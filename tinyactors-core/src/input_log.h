@@ -36,7 +36,7 @@ typedef struct {
     ta_record_text text;
 } ta_record_field;
 
-#define TA_RECORD_FIELDS_MAX 10u
+#define TA_RECORD_FIELDS_MAX 12u
 
 static inline ta_record_field ta_record_number(uint64_t number) {
     return (ta_record_field){ .number = number };
@@ -60,12 +60,17 @@ typedef struct {
     ta_time time;
     uint32_t field_count;
     ta_record_field fields[TA_RECORD_FIELDS_MAX];
-    /* JUMP: the target states, of `definition`. */
+    /* JUMP: the target states, of `definition`; or, when `target_at` is
+     * set, the states it gives for 0 .. target_count - 1, asked in order
+     * (a checkpoint's lists, walked without an array). */
     const ta_state_id *targets;
     uint32_t target_count;
-    /* The record's value, written by `definition`'s data model; none when
-     * null or when its `v` is null. */
+    ta_state_id (*target_at)(void *context, uint32_t index);
+    void *target_context;
+    /* The record's values, written by `definition`'s data model, `value`
+     * then `value2`; each is absent when null or when its `v` is null. */
     const ta_value *value;
+    const ta_value *value2;
     const ta_definition *definition;
 } ta_record_desc;
 
@@ -100,16 +105,42 @@ ta_result ta_input_released(ta_system *system, ta_actor *actor, bool no_microste
 /* The actor is past its microstep limit, stopped inside a macrostep (ADR 0075). */
 bool ta_input_runaway_stopped(const ta_system *system, const ta_actor *actor);
 
-/* A log's first record, SPAWNED, read for ta_actor_prepare(). */
+/* One record's fixed part and text part, in one allocation. */
 typedef struct {
+    ta_record_kind kind;
+    uint64_t seq;
+    ta_time time;
+    uint32_t fields; /* 8-byte fields after the header */
+    uint32_t text_bytes;
+    uint16_t value_count;
+    uint8_t *block;
+    size_t block_bytes;
+    const uint8_t *text;
+} ta_input_record;
+
+/* A log's first record, SPAWNED or CHECKPOINT, read for ta_actor_prepare().
+ * A CHECKPOINT keeps its record, whose state lists ta_input_restore()
+ * applies; release it with ta_input_spawn_release(). */
+typedef struct {
+    ta_record_kind kind;
     ta_time time;
     uint64_t seq;
     bool has_binding;
     ta_value binding; /* owned */
+    ta_input_record checkpoint;
 } ta_input_spawn;
+void ta_input_spawn_release(ta_system *system, ta_input_spawn *spawn);
 typedef struct {
     const ta_byte_source *log;
     const ta_definition *definition;
     ta_input_spawn *out;
 } ta_input_spawn_params;
 ta_result ta_input_read_spawn(ta_system *system, const ta_input_spawn_params *params);
+
+/* Gives a replaying actor, just prepared and not bootstrapped, the state a
+ * checkpoint holds: its lists, then its parts, read from `log`. */
+typedef struct {
+    ta_input_spawn *spawn;
+    const ta_byte_source *log;
+} ta_input_restore_params;
+ta_result ta_input_restore(ta_system *system, ta_actor *actor, const ta_input_restore_params *params);

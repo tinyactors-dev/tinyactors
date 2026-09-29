@@ -757,20 +757,20 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
         binding = spawn.has_binding ? &spawn.binding : NULL;
     }
     if (at != NULL && *at > ta_clock_now(&system->clock)) {
-        ta_value_release(&spawn.binding);
+        ta_input_spawn_release(system, &spawn);
         return TA_ERR_INVALID;
     }
     ta_actor_ref self = {0};
     ta_result result = ta_actor_prepared_self(system, params, definition, &self);
     if (result != TA_OK) {
-        ta_value_release(&spawn.binding);
+        ta_input_spawn_release(system, &spawn);
         return result;
     }
     ta_actor *actor = NULL;
     result = ta_actor_new(system, definition, &actor);
     if (result != TA_OK) {
         ta_actor_ref_release(&self);
-        ta_value_release(&spawn.binding);
+        ta_input_spawn_release(system, &spawn);
         return result;
     }
     ta_actor_id id = actor->record.id;
@@ -806,7 +806,13 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
             });
         actor->datamodel_initialized = result == TA_OK;
     }
-    ta_value_release(&spawn.binding);
+    /* A log that starts with a checkpoint gives the actor its state, and
+     * no bootstrap runs (ADR 0091 section 3). */
+    if (result == TA_OK && spawn.kind == TA_RECORD_CHECKPOINT) {
+        result = ta_input_restore(system, actor,
+                                  &(ta_input_restore_params){ .spawn = &spawn, .log = params->log });
+    }
+    ta_input_spawn_release(system, &spawn);
     if (result != TA_OK) {
         ta_actor_release_slot(system, id);
         ta_actor_free(system, actor);

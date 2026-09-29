@@ -39,6 +39,17 @@ ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id
  * changes nothing visible when it fails; the second then queues them and
  * forgets the invocations, and cannot fail. It answers whether it queued one.
  */
+/*
+ * A replaying actor restored from a checkpoint (ADR 0091) takes back its
+ * active invocations as replayed ones: active in core, with no invoker
+ * called, so the services' later events still match them.
+ */
+typedef struct {
+    ta_invoke_id id;
+    ta_atom type;
+    ta_invoke_decl_id decl;
+} ta_invoke_restore_params;
+ta_result ta_invoke_restore(ta_system *system, ta_actor *actor, const ta_invoke_restore_params *params);
 /* Whether `invoke` is one of the actor's active invocations. */
 bool ta_invoke_is_active(const ta_actor *actor, ta_invoke_id invoke);
 ta_result ta_invoke_prepare_retire(ta_system *system, ta_actor *actor);

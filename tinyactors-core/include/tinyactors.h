@@ -2857,6 +2857,11 @@ typedef struct {
      * the end of its first record, a `spawned` one, which makes a replaying
      * actor whose clock starts at the record's time and whose data is bound
      * to its binding. `datamodel_binding` and `at` must then be null.
+     * A log may start with a checkpoint instead (ADR 0091): the source is
+     * read through its parts, and the replaying actor starts from the state
+     * it holds, at its time, with no bootstrap. TA_ERR_DEFINITION_MISMATCH
+     * when it was taken under another revision; TA_ERR_NOT_FOUND when it
+     * names a state or an <invoke> the definition does not have.
      */
     TA_IN TA_OPTIONAL const ta_byte_source *log;
 } ta_actor_prepare_params;
@@ -3558,6 +3563,24 @@ TA_API ta_result ta_definition_inspect(const ta_system *system,
  *   FINISHED    final state ID   DROPPED     u64 host_seq
  *   QUEUED      EVENT's fields                             value: data
  *   ABANDONED, RELEASED, DESTROYED, EVICTED: none
+ * A checkpoint (ADR 0091) is one unit of records, all with the checkpoint's
+ * seq: CHECKPOINT, then its parts, then the messages it owes:
+ *   CHECKPOINT  family, name, revision, u64 generated-ID counter, u64
+ *               macrostep, u64 microstep, u64 lifecycle count (ADR 0067),
+ *               u64 part count, u64 owed count, u64 active count, u64 late
+ *               count, then one text per active atomic state ID, then one
+ *               per state ID whose late-bound data is initialized
+ *                                                          value: data root
+ *   CHECKPOINT_HISTORY  history state ID, u64 count, then one text per
+ *               recorded state ID
+ *   CHECKPOINT_SEND  send ID, event name, I/O type, destination (a target
+ *               URI; absent for a send to the actor itself or to a host
+ *               processor), u64 due, u64 flags (1 data, 2 target value, 4
+ *               literal target, 8 literal content, 16 to the actor itself),
+ *               u64 literal target's content ID, u64 content ID
+ *                                                          values: data, target
+ *   CHECKPOINT_INVOKE  invoke ID, invoker type, u64 <invoke> index
+ *   QUEUED      (owed count of them) a message the host had not delivered
  * A value stream is present only when the value is (value_count).
  * Readers skip fields past the ones they know (fixed_bytes), and refuse a
  * version or a kind they do not know.
@@ -3576,7 +3599,11 @@ typedef enum {
     TA_RECORD_DESTROYED = 10,
     TA_RECORD_QUEUED = 11,
     TA_RECORD_DROPPED = 12,
-    TA_RECORD_EVICTED = 13
+    TA_RECORD_EVICTED = 13,
+    TA_RECORD_CHECKPOINT = 14,
+    TA_RECORD_CHECKPOINT_HISTORY = 15,
+    TA_RECORD_CHECKPOINT_SEND = 16,
+    TA_RECORD_CHECKPOINT_INVOKE = 17
 } ta_record_kind TA_SYMBOLS("TA_RECORD_");
 
 /*
@@ -3647,6 +3674,10 @@ typedef struct {
  *   does not have.
  * - TA_ERR_UNSUPPORTED: the data model cannot read a value.
  * - and what the input's own function answers.
+ * A record the actor already has, one whose seq is at or below the last it
+ * applied (a log handed over with a checkpoint, a checkpoint met again in
+ * a full log), is skipped: TA_REPLAY_NEXT. The messages a checkpoint owes
+ * are handed back as TA_REPLAY_HOST once, when the replay started from it.
  * After an error the source is at no defined position.
  */
 typedef struct {
@@ -3656,6 +3687,41 @@ typedef struct {
     TA_OUT TA_OPTIONAL ta_host_record *host;
 } ta_actor_replay_params;
 TA_API ta_result ta_actor_replay(ta_system *system, TA_IN const ta_actor_replay_params *params);
+
+/*
+ * A message the host has accepted for an actor but not delivered, which a
+ * checkpoint carries so a log compacted to it owes it still (ADR 0091).
+ */
+typedef struct {
+    uint64_t host_seq;
+    TA_IN const ta_event *event;
+} ta_owed_message;
+
+/*
+ * Writes a checkpoint of an idle, published, named actor of a logged family
+ * to `sink` as one unit (ADR 0091): its state at its last record, which a
+ * log may start with instead of SPAWNED (ta_actor_prepare_params.log).
+ * `root` is the data-model root to write, or null for the data model's
+ * inspect() view. `owed` are the messages the host holds for it. Nothing
+ * in the actor changes, and nothing is written to the input sink. Pending
+ * sends the router already refused once are sent (ADR 0054) and are not in
+ * it.
+ * - TA_ERR_BUSY: the actor is inside a macrostep, holds an event, or has
+ *   queued internal events; or a record is being written.
+ * - TA_ERR_INVALID: the actor is unnamed, unpublished or not logged.
+ * - TA_ERR_DONE: the actor has finished.
+ * - TA_ERR_NOMEM: the sink refused; nothing was kept.
+ * - TA_ERR_UNSUPPORTED: a value has no durable form.
+ */
+typedef struct {
+    ta_actor_id actor;
+    ta_byte_sink sink;
+    TA_IN TA_OPTIONAL const ta_value *root;
+    TA_COUNTED_BY(owed_count) TA_OPTIONAL const ta_owed_message *owed;
+    uint32_t owed_count;
+} ta_actor_checkpoint_params;
+TA_API ta_result ta_actor_checkpoint(ta_system *system, TA_IN const ta_actor_checkpoint_params *params)
+    TA_VALUE_MODEL(actor, params.actor);
 
 /* ========================================================================
  * Session images

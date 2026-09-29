@@ -37,6 +37,9 @@ typedef struct ta_activation_effects {
      * and `clock` is its own logical time, moved by ta_actor_set_time(). */
     bool replaying;
     ta_time clock;
+    /* QUEUED records of the checkpoint the replay started from (ADR 0091)
+     * still to hand back, although their seq is the checkpoint's. */
+    uint32_t checkpoint_owed;
 } ta_activation_effects;
 
 /* Where an actor's external event is (ADR 0069). */

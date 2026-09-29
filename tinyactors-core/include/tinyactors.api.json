@@ -674,6 +674,80 @@
         }
       }
     },
+    "ta_actor_checkpoint_params": {
+      "kind": "struct",
+      "doc": "Writes a checkpoint of an idle, published, named actor of a logged family to `sink` as one unit (ADR 0091): its state at its last record, which a log may start with instead of SPAWNED (ta_actor_prepare_params.log). `root` is the data-model root to write, or null for the data model's inspect() view. `owed` are the messages the host holds for it. Nothing in the actor changes, and nothing is written to the input sink. Pending sends the router already refused once are sent (ADR 0054) and are not in it. - TA_ERR_BUSY: the actor is inside a macrostep, holds an event, or has queued internal events; or a record is being written. - TA_ERR_INVALID: the actor is unnamed, unpublished or not logged. - TA_ERR_DONE: the actor has finished. - TA_ERR_NOMEM: the sink refused; nothing was kept. - TA_ERR_UNSUPPORTED: a value has no durable form.",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "sink",
+          "type": {
+            "type": "ta_byte_sink"
+          }
+        },
+        {
+          "name": "root",
+          "type": {
+            "pointer": {
+              "type": "ta_value",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "owed",
+          "type": {
+            "pointer": {
+              "type": "ta_owed_message",
+              "const": true
+            }
+          },
+          "count": "owed_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "owed_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "owed"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "sink": 8,
+            "root": 24,
+            "owed": 32,
+            "owed_count": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "sink": 8,
+            "root": 16,
+            "owed": 20,
+            "owed_count": 24
+          }
+        }
+      }
+    },
     "ta_actor_completion": {
       "kind": "struct",
       "doc": "Release data with ta_value_release() when has_data is true.",
@@ -2036,7 +2110,7 @@
           "shape": "single",
           "direction": "in",
           "optional": true,
-          "doc": "A log to prepare from (ADR 0090 section 7): the source is read up to the end of its first record, a `spawned` one, which makes a replaying actor whose clock starts at the record's time and whose data is bound to its binding. `datamodel_binding` and `at` must then be null."
+          "doc": "A log to prepare from (ADR 0090 section 7): the source is read up to the end of its first record, a `spawned` one, which makes a replaying actor whose clock starts at the record's time and whose data is bound to its binding. `datamodel_binding` and `at` must then be null. A log may start with a checkpoint instead (ADR 0091): the source is read through its parts, and the replaying actor starts from the state it holds, at its time, with no bootstrap. TA_ERR_DEFINITION_MISMATCH when it was taken under another revision; TA_ERR_NOT_FOUND when it names a state or an <invoke > the definition does not have."
         }
       ],
       "layout": {
@@ -2303,7 +2377,7 @@
     },
     "ta_actor_replay_params": {
       "kind": "struct",
-      "doc": "Applies one record of a log to a replaying actor (ADR 0090 section 7): reads exactly one record from `source`, moves the actor's clock to its time and applies it. An actor stopped as a runaway (TA_ERR_RUNAWAY from its resume) takes only ABANDONED or RELEASED. - TA_ERR_INVALID: the actor is not replaying, or the record is SPAWNED (prepare from it instead) or goes back in time. - TA_ERR_BUSY: the actor is inside a macrostep. - TA_ERR_CORRUPT: the bytes are not a record this build reads. - TA_ERR_NOT_FOUND: the record names a state or an invocation the actor does not have. - TA_ERR_UNSUPPORTED: the data model cannot read a value. - and what the input's own function answers. After an error the source is at no defined position.",
+      "doc": "Applies one record of a log to a replaying actor (ADR 0090 section 7): reads exactly one record from `source`, moves the actor's clock to its time and applies it. An actor stopped as a runaway (TA_ERR_RUNAWAY from its resume) takes only ABANDONED or RELEASED. - TA_ERR_INVALID: the actor is not replaying, or the record is SPAWNED (prepare from it instead) or goes back in time. - TA_ERR_BUSY: the actor is inside a macrostep. - TA_ERR_CORRUPT: the bytes are not a record this build reads. - TA_ERR_NOT_FOUND: the record names a state or an invocation the actor does not have. - TA_ERR_UNSUPPORTED: the data model cannot read a value. - and what the input's own function answers. A record the actor already has, one whose seq is at or below the last it applied (a log handed over with a checkpoint, a checkpoint met again in a full log), is skipped: TA_REPLAY_NEXT. The messages a checkpoint owes are handed back as TA_REPLAY_HOST once, when the replay started from it. After an error the source is at no defined position.",
       "fields": [
         {
           "name": "actor",
@@ -12509,6 +12583,47 @@
         }
       }
     },
+    "ta_owed_message": {
+      "kind": "struct",
+      "doc": "A message the host has accepted for an actor but not delivered, which a checkpoint carries so a log compacted to it owes it still (ADR 0091).",
+      "fields": [
+        {
+          "name": "host_seq",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "host_seq": 0,
+            "event": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "host_seq": 0,
+            "event": 8
+          }
+        }
+      }
+    },
     "ta_param_id": {
       "kind": "alias",
       "type": {
@@ -12628,6 +12743,26 @@
           "name": "TA_RECORD_EVICTED",
           "value": 13,
           "symbol": "evicted"
+        },
+        {
+          "name": "TA_RECORD_CHECKPOINT",
+          "value": 14,
+          "symbol": "checkpoint"
+        },
+        {
+          "name": "TA_RECORD_CHECKPOINT_HISTORY",
+          "value": 15,
+          "symbol": "checkpoint_history"
+        },
+        {
+          "name": "TA_RECORD_CHECKPOINT_SEND",
+          "value": 16,
+          "symbol": "checkpoint_send"
+        },
+        {
+          "name": "TA_RECORD_CHECKPOINT_INVOKE",
+          "value": 17,
+          "symbol": "checkpoint_invoke"
         }
       ],
       "layout": {
@@ -20646,6 +20781,48 @@
           "direction": "in"
         }
       ]
+    },
+    {
+      "name": "ta_actor_checkpoint",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_checkpoint_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ],
+      "value_model": {
+        "kind": "actor",
+        "path": [
+          "params",
+          "actor"
+        ]
+      }
     },
     {
       "name": "ta_actor_capture",

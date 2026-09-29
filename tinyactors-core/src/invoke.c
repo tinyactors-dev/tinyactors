@@ -459,6 +459,29 @@ static ta_result ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke_de
     return ta_invoke_op(status);
 }
 
+ta_result ta_invoke_restore(ta_system *system, ta_actor *actor, const ta_invoke_restore_params *params) {
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_result result = ta_invoke_grow(system, sparse);
+    if (result != TA_OK) {
+        return result;
+    }
+    const ta_invoke_decl *decl = &actor->definition->invokes[params->decl];
+    const ta_invoker *invoker = ta_invoke_find_invoker(system, params->type);
+    uint32_t index = sparse->invoke_count;
+    sparse->invokes[index] = (ta_active_invoke){
+        .id = params->id, .type = params->type, .autoforward = decl->autoforward, .active = true,
+    };
+    sparse->invoke_meta[index] = (ta_invoke_meta){
+        .decl = params->decl, .state = decl->owner, .invoker = invoker != NULL ? *invoker : (ta_invoker){ 0 },
+        .replayed = true,
+    };
+    sparse->invoke_count += 1u;
+    return TA_OK;
+}
+
 typedef struct {
     ta_invoke_decl_id decl;
     ta_invoke_id id;

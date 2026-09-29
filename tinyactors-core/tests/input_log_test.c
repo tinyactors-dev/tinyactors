@@ -1427,6 +1427,387 @@ static void test_no_allocation(void) {
     destroy_system(system);
 }
 
+/* ------------------------------------------------------------------------
+ * Checkpoints (ADR 0091)
+ */
+
+static ta_definition_id define_revision(ta_system *system, const char *family, const ta_scxml_state_spec *states,
+                                        const char *revision) {
+    ta_definition_identity identity = {
+        .family = { .name = { .ptr = family, .len = (uint32_t)strlen(family) } },
+        .revision = { .ptr = (const uint8_t *)revision, .len = (uint32_t)strlen(revision) },
+    };
+    ta_definition *definition = NULL;
+    ta_result result = ta_definition_compile_spec(
+        system, &(ta_definition_compile_params){
+                    .spec = &(ta_scxml_spec){ .datamodel = STR("null"), .identity = &identity, .states = states },
+                    .datamodel = { .self = NULL, .v = &blob_model_vtable },
+                    .allocator = allocator,
+                    .out = &definition,
+                });
+    CHECK(result == TA_OK);
+    ta_definition_id id = 0;
+    CHECK(result == TA_OK && ta_system_register_definition(system, definition, &id) == TA_OK);
+    return id;
+}
+
+typedef struct {
+    const ta_value *root;
+    const ta_owed_message *owed;
+    uint32_t owed_count;
+} checkpoint_args;
+
+static ta_result checkpoint_into(ta_system *system, ta_actor_id actor, memory_sink *sink, const checkpoint_args *args) {
+    return ta_actor_checkpoint(system, &(ta_actor_checkpoint_params){
+                                           .actor = actor,
+                                           .sink = { .self = sink, .v = &sink_vtable },
+                                           .root = args->root,
+                                           .owed = args->owed,
+                                           .owed_count = args->owed_count,
+                                       });
+}
+
+static void concat(buffer *out, const buffer *part, size_t from, size_t to) {
+    buffer_put(out, part->bytes + from, to - from);
+}
+
+static bool same_history(ta_system *system, ta_actor_id left, ta_actor_id right, const char *id) {
+    ta_state_id history = state_of(system, left, id);
+    ta_state_id left_recorded[8];
+    ta_state_id right_recorded[8];
+    uint32_t left_count = 0;
+    uint32_t right_count = 0;
+    CHECK(ta_actor_history(system, &(ta_actor_history_params){ .actor = left, .history = history,
+                                                                .states = left_recorded, .capacity = 8,
+                                                                .count = &left_count }) == TA_OK);
+    CHECK(ta_actor_history(system, &(ta_actor_history_params){ .actor = right, .history = history,
+                                                                .states = right_recorded, .capacity = 8,
+                                                                .count = &right_count }) == TA_OK);
+    return left_count == right_count && memcmp(left_recorded, right_recorded, left_count * sizeof(ta_state_id)) == 0;
+}
+
+/* A checkpoint alone, a checkpoint and its tail, a checkpoint and the whole
+ * log it covers, and a whole log with a checkpoint inside it all rebuild
+ * the live actor. */
+static void test_checkpoint_replays(void) {
+    static const uint32_t pieces[] = { 1, 7 };
+    for (size_t piece = 0; piece < sizeof pieces / sizeof pieces[0]; piece += 1) {
+        ta_system *system = create_system();
+        ta_definition_id definition = define(system, "hist", history_chart);
+        log_family(system, "hist");
+        ta_value binding = blob_make(24, 3);
+        ta_actor_id live = 0;
+        CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &hist_live,
+                                                               .datamodel_binding = &binding, .out = &live }) == TA_OK);
+        CHECK(run(system, live) == TA_RUN_STABLE);
+        static const struct { ta_time at; const char *event; } inputs[] = {
+            { 100, "next" }, { 200, "arm" }, { 300, "next" }, { 400, "off" }, { 500, "arm" }, { 900, "back" },
+        };
+        memory_sink middle = { .refuse_at = -1 };
+        size_t at_middle = 0;
+        for (size_t index = 0; index < sizeof inputs / sizeof inputs[0]; index += 1) {
+            CHECK(ta_system_set_time(system, inputs[index].at) == TA_OK);
+            deliver(system, live, inputs[index].event);
+            if (index == 3) { /* in `off`, with `tick` pending and `h` recorded */
+                CHECK(ta_system_set_time(system, 450) == TA_OK);
+                CHECK(checkpoint_into(system, live, &middle, &(checkpoint_args){ .root = &binding }) == TA_OK);
+                at_middle = the_sink.log.len;
+            }
+        }
+        memory_sink end = { .refuse_at = -1 };
+        CHECK(checkpoint_into(system, live, &end, &(checkpoint_args){ .root = &binding }) == TA_OK);
+        CHECK(middle.units == 1 && middle.kept == 1 && end.kept == 1);
+        const buffer *log = &the_sink.log;
+        size_t log_len = log->len;
+
+        buffer variants[4] = { 0 };
+        concat(&variants[0], &end.log, 0, end.log.len);                     /* the checkpoint alone */
+        concat(&variants[1], &middle.log, 0, middle.log.len);               /* the checkpoint and its tail */
+        concat(&variants[1], log, at_middle, log_len);
+        concat(&variants[2], &middle.log, 0, middle.log.len);               /* ... and every record before it */
+        concat(&variants[2], log, 0, log_len);
+        concat(&variants[3], log, 0, at_middle);                            /* a checkpoint inside the log */
+        concat(&variants[3], &middle.log, 0, middle.log.len);
+        concat(&variants[3], log, at_middle, log_len);
+        for (int variant = 0; variant < 4; variant += 1) {
+            ta_value_release(&bound);
+            bound = (ta_value){ 0 };
+            replayed copy = replay_log(system, definition, &hist_copy, &variants[variant], pieces[piece]);
+            CHECK(blob_equal(&bound, &binding));
+            CHECK(copy.lives == 1 && copy.host_records == 0);
+            CHECK(ta_actor_publish(system, &(ta_actor_publish_params){ .actor = copy.actor }) == TA_OK);
+            CHECK(same_state(system, live, copy.actor));
+            CHECK(same_history(system, live, copy.actor, "h"));
+            CHECK(the_sink.log.len == log_len); /* a replay writes nothing */
+            CHECK(ta_actor_destroy(system, copy.actor) == TA_OK);
+            the_sink.log.len = log_len; /* forget its DESTROYED */
+            buffer_free(&variants[variant]);
+        }
+        buffer_free(&middle.log);
+        buffer_free(&end.log);
+        ta_value_release(&binding);
+        destroy_system(system);
+    }
+}
+
+/* A log compacted to its checkpoint still owes the messages the host had
+ * not delivered; a full log hands each back once. */
+static void test_checkpoint_owed(void) {
+    ta_system *system = create_system();
+    ta_definition_id definition = define(system, "timers", timers);
+    log_family(system, "timers");
+    ta_actor_id live = spawn_named(system, definition, &address_a);
+    ta_value data = blob_make(12, 8);
+    ta_event queued = { .name = event_name(system, "later"), .type = TA_EVENT_EXTERNAL,
+                        .invoke_id = TA_INVOKE_ID_NONE, .data = data };
+    for (uint64_t seq = 3; seq <= 4; seq += 1) {
+        CHECK(ta_system_write_host_record(system, &(ta_host_record_params){ .address = &address_a,
+                                                                            .kind = TA_RECORD_QUEUED,
+                                                                            .host_seq = seq, .actor = live,
+                                                                            .event = &queued }) == TA_OK);
+    }
+    CHECK(ta_system_set_time(system, 1000) == TA_OK);
+    ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1, .host_seq = 3 }) ==
+          TA_OK);
+    CHECK(run(system, live) == TA_RUN_STABLE);
+    memory_sink cp = { .refuse_at = -1 };
+    ta_owed_message owed = { .host_seq = 4, .event = &queued };
+    CHECK(checkpoint_into(system, live, &cp, &(checkpoint_args){ .owed = &owed, .owed_count = 1 }) == TA_OK);
+    size_t at_cp = the_sink.log.len;
+    CHECK(ta_system_write_host_record(system, &(ta_host_record_params){ .address = &address_a,
+                                                                        .kind = TA_RECORD_DROPPED, .host_seq = 4,
+                                                                        .actor = live }) == TA_OK);
+    const buffer *log = &the_sink.log;
+    static const ta_actor_address copy_address = { .family = { .name = STR("timers") }, .name = STR("c") };
+
+    /* compacted: the checkpoint and what followed it */
+    buffer compacted = { 0 };
+    concat(&compacted, &cp.log, 0, cp.log.len);
+    concat(&compacted, log, at_cp, log->len);
+    replayed copy = replay_log(system, definition, &copy_address, &compacted, 7);
+    CHECK(copy.queued_count == 1 && copy.queued[0] == 4);
+    CHECK(blob_equal(&copy.queued_data, &data));
+    CHECK(copy.delivered_count == 0 && copy.dropped_count == 1 && copy.dropped[0] == 4);
+    CHECK(in_state(system, copy.actor, "waiting"));
+    CHECK(ta_actor_destroy(system, copy.actor) == TA_OK);
+    ta_value_release(&copy.queued_data);
+    buffer_free(&compacted);
+
+    /* the checkpoint, then the whole log: the covered records are skipped */
+    buffer whole = { 0 };
+    concat(&whole, &cp.log, 0, cp.log.len);
+    concat(&whole, log, 0, at_cp + (log->len - at_cp));
+    copy = replay_log(system, definition, &copy_address, &whole, 1);
+    CHECK(copy.queued_count == 1 && copy.queued[0] == 4 && copy.delivered_count == 0 && copy.dropped_count == 1);
+    CHECK(ta_actor_destroy(system, copy.actor) == TA_OK);
+    ta_value_release(&copy.queued_data);
+    buffer_free(&whole);
+
+    /* the whole log with the checkpoint inside it: the original records count */
+    buffer inside = { 0 };
+    concat(&inside, log, 0, at_cp);
+    concat(&inside, &cp.log, 0, cp.log.len);
+    concat(&inside, log, at_cp, log->len);
+    copy = replay_log(system, definition, &copy_address, &inside, 7);
+    CHECK(copy.queued_count == 2 && copy.queued[0] == 3 && copy.queued[1] == 4);
+    CHECK(copy.delivered_count == 1 && copy.delivered[0] == 3 && copy.dropped_count == 1);
+    CHECK(ta_actor_destroy(system, copy.actor) == TA_OK);
+    ta_value_release(&copy.queued_data);
+    buffer_free(&inside);
+    buffer_free(&cp.log);
+    ta_value_release(&data);
+    destroy_system(system);
+}
+
+/* The timelines of ADR 0089 section 2, from a checkpoint taken mid-way and
+ * the records after it. */
+static void test_checkpoint_timelines(void) {
+    for (int timeline = 0; timeline < 3; timeline += 1) {
+        ta_system *system = create_system();
+        ta_definition_id definition = define(system, "timers", timers);
+        log_family(system, "timers");
+        ta_actor_id live = 0;
+        live_until_e1(system, definition, &live);
+        CHECK(ta_system_set_time(system, 2000) == TA_OK);
+        memory_sink cp = { .refuse_at = -1 };
+        CHECK(checkpoint_into(system, live, &cp, &(checkpoint_args){ 0 }) == TA_OK);
+        size_t at_cp = the_sink.log.len;
+        if (timeline == 0) { /* both fired and the timeout came back before the actor stopped */
+            CHECK(ta_system_set_time(system, 6000) == TA_OK);
+            CHECK(dispatch(system) == 2);
+            CHECK(ta_system_set_time(system, 6500) == TA_OK);
+            deliver(system, live, "timeout");
+            CHECK(ta_system_set_time(system, 7000) == TA_OK);
+            evict(system, live);
+        } else if (timeline == 1) { /* still pending when it stopped */
+            CHECK(ta_system_set_time(system, 3000) == TA_OK);
+            evict(system, live);
+        } else { /* a crash after the checkpoint's commit, the sends dispatched after it */
+            CHECK(ta_system_set_time(system, 6000) == TA_OK);
+            CHECK(dispatch(system) == 2);
+            CHECK(ta_actor_destroy(system, live) == TA_OK);
+            the_sink.log.len = at_cp; /* nothing after the checkpoint was committed */
+        }
+        buffer log = { 0 };
+        concat(&log, &cp.log, 0, cp.log.len);
+        concat(&log, &the_sink.log, at_cp, the_sink.log.len);
+        CHECK(ta_system_set_time(system, 7u * 24u * 3600u * 1000u) == TA_OK);
+        int routed_before = routed;
+        replayed copy = replay_log(system, definition, &address_a, &log, 7);
+        CHECK(in_state(system, copy.actor, timeline == 0 ? "timedout" : "waiting"));
+        CHECK(ta_actor_publish(system, &(ta_actor_publish_params){ .actor = copy.actor }) == TA_OK);
+        ta_actor_inspection view;
+        CHECK(ta_actor_inspect(system, copy.actor, &view) == TA_OK);
+        if (timeline == 0) {
+            CHECK(view.delayed_send_count == 0);
+            CHECK(routed == routed_before);
+        } else {
+            CHECK(view.delayed_send_count == 2 && view.delayed_sends[0].due == 6000);
+            CHECK(dispatch(system) == 2 && routed == routed_before + 2); /* once, a week late */
+            CHECK(run(system, copy.actor) == TA_RUN_STABLE);
+        }
+        buffer_free(&log);
+        buffer_free(&cp.log);
+        destroy_system(system);
+    }
+}
+
+/* What a checkpoint refuses, and what it costs. */
+static void test_checkpoint_refusals(void) {
+    ta_system *system = create_system();
+    ta_definition_id definition = define(system, "timers", timers);
+    ta_definition_id finals = define(system, "finals", at_once_final);
+    ta_definition_id unlogged = define(system, "free", timers);
+    log_family(system, "timers");
+    log_family(system, "finals");
+    ta_actor_id live = spawn_named(system, definition, &address_a);
+    ta_value root = blob_make(16, 5);
+    memory_sink cp = { .refuse_at = -1 };
+    const checkpoint_args with_root = { .root = &root };
+
+    /* busy: inside a macrostep */
+    ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1 }) == TA_OK);
+    CHECK(checkpoint_into(system, live, &cp, &with_root) == TA_ERR_BUSY);
+    CHECK(run(system, live) == TA_RUN_STABLE);
+
+    /* invalid: unnamed, or not logged; done: finished */
+    ta_actor_id anonymous = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &anonymous }) == TA_OK);
+    CHECK(run(system, anonymous) == TA_RUN_STABLE);
+    CHECK(checkpoint_into(system, anonymous, &cp, &with_root) == TA_ERR_INVALID);
+    static const ta_actor_address free_address = { .family = { .name = STR("free") }, .name = STR("f") };
+    ta_actor_id free_actor = spawn_named(system, unlogged, &free_address);
+    CHECK(checkpoint_into(system, free_actor, &cp, &with_root) == TA_ERR_INVALID);
+    static const ta_actor_address final_address = { .family = { .name = STR("finals") }, .name = STR("x") };
+    ta_actor_id finished = spawn_named(system, finals, &final_address);
+    CHECK(checkpoint_into(system, finished, &cp, &with_root) == TA_ERR_DONE);
+    CHECK(cp.units == 0);
+
+    /* a sink that refuses at every byte: an out-of-memory sweep */
+    long refused = 0;
+    for (long at = 0;; at += 1) {
+        cp.refuse_at = at;
+        ta_result result = checkpoint_into(system, live, &cp, &with_root);
+        cp.refuse_at = -1;
+        if (result == TA_OK) {
+            break;
+        }
+        CHECK(result == TA_ERR_NOMEM);
+        CHECK(cp.log.len == 0 && cp.kept == 0);
+        refused += 1;
+    }
+    CHECK(refused > 100 && cp.kept == 1);
+    cp.refuse_begin = true;
+    CHECK(checkpoint_into(system, live, &cp, &with_root) == TA_ERR_NOMEM);
+    cp.refuse_begin = false;
+
+    /* a value with no durable form */
+    size_t kept_len = cp.log.len;
+    durable_refuses = true;
+    CHECK(checkpoint_into(system, live, &cp, &with_root) == TA_ERR_UNSUPPORTED);
+    durable_refuses = false;
+    CHECK(cp.log.len == kept_len);
+
+    /* nothing is allocated, and the input log does not move */
+    long before = allocations;
+    size_t log_len = the_sink.log.len;
+    CHECK(checkpoint_into(system, live, &cp, &with_root) == TA_OK);
+    CHECK(allocations == before);
+    CHECK(the_sink.log.len == log_len);
+
+    /* another revision of the family */
+    ta_definition_id newer = define_revision(system, "timers", timers, "v2");
+    memory_source source = { .bytes = cp.log.bytes, .len = kept_len, .piece = 7 };
+    ta_byte_source as_source = { .self = &source, .v = &source_vtable };
+    ta_actor_id actor = 0;
+    static const ta_actor_address other = { .family = { .name = STR("timers") }, .name = STR("n") };
+    CHECK(ta_actor_prepare(system, &(ta_actor_prepare_params){ .address = &other, .definition = newer,
+                                                               .log = &as_source, .out = &actor }) ==
+          TA_ERR_DEFINITION_MISMATCH);
+
+    /* a checkpoint beyond what a replay applied is not applied mid-replay */
+    source = (memory_source){ .bytes = cp.log.bytes, .len = kept_len, .piece = 7 };
+    CHECK(ta_actor_prepare(system, &(ta_actor_prepare_params){ .address = &other, .definition = definition,
+                                                               .log = &as_source, .out = &actor }) == TA_OK);
+    ta_actor_inspection idle_view;
+    CHECK(ta_actor_inspect(system, actor, &idle_view) == TA_OK && !idle_view.macrostep_in_progress);
+    memory_source again = { .bytes = cp.log.bytes, .len = kept_len, .piece = 7 };
+    uint8_t *bumped = malloc(kept_len);
+    memcpy(bumped, cp.log.bytes, kept_len);
+    bumped[8] = (uint8_t)(bumped[8] + 1u); /* the header's seq, one past */
+    again.bytes = bumped;
+    ta_replay_step step = TA_REPLAY_NEXT;
+    CHECK(ta_actor_replay(system, &(ta_actor_replay_params){ .actor = actor,
+                                                             .source = { .self = &again, .v = &source_vtable },
+                                                             .step = &step }) == TA_ERR_INVALID);
+    free(bumped);
+    CHECK(ta_actor_destroy(system, actor) == TA_OK);
+    buffer_free(&cp.log);
+    ta_value_release(&root);
+    destroy_system(system);
+}
+
+/* An invocation active at the checkpoint is active in its replay: the
+ * service's later report still matches it. */
+static void test_checkpoint_invocation(void) {
+    ta_system *system = create_system();
+    ta_definition_id jobs = define(system, "jobs", invoking);
+    log_family(system, "jobs");
+    static const ta_actor_address job_address = { .family = { .name = STR("jobs") }, .name = STR("j") };
+    static const ta_actor_address job_copy = { .family = { .name = STR("jobs") }, .name = STR("k") };
+    ta_actor_id job = spawn_named(system, jobs, &job_address);
+    memory_sink cp = { .refuse_at = -1 };
+    CHECK(checkpoint_into(system, job, &cp, &(checkpoint_args){ 0 }) == TA_OK);
+    size_t at_cp = the_sink.log.len;
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, job, &view) == TA_OK && view.invoke_count == 1);
+    ta_invoke_error error = { .reason = STR("boom"), .ends = true };
+    CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .actor = job, .invoke_id = view.invokes[0].id,
+                                                                     .kind = TA_INVOKE_REPORT_ERROR,
+                                                                     .as.error = &error }) == TA_OK);
+    CHECK(run(system, job) == TA_RUN_STABLE);
+    buffer log = { 0 };
+    concat(&log, &cp.log, 0, cp.log.len);
+    concat(&log, &the_sink.log, at_cp, the_sink.log.len);
+    replayed copy = replay_log(system, jobs, &job_copy, &log, 7);
+    CHECK(in_state(system, copy.actor, "failed"));
+    CHECK(ta_actor_destroy(system, copy.actor) == TA_OK);
+
+    /* compacted to the checkpoint alone: the invocation is retired at publish */
+    buffer alone = { 0 };
+    concat(&alone, &cp.log, 0, cp.log.len);
+    copy = replay_log(system, jobs, &job_copy, &alone, 7);
+    CHECK(ta_actor_inspect(system, copy.actor, &view) == TA_OK && view.invoke_count == 1);
+    CHECK(ta_actor_publish(system, &(ta_actor_publish_params){ .actor = copy.actor }) == TA_OK);
+    CHECK(ta_actor_inspect(system, copy.actor, &view) == TA_OK && view.invoke_count == 0);
+    buffer_free(&log);
+    buffer_free(&alone);
+    buffer_free(&cp.log);
+    destroy_system(system);
+}
+
 int main(void) {
     blob_model_vtable = *ta_null_datamodel().v;
     blob_model_vtable.value_write = blob_write;
@@ -1441,6 +1822,11 @@ int main(void) {
     test_refusals();
     test_readers();
     test_no_allocation();
+    test_checkpoint_replays();
+    test_checkpoint_owed();
+    test_checkpoint_timelines();
+    test_checkpoint_refusals();
+    test_checkpoint_invocation();
     CHECK(live_blobs == 0);
     if (failures != 0) {
         fprintf(stderr, "input_log_test: %d failure(s)\n", failures);

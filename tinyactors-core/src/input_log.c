@@ -199,11 +199,16 @@ static const ta_byte_sink_vtable ta_input_frame_vtable = {
     .end = ta_input_frame_end,
 };
 
-static bool ta_input_has_value(const ta_record_desc *record) {
-    return record->value != NULL && record->value->v != NULL && record->definition != NULL;
+static bool ta_input_value_present(const ta_record_desc *record, const ta_value *value) {
+    return value != NULL && value->v != NULL && record->definition != NULL;
 }
 
-static ta_result ta_input_value(ta_system *system, const ta_record_desc *record) {
+static uint16_t ta_input_value_count(const ta_record_desc *record) {
+    return (uint16_t)((ta_input_value_present(record, record->value) ? 1u : 0u) +
+                      (ta_input_value_present(record, record->value2) ? 1u : 0u));
+}
+
+static ta_result ta_input_value(ta_system *system, const ta_record_desc *record, const ta_value *value) {
     const ta_definition *definition = record->definition;
     if (definition->datamodel.v->value_write == NULL) {
         return TA_ERR_UNSUPPORTED;
@@ -212,7 +217,7 @@ static ta_result ta_input_value(ta_system *system, const ta_record_desc *record)
     ta_op_status status = definition->datamodel.v->value_write(
         definition->datamodel.self, &(ta_datamodel_value_write_params){
                                         .shared = definition->datamodel_shared,
-                                        .value = record->value,
+                                        .value = value,
                                         .sink = { .self = system, .v = &ta_input_frame_vtable },
                                         .durable = true,
                                         .fault = &fault,
@@ -229,17 +234,14 @@ static ta_result ta_input_value(ta_system *system, const ta_record_desc *record)
 }
 
 static ta_record_text ta_input_target_text(const ta_record_desc *record, uint32_t index) {
-    ta_atom name = record->definition->states[record->targets[index]].name;
+    ta_state_id state = record->target_at != NULL ? record->target_at(record->target_context, index)
+                                                  : record->targets[index];
+    ta_atom name = record->definition->states[state].name;
     return (ta_record_text){ .present = true, .text = ta_atom_text(&record->definition->system->atoms, name) };
 }
 
-ta_result ta_input_open(ta_system *system, ta_actor *actor, const ta_record_desc *record) {
-    if (system->input_sink.v == NULL) {
-        return TA_OK;
-    }
-    if (system->input_open) {
-        return TA_ERR_BUSY;
-    }
+/* Writes a whole record into the open unit, under `seq`. */
+static ta_result ta_input_emit(ta_system *system, uint64_t seq, const ta_record_desc *record) {
     uint32_t text_bytes = 0;
     for (uint32_t index = 0; index < record->field_count; index += 1u) {
         text_bytes += record->fields[index].is_text ? ta_input_text_length(&record->fields[index].text) : 0u;
@@ -248,30 +250,13 @@ ta_result ta_input_open(ta_system *system, ta_actor *actor, const ta_record_desc
         text_bytes += ta_input_target_text(record, index).text.len;
     }
     uint32_t fixed_bytes = TA_RECORD_HEADER_BYTES + 8u * (record->field_count + record->target_count);
-    uint64_t seq = 0;
-    if (actor != NULL) {
-        ta_result result = ta_input_prepare_actor(system, actor);
-        if (result != TA_OK) {
-            return result;
-        }
-        seq = actor->sparse->log_seq + 1u;
-    }
-    if (system->input_sink.v->begin(system->input_sink.self) != TA_OP_OK) {
-        return TA_ERR_NOMEM;
-    }
-    system->input_open = true;
-    system->input_status = TA_OP_OK;
-    system->input_used = 0;
-    system->input_actor = actor;
-    system->input_seq = seq;
-
     ta_input_u16(system, TA_RECORD_VERSION);
     ta_input_u16(system, (uint16_t)record->kind);
     ta_input_u32(system, fixed_bytes);
     ta_input_u64(system, seq);
     ta_input_u64(system, record->time);
     ta_input_u32(system, text_bytes);
-    ta_input_u16(system, ta_input_has_value(record) ? 1u : 0u);
+    ta_input_u16(system, ta_input_value_count(record));
     ta_input_u16(system, 0);
     uint32_t offset = 0;
     for (uint32_t index = 0; index < record->field_count; index += 1u) {
@@ -303,13 +288,43 @@ ta_result ta_input_open(ta_system *system, ta_actor *actor, const ta_record_desc
     }
     ta_input_zeros(system, ta_input_pad(text_bytes));
     ta_result result = TA_OK;
-    if (ta_input_has_value(record)) {
-        result = ta_input_value(system, record);
+    if (ta_input_value_present(record, record->value)) {
+        result = ta_input_value(system, record, record->value);
+    }
+    if (result == TA_OK && ta_input_value_present(record, record->value2)) {
+        result = ta_input_value(system, record, record->value2);
     }
     ta_input_flush(system);
     if (result == TA_OK && system->input_status != TA_OP_OK) {
         result = TA_ERR_NOMEM;
     }
+    return result;
+}
+
+ta_result ta_input_open(ta_system *system, ta_actor *actor, const ta_record_desc *record) {
+    if (system->input_sink.v == NULL) {
+        return TA_OK;
+    }
+    if (system->input_open) {
+        return TA_ERR_BUSY;
+    }
+    uint64_t seq = 0;
+    if (actor != NULL) {
+        ta_result result = ta_input_prepare_actor(system, actor);
+        if (result != TA_OK) {
+            return result;
+        }
+        seq = actor->sparse->log_seq + 1u;
+    }
+    if (system->input_sink.v->begin(system->input_sink.self) != TA_OP_OK) {
+        return TA_ERR_NOMEM;
+    }
+    system->input_open = true;
+    system->input_status = TA_OP_OK;
+    system->input_used = 0;
+    system->input_actor = actor;
+    system->input_seq = seq;
+    ta_result result = ta_input_emit(system, seq, record);
     if (result != TA_OK) {
         ta_input_close(system, false);
     }
@@ -577,23 +592,18 @@ static uint32_t ta_input_known_fields(ta_record_kind kind) {
         case TA_RECORD_DESTROYED:
         case TA_RECORD_EVICTED:
             return 0;
+        case TA_RECORD_CHECKPOINT:
+            return 11;
+        case TA_RECORD_CHECKPOINT_HISTORY:
+            return 2;
+        case TA_RECORD_CHECKPOINT_SEND:
+            return 8;
+        case TA_RECORD_CHECKPOINT_INVOKE:
+            return 3;
         default:
             return UINT32_MAX;
     }
 }
-
-/* One record's fixed part and text part, in one allocation. */
-typedef struct {
-    ta_record_kind kind;
-    uint64_t seq;
-    ta_time time;
-    uint32_t fields; /* 8-byte fields after the header */
-    uint32_t text_bytes;
-    uint16_t value_count;
-    uint8_t *block;
-    size_t block_bytes;
-    const uint8_t *text;
-} ta_input_record;
 
 static void ta_input_record_free(ta_system *system, ta_input_record *record) {
     if (record->block != NULL) {
@@ -647,7 +657,29 @@ static uint32_t ta_input_text_mask(ta_record_kind kind) {
         case TA_RECORD_FIRED:
         case TA_RECORD_WITHDRAWN:
         case TA_RECORD_FINISHED:
+        case TA_RECORD_CHECKPOINT_HISTORY:
             return 0x1u;
+        case TA_RECORD_CHECKPOINT:
+            return 0x7u;
+        case TA_RECORD_CHECKPOINT_SEND:
+            return 0xfu;
+        case TA_RECORD_CHECKPOINT_INVOKE:
+            return 0x3u;
+        default:
+            return 0;
+    }
+}
+
+/* The texts that follow a kind's known fields: JUMP's targets, a
+ * checkpoint's two state lists, a history's recorded states. */
+static uint64_t ta_input_trailing(const ta_input_record *record) {
+    switch (record->kind) {
+        case TA_RECORD_JUMP:
+            return ta_input_field(record, 8);
+        case TA_RECORD_CHECKPOINT:
+            return ta_input_field(record, 9) + ta_input_field(record, 10);
+        case TA_RECORD_CHECKPOINT_HISTORY:
+            return ta_input_field(record, 1);
         default:
             return 0;
     }
@@ -671,7 +703,8 @@ static ta_result ta_input_read_record(ta_system *system, const ta_byte_source *s
         .value_count = (uint16_t)ta_input_le(header + 28, 2),
     };
     if (version != TA_RECORD_VERSION || known == UINT32_MAX || fixed_bytes % 8u != 0 ||
-        fixed_bytes < TA_RECORD_HEADER_BYTES + 8u * known || out->value_count > 1u) {
+        fixed_bytes < TA_RECORD_HEADER_BYTES + 8u * known ||
+        out->value_count > (kind == TA_RECORD_CHECKPOINT_SEND ? 2u : 1u)) {
         return TA_ERR_CORRUPT;
     }
     out->fields = (fixed_bytes - TA_RECORD_HEADER_BYTES) / 8u;
@@ -692,9 +725,9 @@ static ta_result ta_input_read_record(ta_system *system, const ta_byte_source *s
             result = TA_ERR_CORRUPT;
         }
     }
-    if (result == TA_OK && kind == TA_RECORD_JUMP) {
-        uint64_t targets = ta_input_field(out, 8);
-        if (targets > out->fields - known || !ta_input_text_refs_valid(out, known, (uint32_t)targets)) {
+    if (result == TA_OK) {
+        uint64_t trailing = ta_input_trailing(out);
+        if (trailing > out->fields - known || !ta_input_text_refs_valid(out, known, (uint32_t)trailing)) {
             result = TA_ERR_CORRUPT;
         }
     }
@@ -775,13 +808,10 @@ typedef struct {
     ta_value *out;
 } ta_input_value_params;
 
-/* Reads the record's value, if it has one, through `definition`'s data model. */
-static ta_result ta_input_read_value(const ta_input_value_params *params) {
+/* Reads the next value stream through `definition`'s data model. */
+static ta_result ta_input_read_stream(const ta_input_value_params *params) {
     ta_value *out = params->out;
     *out = (ta_value){ 0 };
-    if (params->record->value_count == 0) {
-        return TA_OK;
-    }
     const ta_definition *definition = params->definition;
     ta_input_value_in in = { .source = params->source };
     ta_result result = TA_OK;
@@ -815,6 +845,24 @@ static ta_result ta_input_read_value(const ta_input_value_params *params) {
         *out = (ta_value){ 0 };
     }
     return result;
+}
+
+/* Reads the record's value, if it has one. */
+static ta_result ta_input_read_value(const ta_input_value_params *params) {
+    *params->out = (ta_value){ 0 };
+    return params->record->value_count == 0 ? TA_OK : ta_input_read_stream(params);
+}
+
+/* Reads past a record's value streams without decoding them. */
+static ta_result ta_input_skip_values(const ta_input_record *record, const ta_byte_source *source) {
+    for (uint16_t index = 0; index < record->value_count; index += 1u) {
+        ta_input_value_in in = { .source = source };
+        ta_result result = ta_input_value_drain(&in);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -1120,6 +1168,11 @@ static ta_result ta_input_apply(ta_system *system, const ta_input_context *apply
         case TA_RECORD_DROPPED:
             return ta_input_apply_host(system, apply, step);
         case TA_RECORD_SPAWNED:
+        case TA_RECORD_CHECKPOINT:
+        case TA_RECORD_CHECKPOINT_HISTORY:
+        case TA_RECORD_CHECKPOINT_SEND:
+        case TA_RECORD_CHECKPOINT_INVOKE:
+            /* A checkpoint past what the replay applied: prepare from it. */
             return TA_ERR_INVALID;
         default:
             break;
@@ -1179,17 +1232,39 @@ ta_result ta_actor_replay(ta_system *system, const ta_actor_replay_params *param
         return result;
     }
     result = ta_input_prepare_actor(system, actor);
-    if (result == TA_OK) {
-        result = ta_input_apply(system,
-                                &(ta_input_context){ .actor = actor, .record = &record, .source = &params->source,
-                                                   .params = params },
-                                params->step);
+    ta_activation_effects *effects = result == TA_OK ? actor->sparse->activation_effects : NULL;
+    bool covered = result == TA_OK && record.seq != 0 && record.seq <= actor->sparse->log_seq;
+    bool owed = covered && record.kind == TA_RECORD_QUEUED && effects != NULL && effects->checkpoint_owed != 0;
+    ta_input_context apply = { .actor = actor, .record = &record, .source = &params->source, .params = params };
+    if (owed) {
+        /* A message the checkpoint the replay started from owes (ADR 0091). */
+        result = ta_input_apply_host(system, &apply, params->step);
+        effects->checkpoint_owed -= result == TA_OK ? 1u : 0u;
+    } else if (covered) {
+        /* The actor has this record already (ADR 0091 section 3). */
+        *params->step = TA_REPLAY_NEXT;
+        result = ta_input_skip_values(&record, &params->source);
+    } else if (result == TA_OK) {
+        result = ta_input_apply(system, &apply, params->step);
     }
     if (result == TA_OK && record.seq != 0 && actor->sparse->log_seq < record.seq) {
         actor->sparse->log_seq = record.seq;
     }
     ta_input_record_free(system, &record);
     return result;
+}
+
+void ta_input_spawn_release(ta_system *system, ta_input_spawn *spawn) {
+    ta_value_release(&spawn->binding);
+    spawn->binding = (ta_value){ 0 };
+    ta_input_record_free(system, &spawn->checkpoint);
+}
+
+static bool ta_input_revision_is(const ta_input_record *record, const ta_definition *definition) {
+    ta_str revision = { 0 };
+    return ta_input_field_text(record, 2, &revision) &&
+           ta_str_equal(revision, (ta_str){ .ptr = (const char *)definition->identity.revision.ptr,
+                                            .len = definition->identity.revision.len });
 }
 
 ta_result ta_input_read_spawn(ta_system *system, const ta_input_spawn_params *params) {
@@ -1199,19 +1274,512 @@ ta_result ta_input_read_spawn(ta_system *system, const ta_input_spawn_params *pa
         return result;
     }
     ta_str family = { 0 };
-    if (record.kind != TA_RECORD_SPAWNED) {
+    if (record.kind != TA_RECORD_SPAWNED && record.kind != TA_RECORD_CHECKPOINT) {
         result = TA_ERR_INVALID;
     } else if (!ta_input_field_text(&record, 0, &family) ||
                !ta_str_equal(family, params->definition->identity.family.name)) {
         result = TA_ERR_INVALID;
+    } else if (record.kind == TA_RECORD_CHECKPOINT && !ta_input_revision_is(&record, params->definition)) {
+        /* A checkpoint holds its revision's states and data (ADR 0091). */
+        result = TA_ERR_DEFINITION_MISMATCH;
     }
     ta_input_spawn *out = params->out;
-    *out = (ta_input_spawn){ .time = record.time, .seq = record.seq };
+    *out = (ta_input_spawn){ .kind = record.kind, .time = record.time, .seq = record.seq };
     if (result == TA_OK) {
         result = ta_input_read_value(&(ta_input_value_params){
             .record = &record, .source = params->log, .definition = params->definition, .out = &out->binding });
         out->has_binding = result == TA_OK && out->binding.v != NULL;
     }
+    if (result == TA_OK && record.kind == TA_RECORD_CHECKPOINT) {
+        out->checkpoint = record;
+        return TA_OK;
+    }
     ta_input_record_free(system, &record);
+    return result;
+}
+
+/* ------------------------------------------------------------------------
+ * Checkpoints (ADR 0091)
+ */
+
+typedef enum { TA_LIST_ACTIVE, TA_LIST_LATE, TA_LIST_HISTORY } ta_input_list_kind;
+
+/* The states of one of an actor's lists, asked for in order. */
+typedef struct {
+    const ta_actor *actor;
+    ta_input_list_kind kind;
+    uint32_t slot;
+    uint32_t next_index; /* the index the cursor answers next */
+    ta_state_id cursor;  /* where to look for it */
+} ta_input_state_list;
+
+static bool ta_input_listed(const ta_input_state_list *list, ta_state_id state) {
+    const ta_actor *actor = list->actor;
+    switch (list->kind) {
+        case TA_LIST_ACTIVE:
+            return ta_configuration_contains_atomic(&actor->configuration, state);
+        case TA_LIST_LATE:
+            return ta_bits_get(actor->late_initialized, state);
+        default:
+            return ta_bits_get(ta_history_slot_words(&actor->history, list->slot), state);
+    }
+}
+
+static uint32_t ta_input_list_count(ta_input_state_list *list) {
+    uint32_t count = 0;
+    for (ta_state_id state = 0; state < list->actor->definition->state_count; state += 1u) {
+        count += ta_input_listed(list, state) ? 1u : 0u;
+    }
+    return count;
+}
+
+static ta_state_id ta_input_list_at(void *context, uint32_t index) {
+    ta_input_state_list *list = context;
+    if (index < list->next_index) {
+        list->next_index = 0;
+        list->cursor = 0;
+    }
+    for (ta_state_id state = list->cursor; state < list->actor->definition->state_count; state += 1u) {
+        if (!ta_input_listed(list, state)) {
+            continue;
+        }
+        if (list->next_index == index) {
+            list->next_index = index + 1u;
+            list->cursor = state + 1u;
+            return state;
+        }
+        list->next_index += 1u;
+    }
+    return 0; /* not reached: the count was taken from the same lists */
+}
+
+/* The actor's ascent over the list texts of a checkpoint header: the
+ * active states, then the late-initialized ones, through one cursor each. */
+typedef struct {
+    ta_input_state_list active;
+    ta_input_state_list late;
+    uint32_t active_count;
+} ta_input_header_lists;
+
+static ta_state_id ta_input_header_at(void *context, uint32_t index) {
+    ta_input_header_lists *lists = context;
+    return index < lists->active_count ? ta_input_list_at(&lists->active, index)
+                                       : ta_input_list_at(&lists->late, index - lists->active_count);
+}
+
+/* A pending send, as a CHECKPOINT_SEND part. */
+static ta_result ta_input_emit_send(ta_system *system, const ta_actor *actor, uint64_t seq,
+                                    const ta_delayed_send_info *send) {
+    const ta_definition *definition = actor->definition;
+    ta_record_event_texts texts = { .system = system, .name = send->event, .send_id = send->send_id };
+    bool scxml = ta_system_is_scxml_io(system, send->io_type);
+    bool self = scxml && send->destination.kind == TA_ACTOR_REF_RUNTIME &&
+                (send->destination.as.runtime == actor->session_id ||
+                 send->destination.as.runtime == actor->record.id);
+    bool destination = scxml && !self &&
+                       (send->destination.kind == TA_ACTOR_REF_NAMED || send->destination.as.runtime != 0);
+    if (destination) {
+        texts.origin = (ta_scxml_target){ .kind = TA_SCXML_TARGET_ACTOR, .as.actor = send->destination };
+    }
+    uint64_t flags = (send->data.v != NULL ? 1u : 0u) | (send->target.v != NULL ? 2u : 0u) |
+                     (send->has_target_text ? 4u : 0u) | (send->has_content ? 8u : 0u) | (self ? 16u : 0u);
+    ta_record_desc record = { .kind = TA_RECORD_CHECKPOINT_SEND,
+                              .time = ta_actor_now(system, actor),
+                              .value = &send->data,
+                              .value2 = &send->target,
+                              .definition = definition };
+    ta_input_send_field(&texts, send->send_id, &record);
+    record.fields[record.field_count++] = (ta_record_field){
+        .is_text = true, .text = { .present = true, .write = ta_input_event_name_write, .context = &texts }
+    };
+    record.fields[record.field_count++] = ta_input_str(true, ta_atom_text(&system->atoms, send->io_type));
+    record.fields[record.field_count++] = (ta_record_field){
+        .is_text = true, .text = { .present = destination, .write = ta_input_origin_write, .context = &texts }
+    };
+    record.fields[record.field_count++] = ta_input_number(send->due);
+    record.fields[record.field_count++] = ta_input_number(flags);
+    record.fields[record.field_count++] = ta_input_number(send->has_target_text ? send->target_text : 0u);
+    record.fields[record.field_count++] = ta_input_number(send->has_content ? send->content : 0u);
+    return ta_input_emit(system, seq, &record);
+}
+
+typedef struct {
+    ta_actor *actor;
+    const ta_actor_checkpoint_params *params;
+    const ta_value *root;
+    uint64_t seq;
+} ta_input_checkpoint;
+
+static uint32_t ta_input_history_parts(const ta_actor *actor) {
+    uint32_t count = 0;
+    for (uint32_t slot = 0; slot < actor->definition->history.slot_count; slot += 1u) {
+        ta_input_state_list list = { .actor = actor, .kind = TA_LIST_HISTORY, .slot = slot };
+        count += ta_input_list_count(&list) != 0 ? 1u : 0u;
+    }
+    return count;
+}
+
+static uint32_t ta_input_send_parts(const ta_actor *actor) {
+    const ta_timer_list *timers = actor->sparse != NULL ? &actor->sparse->timers : NULL;
+    uint32_t count = 0;
+    for (uint32_t index = 0; timers != NULL && index < timers->count; index += 1u) {
+        count += timers->sends[index].submitted ? 0u : 1u;
+    }
+    return count;
+}
+
+static uint32_t ta_input_invoke_parts(const ta_actor *actor) {
+    const ta_actor_sparse_state *sparse = actor->sparse;
+    uint32_t count = 0;
+    for (uint32_t index = 0; sparse != NULL && index < sparse->invoke_count; index += 1u) {
+        count += sparse->invokes[index].active ? 1u : 0u;
+    }
+    return count;
+}
+
+static ta_result ta_input_emit_header(ta_system *system, const ta_input_checkpoint *checkpoint) {
+    const ta_actor *actor = checkpoint->actor;
+    const ta_definition *definition = actor->definition;
+    ta_actor_address address = ta_address_view(actor->record.self.as.named);
+    ta_input_header_lists lists = {
+        .active = { .actor = actor, .kind = TA_LIST_ACTIVE },
+        .late = { .actor = actor, .kind = TA_LIST_LATE },
+    };
+    lists.active_count = ta_input_list_count(&lists.active);
+    uint32_t late_count = ta_input_list_count(&lists.late);
+    uint32_t parts = ta_input_history_parts(actor) + ta_input_send_parts(actor) + ta_input_invoke_parts(actor);
+    ta_record_desc record = { .kind = TA_RECORD_CHECKPOINT,
+                              .time = ta_actor_now(system, actor),
+                              .field_count = 11,
+                              .target_count = lists.active_count + late_count,
+                              .target_at = ta_input_header_at,
+                              .target_context = &lists,
+                              .value = checkpoint->root,
+                              .definition = definition };
+    record.fields[0] = ta_input_str(true, address.family.name);
+    record.fields[1] = ta_input_str(true, address.name);
+    record.fields[2] = ta_input_str(true, (ta_str){ .ptr = (const char *)definition->identity.revision.ptr,
+                                                    .len = definition->identity.revision.len });
+    record.fields[3] = ta_input_number(actor->next_send_id);
+    record.fields[4] = ta_input_number(actor->trace_macrostep);
+    record.fields[5] = ta_input_number(actor->trace_microstep);
+    record.fields[6] = ta_input_number(actor->trace_lifecycle);
+    record.fields[7] = ta_input_number(parts);
+    record.fields[8] = ta_input_number(checkpoint->params->owed_count);
+    record.fields[9] = ta_input_number(lists.active_count);
+    record.fields[10] = ta_input_number(late_count);
+    return ta_input_emit(system, checkpoint->seq, &record);
+}
+
+static ta_result ta_input_emit_parts(ta_system *system, const ta_input_checkpoint *checkpoint) {
+    const ta_actor *actor = checkpoint->actor;
+    const ta_definition *definition = actor->definition;
+    ta_result result = TA_OK;
+    for (ta_state_id state = 0; result == TA_OK && state < definition->state_count; state += 1u) {
+        uint32_t slot = definition->states[state].history_slot;
+        if (slot == UINT32_MAX) {
+            continue;
+        }
+        ta_input_state_list list = { .actor = actor, .kind = TA_LIST_HISTORY, .slot = slot };
+        uint32_t count = ta_input_list_count(&list);
+        if (count == 0) {
+            continue;
+        }
+        ta_record_desc record = { .kind = TA_RECORD_CHECKPOINT_HISTORY,
+                                  .time = ta_actor_now(system, actor),
+                                  .field_count = 2,
+                                  .target_count = count,
+                                  .target_at = ta_input_list_at,
+                                  .target_context = &list,
+                                  .definition = definition };
+        record.fields[0] = ta_input_str(true, ta_input_state_text(system, definition, state));
+        record.fields[1] = ta_input_number(count);
+        result = ta_input_emit(system, checkpoint->seq, &record);
+    }
+    const ta_actor_sparse_state *sparse = actor->sparse;
+    for (uint32_t index = 0; result == TA_OK && sparse != NULL && index < sparse->timers.count; index += 1u) {
+        if (!sparse->timers.sends[index].submitted) {
+            result = ta_input_emit_send(system, actor, checkpoint->seq, &sparse->timers.sends[index]);
+        }
+    }
+    for (uint32_t index = 0; result == TA_OK && sparse != NULL && index < sparse->invoke_count; index += 1u) {
+        const ta_active_invoke *invoke = &sparse->invokes[index];
+        if (!invoke->active) {
+            continue;
+        }
+        ta_record_desc record = { .kind = TA_RECORD_CHECKPOINT_INVOKE,
+                                  .time = ta_actor_now(system, actor),
+                                  .field_count = 3,
+                                  .definition = definition };
+        record.fields[0] = ta_input_str(true, ta_invoke_id_text(system, invoke->id));
+        record.fields[1] = ta_input_str(true, ta_atom_text(&system->atoms, invoke->type));
+        record.fields[2] = ta_input_number(sparse->invoke_meta[index].decl);
+        result = ta_input_emit(system, checkpoint->seq, &record);
+    }
+    const ta_actor_checkpoint_params *params = checkpoint->params;
+    for (uint32_t index = 0; result == TA_OK && index < params->owed_count; index += 1u) {
+        const ta_owed_message *owed = &params->owed[index];
+        ta_record_desc record = { .kind = TA_RECORD_QUEUED, .time = ta_actor_now(system, actor) };
+        ta_record_event_texts texts;
+        ta_input_event_fields(&(ta_record_event_params){ .system = system,
+                                                         .actor = actor,
+                                                         .event = owed->event,
+                                                         .host_seq = owed->host_seq },
+                              &texts, &record);
+        record.value = &owed->event->data;
+        record.definition = definition;
+        result = ta_input_emit(system, checkpoint->seq, &record);
+    }
+    return result;
+}
+
+ta_result ta_actor_checkpoint(ta_system *system, const ta_actor_checkpoint_params *params) {
+    if (system == NULL || params == NULL || params->sink.v == NULL ||
+        (params->owed_count != 0 && params->owed == NULL)) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor *actor = ta_actor_lookup(system, params->actor);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    for (uint32_t index = 0; index < params->owed_count; index += 1u) {
+        if (params->owed[index].event == NULL || params->owed[index].host_seq == 0) {
+            return TA_ERR_INVALID;
+        }
+    }
+    if (!actor->published || actor->record.self.kind != TA_ACTOR_REF_NAMED || !actor->definition->input_logged) {
+        return TA_ERR_INVALID;
+    }
+    if (actor->finished) {
+        return TA_ERR_DONE;
+    }
+    if (system->input_open || actor->macrostep || ta_actor_external_event(actor) != NULL ||
+        ta_interpreter_internal_pending(actor)) {
+        return TA_ERR_BUSY;
+    }
+    ta_value inspected = { 0 };
+    const ta_value *root = params->root;
+    if (root == NULL && actor->definition->datamodel.v->inspect != NULL) {
+        const ta_definition *definition = actor->definition;
+        if (definition->datamodel.v->inspect(definition->datamodel.self,
+                                             &(ta_datamodel_inspect_params){ .shared = definition->datamodel_shared,
+                                                                             .instance = actor->datamodel_instance,
+                                                                             .host = &actor->host,
+                                                                             .out = &inspected }) == TA_OK) {
+            root = &inspected;
+        }
+    }
+    ta_input_checkpoint checkpoint = {
+        .actor = actor, .params = params, .root = root, .seq = actor->sparse != NULL ? actor->sparse->log_seq : 0
+    };
+    /* The checkpoint goes to its own sink, through the input log's writer:
+     * nothing counts as an input, so no record number moves. */
+    ta_byte_sink input_sink = system->input_sink;
+    system->input_sink = params->sink;
+    ta_result result = TA_ERR_NOMEM;
+    if (params->sink.v->begin(params->sink.self) == TA_OP_OK) {
+        system->input_open = true;
+        system->input_status = TA_OP_OK;
+        system->input_used = 0;
+        system->input_actor = NULL;
+        result = ta_input_emit_header(system, &checkpoint);
+        if (result == TA_OK) {
+            result = ta_input_emit_parts(system, &checkpoint);
+        }
+        ta_input_close(system, result == TA_OK);
+    }
+    system->input_sink = input_sink;
+    ta_value_release(&inspected);
+    return result;
+}
+
+/* ------------------------------------------------------------------------
+ * Restoring a checkpoint into a replaying actor
+ */
+
+static ta_result ta_input_restore_lists(ta_actor *actor, const ta_input_record *record) {
+    const ta_definition *definition = actor->definition;
+    uint64_t active = ta_input_field(record, 9);
+    uint64_t late = ta_input_field(record, 10);
+    ta_configuration_clear(&actor->configuration);
+    for (uint64_t index = 0; index < active + late; index += 1u) {
+        ta_str id = { 0 };
+        ta_state_id state = 0;
+        if (!ta_input_field_text(record, 11u + (uint32_t)index, &id)) {
+            return TA_ERR_CORRUPT;
+        }
+        ta_result result = ta_input_state(definition, id, &state);
+        if (result != TA_OK) {
+            return result;
+        }
+        if (index < active) {
+            ta_configuration_set_atomic(&actor->configuration, state, true);
+        } else {
+            ta_bits_put(actor->late_initialized, state, true);
+        }
+    }
+    return TA_OK;
+}
+
+static ta_result ta_input_restore_history(ta_actor *actor, const ta_input_record *record) {
+    const ta_definition *definition = actor->definition;
+    ta_str id = { 0 };
+    ta_state_id history = 0;
+    if (!ta_input_field_text(record, 0, &id)) {
+        return TA_ERR_CORRUPT;
+    }
+    ta_result result = ta_input_state(definition, id, &history);
+    if (result != TA_OK) {
+        return result;
+    }
+    uint32_t slot = definition->states[history].history_slot;
+    if (slot == UINT32_MAX) {
+        return TA_ERR_NOT_FOUND;
+    }
+    uint64_t *words = ta_history_slot_words(&actor->history, slot);
+    uint64_t count = ta_input_field(record, 1);
+    for (uint64_t index = 0; index < count; index += 1u) {
+        ta_state_id state = 0;
+        if (!ta_input_field_text(record, 2u + (uint32_t)index, &id)) {
+            return TA_ERR_CORRUPT;
+        }
+        result = ta_input_state(definition, id, &state);
+        if (result != TA_OK) {
+            return result;
+        }
+        ta_bits_put(words, state, true);
+    }
+    return TA_OK;
+}
+
+static ta_result ta_input_restore_send(ta_system *system, ta_actor *actor, const ta_input_restore_params *params,
+                                       const ta_input_record *record) {
+    const ta_definition *definition = actor->definition;
+    uint64_t flags = ta_input_field(record, 5);
+    ta_delayed_send send = { .owner = actor->record.id,
+                             .due = ta_input_field(record, 4),
+                             .has_target_text = (flags & 4u) != 0,
+                             .target_text = (ta_content_id)ta_input_field(record, 6),
+                             .has_content = (flags & 8u) != 0,
+                             .content = (ta_content_id)ta_input_field(record, 7),
+                             .invoke_id = TA_INVOKE_ID_NONE };
+    ta_str text = { 0 };
+    ta_str name = { 0 };
+    ta_str type = { 0 };
+    if ((send.has_target_text && send.target_text >= definition->content_count) ||
+        (send.has_content && send.content >= definition->content_count) || !ta_input_field_text(record, 1, &name) ||
+        !ta_input_field_text(record, 2, &type) ||
+        (unsigned)(((flags & 1u) != 0) + ((flags & 2u) != 0)) != record->value_count) {
+        return TA_ERR_CORRUPT;
+    }
+    ta_result result = TA_OK;
+    if (ta_input_field_text(record, 0, &text)) {
+        result = ta_input_send_id(system, text, &send.send_id);
+    }
+    if (result == TA_OK) {
+        result = ta_event_name_intern_dotted(&system->event_names, name, &send.event);
+    }
+    if (result == TA_OK) {
+        result = ta_atom_intern(&system->atoms, type, &send.io_type);
+    }
+    if (result == TA_OK && (flags & 16u) != 0) {
+        send.destination = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME,
+                                           .family = definition->family,
+                                           .as.runtime = actor->record.id };
+    } else if (result == TA_OK && ta_input_field_text(record, 3, &text)) {
+        ta_scxml_target target = { 0 };
+        result = ta_scxml_target_parse(system, text, &target);
+        if (result == TA_OK && target.kind != TA_SCXML_TARGET_ACTOR) {
+            ta_scxml_target_release(&target);
+            result = TA_ERR_CORRUPT;
+        }
+        if (result == TA_OK) {
+            send.destination = target.as.actor; /* the target's reference passes to the send */
+        }
+    }
+    const ta_input_value_params value = { .record = record, .source = params->log, .definition = definition };
+    if (result == TA_OK && (flags & 1u) != 0) {
+        result = ta_input_read_stream(&(ta_input_value_params){
+            .record = value.record, .source = value.source, .definition = value.definition, .out = &send.data });
+    }
+    if (result == TA_OK && (flags & 2u) != 0) {
+        result = ta_input_read_stream(&(ta_input_value_params){
+            .record = value.record, .source = value.source, .definition = value.definition, .out = &send.target });
+    }
+    if (result == TA_OK) {
+        result = ta_actor_hold_send(system, actor, &(ta_activation_send){ .send = send, .immediate = false });
+    }
+    if (result != TA_OK) {
+        ta_value_release(&send.data);
+        ta_value_release(&send.target);
+        ta_actor_ref_release(&send.destination);
+    }
+    return result;
+}
+
+static ta_result ta_input_restore_invoke(ta_system *system, ta_actor *actor, const ta_input_record *record) {
+    ta_str id = { 0 };
+    ta_str type = { 0 };
+    uint64_t decl = ta_input_field(record, 2);
+    if (!ta_input_field_text(record, 0, &id) || !ta_input_field_text(record, 1, &type)) {
+        return TA_ERR_CORRUPT;
+    }
+    if (decl >= actor->definition->invoke_decl_count) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_invoke_restore_params restore = { .decl = (ta_invoke_decl_id)decl };
+    ta_result result = ta_invoke_id_from_text(system, id, &restore.id);
+    if (result == TA_OK) {
+        result = ta_atom_intern(&system->atoms, type, &restore.type);
+    }
+    return result == TA_OK ? ta_invoke_restore(system, actor, &restore) : result;
+}
+
+static ta_result ta_input_restore_part(ta_system *system, ta_actor *actor, const ta_input_restore_params *params) {
+    ta_input_record record;
+    ta_result result = ta_input_read_record(system, params->log, &record);
+    if (result != TA_OK) {
+        return result;
+    }
+    if (record.seq != params->spawn->seq) {
+        result = TA_ERR_CORRUPT;
+    } else if (record.kind == TA_RECORD_CHECKPOINT_HISTORY) {
+        result = ta_input_restore_history(actor, &record);
+    } else if (record.kind == TA_RECORD_CHECKPOINT_SEND) {
+        result = ta_input_restore_send(system, actor, params, &record);
+    } else if (record.kind == TA_RECORD_CHECKPOINT_INVOKE) {
+        result = ta_input_restore_invoke(system, actor, &record);
+    } else {
+        result = TA_ERR_CORRUPT;
+    }
+    if (result == TA_OK && record.kind != TA_RECORD_CHECKPOINT_SEND) {
+        result = ta_input_skip_values(&record, params->log);
+    }
+    ta_input_record_free(system, &record);
+    return result;
+}
+
+ta_result ta_input_restore(ta_system *system, ta_actor *actor, const ta_input_restore_params *params) {
+    const ta_input_record *record = &params->spawn->checkpoint;
+    ta_result result = ta_input_restore_lists(actor, record);
+    if (result != TA_OK) {
+        return result;
+    }
+    /* It starts idle: the state it restores is past its bootstrap. */
+    actor->bootstrapped = true;
+    actor->macrostep = false;
+    actor->record.residency = TA_ACTOR_IDLE;
+    actor->next_send_id = ta_input_field(record, 3);
+    actor->trace_macrostep = ta_input_field(record, 4);
+    actor->trace_microstep = (uint32_t)ta_input_field(record, 5);
+    actor->trace_lifecycle = (uint32_t)ta_input_field(record, 6);
+    uint64_t parts = ta_input_field(record, 7);
+    for (uint64_t index = 0; result == TA_OK && index < parts; index += 1u) {
+        result = ta_input_restore_part(system, actor, params);
+    }
+    if (result == TA_OK) {
+        uint64_t owed = ta_input_field(record, 8);
+        actor->sparse->activation_effects->checkpoint_owed = owed > UINT32_MAX ? UINT32_MAX : (uint32_t)owed;
+    }
     return result;
 }
