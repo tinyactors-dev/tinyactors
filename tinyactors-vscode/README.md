@@ -88,7 +88,7 @@ as a workbench, stopped on entry.
 | `port` | the port the application serves debug sessions on; required |
 | `host` | its host; default `127.0.0.1` |
 | `address` | the actor, `"family/name"` or `{ "family", "name" }` |
-| `sessionID` | or the actor by its session ID, in decimal |
+| `sessionID` | or the actor by its session ID, as `_sessionid` shows it (`<incarnation>.<session>.<family>`) |
 | `actor` | or by its actor ID, `{ "slot", "generation" }` |
 | `allow` | the permissions to ask for, of `send`, `set`, `goto`, `evaluate`; none watches only; default and most: what the session grants |
 

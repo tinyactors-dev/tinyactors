@@ -48,7 +48,7 @@ async function spawnIsAsynchronous() {
   assert.equal(idle.inspect().finalState, null, 'null while running');
   assert.equal(idle.inspect().scheduling, 'idle');
   assert.equal(idle.inspect().residency, 'idle');
-  assert.equal(typeof idle.inspect().sessionID, 'bigint');
+  assert.match(idle.inspect().sessionID, /^\d+\.\d+\.idle$/, 'a session ID is text (core ADR 0088)');
   assert.equal(done.length, 1);
   assert.ok(done[0].actor.equals(finishing));
 

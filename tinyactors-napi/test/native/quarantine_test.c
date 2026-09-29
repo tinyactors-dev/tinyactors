@@ -92,7 +92,7 @@ static bool turn(tna_system *system) {
 
 static void reports(uint32_t fail_data) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     system->wake = no_wake;
     system->child_definition = child_definition;
     data_script script = { .fail_data = fail_data };
@@ -162,7 +162,7 @@ static void reports(uint32_t fail_data) {
 /* A parent gone before its child's report is taken: the report is dropped. */
 static void parent_gone(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     system->wake = no_wake;
     system->child_definition = child_definition;
     data_script script = { .fail_data = 1 };

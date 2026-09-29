@@ -279,7 +279,7 @@ async function session() {
   await client.ok('configurationDone');
   const [process] = client.events('process');
   assert.deepEqual(process, { name: 'subscription/acct_1', startMethod: 'attach', isLocalProcess: true });
-  assert.match(client.output(), /attached to subscription\/acct_1 \(session \d+\), watched live and never paused; allowed: send, set, goto, evaluate/);
+  assert.match(client.output(), /attached to subscription\/acct_1 \(session \d+\.\d+\.subscription\), watched live and never paused; allowed: send, set, goto, evaluate/);
   // One stop, so the client shows the stack and the variables.
   const [entry] = client.events('stopped');
   // The attach stop takes the focus, so the client selects the top frame and
@@ -682,7 +682,7 @@ async function state() {
                    [['name', '"basic"'], ['seats', '2']]);
   assert.deepEqual((await read('Configuration')).map((variable) => variable.name), ['active']);
   const system_ = Object.fromEntries((await read('System')).map((variable) => [variable.name, variable.value]));
-  assert.equal(system_._sessionid, JSON.stringify(`0.${actor.inspect().sessionID}.subscription`), "_sessionid as the chart reads it (core ADR 0088)");
+  assert.equal(system_._sessionid, JSON.stringify(actor.inspect().sessionID), "_sessionid as the chart reads it (core ADR 0088)");
   assert.equal(system_.scheduling, '"idle"');
   await client.refused('setVariable', { variablesReference: scopes[6].variablesReference, name: 'now', value: '1' },
                        /only the Data model/);

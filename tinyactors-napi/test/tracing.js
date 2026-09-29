@@ -80,7 +80,7 @@ async function batches() {
   const go = named(spans, 'scxml.macrostep go');
   const goStep = named(spans, 'scxml.microstep go');
   assert.ok(spawned && boot && bootStep && go && goStep, `the spans: ${sink.names()}`);
-  const session = BigInt(boot.attributes['scxml.session_id']);
+  const session = boot.attributes['scxml.session_id'];
   assert.equal(boot.spanID, stepSpanID(session, 1n, 0), 'span IDs are step keys');
   assert.equal(goStep.spanID, stepSpanID(session, 2n, 1));
   assert.equal(bootStep.parentSpanID, boot.spanID);

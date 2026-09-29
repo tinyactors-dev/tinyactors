@@ -18,7 +18,6 @@
 const { core } = require('../native');
 const { TinyactorsError } = require('../errors');
 const { locationText, valueAt } = require('./expressions');
-const { sessionText } = require('../system');
 
 const SCOPES = ['Data model', 'Event', 'Configuration', 'Queues', 'Timers', 'Invocations', 'System'];
 const PREVIEW = 60;
@@ -206,7 +205,7 @@ class Variables {
                                          thread: child === undefined ? null : `${child.id} ${child.label}` }];
       });
       case 'System': return [
-        ['_sessionid', sessionText(system, view)],
+        ['_sessionid', view.sessionID],
         ['_name', this.#host.documentName(view)],
         ['now', system.time],
         ['actor', `${view.actor.slot}:${view.actor.generation}`],

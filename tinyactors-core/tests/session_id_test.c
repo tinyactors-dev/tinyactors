@@ -425,7 +425,39 @@ static void test_an_unnamed_session_names_its_family(void) {
     finish(&f);
 }
 
+/* A step key names its session's family (ADR 0088), so a host can render
+ * the session's text from any record, even once the session is gone. */
+static int keyed_records = 0;
+static int keyed_without_family = 0;
+static ta_atom keyed_family = 0;
+static void keyed_write(void *self, const ta_trace_record *record) {
+    (void)self;
+    keyed_records += 1;
+    keyed_without_family += record->key.family == keyed_family ? 0 : 1;
+}
+static const ta_trace_sink_vtable keyed_vtable = { .write = keyed_write };
+
+static void test_a_step_key_names_its_family(void) {
+    fixture f;
+    start(&f);
+    CHECK(ta_system_intern_atom(f.system, (ta_str)STR("idle"), &keyed_family) == TA_OK);
+    CHECK(ta_system_set_trace_sink(f.system, (ta_trace_sink){ .v = &keyed_vtable, .kinds = UINT32_MAX }) == TA_OK);
+    keyed_records = 0;
+    keyed_without_family = 0;
+    ta_actor_id actor = spawn(&f, NULL);
+    ta_run_status status = TA_RUN_ERROR;
+    CHECK(ta_actor_resume(f.system, &(ta_actor_resume_params){ .actor = actor, .budget = 16, .status = &status }) ==
+          TA_OK);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(f.system, actor, &view) == TA_OK);
+    CHECK(view.step.family == keyed_family && view.trace.cause.family == keyed_family);
+    CHECK(ta_actor_destroy(f.system, actor) == TA_OK);
+    CHECK(keyed_records > 0 && keyed_without_family == 0);
+    finish(&f);
+}
+
 int main(void) {
+    test_a_step_key_names_its_family();
     test_an_unnamed_session_names_its_family();
     test_load_keeps_the_session();
     test_load_runs_under_its_trace_parent();

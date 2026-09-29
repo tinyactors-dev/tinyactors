@@ -34,7 +34,7 @@
 const { core } = require('./native');
 const { TinyactorsError } = require('./errors');
 const { ActorID } = require('./actor');
-const { nativeOf, observe, sessionText } = require('./system');
+const { nativeOf, observe, sessionNumber } = require('./system');
 const { exportSpec } = require('./definition');
 const { Labels } = require('./debug/labels');
 const { Macrosteps, summarize } = require('./debug/macrosteps');
@@ -339,14 +339,14 @@ class DebugSession {
       return { actor: id, address: undefined };
     }
     if (sessionID !== undefined) {
-      let wanted;
+      let number;
       try {
-        wanted = BigInt(sessionID);
+        number = sessionNumber(system, sessionID);
       } catch {
-        throw refuse('"sessionID" is a session ID in decimal');
+        throw refuse('"sessionID" is a session ID of this system, as _sessionid shows it');
       }
-      const found = actorOfSession(system, wanted);
-      if (found === undefined) throw refuse(`no resident actor holds session ${wanted}`);
+      const found = actorOfSession(system, number, sessionID);
+      if (found === undefined) throw refuse(`no resident actor holds session ${sessionID}`);
       return { actor: found, address: undefined };
     }
     throw refuse('attach needs "address", "actor" { slot, generation } or "sessionID"');
@@ -362,7 +362,7 @@ class DebugSession {
     const { actor, address } = this.#resolve(args);
     const view = this.#system.inspect(actor);
     const label = address !== undefined ? `${address.family}/${address.name}` : `actor ${actor.slot}:${actor.generation}`;
-    const attached = { allow, actor, label, address, sessionID: String(view.sessionID), args };
+    const attached = { allow, actor, label, address, sessionID: view.sessionID, args };
     this.#attached = attached;
     try {
       this.#audited({ type: 'attach', allow: [...allow] });
@@ -780,7 +780,7 @@ class DebugSession {
     return {
       data: view.data,
       event: this.#eventOf(thread, view),
-      sessionID: sessionText(this.#system, view),
+      sessionID: view.sessionID,
       name: this.#documentName(view),
       activeStates: view.activeStates,
     };
@@ -1380,8 +1380,8 @@ function parseAddress(address) {
  * one reloaded since has another ID, so every resident actor is looked
  * through for it.
  */
-function actorOfSession(system, wanted) {
-  const guess = new ActorID(system, Number(wanted & 0xffffffffn), Number(wanted >> 32n));
+function actorOfSession(system, number, wanted) {
+  const guess = new ActorID(system, Number(number & 0xffffffffn), Number(number >> 32n));
   try {
     if (system.inspect(guess).sessionID === wanted) return guess;
   } catch (error) {
@@ -1397,13 +1397,13 @@ function actorOfSession(system, wanted) {
  * The child an in-system SCXML invocation runs, from its serviceHandle:
  * the child's runtime ID, (generation << 32) | slot (src/adapters/invoker.c),
  * not its session ID; they differ once slots are reused or an actor is
- * reloaded. Answers { actor, session } with the session in decimal, or
+ * reloaded. Answers { actor, session } with the session as its text, or
  * undefined when no resident actor has that ID any more.
  */
 function childOf(system, handle) {
   const actor = new ActorID(system, Number(handle & 0xffffffffn), Number(handle >> 32n));
   try {
-    return { actor, session: String(system.inspect(actor).sessionID) };
+    return { actor, session: system.inspect(actor).sessionID };
   } catch (error) {
     if (error instanceof TinyactorsError && (error.code === 'not-found' || error.code === 'invalid')) return undefined;
     throw error;

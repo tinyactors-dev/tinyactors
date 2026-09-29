@@ -93,7 +93,7 @@ static uint32_t count_records(const tna_system *system, tna_record_kind kind) {
 
 static void turns(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     wake_counter counter = { 0 };
     system->wake = count_wake;
     system->wake_context = &counter;
@@ -157,7 +157,7 @@ static void turns(void) {
 /* A long entry handler, split by the action budget over several turns. */
 static void action_budget(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     enum { ACTIONS = 40 };
     ta_scxml_action_spec logs[ACTIONS + 1];
     memset(logs, 0, sizeof logs);
@@ -210,7 +210,7 @@ static void action_budget(void) {
 /* The resume limit bounds one turn; the rest waits for the next. */
 static void resume_limit(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     ta_scxml_state_spec idle_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle") }, { 0 } };
     ta_scxml_spec idle = { .name = S("idle"), .states = idle_states };
     ta_definition_id chart = define(system, &idle);

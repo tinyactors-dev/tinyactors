@@ -18,7 +18,7 @@ static ta_address *intern(tna_system *system, ta_str family, ta_str name) {
 
 static void compare_and_swap(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     tna_directory *directory = &system->directory;
     ta_actor_directory adapter = tna_directory_adapter(directory);
     ta_address *a = intern(system, S("f"), S("a"));
@@ -73,7 +73,7 @@ static void compare_and_swap(void) {
 /* Core claims and removes the entry of a named actor through the directory. */
 static void named_actor_lifecycle(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     static ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = { "a", 1 } }, { 0 } };
     ta_scxml_spec spec = { .name = S("f"), .states = states };
     ta_definition *definition = NULL;

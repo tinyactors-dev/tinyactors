@@ -25,7 +25,7 @@ static uint32_t settled_count;
 static tna_system *make_system(void) {
     settled_count = 0; /* waiter indices start again in each system */
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     system->wake = no_wake;
     return system;
 }

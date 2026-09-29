@@ -377,8 +377,12 @@ typedef enum { TA_RUN_STABLE = 0, TA_RUN_PAUSED = 1, TA_RUN_DONE = 2, TA_RUN_ERR
  * macrostep: its key is (session, 0, n), where n counts the session's
  * lifecycle records from 1 across residency, so each has its own span ID.
  * FINISHED names the step that finished as its `cause`.
+ * `family` is the session's definition family (ADR 0088), so a host renders
+ * the session's text (ta_session_id_format) from a key alone, even once the
+ * session is gone; it is 0 for the host's causes and for definition records.
+ * It fills padding, so a key is 24 bytes, and it is not part of a span ID.
  */
-typedef struct { uint64_t session; uint64_t macrostep; uint32_t microstep; } ta_step_key;
+typedef struct { uint64_t session; uint64_t macrostep; uint32_t microstep; ta_atom family; } ta_step_key;
 /*
  * A W3C trace context: the trace-id is `trace_id_high` then `trace_id_low`,
  * each big-endian, and all zero means none; `flags` are the W3C

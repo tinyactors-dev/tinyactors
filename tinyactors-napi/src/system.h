@@ -227,7 +227,8 @@ struct tna_system {
 };
 
 /* TA_ERR_NOMEM when the record or core cannot be allocated. */
-ta_result tna_system_create(tna_system **out);
+/* `incarnation` is core's (core ADR 0088): distinct from earlier systems and processes. */
+ta_result tna_system_create(uint64_t incarnation, tna_system **out);
 void tna_system_close(tna_system *system);
 bool tna_system_closed(const tna_system *system);
 size_t tna_system_leaked_bytes(const tna_system *system);

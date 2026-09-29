@@ -78,10 +78,11 @@ async function listsEveryProcessor() {
   const sessionOf = (actor) => actor.inspect().sessionID;
   const scxml = 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor';
   assert.deepEqual(plain.inspect().data.processors, {
-    scxml: { location: `#_scxml_0.${sessionOf(plain)}.replier` },
-    [scxml]: { location: `#_scxml_0.${sessionOf(plain)}.replier` },
-    peer: { location: `peer://here/${sessionOf(plain)}` },
-    ws: { location: `ws://here/${sessionOf(plain)}` },
+    scxml: { location: `#_scxml_${sessionOf(plain)}` },
+    [scxml]: { location: `#_scxml_${sessionOf(plain)}` },
+    // A processor's {session} placeholder is the session's number (core ADR 0068).
+    peer: { location: `peer://here/${plain.inspect().step.session}` },
+    ws: { location: `ws://here/${plain.inspect().step.session}` },
     http: {},
   }, 'an unnamed session has no {family}/{name} location');
   assert.equal(named.inspect().data.processors.http.location, 'http://here/replier/r1');

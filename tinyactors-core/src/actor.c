@@ -1097,6 +1097,7 @@ ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_send_id s
 
 /* The family fills the padding after `kind` (ADR 0088). */
 _Static_assert(sizeof(ta_actor_ref) == 16, "ta_actor_ref must stay 16 bytes");
+_Static_assert(sizeof(ta_step_key) == 24, "ta_step_key must stay 24 bytes: its family fills padding");
 
 ta_atom ta_actor_family_of(const ta_system *system, ta_actor_id id) {
     const ta_actor *actor = ta_actor_lookup(system, id);
@@ -1231,10 +1232,7 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .allocated_bytes = ta_actor_allocated_bytes(actor),
         .final_state = TA_STATE_NONE,
         .trace = { .context = ta_actor_macrostep_parent(actor).context,
-                   .cause = actor->trace_begun ? (ta_step_key){ .session = actor->session_id,
-                                                                .macrostep = actor->trace_macrostep,
-                                                                .microstep = actor->trace_microstep }
-                                               : (ta_step_key){ .session = actor->session_id } },
+                   .cause = ta_actor_step(actor) },
     };
     /* A taken head is `_event`, not work that waits. */
     uint32_t waiting = ta_actor_waiting_internal(actor);

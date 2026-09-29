@@ -3807,7 +3807,8 @@ TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta
 
 TA_PRIVATE ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
     actor->trace_lifecycle += 1u;
-    return (ta_step_key){ .session = actor->session_id, .microstep = actor->trace_lifecycle };
+    return (ta_step_key){ .session = actor->session_id, .microstep = actor->trace_lifecycle,
+                          .family = actor->definition->family };
 }
 
 TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
@@ -12291,6 +12292,7 @@ TA_API ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_se
 
 /* The family fills the padding after `kind` (ADR 0088). */
 _Static_assert(sizeof(ta_actor_ref) == 16, "ta_actor_ref must stay 16 bytes");
+_Static_assert(sizeof(ta_step_key) == 24, "ta_step_key must stay 24 bytes: its family fills padding");
 
 TA_PRIVATE ta_atom ta_actor_family_of(const ta_system *system, ta_actor_id id) {
     const ta_actor *actor = ta_actor_lookup(system, id);
@@ -12425,10 +12427,7 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         .allocated_bytes = ta_actor_allocated_bytes(actor),
         .final_state = TA_STATE_NONE,
         .trace = { .context = ta_actor_macrostep_parent(actor).context,
-                   .cause = actor->trace_begun ? (ta_step_key){ .session = actor->session_id,
-                                                                .macrostep = actor->trace_macrostep,
-                                                                .microstep = actor->trace_microstep }
-                                               : (ta_step_key){ .session = actor->session_id } },
+                   .cause = ta_actor_step(actor) },
     };
     /* A taken head is `_event`, not work that waits. */
     uint32_t waiting = ta_actor_waiting_internal(actor);
@@ -15051,10 +15050,10 @@ TA_PRIVATE ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor) {
 
 TA_PRIVATE ta_step_key ta_actor_step(const ta_actor *actor) {
     if (!actor->trace_begun) {
-        return (ta_step_key){ .session = actor->session_id };
+        return (ta_step_key){ .session = actor->session_id, .family = actor->definition->family };
     }
     return (ta_step_key){ .session = actor->session_id, .macrostep = actor->trace_macrostep,
-                          .microstep = actor->trace_microstep };
+                          .microstep = actor->trace_microstep, .family = actor->definition->family };
 }
 
 /* The key of the step running now; outside a macrostep, the session alone. */
@@ -16323,7 +16322,7 @@ TA_PRIVATE void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor
         return;
     }
     ta_trace_record record = ta_trace_record_blank(TA_TRACE_RAISED);
-    record.key = (ta_step_key){ .session = actor->session_id };
+    record.key = (ta_step_key){ .session = actor->session_id, .family = actor->definition->family };
     record.actor = actor->record.id;
     record.definition = actor->definition->id;
     record.now = ta_actor_now(system, actor);

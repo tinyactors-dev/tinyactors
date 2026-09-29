@@ -26,7 +26,7 @@ static void no_wake(tna_system *system, void *context) {
 
 static tna_system *make_system(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     system->wake = no_wake;
     CHECK(tna_system_set_clock(system, TNA_CLOCK_MANUAL, 0) == TA_OK);
     return system;

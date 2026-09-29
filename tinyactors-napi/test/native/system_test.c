@@ -4,7 +4,7 @@
 
 static void closes_without_leaks(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     CHECK(system != NULL);
     CHECK(!tna_system_closed(system));
     /* Core allocated its system through the core lane. */
@@ -24,7 +24,7 @@ static void closes_without_leaks(void) {
 
 static void frees_an_open_system(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(&system) == TA_OK);
+    CHECK(tna_system_create(0, &system) == TA_OK);
     tna_system_free(system); /* closes first */
 }
 
@@ -32,7 +32,7 @@ static void many_systems_in_any_order(void) {
     enum { COUNT = 64 };
     tna_system *systems[COUNT];
     for (int index = 0; index < COUNT; index += 1) {
-        CHECK(tna_system_create(&systems[index]) == TA_OK);
+        CHECK(tna_system_create(0, &systems[index]) == TA_OK);
     }
     /* Close the odd ones, then free everything from the back. */
     for (int index = 1; index < COUNT; index += 2) {
@@ -47,7 +47,7 @@ static void many_systems_in_any_order(void) {
 }
 
 static void rejects_null(void) {
-    CHECK(tna_system_create(NULL) == TA_ERR_INVALID);
+    CHECK(tna_system_create(0, NULL) == TA_ERR_INVALID);
     tna_system_close(NULL);
     tna_system_free(NULL);
     CHECK(tna_system_closed(NULL));

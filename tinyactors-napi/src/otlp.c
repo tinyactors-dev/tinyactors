@@ -662,6 +662,35 @@ static ta_str tna_decimal(uint64_t value, char *out) {
     return (ta_str){ out, (uint32_t)len };
 }
 
+/* A session ID as text (core ADR 0088, napi ADR 0032 section 1),
+ * `<incarnation>.<session>.<family>`, into `out` (TNA_SESSION_TEXT bytes):
+ * the text `_sessionid` holds. The decimal session alone when the family is
+ * unknown, which only a host's cause or a definition record has, or when
+ * the text does not fit. */
+#define TNA_SESSION_TEXT 256u
+static ta_str tna_session_text(const tna_otlp *otlp, uint64_t session, ta_str family, char *out) {
+    uint32_t needed = 0;
+    if (family.len != 0 && otlp->config.core != NULL &&
+        ta_session_id_format(otlp->config.core,
+                             &(ta_session_id_format_params){ .session = session, .family = family, .buffer = out,
+                                                             .capacity = TNA_SESSION_TEXT, .needed = &needed }) ==
+            TA_OK &&
+        needed != 0) {
+        return (ta_str){ out, needed - 1u };
+    }
+    return tna_decimal(session, out);
+}
+
+/* The session of a step key as text: a key names its session's family (core ADR 0088). */
+static ta_str tna_key_session(const tna_otlp *otlp, const ta_step_key *key, char *out) {
+    ta_str family = { 0 };
+    if (key->family != 0 && otlp->config.core != NULL &&
+        ta_system_atom_text(otlp->config.core, key->family, &family) != TA_OK) {
+        family = (ta_str){ 0 };
+    }
+    return tna_session_text(otlp, key->session, family, out);
+}
+
 /* ------------------------------------------------------------------------
  * The encoder
  */
@@ -1235,13 +1264,12 @@ static bool tna_event_attributes(tna_otlp *otlp, tna_otlp_buf *buf, uint32_t fie
 
 /* The attributes of a step's span: the session, step and actor. */
 static bool tna_step_attributes(tna_otlp *otlp, tna_otlp_buf *buf, const ta_trace_record *record) {
-    char session[24];
+    char session[TNA_SESSION_TEXT];
     char actor[48];
     ta_str slot = tna_decimal(ta_actor_id_slot(record->actor), actor);
     actor[slot.len] = ':';
     ta_str generation = tna_decimal(ta_actor_id_generation(record->actor), actor + slot.len + 1u);
-    (void)otlp;
-    return tna_kv_string(buf, F_SPAN_ATTRIBUTES, LIT("scxml.session_id"), tna_decimal(record->key.session, session)) &&
+    return tna_kv_string(buf, F_SPAN_ATTRIBUTES, LIT("scxml.session_id"), tna_key_session(otlp, &record->key, session)) &&
            tna_kv_int(buf, F_SPAN_ATTRIBUTES, LIT("scxml.macrostep"), (int64_t)record->key.macrostep) &&
            tna_kv_string(buf, F_SPAN_ATTRIBUTES, LIT("scxml.actor"),
                          (ta_str){ actor, slot.len + 1u + generation.len }) &&
@@ -1250,12 +1278,12 @@ static bool tna_step_attributes(tna_otlp *otlp, tna_otlp_buf *buf, const ta_trac
 }
 
 /* A cause, as three attributes (the span parent says the same, lossily). */
-static bool tna_cause_attributes(tna_otlp_buf *buf, uint32_t field, const ta_step_key *cause) {
+static bool tna_cause_attributes(const tna_otlp *otlp, tna_otlp_buf *buf, uint32_t field, const ta_step_key *cause) {
     if (tna_key_empty(cause)) {
         return true;
     }
-    char session[24];
-    return tna_kv_string(buf, field, LIT("scxml.cause.session_id"), tna_decimal(cause->session, session)) &&
+    char session[TNA_SESSION_TEXT];
+    return tna_kv_string(buf, field, LIT("scxml.cause.session_id"), tna_key_session(otlp, cause, session)) &&
            tna_kv_int(buf, field, LIT("scxml.cause.macrostep"), (int64_t)cause->macrostep) &&
            tna_kv_int(buf, field, LIT("scxml.cause.microstep"), (int64_t)cause->microstep);
 }
@@ -1391,7 +1419,7 @@ static bool tna_begin(tna_otlp *otlp, const ta_trace_record *record, uint64_t no
                                                : LIT("(no event)");
     bool ok = tna_span_open(otlp, span, record, now) && tna_span_name(span, LIT("scxml.macrostep "), what) &&
               tna_event_attributes(otlp, &span->attributes, F_SPAN_ATTRIBUTES, record->event) &&
-              tna_cause_attributes(&span->attributes, F_SPAN_ATTRIBUTES, &record->cause) &&
+              tna_cause_attributes(otlp, &span->attributes, F_SPAN_ATTRIBUTES, &record->cause) &&
               tna_kv_int(&span->attributes, F_SPAN_ATTRIBUTES, LIT("scxml.trace.flags"), record->context.flags);
     if (!ok) {
         tna_open_remove(otlp, open);
@@ -1534,7 +1562,7 @@ static bool tna_record_attributes(tna_otlp *otlp, tna_otlp_buf *buf, const ta_tr
         ok = tna_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.final_state"),
                            tna_state_name(otlp, record->definition, record->state));
     }
-    return ok && tna_cause_attributes(buf, F_EVENT_ATTRIBUTES, &record->cause);
+    return ok && tna_cause_attributes(otlp, buf, F_EVENT_ATTRIBUTES, &record->cause);
 }
 
 /* A record inside a macrostep: a span event on the step it happened in. */
@@ -1588,7 +1616,7 @@ static bool tna_lifecycle(tna_otlp *otlp, const ta_trace_record *record, uint64_
     tna_span_reset(span);
     bool ok = tna_span_open(otlp, span, record, now) &&
               tna_span_name(span, LIT("scxml."), tna_cstr(tna_kind_names[record->kind])) &&
-              tna_cause_attributes(&span->attributes, F_SPAN_ATTRIBUTES, &record->cause) &&
+              tna_cause_attributes(otlp, &span->attributes, F_SPAN_ATTRIBUTES, &record->cause) &&
               (record->state == TA_STATE_NONE ||
                tna_kv_string(&span->attributes, F_SPAN_ATTRIBUTES, LIT("scxml.final_state"),
                              tna_state_name(otlp, record->definition, record->state)));
@@ -1702,9 +1730,9 @@ static bool tna_log_append(tna_otlp *otlp, const tna_log_line *line) {
 static bool tna_log_attributes(tna_otlp *otlp, const ta_trace_record *record) {
     tna_otlp_buf *buf = &otlp->scratch;
     buf->len = 0;
-    char decimal[24];
+    char decimal[TNA_SESSION_TEXT];
     bool ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.session_id"),
-                            tna_decimal(record->key.session, decimal)) &&
+                            tna_key_session(otlp, &record->key, decimal)) &&
               tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.macrostep"), (int64_t)record->key.macrostep) &&
               tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.microstep"), record->key.microstep);
     ta_definition_inspection view;
@@ -1903,12 +1931,15 @@ void tna_otlp_host_log(tna_otlp *otlp, const tna_otlp_host_log_params *log) {
     line.body = (ta_str){ (const char *)otlp->log_body.data, (uint32_t)otlp->log_body.len };
     tna_otlp_buf *buf = &otlp->scratch;
     buf->len = 0;
-    char decimal[24];
-    if (ok && log->session != 0) {
-        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.session_id"), tna_decimal(log->session, decimal));
-    }
+    char decimal[TNA_SESSION_TEXT];
     ta_definition_inspection view;
-    if (ok && log->definition != 0 && ta_definition_inspect(otlp->config.core, log->definition, &view) == TA_OK) {
+    bool defined = log->definition != 0 && ta_definition_inspect(otlp->config.core, log->definition, &view) == TA_OK;
+    if (ok && log->session != 0) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.session_id"),
+                           tna_session_text(otlp, log->session, defined ? view.identity.family.name : (ta_str){ 0 },
+                                            decimal));
+    }
+    if (ok && defined) {
         ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.family"), view.identity.family.name) &&
              tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.revision"),
                            (ta_str){ (const char *)view.identity.revision.ptr, view.identity.revision.len });
@@ -2003,8 +2034,8 @@ void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record) {
     }
     tna_otlp_buf *buf = &otlp->scratch;
     buf->len = 0;
-    char decimal[24];
-    ok = ok && tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.session_id"), tna_decimal(record->key.session, decimal));
+    char decimal[TNA_SESSION_TEXT];
+    ok = ok && tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.session_id"), tna_key_session(otlp, &record->key, decimal));
     if (ok && record->label.len != 0) {
         ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.log.label"), record->label);
     }

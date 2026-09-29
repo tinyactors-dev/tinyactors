@@ -149,10 +149,10 @@ ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor) {
 
 ta_step_key ta_actor_step(const ta_actor *actor) {
     if (!actor->trace_begun) {
-        return (ta_step_key){ .session = actor->session_id };
+        return (ta_step_key){ .session = actor->session_id, .family = actor->definition->family };
     }
     return (ta_step_key){ .session = actor->session_id, .macrostep = actor->trace_macrostep,
-                          .microstep = actor->trace_microstep };
+                          .microstep = actor->trace_microstep, .family = actor->definition->family };
 }
 
 /* The key of the step running now; outside a macrostep, the session alone. */
@@ -1421,7 +1421,7 @@ void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_
         return;
     }
     ta_trace_record record = ta_trace_record_blank(TA_TRACE_RAISED);
-    record.key = (ta_step_key){ .session = actor->session_id };
+    record.key = (ta_step_key){ .session = actor->session_id, .family = actor->definition->family };
     record.actor = actor->record.id;
     record.definition = actor->definition->id;
     record.now = ta_actor_now(system, actor);

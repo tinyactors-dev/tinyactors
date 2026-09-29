@@ -34,6 +34,15 @@ export interface SystemOptions {
   clock?: "realtime" | "manual";
   /** Core's logical time at creation, in milliseconds; default 0. */
   initialTime?: number;
+  /**
+   * Core's incarnation (core ADR 0088, napi ADR 0032): the first part of
+   * every session ID's text, `<incarnation>.<session>.<family>`. Choose it
+   * distinct from the systems and processes before this one, so a session
+   * URI written into a log or into data never reaches an unrelated actor
+   * later. A non-negative safe integer or a bigint of at most 64 bits;
+   * default 64 random bits. Tests that compare session text pass 0.
+   */
+  incarnation?: number | bigint;
   scheduling?: SchedulingOptions;
   /**
    * What happens to an actor that reaches a top-level final state (ADR 0012):
@@ -191,6 +200,8 @@ export interface System {
   readonly closed: boolean;
   readonly clock: "realtime" | "manual";
   readonly time: number;
+  /** Core's incarnation (SystemOptions.incarnation). */
+  readonly incarnation: bigint;
 
   /**
    * Compile and register a chart: a statechart() builder, or a spec in the
@@ -491,14 +502,15 @@ export interface System {
   configureTraces(options: TraceConfiguration): void;
   /**
    * Traces matching deliveries in full, sampled whatever the ratio, until
-   * stop(): to these sessions (IDs or actors), to the actors at these
+   * stop(): to these sessions (their text, as `sessionID` shows it, or
+   * actors), to the actors at these
    * addresses, and to the actors of these definition families. What a
    * watched delivery causes is watched too. An address is resolved once,
    * now, to its resident actor's session: an address with none throws
    * `not-found`, and a later session at it is not watched.
    */
   watchTraces(watch: {
-    sessions?: (bigint | number | ActorID)[];
+    sessions?: (string | ActorID)[];
     families?: string[];
     addresses?: { family: string; name: string }[];
   }): { stop(): void };
@@ -1486,8 +1498,12 @@ export type ActorResidency = "idle" | "running" | "done";
  */
 export interface ActorInspection<Data = unknown> {
   readonly actor: Actor;
-  /** Stable across unload and load; the runtime ID is not (core ADR 0066). */
-  readonly sessionID: bigint;
+  /**
+   * The session ID as text, `<incarnation>.<session>.<family>` (core ADR
+   * 0088): what the chart reads as `_sessionid`. Stable across unload and
+   * load; the runtime ID is not (core ADR 0066).
+   */
+  readonly sessionID: string;
   readonly definition: DefinitionIdentity;
   /** The definition's ID (Definition.id), which names its compiled states, transitions and actions. */
   readonly definitionID: DefinitionID;
@@ -1613,8 +1629,8 @@ export interface SessionImage<Data extends object = Record<string, unknown>> {
   readonly origin: System;
   /** The actor at capture; its ID is stale once the actor is unloaded. */
   readonly actor: ActorID;
-  /** Stable across unload and load (core ADR 0066). */
-  readonly sessionID: bigint;
+  /** The session ID as text (ActorInspection.sessionID); stable across unload and load. */
+  readonly sessionID: string;
   readonly definition: DefinitionIdentity;
   readonly address?: ActorAddress;
   /** The data-model root at capture (shared, not copied), or undefined under the null data model. */
@@ -2200,7 +2216,8 @@ export declare function decodeTraces(bytes: Uint8Array): DecodedSpan[];
 export declare function parseTraceparent(header: string | undefined):
   { traceID: string; parentSpanID: string; flags: number; sampled: boolean } | undefined;
 export declare function formatTraceparent(span: { traceID: string; spanID: string; sampled?: boolean; flags?: number }): string;
-export declare function stepSpanID(session: bigint | number, macrostep: bigint | number, microstep?: number): string;
+/** `session`: the numeric session ID, or a session ID's text (`scxml.session_id`, ActorInspection.sessionID). */
+export declare function stepSpanID(session: bigint | number | string, macrostep: bigint | number, microstep?: number): string;
 
 // ---------------------------------------------------------------------------
 // The debug adapter (napi ADR 0026)
@@ -2219,7 +2236,7 @@ export type DebugAuditEntry = {
   session: number;
   /** While attached: the actor's label and its session ID. */
   actor?: string;
-  /** In decimal. */
+  /** As text (ActorInspection.sessionID). */
   sessionID?: string;
 } & (
   | { type: 'attach'; allow: DebugPermission[]; [detail: string]: unknown }

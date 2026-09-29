@@ -63,7 +63,8 @@ uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_cont
 
 ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
     actor->trace_lifecycle += 1u;
-    return (ta_step_key){ .session = actor->session_id, .microstep = actor->trace_lifecycle };
+    return (ta_step_key){ .session = actor->session_id, .microstep = actor->trace_lifecycle,
+                          .family = actor->definition->family };
 }
 
 void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,

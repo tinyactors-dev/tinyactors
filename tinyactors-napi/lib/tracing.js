@@ -121,10 +121,14 @@ const hex16 = (value) => value.toString(16).padStart(16, '0');
 
 /**
  * The 16-hex-digit span ID of step (session, macrostep, microstep). A host
- * cause (session 0) is the host's own span ID, `macrostep`.
+ * cause (session 0) is the host's own span ID, `macrostep`. `session` is the
+ * numeric session ID (ActorInspection.step.session), or a session ID's text,
+ * `<incarnation>.<session>.<family>` (core ADR 0088), as `scxml.session_id`
+ * and ActorInspection.sessionID show it.
  */
 function stepSpanID(session, macrostep, microstep = 0) {
-  const s = BigInt(session);
+  const text = typeof session === 'string' ? /^\d+\.(\d+)\./.exec(session) : null;
+  const s = BigInt(text === null ? session : text[1]);
   const m = BigInt(macrostep);
   if (s === 0n) {
     return hex16(m);

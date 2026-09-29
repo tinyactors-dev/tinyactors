@@ -249,8 +249,9 @@ class System {
     // close() is still finalized, as with the environment-wide effect handler.
     const deadLetter = options?.deadLetter;
     const self = new WeakRef(this);
-    const nativeOptions = deadLetter !== undefined && typeof deadLetter !== 'function' ? options
-      : { ...options, deadLetter: (letter) => self.deref()?.#deadLetter(letter, deadLetter) };
+    const incarnation = incarnationOf(options?.incarnation);
+    const nativeOptions = deadLetter !== undefined && typeof deadLetter !== 'function' ? { ...options, incarnation }
+      : { ...options, incarnation, deadLetter: (letter) => self.deref()?.#deadLetter(letter, deadLetter) };
     this.#native = new native.System(this, nativeOptions);
     this.#events = new EventNames(this.#native);
     const unloadValues = options?.unloadValues ?? 'serialize';
@@ -548,14 +549,14 @@ class System {
   watchTraces({ sessions = [], families = [], addresses = [] } = {}) {
     const watch = { sessions: new Set(), families: new Set(families.map(String)) };
     for (const session of sessions) {
-      watch.sessions.add(session instanceof ActorID ? BigInt(this.inspect(session).sessionID) : BigInt(session));
+      watch.sessions.add(session instanceof ActorID ? this.#sessionNumber(session) : sessionNumber(this, session));
     }
     for (const address of addresses) {
       const actor = this.findActor(address);
       if (actor === undefined) {
         throw new TinyactorsError('watchTraces(): no resident actor has that address', 'not-found');
       }
-      watch.sessions.add(BigInt(this.inspect(actor).sessionID));
+      watch.sessions.add(this.#sessionNumber(actor));
     }
     this.#watches.add(watch);
     this.#applyWatches();
@@ -1178,6 +1179,17 @@ class System {
     }
   }
 
+  /** Core's incarnation (core ADR 0088): the first part of every session ID's text. */
+  get incarnation() {
+    return core.system_incarnation(this.#native);
+  }
+
+  // The numeric session ID of a resident actor, which core's watches take.
+  #sessionNumber(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    return BigInt(core.actor_inspect(this.#native, slot, generation).session_id);
+  }
+
   /** A snapshot of core's view of `actor` (ADR 0054: O(size of the actor)). */
   inspect(actor) {
     const { slot, generation } = actorOf(this, actor);
@@ -1186,7 +1198,7 @@ class System {
     const idOrNull = (id) => (id === NO_STATE ? null : id);
     const inspection = {
       actor: new ActorID(this, view.actor.slot, view.actor.generation),
-      sessionID: view.session_id,
+      sessionID: core.session_id_format(this.#native, view.session_id, view.definition.family.name),
       definition: identityOf(view.definition),
       // The definition's ID, which names its states, transitions and
       // actions to core's lookups (core ADR 0071).
@@ -1648,7 +1660,7 @@ class System {
     const self = this.#destination(view.self);
     return new SessionImage(this, handle, {
       actor: new ActorID(this, slot, generation),
-      sessionID: view.session_id,
+      sessionID: core.session_id_format(this.#native, view.session_id, view.definition.family.name),
       definition: identityOf(view.definition),
       address: self instanceof ActorID || self === null ? undefined : self,
       data: this.#dataRoot(view.definition_id, slot, generation),
@@ -2423,6 +2435,20 @@ class PreparedActor extends ActorID {
   }
 }
 
+// Core's incarnation (core ADR 0088, napi ADR 0032 section 1): the option,
+// a safe integer or a bigint of at most 64 bits, or 64 random bits.
+function incarnationOf(given) {
+  if (given === undefined) {
+    return globalThis.crypto.getRandomValues(new BigUint64Array(1))[0];
+  }
+  const value = typeof given === 'number' && Number.isSafeInteger(given) ? BigInt(given) : given;
+  if (typeof value !== 'bigint' || value < 0n || value > 0xffffffffffffffffn) {
+    throw new TinyactorsError('createSystem(): incarnation must be a non-negative safe integer or a 64-bit bigint',
+      'invalid');
+  }
+  return value;
+}
+
 function createSystem(options) {
   return new System(options);
 }
@@ -2442,11 +2468,15 @@ function discardLoad(result) {
 }
 
 /**
- * A session ID as text, <incarnation>.<session>.<family> (core ADR 0088),
- * from an inspection: what the chart reads as _sessionid.
+ * The numeric session ID in a session's text, <incarnation>.<session>.<family>
+ * (core ADR 0088), when the text is one of this system's; `invalid` otherwise.
  */
-function sessionText(system, view) {
-  return core.session_id_format(nativeOf(system), view.sessionID, view.definition.family);
+function sessionNumber(system, text) {
+  const match = typeof text === 'string' ? /^(\d+)\.(\d+)\.(.+)$/.exec(text) : null;
+  if (match === null || BigInt(match[1]) !== system.incarnation || BigInt(match[2]) === 0n) {
+    throw new TinyactorsError(`expected a session ID of this system, as _sessionid shows it: ${String(text)}`, 'invalid');
+  }
+  return BigInt(match[2]);
 }
 
-module.exports = { System, createSystem, nativeOf, observe, sessionText, ActorID, PreparedActor, SessionImage };
+module.exports = { System, createSystem, nativeOf, observe, sessionNumber, ActorID, PreparedActor, SessionImage };

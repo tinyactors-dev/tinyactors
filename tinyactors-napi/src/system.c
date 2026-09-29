@@ -17,7 +17,7 @@
 #include "adapters/log.h"
 #include "router.h"
 
-ta_result tna_system_create(tna_system **out) {
+ta_result tna_system_create(uint64_t incarnation, tna_system **out) {
     if (out == NULL) {
         return TA_ERR_INVALID;
     }
@@ -59,6 +59,7 @@ ta_result tna_system_create(tna_system **out) {
     ta_system_config config = {
         .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
         .initial_time = 0,
+        .incarnation = incarnation,
     };
     result = ta_system_create(&config, &system->core);
     if (result != TA_OK) {

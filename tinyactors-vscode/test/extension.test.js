@@ -190,7 +190,7 @@ test('an attach passes its fields through and fills the host', () => {
   assert.deepEqual(resolve(attach), { ...attach, host: '127.0.0.1' });
   assert.deepEqual(resolve({ ...attach, host: 'example.test', address: { family: 'f', name: 'n' } }),
     { ...attach, host: 'example.test', address: { family: 'f', name: 'n' } });
-  assert.equal(resolve({ ...attach, address: undefined, sessionID: '42' }).sessionID, '42');
+  assert.equal(resolve({ ...attach, address: undefined, sessionID: '0.42.f' }).sessionID, '0.42.f');
   assert.deepEqual(resolve({ ...attach, address: undefined, actor: { slot: 3, generation: 1 } }).actor,
     { slot: 3, generation: 1 });
   assert.deepEqual(state.errors, []);

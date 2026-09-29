@@ -249,7 +249,25 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         return tna_throw(env, "out-of-memory", "cannot allocate a system");
     }
     wrapper->tag = &tna_napi_system_tag;
-    ta_result result = tna_system_create(&wrapper->system);
+    /* lib/system.js always passes the incarnation, as a bigint (napi ADR 0032). */
+    uint64_t incarnation = 0;
+    napi_value given = NULL;
+    napi_valuetype options_type = napi_undefined;
+    bool lossless = true;
+    if (argv[1] != NULL) {
+        napi_typeof(env, argv[1], &options_type);
+    }
+    if (options_type == napi_object && napi_get_named_property(env, argv[1], "incarnation", &given) == napi_ok) {
+        napi_valuetype given_type = napi_undefined;
+        napi_typeof(env, given, &given_type);
+        if (given_type != napi_undefined &&
+            (given_type != napi_bigint || napi_get_value_bigint_uint64(env, given, &incarnation, &lossless) != napi_ok ||
+             !lossless)) {
+            free(wrapper);
+            return tna_throw(env, "invalid", "createSystem(): incarnation must fit in 64 bits");
+        }
+    }
+    ta_result result = tna_system_create(incarnation, &wrapper->system);
     if (result != TA_OK) {
         free(wrapper);
         return tna_throw(env, tna_result_code(result), "cannot create a system");
