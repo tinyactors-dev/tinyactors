@@ -1,6 +1,6 @@
 # ADR 0037: Core-owned actor protocol; host-backed directory
 
-- Status: Accepted; reconstruction details refined by ADR 0038; amended by ADR 0089 (a prepared actor needs no incumbent, and replays a host's logged inputs off-route; core still keeps no log)
+- Status: Accepted; reconstruction details refined by ADR 0038; amended by ADR 0089 (a prepared actor needs no incumbent, and replays a host's logged inputs off-route; core still keeps no log); amended by ADR 0090 (core defines the input log's records, their byte layout and their replay, and still stores nothing) and ADR 0091 (checkpoints in that layout)
 - Date: 2026-09-15
 
 ## Context

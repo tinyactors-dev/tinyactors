@@ -7,7 +7,7 @@
 - the invoker contract: a start's failure is reported, not answered;
 - the generation of invoke IDs, which moves from a counter per system to one per session.
 
-It would extend ADR 0072: a resume says whether its event was ignored. It would replace ADR 0084 section 7 (withdrawal by due time). It serves `docs/proposals/replay-persistence.md`, and feedback from granary, an application built on `@tinyactors/node`.
+It would extend ADR 0072: a resume says whether its event was ignored. It would replace ADR 0084 section 7 (withdrawal by due time). It serves `docs/proposals/replay-persistence.md`, and feedback from granary, an application built on `@tinyactors/node`. ADR 0090 moves the recording and the replay into core (a host hands `ta_actor_replay()` records instead of calling the input functions), and ADR 0091 lets a replay start from a checkpoint.
 **Date:** 2026-09-29
 
 ## Context

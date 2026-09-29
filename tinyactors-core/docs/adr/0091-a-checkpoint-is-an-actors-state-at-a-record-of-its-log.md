@@ -1,6 +1,6 @@
 # ADR 0091: A checkpoint is an actor's state at a record of its log
 
-**Status:** Proposed (2026-09-29). Builds on ADR 0090 (the input log, its byte layout and its replay). Would refine ADR 0089: a replay can start from a checkpoint instead of from `spawned`.
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Builds on ADR 0090 (the input log, its byte layout and its replay). Refines ADR 0089: a replay can start from a checkpoint instead of from `spawned`. Amended in place while Proposed, when it was implemented: a checkpoint is a unit of records rather than one record, it carries the messages the host still owes (section 5), and it carries no invocation values.
 **Date:** 2026-09-29
 
 ## Context
@@ -19,17 +19,23 @@ record (ADR 0090). A replay can then start from it.
 
 ## Decision
 
-### 1. A checkpoint record
+### 1. A checkpoint is a unit of records
 
-A `checkpoint` is a record kind in ADR 0090's layout. Its `seq` is the
-number of the last log record it includes, and its `time` is the actor's
-clock.
+A checkpoint is written as one unit of records in ADR 0090's layout, all
+with the same `seq`, the number of the last log record it includes, and
+the same `time`, the actor's clock:
 
-| Part | Contents |
+| Record | Contents |
 |---|---|
-| Fixed fields | the definition's revision; the generated-ID counter (send and invoke IDs, ADR 0089 section 5); the session's step counters (ADR 0067); flags (finished) |
-| Texts | family and name; the active atomic states' IDs; each history state's recorded IDs; for each pending delayed send, its send ID, event name, I/O type, target, due time and whether it was submitted; for each active invocation, its ID text and its `<invoke>`'s position in the chart |
-| Values | the data model's root; each pending send's data and target value; each active invocation's values as the invoke request carried them |
+| `CHECKPOINT` | family, name and revision; the generated-ID counter (send and invoke IDs, ADR 0089 section 5); the session's step counters (ADR 0067); how many parts and owed messages follow; the active atomic states' IDs; the IDs of the states whose late-bound data is initialized (ADR 0032). Value: the data root |
+| `CHECKPOINT_HISTORY` | one per history state that has recorded states: its ID and the recorded states' IDs |
+| `CHECKPOINT_SEND` | one per pending delayed send: its send ID, event name, I/O type, destination as a target URI (or marked as the actor itself), due time, and the content IDs of a literal target or literal content. Values: its data, and its target value |
+| `CHECKPOINT_INVOKE` | one per active invocation: its ID, the invoker's type, and its `<invoke>`'s position in the chart |
+| `QUEUED` | one per message the host still owes (section 5) |
+
+A unit of records, rather than one record with a list of everything, keeps
+ADR 0090's rules: each record has fixed fields, a text part and at most a
+couple of value streams, and a reader holds one record at a time.
 
 - **State is written by ID,** the chart's text, never by number.
 - **Every value goes through `value_write` with `durable = true`,** in
@@ -37,18 +43,36 @@ clock.
 - **A checkpoint holds only what an idle actor has.** There is no internal
   queue, no continuation and no external event in it, because only an idle
   actor can be checkpointed (section 2).
+- **A send the router already refused once is not in it.** Such a send has
+  been sent (ADR 0054), its `fired` record is in the log, and it belongs to
+  its receiver.
+- **An invocation carries no values.** Its request's values were for the
+  invoker, which a replaying actor never calls (ADR 0089 section 3), and a
+  restored invocation is retired at publish or matched by the service's
+  later events. Its ID, type and position are all that is needed.
 
 ### 2. Taking a checkpoint
 
 ```c
-typedef struct { ta_actor_id actor; ta_byte_sink sink; } ta_actor_checkpoint_params;
+typedef struct { uint64_t host_seq; const ta_event *event; } ta_owed_message;
+typedef struct {
+    ta_actor_id actor;
+    ta_byte_sink sink;
+    const ta_value *root;              /* optional: null for the data model's inspect() view */
+    const ta_owed_message *owed;       /* the messages the host holds for it (section 5) */
+    uint32_t owed_count;
+} ta_actor_checkpoint_params;
 TA_API ta_result ta_actor_checkpoint(ta_system *system, TA_IN const ta_actor_checkpoint_params *params);
 ```
 
-- **Only a named, idle actor of a logged family can be checkpointed.**
-  Otherwise the answer is:
-  - `TA_ERR_BUSY` while it is inside a macrostep or holds an event;
-  - `TA_ERR_INVALID` if it is unnamed or not logged.
+- **Only a named, idle, published actor of a logged family can be
+  checkpointed.** Otherwise the answer is:
+  - `TA_ERR_BUSY` while it is inside a macrostep, holds an event, or has
+    queued internal events;
+  - `TA_ERR_INVALID` if it is unnamed, unpublished or not logged;
+  - `TA_ERR_DONE` if it has finished: its log already ends in `finished`.
+- **The data root** is the one the host passes, as for offload (ADR 0074),
+  or the data model's `inspect()` view when it passes none.
 - **Core writes the checkpoint to the sink as one unit** (`begin` … `end`).
   `TA_ERR_NOMEM` means the sink refused it, and nothing changed.
 - **A value with no durable form** answers `TA_ERR_UNSUPPORTED`. It cannot
@@ -71,10 +95,12 @@ actor:
 - its active invocations, active in core without an invoker, so the
   services' later events still match them.
 
-Replay then continues with the records after the checkpoint, which are
-those whose `seq` is greater than the checkpoint's. A record whose `seq`
-is not greater is skipped, so a host may hand over a log that still
-contains records the checkpoint covers.
+The restored actor is idle: no bootstrap runs. Replay then continues with
+the records after the checkpoint, which are those whose `seq` is greater
+than the checkpoint's. A record whose `seq` is not greater is skipped, so a
+host may hand over a log that still contains records the checkpoint covers.
+The same rule skips a checkpoint met again inside a full log replayed from
+`spawned`: its records carry a `seq` the replay has already applied.
 
 **A checkpoint is valid only for its revision.** Configuration and data
 are written by the chart they came from:
@@ -97,6 +123,24 @@ The host chooses between two policies:
 
 Core has no opinion. When to checkpoint (every N records, every T of
 logical time, at eviction) is the host's, or its application's, policy.
+
+### 5. The messages the host still owes
+
+A host's mailbox is its own (ADR 0029), so a message it accepted but has
+not delivered is known to the log only by its `queued` record, and matched
+later by an `event` or `dropped` record with the same host number (ADR
+0090 section 6). Compacting a log to its checkpoint would drop the
+`queued` records of messages still owed, and the replay would never hand
+them back.
+
+So the host passes the messages it holds for the actor when it takes the
+checkpoint, and core writes each as a `QUEUED` record at the end of the
+checkpoint's unit. A replay that starts from the checkpoint hands them
+back as `TA_REPLAY_HOST`, once, although their `seq` is the checkpoint's.
+A replay that meets the checkpoint inside a full log skips them with the
+rest of it: it already handed back the original `queued` records. Core
+keeps nothing for this. The host holds the messages anyway, and core
+holds no copy of what it did not deliver.
 
 ## Consequences
 
@@ -123,7 +167,92 @@ logical time, at eviction) is the host's, or its application's, policy.
 - **Checkpoints that hold a paused macrostep.** A continuation's position
   is only meaningful within one compiled definition, and replay needs an
   idle actor between records anyway.
+- **Core tracking the owed host numbers itself.** Core would still not hold
+  the messages, so a checkpoint could name what is owed but not carry it.
+  The host already holds them, so it passes them.
 
 ## Implementation notes
 
-None yet.
+- **Where:**
+  - `include/tinyactors.h`: the kinds `TA_RECORD_CHECKPOINT`, `_HISTORY`,
+    `_SEND` and `_INVOKE` and their fields (in the input log's layout
+    comment), `ta_owed_message`, `ta_actor_checkpoint_params` and
+    `ta_actor_checkpoint()`, and the checkpoint cases of
+    `ta_actor_prepare_params.log` and `ta_actor_replay()`.
+  - `src/input_log.{c,h}`: the writer gained `ta_input_emit()` (a record
+    written into an open unit), a second value per record, and trailing
+    state lists asked for through a cursor (`target_at`), so a checkpoint
+    walks its configuration and history lists without an array. The
+    checkpoint writer (`ta_actor_checkpoint()`), the first-record reader
+    (`ta_input_read_spawn()`, now for SPAWNED and CHECKPOINT), the restore
+    (`ta_input_restore()`), and the replay's skip rule.
+  - `src/invoke.{c,h}`: `ta_invoke_restore()`, an invocation made active as
+    a replayed one.
+  - `src/actor.{c,h}`: `ta_actor_prepare()` restores from a checkpoint; a
+    replaying actor's `checkpoint_owed` count.
+  - napi `bindings.rb`: the new function and types are skipped until napi
+    ADR 0034 binds them.
+  - test host: `src/instruments.c` (the kinds' names; a `compact` control
+    on `input.recording` that drops the units a checkpoint covers),
+    `ruby/tinyactors_test/scenario.rb` (`checkpoint`, `compact_inputs`),
+    `ruby/scenarios/replay.rb`.
+- **Where the code differs from the text:**
+  - A checkpoint is a unit of records, not one record, and it carries the
+    owed messages (sections 1 and 5, amended in place).
+  - An invocation carries no values, and a send the router already
+    refused is left out (section 1).
+  - A finished actor is `TA_ERR_DONE`, and a checkpoint needs a published
+    actor (section 2).
+  - The restored actor's `seq` is the checkpoint's, which is how the skip
+    rule of section 3 works: `ta_actor_replay()` skips every record at or
+    below the last `seq` the actor applied, whatever its kind, and a
+    CHECKPOINT record past that is `TA_ERR_INVALID` (prepare from it
+    instead).
+  - Owed messages, and parts, carry the checkpoint's `seq`; the restored
+    actor counts the owed ones (`checkpoint_owed`) and hands exactly those
+    back.
+  - A send to the actor itself is marked, not written as a URI: its
+    destination names the old session, and the restore points it at the
+    new one, as a spawn's re-armed sends do (ADR 0074 section 8).
+- **Tests:**
+  - `tests/input_log_test.c` (fast):
+    - a checkpoint alone, a checkpoint and its tail, a checkpoint and the
+      whole log it covers, and a whole log with a checkpoint inside it,
+      each read in 1- and 7-byte pieces, rebuilding the live actor's
+      configuration, deep history, pending sends and binding, and writing
+      nothing to the input sink;
+    - owed messages: a compacted log hands back the owed one with its data;
+      the checkpoint and the whole log hand it back once; a whole log with
+      the checkpoint inside hands back the originals;
+    - the timelines of ADR 0089 section 2 from a checkpoint taken mid-way
+      and the records after it;
+    - an invocation active at the checkpoint matches the service's later
+      report, and a checkpoint alone retires it at publish;
+    - refusals: busy, unnamed, unlogged, finished; a sink refusing at every
+      byte (an out-of-memory sweep) and at `begin`; a root with no durable
+      form; another revision; a checkpoint past what a replay applied;
+    - taking a checkpoint allocates nothing (a counting allocator) and
+      leaves the input log unchanged.
+    None is exhaustive: the byte sweep is bounded by one checkpoint's
+    size.
+  - test host `ruby/scenarios/replay.rb`, group "input log": a log compacted
+    to its checkpoint rebuilds an actor a week later, its data from the
+    checkpoint; a checkpoint's busy and invalid refusals.
+- **Costs:**
+  - an actor that is never checkpointed: nothing. A replaying actor's held
+    effects grow from 64 to 72 bytes (`checkpoint_owed`); only unpublished
+    actors have them;
+  - a record description on the stack, while one is written, grows by 136
+    bytes to 752: `TA_RECORD_FIELDS_MAX` rose from 10 to 12 (56 bytes a
+    field), plus `target_at`, `target_context` and `value2`;
+  - a checkpoint's size: its CHECKPOINT record is 120 bytes of fixed part,
+    8 more per listed state, its texts padded to 8, and the data root's
+    stream; a HISTORY part 48 bytes plus 8 per recorded state; a SEND part
+    96 bytes plus its texts and value streams; an INVOKE part 56 bytes
+    plus its texts. Measured in the test: the `timers` actor waiting with
+    two pending sends, 464 bytes; the `hist` actor with a recorded history
+    and a pending send, 432 bytes mid-way and 584 at the end, against a
+    720-byte log for the same history;
+  - taking a checkpoint allocates nothing in core; restoring one reads
+    each record once, allocating its fixed and text parts, which are freed
+    before the next.

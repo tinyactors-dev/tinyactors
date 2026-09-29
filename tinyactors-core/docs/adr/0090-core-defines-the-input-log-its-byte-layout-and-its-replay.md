@@ -1,6 +1,6 @@
 # ADR 0090: Core defines the input log, its byte layout and its replay
 
-**Status:** Proposed (2026-09-29); sections 1 to 7 implemented (2026-09-29), see the implementation notes. Would amend:
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. ADR 0091 adds checkpoints: record kinds CHECKPOINT, CHECKPOINT_HISTORY, CHECKPOINT_SEND (with two value streams) and CHECKPOINT_INVOKE, and a replay that skips records at or below the last `seq` it applied. Amends:
 - ADR 0037: core defines the format of a log and how it replays, and still stores nothing and requires nothing;
 - ADR 0074: the data model's value codec streams through a byte sink and a byte source, and says whether its bytes are durable;
 - ADR 0089: a host replays by handing core records, instead of calling the input functions itself.
