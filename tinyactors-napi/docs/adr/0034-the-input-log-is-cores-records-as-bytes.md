@@ -169,3 +169,64 @@ Replay never needs it.
   - **Replay, one actor, records streamed from an async generator:** 10,000 events Node 4.71 µs, Bun 2.75 µs per event; 100,000 events Node 2.47 µs, Bun 1.94 µs; 100,000 events with 2 KB values Node 9.62 µs, Bun 7.38 µs. [ADR 0032/0033's driver: 10,000 events Node 22.2, Bun 5.8; 100,000 Node 37.0, Bun 21.6 µs per event.] Records are applied natively, 256 between yields, instead of one pump turn per window.
   - **Peak memory, 100,000-record log with 2 KB values (over 200 MB if held):** the heap grew by 0.1 MB on Node and Bun: one record and one chunk are held.
   - **10 MB value:** 20.0 MB of records (`queued` and `event`). Replaying it in 64 KiB pieces grew Node's heap by 9.1 MB (the value the replayed actor holds) and RSS by 10.2 MB. On Bun the heap grew by 0.0 MB after collection but RSS by 339 MB, which the collector did not return to the system during the run: the feed holds the record (about 10 MB) while core reads it, and the durable reader builds the string from 16 KB pieces; Bun's retained RSS is not explained further here.
+
+### Addendum (2026-09-30): the durable reader scans each piece once
+
+- **What was wrong.** The reader (`lib/durable.js`) kept the text it had
+  not consumed and rescanned it as pieces arrived; a string token was found
+  by rescanning the accumulated text, then sliced whole and handed to
+  `JSON.parse`. A 10 MB string was copied many times over while it was
+  read. After replaying a 10 MB value, Bun's RSS had grown by 360 MB and
+  was not returned; Node's peaked at +201 MB and fell back after a
+  collection (this machine, measured before the change; the 339 MB above
+  was the same effect on another run).
+- **What it is now.** A scanner that consumes each piece once, in `71f6572`:
+  - numbers and words keep only their own few characters (at most 1,024,
+    more is refused);
+  - a string gathers short runs and escapes as UTF-16 code units in an
+    8,192-unit buffer, and long runs as slices of the piece; runs are
+    kept in segments of about 16,384 characters and joined once, at the
+    closing quote. A string that closes within its piece with nothing
+    gathered, most keys, is one slice;
+  - pieces may be strings or UTF-8 bytes cut anywhere: bytes go through one
+    streaming decoder with `fatal: true`, so a character split across pieces
+    is whole when scanned, and malformed UTF-8 is refused. `readInputLog`
+    now hands the value streams' bytes straight to the reader;
+  - a refusal names the character where the text goes wrong (a number or a
+    word at its first character); the grammar (ADR 0031's forms, registered
+    classes, `__proto__` as an own property) is unchanged.
+- **Figures** (M4 Max; reading with `durableValue` in 16 KiB pieces; before
+  → after):
+
+  | | Node | Bun |
+  |---|---|---|
+  | long string (10 MB of `é`) | 66 → 416 MB/s | 171 → 1,254 MB/s |
+  | long ASCII string (10 MB) | 37 → 1,101 MB/s | 176 → 8,115 MB/s |
+  | escape-dense string (3.8 MB) | 62 → 144 MB/s | 198 → 356 MB/s |
+  | structured (100,000 small objects, 6.4 MB) | 31 → 63 MB/s | 49 → 94 MB/s |
+  | replaying a 10 MB value: RSS growth | +201 MB peak (+13 after GC) → +31 MB (+11 after GC) | +360 MB, kept → +34 MB, kept |
+
+  The replay's growth is now about the value the replayed actor holds, plus
+  the record the feed holds while core reads it. `test/replay.js` asserts
+  RSS grows by less than 120 MB there.
+- **Per logged input: unchanged.** Logging writes values; the reader is not
+  on that path. 1,000 actors × 50 messages with data `{ by: 1 }`: Node +5.5
+  µs (5,996 against 510 ns unlogged), Bun +3.8 µs (4,230 against 429),
+  before and after, on this machine. (The +8.3 and +5.9 µs above were
+  measured on another run.)
+- **Tests** (`test/durable.js`, Node and Bun): every existing case read from
+  pieces of 1, 2, 3, 7 and 4096 bytes; a text holding every token kind and
+  every escape (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, `é`, a
+  surrogate pair), cut at every position into two pieces and at a grid of
+  positions into three, and as bytes cut inside 2- and 4-byte characters and
+  one byte at a time; 500 random values through the printer, cut into
+  random byte pieces of 1 to 9 bytes; refusals at the right character
+  (`[1,2x]` at 4, `{"a" 1}` at 5, a raw control character, `\q`,
+  `\u12G4`, `01`, `1.`, `nope`, `1 2`, an unclosed string, a truncated
+  array, empty text, an unknown class, a 2,000-digit number, malformed
+  UTF-8 in the middle and at the end).
+- **Benchmark** (`bench-compare 51c907a`, machines a99e44a37e2e for Node and
+  c989bd79a51f for Bun): nothing slower outside the 5% rule; the two rows
+  flagged are RSS decreases (Node `decoded` −6.4%, Bun `full + values`
+  −6.7%). The benchmark installs no input log, so it does not exercise the
+  reader.
