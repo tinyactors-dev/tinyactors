@@ -767,28 +767,196 @@ static ta_op_status tat_json_codec_fault(ta_fault *fault, int32_t code, const ch
     return TA_OP_ERROR;
 }
 
+/*
+ * The writer streams (core ADR 0090 section 2): it walks the value with an
+ * explicit stack of open containers and writes the text through one
+ * TAT_JSON_PIECE buffer, so neither the text nor a frame per level of the
+ * C stack is ever held whole. The bytes are jv_dump_string(value, 0)'s:
+ * strings are escaped by jq's rules (jv_print.c's jvp_dump_string without
+ * JV_PRINT_ASCII), objects keep jq's iteration order, and a number is
+ * printed by jq itself, so a literal keeps its text. The one difference is
+ * depth: jq prints "<skipped: too deep>" past MAX_PRINT_DEPTH (10,000),
+ * where this writes the value whole.
+ */
+typedef struct {
+    uint8_t bytes[TAT_JSON_PIECE];
+    uint32_t used;
+    ta_byte_sink sink;
+    ta_op_status status;
+} tat_json_out;
+
+static void tat_json_flush(tat_json_out *out) {
+    if (out->status == TA_OP_OK && out->used != 0) {
+        out->status = out->sink.v->write(out->sink.self, (ta_bytes){ .ptr = out->bytes, .len = out->used });
+    }
+    out->used = 0;
+}
+
+static void tat_json_put(tat_json_out *out, const char *text, size_t length) {
+    while (length != 0 && out->status == TA_OP_OK) {
+        size_t room = TAT_JSON_PIECE - out->used;
+        size_t count = length < room ? length : room;
+        memcpy(out->bytes + out->used, text, count);
+        out->used += (uint32_t)count;
+        text += count;
+        length -= count;
+        if (out->used == TAT_JSON_PIECE) {
+            tat_json_flush(out);
+        }
+    }
+}
+
+static void tat_json_put_string(tat_json_out *out, jv string) {
+    const char *text = jv_string_value(string);
+    size_t length = (size_t)jv_string_length_bytes(jv_copy(string));
+    size_t run = 0;
+    tat_json_put(out, "\"", 1);
+    for (size_t at = 0; at < length; at += 1) {
+        unsigned char byte = (unsigned char)text[at];
+        if (byte != '"' && byte != '\\' && byte >= 0x20 && byte != 0x7f) {
+            continue; /* printable ASCII, or a byte of a UTF-8 sequence: as it is */
+        }
+        tat_json_put(out, text + run, at - run);
+        run = at + 1;
+        char escape[8];
+        size_t escaped = 2;
+        escape[0] = '\\';
+        switch (byte) {
+        case '"': escape[1] = '"'; break;
+        case '\\': escape[1] = '\\'; break;
+        case '\b': escape[1] = 'b'; break;
+        case '\t': escape[1] = 't'; break;
+        case '\r': escape[1] = 'r'; break;
+        case '\n': escape[1] = 'n'; break;
+        case '\f': escape[1] = 'f'; break;
+        default:
+            escaped = (size_t)snprintf(escape, sizeof escape, "\\u%04x", byte);
+            break;
+        }
+        tat_json_put(out, escape, escaped);
+    }
+    tat_json_put(out, text + run, length - run);
+    tat_json_put(out, "\"", 1);
+}
+
+typedef struct {
+    jv container;
+    int next;      /* an array's next index, or an object's iterator */
+    bool first;
+} tat_json_frame;
+
+typedef struct {
+    tat_json_frame *frames;
+    uint32_t depth;
+    uint32_t capacity;
+} tat_json_stack;
+
+/* Writes a scalar, or opens a container: false when the stack cannot grow. */
+static bool tat_json_start(tat_json_out *out, tat_json_stack *stack, jv value) {
+    switch (jv_get_kind(value)) {
+    case JV_KIND_NULL: tat_json_put(out, "null", 4); return true;
+    case JV_KIND_FALSE: tat_json_put(out, "false", 5); return true;
+    case JV_KIND_TRUE: tat_json_put(out, "true", 4); return true;
+    case JV_KIND_STRING: tat_json_put_string(out, value); return true;
+    case JV_KIND_NUMBER: {
+        jv text = jv_dump_string(jv_copy(value), 0);
+        tat_json_put(out, jv_string_value(text), (size_t)jv_string_length_bytes(jv_copy(text)));
+        jv_free(text);
+        return true;
+    }
+    case JV_KIND_ARRAY:
+    case JV_KIND_OBJECT: {
+        bool array = jv_get_kind(value) == JV_KIND_ARRAY;
+        int length = array ? jv_array_length(jv_copy(value)) : jv_object_length(jv_copy(value));
+        if (length == 0) {
+            tat_json_put(out, array ? "[]" : "{}", 2);
+            return true;
+        }
+        if (stack->depth == stack->capacity) {
+            uint32_t grown = stack->capacity == 0 ? 16u : stack->capacity * 2u;
+            tat_json_frame *frames = realloc(stack->frames, (size_t)grown * sizeof *frames);
+            if (frames == NULL) {
+                return false;
+            }
+            stack->frames = frames;
+            stack->capacity = grown;
+        }
+        stack->frames[stack->depth++] = (tat_json_frame){
+            .container = jv_copy(value), .next = array ? 0 : jv_object_iter(value), .first = true };
+        tat_json_put(out, array ? "[" : "{", 1);
+        return true;
+    }
+    default:
+        out->status = TA_OP_ERROR;
+        return true;
+    }
+}
+
 static ta_op_status tat_json_value_write(void *self, const ta_datamodel_value_write_params *params) {
     (void)self;
     if (params->value == NULL || params->value->v != &TAT_JSON_VALUE_VTABLE || params->value->self == NULL) {
         return tat_json_codec_fault(params->fault, TA_ERR_INVALID, "json: not a value of this data model");
     }
     const tat_json_value *wrapped = params->value->self;
-    jv text = jv_dump_string(jv_copy(wrapped->value), 0);
-    if (!jv_is_valid(text)) {
-        jv_free(text);
+    if (!jv_is_valid(jv_copy(wrapped->value))) {
         return tat_json_codec_fault(params->fault, TA_ERR_UNSUPPORTED, "json: the value has no JSON text");
     }
-    const char *chars = jv_string_value(text);
-    uint32_t length = (uint32_t)jv_string_length_bytes(jv_copy(text));
-    ta_op_status status = TA_OP_OK;
-    for (uint32_t at = 0; status == TA_OP_OK && at < length; at += TAT_JSON_PIECE) {
-        uint32_t count = length - at < TAT_JSON_PIECE ? length - at : TAT_JSON_PIECE;
-        status = params->sink.v->write(params->sink.self, (ta_bytes){ .ptr = (const uint8_t *)chars + at,
-                                                                       .len = count });
+    tat_json_out *out = malloc(sizeof *out);
+    if (out == NULL) {
+        return TA_OP_NOMEM;
     }
-    jv_free(text);
+    *out = (tat_json_out){ .sink = params->sink, .status = TA_OP_OK };
+    tat_json_stack stack = { 0 };
+    bool grown = tat_json_start(out, &stack, wrapped->value);
+    while (grown && out->status == TA_OP_OK && stack.depth != 0) {
+        tat_json_frame *top = &stack.frames[stack.depth - 1u];
+        jv container = top->container;
+        if (jv_get_kind(container) == JV_KIND_ARRAY) {
+            if (top->next == jv_array_length(jv_copy(container))) {
+                tat_json_put(out, "]", 1);
+                jv_free(container);
+                stack.depth -= 1u;
+                continue;
+            }
+            if (!top->first) {
+                tat_json_put(out, ",", 1);
+            }
+            top->first = false;
+            jv item = jv_array_get(jv_copy(container), top->next++);
+            grown = tat_json_start(out, &stack, item);
+            jv_free(item);
+            continue;
+        }
+        if (!jv_object_iter_valid(container, top->next)) {
+            tat_json_put(out, "}", 1);
+            jv_free(container);
+            stack.depth -= 1u;
+            continue;
+        }
+        if (!top->first) {
+            tat_json_put(out, ",", 1);
+        }
+        top->first = false;
+        jv key = jv_object_iter_key(container, top->next);
+        jv item = jv_object_iter_value(container, top->next);
+        top->next = jv_object_iter_next(container, top->next);
+        tat_json_put_string(out, key);
+        tat_json_put(out, ":", 1);
+        jv_free(key);
+        grown = tat_json_start(out, &stack, item);
+        jv_free(item);
+    }
+    while (stack.depth != 0) {
+        jv_free(stack.frames[--stack.depth].container);
+    }
+    free(stack.frames);
+    if (grown) {
+        tat_json_flush(out);
+    }
+    ta_op_status status = grown ? out->status : TA_OP_NOMEM;
+    free(out);
     if (status == TA_OP_ERROR) {
-        return tat_json_codec_fault(params->fault, TA_ERR_INVALID, "json: the sink failed");
+        return tat_json_codec_fault(params->fault, TA_ERR_INVALID, "json: the value has no JSON text, or the sink failed");
     }
     return status;
 }

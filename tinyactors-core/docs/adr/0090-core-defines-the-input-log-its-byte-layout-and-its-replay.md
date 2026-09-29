@@ -376,3 +376,35 @@ TA_API ta_result ta_actor_replay(ta_system *system, TA_IN const ta_actor_replay_
   - a record: its fixed part is 32 bytes plus 8 per field; texts are padded to 8; a value costs, for each piece the data model writes, a 4-byte length and padding to 8, plus an 8-byte terminator. As written by the test: SPAWNED for `timers`/`a`/`v1` without a binding 72 bytes; EVENT `e1` with no data 96 bytes; FIRED `t1` 48; DROPPED 40; EVICTED, DESTROYED, ABANDONED and RELEASED 32;
   - writing a record allocates nothing (tested); reading one allocates its fixed part and text part once, and frees them before the call returns;
   - a delivery to an unlogged actor costs one flag test more.
+
+### Addendum (2026-09-30): the test host's data models
+
+- **The jq model now streams both directions.** Its writer walks the `jv`
+  value with an explicit stack and writes through one 4 KiB buffer, where it
+  used to build the whole text with `jv_dump_string()` and cut it; its reader
+  already streamed (`jv_parser_set_buf`). The bytes are `jv_dump_string(v,
+  0)`'s: strings are escaped by jq's rules, objects keep jq's order, and each
+  number is printed by jq itself, so a literal keeps its text. The one
+  difference is depth: jq prints `<skipped: too deep>` past 10,000 levels,
+  where the writer writes the value whole (jq's parser takes at most 10,000
+  levels, so such a value comes only from a jq program).
+  `tinyactors-test/src/json_datamodel.c`; `tests/json_datamodel_test.c`
+  compares the writer's bytes with jq's for escapes, control characters,
+  DEL, non-ASCII text, number literals and nested containers, writes a 5 MB
+  string with no write larger than 4 KiB, and 9,999 levels of nesting.
+- **The QuickJS model holds whole encodings by design.** It writes with
+  `JS_JSONStringify` and reads by gathering the pieces for `JS_ParseJSON`.
+  The test host needs one fully streaming reference model, which the jq
+  model is, and QuickJS has no incremental parser; writing one would prove
+  again what napi's data model and the jq model already prove. The same note
+  is in `ecmascript_datamodel.c`.
+- **A scenario shows core's side end to end** (`ruby/scenarios/replay.rb`,
+  "a large value is logged and replayed in pieces, and core holds no copy of
+  it"): a 4 MB value is delivered to a logged actor on the jq model, logged,
+  evicted and replayed from 4 KiB pieces. The sink never receives a write
+  larger than 8 KiB, and the counting allocator behind the system peaks far
+  below the value's size, so neither the framing nor the replay holds a
+  copy. jq allocates its values from its own heap, which the counting
+  allocator does not see; the writer's streaming is shown by the unit test
+  above. The `input.recording` instrument gained a `stats` command
+  reporting its bytes and largest write.

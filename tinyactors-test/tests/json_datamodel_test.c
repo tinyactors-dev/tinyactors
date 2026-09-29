@@ -197,6 +197,73 @@ int main(void) {
                                                     .durable = true, .out = &back, .fault = &fault }) == TA_OP_ERROR,
                 "value_read refuses bytes that are not one JSON value");
     }
+    /* The writer streams, and writes jv_dump_string(value, 0)'s bytes: each
+     * value is wrapped in an array, whose value_text is jq's own text. */
+    static const char *const texts[] = {
+        "null", "true", "false", "0", "-1.50", "1e3", "12345678901234567890", "3.141592653589793",
+        "\"\"", "\"a\\\"b\\\\c/d\\b\\f\\n\\r\\t\\u0001\\u001f\\u007fé€\\ud83d\\ude00\"",
+        "[]", "{}", "[[],{},[[[1]]]]", "{\"b\":1,\"a\":[true,{\"c\\n\":null}],\"\":\"x\"}",
+    };
+    for (size_t index = 0; index < ARRAY_COUNT(texts); index += 1) {
+        char wrapped_text[512];
+        snprintf(wrapped_text, sizeof wrapped_text, "[%s]", texts[index]);
+        ta_value value = {0};
+        require(tat_json_value_parse(&context, wrapped_text, &value) == TA_OK, "parse a writer case");
+        ta_str jq_text = {0};
+        require(model.v->value_text(model.self, &(ta_datamodel_value_text_params){
+                                                    .value = &value, .out = &jq_text, .fault = &fault }) == TA_OP_OK,
+                "jq's text of a writer case");
+        test_sink sink = {0};
+        require(model.v->value_write(model.self, &(ta_datamodel_value_write_params){
+                                                     .value = &value, .sink = { .self = &sink, .v = &TEST_SINK },
+                                                     .durable = true, .fault = &fault }) == TA_OP_OK,
+                "value_write of a writer case");
+        require(sink.len == jq_text.len && memcmp(sink.bytes, jq_text.ptr, sink.len) == 0,
+                "value_write writes jv_dump_string's bytes");
+        free(sink.bytes);
+        ta_value_release(&value);
+    }
+    /* A large value crosses in pieces of at most 4 KiB, and deep nesting is
+     * walked on an explicit stack: 9,999 levels, the most jq's parser takes. */
+    {
+        size_t length = 5u * 1024u * 1024u;
+        char *text = malloc(length + 3u);
+        require(text != NULL, "large text");
+        text[0] = '"';
+        for (size_t at = 1; at <= length; at += 1) {
+            text[at] = (char)('a' + (at % 26u));
+        }
+        text[length + 1u] = '"';
+        text[length + 2u] = '\0';
+        ta_value large = {0};
+        require(tat_json_value_parse(&context, text, &large) == TA_OK, "parse a large string");
+        free(text);
+        test_counting_sink counted = {0};
+        require(model.v->value_write(model.self, &(ta_datamodel_value_write_params){
+                                                     .value = &large,
+                                                     .sink = { .self = &counted, .v = &TEST_COUNTING_SINK },
+                                                     .durable = true, .fault = &fault }) == TA_OP_OK,
+                "value_write of a large string");
+        require(counted.total == length + 2u && counted.largest <= 4096u, "a large value is written in pieces");
+        ta_value_release(&large);
+        size_t depth = 9999u;
+        char *deep = malloc(2u * depth + 1u);
+        require(deep != NULL, "deep text");
+        memset(deep, '[', depth);
+        memset(deep + depth, ']', depth);
+        deep[2u * depth] = '\0';
+        ta_value nested = {0};
+        require(tat_json_value_parse(&context, deep, &nested) == TA_OK, "parse deep nesting");
+        test_sink sink = {0};
+        require(model.v->value_write(model.self, &(ta_datamodel_value_write_params){
+                                                     .value = &nested, .sink = { .self = &sink, .v = &TEST_SINK },
+                                                     .durable = true, .fault = &fault }) == TA_OP_OK &&
+                    sink.len == 2u * depth && memcmp(sink.bytes, deep, sink.len) == 0,
+                "deep nesting is written whole");
+        free(sink.bytes);
+        free(deep);
+        ta_value_release(&nested);
+    }
     ta_value_release(&binding);
     free(instance);
     tat_json_datamodel_context_destroy(&context);

@@ -79,4 +79,34 @@ static ta_op_status test_source_read(void *self, const ta_byte_read_params *para
 
 static const ta_byte_source_vtable TEST_SOURCE = { .read = test_source_read };
 
+/* A sink that keeps nothing: it counts the bytes and the largest write, to
+ * show a writer streams. */
+typedef struct {
+    size_t total;
+    size_t largest;
+} test_counting_sink;
+
+static ta_op_status test_counting_begin(void *self) {
+    (void)self;
+    return TA_OP_OK;
+}
+
+static ta_op_status test_counting_write(void *self, ta_bytes bytes) {
+    test_counting_sink *sink = self;
+    sink->total += bytes.len;
+    if (bytes.len > sink->largest) {
+        sink->largest = bytes.len;
+    }
+    return TA_OP_OK;
+}
+
+static void test_counting_end(void *self, bool keep) {
+    (void)self;
+    (void)keep;
+}
+
+static const ta_byte_sink_vtable TEST_COUNTING_SINK = {
+    .begin = test_counting_begin, .write = test_counting_write, .end = test_counting_end,
+};
+
 #endif

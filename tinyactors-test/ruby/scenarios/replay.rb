@@ -4,6 +4,16 @@
 # ADR 0089): a replaying actor runs on its own clock, crosses no border, and
 # publishing puts it on the route with what is still pending.
 
+TinyactorsTest.chart :replay_box do
+  data size: 0
+
+  state :idle do
+    transition on: 'put' do
+      assign '.size', '$_event.data.blob | length'
+    end
+  end
+end
+
 TinyactorsTest.chart :replay_timer do
   data seen: 0
 
@@ -87,6 +97,28 @@ TinyactorsTest.scenarios 'input log' do
     assert_equal 'ok', publish(replay)
     assert_equal 1, replay.data('.seen')
     assert_equal 0, replay.delayed_sends, 'nothing fires twice'
+  end
+
+  # Catches: a data model or core framing that holds a whole value while it
+  # is logged or replayed. The jq model writes and reads in pieces (core ADR
+  # 0090's notes); its own heap is jq's, so the counting allocator shows
+  # core's side: no copy of the value, whatever its size.
+  scenario 'a large value is logged and replayed in pieces, and core holds no copy of it' do
+    recording_inputs :replay_box
+    live = spawn :replay_box, name: 'big'
+    blob = 'v' * (4 * 1024 * 1024)
+    live.deliver 'put', data: { blob: blob }
+    assert_equal blob.size, live.data('.size')
+    stats = @instruments.fetch('inputs').control('stats')
+    assert stats[:bytes].to_i > blob.size, 'the value is in the log'
+    assert stats[:largest_write].to_i <= 8192, "the value reached the sink in pieces, the largest #{stats[:largest_write]} bytes"
+    evict live
+
+    replay = replay_log :replay_box, address: live.address, piece: 4096
+    assert_equal blob.size, replay.data('.size')
+    assert_equal 'ok', publish(replay)
+    peak = allocator.stats[:peak_bytes].to_i
+    assert peak < blob.size / 4, "core's allocations peaked at #{peak} bytes for a #{blob.size}-byte value"
   end
 
   # Catches: a checkpoint that does not hold the actor's state, or a log

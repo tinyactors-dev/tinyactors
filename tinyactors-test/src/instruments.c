@@ -163,6 +163,7 @@ typedef struct tat_instrument {
         size_t end_count;
         size_t end_cap;
         size_t read_at;
+        size_t largest_write; /* the largest single write core made: a writer that streams keeps it small */
         uint32_t piece;
         bool open;
     } input;
@@ -2079,6 +2080,9 @@ static ta_op_status tat_input_write(void *self, ta_bytes bytes) {
         memcpy(instrument->input.bytes + instrument->input.len, bytes.ptr, bytes.len);
     }
     instrument->input.len += bytes.len;
+    if (bytes.len > instrument->input.largest_write) {
+        instrument->input.largest_write = bytes.len;
+    }
     return TA_OP_OK;
 }
 
@@ -2212,8 +2216,12 @@ static jv tat_control_input(tat_instrument *instrument, const char *command, jv 
         return jv_object_set(jv_object(), jv_string("bytes"),
                              tat_u64(instrument->input.len - instrument->input.read_at));
     }
+    if (strcmp(command, "stats") == 0) {
+        jv stats = jv_object_set(jv_object(), jv_string("bytes"), tat_u64(instrument->input.len));
+        return jv_object_set(stats, jv_string("largest_write"), tat_u64(instrument->input.largest_write));
+    }
     return tat_invalid(error_code, jv_string("input.recording commands: fail {op: begin | write}, rewind {piece?}, "
-                                             "truncate {records, piece?}, compact {records}, remaining"));
+                                             "truncate {records, piece?}, compact {records}, remaining, stats"));
 }
 
 /* {"name", "command", "args"?}: steers one instrument between steps. */

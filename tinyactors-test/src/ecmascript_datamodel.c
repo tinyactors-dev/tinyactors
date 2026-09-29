@@ -1240,9 +1240,14 @@ static ta_op_status tat_js_value_text(void *self, const ta_datamodel_value_text_
  * - durable=true: the value's JSON text, which no process owns. A value JSON
  *   cannot say (undefined, a function, a symbol, a cycle) has no durable
  *   form.
- * Both are written in pieces. QuickJS builds either form whole, and reads
- * one only from a whole buffer, so reading gathers the pieces first; the
- * test host accepts that, where a production data model would stream.
+ * Both are written in pieces. QuickJS builds either form whole
+ * (JS_JSONStringify, JS_WriteObject), and reads one only from a whole buffer
+ * (JS_ParseJSON, JS_ReadObject), so reading gathers the pieces first. This
+ * model holds whole encodings by design: the test host needs one fully
+ * streaming reference model, and that is the jq model (json_datamodel.c),
+ * which writes and reads in pieces; QuickJS has no incremental parser, and
+ * writing one would prove again what napi's data model and the jq model
+ * already prove (core ADR 0090's implementation notes).
  */
 #define TAT_JS_PIECE 4096u
 
