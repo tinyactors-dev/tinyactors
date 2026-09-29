@@ -179,14 +179,16 @@ async function forwardedAndUnavailable() {
   system.close();
 }
 
-// A request of up to 1,000 bytes is whole on Bun too: it is written before
-// its ArrayBuffer is asked for, which moves a small Buffer's bytes.
+// A small request is whole on Bun too: it is written before its
+// ArrayBuffer is asked for, which moves a small (pooled, under 4 KiB)
+// Buffer's bytes. The resource's parameter attributes (napi ADR 0035) make
+// each request about 900 bytes larger.
 async function smallRequests() {
   const system = createSystem();
   let whole = 0;
   let broken = 0;
   system.setTraceSink((traces) => {
-    assert.ok(traces.length > 0 && traces.length <= 1000, `a small request (${traces.length} bytes)`);
+    assert.ok(traces.length > 0 && traces.length <= 4000, `a small request (${traces.length} bytes)`);
     try {
       decodeTraces(traces);
       whole += 1;
@@ -588,6 +590,24 @@ async function stagingBound() {
   assert.ok(counts[0] > counts[1], `a small bound makes more requests: ${counts}`);
 }
 
+// Every request's resource names the system's parameters (napi ADR 0035),
+// and stats() reports them.
+async function parameterResource() {
+  const system = createSystem({ parameters: { traceValueBytes: 4096, microstepLimit: 777 } });
+  const batches = [];
+  system.setTraceSink((bytes) => batches.push(bytes), { detail: 'full', resource: { 'tinyactors.param.dueBudget': 'mine' } });
+  system.spawn(counter(system));
+  await system.flush();
+  const [span] = decodeTraces(batches[0]);
+  assert.equal(span.resource.attributes['tinyactors.param.traceValueBytes'], '4096');
+  assert.equal(span.resource.attributes['tinyactors.param.microstepLimit'], '777');
+  assert.equal(span.resource.attributes['tinyactors.param.interpreterBytes'], String(system.parameters.interpreterBytes));
+  assert.equal(span.resource.attributes['tinyactors.param.dueBudget'], 'mine', "the application's attribute wins");
+  assert.equal(system.stats().parameters.traceValueBytes, 4096);
+  assert.ok(Object.isFrozen(system.parameters));
+  system.close();
+}
+
 // Values only when asked for; links instead of parents when asked for.
 async function valuesAndLinks() {
   const system = createSystem({ parameters: { traceValueBytes: 16 } });
@@ -782,6 +802,7 @@ async function watchAndSample() {
   await valuesAndLinks();
   await largeValues();
   await stagingBound();
+  await parameterResource();
   await lifecycle();
   await summaryFailures();
   await loadedAndUnloaded();

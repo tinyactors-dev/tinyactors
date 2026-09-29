@@ -305,6 +305,20 @@ class System {
     return this.#parameters;
   }
 
+  // Every parameter as a `tinyactors.param.<name>` resource attribute, so a
+  // trace says which caps applied (napi ADR 0035); the application's own
+  // resource attributes win on a clash.
+  #parameterResource(resource) {
+    const pairs = [];
+    for (const [name, value] of Object.entries(this.#parameters)) {
+      const key = `tinyactors.param.${name}`;
+      if (!Object.hasOwn(resource, key)) {
+        pairs.push(key, String(value));
+      }
+    }
+    return pairs;
+  }
+
   /**
    * Make `processor` the I/O processor for `<send type>` (core ADRs 0015,
    * 0046). Core calls it while an actor runs, so the call is queued and
@@ -513,6 +527,7 @@ class System {
       }
       pairs.push(key, value);
     }
+    pairs.push(...this.#parameterResource(resource));
     const previous = this.#traceSink;
     const observed = sink === undefined && this.#observing('traces');
     const remaining = observed
@@ -535,7 +550,7 @@ class System {
   // but what is watched, every kind of it, with values (ADR 0026).
   #installObserverSink() {
     const all = 2 ** TRACE_KINDS.length - 1;
-    return this.#native.setTraceSink(true, 0, all, 0, 0, true, false, [], undefined, 0);
+    return this.#native.setTraceSink(true, 0, all, 0, 0, true, false, this.#parameterResource({}), undefined, 0);
   }
 
   #observing(what) {
@@ -578,7 +593,7 @@ class System {
     const all = 2 ** TRACE_KINDS.length - 1;
     const remaining = wanted
       ? this.#installObserverSink()
-      : this.#native.setTraceSink(false, 0, all, 0, 0, false, false, [], undefined, 0);
+      : this.#native.setTraceSink(false, 0, all, 0, 0, false, false, this.#parameterResource({}), undefined, 0);
     this.#observerSink = wanted;
     if (remaining !== undefined) {
       this.#notify('traces', remaining.traces, remaining.logs);
@@ -2777,7 +2792,7 @@ class System {
    * (ADRs 0009 and 0014). Throws `closed` after close().
    */
   stats() {
-    return this.#native.stats();
+    return { ...this.#native.stats(), parameters: this.#parameters };
   }
 
   /**

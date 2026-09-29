@@ -787,6 +787,8 @@ export interface PageOptions {
 }
 
 export interface SystemStats {
+  /** The system's parameters, as System.parameters (napi ADR 0035). */
+  readonly parameters: Readonly<Required<SystemParameters>>;
   readonly memory: {
     readonly total: MemoryCounters;
     readonly core: MemoryCounters;
@@ -2413,7 +2415,11 @@ export interface TraceSinkOptions extends TraceConfiguration {
   logLimit?: number;
   /** Also trace macrosteps whose traceparent is not sampled. */
   unsampled?: boolean;
-  /** Resource attributes every request carries, such as `service.name`. */
+  /**
+   * Resource attributes every request carries, such as `service.name`. Every
+   * system parameter is added as `tinyactors.param.<name>` (napi ADR 0035),
+   * unless this names the same key.
+   */
   resource?: Record<string, string>;
   /**
    * Event data and assigned values as JSON attributes, cut at the
