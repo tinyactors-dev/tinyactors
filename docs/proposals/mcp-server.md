@@ -1,7 +1,7 @@
 # An MCP server: connect an agent to a system
 
 **Status:** Proposed (2026-09-29)
-**Touches:** tinyactors-napi (an MCP server; DAP removed), tinyactors-test (an MCP server for the workbench; DAP and its transcripts removed), tinyactors-vscode (removed), root docs and AGENTS.md
+**Touches:** tinyactors-napi (MCP tools for the application's MCP server; DAP removed), tinyactors-test (an MCP server for the workbench; DAP and its transcripts removed), tinyactors-vscode (removed), root docs and AGENTS.md
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
 ## Goal
@@ -71,7 +71,8 @@ URI names its system.
 
 - **`{system}` is a host binding's name.** Core knows a system by its
   incarnation, which changes when the host says so. napi takes the names
-  where the server is created: `serveMCP({ systems: { orders, billing } })`.
+  where it adds the tools: `registerMCPTools(server, { systems: { orders,
+  billing } })` (see [Hosts](#hosts)).
   The test host names the workbench's system after its directory.
 - **Charts are unchanged.** Inside a chart an actor is still
   `#_actor_<family>/<name>` or `#_scxml_<session id>`. The server converts
@@ -124,19 +125,27 @@ not a protocol error.
 | `list_actors` | `system`, `family?`, `cursor?` | the resident actors, paged | readOnly | `ta_system_visit_actors`, `system.actors()` |
 | `inspect` | `system`, `actor` | the actor's resource, as a tool result: a model cannot always read resources itself | readOnly | `ta_actor_inspect` |
 | `describe` | `system`, `actor` or `definition` | the states, the events the current configuration accepts, the data model | readOnly | definition inspection (core ADRs 0042, 0071) |
-| `evaluate` | `system`, `actor`, `expression` | evaluates an expression in the actor's data model | not readOnly | the data model |
-| `send` | `system`, `actor`, `event`, `data?`, `until?`, `timeoutMs?` | delivers an event and returns the replies (below) | openWorld | `post` |
+| `evaluate` | `system`, `actor`, `expression` | evaluates an expression against a copy of the actor's data; what it writes is discarded | readOnly | the data model |
+| `send` | `system`, `actor`, `event`, `data?`, `timeoutMs?` | delivers an event and returns the replies (below) | openWorld | `post` with an `origin` |
 | `load` | `system`, `actor` | brings a named actor in, without sending it anything | idempotent | napi's loader (`setLoader`) |
 | `goto` | `system`, `actor`, `states`, `from?` | an operator transition, queued behind the actor's mail | destructive | core ADR 0082 |
 | `abandon` | `system`, `actor` | abandons a macrostep that never ends | destructive | core ADR 0082 |
 | `cancel` | `system`, `actor`, `sendID` | withdraws one pending delayed send | destructive, idempotent | core ADR 0084 |
-| `set` | `system`, `actor`, `location`, `value` | writes a data-model location | destructive | napi's write path; the test host captures and reloads (core ADR 0038) |
+| `set` | `system`, `actor`, `location`, `value` | writes a data-model location; refused for an actor of a logged family | destructive | napi's write path; the test host captures and reloads (core ADR 0038) |
 | `replace` | `system`, `actor`, `revision` | hot-replaces the actor with a registered revision | destructive | `prepare`, `publish` |
 | `destroy` | `system`, `actor` | ends the actor | destructive | `ta_actor_destroy`, `system.destroy()` |
 
-- **`load`** needs a load reason of its own: napi's `LoadReason` is `mail`,
-  `timer` or `session` today, and a load that no mail asked for is none of
-  them.
+- **Logged actors stay replayable.** Every poke of an actor whose family
+  is logged (napi ADR 0033, core ADR 0090) must be an input the log
+  records, or a replay after a restart no longer arrives where the actor
+  was:
+  - `send` is an `event` record, `goto` a `jump`, `abandon` an
+    `abandoned`, `cancel` a `withdrawn`, `destroy` a `destroyed`;
+  - a data write has no record, so `set` answers `unsupported` for a
+    logged actor and names `send` and `goto` instead;
+  - `evaluate` never writes, for any actor: it runs against a copy of the
+    data, so an agent can try an expression without changing anything.
+    Writing is `set`'s job.
 - **Nothing stops or steps an actor**, in either host. There are no
   breakpoints: what an actor did is in its trace (below), and `inspect`
   shows where it stands.
@@ -144,37 +153,55 @@ not a protocol error.
 
 ## Replies to a send
 
-A chart replies to whoever sent its event, using `_event.origin` and
+A chart replies to whoever sent its event, with `_event.origin` and
 `_event.origintype` (SCXML C.1; core ADR 0068 makes every origin
-answerable). An event from MCP has an origin, and the chart can reply to it
-like to any other.
+answerable). napi already has what an MCP caller needs, the same way an
+application answers an HTTP request or a WebSocket connection:
 
-- **The server registers an I/O processor** of type `mcp` in the system.
-  It is listed in `_ioprocessors`.
-- **An MCP `send` has an origin of its own**, `mcp:call/<id>`, where `<id>`
-  is minted by the server for that call. MCP request IDs are the client's
-  and can repeat across clients.
-- **The reply goes back as the tool result.** 2026-07-28 has no connection
-  and no channel to the client except the response to a request in
-  progress. So `send` keeps its call open, collects every event sent to its
-  origin, and returns them: a text block per reply for the model, and
-  `structuredContent` with each reply's name, data and sender.
-- **How long a call stays open:** by default until the system settles.
-  Nothing runnable and nothing due at the current time is left of what the
-  send caused, followed through the records' causes (core ADR 0067). A
-  live napi system is never idle as a whole, so causes decide, not the
-  whole system. `until` (a state of the target, or `reply`) and
-  `timeoutMs` change it.
-- **A reply after the call ended** finds nobody at the origin, and the
-  sender gets `error.communication` (SCXML C.1, an inaccessible target).
-  Nothing is kept in an inbox.
-- **A long wait** is a task, when the client supports the Tasks extension:
-  `send` answers a task handle, and `tasks/get` answers the replies once
-  the wait ends.
+- the server registers an I/O processor with `system.registerIO('mcp', …)`
+  on each system it serves; it is listed in `_ioprocessors`;
+- each `send` call opens a scope, `system.openScope('mcp',
+  'mcp:call/<id>')`, with an `<id>` the server mints (MCP request IDs are
+  the client's and can repeat across clients), and posts the event with
+  `origin: { type: 'mcp', scope }`;
+- the processor's `send()` collects every event sent to that scope while
+  the call is open;
+- when the call ends, the server closes the scope.
 
-A chart can also send to the `mcp` processor on its own, to an origin it
-kept. That works while the call is open, and raises `error.communication`
-after it.
+**The chart does not know it is talking to an agent.** It answers the
+way it answers any sender:
+
+```js
+.on('quote.request', (t) => t.send('quote', (send) => send
+  .via(({ event }) => event.originType)
+  .to(({ event }) => event.origin)))
+```
+
+The same transition answers an HTTP handler, a WebSocket connection, or an
+agent over MCP. A chart that never replies is fine too: the agent gets the
+result of the send and reads the actor with `inspect`.
+
+- **The type is `mcp` unless the application names another**
+  (`registerMCPTools(server, { ioType })`), for an application that
+  already registered an `mcp` processor of its own. Nothing else depends
+  on the name: a chart that replies to its origin never writes it.
+- **The reply goes back in the tool result.** 2026-07-28 has no
+  connection, and the only way to the client is the response to a request
+  in progress. So `send` keeps its call open and returns what reached its
+  origin: a text block per reply for the model, and `structuredContent`
+  with each reply's event name, data and sender.
+- **How long a call stays open:** until nothing the send caused is
+  runnable or due at the current time, followed through the records'
+  causes (core ADR 0067), or until `timeoutMs`. A live system is never
+  idle as a whole, so the send's own causes decide, not `flush()`. What
+  counts as "the" reply is the application's protocol; the server returns
+  every reply and does not guess.
+- **A reply after the call ended** has no one to go to. The scope is
+  closed, the processor throws, and the chart gets `error.communication`,
+  as for any sender that went away (SCXML C.1). Nothing waits in an inbox.
+- **A wait longer than a request should be** is a task, where the client
+  supports the Tasks extension: `send` answers a task handle, and
+  `tasks/get` answers the replies once the wait ends.
 
 ## Streams
 
@@ -198,55 +225,93 @@ A `tools/call` that carries `traceparent` and `tracestate` in `_meta`
 the call causes, and everything that macrostep causes, join the agent's
 trace. The result names the trace ID in `structuredContent`.
 
-## The MCP App
+## The MCP App (later)
 
 `inspect` and `describe` declare `_meta.ui.resourceUri:
 "ui://tinyactors/chart"`. The page draws the chart from the definition's
 spec, marks the active configuration, and lists the pending delayed sends.
 Its controls call `send`, `goto` and `cancel` through the host, and it
-calls `inspect` again to refresh. It runs in every client with MCP Apps:
-Claude, VS Code Copilot, Cursor, ChatGPT, Goose, Postman, MCPJam.
+calls `inspect` again to refresh.
+
+It is a later step, not the first: a developer's first client is usually a
+coding agent in a terminal, which does not render Apps. The clients that do
+are Claude (web and desktop), VS Code Copilot, Cursor, ChatGPT, Goose,
+Postman and MCPJam. The tools and resources are complete without it.
 
 ## Access
 
-The server gives full access to everything it serves. Authorization,
-auditing and limits belong in an MCP proxy in front of it, or in the
-middleware of the application that mounts it, not in tinyactors.
-
-- napi's server is a request handler for Streamable HTTP, which the
-  application mounts on a route of its own, and a stdio loop.
-- The test host's server speaks stdio from the workbench.
-- `evaluate` runs code in the process with the ECMAScript data model, and
-  every destructive tool acts at once. The README says so where it shows
-  how to mount the server.
+The tools give full access to everything they serve. Authorization,
+auditing and limits belong to the application's MCP server, or to an MCP
+proxy in front of it, not to tinyactors. `evaluate` cannot change an actor,
+but with the ECMAScript data model it runs code in the process, and every
+destructive tool acts at once. The README says so where it shows how to add
+the tools.
 
 ## Hosts
 
-| | Transport | Serves |
-|---|---|---|
-| napi | Streamable HTTP (a handler), stdio | the systems given to `serveMCP` |
-| test host | stdio, from the Ruby workbench | the workbench's system |
+### napi: tools for the application's own MCP server
 
-- **Shared transcripts** keep the two servers in step, as the DAP
-  transcripts did: a chart in both authoring forms, the requests a client
-  sends, and the results and notifications it must get, with the same
-  matchers (`$capture`, `$var`, `$expr`, ...). They live in
-  `tinyactors-test/mcp/`, and both hosts play them in their test tasks.
+An application that exposes an MCP server has one already, for its own
+tools, with its own transport and authentication. napi adds its tools to
+that server rather than running a second one:
+
+```js
+const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
+const { registerMCPTools } = require('@tinyactors/node/mcp');
+
+const server = new McpServer({ name: 'granary', version: '1.0.0' });
+registerMCPTools(server, { systems: { orders, billing } });
+server.registerTool('restock', /* the application's own tool */);
+// Mount it on the application's HTTP server as the SDK shows.
+```
+
+- **The application chooses the transport.** A running application serves
+  Streamable HTTP on a route of its own. stdio suits a process the client
+  starts, which a long-running application is not.
+- **Options:** `systems` (names to systems), `ioType` (default `mcp`), and
+  `prefix` for the tool names (default none), for an application whose own
+  tools would clash.
+- **The SDK is an optional peer dependency** of `@tinyactors/node`, loaded
+  only by `@tinyactors/node/mcp`.
+
+### The test host: the workbench's server
+
+`bin/mcp` serves a workbench directory's system over stdio. A developer
+starts it from an MCP client's configuration, the way `bin/dap` was started
+from VS Code. The workbench's charts reload when their files change, as
+they do now.
+
+### Kept in step
+
+- **Shared transcripts** keep the two in step, as the DAP transcripts did:
+  a chart in both authoring forms, the requests a client sends, and the
+  results and notifications it must get, with the same matchers
+  (`$capture`, `$var`, `$expr`, ...). They live in `tinyactors-test/mcp/`,
+  and both hosts play them in their test tasks.
 - **Error codes:** MCP reserves `-32020` to `-32099`. The test host's own
   RPC codes (`-32001`, ...) are on its host protocol, not on the MCP
   server.
 
 ## Open questions
 
-1. **The name of the `mcp` I/O processor type**, and whether its long form
-   is a URI, as SCXML's own types are.
-2. **What `until: reply` means** when a chart replies more than once.
-3. **Whether `set` stays** once `evaluate` can assign, or both remain.
-4. **How the MCP App gets updates**: whether a host passes resource
-   updates into an App, or the page polls `inspect`.
-5. **The test host's stepping hooks in core** (`pause_at_microstep_start`,
-   action budgets): whether any become unused once the workbench no longer
-   steps. Scenarios exercise them, so they probably stay.
+What is left is ours, not the application's:
+
+1. **The SDK's support for 2026-07-28.** `registerMCPTools` assumes the
+   official TypeScript SDK serves the stateless protocol,
+   `subscriptions/listen` and `server/discover`. Check before an ADR, and
+   decide what to do while it serves only 2025-11-25.
+2. **Following a send's causes in napi.** The records carry causes, but
+   napi has no call that says "nothing this send caused is runnable". It
+   needs one for `send` to know when to answer.
+3. **An evaluation against a copy.** Each data model needs a way to
+   evaluate against a copy of an actor's data: a structured clone for
+   napi's JavaScript values, a copy of the JSON for jq.
+4. **A load without mail.** `load` needs a `LoadReason` of its own; napi's
+   are `mail`, `timer` and `session`.
+
+Whether core's stepping hooks (`pause_at_microstep_start`, action budgets)
+become unused once the workbench no longer steps is checked in the change
+that removes DAP. Scenarios exercise them, so they probably stay.
 
 ## Sources
 
