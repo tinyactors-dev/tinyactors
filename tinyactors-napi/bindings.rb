@@ -127,6 +127,7 @@ module TinyactorsNapiBindings
     'ta_chart_{codec_info,error,position}' => 'chart codec results; no codec is registered yet',
     'ta_import_error' => 'chart codec result; no codec is registered yet',
     'ta_arena' => 'C memory utility',
+    'ta_byte_{sink,source,read_params}' => 'byte streams are plumbing: the data model and the input log own them (core ADR 0090)',
     'ta_allocator_free_params' => 'allocator callback argument',
     'ta_tree{,_list,_list_layout}' => 'C construction helper',
     'ta_system_config' => 'the native System creates the ta_system (ADR 0012)'

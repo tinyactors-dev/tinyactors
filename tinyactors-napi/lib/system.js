@@ -17,6 +17,7 @@ const { SessionImage, handleOf } = require('./image');
 const { traceConfig, TRACE_KINDS } = require('./tracing');
 const { buildSnapshot } = require('./metrics');
 const { STANDARD_CLASSES, printBuiltin, printCall, printedSpec } = require('./values');
+const { durableChunks, durableReader } = require('./durable');
 
 const NO_STATE = 4294967295;
 
@@ -287,6 +288,7 @@ class System {
       throw new TinyactorsError('createSystem(): unloadValues must be "serialize" or "handles"', 'invalid');
     }
     this.#native.setOffloadValues(v8.serialize, v8.deserialize, unloadValues === 'handles');
+    this.#native.setDurableCodec(durableChunks, durableReader);
     for (const [name, constructor] of Object.entries(STANDARD_CLASSES)) {
       this.registerClass(name, constructor);
     }

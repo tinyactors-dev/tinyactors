@@ -1233,49 +1233,138 @@ static ta_op_status tat_js_value_text(void *self, const ta_datamodel_value_text_
 }
 
 /*
- * Offloading (core ADR 0074): a value's bytes are QuickJS's structured
- * serialization (JS_WriteObject), after one byte for the wrapper's `wire`
- * flag, so an offloaded actor's objects leave the JavaScript heap.
+ * A value as bytes (core ADR 0090, and ADR 0074's offload). The first byte is
+ * the wrapper's `wire` flag. After it:
+ * - durable=false (offload): QuickJS's structured serialization
+ *   (JS_WriteObject), which keeps what JSON cannot, for this process only;
+ * - durable=true: the value's JSON text, which no process owns. A value JSON
+ *   cannot say (undefined, a function, a symbol, a cycle) has no durable
+ *   form.
+ * Both are written in pieces. QuickJS builds either form whole, and reads
+ * one only from a whole buffer, so reading gathers the pieces first; the
+ * test host accepts that, where a production data model would stream.
  */
-static ta_op_status tat_js_value_encode(void *self, const ta_datamodel_value_encode_params *params) {
+#define TAT_JS_PIECE 4096u
+
+static ta_op_status tat_js_write_pieces(const ta_datamodel_value_write_params *params, const uint8_t *bytes,
+                                        size_t length) {
+    ta_op_status status = TA_OP_OK;
+    for (size_t at = 0; status == TA_OP_OK && at < length; at += TAT_JS_PIECE) {
+        size_t count = length - at < TAT_JS_PIECE ? length - at : TAT_JS_PIECE;
+        status = params->sink.v->write(params->sink.self, (ta_bytes){ .ptr = bytes + at, .len = (uint32_t)count });
+    }
+    if (status == TA_OP_ERROR) {
+        tat_js_fault(params->fault, TA_ERR_INVALID, "ecmascript: the sink failed");
+    }
+    return status;
+}
+
+static ta_op_status tat_js_value_write(void *self, const ta_datamodel_value_write_params *params) {
     (void)self;
     tat_js_value *wrapped = tat_js_unwrap(params->value);
     if (wrapped == NULL) {
+        tat_js_fault(params->fault, TA_ERR_INVALID, "ecmascript: not a value of this data model");
         return TA_OP_ERROR;
     }
     JSContext *utility = wrapped->state->utility;
     tat_js_begin_work(wrapped->state);
-    size_t length = 0;
-    uint8_t *written = JS_WriteObject(utility, &length, wrapped->value, JS_WRITE_OBJ_REFERENCE);
-    if (written == NULL) {
+    uint8_t wire = wrapped->wire ? 1u : 0u;
+    ta_op_status status = params->sink.v->write(params->sink.self, (ta_bytes){ .ptr = &wire, .len = 1 });
+    if (status != TA_OP_OK) {
+        if (status == TA_OP_ERROR) {
+            tat_js_fault(params->fault, TA_ERR_INVALID, "ecmascript: the sink failed");
+        }
+        return status;
+    }
+    if (!params->durable) {
+        size_t length = 0;
+        uint8_t *written = JS_WriteObject(utility, &length, wrapped->value, JS_WRITE_OBJ_REFERENCE);
+        if (written == NULL) {
+            tat_js_clear_exception(utility);
+            tat_js_fault(params->fault, TA_ERR_UNSUPPORTED, "ecmascript: the value has no byte form");
+            return TA_OP_ERROR;
+        }
+        status = tat_js_write_pieces(params, written, length);
+        js_free(utility, written);
+        return status;
+    }
+    JSValue v = wrapped->value;
+    JSValue text = JS_IsUndefined(v) || JS_IsFunction(utility, v) || JS_IsSymbol(v)
+                       ? JS_UNDEFINED
+                       : JS_JSONStringify(utility, v, JS_UNDEFINED, JS_UNDEFINED);
+    if (JS_IsException(text)) {
         tat_js_clear_exception(utility);
+    }
+    if (!JS_IsString(text)) {
+        JS_FreeValue(utility, text);
+        tat_js_fault(params->fault, TA_ERR_UNSUPPORTED, "ecmascript: the value has no durable form");
         return TA_OP_ERROR;
     }
-    uint8_t *copy = ta_arena_alloc(params->arena, length + 1u, 1);
-    if (copy == NULL) {
-        js_free(utility, written);
+    size_t length = 0;
+    const char *chars = JS_ToCStringLen(utility, &length, text);
+    JS_FreeValue(utility, text);
+    if (chars == NULL) {
+        tat_js_clear_exception(utility);
         return TA_OP_NOMEM;
     }
-    copy[0] = wrapped->wire ? 1u : 0u;
-    memcpy(copy + 1, written, length);
-    js_free(utility, written);
-    *params->out = (ta_bytes){ .ptr = copy, .len = length + 1u };
-    return TA_OP_OK;
+    status = tat_js_write_pieces(params, (const uint8_t *)chars, length);
+    JS_FreeCString(utility, chars);
+    return status;
 }
 
-static ta_op_status tat_js_value_decode(void *self, const ta_datamodel_value_decode_params *params) {
+static ta_op_status tat_js_value_read(void *self, const ta_datamodel_value_read_params *params) {
     tat_js_state *state = ((tat_js_datamodel_context *)self)->state;
-    if (params->bytes.len < 1u) {
+    size_t length = 0;
+    size_t capacity = TAT_JS_PIECE;
+    uint8_t *bytes = malloc(capacity + 1u);
+    if (bytes == NULL) {
+        return TA_OP_NOMEM;
+    }
+    for (;;) {
+        if (capacity - length < TAT_JS_PIECE) {
+            uint8_t *grown = realloc(bytes, capacity * 2u + 1u);
+            if (grown == NULL) {
+                free(bytes);
+                return TA_OP_NOMEM;
+            }
+            bytes = grown;
+            capacity *= 2u;
+        }
+        uint32_t got = 0;
+        ta_op_status status = params->source.v->read(params->source.self, &(ta_byte_read_params){
+                                                                               .buffer = bytes + length,
+                                                                               .capacity = TAT_JS_PIECE,
+                                                                               .got = &got });
+        if (status != TA_OP_OK) {
+            free(bytes);
+            if (status == TA_OP_ERROR) {
+                tat_js_fault(params->fault, TA_ERR_INVALID, "ecmascript: the source failed");
+            }
+            return status;
+        }
+        if (got == 0) {
+            break;
+        }
+        length += got;
+    }
+    if (length < 1u) {
+        free(bytes);
+        tat_js_fault(params->fault, TA_ERR_INVALID, "ecmascript: the bytes are no value");
         return TA_OP_ERROR;
     }
     JSContext *utility = state->utility;
     tat_js_begin_work(state);
-    JSValue value = JS_ReadObject(utility, params->bytes.ptr + 1, params->bytes.len - 1u, JS_READ_OBJ_REFERENCE);
+    bytes[length] = 0;
+    JSValue value = params->durable ? JS_ParseJSON(utility, (const char *)bytes + 1, length - 1u, "<durable>")
+                                    : JS_ReadObject(utility, bytes + 1, length - 1u, JS_READ_OBJ_REFERENCE);
+    bool wire = bytes[0] != 0;
+    free(bytes);
     if (JS_IsException(value)) {
         tat_js_clear_exception(utility);
+        tat_js_fault(params->fault, TA_ERR_INVALID, "ecmascript: the bytes are no value");
         return TA_OP_ERROR;
     }
-    return tat_js_wrap(state, value, params->bytes.ptr[0] != 0, params->out) == TA_OK ? TA_OP_OK : TA_OP_NOMEM;
+    return tat_js_wrap(state, value, wire, params->out) == TA_OK ? TA_OP_OK : TA_OP_NOMEM;
 }
 
 static ta_op_status tat_js_text_value(void *self, const ta_datamodel_text_value_params *params) {
@@ -1450,8 +1539,8 @@ static const ta_datamodel_vtable TAT_JS_DATAMODEL_VTABLE = {
     .import_content = tat_js_import_content,
     .foreach_snapshot = tat_js_foreach_snapshot,
     .foreach_bind = tat_js_foreach_bind,
-    .value_encode = tat_js_value_encode,
-    .value_decode = tat_js_value_decode,
+    .value_write = tat_js_value_write,
+    .value_read = tat_js_value_read,
 };
 
 ta_datamodel tat_js_datamodel(tat_js_datamodel_context *context) {

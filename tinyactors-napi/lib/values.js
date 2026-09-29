@@ -370,4 +370,4 @@ function printedSpec(spec, print, datamodel) {
   return { ...walk(spec), datamodel };
 }
 
-module.exports = { serialize, STANDARD_CLASSES, construction, printBuiltin, printCall, printedSpec };
+module.exports = { serialize, STANDARD_CLASSES, construction, printBuiltin, printCall, printedSpec, standardName, described, refuse };

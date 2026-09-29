@@ -750,41 +750,103 @@ static ta_op_status tat_json_import_content(void *self, const ta_datamodel_impor
 }
 
 /*
- * Offloading (core ADR 0074): a JSON value's bytes are its JSON text, so an
- * offloaded actor's values leave the value arena. Parsing the text back makes
- * an equal value; jq values are immutable, so equal is the same.
+ * A value as bytes (core ADR 0090, and ADR 0074's offload): its JSON text,
+ * which no process owns, so the same bytes serve offload and a durable log.
+ * It is written in pieces and parsed as the pieces arrive (jq's incremental
+ * parser). jq's dumper builds the text whole before it is written; the test
+ * host accepts that, where a production data model would walk the value.
+ * Parsing the text back makes an equal value; jq values are immutable, so
+ * equal is the same.
  */
-static ta_op_status tat_json_value_encode(void *self, const ta_datamodel_value_encode_params *params) {
+#define TAT_JSON_PIECE 4096u
+
+static ta_op_status tat_json_codec_fault(ta_fault *fault, int32_t code, const char *message) {
+    if (fault != NULL) {
+        *fault = (ta_fault){ .code = code, .message = { .ptr = message, .len = (uint32_t)strlen(message) } };
+    }
+    return TA_OP_ERROR;
+}
+
+static ta_op_status tat_json_value_write(void *self, const ta_datamodel_value_write_params *params) {
     (void)self;
     if (params->value == NULL || params->value->v != &TAT_JSON_VALUE_VTABLE || params->value->self == NULL) {
-        return TA_OP_ERROR;
+        return tat_json_codec_fault(params->fault, TA_ERR_INVALID, "json: not a value of this data model");
     }
     const tat_json_value *wrapped = params->value->self;
     jv text = jv_dump_string(jv_copy(wrapped->value), 0);
     if (!jv_is_valid(text)) {
         jv_free(text);
-        return TA_OP_ERROR;
+        return tat_json_codec_fault(params->fault, TA_ERR_UNSUPPORTED, "json: the value has no JSON text");
     }
-    int length = jv_string_length_bytes(jv_copy(text));
-    uint8_t *copy = ta_arena_alloc(params->arena, length == 0 ? 1u : (size_t)length, 1);
-    if (copy == NULL) {
-        jv_free(text);
-        return TA_OP_NOMEM;
+    const char *chars = jv_string_value(text);
+    uint32_t length = (uint32_t)jv_string_length_bytes(jv_copy(text));
+    ta_op_status status = TA_OP_OK;
+    for (uint32_t at = 0; status == TA_OP_OK && at < length; at += TAT_JSON_PIECE) {
+        uint32_t count = length - at < TAT_JSON_PIECE ? length - at : TAT_JSON_PIECE;
+        status = params->sink.v->write(params->sink.self, (ta_bytes){ .ptr = (const uint8_t *)chars + at,
+                                                                       .len = count });
     }
-    memcpy(copy, jv_string_value(text), (size_t)length);
     jv_free(text);
-    *params->out = (ta_bytes){ .ptr = copy, .len = (size_t)length };
-    return TA_OP_OK;
+    if (status == TA_OP_ERROR) {
+        return tat_json_codec_fault(params->fault, TA_ERR_INVALID, "json: the sink failed");
+    }
+    return status;
 }
 
-static ta_op_status tat_json_value_decode(void *self, const ta_datamodel_value_decode_params *params) {
-    if (params->bytes.len > INT_MAX) {
-        return TA_OP_ERROR;
+/* Takes every value the parser has finished; false on a parse error or a second value. */
+static bool tat_json_drain(jv_parser *parser, jv *value, bool *have) {
+    for (;;) {
+        jv next = jv_parser_next(parser);
+        if (jv_is_valid(next)) {
+            if (*have) {
+                jv_free(next);
+                return false;
+            }
+            *value = next;
+            *have = true;
+            continue;
+        }
+        bool failed = jv_invalid_has_msg(jv_copy(next));
+        jv_free(next);
+        return !failed;
     }
-    jv value = jv_parse_sized(params->bytes.len == 0 ? "" : (const char *)params->bytes.ptr, (int)params->bytes.len);
-    if (!jv_is_valid(value)) {
-        jv_free(value);
-        return TA_OP_ERROR;
+}
+
+static ta_op_status tat_json_value_read(void *self, const ta_datamodel_value_read_params *params) {
+    jv_parser *parser = jv_parser_new(0);
+    if (parser == NULL) {
+        return TA_OP_NOMEM;
+    }
+    char piece[TAT_JSON_PIECE];
+    jv value = jv_invalid();
+    bool have = false;
+    bool parsed = true;
+    for (;;) {
+        uint32_t got = 0;
+        ta_op_status status = params->source.v->read(params->source.self, &(ta_byte_read_params){
+                                                                               .buffer = (uint8_t *)piece,
+                                                                               .capacity = TAT_JSON_PIECE,
+                                                                               .got = &got });
+        if (status != TA_OP_OK) {
+            if (have) {
+                jv_free(value);
+            }
+            jv_parser_free(parser);
+            return status == TA_OP_NOMEM ? TA_OP_NOMEM
+                                         : tat_json_codec_fault(params->fault, TA_ERR_INVALID, "json: the source failed");
+        }
+        jv_parser_set_buf(parser, piece, (int)got, got != 0);
+        parsed = parsed && tat_json_drain(parser, &value, &have);
+        if (got == 0) {
+            break;
+        }
+    }
+    jv_parser_free(parser);
+    if (!parsed || !have) {
+        if (have) {
+            jv_free(value);
+        }
+        return tat_json_codec_fault(params->fault, TA_ERR_INVALID, "json: the bytes are not one JSON value");
     }
     return tat_json_wrap(self, value, params->out) == TA_OK ? TA_OP_OK : TA_OP_NOMEM;
 }
@@ -894,8 +956,8 @@ static const ta_datamodel_vtable TAT_JSON_DATAMODEL_VTABLE = {
     .import_content = tat_json_import_content,
     .foreach_snapshot = tat_json_foreach_snapshot,
     .foreach_bind = tat_json_foreach_bind,
-    .value_encode = tat_json_value_encode,
-    .value_decode = tat_json_value_decode,
+    .value_write = tat_json_value_write,
+    .value_read = tat_json_value_read,
 };
 
 ta_datamodel tat_json_datamodel(tat_json_datamodel_context *context) {

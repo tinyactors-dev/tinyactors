@@ -240,18 +240,17 @@ static ta_op_status ta_null_foreach_bind(void *self, const ta_datamodel_foreach_
     return ta_null_unsupported(params->fault, TA_NULL_TEXT("the null data model has no collections to iterate"));
 }
 
-/* It owns no values, so none has a byte form (ADR 0074). A null-data-model
- * actor holds no values while it is stable, so it still offloads. */
-static ta_op_status ta_null_value_encode(void *self, const ta_datamodel_value_encode_params *params) {
+/* It owns no values, so none has a byte form (ADR 0074, ADR 0090). A
+ * null-data-model actor holds no values while it is stable, so it still
+ * offloads. */
+static ta_op_status ta_null_value_write(void *self, const ta_datamodel_value_write_params *params) {
     (void)self;
-    (void)params;
-    return TA_OP_ERROR;
+    return ta_null_unsupported(params->fault, TA_NULL_TEXT("the null data model has no values to write"));
 }
 
-static ta_op_status ta_null_value_decode(void *self, const ta_datamodel_value_decode_params *params) {
+static ta_op_status ta_null_value_read(void *self, const ta_datamodel_value_read_params *params) {
     (void)self;
-    (void)params;
-    return TA_OP_ERROR;
+    return ta_null_unsupported(params->fault, TA_NULL_TEXT("the null data model has no values to read"));
 }
 
 /*
@@ -279,8 +278,8 @@ static const ta_datamodel_vtable ta_null_datamodel_vtable = {
     .import_content = ta_null_import_content,
     .foreach_snapshot = ta_null_foreach_snapshot,
     .foreach_bind = ta_null_foreach_bind,
-    .value_encode = ta_null_value_encode,
-    .value_decode = ta_null_value_decode,
+    .value_write = ta_null_value_write,
+    .value_read = ta_null_value_read,
 };
 
 ta_datamodel ta_null_datamodel(void) {

@@ -4,6 +4,7 @@
 
 #include "allocator.h"
 #include "json_datamodel.h"
+#include "byte_buffers.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -151,36 +152,51 @@ int main(void) {
 
     model.v->destroy_instance(model.self, shared, instance);
     model.v->destroy_definition(model.self, shared, tat_libc_allocator());
-    /* Offloading (core ADR 0074): a value's bytes are its JSON text, and they
-     * decode to an equal value; bytes that are not JSON are refused. */
-    ta_arena arena;
-    require(ta_arena_init(&arena, tat_libc_allocator(), 64) == TA_OK, "offload arena");
-    ta_bytes bytes = {0};
-    require(model.v->value_encode(model.self, &(ta_datamodel_value_encode_params){ .shared = shared,
-                                                                                    .value = &binding,
-                                                                                    .arena = &arena,
-                                                                                    .out = &bytes }) == TA_OP_OK,
-            "value_encode");
-    require(bytes.len > 2 && bytes.ptr[0] == '{' && bytes.ptr[bytes.len - 1u] == '}',
-            "value_encode writes the JSON text");
-    ta_value back = {0};
-    require(model.v->value_decode(model.self, &(ta_datamodel_value_decode_params){ .shared = shared,
-                                                                                    .bytes = bytes,
-                                                                                    .out = &back }) == TA_OP_OK,
-            "value_decode");
-    ta_bytes again = {0};
-    require(model.v->value_encode(model.self, &(ta_datamodel_value_encode_params){ .shared = shared,
-                                                                                    .value = &back,
-                                                                                    .arena = &arena,
-                                                                                    .out = &again }) == TA_OP_OK &&
-                again.len == bytes.len && memcmp(again.ptr, bytes.ptr, bytes.len) == 0,
-            "the decoded value equals the encoded one");
-    ta_value_release(&back);
-    require(model.v->value_decode(model.self, &(ta_datamodel_value_decode_params){
-                                                  .shared = shared, .bytes = { .ptr = (const uint8_t *)"{", .len = 1 },
-                                                  .out = &back }) == TA_OP_ERROR,
-            "value_decode refuses bytes that are not JSON");
-    ta_arena_destroy(&arena);
+    /* A value as bytes (core ADR 0090): its JSON text, durable or not,
+     * written in pieces and read back from pieces of any size; bytes that
+     * are not one JSON value are refused. */
+    for (int durable = 0; durable < 2; durable += 1) {
+        test_sink sink = {0};
+        ta_fault fault = {0};
+        require(model.v->value_write(model.self, &(ta_datamodel_value_write_params){
+                                                     .shared = shared, .value = &binding,
+                                                     .sink = { .self = &sink, .v = &TEST_SINK },
+                                                     .durable = durable != 0, .fault = &fault }) == TA_OP_OK,
+                "value_write");
+        require(sink.len > 2 && sink.bytes[0] == '{' && sink.bytes[sink.len - 1u] == '}',
+                "value_write writes the JSON text");
+        static const uint32_t pieces[] = { 1, 7, 0 };
+        for (size_t index = 0; index < ARRAY_COUNT(pieces); index += 1) {
+            test_source source = { .bytes = sink.bytes, .len = sink.len, .piece = pieces[index] };
+            ta_value back = {0};
+            require(model.v->value_read(model.self, &(ta_datamodel_value_read_params){
+                                                        .shared = shared,
+                                                        .source = { .self = &source, .v = &TEST_SOURCE },
+                                                        .durable = durable != 0, .out = &back,
+                                                        .fault = &fault }) == TA_OP_OK,
+                    "value_read");
+            test_sink again = {0};
+            require(model.v->value_write(model.self, &(ta_datamodel_value_write_params){
+                                                         .shared = shared, .value = &back,
+                                                         .sink = { .self = &again, .v = &TEST_SINK },
+                                                         .durable = durable != 0, .fault = &fault }) == TA_OP_OK &&
+                        again.len == sink.len && memcmp(again.bytes, sink.bytes, sink.len) == 0,
+                    "the read value equals the written one");
+            free(again.bytes);
+            ta_value_release(&back);
+        }
+        free(sink.bytes);
+    }
+    const uint8_t *not_json[] = { (const uint8_t *)"{", (const uint8_t *)"1 2", (const uint8_t *)"" };
+    for (size_t index = 0; index < ARRAY_COUNT(not_json); index += 1) {
+        test_source source = { .bytes = not_json[index], .len = strlen((const char *)not_json[index]), .piece = 1 };
+        ta_value back = {0};
+        ta_fault fault = {0};
+        require(model.v->value_read(model.self, &(ta_datamodel_value_read_params){
+                                                    .shared = shared, .source = { .self = &source, .v = &TEST_SOURCE },
+                                                    .durable = true, .out = &back, .fault = &fault }) == TA_OP_ERROR,
+                "value_read refuses bytes that are not one JSON value");
+    }
     ta_value_release(&binding);
     free(instance);
     tat_json_datamodel_context_destroy(&context);

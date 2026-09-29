@@ -1671,8 +1671,8 @@ static ta_op_status tna_dm_foreach_bind(void *self, const ta_datamodel_foreach_b
     return status;
 }
 
-static ta_op_status tna_dm_value_encode(void *self, const ta_datamodel_value_encode_params *params);
-static ta_op_status tna_dm_value_decode(void *self, const ta_datamodel_value_decode_params *params);
+static ta_op_status tna_dm_value_write(void *self, const ta_datamodel_value_write_params *params);
+static ta_op_status tna_dm_value_read(void *self, const ta_datamodel_value_read_params *params);
 
 static const ta_datamodel_vtable tna_dm_vtable = {
     .name = { "javascript", 10 },
@@ -1696,23 +1696,29 @@ static const ta_datamodel_vtable tna_dm_vtable = {
     .import_content = tna_dm_import_content,
     .foreach_snapshot = tna_dm_foreach_snapshot,
     .foreach_bind = tna_dm_foreach_bind,
-    .value_encode = tna_dm_value_encode,
-    .value_decode = tna_dm_value_decode,
+    .value_write = tna_dm_value_write,
+    .value_read = tna_dm_value_read,
 };
 
 /* ------------------------------------------------------------------------
- * Offloading (core ADR 0074)
+ * A value as bytes (core ADR 0090 section 2, napi ADR 0034 section 2)
  *
- * A value's bytes start with a tag: 'S' and v8.serialize's bytes, which
- * v8.deserialize reads back as a new object, so the value leaves the
- * JavaScript heap; or 'H' and the value box itself, retained, for a value
- * serialization refuses (a function, a class instance with private state)
- * or when the system keeps every value by handle. A handle keeps the object
- * alive: it frees only core's part of the actor.
+ * durable=false, for offloading (core ADR 0074): a tag, then either 'S' and
+ * v8.serialize's bytes, which v8.deserialize reads back as a new object, so
+ * the value leaves the JavaScript heap; or 'H' and the value box itself,
+ * retained, for a value serialization refuses (a function, a class instance
+ * with private state) or when the system keeps every value by handle. A
+ * handle keeps the object alive: it frees only core's part of the actor.
+ *
+ * durable=true: the built-in data model's text (ADR 0031), which
+ * lib/durable.js writes in pieces from an explicit-stack walk and parses as
+ * pieces arrive. Each piece crosses as a string and leaves as UTF-8, so no
+ * side holds the whole text.
  */
 
 #define TNA_OFFLOAD_SERIALIZED 'S'
 #define TNA_OFFLOAD_HANDLE 'H'
+#define TNA_DURABLE_PIECE 16384u
 
 static ta_allocator tna_offload_allocator(tna_js_datamodel *dm) {
     return tna_allocator_for(&dm->wrapper->system->allocator, TNA_MEMORY_OTHER);
@@ -1726,8 +1732,12 @@ static void tna_clear_exception(napi_env env) {
     }
 }
 
+static ta_op_status tna_sink_write(const ta_byte_sink *sink, const void *bytes, size_t length) {
+    return sink->v->write(sink->self, (ta_bytes){ .ptr = bytes, .len = (uint32_t)length });
+}
+
 /* TA_OP_ERROR when serialization refuses the value, so the caller keeps it by handle. */
-static ta_op_status tna_offload_serialize(tna_js_datamodel *dm, const ta_datamodel_value_encode_params *params) {
+static ta_op_status tna_offload_serialize(tna_js_datamodel *dm, const ta_datamodel_value_write_params *params) {
     napi_env env = dm->env;
     napi_value value = NULL;
     napi_value serialize = NULL;
@@ -1743,25 +1753,18 @@ static ta_op_status tna_offload_serialize(tna_js_datamodel *dm, const ta_datamod
         tna_clear_exception(env);
         return TA_OP_ERROR;
     }
-    uint8_t *copy = ta_arena_alloc(params->arena, length + 1u, 1);
-    if (copy == NULL) {
-        return TA_OP_NOMEM;
+    static const uint8_t tag = TNA_OFFLOAD_SERIALIZED;
+    ta_op_status status = tna_sink_write(&params->sink, &tag, 1);
+    for (size_t at = 0; status == TA_OP_OK && at < length; at += TNA_DURABLE_PIECE) {
+        size_t count = length - at < TNA_DURABLE_PIECE ? length - at : TNA_DURABLE_PIECE;
+        status = tna_sink_write(&params->sink, (const uint8_t *)data + at, count);
     }
-    copy[0] = TNA_OFFLOAD_SERIALIZED;
-    if (length != 0) {
-        memcpy(copy + 1, data, length);
-    }
-    *params->out = (ta_bytes){ .ptr = copy, .len = length + 1u };
-    return TA_OP_OK;
+    return status == TA_OP_ERROR ? TA_OP_NOMEM : status;
 }
 
-static ta_op_status tna_offload_handle(tna_js_datamodel *dm, const ta_datamodel_value_encode_params *params) {
+static ta_op_status tna_offload_handle(tna_js_datamodel *dm, const ta_datamodel_value_write_params *params) {
     if (!dm->offloading) {
         return TA_OP_ERROR;
-    }
-    uint8_t *copy = ta_arena_alloc(params->arena, 1u + sizeof(ta_value), _Alignof(ta_value));
-    if (copy == NULL) {
-        return TA_OP_NOMEM;
     }
     /* One slot at a time: an actor holds few values, and the store frees the
      * array at exactly its count. */
@@ -1783,19 +1786,96 @@ static ta_op_status tna_offload_handle(tna_js_datamodel *dm, const ta_datamodel_
         dm->handles = grown;
         dm->handle_capacity = capacity;
     }
+    uint8_t bytes[1u + sizeof(ta_value)];
+    bytes[0] = TNA_OFFLOAD_HANDLE;
+    memcpy(bytes + 1, params->value, sizeof(ta_value));
+    ta_op_status status = tna_sink_write(&params->sink, bytes, sizeof bytes);
+    if (status != TA_OP_OK) {
+        return status == TA_OP_ERROR ? TA_OP_NOMEM : status;
+    }
     ta_value kept = *params->value;
     ta_value_retain(&kept);
     dm->handles[dm->handle_count++] = kept;
-    copy[0] = TNA_OFFLOAD_HANDLE;
-    memcpy(copy + 1, &kept, sizeof kept);
-    *params->out = (ta_bytes){ .ptr = copy, .len = 1u + sizeof kept };
     return TA_OP_OK;
 }
 
-static ta_op_status tna_dm_value_encode(void *self, const ta_datamodel_value_encode_params *params) {
+/* One piece of text from JavaScript, as UTF-8, into the sink. */
+static ta_op_status tna_durable_piece(tna_js_datamodel *dm, const ta_byte_sink *sink, napi_value text) {
+    napi_env env = dm->env;
+    size_t length = 0;
+    if (napi_get_value_string_utf8(env, text, NULL, 0, &length) != napi_ok) {
+        return TA_OP_ERROR;
+    }
+    ta_allocator allocator = tna_offload_allocator(dm);
+    char *utf8 = tna_alloc(allocator, length + 1u, 1);
+    if (utf8 == NULL) {
+        return TA_OP_NOMEM;
+    }
+    size_t written = 0;
+    ta_op_status status = napi_get_value_string_utf8(env, text, utf8, length + 1u, &written) == napi_ok
+                              ? tna_sink_write(sink, utf8, written)
+                              : TA_OP_ERROR;
+    tna_free(allocator, &(ta_allocator_free_params){ .ptr = utf8, .size = length + 1u, .alignment = 1 });
+    return status;
+}
+
+static ta_op_status tna_durable_write(tna_js_datamodel *dm, const ta_datamodel_value_write_params *params) {
+    tna_frame frame;
+    if (!tna_begin(&frame, dm, NULL, NULL, params->fault)) {
+        return TA_OP_ERROR;
+    }
+    napi_env env = dm->env;
+    napi_value value = NULL;
+    napi_value chunks = NULL;
+    napi_value global = NULL;
+    napi_value iterator = NULL;
+    napi_value next = NULL;
+    ta_op_status status = TA_OP_OK;
+    if (dm->durable_chunks == NULL || !tna_value_get(env, params->value, &value) ||
+        napi_get_reference_value(env, dm->durable_chunks, &chunks) != napi_ok || chunks == NULL ||
+        napi_get_global(env, &global) != napi_ok ||
+        napi_call_function(env, global, chunks, 1, &value, &iterator) != napi_ok ||
+        napi_get_named_property(env, iterator, "next", &next) != napi_ok) {
+        status = tna_fail(&frame, "javascript: the value has no durable form");
+    }
+    while (status == TA_OP_OK) {
+        napi_value step = NULL;
+        napi_value done = NULL;
+        napi_value text = NULL;
+        bool finished = false;
+        if (napi_call_function(env, iterator, next, 0, NULL, &step) != napi_ok ||
+            napi_get_named_property(env, step, "done", &done) != napi_ok ||
+            napi_get_value_bool(env, done, &finished) != napi_ok) {
+            status = tna_fail(&frame, "javascript: the value has no durable form");
+            break;
+        }
+        if (finished) {
+            break;
+        }
+        if (napi_get_named_property(env, step, "value", &text) != napi_ok) {
+            status = tna_fail(&frame, "javascript: the value has no durable form");
+            break;
+        }
+        status = tna_durable_piece(dm, &params->sink, text);
+        if (status == TA_OP_ERROR) {
+            status = tna_fail(&frame, "javascript: the sink failed");
+        }
+    }
+    tna_end(&frame);
+    return status;
+}
+
+static ta_op_status tna_dm_value_write(void *self, const ta_datamodel_value_write_params *params) {
     tna_js_datamodel *dm = ((tna_dm_adapter *)self)->dm;
     if (!tna_value_ours(params->value)) {
+        if (params->fault != NULL) {
+            *params->fault = (ta_fault){ .code = TA_ERR_INVALID,
+                                         .message = { "javascript: not a value of this data model", 42 } };
+        }
         return TA_OP_ERROR;
+    }
+    if (params->durable) {
+        return tna_durable_write(dm, params);
     }
     if (!dm->by_handle && dm->serialize != NULL && dm->js_usable) {
         ta_op_status status = tna_offload_serialize(dm, params);
@@ -1803,22 +1883,150 @@ static ta_op_status tna_dm_value_encode(void *self, const ta_datamodel_value_enc
             return status;
         }
     }
-    return tna_offload_handle(dm, params);
+    ta_op_status status = tna_offload_handle(dm, params);
+    if (status == TA_OP_ERROR && params->fault != NULL) {
+        *params->fault = (ta_fault){ .code = TA_ERR_UNSUPPORTED,
+                                     .message = { "javascript: the value has no byte form", 38 } };
+    }
+    return status;
 }
 
-static ta_op_status tna_dm_value_decode(void *self, const ta_datamodel_value_decode_params *params) {
-    tna_js_datamodel *dm = ((tna_dm_adapter *)self)->dm;
-    if (params->bytes.len < 1u) {
+/*
+ * How much of `bytes` ends on a whole UTF-8 character: a piece can end in
+ * the middle of one, whose rest comes with the next piece.
+ */
+static size_t tna_utf8_whole(const uint8_t *bytes, size_t length) {
+    size_t back = 0;
+    while (back < 3u && back < length && (bytes[length - 1u - back] & 0xc0u) == 0x80u) {
+        back += 1;
+    }
+    if (back == length) {
+        return length;
+    }
+    uint8_t lead = bytes[length - 1u - back];
+    size_t need = lead < 0x80u ? 1u : (lead & 0xe0u) == 0xc0u ? 2u : (lead & 0xf0u) == 0xe0u ? 3u : 4u;
+    return back + 1u >= need ? length : length - 1u - back;
+}
+
+static bool tna_call_method(napi_env env, napi_value object, const char *name, size_t argc, napi_value *argv,
+                            napi_value *out) {
+    napi_value method = NULL;
+    napi_value ignored = NULL;
+    return napi_get_named_property(env, object, name, &method) == napi_ok &&
+           napi_call_function(env, object, method, argc, argv, out != NULL ? out : &ignored) == napi_ok;
+}
+
+static ta_op_status tna_durable_read(tna_js_datamodel *dm, const ta_datamodel_value_read_params *params) {
+    tna_frame frame;
+    if (!tna_begin(&frame, dm, NULL, NULL, params->fault)) {
         return TA_OP_ERROR;
     }
-    if (params->bytes.ptr[0] == TNA_OFFLOAD_HANDLE && params->bytes.len == 1u + sizeof(ta_value)) {
+    napi_env env = dm->env;
+    napi_value factory = NULL;
+    napi_value classes = NULL;
+    napi_value global = NULL;
+    napi_value reader = NULL;
+    ta_allocator allocator = tna_offload_allocator(dm);
+    uint8_t *piece = tna_alloc(allocator, TNA_DURABLE_PIECE + 4u, 1);
+    ta_op_status status = piece == NULL ? TA_OP_NOMEM : TA_OP_OK;
+    if (status == TA_OP_OK &&
+        (dm->durable_reader == NULL || napi_get_reference_value(env, dm->durable_reader, &factory) != napi_ok ||
+         napi_get_reference_value(env, dm->classes, &classes) != napi_ok || napi_get_global(env, &global) != napi_ok ||
+         napi_call_function(env, global, factory, 1, &classes, &reader) != napi_ok)) {
+        status = tna_fail(&frame, "javascript: cannot read durable values");
+    }
+    size_t carried = 0;
+    while (status == TA_OP_OK) {
+        uint32_t got = 0;
+        status = params->source.v->read(params->source.self, &(ta_byte_read_params){
+                                                                 .buffer = piece + carried,
+                                                                 .capacity = TNA_DURABLE_PIECE,
+                                                                 .got = &got });
+        if (status != TA_OP_OK) {
+            if (status == TA_OP_ERROR) {
+                status = tna_fail(&frame, "javascript: the source failed");
+            }
+            break;
+        }
+        size_t length = carried + got;
+        size_t whole = got == 0 ? length : tna_utf8_whole(piece, length);
+        if (whole != 0) {
+            napi_value text = NULL;
+            if (napi_create_string_utf8(env, (const char *)piece, whole, &text) != napi_ok ||
+                !tna_call_method(env, reader, "push", 1, &text, NULL)) {
+                status = tna_fail(&frame, "javascript: the bytes are not a value in the built-in data model's text");
+                break;
+            }
+        }
+        carried = length - whole;
+        memmove(piece, piece + whole, carried);
+        if (got == 0) {
+            napi_value value = NULL;
+            if (!tna_call_method(env, reader, "end", 0, NULL, &value)) {
+                status = tna_fail(&frame, "javascript: the bytes are not a value in the built-in data model's text");
+            } else if (!tna_value_make(&dm->wrapper->values, value, params->out)) {
+                status = TA_OP_NOMEM;
+            }
+            break;
+        }
+    }
+    if (piece != NULL) {
+        tna_free(allocator, &(ta_allocator_free_params){ .ptr = piece, .size = TNA_DURABLE_PIECE + 4u, .alignment = 1 });
+    }
+    tna_end(&frame);
+    return status;
+}
+
+/* Offload's bytes, gathered: v8.deserialize and a handle both want them whole. */
+static ta_op_status tna_offload_gather(tna_js_datamodel *dm, const ta_byte_source *source, uint8_t **out,
+                                       size_t *length, size_t *capacity) {
+    ta_allocator allocator = tna_offload_allocator(dm);
+    *out = NULL;
+    *length = 0;
+    *capacity = 0;
+    for (;;) {
+        if (*capacity - *length < TNA_DURABLE_PIECE) {
+            size_t grown_capacity = *capacity == 0 ? TNA_DURABLE_PIECE : *capacity * 2u;
+            uint8_t *grown = tna_alloc(allocator, grown_capacity, 1);
+            if (grown == NULL) {
+                return TA_OP_NOMEM;
+            }
+            if (*length != 0) {
+                memcpy(grown, *out, *length);
+            }
+            if (*out != NULL) {
+                tna_free(allocator, &(ta_allocator_free_params){ .ptr = *out, .size = *capacity, .alignment = 1 });
+            }
+            *out = grown;
+            *capacity = grown_capacity;
+        }
+        uint32_t got = 0;
+        ta_op_status status = source->v->read(source->self, &(ta_byte_read_params){
+                                                                .buffer = *out + *length,
+                                                                .capacity = TNA_DURABLE_PIECE,
+                                                                .got = &got });
+        if (status != TA_OP_OK) {
+            return status;
+        }
+        if (got == 0) {
+            return TA_OP_OK;
+        }
+        *length += got;
+    }
+}
+
+static ta_op_status tna_offload_read(tna_js_datamodel *dm, ta_bytes bytes, ta_value *out) {
+    if (bytes.len < 1u) {
+        return TA_OP_ERROR;
+    }
+    if (bytes.ptr[0] == TNA_OFFLOAD_HANDLE && bytes.len == 1u + sizeof(ta_value)) {
         ta_value kept;
-        memcpy(&kept, params->bytes.ptr + 1, sizeof kept);
+        memcpy(&kept, bytes.ptr + 1, sizeof kept);
         if (!tna_value_ours(&kept)) {
             return TA_OP_ERROR;
         }
         ta_value_retain(&kept);
-        *params->out = kept;
+        *out = kept;
         return TA_OP_OK;
     }
     napi_env env = dm->env;
@@ -1826,18 +2034,40 @@ static ta_op_status tna_dm_value_decode(void *self, const ta_datamodel_value_dec
     napi_value deserialize = NULL;
     napi_value global = NULL;
     napi_value value = NULL;
-    if (params->bytes.ptr[0] != TNA_OFFLOAD_SERIALIZED || dm->deserialize == NULL || !dm->js_usable) {
+    if (bytes.ptr[0] != TNA_OFFLOAD_SERIALIZED || dm->deserialize == NULL || !dm->js_usable) {
         return TA_OP_ERROR;
     }
     void *copied = NULL;
-    if (napi_create_buffer_copy(env, params->bytes.len - 1u, params->bytes.ptr + 1, &copied, &buffer) != napi_ok ||
+    if (napi_create_buffer_copy(env, bytes.len - 1u, bytes.ptr + 1, &copied, &buffer) != napi_ok ||
         napi_get_reference_value(env, dm->deserialize, &deserialize) != napi_ok || deserialize == NULL ||
         napi_get_global(env, &global) != napi_ok ||
         napi_call_function(env, global, deserialize, 1, &buffer, &value) != napi_ok) {
         tna_clear_exception(env);
         return TA_OP_ERROR;
     }
-    return tna_value_make(&dm->wrapper->values, value, params->out) ? TA_OP_OK : TA_OP_NOMEM;
+    return tna_value_make(&dm->wrapper->values, value, out) ? TA_OP_OK : TA_OP_NOMEM;
+}
+
+static ta_op_status tna_dm_value_read(void *self, const ta_datamodel_value_read_params *params) {
+    tna_js_datamodel *dm = ((tna_dm_adapter *)self)->dm;
+    if (params->durable) {
+        return tna_durable_read(dm, params);
+    }
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    size_t capacity = 0;
+    ta_op_status status = tna_offload_gather(dm, &params->source, &bytes, &length, &capacity);
+    if (status == TA_OP_OK) {
+        status = tna_offload_read(dm, (ta_bytes){ .ptr = bytes, .len = (uint32_t)length }, params->out);
+        if (status == TA_OP_ERROR && params->fault != NULL) {
+            *params->fault = (ta_fault){ .code = TA_ERR_INVALID,
+                                         .message = { "javascript: the bytes are no offloaded value", 44 } };
+        }
+    }
+    if (bytes != NULL) {
+        tna_free(tna_offload_allocator(dm), &(ta_allocator_free_params){ .ptr = bytes, .size = capacity, .alignment = 1 });
+    }
+    return status;
 }
 
 bool tna_js_datamodel_set_offload(tna_js_datamodel *dm, const tna_offload_values *values) {
@@ -1860,6 +2090,36 @@ bool tna_js_datamodel_set_offload(tna_js_datamodel *dm, const tna_offload_values
     dm->serialize = serialize;
     dm->deserialize = deserialize;
     dm->by_handle = values->by_handle;
+    return true;
+}
+
+/* The built-in data model's codec, for napi's own callers (napi_loads.c). */
+ta_op_status tna_js_datamodel_value_write(tna_js_datamodel *dm, const ta_datamodel_value_write_params *params) {
+    return tna_dm_value_write(&dm->builtin, params);
+}
+
+ta_op_status tna_js_datamodel_value_read(tna_js_datamodel *dm, const ta_datamodel_value_read_params *params) {
+    return tna_dm_value_read(&dm->builtin, params);
+}
+
+bool tna_js_datamodel_set_durable(tna_js_datamodel *dm, napi_value chunks, napi_value reader) {
+    napi_ref chunks_ref = NULL;
+    napi_ref reader_ref = NULL;
+    if (napi_create_reference(dm->env, chunks, 1, &chunks_ref) != napi_ok) {
+        return false;
+    }
+    if (napi_create_reference(dm->env, reader, 1, &reader_ref) != napi_ok) {
+        napi_delete_reference(dm->env, chunks_ref);
+        return false;
+    }
+    if (dm->durable_chunks != NULL) {
+        napi_delete_reference(dm->env, dm->durable_chunks);
+    }
+    if (dm->durable_reader != NULL) {
+        napi_delete_reference(dm->env, dm->durable_reader);
+    }
+    dm->durable_chunks = chunks_ref;
+    dm->durable_reader = reader_ref;
     return true;
 }
 
@@ -2212,7 +2472,7 @@ void tna_js_datamodel_after_core(tna_js_datamodel *dm) {
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable) {
     tna_js_datamodel_after_core(dm);
     napi_ref *refs[] = { &dm->context, &dm->json_parse, &dm->array_from, &dm->functions, &dm->classes, &dm->serialize, &dm->deserialize,
-                         &dm->objects };
+                         &dm->durable_chunks, &dm->durable_reader, &dm->objects };
     for (size_t at = 0; at < sizeof refs / sizeof refs[0]; at += 1) {
         if (*refs[at] != NULL && refs_usable) {
             napi_delete_reference(dm->env, *refs[at]);

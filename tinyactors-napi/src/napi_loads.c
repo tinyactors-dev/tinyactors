@@ -337,6 +337,202 @@ napi_value tna_set_offload_values_method(napi_env env, napi_callback_info info) 
     return tna_undefined_value(env);
 }
 
+/* setDurableCodec(chunks, reader): lib/durable.js's two functions (napi ADR 0034). */
+napi_value tna_set_durable_codec_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (argc < 2 || !tna_js_datamodel_set_durable(&wrapper->dm, argv[0], argv[1])) {
+        return tna_throw(env, "out-of-memory", "setDurableCodec: cannot keep the functions");
+    }
+    return tna_undefined_value(env);
+}
+
+/*
+ * A byte sink that gathers into memory, and remembers its largest piece;
+ * and a source that hands bytes back in pieces of a chosen size. Internal:
+ * the tests read a value's durable bytes through them (core ADR 0090).
+ */
+typedef struct {
+    tna_allocator *allocator;
+    uint8_t *bytes;
+    size_t len;
+    size_t cap;
+    size_t largest;
+} tna_gather_sink;
+
+static ta_op_status tna_gather_begin(void *self) {
+    ((tna_gather_sink *)self)->len = 0;
+    return TA_OP_OK;
+}
+
+static ta_op_status tna_gather_write(void *self, ta_bytes bytes) {
+    tna_gather_sink *sink = self;
+    ta_allocator allocator = tna_allocator_for(sink->allocator, TNA_MEMORY_OTHER);
+    if (sink->len + bytes.len > sink->cap) {
+        size_t cap = sink->cap == 0 ? 4096u : sink->cap;
+        while (cap < sink->len + bytes.len) {
+            cap *= 2u;
+        }
+        uint8_t *grown = tna_alloc(allocator, cap, 1);
+        if (grown == NULL) {
+            return TA_OP_NOMEM;
+        }
+        if (sink->len != 0) {
+            memcpy(grown, sink->bytes, sink->len);
+        }
+        if (sink->bytes != NULL) {
+            tna_free(allocator, &(ta_allocator_free_params){ .ptr = sink->bytes, .size = sink->cap, .alignment = 1 });
+        }
+        sink->bytes = grown;
+        sink->cap = cap;
+    }
+    if (bytes.len != 0) {
+        memcpy(sink->bytes + sink->len, bytes.ptr, bytes.len);
+    }
+    sink->len += bytes.len;
+    sink->largest = bytes.len > sink->largest ? bytes.len : sink->largest;
+    return TA_OP_OK;
+}
+
+static void tna_gather_end(void *self, bool keep) {
+    if (!keep) {
+        ((tna_gather_sink *)self)->len = 0;
+    }
+}
+
+static const ta_byte_sink_vtable tna_gather_vtable = {
+    .begin = tna_gather_begin, .write = tna_gather_write, .end = tna_gather_end,
+};
+
+typedef struct {
+    const uint8_t *bytes;
+    size_t len;
+    size_t at;
+    uint32_t piece;
+} tna_piece_source;
+
+static ta_op_status tna_piece_read(void *self, const ta_byte_read_params *params) {
+    tna_piece_source *source = self;
+    size_t count = source->len - source->at;
+    count = count < params->capacity ? count : params->capacity;
+    count = source->piece != 0 && count > source->piece ? source->piece : count;
+    if (count != 0) {
+        memcpy(params->buffer, source->bytes + source->at, count);
+    }
+    source->at += count;
+    *params->got = (uint32_t)count;
+    return TA_OP_OK;
+}
+
+static const ta_byte_source_vtable tna_piece_vtable = { .read = tna_piece_read };
+
+static napi_value tna_codec_refusal(napi_env env, const ta_fault *fault, ta_op_status status) {
+    if (status == TA_OP_NOMEM) {
+        return tna_throw(env, "out-of-memory", "the value's bytes could not be kept");
+    }
+    char message[256];
+    size_t length = fault->message.len < sizeof message - 1u ? fault->message.len : sizeof message - 1u;
+    memcpy(message, fault->message.ptr, length);
+    message[length] = 0;
+    return tna_throw(env, "unsupported", message);
+}
+
+/* durableBytes(value, durable) -> { bytes, largest }: the value's bytes and its largest piece. */
+napi_value tna_durable_bytes_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    bool durable = true;
+    if (argc >= 2) {
+        napi_get_value_bool(env, argv[1], &durable);
+    }
+    ta_value value = { 0 };
+    if (!tna_value_make(&wrapper->values, argc >= 1 ? argv[0] : tna_undefined_value(env), &value)) {
+        return tna_throw(env, "out-of-memory", "durableBytes: cannot keep the value");
+    }
+    tna_gather_sink state = { .allocator = &wrapper->system->allocator };
+    ta_byte_sink sink = { .self = &state, .v = &tna_gather_vtable };
+    ta_fault fault = { 0 };
+    sink.v->begin(sink.self);
+    tna_js_datamodel_offload_begin(&wrapper->dm);
+    ta_op_status status = tna_js_datamodel_value_write(&wrapper->dm, &(ta_datamodel_value_write_params){
+                                                                          .value = &value, .sink = sink,
+                                                                          .durable = durable, .fault = &fault });
+    tna_offload_handles handles = tna_js_datamodel_offload_end(&wrapper->dm);
+    tna_js_datamodel_release_handles(&wrapper->dm, handles);
+    sink.v->end(sink.self, status == TA_OP_OK);
+    ta_value_release(&value);
+    napi_value result = NULL;
+    if (status != TA_OP_OK) {
+        result = tna_codec_refusal(env, &fault, status);
+    } else {
+        napi_value buffer = NULL;
+        napi_value largest = NULL;
+        void *data = NULL;
+        napi_create_object(env, &result);
+        napi_create_buffer_copy(env, state.len, state.len == 0 ? (const void *)"" : state.bytes, &data, &buffer);
+        napi_create_double(env, (double)state.largest, &largest);
+        napi_set_named_property(env, result, "bytes", buffer);
+        napi_set_named_property(env, result, "largest", largest);
+    }
+    ta_value_release(&fault.data);
+    if (state.bytes != NULL) {
+        tna_free(tna_allocator_for(state.allocator, TNA_MEMORY_OTHER),
+                 &(ta_allocator_free_params){ .ptr = state.bytes, .size = state.cap, .alignment = 1 });
+    }
+    return result;
+}
+
+/* durableValue(bytes, piece): the value read back from `bytes`, handed out `piece` bytes at a time. */
+napi_value tna_durable_value_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    void *data = NULL;
+    size_t length = 0;
+    uint32_t piece = 0;
+    if (argc < 1 || napi_get_buffer_info(env, argv[0], &data, &length) != napi_ok) {
+        return tna_throw(env, "invalid", "durableValue: expected a Buffer");
+    }
+    if (argc >= 2) {
+        napi_get_value_uint32(env, argv[1], &piece);
+    }
+    tna_piece_source state = { .bytes = data, .len = length, .piece = piece };
+    ta_value value = { 0 };
+    ta_fault fault = { 0 };
+    ta_op_status status = tna_js_datamodel_value_read(&wrapper->dm, &(ta_datamodel_value_read_params){
+                                                                         .source = { .self = &state, .v = &tna_piece_vtable },
+                                                                         .durable = true, .out = &value, .fault = &fault });
+    napi_value result = NULL;
+    if (status != TA_OP_OK) {
+        result = tna_codec_refusal(env, &fault, status);
+    } else if (!tna_value_get(env, &value, &result)) {
+        result = tna_throw(env, "invalid", "durableValue: the value is gone");
+    }
+    ta_value_release(&value);
+    ta_value_release(&fault.data);
+    return result;
+}
+
 /* Takes the actor back from bytes the store could not keep, so it is not lost. */
 static void tna_offload_undo(tna_napi_system *wrapper, ta_bytes bytes) {
     tna_system *system = wrapper->system;

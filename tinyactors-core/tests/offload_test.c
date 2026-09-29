@@ -464,6 +464,235 @@ static void test_rearm_at_spawn(void) {
     finish(&f);
 }
 
+/*
+ * ADR 0090 sections 1 and 2: values reach the offload through the data
+ * model's streaming codec. A blob value is written in pieces of
+ * `write_piece` bytes and read back in pieces of `read_piece`, so the
+ * arena sink and the memory source see every split.
+ */
+typedef struct {
+    long refs;
+    uint32_t len;
+    uint8_t bytes[];
+} blob;
+
+static long live_blobs;
+static uint32_t write_piece = 7;
+static uint32_t read_piece = 7;
+static bool write_refuses;
+
+static void blob_retain(void *self) {
+    ((blob *)self)->refs += 1;
+}
+
+static void blob_release(void *self) {
+    blob *b = self;
+    if (--b->refs == 0) {
+        live_blobs -= 1;
+        free(b);
+    }
+}
+
+static const ta_value_vtable blob_vtable = { .retain = blob_retain, .release = blob_release };
+
+static ta_value blob_make(uint32_t len, uint8_t seed) {
+    blob *b = malloc(sizeof(blob) + len);
+    b->refs = 1;
+    b->len = len;
+    for (uint32_t index = 0; index < len; index += 1) {
+        b->bytes[index] = (uint8_t)(seed + index * 31u);
+    }
+    live_blobs += 1;
+    return (ta_value){ .self = b, .v = &blob_vtable };
+}
+
+static bool blob_equal(const ta_value *a, const ta_value *b) {
+    const blob *x = a->self;
+    const blob *y = b->self;
+    return a->v == &blob_vtable && b->v == &blob_vtable && x->len == y->len && memcmp(x->bytes, y->bytes, x->len) == 0;
+}
+
+static ta_op_status blob_write(void *self, const ta_datamodel_value_write_params *params) {
+    (void)self;
+    CHECK(!params->durable);
+    if (write_refuses) {
+        *params->fault = (ta_fault){ .code = TA_ERR_UNSUPPORTED, .message = STR("refused"), .data = blob_make(3, 1) };
+        return TA_OP_ERROR;
+    }
+    const blob *b = params->value->self;
+    uint32_t len = b->len;
+    ta_op_status status = params->sink.v->write(params->sink.self,
+                                                (ta_bytes){ .ptr = (const uint8_t *)&len, .len = sizeof len });
+    for (uint32_t at = 0; status == TA_OP_OK && at < b->len; at += write_piece) {
+        uint32_t count = b->len - at < write_piece ? b->len - at : write_piece;
+        status = params->sink.v->write(params->sink.self, (ta_bytes){ .ptr = b->bytes + at, .len = count });
+    }
+    return status;
+}
+
+static ta_op_status blob_read(void *self, const ta_datamodel_value_read_params *params) {
+    (void)self;
+    uint8_t piece[4096];
+    uint8_t header[sizeof(uint32_t)];
+    uint32_t have = 0;
+    uint32_t got = 0;
+    blob *b = NULL;
+    uint32_t filled = 0;
+    for (;;) {
+        uint32_t want = read_piece < sizeof piece ? read_piece : (uint32_t)sizeof piece;
+        ta_op_status status = params->source.v->read(params->source.self, &(ta_byte_read_params){
+                                                                              .buffer = piece,
+                                                                              .capacity = want,
+                                                                              .got = &got });
+        if (status != TA_OP_OK) {
+            return status;
+        }
+        if (got == 0) {
+            break;
+        }
+        for (uint32_t index = 0; index < got; index += 1) {
+            if (have < sizeof header) {
+                header[have++] = piece[index];
+                if (have == sizeof header) {
+                    uint32_t len;
+                    memcpy(&len, header, sizeof len);
+                    ta_value made = blob_make(len, 0);
+                    b = made.self;
+                }
+            } else if (b != NULL && filled < b->len) {
+                b->bytes[filled++] = piece[index];
+            }
+        }
+    }
+    if (b == NULL || filled != b->len) {
+        if (b != NULL) {
+            blob_release(b);
+        }
+        *params->fault = (ta_fault){ .code = TA_ERR_INVALID, .message = STR("no blob") };
+        return TA_OP_ERROR;
+    }
+    *params->out = (ta_value){ .self = b, .v = &blob_vtable };
+    return TA_OP_OK;
+}
+
+static ta_datamodel_vtable blob_model_vtable;
+
+/* Unlike the null data model it wraps, it takes a binding: the root. */
+static ta_result blob_init_instance(void *self, const ta_datamodel_init_instance_params *params) {
+    (void)self;
+    (void)params;
+    return TA_OK;
+}
+
+/* The timed chart again, on a data model whose values are blobs. */
+static void start_blobs(fixture *f) {
+    *f = (fixture){0};
+    blob_model_vtable = *ta_null_datamodel().v;
+    blob_model_vtable.value_write = blob_write;
+    blob_model_vtable.value_read = blob_read;
+    blob_model_vtable.init_instance = blob_init_instance;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &f->system) == TA_OK);
+    CHECK(ta_system_set_actor_directory(f->system, (ta_actor_directory){ .self = &f->dir, .v = &dir_vtable }) ==
+          TA_OK);
+    ta_definition_identity identity = {
+        .family = { STR("timed") },
+        .revision = { .ptr = (const uint8_t *)"v1", .len = 2 },
+    };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(
+              f->system, &(ta_definition_compile_params){
+                             .spec = &(ta_scxml_spec){ .datamodel = STR("null"), .identity = &identity,
+                                                       .states = timed_chart },
+                             .datamodel = { .self = NULL, .v = &blob_model_vtable },
+                             .allocator = test_allocator,
+                             .out = &definition,
+                         }) == TA_OK);
+    CHECK(ta_system_register_definition(f->system, definition, &f->definition) == TA_OK);
+    CHECK(ta_arena_init(&f->arena, test_allocator, 256) == TA_OK);
+}
+
+/* A root of 10,000 bytes goes out and comes back whole, for every split. */
+static void test_streaming_codec(void) {
+    static const uint32_t pieces[][2] = { { 1, 1 }, { 7, 7 }, { 7, 1 }, { 1, 4096 }, { 4096, 3 } };
+    for (size_t index = 0; index < sizeof pieces / sizeof pieces[0]; index += 1) {
+        write_piece = pieces[index][0];
+        read_piece = pieces[index][1];
+        fixture f;
+        start_blobs(&f);
+        ta_actor_id actor = spawn(&f, &the_address);
+        ta_value root = blob_make(10000, (uint8_t)index);
+        ta_bytes bytes = {0};
+        CHECK(ta_actor_offload(f.system, &(ta_actor_offload_params){ .actor = actor, .root = &root,
+                                                                     .arena = &f.arena, .out = &bytes }) == TA_OK);
+        ta_value back = {0};
+        ta_actor_id id = 0;
+        CHECK(ta_actor_load(f.system, &(ta_actor_load_params){ .bytes = bytes, .out = &id, .root = &back }) == TA_OK);
+        CHECK(blob_equal(&root, &back));
+        CHECK(active(&f, id, "a"));
+        ta_value_release(&back);
+        ta_value_release(&root);
+        finish(&f);
+    }
+    write_piece = 7;
+    read_piece = 7;
+    CHECK(live_blobs == 0);
+}
+
+/* A value the data model will not write refuses the offload, and the fault's data is released. */
+static void test_codec_refusal(void) {
+    fixture f;
+    start_blobs(&f);
+    ta_actor_id actor = spawn(&f, &the_address);
+    ta_value root = blob_make(16, 9);
+    write_refuses = true;
+    ta_bytes bytes = {0};
+    CHECK(ta_actor_offload(f.system, &(ta_actor_offload_params){ .actor = actor, .root = &root,
+                                                                 .arena = &f.arena, .out = &bytes }) ==
+          TA_ERR_UNSUPPORTED);
+    write_refuses = false;
+    CHECK(bytes.len == 0);
+    CHECK(ta_actor_lookup(f.system, actor) != NULL);
+    CHECK(f.dir.entry.kind == TA_ACTOR_DIRECTORY_RESIDENT);
+    ta_value_release(&root);
+    finish(&f);
+    CHECK(live_blobs == 0);
+}
+
+/* ADR 0070 with values: the arena sink's growth fails at each allocation in turn. */
+static void test_codec_allocation_failures(void) {
+    write_piece = 1;
+    for (long step = 0;; step += 1) {
+        fixture f;
+        start_blobs(&f);
+        ta_actor_id actor = spawn(&f, &the_address);
+        ta_value root = blob_make(3000, 5);
+        allocations = 0;
+        fail_at = step;
+        ta_bytes bytes = {0};
+        ta_result result = ta_actor_offload(f.system, &(ta_actor_offload_params){ .actor = actor, .root = &root,
+                                                                                  .arena = &f.arena, .out = &bytes });
+        fail_at = -1;
+        if (result == TA_OK) {
+            ta_value back = {0};
+            ta_actor_id id = 0;
+            CHECK(ta_actor_load(f.system, &(ta_actor_load_params){ .bytes = bytes, .out = &id, .root = &back }) ==
+                  TA_OK);
+            CHECK(blob_equal(&root, &back));
+            ta_value_release(&back);
+            ta_value_release(&root);
+            finish(&f);
+            break;
+        }
+        CHECK(result == TA_ERR_NOMEM);
+        CHECK(ta_actor_lookup(f.system, actor) != NULL);
+        CHECK(f.dir.entry.kind == TA_ACTOR_DIRECTORY_RESIDENT);
+        ta_value_release(&root);
+        finish(&f);
+    }
+    write_piece = 7;
+    CHECK(live_blobs == 0);
+}
+
 int main(void) {
     test_round_trip();
     test_history_survives();
@@ -471,6 +700,9 @@ int main(void) {
     test_other_system_is_stale();
     test_allocation_failures();
     test_rearm_at_spawn();
+    test_streaming_codec();
+    test_codec_refusal();
+    test_codec_allocation_failures();
     CHECK(live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "offload_test: %d check(s) failed\n", failures);

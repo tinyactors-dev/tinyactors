@@ -4,6 +4,7 @@
 
 #include "allocator.h"
 #include "ecmascript_datamodel.h"
+#include "byte_buffers.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 #define S(text) ((ta_str){.ptr = (text), .len = (uint32_t)(sizeof(text) - 1)})
@@ -429,30 +430,43 @@ static void test_operations(tat_js_datamodel_context *context) {
     ta_value_release(&array);
     ta_value_release(&shared);
 
-    /* Offloading (core ADR 0074): a value's bytes decode to an equal value,
-     * and bytes that are not a serialized value are refused. */
-    ta_arena arena;
-    require(ta_arena_init(&arena, tat_libc_allocator(), 64) == TA_OK, "offload arena");
-    ta_bytes bytes = {0};
-    check(model.v->value_encode(model.self, &(ta_datamodel_value_encode_params){ .shared = s.shared,
-                                                                                  .value = &object,
-                                                                                  .arena = &arena,
-                                                                                  .out = &bytes }) == TA_OP_OK &&
-              bytes.len > 1,
-          "value_encode writes an object");
-    ta_value back = {0};
-    check(model.v->value_decode(model.self, &(ta_datamodel_value_decode_params){ .shared = s.shared,
-                                                                                  .bytes = bytes,
-                                                                                  .out = &back }) == TA_OP_OK,
-          "value_decode reads it back");
-    check(json_is(&back, "{\"n\":5}"), "the decoded value equals the encoded one");
-    ta_value_release(&back);
+    /* A value as bytes (core ADR 0090): both forms read back to an equal
+     * value from pieces of any size; bytes that are no value are refused. */
+    for (int durable = 0; durable < 2; durable += 1) {
+        test_sink sink = {0};
+        ta_fault fault = {0};
+        check(model.v->value_write(model.self, &(ta_datamodel_value_write_params){
+                                                   .shared = s.shared, .value = &object,
+                                                   .sink = { .self = &sink, .v = &TEST_SINK },
+                                                   .durable = durable != 0, .fault = &fault }) == TA_OP_OK &&
+                  sink.len > 1,
+              "value_write writes an object");
+        static const uint32_t pieces[] = { 1, 7, 0 };
+        for (size_t index = 0; index < sizeof pieces / sizeof pieces[0]; index += 1) {
+            test_source source = { .bytes = sink.bytes, .len = sink.len, .piece = pieces[index] };
+            ta_value back = {0};
+            check(model.v->value_read(model.self, &(ta_datamodel_value_read_params){
+                                                      .shared = s.shared,
+                                                      .source = { .self = &source, .v = &TEST_SOURCE },
+                                                      .durable = durable != 0, .out = &back,
+                                                      .fault = &fault }) == TA_OP_OK,
+                  "value_read reads it back");
+            check(json_is(&back, "{\"n\":5}"), "the read value equals the written one");
+            ta_value_release(&back);
+        }
+        free(sink.bytes);
+    }
     uint8_t junk[] = { 0, 0xff, 0xfe };
-    check(model.v->value_decode(model.self, &(ta_datamodel_value_decode_params){
-                                              .shared = s.shared, .bytes = { .ptr = junk, .len = sizeof junk },
-                                              .out = &back }) == TA_OP_ERROR,
-          "value_decode refuses bytes that are no value");
-    ta_arena_destroy(&arena);
+    for (int durable = 0; durable < 2; durable += 1) {
+        test_source source = { .bytes = junk, .len = sizeof junk, .piece = 1 };
+        ta_value back = {0};
+        ta_fault fault = {0};
+        check(model.v->value_read(model.self, &(ta_datamodel_value_read_params){
+                                                  .shared = s.shared, .source = { .self = &source, .v = &TEST_SOURCE },
+                                                  .durable = durable != 0, .out = &back, .fault = &fault }) ==
+                  TA_OP_ERROR,
+              "value_read refuses bytes that are no value");
+    }
 
     /* A value outlives its session. */
     close_session(&s);

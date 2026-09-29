@@ -1,6 +1,6 @@
 # ADR 0090: Core defines the input log, its byte layout and its replay
 
-**Status:** Proposed (2026-09-29). Would amend:
+**Status:** Proposed (2026-09-29); sections 1 and 2 implemented (2026-09-29), see the implementation notes. Would amend:
 - ADR 0037: core defines the format of a log and how it replays, and still stores nothing and requires nothing;
 - ADR 0074: the data model's value codec streams through a byte sink and a byte source, and says whether its bytes are durable;
 - ADR 0089: a host replays by handing core records, instead of calling the input functions itself.
@@ -296,4 +296,45 @@ TA_API ta_result ta_actor_replay(ta_system *system, TA_IN const ta_actor_replay_
 
 ## Implementation notes
 
-None yet.
+### Sections 1 and 2
+
+- **Where:**
+  - `include/tinyactors.h`: `ta_byte_sink` (begin, write, end), `ta_byte_source` (read), `ta_byte_read_params`, and `value_write`/`value_read` with their params in place of `value_encode`/`value_decode`.
+  - `src/session_image.c`: offload writes each value through an arena-backed sink (`ta_arena_sink`), which gathers the pieces into one run of the offload's arena and doubles it as the value grows, and reads it through a memory source.
+  - `src/null_datamodel.c`: it has no values, so both operations refuse with a fault.
+  - napi: `src/napi_datamodel.{c,h}`, `lib/durable.js`, `src/napi_loads.c` (`setDurableCodec`, and the internal test methods `durableBytes`/`durableValue`), `lib/system.js`.
+  - test host: `src/json_datamodel.c`, `src/ecmascript_datamodel.c`.
+- **Who brackets a unit.** `value_write` only calls `write`. The code that owns the unit (the offload for one value here, a record in section 5) calls `begin` and `end(keep)` around it. The header says so.
+- **A source holds exactly one value.** `value_read` reads until the source reports that it ended (`*got == 0`). The chunk framing of section 3 is what gives a record's value stream its end; offload hands a memory source over the value's bytes.
+- **`ta_byte_read_params.buffer`** is annotated `TA_BUFFER(capacity, got)` with `got` `TA_ALWAYS`: the API extractor refuses a writable list.
+- **napi's durable form** is ADR 0031's text:
+  - `lib/durable.js`'s `durableChunks(value)` walks the value with an explicit stack of frames, one per open container, and yields pieces of about 16,384 characters. A long string is escaped in slices of that size, which keeps a lone surrogate at a slice boundary valid: JSON escapes it, and parsing rejoins the pair.
+  - A Map's entries, a Set's items and a typed array's elements are walked lazily, without copying them into an array first.
+  - The writer uses `,` and `:` without spaces. The built-in reader of ADR 0031 accepts either.
+  - Natively, each piece crosses as a string and is converted to UTF-8 in a buffer the size of that piece, then written.
+  - The reader, `durableReader(classes)`, is an incremental parser with an explicit stack. It keeps only the text it has not consumed. While a string is open, it resumes scanning where the last piece stopped, so a long string is scanned once. A number that ends a piece waits for the next one, because `1.` may become `1.5`.
+  - Natively, the source is read in pieces of 16,384 bytes, and a UTF-8 character split across pieces is carried to the next piece.
+  - Refusals are the built-in printer's (a function, a symbol, a BigInt, NaN, -0, undefined, a cycle, a class instance without `[serialize]()`, holes, accessors), with the JavaScript error as the fault's data. A class the reading system hasn't registered is refused on the way back.
+- **napi's offload form** (`durable = false`) is unchanged: a tag, then v8's serialization or a handle. It is written through the sink in pieces, and gathered whole before it is read, because `v8.deserialize` and a handle both need all of it.
+- **Test host:**
+  - the JSON data model writes its JSON text for both forms, and reads it with jq's incremental parser;
+  - the ECMAScript data model writes QuickJS's structured serialization for offload, and JSON text for `durable = true`. A value JSON cannot say has no durable form.
+
+  jq's dumper, and QuickJS in both directions, build or read the whole text. The test host accepts that; its data models are not where memory bounds matter.
+- **Memory:** in core, the arena sink is the offload's own memory, and nothing else is allocated. In napi, a durable write holds one piece (about 16,384 characters, and its UTF-8 copy). A durable read holds one 16 KB piece, plus the parser's unconsumed text. While a long string is being read, that is its escaped text until the closing quote. The value itself is, of course, in memory once it is built.
+- **Tests:**
+  - core `tests/offload_test.c`:
+    - a blob data model that writes in 1-, 7- and 4096-byte pieces and reads in 1-, 3-, 7- and 4096-byte pieces, round-tripping a 10,000-byte root through offload and load;
+    - a refused `value_write`, which gives `TA_ERR_UNSUPPORTED`, leaves the actor resident, and releases the fault's data;
+    - an out-of-memory sweep over offload while a 3,000-byte value is written one byte at a time.
+  - napi `test/durable.js` (Node and Bun):
+    - every kind of value the built-in data model prints, read back from pieces of 1, 2, 3, 7, 4096 and whole;
+    - a 10 MB string, which crosses in pieces no larger than 64 KB;
+    - 50,000 levels of nesting;
+    - the refusals, an unregistered class, and truncated or malformed text;
+    - the offload tag.
+  - test host `tests/json_datamodel_test.c` and `tests/ecmascript_datamodel_test.c`: both forms, read from 1- and 7-byte pieces and whole, and bytes that are no value refused.
+- **Costs:**
+  - the offload format is unchanged byte for byte;
+  - an offload now copies each value's bytes from the sink's run into the offload buffer, as it copied the arena bytes before;
+  - no per-actor or per-event cost.

@@ -5516,18 +5516,17 @@ static ta_op_status ta_null_foreach_bind(void *self, const ta_datamodel_foreach_
     return ta_null_unsupported(params->fault, TA_NULL_TEXT("the null data model has no collections to iterate"));
 }
 
-/* It owns no values, so none has a byte form (ADR 0074). A null-data-model
- * actor holds no values while it is stable, so it still offloads. */
-static ta_op_status ta_null_value_encode(void *self, const ta_datamodel_value_encode_params *params) {
+/* It owns no values, so none has a byte form (ADR 0074, ADR 0090). A
+ * null-data-model actor holds no values while it is stable, so it still
+ * offloads. */
+static ta_op_status ta_null_value_write(void *self, const ta_datamodel_value_write_params *params) {
     (void)self;
-    (void)params;
-    return TA_OP_ERROR;
+    return ta_null_unsupported(params->fault, TA_NULL_TEXT("the null data model has no values to write"));
 }
 
-static ta_op_status ta_null_value_decode(void *self, const ta_datamodel_value_decode_params *params) {
+static ta_op_status ta_null_value_read(void *self, const ta_datamodel_value_read_params *params) {
     (void)self;
-    (void)params;
-    return TA_OP_ERROR;
+    return ta_null_unsupported(params->fault, TA_NULL_TEXT("the null data model has no values to read"));
 }
 
 /*
@@ -5555,8 +5554,8 @@ static const ta_datamodel_vtable ta_null_datamodel_vtable = {
     .import_content = ta_null_import_content,
     .foreach_snapshot = ta_null_foreach_snapshot,
     .foreach_bind = ta_null_foreach_bind,
-    .value_encode = ta_null_value_encode,
-    .value_decode = ta_null_value_decode,
+    .value_write = ta_null_value_write,
+    .value_read = ta_null_value_read,
 };
 
 TA_API ta_datamodel ta_null_datamodel(void) {
@@ -13524,7 +13523,7 @@ static ta_result ta_image_load(ta_system *system, const ta_image_load_params *pa
  * The layout: a header; the session storage; the definition identity's
  * text; the self address; the invocation records and pending invokes, raw;
  * the delayed sends, raw, each followed by its destination and origin; and
- * the values, each through the actor's data model (value_encode): the root,
+ * the values, each through the actor's data model (value_write): the root,
  * the completion data, then each send's target and data. Raw records are
  * safe because nothing but this build reads them; their pointers and values
  * are rewritten on the way back in.
@@ -13601,6 +13600,81 @@ static uint8_t *ta_offload_put_ref(uint8_t *at, const ta_actor_ref *ref) {
     return at;
 }
 
+/*
+ * An arena sink (ADR 0090): one unit's pieces gathered into one run of the
+ * arena, which doubles as the unit grows. The arena keeps the runs it
+ * outgrew until it is reset, which is the offload's own lifetime.
+ */
+typedef struct {
+    ta_arena *arena;
+    uint8_t *ptr;
+    size_t len;
+    size_t cap;
+} ta_arena_sink;
+
+static ta_op_status ta_arena_sink_begin(void *self) {
+    ((ta_arena_sink *)self)->len = 0;
+    return TA_OP_OK;
+}
+
+static ta_op_status ta_arena_sink_write(void *self, ta_bytes bytes) {
+    ta_arena_sink *sink = self;
+    if (bytes.len == 0) {
+        return TA_OP_OK;
+    }
+    if ((size_t)bytes.len > sink->cap - sink->len) {
+        size_t need = sink->len + (size_t)bytes.len;
+        size_t cap = sink->cap < 64u ? 64u : sink->cap;
+        while (cap < need) {
+            cap *= 2u;
+        }
+        uint8_t *grown = ta_arena_alloc(sink->arena, cap, _Alignof(uint64_t));
+        if (grown == NULL) {
+            return TA_OP_NOMEM;
+        }
+        if (sink->len != 0) {
+            ta_mem_copy(grown, sink->ptr, sink->len);
+        }
+        sink->ptr = grown;
+        sink->cap = cap;
+    }
+    ta_mem_copy(sink->ptr + sink->len, bytes.ptr, bytes.len);
+    sink->len += bytes.len;
+    return TA_OP_OK;
+}
+
+static void ta_arena_sink_end(void *self, bool keep) {
+    if (!keep) {
+        ((ta_arena_sink *)self)->len = 0;
+    }
+}
+
+static const ta_byte_sink_vtable ta_arena_sink_vtable = {
+    .begin = ta_arena_sink_begin,
+    .write = ta_arena_sink_write,
+    .end = ta_arena_sink_end,
+};
+
+/* A memory source: the bytes of one value, handed out in the reader's pieces. */
+typedef struct {
+    ta_bytes bytes;
+    uint32_t at;
+} ta_memory_source;
+
+static ta_op_status ta_memory_source_read(void *self, const ta_byte_read_params *params) {
+    ta_memory_source *source = self;
+    uint32_t left = source->bytes.len - source->at;
+    uint32_t count = left < params->capacity ? left : params->capacity;
+    if (count != 0) {
+        ta_mem_copy(params->buffer, source->bytes.ptr + source->at, count);
+    }
+    source->at += count;
+    *params->got = count;
+    return TA_OP_OK;
+}
+
+static const ta_byte_source_vtable ta_memory_source_vtable = { .read = ta_memory_source_read };
+
 /* One value through the data model; an absent value is stored as absent. */
 typedef struct {
     const ta_definition *definition;
@@ -13615,22 +13689,30 @@ static ta_result ta_offload_encode_value(const ta_offload_value_params *params) 
         return TA_OK;
     }
     const ta_datamodel *datamodel = &params->definition->datamodel;
-    if (datamodel->v->value_encode == NULL) {
+    if (datamodel->v->value_write == NULL) {
         return TA_ERR_UNSUPPORTED;
     }
-    ta_bytes bytes = {0};
-    ta_op_status status = datamodel->v->value_encode(
-        datamodel->self, &(ta_datamodel_value_encode_params){ .shared = params->definition->datamodel_shared,
-                                                              .value = params->value,
-                                                              .arena = params->arena,
-                                                              .out = &bytes });
+    ta_arena_sink state = { .arena = params->arena };
+    ta_byte_sink sink = { .self = &state, .v = &ta_arena_sink_vtable };
+    ta_fault fault = {0};
+    (void)sink.v->begin(sink.self);
+    ta_op_status status = datamodel->v->value_write(
+        datamodel->self, &(ta_datamodel_value_write_params){ .shared = params->definition->datamodel_shared,
+                                                             .value = params->value,
+                                                             .sink = sink,
+                                                             .durable = false,
+                                                             .fault = &fault });
+    sink.v->end(sink.self, status == TA_OP_OK);
+    if (status == TA_OP_ERROR) {
+        ta_value_release(&fault.data);
+    }
     if (status == TA_OP_NOMEM) {
         return TA_ERR_NOMEM;
     }
-    if (status != TA_OP_OK || bytes.len > UINT32_MAX - 1u || (bytes.len != 0 && bytes.ptr == NULL)) {
+    if (status != TA_OP_OK || state.len > UINT32_MAX - 1u) {
         return TA_ERR_UNSUPPORTED;
     }
-    *params->out = bytes;
+    *params->out = (ta_bytes){ .ptr = state.ptr, .len = (uint32_t)state.len };
     return TA_OK;
 }
 
@@ -13968,14 +14050,22 @@ static ta_result ta_offload_take_values(ta_offload_reader *reader, ta_system *sy
         }
         ta_bytes bytes = { .ptr = reader->at, .len = (size_t)length - 1u };
         reader->at += length - 1u;
-        if (datamodel->v->value_decode == NULL) {
+        if (datamodel->v->value_read == NULL) {
             return TA_ERR_UNSUPPORTED;
         }
         ta_value value = {0};
-        ta_op_status status = datamodel->v->value_decode(
-            datamodel->self, &(ta_datamodel_value_decode_params){ .shared = definition->datamodel_shared,
-                                                                  .bytes = bytes,
-                                                                  .out = &value });
+        ta_memory_source memory = { .bytes = bytes };
+        ta_fault fault = {0};
+        ta_op_status status = datamodel->v->value_read(
+            datamodel->self,
+            &(ta_datamodel_value_read_params){ .shared = definition->datamodel_shared,
+                                               .source = { .self = &memory, .v = &ta_memory_source_vtable },
+                                               .durable = false,
+                                               .out = &value,
+                                               .fault = &fault });
+        if (status == TA_OP_ERROR) {
+            ta_value_release(&fault.data);
+        }
         if (status == TA_OP_NOMEM) {
             return TA_ERR_NOMEM;
         }

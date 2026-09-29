@@ -1839,7 +1839,7 @@
     },
     "ta_actor_offload_params": {
       "kind": "struct",
-      "doc": "Captures a stable named actor as bytes and unloads it in one step (ADR 0074): the bytes go into `arena`, only this system can load them, and their layout may change in any build. Values go through the actor's data model (value_encode). `root`, when given, is the data-model root to include, which ta_actor_load() hands back. TA_ERR_BUSY: the actor is inside a macrostep, has queued internal events, a pending completion or a parent. TA_ERR_UNSUPPORTED: its data model has no byte form for a value it holds. TA_ERR_INVALID: an anonymous actor. On any failure the actor is resident and unchanged.",
+      "doc": "Captures a stable named actor as bytes and unloads it in one step (ADR 0074): the bytes go into `arena`, only this system can load them, and their layout may change in any build. Values go through the actor's data model (value_write, not durable). `root`, when given, is the data-model root to include, which ta_actor_load() hands back. TA_ERR_BUSY: the actor is inside a macrostep, has queued internal events, a pending completion or a parent. TA_ERR_UNSUPPORTED: its data model has no byte form for a value it holds. TA_ERR_INVALID: an anonymous actor. On any failure the actor is resident and unchanged.",
       "fields": [
         {
           "name": "actor",
@@ -2934,6 +2934,340 @@
           "offsets": {
             "atoms": 0,
             "count": 4
+          }
+        }
+      }
+    },
+    "ta_byte_read_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "uint8_t"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "got",
+          "shape": "buffer",
+          "direction": "out",
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "buffer"
+        },
+        {
+          "name": "got",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "buffer"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "buffer": 0,
+            "capacity": 8,
+            "got": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "buffer": 0,
+            "capacity": 4,
+            "got": 8
+          }
+        }
+      }
+    },
+    "ta_byte_sink": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_byte_sink_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_byte_sink_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "Byte sinks and byte sources (ADR 0090): bytes that move in pieces, so neither side holds a whole unit or needs its size in advance.\n\nA sink receives a unit (a record, a value, an offload) between begin and end. begin may refuse with TA_OP_NOMEM; write may answer TA_OP_NOMEM or TA_OP_ERROR, after which the writer stops and calls end(keep=false), which discards everything written since begin. end(keep=true) keeps the unit. Pieces are borrowed for the call. A writer that writes into a sink never calls begin or end itself unless it owns the unit: a data model's value_write only writes.\n\nA source hands out bytes in pieces of the reader's size: read fills up to `capacity` bytes of `buffer` and sets *got; *got == 0 with TA_OP_OK means the source has ended. A source a reader is given holds exactly one unit.",
+      "fields": [
+        {
+          "name": "begin",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_op_status"
+                  },
+                  "success": "TA_OP_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        },
+        {
+          "name": "write",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_op_status"
+                  },
+                  "success": "TA_OP_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "bytes",
+                    "type": {
+                      "type": "ta_bytes"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        },
+        {
+          "name": "end",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "builtin": "void"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "keep",
+                    "type": {
+                      "builtin": "bool"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "begin": 0,
+            "write": 8,
+            "end": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "begin": 0,
+            "write": 4,
+            "end": 8
+          }
+        }
+      }
+    },
+    "ta_byte_source": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_byte_source_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_byte_source_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "fields": [
+        {
+          "name": "read",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_op_status"
+                  },
+                  "success": "TA_OP_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "params",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_byte_read_params",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "read": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "read": 0
           }
         }
       }
@@ -6093,7 +6427,7 @@
         }
       }
     },
-    "ta_datamodel_value_decode_params": {
+    "ta_datamodel_value_read_params": {
       "kind": "struct",
       "fields": [
         {
@@ -6107,9 +6441,15 @@
           "direction": "in"
         },
         {
-          "name": "bytes",
+          "name": "source",
           "type": {
-            "type": "ta_bytes"
+            "type": "ta_byte_source"
+          }
+        },
+        {
+          "name": "durable",
+          "type": {
+            "builtin": "bool"
           }
         },
         {
@@ -6123,96 +6463,41 @@
           "direction": "out",
           "valid_on": "success",
           "release": "ta_value_release"
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "shared": 0,
-            "bytes": 8,
-            "out": 24
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 16,
-          "align": 4,
-          "offsets": {
-            "shared": 0,
-            "bytes": 4,
-            "out": 12
-          }
-        }
-      }
-    },
-    "ta_datamodel_value_encode_params": {
-      "kind": "struct",
-      "doc": "Offloading an unloaded actor (ADR 0074). value_encode writes one value as bytes into `arena`; value_decode makes a value from bytes value_encode wrote, in the same process and system. What the bytes are is the data model's choice: a handle to a value it keeps alive, or the value itself. TA_OP_NOMEM means nothing changed (ADR 0070); TA_OP_ERROR means the value has no byte form. Either operation may be null: the data model then has no byte form for any value, and an actor holding one of its values does not offload.",
-      "fields": [
-        {
-          "name": "shared",
-          "type": {
-            "pointer": {
-              "builtin": "void"
-            }
-          },
-          "shape": "raw",
-          "direction": "in"
         },
         {
-          "name": "value",
+          "name": "fault",
           "type": {
             "pointer": {
-              "type": "ta_value",
-              "const": true
-            }
-          },
-          "shape": "single",
-          "direction": "in"
-        },
-        {
-          "name": "arena",
-          "type": {
-            "pointer": {
-              "type": "ta_arena"
-            }
-          },
-          "shape": "arena",
-          "direction": "inout"
-        },
-        {
-          "name": "out",
-          "type": {
-            "pointer": {
-              "type": "ta_bytes"
+              "type": "ta_fault"
             }
           },
           "shape": "single",
           "direction": "out",
-          "valid_on": "success",
-          "lifetime": "arena"
+          "valid_on": "TA_OP_ERROR",
+          "lifetime": "call"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
+          "size": 48,
           "align": 8,
           "offsets": {
             "shared": 0,
-            "value": 8,
-            "arena": 16,
-            "out": 24
+            "source": 8,
+            "durable": 24,
+            "out": 32,
+            "fault": 40
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 16,
+          "size": 24,
           "align": 4,
           "offsets": {
             "shared": 0,
-            "value": 4,
-            "arena": 8,
-            "out": 12
+            "source": 4,
+            "durable": 12,
+            "out": 16,
+            "fault": 20
           }
         }
       }
@@ -6310,6 +6595,81 @@
             "value": 8,
             "host": 12,
             "out": 16,
+            "fault": 20
+          }
+        }
+      }
+    },
+    "ta_datamodel_value_write_params": {
+      "kind": "struct",
+      "doc": "A value as bytes (ADR 0090 section 2, replacing ADR 0074's arena pair). value_write writes one value to `sink` in pieces, by calls to write only; value_read makes a value from `source`, which holds exactly the bytes one value_write wrote, and reads it in pieces. Neither may hold the whole encoding: a data model whose values are trees writes them as it walks them, without recursion (ADR 0060).\n\n`durable` asks for bytes that outlive the process: no handles and no process-local identifiers, so another process running the same data model reads them. A value with no durable form answers TA_OP_ERROR. durable=false is offload's (ADR 0074): the bytes stay in this process and system, and may be a handle to a value the data model keeps alive.\n\nTA_OP_NOMEM means nothing changed (ADR 0070): the data model could not get memory, or the sink refused. TA_OP_ERROR means the value has no byte form of that kind, the sink failed, or the bytes are no value; `fault` says which. Either operation may be null: the data model then has no byte form for any value, and an actor holding one of its values does not offload.",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "sink",
+          "type": {
+            "type": "ta_byte_sink"
+          }
+        },
+        {
+          "name": "durable",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "TA_OP_ERROR",
+          "lifetime": "call"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "shared": 0,
+            "value": 8,
+            "sink": 16,
+            "durable": 32,
+            "fault": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "shared": 0,
+            "value": 4,
+            "sink": 8,
+            "durable": 16,
             "fault": 20
           }
         }
@@ -7135,7 +7495,7 @@
           "direction": "in"
         },
         {
-          "name": "value_encode",
+          "name": "value_write",
           "type": {
             "pointer": {
               "function": {
@@ -7160,7 +7520,7 @@
                     "name": "params",
                     "type": {
                       "pointer": {
-                        "type": "ta_datamodel_value_encode_params",
+                        "type": "ta_datamodel_value_write_params",
                         "const": true
                       }
                     },
@@ -7176,7 +7536,7 @@
           "optional": true
         },
         {
-          "name": "value_decode",
+          "name": "value_read",
           "type": {
             "pointer": {
               "function": {
@@ -7201,7 +7561,7 @@
                     "name": "params",
                     "type": {
                       "pointer": {
-                        "type": "ta_datamodel_value_decode_params",
+                        "type": "ta_datamodel_value_read_params",
                         "const": true
                       }
                     },
@@ -7243,8 +7603,8 @@
             "import_content": 152,
             "foreach_snapshot": 160,
             "foreach_bind": 168,
-            "value_encode": 176,
-            "value_decode": 184
+            "value_write": 176,
+            "value_read": 184
           }
         },
         "wasm32-unknown-unknown": {
@@ -7272,8 +7632,8 @@
             "import_content": 76,
             "foreach_snapshot": 80,
             "foreach_bind": 84,
-            "value_encode": 88,
-            "value_decode": 92
+            "value_write": 88,
+            "value_read": 92
           }
         }
       }

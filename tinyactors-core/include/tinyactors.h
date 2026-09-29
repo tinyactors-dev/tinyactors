@@ -363,6 +363,38 @@ typedef enum { TA_OP_OK TA_SUCCESS = 0, TA_OP_ERROR = 1, TA_OP_NOMEM = 2 } ta_op
 typedef enum { TA_RUN_STABLE = 0, TA_RUN_PAUSED = 1, TA_RUN_DONE = 2, TA_RUN_ERROR = 3 } ta_run_status TA_SYMBOLS("TA_RUN_");
 
 /*
+ * Byte sinks and byte sources (ADR 0090): bytes that move in pieces, so
+ * neither side holds a whole unit or needs its size in advance.
+ *
+ * A sink receives a unit (a record, a value, an offload) between begin and
+ * end. begin may refuse with TA_OP_NOMEM; write may answer TA_OP_NOMEM or
+ * TA_OP_ERROR, after which the writer stops and calls end(keep=false), which
+ * discards everything written since begin. end(keep=true) keeps the unit.
+ * Pieces are borrowed for the call. A writer that writes into a sink never
+ * calls begin or end itself unless it owns the unit: a data model's
+ * value_write only writes.
+ *
+ * A source hands out bytes in pieces of the reader's size: read fills up to
+ * `capacity` bytes of `buffer` and sets *got; *got == 0 with TA_OP_OK means
+ * the source has ended. A source a reader is given holds exactly one unit.
+ */
+typedef struct ta_byte_sink_vtable {
+    ta_op_status (*begin)(void *self);
+    ta_op_status (*write)(void *self, ta_bytes bytes);
+    void (*end)(void *self, bool keep);
+} ta_byte_sink_vtable TA_VTABLE;
+typedef struct { void *self; const ta_byte_sink_vtable *v; } ta_byte_sink TA_ADAPTER;
+typedef struct {
+    TA_BUFFER(capacity, got) uint8_t *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *got;
+} ta_byte_read_params;
+typedef struct ta_byte_source_vtable {
+    ta_op_status (*read)(void *self, TA_IN const ta_byte_read_params *params);
+} ta_byte_source_vtable TA_VTABLE;
+typedef struct { void *self; const ta_byte_source_vtable *v; } ta_byte_source TA_ADAPTER;
+
+/*
  * Trace context and cause (ADR 0067). They travel next to an event, not in
  * it: an SCXML event has no such field, so data models never see them, and
  * internal queue entries do not carry them.
@@ -812,17 +844,27 @@ typedef struct { void *shared; void *instance; const ta_dm_host *host; TA_OUT TA
 typedef struct { void *shared; void *instance; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_LIFETIME(input) ta_str *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_value_text_params;
 typedef struct { void *shared; void *instance; ta_str text; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_text_value_params;
 /*
- * Offloading an unloaded actor (ADR 0074). value_encode writes one value as
- * bytes into `arena`; value_decode makes a value from bytes value_encode
- * wrote, in the same process and system. What the bytes are is the data
- * model's choice: a handle to a value it keeps alive, or the value itself.
- * TA_OP_NOMEM means nothing changed (ADR 0070); TA_OP_ERROR means the value
- * has no byte form. Either operation may be null: the data model then has no
- * byte form for any value, and an actor holding one of its values does not
- * offload.
+ * A value as bytes (ADR 0090 section 2, replacing ADR 0074's arena pair).
+ * value_write writes one value to `sink` in pieces, by calls to write only;
+ * value_read makes a value from `source`, which holds exactly the bytes one
+ * value_write wrote, and reads it in pieces. Neither may hold the whole
+ * encoding: a data model whose values are trees writes them as it walks
+ * them, without recursion (ADR 0060).
+ *
+ * `durable` asks for bytes that outlive the process: no handles and no
+ * process-local identifiers, so another process running the same data
+ * model reads them. A value with no durable form answers TA_OP_ERROR.
+ * durable=false is offload's (ADR 0074): the bytes stay in this process and
+ * system, and may be a handle to a value the data model keeps alive.
+ *
+ * TA_OP_NOMEM means nothing changed (ADR 0070): the data model could not get
+ * memory, or the sink refused. TA_OP_ERROR means the value has no byte form
+ * of that kind, the sink failed, or the bytes are no value; `fault` says
+ * which. Either operation may be null: the data model then has no byte form
+ * for any value, and an actor holding one of its values does not offload.
  */
-typedef struct { void *shared; TA_IN const ta_value *value; TA_ARENA ta_arena *arena; TA_OUT TA_LIFETIME(arena) ta_bytes *out; } ta_datamodel_value_encode_params;
-typedef struct { void *shared; ta_bytes bytes; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; } ta_datamodel_value_decode_params;
+typedef struct { void *shared; TA_IN const ta_value *value; ta_byte_sink sink; bool durable; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_value_write_params;
+typedef struct { void *shared; ta_byte_source source; bool durable; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_value_read_params;
 /* Imports literal <content> or <data> content into a legal data-model value. */
 typedef struct { void *shared; void *instance; ta_bytes content; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_import_content_params;
 /*
@@ -859,8 +901,8 @@ typedef struct ta_datamodel_vtable {
     ta_op_status (*import_content)(void *self, TA_IN const ta_datamodel_import_content_params *params);
     ta_op_status (*foreach_snapshot)(void *self, TA_IN const ta_datamodel_foreach_snapshot_params *params);
     ta_op_status (*foreach_bind)(void *self, TA_IN const ta_datamodel_foreach_bind_params *params);
-    TA_OPTIONAL ta_op_status (*value_encode)(void *self, TA_IN const ta_datamodel_value_encode_params *params);
-    TA_OPTIONAL ta_op_status (*value_decode)(void *self, TA_IN const ta_datamodel_value_decode_params *params);
+    TA_OPTIONAL ta_op_status (*value_write)(void *self, TA_IN const ta_datamodel_value_write_params *params);
+    TA_OPTIONAL ta_op_status (*value_read)(void *self, TA_IN const ta_datamodel_value_read_params *params);
 } ta_datamodel_vtable TA_VTABLE;
 typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel TA_ADAPTER;
 
@@ -2746,7 +2788,7 @@ typedef struct { TA_IN const ta_actor_address *address; } ta_actor_remove_unload
  * Captures a stable named actor as bytes and unloads it in one step (ADR
  * 0074): the bytes go into `arena`, only this system can load them, and
  * their layout may change in any build. Values go through the actor's data
- * model (value_encode). `root`, when given, is the data-model root to
+ * model (value_write, not durable). `root`, when given, is the data-model root to
  * include, which ta_actor_load() hands back. TA_ERR_BUSY: the actor is inside
  * a macrostep, has queued internal events, a pending completion or a parent.
  * TA_ERR_UNSUPPORTED: its data model has no byte form for a value it holds.
