@@ -532,11 +532,11 @@ async function failureLogsSayWhy() {
   }
 }
 
-// A 16 KiB payload arrives whole with traceValueBytes: 16384 (napi ADR 0035),
+// A 16 KiB payload arrives whole with valueBytes: 16384 (napi ADR 0035),
 // and is cut, and marked, at the default of 1024.
 async function largeValues() {
   const payload = { body: 'x'.repeat(16000) };
-  for (const [parameters, whole] of [[{ traceValueBytes: 16384 }, true], [{}, false]]) {
+  for (const [parameters, whole] of [[{ valueBytes: 16384 }, true], [{}, false]]) {
     const system = createSystem({ parameters });
     const sink = recorder(system, { values: true });
     const actor = system.spawn(counter(system));
@@ -622,24 +622,24 @@ async function stagingBoundOutsideTurns() {
 // Every request's resource names the system's parameters (napi ADR 0035),
 // and stats() reports them.
 async function parameterResource() {
-  const system = createSystem({ parameters: { traceValueBytes: 4096, microstepLimit: 777 } });
+  const system = createSystem({ parameters: { valueBytes: 4096, microstepLimit: 777 } });
   const batches = [];
   system.setTraceSink((bytes) => batches.push(bytes), { detail: 'full', resource: { 'tinyactors.param.dueBudget': 'mine' } });
   system.spawn(counter(system));
   await system.flush();
   const [span] = decodeTraces(batches[0]);
-  assert.equal(span.resource.attributes['tinyactors.param.traceValueBytes'], '4096');
+  assert.equal(span.resource.attributes['tinyactors.param.valueBytes'], '4096');
   assert.equal(span.resource.attributes['tinyactors.param.microstepLimit'], '777');
   assert.equal(span.resource.attributes['tinyactors.param.interpreterBytes'], String(system.parameters.interpreterBytes));
   assert.equal(span.resource.attributes['tinyactors.param.dueBudget'], 'mine', "the application's attribute wins");
-  assert.equal(system.stats().parameters.traceValueBytes, 4096);
+  assert.equal(system.stats().parameters.valueBytes, 4096);
   assert.ok(Object.isFrozen(system.parameters));
   system.close();
 }
 
 // Values only when asked for; links instead of parents when asked for.
 async function valuesAndLinks() {
-  const system = createSystem({ parameters: { traceValueBytes: 16 } });
+  const system = createSystem({ parameters: { valueBytes: 16 } });
   const sink = recorder(system, { values: true });
   const actor = system.spawn(counter(system));
   await system.flush();
@@ -649,7 +649,7 @@ async function valuesAndLinks() {
   const assign = goStep.events.find((event) => event.name === 'scxml.assign');
   assert.equal(assign.attributes['scxml.value'], '1');
   assert.equal(assign.attributes['scxml.value.truncated'], undefined, 'a value that fits is not marked');
-  assert.equal(goStep.attributes['scxml.event.data'], '{"order":"a-long', 'cut at traceValueBytes');
+  assert.equal(goStep.attributes['scxml.event.data'], '{"order":"a-long', 'cut at valueBytes');
   assert.equal(goStep.attributes['scxml.event.data.truncated'], true, 'and marked as cut');
   assert.throws(() => system.setTraceSink(() => {}, { valueLimit: 8 }), { code: 'invalid' });
 

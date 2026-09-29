@@ -490,7 +490,7 @@ class System {
    * - resource: resource attributes, { "service.name": "orders", ... },
    *   strings only;
    * - values: put event data and assigned values in attributes, as JSON
-   *   cut at the `traceValueBytes` parameter (napi ADR 0035) and marked
+   *   cut at the `valueBytes` parameter (napi ADR 0035) and marked
    *   `<key>.truncated` when cut. Off by default: values may hold personal
    *   data;
    * - parent: "cause" (default) parents a macrostep under the step that
@@ -506,7 +506,7 @@ class System {
       throw new TinyactorsError('setTraceSink(): expected a function or undefined', 'invalid');
     }
     if (options?.valueLimit !== undefined) {
-      throw new TinyactorsError('setTraceSink(): valueLimit is now the traceValueBytes parameter (napi ADR 0035)', 'invalid');
+      throw new TinyactorsError('setTraceSink(): valueLimit is now the valueBytes parameter (napi ADRs 0035 and 0036)', 'invalid');
     }
     const { unsampled = false, resource = {}, values = false, parent = 'cause', seed,
             logs = true, logLimit = 20 } = options ?? {};

@@ -50,10 +50,10 @@ struct tna_napi_system {
     tna_js_datamodel dm;          /* the JavaScript data model (ADR 0011) */
     tna_children children;        /* the SCXML invoker's children (napi ADR 0021) */
     double last_send_token;       /* the token of the last send(), for cancelSend() */
-    /* Tracing with values (napi ADR 0016): a value's JSON text, cut. */
-    /* A value's JSON for a trace or log attribute: traceValueBytes (napi ADR
-     * 0035), plus a terminator, allocated at creation. */
-    size_t trace_value_bytes;
+    /* A value's JSON for a trace attribute or a log record, cut at the
+     * valueBytes parameter (napi ADRs 0035 and 0036), plus a terminator,
+     * allocated at creation. */
+    size_t value_bytes;
     char *trace_value;
     /* A refused document's text, and scratch to reframe it: compileTextBytes
      * plus TNA_REFUSAL_FRAME_BYTES each, allocated at creation (napi ADR

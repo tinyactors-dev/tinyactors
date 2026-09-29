@@ -464,14 +464,14 @@ const { createSystem, parameterInfo } = require('@tinyactors/node');
 
 // Event payloads of up to 16 KiB arrive whole in traces (`values: true`);
 // the default cuts them at 1024 bytes and marks them `.truncated`.
-const system = createSystem({ parameters: { traceValueBytes: 16384, maxQueuedMessages: 10_000 } });
-console.log(system.parameters.traceValueBytes);       // 16384
+const system = createSystem({ parameters: { valueBytes: 16384, maxQueuedMessages: 10_000 } });
+console.log(system.parameters.valueBytes);       // 16384
 console.log(parameterInfo().interpreterBytes);        // { default, min, max, unit, owner }
 system.close();
 ```
 
 They include core's (`microstepLimit`, `interpreterBytes`, `renderBytes`,
-`maxActors`, ...) and napi's (`traceValueBytes`, `traceStagingBytes`, the
+`maxActors`, ...) and napi's (`valueBytes`, `traceStagingBytes`, the
 scheduling budgets, the mailbox limits). Every trace request's resource
 names them as `tinyactors.param.<name>`, so a trace says which caps applied.
 

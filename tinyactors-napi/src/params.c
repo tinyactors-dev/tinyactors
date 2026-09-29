@@ -1,7 +1,7 @@
 #include "params.h"
 
 const tna_param_info tna_param_table[TNA_PARAM_COUNT] = {
-    [TNA_PARAM_TRACE_VALUE_BYTES] = { "traceValueBytes", "bytes", TNA_PARAM_DEFAULT_TRACE_VALUE_BYTES, 16, 1048576 },
+    [TNA_PARAM_VALUE_BYTES] = { "valueBytes", "bytes", TNA_PARAM_DEFAULT_VALUE_BYTES, 16, 1048576 },
     [TNA_PARAM_TRACE_STAGING_BYTES] = { "traceStagingBytes", "bytes", TNA_PARAM_DEFAULT_TRACE_STAGING_BYTES, 65536,
                                         1073741824 },
     [TNA_PARAM_REGISTERED_DATAMODELS] = { "registeredDatamodels", "data models",

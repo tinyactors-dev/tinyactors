@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 typedef enum {
-    TNA_PARAM_TRACE_VALUE_BYTES,     /* bytes of a value's JSON in a trace or log attribute */
+    TNA_PARAM_VALUE_BYTES,           /* bytes of a value's JSON in a trace attribute or a log record */
     TNA_PARAM_TRACE_STAGING_BYTES,   /* OTLP staging kept between turns; a turn past it ends early */
     TNA_PARAM_REGISTERED_DATAMODELS, /* data models registerDatamodel() may add */
     TNA_PARAM_DATAMODEL_NAME_BYTES,  /* longest registered data model name, in bytes */
@@ -25,7 +25,7 @@ typedef enum {
 } tna_param;
 
 enum {
-    TNA_PARAM_DEFAULT_TRACE_VALUE_BYTES = 1024,
+    TNA_PARAM_DEFAULT_VALUE_BYTES = 1024,
     TNA_PARAM_DEFAULT_TRACE_STAGING_BYTES = 1048576,
     TNA_PARAM_DEFAULT_REGISTERED_DATAMODELS = 8,
     TNA_PARAM_DEFAULT_DATAMODEL_NAME_BYTES = 32,

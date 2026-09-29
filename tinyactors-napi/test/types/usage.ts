@@ -11,8 +11,8 @@ class Money {
 
 export async function usage(): Promise<void> {
   // A system is disposable (explicit resource management), created with its parameters.
-  using system = createSystem({ parameters: { traceValueBytes: 16384, microstepLimit: 50_000 } });
-  const bytes16k: number = system.parameters.traceValueBytes;
+  using system = createSystem({ parameters: { valueBytes: 16384, microstepLimit: 50_000 } });
+  const bytes16k: number = system.parameters.valueBytes;
   const bound: number = parameterInfo().interpreterBytes.max;
   void bytes16k; void bound;
   // A function charts call by name, so the chart is content core sees whole.

@@ -449,8 +449,8 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         return tna_throw(env, tna_result_code(result), "cannot create a system");
     }
     /* napi's buffers are allocated with the system (napi ADR 0035). */
-    wrapper->trace_value_bytes = (size_t)napi_params.values[TNA_PARAM_TRACE_VALUE_BYTES];
-    wrapper->trace_value = malloc(wrapper->trace_value_bytes + 1u);
+    wrapper->value_bytes = (size_t)napi_params.values[TNA_PARAM_VALUE_BYTES];
+    wrapper->trace_value = malloc(wrapper->value_bytes + 1u);
     uint64_t compile_text = 0;
     (void)ta_system_param(wrapper->system->core, TA_PARAM_COMPILE_TEXT_BYTES, &compile_text);
     wrapper->refusal_bytes = (size_t)compile_text + TNA_REFUSAL_FRAME_BYTES;

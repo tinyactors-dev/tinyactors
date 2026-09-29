@@ -243,11 +243,11 @@ export interface SystemParameters {
   maxDefinitions?: number;
   // napi's.
   /**
-   * Bytes of a value's JSON in a trace or log attribute (`values: true`); a
-   * longer value is cut and marked `<key>.truncated`. Default 1024, from 16
-   * to 1 MiB.
+   * Bytes of a value's JSON in a trace attribute (`values: true`) or a log
+   * record: one limit for both (napi ADR 0036). A longer value is cut and
+   * marked `<key>.truncated`. Default 1024, from 16 to 1 MiB.
    */
-  traceValueBytes?: number;
+  valueBytes?: number;
   /**
    * The OTLP staging, reserved whole while a trace sink is installed (napi
    * ADR 0036). A turn whose spans and logs reach it ends early, so the sink
@@ -2429,7 +2429,7 @@ export interface TraceSinkOptions extends TraceConfiguration {
   resource?: Record<string, string>;
   /**
    * Event data and assigned values as JSON attributes, cut at the
-   * `traceValueBytes` parameter (SystemParameters) and marked
+   * `valueBytes` parameter (SystemParameters) and marked
    * `<key>.truncated` when cut.
    */
   values?: boolean;

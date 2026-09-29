@@ -117,11 +117,11 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out, 
               napi_call_function(env, json, stringify, 1, &js, &text) == napi_ok;
     }
     if (got && napi_typeof(env, text, &type) == napi_ok && type == napi_string) {
-        /* traceValueBytes (napi ADR 0035): the buffer was sized by it at creation. */
+        /* valueBytes (napi ADR 0035): the buffer was sized by it at creation. */
         size_t full = 0;
         size_t written = 0;
         if (napi_get_value_string_utf8(env, text, NULL, 0, &full) == napi_ok &&
-            napi_get_value_string_utf8(env, text, wrapper->trace_value, wrapper->trace_value_bytes + 1u, &written) ==
+            napi_get_value_string_utf8(env, text, wrapper->trace_value, wrapper->value_bytes + 1u, &written) ==
                 napi_ok) {
             *out = (ta_str){ wrapper->trace_value, (uint32_t)written };
             *cut = written < full;
