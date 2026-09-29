@@ -9,6 +9,13 @@ const { TinyactorsError } = require('./errors');
 
 let table;
 
+// The defaults a `tinyactors.params` attribute is read against (napi ADR
+// 0036): the attribute names only the parameters that differ from them, so a
+// reader must know which defaults applied. Change the version whenever a
+// default changes; test/tracing.js holds each version's defaults and fails
+// until it is changed.
+const DEFAULTS_VERSION = 'v1';
+
 function tableOf() {
   if (table === undefined) {
     table = new Map();
@@ -57,4 +64,21 @@ function resolveParameters(given) {
   return Object.freeze(resolved);
 }
 
-module.exports = { parameterInfo, resolveParameters };
+/**
+ * The `tinyactors.params` resource attribute for `values` (napi ADR 0036):
+ * the defaults' version, then `name=value` for each parameter that differs
+ * from its default, in name order, separated by `;`. `v1` alone for a
+ * system with every default.
+ */
+function parameterAttribute(values) {
+  const differing = [];
+  for (const [name, info] of tableOf()) {
+    if (values[name] !== info.default) {
+      differing.push(name);
+    }
+  }
+  differing.sort();
+  return [DEFAULTS_VERSION, ...differing.map((name) => `${name}=${values[name]}`)].join(';');
+}
+
+module.exports = { DEFAULTS_VERSION, parameterAttribute, parameterInfo, resolveParameters };

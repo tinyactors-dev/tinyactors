@@ -2422,9 +2422,11 @@ export interface TraceSinkOptions extends TraceConfiguration {
   /** Also trace macrosteps whose traceparent is not sampled. */
   unsampled?: boolean;
   /**
-   * Resource attributes every request carries, such as `service.name`. Every
-   * system parameter is added as `tinyactors.param.<name>` (napi ADR 0035),
-   * unless this names the same key.
+   * Resource attributes every request carries, such as `service.name`. The
+   * system's parameters are added as one attribute, `tinyactors.params`: the
+   * defaults' version, then `name=value` for each parameter that differs from
+   * its default, in name order (`v1;valueBytes=16384`), or `v1` alone (napi
+   * ADR 0036), unless this names the same key.
    */
   resource?: Record<string, string>;
   /**

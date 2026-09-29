@@ -181,14 +181,14 @@ async function forwardedAndUnavailable() {
 
 // A small request is whole on Bun too: it is written before its
 // ArrayBuffer is asked for, which moves a small (pooled, under 4 KiB)
-// Buffer's bytes. The resource's parameter attributes (napi ADR 0035) make
-// each request about 900 bytes larger.
+// Buffer's bytes. The resource names the parameters in one short
+// attribute (napi ADR 0036), so a request stays this small.
 async function smallRequests() {
   const system = createSystem();
   let whole = 0;
   let broken = 0;
   system.setTraceSink((traces) => {
-    assert.ok(traces.length > 0 && traces.length <= 4000, `a small request (${traces.length} bytes)`);
+    assert.ok(traces.length > 0 && traces.length <= 1000, `a small request (${traces.length} bytes)`);
     try {
       decodeTraces(traces);
       whole += 1;
@@ -619,22 +619,51 @@ async function stagingBoundOutsideTurns() {
   system.close();
 }
 
-// Every request's resource names the system's parameters (napi ADR 0035),
-// and stats() reports them.
+// Every request's resource names the system's parameters in one attribute
+// (napi ADR 0036): the defaults' version, then what differs from them in
+// name order; `v1` alone for a system with every default. stats() reports
+// every value.
 async function parameterResource() {
-  const system = createSystem({ parameters: { valueBytes: 4096, microstepLimit: 777 } });
-  const batches = [];
-  system.setTraceSink((bytes) => batches.push(bytes), { detail: 'full', resource: { 'tinyactors.param.dueBudget': 'mine' } });
-  system.spawn(counter(system));
-  await system.flush();
-  const [span] = decodeTraces(batches[0]);
-  assert.equal(span.resource.attributes['tinyactors.param.valueBytes'], '4096');
-  assert.equal(span.resource.attributes['tinyactors.param.microstepLimit'], '777');
-  assert.equal(span.resource.attributes['tinyactors.param.interpreterBytes'], String(system.parameters.interpreterBytes));
-  assert.equal(span.resource.attributes['tinyactors.param.dueBudget'], 'mine', "the application's attribute wins");
+  const request = async (parameters, resource) => {
+    const system = createSystem({ parameters });
+    const batches = [];
+    system.setTraceSink((bytes) => batches.push(bytes), { detail: 'full', resource });
+    system.spawn(counter(system));
+    await system.flush();
+    const [span] = decodeTraces(batches[0]);
+    system.close();
+    return span.resource.attributes;
+  };
+  const defaults = await request(undefined, {});
+  assert.equal(defaults['tinyactors.params'], 'v1', 'a system with every default sends the version alone');
+  assert.equal(Object.keys(defaults).filter((key) => key.startsWith('tinyactors.param.')).length, 0);
+  const changed = await request({ valueBytes: 4096, microstepLimit: 777, interpreterBytes: 131072 }, {});
+  assert.equal(changed['tinyactors.params'], 'v1;interpreterBytes=131072;microstepLimit=777;valueBytes=4096');
+  const mine = await request({ valueBytes: 4096 }, { 'tinyactors.params': 'mine' });
+  assert.equal(mine['tinyactors.params'], 'mine', "the application's attribute wins");
+  const system = createSystem({ parameters: { valueBytes: 4096 } });
   assert.equal(system.stats().parameters.valueBytes, 4096);
   assert.ok(Object.isFrozen(system.parameters));
   system.close();
+}
+
+// The defaults `v1` names (napi ADR 0036). A default that changes must
+// change DEFAULTS_VERSION in lib/params.js, and add its defaults here.
+function defaultsVersion() {
+  const { DEFAULTS_VERSION, parameterInfo } = require('../lib/params');
+  const versions = {
+    v1: {
+      actionBudget: 1024, compileMessageBytes: 256, compileNearestBytes: 128, compileTextBytes: 1024,
+      datamodelNameBytes: 32, dueBudget: 1024, eventBlockCache: 1024, eventNameDepth: 64,
+      interpreterBytes: 65536, interpreterNesting: 4, maxActors: 2147483647, maxDefinitions: 2147483647,
+      maxPendingSends: 2147483647, maxQueuedMessages: 0, maxRetainedBytes: 0, messageBudget: 1024,
+      microstepLimit: 100000, registeredDatamodels: 8, renderBytes: 16384, resumeBudget: 64,
+      resumesPerTurn: 1024, traceStagingBytes: 1048576, valueBytes: 1024,
+    },
+  };
+  const now = Object.fromEntries(Object.entries(parameterInfo()).map(([name, info]) => [name, info.default]));
+  assert.deepEqual(now, versions[DEFAULTS_VERSION],
+    `the defaults changed: change DEFAULTS_VERSION (${DEFAULTS_VERSION}) and record the new ones here`);
 }
 
 // Values only when asked for; links instead of parents when asked for.
@@ -833,6 +862,7 @@ async function watchAndSample() {
   await stagingBound();
   await stagingBoundOutsideTurns();
   await parameterResource();
+  defaultsVersion();
   await lifecycle();
   await summaryFailures();
   await loadedAndUnloaded();

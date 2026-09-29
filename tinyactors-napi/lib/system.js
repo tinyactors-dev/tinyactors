@@ -18,7 +18,7 @@ const { traceConfig, TRACE_KINDS } = require('./tracing');
 const { buildSnapshot } = require('./metrics');
 const { STANDARD_CLASSES, printBuiltin, printCall, printedSpec } = require('./values');
 const { durableChunks, durableReader } = require('./durable');
-const { resolveParameters } = require('./params');
+const { parameterAttribute, resolveParameters } = require('./params');
 
 const NO_STATE = 4294967295;
 
@@ -305,18 +305,12 @@ class System {
     return this.#parameters;
   }
 
-  // Every parameter as a `tinyactors.param.<name>` resource attribute, so a
-  // trace says which caps applied (napi ADR 0035); the application's own
-  // resource attributes win on a clash.
+  // The system's parameters as one `tinyactors.params` resource attribute,
+  // so a trace says which caps applied (napi ADRs 0035 and 0036): only what
+  // differs from the defaults, tens of bytes, `v1` for a default system. The
+  // application's own attribute of that name wins.
   #parameterResource(resource) {
-    const pairs = [];
-    for (const [name, value] of Object.entries(this.#parameters)) {
-      const key = `tinyactors.param.${name}`;
-      if (!Object.hasOwn(resource, key)) {
-        pairs.push(key, String(value));
-      }
-    }
-    return pairs;
+    return Object.hasOwn(resource, 'tinyactors.params') ? [] : ['tinyactors.params', parameterAttribute(this.#parameters)];
   }
 
   /**
