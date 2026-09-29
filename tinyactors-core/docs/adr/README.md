@@ -91,3 +91,5 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0085](0085-a-spec-says-where-its-elements-were-written-and-an-encode-says-where-it-wrote-them.md) | [A spec says where its elements were written, and an encode says where it wrote them](0085-a-spec-says-where-its-elements-were-written-and-an-encode-says-where-it-wrote-them.md) |
 | [0086](0086-a-resume-can-stop-before-a-microsteps-first-unit.md) | [A resume can stop before a microstep's first unit](0086-a-resume-can-stop-before-a-microsteps-first-unit.md) |
 | [0087](0087-host-expressions-are-compared-by-handle.md) | [Host expressions are compared by handle](0087-host-expressions-are-compared-by-handle.md) |
+| [0088](0088-a-session-id-names-its-family.md) | [A session ID names its family](0088-a-session-id-names-its-family.md) |
+| [0089](0089-an-actor-is-rebuilt-by-replaying-its-inputs-before-it-is-published.md) | [An actor is rebuilt by replaying its inputs before it is published](0089-an-actor-is-rebuilt-by-replaying-its-inputs-before-it-is-published.md) |
