@@ -1,6 +1,6 @@
 # ADR 0032: Named actors persist by replaying their inputs
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refined by ADR 0033: a batch is `{ entries, wakes }` without `turn` or `horizon`; `fired`, `dropped` and `jump` records; a loader answers `{ replay: { spawn, inputs } }`; `requeue()` is gone, a replay delivering what the log shows owed; `evict()` arms the actor's wake. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
 - ADR 0020: a loader is also asked for a session that has gone, and can answer with a replay;
 - ADR 0022: mail to a gone session of a family with a loader goes to that loader;
 - the replacement API (`prepareReplacement`, `activate`), which becomes `prepare` and `publish`.
