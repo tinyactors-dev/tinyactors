@@ -530,7 +530,8 @@ static void test_malformed(ta_system *system) {
     CHECK(error.path_length >= 2 && error.path[error.path_length - 2u].member == TA_SPEC_MEMBER_CONDITION);
     ta_str line = {0};
     CHECK(ta_compile_error_format(&(ta_compile_error_format_params){
-                                      .spec = &spec, .error = &error, .arena = &arena, .out = &line }) == TA_OK);
+                                      .spec = &spec, .error = &error, .arena = &arena, .out = &line,
+                                      .system = system }) == TA_OK);
     CHECK(line.ptr != NULL && strstr(line.ptr, ".actions[0].condition.span:") != NULL);
 
     options = with_spans(0);

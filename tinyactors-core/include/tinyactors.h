@@ -2270,11 +2270,14 @@ TA_API void ta_definition_destroy(TA_DESTROYS ta_definition *definition);
 /*
  * Writes a compile error as one line of text, for people. The line has no
  * stable grammar; tools read the struct. It is never longer than
- * TA_COMPILE_ERROR_TEXT_MAX bytes, however deep the path or long the text:
- * - a path of more than 8 steps shows its first 2 and last 6 steps, and says
- *   how many it left out;
+ * `system`'s compileTextBytes parameter (ADR 0092), or its default of 1024
+ * bytes without a system, however deep the path or long the text. The
+ * limits below grow with that size, so a larger one shows more:
+ * - a deep path shows its first and last steps, and says how many it left
+ *   out (at 1024 bytes: the first 2 and last 6 of more than 8);
  * - each ID, subject, related text and message is cut at a UTF-8 boundary
- *   and ends in "..." when it is too long;
+ *   and ends in "..." when it is too long (at 1024 bytes: IDs at 64, the
+ *   message at 96);
  * - control characters are escaped everywhere, and quotes and backslashes
  *   are escaped inside the quoted subject and related text, so the line
  *   stays one line.
@@ -2288,8 +2291,9 @@ typedef struct {
     TA_IN const ta_compile_error *error;
     TA_ARENA ta_arena *arena;
     TA_OUT TA_LIFETIME(arena) ta_str *out;
+    /* Whose compileTextBytes sizes the line; null for the default. */
+    TA_OPTIONAL const ta_system *system;
 } ta_compile_error_format_params;
-#define TA_COMPILE_ERROR_TEXT_MAX ((uint32_t)1024)
 TA_API ta_result ta_compile_error_format(TA_IN const ta_compile_error_format_params *params);
 
 /*
@@ -3814,6 +3818,7 @@ typedef enum {
     TA_PARAM_EVENT_BLOCK_CACHE,    /* empty event blocks kept for reuse (ADR 0069), created at creation */
     TA_PARAM_EVENT_NAME_DEPTH,     /* segments an event name may have; at most 64 */
     TA_PARAM_COMPILE_MESSAGE_BYTES,/* bytes kept of a data model's rejection message (ADR 0058) */
+    TA_PARAM_COMPILE_TEXT_BYTES,   /* bytes of a compile error formatted as a line (ta_compile_error_format) */
     TA_PARAM_COMPILE_NEAREST_BYTES,/* longest unknown target that gets a nearest-name suggestion */
     TA_PARAM_INTERPRETER_BYTES,    /* one interpreter's frames and sets, what a chart's structure needs */
     TA_PARAM_RENDER_BYTES,         /* one interpreter's temporaries whose size depends on content (ADR 0068) */
@@ -3831,6 +3836,7 @@ enum TA_CONSTANTS_OF(ta_param_default, "TA_PARAM_DEFAULT_") {
     TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE = 4,
     TA_PARAM_DEFAULT_EVENT_NAME_DEPTH = 64,
     TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES = 256,
+    TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES = 1024,
     TA_PARAM_DEFAULT_COMPILE_NEAREST_BYTES = 128,
     TA_PARAM_DEFAULT_INTERPRETER_BYTES = 65536,
     TA_PARAM_DEFAULT_RENDER_BYTES = 16384,

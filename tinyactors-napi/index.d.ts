@@ -216,6 +216,12 @@ export interface SystemParameters {
   eventNameDepth?: number;
   /** Bytes kept of a data model's refusal message; default 256, from 16 to 65536. */
   compileMessageBytes?: number;
+  /**
+   * Bytes of a compile error formatted as one line (ChartRefusal's message);
+   * a larger value shows more of a deep path and of long IDs. Default 1024,
+   * from 256 to 65536. napi keeps at most 1023 bytes of the line.
+   */
+  compileTextBytes?: number;
   /** Longest unknown target that gets a nearest-name suggestion; default 128, at most 65536. */
   compileNearestBytes?: number;
   /**

@@ -36,7 +36,8 @@ static void tna_import_decode(tna_import_failure *failure, const ta_chart_error 
              (int)error->attribute.len, error->attribute.ptr != NULL ? error->attribute.ptr : "");
 }
 
-static void tna_import_describe(tna_import_failure *failure, const ta_import_error *error, ta_arena *arena) {
+static void tna_import_describe(tna_import_failure *failure, const ta_import_error *error, ta_arena *arena,
+                                const ta_system *core) {
     *failure = (tna_import_failure){
         .stage = error->stage,
         .located = error->located,
@@ -55,7 +56,7 @@ static void tna_import_describe(tna_import_failure *failure, const ta_import_err
     ta_str text = { 0 };
     if (error->stage == TA_IMPORT_STAGE_COMPILE &&
         ta_compile_error_format(&(ta_compile_error_format_params){
-            .error = &error->as.compile, .arena = arena, .out = &text }) == TA_OK) {
+            .error = &error->as.compile, .arena = arena, .out = &text, .system = core }) == TA_OK) {
         tna_import_text(failure, text);
         return;
     }
@@ -99,7 +100,7 @@ ta_result tna_import(tna_system *system, const tna_import_params *params) {
                                                     .error = &error,
                                                 });
     if ((result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) && params->failure != NULL) {
-        tna_import_describe(params->failure, &error, &arena);
+        tna_import_describe(params->failure, &error, &arena, system->core);
     }
     ta_arena_destroy(&arena);
     return result;

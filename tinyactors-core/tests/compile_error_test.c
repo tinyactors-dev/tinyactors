@@ -762,7 +762,7 @@ static ta_str format_line(const ta_scxml_spec *spec, outcome *o) {
     ta_str line = {0};
     CHECK(ta_compile_error_format(&(ta_compile_error_format_params){ .spec = spec, .error = &o->error,
                                                                      .arena = &o->arena, .out = &line }) == TA_OK);
-    CHECK(line.len <= TA_COMPILE_ERROR_TEXT_MAX);
+    CHECK(line.len <= TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES);
     CHECK(memchr(line.ptr, '\n', line.len) == NULL);
     CHECK(utf8_valid(line));
     return line;
@@ -1016,6 +1016,70 @@ static void test_history_default_chains(void) {
     CHECK(ta_system_retire_definition(system_under_test, id) == TA_OK);
 }
 
+/*
+ * compileTextBytes (ADR 0092): a deep path and long texts formatted at 256,
+ * 1024 and 8192 bytes. Each line stays within its size, and a larger size
+ * shows more of the path and more of each text.
+ */
+static void test_text_bytes(void) {
+    ta_spec_step path[60];
+    for (uint32_t index = 0; index < 60u; index += 1u) {
+        path[index] = (ta_spec_step){ .member = index % 2u == 0 ? TA_SPEC_MEMBER_TRANSITIONS : TA_SPEC_MEMBER_TARGETS,
+                                      .index = 4000000000u + index };
+    }
+    static char long_text[20000];
+    memset(long_text, 'y', sizeof long_text);
+    ta_str text = { .ptr = long_text, .len = (uint32_t)sizeof long_text };
+    ta_compile_error error = { .code = TA_COMPILE_ERROR_UNKNOWN_STATE, .path = path, .path_length = 60u,
+                               .subject = text, .related = text, .message = text };
+    static const uint32_t sizes[3] = { 256u, 1024u, 8192u };
+    uint32_t previous_length = 0;
+    uint32_t previous_shown = 0;
+    for (uint32_t which = 0; which < 3u; which += 1u) {
+        ta_system *system = NULL;
+        ta_param_value param = { .param = TA_PARAM_COMPILE_TEXT_BYTES, .value = sizes[which] };
+        CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator, .params = &param, .param_count = 1 },
+                               &system) == TA_OK);
+        uint64_t read = 0;
+        CHECK(ta_system_param(system, TA_PARAM_COMPILE_TEXT_BYTES, &read) == TA_OK && read == sizes[which]);
+        ta_arena arena;
+        CHECK(ta_arena_init(&arena, test_allocator, 256) == TA_OK);
+        ta_str line = { 0 };
+        CHECK(ta_compile_error_format(&(ta_compile_error_format_params){
+                                          .error = &error, .arena = &arena, .out = &line, .system = system }) == TA_OK);
+        CHECK(line.len <= sizes[which]);
+        CHECK(memchr(line.ptr, '\n', line.len) == NULL);
+        /* Steps shown: each "[4000000..." index. */
+        uint32_t shown = 0;
+        for (uint32_t at = 0; at + 4u <= line.len; at += 1u) {
+            shown += memcmp(line.ptr + at, "[400", 4) == 0 ? 1u : 0u;
+        }
+        CHECK(strstr(line.ptr, " steps]") != NULL);
+        CHECK(line.len > previous_length);
+        CHECK(shown > previous_shown || (which == 0u && shown >= 2u));
+        previous_length = line.len;
+        previous_shown = shown;
+        ta_arena_destroy(&arena);
+        ta_system_destroy(system);
+    }
+    /* Without a system: the default, 1024. */
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 256) == TA_OK);
+    ta_str line = { 0 };
+    CHECK(ta_compile_error_format(&(ta_compile_error_format_params){ .error = &error, .arena = &arena, .out = &line }) ==
+          TA_OK);
+    CHECK(line.len <= TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES && line.len > 256u);
+    ta_arena_destroy(&arena);
+    /* Out of bounds is refused, naming the parameter. */
+    ta_system *refused = NULL;
+    ta_param rejected = TA_PARAM_COUNT;
+    ta_param_value small = { .param = TA_PARAM_COMPILE_TEXT_BYTES, .value = 255u };
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator, .params = &small, .param_count = 1,
+                                                .rejected = &rejected },
+                           &refused) == TA_ERR_INVALID);
+    CHECK(rejected == TA_PARAM_COMPILE_TEXT_BYTES);
+}
+
 int main(void) {
     if (ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system_under_test) != TA_OK) {
         fprintf(stderr, "cannot create a system\n");
@@ -1031,6 +1095,7 @@ int main(void) {
     test_order();
     test_success_costs_nothing();
     test_rejection();
+    test_text_bytes();
     test_format();
     test_deep_typo_is_bounded();
     test_long_subjects_are_bounded();

@@ -132,13 +132,6 @@
       "value": 4294967295
     },
     {
-      "name": "TA_COMPILE_ERROR_TEXT_MAX",
-      "type": {
-        "builtin": "uint32_t"
-      },
-      "value": 1024
-    },
-    {
       "name": "TA_CONTENT_ID_NONE",
       "type": {
         "type": "ta_content_id"
@@ -4815,7 +4808,7 @@
     },
     "ta_compile_error_format_params": {
       "kind": "struct",
-      "doc": "Writes a compile error as one line of text, for people. The line has no stable grammar; tools read the struct. It is never longer than TA_COMPILE_ERROR_TEXT_MAX bytes, however deep the path or long the text: - a path of more than 8 steps shows its first 2 and last 6 steps, and says how many it left out; - each ID, subject, related text and message is cut at a UTF-8 boundary and ends in \"...\" when it is too long; - control characters are escaped everywhere, and quotes and backslashes are escaped inside the quoted subject and related text, so the line stays one line. A state step shows its ID: states[2](idle).transitions[0].targets[0]: unknown state \"idel\"; nearest is \"idle\" `spec` is the spec the error came from; it may be null, and then no IDs are shown.",
+      "doc": "Writes a compile error as one line of text, for people. The line has no stable grammar; tools read the struct. It is never longer than `system`'s compileTextBytes parameter (ADR 0092), or its default of 1024 bytes without a system, however deep the path or long the text. The limits below grow with that size, so a larger one shows more: - a deep path shows its first and last steps, and says how many it left out (at 1024 bytes: the first 2 and last 6 of more than 8); - each ID, subject, related text and message is cut at a UTF-8 boundary and ends in \"...\" when it is too long (at 1024 bytes: IDs at 64, the message at 96); - control characters are escaped everywhere, and quotes and backslashes are escaped inside the quoted subject and related text, so the line stays one line. A state step shows its ID: states[2](idle).transitions[0].targets[0]: unknown state \"idel\"; nearest is \"idle\" `spec` is the spec the error came from; it may be null, and then no IDs are shown.",
       "fields": [
         {
           "name": "spec",
@@ -4861,27 +4854,42 @@
           "direction": "out",
           "valid_on": "success",
           "lifetime": "arena"
+        },
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in",
+          "optional": true,
+          "doc": "Whose compileTextBytes sizes the line; null for the default."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
+          "size": 40,
           "align": 8,
           "offsets": {
             "spec": 0,
             "error": 8,
             "arena": 16,
-            "out": 24
+            "out": 24,
+            "system": 32
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 16,
+          "size": 20,
           "align": 4,
           "offsets": {
             "spec": 0,
             "error": 4,
             "arena": 8,
-            "out": 12
+            "out": 12,
+            "system": 16
           }
         }
       }
@@ -12703,50 +12711,56 @@
           "doc": "bytes kept of a data model's rejection message (ADR 0058)"
         },
         {
-          "name": "TA_PARAM_COMPILE_NEAREST_BYTES",
+          "name": "TA_PARAM_COMPILE_TEXT_BYTES",
           "value": 4,
+          "symbol": "compile_text_bytes",
+          "doc": "bytes of a compile error formatted as a line (ta_compile_error_format)"
+        },
+        {
+          "name": "TA_PARAM_COMPILE_NEAREST_BYTES",
+          "value": 5,
           "symbol": "compile_nearest_bytes",
           "doc": "longest unknown target that gets a nearest-name suggestion"
         },
         {
           "name": "TA_PARAM_INTERPRETER_BYTES",
-          "value": 5,
+          "value": 6,
           "symbol": "interpreter_bytes",
           "doc": "one interpreter's frames and sets, what a chart's structure needs"
         },
         {
           "name": "TA_PARAM_RENDER_BYTES",
-          "value": 6,
+          "value": 7,
           "symbol": "render_bytes",
           "doc": "one interpreter's temporaries whose size depends on content (ADR 0068)"
         },
         {
           "name": "TA_PARAM_INTERPRETER_NESTING",
-          "value": 7,
+          "value": 8,
           "symbol": "interpreter_nesting",
           "doc": "interpreters that may run inside one another (ADR 0060)"
         },
         {
           "name": "TA_PARAM_MAX_ACTORS",
-          "value": 8,
+          "value": 9,
           "symbol": "max_actors",
           "doc": "quota: live actors"
         },
         {
           "name": "TA_PARAM_MAX_PENDING_SENDS",
-          "value": 9,
+          "value": 10,
           "symbol": "max_pending_sends",
           "doc": "quota: pending delayed sends of one actor"
         },
         {
           "name": "TA_PARAM_MAX_DEFINITIONS",
-          "value": 10,
+          "value": 11,
           "symbol": "max_definitions",
           "doc": "quota: live definitions"
         },
         {
           "name": "TA_PARAM_COUNT",
-          "value": 11,
+          "value": 12,
           "symbol": "count"
         }
       ],
@@ -12787,6 +12801,11 @@
           "name": "TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES",
           "value": 256,
           "symbol": "compile_message_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES",
+          "value": 1024,
+          "symbol": "compile_text_bytes"
         },
         {
           "name": "TA_PARAM_DEFAULT_COMPILE_NEAREST_BYTES",

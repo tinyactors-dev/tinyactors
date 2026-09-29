@@ -10199,17 +10199,18 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definiti
  */
 
 /*
- * The formatter's output: one buffer of TA_COMPILE_ERROR_TEXT_MAX bytes,
- * allocated once. Appending past the end is cut off, which the field limits
- * below keep from happening; it is the backstop, not the rule.
+ * The formatter's output: one buffer of compileTextBytes, allocated once.
+ * Appending past the end is cut off, which the field limits below keep from
+ * happening; it is the backstop, not the rule.
  */
 typedef struct {
     char *bytes;
     uint32_t length;
+    uint32_t capacity;
 } ta_text_builder;
 
 static void ta_text_append(ta_text_builder *text, ta_str piece) {
-    uint32_t room = TA_COMPILE_ERROR_TEXT_MAX - text->length;
+    uint32_t room = text->capacity - text->length;
     uint32_t count = ta_utf8_prefix(piece, room);
     if (count != 0) {
         ta_mem_copy(text->bytes + text->length, piece.ptr, count);
@@ -10228,13 +10229,36 @@ static void ta_text_append_u32(ta_text_builder *text, uint32_t value) {
     ta_text_append(text, (ta_str){ .ptr = digits + sizeof(digits) - count, .len = count });
 }
 
-/* Output limits for one field, and how much of a deep path is shown. */
-enum {
-    TA_FORMAT_ID_MAX = 64u,
-    TA_FORMAT_TEXT_MAX = 96u,
-    TA_FORMAT_HEAD_STEPS = 2u,
-    TA_FORMAT_TAIL_STEPS = 6u
-};
+/*
+ * Output limits for one field, and how much of a deep path is shown, from
+ * the line's size (compileTextBytes, ADR 0092): IDs, the subject and related
+ * text get a sixteenth, the message three thirty-seconds, and the path what
+ * is left once those and its elision marker have their worst case, a
+ * quarter of its steps at the head. At 1024 bytes that is 64, 96, and 2 and
+ * 6 steps, the limits this formatter always had.
+ */
+typedef struct {
+    uint32_t id;
+    uint32_t text;
+    uint32_t head;
+    uint32_t tail;
+} ta_format_limits;
+
+static ta_format_limits ta_format_limits_for(uint32_t size) {
+    ta_format_limits limits = { .id = size / 16u, .text = size * 3u / 32u };
+    /* ": " message ' "' subject '"' "; it must be inside \"" related '"' */
+    uint32_t fixed = 2u + limits.text + 2u + limits.id + 1u + 22u + limits.id + 1u;
+    uint32_t elision = 19u; /* ".[4294967295 steps]" */
+    /* "." member "[" index "]" "(" id ")": the longest member name is 11 bytes */
+    uint32_t step = 1u + 11u + 12u + 2u + limits.id;
+    uint32_t steps = size > fixed + elision ? (size - fixed - elision) / step : 0u;
+    if (steps < 2u) {
+        steps = 2u;
+    }
+    limits.head = steps / 4u != 0 ? steps / 4u : 1u;
+    limits.tail = steps - limits.head;
+    return limits;
+}
 
 /*
  * The length in bytes of the unit of `text` starting at `at`: a well-formed
@@ -10354,7 +10378,10 @@ TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *p
         return TA_ERR_INVALID;
     }
     const ta_compile_error *error = params->error;
-    ta_text_builder text = { .bytes = ta_arena_alloc(params->arena, TA_COMPILE_ERROR_TEXT_MAX, 1) };
+    uint32_t size = params->system != NULL ? params->system->params[TA_PARAM_COMPILE_TEXT_BYTES]
+                                           : (uint32_t)TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES;
+    ta_format_limits limits = ta_format_limits_for(size);
+    ta_text_builder text = { .bytes = ta_arena_alloc(params->arena, size, 1), .capacity = size };
     if (text.bytes == NULL) {
         return TA_ERR_NOMEM;
     }
@@ -10365,7 +10392,7 @@ TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *p
      */
     const ta_scxml_state_spec *list = params->spec != NULL ? params->spec->states : NULL;
     uint32_t length = error->path_length;
-    bool elide = length > TA_FORMAT_HEAD_STEPS + TA_FORMAT_TAIL_STEPS;
+    bool elide = length > limits.head + limits.tail;
     for (uint32_t index = 0; index < length; index += 1u) {
         ta_spec_step step = error->path[index];
         const ta_scxml_state_spec *state = NULL;
@@ -10375,10 +10402,10 @@ TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *p
         } else {
             list = NULL;
         }
-        bool shown = !elide || index < TA_FORMAT_HEAD_STEPS || index >= length - TA_FORMAT_TAIL_STEPS;
-        if (elide && index == TA_FORMAT_HEAD_STEPS) {
+        bool shown = !elide || index < limits.head || index >= length - limits.tail;
+        if (elide && index == limits.head) {
             ta_text_append(&text, TA_PHRASE(".["));
-            ta_text_append_u32(&text, length - TA_FORMAT_HEAD_STEPS - TA_FORMAT_TAIL_STEPS);
+            ta_text_append_u32(&text, length - limits.head - limits.tail);
             ta_text_append(&text, TA_PHRASE(" steps]"));
         }
         if (!shown) {
@@ -10395,7 +10422,7 @@ TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *p
         }
         if (state != NULL) {
             ta_text_append(&text, TA_PHRASE("("));
-            ta_text_append_field(&text, state->id, TA_FORMAT_ID_MAX, false);
+            ta_text_append_field(&text, state->id, limits.id, false);
             ta_text_append(&text, TA_PHRASE(")"));
         }
     }
@@ -10403,10 +10430,10 @@ TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *p
         ta_text_append(&text, TA_PHRASE(": "));
     }
     ta_text_append_field(&text, error->message.len != 0 ? error->message : TA_PHRASE("the spec was refused"),
-                         TA_FORMAT_TEXT_MAX, false);
+                         limits.text, false);
     if (error->subject.len != 0) {
         ta_text_append(&text, TA_PHRASE(" \""));
-        ta_text_append_field(&text, error->subject, TA_FORMAT_ID_MAX, true);
+        ta_text_append_field(&text, error->subject, limits.id, true);
         ta_text_append(&text, TA_PHRASE("\""));
     }
     if (error->related.len != 0) {
@@ -10421,7 +10448,7 @@ TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *p
                 ta_text_append(&text, TA_PHRASE("; see also \""));
                 break;
         }
-        ta_text_append_field(&text, error->related, TA_FORMAT_ID_MAX, true);
+        ta_text_append_field(&text, error->related, limits.id, true);
         ta_text_append(&text, TA_PHRASE("\""));
     }
     *params->out = (ta_str){ .ptr = text.bytes, .len = text.length };
@@ -14773,6 +14800,7 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
                                     TA_EVENT_NAME_MAX_DEPTH },
     [TA_PARAM_COMPILE_MESSAGE_BYTES] = { "compileMessageBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES, 16,
                                          65536u },
+    [TA_PARAM_COMPILE_TEXT_BYTES] = { "compileTextBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES, 256, 65536u },
     [TA_PARAM_COMPILE_NEAREST_BYTES] = { "compileNearestBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_NEAREST_BYTES, 0,
                                          65536u },
     [TA_PARAM_INTERPRETER_BYTES] = { "interpreterBytes", "bytes", TA_PARAM_DEFAULT_INTERPRETER_BYTES, 1024,

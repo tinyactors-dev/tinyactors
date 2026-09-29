@@ -34,6 +34,7 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
                                     TA_EVENT_NAME_MAX_DEPTH },
     [TA_PARAM_COMPILE_MESSAGE_BYTES] = { "compileMessageBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES, 16,
                                          65536u },
+    [TA_PARAM_COMPILE_TEXT_BYTES] = { "compileTextBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES, 256, 65536u },
     [TA_PARAM_COMPILE_NEAREST_BYTES] = { "compileNearestBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_NEAREST_BYTES, 0,
                                          65536u },
     [TA_PARAM_INTERPRETER_BYTES] = { "interpreterBytes", "bytes", TA_PARAM_DEFAULT_INTERPRETER_BYTES, 1024,

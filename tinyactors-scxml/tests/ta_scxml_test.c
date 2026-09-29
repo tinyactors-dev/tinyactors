@@ -513,7 +513,8 @@ static void import_for_error(ta_system *system, ta_arena *arena, const char *doc
     if (out->error.stage == TA_IMPORT_STAGE_COMPILE) {
         (void)ta_compile_error_format(&(ta_compile_error_format_params){ .error = &out->error.as.compile,
                                                                          .arena = arena,
-                                                                         .out = &out->line });
+                                                                         .out = &out->line,
+                                                                         .system = system });
     }
 }
 
