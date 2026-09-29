@@ -321,6 +321,67 @@ async function crash() {
   second.close();
 }
 
+// A report and an operator's actions are replayed too: an invocation that
+// reported unavailable, and a runaway the operator abandoned and released.
+async function reportsAndOperations() {
+  const store = memoryStore();
+  let reporter;
+  const system = createSystem({
+    clock: 'manual',
+    incarnation: 1,
+    scheduling: { microstepLimit: 50 },
+    invokers: { job: { start(request, report) { reporter = report; } } },
+  });
+  system.setInputLog(store.sink, { families: ['worker', 'spinner'] });
+  const definitions = {
+    worker: system.define(statechart({ family: 'worker', revision: 'v1' })
+      .state('running', (s) => {
+        s.invoke((i) => i.type('job').id('work'));
+        s.on('error.communication.invoke.work.unavailable', (t) => t.target('lost'));
+      })
+      .state('lost', (s) => s.on('peek', (t) => t.target('lost')))),
+    spinner: system.define(statechart({ family: 'spinner', revision: 'v1' })
+      .data('n', 0)
+      .state('idle', (s) => s.on('go', (t) => t.target('spin')))
+      .state('spin', (s) => s
+        .always((t) => t.when(({ data }) => data.n < 1000).assign('n', ({ data }) => data.n + 1).target('spin')))),
+  };
+  system.setLoader('worker', store.loader(definitions));
+  system.setLoader('spinner', store.loader(definitions));
+
+  const worker = system.spawn(definitions.worker, { name: 'w' });
+  await system.flush();
+  reporter.unavailable({ why: 'gone' });
+  await system.flush();
+  assert.deepEqual(worker.inspect().activeStates, ['lost']);
+  system.evict(worker);
+
+  const spinner = system.spawn(definitions.spinner, { name: 's' });
+  await system.flush();
+  spinner.post('go');
+  await system.flush();
+  assert.equal(system.inspect(spinner).scheduling, 'quarantined', 'a runaway');
+  system.abandon(spinner);
+  system.release(spinner);
+  await system.flush();
+  const before = spinner.inspect();
+  system.evict(spinner);
+  await system.flush();
+
+  await system.send({ family: 'worker', name: 'w' }, 'peek');
+  const back = system.findActor({ family: 'worker', name: 'w' });
+  assert.deepEqual(back.inspect().activeStates, ['lost'], 'the report is replayed');
+  // Any mail would start the spinner's eventless loop again, so it is
+  // replayed by hand and inspected before it is published.
+  const log = store.of('spinner', 's');
+  const again = system.prepare(definitions.spinner, { address: { family: 'spinner', name: 's' }, at: log[0].time });
+  const report = await again.replay(log);
+  assert.equal(report.inputs, log.length);
+  assert.deepEqual(again.inspect().activeStates, before.activeStates);
+  assert.equal(again.inspect().data.n, before.data.n, 'the runaway stops where the abandon stopped it');
+  system.close();
+}
+
 // replay() refuses what it cannot replay.
 async function refusals() {
   const system = createSystem({ clock: 'manual' });
@@ -343,6 +404,7 @@ async function refusals() {
   await timeoutToSelf();
   await sendsToAnother();
   await crash();
+  await reportsAndOperations();
   await refusals();
   console.log('replay.js passed');
 })().catch((error) => {

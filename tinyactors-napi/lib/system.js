@@ -2634,6 +2634,11 @@ class System {
         throw fault;
       }
       await this.#untilIdle(prepared);
+      if (record.kind === 'abandoned') {
+        // A runaway's macrostep is still open: the clock moves once it is abandoned.
+        fault = undefined;
+        this.abandon(prepared);
+      }
       prepared.setTime(record.time);
       lastTime = record.time;
       switch (record.kind) {
@@ -2666,8 +2671,6 @@ class System {
           this.withdrawSend(prepared, record.sendID);
           break;
         case 'abandoned':
-          fault = undefined;
-          this.abandon(prepared);
           break;
         case 'released':
           fault = undefined;
