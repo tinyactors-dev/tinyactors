@@ -1248,6 +1248,9 @@ void tna_sched_turn(tna_sched *sched, const tna_turn_params *params) {
             break;
         }
         tna_sched_resume_one(sched, params, actor);
+        if (params->stop != NULL && params->stop(params->stop_context)) {
+            return;
+        }
     }
     pending = tna_ring_count(&sched->ready);
     limit = params->budgets.messages < pending ? params->budgets.messages : pending;
@@ -1257,6 +1260,9 @@ void tna_sched_turn(tna_sched *sched, const tna_turn_params *params) {
             break;
         }
         tna_sched_deliver_one(sched, params, actor);
+        if (params->stop != NULL && params->stop(params->stop_context)) {
+            return;
+        }
     }
     tna_sched_report_dead(sched, params, params->budgets.messages);
 }

@@ -77,6 +77,9 @@ typedef struct {
      * records, at most `log_limit` per definition and name per second;
      * 0 writes no logs. */
     uint32_t log_limit;
+    /* The staging capacity a buffer always may keep between turns: the
+     * traceStagingBytes parameter (napi ADR 0035); 0 for 1 MiB. */
+    size_t keep_bytes;
 } tna_otlp_config;
 
 /* A growable byte buffer over an allocator. */
@@ -270,7 +273,7 @@ void tna_otlp_forget_definition(tna_otlp *otlp, ta_definition_id definition);
  * carries them: the sink is going away. */
 /*
  * At the end of every pump turn, whether or not it wrote a request: a
- * staging buffer larger than 1 MiB and more than four times a typical
+ * staging buffer larger than traceStagingBytes and more than four times a typical
  * turn's use (as it stood before this turn) is freed. A burst, such as a
  * turn of spawns each tracing its bootstrap, is far above typical, so its
  * buffer goes as soon as the turn ends instead of staying for the system's

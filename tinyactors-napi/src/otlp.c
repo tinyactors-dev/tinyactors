@@ -98,15 +98,18 @@ static void tna_buf_free(tna_otlp_buf *buf) {
 }
 
 /*
- * The staging capacity a buffer always may keep between turns. Past it, a
- * buffer is kept only while a typical turn uses a quarter of it
- * (tna_otlp_end_turn).
+ * The staging capacity a buffer always may keep between turns
+ * (traceStagingBytes, napi ADR 0035). Past it, a buffer is kept only while a
+ * typical turn uses a quarter of it (tna_otlp_end_turn); a turn stops early
+ * once it has staged that much (tna_system_turn).
  */
-#define TNA_OTLP_KEEP_BYTES ((size_t)1 << 20)
+static size_t tna_keep_bytes(const tna_otlp *otlp) {
+    return otlp->config.keep_bytes != 0 ? otlp->config.keep_bytes : (size_t)1 << 20;
+}
 
 /* An empty buffer beyond the kept bytes, and four times a typical turn's use, is freed. */
-static void tna_buf_settle(tna_otlp_buf *buf, size_t used) {
-    if (buf->len == 0 && buf->cap > TNA_OTLP_KEEP_BYTES && buf->cap / 4u > used) {
+static void tna_buf_settle(tna_otlp_buf *buf, size_t used, size_t keep) {
+    if (buf->len == 0 && buf->cap > keep && buf->cap / 4u > used) {
         tna_buf_free(buf);
     }
 }
@@ -2228,7 +2231,7 @@ static size_t tna_typical_use(size_t typical, size_t used) {
 }
 
 void tna_otlp_end_turn(tna_otlp *otlp) {
-    tna_buf_settle(&otlp->spans, otlp->typical_spans);
+    tna_buf_settle(&otlp->spans, otlp->typical_spans, tna_keep_bytes(otlp));
     if (otlp->spans.data == NULL && otlp->entry_count == 0) {
         /* The entries, runs and scopes of a burst go with its spans. */
         ta_allocator allocator = otlp->config.allocator;
@@ -2240,7 +2243,7 @@ void tna_otlp_end_turn(tna_otlp *otlp) {
                        _Alignof(uint32_t));
         tna_buf_free(&otlp->scopes);
     }
-    tna_buf_settle(&otlp->logs, otlp->typical_logs);
+    tna_buf_settle(&otlp->logs, otlp->typical_logs, tna_keep_bytes(otlp));
     otlp->typical_spans = tna_typical_use(otlp->typical_spans, otlp->turn_spans);
     otlp->typical_logs = tna_typical_use(otlp->typical_logs, otlp->turn_logs);
     otlp->turn_spans = 0;

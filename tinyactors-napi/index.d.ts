@@ -248,9 +248,10 @@ export interface SystemParameters {
    */
   traceValueBytes?: number;
   /**
-   * OTLP staging kept between turns; a turn whose spans pass it ends early,
-   * so the sink gets that turn's request and the next turn another. Default
-   * 1 MiB, from 64 KiB to 1 GiB.
+   * OTLP staging kept between turns; a turn whose spans and logs pass it
+   * ends early, so the sink gets that turn's request and the next turn goes
+   * on, with nothing dropped. What calls between turns stage (spawn()'s
+   * lifecycle span) is not bounded by it. Default 1 MiB, from 64 KiB to 1 GiB.
    */
   traceStagingBytes?: number;
   /** Data models registerDatamodel() may add; default 8, at most 1024. */

@@ -554,6 +554,40 @@ async function largeValues() {
   }
 }
 
+// traceStagingBytes (napi ADR 0035): a turn whose spans pass the staging
+// bound ends early, so the sink gets several requests where one turn would
+// have made one large one, and no span is lost. (spawn() writes its
+// lifecycle span when it is called, outside any turn, so the bound applies
+// to what turns stage: here, the deliveries.)
+async function stagingBound() {
+  const actors = 3000;
+  const counts = [];
+  for (const parameters of [{ traceStagingBytes: 65536 }, {}]) {
+    const system = createSystem({ parameters });
+    const sink = recorder(system, {});
+    const definition = counter(system);
+    const spawned = [];
+    for (let index = 0; index < actors; index += 1) {
+      spawned.push(system.spawn(definition));
+    }
+    await system.flush();
+    sink.batches.length = 0;
+    for (const actor of spawned) {
+      actor.post('go');
+    }
+    await system.flush();
+    const steps = sink.spans.filter((span) => span.name === 'scxml.microstep go');
+    assert.equal(steps.length, actors, 'every delivery traced, none dropped');
+    counts.push(sink.batches.length);
+    if (parameters.traceStagingBytes !== undefined) {
+      const largest = Math.max(...sink.batches.map((bytes) => bytes.length));
+      assert.ok(largest < 2 * 65536, `a request stays near the bound: ${largest} bytes`);
+    }
+    system.close();
+  }
+  assert.ok(counts[0] > counts[1], `a small bound makes more requests: ${counts}`);
+}
+
 // Values only when asked for; links instead of parents when asked for.
 async function valuesAndLinks() {
   const system = createSystem({ parameters: { traceValueBytes: 16 } });
@@ -747,6 +781,7 @@ async function watchAndSample() {
   await failureLogsSayWhy();
   await valuesAndLinks();
   await largeValues();
+  await stagingBound();
   await lifecycle();
   await summaryFailures();
   await loadedAndUnloaded();

@@ -362,6 +362,11 @@ typedef struct {
     tna_turn_budgets budgets;
     /* Watched sessions and definitions (watch.h); NULL or empty: none. */
     tna_trace_watch *watch;
+    /* Asked after each resume and delivery: true ends the turn there, and
+     * what is left waits for the next one (napi ADR 0035's staging bound).
+     * NULL: never. */
+    bool (*stop)(void *context);
+    void *stop_context;
 } tna_turn_params;
 
 /* `allocator` for the table and queues, `envelopes` for the envelope store. */

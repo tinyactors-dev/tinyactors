@@ -363,6 +363,7 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
                           .host = { .self = wrapper, .now = tna_host_now, .trace_id = tna_host_trace_id,
                                     .value_text = tna_host_value_text },
                           .log_limit = log_limit,
+                          .keep_bytes = (size_t)system->params.values[TNA_PARAM_TRACE_STAGING_BYTES],
                           .link_parents = links,
                           .values = values,
                           .version = { TINYACTORS_NAPI_VERSION, (uint32_t)(sizeof TINYACTORS_NAPI_VERSION - 1u) },

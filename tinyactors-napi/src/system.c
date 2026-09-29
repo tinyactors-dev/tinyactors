@@ -491,6 +491,18 @@ bool tna_system_dispatch_due(tna_system *system) {
     return more_due;
 }
 
+/*
+ * A turn stops once it has staged traceStagingBytes of spans and logs (napi
+ * ADR 0035): the sink gets this turn's request, and the next turn goes on
+ * where this one stopped, so the staging stays near its bound and nothing
+ * is dropped. One macrostep's records are never split.
+ */
+static bool tna_system_staging_full(void *context) {
+    tna_system *system = context;
+    return system->tracing && tna_otlp_traces_size(&system->otlp) + tna_otlp_logs_size(&system->otlp) >=
+                                  system->params.values[TNA_PARAM_TRACE_STAGING_BYTES];
+}
+
 void tna_system_turn(tna_system *system) {
     system->turn_pending = false;
     if (system->closed) {
@@ -503,6 +515,8 @@ void tna_system_turn(tna_system *system) {
                                        .inside_core = &system->inside_core,
                                        .budgets = system->budgets,
                                        .watch = &system->trace_watch,
+                                       .stop = tna_system_staging_full,
+                                       .stop_context = system,
                                    });
     tna_quarantine_reports_retry(system);
     tna_quarantine_reports_make(system);
