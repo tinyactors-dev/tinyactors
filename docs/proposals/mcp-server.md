@@ -1,7 +1,7 @@
 # An MCP server: connect an agent to a system
 
 **Status:** Proposed (2026-09-29)
-**Touches:** every host (one mapping of MCP onto core, shared transcripts); tinyactors-napi (MCP tools for the application's MCP server; DAP removed); tinyactors-test (an MCP server for the workbench; DAP removed); tinyactors-vscode (removed); root docs and AGENTS.md
+**Touches:** tinyactors-core (a short form for registered I/O processor types); the host kernel (the mapping, implemented once); tinyactors-napi and tinyactors-test (bind it; DAP removed); tinyactors-vscode (removed); root docs and AGENTS.md
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
 ## Goal
@@ -33,11 +33,12 @@ MCP:
   ([SQLite](sqlite-host.md), [PostgreSQL](postgres-host.md)). It is written
   in terms of core (its ADRs and C API) and MCP, and names no host's
   language, API or library.
-- **[Part 2, host bindings](#part-2-host-bindings)** says what a host must
-  provide to implement the mapping, and how napi and the test host provide
-  it. Everything specific to Node, JavaScript or Ruby is there.
+- **[Part 2, host bindings](#part-2-host-bindings)** says where the mapping
+  is implemented (once, in the [host kernel](host-kernel.md)), and what is
+  left for a host: handing its MCP library the kernel's tools and
+  resources. Everything specific to Node, JavaScript or Ruby is there.
 - **[In this repository](#in-this-repository)** lists what the change
-  removes and keeps here.
+  adds, removes and keeps here.
 
 A host may add to the mapping (tools of its own, fields under `host` in a
 resource, options when the tools are set up). It must not change what the
@@ -151,8 +152,13 @@ A chart replies to whoever sent its event, with `_event.origin` and
 through its I/O processor registry and origin scopes (core ADR 0068). An
 agent's `send` uses them like any other sender:
 
-- **Each served system has an I/O processor of type `mcp`**, listed in
-  `_ioprocessors`.
+- **Each served system has the MCP I/O processor.** Its type is a full
+  URL, as SCXML 6.2.5 asks of every processor ("the URI of the
+  description of the relevant Event I/O Processor"): the permanent URL of
+  this mapping's documentation, fixed when the documentation has a home.
+  Its short form is `mcp`, as `scxml` is the built-in processor's. Both
+  select it in `<send type>`; `_ioprocessors` and `_event.origintype`
+  carry the full URL.
 - **Each `send` call opens an origin scope** for that processor, with the
   URI `mcp:call/<id>`, where `<id>` is minted by the server (MCP request
   IDs are the client's and can repeat across clients). The event is
@@ -239,6 +245,26 @@ actor, but a data model with a general-purpose language runs the agent's
 code in the host's process, and every destructive tool acts at once. Each
 host's documentation says so where it shows how to serve the tools.
 
+## Protocol revisions
+
+The mapping targets MCP 2026-07-28, the current revision. MCP will have
+new revisions over the life of the project, so the mapping keeps what
+depends on one revision in one place:
+
+- **Stable across revisions:** what the tools and resources are, their
+  arguments and results, how a send's replies are collected, and which
+  core records make an update. This is the mapping.
+- **Specific to 2026-07-28:** `subscriptions/listen` (it replaced
+  `resources/subscribe`), `resultType`, `ttlMs` and `cacheScope`,
+  `-32602` for a resource not found, the `_meta` keys for trace context,
+  and the Tasks and Apps extensions.
+- **Not the mapping's concern:** transport, JSON-RPC framing, version
+  negotiation (`server/discover`, the protocol version in `_meta`) and
+  capability exchange. An MCP library does these, in every language.
+
+A new MCP revision changes the second list and the transcripts that cover
+it, and names the revision it targets at the top of this section.
+
 ## Conformance
 
 Shared transcripts define the mapping, and every host plays them in its
@@ -252,42 +278,87 @@ test task, as the DAP transcripts did for two hosts:
 - **What differs is keyed by data model, not by host:** `$expr` has a form
   per data model (`jq`, `ecmascript`, `null`, ...), so a new host with a
   data model already covered plays the transcripts unchanged.
-- **Setup is a host's own** (below), and ends in a system named
-  `transcripts` that holds the transcript's actors.
+- **Setup is a host's own,** and ends in a system named `transcripts`
+  that holds the transcript's actors.
+
+Since the kernel implements the mapping once, the transcripts mostly test
+the kernel, through each host's binding of it. They also catch a binding
+that drops or renames what the kernel offers.
 
 # Part 2: host bindings
 
-## What a host provides
+## The mapping lives in the host kernel
 
-| Needs | Why | napi | test host |
-|---|---|---|---|
-| names for the systems it serves | addresses | `registerMCPTools(server, { systems })` | the workbench's directory name |
-| an MCP server and transport | reach a client | the application's own server (official TypeScript SDK) | its own, over stdio |
-| the `mcp` I/O processor and origin scopes | replies | `system.registerIO`, `system.openScope`, `origin` on `post` | to add: an adapter in `src/adapters.c` |
-| following a send's causes | when `send` answers | to add: nothing tells yet when a send's work is done | the Scheduler runs to quiescence; causes decide once delayed sends are due later |
-| evaluating against a copy of the data | `evaluate` never writes | to add: a structured clone of the data | to add: a copy of the JSON (jq); a fresh context with the data decoded into it (ECMAScript) |
-| a load no mail asked for | `load` | to add: a `LoadReason` of its own (today `mail`, `timer`, `session`) | the workbench's load path |
-| a write of a data location | `set` | its write path | capture and reload (core ADR 0038) |
-| a trace sink and an exporter | streams, traces | `setTraceSink`, OTLP (napi ADR 0015) | the trace records it reads now |
+A host's language already has an MCP library (an official SDK or another)
+that does the transport, the JSON-RPC framing, version negotiation and
+tool registration. A host should not implement the mapping as well. It
+should hand the library what one shared implementation offers.
 
-A new host fills the same rows. Two sketches, to check that nothing above
-assumes a JavaScript or Ruby process:
+That implementation is a module of the [host kernel](host-kernel.md), the
+C library on top of core that the kernel proposal extracts from napi. It
+fits there because the mapping needs what the kernel already holds:
 
-- **A Python binding** adds the tools to an application's server built on
-  the official Python SDK, as napi does for Node, and registers the `mcp`
-  processor through its own binding of core's I/O registry.
-- **A database host** ([SQLite](sqlite-host.md),
-  [PostgreSQL](postgres-host.md)) cannot hold an MCP connection inside the
-  database. Its server runs beside the database and calls the host's SQL
-  functions. A `send` is one transaction; its replies are the events the
-  transaction sent to the call's origin, returned once it commits. System
-  names are the database's (a schema, or a table of systems).
+| The mapping needs | The kernel has |
+|---|---|
+| following what a send caused, to know when to answer | the scheduler, its queues and turn state, and core's records |
+| loading an actor no mail asked for | the directory and the loader hooks |
+| delivering with an origin and a trace parent | the router and effects |
+| the MCP I/O processor and its origin scopes | the I/O adapters (`adapters/io.c`) |
+| resident actors, definitions, metrics | enumeration, and core's inspection |
 
-## napi: tools for the application's own MCP server
+### What the kernel's MCP module offers a host
 
-An application that exposes an MCP server has one already, for its own
-tools, with its own transport and authentication. napi adds its tools to
-that server rather than running a second one:
+In C, with JSON text in and out, so any language can pass it straight to
+its MCP library:
+
+- **the catalogue:** every tool (name, description, input and output
+  schemas, annotations) and every resource template, as JSON;
+- **`call`:** a tool name, its arguments and the request's `_meta` in; a
+  result out. A `send` answers later, when its replies are in, through
+  the same completion the host's pump already drives;
+- **`read` and `list`:** a resource by URI, and the resource list by
+  cursor;
+- **`listen`:** the URIs a client subscribed to in; a callback per
+  update, with the URI to put in `notifications/resources/updated`;
+- **`add_system` and `remove_system`:** the systems the module serves,
+  under the names the application gives them.
+
+### What a host still writes
+
+- a few dozen lines that register the catalogue with its MCP library and
+  forward calls, reads and subscriptions to the module;
+- the evaluation against a copy of an actor's data, for data models whose
+  values live in the host's language (napi's JavaScript values); the
+  kernel does it for data models in C (jq, null);
+- its documentation of how an application serves the tools.
+
+### Hosts without the kernel
+
+The kernel holds actors in memory. The database hosts keep mailboxes,
+the directory and timers in tables (the kernel proposal leaves them out),
+so the MCP module depends on the kernel only through a small interface:
+
+- the scheduling questions: is anything a send caused still runnable or
+  due, and wake me when that changes;
+- loading an actor by address.
+
+A database host answers them from its tables, and uses the rest of the
+module unchanged. Its MCP server runs beside the database and calls the
+host's SQL functions; a `send` is one transaction, and its replies are
+returned once it commits.
+
+### When
+
+The kernel proposal waits for a second language host before it
+extracts anything. The MCP module need not wait: it is written in napi's
+Node-free C (`tinyactors-napi/src/`, beside `scheduler.c` and
+`router.c`), under the kernel's rules, and moves with them when the
+kernel is extracted.
+
+## napi
+
+napi adds the module's tools to the application's own MCP server rather
+than running a second one:
 
 ```js
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
@@ -302,28 +373,35 @@ server.registerTool('restock', /* the application's own tool */);
 - **The application chooses the transport.** A running application serves
   Streamable HTTP on a route of its own. stdio suits a process the client
   starts, which a long-running application is not.
-- **Options:**
-  - `systems`: names to systems;
-  - `prefix` for the tool names (default none), for an application whose
-    own tools would clash;
-  - `ioType` (default `mcp`), only for an application that already
-    registered an `mcp` processor of its own. A chart that replies to its
-    origin never names the type.
+- **Options:** `systems` (names to systems), and `prefix` for the tool
+  names (default none), for an application whose own tools would clash.
 - **The SDK is an optional peer dependency** of `@tinyactors/node`, loaded
   only by `@tinyactors/node/mcp`.
-- **A reply chart in napi's builder** is the SCXML above:
-  `t.send('quote', (send) => send.via(({ event }) => event.originType).to(({ event }) => event.origin))`.
+- **`evaluate`** on napi's JavaScript data model evaluates against a
+  structured clone of the actor's data.
+- **A reply in napi's builder** is the SCXML transition of
+  [Replies](#replies): `t.send('quote', (send) => send.via(({ event }) =>
+  event.originType).to(({ event }) => event.origin))`.
 
-## The test host: the workbench's server
+## The test host
 
-`bin/mcp` serves a workbench directory's system over stdio. A developer
-starts it from an MCP client's configuration, the way `bin/dap` was
-started from VS Code. The workbench's charts reload when their files
-change, as they do now. The server speaks MCP on its own; the test host's
-host protocol and its error codes (`-32001`, ...) stay behind it, apart
-from MCP's reserved range (`-32020` to `-32099`).
+The test host is the verification host: it links core and drives it from
+Ruby, and its Scheduler is in Ruby, not in the kernel. It links the
+kernel's MCP module into the C host and binds it through its host
+protocol, like any other C API, with the Ruby Scheduler behind the
+module's scheduling questions. So the transcripts test the module, not a
+second implementation in Ruby.
+
+`bin/mcp` serves a workbench directory's system, named after the
+directory, over stdio. A developer starts it from an MCP client's
+configuration. The workbench's charts reload when their files change, as
+they do now.
 
 # In this repository
+
+**Changes in core:** `ta_io_registration_params` takes a short form beside
+the type's URL, and core treats it as it treats `scxml` for the built-in
+processor. The built-in alias stops being a special case.
 
 **Stays**, because it is core API that any host uses:
 
@@ -357,22 +435,18 @@ change. Scenarios exercise them, so they probably stay.
 
 # Open questions
 
-**For the mapping:**
-
-1. **Following a send's causes.** Every host needs to know when nothing a
-   send caused is runnable or due. The records carry causes, so a host can
-   follow them itself, but a core call that answers it would give every
-   host the same answer. Decide which.
-2. **The `mcp` processor's type.** Whether it stays the short name `mcp`
-   or gets a URI long form, as SCXML's own processor types have.
-
-**For the hosts:**
-
-3. **napi: the SDK's support for 2026-07-28.** `registerMCPTools` assumes the
-   official TypeScript SDK serves the stateless protocol,
-   `subscriptions/listen` and `server/discover`. Check before an ADR, and
-   decide what to do while it serves only 2025-11-25.
-4. **The rows marked "to add"**, in napi and the test host, in [What a host provides](#what-a-host-provides).
+1. **The URL of the MCP processor type.** The rule is settled (the
+   permanent URL of this mapping's documentation, short form `mcp`); the
+   URL waits for the documentation to have a home.
+2. **Following a send's causes.** Whether the kernel follows the records'
+   causes itself, or core gains a call that answers "is anything this
+   input caused still runnable or due", which the database hosts would
+   use too.
+3. **JSON in C.** The module speaks JSON text. The kernel needs a JSON
+   reader and writer; the test host uses jq's, napi none yet.
+4. **The TypeScript SDK and 2026-07-28.** Whether the official SDK serves
+   the stateless revision yet, and what napi does while it serves only
+   2025-11-25.
 
 ## Sources
 
