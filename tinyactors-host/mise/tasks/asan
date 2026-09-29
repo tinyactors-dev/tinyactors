@@ -1,0 +1,21 @@
+#!/usr/bin/env ruby
+#MISE description="Build the host kernel's tests with AddressSanitizer and UndefinedBehaviorSanitizer and run them"
+# vim:ft=ruby
+
+require_relative '../kernel'
+require 'fileutils'
+
+build = HostKernel::BUILD.join('asan')
+FileUtils.mkdir_p(build)
+cc = Toolchain::Target.host.compile_command
+flags = [*HostKernel::WARNINGS, *HostKernel::INCLUDES, '-g', '-O1', '-fno-omit-frame-pointer',
+         '-fsanitize=address,undefined', '-fno-sanitize-recover=all']
+sources = HostKernel.sources.map(&:to_s)
+failed = HostKernel.tests.reject do |test|
+  binary = build.join(test)
+  system(*cc, *flags, HostKernel::ROOT.join("tests/#{test}.c").to_s, *sources, '-o', binary.to_s,
+         chdir: HostKernel::ROOT.to_s) &&
+    system(binary.to_s, chdir: HostKernel::ROOT.to_s, out: File::NULL)
+end
+abort "asan: failed: #{failed.join(', ')}" unless failed.empty?
+puts "asan: #{HostKernel.tests.size} kernel test(s) pass under AddressSanitizer and UBSan"

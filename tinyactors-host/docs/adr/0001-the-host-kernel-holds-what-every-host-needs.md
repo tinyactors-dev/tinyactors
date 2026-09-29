@@ -149,4 +149,50 @@ without a JavaScript runtime.
 
 ## Implementation notes
 
-None yet.
+### Step 1: an empty kernel that builds and tests (2026-09-30)
+
+- **Where:**
+  - `tinyactors-host/include/tinyactors_host.h`;
+  - `src/memory.{c,h}` (the kernel's own copy, set and compare, since it calls
+    no C library) and `src/version.c`;
+  - `tests/smoke_test.c`;
+  - `mise/kernel.rb` (what the tasks share) and `mise/tasks/{build,test,asan,check-recursion,check-freestanding}`;
+  - `AGENTS.md` (with `CLAUDE.md` linking to it) and `README.md`.
+- **The host interface is declared in outline only:** `tah_pump_driver`
+  (request a turn, arm a timer, read a monotonic clock), `tah_hooks`
+  (one operation so far, `effects_ready`) and `tah_host`, which bundles them
+  with core's `ta_allocator`. Values and the data model are core's `ta_value`
+  and `ta_datamodel`, and errors are core's `ta_result`, so the header
+  declares no types for them and says so. Step 2 adds the hook operations as
+  napi's code moves in.
+- **libc-free is enforced twice:**
+  - `src/` is compiled with `-ffreestanding -nostdlibinc` on every host, so a
+    C library header fails to compile in the ordinary build;
+  - `mise run check-freestanding` compiles every source with the release's zig
+    for `wasm32-freestanding`, which has no C library. It fails on any
+    undefined symbol other than core's API (`ta_*`), the kernel's own
+    (`tah_*`), and the memory builtins the compiler emits (`memcpy`, `memset`,
+    `memmove`, `memcmp`, `bcmp`; root ADR 0001, decision 16).
+
+  Both were checked by hand to reject an `#include <string.h>` and a call to
+  `puts`. The wasm object format now lists `__stack_pointer`, which the wasm
+  linker defines, as a symbol an object may leave to the runtime
+  (`mise/lib/toolchain/object_format.rb`).
+- **`check-recursion`** compiles the kernel as one translation unit that
+  includes each source, and reads its call graph. The cycle finder moved
+  from core's task into `mise/lib/call_graph.rb`, which core's
+  `check-recursion` now uses too.
+- **The build:** each source is compiled into `build/objects/` (reused by
+  content, `mise/lib/cache.rb`), then archived into
+  `build/libtinyactors_host.a`. Tests link against it, and `asan` builds them
+  with the sources under AddressSanitizer and UBSan.
+- **Wiring:**
+  - `tinyactors-host` joins the root `mise.toml`'s `config_roots`;
+  - the root `build` builds it after core, and the root `test` runs it after
+    core ("host kernel");
+  - napi's and the test host's `test` tasks list the kernel's `include/` and
+    `src/` in their `#MISE sources`.
+- **AGENTS.md's table** says a kernel change reruns the kernel, the test host
+  and napi. Section 1 also named vscode, but vscode's `#MISE sources` list
+  napi's `lib/`, not its C, so a change to napi's C does not rerun vscode
+  either. The table follows what actually reruns.

@@ -43,7 +43,8 @@ are in [`docs/proposals/`](docs/proposals/README.md).
   needs its home and the test host is a second consumer. Steps, in order;
   each ends with `mise run test` passing, and the last with
   `mise run test:full --all`:
-  1. **Create `tinyactors-host/`:** its `mise.toml`, build and test tasks on
+  1. **Done:** [kernel ADR 0001, step 1](tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md#step-1-an-empty-kernel-that-builds-and-tests-2026-09-30).
+     **Create `tinyactors-host/`:** its `mise.toml`, build and test tasks on
      the root toolchain, `include/tinyactors_host.h`, native tests under
      ASan and UBSan, `check-recursion`, its `#MISE sources`, and its row in
      AGENTS.md's table of what reruns. An empty library that builds and

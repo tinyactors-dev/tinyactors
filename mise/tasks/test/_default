@@ -28,6 +28,7 @@ steps = [
   ['toolchain', ['mise', 'run', *(all ? ['--force'] : []), 'toolchain-test'], root],
   ['build', %w[mise run build], root],
   ['core', ['mise', 'run', *flags.call], root.join('tinyactors-core')],
+  ['host kernel', ['mise', 'run', *flags.call], root.join('tinyactors-host')],
   ['tinyxml', ['mise', 'run', *flags.call], root.join('tinyxml')],
   ['scxml codec', ['mise', 'run', *flags.call], root.join('tinyactors-scxml')],
   # --full: the exhaustive scenarios, and scale_test up to four million actors.

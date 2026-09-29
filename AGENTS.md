@@ -38,6 +38,7 @@ and core does not handle bytes it has no use for.
   | You changed                         | These projects' tests run                |
   |-------------------------------------|------------------------------------------|
   | `tinyactors-core` code or tests     | all of them                              |
+  | `tinyactors-host` (the host kernel) | the kernel, the test host, napi          |
   | `tinyxml`, `tinyactors-scxml`       | that one, the scxml codec, test host, napi |
   | `tinyactors-test`                   | test host, and napi when `dap/` or the IRP importer changed |
   | `tinyactors-napi`                   | napi, vscode                             |
