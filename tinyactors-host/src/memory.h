@@ -12,9 +12,28 @@
 #include <stddef.h>
 #include <stdint.h>
 
-void tah_mem_copy(void *to, const void *from, size_t size);
-void tah_mem_set(void *to, unsigned char byte, size_t size);
-bool tah_mem_equal(const void *left, const void *right, size_t size);
+/*
+ * Copy, fill and compare go through the compiler's builtins: it inlines
+ * small, fixed-size ones and calls memcpy, memset or memcmp for the rest.
+ * Those symbols are the only ones the kernel may leave undefined beside
+ * core's (check-freestanding): a release resolves them with zig's
+ * compiler-rt, a browser build with its own, a test program with its C
+ * library. A byte loop instead cost the traced benchmarks several percent
+ * (kernel ADR 0001, step 2b notes).
+ */
+static inline void tah_mem_copy(void *to, const void *from, size_t size) {
+    if (size != 0u) {
+        __builtin_memcpy(to, from, size);
+    }
+}
+static inline void tah_mem_set(void *to, unsigned char byte, size_t size) {
+    if (size != 0u) {
+        __builtin_memset(to, byte, size);
+    }
+}
+static inline bool tah_mem_equal(const void *left, const void *right, size_t size) {
+    return size == 0u || __builtin_memcmp(left, right, size) == 0;
+}
 /* The first `byte` among `size` bytes at `from`, or NULL; as memchr. */
 const void *tah_mem_find(const void *from, unsigned char byte, size_t size);
 /* The length of a NUL-terminated text, as strlen. */
