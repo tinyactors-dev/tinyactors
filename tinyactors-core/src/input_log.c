@@ -439,7 +439,7 @@ void ta_input_event_fields(const ta_record_event_params *params, ta_record_event
                         .address = actor != NULL && actor->record.self.kind == TA_ACTOR_REF_NAMED
                                        ? actor->record.self.as.named
                                        : NULL,
-                        .arena = ta_arena_allocator(&system->scratch),
+                        .arena = ta_arena_allocator(&system->render),
                         .out = &uri,
                     });
         origin = ta_input_str(rendered == TA_OK, uri);
@@ -467,7 +467,7 @@ static ta_str ta_input_state_text(const ta_system *system, const ta_definition *
 }
 
 bool ta_input_runaway_stopped(const ta_system *system, const ta_actor *actor) {
-    uint32_t limit = actor->definition->microstep_limit == 0 ? system->microstep_limit
+    uint32_t limit = actor->definition->microstep_limit == 0 ? system->params[TA_PARAM_MICROSTEP_LIMIT]
                                                             : actor->definition->microstep_limit;
     return actor->macrostep && actor->trace_begun && limit != 0 && limit != TA_MICROSTEP_LIMIT_NONE &&
            actor->trace_microstep >= limit;

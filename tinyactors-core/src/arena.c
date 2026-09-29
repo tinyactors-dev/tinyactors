@@ -136,3 +136,38 @@ static const ta_allocator_vtable ta_arena_allocator_vtable = {
 ta_allocator ta_arena_allocator(ta_arena *arena) {
     return (ta_allocator){ .self = arena, .v = &ta_arena_allocator_vtable };
 }
+
+/* A fixed arena's backing: it never gives memory, and its blocks are not its own. */
+static void *ta_arena_fixed_alloc(void *self, size_t size, size_t alignment) {
+    (void)self;
+    (void)size;
+    (void)alignment;
+    return NULL;
+}
+
+static void ta_arena_fixed_free(void *self, const ta_allocator_free_params *params) {
+    (void)self;
+    (void)params;
+}
+
+static const ta_allocator_vtable ta_arena_fixed_vtable = {
+    .alloc = ta_arena_fixed_alloc,
+    .free = ta_arena_fixed_free,
+};
+
+size_t ta_arena_fixed_bytes(size_t capacity) {
+    return offsetof(ta_arena_block, data) + capacity;
+}
+
+void ta_arena_init_fixed(ta_arena *arena, void *memory, size_t bytes) {
+    ta_arena_block *block = memory;
+    *block = (ta_arena_block){
+        .next = NULL,
+        .allocation_size = bytes,
+        .alignment = _Alignof(ta_arena_block),
+        .capacity = bytes - offsetof(ta_arena_block, data),
+        .used = 0,
+    };
+    /* block_size is never used to grow: the backing refuses. */
+    *arena = (ta_arena){ .backing = { .self = NULL, .v = &ta_arena_fixed_vtable }, .head = block, .block_size = 1 };
+}

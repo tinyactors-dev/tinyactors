@@ -499,9 +499,20 @@ static ta_definition_id define(ta_system *system, const char *family, const ta_s
     return id;
 }
 
+/* Parameters for the next system a helper creates (ADR 0092: they are fixed
+ * at creation), then back to the defaults. */
+static ta_param_value next_params[4];
+static uint32_t next_param_count;
+static void next_param(ta_param param, uint64_t value) {
+    next_params[next_param_count++] = (ta_param_value){ .param = param, .value = value };
+}
+
 static ta_system *create_system(void) {
     ta_system *system = NULL;
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = next_params,
+                                                .param_count = next_param_count },
+                           &system) == TA_OK);
+    next_param_count = 0;
     CHECK(ta_system_set_external_event_router(system, (ta_external_event_router){ .v = &router_vtable }) == TA_OK);
     CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .v = &dir_vtable }) == TA_OK);
     ta_atom svc = 0;
@@ -940,6 +951,7 @@ static void test_golden_records(void) {
 
 /* REPORT, ABANDONED, RELEASED and FINISHED */
 static void test_golden_operations(void) {
+    next_param(TA_PARAM_MICROSTEP_LIMIT, 5);
     ta_system *system = create_system();
     ta_definition_id jobs = define(system, "jobs", invoking);
     ta_definition_id chains = define(system, "chains", chain);
@@ -947,7 +959,6 @@ static void test_golden_operations(void) {
     log_family(system, "jobs");
     log_family(system, "chains");
     log_family(system, "fin");
-    ta_system_set_microstep_limit(system, 5);
     buffer want = { 0 };
 
     static const ta_actor_address job_address = { .family = { .name = STR("jobs") }, .name = STR("j") };
@@ -1166,6 +1177,7 @@ static void test_destroyed_life(void) {
 
 /* Operations, reports, jumps and host records replay too. */
 static void test_replay_operations(void) {
+    next_param(TA_PARAM_MICROSTEP_LIMIT, 5);
     ta_system *system = create_system();
     ta_definition_id jobs = define(system, "jobs", invoking);
     ta_definition_id chains = define(system, "chains", chain);
@@ -1173,7 +1185,6 @@ static void test_replay_operations(void) {
     log_family(system, "jobs");
     log_family(system, "chains");
     log_family(system, "timers");
-    ta_system_set_microstep_limit(system, 5);
 
     /* a report */
     static const ta_actor_address job_address = { .family = { .name = STR("jobs") }, .name = STR("j") };

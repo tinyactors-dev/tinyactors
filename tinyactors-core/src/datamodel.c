@@ -36,9 +36,10 @@ ta_time ta_dm_host_time(const ta_dm_host *host) {
     return ta_interpreter_macrostep_time(host->impl->system, host->impl->actor);
 }
 
-/* The scratch arena of the interpreter run that is calling the data model (ADR 0068). */
+/* The render area of the interpreter run that is calling the data model
+ * (ADR 0068): rendered text is content-sized (ADR 0092 section 3). */
 static ta_allocator ta_dm_arena(const ta_dm_host *host) {
-    return ta_arena_allocator(&host->impl->system->scratch);
+    return ta_arena_allocator(&host->impl->system->render);
 }
 
 typedef struct {

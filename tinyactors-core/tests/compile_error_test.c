@@ -885,7 +885,7 @@ static void test_long_message_is_bounded(void) {
     outcome o;
     compile_with(&spec, &model, true, &o);
     CHECK(o.error.code == TA_COMPILE_ERROR_EXPRESSION_REJECTED);
-    CHECK(o.error.message.len == TA_COMPILE_ERROR_MESSAGE_MAX); /* the copy kept is bounded */
+    CHECK(o.error.message.len == TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES); /* the copy kept is bounded */
     CHECK(o.error.message.ptr != long_message);
     ta_str line = format_line(&spec, &o);
     CHECK(contains(line, "mmm..."));

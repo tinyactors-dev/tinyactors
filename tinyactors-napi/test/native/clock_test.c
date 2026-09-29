@@ -41,7 +41,7 @@ static void record_arm(tna_system *system, ta_time delay, void *context) {
 
 static tna_system *make_system(tna_clock_kind kind, ta_time initial) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(0, &system) == TA_OK);
+    CHECK(tna_system_create(&(tna_system_create_params){ 0 }, &system) == TA_OK);
     system->wake = no_wake;
     system->clock.now = read_fake;
     system->clock.arm = record_arm;

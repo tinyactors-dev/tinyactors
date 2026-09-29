@@ -14,10 +14,15 @@
 #include "timer.h"
 #include "trace.h"
 
-/* How many empty event blocks a new system keeps for reuse (ADR 0064): one
- * per interpreter that can run at once, nested exits included (ADR 0060).
- * ta_system_set_event_block_cache() changes it (ADR 0069). */
-#define TA_EVENT_BLOCK_CACHE_DEFAULT 4u
+/*
+ * A nested interpreter's memory (ADR 0092 section 3): its structural region
+ * and its render area, one allocation made the first time an invocation is
+ * cancelled at this depth, then kept for reuse until the system goes.
+ */
+typedef struct {
+    void *memory;
+    size_t bytes;
+} ta_nested_region;
 
 /* The input log's staging buffer (ADR 0090 section 5): header, fields,
  * chunk frames and windows of rendered text pass through it. */
@@ -87,9 +92,21 @@ struct ta_system {
     uint64_t offload_token;
     /* Every definition's counters, freed ones included (ADR 0072). */
     ta_counters counters;
-    /* Microsteps one macrostep may run, for definitions that set none (ADR
-     * 0075); 0 for no limit. */
-    uint32_t microstep_limit;
+    /* The system's parameters (ADR 0092), fixed at creation. */
+    uint32_t params[TA_PARAM_COUNT];
+    /* Live actors and definitions, for their quotas (ADR 0092 section 4). */
+    uint32_t live_actors;
+    uint32_t live_definitions;
+    /*
+     * The memory allocated at creation for the buffers every run needs (ADR
+     * 0092 section 3): interpreter region 0 and its render area, and the
+     * table of nested regions. `scratch` and `render` are arenas over it
+     * that never grow.
+     */
+    void *arena_memory;
+    size_t arena_bytes;
+    ta_arena render;
+    ta_nested_region *nested; /* interpreterNesting - 1 entries */
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
@@ -133,6 +150,14 @@ struct ta_system {
  * unknown or stale ID.
  */
 ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
+/*
+ * A nested interpreter's two arenas (ADR 0092 section 3): region `depth`,
+ * from 1, allocated the first time it is needed and kept. TA_ERR_UNSUPPORTED
+ * past interpreterNesting, TA_ERR_NOMEM when it cannot be allocated.
+ */
+ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *scratch, ta_arena *render);
+/* False, counting the refusal, when a new actor would pass maxActors. */
+bool ta_system_quota_actor(ta_system *system);
 /* Frees a registered definition and its slot if nothing holds or uses it,
  * and what that frees in turn (ADR 0077). */
 void ta_system_settle_definition(ta_system *system, ta_definition *definition);

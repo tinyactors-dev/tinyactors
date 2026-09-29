@@ -803,6 +803,22 @@ static void ta_block_settle(ta_system *system, ta_actor *actor) {
     ta_block_free(system, block);
 }
 
+ta_result ta_interpreter_block_cache_fill(ta_system *system) {
+    while (system->block_cache_count < system->block_cache_limit) {
+        ta_event_block *block = ta_mem_alloc(system->allocator, ta_event_block_bytes(TA_EVENT_BLOCK_QUEUE_INITIAL),
+                                             _Alignof(ta_event_block));
+        if (block == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        block->capacity = TA_EVENT_BLOCK_QUEUE_INITIAL;
+        block->count = 0;
+        block->next_cached = system->block_cache;
+        system->block_cache = block;
+        system->block_cache_count += 1u;
+    }
+    return TA_OK;
+}
+
 void ta_interpreter_block_cache_trim(ta_system *system) {
     while (system->block_cache_count > system->block_cache_limit) {
         ta_event_block *block = system->block_cache;
@@ -1602,6 +1618,16 @@ static void ta_send_state_release(ta_send_state *state) {
     ta_scxml_target_release(&state->scxml);
 }
 
+/*
+ * A content-sized temporary that does not fit the render area (ADR 0092
+ * section 3): an execution error that names the parameter, and fails the
+ * same way for the same content, where the arena used to grow.
+ */
+void ta_interpreter_render_fault(ta_fault *fault) {
+    static const char text[] = "the render area is full (renderBytes)";
+    *fault = (ta_fault){ .code = TA_ERR_NOMEM, .message = { .ptr = text, .len = (uint32_t)(sizeof text - 1u) } };
+}
+
 static ta_result ta_send_payload(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                  ta_fault *fault) {
     if (!state->scxml_io && send->data.kind == TA_VALUE_SOURCE_CONTENT) {
@@ -1624,10 +1650,11 @@ static ta_result ta_send_payload(ta_interpreter *it, const ta_send_action *send,
     if (v->make_params == NULL) {
         return TA_EXEC_FAILED;
     }
-    ta_named_value *values = ta_arena_alloc(&it->system->scratch, send->params.length * sizeof(ta_named_value),
+    ta_named_value *values = ta_arena_alloc(&it->system->render, send->params.length * sizeof(ta_named_value),
                                             _Alignof(ta_named_value));
     if (values == NULL) {
-        return TA_ERR_NOMEM;
+        ta_interpreter_render_fault(fault);
+        return TA_EXEC_FAILED;
     }
     uint32_t evaluated = 0;
     ta_op_status status = TA_OP_OK;
@@ -2021,6 +2048,20 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         state->sent = result == TA_OK;
         return result;
     }
+    if (state->delay != 0 && actor->sparse != NULL &&
+        actor->sparse->timers.count >= system->params[TA_PARAM_MAX_PENDING_SENDS]) {
+        /* A quota (ADR 0092 section 4): the send is not made, and the
+         * sender hears it as an execution error. */
+        ta_value_release(&record.data);
+        ta_value_release(&record.target);
+        ta_actor_ref_release(&record.destination);
+        system->counters.quota_refusals += 1u;
+        static const char text[] = "too many pending delayed sends (maxPendingSends)";
+        ta_fault fault = { .code = TA_ERR_NOMEM, .message = { .ptr = text, .len = (uint32_t)(sizeof text - 1u) } };
+        ta_result raised = ta_execution_error(it, &fault);
+        state->sent = false;
+        return raised == TA_EXEC_FAILED ? TA_OK : raised;
+    }
     if (state->delay == 0) {
         ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record, true);
         if (submitted != TA_EXTERNAL_EVENT_RETRY) {
@@ -2381,6 +2422,9 @@ static bool ta_exec_should_pause(const ta_interpreter *it, uint32_t floor) {
  * never runs twice because its error could not be queued.
  */
 static ta_result ta_unit_reserve(ta_interpreter *it, const ta_action_def *action) {
+    /* Content-sized temporaries live for one unit (ADR 0092 section 3): a
+     * <foreach> of many sends reuses the render area instead of filling it. */
+    ta_arena_reset(&it->system->render);
     ta_result result = ta_queue_room(it->system, it->actor);
     if (result == TA_OK && action != NULL && action->kind == TA_ACTION_SEND &&
         action->as.send.delay.kind != TA_DELAY_SOURCE_NONE && it->actor->published) {
@@ -3015,10 +3059,13 @@ static ta_result ta_raise_done(ta_interpreter *it, ta_state_id state, ta_value *
 static ta_result ta_done_data_params(ta_interpreter *it, ta_span32 params, ta_value *out) {
     const ta_definition *definition = it->definition;
     const ta_datamodel_vtable *v = definition->datamodel.v;
-    ta_named_value *values = ta_arena_alloc(&it->system->scratch, params.length * sizeof(ta_named_value),
+    ta_named_value *values = ta_arena_alloc(&it->system->render, params.length * sizeof(ta_named_value),
                                             _Alignof(ta_named_value));
     if (values == NULL) {
-        return TA_ERR_NOMEM;
+        ta_fault full = {0};
+        ta_interpreter_render_fault(&full);
+        ta_result raised = ta_execution_error(it, &full);
+        return raised == TA_EXEC_FAILED ? TA_OK : raised;
     }
     uint32_t count = 0;
     ta_result result = TA_OK;
@@ -3951,11 +3998,50 @@ static void ta_stop_drop(ta_interpreter *it) {
     }
 }
 
+/* One allocation of ta_interpreter_init, added to a running size the way
+ * an arena lays it out. */
+static void ta_need_take(size_t *at, size_t size, size_t alignment) {
+    *at = TA_ALIGN_UP(*at, alignment) + size;
+}
+
+/*
+ * The bytes of interpreter scratch a definition needs (ADR 0092 section 3):
+ * everything ta_interpreter_init takes, in its order and alignment, with
+ * both trace buffers, whether or not a sink wants them. The compiler checks
+ * it against interpreterBytes, so a definition that registers never runs
+ * out of structural scratch.
+ */
+size_t ta_interpreter_scratch_need(const ta_definition *definition) {
+    /* Positions are counted from the block's data, which starts aligned to
+     * the block's own alignment, as ta_arena_init_fixed lays it out. */
+    size_t start = offsetof(ta_arena_block, data);
+    size_t at = start;
+    uint32_t words = ta_bits_words(definition->state_count);
+    for (uint32_t index = 0; index < 11u; index += 1u) {
+        ta_need_take(&at, (size_t)words * sizeof(uint64_t), _Alignof(uint64_t));
+    }
+    size_t capacity = (size_t)definition->state_count + 1u;
+    ta_need_take(&at, capacity * sizeof(ta_state_id), _Alignof(ta_state_id));
+    ta_need_take(&at, capacity * sizeof(ta_transition_id), _Alignof(ta_transition_id));
+    ta_need_take(&at, capacity * sizeof(ta_transition_id), _Alignof(ta_transition_id));
+    ta_need_take(&at, capacity * sizeof(bool), _Alignof(bool));
+    ta_need_take(&at, (size_t)ta_entry_capacity(definition) * sizeof(struct ta_entry_frame),
+                 _Alignof(struct ta_entry_frame));
+    ta_need_take(&at, ((size_t)definition->history.slot_count + 1u) * sizeof(ta_state_id), _Alignof(ta_state_id));
+    ta_need_take(&at, (size_t)ta_exec_capacity(definition) * sizeof(ta_exec_frame), _Alignof(ta_exec_frame));
+    ta_need_take(&at, (size_t)ta_decl_words(definition) * sizeof(uint64_t), _Alignof(uint64_t));
+    ta_need_take(&at, (3u * (size_t)definition->state_count + 1u) * sizeof(ta_state_id), _Alignof(ta_state_id));
+    ta_need_take(&at, ((size_t)ta_trace_guard_capacity(definition) + 1u) * sizeof(struct ta_trace_condition),
+                 _Alignof(struct ta_trace_condition));
+    return at - start;
+}
+
 static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
     uint32_t words = ta_bits_words(definition->state_count);
     *it = (ta_interpreter){ .system = system, .actor = actor, .definition = definition, .words = words };
     ta_arena_reset(&system->scratch);
+    ta_arena_reset(&system->render);
     uint64_t **sets[] = {
         &it->active, &it->to_exit, &it->to_enter, &it->default_entry,
         &it->domain_targets, &it->entry_targets, &it->exit_left, &it->exit_right,
@@ -4137,7 +4223,7 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
     }
     it->pausable = true;
     it->action_budget = params->action_budget;
-    uint32_t limit = actor->definition->microstep_limit == 0 ? system->microstep_limit
+    uint32_t limit = actor->definition->microstep_limit == 0 ? system->params[TA_PARAM_MICROSTEP_LIMIT]
                                                             : actor->definition->microstep_limit;
     it->microstep_limit = params->no_microstep_limit || limit == TA_MICROSTEP_LIMIT_NONE ? 0 : limit;
     it->pause_at_start = params->pause_at_microstep_start;
@@ -4179,6 +4265,7 @@ typedef struct {
     ta_actor *actor;
     ta_interpreter it;
     ta_arena arena;
+    ta_arena render;
     ta_state_id next;     /* states left to exit: those below `next`, highest first */
     ta_state_id exiting;  /* the state whose invocations are being cancelled */
     uint32_t cursor;      /* its invocations left: those below `cursor` */
@@ -4187,10 +4274,12 @@ typedef struct {
 } ta_exit_frame;
 
 /*
- * Starts exiting a session: a scratch arena of its own, so the interpreter
- * that cancelled it keeps its scratch, and an interpreter over it. Nothing
- * happens when the session is gone or finished, or when there is no memory
- * to exit it with.
+ * Starts exiting a session: a nested interpreter region of its own (ADR
+ * 0092 section 3), region `frames->count + 1`, so the interpreter that
+ * cancelled it keeps its scratch, and an interpreter over it. The region is
+ * allocated the first time an exit reaches this depth, and kept. Nothing
+ * happens when the session is gone or finished, when the depth passes
+ * interpreterNesting, or when there is no memory for the region.
  */
 static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
     ta_actor *actor = ta_actor_lookup(system, id);
@@ -4198,24 +4287,27 @@ static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
         return;
     }
     ta_exit_frame frame = { .actor = actor, .exiting = TA_STATE_NONE };
-    if (ta_arena_init(&frame.arena, system->allocator, system->scratch.block_size) != TA_OK) {
+    if (ta_system_nested_region(system, frames->count + 1u, &frame.arena, &frame.render) != TA_OK) {
         return;
     }
     ta_arena previous = system->scratch;
+    ta_arena previous_render = system->render;
     system->scratch = frame.arena;
+    system->render = frame.render;
     ta_result result = ta_interpreter_init(&frame.it, system, actor);
     /* A session stopped inside a microstep exits its live set; the rest of
      * the stop is dropped (ADR 0061 section 6). */
     ta_stop_drop(&frame.it);
     frame.arena = system->scratch;
+    frame.render = system->render;
     frame.next = actor->definition->state_count;
     if (result == TA_OK) {
         result = ta_vec_push(frames, &frame);
     }
     if (result != TA_OK) {
         actor->live_active = NULL;
-        ta_arena_destroy(&frame.arena);
         system->scratch = previous;
+        system->render = previous_render;
     }
 }
 
@@ -4231,6 +4323,7 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
         frame->waiting = false;
         ta_invoke_cancel_service(&frame->taken);
         frame->arena = system->scratch;
+        frame->render = system->render;
         return;
     }
     if (frame->exiting != TA_STATE_NONE) {
@@ -4239,18 +4332,23 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
             frame->exiting = TA_STATE_NONE;
             it->at = (ta_micro_position){0};
             frame->arena = system->scratch;
+            frame->render = system->render;
+        frame->render = system->render;
             return;
         }
         ta_interpreter_trace_invoke(it, TA_TRACE_INVOKE_CANCELLED, frame->taken.active.id);
         if (frame->taken.meta.has_child) {
             frame->waiting = true;
             frame->arena = system->scratch;
+            frame->render = system->render;
+        frame->render = system->render;
             ta_exit_open(system, frames, frame->taken.meta.child); /* may move `frame` */
             return;
         } else {
             ta_invoke_cancel_service(&frame->taken);
         }
         frame->arena = system->scratch;
+        frame->render = system->render;
         return;
     }
     while (frame->next > 0 && !ta_bits_get(it->active, frame->next - 1u)) {
@@ -4259,7 +4357,7 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
     if (frame->next == 0) {
         ta_store_active(it);
         frame->actor->live_active = NULL;
-        ta_arena_destroy(&system->scratch);
+        /* The region stays allocated for the next exit this deep. */
         frames->count -= 1u;
         return;
     }
@@ -4268,6 +4366,7 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
     it->at = (ta_micro_position){ .phase = TA_PHASE_EXIT, .state = state + 1u };
     ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
     frame->arena = system->scratch;
+    frame->render = system->render;
     if (result != TA_OK) {
         /* Nothing continues an exit: a block that ran out of memory left its
          * frames open for a stop, and they are dropped. */
@@ -4285,16 +4384,19 @@ void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id) {
     /* Cancelling an invocation happens inside the parent's interpreter:
      * every exited session gets its own scratch, and the parent's comes back. */
     ta_arena outer = system->scratch;
+    ta_arena outer_render = system->render;
     ta_vec frames;
     ta_vec_init(&frames, system->allocator, TA_VEC_LAYOUT(ta_exit_frame));
     ta_exit_open(system, &frames, id);
     while (frames.count != 0) {
         ta_exit_frame *frame = ta_vec_at(&frames, frames.count - 1u);
         system->scratch = frame->arena;
+        system->render = frame->render;
         ta_exit_step(system, &frames);
     }
     ta_vec_destroy(&frames);
     system->scratch = outer;
+    system->render = outer_render;
 }
 
 /* ------------------------------------------------------------------------

@@ -11,7 +11,7 @@ static ta_str text_of(const char *text) {
 
 static void interns_once_and_formats_back(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(0, &system) == TA_OK);
+    CHECK(tna_system_create(&(tna_system_create_params){ 0 }, &system) == TA_OK);
     ta_event_name_id first = 0;
     ta_event_name_id again = 0;
     ta_event_name_id other = 0;
@@ -36,7 +36,7 @@ static void interns_once_and_formats_back(void) {
 
 static void refuses_malformed_names(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(0, &system) == TA_OK);
+    CHECK(tna_system_create(&(tna_system_create_params){ 0 }, &system) == TA_OK);
     ta_event_name_id id = 0;
     const char *bad[] = { "", ".", "a..b", ".a", "a." };
     for (size_t index = 0; index < sizeof bad / sizeof bad[0]; index += 1) {

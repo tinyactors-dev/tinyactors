@@ -13,10 +13,181 @@ static ta_str ta_cstr(const char *text) {
     return out;
 }
 
+/* ------------------------------------------------------------------------
+ * System parameters (ADR 0092)
+ */
+
+typedef struct {
+    const char *name;
+    const char *unit;
+    uint32_t default_value;
+    uint32_t min;
+    uint32_t max;
+} ta_param_row;
+
+/* One row per ta_param, in its order. The bounds are the only ones: no
+ * other code checks a parameter again. */
+static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
+    [TA_PARAM_MICROSTEP_LIMIT] = { "microstepLimit", "microsteps", TA_PARAM_DEFAULT_MICROSTEP_LIMIT, 0, 2147483647u },
+    [TA_PARAM_EVENT_BLOCK_CACHE] = { "eventBlockCache", "blocks", TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, 0, 65536u },
+    [TA_PARAM_EVENT_NAME_DEPTH] = { "eventNameDepth", "segments", TA_PARAM_DEFAULT_EVENT_NAME_DEPTH, 8,
+                                    TA_EVENT_NAME_MAX_DEPTH },
+    [TA_PARAM_COMPILE_MESSAGE_BYTES] = { "compileMessageBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES, 16,
+                                         65536u },
+    [TA_PARAM_COMPILE_NEAREST_BYTES] = { "compileNearestBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_NEAREST_BYTES, 0,
+                                         65536u },
+    [TA_PARAM_INTERPRETER_BYTES] = { "interpreterBytes", "bytes", TA_PARAM_DEFAULT_INTERPRETER_BYTES, 1024,
+                                     1073741824u },
+    [TA_PARAM_RENDER_BYTES] = { "renderBytes", "bytes", TA_PARAM_DEFAULT_RENDER_BYTES, 256, 1073741824u },
+    [TA_PARAM_INTERPRETER_NESTING] = { "interpreterNesting", "interpreters", TA_PARAM_DEFAULT_INTERPRETER_NESTING, 1,
+                                       64 },
+    [TA_PARAM_MAX_ACTORS] = { "maxActors", "actors", TA_PARAM_DEFAULT_MAX_ACTORS, 1, 2147483647u },
+    [TA_PARAM_MAX_PENDING_SENDS] = { "maxPendingSends", "sends", TA_PARAM_DEFAULT_MAX_PENDING_SENDS, 1, 2147483647u },
+    [TA_PARAM_MAX_DEFINITIONS] = { "maxDefinitions", "definitions", TA_PARAM_DEFAULT_MAX_DEFINITIONS, 1, 2147483647u },
+};
+
+ta_result ta_param_info_of(ta_param param, ta_param_info *out) {
+    if (out == NULL || (uint32_t)param >= (uint32_t)TA_PARAM_COUNT) {
+        return TA_ERR_INVALID;
+    }
+    const ta_param_row *row = &ta_param_rows[param];
+    *out = (ta_param_info){ .name = ta_cstr(row->name),
+                            .default_value = row->default_value,
+                            .min = row->min,
+                            .max = row->max,
+                            .unit = ta_cstr(row->unit) };
+    return TA_OK;
+}
+
+ta_result ta_system_param(const ta_system *system, ta_param param, uint64_t *out) {
+    if (system == NULL || out == NULL || (uint32_t)param >= (uint32_t)TA_PARAM_COUNT) {
+        return TA_ERR_INVALID;
+    }
+    *out = system->params[param];
+    return TA_OK;
+}
+
+/* Every parameter's value: the defaults, then the config's, each checked
+ * against its bounds once. TA_ERR_INVALID names the parameter at fault. */
+static ta_result ta_params_resolve(const ta_system_config *config, uint32_t values[TA_PARAM_COUNT]) {
+    bool given[TA_PARAM_COUNT] = { false };
+    for (uint32_t index = 0; index < (uint32_t)TA_PARAM_COUNT; index += 1u) {
+        values[index] = ta_param_rows[index].default_value;
+    }
+    if (config->param_count != 0 && config->params == NULL) {
+        return TA_ERR_INVALID;
+    }
+    for (uint32_t index = 0; index < config->param_count; index += 1u) {
+        const ta_param_value *value = &config->params[index];
+        uint32_t param = (uint32_t)value->param;
+        if (param >= (uint32_t)TA_PARAM_COUNT) {
+            return TA_ERR_INVALID;
+        }
+        const ta_param_row *row = &ta_param_rows[param];
+        if (given[param] || value->value < row->min || value->value > row->max) {
+            if (config->rejected != NULL) {
+                *config->rejected = value->param;
+            }
+            return TA_ERR_INVALID;
+        }
+        given[param] = true;
+        values[param] = (uint32_t)value->value;
+    }
+    return TA_OK;
+}
+
+/* Bytes of one interpreter: its structural region and its render area,
+ * each a fixed arena, the render area starting aligned. */
+static size_t ta_interpreter_region_bytes(const uint32_t params[TA_PARAM_COUNT]) {
+    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(params[TA_PARAM_INTERPRETER_BYTES]),
+                                    (size_t)_Alignof(ta_arena_block));
+    return structural + ta_arena_fixed_bytes(params[TA_PARAM_RENDER_BYTES]);
+}
+
+/* Lays a region's two fixed arenas over its memory. */
+static void ta_interpreter_region_open(const ta_system *system, void *memory, ta_arena *scratch, ta_arena *render) {
+    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(system->params[TA_PARAM_INTERPRETER_BYTES]),
+                                    (size_t)_Alignof(ta_arena_block));
+    ta_arena_init_fixed(scratch, memory, structural);
+    ta_arena_init_fixed(render, (unsigned char *)memory + structural,
+                        ta_arena_fixed_bytes(system->params[TA_PARAM_RENDER_BYTES]));
+}
+
+ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *scratch, ta_arena *render) {
+    if (depth == 0 || depth >= system->params[TA_PARAM_INTERPRETER_NESTING]) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    ta_nested_region *region = &system->nested[depth - 1u];
+    if (region->memory == NULL) {
+        size_t bytes = ta_interpreter_region_bytes(system->params);
+        region->memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+        if (region->memory == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        region->bytes = bytes;
+    }
+    ta_interpreter_region_open(system, region->memory, scratch, render);
+    return TA_OK;
+}
+
+/*
+ * The memory every run needs, allocated once (ADR 0092 section 3):
+ * interpreter region 0 with its render area, then the table of nested
+ * regions; and the event-block cache, filled to its parameter.
+ */
+static ta_result ta_system_arena_open(ta_system *system) {
+    size_t region = ta_interpreter_region_bytes(system->params);
+    size_t nested = (size_t)(system->params[TA_PARAM_INTERPRETER_NESTING] - 1u) * sizeof(ta_nested_region);
+    size_t bytes = TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)) + nested;
+    system->arena_memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+    if (system->arena_memory == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    system->arena_bytes = bytes;
+    ta_interpreter_region_open(system, system->arena_memory, &system->scratch, &system->render);
+    system->nested = (ta_nested_region *)((unsigned char *)system->arena_memory +
+                                          TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)));
+    for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
+        system->nested[index] = (ta_nested_region){ 0 };
+    }
+    return ta_interpreter_block_cache_fill(system);
+}
+
+static void ta_system_arena_close(ta_system *system) {
+    if (system->arena_memory == NULL) {
+        return;
+    }
+    for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
+        ta_nested_region *region = &system->nested[index];
+        if (region->memory != NULL) {
+            ta_mem_free(system->allocator, region->memory,
+                        &(ta_allocator_free_params){ .size = region->bytes, .alignment = _Alignof(ta_arena_block) });
+        }
+    }
+    ta_mem_free(system->allocator, system->arena_memory,
+                &(ta_allocator_free_params){ .size = system->arena_bytes, .alignment = _Alignof(ta_arena_block) });
+    system->arena_memory = NULL;
+    system->scratch = (ta_arena){ 0 };
+    system->render = (ta_arena){ 0 };
+}
+
+bool ta_system_quota_actor(ta_system *system) {
+    if (system->live_actors >= system->params[TA_PARAM_MAX_ACTORS]) {
+        system->counters.quota_refusals += 1u;
+        return false;
+    }
+    return true;
+}
+
 ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     if (config == NULL || out == NULL || config->allocator.v == NULL ||
         config->allocator.v->alloc == NULL || config->allocator.v->free == NULL) {
         return TA_ERR_INVALID;
+    }
+    uint32_t params[TA_PARAM_COUNT];
+    ta_result resolved = ta_params_resolve(config, params);
+    if (resolved != TA_OK) {
+        return resolved;
     }
     ta_system *system = ta_mem_alloc(config->allocator, sizeof(ta_system), _Alignof(ta_system));
     if (system == NULL) {
@@ -24,9 +195,10 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     }
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
-                           .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT,
+                           .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
                            .trace = ta_null_trace_sink(),
                            .definition_sink = ta_null_definition_sink() };
+    ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
@@ -51,10 +223,11 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     }
     result = ta_event_name_table_init(&system->event_names, config->allocator, &system->atoms);
     if (result == TA_OK) {
+        system->event_names.max_depth = params[TA_PARAM_EVENT_NAME_DEPTH];
         result = ta_timer_heap_init(&system->timers, config->allocator);
     }
     if (result == TA_OK) {
-        result = ta_arena_init(&system->scratch, config->allocator, 4096);
+        result = ta_system_arena_open(system);
     }
     if (result == TA_OK) {
         result = ta_atom_intern(&system->atoms, ta_cstr(TA_SCXML_IO_URI), &system->scxml_io_type);
@@ -108,9 +281,9 @@ void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
     ta_vec_destroy(&system->logged_families);
-    ta_arena_destroy(&system->scratch);
     system->block_cache_limit = 0;
     ta_interpreter_block_cache_trim(system);
+    ta_system_arena_close(system);
     ta_interpreter_release_spares(system);
     /* Unloaded sessions hold addresses; give them back before the table goes. */
     ta_session_table_destroy(&system->sessions);
@@ -191,15 +364,6 @@ void ta_system_tell_definition(ta_system *system, const ta_definition *definitio
     }
     ta_definition_event event = { .kind = kind, .definition = definition->id, .identity = definition->identity };
     system->definition_sink.v->notify(system->definition_sink.self, &event);
-}
-
-ta_result ta_system_set_event_block_cache(ta_system *system, uint32_t blocks) {
-    if (system == NULL) {
-        return TA_ERR_INVALID;
-    }
-    system->block_cache_limit = blocks;
-    ta_interpreter_block_cache_trim(system);
-    return TA_OK;
 }
 
 ta_result ta_system_set_external_event_router(ta_system *system, ta_external_event_router router) {
@@ -316,6 +480,11 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
         ta_definition_destroy(definition);
         return TA_OK;
     }
+    if (system->live_definitions >= system->params[TA_PARAM_MAX_DEFINITIONS]) {
+        /* A quota, answered as an allocator that ran out (ADR 0092 section 4). */
+        system->counters.quota_refusals += 1u;
+        return TA_ERR_NOMEM;
+    }
     uint32_t slot = system->free_definition_slot;
     if (slot == UINT32_MAX) {
         ta_definition_slot fresh = { .generation = 1, .next_free = UINT32_MAX };
@@ -339,6 +508,7 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
     }
     entry->definition = definition;
     entry->next_free = UINT32_MAX;
+    system->live_definitions += 1u;
     if (definition->unregistered_previous != NULL) {
         definition->unregistered_previous->unregistered_next = definition->unregistered_next;
     } else {
@@ -418,6 +588,7 @@ void ta_system_settle_definition(ta_system *system, ta_definition *definition) {
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
         /* The slot's next occupant gets a new generation, so this ID goes stale. */
         entry->definition = NULL;
+        system->live_definitions -= 1u;
         entry->generation += 1u;
         entry->next_free = system->free_definition_slot;
         system->free_definition_slot = slot;
@@ -785,12 +956,6 @@ ta_result ta_definition_counters(const ta_system *system, ta_definition_id defin
     }
     *out = found->counters;
     return TA_OK;
-}
-
-void ta_system_set_microstep_limit(ta_system *system, uint32_t limit) {
-    if (system != NULL) {
-        system->microstep_limit = limit;
-    }
 }
 
 ta_result ta_definition_set_microstep_limit(ta_system *system, ta_definition_id definition, uint32_t limit) {

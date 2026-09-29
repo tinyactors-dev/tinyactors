@@ -132,13 +132,6 @@
       "value": 4294967295
     },
     {
-      "name": "TA_COMPILE_ERROR_MESSAGE_MAX",
-      "type": {
-        "builtin": "uint32_t"
-      },
-      "value": 256
-    },
-    {
       "name": "TA_COMPILE_ERROR_TEXT_MAX",
       "type": {
         "builtin": "uint32_t"
@@ -5097,11 +5090,18 @@
             "builtin": "uint64_t"
           },
           "doc": "a macrostep reached its microstep limit (ADR 0075)"
+        },
+        {
+          "name": "quota_refusals",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "a spawn, a delayed send or a registration a quota refused (ADR 0092)"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 184,
+          "size": 192,
           "align": 8,
           "offsets": {
             "spawned": 0,
@@ -5126,11 +5126,12 @@
             "runs_paused": 152,
             "runs_stopped": 160,
             "macrosteps_long": 168,
-            "runaways": 176
+            "runaways": 176,
+            "quota_refusals": 184
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 184,
+          "size": 192,
           "align": 8,
           "offsets": {
             "spawned": 0,
@@ -5155,7 +5156,8 @@
             "runs_paused": 152,
             "runs_stopped": 160,
             "macrosteps_long": 168,
-            "runaways": 176
+            "runaways": 176,
+            "quota_refusals": 184
           }
         }
       }
@@ -5974,6 +5976,7 @@
     },
     "ta_datamodel_init_instance_params": {
       "kind": "struct",
+      "doc": "Core keeps at most TA_PARAM_COMPILE_MESSAGE_BYTES of a rejection's message (ADR 0092), cut at a UTF-8 boundary.",
       "fields": [
         {
           "name": "shared",
@@ -12672,6 +12675,167 @@
         }
       }
     },
+    "ta_param": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_PARAM_MICROSTEP_LIMIT",
+          "value": 0,
+          "symbol": "microstep_limit",
+          "doc": "microsteps per macrostep before a runaway (ADR 0075); 0: none"
+        },
+        {
+          "name": "TA_PARAM_EVENT_BLOCK_CACHE",
+          "value": 1,
+          "symbol": "event_block_cache",
+          "doc": "empty event blocks kept for reuse (ADR 0069), created at creation"
+        },
+        {
+          "name": "TA_PARAM_EVENT_NAME_DEPTH",
+          "value": 2,
+          "symbol": "event_name_depth",
+          "doc": "segments an event name may have; at most 64"
+        },
+        {
+          "name": "TA_PARAM_COMPILE_MESSAGE_BYTES",
+          "value": 3,
+          "symbol": "compile_message_bytes",
+          "doc": "bytes kept of a data model's rejection message (ADR 0058)"
+        },
+        {
+          "name": "TA_PARAM_COMPILE_NEAREST_BYTES",
+          "value": 4,
+          "symbol": "compile_nearest_bytes",
+          "doc": "longest unknown target that gets a nearest-name suggestion"
+        },
+        {
+          "name": "TA_PARAM_INTERPRETER_BYTES",
+          "value": 5,
+          "symbol": "interpreter_bytes",
+          "doc": "one interpreter's frames and sets, what a chart's structure needs"
+        },
+        {
+          "name": "TA_PARAM_RENDER_BYTES",
+          "value": 6,
+          "symbol": "render_bytes",
+          "doc": "one interpreter's temporaries whose size depends on content (ADR 0068)"
+        },
+        {
+          "name": "TA_PARAM_INTERPRETER_NESTING",
+          "value": 7,
+          "symbol": "interpreter_nesting",
+          "doc": "interpreters that may run inside one another (ADR 0060)"
+        },
+        {
+          "name": "TA_PARAM_MAX_ACTORS",
+          "value": 8,
+          "symbol": "max_actors",
+          "doc": "quota: live actors"
+        },
+        {
+          "name": "TA_PARAM_MAX_PENDING_SENDS",
+          "value": 9,
+          "symbol": "max_pending_sends",
+          "doc": "quota: pending delayed sends of one actor"
+        },
+        {
+          "name": "TA_PARAM_MAX_DEFINITIONS",
+          "value": 10,
+          "symbol": "max_definitions",
+          "doc": "quota: live definitions"
+        },
+        {
+          "name": "TA_PARAM_COUNT",
+          "value": 11,
+          "symbol": "count"
+        }
+      ],
+      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\nSystem parameters (ADR 0092): each is set once, when the system is created, and never changes. A parameter bounds a limit or a buffer; the buffers every run needs are allocated at creation (interpreter region 0, the render area, the event-block cache), the ones only nested interpreters need on first use, up to their bound. ta_param_info_of() gives each one's name, default, bounds and unit; names are lowerCamelCase, for hosts to use as they are.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_param_default": {
+      "kind": "enum",
+      "underlying": {
+        "builtin": "uint32_t"
+      },
+      "constants": [
+        {
+          "name": "TA_PARAM_DEFAULT_MICROSTEP_LIMIT",
+          "value": 100000,
+          "symbol": "microstep_limit"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE",
+          "value": 4,
+          "symbol": "event_block_cache"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_EVENT_NAME_DEPTH",
+          "value": 64,
+          "symbol": "event_name_depth"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES",
+          "value": 256,
+          "symbol": "compile_message_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_COMPILE_NEAREST_BYTES",
+          "value": 128,
+          "symbol": "compile_nearest_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_INTERPRETER_BYTES",
+          "value": 262144,
+          "symbol": "interpreter_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_RENDER_BYTES",
+          "value": 16384,
+          "symbol": "render_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_INTERPRETER_NESTING",
+          "value": 4,
+          "symbol": "interpreter_nesting"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_MAX_ACTORS",
+          "value": 2147483647,
+          "symbol": "max_actors"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_MAX_PENDING_SENDS",
+          "value": 2147483647,
+          "symbol": "max_pending_sends"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_MAX_DEFINITIONS",
+          "value": 2147483647,
+          "symbol": "max_definitions"
+        }
+      ],
+      "doc": "The built-in defaults (ADR 0092 rule 4); ta_param_info_of() reports them too.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
     "ta_param_id": {
       "kind": "alias",
       "type": {
@@ -12685,6 +12849,100 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
+        }
+      }
+    },
+    "ta_param_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "default_value",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "min",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "max",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "unit",
+          "type": {
+            "type": "ta_str"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "default_value": 16,
+            "min": 24,
+            "max": 32,
+            "unit": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "default_value": 8,
+            "min": 16,
+            "max": 24,
+            "unit": 32
+          }
+        }
+      }
+    },
+    "ta_param_value": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "param",
+          "type": {
+            "type": "ta_param"
+          }
+        },
+        {
+          "name": "value",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "param": 0,
+            "value": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "param": 0,
+            "value": 8
+          }
         }
       }
     },
@@ -16020,7 +16278,7 @@
     },
     "ta_system_config": {
       "kind": "struct",
-      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.",
+      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\n`params` sets system parameters (ADR 0092); the rest keep their defaults. A value outside its bounds, an unknown parameter, or one listed twice is TA_ERR_INVALID, with `rejected` naming it when given, and nothing is created. TA_ERR_NOMEM: the buffers the parameters size could not be allocated.",
       "fields": [
         {
           "name": "allocator",
@@ -16039,25 +16297,63 @@
           "type": {
             "builtin": "uint64_t"
           }
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_param_value",
+              "const": true
+            }
+          },
+          "count": "param_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "param_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "params"
+        },
+        {
+          "name": "rejected",
+          "type": {
+            "pointer": {
+              "type": "ta_param"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
+          "size": 56,
           "align": 8,
           "offsets": {
             "allocator": 0,
             "initial_time": 16,
-            "incarnation": 24
+            "incarnation": 24,
+            "params": 32,
+            "param_count": 40,
+            "rejected": 48
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 40,
           "align": 8,
           "offsets": {
             "allocator": 0,
             "initial_time": 8,
-            "incarnation": 16
+            "incarnation": 16,
+            "params": 24,
+            "param_count": 28,
+            "rejected": 32
           }
         }
       }
@@ -19664,7 +19960,7 @@
     },
     {
       "name": "ta_actor_deliver",
-      "doc": "Offers an external event to a resident actor: the admission test (ADR 0055). The result alone tells a host what to do with the message, so it never needs to inspect the actor first: - TA_OK: accepted; the actor holds the event, so resume it. - TA_ERR_BUSY: the actor is inside a macrostep, including one paused by ta_actor_resume()'s budgets (ADR 0061), or already holds an event. Keep the message queued for this actor. - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or unloaded). The receiver is gone from here; drop or route the message. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; or an operator transition with no targets, an unknown state, targets that cannot form a legal configuration, or a source that is not active (ADR 0082). - TA_ERR_NOMEM: no memory for the event block the event would live in until its macrostep ends (ADR 0069), or for the operator transition. Keep the message and try again later; ta_system_set_event_block_cache() keeps blocks for reuse. On any result but TA_OK nothing is retained and the event is untouched. A malformed event or operator transition is TA_ERR_INVALID whatever the actor's state, except that whether its source is active is asked only of an actor that would otherwise accept it. A finished actor is TA_ERR_DONE, never TA_ERR_BUSY: finishing is permanent, so a host that kept a message queued would wait forever.",
+      "doc": "Offers an external event to a resident actor: the admission test (ADR 0055). The result alone tells a host what to do with the message, so it never needs to inspect the actor first: - TA_OK: accepted; the actor holds the event, so resume it. - TA_ERR_BUSY: the actor is inside a macrostep, including one paused by ta_actor_resume()'s budgets (ADR 0061), or already holds an event. Keep the message queued for this actor. - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or unloaded). The receiver is gone from here; drop or route the message. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; or an operator transition with no targets, an unknown state, targets that cannot form a legal configuration, or a source that is not active (ADR 0082). - TA_ERR_NOMEM: no memory for the event block the event would live in until its macrostep ends (ADR 0069), or for the operator transition. Keep the message and try again later; TA_PARAM_EVENT_BLOCK_CACHE keeps blocks for reuse. On any result but TA_OK nothing is retained and the event is untouched. A malformed event or operator transition is TA_ERR_INVALID whatever the actor's state, except that whether its source is active is asked only of an actor that would otherwise accept it. A finished actor is TA_ERR_DONE, never TA_ERR_BUSY: finishing is permanent, so a host that kept a message queued would wait forever.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -21054,6 +21350,39 @@
       ]
     },
     {
+      "name": "ta_param_info_of",
+      "doc": "A parameter's name, default, bounds and unit; TA_ERR_INVALID for an unknown one. The texts are core's constants, valid for as long as the program runs.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "param",
+          "type": {
+            "type": "ta_param"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_param_info"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "call"
+        }
+      ]
+    },
+    {
       "name": "ta_system_create",
       "public": true,
       "static_inline": false,
@@ -21146,8 +21475,8 @@
       ]
     },
     {
-      "name": "ta_system_set_event_block_cache",
-      "doc": "How many empty event blocks the system keeps for reuse (ADR 0064, ADR 0069); 4 when a system is created. An actor holds a block from ta_actor_deliver() until its macrostep ends, so a host that delivers a batch of events before it resumes the actors needs a cache as large as the batch for delivery to make no allocator call. The cache takes no memory until blocks are returned to it, and it keeps only small blocks, so it holds at most `blocks` of them. A smaller setting frees the cached blocks above it.",
+      "name": "ta_system_param",
+      "doc": "A system parameter's value (ADR 0092); TA_ERR_INVALID for an unknown one.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -21162,17 +21491,29 @@
           "name": "system",
           "type": {
             "pointer": {
-              "type": "ta_system"
+              "type": "ta_system",
+              "const": true
             }
           },
           "shape": "handle",
           "direction": "in"
         },
         {
-          "name": "blocks",
+          "name": "param",
           "type": {
-            "builtin": "uint32_t"
+            "type": "ta_param"
           }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "builtin": "uint64_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
         }
       ]
     },
@@ -21567,36 +21908,6 @@
           "name": "sink",
           "type": {
             "type": "ta_definition_sink"
-          }
-        }
-      ]
-    },
-    {
-      "name": "ta_system_set_microstep_limit",
-      "doc": "The microsteps one macrostep may run before ta_actor_resume() answers TA_ERR_RUNAWAY (ADR 0075), for definitions that set none of their own; 0 for no limit, the default. It applies from the next resume on.",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "builtin": "void"
-        }
-      },
-      "params": [
-        {
-          "name": "system",
-          "type": {
-            "pointer": {
-              "type": "ta_system"
-            }
-          },
-          "shape": "handle",
-          "direction": "in"
-        },
-        {
-          "name": "limit",
-          "type": {
-            "builtin": "uint32_t"
           }
         }
       ]

@@ -42,7 +42,7 @@ ta_result ta_event_name_child(ta_event_name_table *table,
         return TA_ERR_INVALID;
     }
     uint32_t depth = ta_event_name_node_at(table, parent)->depth + 1u;
-    if (depth > TA_EVENT_NAME_MAX_DEPTH) {
+    if (depth > table->max_depth) {
         return TA_ERR_INVALID;
     }
     uint32_t hash = ta_event_name_hash(parent, segment);
@@ -89,7 +89,7 @@ static ta_result ta_event_name_builtin(ta_event_name_table *table, const char *p
 ta_result ta_event_name_table_init(ta_event_name_table *table,
                                    ta_allocator allocator,
                                    ta_atom_table *atoms) {
-    *table = (ta_event_name_table){ .allocator = allocator, .atoms = atoms };
+    *table = (ta_event_name_table){ .allocator = allocator, .atoms = atoms, .max_depth = TA_EVENT_NAME_MAX_DEPTH };
     ta_vec_init(&table->nodes, allocator, TA_VEC_LAYOUT(ta_event_name_node));
     ta_event_name_node root = { .parent = TA_EVENT_NAME_ROOT, .segment = TA_ATOM_NONE };
     ta_result result = ta_vec_push(&table->nodes, &root);
@@ -127,7 +127,7 @@ ta_result ta_event_name_intern_atoms_internal(ta_event_name_table *table,
                                               const ta_atom_list *segments,
                                               ta_event_name_id *out) {
     if (segments == NULL || segments->count == 0 || segments->atoms == NULL ||
-        segments->count > TA_EVENT_NAME_MAX_DEPTH) {
+        segments->count > table->max_depth) {
         return TA_ERR_INVALID;
     }
     for (uint32_t index = 0; index < segments->count; index += 1) {

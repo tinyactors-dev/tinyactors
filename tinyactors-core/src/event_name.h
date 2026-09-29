@@ -16,6 +16,9 @@ typedef struct {
     ta_vec nodes;
     uint32_t *buckets;
     uint32_t bucket_count;
+    /* Segments a name may have: the system's eventNameDepth (ADR 0092),
+     * at most TA_EVENT_NAME_MAX_DEPTH, which sizes callers' arrays. */
+    uint32_t max_depth;
 } ta_event_name_table;
 
 enum {
@@ -29,6 +32,7 @@ enum {
     TA_EVENT_NAME_DONE_INVOKE = 7u
 };
 
+/* The ceiling of eventNameDepth (ADR 0092): it sizes segment arrays. */
 #define TA_EVENT_NAME_MAX_DEPTH 64u
 
 ta_result ta_event_name_table_init(ta_event_name_table *table,

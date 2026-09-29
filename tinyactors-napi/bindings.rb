@@ -48,7 +48,6 @@ module TinyactorsNapiBindings
     'ta_actor_offload' => 'unload() offloads into the native offload store, which owns the bytes (core ADR 0074)',
     'ta_system_{dispatch_due,set_time}' => 'the clock belongs to the pump (ADR 0007)',
     'ta_system_set_{external_event_router,actor_directory}' => 'installed at system creation (ADR 0006)',
-    'ta_system_set_event_block_cache' => 'sized from scheduling.messageBudget at system creation (core ADR 0069)',
     'ta_system_register_{io,invoker}' => 'reached through hand-written registration (step 13)',
     'ta_system_set_log_sink' => 'reached through hand-written registration (step 13)',
     'ta_system_set_trace_sink' => 'installed by the tracing hook, which hands records to JavaScript (core ADR 0067)',

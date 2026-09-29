@@ -1228,11 +1228,18 @@ static double batch_allocations(ta_system *system, const ta_actor_id *actors, co
     return (double)counts->alloc_calls / (2.0 * DELIVERY_ROUNDS * DELIVERY_BATCH);
 }
 
-static void check_batched_delivery_allocations(void) {
+/* A system whose block cache holds `cache` blocks, created with it (core
+ * ADR 0092), with DELIVERY_BATCH actors of the batched chart; allocator
+ * calls per delivered event. `created_bytes` is what creation allocated. */
+static double batched_system(uint32_t cache, size_t *created_bytes) {
     counting_allocator counts = {.backing = tat_libc_allocator()};
     ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
     ta_system *system = NULL;
-    require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
+    ta_param_value params[] = {{.param = TA_PARAM_EVENT_BLOCK_CACHE, .value = cache}};
+    require(ta_system_create(&(ta_system_config){.allocator = allocator, .params = params, .param_count = 1},
+                             &system) == TA_OK,
+            "system creation");
+    *created_bytes = counts.live_bytes;
     ta_definition_id simple = register_revision(system, allocator, &(revision_spec){"batched", "v2", STATES_V2});
     ta_actor_id actors[DELIVERY_BATCH];
     for (unsigned index = 0; index < DELIVERY_BATCH; index += 1u) {
@@ -1240,17 +1247,23 @@ static void check_batched_delivery_allocations(void) {
                 "spawning an actor of the batch");
         run_to_stable(system, actors[index]);
     }
-    double small_cache = batch_allocations(system, actors, &counts);
-    require(ta_system_set_event_block_cache(system, DELIVERY_BATCH) == TA_OK, "sizing the block cache");
-    double sized_cache = batch_allocations(system, actors, &counts);
-    size_t cached_bytes = counts.live_bytes;
-    require(ta_system_set_event_block_cache(system, 0) == TA_OK, "emptying the block cache");
-    size_t block_bytes = (cached_bytes - counts.live_bytes) / DELIVERY_BATCH;
-    printf("allocator calls per event delivered in batches of %u: %.2f with the default block cache, %.2f with a "
-           "cache of %u; %zu bytes per cached block\n",
-           DELIVERY_BATCH, small_cache, sized_cache, DELIVERY_BATCH, block_bytes);
+    double calls = batch_allocations(system, actors, &counts);
     ta_system_destroy(system);
     require(counts.live_bytes == 0, "the batched system returned every byte it was given");
+    return calls;
+}
+
+static void check_batched_delivery_allocations(void) {
+    size_t default_bytes = 0;
+    size_t sized_bytes = 0;
+    size_t empty_bytes = 0;
+    double small_cache = batched_system(TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, &default_bytes);
+    double sized_cache = batched_system(DELIVERY_BATCH, &sized_bytes);
+    (void)batched_system(0, &empty_bytes);
+    size_t block_bytes = (sized_bytes - empty_bytes) / DELIVERY_BATCH;
+    printf("allocator calls per event delivered in batches of %u: %.2f with the default block cache, %.2f with a "
+           "cache of %u; %zu bytes per cached block, created with the system\n",
+           DELIVERY_BATCH, small_cache, sized_cache, DELIVERY_BATCH, block_bytes);
     require(small_cache > 0.9, "a batch larger than the default cache takes a block per delivery (ADR 0069)");
     require(sized_cache == 0.0, "a batch no larger than the block cache calls the allocator (ADR 0069)");
 }

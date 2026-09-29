@@ -133,6 +133,15 @@ struct ta_arena_block {
 
 /* Copies text into the arena. An empty string yields a non-null empty ta_str. */
 TA_PRIVATE ta_result ta_arena_copy_str(ta_arena *arena, ta_str text, ta_str *out);
+/*
+ * An arena over `bytes` of memory the caller owns, aligned for
+ * ta_arena_block, which never grows (ADR 0092): an allocation that does not
+ * fit answers NULL. Reset and destroy work as for any arena; destroy frees
+ * nothing, since the memory is the caller's.
+ */
+TA_PRIVATE void ta_arena_init_fixed(ta_arena *arena, void *memory, size_t bytes);
+/* Bytes one fixed arena needs to offer `capacity` bytes. */
+TA_PRIVATE size_t ta_arena_fixed_bytes(size_t capacity);
 /* Bytes the arena holds from its backing allocator, block headers included. */
 TA_PRIVATE size_t ta_arena_allocated_bytes(const ta_arena *arena);
 
@@ -407,6 +416,9 @@ typedef struct {
     ta_vec nodes;
     uint32_t *buckets;
     uint32_t bucket_count;
+    /* Segments a name may have: the system's eventNameDepth (ADR 0092),
+     * at most TA_EVENT_NAME_MAX_DEPTH, which sizes callers' arrays. */
+    uint32_t max_depth;
 } ta_event_name_table;
 
 enum {
@@ -420,6 +432,7 @@ enum {
     TA_EVENT_NAME_DONE_INVOKE = 7u
 };
 
+/* The ceiling of eventNameDepth (ADR 0092): it sizes segment arrays. */
 #define TA_EVENT_NAME_MAX_DEPTH 64u
 
 TA_PRIVATE ta_result ta_event_name_table_init(ta_event_name_table *table,
@@ -1905,10 +1918,15 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
 
 
 
-/* How many empty event blocks a new system keeps for reuse (ADR 0064): one
- * per interpreter that can run at once, nested exits included (ADR 0060).
- * ta_system_set_event_block_cache() changes it (ADR 0069). */
-#define TA_EVENT_BLOCK_CACHE_DEFAULT 4u
+/*
+ * A nested interpreter's memory (ADR 0092 section 3): its structural region
+ * and its render area, one allocation made the first time an invocation is
+ * cancelled at this depth, then kept for reuse until the system goes.
+ */
+typedef struct {
+    void *memory;
+    size_t bytes;
+} ta_nested_region;
 
 /* The input log's staging buffer (ADR 0090 section 5): header, fields,
  * chunk frames and windows of rendered text pass through it. */
@@ -1978,9 +1996,21 @@ struct ta_system {
     uint64_t offload_token;
     /* Every definition's counters, freed ones included (ADR 0072). */
     ta_counters counters;
-    /* Microsteps one macrostep may run, for definitions that set none (ADR
-     * 0075); 0 for no limit. */
-    uint32_t microstep_limit;
+    /* The system's parameters (ADR 0092), fixed at creation. */
+    uint32_t params[TA_PARAM_COUNT];
+    /* Live actors and definitions, for their quotas (ADR 0092 section 4). */
+    uint32_t live_actors;
+    uint32_t live_definitions;
+    /*
+     * The memory allocated at creation for the buffers every run needs (ADR
+     * 0092 section 3): interpreter region 0 and its render area, and the
+     * table of nested regions. `scratch` and `render` are arenas over it
+     * that never grow.
+     */
+    void *arena_memory;
+    size_t arena_bytes;
+    ta_arena render;
+    ta_nested_region *nested; /* interpreterNesting - 1 entries */
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
@@ -2024,6 +2054,14 @@ struct ta_system {
  * unknown or stale ID.
  */
 TA_PRIVATE ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
+/*
+ * A nested interpreter's two arenas (ADR 0092 section 3): region `depth`,
+ * from 1, allocated the first time it is needed and kept. TA_ERR_UNSUPPORTED
+ * past interpreterNesting, TA_ERR_NOMEM when it cannot be allocated.
+ */
+TA_PRIVATE ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *scratch, ta_arena *render);
+/* False, counting the refusal, when a new actor would pass maxActors. */
+TA_PRIVATE bool ta_system_quota_actor(ta_system *system);
 /* Frees a registered definition and its slot if nothing holds or uses it,
  * and what that frees in turn (ADR 0077). */
 TA_PRIVATE void ta_system_settle_definition(ta_system *system, ta_definition *definition);
@@ -2185,6 +2223,12 @@ TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, 
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 /* Frees cached event blocks until the cache holds no more than its limit
  * (ADR 0069); a limit of 0 frees them all, at teardown. */
+/* The interpreter scratch a definition needs (ADR 0092 section 3). */
+TA_PRIVATE size_t ta_interpreter_scratch_need(const ta_definition *definition);
+/* The fault of a temporary that does not fit the render area (ADR 0092). */
+TA_PRIVATE void ta_interpreter_render_fault(ta_fault *fault);
+/* Fills the event-block cache to its limit, at creation (ADR 0092 section 3). */
+TA_PRIVATE ta_result ta_interpreter_block_cache_fill(ta_system *system);
 TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system);
 /* Frees the continuation and sparse state the system keeps for a run that
  * stops (ADR 0070), at teardown. */
@@ -2765,6 +2809,41 @@ static const ta_allocator_vtable ta_arena_allocator_vtable = {
 
 TA_API ta_allocator ta_arena_allocator(ta_arena *arena) {
     return (ta_allocator){ .self = arena, .v = &ta_arena_allocator_vtable };
+}
+
+/* A fixed arena's backing: it never gives memory, and its blocks are not its own. */
+static void *ta_arena_fixed_alloc(void *self, size_t size, size_t alignment) {
+    (void)self;
+    (void)size;
+    (void)alignment;
+    return NULL;
+}
+
+static void ta_arena_fixed_free(void *self, const ta_allocator_free_params *params) {
+    (void)self;
+    (void)params;
+}
+
+static const ta_allocator_vtable ta_arena_fixed_vtable = {
+    .alloc = ta_arena_fixed_alloc,
+    .free = ta_arena_fixed_free,
+};
+
+TA_PRIVATE size_t ta_arena_fixed_bytes(size_t capacity) {
+    return offsetof(ta_arena_block, data) + capacity;
+}
+
+TA_PRIVATE void ta_arena_init_fixed(ta_arena *arena, void *memory, size_t bytes) {
+    ta_arena_block *block = memory;
+    *block = (ta_arena_block){
+        .next = NULL,
+        .allocation_size = bytes,
+        .alignment = _Alignof(ta_arena_block),
+        .capacity = bytes - offsetof(ta_arena_block, data),
+        .used = 0,
+    };
+    /* block_size is never used to grow: the backing refuses. */
+    *arena = (ta_arena){ .backing = { .self = NULL, .v = &ta_arena_fixed_vtable }, .head = block, .block_size = 1 };
 }
 
 
@@ -3747,7 +3826,7 @@ TA_PRIVATE ta_result ta_event_name_child(ta_event_name_table *table,
         return TA_ERR_INVALID;
     }
     uint32_t depth = ta_event_name_node_at(table, parent)->depth + 1u;
-    if (depth > TA_EVENT_NAME_MAX_DEPTH) {
+    if (depth > table->max_depth) {
         return TA_ERR_INVALID;
     }
     uint32_t hash = ta_event_name_hash(parent, segment);
@@ -3794,7 +3873,7 @@ static ta_result ta_event_name_builtin(ta_event_name_table *table, const char *p
 TA_PRIVATE ta_result ta_event_name_table_init(ta_event_name_table *table,
                                    ta_allocator allocator,
                                    ta_atom_table *atoms) {
-    *table = (ta_event_name_table){ .allocator = allocator, .atoms = atoms };
+    *table = (ta_event_name_table){ .allocator = allocator, .atoms = atoms, .max_depth = TA_EVENT_NAME_MAX_DEPTH };
     ta_vec_init(&table->nodes, allocator, TA_VEC_LAYOUT(ta_event_name_node));
     ta_event_name_node root = { .parent = TA_EVENT_NAME_ROOT, .segment = TA_ATOM_NONE };
     ta_result result = ta_vec_push(&table->nodes, &root);
@@ -3832,7 +3911,7 @@ TA_PRIVATE ta_result ta_event_name_intern_atoms_internal(ta_event_name_table *ta
                                               const ta_atom_list *segments,
                                               ta_event_name_id *out) {
     if (segments == NULL || segments->count == 0 || segments->atoms == NULL ||
-        segments->count > TA_EVENT_NAME_MAX_DEPTH) {
+        segments->count > table->max_depth) {
         return TA_ERR_INVALID;
     }
     for (uint32_t index = 0; index < segments->count; index += 1) {
@@ -5276,9 +5355,10 @@ TA_API ta_time ta_dm_host_time(const ta_dm_host *host) {
     return ta_interpreter_macrostep_time(host->impl->system, host->impl->actor);
 }
 
-/* The scratch arena of the interpreter run that is calling the data model (ADR 0068). */
+/* The render area of the interpreter run that is calling the data model
+ * (ADR 0068): rendered text is content-sized (ADR 0092 section 3). */
 static ta_allocator ta_dm_arena(const ta_dm_host *host) {
-    return ta_arena_allocator(&host->impl->system->scratch);
+    return ta_arena_allocator(&host->impl->system->render);
 }
 
 typedef struct {
@@ -6292,9 +6372,10 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
         digits[digit_count++] = (char)('0' + serial % 10u);
     }
     uint32_t length = state.len + 1u + digit_count;
-    char *text = ta_arena_alloc(&system->scratch, length, 1);
+    char *text = ta_arena_alloc(&system->render, length, 1);
     if (text == NULL) {
-        return TA_ERR_NOMEM;
+        ta_interpreter_render_fault(&values->fault);
+        return TA_INVOKE_FAILED;
     }
     ta_mem_copy(text, state.ptr, state.len);
     text[state.len] = '.';
@@ -6388,10 +6469,11 @@ static ta_result ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke_de
     if (v->make_params == NULL) {
         return TA_INVOKE_FAILED;
     }
-    ta_named_value *named = ta_arena_alloc(&it->system->scratch, decl->params.length * sizeof(ta_named_value),
+    ta_named_value *named = ta_arena_alloc(&it->system->render, decl->params.length * sizeof(ta_named_value),
                                            _Alignof(ta_named_value));
     if (named == NULL) {
-        return TA_ERR_NOMEM;
+        ta_interpreter_render_fault(&values->fault);
+        return TA_INVOKE_FAILED;
     }
     uint32_t evaluated = 0;
     for (; evaluated < decl->params.length && status == TA_OP_OK; evaluated += 1) {
@@ -7702,9 +7784,6 @@ typedef struct {
  */
 #define TA_COMPILER_LINEAR_NAMES 16u
 
-/* Longer unknown targets get no nearest-name suggestion. */
-#define TA_COMPILER_NEAREST_MAX 128u
-
 /*
  * Compiles a ta_scxml_spec in two passes. Pass one assigns state IDs in
  * document (pre-)order and records child ranges; pass two resolves targets and
@@ -7964,7 +8043,7 @@ static uint32_t ta_compiler_distance(ta_allocator allocator, ta_str left, ta_str
 static ta_str ta_compiler_nearest(ta_compiler *compiler, ta_str id) {
     ta_str nearest = {0};
     uint32_t best = UINT32_MAX;
-    if (id.len > TA_COMPILER_NEAREST_MAX) {
+    if (id.len > compiler->system->params[TA_PARAM_COMPILE_NEAREST_BYTES]) {
         return nearest; /* nobody misspells a name this long by a few letters */
     }
     for (ta_state_id state = 0; state < compiler->states.count; state += 1u) {
@@ -10023,7 +10102,7 @@ static void ta_compile_rejected(ta_system *system, const ta_definition_compile_p
     if (params->error_arena != NULL && rejection->message.ptr != NULL && rejection->message.len != 0) {
         ta_str copy = {0};
         ta_str kept = { .ptr = rejection->message.ptr,
-                        .len = ta_utf8_prefix(rejection->message, TA_COMPILE_ERROR_MESSAGE_MAX) };
+                        .len = ta_utf8_prefix(rejection->message, system->params[TA_PARAM_COMPILE_MESSAGE_BYTES]) };
         if (ta_arena_copy_str(params->error_arena, kept, &copy) == TA_OK) {
             message = copy;
         }
@@ -10047,6 +10126,41 @@ static void ta_compile_rejected(ta_system *system, const ta_definition_compile_p
     error->message = message;
 }
 
+/*
+ * A compiled definition whose interpreter needs more scratch than the
+ * system's interpreterBytes (ADR 0092 section 3) is refused here, before it
+ * can be registered, with both figures in the error.
+ */
+static ta_result ta_compile_check_scratch(ta_system *system, const ta_definition_compile_params *params) {
+    ta_definition *definition = *params->out;
+    size_t need = ta_interpreter_scratch_need(definition);
+    uint32_t have = system->params[TA_PARAM_INTERPRETER_BYTES];
+    if (need <= have) {
+        return TA_OK;
+    }
+    ta_definition_destroy(definition);
+    *params->out = NULL;
+    if (params->error == NULL) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    ta_str message = TA_PHRASE("the chart needs more interpreter scratch than this system has (interpreterBytes)");
+    char text[128];
+    ta_text_writer writer = { .buffer = text, .capacity = sizeof text };
+    ta_text_put(&writer, TA_PHRASE("the chart needs "));
+    ta_text_put_u64(&writer, (uint64_t)need);
+    ta_text_put(&writer, TA_PHRASE(" bytes of interpreter scratch; this system has "));
+    ta_text_put_u64(&writer, have);
+    ta_text_put(&writer, TA_PHRASE(" (interpreterBytes)"));
+    uint32_t needed = 0;
+    ta_str copy = { 0 };
+    if (params->error_arena != NULL && ta_text_finish(&writer, &needed) == TA_OK &&
+        ta_arena_copy_str(params->error_arena, (ta_str){ .ptr = text, .len = writer.length }, &copy) == TA_OK) {
+        message = copy;
+    }
+    *params->error = (ta_compile_error){ .code = TA_COMPILE_ERROR_LIMIT, .message = message };
+    return TA_ERR_UNSUPPORTED;
+}
+
 TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_compile_params *params) {
     if (params != NULL && params->error != NULL) {
         *params->error = (ta_compile_error){0};
@@ -10064,6 +10178,9 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definiti
                                                       .rejected = &rejection,
                                                       .out = params->out,
                                                   });
+    if (result == TA_OK) {
+        return ta_compile_check_scratch(system, params);
+    }
     if (params->error == NULL || (result != TA_ERR_INVALID && result != TA_ERR_UNSUPPORTED)) {
         return result;
     }
@@ -11707,6 +11824,7 @@ TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
                                              .alignment = definition->actor_block_alignment });
     ta_definition *owner = ta_system_definition(system, definition->id);
     owner->actor_count -= 1u;
+    system->live_actors -= 1u;
     ta_system_settle_definition(system, owner);
 }
 
@@ -11885,6 +12003,10 @@ TA_API ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *pa
  * from an image instead, so both start here.
  */
 TA_PRIVATE ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **out) {
+    /* maxActors is answered as an allocator that ran out (ADR 0092 section 4). */
+    if (!ta_system_quota_actor(system)) {
+        return TA_ERR_NOMEM;
+    }
     /* One allocation: the record, the session storage, the instance (ADR 0063). */
     ta_actor *actor = ta_mem_alloc(system->allocator, definition->actor_block_bytes, definition->actor_block_alignment);
     if (actor == NULL) {
@@ -11894,6 +12016,7 @@ TA_PRIVATE ta_result ta_actor_new(ta_system *system, ta_definition *definition, 
     *actor = (ta_actor){ .definition = definition, .published = true, .macrostep = true };
     /* Counted from here so every ta_actor_free() path can uncount it. */
     definition->actor_count += 1u;
+    system->live_actors += 1u;
     actor->host_impl = (ta_dm_host_impl){ .system = system, .actor = actor };
     actor->host = (ta_dm_host){ .impl = &actor->host_impl };
 
@@ -12005,6 +12128,17 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
     return result;
 }
 
+/* How many invoking parents stand above an actor: 0 for one nobody invoked. */
+static uint32_t ta_actor_invoke_depth(ta_system *system, ta_actor_id id) {
+    uint32_t depth = 0;
+    const ta_actor *actor = ta_actor_lookup(system, id);
+    while (actor != NULL && actor->sparse != NULL && actor->sparse->has_parent && depth < UINT32_MAX - 1u) {
+        depth += 1u;
+        actor = ta_actor_lookup(system, actor->sparse->parent.actor);
+    }
+    return depth;
+}
+
 TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
@@ -12012,6 +12146,12 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
     ta_definition *definition = ta_system_definition(system, params->definition);
     if (definition == NULL || definition->retired) {
         return TA_ERR_NOT_FOUND;
+    }
+    if (params->parent != NULL && ta_actor_invoke_depth(system, params->parent->actor) + 1u >=
+                                      system->params[TA_PARAM_INTERPRETER_NESTING]) {
+        /* Exiting it would need an interpreter region past interpreterNesting
+         * (ADR 0092 section 3). */
+        return TA_ERR_UNSUPPORTED;
     }
     ta_actor *actor = NULL;
     ta_result result = ta_actor_new(system, definition, &actor);
@@ -14612,10 +14752,181 @@ static ta_str ta_cstr(const char *text) {
     return out;
 }
 
+/* ------------------------------------------------------------------------
+ * System parameters (ADR 0092)
+ */
+
+typedef struct {
+    const char *name;
+    const char *unit;
+    uint32_t default_value;
+    uint32_t min;
+    uint32_t max;
+} ta_param_row;
+
+/* One row per ta_param, in its order. The bounds are the only ones: no
+ * other code checks a parameter again. */
+static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
+    [TA_PARAM_MICROSTEP_LIMIT] = { "microstepLimit", "microsteps", TA_PARAM_DEFAULT_MICROSTEP_LIMIT, 0, 2147483647u },
+    [TA_PARAM_EVENT_BLOCK_CACHE] = { "eventBlockCache", "blocks", TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, 0, 65536u },
+    [TA_PARAM_EVENT_NAME_DEPTH] = { "eventNameDepth", "segments", TA_PARAM_DEFAULT_EVENT_NAME_DEPTH, 8,
+                                    TA_EVENT_NAME_MAX_DEPTH },
+    [TA_PARAM_COMPILE_MESSAGE_BYTES] = { "compileMessageBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES, 16,
+                                         65536u },
+    [TA_PARAM_COMPILE_NEAREST_BYTES] = { "compileNearestBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_NEAREST_BYTES, 0,
+                                         65536u },
+    [TA_PARAM_INTERPRETER_BYTES] = { "interpreterBytes", "bytes", TA_PARAM_DEFAULT_INTERPRETER_BYTES, 1024,
+                                     1073741824u },
+    [TA_PARAM_RENDER_BYTES] = { "renderBytes", "bytes", TA_PARAM_DEFAULT_RENDER_BYTES, 256, 1073741824u },
+    [TA_PARAM_INTERPRETER_NESTING] = { "interpreterNesting", "interpreters", TA_PARAM_DEFAULT_INTERPRETER_NESTING, 1,
+                                       64 },
+    [TA_PARAM_MAX_ACTORS] = { "maxActors", "actors", TA_PARAM_DEFAULT_MAX_ACTORS, 1, 2147483647u },
+    [TA_PARAM_MAX_PENDING_SENDS] = { "maxPendingSends", "sends", TA_PARAM_DEFAULT_MAX_PENDING_SENDS, 1, 2147483647u },
+    [TA_PARAM_MAX_DEFINITIONS] = { "maxDefinitions", "definitions", TA_PARAM_DEFAULT_MAX_DEFINITIONS, 1, 2147483647u },
+};
+
+TA_API ta_result ta_param_info_of(ta_param param, ta_param_info *out) {
+    if (out == NULL || (uint32_t)param >= (uint32_t)TA_PARAM_COUNT) {
+        return TA_ERR_INVALID;
+    }
+    const ta_param_row *row = &ta_param_rows[param];
+    *out = (ta_param_info){ .name = ta_cstr(row->name),
+                            .default_value = row->default_value,
+                            .min = row->min,
+                            .max = row->max,
+                            .unit = ta_cstr(row->unit) };
+    return TA_OK;
+}
+
+TA_API ta_result ta_system_param(const ta_system *system, ta_param param, uint64_t *out) {
+    if (system == NULL || out == NULL || (uint32_t)param >= (uint32_t)TA_PARAM_COUNT) {
+        return TA_ERR_INVALID;
+    }
+    *out = system->params[param];
+    return TA_OK;
+}
+
+/* Every parameter's value: the defaults, then the config's, each checked
+ * against its bounds once. TA_ERR_INVALID names the parameter at fault. */
+static ta_result ta_params_resolve(const ta_system_config *config, uint32_t values[TA_PARAM_COUNT]) {
+    bool given[TA_PARAM_COUNT] = { false };
+    for (uint32_t index = 0; index < (uint32_t)TA_PARAM_COUNT; index += 1u) {
+        values[index] = ta_param_rows[index].default_value;
+    }
+    if (config->param_count != 0 && config->params == NULL) {
+        return TA_ERR_INVALID;
+    }
+    for (uint32_t index = 0; index < config->param_count; index += 1u) {
+        const ta_param_value *value = &config->params[index];
+        uint32_t param = (uint32_t)value->param;
+        if (param >= (uint32_t)TA_PARAM_COUNT) {
+            return TA_ERR_INVALID;
+        }
+        const ta_param_row *row = &ta_param_rows[param];
+        if (given[param] || value->value < row->min || value->value > row->max) {
+            if (config->rejected != NULL) {
+                *config->rejected = value->param;
+            }
+            return TA_ERR_INVALID;
+        }
+        given[param] = true;
+        values[param] = (uint32_t)value->value;
+    }
+    return TA_OK;
+}
+
+/* Bytes of one interpreter: its structural region and its render area,
+ * each a fixed arena, the render area starting aligned. */
+static size_t ta_interpreter_region_bytes(const uint32_t params[TA_PARAM_COUNT]) {
+    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(params[TA_PARAM_INTERPRETER_BYTES]),
+                                    (size_t)_Alignof(ta_arena_block));
+    return structural + ta_arena_fixed_bytes(params[TA_PARAM_RENDER_BYTES]);
+}
+
+/* Lays a region's two fixed arenas over its memory. */
+static void ta_interpreter_region_open(const ta_system *system, void *memory, ta_arena *scratch, ta_arena *render) {
+    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(system->params[TA_PARAM_INTERPRETER_BYTES]),
+                                    (size_t)_Alignof(ta_arena_block));
+    ta_arena_init_fixed(scratch, memory, structural);
+    ta_arena_init_fixed(render, (unsigned char *)memory + structural,
+                        ta_arena_fixed_bytes(system->params[TA_PARAM_RENDER_BYTES]));
+}
+
+TA_PRIVATE ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *scratch, ta_arena *render) {
+    if (depth == 0 || depth >= system->params[TA_PARAM_INTERPRETER_NESTING]) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    ta_nested_region *region = &system->nested[depth - 1u];
+    if (region->memory == NULL) {
+        size_t bytes = ta_interpreter_region_bytes(system->params);
+        region->memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+        if (region->memory == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        region->bytes = bytes;
+    }
+    ta_interpreter_region_open(system, region->memory, scratch, render);
+    return TA_OK;
+}
+
+/*
+ * The memory every run needs, allocated once (ADR 0092 section 3):
+ * interpreter region 0 with its render area, then the table of nested
+ * regions; and the event-block cache, filled to its parameter.
+ */
+static ta_result ta_system_arena_open(ta_system *system) {
+    size_t region = ta_interpreter_region_bytes(system->params);
+    size_t nested = (size_t)(system->params[TA_PARAM_INTERPRETER_NESTING] - 1u) * sizeof(ta_nested_region);
+    size_t bytes = TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)) + nested;
+    system->arena_memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+    if (system->arena_memory == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    system->arena_bytes = bytes;
+    ta_interpreter_region_open(system, system->arena_memory, &system->scratch, &system->render);
+    system->nested = (ta_nested_region *)((unsigned char *)system->arena_memory +
+                                          TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)));
+    for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
+        system->nested[index] = (ta_nested_region){ 0 };
+    }
+    return ta_interpreter_block_cache_fill(system);
+}
+
+static void ta_system_arena_close(ta_system *system) {
+    if (system->arena_memory == NULL) {
+        return;
+    }
+    for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
+        ta_nested_region *region = &system->nested[index];
+        if (region->memory != NULL) {
+            ta_mem_free(system->allocator, region->memory,
+                        &(ta_allocator_free_params){ .size = region->bytes, .alignment = _Alignof(ta_arena_block) });
+        }
+    }
+    ta_mem_free(system->allocator, system->arena_memory,
+                &(ta_allocator_free_params){ .size = system->arena_bytes, .alignment = _Alignof(ta_arena_block) });
+    system->arena_memory = NULL;
+    system->scratch = (ta_arena){ 0 };
+    system->render = (ta_arena){ 0 };
+}
+
+TA_PRIVATE bool ta_system_quota_actor(ta_system *system) {
+    if (system->live_actors >= system->params[TA_PARAM_MAX_ACTORS]) {
+        system->counters.quota_refusals += 1u;
+        return false;
+    }
+    return true;
+}
+
 TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     if (config == NULL || out == NULL || config->allocator.v == NULL ||
         config->allocator.v->alloc == NULL || config->allocator.v->free == NULL) {
         return TA_ERR_INVALID;
+    }
+    uint32_t params[TA_PARAM_COUNT];
+    ta_result resolved = ta_params_resolve(config, params);
+    if (resolved != TA_OK) {
+        return resolved;
     }
     ta_system *system = ta_mem_alloc(config->allocator, sizeof(ta_system), _Alignof(ta_system));
     if (system == NULL) {
@@ -14623,9 +14934,10 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
-                           .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT,
+                           .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
                            .trace = ta_null_trace_sink(),
                            .definition_sink = ta_null_definition_sink() };
+    ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
@@ -14650,10 +14962,11 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     result = ta_event_name_table_init(&system->event_names, config->allocator, &system->atoms);
     if (result == TA_OK) {
+        system->event_names.max_depth = params[TA_PARAM_EVENT_NAME_DEPTH];
         result = ta_timer_heap_init(&system->timers, config->allocator);
     }
     if (result == TA_OK) {
-        result = ta_arena_init(&system->scratch, config->allocator, 4096);
+        result = ta_system_arena_open(system);
     }
     if (result == TA_OK) {
         result = ta_atom_intern(&system->atoms, ta_cstr(TA_SCXML_IO_URI), &system->scxml_io_type);
@@ -14707,9 +15020,9 @@ TA_API void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
     ta_vec_destroy(&system->logged_families);
-    ta_arena_destroy(&system->scratch);
     system->block_cache_limit = 0;
     ta_interpreter_block_cache_trim(system);
+    ta_system_arena_close(system);
     ta_interpreter_release_spares(system);
     /* Unloaded sessions hold addresses; give them back before the table goes. */
     ta_session_table_destroy(&system->sessions);
@@ -14790,15 +15103,6 @@ TA_PRIVATE void ta_system_tell_definition(ta_system *system, const ta_definition
     }
     ta_definition_event event = { .kind = kind, .definition = definition->id, .identity = definition->identity };
     system->definition_sink.v->notify(system->definition_sink.self, &event);
-}
-
-TA_API ta_result ta_system_set_event_block_cache(ta_system *system, uint32_t blocks) {
-    if (system == NULL) {
-        return TA_ERR_INVALID;
-    }
-    system->block_cache_limit = blocks;
-    ta_interpreter_block_cache_trim(system);
-    return TA_OK;
 }
 
 TA_API ta_result ta_system_set_external_event_router(ta_system *system, ta_external_event_router router) {
@@ -14915,6 +15219,11 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
         ta_definition_destroy(definition);
         return TA_OK;
     }
+    if (system->live_definitions >= system->params[TA_PARAM_MAX_DEFINITIONS]) {
+        /* A quota, answered as an allocator that ran out (ADR 0092 section 4). */
+        system->counters.quota_refusals += 1u;
+        return TA_ERR_NOMEM;
+    }
     uint32_t slot = system->free_definition_slot;
     if (slot == UINT32_MAX) {
         ta_definition_slot fresh = { .generation = 1, .next_free = UINT32_MAX };
@@ -14938,6 +15247,7 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
     }
     entry->definition = definition;
     entry->next_free = UINT32_MAX;
+    system->live_definitions += 1u;
     if (definition->unregistered_previous != NULL) {
         definition->unregistered_previous->unregistered_next = definition->unregistered_next;
     } else {
@@ -15017,6 +15327,7 @@ TA_PRIVATE void ta_system_settle_definition(ta_system *system, ta_definition *de
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
         /* The slot's next occupant gets a new generation, so this ID goes stale. */
         entry->definition = NULL;
+        system->live_definitions -= 1u;
         entry->generation += 1u;
         entry->next_free = system->free_definition_slot;
         system->free_definition_slot = slot;
@@ -15384,12 +15695,6 @@ TA_API ta_result ta_definition_counters(const ta_system *system, ta_definition_i
     }
     *out = found->counters;
     return TA_OK;
-}
-
-TA_API void ta_system_set_microstep_limit(ta_system *system, uint32_t limit) {
-    if (system != NULL) {
-        system->microstep_limit = limit;
-    }
 }
 
 TA_API ta_result ta_definition_set_microstep_limit(ta_system *system, ta_definition_id definition, uint32_t limit) {
@@ -16229,6 +16534,22 @@ static void ta_block_settle(ta_system *system, ta_actor *actor) {
     ta_block_free(system, block);
 }
 
+TA_PRIVATE ta_result ta_interpreter_block_cache_fill(ta_system *system) {
+    while (system->block_cache_count < system->block_cache_limit) {
+        ta_event_block *block = ta_mem_alloc(system->allocator, ta_event_block_bytes(TA_EVENT_BLOCK_QUEUE_INITIAL),
+                                             _Alignof(ta_event_block));
+        if (block == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        block->capacity = TA_EVENT_BLOCK_QUEUE_INITIAL;
+        block->count = 0;
+        block->next_cached = system->block_cache;
+        system->block_cache = block;
+        system->block_cache_count += 1u;
+    }
+    return TA_OK;
+}
+
 TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system) {
     while (system->block_cache_count > system->block_cache_limit) {
         ta_event_block *block = system->block_cache;
@@ -17028,6 +17349,16 @@ static void ta_send_state_release(ta_send_state *state) {
     ta_scxml_target_release(&state->scxml);
 }
 
+/*
+ * A content-sized temporary that does not fit the render area (ADR 0092
+ * section 3): an execution error that names the parameter, and fails the
+ * same way for the same content, where the arena used to grow.
+ */
+TA_PRIVATE void ta_interpreter_render_fault(ta_fault *fault) {
+    static const char text[] = "the render area is full (renderBytes)";
+    *fault = (ta_fault){ .code = TA_ERR_NOMEM, .message = { .ptr = text, .len = (uint32_t)(sizeof text - 1u) } };
+}
+
 static ta_result ta_send_payload(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                  ta_fault *fault) {
     if (!state->scxml_io && send->data.kind == TA_VALUE_SOURCE_CONTENT) {
@@ -17050,10 +17381,11 @@ static ta_result ta_send_payload(ta_interpreter *it, const ta_send_action *send,
     if (v->make_params == NULL) {
         return TA_EXEC_FAILED;
     }
-    ta_named_value *values = ta_arena_alloc(&it->system->scratch, send->params.length * sizeof(ta_named_value),
+    ta_named_value *values = ta_arena_alloc(&it->system->render, send->params.length * sizeof(ta_named_value),
                                             _Alignof(ta_named_value));
     if (values == NULL) {
-        return TA_ERR_NOMEM;
+        ta_interpreter_render_fault(fault);
+        return TA_EXEC_FAILED;
     }
     uint32_t evaluated = 0;
     ta_op_status status = TA_OP_OK;
@@ -17447,6 +17779,20 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         state->sent = result == TA_OK;
         return result;
     }
+    if (state->delay != 0 && actor->sparse != NULL &&
+        actor->sparse->timers.count >= system->params[TA_PARAM_MAX_PENDING_SENDS]) {
+        /* A quota (ADR 0092 section 4): the send is not made, and the
+         * sender hears it as an execution error. */
+        ta_value_release(&record.data);
+        ta_value_release(&record.target);
+        ta_actor_ref_release(&record.destination);
+        system->counters.quota_refusals += 1u;
+        static const char text[] = "too many pending delayed sends (maxPendingSends)";
+        ta_fault fault = { .code = TA_ERR_NOMEM, .message = { .ptr = text, .len = (uint32_t)(sizeof text - 1u) } };
+        ta_result raised = ta_execution_error(it, &fault);
+        state->sent = false;
+        return raised == TA_EXEC_FAILED ? TA_OK : raised;
+    }
     if (state->delay == 0) {
         ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record, true);
         if (submitted != TA_EXTERNAL_EVENT_RETRY) {
@@ -17807,6 +18153,9 @@ static bool ta_exec_should_pause(const ta_interpreter *it, uint32_t floor) {
  * never runs twice because its error could not be queued.
  */
 static ta_result ta_unit_reserve(ta_interpreter *it, const ta_action_def *action) {
+    /* Content-sized temporaries live for one unit (ADR 0092 section 3): a
+     * <foreach> of many sends reuses the render area instead of filling it. */
+    ta_arena_reset(&it->system->render);
     ta_result result = ta_queue_room(it->system, it->actor);
     if (result == TA_OK && action != NULL && action->kind == TA_ACTION_SEND &&
         action->as.send.delay.kind != TA_DELAY_SOURCE_NONE && it->actor->published) {
@@ -18441,10 +18790,13 @@ static ta_result ta_raise_done(ta_interpreter *it, ta_state_id state, ta_value *
 static ta_result ta_done_data_params(ta_interpreter *it, ta_span32 params, ta_value *out) {
     const ta_definition *definition = it->definition;
     const ta_datamodel_vtable *v = definition->datamodel.v;
-    ta_named_value *values = ta_arena_alloc(&it->system->scratch, params.length * sizeof(ta_named_value),
+    ta_named_value *values = ta_arena_alloc(&it->system->render, params.length * sizeof(ta_named_value),
                                             _Alignof(ta_named_value));
     if (values == NULL) {
-        return TA_ERR_NOMEM;
+        ta_fault full = {0};
+        ta_interpreter_render_fault(&full);
+        ta_result raised = ta_execution_error(it, &full);
+        return raised == TA_EXEC_FAILED ? TA_OK : raised;
     }
     uint32_t count = 0;
     ta_result result = TA_OK;
@@ -19377,11 +19729,50 @@ static void ta_stop_drop(ta_interpreter *it) {
     }
 }
 
+/* One allocation of ta_interpreter_init, added to a running size the way
+ * an arena lays it out. */
+static void ta_need_take(size_t *at, size_t size, size_t alignment) {
+    *at = TA_ALIGN_UP(*at, alignment) + size;
+}
+
+/*
+ * The bytes of interpreter scratch a definition needs (ADR 0092 section 3):
+ * everything ta_interpreter_init takes, in its order and alignment, with
+ * both trace buffers, whether or not a sink wants them. The compiler checks
+ * it against interpreterBytes, so a definition that registers never runs
+ * out of structural scratch.
+ */
+TA_PRIVATE size_t ta_interpreter_scratch_need(const ta_definition *definition) {
+    /* Positions are counted from the block's data, which starts aligned to
+     * the block's own alignment, as ta_arena_init_fixed lays it out. */
+    size_t start = offsetof(ta_arena_block, data);
+    size_t at = start;
+    uint32_t words = ta_bits_words(definition->state_count);
+    for (uint32_t index = 0; index < 11u; index += 1u) {
+        ta_need_take(&at, (size_t)words * sizeof(uint64_t), _Alignof(uint64_t));
+    }
+    size_t capacity = (size_t)definition->state_count + 1u;
+    ta_need_take(&at, capacity * sizeof(ta_state_id), _Alignof(ta_state_id));
+    ta_need_take(&at, capacity * sizeof(ta_transition_id), _Alignof(ta_transition_id));
+    ta_need_take(&at, capacity * sizeof(ta_transition_id), _Alignof(ta_transition_id));
+    ta_need_take(&at, capacity * sizeof(bool), _Alignof(bool));
+    ta_need_take(&at, (size_t)ta_entry_capacity(definition) * sizeof(struct ta_entry_frame),
+                 _Alignof(struct ta_entry_frame));
+    ta_need_take(&at, ((size_t)definition->history.slot_count + 1u) * sizeof(ta_state_id), _Alignof(ta_state_id));
+    ta_need_take(&at, (size_t)ta_exec_capacity(definition) * sizeof(ta_exec_frame), _Alignof(ta_exec_frame));
+    ta_need_take(&at, (size_t)ta_decl_words(definition) * sizeof(uint64_t), _Alignof(uint64_t));
+    ta_need_take(&at, (3u * (size_t)definition->state_count + 1u) * sizeof(ta_state_id), _Alignof(ta_state_id));
+    ta_need_take(&at, ((size_t)ta_trace_guard_capacity(definition) + 1u) * sizeof(struct ta_trace_condition),
+                 _Alignof(struct ta_trace_condition));
+    return at - start;
+}
+
 static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
     uint32_t words = ta_bits_words(definition->state_count);
     *it = (ta_interpreter){ .system = system, .actor = actor, .definition = definition, .words = words };
     ta_arena_reset(&system->scratch);
+    ta_arena_reset(&system->render);
     uint64_t **sets[] = {
         &it->active, &it->to_exit, &it->to_enter, &it->default_entry,
         &it->domain_targets, &it->entry_targets, &it->exit_left, &it->exit_right,
@@ -19563,7 +19954,7 @@ TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, c
     }
     it->pausable = true;
     it->action_budget = params->action_budget;
-    uint32_t limit = actor->definition->microstep_limit == 0 ? system->microstep_limit
+    uint32_t limit = actor->definition->microstep_limit == 0 ? system->params[TA_PARAM_MICROSTEP_LIMIT]
                                                             : actor->definition->microstep_limit;
     it->microstep_limit = params->no_microstep_limit || limit == TA_MICROSTEP_LIMIT_NONE ? 0 : limit;
     it->pause_at_start = params->pause_at_microstep_start;
@@ -19605,6 +19996,7 @@ typedef struct {
     ta_actor *actor;
     ta_interpreter it;
     ta_arena arena;
+    ta_arena render;
     ta_state_id next;     /* states left to exit: those below `next`, highest first */
     ta_state_id exiting;  /* the state whose invocations are being cancelled */
     uint32_t cursor;      /* its invocations left: those below `cursor` */
@@ -19613,10 +20005,12 @@ typedef struct {
 } ta_exit_frame;
 
 /*
- * Starts exiting a session: a scratch arena of its own, so the interpreter
- * that cancelled it keeps its scratch, and an interpreter over it. Nothing
- * happens when the session is gone or finished, or when there is no memory
- * to exit it with.
+ * Starts exiting a session: a nested interpreter region of its own (ADR
+ * 0092 section 3), region `frames->count + 1`, so the interpreter that
+ * cancelled it keeps its scratch, and an interpreter over it. The region is
+ * allocated the first time an exit reaches this depth, and kept. Nothing
+ * happens when the session is gone or finished, when the depth passes
+ * interpreterNesting, or when there is no memory for the region.
  */
 static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
     ta_actor *actor = ta_actor_lookup(system, id);
@@ -19624,24 +20018,27 @@ static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
         return;
     }
     ta_exit_frame frame = { .actor = actor, .exiting = TA_STATE_NONE };
-    if (ta_arena_init(&frame.arena, system->allocator, system->scratch.block_size) != TA_OK) {
+    if (ta_system_nested_region(system, frames->count + 1u, &frame.arena, &frame.render) != TA_OK) {
         return;
     }
     ta_arena previous = system->scratch;
+    ta_arena previous_render = system->render;
     system->scratch = frame.arena;
+    system->render = frame.render;
     ta_result result = ta_interpreter_init(&frame.it, system, actor);
     /* A session stopped inside a microstep exits its live set; the rest of
      * the stop is dropped (ADR 0061 section 6). */
     ta_stop_drop(&frame.it);
     frame.arena = system->scratch;
+    frame.render = system->render;
     frame.next = actor->definition->state_count;
     if (result == TA_OK) {
         result = ta_vec_push(frames, &frame);
     }
     if (result != TA_OK) {
         actor->live_active = NULL;
-        ta_arena_destroy(&frame.arena);
         system->scratch = previous;
+        system->render = previous_render;
     }
 }
 
@@ -19657,6 +20054,7 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
         frame->waiting = false;
         ta_invoke_cancel_service(&frame->taken);
         frame->arena = system->scratch;
+        frame->render = system->render;
         return;
     }
     if (frame->exiting != TA_STATE_NONE) {
@@ -19665,18 +20063,23 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
             frame->exiting = TA_STATE_NONE;
             it->at = (ta_micro_position){0};
             frame->arena = system->scratch;
+            frame->render = system->render;
+        frame->render = system->render;
             return;
         }
         ta_interpreter_trace_invoke(it, TA_TRACE_INVOKE_CANCELLED, frame->taken.active.id);
         if (frame->taken.meta.has_child) {
             frame->waiting = true;
             frame->arena = system->scratch;
+            frame->render = system->render;
+        frame->render = system->render;
             ta_exit_open(system, frames, frame->taken.meta.child); /* may move `frame` */
             return;
         } else {
             ta_invoke_cancel_service(&frame->taken);
         }
         frame->arena = system->scratch;
+        frame->render = system->render;
         return;
     }
     while (frame->next > 0 && !ta_bits_get(it->active, frame->next - 1u)) {
@@ -19685,7 +20088,7 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
     if (frame->next == 0) {
         ta_store_active(it);
         frame->actor->live_active = NULL;
-        ta_arena_destroy(&system->scratch);
+        /* The region stays allocated for the next exit this deep. */
         frames->count -= 1u;
         return;
     }
@@ -19694,6 +20097,7 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
     it->at = (ta_micro_position){ .phase = TA_PHASE_EXIT, .state = state + 1u };
     ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
     frame->arena = system->scratch;
+    frame->render = system->render;
     if (result != TA_OK) {
         /* Nothing continues an exit: a block that ran out of memory left its
          * frames open for a stop, and they are dropped. */
@@ -19711,16 +20115,19 @@ TA_PRIVATE void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id) {
     /* Cancelling an invocation happens inside the parent's interpreter:
      * every exited session gets its own scratch, and the parent's comes back. */
     ta_arena outer = system->scratch;
+    ta_arena outer_render = system->render;
     ta_vec frames;
     ta_vec_init(&frames, system->allocator, TA_VEC_LAYOUT(ta_exit_frame));
     ta_exit_open(system, &frames, id);
     while (frames.count != 0) {
         ta_exit_frame *frame = ta_vec_at(&frames, frames.count - 1u);
         system->scratch = frame->arena;
+        system->render = frame->render;
         ta_exit_step(system, &frames);
     }
     ta_vec_destroy(&frames);
     system->scratch = outer;
+    system->render = outer_render;
 }
 
 /* ------------------------------------------------------------------------
@@ -20328,7 +20735,7 @@ TA_PRIVATE void ta_input_event_fields(const ta_record_event_params *params, ta_r
                         .address = actor != NULL && actor->record.self.kind == TA_ACTOR_REF_NAMED
                                        ? actor->record.self.as.named
                                        : NULL,
-                        .arena = ta_arena_allocator(&system->scratch),
+                        .arena = ta_arena_allocator(&system->render),
                         .out = &uri,
                     });
         origin = ta_input_str(rendered == TA_OK, uri);
@@ -20356,7 +20763,7 @@ static ta_str ta_input_state_text(const ta_system *system, const ta_definition *
 }
 
 TA_PRIVATE bool ta_input_runaway_stopped(const ta_system *system, const ta_actor *actor) {
-    uint32_t limit = actor->definition->microstep_limit == 0 ? system->microstep_limit
+    uint32_t limit = actor->definition->microstep_limit == 0 ? system->params[TA_PARAM_MICROSTEP_LIMIT]
                                                             : actor->definition->microstep_limit;
     return actor->macrostep && actor->trace_begun && limit != 0 && limit != TA_MICROSTEP_LIMIT_NONE &&
            actor->trace_microstep >= limit;

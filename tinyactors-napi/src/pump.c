@@ -253,6 +253,33 @@ static void tna_pump_arm(tna_system *system, ta_time delay, void *context) {
     napi_close_handle_scope(env, scope);
 }
 
+bool tna_pump_core_params(napi_env env, napi_value options, ta_param_value out[TNA_CORE_PARAM_COUNT]) {
+    napi_valuetype type = napi_undefined;
+    if (options != NULL) {
+        napi_typeof(env, options, &type);
+    }
+    napi_value scheduling = NULL;
+    uint32_t microstep_limit = TNA_DEFAULT_MICROSTEP_LIMIT;
+    uint32_t messages = TNA_DEFAULT_MESSAGE_BUDGET;
+    if (type == napi_object &&
+        (!tna_option(env, options, "scheduling", &scheduling) ||
+         !tna_count_option(env, scheduling, "microstepLimit", &microstep_limit) ||
+         !tna_count_option(env, scheduling, "messageBudget", &messages))) {
+        return false;
+    }
+    if (microstep_limit > 2147483647u) {
+        tna_throw(env, "invalid", "createSystem: scheduling.microstepLimit must be at most 2147483647");
+        return false;
+    }
+    /* Runaways (core ADR 0075); 0 for no limit. */
+    out[0] = (ta_param_value){ .param = TA_PARAM_MICROSTEP_LIMIT, .value = microstep_limit };
+    /* A delivered event holds a core event block until its actor is
+     * resumed, the next turn at the latest, so core keeps a turn's worth of
+     * them, created with the system (core ADRs 0069, 0092). */
+    out[1] = (ta_param_value){ .param = TA_PARAM_EVENT_BLOCK_CACHE, .value = messages > 65536u ? 65536u : messages };
+    return true;
+}
+
 bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, napi_value options) {
     wrapper->env = env;
     wrapper->destroy_finished = true;
@@ -270,8 +297,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
     napi_value initial_value = NULL;
     tna_clock_kind clock = TNA_CLOCK_REALTIME;
     ta_time initial = 0;
-    /* Microsteps one macrostep may run before its actor is quarantined as a
-     * runaway (core ADR 0075); 0 for no limit. */
+    /* Parsed again only to validate it: core took it at creation (tna_pump_core_params). */
     uint32_t microstep_limit = TNA_DEFAULT_MICROSTEP_LIMIT;
     tna_turn_budgets *budgets = &wrapper->system->budgets;
     if (!tna_option(env, options, "scheduling", &scheduling) ||
@@ -296,11 +322,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
                   "createSystem: scheduling.resumeBudget, resumesPerTurn, messageBudget and dueBudget must be at least 1");
         return false;
     }
-    /* A delivered event holds a core event block until its actor is resumed,
-     * the next turn at the latest, so core caches a turn's worth of them and
-     * delivery makes no allocator call once warm (core ADR 0069). */
-    (void)ta_system_set_event_block_cache(wrapper->system->core, budgets->messages);
-    ta_system_set_microstep_limit(wrapper->system->core, microstep_limit);
+    (void)microstep_limit;
     if (tna_system_set_clock(wrapper->system, clock, initial) != TA_OK) {
         tna_throw(env, "invalid", "createSystem: cannot set the clock");
         return false;

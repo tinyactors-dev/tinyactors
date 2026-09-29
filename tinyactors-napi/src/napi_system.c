@@ -269,7 +269,14 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
             return tna_throw(env, "invalid", "createSystem(): incarnation must fit in 64 bits");
         }
     }
-    ta_result result = tna_system_create(incarnation, &wrapper->system);
+    ta_param_value params[TNA_CORE_PARAM_COUNT];
+    if (!tna_pump_core_params(env, argv[1], params)) {
+        free(wrapper);
+        return NULL;
+    }
+    ta_result result = tna_system_create(
+        &(tna_system_create_params){ .incarnation = incarnation, .params = params, .param_count = TNA_CORE_PARAM_COUNT },
+        &wrapper->system);
     if (result != TA_OK) {
         free(wrapper);
         return tna_throw(env, tna_result_code(result), "cannot create a system");

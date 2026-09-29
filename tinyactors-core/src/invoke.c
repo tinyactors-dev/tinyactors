@@ -332,9 +332,10 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
         digits[digit_count++] = (char)('0' + serial % 10u);
     }
     uint32_t length = state.len + 1u + digit_count;
-    char *text = ta_arena_alloc(&system->scratch, length, 1);
+    char *text = ta_arena_alloc(&system->render, length, 1);
     if (text == NULL) {
-        return TA_ERR_NOMEM;
+        ta_interpreter_render_fault(&values->fault);
+        return TA_INVOKE_FAILED;
     }
     ta_mem_copy(text, state.ptr, state.len);
     text[state.len] = '.';
@@ -428,10 +429,11 @@ static ta_result ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke_de
     if (v->make_params == NULL) {
         return TA_INVOKE_FAILED;
     }
-    ta_named_value *named = ta_arena_alloc(&it->system->scratch, decl->params.length * sizeof(ta_named_value),
+    ta_named_value *named = ta_arena_alloc(&it->system->render, decl->params.length * sizeof(ta_named_value),
                                            _Alignof(ta_named_value));
     if (named == NULL) {
-        return TA_ERR_NOMEM;
+        ta_interpreter_render_fault(&values->fault);
+        return TA_INVOKE_FAILED;
     }
     uint32_t evaluated = 0;
     for (; evaluated < decl->params.length && status == TA_OP_OK; evaluated += 1) {

@@ -44,6 +44,10 @@
  * undefined) and installs the wake callback. Throws and returns false on bad
  * options.
  */
+/* The core parameters createSystem's options set (core ADR 0092): the
+ * microstep limit and the event-block cache. False after throwing. */
+#define TNA_CORE_PARAM_COUNT 2u
+bool tna_pump_core_params(napi_env env, napi_value options, ta_param_value out[TNA_CORE_PARAM_COUNT]);
 bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, napi_value options);
 /* Rejects waiting flush promises (when `env_usable`) and drops the pump's references. */
 void tna_pump_close(tna_napi_system *wrapper, bool env_usable);

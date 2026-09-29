@@ -1,5 +1,6 @@
 #include "builder.h"
 #include "system.h"
+#include "interpreter.h"
 
 /* A state by its interned name, for the name index built after pass one. */
 typedef struct {
@@ -64,9 +65,6 @@ typedef struct {
  * answer.
  */
 #define TA_COMPILER_LINEAR_NAMES 16u
-
-/* Longer unknown targets get no nearest-name suggestion. */
-#define TA_COMPILER_NEAREST_MAX 128u
 
 /*
  * Compiles a ta_scxml_spec in two passes. Pass one assigns state IDs in
@@ -327,7 +325,7 @@ static uint32_t ta_compiler_distance(ta_allocator allocator, ta_str left, ta_str
 static ta_str ta_compiler_nearest(ta_compiler *compiler, ta_str id) {
     ta_str nearest = {0};
     uint32_t best = UINT32_MAX;
-    if (id.len > TA_COMPILER_NEAREST_MAX) {
+    if (id.len > compiler->system->params[TA_PARAM_COMPILE_NEAREST_BYTES]) {
         return nearest; /* nobody misspells a name this long by a few letters */
     }
     for (ta_state_id state = 0; state < compiler->states.count; state += 1u) {
@@ -2386,7 +2384,7 @@ static void ta_compile_rejected(ta_system *system, const ta_definition_compile_p
     if (params->error_arena != NULL && rejection->message.ptr != NULL && rejection->message.len != 0) {
         ta_str copy = {0};
         ta_str kept = { .ptr = rejection->message.ptr,
-                        .len = ta_utf8_prefix(rejection->message, TA_COMPILE_ERROR_MESSAGE_MAX) };
+                        .len = ta_utf8_prefix(rejection->message, system->params[TA_PARAM_COMPILE_MESSAGE_BYTES]) };
         if (ta_arena_copy_str(params->error_arena, kept, &copy) == TA_OK) {
             message = copy;
         }
@@ -2410,6 +2408,41 @@ static void ta_compile_rejected(ta_system *system, const ta_definition_compile_p
     error->message = message;
 }
 
+/*
+ * A compiled definition whose interpreter needs more scratch than the
+ * system's interpreterBytes (ADR 0092 section 3) is refused here, before it
+ * can be registered, with both figures in the error.
+ */
+static ta_result ta_compile_check_scratch(ta_system *system, const ta_definition_compile_params *params) {
+    ta_definition *definition = *params->out;
+    size_t need = ta_interpreter_scratch_need(definition);
+    uint32_t have = system->params[TA_PARAM_INTERPRETER_BYTES];
+    if (need <= have) {
+        return TA_OK;
+    }
+    ta_definition_destroy(definition);
+    *params->out = NULL;
+    if (params->error == NULL) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    ta_str message = TA_PHRASE("the chart needs more interpreter scratch than this system has (interpreterBytes)");
+    char text[128];
+    ta_text_writer writer = { .buffer = text, .capacity = sizeof text };
+    ta_text_put(&writer, TA_PHRASE("the chart needs "));
+    ta_text_put_u64(&writer, (uint64_t)need);
+    ta_text_put(&writer, TA_PHRASE(" bytes of interpreter scratch; this system has "));
+    ta_text_put_u64(&writer, have);
+    ta_text_put(&writer, TA_PHRASE(" (interpreterBytes)"));
+    uint32_t needed = 0;
+    ta_str copy = { 0 };
+    if (params->error_arena != NULL && ta_text_finish(&writer, &needed) == TA_OK &&
+        ta_arena_copy_str(params->error_arena, (ta_str){ .ptr = text, .len = writer.length }, &copy) == TA_OK) {
+        message = copy;
+    }
+    *params->error = (ta_compile_error){ .code = TA_COMPILE_ERROR_LIMIT, .message = message };
+    return TA_ERR_UNSUPPORTED;
+}
+
 ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_compile_params *params) {
     if (params != NULL && params->error != NULL) {
         *params->error = (ta_compile_error){0};
@@ -2427,6 +2460,9 @@ ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_comp
                                                       .rejected = &rejection,
                                                       .out = params->out,
                                                   });
+    if (result == TA_OK) {
+        return ta_compile_check_scratch(system, params);
+    }
     if (params->error == NULL || (result != TA_ERR_INVALID && result != TA_ERR_UNSUPPORTED)) {
         return result;
     }

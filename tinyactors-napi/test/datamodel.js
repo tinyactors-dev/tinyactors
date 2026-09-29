@@ -402,10 +402,12 @@ async function originOfADestroyedSender() {
   system.close();
 }
 
-// When core cannot render a system variable for lack of memory, reading it
-// throws and the expression fails as error.execution (core ADR 0070, open
-// point 1). It never reads as undefined, and catching the exception in the
-// chart's code does not hide the failure.
+// When core cannot render a system variable, reading it throws and the
+// expression fails as error.execution (core ADR 0070, open point 1). It
+// never reads as undefined, and catching the exception in the chart's code
+// does not hide the failure. Rendered text lives in the render area, which
+// is allocated with the system (core ADR 0092): a name longer than
+// renderBytes fails the same way whether memory is short or not.
 async function failedSystemVariable() {
   const system = createSystem();
   const definition = system.define(
@@ -454,11 +456,17 @@ async function failedSystemVariable() {
   assert.equal(data.caught, 'out-of-memory', 'the getter threw');
   assert.equal(data.errors.length, 2, 'catching the exception does not hide the failure');
 
-  // With memory again, the same variable renders.
+  // With memory again, the same name still does not fit the render area:
+  // content-sized, it fails the same way (core ADR 0092 section 3).
   actor.post(`long.${segment}`);
   await system.flush();
-  assert.equal(actor.inspect().data.seen, `long.${segment}`);
-  assert.equal(actor.inspect().data.errors.length, 2);
+  assert.equal(actor.inspect().data.seen, null);
+  assert.equal(actor.inspect().data.errors.length, 3);
+  // A name that fits renders.
+  actor.post('long.short');
+  await system.flush();
+  assert.equal(actor.inspect().data.seen, 'long.short');
+  assert.equal(actor.inspect().data.errors.length, 3);
   system.close();
   assert.equal(native.environmentStats().leakedBytes, 0);
 }

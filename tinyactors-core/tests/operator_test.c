@@ -370,11 +370,22 @@ static ta_state_id state(run *r, const char *id) {
     return out;
 }
 
+/* Parameters for the next system a helper creates (ADR 0092: they are fixed
+ * at creation), then back to the defaults. */
+static ta_param_value next_params[4];
+static uint32_t next_param_count;
+static void next_param(ta_param param, uint64_t value) {
+    next_params[next_param_count++] = (ta_param_value){ .param = param, .value = value };
+}
+
 /* A system with the chart, a recording trace sink, and one actor, not yet
  * bootstrapped. */
 static void start(run *r) {
     *r = (run){0};
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &r->system) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = next_params,
+                                                .param_count = next_param_count },
+                           &r->system) == TA_OK);
+    next_param_count = 0;
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(r->system, &(ta_definition_compile_params){ .spec = &chart,
                                                                                  .datamodel = { .v = &dm_vtable },
@@ -866,11 +877,11 @@ static void jump_retrying(run *r) {
 
 static void test_out_of_memory(void) {
     run r;
-    start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
     /* No cached event blocks: the jump's event takes a new one, which grows
      * inside the jump's microstep, before its first unit (ADR 0070). */
-    CHECK(ta_system_set_event_block_cache(r.system, 0) == TA_OK);
+    next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
+    start(&r);
+    CHECK(settle(&r, 0) == TA_RUN_STABLE);
     clear_log();
     uint32_t first = record_count;
     unsigned long before = allocations;
@@ -888,9 +899,9 @@ static void test_out_of_memory(void) {
 
     char text[4096];
     for (unsigned long failing = 1; failing <= used; failing += 1u) {
+        next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
         start(&r);
         CHECK(settle(&r, 0) == TA_RUN_STABLE);
-        CHECK(ta_system_set_event_block_cache(r.system, 0) == TA_OK);
         clear_log();
         first = record_count;
         fail_at = allocations + failing;
@@ -939,8 +950,8 @@ static void test_out_of_memory(void) {
  */
 static void test_abandon_a_runaway(void) {
     run r;
+    next_param(TA_PARAM_MICROSTEP_LIMIT, 50);
     start(&r);
-    ta_system_set_microstep_limit(r.system, 50);
     CHECK(settle(&r, 0) == TA_RUN_STABLE);
     CHECK(offer(&r, "spin", NULL) == TA_OK);
     ta_run_status status = TA_RUN_PAUSED;

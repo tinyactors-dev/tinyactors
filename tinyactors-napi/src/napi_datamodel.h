@@ -124,7 +124,7 @@ struct tna_js_datamodel {
     uint32_t registered_count;
     /* A compiler's refusal message, which core copies before it next calls
      * the data model (ta_expression_rejection). */
-    char rejection[TA_COMPILE_ERROR_MESSAGE_MAX];
+    char rejection[TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES];
     /*
      * Offloading an unloaded actor (core ADR 0074): a value's bytes are its
      * serialization (`serialize`, v8.serialize) when it has one, or else a

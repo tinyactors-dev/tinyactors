@@ -119,6 +119,16 @@ static const ta_datamodel_vtable dm_vtable = {
  * Helpers
  */
 
+/* A system whose interpreter region holds 10,000 levels (ADR 0092): the
+ * default interpreterBytes refuses these charts when they are defined. */
+static ta_system *deep_system(uint64_t interpreter_bytes) {
+    ta_system *system = NULL;
+    ta_param_value params[] = { { .param = TA_PARAM_INTERPRETER_BYTES, .value = interpreter_bytes } };
+    ta_result result = ta_system_create(
+        &(ta_system_config){ .allocator = allocator, .params = params, .param_count = 1 }, &system);
+    return result == TA_OK ? system : NULL;
+}
+
 static ta_definition_id compile_register(ta_system *system, const ta_scxml_spec *spec) {
     ta_definition *definition = NULL;
     ta_result result = ta_definition_compile_spec(system, &(ta_definition_compile_params){
@@ -190,8 +200,8 @@ static void deep_states(void) {
     levels[DEPTH - 1u][1] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = STR("b") };
     ta_scxml_spec spec = { .name = STR("deep_states"), .states = levels[0] };
 
-    ta_system *system = NULL;
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
+    ta_system *system = deep_system(16u * 1024u * 1024u);
+    CHECK(system != NULL);
     ta_definition_id id = compile_register(system, &spec);
     check_export(system, id, DEPTH);
     ta_actor_id actor = 0;
@@ -261,8 +271,8 @@ static void deep_actions(void) {
     ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("s"), .onentry = onentry }, {0} };
     ta_scxml_spec spec = { .name = STR("deep_actions"), .states = states };
 
-    ta_system *system = NULL;
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
+    ta_system *system = deep_system(16u * 1024u * 1024u);
+    CHECK(system != NULL);
     ta_definition_id id = compile_register(system, &spec);
     check_export(system, id, 1);
     ta_actor_id actor = 0;
@@ -277,11 +287,13 @@ static void deep_actions(void) {
 }
 
 /*
- * The executor's frames come from the interpreter's scratch when it starts.
- * Without memory for them the resume is TA_ERR_NOMEM before any action
- * runs, and a retry once memory is back runs the whole block once.
+ * The executor's frames come from interpreter region 0, allocated when the
+ * system is created (ADR 0092 section 3). A chart that needs more than
+ * interpreterBytes is refused when it is defined, naming both figures; a
+ * system with exactly that many is refused at creation when the allocator
+ * cannot give it, and once created it runs the chart without running out.
  */
-static void frames_out_of_memory(void) {
+static void frames_are_sized_at_creation(void) {
     ta_scxml_action_spec (*blocks)[2] = deep_blocks();
     CHECK(blocks != NULL);
     if (blocks == NULL) {
@@ -293,15 +305,38 @@ static void frames_out_of_memory(void) {
 
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, allocator, 1024) == TA_OK);
+    ta_definition *definition = NULL;
+    ta_compile_error error = {0};
+    CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){
+                                                 .spec = &spec, .datamodel = { .v = &dm_vtable },
+                                                 .allocator = allocator, .out = &definition,
+                                                 .error = &error, .error_arena = &arena }) == TA_ERR_UNSUPPORTED);
+    CHECK(definition == NULL);
+    CHECK(error.code == TA_COMPILE_ERROR_LIMIT);
+    static const char prefix[] = "the chart needs ";
+    CHECK(error.message.len > sizeof prefix && memcmp(error.message.ptr, prefix, sizeof prefix - 1u) == 0);
+    CHECK(strstr(error.message.ptr, " bytes of interpreter scratch; this system has 262144 (interpreterBytes)") != NULL);
+    uint64_t need = 0;
+    for (const char *digit = error.message.ptr + sizeof prefix - 1u; *digit >= '0' && *digit <= '9'; digit += 1) {
+        need = need * 10u + (uint64_t)(*digit - '0');
+    }
+    CHECK(need > 262144u);
+    ta_arena_destroy(&arena);
+    ta_system_destroy(system);
+
+    refuse_from = (size_t)need; /* the region is at least this large */
+    CHECK(deep_system(need) == NULL);
+    refuse_from = 0;
+
+    system = deep_system(need);
+    CHECK(system != NULL);
     ta_definition_id id = compile_register(system, &spec);
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
     conditions = bindings = 0;
     ta_run_status status = TA_RUN_ERROR;
-    refuse_from = 64u * 1024u; /* the frames for 10,000 levels are far larger */
-    CHECK(resume(system, actor, &status) == TA_ERR_NOMEM);
-    CHECK(conditions == 0 && bindings == 0);
-    refuse_from = 0;
     CHECK(resume(system, actor, &status) == TA_OK && status == TA_RUN_STABLE);
     CHECK(conditions == DEPTH / 2u);
     CHECK(bindings == DEPTH / 2u);
@@ -313,7 +348,7 @@ static void *run_all(void *unused) {
     (void)unused;
     deep_states();
     deep_actions();
-    frames_out_of_memory();
+    frames_are_sized_at_creation();
     return NULL;
 }
 

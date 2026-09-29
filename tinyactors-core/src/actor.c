@@ -268,6 +268,7 @@ void ta_actor_free(ta_system *system, ta_actor *actor) {
                                              .alignment = definition->actor_block_alignment });
     ta_definition *owner = ta_system_definition(system, definition->id);
     owner->actor_count -= 1u;
+    system->live_actors -= 1u;
     ta_system_settle_definition(system, owner);
 }
 
@@ -446,6 +447,10 @@ ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *params) {
  * from an image instead, so both start here.
  */
 ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **out) {
+    /* maxActors is answered as an allocator that ran out (ADR 0092 section 4). */
+    if (!ta_system_quota_actor(system)) {
+        return TA_ERR_NOMEM;
+    }
     /* One allocation: the record, the session storage, the instance (ADR 0063). */
     ta_actor *actor = ta_mem_alloc(system->allocator, definition->actor_block_bytes, definition->actor_block_alignment);
     if (actor == NULL) {
@@ -455,6 +460,7 @@ ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **
     *actor = (ta_actor){ .definition = definition, .published = true, .macrostep = true };
     /* Counted from here so every ta_actor_free() path can uncount it. */
     definition->actor_count += 1u;
+    system->live_actors += 1u;
     actor->host_impl = (ta_dm_host_impl){ .system = system, .actor = actor };
     actor->host = (ta_dm_host){ .impl = &actor->host_impl };
 
@@ -566,6 +572,17 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
     return result;
 }
 
+/* How many invoking parents stand above an actor: 0 for one nobody invoked. */
+static uint32_t ta_actor_invoke_depth(ta_system *system, ta_actor_id id) {
+    uint32_t depth = 0;
+    const ta_actor *actor = ta_actor_lookup(system, id);
+    while (actor != NULL && actor->sparse != NULL && actor->sparse->has_parent && depth < UINT32_MAX - 1u) {
+        depth += 1u;
+        actor = ta_actor_lookup(system, actor->sparse->parent.actor);
+    }
+    return depth;
+}
+
 ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
@@ -573,6 +590,12 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     ta_definition *definition = ta_system_definition(system, params->definition);
     if (definition == NULL || definition->retired) {
         return TA_ERR_NOT_FOUND;
+    }
+    if (params->parent != NULL && ta_actor_invoke_depth(system, params->parent->actor) + 1u >=
+                                      system->params[TA_PARAM_INTERPRETER_NESTING]) {
+        /* Exiting it would need an interpreter region past interpreterNesting
+         * (ADR 0092 section 3). */
+        return TA_ERR_UNSUPPORTED;
     }
     ta_actor *actor = NULL;
     ta_result result = ta_actor_new(system, definition, &actor);

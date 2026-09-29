@@ -692,9 +692,8 @@ typedef struct {
      */
     TA_OUT TA_OPTIONAL TA_LIFETIME(call) ta_expression_rejection *rejected;
 } ta_datamodel_prepare_definition_params;
-/* Core keeps at most this many bytes of a rejection's message, cut at a
- * UTF-8 boundary. */
-#define TA_COMPILE_ERROR_MESSAGE_MAX ((uint32_t)256)
+/* Core keeps at most TA_PARAM_COMPILE_MESSAGE_BYTES of a rejection's
+ * message (ADR 0092), cut at a UTF-8 boundary. */
 typedef struct { void *shared; void *instance; TA_IN TA_OPTIONAL const ta_value *binding; const ta_dm_host *host; } ta_datamodel_init_instance_params;
 /*
  * Named top-level data bindings (SCXML <data>). `name` is the author's data ID,
@@ -2965,7 +2964,7 @@ typedef struct {
  *   configuration, or a source that is not active (ADR 0082).
  * - TA_ERR_NOMEM: no memory for the event block the event would live in
  *   until its macrostep ends (ADR 0069), or for the operator transition.
- *   Keep the message and try again later; ta_system_set_event_block_cache()
+ *   Keep the message and try again later; TA_PARAM_EVENT_BLOCK_CACHE
  *   keeps blocks for reuse.
  * On any result but TA_OK nothing is retained and the event is untouched.
  * A malformed event or operator transition is TA_ERR_INVALID whatever the
@@ -3801,7 +3800,80 @@ TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
  * system, from random bytes or a restart counter; tests use 0. It is the
  * first part of every session ID's text.
  */
-typedef struct { ta_allocator allocator; ta_time initial_time; uint64_t incarnation; } ta_system_config;
+/*
+ * System parameters (ADR 0092): each is set once, when the system is
+ * created, and never changes. A parameter bounds a limit or a buffer; the
+ * buffers every run needs are allocated at creation (interpreter region 0,
+ * the render area, the event-block cache), the ones only nested
+ * interpreters need on first use, up to their bound. ta_param_info_of()
+ * gives each one's name, default, bounds and unit; names are lowerCamelCase,
+ * for hosts to use as they are.
+ */
+typedef enum {
+    TA_PARAM_MICROSTEP_LIMIT = 0,  /* microsteps per macrostep before a runaway (ADR 0075); 0: none */
+    TA_PARAM_EVENT_BLOCK_CACHE,    /* empty event blocks kept for reuse (ADR 0069), created at creation */
+    TA_PARAM_EVENT_NAME_DEPTH,     /* segments an event name may have; at most 64 */
+    TA_PARAM_COMPILE_MESSAGE_BYTES,/* bytes kept of a data model's rejection message (ADR 0058) */
+    TA_PARAM_COMPILE_NEAREST_BYTES,/* longest unknown target that gets a nearest-name suggestion */
+    TA_PARAM_INTERPRETER_BYTES,    /* one interpreter's frames and sets, what a chart's structure needs */
+    TA_PARAM_RENDER_BYTES,         /* one interpreter's temporaries whose size depends on content (ADR 0068) */
+    TA_PARAM_INTERPRETER_NESTING,  /* interpreters that may run inside one another (ADR 0060) */
+    TA_PARAM_MAX_ACTORS,           /* quota: live actors */
+    TA_PARAM_MAX_PENDING_SENDS,    /* quota: pending delayed sends of one actor */
+    TA_PARAM_MAX_DEFINITIONS,      /* quota: live definitions */
+    TA_PARAM_COUNT
+} ta_param TA_SYMBOLS("TA_PARAM_");
+
+/* The built-in defaults (ADR 0092 rule 4); ta_param_info_of() reports them too. */
+typedef uint32_t ta_param_default;
+enum TA_CONSTANTS_OF(ta_param_default, "TA_PARAM_DEFAULT_") {
+    TA_PARAM_DEFAULT_MICROSTEP_LIMIT = 100000,
+    TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE = 4,
+    TA_PARAM_DEFAULT_EVENT_NAME_DEPTH = 64,
+    TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES = 256,
+    TA_PARAM_DEFAULT_COMPILE_NEAREST_BYTES = 128,
+    TA_PARAM_DEFAULT_INTERPRETER_BYTES = 262144,
+    TA_PARAM_DEFAULT_RENDER_BYTES = 16384,
+    TA_PARAM_DEFAULT_INTERPRETER_NESTING = 4,
+    TA_PARAM_DEFAULT_MAX_ACTORS = 2147483647,
+    TA_PARAM_DEFAULT_MAX_PENDING_SENDS = 2147483647,
+    TA_PARAM_DEFAULT_MAX_DEFINITIONS = 2147483647
+};
+
+typedef struct { ta_param param; uint64_t value; } ta_param_value;
+
+typedef struct {
+    ta_str name;
+    uint64_t default_value;
+    uint64_t min;
+    uint64_t max;
+    ta_str unit;
+} ta_param_info;
+
+/* A parameter's name, default, bounds and unit; TA_ERR_INVALID for an unknown
+ * one. The texts are core's constants, valid for as long as the program runs. */
+TA_API ta_result ta_param_info_of(ta_param param, TA_OUT TA_LIFETIME(call) ta_param_info *out);
+
+/*
+ * `incarnation` (ADR 0088) tells this system's session IDs from those of the
+ * systems and processes before it: a host chooses a distinct value for each
+ * system, from random bytes or a restart counter; tests use 0. It is the
+ * first part of every session ID's text.
+ *
+ * `params` sets system parameters (ADR 0092); the rest keep their defaults.
+ * A value outside its bounds, an unknown parameter, or one listed twice is
+ * TA_ERR_INVALID, with `rejected` naming it when given, and nothing is
+ * created. TA_ERR_NOMEM: the buffers the parameters size could not be
+ * allocated.
+ */
+typedef struct {
+    ta_allocator allocator;
+    ta_time initial_time;
+    uint64_t incarnation;
+    TA_COUNTED_BY(param_count) TA_OPTIONAL const ta_param_value *params;
+    uint32_t param_count;
+    TA_OUT TA_OPTIONAL ta_param *rejected;
+} ta_system_config;
 typedef struct {
     ta_event_name_id name;
     TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
@@ -3812,17 +3884,8 @@ typedef struct {
 TA_API ta_result ta_system_create(TA_IN const ta_system_config *config, ta_system **out);
 TA_API void ta_system_destroy(TA_DESTROYS ta_system *system);
 TA_API ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_directory directory);
-/*
- * How many empty event blocks the system keeps for reuse (ADR 0064,
- * ADR 0069); 4 when a system is created. An actor holds a block from
- * ta_actor_deliver() until its macrostep ends, so a host that delivers a
- * batch of events before it resumes the actors needs a cache as large as
- * the batch for delivery to make no allocator call. The cache takes no
- * memory until blocks are returned to it, and it keeps only small blocks,
- * so it holds at most `blocks` of them. A smaller setting frees the cached
- * blocks above it.
- */
-TA_API ta_result ta_system_set_event_block_cache(ta_system *system, uint32_t blocks);
+/* A system parameter's value (ADR 0092); TA_ERR_INVALID for an unknown one. */
+TA_API ta_result ta_system_param(const ta_system *system, ta_param param, TA_OUT uint64_t *out);
 /* Installs the scheduler for normalized external SCXML-session events. */
 TA_API ta_result ta_system_set_external_event_router(ta_system *system,
                                                       ta_external_event_router router);
@@ -3952,17 +4015,12 @@ typedef struct {
     uint64_t runs_stopped;         /* an allocation failed (ADR 0070) */
     uint64_t macrosteps_long;      /* a macrostep reached a tenth of its microstep limit (ADR 0075) */
     uint64_t runaways;             /* a macrostep reached its microstep limit (ADR 0075) */
+    uint64_t quota_refusals;       /* a spawn, a delayed send or a registration a quota refused (ADR 0092) */
 } ta_counters;
 
 /*
- * The microsteps one macrostep may run before ta_actor_resume() answers
- * TA_ERR_RUNAWAY (ADR 0075), for definitions that set none of their own;
- * 0 for no limit, the default. It applies from the next resume on.
- */
-TA_API void ta_system_set_microstep_limit(ta_system *system, uint32_t limit);
-/*
- * A definition's microstep limit (ADR 0075): 0 takes the system's,
- * TA_MICROSTEP_LIMIT_NONE is none. TA_ERR_NOT_FOUND for an unknown or freed
+ * A definition's microstep limit (ADR 0075): 0 takes the system's parameter
+ * (TA_PARAM_MICROSTEP_LIMIT, ADR 0092), TA_MICROSTEP_LIMIT_NONE is none. TA_ERR_NOT_FOUND for an unknown or freed
  * definition.
  */
 #define TA_MICROSTEP_LIMIT_NONE ((uint32_t)UINT32_MAX)

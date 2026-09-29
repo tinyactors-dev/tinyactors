@@ -92,13 +92,14 @@ static bool turn(tna_system *system) {
 
 static void reports(uint32_t fail_data) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(0, &system) == TA_OK);
+    /* A runaway at 50 microsteps (core ADR 0075), a parameter fixed at creation (core ADR 0092). */
+    ta_param_value limit[] = { { .param = TA_PARAM_MICROSTEP_LIMIT, .value = 50 } };
+    CHECK(tna_system_create(&(tna_system_create_params){ .params = limit, .param_count = 1 }, &system) == TA_OK);
     system->wake = no_wake;
     system->child_definition = child_definition;
     data_script script = { .fail_data = fail_data };
     system->quarantine_data = quarantine_data;
     system->quarantine_context = &script;
-    ta_system_set_microstep_limit(system->core, 50);
 
     /* The child loops for ever; the parent waits for it in `waiting`. */
     ta_str spin_target[] = { S("spin"), { 0 } };
@@ -162,13 +163,14 @@ static void reports(uint32_t fail_data) {
 /* A parent gone before its child's report is taken: the report is dropped. */
 static void parent_gone(void) {
     tna_system *system = NULL;
-    CHECK(tna_system_create(0, &system) == TA_OK);
+    /* A runaway at 50 microsteps (core ADR 0075), a parameter fixed at creation (core ADR 0092). */
+    ta_param_value limit[] = { { .param = TA_PARAM_MICROSTEP_LIMIT, .value = 50 } };
+    CHECK(tna_system_create(&(tna_system_create_params){ .params = limit, .param_count = 1 }, &system) == TA_OK);
     system->wake = no_wake;
     system->child_definition = child_definition;
     data_script script = { .fail_data = 1 };
     system->quarantine_data = quarantine_data;
     system->quarantine_context = &script;
-    ta_system_set_microstep_limit(system->core, 50);
 
     ta_str spin_target[] = { S("spin"), { 0 } };
     ta_scxml_transition_spec spin[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = spin_target }, { 0 } };
