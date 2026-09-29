@@ -1,6 +1,6 @@
 # ADR 0022: Mail a chart sends nowhere raises `error.communication`
 
-**Status:** Accepted and implemented. Refines ADR 0006 point 4 and ADR 0008 point 1: mail a chart sends to a target that does not exist is no longer a dead letter.
+**Status:** Accepted and implemented. Refines ADR 0006 point 4 and ADR 0008 point 1: mail a chart sends to a target that does not exist is no longer a dead letter. Refined by ADR 0032 section 2: mail for a session that has gone, of a family with a loader, waits for that loader instead of raising error.communication.
 **Date:** 2026-09-25
 
 ## Context

@@ -236,3 +236,12 @@ its actors.
   image and offload formats are unchanged. Rendering a session ID writes
   the incarnation and family as well (`0.4294967296.messenger` in place of
   `4294967296`).
+- **A step key names its family (2026-09-29, with napi ADR 0032 section
+  1).** Section 1's "a record or reference that names a session also names
+  its family" did not hold for a trace record's `cause`, whose session may be
+  another family's and gone. `ta_step_key` gained `ta_atom family` (in its
+  padding: 24 bytes before and after, static-asserted), set by
+  `ta_actor_step()`, `ta_trace_lifecycle_key()` and the RAISED record's key;
+  a host's cause and a definition record keep 0. It is not part of a span
+  ID. `tests/session_id_test.c` (`test_a_step_key_names_its_family`) checks
+  every record's key and an inspection's step and cause.

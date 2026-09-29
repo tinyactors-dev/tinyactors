@@ -1,6 +1,6 @@
 # ADR 0032: Named actors persist by replaying their inputs
 
-**Status:** Accepted; sections 3, 4 and 5 implemented (2026-09-29), see the implementation notes; the rest not yet. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
+**Status:** Accepted; sections 1 to 5 implemented (2026-09-29), see the implementation notes; the rest not yet. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
 - ADR 0020: a loader is also asked for a session that has gone, and can answer with a replay;
 - ADR 0022: mail to a gone session of a family with a loader goes to that loader;
 - the replacement API (`prepareReplacement`, `activate`), which becomes `prepare` and `publish`.
@@ -364,3 +364,73 @@ or is quarantined. Mail for the address then goes to the family's loader.
   a send pending at the stop delivered after publish; prepare's and
   publish's refusals); `test/persist.js` migrated.
 
+### Sections 1 and 2 (2026-09-29)
+
+- **Where:** `lib/system.js` (`incarnationOf`, `System.incarnation`,
+  `sessionNumber`, inspection's and capture's `sessionID`, `watchTraces`,
+  `#runSessionLoad`), `src/napi_system.c` and `src/system.{c,h}`
+  (`tna_system_create(incarnation, ...)`), `src/otlp.c`
+  (`tna_session_text`, `tna_key_session`), `lib/tracing.js` (`stepSpanID`
+  takes the text), `lib/debug.js` and `lib/debug/variables.js` (attach by
+  the text, threads keyed by it), `src/router.c`
+  (`tna_router_session_loads`, `tna_router_post_session`),
+  `src/loads.{c,h}` (`TNA_LOAD_WHY_SESSION`, `tna_loads_route_session`,
+  `tna_loads_family_loads`, a load's `keyed`), `src/napi_loads.c` (`why`
+  "session"), `index.d.ts` (`SystemOptions.incarnation`,
+  `System.incarnation`, `LoadTarget`, `LoadReason`), the VS Code launch
+  schema (`sessionID` is the text). Commits `8c8e3fc` and `6c2bf1a`.
+- **A cause's family is carried in core's step key (the decision section 1
+  asked for).** A span's `scxml.cause.session_id` names the sending step,
+  whose session may be another family's and already gone, so looking its
+  family up at encoding time can fail. `ta_step_key` gained `ta_atom family`,
+  set wherever core makes a key for a session. It fills the key's padding,
+  so a key stays 24 bytes (static-asserted in `src/actor.c`), and it is not
+  part of a span ID (`ta_step_key_span_id` mixes the other fields). The
+  encoder renders both attributes from their keys. A host's cause and a
+  definition record have family 0 and are written as the decimal number, as
+  before. Core ADR 0088's notes record the change to the key.
+- **Numbers stay where they are identities:** `ActorInspection.step.session`
+  and the `cause` of a traceparent object are the numbers `stepSpanID()`
+  hashes, and an I/O processor's `{session}` placeholder (core ADR 0068)
+  stays the session's number, because core's `ta_io_text_params` carries no
+  family.
+- **The default incarnation** is 64 bits from `crypto.getRandomValues()`,
+  which Node and Bun both have.
+- **A gone session's load is keyed by an interned address,** `{ family,
+  <session text> }`, which lets section 2 reuse the loads of ADR 0020
+  (waiting mail, `maxWaiting`, timeouts, metrics). It is never a directory
+  entry. A dead letter of mail that waited for it names that address as its
+  target. An application name equal to a session's text in the same family
+  would share its load; such a name contains the incarnation, the session
+  number and the family, so this is not guarded against.
+- **A session this system cannot name** (another incarnation's, or one core
+  routes to session 0 because another family holds its ID) is shown to the
+  loader as `<incarnation>.0.<family>` and gets a load per message, kept out
+  of the address map, since two such messages may be for different
+  sessions.
+- **flush() waits for loads in flight,** as it does for named loads, so a
+  test that holds a loader's promise lets turns run on a timer instead.
+- **Costs:**
+  - a message to a runtime destination: one check of the reference's family
+    atom; with a loader registered, one more scheduler lookup;
+  - a message for a gone session of a family with a loader (the miss
+    path): the family's text (`ta_system_atom_text`), the session's text
+    into a 256-byte stack buffer (heap only for a longer family), an
+    address lookup (`ta_address_intern`, which allocates the first time a
+    session's key is seen), and the load's map lookup;
+  - a loaded session: one address record (its header plus the family and
+    the text) and one load record (`tna_load`) while the load is in
+    flight, both released when it finishes;
+  - OTLP: each span's session attribute grows from about 10 to about 30
+    bytes, plus the family's length;
+  - with no loader for a family: nothing changes.
+- **Tests:** `test/sessions.js` (the incarnation option and its refusals,
+  the text in inspection, capture and `_sessionid`, a family holding `/`
+  and `.`, OTLP's session and cause attributes, `stepSpanID()` from the
+  text); `test/session-loads.js` (a reply to a finished requester starts a
+  new instance that gets it; without a loader the sender gets
+  error.communication; "not-found" is a dead letter; another incarnation's
+  session goes to the loader as session 0; three replies for one session
+  wait on one load and reach one instance in order);
+  `test/native/loads_test.c` (`a_gone_session_loads_a_new_instance`); the
+  OTLP golden bytes and the tests that compared decimal session IDs.
