@@ -160,20 +160,22 @@ export type LoadResult<Data extends object = object> =
   | { readonly reject: unknown }
   | {
       /**
-       * Rebuild the actor from its input log (napi ADR 0032 section 7): a
-       * replaying actor of `spawn` at the address, from `binding` (the
-       * `spawned` record's), with its clock starting at the first record's
-       * time; `inputs` replayed into it; published at `stoppedAt`, the moment
-       * it stopped (its `evicted` record's time, or the last committed
-       * horizon after a crash); then the waiting mail is delivered, in
-       * order. `onReport` gets what the replay did. Any failure is
-       * `load-failed`. For a named address only.
+       * Rebuild the actor from the records the input log handed for its
+       * address, in order (napi ADRs 0032 and 0033). No records: a fresh
+       * actor of `spawn` at the address. Otherwise a replaying actor takes
+       * the `spawned` record's binding and time, the records are replayed
+       * into it, and it is published at the last record's time; the
+       * messages the log shows queued and never delivered go back in its
+       * mailbox, then the mail that waited for the load. A history that ends
+       * in a final state ends the load `done` (its mail becomes dead letters
+       * with reason `done`). `onReport` gets what the replay did. Any other
+       * failure is `load-failed`. For a named address only. `inputs` may be
+       * an async iterable, such as a database cursor: it is read through in
+       * windows, never held whole.
        */
       readonly replay: {
         readonly spawn: Definition<Data>;
-        readonly binding?: Partial<Data> | Data;
         readonly inputs: Iterable<InputRecord> | AsyncIterable<InputRecord>;
-        readonly stoppedAt: number;
         readonly onReport?: (report: ReplayReport) => void;
       };
     };
@@ -518,46 +520,43 @@ export interface System {
    * held delayed sends are scheduled (one already due fires at the next
    * dispatch), and its active invocations are reported
    * `error.communication.invoke.<id>.unavailable`. `at` moves a replaying
-   * actor's clock one last time first: to the moment the run it replays
-   * stopped (core ADR 0089 section 2).
+   * actor's clock one last time first; it defaults to the time of the last
+   * record PreparedActor.replay() replayed.
    */
   publish<Data extends object>(prepared: PreparedActor<Data>, options?: { readonly at?: number }): Actor<Data>;
 
   /**
-   * Record every input core accepts for the named actors of `families` and
-   * hand them to `sink.commit(batch)` once per turn (napi ADR 0032 section
-   * 6). Values are the values core holds: the sink encodes and stores them
-   * as it likes, since napi chooses no storage and no encoding. While a
-   * sink is installed, a turn's services (I/O processor sends, invoker
-   * starts, cancels and forwards, log records) wait until its batch's
-   * commit returns or the promise it returns resolves; batches commit one
-   * at a time, in turn order, while later turns run. A commit that throws
-   * or rejects stops the system's services and quarantines every actor
-   * with inputs in that batch, with a fault whose operation and code are
-   * "input-log". `null` removes the sink; what it held runs once the
-   * commits before it are done.
+   * Install a write-ahead log for the named actors of `families` (napi ADRs
+   * 0032 and 0033). Once per turn, `sink.commit(batch)` gets { entries,
+   * wakes }: append each entry's `record` to its `address`'s log, in order,
+   * and set each wake's `address` to `at` (null removes it), in one
+   * transaction. The records are the log's own vocabulary, what napi needs
+   * to rebuild an actor by replay: store them without reading them, and
+   * hand an address's records back from its family's loader as
+   * { replay: { spawn, inputs } }. After a restart, set the loaders, then
+   * call wakeAt(address, at) for every stored wake. Values are the values
+   * core holds: the sink encodes and stores them as it likes, since napi
+   * chooses no storage and no encoding. While a sink is installed, a turn's
+   * services (I/O processor sends, invoker starts, cancels and forwards,
+   * log records) wait until its batch's commit returns or the promise it
+   * returns resolves; batches commit one at a time, in turn order, while
+   * later turns run. A commit that throws or rejects stops the system's
+   * services and quarantines every actor with inputs in that batch, with a
+   * fault whose operation and code are "input-log". `null` removes the
+   * sink; what it held runs once the commits before it are done.
    */
   setInputLog(sink: InputLog | null, options?: { readonly families: readonly string[] }): void;
 
   /**
-   * Put messages the input log recorded as `queued`, and never delivered,
-   * back in their addresses' mailboxes, in order: after a crash, the
-   * `queued` records a sink committed with no `event` of the same `seq`.
-   * Each keeps its event, data, origin and send ID (a literal send ID this
-   * system has never seen is dropped), and is recorded as queued again with
-   * a new `seq`. `invalid` for a record of another kind.
-   */
-  requeue(records: readonly Extract<InputRecord, { readonly kind: "queued" }>[]): void;
-
-  /**
    * Remove a stable named actor so that its input log becomes its only
-   * state (napi ADR 0032 section 8): dispatch the system's due sends,
-   * record `evicted` at `system.time`, destroy the actor and remove its
-   * directory entry, so mail for its address goes to its family's loader.
-   * Returns the eviction time: the moment the actor stopped, which a
-   * loader's { replay } passes as `stoppedAt`. `busy` while it has mail
-   * waiting (a timer that fell due included), a send still due, is inside a
-   * macrostep, or is quarantined; `invalid` for an actor without a name.
+   * state (napi ADRs 0032 and 0033): dispatch the system's due sends,
+   * record `evicted` with the actor's wake (its first pending delayed
+   * send's due time), destroy the actor and remove its directory entry, and
+   * arm the wake with wakeAt(), so its family's loader brings it back when
+   * a timer is due; mail for its address goes to the loader too. Returns
+   * the eviction time. `busy` while it has mail waiting (a timer that fell
+   * due included), a send still due, is inside a macrostep, or is
+   * quarantined; `invalid` for an actor without a name.
    */
   evict(actor: ActorID): number;
 
@@ -1581,43 +1580,47 @@ export interface ReplayReport {
   /** The events the actor's revision did not use (SendResult.consumed false). */
   readonly ignored: readonly InputRecord[];
   readonly lastTime?: number;
+  /** The history reached a final state: the actor takes nothing more, and publish() answers `done`. */
+  readonly finished: boolean;
 }
 
-/** Where System.setInputLog() hands each turn's inputs (napi ADR 0032 section 6). */
+/** Where System.setInputLog() hands each turn's records (napi ADRs 0032 and 0033). */
 export interface InputLog {
   /**
-   * Once per turn that recorded inputs or dispatched delayed sends, in turn
-   * order, one at a time. The turn's services wait until it returns, or the
-   * promise it returns resolves.
+   * Once per turn with records or wakes, in turn order, one at a time. The
+   * turn's services wait until it returns, or the promise it returns
+   * resolves. Store the batch in one transaction.
    */
   commit(batch: InputBatch): void | Promise<void>;
 }
 
 export interface InputBatch {
-  readonly turn: number;
+  /** Append each `record` to its `address`'s log, in this order. */
+  readonly entries: readonly { readonly address: ActorAddress; readonly record: InputRecord }[];
   /**
-   * Every delayed send due by this logical time has been dispatched: the
-   * moment the system's actors stopped, when it is the last one committed
-   * before a crash (core ADR 0089 section 2).
+   * Set each `address`'s wake to `at`, or remove it for null: when napi
+   * next needs the actor back (a timer due, or mail it has not taken).
+   * After a restart, call System.wakeAt(address, at) for each stored wake.
    */
-  readonly horizon: number;
-  /** In the order core accepted them. */
-  readonly inputs: readonly InputRecord[];
+  readonly wakes: readonly { readonly address: ActorAddress; readonly at: number | null }[];
 }
 
 /**
- * One input core accepted for a named actor of a logged family (napi ADR
- * 0032 section 6), at logical time `time`. `queued` is a message accepted
- * into the actor's mailbox, or waiting for its family's loader; its `event`
- * record carries the same `seq` when it is delivered. `data` and `binding`
- * are the values core holds; a spawn's binding is a structured clone taken
- * at the spawn when it can be cloned.
+ * One record of the input log (napi ADRs 0032 and 0033), at logical time
+ * `time`: the log's own vocabulary, what napi needs to rebuild an actor by
+ * replay. An application stores records without reading them; `event`
+ * records read as an audit trail. `queued` is a message accepted into the
+ * actor's mailbox, or waiting for its family's loader, and its `event` (or
+ * `jump`) record carries the same `seq` when it is delivered, its `dropped`
+ * record when it never will be. `fired` is a delayed send the actor
+ * dispatched. `data` and `binding` are the values core holds; a spawn's
+ * binding is a structured clone taken at the spawn when it can be cloned.
  */
-export type InputRecord = { readonly time: number; readonly address: ActorAddress } & (
+export type InputRecord = { readonly time: number } & (
   | { readonly kind: "spawned"; readonly revision?: string; readonly binding?: unknown }
   | {
       readonly kind: "queued";
-      readonly seq: number;
+      readonly seq: string;
       readonly name: EventName;
       readonly type: "external" | "platform";
       readonly data?: unknown;
@@ -1628,7 +1631,7 @@ export type InputRecord = { readonly time: number; readonly address: ActorAddres
     }
   | {
       readonly kind: "event";
-      readonly seq?: number;
+      readonly seq?: string;
       readonly name: EventName;
       readonly type: "external" | "platform";
       readonly data?: unknown;
@@ -1636,6 +1639,19 @@ export type InputRecord = { readonly time: number; readonly address: ActorAddres
       readonly origin?: string;
       readonly originType?: string;
       readonly invokeID?: string;
+    }
+  | {
+      /** An operator transition (core ADR 0082), by state names; `source` null for the root. */
+      readonly kind: "jump";
+      readonly seq?: string;
+      readonly name: EventName;
+      readonly type: "external" | "platform";
+      readonly data?: unknown;
+      readonly sendID?: string;
+      readonly origin?: string;
+      readonly originType?: string;
+      readonly source: string | null;
+      readonly targets: readonly string[];
     }
   | {
       readonly kind: "report";
@@ -1650,6 +1666,8 @@ export type InputRecord = { readonly time: number; readonly address: ActorAddres
   | { readonly kind: "released" }
   | { readonly kind: "evicted" }
   | { readonly kind: "finished" }
+  | { readonly kind: "fired"; readonly sendID?: string }
+  | { readonly kind: "dropped"; readonly seq: string }
 );
 
 export type PrepareOptions<Data extends object> = {
@@ -1661,6 +1679,12 @@ export type PrepareOptions<Data extends object> = {
   readonly binding?: Partial<Data> | Data;
   /** A replaying actor, whose clock starts here: no later than the system's time. */
   readonly at?: number;
+  /**
+   * The log's `spawned` record: a replaying actor whose clock starts at its
+   * time and whose binding is its binding, unless `at` or `binding` says
+   * otherwise (napi ADR 0033 section 6).
+   */
+  readonly spawned?: Extract<InputRecord, { readonly kind: "spawned" }>;
 } & ({ readonly incumbent: ActorID; readonly address?: never } | { readonly address: ActorAddress; readonly incumbent?: never });
 
 /**

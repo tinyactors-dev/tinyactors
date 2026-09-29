@@ -73,9 +73,20 @@ static void tna_jump_give(tna_sched *sched, tna_envelope *envelope) {
     envelope->has_jump = 0;
 }
 
+/* Tells the input log's observer, when there is one (napi ADR 0032 section 6). */
+static void tna_sched_note_to(const tna_sched *sched, tna_sched_note note) {
+    if (sched->observer.self != NULL) {
+        note.message = note.envelope != 0 ? tna_sched_envelope(sched, note.envelope) : NULL;
+        sched->observer.note(sched->observer.self, &note);
+    }
+}
+
 /* Releases the envelope's references and returns it to the free list. */
 static void tna_envelope_give(tna_sched *sched, uint32_t index) {
     tna_envelope *envelope = tna_sched_envelope(sched, index);
+    /* Delivered mail was noted already and left the log's map: this is mail
+     * that leaves undelivered (ADR 0033 section 3). */
+    tna_sched_note_to(sched, (tna_sched_note){ .kind = TNA_NOTE_DROPPED, .actor = envelope->target, .envelope = index });
     if (tna_map_count(&sched->replay_times) != 0) {
         (void)tna_map_remove(&sched->replay_times, index);
     }
@@ -212,14 +223,6 @@ tna_sched_entry *tna_sched_lookup(const tna_sched *sched, ta_actor_id actor) {
         return NULL;
     }
     return entry;
-}
-
-/* Tells the input log's observer, when there is one (napi ADR 0032 section 6). */
-static void tna_sched_note_to(const tna_sched *sched, tna_sched_note note) {
-    if (sched->observer.self != NULL) {
-        note.message = note.envelope != 0 ? tna_sched_envelope(sched, note.envelope) : NULL;
-        sched->observer.note(sched->observer.self, &note);
-    }
 }
 
 void tna_sched_forget_logging(tna_sched *sched) {
@@ -943,6 +946,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
     default:
         entry->flags &= (uint8_t)~TNA_SCHED_UNLIMITED;
         tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_STABLE, .ignored = ignored });
+        tna_sched_note_to(sched, (tna_sched_note){ .kind = TNA_NOTE_SETTLED, .actor = actor });
         tna_sched_settle(sched, params, entry, actor);
         return;
     }

@@ -2,7 +2,7 @@
 // against Node's types and ES2022 only: no DOM. It is compiled, never run.
 
 import { createSystem, named, serialize, statechart } from '@tinyactors/node';
-import type { InputRecord, ReplayReport } from '@tinyactors/node';
+import type { ActorAddress, InputRecord, ReplayReport } from '@tinyactors/node';
 
 class Money {
   constructor(readonly amount: number, readonly currency: string) {}
@@ -36,16 +36,28 @@ export async function usage(): Promise<void> {
   await actor.send('add', undefined, { signal: controller.signal });
   controller.abort();
 
-  // Persistence by replay (napi ADR 0032): an input log, a loader that
-  // answers { replay }, eviction, and a replay by hand.
-  const records: InputRecord[] = [];
-  system.setInputLog({ commit(batch) { records.push(...batch.inputs); } }, { families: ['counter'] });
+  // Persistence by replay (napi ADRs 0032 and 0033): a write-ahead log the
+  // application stores without reading, a loader that answers { replay },
+  // wakes, eviction, and an upgrade by replay.
+  const log = new Map<string, InputRecord[]>();
+  const wakes = new Map<string, number>();
+  const key = (address: ActorAddress) => `${address.family}/${address.name}`;
+  system.setInputLog({
+    commit({ entries, wakes: changed }) {
+      for (const { address, record } of entries) log.set(key(address), [...(log.get(key(address)) ?? []), record]);
+      for (const { address, at } of changed) at === null ? wakes.delete(key(address)) : wakes.set(key(address), at);
+    },
+  }, { families: ['counter'] });
   system.setLoader('counter', (target) => ('name' in target
-    ? { replay: { spawn: counter, inputs: records, stoppedAt: system.time, onReport: (report) => void report.ignored } }
+    ? { replay: { spawn: counter, inputs: log.get(key(target)) ?? [], onReport: (report) => void report.ignored } }
     : 'not-found'));
-  const stoppedAt: number = system.evict(actor);
-  const prepared = system.prepare(counter, { address: { family: 'counter', name: 'again' }, at: 0 });
-  const report: ReplayReport = await prepared.replay(records);
-  system.publish(prepared, { at: stoppedAt });
+  const evictedAt: number = system.evict(actor);
+  void evictedAt;
+  system.wakeAt({ family: 'counter', name: 'a' }, wakes.get('counter/a') ?? 0);
+  const history = log.get('counter/again') ?? [];
+  const spawned = history.find((record): record is Extract<InputRecord, { kind: 'spawned' }> => record.kind === 'spawned');
+  const prepared = system.prepare(counter, { address: { family: 'counter', name: 'again' }, spawned });
+  const report: ReplayReport = await prepared.replay(history);
+  system.publish(prepared);
   void report.inputs;
 }

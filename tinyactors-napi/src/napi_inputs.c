@@ -54,7 +54,7 @@ static napi_value tna_input_object(napi_env env, tna_system *system, const tna_i
     if (input->seq != 0) {
         tna_put(env, object, "seq", tna_input_number(env, (double)input->seq));
     }
-    if (input->kind == TNA_INPUT_QUEUED || input->kind == TNA_INPUT_EVENT) {
+    if (input->kind == TNA_INPUT_QUEUED || input->kind == TNA_INPUT_EVENT || input->kind == TNA_INPUT_JUMP) {
         tna_put(env, object, "name", tna_event_text(env, system, input->name));
         napi_value type = NULL;
         napi_create_string_utf8(env, tna_event_type_name(input->type), NAPI_AUTO_LENGTH, &type);
@@ -73,6 +73,20 @@ static napi_value tna_input_object(napi_env env, tna_system *system, const tna_i
     if (input->kind == TNA_INPUT_SPAWNED) {
         tna_put(env, object, "revision", tna_text(env, input->revision));
     }
+    if (input->kind == TNA_INPUT_JUMP) {
+        /* State IDs and the definition they belong to: lib names them. */
+        napi_value definition = NULL;
+        napi_value targets = NULL;
+        napi_create_bigint_uint64(env, input->definition, &definition);
+        tna_put(env, object, "definition", definition);
+        tna_put(env, object, "source", tna_input_number(env, input->source));
+        if (napi_create_array_with_length(env, input->target_count, &targets) == napi_ok) {
+            for (uint32_t at = 0; at < input->target_count; at += 1u) {
+                napi_set_element(env, targets, at, tna_input_number(env, input->targets[at]));
+            }
+            tna_put(env, object, "targets", targets);
+        }
+    }
     if (input->has_value) {
         napi_value value = NULL;
         if (tna_value_get(env, &input->value, &value)) {
@@ -85,16 +99,20 @@ static napi_value tna_input_object(napi_env env, tna_system *system, const tna_i
 void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
     tna_system *system = wrapper->system;
     tna_inputs *inputs = &system->inputs;
-    if (!inputs->enabled && inputs->count == 0) {
+    if (!inputs->enabled && inputs->count == 0 && inputs->touched.count == 0) {
         return;
     }
     napi_handle_scope scope = NULL;
     napi_open_handle_scope(env, &scope);
     uint32_t count = 0;
     tna_input *first = tna_inputs_take(inputs, &count);
+    uint32_t wake_count = 0;
+    const tna_input_wake *wakes = tna_inputs_wakes(system, &wake_count);
     napi_value batch = NULL;
     napi_value list = NULL;
-    bool made = napi_create_object(env, &batch) == napi_ok && napi_create_array_with_length(env, count, &list) == napi_ok;
+    napi_value wake_list = NULL;
+    bool made = napi_create_object(env, &batch) == napi_ok && napi_create_array_with_length(env, count, &list) == napi_ok &&
+                napi_create_array_with_length(env, wake_count, &wake_list) == napi_ok;
     uint32_t at = 0;
     for (const tna_input *input = first; made && input != NULL; input = input->next) {
         napi_value object = tna_input_object(env, system, input);
@@ -102,16 +120,27 @@ void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *fir
             napi_set_element(env, list, at++, object);
         }
     }
+    for (uint32_t index = 0; made && index < wake_count; index += 1u) {
+        napi_value wake = NULL;
+        napi_value when = NULL;
+        if (napi_create_object(env, &wake) != napi_ok) {
+            continue;
+        }
+        tna_put(env, wake, "address", tna_address_object(env, &wakes[index].address));
+        if (wakes[index].has_at) {
+            when = tna_input_number(env, (double)wakes[index].at);
+        } else {
+            napi_get_null(env, &when);
+        }
+        tna_put(env, wake, "at", when);
+        napi_set_element(env, wake_list, index, wake);
+    }
     /* Before JavaScript runs: the values are JavaScript values now. */
     tna_inputs_release(inputs, first);
     if (made) {
-        inputs->turn += 1u;
-        tna_put(env, batch, "turn", tna_input_number(env, (double)inputs->turn));
-        tna_put(env, batch, "horizon", tna_input_number(env, (double)inputs->horizon));
-        tna_put(env, batch, "dispatched", tna_input_number(env, inputs->dispatched));
         tna_put(env, batch, "inputs", list);
+        tna_put(env, batch, "wakes", wake_list);
     }
-    inputs->dispatched = 0;
     tna_env *data = wrapper->env_data;
     napi_value handler = NULL;
     napi_value argv[3] = { NULL, NULL, batch };
@@ -213,7 +242,7 @@ napi_value tna_input_host_method(napi_env env, napi_callback_info info) {
     if (argc < 3 || napi_get_value_string_utf8(env, argv[0], kind_text, sizeof kind_text, &length) != napi_ok ||
         !tna_input_kind_from(kind_text, &kind) || napi_get_value_uint32(env, argv[1], &slot) != napi_ok ||
         napi_get_value_uint32(env, argv[2], &generation) != napi_ok) {
-        return tna_throw(env, "invalid", "inputHost: expected (kind, slot, generation, value?, text?, family?, name?)");
+        return tna_throw(env, "invalid", "inputHost: expected (kind, slot, generation, value?, text?, wake?)");
     }
     tna_input_host host = { .kind = kind, .actor = ta_actor_id_make(slot, generation) };
     napi_valuetype type = napi_undefined;
@@ -227,11 +256,11 @@ napi_value tna_input_host_method(napi_env env, napi_callback_info info) {
     if (argc >= 5 && argv[4] != NULL && napi_typeof(env, argv[4], &type) == napi_ok && type == napi_string) {
         ok = tna_text_argument(env, system, argv[4], &host.text);
     }
-    ta_actor_address address = { 0 };
-    if (ok && argc >= 7 && argv[5] != NULL && napi_typeof(env, argv[5], &type) == napi_ok && type == napi_string) {
-        ok = tna_text_argument(env, system, argv[5], &address.family.name) &&
-             tna_text_argument(env, system, argv[6], &address.name);
-        host.address = &address;
+    double wake = 0;
+    if (ok && argc >= 6 && argv[5] != NULL && napi_typeof(env, argv[5], &type) == napi_ok && type == napi_number &&
+        napi_get_value_double(env, argv[5], &wake) == napi_ok && wake >= 0) {
+        host.has_wake = true;
+        host.wake = (ta_time)wake;
     }
     if (ok) {
         tna_inputs_host(system, &host);

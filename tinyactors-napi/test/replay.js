@@ -1,66 +1,58 @@
 'use strict';
 
-// Persistence by replay, end to end (core ADRs 0088 and 0089, napi ADR 0032
-// sections 6 to 8): named actors whose input log an in-memory store keeps,
-// evicted, and brought back by a loader that answers { replay }; an
-// upgrade by replay into a new revision; the timelines of core ADR 0089
-// section 2, a crash between two commits included. Runs on Node and Bun.
+// Persistence by replay, end to end (core ADRs 0088 and 0089, napi ADRs 0032
+// and 0033): named actors whose write-ahead log an in-memory store keeps in
+// two tables, a log and a wake per address, without reading a record;
+// evicted, woken, and brought back by a loader that answers
+// { replay: { spawn, inputs } }; crashes between commits; an upgrade by
+// replay; a long log streamed from an async generator. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
 const { createSystem, statechart } = require('..');
 
-// An input log in memory: each committed record under its address, and the
-// latest committed horizon. `frozen` drops every later commit, as a crash
-// loses what was not committed yet.
+// The store an application writes: an append-only log per address and a
+// wake per address, stored as the batch says, never interpreted. `frozen`
+// drops every later commit, as a crash loses what was not committed yet.
 function memoryStore() {
   const logs = new Map();
+  const wakes = new Map();
+  const key = (address) => `${address.family}/${address.name}`;
   const store = {
-    horizon: 0,
     frozen: false,
+    wakes,
     sink: {
-      commit(batch) {
+      commit({ entries, wakes: changed }) {
         if (store.frozen) {
           return;
         }
-        store.horizon = batch.horizon;
-        for (const input of batch.inputs) {
-          const key = `${input.address.family}/${input.address.name}`;
-          if (!logs.has(key)) {
-            logs.set(key, []);
+        for (const { address, record } of entries) {
+          if (!logs.has(key(address))) {
+            logs.set(key(address), []);
           }
-          logs.get(key).push(input);
+          logs.get(key(address)).push(record);
+        }
+        for (const { address, at } of changed) {
+          if (at === null) {
+            wakes.delete(key(address));
+          } else {
+            wakes.set(key(address), { address, at });
+          }
         }
       },
     },
-    of(family, name) {
-      return logs.get(`${family}/${name}`) ?? [];
+    read(address) {
+      return logs.get(key(address)) ?? [];
     },
-    // What a crash left queued: `queued` records with no `event` of their seq.
-    undelivered() {
-      const records = [...logs.values()].flat();
-      const delivered = new Set(records.filter((r) => r.kind === 'event' && r.seq !== undefined).map((r) => r.seq));
-      return records.filter((r) => r.kind === 'queued' && !delivered.has(r.seq));
-    },
-    // A loader answering from the log: nothing logged is not-found.
+    // The whole loader: the address's records, handed back.
     loader(definitions) {
-      return (address) => {
-        const log = store.of(address.family, address.name);
-        if (log.length === 0) {
-          return 'not-found';
-        }
-        const evicted = log.filter((r) => r.kind === 'evicted').at(-1);
-        return {
-          replay: {
-            spawn: definitions[address.family],
-            binding: log[0].binding,
-            inputs: log,
-            stoppedAt: evicted !== undefined ? evicted.time : store.horizon,
-            onReport: (report) => store.reports.push({ address, report }),
-          },
-        };
-      };
+      return (address) => ({ replay: { spawn: definitions[address.family], inputs: store.read(address) } });
     },
-    reports: [],
+    // At startup: every stored wake, armed again.
+    wakeAll(system) {
+      for (const { address, at } of wakes.values()) {
+        system.wakeAt(address, at);
+      }
+    },
   };
   return store;
 }
@@ -68,9 +60,12 @@ function memoryStore() {
 const ledger = () => statechart({ family: 'ledger', revision: 'v1' })
   .data('pings', 0)
   .data('hellos', 0)
+  .data('sendID', null)
   .state('open', (s) => s
     .on('ping', (t) => t.assign('pings', ({ data }) => data.pings + 1))
-    .on('hello', (t) => t.assign('hellos', ({ data }) => data.hellos + 1)));
+    .on('hello', (t) => t
+      .assign('hellos', ({ data }) => data.hellos + 1)
+      .assign('sendID', ({ event }) => event.sendID ?? null)));
 
 // An order: `add` counts, logs, pings the ledger, arms a reminder to itself
 // and an expiry an operator may withdraw; a service's `result` is taken
@@ -91,12 +86,26 @@ const order = () => statechart({ family: 'order', revision: 'v1' })
     s.on('result', (t) => t.assign('items', ({ data }) => data.items));
   });
 
+// A timeout of 5s to itself on `e1`.
+const timer = () => statechart({ family: 'timer', revision: 'v1' })
+  .state('idle', (s) => s.on('e1', (t) => t.target('waiting').send('timeout', (send) => send.after(5000))))
+  .state('waiting', (s) => s.on('timeout', (t) => t.target('timedout')))
+  .state('timedout', (s) => s.on('peek', (t) => t.target('timedout')));
+
 function snapshot(inspection) {
   return {
     activeStates: inspection.activeStates,
     data: inspection.data,
     delayedSends: inspection.delayedSends.map((send) => ({ id: send.id, due: send.due, event: send.event })),
   };
+}
+
+// Lets a loader's promise settle and the turns after it run.
+async function settle(system) {
+  for (let turn = 0; turn < 5; turn += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await system.flush();
+  }
 }
 
 // Live actors, their log committed, the order evicted, and mail for it
@@ -140,15 +149,17 @@ async function endToEnd() {
   assert.deepEqual(logs, ['added', 'added']);
   assert.equal(starts, 1);
 
-  const stopped = system.evict(live);
+  assert.equal(system.evict(live), 1200);
   await system.flush();
-  const kinds = store.of('order', 'o1').map((r) => r.kind);
+  const kinds = store.read({ family: 'order', name: 'o1' }).map((r) => r.kind);
   assert.equal(kinds[0], 'spawned');
   assert.equal(kinds.at(-1), 'evicted');
   assert.ok(kinds.includes('withdrawn'));
-  const logged = store.of('order', 'o1').length;
+  assert.ok(kinds.includes('fired'), 'the reminder that fired');
+  assert.equal(store.wakes.get('order/o1').at, 2200, 'woken for the reminder armed at 1200');
+  const logged = store.read({ family: 'order', name: 'o1' }).length;
 
-  await system.advanceTo(1500); // before the reminder armed at 1200 is due
+  await system.advanceTo(1500); // before the reminder is due
   const reply = await system.send({ family: 'order', name: 'o1' }, 'peek'); // summons it
   assert.equal(reply.status, 'stable');
   const back = system.findActor({ family: 'order', name: 'o1' });
@@ -159,17 +170,227 @@ async function endToEnd() {
   assert.equal(book.inspect().data.pings, 2, 'the replay pinged nobody');
   assert.deepEqual(logs, ['added', 'added'], 'the replay wrote no log');
   assert.equal(starts, 1, 'the replay started no service');
-  assert.equal(stopped, 1200);
-  const newer = store.of('order', 'o1').slice(logged).map((r) => r.kind);
-  assert.deepEqual(newer.filter((kind) => kind !== 'queued' && kind !== 'event'), [], 'the replay logged nothing');
-  assert.ok(newer.includes('event'), 'the mail that summoned it is logged');
-  assert.equal(store.reports.length, 1);
-  assert.equal(store.reports[0].report.ignored.length, 0);
+  const newer = store.read({ family: 'order', name: 'o1' }).slice(logged).map((r) => r.kind);
+  assert.deepEqual(newer, ['queued', 'event'], 'only the mail that summoned it is logged, once');
 
   await system.advanceTo(2200); // the reminder armed at 1200
   await system.flush();
   assert.equal(back.inspect().data.reminded, 2);
   system.close();
+}
+
+// An evicted actor's timeout fires on time: its wake brings it back through
+// the loader when the timer is due, with no mail.
+async function evictedTimeoutFiresOnTime() {
+  const store = memoryStore();
+  const system = createSystem({ clock: 'manual', incarnation: 1 });
+  system.setInputLog(store.sink, { families: ['timer'] });
+  const definitions = { timer: system.define(timer()) };
+  system.setLoader('timer', store.loader(definitions));
+  const live = system.spawn(definitions.timer, { name: 't' });
+  await system.flush();
+  await system.advanceTo(1000);
+  await live.send('e1'); // the timeout is due at 6000
+  await system.advanceTo(2000);
+  system.evict(live);
+  await system.flush();
+  assert.equal(store.wakes.get('timer/t').at, 6000);
+  assert.equal(system.findActor({ family: 'timer', name: 't' }), undefined);
+  await system.advanceTo(6000);
+  await settle(system);
+  const back = system.findActor({ family: 'timer', name: 't' });
+  assert.ok(back !== undefined, 'the wake brought it back');
+  assert.deepEqual(back.inspect().activeStates, ['timedout'], 'and its timeout fired');
+  system.close();
+}
+
+// The same after a restart: the first system dies with the actor resident;
+// a new system, of another incarnation, arms every stored wake at startup.
+async function timeoutAfterARestart() {
+  const store = memoryStore();
+  const first = createSystem({ clock: 'manual', incarnation: 1 });
+  first.setInputLog(store.sink, { families: ['timer'] });
+  const live = first.spawn(first.define(timer()), { name: 't' });
+  await first.flush();
+  await first.advanceTo(1000);
+  await live.send('e1');
+  await first.advanceTo(2000);
+  first.close(); // the crash, the actor resident
+  assert.equal(store.wakes.get('timer/t').at, 6000, 'its wake was committed while it lived');
+
+  const second = createSystem({ clock: 'manual', incarnation: 2, initialTime: 2000 });
+  second.setInputLog(store.sink, { families: ['timer'] });
+  const definitions = { timer: second.define(timer()) };
+  second.setLoader('timer', store.loader(definitions));
+  store.wakeAll(second);
+  await second.advanceTo(5999);
+  await settle(second);
+  assert.equal(second.findActor({ family: 'timer', name: 't' }), undefined, 'not before its wake');
+  await second.advanceTo(6000);
+  await settle(second);
+  assert.deepEqual(second.findActor({ family: 'timer', name: 't' }).inspect().activeStates, ['timedout']);
+  second.close();
+}
+
+// A crash between two commits, with mail left queued: the ledger's load
+// never finished, and the sender's ping was dispatched after the last
+// commit. A new system arms the stored wakes; each actor replays what was
+// committed, the hello owed to the ledger is delivered once, and the lost
+// ping is sent again, once.
+async function crashWithMailInFlight() {
+  const store = memoryStore();
+  const first = createSystem({ clock: 'manual', incarnation: 1 });
+  first.setInputLog(store.sink, { families: ['sender', 'ledger'] });
+  const sender = () => statechart({ family: 'sender', revision: 'v1' })
+    .state('s', (s) => s
+      .on('arm', (t) => t.send('ping', (send) => send.to('#_actor_ledger/main').after(2000)))
+      .on('peek', (t) => t.target('s')));
+  const book = first.spawn(first.define(ledger()), { name: 'main' });
+  const a = first.spawn(first.define(sender()), { name: 'a' });
+  await first.flush();
+  await first.advanceTo(1000);
+  await a.send('arm'); // the ping is due at 3000
+  first.evict(book);
+  await first.flush();
+  first.setLoader('ledger', () => new Promise(() => {})); // the ledger's load never finishes
+  first.post({ family: 'ledger', name: 'main' }, 'hello'); // queued, waiting for the load
+  await new Promise((resolve) => setTimeout(resolve, 20)); // a turn commits it
+  assert.ok(store.read({ family: 'ledger', name: 'main' }).some((r) => r.kind === 'queued'), 'the hello is queued');
+  assert.ok(store.wakes.has('ledger/main'), 'and the ledger owes it');
+  store.frozen = true; // the crash: nothing after this point is committed
+  const moved = first.advanceTo(3000).catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  first.close();
+  await moved;
+
+  store.frozen = false;
+  const second = createSystem({ clock: 'manual', incarnation: 2, initialTime: 5000 });
+  second.setInputLog(store.sink, { families: ['sender', 'ledger'] });
+  const definitions = { ledger: second.define(ledger()), sender: second.define(sender()) };
+  second.setLoader('ledger', store.loader(definitions));
+  second.setLoader('sender', store.loader(definitions));
+  store.wakeAll(second);
+  await second.advanceTo(5001);
+  await settle(second);
+  const main = second.findActor({ family: 'ledger', name: 'main' });
+  assert.equal(main.inspect().data.hellos, 1, 'the queued hello is delivered once');
+  assert.equal(main.inspect().data.pings, 1, 'the ping lost in the crash is sent again, once');
+  second.close();
+}
+
+// A queued message that was withdrawn is `dropped`, and a replay after a
+// crash does not deliver it; one that was not is delivered, once, with its
+// literal send ID, which the new system has never seen.
+async function droppedAndLiteralSendIDs() {
+  const store = memoryStore();
+  const first = createSystem({ clock: 'manual', incarnation: 1 });
+  first.setInputLog(store.sink, { families: ['ledger', 'greeter'] });
+  const greeter = () => statechart({ family: 'greeter', revision: 'v1' })
+    .state('s', (s) => s.on('go', (t) => t.send('hello', (send) => send.to('#_actor_ledger/main').id('greeting'))));
+  const book = first.spawn(first.define(ledger()), { name: 'main' });
+  const g = first.spawn(first.define(greeter()), { name: 'g' });
+  await first.flush();
+  first.evict(book);
+  await first.flush();
+  first.setLoader('ledger', () => new Promise(() => {}));
+  await g.send('go'); // queued for the ledger, with its send ID
+  const alive = setInterval(() => {}, 1000); // a send()'s timeout does not keep the process alive
+  await assert.rejects(first.send({ family: 'ledger', name: 'main' }, 'ping', undefined, { timeout: 5 }),
+    (error) => error.code === 'timeout'); // queued, then withdrawn
+  clearInterval(alive);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const kinds = store.read({ family: 'ledger', name: 'main' }).map((r) => r.kind);
+  assert.deepEqual(kinds.filter((kind) => kind === 'queued' || kind === 'dropped'), ['queued', 'queued', 'dropped']);
+  first.close();
+
+  const second = createSystem({ clock: 'manual', incarnation: 2 });
+  second.setInputLog(store.sink, { families: ['ledger', 'greeter'] });
+  const definitions = { ledger: second.define(ledger()) }; // not the greeter: 'greeting' is new here
+  second.setLoader('ledger', store.loader(definitions));
+  store.wakeAll(second);
+  await second.advanceTo(1);
+  await settle(second);
+  const main = second.findActor({ family: 'ledger', name: 'main' });
+  assert.equal(main.inspect().data.hellos, 1, 'the hello, once');
+  assert.equal(main.inspect().data.sendID, 'greeting', 'with its literal send ID');
+  assert.equal(main.inspect().data.pings, 0, 'the withdrawn ping is not delivered');
+  second.close();
+}
+
+// An operator transition is replayed as the transition it was.
+async function jumpReplayed() {
+  const store = memoryStore();
+  const system = createSystem({ clock: 'manual', incarnation: 1 });
+  system.setInputLog(store.sink, { families: ['jumper'] });
+  const definitions = {
+    jumper: system.define(statechart({ family: 'jumper', revision: 'v1' })
+      .state('a', (s) => s.on('peek', (t) => t.target('a')))
+      .state('b', (s) => s.on('peek', (t) => t.target('b')))),
+  };
+  system.setLoader('jumper', store.loader(definitions));
+  const live = system.spawn(definitions.jumper, { name: 'j' });
+  await system.flush();
+  system.post(live, 'operator.goto', undefined, { transition: { targets: ['b'] } });
+  await system.flush();
+  assert.deepEqual(live.inspect().activeStates, ['b']);
+  system.evict(live);
+  await system.send({ family: 'jumper', name: 'j' }, 'peek');
+  assert.deepEqual(system.findActor({ family: 'jumper', name: 'j' }).inspect().activeStates, ['b']);
+  system.close();
+}
+
+// A history that ends in a final state: the load ends `done`, and its mail
+// becomes a dead letter with reason done.
+async function finishedIsDone() {
+  const store = memoryStore();
+  const first = createSystem({ clock: 'manual', incarnation: 1 });
+  first.setInputLog(store.sink, { families: ['task'] });
+  const task = () => statechart({ family: 'task', revision: 'v1' })
+    .state('open', (s) => s.on('close', (t) => t.target('closed')))
+    .final('closed');
+  const live = first.spawn(first.define(task()), { name: 't' });
+  await live.send('close');
+  await first.flush();
+  first.close();
+
+  const letters = [];
+  const second = createSystem({ clock: 'manual', incarnation: 2, deadLetter: (letter) => letters.push(letter) });
+  second.setLoader('task', store.loader({ task: second.define(task()) }));
+  second.post({ family: 'task', name: 't' }, 'close');
+  await settle(second);
+  assert.equal(second.findActor({ family: 'task', name: 't' }), undefined);
+  assert.deepEqual(letters.map((letter) => letter.reason), ['done'], JSON.stringify(letters.map((l) => l.detail)));
+  second.close();
+}
+
+// Outward effects are at most once across a crash: a send released only
+// after its batch committed is lost if the process dies in between, and a
+// replay does not repeat it, since its cause is committed.
+async function effectsAreAtMostOnce() {
+  const store = memoryStore();
+  const sent = [];
+  const io = { out: { send(request) { sent.push(request.event); } } };
+  const emitter = () => statechart({ family: 'emitter', revision: 'v1' })
+    .data('emitted', 0)
+    .state('s', (s) => s
+      .on('emit', (t) => t.assign('emitted', ({ data }) => data.emitted + 1).send('out-event', (send) => send.via('out').to('x')))
+      .on('peek', (t) => t.target('s')));
+  const first = createSystem({ clock: 'manual', incarnation: 1, io });
+  first.setInputLog({ commit(batch) { store.sink.commit(batch); return new Promise(() => {}); } }, { families: ['emitter'] });
+  const live = first.spawn(first.define(emitter()), { name: 'e' });
+  live.post('emit');
+  await first.flush();
+  first.close(); // committed, and the send never left
+  assert.deepEqual(sent, []);
+
+  const second = createSystem({ clock: 'manual', incarnation: 2, io });
+  second.setInputLog(store.sink, { families: ['emitter'] });
+  second.setLoader('emitter', store.loader({ emitter: second.define(emitter()) }));
+  await second.send({ family: 'emitter', name: 'e' }, 'peek');
+  assert.equal(second.findActor({ family: 'emitter', name: 'e' }).inspect().data.emitted, 1, 'the emit is replayed');
+  await second.flush();
+  assert.deepEqual(sent, [], 'and its send is not repeated: at most once');
+  second.close();
 }
 
 // An upgrade by replay: the live counter's log replayed into v2, which no
@@ -195,130 +416,15 @@ async function upgrade() {
   await system.flush();
   assert.equal(live.inspect().data.n, 12);
 
-  const log = store.of('counter', 'c');
-  const next = system.prepare(v2, { incumbent: live, binding: log[0].binding, at: log[0].time });
+  const log = store.read({ family: 'counter', name: 'c' });
+  const next = system.prepare(v2, { incumbent: live, spawned: log[0] });
   const report = await next.replay(log);
   assert.equal(report.inputs, log.length);
   assert.deepEqual(report.ignored.map((r) => r.name), ['bump']);
-  const published = system.publish(next, { at: system.time });
+  const published = system.publish(next); // at the last record's time
   assert.equal(published.inspect().data.n, 4, 'v2 reads the history: two incs, the bump ignored');
   assert.ok(system.findActor({ family: 'counter', name: 'c' }).equals(published));
   system.close();
-}
-
-// A timeout to itself (core ADR 0089 section 2, first timeline): it fired
-// live, and its delivery is in the log.
-async function timeoutToSelf() {
-  const store = memoryStore();
-  const system = createSystem({ clock: 'manual', incarnation: 1 });
-  system.setInputLog(store.sink, { families: ['timer'] });
-  const definition = system.define(statechart({ family: 'timer', revision: 'v1' })
-    .state('idle', (s) => s.on('e1', (t) => t.target('waiting').send('timeout', (send) => send.after(5000))))
-    .state('waiting', (s) => s.on('timeout', (t) => t.target('timedout')))
-    .state('timedout', (s) => s.on('peek', (t) => t.target('timedout'))));
-  system.setLoader('timer', store.loader({ timer: definition }));
-  const live = system.spawn(definition, { name: 't' });
-  await system.flush();
-  await system.advanceTo(1000);
-  await live.send('e1');
-  await system.advanceTo(6000);
-  await system.flush();
-  system.evict(live);
-  await system.flush();
-  await system.advanceTo(6000 + 7 * 24 * 3600 * 1000);
-  await system.send({ family: 'timer', name: 't' }, 'peek');
-  const back = system.findActor({ family: 'timer', name: 't' });
-  assert.deepEqual(back.inspect().activeStates, ['timedout']);
-  assert.equal(back.inspect().delayedSends.length, 0, 'nothing fires twice');
-  system.close();
-}
-
-// Sends to another actor (second and third timelines): one fired before the
-// actor stopped and is not sent again; one still pending when it stopped
-// fires once, late, at publish.
-async function sendsToAnother() {
-  const store = memoryStore();
-  const system = createSystem({ clock: 'manual', incarnation: 1 });
-  system.setInputLog(store.sink, { families: ['sender', 'ledger'] });
-  const definitions = {
-    ledger: system.define(ledger()),
-    sender: system.define(statechart({ family: 'sender', revision: 'v1' })
-      .state('s', (s) => s
-        .on('arm', (t) => t.send('ping', (send) => send.to('#_actor_ledger/main').after(2000)))
-        .on('peek', (t) => t.target('s')))),
-  };
-  system.setLoader('sender', store.loader(definitions));
-  const book = system.spawn(definitions.ledger, { name: 'main' });
-  const fired = system.spawn(definitions.sender, { name: 'fired' });
-  const pending = system.spawn(definitions.sender, { name: 'pending' });
-  await system.flush();
-  await system.advanceTo(1000);
-  await fired.send('arm');
-  await pending.send('arm');
-  await system.advanceTo(1500);
-  await system.flush();
-  system.evict(pending); // stopped at 1500, its ping due at 3000
-  await system.advanceTo(4000);
-  await system.flush();
-  system.evict(fired); // stopped at 4000, its ping fired at 3000
-  await system.flush();
-  assert.equal(book.inspect().data.pings, 1);
-
-  await system.advanceTo(10000);
-  await system.send({ family: 'sender', name: 'fired' }, 'peek');
-  await system.flush();
-  assert.equal(book.inspect().data.pings, 1, 'the ping that fired is not sent again');
-  await system.send({ family: 'sender', name: 'pending' }, 'peek');
-  await system.flush();
-  assert.equal(book.inspect().data.pings, 2, 'the pending ping fires once, late');
-  system.close();
-}
-
-// A crash between two commits (fourth timeline), with mail left queued: a
-// new system, another incarnation, requeues what was never delivered and
-// replays both actors from what was committed. The ledger takes the hello
-// and the ping once each.
-async function crash() {
-  const store = memoryStore();
-  const first = createSystem({ clock: 'manual', incarnation: 1 });
-  first.setInputLog(store.sink, { families: ['sender', 'ledger'] });
-  const sender = () => statechart({ family: 'sender', revision: 'v1' })
-    .state('s', (s) => s
-      .on('arm', (t) => t.send('ping', (send) => send.to('#_actor_ledger/main').after(2000)))
-      .on('peek', (t) => t.target('s')));
-  const book = first.spawn(first.define(ledger()), { name: 'main' });
-  const a = first.spawn(first.define(sender()), { name: 'a' });
-  await first.flush();
-  await first.advanceTo(1000);
-  await a.send('arm'); // the ping is due at 3000
-  first.evict(book);
-  await first.flush();
-  first.setLoader('ledger', () => new Promise(() => {})); // the ledger's load never finishes
-  first.post({ family: 'ledger', name: 'main' }, 'hello'); // queued, waiting for the load
-  await new Promise((resolve) => setTimeout(resolve, 20)); // a turn commits it
-  assert.ok(store.undelivered().some((r) => r.name === 'hello'), 'the hello is committed as queued');
-  store.frozen = true; // the crash: nothing after this point is committed
-  // advanceTo() waits for a quiet system, which the hanging load never
-  // allows: the ping is dispatched meanwhile, and lost with the process.
-  const moved = first.advanceTo(3000).catch(() => {});
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  first.close();
-  await moved;
-
-  const second = createSystem({ clock: 'manual', incarnation: 2 });
-  await second.advanceTo(5000);
-  store.frozen = false;
-  second.setInputLog(store.sink, { families: ['sender', 'ledger'] });
-  const definitions = { ledger: second.define(ledger()), sender: second.define(sender()) };
-  second.setLoader('ledger', store.loader(definitions));
-  second.setLoader('sender', store.loader(definitions));
-  second.requeue(store.undelivered());
-  await second.send({ family: 'sender', name: 'a' }, 'peek'); // replayed; its ping, due at 3000, fires late
-  await second.flush();
-  const main = second.findActor({ family: 'ledger', name: 'main' });
-  assert.equal(main.inspect().data.hellos, 1, 'the queued hello is delivered once');
-  assert.equal(main.inspect().data.pings, 1, 'the ping lost in the crash is sent again, once');
-  second.close();
 }
 
 // A report and an operator's actions are replayed too: an invocation that
@@ -373,8 +479,8 @@ async function reportsAndOperations() {
   assert.deepEqual(back.inspect().activeStates, ['lost'], 'the report is replayed');
   // Any mail would start the spinner's eventless loop again, so it is
   // replayed by hand and inspected before it is published.
-  const log = store.of('spinner', 's');
-  const again = system.prepare(definitions.spinner, { address: { family: 'spinner', name: 's' }, at: log[0].time });
+  const log = store.read({ family: 'spinner', name: 's' });
+  const again = system.prepare(definitions.spinner, { address: { family: 'spinner', name: 's' }, spawned: log[0] });
   const report = await again.replay(log);
   assert.equal(report.inputs, log.length);
   assert.deepEqual(again.inspect().activeStates, before.activeStates);
@@ -382,7 +488,45 @@ async function reportsAndOperations() {
   system.close();
 }
 
-// replay() refuses what it cannot replay.
+// A long log streamed from an async generator, as a database cursor would
+// hand it: replay reads it in windows, so memory does not grow with it.
+async function streamsALongLog() {
+  const collect = typeof Bun !== 'undefined'
+    ? () => Bun.gc(true)
+    : (() => {
+      require('node:v8').setFlagsFromString('--expose-gc');
+      return require('node:vm').runInNewContext('gc');
+    })();
+  const heap = () => {
+    collect();
+    return process.memoryUsage().heapUsed;
+  };
+  const count = 50000;
+  const payload = 'x'.repeat(2048); // 50,000 records would be over 100 MB if held
+  const system = createSystem({ clock: 'manual', incarnation: 1, initialTime: count });
+  const definition = system.define(statechart({ family: 'counter', revision: 'v1' })
+    .data('n', 0)
+    .state('s', (s) => s.on('inc', (t) => t.assign('n', ({ data }) => data.n + 1))));
+  const baseline = heap();
+  let peak = 0;
+  async function* cursor() {
+    yield { kind: 'spawned', time: 0, revision: 'v1' };
+    for (let index = 1; index <= count; index += 1) {
+      if (index % 5000 === 0) {
+        peak = Math.max(peak, heap() - baseline);
+      }
+      yield { kind: 'event', time: index, name: 'inc', type: 'external', data: { payload: `${payload}${index}` } };
+    }
+  }
+  const prepared = system.prepare(definition, { address: { family: 'counter', name: 'long' }, at: 0 });
+  const report = await prepared.replay(cursor());
+  assert.equal(report.inputs, count + 1);
+  assert.equal(prepared.inspect().data.n, count);
+  assert.ok(peak < 40 * 1024 * 1024, `the log is not held: the heap grew by at most ${Math.round(peak / 1048576)} MB`);
+  system.close();
+}
+
+// replay() and evict() refuse what they cannot do.
 async function refusals() {
   const system = createSystem({ clock: 'manual' });
   const definition = system.define(ledger());
@@ -392,6 +536,8 @@ async function refusals() {
   await assert.rejects(replaying.replay('abc'), (error) => error.code === 'invalid');
   await assert.rejects(replaying.replay([{ kind: 'event' }]), (error) => error.code === 'invalid');
   await assert.rejects(replaying.replay([{ kind: 'mystery', time: 0 }]), (error) => error.code === 'invalid');
+  assert.throws(() => system.prepare(definition, { address: { family: 'ledger', name: 'z' }, spawned: { kind: 'event' } }),
+    (error) => error.code === 'invalid');
   const unnamed = system.spawn(definition);
   await system.flush();
   assert.throws(() => system.evict(unnamed), (error) => error.code === 'invalid');
@@ -400,11 +546,16 @@ async function refusals() {
 
 (async () => {
   await endToEnd();
+  await evictedTimeoutFiresOnTime();
+  await timeoutAfterARestart();
+  await crashWithMailInFlight();
+  await droppedAndLiteralSendIDs();
+  await jumpReplayed();
+  await finishedIsDone();
+  await effectsAreAtMostOnce();
   await upgrade();
-  await timeoutToSelf();
-  await sendsToAnother();
-  await crash();
   await reportsAndOperations();
+  await streamsALongLog();
   await refusals();
   console.log('replay.js passed');
 })().catch((error) => {

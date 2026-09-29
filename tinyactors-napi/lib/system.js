@@ -22,6 +22,8 @@ const NO_STATE = 4294967295;
 
 // PreparedActor.replay() reaches the system's replay driver through this key (napi ADR 0032 section 7).
 const REPLAY = Symbol('replay');
+// The time of the last record a replaying actor replayed: publish()'s default `at`.
+const LAST_REPLAYED = Symbol('lastReplayed');
 
 // The SCXML Event I/O Processor's type, as a logged origin names it.
 const SCXML_PROCESSOR = 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor';
@@ -237,6 +239,10 @@ class System {
   #commits = [];
   #committing = false;
   #inputFailure;
+  // Messages a replay owed and put back (napi ADR 0033 section 5): this
+  // system's seq for each -> the seq of the queued record the log has.
+  #owedSeqs = new Map();
+  #incarnationText;
 
   static {
     nativeOf = (system) => system.#native;
@@ -383,12 +389,17 @@ class System {
   }
 
   /**
-   * Record every input core accepts for the named actors of `families`, and
-   * hand them to `sink.commit(batch)` once per turn (napi ADR 0032 section
-   * 6). A batch is { turn, horizon, inputs }: the records in the order core
-   * accepted them, and the time up to which every due delayed send has been
-   * dispatched. Values are the values core holds; the sink encodes and
-   * stores them as it likes, since napi chooses no storage and no encoding.
+   * Install a write-ahead log for the named actors of `families` (napi ADRs
+   * 0032 and 0033): once per turn, `sink.commit(batch)` gets { entries,
+   * wakes }. Append each entry's `record` to its `address`'s log, in order,
+   * and set each wake's `address` to `at` (null removes it), in one
+   * transaction. The records are the log's own vocabulary, what napi needs
+   * to rebuild an actor by replay: the sink stores them without reading
+   * them, and hands an address's records back to its family's loader as
+   * { replay: { spawn, inputs } }. After a restart, call wakeAt(address, at)
+   * for every stored wake. Values are the values core holds; the sink
+   * encodes and stores them as it likes, since napi chooses no storage and
+   * no encoding.
    *
    * While a sink is installed, a turn's services (I/O processor sends,
    * invoker starts, cancels and forwards, log records) wait until its
@@ -421,35 +432,10 @@ class System {
     this.#inputLog = sink;
   }
 
-  /**
-   * Put messages the input log recorded as `queued`, and never delivered,
-   * back in their addresses' mailboxes, in the order given (napi ADR 0032
-   * section 6): after a crash, the records a sink committed with no
-   * `event` of the same `seq`. Each keeps its event, data, origin and send
-   * ID, and is recorded as queued again, with a new `seq`.
-   */
-  requeue(records) {
-    if (!Array.isArray(records)) {
-      throw new TinyactorsError('requeue(): expected an array of queued records', 'invalid');
-    }
-    for (const record of records) {
-      if (record === null || typeof record !== 'object' || record.kind !== 'queued') {
-        throw new TinyactorsError('requeue(): expected records of kind "queued"', 'invalid');
-      }
-      const { family, name } = addressOf(record.address, 'requeue()');
-      let origin;
-      if (typeof record.origin === 'string' && typeof record.originType === 'string') {
-        origin = loggedOrigin(record);
-      }
-      this.#native.requeue(family, name, this.#events.id(record.name), record.data, origin,
-        typeof record.sendID === 'string' ? record.sendID : undefined, record.type === 'platform');
-    }
-  }
-
   // A host operation the input log records for a logged actor (napi ADR 0032 section 6).
-  #recordHost(kind, actor, value, text) {
+  #recordHost(kind, actor, value, text, wake) {
     if (this.#inputLog !== undefined) {
-      this.#native.inputHost(kind, actor.slot, actor.generation, value, text);
+      this.#native.inputHost(kind, actor.slot, actor.generation, value, text, wake);
     }
   }
 
@@ -758,16 +744,26 @@ class System {
     const held = this.#held;
     this.#held = [];
     const actors = [];
-    const inputs = batch.inputs.map((record) => {
-      const { slot, generation, ...input } = record;
+    const entries = batch.inputs.map((input) => {
+      const { slot, generation, address, ...record } = input;
       if (slot !== undefined) {
         actors.push([slot, generation]);
       }
-      return Object.freeze(input);
+      if (record.seq !== undefined) {
+        record.seq = this.#logSeq(record.kind, record.seq);
+      }
+      if (record.kind === 'jump') {
+        const stateName = (state) => (state === NO_STATE ? null : readState(this.#native, record.definition, state).name);
+        record.source = stateName(record.source);
+        record.targets = record.targets.map(stateName);
+        delete record.definition;
+      }
+      return Object.freeze({ address: Object.freeze(address), record: Object.freeze(record) });
     });
+    const wakes = batch.wakes.map((wake) => Object.freeze({ address: Object.freeze(wake.address), at: wake.at }));
     const sink = this.#inputLog;
-    const commit = sink !== undefined && (inputs.length > 0 || batch.dispatched > 0)
-      ? Object.freeze({ turn: batch.turn, horizon: batch.horizon, inputs: Object.freeze(inputs) })
+    const commit = sink !== undefined && (entries.length > 0 || wakes.length > 0)
+      ? Object.freeze({ entries: Object.freeze(entries), wakes: Object.freeze(wakes) })
       : undefined;
     if (commit === undefined && held.length === 0) {
       return;
@@ -776,6 +772,22 @@ class System {
     if (!this.#committing) {
       this.#drainCommits();
     }
+  }
+
+  // A record's seq as the log keeps it: this system's number, unique across
+  // restarts with the incarnation in front, or, for a message a replay owed
+  // and put back (ADR 0033 section 5), the seq of the queued record the log
+  // already has. Its event or dropped record ends the alias.
+  #logSeq(kind, seq) {
+    const owed = this.#owedSeqs.get(seq);
+    if (owed !== undefined) {
+      if (kind !== 'queued') {
+        this.#owedSeqs.delete(seq);
+      }
+      return owed;
+    }
+    this.#incarnationText ??= String(this.incarnation);
+    return `${this.#incarnationText}.${seq}`;
   }
 
   // Commits the waiting batches one at a time; a synchronous commit runs its
@@ -2212,7 +2224,11 @@ class System {
                typeof result.replay === 'object') {
       const actor = await this.#replayAt(result.replay, load);
       if (!this.closed) {
-        this.#completeLoad(index, generation, 'loaded', actor);
+        if (actor === undefined) {
+          this.#completeLoad(index, generation, 'done'); // the history ends in a final state
+        } else {
+          this.#completeLoad(index, generation, 'loaded', actor);
+        }
       }
     } else {
       this.#failLoad(key, load, 'failed', 'the loader returned something it cannot: expected "offloaded", ' +
@@ -2221,19 +2237,21 @@ class System {
     }
   }
 
-  // A loader's { replay: { spawn, binding, inputs, stoppedAt, onReport } }
-  // (napi ADR 0032 section 7): a replaying actor at the load's address, its
-  // clock from the first record's time, the inputs replayed into it, and
-  // published at `stoppedAt`. The load then hands it the waiting mail. On
-  // any failure the prepared actor is destroyed and the load fails.
-  async #replayAt(replay, { address }) {
-    const { spawn: definition, binding, inputs, stoppedAt, onReport } = replay;
+  // A loader's { replay: { spawn, inputs, onReport } } (napi ADRs 0032 and
+  // 0033): no records spawn a fresh actor at the load's address; otherwise
+  // a replaying actor there takes the `spawned` record's binding and time,
+  // the records are replayed into it, and it is published at the last
+  // record's time. The messages the log shows queued and never delivered
+  // then go back in its mailbox, ahead of the load's waiting mail. A
+  // history that ends in a final state answers undefined: the load ends
+  // `done`. On any other failure the prepared actor is destroyed and the
+  // load fails.
+  async #replayAt(replay, load) {
+    const { address } = load;
+    const { spawn: definition, inputs, onReport } = replay;
     if (!(definition instanceof Definition) || definition.system !== this ||
         definition.identity.family !== address.family) {
       throw new TinyactorsError(`{ replay } needs a definition of family ${address.family} of this system`, 'invalid');
-    }
-    if (typeof stoppedAt !== 'number' || !Number.isFinite(stoppedAt) || stoppedAt < 0) {
-      throw new TinyactorsError('{ replay } needs `stoppedAt`, the time the actor stopped', 'invalid');
     }
     if (onReport !== undefined && typeof onReport !== 'function') {
       throw new TinyactorsError('{ replay }: onReport must be a function', 'invalid');
@@ -2244,19 +2262,25 @@ class System {
     }
     const iterator = open.call(inputs);
     const first = await iterator.next();
-    const at = first.done ? stoppedAt : first.value?.time;
-    if (typeof at !== 'number' || !Number.isFinite(at) || at < 0) {
+    if (first.done) {
+      return this.#spawnAt({ spawn: definition }, load);
+    }
+    const head = first.value;
+    if (head === null || typeof head !== 'object' || typeof head.time !== 'number' || !Number.isFinite(head.time) ||
+        head.time < 0) {
       throw new TinyactorsError('{ replay }: an input record is { time, kind, ... }', 'invalid');
     }
-    const prepared = this.prepare(definition, { address, binding, at });
+    const prepared = head.kind === 'spawned'
+      ? this.prepare(definition, { address, spawned: head })
+      : this.prepare(definition, { address, at: head.time });
     try {
-      let head = first.done ? undefined : first;
+      let pending = first;
       const rest = {
         [Symbol.asyncIterator]: () => ({
           next: async () => {
-            if (head !== undefined) {
-              const taken = head;
-              head = undefined;
+            if (pending !== undefined) {
+              const taken = pending;
+              pending = undefined;
               return taken;
             }
             return iterator.next();
@@ -2264,11 +2288,27 @@ class System {
           return: async (value) => (typeof iterator.return === 'function' ? iterator.return(value) : { done: true, value }),
         }),
       };
-      const report = await prepared.replay(rest);
+      const { report, owed } = await this[REPLAY](prepared, rest);
       onReport?.(report);
-      const actor = this.publish(prepared, { at: stoppedAt });
+      if (report.finished) {
+        if (this.#native.scheduling(prepared.slot, prepared.generation) !== 'none') {
+          core.actor_destroy(this.#native, prepared.slot, prepared.generation);
+        }
+        return undefined;
+      }
+      let actor;
+      try {
+        actor = this.publish(prepared);
+      } catch (error) {
+        if (error instanceof TinyactorsError && error.code === 'done') {
+          core.actor_destroy(this.#native, prepared.slot, prepared.generation);
+          return undefined;
+        }
+        throw error;
+      }
       // A published replay replaces whatever unload() offloaded to this address.
       this.#native.dropOffloaded(address.family, address.name);
+      this.#redeliver(actor, owed);
       return actor;
     } catch (error) {
       if (!this.closed) {
@@ -2279,6 +2319,31 @@ class System {
         }
       }
       throw error;
+    }
+  }
+
+  // Puts back the messages a replay found queued and never delivered, in
+  // the order they were queued (napi ADR 0033 section 5). Each keeps its
+  // event, data, origin and send ID (a literal one is interned); one from an
+  // invoked service goes without its invocation, which the publish retired.
+  //
+  // Only a message queued by another incarnation is owed: one this system
+  // queued is still in memory (waiting for this very load, say) and reaches
+  // the actor from there, and one it put back already is on its way.
+  #redeliver(actor, owed) {
+    this.#incarnationText ??= String(this.incarnation);
+    const here = `${this.#incarnationText}.`;
+    const onTheirWay = new Set(this.#owedSeqs.values());
+    for (const record of owed.values()) {
+      if (typeof record.seq === 'string' && (record.seq.startsWith(here) || onTheirWay.has(record.seq))) {
+        continue;
+      }
+      const seq = this.#native.redeliver(actor.slot, actor.generation, this.#events.id(record.name), record.data,
+        loggedOrigin(record), typeof record.sendID === 'string' ? record.sendID : undefined,
+        record.type === 'platform', Math.floor(record.time));
+      if (seq > 0 && typeof record.seq === 'string') {
+        this.#owedSeqs.set(seq, record.seq);
+      }
     }
   }
 
@@ -2400,14 +2465,20 @@ class System {
     if (options === null || typeof options !== 'object') {
       throw new TinyactorsError('prepare(): expected options { incumbent } or { address }', 'invalid');
     }
-    const { incumbent, address, at } = options;
+    const { incumbent, address, spawned } = options;
     if ((incumbent === undefined) === (address === undefined)) {
       throw new TinyactorsError('prepare(): expected exactly one of { incumbent } and { address }', 'invalid');
     }
+    if (spawned !== undefined && (spawned === null || typeof spawned !== 'object' || spawned.kind !== 'spawned' ||
+                                  typeof spawned.time !== 'number')) {
+      throw new TinyactorsError('prepare(): `spawned` must be the log\'s spawned record', 'invalid');
+    }
+    // A log's spawned record gives a replay its clock and its binding (napi ADR 0033 section 6).
+    const at = options.at ?? spawned?.time;
     if (at !== undefined && (typeof at !== 'number' || !Number.isFinite(at) || at < 0)) {
       throw new TinyactorsError('prepare(): `at` must be a non-negative number of milliseconds', 'invalid');
     }
-    let binding = options.binding;
+    let binding = options.binding ?? spawned?.binding;
     let slot = 0;
     let generation = 0;
     let target;
@@ -2453,8 +2524,10 @@ class System {
     if (incumbent !== undefined && this.#native.scheduling(incumbent.slot, incumbent.generation) === 'runnable') {
       throw new TinyactorsError('publish(): the incumbent is inside a macrostep; publish once it is idle', 'busy');
     }
-    if (options.at !== undefined) {
-      prepared.setTime(options.at);
+    // A replaying actor's clock moves to `at`, by default its last replayed record's time.
+    const at = options.at ?? (prepared.replaying ? prepared[LAST_REPLAYED] : undefined);
+    if (at !== undefined) {
+      prepared.setTime(at);
     }
     core.actor_publish(this.#native, prepared.slot, prepared.generation,
       incumbent?.slot ?? 0, incumbent?.generation ?? 0);
@@ -2573,13 +2646,15 @@ class System {
 
   /**
    * Remove the stable named actor `actor` so that its input log is its only
-   * state (napi ADR 0032 section 8): the system's due sends are dispatched,
-   * `evicted` is recorded at the system's time, and the actor is destroyed,
-   * which removes its address from the directory. Mail for the address then
-   * goes to its family's loader, which can answer with { replay }. Throws
-   * `busy` while the actor is inside a macrostep, is quarantined, has mail
-   * waiting (a due timer's included), or has a send still due. Returns the
-   * eviction time: the moment the actor stopped, for publish({ at }).
+   * state (napi ADRs 0032 and 0033): the system's due sends are dispatched,
+   * `evicted` is recorded at the system's time with the actor's wake (its
+   * first pending delayed send's due time, or none), the actor is destroyed,
+   * which removes its address from the directory, and its wake is armed
+   * with wakeAt(), so its family's loader brings it back when a timer is
+   * due. Mail for the address goes to the loader as well. Throws `busy`
+   * while the actor is inside a macrostep, is quarantined, has mail waiting
+   * (a due timer's included), or has a send still due. Returns the
+   * eviction time.
    */
   evict(actor) {
     const { slot, generation } = actorOf(this, actor);
@@ -2602,20 +2677,28 @@ class System {
     if (this.#native.mailbox(slot, generation, 1).length > 0) {
       throw busy('the actor has mail waiting');
     }
-    if (core.actor_inspect(this.#native, slot, generation).delayed_sends.some((send) => Number(send.due) <= now)) {
+    const pending = core.actor_inspect(this.#native, slot, generation).delayed_sends;
+    if (pending.some((send) => Number(send.due) <= now)) {
       throw busy('a send of the actor is still due');
     }
-    this.#native.inputHost('evicted', slot, generation, undefined, undefined, address.family, address.name);
+    const wake = pending.length === 0 ? undefined : Math.min(...pending.map((send) => Number(send.due)));
+    this.#recordHost('evicted', { slot, generation }, undefined, undefined, wake);
     core.actor_destroy(this.#native, slot, generation);
+    if (wake !== undefined) {
+      this.wakeAt(address, wake);
+    }
     return now;
   }
 
   // Replays `inputs`, one actor's input records, into the replaying actor
-  // `prepared` (napi ADR 0032 section 7): PreparedActor.replay(). Event and
-  // report records are queued REPLAY_WINDOW at a time, each carrying its
-  // time, which the scheduler sets on the actor's clock just before the
-  // actor takes it; a host operation waits for the window to settle and
-  // runs on the idle actor.
+  // `prepared` (napi ADRs 0032 section 7 and 0033): PreparedActor.replay().
+  // Event, jump and report records are queued REPLAY_WINDOW at a time, each
+  // carrying its time, which the scheduler sets on the actor's clock just
+  // before the actor takes it; a host operation and a `fired` record wait
+  // for the window to settle and move the clock on the idle actor. `queued`
+  // and `dropped` records are not inputs: they say which messages the log
+  // saw queued and never delivered, which it answers as `owed`, in the order
+  // they were queued, beside the report.
   async [REPLAY](prepared, inputs) {
     if (!(prepared instanceof PreparedActor) || prepared.system !== this || !prepared.replaying) {
       throw new TinyactorsError('replay(): expected a replaying actor of this system (prepare() with `at`)', 'invalid');
@@ -2625,9 +2708,11 @@ class System {
       throw new TinyactorsError('replay(): expected an iterable or async iterable of input records', 'invalid');
     }
     const ignored = [];
+    const owed = new Map();
     let count = 0;
     let lastTime;
     let fault; // a replayed macrostep that faulted, waiting for the operation that followed it live
+    let finished = false; // the history reached a final state: the actor takes nothing more
     let window = [];
     const settle = async () => {
       if (window.length === 0) {
@@ -2635,11 +2720,16 @@ class System {
       }
       const taken = window;
       window = [];
-      const results = await this.#settleWindow(prepared, taken.map((entry) => entry.promise));
+      const results = await this.#settleWindow(prepared, taken.map((entry) => entry.promise), () => finished);
       results.forEach((result, index) => {
         if (result instanceof Error) {
           fault ??= result;
-        } else if (taken[index].record.kind === 'event' && result.consumed === false) {
+          return;
+        }
+        if (result?.status === 'done') {
+          finished = true;
+        }
+        if (taken[index].record.kind === 'event' && result?.consumed === false) {
           ignored.push(taken[index].record);
         }
       });
@@ -2651,12 +2741,20 @@ class System {
       }
       count += 1;
       if (record.kind === 'queued') {
-        continue; // a queued message reaches the actor as its `event` record
+        owed.set(record.seq, record); // delivered as its `event` record, or owed
+        continue;
       }
       if (lastTime !== undefined && record.time < lastTime) {
         throw new TinyactorsError('replay(): input records must come in the order of their times', 'invalid');
       }
-      if (record.kind === 'event' || record.kind === 'report') {
+      if (record.seq !== undefined) {
+        owed.delete(record.seq);
+      }
+      if (record.kind === 'dropped' || finished) {
+        lastTime = record.time;
+        continue;
+      }
+      if (record.kind === 'event' || record.kind === 'report' || record.kind === 'jump') {
         const report = record.kind === 'report' ? REPORT_KINDS[record.reason] : 0;
         if (report === undefined) {
           throw new TinyactorsError(`replay(): a report's reason is unavailable, quarantined or failed, not ${record.reason}`,
@@ -2673,6 +2771,10 @@ class System {
         continue;
       }
       await settle();
+      if (finished) {
+        lastTime = record.time;
+        continue;
+      }
       if (fault !== undefined && record.kind !== 'abandoned' && record.kind !== 'released') {
         throw fault;
       }
@@ -2689,6 +2791,7 @@ class System {
         case 'evicted':
         case 'finished':
         case 'abandoned':
+        case 'fired': // the clock passing the send drops it, as it fired live
           break;
         case 'withdrawn':
           this.withdrawSend(prepared, record.sendID);
@@ -2705,14 +2808,23 @@ class System {
     if (fault !== undefined) {
       throw fault;
     }
-    await this.#untilIdle(prepared);
-    return Object.freeze({ inputs: count, ignored: Object.freeze(ignored), lastTime });
+    if (!finished) {
+      await this.#untilIdle(prepared);
+    }
+    for (const record of owed.values()) {
+      if (lastTime === undefined || record.time > lastTime) {
+        lastTime = record.time;
+      }
+    }
+    prepared[LAST_REPLAYED] = lastTime;
+    const report = Object.freeze({ inputs: count, ignored: Object.freeze(ignored), lastTime, finished });
+    return { report, owed };
   }
 
   // Waits for a window of replayed records: each one's settlement, or the
   // fault it ended in. A fault quarantines the actor with the records behind
   // it still queued; the log has nothing that resolves that, so it throws.
-  async #settleWindow(prepared, promises) {
+  async #settleWindow(prepared, promises, finished) {
     const results = new Array(promises.length);
     let left = promises.length;
     let failure;
@@ -2724,7 +2836,11 @@ class System {
     while (left > 0 && failure === undefined) {
       await new Promise((resolve) => setImmediate(resolve));
       const state = this.#native.scheduling(prepared.slot, prepared.generation);
-      if (state === 'none' || this.closed) {
+      if (this.closed || (state === 'none' && !finished())) {
+        // A finished replay is reclaimed once its promise settled: wait for it.
+        if (state === 'none' && results.some((result) => result?.status === 'done')) {
+          continue;
+        }
         throw new TinyactorsError('replay(): the replaying actor is gone', this.closed ? 'closed' : 'not-found');
       }
       stuck = state === 'quarantined' ? stuck + 1 : 0;
@@ -2739,14 +2855,17 @@ class System {
     return results;
   }
 
-  // One event or report record, through the replaying actor's mailbox; its
-  // settlement, or the error a fault rejected it with.
+  // One event, jump or report record, through the replaying actor's
+  // mailbox; its settlement, or the error a fault rejected it with.
   #replayed(prepared, record, report) {
     const origin = report === 0 ? loggedOrigin(record) : undefined;
     const name = report === 0 ? this.#events.id(record.name) : 0;
+    const transition = record.kind === 'jump'
+      ? this.#jumpOf(prepared, { targets: record.targets, source: record.source }, 'replay()')
+      : undefined;
     const promise = this.#native.replaySend(prepared.slot, prepared.generation, name, record.data, origin,
       typeof record.sendID === 'string' ? record.sendID : undefined, record.type === 'platform',
-      typeof record.invokeID === 'string' ? record.invokeID : undefined, report, Math.floor(record.time));
+      typeof record.invokeID === 'string' ? record.invokeID : undefined, report, Math.floor(record.time), transition);
     return promise.then((settled) => settled, (error) => {
       if (error instanceof TinyactorsError && error.code !== 'closed' && error.code !== 'not-found' &&
           this.#native.scheduling(prepared.slot, prepared.generation) === 'quarantined') {
@@ -3027,8 +3146,8 @@ class PreparedActor extends ActorID {
    * with { inputs, ignored, lastTime }: the records read, the events the
    * current revision took without a transition, and the last time.
    */
-  replay(inputs) {
-    return this.system[REPLAY](this, inputs);
+  async replay(inputs) {
+    return (await this.system[REPLAY](this, inputs)).report;
   }
 }
 
@@ -3050,7 +3169,7 @@ function createSystem(options) {
   return new System(options);
 }
 
-// The origin of a logged message, as requeue() and replay() pass it back
+// The origin of a logged message, as a replay and a redelivery pass it back
 // (napi ADR 0032 sections 6 and 7): an actor's URI for the SCXML processor,
 // an I/O message origin for any other, or none.
 function loggedOrigin(record) {

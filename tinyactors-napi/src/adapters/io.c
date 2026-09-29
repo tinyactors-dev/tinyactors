@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "../inputs.h"
 #include "../system.h"
 
 struct tna_io_processor {
@@ -16,6 +17,10 @@ struct tna_io_processor {
 
 static ta_op_status tna_io_send(void *self, const ta_send *send, ta_fault *fault) {
     tna_system *system = ((tna_io_processor *)self)->system;
+    if (system->dispatching_due) {
+        /* A delayed send left its sender: the input log says so (ADR 0033 section 3). */
+        tna_inputs_fired(system, &send->source, send->send_id);
+    }
     tna_effect effect = {
         .kind = TNA_EFFECT_IO,
         .source = send->source,

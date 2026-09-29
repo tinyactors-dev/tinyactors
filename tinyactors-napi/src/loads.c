@@ -8,6 +8,7 @@ const char *tna_load_outcome_name(tna_load_outcome outcome) {
     static const char *const names[TNA_LOAD_OUTCOMES] = {
         [TNA_LOAD_LOADED] = "loaded",       [TNA_LOAD_SPAWNED] = "spawned", [TNA_LOAD_NOT_FOUND] = "not_found",
         [TNA_LOAD_REJECTED] = "rejected",   [TNA_LOAD_FAILED] = "failed",   [TNA_LOAD_TIMED_OUT] = "timed_out",
+        [TNA_LOAD_DONE] = "done",
     };
     return (uint32_t)outcome < TNA_LOAD_OUTCOMES ? names[outcome] : "failed";
 }
@@ -338,6 +339,7 @@ static tna_dead_reason tna_load_dead_reason(tna_load_outcome outcome) {
     case TNA_LOAD_NOT_FOUND: return TNA_DEAD_NOT_FOUND;
     case TNA_LOAD_REJECTED: return TNA_DEAD_REJECTED;
     case TNA_LOAD_TIMED_OUT: return TNA_DEAD_LOAD_TIMEOUT;
+    case TNA_LOAD_DONE: return TNA_DEAD_DONE;
     default: return TNA_DEAD_LOAD_FAILED;
     }
 }

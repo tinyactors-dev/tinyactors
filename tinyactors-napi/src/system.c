@@ -476,7 +476,6 @@ bool tna_system_dispatch_due(tna_system *system) {
                                                });
     system->dispatching_due = false;
     system->inside_core = false;
-    system->inputs.dispatched += dispatched;
     return more_due;
 }
 
@@ -501,14 +500,6 @@ void tna_system_turn(tna_system *system) {
                                                            .now = ta_system_time(system->core),
                                                            .now_ns = tna_monotonic_ns(NULL) });
     tna_system_dispatch_due(system);
-    if (system->inputs.enabled) {
-        /* Every send due by the horizon has been dispatched (core ADR 0089
-         * section 2): a budget that left some due holds it before them. */
-        ta_time now = ta_system_time(system->core);
-        ta_time next = 0;
-        system->inputs.horizon =
-            ta_system_next_deadline(system->core, &next) == TA_OK && next <= now ? (next == 0 ? 0 : next - 1u) : now;
-    }
 }
 
 void tna_system_end_turn(tna_system *system) {

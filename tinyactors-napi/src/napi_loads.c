@@ -118,6 +118,7 @@ static const struct {
 } tna_load_outcomes[] = {
     { "loaded", TNA_LOAD_LOADED },       { "spawned", TNA_LOAD_SPAWNED }, { "not-found", TNA_LOAD_NOT_FOUND },
     { "rejected", TNA_LOAD_REJECTED },   { "failed", TNA_LOAD_FAILED },   { "timed-out", TNA_LOAD_TIMED_OUT },
+    { "done", TNA_LOAD_DONE },
 };
 
 /* The WARN log of a load that failed or timed out (napi ADR 0020 section 7). */

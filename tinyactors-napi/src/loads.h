@@ -59,6 +59,7 @@ typedef enum {
     TNA_LOAD_REJECTED,   /* "not now" */
     TNA_LOAD_FAILED,
     TNA_LOAD_TIMED_OUT,
+    TNA_LOAD_DONE,       /* a replay reached a final state: the actor is done (napi ADR 0033) */
     TNA_LOAD_OUTCOMES
 } tna_load_outcome;
 

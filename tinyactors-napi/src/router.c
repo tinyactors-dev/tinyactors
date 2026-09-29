@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "inputs.h"
 #include "system.h"
 
 ta_result tna_router_post_named(tna_system *system, ta_address *address, const tna_message *message) {
@@ -165,6 +166,10 @@ static ta_external_event_submit_status tna_router_submit(void *self, const ta_ex
     tna_system *system = self;
     const ta_external_delivery *delivery = params->delivery;
     tna_dead_reason reason = TNA_DEAD_NOT_FOUND;
+    if (system->dispatching_due && delivery->event.origin.kind == TA_ORIGIN_ACTOR) {
+        /* A delayed send left its sender: the input log says so (ADR 0033 section 3). */
+        tna_inputs_fired(system, &delivery->event.origin.as.actor, delivery->event.send_id);
+    }
     ta_str family = { 0 };
     bool to_loader = tna_router_session_loads(system, &delivery->destination, &family);
     if (!to_loader && tna_router_unreachable(system, &delivery->destination, &reason)) {

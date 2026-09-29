@@ -276,15 +276,17 @@ typedef struct tna_turn_record {
 /*
  * What the input log hears from the scheduler (napi ADR 0032 section 6):
  * a message accepted into an actor's mailbox or into the waiting mailbox of
- * an address, a message or report core accepted, and an actor that
- * finished. `message` is the envelope, borrowed for the call. The observer
+ * an address, a message or report core accepted, an actor that finished,
+ * and a message given back without being delivered (ADR 0033). `message` is the envelope, borrowed for the call. The observer
  * must not call back into the scheduler.
  */
 typedef enum {
     TNA_NOTE_QUEUED,    /* `actor`, or `address` for mail that waits for a load */
     TNA_NOTE_DELIVERED, /* ta_actor_deliver() took `message` */
     TNA_NOTE_REPORTED,  /* ta_actor_report_invoke() took the report `message` */
-    TNA_NOTE_FINISHED   /* `actor` reached a top-level final state */
+    TNA_NOTE_FINISHED,  /* `actor` reached a top-level final state */
+    TNA_NOTE_DROPPED,   /* `message` leaves the scheduler undelivered: a dead letter, a withdrawal */
+    TNA_NOTE_SETTLED    /* `actor` ended a macrostep and is stable: its pending sends may have changed */
 } tna_note_kind;
 
 typedef struct {

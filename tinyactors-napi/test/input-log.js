@@ -1,11 +1,10 @@
 'use strict';
 
-// The input log (napi ADR 0032 section 6): the inputs core accepted for the
-// named actors of the logged families, handed to the sink once per turn;
-// the turn's services held until its batch commits; a failed commit that
-// quarantines the batch's actors; the dispatch horizon; the durable
-// mailbox's queued records and requeue() after a crash. Runs on Node and
-// Bun.
+// The input log (napi ADRs 0032 section 6 and 0033): the records of what
+// core accepted for the named actors of the logged families, handed to the
+// sink once per turn as { entries, wakes }; the turn's services held until
+// its batch commits; a failed commit that quarantines the batch's actors;
+// `fired`, `dropped` and `jump` records; the wakes. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
 const { createSystem, statechart } = require('..');
@@ -29,7 +28,11 @@ const pinger = () => statechart({ family: 'pinger', revision: 'v1' })
     .on('pong', (t) => t.target('done')))
   .final('done');
 
-const kinds = (batches) => batches.flatMap((batch) => batch.inputs.map((input) => `${input.kind}:${input.address.name}`));
+const kinds = (batches) => batches.flatMap((batch) => batch.entries.map(({ address, record }) => `${record.kind}:${address.name}`));
+const entriesOf = (batches) => batches.flatMap((batch) => batch.entries);
+const recordsOf = (batches) => entriesOf(batches).map((entry) => entry.record);
+const wakesOf = (batches, name) => batches.flatMap((batch) => batch.wakes).filter((wake) => wake.address.name === name)
+  .map((wake) => wake.at);
 
 // Every kind of record a live run makes, in the order core accepted them,
 // for the logged families only.
@@ -52,8 +55,9 @@ async function recordsEachKind() {
   system.post(c1, 'stop');
   await system.flush();
 
-  const records = batches.flatMap((batch) => batch.inputs);
-  assert.ok(records.every((input) => input.address.family !== 'unlogged'), 'no record for an unlogged family');
+  const records = recordsOf(batches);
+  assert.ok(entriesOf(batches).every(({ address }) => address.family !== 'unlogged'), 'no record for an unlogged family');
+  assert.ok(records.every((record) => record.address === undefined), 'the address is the entry\'s, not the record\'s');
   assert.deepEqual(kinds(batches), [
     'spawned:c1', 'spawned:p1',
     'queued:c1', 'queued:p1', 'event:c1', 'event:p1',
@@ -81,11 +85,15 @@ async function recordsEachKind() {
     assert.deepEqual(event.data, input.data);
   }
   assert.equal(new Set(queued.map((input) => input.seq)).size, queued.length, 'seqs are unique');
+  assert.ok(queued.every((input) => /^0\.\d+$/.test(input.seq)), 'a seq names the incarnation');
   const ping = events.find((input) => input.name === 'ping');
   assert.equal(ping.origin, '#_actor_pinger/p1');
   assert.equal(ping.originType, 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor');
   assert.deepEqual(events.find((input) => input.name === 'inc').data, { by: 1 });
-  assert.ok(batches.every((batch, index) => index === 0 || batch.turn > batches[index - 1].turn), 'batches in turn order');
+  assert.equal(batches[0].turn, undefined, 'no turn and no horizon in a batch');
+  assert.equal(batches[0].horizon, undefined);
+  assert.deepEqual(wakesOf(batches, 'p1').at(-1), null, 'a finished actor needs no wake');
+  assert.deepEqual(wakesOf(batches, 'c1').at(-1), null);
   system.close();
 }
 
@@ -108,7 +116,7 @@ async function reportsAndOperations() {
   reporter.unavailable({ why: 'gone' });
   await system.flush();
   assert.deepEqual(worker.inspect().activeStates, ['lost']);
-  const report = batches.flatMap((batch) => batch.inputs).find((input) => input.kind === 'report');
+  const report = recordsOf(batches).find((input) => input.kind === 'report');
   assert.ok(report, 'the report is recorded');
   assert.equal(report.invokeID, 'work');
   assert.equal(report.reason, 'unavailable');
@@ -127,25 +135,26 @@ async function reportsAndOperations() {
   system.abandon(spinner);
   system.release(spinner);
   await system.flush();
-  const operations = batches.flatMap((batch) => batch.inputs)
-    .filter((input) => input.address.name === 's1' && (input.kind === 'abandoned' || input.kind === 'released'))
-    .map((input) => input.kind);
+  const operations = entriesOf(batches)
+    .filter(({ address, record }) => address.name === 's1' && (record.kind === 'abandoned' || record.kind === 'released'))
+    .map(({ record }) => record.kind);
   assert.deepEqual(operations, ['abandoned', 'released']);
   system.close();
 }
 
-// A turn's services wait for its batch's commit, and run once it resolves.
+// A turn's services wait for its batch's commit, and run once it resolves;
+// batches commit one at a time.
 async function servicesWaitForTheCommit() {
   const sent = [];
   const logs = [];
-  let resolve;
-  const commits = [];
+  const resolvers = [];
+  let commits = 0;
   const system = createSystem({ io: { out: { send(request) { sent.push(request.event); } } } });
   system.setLogSink((record) => logs.push(record.label));
   system.setInputLog({
-    commit(batch) {
-      commits.push(batch.turn);
-      return new Promise((done) => { resolve = done; });
+    commit() {
+      commits += 1;
+      return new Promise((done) => { resolvers.push(done); });
     },
   }, { families: ['emitter'] });
   const emitter = system.spawn(system.define(statechart({ family: 'emitter', revision: 'v1' })
@@ -156,9 +165,11 @@ async function servicesWaitForTheCommit() {
   await new Promise((done) => setImmediate(done));
   assert.deepEqual(sent, [], 'the send waits for the commit');
   assert.deepEqual(logs, [], 'the log record waits too');
-  assert.equal(commits.length, 1, 'one batch commits at a time');
-  resolve();
-  await new Promise((done) => setImmediate(done));
+  assert.equal(commits, 1, 'one batch commits at a time');
+  while (sent.length === 0 && resolvers.length > 0) {
+    resolvers.shift()();
+    await new Promise((done) => setImmediate(done));
+  }
   assert.deepEqual(sent, ['out-event']);
   assert.deepEqual(logs, ['emitting']);
   system.close();
@@ -190,9 +201,10 @@ async function aFailedCommitFaults() {
   system.close();
 }
 
-// The horizon: every send due by it has been dispatched, even when a turn's
-// dispatch budget leaves some due for the next turn.
-async function horizonUnderADispatchBudget() {
+// A delayed send the actor dispatches is `fired`, whether or not a
+// dispatch budget postpones it, and wakes follow the actor's first pending
+// send: its due time while one is pending, null once none is.
+async function firedAndWakes() {
   const batches = [];
   const system = createSystem({ clock: 'manual', scheduling: { dueBudget: 1 } });
   system.setInputLog({ commit(batch) { batches.push(batch); } }, { families: ['burst'] });
@@ -200,20 +212,76 @@ async function horizonUnderADispatchBudget() {
     .data('ticks', 0)
     .state('s', (s) => s
       .on('arm', (t) => t
-        .send('tick', (send) => send.after(1000))
-        .send('tick', (send) => send.after(1000))
-        .send('tick', (send) => send.after(1000)))
+        .send('tick', (send) => send.id('a').after(1000))
+        .send('tick', (send) => send.id('b').after(1000))
+        .send('tock', (send) => send.to('#_actor_burst/other').id('c').after(3000)))
       .on('tick', (t) => t.assign('ticks', function () { return this.ticks + 1; })))), { name: 'b1' });
   burst.post('arm');
   await system.flush();
-  batches.length = 0;
+  assert.deepEqual(wakesOf(batches, 'b1').at(-1), 1000, 'the first pending send');
   await system.advanceTo(1000);
   await system.flush();
-  const horizons = batches.map((batch) => batch.horizon);
-  assert.ok(horizons.includes(999), `a turn that left sends due holds the horizon before them: ${horizons}`);
-  assert.equal(horizons.at(-1), 1000, 'once all are dispatched, the horizon is now');
-  assert.ok(horizons.every((horizon, index) => index === 0 || horizon >= horizons[index - 1]), 'the horizon never goes back');
-  assert.equal(burst.inspect().data.ticks, 3);
+  const fired = recordsOf(batches).filter((record) => record.kind === 'fired').map((record) => record.sendID);
+  assert.deepEqual(fired, ['a', 'b'], 'each dispatched send, one turn apart under the budget');
+  assert.deepEqual(wakesOf(batches, 'b1').at(-1), 3000, 'then the send to another actor');
+  await system.advanceTo(3000);
+  await system.flush();
+  assert.deepEqual(recordsOf(batches).filter((record) => record.kind === 'fired').map((record) => record.sendID),
+    ['a', 'b', 'c'], 'a send to another actor is fired too');
+  assert.equal(wakesOf(batches, 'b1').at(-1), null, 'nothing pending: no wake');
+  assert.equal(burst.inspect().data.ticks, 2);
+  system.close();
+}
+
+// A message that leaves undelivered is `dropped`: one withdrawn by a send()
+// timeout while it waited for a loader, and one buried when its actor
+// finished. An operator transition is a `jump`, by state names.
+async function droppedAndJump() {
+  const batches = [];
+  const system = createSystem({ incarnation: 0 });
+  const definition = system.define(counter());
+  system.setInputLog({ commit(batch) { batches.push(batch); } }, { families: ['counter'] });
+  let release;
+  system.setLoader('counter', async () => {
+    await new Promise((done) => { release = done; });
+    return { spawn: definition };
+  });
+  // A send()'s timeout does not keep the process alive, and nothing else would.
+  const alive = setInterval(() => {}, 1000);
+  await assert.rejects(system.send({ family: 'counter', name: 'slow' }, 'inc', undefined, { timeout: 5 }),
+    (error) => error.code === 'timeout');
+  clearInterval(alive);
+  await new Promise((done) => setTimeout(done, 5));
+  release();
+  await new Promise((done) => setTimeout(done, 5));
+  await system.flush();
+  const slow = entriesOf(batches).filter(({ address }) => address.name === 'slow').map(({ record }) => record);
+  const queued = slow.find((record) => record.kind === 'queued');
+  const dropped = slow.find((record) => record.kind === 'dropped');
+  assert.ok(dropped, 'the withdrawn message is dropped');
+  assert.equal(dropped.seq, queued.seq);
+  assert.ok(!slow.some((record) => record.kind === 'event'), 'and never delivered');
+
+  const c = system.spawn(definition, { name: 'ender' });
+  await system.flush();
+  system.post(c, 'stop');
+  system.post(c, 'inc');
+  await system.flush();
+  const ender = entriesOf(batches).filter(({ address }) => address.name === 'ender').map(({ record }) => record);
+  const late = ender.filter((record) => record.kind === 'queued')[1];
+  assert.ok(ender.some((record) => record.kind === 'dropped' && record.seq === late.seq), 'buried with its actor');
+
+  const j = system.spawn(system.define(statechart({ family: 'counter', revision: 'v2' })
+    .state('a', (s) => s.on('x', (t) => t.target('a')))
+    .state('b')), { name: 'jumper' });
+  await system.flush();
+  system.post(j, 'operator.goto', { why: 'test' }, { transition: { targets: ['b'] } });
+  await system.flush();
+  const jump = entriesOf(batches).find(({ address, record }) => address.name === 'jumper' && record.kind === 'jump');
+  assert.ok(jump, 'the operator transition is a jump');
+  assert.equal(jump.record.source, null);
+  assert.deepEqual(jump.record.targets, ['b']);
+  assert.equal(jump.record.definition, undefined, 'by state names only');
   system.close();
 }
 
@@ -231,65 +299,16 @@ async function queuedWhileALoaderRuns() {
   });
   system.post({ family: 'counter', name: 'lazy' }, 'inc', { n: 1 });
   await new Promise((done) => setTimeout(done, 5));
-  const queued = batches.flatMap((batch) => batch.inputs).filter((input) => input.kind === 'queued');
+  const queued = entriesOf(batches).filter(({ record }) => record.kind === 'queued');
   assert.equal(queued.length, 1);
   assert.deepEqual(queued[0].address, { family: 'counter', name: 'lazy' });
+  assert.equal(typeof wakesOf(batches, 'lazy').at(-1), 'number', 'mail it owes needs it back');
   release();
   await new Promise((done) => setTimeout(done, 5));
   await system.flush();
-  const event = batches.flatMap((batch) => batch.inputs).find((input) => input.kind === 'event');
-  assert.equal(event.seq, queued[0].seq);
-  system.close();
-}
-
-// A crash: the first system closes with a message queued and not delivered.
-// A new system requeues what has no event, and each message is delivered
-// once.
-async function requeueAfterACrash() {
-  const log = [];
-  const first = createSystem({ incarnation: 1 });
-  const firstDefinition = first.define(counter());
-  first.setInputLog({ commit(batch) { log.push(...batch.inputs); } }, { families: ['counter'] });
-  first.setLoader('counter', () => new Promise(() => {})); // never loads: the mail waits
-  first.post({ family: 'counter', name: 'c9' }, 'inc', { n: 1 });
-  first.post({ family: 'counter', name: 'c9' }, 'inc', { n: 2 });
-  await new Promise((done) => setTimeout(done, 5));
-  assert.equal(log.filter((input) => input.kind === 'queued').length, 2);
-  void firstDefinition;
-  first.close(); // the crash
-
-  const delivered = new Set(log.filter((input) => input.kind === 'event').map((input) => input.seq));
-  const undelivered = log.filter((input) => input.kind === 'queued' && !delivered.has(input.seq));
-  assert.equal(undelivered.length, 2);
-
-  const after = [];
-  const second = createSystem({ incarnation: 2 });
-  second.setInputLog({ commit(batch) { after.push(...batch.inputs); } }, { families: ['counter'] });
-  const actor = second.spawn(second.define(counter()), { name: 'c9' });
-  second.requeue(undelivered);
-  await second.flush();
-  assert.equal(actor.inspect().data.n, 2, 'both messages, once each');
-  const requeued = after.filter((input) => input.kind === 'queued');
-  assert.equal(requeued.length, 2, 'queued again');
-  assert.deepEqual(requeued.map((input) => input.data), [{ n: 1 }, { n: 2 }]);
-  assert.equal(after.filter((input) => input.kind === 'event').length, 2);
-  second.close();
-}
-
-// requeue() keeps an actor's origin, so a reply still reaches its sender.
-async function requeueKeepsTheOrigin() {
-  const system = createSystem({ incarnation: 0, finished: 'retain' });
-  system.setInputLog({ commit() {} }, { families: ['counter', 'pinger'] });
-  system.spawn(system.define(counter()), { name: 'c1' });
-  const p1 = system.spawn(system.define(pinger()), { name: 'p1' });
-  await system.flush();
-  system.requeue([{
-    kind: 'queued', time: 0, seq: 1, address: { family: 'counter', name: 'c1' }, name: 'ping', type: 'external',
-    origin: '#_actor_pinger/p1', originType: 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor',
-  }]);
-  await system.flush();
-  assert.equal(p1.inspect().finalState, 'done', 'the pong reached the pinger');
-  assert.throws(() => system.requeue([{ kind: 'event' }]), { code: 'invalid' });
+  const event = recordsOf(batches).find((input) => input.kind === 'event');
+  assert.equal(event.seq, queued[0].record.seq);
+  assert.equal(wakesOf(batches, 'lazy').at(-1), null, 'delivered, and nothing pending');
   system.close();
 }
 
@@ -305,14 +324,16 @@ async function withoutASink() {
   await system.flush();
   assert.deepEqual(sent, ['out-event'], 'no hold without a sink');
 
-  let resolve;
-  system.setInputLog({ commit() { return new Promise((done) => { resolve = done; }); } }, { families: ['emitter'] });
+  const resolvers = [];
+  system.setInputLog({ commit() { return new Promise((done) => { resolvers.push(done); }); } }, { families: ['emitter'] });
   emitter.post('emit');
   await system.flush();
   assert.deepEqual(sent, ['out-event']);
   system.setInputLog(null);
-  resolve();
-  await new Promise((done) => setImmediate(done));
+  while (resolvers.length > 0) {
+    resolvers.shift()();
+    await new Promise((done) => setImmediate(done));
+  }
   assert.deepEqual(sent, ['out-event', 'out-event'], 'the held send runs after its commit');
   emitter.post('emit');
   await system.flush();
@@ -329,10 +350,9 @@ async function withoutASink() {
   await reportsAndOperations();
   await servicesWaitForTheCommit();
   await aFailedCommitFaults();
-  await horizonUnderADispatchBudget();
+  await firedAndWakes();
+  await droppedAndJump();
   await queuedWhileALoaderRuns();
-  await requeueAfterACrash();
-  await requeueKeepsTheOrigin();
   await withoutASink();
   console.log('input-log: ok');
 })().catch((error) => {
