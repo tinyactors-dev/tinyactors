@@ -1,6 +1,6 @@
 # ADR 0007: The event loop drives a bounded pump
 
-**Status:** Accepted; turns yield to I/O and the clock is read every turn (amended)
+**Status:** Accepted; turns yield to I/O and the clock is read every turn (amended) Refined by napi ADR 0035: the turn budgets are system parameters, and a turn also ends once it has staged `traceStagingBytes` of trace records.
 **Date:** 2026-09-23
 
 ## Context

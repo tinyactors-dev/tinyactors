@@ -621,12 +621,13 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
     assert_equal [], result[:unreported], 'every failed allocation is reported'
   end
 
-  # ADR 0070 open point: the ECMAScript data model evaluates JavaScript,
-  # which may have changed the session before it read the variable, so it
-  # cannot say it changed nothing. Rendering `_event.name` failing throws
-  # out of memory in JavaScript, and the chart sees error.execution.
-  expect_failure 'ADR 0070: the ECMAScript data model turns a failed rendering into error.execution',
-                 message: /data\.errors/
+  # ADR 0070's open point (the ECMAScript data model evaluates JavaScript,
+  # so a failed rendering after the session changed could not be undone)
+  # no longer arises from memory: since core ADR 0092, rendered text lives
+  # in the render area allocated with the system, so rendering `_event.name`
+  # takes no allocation that can fail, and every allocation failure that is
+  # left stays invisible. A name longer than renderBytes fails the same way
+  # whatever the memory (napi's test/datamodel.js).
   scenario 'a system variable core could not render stops the run (ecmascript)' do
     assert_allocation_failures_invisible do
       actor = spawn :oom_names_ecmascript

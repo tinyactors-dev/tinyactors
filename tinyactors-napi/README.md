@@ -453,6 +453,28 @@ passed to `post()`, `send()` or `spawn()` puts the steps it causes into the
 caller's trace. `watchTraces()` traces chosen actors in full whatever the
 sampling ratio, and failures are also written as OTLP log records.
 
+## System parameters
+
+A system's limits and budgets are parameters, set once when it is created
+and never changed (core ADR 0092, napi ADR 0035). Every one has a default
+and bounds; an unknown name or a value out of bounds throws `invalid`.
+
+```js
+const { createSystem, parameterInfo } = require('@tinyactors/node');
+
+// Event payloads of up to 16 KiB arrive whole in traces (`values: true`);
+// the default cuts them at 1024 bytes and marks them `.truncated`.
+const system = createSystem({ parameters: { traceValueBytes: 16384, maxQueuedMessages: 10_000 } });
+console.log(system.parameters.traceValueBytes);       // 16384
+console.log(parameterInfo().interpreterBytes);        // { default, min, max, unit, owner }
+system.close();
+```
+
+They include core's (`microstepLimit`, `interpreterBytes`, `renderBytes`,
+`maxActors`, ...) and napi's (`traceValueBytes`, `traceStagingBytes`, the
+scheduling budgets, the mailbox limits). Every trace request's resource
+names them as `tinyactors.param.<name>`, so a trace says which caps applied.
+
 ## Debugging a live actor
 
 `createDebugSession()` speaks the Debug Adapter Protocol, so a debugger
