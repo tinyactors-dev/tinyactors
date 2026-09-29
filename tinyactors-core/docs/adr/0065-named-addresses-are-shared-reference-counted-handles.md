@@ -1,6 +1,6 @@
 # ADR 0065: Named addresses are shared, reference-counted handles
 
-**Status:** Accepted and implemented; refines ADR 0022, ADR 0040 and ADR 0050. See the implementation notes for where the code differs from the text.
+**Status:** Accepted and implemented; refines ADR 0022, ADR 0040 and ADR 0050. See the implementation notes for where the code differs from the text. Refined by ADR 0088: a runtime reference also names its family (`ta_actor_ref.family`), so an origin still says which family sent it once the actor is gone.
 **Date:** 2026-09-23
 
 ## Context

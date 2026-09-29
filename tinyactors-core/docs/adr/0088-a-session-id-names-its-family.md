@@ -1,6 +1,6 @@
 # ADR 0088: A session ID names its family
 
-**Status:** Proposed (2026-09-29). Would amend ADR 0066 (a session ID's text carries its system's incarnation and its family), ADR 0065 (a runtime reference names its family) and ADR 0044 (the session URI's grammar). ADR 0089 depends on it.
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Would amend ADR 0066 (a session ID's text carries its system's incarnation and its family), ADR 0065 (a runtime reference names its family) and ADR 0044 (the session URI's grammar). ADR 0089 depends on it.
 **Date:** 2026-09-29
 
 ## Context
@@ -171,4 +171,68 @@ its actors.
 
 ## Implementation notes
 
-None yet.
+- **Where:** `include/tinyactors.h` (`ta_actor_ref.family`,
+  `ta_system_config.incarnation`, `ta_session_id_format()`,
+  `ta_system_incarnation()`), `src/scxml_uri.{c,h}` (the text's parser and
+  writer, `ta_session_ref_write`, the session URI's parse),
+  `src/datamodel.c` (`_sessionid`), `src/actor.{c,h}` (`self` names its
+  family; `ta_actor_family_of`, `ta_actor_runtime_ref`; re-armed pending
+  sends), `src/interpreter.c` and `src/invoke.c` (`#_parent`, `#_<invokeid>`,
+  autoforwarding and a child's completion name their destination's family),
+  `src/session.c` (`ta_session_route`), `src/atom.c`, `src/system.{c,h}`,
+  `src/definition.h`, `src/builder.c`.
+- **Atom 0 is the empty text (not in the decision).** Section 2 makes a
+  runtime reference name its family by atom, and every host builds
+  references with designated initializers, so a zeroed `family` must mean
+  "unknown". The atom table now interns the empty text first, at index 0,
+  and no family is empty (a chart without a family does not compile), so 0
+  names none. Every other atom moved up by one; nothing depended on their
+  numbers.
+- **The family atom already existed.** The compiler interned the family as
+  `ta_definition.name`; it is renamed `family`. No atom is added per
+  definition.
+- **Core checks the family when it routes (section 4 put it in the
+  router).** `ta_session_route()`, which every SCXML submission goes
+  through, gives a runtime destination whose ID another family's actor
+  holds ID 0, keeping the family, so a router sees "gone" without
+  comparing families itself. napi's and the test host's routers are
+  unchanged: resident and not finished is delivered, anything else is
+  ERROR. Asking a family's loader for a gone session is napi ADR 0032.
+- **What a reference with no family writes.** A runtime reference with
+  family 0 whose actor is alive writes the actor's family; one whose actor
+  is gone (a bare `#_scxml_<n>` a document wrote) writes the bare number,
+  as before. A reference parsed from another incarnation is session 0 with
+  its family, and writes as this system's `<incarnation>.0.<family>`: the
+  other incarnation is not kept.
+- **Pending sends a host re-arms (core ADR 0074 section 8)** must carry a
+  valid atom as a runtime destination's family (`TA_ERR_INVALID`
+  otherwise); a send to the new session itself (runtime ID 0) takes its
+  family. napi rebuilds destinations from `ActorID`s and addresses, so its
+  re-armed references carry family 0.
+- **Hosts, migrated in the same change:** the test host's scenarios compare
+  `Actor#session_text` / `#session_uri` (built with `ta_session_id_format`
+  through the generated bindings), and its debug adapter's `_sessionid`,
+  `$_sessionid` and `_ioprocessors` use the text. napi's debug adapter
+  (`_sessionid` in the System scope, `sessionID` in evaluated expressions)
+  uses `sessionText()` in `lib/system.js`, which calls the formatter; its
+  tests expect the text, with incarnation 0, which napi passes until napi
+  ADR 0032 adds `createSystem({ incarnation })`. **Not migrated here:**
+  napi's OTLP `scxml.session_id` and `scxml.cause.session_id` stay decimal,
+  and `ActorInspection.sessionID` stays the number. Both are napi ADR 0032
+  section 1; a cause's family is not in the trace record, so OTLP needs a
+  decision of its own there.
+- **Tests:** `tests/scxml_uri_test.c` (a session's text parses with its
+  family, a family holding `.` and `/`, another incarnation's session is
+  session 0, text that is not the form is inaccessible, the bare form names
+  no family, `ta_session_id_format()` and its refusals, the text
+  round-trips); `tests/session_id_test.c` (an unnamed actor's `self` names
+  its family, its URI and `ta_session_id_format()` agree, another family's
+  reference routes to session 0, and once the actor is destroyed its
+  reference still writes the same text, which parses back to it).
+- **Costs:** per actor 0 bytes: `ta_actor_ref` is 16 bytes before and after
+  (a static assertion in `src/actor.c` checks it), and `ta_actor` is
+  unchanged. Per system 8 bytes for the incarnation and one atom entry (24
+  bytes on a 64-bit host) for the empty text. Per definition and per event 0 bytes. The
+  image and offload formats are unchanged. Rendering a session ID writes
+  the incarnation and family as well (`0.4294967296.messenger` in place of
+  `4294967296`).
