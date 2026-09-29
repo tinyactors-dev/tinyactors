@@ -1,6 +1,6 @@
 # ADR 0032: Named actors persist by replaying their inputs
 
-**Status:** Accepted; sections 3 and 4 implemented (2026-09-29), see the implementation notes; the rest not yet. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
+**Status:** Accepted; sections 3, 4 and 5 implemented (2026-09-29), see the implementation notes; the rest not yet. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
 - ADR 0020: a loader is also asked for a session that has gone, and can answer with a replay;
 - ADR 0022: mail to a gone session of a family with a loader goes to that loader;
 - the replacement API (`prepareReplacement`, `activate`), which becomes `prepare` and `publish`.
@@ -339,3 +339,28 @@ or is quarantined. Mail for the address then goes to the family's loader.
 - **Tests:** `test/session-inputs.js` (`consumed`, `time`, a queued
   `unavailable()`), `test/invoke.js` (`refusals` now expects `failed`
   reports and both invocations ended).
+
+### Section 5 (2026-09-29, with core ADR 0089's sections 1, 2, 3, 6 and 7)
+
+- **Where:** `lib/system.js` (`System.prepare()`, `System.publish()`,
+  `PreparedActor.replaying` and `setTime()`), `lib/actor.js`
+  (`Actor.prepareReplacement` removed), `bindings.rb` and `src/hooks.{c,h}`
+  (`ta_actor_prepare` puts the actor on the runnable queue; the `published`
+  hook moves an incumbent's waiting mail and wakes an actor left a
+  macrostep, such as a replay whose invocations were retired),
+  `src/gen/ta_napi.{c,h}` (regenerated), `lib/debug.js` (the upgrade
+  prepares with `{ incumbent }` and publishes), `index.d.ts`
+  (`PrepareOptions` replaces `ReplacementOptions`), `docs/design.md`,
+  `mise/lib/api_status_probe.js`. Commit `fb908fd`.
+- **`publish()` without an incumbent destroys nothing,** and mail that waited
+  for the address under a loader is not moved yet: that is section 7's
+  loader answer, which prepares, replays and publishes inside the load and
+  then delivers the waiting mail.
+- **`PreparedActor.activate()` is gone** with `System.activate()`; publishing
+  is one call, `System.publish(prepared, { at })`.
+- **Tests:** `test/prepare.js` (an evicted actor replayed by hand a week
+  later: the timeout held, dropped as the clock passes it, taken from the
+  log; no log written; the clock refusing to go back; publish at the stop;
+  a send pending at the stop delivered after publish; prepare's and
+  publish's refusals); `test/persist.js` migrated.
+

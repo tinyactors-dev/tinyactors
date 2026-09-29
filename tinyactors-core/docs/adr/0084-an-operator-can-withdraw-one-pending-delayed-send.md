@@ -1,6 +1,6 @@
 # ADR 0084: An operator can withdraw one pending delayed send
 
-**Status:** Accepted and implemented (2026-09-26). Refines ADR 0012 (cancellation from outside the chart, still scoped to the owning session); applies ADR 0038, ADR 0048, ADR 0054, ADR 0067 and ADR 0070.
+**Status:** Accepted and implemented (2026-09-26). Refines ADR 0012 (cancellation from outside the chart, still scoped to the owning session); applies ADR 0038, ADR 0048, ADR 0054, ADR 0067 and ADR 0070. Section 7 (withdrawal by due time) is replaced by ADR 0089: a replaying actor's held sends are dropped as its clock moves, and withdrawal also reaches them.
 **Date:** 2026-09-26
 
 ## Context

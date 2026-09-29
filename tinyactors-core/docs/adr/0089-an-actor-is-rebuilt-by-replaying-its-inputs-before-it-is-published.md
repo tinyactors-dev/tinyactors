@@ -1,6 +1,6 @@
 # ADR 0089: An actor is rebuilt by replaying its inputs before it is published
 
-**Status:** Accepted; sections 4, 5, 8 and 9 implemented (2026-09-29), see the implementation notes; sections 1, 2, 3, 6 and 7 not yet. Depends on ADR 0088. Amends:
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Depends on ADR 0088. Amends:
 - ADR 0037: a prepared actor needs no incumbent, and core supports replay without owning a log or a replay mode;
 - ADR 0012: a replaying actor has its own clock;
 - ADR 0081: an invoker's error report waits for the macrostep to end;
@@ -493,3 +493,87 @@ sends) when:
   macrostep has no test of its own: napi's pump cannot move the manual
   clock mid-macrostep. `mise run test:full` passed, the test host's 527
   scenarios included (its fast pass runs 427); IRP 176/176 on Node and Bun.
+
+### Sections 1, 2, 3, 6 and 7 (2026-09-29)
+
+- **Where:** `include/tinyactors.h` (`ta_actor_prepare_params`,
+  `ta_actor_publish_params`, `ta_actor_prepare()`, `ta_actor_publish()`,
+  `ta_actor_set_time()`, the withdrawal's note), `src/actor.{c,h}`
+  (`ta_actor_replaying`, `ta_actor_now`, prepare, publish and its route,
+  the clock, withdrawal of held sends), `src/interpreter.{c,h}` (a
+  replaying actor's immediate sends and logs dropped in `ta_send_commit`
+  and `<log>`, its pending invocations started at the end of a macrostep,
+  `ta_interpreter_queue_reserve`, every "now" read through
+  `ta_actor_now`), `src/invoke.{c,h}` (`ta_invoke_meta.replayed`, no
+  invoker call for a replayed start, no cancel or forward for a replayed
+  invocation, `ta_invoke_prepare_retire` and `ta_invoke_retire_all`),
+  `src/trace.c` (a lifecycle record's `now`). Commit `fb908fd`.
+- **The replay state lives in `ta_activation_effects`,** the record an
+  unpublished actor's held effects already used: `replaying` and `clock`.
+  A replaying actor gets it at prepare, for its clock. `ta_actor_now()`
+  answers the clock for a replaying actor and the system's time otherwise,
+  and is what the macrostep's time (section 9), a delayed send's due time
+  and a trace record's `now` read, so a live actor's times are unchanged.
+- **Held sends are dropped by due time only.** A replaying actor's held
+  list holds nothing else: its immediate sends and logs never enter it
+  (section 3). `ta_actor_set_time()` compacts the list in place.
+- **A send to `#_<invokeid>` of a replayed invocation** (not in the
+  decision). A replayed invocation has no child, so the target resolves
+  to nothing; the run being replayed reached a child there. While the
+  invocation is active, a replaying actor's send to it counts as sent: an
+  immediate one is dropped, and a delayed one is held with no destination
+  (runtime ID 0), so if it is still held at publish it fails at dispatch as
+  the invocation is gone by then. A send to an invocation that is not
+  active raises `error.communication`, as in a live run.
+- **`done.invoke` does not retire an invocation** (section 3 said it would).
+  Core never did: an invocation ends when its state exits, when the host
+  reports it lost, or when the session finishes. A replayed `done.invoke`
+  runs `<finalize>` and the chart's transitions, as the live one did, so the
+  replay matches the run; the text was wrong, not the code.
+- **Publishing a replay makes room first.** It reserves the timer room for
+  its held sends, names each `error.communication.invoke.<id>.unavailable`
+  and reserves queue room for them (`ta_invoke_prepare_retire`), and only
+  then changes the directory; so a refusal changes nothing, and the rest
+  (scheduling, queueing, forgetting the invocations) cannot fail. The
+  out-of-memory sweep in `tests/replay_test.c` checks it at every
+  allocation publish makes.
+- **An UNLOADED entry's parked session ends** when publish replaces it
+  (ADR 0066), as `ta_actor_remove_unloaded()` ends it; the image or bytes
+  the host kept describe nothing after that.
+- **The bootstrap's trace parent:** `ta_actor_prepare_params.trace` puts
+  the bootstrap under a parent as a spawn's does. A prepared actor writes no
+  SPAWNED record, as a prepared replacement wrote none.
+- **Operator actions** needed nothing: `ta_actor_deliver()` with an operator
+  transition, `ta_actor_abandon()` and a resume with `no_microstep_limit`
+  never looked at `published`.
+- **Callers migrated in the same commit:** napi (`System.prepare()` and
+  `System.publish()`, `PreparedActor.replaying` and `setTime()`, the
+  `published` hook that moves an incumbent's mail and wakes an actor left a
+  macrostep; `Actor.prepareReplacement` and `activate()` removed; the debug
+  adapter's upgrade, `docs/design.md`, `test/persist.js`, the API status
+  probe) and the test host (`prepare`, `publish` and `set_actor_time`
+  helpers; `definition_upgrade`, `named_actors`, the workbench, the runner
+  self-test, `scale_test.c`).
+- **Costs:** a published actor stores nothing more. `ta_activation_effects`,
+  which only an unpublished actor has, grew from 48 to 64 bytes (the flag
+  and the clock). `ta_invoke_meta` stays 40 bytes (`replayed` fills
+  padding). Delivery, resume and dispatch cost the same for published
+  actors: the replay checks are one test of `published` first.
+  `scale_test` measured 332 bytes per actor, flat to 4,000,000 actors.
+- **Tests:** `tests/replay_test.c`: the four timelines of section 2 (a
+  timeout to itself dropped when the clock passes it and taken from the
+  log; a send to another actor dropped at the stop; one still pending at
+  the stop, fired once, late, at publish; a crash between commits firing
+  again); a replay under the same revision matching the live run's
+  configuration, deep history and pending sends; a replayed invocation
+  whose reply reaches `<finalize>` while no invoker, router or log sink is
+  called; publish retiring an invocation as unavailable; result codes of
+  prepare, publish (resident address, UNLOADED entry, finished, published)
+  and set_time (not replaying, backwards, the future, busy); withdrawal of
+  a held send; the out-of-memory sweep of publish.
+  `tinyactors-test/ruby/scenarios/replay.rb` (an evicted actor rebuilt from
+  its inputs a week later, and a send pending at the stop firing after
+  publish). `tinyactors-napi/test/prepare.js` (the same through
+  `System.prepare/publish`, and prepare's refusals). `mise run test:full`
+  passed (529 test host scenarios); IRP 176/176 on Node and Bun.
+
