@@ -162,6 +162,7 @@ module NapiCompile
     src/napi_codecs.c
     src/napi_datamodel.c
     src/napi_inputs.c
+    src/napi_replay.c
     src/napi_loads.c
     src/napi_services.c
     src/napi_system.c

@@ -106,7 +106,7 @@ void tna_system_close(tna_system *system) {
     tna_effects_close(&system->effects);
     /* Records hold values; the log goes while core is alive. */
     system->sched.observer = (tna_sched_observer){ 0 };
-    tna_inputs_destroy(&system->inputs);
+    tna_inputs_destroy(system);
     if (system->tracing) {
         tna_otlp_destroy(&system->otlp);
         system->tracing = false;

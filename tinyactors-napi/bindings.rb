@@ -79,7 +79,7 @@ module TinyactorsNapiBindings
     'ta_null_trace_sink' => 'the tracing hook installs it when no JavaScript callback is registered (core ADR 0067)',
     'ta_null_definition_sink' => 'the native System always installs its own definition sink (core ADR 0079)',
     'ta_definition_{import,encode}' => 'src/import.c calls them with the SCXML codec, for define(text, { format: \'scxml\' }) and the debug session\'s encodeDefinition() (ADRs 0019, 0026)',
-    'ta_system_{set_input_sink,log_family,write_host_record}' => "core's input log is installed and fed by the input-log plumbing (core ADR 0090, napi ADR 0034)",
+    'ta_system_{set_input_sink,log_family,write_host_record,input_owner}' => "core's input log is installed and fed by the input-log plumbing (core ADR 0090, napi ADR 0034)",
     'ta_actor_replay' => 'a replay reads its log from a byte source the input-log plumbing owns (core ADR 0090, napi ADR 0034)',
     'ta_actor_checkpoint' => 'a checkpoint is written through a byte sink the input-log plumbing owns (core ADR 0091, napi ADR 0034)'
   }.freeze
@@ -130,7 +130,7 @@ module TinyactorsNapiBindings
     'ta_chart_{codec_info,error,position}' => 'chart codec results; no codec is registered yet',
     'ta_import_error' => 'chart codec result; no codec is registered yet',
     'ta_arena' => 'C memory utility',
-    'ta_{actor_replay_params,host_record,host_record_params,actor_checkpoint_params,owed_message}' => 'input-log plumbing (core ADRs 0090 and 0091, napi ADR 0034)',
+    'ta_{actor_replay_params,host_record,host_record_params,actor_checkpoint_params,owed_message,input_owner}' => 'input-log plumbing (core ADRs 0090 and 0091, napi ADR 0034)',
     'ta_byte_{sink,source,read_params}' => 'byte streams are plumbing: the data model and the input log own them (core ADR 0090)',
     'ta_allocator_free_params' => 'allocator callback argument',
     'ta_tree{,_list,_list_layout}' => 'C construction helper',

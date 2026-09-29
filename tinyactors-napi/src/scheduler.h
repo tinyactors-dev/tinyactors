@@ -83,7 +83,10 @@ enum {
      * whether it is a named actor of a logged family: a cache, so core is
      * asked once per actor, and cleared when the logged families change. */
     TNA_SCHED_LOG_KNOWN = 1u << 3,
-    TNA_SCHED_LOGGED = 1u << 4
+    TNA_SCHED_LOGGED = 1u << 4,
+    /* A replaying actor (napi ADR 0034): the replay resumes it itself, and
+     * a turn leaves it alone until it is published. */
+    TNA_SCHED_REPLAYING = 1u << 5
 };
 
 typedef struct {
@@ -195,9 +198,6 @@ typedef struct {
      * carries its invocation and data. A report for a gone target is
      * dropped, never a dead letter. */
     uint8_t report;
-    /* A replayed input's time, or NULL: the replaying actor's clock moves
-     * there before it takes the message (napi ADR 0032 section 7). */
-    const ta_time *replay_time;
 } tna_message;
 
 typedef enum {
@@ -299,7 +299,12 @@ typedef struct {
 
 typedef struct {
     void *self; /* NULL: no observer, and the scheduler notes nothing */
-    void (*note)(void *self, const tna_sched_note *note);
+    /* For QUEUED, anything but TA_OK refuses the message, which the post
+     * then answers; for the other kinds the result is ignored. */
+    ta_result (*note)(void *self, const tna_sched_note *note);
+    /* The host number of a queued message, which delivery passes to core
+     * (core ADR 0090 section 6); 0 for none. */
+    uint64_t (*host_seq)(void *self, uint32_t envelope);
 } tna_sched_observer;
 
 typedef struct {
@@ -341,10 +346,6 @@ typedef struct {
     uint32_t record_count;
     /* The input log's observer (napi ADR 0032 section 6), or none. */
     tna_sched_observer observer;
-    /* A replayed message's time (napi ADR 0032 section 7): envelope index ->
-     * the logical time the replaying actor's clock moves to just before
-     * the message is delivered. Empty, and never consulted, without a replay. */
-    tna_map replay_times;
 } tna_sched;
 
 typedef struct {

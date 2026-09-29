@@ -166,10 +166,6 @@ static ta_external_event_submit_status tna_router_submit(void *self, const ta_ex
     tna_system *system = self;
     const ta_external_delivery *delivery = params->delivery;
     tna_dead_reason reason = TNA_DEAD_NOT_FOUND;
-    if (system->dispatching_due && delivery->event.origin.kind == TA_ORIGIN_ACTOR) {
-        /* A delayed send left its sender: the input log says so (ADR 0033 section 3). */
-        tna_inputs_fired(system, &delivery->event.origin.as.actor, delivery->event.send_id);
-    }
     ta_str family = { 0 };
     bool to_loader = tna_router_session_loads(system, &delivery->destination, &family);
     if (!to_loader && tna_router_unreachable(system, &delivery->destination, &reason)) {
@@ -200,6 +196,16 @@ static ta_external_event_submit_status tna_router_submit(void *self, const ta_ex
                        : delivery->destination.kind == TA_ACTOR_REF_NAMED
                            ? tna_router_post_named(system, delivery->destination.as.named, &message)
                            : tna_sched_post(&system->sched, &message);
+    if (result == TA_ERR_UNSUPPORTED) {
+        /* The receiver's input log cannot hold its data (napi ADR 0034
+         * section 2): no retry will change that, so the sender hears. */
+        ta_event_release(&event);
+        static const char text[] = "the receiver logs its inputs, and the data has no durable form";
+        if (params->fault != NULL) {
+            *params->fault = (ta_fault){ .code = TA_ERR_UNSUPPORTED, .message = { text, (uint32_t)(sizeof text - 1u) } };
+        }
+        return TA_EXTERNAL_EVENT_ERROR;
+    }
     if (result != TA_OK) {
         ta_event_release(&event);
         return TA_EXTERNAL_EVENT_RETRY; /* full, or out of memory: core offers it again */

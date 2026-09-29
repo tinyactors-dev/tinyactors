@@ -1,18 +1,19 @@
 'use strict';
 
-// Persistence by replay, end to end (core ADRs 0088 and 0089, napi ADRs 0032
-// and 0033): named actors whose write-ahead log an in-memory store keeps in
-// two tables, a log and a wake per address, without reading a record;
-// evicted, woken, and brought back by a loader that answers
-// { replay: { spawn, inputs } }; crashes between commits; an upgrade by
+// Persistence by replay, end to end (core ADRs 0088 to 0091, napi ADRs 0032
+// to 0034): named actors whose write-ahead log an in-memory store keeps in
+// two tables, a log of opaque bytes and a wake per address; evicted, woken,
+// and brought back by a loader that answers { replay: { spawn, inputs } };
+// crashes between commits; checkpoints and compaction; an upgrade by
 // replay; a long log streamed from an async generator. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
-const { createSystem, statechart } = require('..');
+const { createSystem, statechart, readInputLog } = require('..');
 
-// The store an application writes: an append-only log per address and a
-// wake per address, stored as the batch says, never interpreted. `frozen`
+// The store an application writes: an append-only log of bytes per address
+// and a wake per address, stored as the batch says, never parsed. `frozen`
 // drops every later commit, as a crash loses what was not committed yet.
+// records() decodes a log with readInputLog(), as an audit trail would.
 function memoryStore() {
   const logs = new Map();
   const wakes = new Map();
@@ -25,11 +26,11 @@ function memoryStore() {
         if (store.frozen) {
           return;
         }
-        for (const { address, record } of entries) {
+        for (const { address, bytes } of entries) {
           if (!logs.has(key(address))) {
             logs.set(key(address), []);
           }
-          logs.get(key(address)).push(record);
+          logs.get(key(address)).push(bytes);
         }
         for (const { address, at } of changed) {
           if (at === null) {
@@ -42,6 +43,17 @@ function memoryStore() {
     },
     read(address) {
       return logs.get(key(address)) ?? [];
+    },
+    async records(address) {
+      const records = [];
+      for await (const record of readInputLog(store.read(address))) {
+        records.push(record);
+      }
+      return records;
+    },
+    // Compaction: the log becomes the checkpoint and what follows it.
+    compact(address, checkpoint) {
+      logs.set(key(address), [...checkpoint]);
     },
     // The whole loader: the address's records, handed back.
     loader(definitions) {
@@ -100,6 +112,77 @@ function snapshot(inspection) {
   };
 }
 
+function joined(chunks) {
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk.buffer, chunk.byteOffset, chunk.length)));
+}
+
+const collect = typeof Bun !== 'undefined'
+  ? () => Bun.gc(true)
+  : (() => {
+    require('node:v8').setFlagsFromString('--expose-gc');
+    return require('node:vm').runInNewContext('gc');
+  })();
+function heap() {
+  collect();
+  return process.memoryUsage().heapUsed;
+}
+
+// Records in core's portable layout (core ADR 0090 section 3), written by
+// hand: a 32-byte header, 8-byte fields (a number, or a text's offset and
+// length), the text part, and value streams of chunks.
+function record({ kind, seq, time, fields, value }) {
+  const texts = [];
+  let textLength = 0;
+  const refs = fields.map((field) => {
+    if (typeof field === 'bigint') {
+      return { number: field };
+    }
+    if (field === undefined) {
+      return { absent: true };
+    }
+    const bytes = Buffer.from(field, 'utf8');
+    const ref = { offset: textLength, length: bytes.length };
+    texts.push(bytes);
+    textLength += bytes.length;
+    return ref;
+  });
+  const pad = (n) => (8 - (n % 8)) % 8;
+  const fixed = 32 + 8 * fields.length;
+  const valueBytes = value === undefined ? undefined : Buffer.from(value, 'utf8');
+  const valueLength = valueBytes === undefined ? 0 : 4 + valueBytes.length + pad(4 + valueBytes.length) + 8;
+  const out = Buffer.alloc(fixed + textLength + pad(textLength) + valueLength);
+  out.writeUInt16LE(1, 0);
+  out.writeUInt16LE(kind, 2);
+  out.writeUInt32LE(fixed, 4);
+  out.writeBigUInt64LE(BigInt(seq), 8);
+  out.writeBigUInt64LE(BigInt(time), 16);
+  out.writeUInt32LE(textLength, 24);
+  out.writeUInt16LE(valueBytes === undefined ? 0 : 1, 28);
+  refs.forEach((ref, index) => {
+    const at = 32 + 8 * index;
+    if (ref.number !== undefined) {
+      out.writeBigUInt64LE(ref.number, at);
+    } else if (ref.absent) {
+      out.writeUInt32LE(0xffffffff, at);
+    } else {
+      out.writeUInt32LE(ref.offset, at);
+      out.writeUInt32LE(ref.length, at + 4);
+    }
+  });
+  Buffer.concat(texts).copy(out, fixed);
+  if (valueBytes !== undefined) {
+    const at = fixed + textLength + pad(textLength);
+    out.writeUInt32LE(valueBytes.length, at);
+    valueBytes.copy(out, at + 4);
+  }
+  return out;
+}
+
+const spawnedRecord = (seq, time, family, name, revision) =>
+  record({ kind: 1, seq, time, fields: [family, name, revision] });
+const eventRecord = (seq, time, name, data) =>
+  record({ kind: 2, seq, time, fields: [0n, 0n, name, undefined, undefined, undefined, undefined], value: data });
+
 // Lets a loader's promise settle and the turns after it run.
 async function settle(system) {
   for (let turn = 0; turn < 5; turn += 1) {
@@ -151,13 +234,13 @@ async function endToEnd() {
 
   assert.equal(system.evict(live), 1200);
   await system.flush();
-  const kinds = store.read({ family: 'order', name: 'o1' }).map((r) => r.kind);
+  const kinds = (await store.records({ family: 'order', name: 'o1' })).map((r) => r.kind);
   assert.equal(kinds[0], 'spawned');
   assert.equal(kinds.at(-1), 'evicted');
   assert.ok(kinds.includes('withdrawn'));
   assert.ok(kinds.includes('fired'), 'the reminder that fired');
   assert.equal(store.wakes.get('order/o1').at, 2200, 'woken for the reminder armed at 1200');
-  const logged = store.read({ family: 'order', name: 'o1' }).length;
+  const logged = (await store.records({ family: 'order', name: 'o1' })).length;
 
   await system.advanceTo(1500); // before the reminder is due
   const reply = await system.send({ family: 'order', name: 'o1' }, 'peek'); // summons it
@@ -170,7 +253,7 @@ async function endToEnd() {
   assert.equal(book.inspect().data.pings, 2, 'the replay pinged nobody');
   assert.deepEqual(logs, ['added', 'added'], 'the replay wrote no log');
   assert.equal(starts, 1, 'the replay started no service');
-  const newer = store.read({ family: 'order', name: 'o1' }).slice(logged).map((r) => r.kind);
+  const newer = (await store.records({ family: 'order', name: 'o1' })).slice(logged).map((r) => r.kind);
   assert.deepEqual(newer, ['queued', 'event'], 'only the mail that summoned it is logged, once');
 
   await system.advanceTo(2200); // the reminder armed at 1200
@@ -255,7 +338,7 @@ async function crashWithMailInFlight() {
   first.setLoader('ledger', () => new Promise(() => {})); // the ledger's load never finishes
   first.post({ family: 'ledger', name: 'main' }, 'hello'); // queued, waiting for the load
   await new Promise((resolve) => setTimeout(resolve, 20)); // a turn commits it
-  assert.ok(store.read({ family: 'ledger', name: 'main' }).some((r) => r.kind === 'queued'), 'the hello is queued');
+  assert.ok((await store.records({ family: 'ledger', name: 'main' })).some((r) => r.kind === 'queued'), 'the hello is queued');
   assert.ok(store.wakes.has('ledger/main'), 'and the ledger owes it');
   store.frozen = true; // the crash: nothing after this point is committed
   const moved = first.advanceTo(3000).catch(() => {});
@@ -299,7 +382,7 @@ async function droppedAndLiteralSendIDs() {
     (error) => error.code === 'timeout'); // queued, then withdrawn
   clearInterval(alive);
   await new Promise((resolve) => setTimeout(resolve, 20));
-  const kinds = store.read({ family: 'ledger', name: 'main' }).map((r) => r.kind);
+  const kinds = (await store.records({ family: 'ledger', name: 'main' })).map((r) => r.kind);
   assert.deepEqual(kinds.filter((kind) => kind === 'queued' || kind === 'dropped'), ['queued', 'queued', 'dropped']);
   first.close();
 
@@ -390,7 +473,7 @@ async function destroyedFreesTheAddress() {
   system.destroy(back);
   await system.flush();
   assert.equal(store.wakes.has('timer/t'), false, 'the stored wake went');
-  assert.equal(store.read(address).at(-1).kind, 'destroyed');
+  assert.equal((await store.records(address)).at(-1).kind, 'destroyed');
   await system.advanceTo(6000);
   await settle(system);
   assert.equal(system.findActor(address), undefined, 'its old timeout did not bring it back');
@@ -403,7 +486,8 @@ async function destroyedFreesTheAddress() {
   const view = fresh.inspect();
   assert.deepEqual(view.activeStates, ['waiting'], 'a fresh one: only the new e1 moved it');
   assert.deepEqual(view.delayedSends.map((send) => send.due), [12000]);
-  assert.ok(store.read(address).findIndex((record) => record.kind === 'destroyed') < store.read(address).length - 1,
+  const lives = await store.records(address);
+  assert.ok(lives.findIndex((record) => record.kind === 'destroyed') < lives.length - 1,
     'the new life is logged after `destroyed`');
   system.close();
 
@@ -472,10 +556,11 @@ async function upgrade() {
   await system.flush();
   assert.equal(live.inspect().data.n, 12);
 
-  const log = store.read({ family: 'counter', name: 'c' });
-  const next = system.prepare(v2, { incumbent: live, spawned: log[0] });
-  const report = await next.replay(log);
-  assert.equal(report.inputs, log.length);
+  const records = await store.records({ family: 'counter', name: 'c' });
+  // The whole log as the start: prepare takes its `spawned`, replay the rest.
+  const next = system.prepare(v2, { incumbent: live, log: joined(store.read({ family: 'counter', name: 'c' })) });
+  const report = await next.replay([]);
+  assert.equal(report.inputs, records.length - 1);
   assert.deepEqual(report.ignored.map((r) => r.name), ['bump']);
   const published = system.publish(next); // at the last record's time
   assert.equal(published.inspect().data.n, 4, 'v2 reads the history: two incs, the bump ignored');
@@ -535,30 +620,24 @@ async function reportsAndOperations() {
   assert.deepEqual(back.inspect().activeStates, ['lost'], 'the report is replayed');
   // Any mail would start the spinner's eventless loop again, so it is
   // replayed by hand and inspected before it is published.
-  const log = store.read({ family: 'spinner', name: 's' });
-  const again = system.prepare(definitions.spinner, { address: { family: 'spinner', name: 's' }, spawned: log[0] });
-  const report = await again.replay(log);
-  assert.equal(report.inputs, log.length);
+  const records = await store.records({ family: 'spinner', name: 's' });
+  const chunks = store.read({ family: 'spinner', name: 's' });
+  // The first chunk holds `spawned`; the rest streams in.
+  const again = system.prepare(definitions.spinner, { address: { family: 'spinner', name: 's' }, log: chunks[0] });
+  const report = await again.replay(chunks.slice(1));
+  assert.equal(report.inputs, records.length - 1);
   assert.deepEqual(again.inspect().activeStates, before.activeStates);
   assert.equal(again.inspect().data.n, before.data.n, 'the runaway stops where the abandon stopped it');
   system.close();
 }
 
 // A long log streamed from an async generator, as a database cursor would
-// hand it: replay reads it in windows, so memory does not grow with it.
+// hand it: replay holds one record and one chunk, so memory does not grow
+// with the log. The log is written by hand in core's layout (core ADR 0090),
+// which is what makes it portable.
 async function streamsALongLog() {
-  const collect = typeof Bun !== 'undefined'
-    ? () => Bun.gc(true)
-    : (() => {
-      require('node:v8').setFlagsFromString('--expose-gc');
-      return require('node:vm').runInNewContext('gc');
-    })();
-  const heap = () => {
-    collect();
-    return process.memoryUsage().heapUsed;
-  };
-  const count = 50000;
-  const payload = 'x'.repeat(2048); // 50,000 records would be over 100 MB if held
+  const count = 100000;
+  const payload = 'x'.repeat(2048); // 100,000 records would be over 200 MB if held
   const system = createSystem({ clock: 'manual', incarnation: 1, initialTime: count });
   const definition = system.define(statechart({ family: 'counter', revision: 'v1' })
     .data('n', 0)
@@ -566,19 +645,138 @@ async function streamsALongLog() {
   const baseline = heap();
   let peak = 0;
   async function* cursor() {
-    yield { kind: 'spawned', time: 0, revision: 'v1' };
     for (let index = 1; index <= count; index += 1) {
-      if (index % 5000 === 0) {
+      if (index % 10000 === 0) {
         peak = Math.max(peak, heap() - baseline);
       }
-      yield { kind: 'event', time: index, name: 'inc', type: 'external', data: { payload: `${payload}${index}` } };
+      yield eventRecord(index + 1, index, 'inc', `{"payload":"${payload}${index}"}`);
     }
   }
-  const prepared = system.prepare(definition, { address: { family: 'counter', name: 'long' }, at: 0 });
+  const prepared = system.prepare(definition, { address: { family: 'counter', name: 'long' },
+                                                log: spawnedRecord(1, 0, 'counter', 'long', 'v1') });
   const report = await prepared.replay(cursor());
-  assert.equal(report.inputs, count + 1);
+  assert.equal(report.inputs, count);
   assert.equal(prepared.inspect().data.n, count);
   assert.ok(peak < 40 * 1024 * 1024, `the log is not held: the heap grew by at most ${Math.round(peak / 1048576)} MB`);
+  system.close();
+}
+
+// A 10 MB value is logged and replayed in chunks: the store gets it as bytes,
+// and the replay's feed holds that one record, not a copy per chunk.
+async function aLargeValue() {
+  const store = memoryStore();
+  const system = createSystem({ clock: 'manual', incarnation: 1 });
+  system.setInputLog(store.sink, { families: ['box'] });
+  const definition = system.define(statechart({ family: 'box', revision: 'v1' })
+    .data('size', 0)
+    .state('s', (s) => s.on('put', (t) => t.assign('size', ({ event }) => event.data.length))));
+  system.setLoader('box', store.loader({ box: definition }));
+  const live = system.spawn(definition, { name: 'b' });
+  await system.flush();
+  const value = 'v'.repeat(10 * 1024 * 1024);
+  await live.send('put', value);
+  await system.flush();
+  system.evict(live);
+  await system.flush();
+  const bytes = store.read({ family: 'box', name: 'b' }).reduce((total, chunk) => total + chunk.length, 0);
+  assert.ok(bytes > 2 * value.length, `logged as \`queued\` and \`event\`: ${bytes} bytes`);
+  // Hand the log back in 64 KiB pieces.
+  const pieces = function* () {
+    for (const chunk of store.read({ family: 'box', name: 'b' })) {
+      for (let at = 0; at < chunk.length; at += 65536) {
+        yield chunk.subarray(at, at + 65536);
+      }
+    }
+  };
+  const before = heap();
+  const again = system.prepare(definition, { address: { family: 'box', name: 'c' }, log: pieces().next().value });
+  // (The first piece holds `spawned`; replaying the rest into another address.)
+  const rest = pieces();
+  rest.next();
+  const report = await again.replay(rest);
+  const grew = heap() - before;
+  assert.equal(again.inspect().data.size, value.length);
+  assert.ok(report.inputs >= 2);
+  // What stays is the value the replayed actor holds, about 10 MB.
+  assert.ok(grew < 40 * 1024 * 1024, `replaying a 10 MB value grew the heap by ${Math.round(grew / 1048576)} MB`);
+  system.close();
+}
+
+// A checkpoint rebuilds the actor, a log compacted to it keeps the owed
+// mail, and a checkpoint loads only under its own revision.
+async function checkpointsAndCompaction() {
+  const store = memoryStore();
+  const first = createSystem({ clock: 'manual', incarnation: 1 });
+  first.setInputLog(store.sink, { families: ['counter'] });
+  const v1 = () => statechart({ family: 'counter', revision: 'v1' })
+    .data('n', 0)
+    .state('s', (s) => s
+      .on('inc', (t) => t.assign('n', ({ data }) => data.n + 1).send('tick', (send) => send.id('tick').after(1000)))
+      .on('tick', (t) => t.assign('n', ({ data }) => data.n + 100)));
+  const definition = first.define(v1());
+  const address = { family: 'counter', name: 'c' };
+  const live = first.spawn(definition, { name: 'c' });
+  await first.flush();
+  for (let index = 0; index < 5; index += 1) {
+    await live.send('inc');
+  }
+  await first.flush();
+  const before = snapshot(live.inspect());
+  assert.equal(before.data.n, 5);
+  const checkpoint = [];
+  first.checkpoint(live, (chunk) => checkpoint.push(Buffer.from(chunk)));
+  assert.ok(checkpoint.length > 0);
+  const [head] = await (async () => {
+    const records = [];
+    for await (const record of readInputLog(checkpoint)) {
+      records.push(record);
+    }
+    return records;
+  })();
+  assert.equal(head.kind, 'checkpoint');
+  assert.equal(head.data.n, 5, 'the data root travels in it');
+  // A message queued and not yet delivered travels with the checkpoint.
+  first.evict(live);
+  await first.flush();
+  first.setLoader('counter', () => new Promise(() => {}));
+  first.post(address, 'inc'); // waits for the load, logged `queued`
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  store.compact(address, [...checkpoint, ...store.read(address).slice(-1)]);
+  first.close();
+
+  const second = createSystem({ clock: 'manual', incarnation: 2 });
+  second.setInputLog(store.sink, { families: ['counter'] });
+  const again = second.define(v1());
+  second.setLoader('counter', store.loader({ counter: again }));
+  store.wakeAll(second);
+  await second.advanceTo(1);
+  await settle(second);
+  const back = second.findActor(address);
+  assert.equal(back.inspect().data.n, 6, 'the checkpoint\'s five, and the owed inc');
+  assert.deepEqual(back.inspect().delayedSends.map((send) => send.id), new Array(6).fill('tick'),
+    'the checkpoint\'s five pending ticks came back, and the owed inc armed a sixth');
+  // Another revision cannot start from the checkpoint.
+  const v2 = second.define(statechart({ family: 'counter', revision: 'v2' }).state('s'));
+  assert.throws(() => second.prepare(v2, { address: { family: 'counter', name: 'd' }, log: joined(checkpoint) }),
+    (error) => error.code === 'definition-mismatch');
+  // Only an idle, named, logged actor has one.
+  const unnamed = second.spawn(again);
+  await second.flush();
+  assert.throws(() => second.checkpoint(unnamed, () => {}), (error) => error.code === 'invalid');
+  second.close();
+}
+
+// An input to a logged actor whose data has no durable form is refused.
+async function nonDurableRefused() {
+  const system = createSystem({ clock: 'manual' });
+  system.setInputLog({ commit() {} }, { families: ['ledger'] });
+  const book = system.spawn(system.define(ledger()), { name: 'main' });
+  await system.flush();
+  assert.throws(() => book.post('ping', { f() {} }), (error) => error.code === 'unsupported');
+  assert.throws(() => book.post('ping', { self: null, get loop() { return this; } }), (error) => error.code === 'unsupported');
+  book.post('ping', { ok: [1, 2, new Date(0)] });
+  await system.flush();
+  assert.equal(book.inspect().data.pings, 1);
   system.close();
 }
 
@@ -591,8 +789,10 @@ async function refusals() {
   const replaying = system.prepare(definition, { address: { family: 'ledger', name: 'y' }, at: 0 });
   await assert.rejects(replaying.replay('abc'), (error) => error.code === 'invalid');
   await assert.rejects(replaying.replay([{ kind: 'event' }]), (error) => error.code === 'invalid');
-  await assert.rejects(replaying.replay([{ kind: 'mystery', time: 0 }]), (error) => error.code === 'invalid');
-  assert.throws(() => system.prepare(definition, { address: { family: 'ledger', name: 'z' }, spawned: { kind: 'event' } }),
+  await assert.rejects(replaying.replay([new Uint8Array(40)]), (error) => error.code === 'corrupt');
+  assert.throws(() => system.prepare(definition, { address: { family: 'ledger', name: 'z' }, log: [1] }),
+    (error) => error.code === 'invalid');
+  assert.throws(() => system.prepare(definition, { address: { family: 'ledger', name: 'z' }, log: new Uint8Array(8) }),
     (error) => error.code === 'invalid');
   const unnamed = system.spawn(definition);
   await system.flush();
@@ -613,6 +813,9 @@ async function refusals() {
   await upgrade();
   await reportsAndOperations();
   await streamsALongLog();
+  await aLargeValue();
+  await checkpointsAndCompaction();
+  await nonDurableRefused();
   await refusals();
   console.log('replay.js passed');
 })().catch((error) => {

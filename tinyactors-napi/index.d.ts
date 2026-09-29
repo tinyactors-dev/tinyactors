@@ -160,22 +160,23 @@ export type LoadResult<Data extends object = object> =
   | { readonly reject: unknown }
   | {
       /**
-       * Rebuild the actor from the records the input log handed for its
-       * address, in order (napi ADRs 0032 and 0033). No records: a fresh
-       * actor of `spawn` at the address. Otherwise a replaying actor takes
-       * the `spawned` record's binding and time, the records are replayed
-       * into it, and it is published at the last record's time; the
+       * Rebuild the actor from its input log (napi ADRs 0033 and 0034):
+       * `inputs` is the log the sink stored for the address, byte chunks cut
+       * anywhere, which napi reads a chunk at a time and never holds whole
+       * (an async iterable such as a database cursor works). No records: a
+       * fresh actor of `spawn` at the address. Otherwise a replaying actor is
+       * made from the first record (`spawned`, or a checkpoint), the rest is
+       * replayed into it, and it is published at the last record's time; the
        * messages the log shows queued and never delivered go back in its
-       * mailbox, then the mail that waited for the load. A history that ends
-       * in a final state ends the load `done` (its mail becomes dead letters
-       * with reason `done`). `onReport` gets what the replay did. Any other
-       * failure is `load-failed`. For a named address only. `inputs` may be
-       * an async iterable, such as a database cursor: it is read through in
-       * windows, never held whole.
+       * mailbox, then the mail that waited for the load. A `destroyed` record
+       * ends a life, and the next starts at the record after it. A history
+       * that ends in a final state ends the load `done` (its mail becomes
+       * dead letters with reason `done`). `onReport` gets what the replay
+       * did. Any other failure is `load-failed`. For a named address only.
        */
       readonly replay: {
         readonly spawn: Definition<Data>;
-        readonly inputs: Iterable<InputRecord> | AsyncIterable<InputRecord>;
+        readonly inputs: Iterable<Uint8Array> | AsyncIterable<Uint8Array>;
         readonly onReport?: (report: ReplayReport) => void;
       };
     };
@@ -504,9 +505,13 @@ export interface System {
    * It bootstraps like a spawned actor. `binding` defaults to the
    * incumbent's live data root when `definition` uses the JavaScript data
    * model. With `at`, it is a replaying actor: its clock starts at `at` and
-   * moves only with PreparedActor.setTime(), and it crosses no border (no
-   * sends, logs or invoker starts leave it) until it is published. Without
-   * `at`, core holds its visible bootstrap effects until publish().
+   * moves only with PreparedActor.setTime() and replay(), and it crosses no
+   * border (no sends, logs or invoker starts leave it) until it is
+   * published. With `log`, the start of an actor's input log holding at
+   * least its first record, it is a replaying actor made from that record
+   * (napi ADR 0034): `spawned` gives its binding and clock, a checkpoint its
+   * whole state, and replay() takes the rest of the log. Without either,
+   * core holds its visible bootstrap effects until publish().
    */
   prepare<Data extends object>(definition: Definition<Data>, options: PrepareOptions<Data>): PreparedActor<Data>;
 
@@ -522,31 +527,34 @@ export interface System {
    * `done` when it finished before it was published. A replaying actor's
    * held delayed sends are scheduled (one already due fires at the next
    * dispatch), and its active invocations are reported
-   * `error.communication.invoke.<id>.unavailable`. `at` moves a replaying
-   * actor's clock one last time first; it defaults to the time of the last
-   * record PreparedActor.replay() replayed.
+   * `error.communication.invoke.<id>.unavailable`, and the messages its log
+   * showed queued and never delivered go back in its mailbox. A replaying
+   * actor is published at its clock, the last replayed record's time; `at`
+   * moves the clock on first.
    */
   publish<Data extends object>(prepared: PreparedActor<Data>, options?: { readonly at?: number }): Actor<Data>;
 
   /**
    * Install a write-ahead log for the named actors of `families` (napi ADRs
-   * 0032 and 0033). Once per turn, `sink.commit(batch)` gets { entries,
-   * wakes }: append each entry's `record` to its `address`'s log, in order,
-   * and set each wake's `address` to `at` (null removes it), in one
-   * transaction. The records are the log's own vocabulary, what napi needs
-   * to rebuild an actor by replay: store them without reading them, and
-   * hand an address's records back from its family's loader as
-   * { replay: { spawn, inputs } }. After a restart, set the loaders, then
-   * call wakeAt(address, at) for every stored wake. Values are the values
-   * core holds: the sink encodes and stores them as it likes, since napi
-   * chooses no storage and no encoding. While a sink is installed, a turn's
-   * services (I/O processor sends, invoker starts, cancels and forwards,
-   * log records) wait until its batch's commit returns or the promise it
-   * returns resolves; batches commit one at a time, in turn order, while
-   * later turns run. A commit that throws or rejects stops the system's
-   * services and quarantines every actor with inputs in that batch, with a
-   * fault whose operation and code are "input-log". `null` removes the
-   * sink; what it held runs once the commits before it are done.
+   * 0032 to 0034). Once per turn, `sink.commit(batch)` gets { entries,
+   * wakes }: append each entry's `bytes` (that address's records from the
+   * turn, in core's portable layout, core ADR 0090) to its `address`'s log
+   * as they are, and set each wake's `address` to `at` (null removes it), in
+   * one transaction. Store the bytes without parsing them, and hand an
+   * address's log back from its family's loader as
+   * { replay: { spawn, inputs } }; readInputLog() decodes one for an audit
+   * trail. After a restart, set the loaders, then call wakeAt(address, at)
+   * for every stored wake. Values are written in the built-in data model's
+   * durable text (napi ADR 0031): an input carrying a value with no durable
+   * form (a function, a cycle, a class instance without `[serialize]()`) is
+   * refused, and post() or send() throws `unsupported`. While a sink is
+   * installed, a turn's services (I/O processor sends, invoker starts,
+   * cancels and forwards, log records) wait until its batch's commit returns
+   * or the promise it returns resolves; batches commit one at a time, in
+   * turn order, while later turns run. A commit that throws or rejects stops
+   * the system's services and quarantines every actor with inputs in that
+   * batch, with a fault whose operation and code are "input-log". `null`
+   * removes the sink; what it held runs once the commits before it are done.
    */
   setInputLog(sink: InputLog | null, options?: { readonly families: readonly string[] }): void;
 
@@ -562,6 +570,21 @@ export interface System {
    * quarantined; `invalid` for an actor without a name.
    */
   evict(actor: ActorID): number;
+
+  /**
+   * Write a checkpoint of `actor` (core ADR 0091, napi ADR 0034 section 4):
+   * an idle, published, named actor of a logged family, in core's portable
+   * layout, in chunks through `write`, called synchronously; each chunk is
+   * the caller's to keep. A log that starts with a checkpoint replays from
+   * it, and records it covers are skipped, so a store may drop the records
+   * before it once it is durable. A checkpoint loads only under its own
+   * revision: an upgrade by replay needs the log from `spawned`. The
+   * messages the actor's mailbox holds travel with it. Throws `busy` for an
+   * actor that is not idle, `invalid` for one that is unnamed or not
+   * logged, `unsupported` for a value with no durable form, and what `write`
+   * throws; after a throw, discard the chunks already written.
+   */
+  checkpoint(actor: ActorID, write: (chunk: Uint8Array) => void): void;
 
   registerIO(type: string, processor: IOProcessor, options?: IOProcessorOptions): void;
   /** Open a scope that stores `uri` once, for a connection or a session (core ADR 0068). */
@@ -1549,7 +1572,7 @@ export interface PreparedActor<Data extends object> extends Actor<Data> {
   readonly published: boolean;
   /** The actor it replaces, when it was prepared with one. */
   readonly incumbent?: ActorID;
-  /** True when it was prepared with `at` (core ADR 0089). */
+  /** True when it was prepared with `at` or `log` (core ADR 0089, napi ADR 0034). */
   readonly replaying: boolean;
   /**
    * Move a replaying actor's clock forward to `time`: not before its clock,
@@ -1559,35 +1582,34 @@ export interface PreparedActor<Data extends object> extends Actor<Data> {
    */
   setTime(time: number): void;
   /**
-   * Replay this replaying actor's own input records, in order (napi ADR 0032
-   * section 7): for each, move its clock to the record's time, perform the
-   * input (deliver an event with its origin, take a report, or repeat a
-   * host operation), and run the actor until it is idle, through the pump
-   * and within its budgets. `spawned` and `evicted` records only move the
-   * clock; `queued` records are skipped. Nothing it does crosses the border
-   * or is recorded in the input log. Replay works on one actor: there is no
-   * replay of a system. An event record's `invokeID` is matched to this
-   * actor's active invocation of that ID, so its <finalize> runs. A
+   * Replay the rest of this actor's input log into it (napi ADR 0034
+   * section 3): `inputs` is byte chunks cut anywhere, read a chunk at a
+   * time. Core applies one record at a time (core ADR 0090 section 7): the
+   * clock moves to its time, the input is taken, and the actor runs until
+   * it is idle. Nothing it does crosses the border or is recorded in the
+   * input log. Replay works on one actor: there is no replay of a system. A
    * macrostep that faults (a runaway) is followed by the `abandoned` or
-   * `released` record the operator's action left; without one the promise
-   * rejects with the fault. Rejects `invalid` for an actor that is not
-   * replaying or a malformed record, `not-found` for a report whose
-   * invocation is not active.
+   * `released` record the operator's action left. Rejects `invalid` for an
+   * actor that is not replaying, a chunk that is not a Uint8Array, a log
+   * that ends inside a record, or one that ends this actor's life
+   * (`destroyed`); `corrupt` for bytes that are not records this build
+   * reads; and what core answers for a record it cannot apply.
    */
-  replay(inputs: Iterable<InputRecord> | AsyncIterable<InputRecord>): Promise<ReplayReport>;
+  replay(inputs: Iterable<Uint8Array> | AsyncIterable<Uint8Array>): Promise<ReplayReport>;
 }
 
-/** What PreparedActor.replay() did (napi ADR 0032 section 7). */
+/** What a replay did (napi ADR 0034 section 3). */
 export interface ReplayReport {
+  /** The records applied. */
   readonly inputs: number;
-  /** The events the actor's revision did not use (SendResult.consumed false). */
-  readonly ignored: readonly InputRecord[];
+  /** The events the actor's revision took without a transition (SendResult.consumed false). */
+  readonly ignored: readonly { readonly kind: "event"; readonly time: number; readonly name: EventName }[];
   readonly lastTime?: number;
   /** The history reached a final state: the actor takes nothing more, and publish() answers `done`. */
   readonly finished: boolean;
 }
 
-/** Where System.setInputLog() hands each turn's records (napi ADRs 0032 and 0033). */
+/** Where System.setInputLog() hands each turn's records (napi ADRs 0032 to 0034). */
 export interface InputLog {
   /**
    * Once per turn with records or wakes, in turn order, one at a time. The
@@ -1598,8 +1620,12 @@ export interface InputLog {
 }
 
 export interface InputBatch {
-  /** Append each `record` to its `address`'s log, in this order. */
-  readonly entries: readonly { readonly address: ActorAddress; readonly record: InputRecord }[];
+  /**
+   * Append each entry's `bytes`, one address's records from this turn in
+   * core's portable layout, to its `address`'s log, in this order. Never
+   * parse them: a loader hands the log back as it is.
+   */
+  readonly entries: readonly { readonly address: ActorAddress; readonly bytes: Uint8Array }[];
   /**
    * Set each `address`'s wake to `at`, or remove it for null: when napi
    * next needs the actor back (a timer due, or mail it has not taken).
@@ -1609,23 +1635,22 @@ export interface InputBatch {
 }
 
 /**
- * One record of the input log (napi ADRs 0032 and 0033), at logical time
- * `time`: the log's own vocabulary, what napi needs to rebuild an actor by
- * replay. An application stores records without reading them; `event`
- * records read as an audit trail. `queued` is a message accepted into the
- * actor's mailbox, or waiting for its family's loader, and its `event` (or
- * `jump`) record carries the same `seq` when it is delivered, its `dropped`
- * record when it never will be. `fired` is a delayed send the actor
- * dispatched. `data` and `binding` are the values core holds; a spawn's
- * binding is a structured clone taken at the spawn when it can be cloned.
+ * One record of an input log as readInputLog() decodes it for an audit
+ * trail (napi ADR 0034 section 5): core's vocabulary (core ADRs 0090 and
+ * 0091), at logical time `time`, numbered `seq` in its actor's log.
+ * `queued` is a message accepted into the actor's mailbox, or waiting for
+ * its family's loader; its `event` (or `jump`) record carries the same
+ * `hostSeq` when it is delivered, its `dropped` record when it never will
+ * be. `fired` is a delayed send the actor dispatched. A checkpoint is its
+ * `checkpoint` record and the parts after it.
  */
-export type InputRecord = { readonly time: number } & (
-  | { readonly kind: "spawned"; readonly revision?: string; readonly binding?: unknown }
+export type InputRecord = { readonly time: number; readonly seq?: string } & (
+  | { readonly kind: "spawned"; readonly address: ActorAddress; readonly revision: string; readonly binding?: unknown }
   | {
-      readonly kind: "queued";
-      readonly seq: string;
+      readonly kind: "queued" | "event";
+      readonly hostSeq?: string;
       readonly name: EventName;
-      readonly type: "external" | "platform";
+      readonly type: "external" | "internal" | "platform";
       readonly data?: unknown;
       readonly sendID?: string;
       readonly origin?: string;
@@ -1633,27 +1658,16 @@ export type InputRecord = { readonly time: number } & (
       readonly invokeID?: string;
     }
   | {
-      readonly kind: "event";
-      readonly seq?: string;
-      readonly name: EventName;
-      readonly type: "external" | "platform";
-      readonly data?: unknown;
-      readonly sendID?: string;
-      readonly origin?: string;
-      readonly originType?: string;
-      readonly invokeID?: string;
-    }
-  | {
-      /** An operator transition (core ADR 0082), by state names; `source` null for the root. */
+      /** An operator transition (core ADR 0082), by state names; no `source` for the root. */
       readonly kind: "jump";
-      readonly seq?: string;
+      readonly hostSeq?: string;
       readonly name: EventName;
-      readonly type: "external" | "platform";
+      readonly type: "external" | "internal" | "platform";
       readonly data?: unknown;
       readonly sendID?: string;
       readonly origin?: string;
       readonly originType?: string;
-      readonly source: string | null;
+      readonly source?: string;
       readonly targets: readonly string[];
     }
   | {
@@ -1663,38 +1677,49 @@ export type InputRecord = { readonly time: number } & (
       readonly data?: unknown;
       readonly ends: boolean;
     }
-  | { readonly kind: "withdrawn"; readonly sendID: string }
-  | { readonly kind: "abandoned" }
-  /** A quarantined actor released: a runaway then runs without its microstep limit. */
-  | { readonly kind: "released" }
-  | { readonly kind: "evicted" }
-  | { readonly kind: "finished" }
-  | { readonly kind: "fired"; readonly sendID?: string }
-  | { readonly kind: "dropped"; readonly seq: string }
-  /**
-   * System.destroy() ended the actor: its address is free and its wake goes.
-   * A loader's replay starts after the last one; a history that ends in one
-   * spawns a fresh actor. PreparedActor.replay() takes one life: the records
-   * after the last `destroyed`.
-   */
-  | { readonly kind: "destroyed" }
+  | { readonly kind: "withdrawn" | "fired"; readonly sendID: string }
+  | { readonly kind: "abandoned" | "released" | "evicted" | "destroyed" }
+  | { readonly kind: "finished"; readonly finalState?: string }
+  | { readonly kind: "dropped"; readonly hostSeq: string }
+  | {
+      readonly kind: "checkpoint";
+      readonly address: ActorAddress;
+      readonly revision: string;
+      readonly active: readonly string[];
+      readonly late: readonly string[];
+      readonly data?: unknown;
+      readonly [field: string]: unknown;
+    }
+  | { readonly kind: "checkpoint-history" | "checkpoint-send" | "checkpoint-invoke"; readonly [field: string]: unknown }
 );
+
+/**
+ * Decode an input log (napi ADR 0034 section 5): `chunks`, the bytes a sink
+ * stored, cut anywhere, yields its records in order, one at a time.
+ * `classes` names the classes the log's values construct, beside the
+ * standard ones (napi ADR 0031). For showing an actor's history; replay
+ * never needs it.
+ */
+export declare function readInputLog(
+  chunks: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
+  options?: { readonly classes?: Readonly<Record<string, new (...args: any[]) => unknown>> },
+): AsyncIterable<InputRecord>;
 
 export type PrepareOptions<Data extends object> = {
   /**
    * Defaults to the incumbent actor's current data-model root, unless `at`
-   * is given: a replay starts from the binding it is given (the `spawned`
-   * record's) and rebuilds the data from its history.
+   * is given: a replay starts from the binding it is given and rebuilds the
+   * data from its history.
    */
   readonly binding?: Partial<Data> | Data;
   /** A replaying actor, whose clock starts here: no later than the system's time. */
   readonly at?: number;
   /**
-   * The log's `spawned` record: a replaying actor whose clock starts at its
-   * time and whose binding is its binding, unless `at` or `binding` says
-   * otherwise (napi ADR 0033 section 6).
+   * The start of an input log, holding at least its first record (napi ADR
+   * 0034): a replaying actor made from `spawned` (its binding and clock) or
+   * a checkpoint (its state). Not with `at` or `binding`.
    */
-  readonly spawned?: Extract<InputRecord, { readonly kind: "spawned" }>;
+  readonly log?: Uint8Array;
 } & ({ readonly incumbent: ActorID; readonly address?: never } | { readonly address: ActorAddress; readonly incumbent?: never });
 
 /**
