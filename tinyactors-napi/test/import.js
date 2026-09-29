@@ -373,6 +373,41 @@ async function names() {
   system.close();
 }
 
+// A refused document's text is as long as compileTextBytes allows, on the
+// import path and for a child chart nested at define() (napi ADR 0036 §1).
+async function longRefusals() {
+  // Core caps the subject at a sixteenth of the line (core ADR 0092): 64
+  // bytes at the default, 1,024 at 16 KiB, so a 1,000-byte target fits only
+  // there, and the text runs past the 1,023 bytes napi used to keep.
+  const target = 't'.repeat(1000);
+  const flat = `<scxml ${NS} name="long"><state id="a"><transition event="go" target="${target}"/></state></scxml>`;
+  const nested = `<scxml ${NS} name="parent"><state id="p"><invoke type="scxml"><content>` +
+    `<scxml ${NS} name="child"><state id="c"><transition event="go" target="${target}"/></state></scxml>` +
+    '</content></invoke></state></scxml>';
+  const messageOf = (system, xml) => {
+    try {
+      system.define(xml, { format: 'scxml' });
+    } catch (error) {
+      assert.equal(error.code, 'invalid');
+      return error.detail.message;
+    }
+    assert.fail('the document was defined');
+  };
+  const small = createSystem();
+  const cut = messageOf(small, flat);
+  assert.ok(cut.length <= 1024, `the default cuts at compileTextBytes (${cut.length})`);
+  assert.ok(!cut.includes(target), 'the default cannot hold the whole target');
+  small.close();
+  const large = createSystem({ parameters: { compileTextBytes: 16384 } });
+  const whole = messageOf(large, flat);
+  assert.ok(whole.length > 1023, `napi no longer cuts at 1,023 bytes (${whole.length})`);
+  assert.ok(whole.includes(target), 'the whole target arrives');
+  const child = messageOf(large, nested);
+  assert.match(child, /^the child chart of <invoke> 0 is refused/);
+  assert.ok(child.includes(target), "a nested child's refusal keeps the whole target");
+  large.close();
+}
+
 (async () => {
   await roles();
   await dataSrc();
@@ -382,6 +417,7 @@ async function names() {
   await reentrancy();
   await outOfMemory();
   await names();
+  await longRefusals();
   console.log('import.js passed');
 })().catch((error) => {
   console.error(error);

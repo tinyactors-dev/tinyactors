@@ -8,8 +8,21 @@
 /* Block size of the import's arena; a large document grows it on demand. */
 #define TNA_IMPORT_ARENA_BLOCK ((size_t)16384)
 
+void tna_import_failure_open(tna_import_failure *failure, char *buffer, size_t size) {
+    *failure = (tna_import_failure){ .message = buffer, .message_size = size };
+    if (size != 0) {
+        buffer[0] = '\0';
+    }
+}
+
+void tna_import_failure_reset(tna_import_failure *failure, ta_import_stage stage, bool located) {
+    tna_import_failure_open(failure, failure->message, failure->message_size);
+    failure->stage = stage;
+    failure->located = located;
+}
+
 static void tna_import_text(tna_import_failure *failure, ta_str text) {
-    size_t length = text.len < sizeof failure->message - 1u ? text.len : sizeof failure->message - 1u;
+    size_t length = text.len < failure->message_size - 1u ? text.len : failure->message_size - 1u;
     if (length != 0) {
         memcpy(failure->message, text.ptr, length);
     }
@@ -29,7 +42,7 @@ static void tna_import_decode(tna_import_failure *failure, const ta_chart_error 
     failure->code = error->code;
     tna_import_copy(failure->construct, sizeof failure->construct, error->construct);
     tna_import_copy(failure->attribute, sizeof failure->attribute, error->attribute);
-    snprintf(failure->message, sizeof failure->message, "%.*s%s%.*s%s%.*s", (int)error->message.len,
+    snprintf(failure->message, failure->message_size, "%.*s%s%.*s%s%.*s", (int)error->message.len,
              error->message.ptr != NULL ? error->message.ptr : "", error->construct.len != 0 ? " in <" : "",
              (int)error->construct.len, error->construct.ptr != NULL ? error->construct.ptr : "",
              error->construct.len != 0 ? (error->attribute.len != 0 ? "> attribute " : ">") : "",
@@ -38,13 +51,10 @@ static void tna_import_decode(tna_import_failure *failure, const ta_chart_error 
 
 static void tna_import_describe(tna_import_failure *failure, const ta_import_error *error, ta_arena *arena,
                                 const ta_system *core) {
-    *failure = (tna_import_failure){
-        .stage = error->stage,
-        .located = error->located,
-        .line = error->at.line,
-        .column = error->at.column,
-        .offset = error->at.offset,
-    };
+    tna_import_failure_reset(failure, error->stage, error->located);
+    failure->line = error->at.line;
+    failure->column = error->at.column;
+    failure->offset = error->at.offset;
     /* A codec that gave no place for its refusal leaves the position zero. */
     if (error->stage == TA_IMPORT_STAGE_DECODE && error->at.line == 0) {
         failure->located = false;
@@ -150,11 +160,10 @@ ta_result tna_encode(tna_system *system, const tna_encode_params *params) {
                                                               .error = &error,
                                                           });
     if (result == TA_ERR_INVALID && params->failure != NULL) {
-        *params->failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE,
-                                                 .located = error.at.line != 0,
-                                                 .line = error.at.line,
-                                                 .column = error.at.column,
-                                                 .offset = error.at.offset };
+        tna_import_failure_reset(params->failure, TA_IMPORT_STAGE_DECODE, error.at.line != 0);
+        params->failure->line = error.at.line;
+        params->failure->column = error.at.column;
+        params->failure->offset = error.at.offset;
         tna_import_decode(params->failure, &error);
     }
     return result;

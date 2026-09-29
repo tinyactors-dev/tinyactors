@@ -33,8 +33,20 @@ typedef struct {
     ta_chart_error_code code;
     char construct[128];
     char attribute[128];
-    char message[1024];
+    /* The text for a person: the wrapper's refusal buffer, sized by core's
+     * compileTextBytes plus room for napi's framing (napi ADR 0036). */
+    char *message;
+    size_t message_size;
 } tna_import_failure;
+
+/* Room napi's framing adds around a formatted compile error: "the child
+ * chart of <invoke> N is refused at line L, column C of its content: ". */
+#define TNA_REFUSAL_FRAME_BYTES 256u
+
+/* A failure whose message is written into `buffer` (`size` bytes), empty. */
+void tna_import_failure_open(tna_import_failure *failure, char *buffer, size_t size);
+/* Clears every field but the message buffer, which becomes empty. */
+void tna_import_failure_reset(tna_import_failure *failure, ta_import_stage stage, bool located);
 
 /* The SCXML codec's adapter over `codec`, which the caller keeps. */
 ta_result tna_scxml_codec(ta_scxml_codec *codec, ta_chart_codec *out);

@@ -54,6 +54,12 @@ struct tna_napi_system {
      * 0035), plus a terminator, allocated at creation. */
     size_t trace_value_bytes;
     char *trace_value;
+    /* A refused document's text, and scratch to reframe it: compileTextBytes
+     * plus TNA_REFUSAL_FRAME_BYTES each, allocated at creation (napi ADR
+     * 0036). `children.failure` points into the same block. */
+    size_t refusal_bytes;
+    char *refusal;
+    char *refusal_scratch;
     napi_deferred *waiters;       /* flush() promises */
     uint32_t waiter_count;
     uint32_t waiter_capacity;

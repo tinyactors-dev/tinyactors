@@ -193,22 +193,23 @@ static bool tna_is_scxml_type(ta_str type) {
 }
 
 /* Says which child of which chart was refused, and why. */
-static void tna_child_refused(tna_import_failure *failure, uint32_t invoke, ta_result result) {
-    char reason[sizeof failure->message];
+static void tna_child_refused(tna_import_failure *failure, char *wrapper_scratch, uint32_t invoke, ta_result result) {
+    char *reason = wrapper_scratch;
+    size_t reason_size = failure->message_size;
     size_t length = strlen(failure->message);
     memcpy(reason, failure->message, length + 1u);
     if (result != TA_ERR_INVALID && result != TA_ERR_UNSUPPORTED) {
-        snprintf(reason, sizeof reason, "%s", result == TA_ERR_DEFINITION_MISMATCH
+        snprintf(reason, reason_size, "%s", result == TA_ERR_DEFINITION_MISMATCH
                                                   ? "its identity is taken by another chart"
                                                   : "it could not be compiled");
         failure->located = false;
     }
     if (failure->located) {
-        snprintf(failure->message, sizeof failure->message,
+        snprintf(failure->message, failure->message_size,
                  "the child chart of <invoke> %u is refused at line %u, column %u of its content: %s", invoke,
                  failure->line, failure->column, reason);
     } else {
-        snprintf(failure->message, sizeof failure->message, "the child chart of <invoke> %u is refused: %s", invoke,
+        snprintf(failure->message, failure->message_size, "the child chart of <invoke> %u is refused: %s", invoke,
                  reason);
     }
     /* The position is in the child's text, not the document being defined. */
@@ -260,8 +261,8 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
                 name = (ta_str){ .ptr = (const char *)content.bytes.ptr, .len = content.bytes.len };
                 result = tna_fetch_src(&fetcher, name, &arena, &text);
                 if (result == TA_ERR_NOT_FOUND) {
-                    *failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE, .located = false };
-                    snprintf(failure->message, sizeof failure->message,
+                    tna_import_failure_reset(failure, TA_IMPORT_STAGE_DECODE, false);
+                    snprintf(failure->message, failure->message_size,
                              "the child chart of <invoke> %u is refused: resolve(src) knows no chart for src %.*s", invoke,
                              (int)content.bytes.len, (const char *)content.bytes.ptr);
                     result = TA_ERR_INVALID;
@@ -275,7 +276,7 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
                 result = tna_compile_child(wrapper, text, name, parent, resolve, &child, failure);
                 wrapper->system->definitions.registering = TNA_ORIGIN_HOST;
                 if (result != TA_OK && result != TA_ERR_NOMEM) {
-                    tna_child_refused(failure, invoke, result);
+                    tna_child_refused(failure, wrapper->refusal_scratch, invoke, result);
                     result = result == TA_ERR_UNSUPPORTED ? TA_ERR_UNSUPPORTED : TA_ERR_INVALID;
                 }
             }
@@ -304,8 +305,8 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
 
 static ta_op_status tna_child_fault(tna_napi_system *wrapper, ta_fault *fault, ta_result code, const char *message) {
     size_t length = strlen(message);
-    if (length >= sizeof wrapper->children.failure) {
-        length = sizeof wrapper->children.failure - 1u;
+    if (length >= wrapper->children.failure_size) {
+        length = wrapper->children.failure_size - 1u;
     }
     if (message != wrapper->children.failure) {
         memcpy(wrapper->children.failure, message, length);
@@ -381,6 +382,7 @@ static bool tna_clear_exception(napi_env env, char *message, size_t capacity) {
 static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes text,
                                            ta_str name, tna_invoking parent) {
     tna_import_failure failure;
+    tna_import_failure_open(&failure, wrapper->refusal, wrapper->refusal_bytes);
     wrapper->system->definitions.registering = TNA_ORIGIN_INVOKE;
     ta_result result =
         tna_compile_child(wrapper, text, name, parent.definition, parent.resolve, params->out, &failure);
@@ -398,14 +400,14 @@ static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tna_c
     if (result != TA_OK) {
         char *message = wrapper->children.failure;
         if (result == TA_ERR_DEFINITION_MISMATCH) {
-            snprintf(message, sizeof wrapper->children.failure,
+            snprintf(message, wrapper->children.failure_size,
                      "invoker.scxml: the child chart is refused: its identity is taken by another chart");
         } else if (failure.located) {
-            snprintf(message, sizeof wrapper->children.failure,
+            snprintf(message, wrapper->children.failure_size,
                      "invoker.scxml: the child chart is refused at line %u, column %u: %s", failure.line,
                      failure.column, failure.message);
         } else {
-            snprintf(message, sizeof wrapper->children.failure, "invoker.scxml: the child chart is refused: %s",
+            snprintf(message, wrapper->children.failure_size, "invoker.scxml: the child chart is refused: %s",
                      failure.message);
         }
         return tna_child_fault(wrapper, params->fault, result, message);
@@ -490,7 +492,7 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
             return TA_OP_NOMEM;
         }
         if (fetched != TA_OK) {
-            snprintf(wrapper->children.failure, sizeof wrapper->children.failure,
+            snprintf(wrapper->children.failure, wrapper->children.failure_size,
                      "invoker.scxml: resolve(src) knows no chart for src %.*s", (int)length, text);
             return tna_child_fault(wrapper, params->fault, TA_ERR_NOT_FOUND, wrapper->children.failure);
         }

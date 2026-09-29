@@ -44,6 +44,7 @@ static void tna_free_wrapper(tna_napi_system *wrapper) {
     tna_env *data = wrapper->env_data;
     tna_js_datamodel_free(&wrapper->dm);
     free(wrapper->trace_value);
+    free(wrapper->refusal);
     free(wrapper);
     tna_env_release(data);
 }
@@ -450,11 +451,22 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     /* napi's buffers are allocated with the system (napi ADR 0035). */
     wrapper->trace_value_bytes = (size_t)napi_params.values[TNA_PARAM_TRACE_VALUE_BYTES];
     wrapper->trace_value = malloc(wrapper->trace_value_bytes + 1u);
-    if (wrapper->trace_value == NULL) {
+    uint64_t compile_text = 0;
+    (void)ta_system_param(wrapper->system->core, TA_PARAM_COMPILE_TEXT_BYTES, &compile_text);
+    wrapper->refusal_bytes = (size_t)compile_text + TNA_REFUSAL_FRAME_BYTES;
+    wrapper->refusal = malloc(3u * wrapper->refusal_bytes);
+    if (wrapper->trace_value == NULL || wrapper->refusal == NULL) {
+        free(wrapper->trace_value);
+        free(wrapper->refusal);
         tna_system_free(wrapper->system);
         free(wrapper);
         return tna_throw(env, "out-of-memory", "cannot allocate the system's buffers");
     }
+    wrapper->refusal[0] = '\0';
+    wrapper->refusal_scratch = wrapper->refusal + wrapper->refusal_bytes;
+    wrapper->children.failure = wrapper->refusal + 2u * wrapper->refusal_bytes;
+    wrapper->children.failure_size = wrapper->refusal_bytes;
+    wrapper->children.failure[0] = '\0';
     wrapper->env_data = data;
     bool values_made = tna_values_init(&wrapper->values, env, &wrapper->system->allocator);
     wrapper->values.torn_down = &data->torn_down;
@@ -466,6 +478,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         tna_system_free(wrapper->system);
         tna_js_datamodel_free(&wrapper->dm);
         free(wrapper->trace_value);
+        free(wrapper->refusal);
         free(wrapper);
         return tna_throw(env, "out-of-memory", "cannot create the data model");
     }
@@ -475,6 +488,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         tna_js_datamodel_free(&wrapper->dm);
         tna_js_datamodel_close(&wrapper->dm, true);
         free(wrapper->trace_value);
+        free(wrapper->refusal);
         free(wrapper);
         return NULL;
     }
@@ -487,6 +501,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         tna_js_datamodel_free(&wrapper->dm);
         tna_js_datamodel_close(&wrapper->dm, true);
         free(wrapper->trace_value);
+        free(wrapper->refusal);
         free(wrapper);
         return tna_throw(env, "invalid", "cannot wrap a system");
     }
@@ -1072,6 +1087,7 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
     uint32_t count = tna_js_datamodel_choices(&wrapper->dm, &choices);
     ta_definition_id id = 0;
     tna_import_failure failure;
+    tna_import_failure_open(&failure, wrapper->refusal, wrapper->refusal_bytes);
     /* The codec and the compilers run inside this core call: one that calls
      * back into the system gets `reentrant` (ADR 0019 section 3). */
     system->inside_core = true;
@@ -1125,6 +1141,7 @@ static napi_value tna_adopt_definition_method(napi_env env, napi_callback_info i
         resolve = argv[1];
     }
     tna_import_failure failure;
+    tna_import_failure_open(&failure, wrapper->refusal, wrapper->refusal_bytes);
     ta_result result = tna_adopt(wrapper, (ta_definition_id)id, resolve, &failure);
     return tna_define_result(env, result, &failure, (ta_definition_id)id, "adoptDefinition");
 }
@@ -1218,6 +1235,7 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
     ta_source_map map = { 0 };
     const ta_definition_identity *identity = NULL;
     tna_import_failure failure;
+    tna_import_failure_open(&failure, wrapper->refusal, wrapper->refusal_bytes);
     /* A JavaScript codec runs inside this core call. */
     system->inside_core = true;
     ta_result result = tna_encode(system, &(tna_encode_params){
@@ -1263,11 +1281,11 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
         out = tna_throw(env, "not-found", "encodeDefinition: no such definition");
     } else if (result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) {
         if (result == TA_ERR_UNSUPPORTED) {
-            failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE };
-            snprintf(failure.message, sizeof failure.message, "the codec cannot encode");
+            tna_import_failure_reset(&failure, TA_IMPORT_STAGE_DECODE, false);
+            snprintf(failure.message, failure.message_size, "the codec cannot encode");
         } else if (printer.message[0] != '\0') {
             /* The data model's reason, not the codec's phrase (napi ADR 0031). */
-            snprintf(failure.message, sizeof failure.message, "%s", printer.message);
+            snprintf(failure.message, failure.message_size, "%s", printer.message);
         }
         out = tna_import_refusal(env, result, &failure);
     } else {
