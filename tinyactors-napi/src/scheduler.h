@@ -195,6 +195,9 @@ typedef struct {
      * carries its invocation and data. A report for a gone target is
      * dropped, never a dead letter. */
     uint8_t report;
+    /* A replayed input's time, or NULL: the replaying actor's clock moves
+     * there before it takes the message (napi ADR 0032 section 7). */
+    const ta_time *replay_time;
 } tna_message;
 
 typedef enum {
@@ -336,6 +339,10 @@ typedef struct {
     uint32_t record_count;
     /* The input log's observer (napi ADR 0032 section 6), or none. */
     tna_sched_observer observer;
+    /* A replayed message's time (napi ADR 0032 section 7): envelope index ->
+     * the logical time the replaying actor's clock moves to just before
+     * the message is delivered. Empty, and never consulted, without a replay. */
+    tna_map replay_times;
 } tna_sched;
 
 typedef struct {

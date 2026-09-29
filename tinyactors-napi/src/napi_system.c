@@ -1648,10 +1648,11 @@ static ta_invoke_id tna_replay_invocation(tna_system *system, ta_actor_id actor,
 }
 
 /*
- * replaySend(slot, generation, name, data, origin, sendID, platform, invokeID, report):
+ * replaySend(slot, generation, name, data, origin, sendID, platform, invokeID, report, time):
  * one input record a replay gives a replaying actor (napi ADR 0032 section
  * 7), queued in its mailbox like a send(), whose promise settles when the
- * macrostep it starts ends. An `event` record carries its name, data,
+ * macrostep it starts ends. Just before the actor takes it, its clock moves
+ * to `time`, the record's, so a replay queues many records at once. An `event` record carries its name, data,
  * origin (as requeue() parses it), send ID, platform flag and the text of
  * the invocation it came from, matched to the actor's active invocation. A
  * `report` record (`report` 1: unavailable, 2: quarantined, 3: failed)
@@ -1659,8 +1660,8 @@ static ta_invoke_id tna_replay_invocation(tna_system *system, ta_actor_id actor,
  * ta_actor_report_invoke() when the actor is idle.
  */
 static napi_value tna_replay_send_method(napi_env env, napi_callback_info info) {
-    size_t argc = 9;
-    napi_value argv[9] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    size_t argc = 10;
+    napi_value argv[10] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -1676,12 +1677,13 @@ static napi_value tna_replay_send_method(napi_env env, napi_callback_info info) 
     uint32_t generation = 0;
     uint32_t name = 0;
     uint32_t report = 0;
-    if (argc < 9 || napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
+    double at = -1;
+    if (argc < 10 || napi_get_value_double(env, argv[9], &at) != napi_ok || !(at >= 0) || napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
         napi_get_value_uint32(env, argv[1], &generation) != napi_ok ||
         napi_get_value_uint32(env, argv[2], &name) != napi_ok || napi_get_value_uint32(env, argv[8], &report) != napi_ok ||
         report > TNA_REPORT_FAILED) {
         return tna_throw(env, "invalid", "replaySend: expected (slot, generation, name, data, origin, sendID, platform, "
-                                         "invokeID, report)");
+                                         "invokeID, report, time)");
     }
     ta_actor_id actor = ta_actor_id_make(slot, generation);
     ta_event event;
@@ -1716,13 +1718,15 @@ static napi_value tna_replay_send_method(napi_env env, napi_callback_info info) 
         return NULL;
     }
     ta_trace_parent trace = { 0 };
+    ta_time time = (ta_time)at;
     ta_result result = accepting.waiter == 0
                            ? TA_ERR_NOMEM
                            : tna_system_post(system, &(tna_message){ .target = actor,
                                                                      .event = &event,
                                                                      .waiter = accepting.waiter,
                                                                      .trace = &trace,
-                                                                     .report = (uint8_t)report });
+                                                                     .report = (uint8_t)report,
+                                                                     .replay_time = &time });
     if (result != TA_OK) {
         ta_event_release(&event);
         return tna_accept_failed(env, wrapper, &accepting, result);

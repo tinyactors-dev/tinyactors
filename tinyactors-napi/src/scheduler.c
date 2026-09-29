@@ -76,6 +76,9 @@ static void tna_jump_give(tna_sched *sched, tna_envelope *envelope) {
 /* Releases the envelope's references and returns it to the free list. */
 static void tna_envelope_give(tna_sched *sched, uint32_t index) {
     tna_envelope *envelope = tna_sched_envelope(sched, index);
+    if (tna_map_count(&sched->replay_times) != 0) {
+        (void)tna_map_remove(&sched->replay_times, index);
+    }
     sched->retained -= envelope->bytes;
     ta_event_release(&envelope->event);
     if (envelope->has_jump) {
@@ -132,6 +135,7 @@ void tna_sched_init(tna_sched *sched, ta_allocator allocator, ta_allocator envel
     tna_free_list_init(&sched->traces, envelopes, TNA_LAYOUT(ta_trace_parent));
     tna_vec_init(&sched->waiters, envelopes, TNA_LAYOUT(tna_waiter));
     tna_map_init(&sched->inflight, allocator);
+    tna_map_init(&sched->replay_times, allocator);
     /* One chunk holds a default turn's settlements (messageBudget and
      * resumesPerTurn are 1024 by default), so steady state reuses it. */
     tna_ring_init(&sched->settled, allocator,
@@ -178,6 +182,7 @@ void tna_sched_destroy(tna_sched *sched) {
     tna_free_list_destroy(&sched->traces);
     tna_vec_destroy(&sched->waiters);
     tna_map_destroy(&sched->inflight);
+    tna_map_destroy(&sched->replay_times);
     tna_ring_destroy(&sched->settled);
     sched->waiter_free = 0;
     sched->waiters_live = 0;
@@ -743,6 +748,12 @@ ta_result tna_sched_post(tna_sched *sched, const tna_message *message) {
         envelope->jump = jump;
         envelope->has_jump = 1u;
     }
+    if (message->replay_time != NULL && tna_map_put(&sched->replay_times, index, *message->replay_time) != TA_OK) {
+        /* The caller keeps the event on failure: the envelope gives back only its own. */
+        tna_sched_envelope(sched, index)->event = (ta_event){ 0 };
+        tna_envelope_give(sched, index);
+        return TA_ERR_NOMEM;
+    }
     if (dead) {
         tna_sched_dead_append(sched, index, entry == NULL ? TNA_DEAD_NOT_FOUND : TNA_DEAD_DONE);
         return TA_OK;
@@ -983,6 +994,36 @@ static ta_str tna_report_reason(uint8_t kind) {
  * invocation for any more (it ended, or the parent went) is dropped, and
  * the next mail follows; out of memory, or busy, it stays at the head.
  */
+/*
+ * A replayed message's time (napi ADR 0032 section 7): the replaying actor's
+ * clock moves there before it takes the message at `head`, between
+ * macrosteps. Core refuses a time before the actor's clock or after the
+ * system's: the message becomes a dead letter and the actor is faulted, as
+ * for a message core refuses. False then.
+ */
+static bool tna_sched_replay_time(tna_sched *sched, const tna_turn_params *params, tna_sched_entry *entry,
+                                  ta_actor_id actor) {
+    uint32_t head = entry->first;
+    uint64_t time = 0;
+    if (tna_map_count(&sched->replay_times) == 0 || !tna_map_get(&sched->replay_times, head, &time)) {
+        return true;
+    }
+    *params->inside_core = true;
+    ta_result result = ta_actor_set_time(params->core, actor, (ta_time)time);
+    *params->inside_core = false;
+    if (result == TA_OK) {
+        (void)tna_map_remove(&sched->replay_times, head);
+        return true;
+    }
+    entry->first = tna_sched_envelope(sched, head)->next;
+    if (entry->first == 0) {
+        entry->last = 0;
+    }
+    tna_sched_dead_append(sched, head, TNA_DEAD_REFUSED);
+    tna_sched_fault(sched, params, (tna_turn_record){ .actor = actor, .operation = "replay", .code = result });
+    return false;
+}
+
 static void tna_sched_report_one(tna_sched *sched, const tna_turn_params *params, tna_sched_entry *entry,
                                  ta_actor_id actor, uint32_t head) {
     tna_envelope *envelope = tna_sched_envelope(sched, head);
@@ -1055,6 +1096,9 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
     }
     if (entry->first == 0) {
         entry->state = TNA_SCHED_IDLE;
+        return;
+    }
+    if (!tna_sched_replay_time(sched, params, entry, actor)) {
         return;
     }
     uint32_t head = entry->first;

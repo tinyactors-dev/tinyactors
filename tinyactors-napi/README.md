@@ -251,6 +251,70 @@ the actor is back. An unloaded actor's own timers wake it too. To survive a
 restart, store an actor's `data()` and `inspect().delayedSends`, and spawn
 it again with `{ binding, pendingSends }`.
 
+## Persistence by replay
+
+A named actor can live on as the log of its inputs: record what it took,
+evict it, and rebuild it from the log when mail arrives for it (core ADRs
+0088 and 0089, napi ADR 0032). tinyactors chooses no storage: your sink
+gets each turn's records and stores them where you like.
+
+```js
+const { createSystem, statechart } = require('@tinyactors/node');
+
+const counter = statechart({ family: 'counter', revision: 'v1' })
+  .data('n', 0)
+  .state('s', (s) => s.on('inc', (t) => t.assign('n', ({ data }) => data.n + 1)));
+
+// Your log store: a database table in real life, keyed by address.
+const logs = new Map();
+let horizon = 0;
+
+async function main() {
+  const system = createSystem();
+  const definition = system.define(counter);
+
+  // Record every input of the family. A turn's effects wait for commit().
+  system.setInputLog({
+    commit(batch) {
+      horizon = batch.horizon;
+      for (const input of batch.inputs) {
+        const key = input.address.name;
+        logs.set(key, [...(logs.get(key) ?? []), input]);
+      }
+    },
+  }, { families: ['counter'] });
+
+  // Rebuild an evicted actor from its log when mail arrives for it.
+  system.setLoader('counter', ({ name }) => {
+    const log = logs.get(name);
+    if (log === undefined) return 'not-found';
+    const evicted = log.findLast((input) => input.kind === 'evicted');
+    return { replay: { spawn: definition, binding: log[0].binding, inputs: log, stoppedAt: evicted?.time ?? horizon } };
+  });
+
+  const c = system.spawn(definition, { name: 'c' });
+  await c.send('inc');
+  await c.send('inc');
+  system.evict(c); // its log is now its only state
+  await system.flush();
+  await system.send({ family: 'counter', name: 'c' }, 'inc'); // replayed, then takes the new mail
+  console.log(system.findActor({ family: 'counter', name: 'c' }).data().n); // 3
+  system.close();
+}
+
+main();
+```
+
+A replay crosses no border: it sends nothing, starts no service and writes
+no log; delayed sends that fired in the run it replays are dropped, and the
+ones still pending fire once, late if their time has passed. Under a new
+revision the same history is read again, which is how an upgrade works:
+`system.prepare(v2, { incumbent, binding, at })`, `prepared.replay(log)`,
+then `system.publish(prepared, { at: system.time })`. After a crash,
+`system.requeue()` puts back the messages the log recorded as `queued` and
+never delivered. Expressions should read `context.time` rather than the
+wall clock, so a replay computes what the live run did.
+
 ## Invoking child charts
 
 ```js

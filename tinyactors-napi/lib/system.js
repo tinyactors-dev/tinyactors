@@ -29,6 +29,9 @@ const SCXML_PROCESSOR = 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor';
 // A logged report's reason, as the native replaySend() takes it (scheduler.h, tna_report_kind).
 const REPORT_KINDS = Object.freeze({ unavailable: 1, quarantined: 2, failed: 3 });
 
+// How many event and report records a replay queues before it waits for them.
+const REPLAY_WINDOW = 256;
+
 const { core } = native;
 
 // Compiles a spec in the generated shape. A refused chart throws with core's
@@ -2608,7 +2611,11 @@ class System {
   }
 
   // Replays `inputs`, one actor's input records, into the replaying actor
-  // `prepared` (napi ADR 0032 section 7): PreparedActor.replay().
+  // `prepared` (napi ADR 0032 section 7): PreparedActor.replay(). Event and
+  // report records are queued REPLAY_WINDOW at a time, each carrying its
+  // time, which the scheduler sets on the actor's clock just before the
+  // actor takes it; a host operation waits for the window to settle and
+  // runs on the idle actor.
   async [REPLAY](prepared, inputs) {
     if (!(prepared instanceof PreparedActor) || prepared.system !== this || !prepared.replaying) {
       throw new TinyactorsError('replay(): expected a replaying actor of this system (prepare() with `at`)', 'invalid');
@@ -2621,15 +2628,51 @@ class System {
     let count = 0;
     let lastTime;
     let fault; // a replayed macrostep that faulted, waiting for the operation that followed it live
+    let window = [];
+    const settle = async () => {
+      if (window.length === 0) {
+        return;
+      }
+      const taken = window;
+      window = [];
+      const results = await this.#settleWindow(prepared, taken.map((entry) => entry.promise));
+      results.forEach((result, index) => {
+        if (result instanceof Error) {
+          fault ??= result;
+        } else if (taken[index].record.kind === 'event' && result.consumed === false) {
+          ignored.push(taken[index].record);
+        }
+      });
+    };
     for await (const record of inputs) {
       if (record === null || typeof record !== 'object' || typeof record.kind !== 'string' ||
-          typeof record.time !== 'number' || !Number.isFinite(record.time)) {
+          typeof record.time !== 'number' || !Number.isFinite(record.time) || record.time < 0) {
         throw new TinyactorsError('replay(): an input record is { time, kind, ... }', 'invalid');
       }
       count += 1;
       if (record.kind === 'queued') {
         continue; // a queued message reaches the actor as its `event` record
       }
+      if (lastTime !== undefined && record.time < lastTime) {
+        throw new TinyactorsError('replay(): input records must come in the order of their times', 'invalid');
+      }
+      if (record.kind === 'event' || record.kind === 'report') {
+        const report = record.kind === 'report' ? REPORT_KINDS[record.reason] : 0;
+        if (report === undefined) {
+          throw new TinyactorsError(`replay(): a report's reason is unavailable, quarantined or failed, not ${record.reason}`,
+            'invalid');
+        }
+        if (fault !== undefined) {
+          throw fault;
+        }
+        window.push({ record, promise: this.#replayed(prepared, record, report) });
+        lastTime = record.time;
+        if (window.length >= REPLAY_WINDOW) {
+          await settle();
+        }
+        continue;
+      }
+      await settle();
       if (fault !== undefined && record.kind !== 'abandoned' && record.kind !== 'released') {
         throw fault;
       }
@@ -2645,32 +2688,10 @@ class System {
         case 'spawned':
         case 'evicted':
         case 'finished':
+        case 'abandoned':
           break;
-        case 'event': {
-          const settled = await this.#replayed(prepared, record, 0);
-          if (settled instanceof Error) {
-            fault = settled;
-          } else if (settled.consumed === false) {
-            ignored.push(record);
-          }
-          break;
-        }
-        case 'report': {
-          const kind = REPORT_KINDS[record.reason];
-          if (kind === undefined) {
-            throw new TinyactorsError(`replay(): a report's reason is unavailable, quarantined or failed, not ${record.reason}`,
-              'invalid');
-          }
-          const settled = await this.#replayed(prepared, record, kind);
-          if (settled instanceof Error) {
-            fault = settled;
-          }
-          break;
-        }
         case 'withdrawn':
           this.withdrawSend(prepared, record.sendID);
-          break;
-        case 'abandoned':
           break;
         case 'released':
           fault = undefined;
@@ -2680,11 +2701,42 @@ class System {
           throw new TinyactorsError(`replay(): an input record of kind ${record.kind} cannot be replayed`, 'invalid');
       }
     }
+    await settle();
     if (fault !== undefined) {
       throw fault;
     }
     await this.#untilIdle(prepared);
     return Object.freeze({ inputs: count, ignored: Object.freeze(ignored), lastTime });
+  }
+
+  // Waits for a window of replayed records: each one's settlement, or the
+  // fault it ended in. A fault quarantines the actor with the records behind
+  // it still queued; the log has nothing that resolves that, so it throws.
+  async #settleWindow(prepared, promises) {
+    const results = new Array(promises.length);
+    let left = promises.length;
+    let failure;
+    promises.forEach((promise, index) => promise.then(
+      (result) => { results[index] = result; left -= 1; },
+      (error) => { failure ??= error; left -= 1; },
+    ));
+    let stuck = 0;
+    while (left > 0 && failure === undefined) {
+      await new Promise((resolve) => setImmediate(resolve));
+      const state = this.#native.scheduling(prepared.slot, prepared.generation);
+      if (state === 'none' || this.closed) {
+        throw new TinyactorsError('replay(): the replaying actor is gone', this.closed ? 'closed' : 'not-found');
+      }
+      stuck = state === 'quarantined' ? stuck + 1 : 0;
+      if (stuck > 1) {
+        throw results.find((result) => result instanceof Error) ??
+          new TinyactorsError('replay(): the replaying actor faulted with records still queued behind the fault', 'invalid');
+      }
+    }
+    if (failure !== undefined) {
+      throw failure;
+    }
+    return results;
   }
 
   // One event or report record, through the replaying actor's mailbox; its
@@ -2694,7 +2746,7 @@ class System {
     const name = report === 0 ? this.#events.id(record.name) : 0;
     const promise = this.#native.replaySend(prepared.slot, prepared.generation, name, record.data, origin,
       typeof record.sendID === 'string' ? record.sendID : undefined, record.type === 'platform',
-      typeof record.invokeID === 'string' ? record.invokeID : undefined, report);
+      typeof record.invokeID === 'string' ? record.invokeID : undefined, report, Math.floor(record.time));
     return promise.then((settled) => settled, (error) => {
       if (error instanceof TinyactorsError && error.code !== 'closed' && error.code !== 'not-found' &&
           this.#native.scheduling(prepared.slot, prepared.generation) === 'quarantined') {
