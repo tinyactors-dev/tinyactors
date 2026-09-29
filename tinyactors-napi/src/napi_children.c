@@ -164,8 +164,8 @@ static ta_result tna_compile_child(tna_napi_system *wrapper, ta_bytes text, ta_s
     tna_child_family family;
     tna_child_family_of(wrapper, parent, &family);
     tna_src_resolver fetcher = { .env = wrapper->env, .resolve = resolve };
-    ta_datamodel choices[2u + TNA_DM_REGISTERED_MAX];
-    uint32_t count = tna_js_datamodel_choices(&wrapper->dm, choices);
+    const ta_datamodel *choices = NULL;
+    uint32_t count = tna_js_datamodel_choices(&wrapper->dm, &choices);
     ta_result result = tna_import_scxml(wrapper->system, &(tna_import_params){
                                                             .input = text,
                                                             .name = name,

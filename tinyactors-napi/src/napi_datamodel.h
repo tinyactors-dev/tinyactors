@@ -74,10 +74,10 @@ typedef struct {
     uint32_t count;
 } tna_intern_table;
 
-/* At most this many data models registered per system (ADR 0019), and the
- * longest name one may have. */
-#define TNA_DM_REGISTERED_MAX 8u
-#define TNA_DM_NAME_MAX 32u
+/* The longest name a data model may have under any system: the ceiling of
+ * the datamodelNameBytes parameter (napi ADR 0035), which sizes buffers on
+ * the stack; each system's own limit is its parameter. */
+#define TNA_DM_NAME_CEILING 256u
 
 /*
  * One data model as core sees it: the built-in operations under a name. The
@@ -90,7 +90,7 @@ typedef struct {
     tna_js_datamodel *dm;
     napi_ref compile; /* NULL for the built-in model */
     ta_datamodel_vtable vtable;
-    char name[TNA_DM_NAME_MAX];
+    char *name; /* datamodelNameBytes, in the data model's names block */
 } tna_dm_adapter;
 
 struct tna_js_datamodel {
@@ -120,11 +120,23 @@ struct tna_js_datamodel {
      */
     ta_datamodel selected;
     tna_dm_adapter builtin;
-    tna_dm_adapter registered[TNA_DM_REGISTERED_MAX];
+    char builtin_name[16];
+    /*
+     * Allocated with the system from its parameters (napi ADR 0035):
+     * registeredDatamodels adapters, their names of datamodelNameBytes, the
+     * choices a compile is offered (the built-in, null, and every registered
+     * one), and a compiler's refusal of compileMessageBytes, which core
+     * copies before it next calls the data model (ta_expression_rejection).
+     * Freed only after core, whose definitions point at the adapters.
+     */
+    tna_dm_adapter *registered;
+    uint32_t registered_capacity;
     uint32_t registered_count;
-    /* A compiler's refusal message, which core copies before it next calls
-     * the data model (ta_expression_rejection). */
-    char rejection[TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES];
+    uint32_t name_bytes;
+    char *names;
+    ta_datamodel *choices;
+    char *rejection;
+    size_t rejection_bytes;
     /*
      * Offloading an unloaded actor (core ADR 0074): a value's bytes are its
      * serialization (`serialize`, v8.serialize) when it has one, or else a
@@ -187,12 +199,15 @@ bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_
 /* Frees what only core's records used, once core has released them (tna_system_close's after_core). */
 void tna_js_datamodel_after_core(tna_js_datamodel *dm);
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable);
+/* Frees the buffers init allocated (napi ADR 0035), once core is gone. */
+void tna_js_datamodel_free(tna_js_datamodel *dm);
 ta_datamodel tna_js_datamodel_adapter(tna_js_datamodel *dm);
 
 /*
  * Registers `compile` as the compiler of a data model named `name` (ADR
  * 0019). TA_ERR_INVALID for "javascript", "null", a name already registered,
- * a name longer than TNA_DM_NAME_MAX - 1, or a full table.
+ * a name of datamodelNameBytes or more, or a table of registeredDatamodels
+ * already full (napi ADR 0035).
  */
 ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_value compile);
 /*
@@ -216,10 +231,10 @@ ta_result tna_js_datamodel_register_name(tna_js_datamodel *dm, const tna_registe
  * The data models an imported document may choose from, in the order
  * ta_definition_import takes them: "javascript" first (a document with no
  * `datamodel` attribute gets it), then core's null data model, which only
- * `datamodel="null"` opts into, then every registered one. `out` has room
- * for 2 + TNA_DM_REGISTERED_MAX.
+ * `datamodel="null"` opts into, then every registered one: the data model's
+ * own array, allocated with the system, until the next call.
  */
-uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, ta_datamodel *out);
+uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, const ta_datamodel **out);
 
 /*
  * Selects the data model named `name` for the next compile (napi ADR 0027):

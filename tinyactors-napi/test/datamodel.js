@@ -469,6 +469,42 @@ async function failedSystemVariable() {
   assert.equal(actor.inspect().data.errors.length, 3);
   system.close();
   assert.equal(native.environmentStats().leakedBytes, 0);
+
+  // With renderBytes raised (napi ADR 0035), the same long name renders.
+  const roomy = createSystem({ parameters: { renderBytes: 1 << 20 } });
+  const wide = roomy.spawn(roomy.define(
+    statechart({ family: 'rendered', revision: 'v1' })
+      .data('seen', null)
+      .state('idle', (s) => s.on('long', (t) => t.assign('seen', ({ event }) => event.name))),
+  ));
+  await roomy.flush();
+  wide.post(`long.${segment}`);
+  await roomy.flush();
+  assert.equal(wide.inspect().data.seen, `long.${segment}`, 'the name renders with room for it');
+  roomy.close();
+}
+
+// registeredDatamodels and datamodelNameBytes (napi ADR 0035) size the
+// table registerDatamodel() fills.
+function datamodelTable() {
+  const compiler = { compile: () => function () { return true; } };
+  const none = createSystem({ parameters: { registeredDatamodels: 0 } });
+  assert.throws(() => none.registerDatamodel('one', compiler), { code: 'invalid' });
+  none.close();
+  const two = createSystem({ parameters: { registeredDatamodels: 2, datamodelNameBytes: 8 } });
+  two.registerDatamodel('first', compiler);
+  two.registerDatamodel('second', compiler);
+  assert.throws(() => two.registerDatamodel('third', compiler), { code: 'invalid' }, 'the table is full');
+  two.close();
+  const short = createSystem({ parameters: { datamodelNameBytes: 8 } });
+  assert.throws(() => short.registerDatamodel('eightchr', compiler), { code: 'invalid' }, 'a name must fit');
+  short.registerDatamodel('seven77', compiler);
+  short.close();
+  const wide = createSystem({ parameters: { registeredDatamodels: 20 } });
+  for (let index = 0; index < 20; index += 1) {
+    wide.registerDatamodel(`model${index}`, compiler);
+  }
+  wide.close();
 }
 
 // content(): literal SCXML <content> from the builder. An I/O processor and
@@ -540,6 +576,7 @@ async function literalContent() {
 (async () => {
   await counter();
   await failedSystemVariable();
+  datamodelTable();
   await pingPong();
   await originOfADestroyedSender();
   await binding();

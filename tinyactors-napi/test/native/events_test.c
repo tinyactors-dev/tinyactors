@@ -42,9 +42,9 @@ static void refuses_malformed_names(void) {
     for (size_t index = 0; index < sizeof bad / sizeof bad[0]; index += 1) {
         CHECK(tna_event_name_intern(system->core, text_of(bad[index]), &id) == TA_ERR_INVALID);
     }
-    char deep[2 * (TNA_EVENT_NAME_MAX_DEPTH + 1u)];
+    char deep[2 * (TA_PARAM_DEFAULT_EVENT_NAME_DEPTH + 1u)];
     size_t at = 0;
-    for (uint32_t segment = 0; segment <= TNA_EVENT_NAME_MAX_DEPTH; segment += 1) {
+    for (uint32_t segment = 0; segment <= TA_PARAM_DEFAULT_EVENT_NAME_DEPTH; segment += 1) {
         deep[at++] = 'x';
         deep[at++] = '.';
     }

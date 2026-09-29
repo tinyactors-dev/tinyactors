@@ -740,15 +740,15 @@ static void tna_compile_refused(tna_js_datamodel *dm, const ta_datamodel_prepare
         }
         napi_value text = NULL;
         if (message != NULL && napi_coerce_to_string(env, message, &text) == napi_ok) {
-            napi_get_value_string_utf8(env, text, dm->rejection, sizeof dm->rejection, &length);
+            napi_get_value_string_utf8(env, text, dm->rejection, dm->rejection_bytes, &length);
         } else {
             napi_get_and_clear_last_exception(env, &error);
         }
     }
     if (length == 0) {
         length = strlen(fallback);
-        if (length >= sizeof dm->rejection) {
-            length = sizeof dm->rejection - 1u;
+        if (length >= dm->rejection_bytes) {
+            length = dm->rejection_bytes - 1u;
         }
         memcpy(dm->rejection, fallback, length);
         dm->rejection[length] = '\0';
@@ -917,7 +917,7 @@ static napi_value tna_construction(tna_js_datamodel *dm, ta_str text) {
     size_t length = 0;
     if (napi_get_and_clear_last_exception(env, &error) == napi_ok && error != NULL &&
         napi_get_named_property(env, error, "message", &message) == napi_ok &&
-        napi_get_value_string_utf8(env, message, dm->rejection, sizeof dm->rejection, &length) != napi_ok) {
+        napi_get_value_string_utf8(env, message, dm->rejection, dm->rejection_bytes, &length) != napi_ok) {
         dm->rejection[0] = '\0';
     }
     return NULL;
@@ -2155,15 +2155,15 @@ ta_datamodel tna_js_datamodel_adapter(tna_js_datamodel *dm) {
     return (ta_datamodel){ .self = &dm->builtin, .v = &dm->builtin.vtable };
 }
 
-static void tna_adapter_init(tna_dm_adapter *adapter, tna_js_datamodel *dm, ta_str name) {
-    *adapter = (tna_dm_adapter){ .dm = dm, .vtable = tna_dm_vtable };
+static void tna_adapter_init(tna_dm_adapter *adapter, tna_js_datamodel *dm, ta_str name, char *buffer) {
+    *adapter = (tna_dm_adapter){ .dm = dm, .vtable = tna_dm_vtable, .name = buffer };
     memcpy(adapter->name, name.ptr, name.len);
     adapter->name[name.len] = '\0';
     adapter->vtable.name = (ta_str){ adapter->name, name.len };
 }
 
 ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_value compile) {
-    if (name.len == 0 || name.len >= TNA_DM_NAME_MAX || dm->registered_count >= TNA_DM_REGISTERED_MAX ||
+    if (name.len == 0 || name.len >= dm->name_bytes || dm->registered_count >= dm->registered_capacity ||
         (name.len == 10 && memcmp(name.ptr, "javascript", 10) == 0) || (name.len == 4 && memcmp(name.ptr, "null", 4) == 0)) {
         return TA_ERR_INVALID;
     }
@@ -2174,7 +2174,7 @@ ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_valu
         }
     }
     tna_dm_adapter *adapter = &dm->registered[dm->registered_count];
-    tna_adapter_init(adapter, dm, name);
+    tna_adapter_init(adapter, dm, name, dm->names + (size_t)dm->registered_count * dm->name_bytes);
     if (napi_create_reference(dm->env, compile, 1, &adapter->compile) != napi_ok) {
         return TA_ERR_NOMEM;
     }
@@ -2182,7 +2182,9 @@ ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_valu
     return TA_OK;
 }
 
-uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, ta_datamodel *out) {
+uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, const ta_datamodel **choices) {
+    ta_datamodel *out = dm->choices;
+    *choices = out;
     uint32_t count = 0;
     out[count++] = tna_js_datamodel_adapter(dm);
     out[count++] = ta_null_datamodel();
@@ -2193,8 +2195,8 @@ uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, ta_datamodel *out) {
 }
 
 ta_result tna_js_datamodel_select(tna_js_datamodel *dm, ta_str name) {
-    ta_datamodel choices[2u + TNA_DM_REGISTERED_MAX];
-    uint32_t count = tna_js_datamodel_choices(dm, choices);
+    const ta_datamodel *choices = NULL;
+    uint32_t count = tna_js_datamodel_choices(dm, &choices);
     for (uint32_t index = 0; index < count; index += 1) {
         ta_str candidate = choices[index].v->name;
         if (candidate.len == name.len && memcmp(candidate.ptr, name.ptr, name.len) == 0) {
@@ -2405,7 +2407,21 @@ static bool tna_global_function(napi_env env, const char *object_name, const cha
 
 bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_env env) {
     *dm = (tna_js_datamodel){ .wrapper = wrapper, .env = env, .js_usable = true };
-    tna_adapter_init(&dm->builtin, dm, (ta_str){ "javascript", 10 });
+    tna_adapter_init(&dm->builtin, dm, (ta_str){ "javascript", 10 }, dm->builtin_name);
+    /* Its buffers come from the system's parameters (napi ADR 0035). */
+    const tna_params *params = &wrapper->system->params;
+    uint64_t message_bytes = TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES;
+    (void)ta_system_param(wrapper->system->core, TA_PARAM_COMPILE_MESSAGE_BYTES, &message_bytes);
+    dm->registered_capacity = (uint32_t)params->values[TNA_PARAM_REGISTERED_DATAMODELS];
+    dm->name_bytes = (uint32_t)params->values[TNA_PARAM_DATAMODEL_NAME_BYTES];
+    dm->rejection_bytes = (size_t)message_bytes + 1u;
+    dm->registered = calloc(dm->registered_capacity != 0 ? dm->registered_capacity : 1u, sizeof *dm->registered);
+    dm->names = calloc(dm->registered_capacity != 0 ? dm->registered_capacity : 1u, dm->name_bytes);
+    dm->choices = calloc(2u + dm->registered_capacity, sizeof *dm->choices);
+    dm->rejection = calloc(dm->rejection_bytes, 1);
+    if (dm->registered == NULL || dm->names == NULL || dm->choices == NULL || dm->rejection == NULL) {
+        return false;
+    }
     napi_value context = NULL;
     napi_value functions = NULL;
     napi_value classes = NULL;
@@ -2467,6 +2483,19 @@ void tna_js_datamodel_after_core(tna_js_datamodel *dm) {
                                               .alignment = _Alignof(tna_intern_slot) });
     }
     dm->primitives = (tna_intern_table){ 0 };
+}
+
+void tna_js_datamodel_free(tna_js_datamodel *dm) {
+    free(dm->registered);
+    free(dm->names);
+    free(dm->choices);
+    free(dm->rejection);
+    dm->registered = NULL;
+    dm->names = NULL;
+    dm->choices = NULL;
+    dm->rejection = NULL;
+    dm->registered_capacity = 0;
+    dm->registered_count = 0;
 }
 
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable) {

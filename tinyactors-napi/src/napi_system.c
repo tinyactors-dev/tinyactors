@@ -42,6 +42,7 @@ const char tna_napi_system_tag = 0;
 static void tna_free_wrapper(tna_napi_system *wrapper) {
     tna_system_free(wrapper->system);
     tna_env *data = wrapper->env_data;
+    tna_js_datamodel_free(&wrapper->dm);
     free(wrapper->trace_value);
     free(wrapper);
     tna_env_release(data);
@@ -463,6 +464,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     if (!values_made || !tna_js_datamodel_init(&wrapper->dm, wrapper, env)) {
         tna_js_datamodel_close(&wrapper->dm, true);
         tna_system_free(wrapper->system);
+        tna_js_datamodel_free(&wrapper->dm);
         free(wrapper->trace_value);
         free(wrapper);
         return tna_throw(env, "out-of-memory", "cannot create the data model");
@@ -470,6 +472,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     if (!tna_pump_init(env, wrapper, facade, argv[1])) {
         tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);
+        tna_js_datamodel_free(&wrapper->dm);
         tna_js_datamodel_close(&wrapper->dm, true);
         free(wrapper->trace_value);
         free(wrapper);
@@ -481,6 +484,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     if (napi_wrap(env, self, wrapper, tna_finalize, NULL, NULL) != napi_ok) {
         tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);
+        tna_js_datamodel_free(&wrapper->dm);
         tna_js_datamodel_close(&wrapper->dm, true);
         free(wrapper->trace_value);
         free(wrapper);
@@ -766,10 +770,11 @@ static napi_value tna_select_datamodel_method(napi_env env, napi_callback_info i
     }
     /* One byte more than any data model's name, so a longer one is never
      * cut down to match. */
-    char name[TNA_DM_NAME_MAX + 1u];
+    char name[TNA_DM_NAME_CEILING + 1u];
     size_t length = 0;
     if (argc < 1 || napi_get_value_string_utf8(env, argv[0], name, sizeof name, &length) != napi_ok ||
-        length >= TNA_DM_NAME_MAX || tna_js_datamodel_select(&wrapper->dm, (ta_str){ name, (uint32_t)length }) != TA_OK) {
+        length >= TNA_DM_NAME_CEILING ||
+        tna_js_datamodel_select(&wrapper->dm, (ta_str){ name, (uint32_t)length }) != TA_OK) {
         return tna_throw(env, "invalid", "selectDatamodel: expected \"javascript\", \"null\" or a registered data model");
     }
     napi_value undefined = NULL;
@@ -795,7 +800,8 @@ static napi_value tna_register_datamodel_method(napi_env env, napi_callback_info
     if (wrapper->system->inside_core) {
         return tna_throw(env, "reentrant", "registerDatamodel: not from inside a core call (ADR 0013)");
     }
-    char name[TNA_DM_NAME_MAX];
+    /* One byte more than any name may have, so a longer one is refused, not cut. */
+    char name[TNA_DM_NAME_CEILING + 1u];
     size_t length = 0;
     napi_valuetype type = napi_undefined;
     if (argc < 2 || napi_get_value_string_utf8(env, argv[0], name, sizeof name, &length) != napi_ok ||
@@ -1062,8 +1068,8 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
     if (!tna_codec_argument(&call, argc >= 5 ? argv[4] : NULL, &codec)) {
         return tna_call_end(&call, NULL);
     }
-    ta_datamodel choices[2u + TNA_DM_REGISTERED_MAX];
-    uint32_t count = tna_js_datamodel_choices(&wrapper->dm, choices);
+    const ta_datamodel *choices = NULL;
+    uint32_t count = tna_js_datamodel_choices(&wrapper->dm, &choices);
     ta_definition_id id = 0;
     tna_import_failure failure;
     /* The codec and the compilers run inside this core call: one that calls
@@ -1191,7 +1197,7 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
     }
     napi_valuetype print_type = napi_undefined;
     napi_valuetype datamodel_type = napi_undefined;
-    char datamodel[TNA_DM_NAME_MAX];
+    char datamodel[TNA_DM_NAME_CEILING + 1u];
     size_t datamodel_length = 0;
     if (argc < 3 || napi_typeof(env, argv[2], &print_type) != napi_ok || print_type != napi_function ||
         (argc >= 4 && napi_typeof(env, argv[3], &datamodel_type) != napi_ok)) {
