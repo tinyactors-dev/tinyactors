@@ -1,6 +1,6 @@
 # ADR 0032: Named actors persist by replaying their inputs
 
-**Status:** Accepted; sections 1 to 5 implemented (2026-09-29), see the implementation notes; the rest not yet. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
+**Status:** Accepted; sections 1 to 6 implemented (2026-09-29), see the implementation notes; sections 7 and 8 not yet. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
 - ADR 0020: a loader is also asked for a session that has gone, and can answer with a replay;
 - ADR 0022: mail to a gone session of a family with a loader goes to that loader;
 - the replacement API (`prepareReplacement`, `activate`), which becomes `prepare` and `publish`.
@@ -313,6 +313,105 @@ or is quarantined. Mail for the address then goes to the family's loader.
   in the same batch as the input of the sender that sent it.
 
 ## Implementation notes
+
+### Section 6 (2026-09-29)
+
+- **Where:** `src/inputs.{c,h}` (the records, their arena, the per-system
+  `seq`, the envelope-to-`seq` map, the scheduler's observer, host
+  operations), `src/scheduler.{c,h}` (`tna_sched_observer` and its notes
+  at a queued message, a delivery, a taken report and a finished actor;
+  the per-actor cache bits `TNA_SCHED_LOG_KNOWN` and `TNA_SCHED_LOGGED`;
+  `tna_sched_quarantine`), `src/system.{c,h}` (the log in the system; the
+  horizon after the turn's dispatch; a system with records waiting is not
+  quiet), `src/napi_inputs.{c,h}` (the batch handed to the effects handler
+  as kind `inputs` after the services; `setInputLog`, `inputHost`),
+  `src/napi_system.c` (`requeue`, `quarantine`), `src/pump.c`,
+  `lib/system.js` (`setInputLog()`, `requeue()`, the held services and the
+  commit queue, the records of spawns, withdrawals, abandons and
+  releases), `index.d.ts`. Commit `cbce803`.
+- **Which actors are logged** is decided once per actor and kept in two
+  bits of its scheduling entry. The first message, delivery or operation
+  for an actor asks core (`ta_actor_inspect`, read-only, so it may run
+  inside the router callback that queues mail between actors). The bits
+  are cleared when the families change. Mail waiting for a loader is
+  logged by its address's family. A session load's mail (section 2) is
+  not: an instance of a session has no name.
+- **A batch is handed every turn while the log is on,** so the turn's held
+  services are sealed with it. `commit` is called when the batch has
+  inputs or the turn dispatched delayed sends, which is when the horizon
+  can have passed a send. So `turn` numbers the turns napi handed, and a
+  sink may see gaps.
+- **The hold is in lib.** The services arrive from the native queue as
+  before and wait in `#held`. Each batch takes the services held since the
+  last one; batches wait in `#commits` and commit one at a time; a
+  synchronous commit releases its services at once. A service with no
+  commit queue and no sink runs at once, as before. Removing the sink
+  releases what it held once the commits before it are done.
+- **A failed commit** (it throws, or its promise rejects) drops the
+  services held and queued, stops later services for good, and
+  quarantines each actor with a record in the batch through the scheduler
+  (`tna_sched_quarantine`, counted under fault code 0). The system's
+  `fault` hook gets `{ actor, operation: "input-log", code: "input-log",
+  message }`. `release()` puts an actor back; the system's services stay
+  stopped.
+- **A spawn's binding is a structured clone** taken at the spawn, because
+  the actor's data root changes from its bootstrap on and the batch is
+  handed after the turn. A binding that cannot be cloned (functions, class
+  instances) is handed as the live value. Every other value is the one
+  core holds.
+- **`queued` skips report envelopes:** a report is recorded as `report`
+  when core takes it. An operator transition (a debugger's jump, ADR 0026)
+  is recorded as the `event` it arrives with, without the transition.
+- **`requeue(records)`** posts each record to its address through the
+  router (so a loader summons an evicted actor), with its origin parsed
+  back by core (`{ actor: <URI> }` for the SCXML processor, `{ type, uri }`
+  as a message origin for any other), its send ID when this system can
+  parse it (a literal ID it never interned is dropped), and `platform`
+  when the record was a platform event. An invocation's ID is not kept:
+  the invocation did not survive the crash. Each requeued message is
+  recorded as `queued` again, with a new `seq`.
+- **A queued message that becomes a dead letter** has no `event` record,
+  so after a crash a sink would requeue it. Its dead letter happened before
+  the crash; requeuing it gives it another chance. Not guarded against.
+- **Benchmark** (`mise run bench-compare 7c9a707`, 100,000 actors, two
+  alternating runs each, medians, no input log installed): nothing outside
+  the 5% rule.
+
+  | | Node (machine 84c362297e3d) | Bun (machine bbe6bf531954) |
+  |---|---|---|
+  | untraced ns/event | 669 → 682 (+1.9%) | 545 → 561 (+2.9%) |
+  | untraced native B/actor | 329 → 329 | 329 → 329 |
+  | untraced RSS B/actor | 757 → 758 (+0.1%) | 1,010 → 1,044 (+3.3%) |
+  | untraced heap B/actor | 116 → 116 | 125 → 125 |
+  | summary ns/event | 1,205 → 1,237 (+2.7%) | within 5% |
+
+  The scheduling entry is still 16 bytes (the cache uses two free flag
+  bits), and an envelope did not grow: the `seq` of a queued message lives
+  in the log's map, only while a log is installed.
+- **Costs with a log installed:** per logged message, a `queued` and an
+  `event` record in the log's arena (about 120 bytes each, plus the
+  origin's text) and one map entry while it is queued; per logged
+  delivery, the origin rendered once (`ta_origin_text`); per actor, one
+  `ta_actor_inspect` the first time it is met; the held services until
+  their batch commits.
+- **Tests:** `test/input-log.js` (each kind of record in order, for the
+  logged families only, with seqs paired and origins kept; a report, an
+  abandon and a release; services held until the commit's promise resolves;
+  a failed commit quarantines with an "input-log" fault and runs nothing it
+  held; the horizon held before the sends a dispatch budget left due; mail
+  waiting for a loader queued under its address, delivered with the same
+  seq; a crash: the first system closed with mail queued, the second
+  requeues what has no event and each message arrives once; requeue keeps
+  an actor's origin, so the reply reaches its sender; without a sink
+  nothing is held, and removing the sink releases what it held).
+
+### Section 7's method moved at review (2026-09-29)
+
+- Replay works on one actor, so it is `PreparedActor.replay(inputs)`, not
+  `System.replay(prepared, inputs)` as first written: the user decided at
+  review that there is no replay of a system. Section 7's text was edited
+  in place while it was unimplemented, and `index.d.ts` declares the
+  method on `PreparedActor`, marked unimplemented until section 7 lands.
 
 ### Sections 3 and 4 (2026-09-29, with core ADR 0089's sections 4, 5, 8 and 9)
 
