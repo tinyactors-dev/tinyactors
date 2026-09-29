@@ -1,6 +1,6 @@
 # ADR 0023: Allocator injection and freestanding-friendly core
 
-**Status:** Accepted  
+**Status:** Accepted; refined by ADR 0092 (every buffer comes from the provided allocator at creation, sized by system parameters)  
 **Date:** 2026-09-15
 
 ## Context

@@ -1,6 +1,6 @@
 # ADR 0060: No recursion in core
 
-**Status:** Accepted and implemented; applies ADR 0023, ADR 0033 and ADR 0047. See the implementation notes: the executor's frames are reserved when the interpreter starts, not at registration.
+**Status:** Accepted and implemented; applies ADR 0023, ADR 0033 and ADR 0047. See the implementation notes: the executor's frames are reserved when the interpreter starts, not at registration. Amended by ADR 0092: frames and sets live in an interpreter region sized by `interpreterBytes`, and a chart that needs more is refused when it is defined.
 **Date:** 2026-09-23
 
 ## Context

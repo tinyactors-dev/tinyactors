@@ -1,6 +1,6 @@
 # ADR 0092: System parameters are fixed at creation and bound every buffer
 
-**Status:** Proposed (2026-09-29). Would amend:
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Amends:
 - ADR 0060: interpreter frames and scratch are sized by a parameter, not per definition, and a chart that needs more is refused when it is defined;
 - ADR 0075: the microstep limit is a parameter, and each definition's limit defaults to it;
 - ADR 0023: every buffer comes from the provided allocator at creation.
@@ -289,4 +289,83 @@ change them.
 
 ## Implementation notes
 
-None yet.
+- **Where:** `include/tinyactors.h` (`ta_param`, the `TA_PARAM_DEFAULT_*`
+  enumerators through `typedef uint32_t ta_param_default`, `ta_param_value`,
+  `ta_param_info`, `ta_system_config.params/param_count/rejected`,
+  `ta_system_param()`, `ta_param_info_of()`, `ta_counters.quota_refusals`);
+  `src/system.{c,h}` (the parameter table, validation, the creation arena,
+  nested regions, quotas for actors and definitions); `src/arena.{c,h}`
+  (`ta_arena_init_fixed`: an arena over caller memory whose backing refuses,
+  so no use site changed); `src/interpreter.{c,h}` (the render area reset at
+  interpreter start and at every unit, `ta_interpreter_scratch_need`, the
+  cache filled at creation, nested exit frames, the pending-send quota);
+  `src/builder.c` (the check at compile time, and the message and nearest
+  limits from parameters); `src/invoke.c`, `src/datamodel.c`,
+  `src/input_log.c` (content-sized temporaries in the render area);
+  `src/actor.c` (the actor quota, the nesting check at spawn);
+  `src/event_name.{c,h}` (`max_depth` on the table). Tests:
+  `tests/params_test.c` (new), `tests/deep_test.c`, and the tests that used
+  the removed setters.
+- **Parameters that are not in the list:** `compileTextBytes` is not a
+  parameter. `ta_compile_error_format()` takes no system, writes into the
+  caller's arena, and its per-field limits are what bound its line, so
+  `TA_COMPILE_ERROR_TEXT_MAX` stays a constant. `TA_COMPILE_ERROR_MESSAGE_MAX`
+  and `TA_COMPILER_NEAREST_MAX` are removed in favour of
+  `compileMessageBytes` and `compileNearestBytes`.
+- **`eventNameDepth` can only be lowered** (bounds 8 to 64). Segment arrays
+  stay on the stack, sized by the compile-time ceiling
+  `TA_EVENT_NAME_MAX_DEPTH`; moving them into shared buffers would have made
+  helpers that call one another share one array. The table checks the
+  parameter where names are interned.
+- **Bounds:** microstepLimit 0 to 2^31−1 (0: none); eventBlockCache 0 to
+  65,536; compileMessageBytes 16 to 65,536; compileNearestBytes 0 to 65,536;
+  interpreterBytes 1,024 to 1 GiB; renderBytes 256 to 1 GiB;
+  interpreterNesting 1 to 64; the quotas 1 to 2^31−1.
+- **The render area is reset at every unit of executable content**, not only
+  when an interpreter starts: a `<foreach>` of many sends with `<param>`s
+  would otherwise fill it with arrays nothing reads any more. Everything it
+  holds (param arrays, rendered text, an invoke ID's text, an I/O origin's
+  URI for the input log) is used within the unit that made it, or within
+  the step outside units that made it.
+- **Nested regions:** an exit frame at depth d (from 1) takes region d, a
+  structural region and its own render area in one allocation made the
+  first time and kept until the system goes. An invoked child whose
+  invoking chain would need a region past `interpreterNesting` is refused by
+  `ta_actor_spawn()` with `TA_ERR_UNSUPPORTED`, which the host's invoker
+  reports; the ADR's "refused at define() when the invocation's chart is
+  known" is not done, since core does not know which chart an invoker will
+  spawn.
+- **Quotas** answer `TA_ERR_NOMEM` for an actor or a definition past its
+  quota, and raise `error.execution` (code `TA_ERR_NOMEM`) in the sender for
+  a delayed send past `maxPendingSends`; each counts one `quota_refusals`.
+- **The structural need is exact.** `ta_interpreter_scratch_need()` repeats
+  `ta_interpreter_init`'s allocations in order and alignment, both trace
+  buffers included. `params_test` defines a 63-state parallel chart with
+  history and guards, reads the need from the compile error, creates a
+  system with exactly that many `interpreterBytes` and runs the chart with
+  every trace kind; `deep_test` does the same for 10,000 levels of actions.
+- **Measured need:** across every chart napi's suites and the W3C IRP suite
+  define (4,097 definitions), the largest structural need is 3,216 bytes, for
+  101 states (about 32 bytes per state; the mean is 644). The default
+  interpreterBytes of 256 KiB fits about 8,000 states, 80 times the largest
+  chart in the repository. renderBytes keeps 16 KiB: IRP runs 176/176 with
+  it. napi's one test with a 200,000-character event name
+  (`test/datamodel.js`) now expects the deterministic render error.
+- **Costs**, measured with a counting allocator:
+  - a default system allocates 297,048 bytes at creation, against 15,104
+    before: the creation arena is 278,656 bytes (region 0 of 262,144 plus its
+    header, the render area of 16,384 plus its header, the table of 3 nested
+    regions), the 4 cached event blocks are 792 bytes each, and the system record grew by the parameters. Before, the
+    scratch arena grew in 4 KiB blocks on first use and the cache filled as
+    blocks came back;
+  - per actor: 0 bytes (`scale_test` 331 bytes per actor, flat to 200,000);
+  - each nested level used: one region of 278,608 bytes, allocated once;
+  - napi passes `scheduling.messageBudget` (1,024 by default) as
+    eventBlockCache, so a napi system creates 1,024 blocks, about 811 KB, at
+    creation, where it used to fill them under load.
+- **Callers:** napi's `tna_system_create()` takes a params struct; the
+  microstep limit and the block cache are read from `createSystem` options
+  before the core system is created (`tna_pump_core_params`); the native
+  tests pass `TA_PARAM_MICROSTEP_LIMIT` where they set it after creation.
+  The test host's `scale_test` measures the block cache by creating systems
+  with the parameter.
