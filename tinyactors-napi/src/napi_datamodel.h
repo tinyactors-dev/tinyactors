@@ -196,7 +196,7 @@ void tna_js_datamodel_release_handles(tna_js_datamodel *dm, tna_offload_handles 
 
 /* Builds the context object; false when it cannot be made. */
 bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_env env);
-/* Frees what only core's records used, once core has released them (tna_system_close's after_core). */
+/* Frees what only core's records used, once core has released them (tah_system_close's after_core). */
 void tna_js_datamodel_after_core(tna_js_datamodel *dm);
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable);
 /* Frees the buffers init allocated (napi ADR 0035), once core is gone. */

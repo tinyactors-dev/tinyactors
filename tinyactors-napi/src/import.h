@@ -78,10 +78,10 @@ typedef struct {
  * JavaScript that throws leaves the exception pending and answers
  * TA_ERR_INVALID.
  */
-ta_result tna_import(tna_system *system, const tna_import_params *params);
+ta_result tna_import(tah_system *system, const tna_import_params *params);
 
 /* Decodes, compiles and registers an SCXML document: tna_import() with the SCXML codec. */
-ta_result tna_import_scxml(tna_system *system, const tna_import_params *params);
+ta_result tna_import_scxml(tah_system *system, const tna_import_params *params);
 
 /*
  * Writes `definition` in a codec's syntax, with where each element landed
@@ -109,7 +109,7 @@ typedef struct {
 } tna_encode_params;
 
 /* An arena for tna_encode(), over the system's core allocator. */
-ta_result tna_encode_arena(tna_system *system, ta_arena *arena);
+ta_result tna_encode_arena(tah_system *system, ta_arena *arena);
 
 /*
  * TA_ERR_NOT_FOUND for no such definition. TA_ERR_UNSUPPORTED when the codec
@@ -117,4 +117,4 @@ ta_result tna_encode_arena(tna_system *system, ta_arena *arena);
  * cannot express the chart, such as SCXML and an expression that is a
  * JavaScript function (`unrepresentable`). TA_ERR_NOMEM.
  */
-ta_result tna_encode(tna_system *system, const tna_encode_params *params);
+ta_result tna_encode(tah_system *system, const tna_encode_params *params);

@@ -1,9 +1,9 @@
 /* The counting allocator and the scratch arenas (ADR 0014). */
+#include "check.h"
 #include <stdint.h>
 #include <stdio.h>
 
 #include "allocator.h"
-#include "check.h"
 
 static void counts_by_category(void) {
     tah_allocator allocator;

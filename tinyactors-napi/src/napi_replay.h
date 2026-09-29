@@ -6,7 +6,7 @@
  *
  * A replay feed holds a log's bytes as JavaScript hands them over, in
  * chunks cut anywhere. Core reads one record at a time from it, and napi
- * hands core a record only once it is all there (tna_record_span), so an
+ * hands core a record only once it is all there (tah_record_span), so an
  * asynchronous source never leaves core half a record. The feed keeps the
  * messages the log shows queued and not delivered (core's TA_REPLAY_HOST)
  * until they are put back after the publish. A replaying actor is resumed

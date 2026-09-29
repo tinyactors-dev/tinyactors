@@ -1,7 +1,7 @@
 /* Host metrics: explicit-bucket histograms and their exemplars (napi ADR 0017 section 7). */
+#include "check.h"
 #include <stdio.h>
 
-#include "check.h"
 #include "host_metrics.h"
 
 /* A value lands in the first bucket whose bound is at least the value; one

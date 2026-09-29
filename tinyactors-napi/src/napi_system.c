@@ -1,5 +1,7 @@
 #include "napi_system.h"
 
+#include "platform.h"
+
 #include "napi_children.h"
 
 #include <stdio.h>
@@ -40,7 +42,7 @@ static void tna_unlist(tna_napi_system *wrapper) {
 const char tna_napi_system_tag = 0;
 
 static void tna_free_wrapper(tna_napi_system *wrapper) {
-    tna_system_free(wrapper->system);
+    tah_system_free(wrapper->system);
     tna_env *data = wrapper->env_data;
     tna_js_datamodel_free(&wrapper->dm);
     free(wrapper->trace_value);
@@ -96,7 +98,7 @@ void tna_napi_system_flush(tna_napi_system *wrapper) {
     while (handle != NULL) {
         tna_napi_handle *next = handle->next;
         if (handle->finalized) {
-            if (handle->pointer != NULL && !tna_system_closed(wrapper->system)) {
+            if (handle->pointer != NULL && !tah_system_closed(wrapper->system)) {
                 handle->kind->release(handle->pointer);
             }
             tna_napi_system_drop(handle);
@@ -130,14 +132,14 @@ static void tna_close_handles(tna_napi_system *wrapper) {
  * false in the finalizer and the cleanup hook, where no JavaScript can run.
  */
 static void tna_close(tna_napi_system *wrapper, bool env_usable) {
-    if (tna_system_closed(wrapper->system)) {
+    if (tah_system_closed(wrapper->system)) {
         return;
     }
     tna_pump_close(wrapper, env_usable);
     tna_close_handles(wrapper);
     /* Closing from a finalizer: exit handlers core runs cannot call JavaScript. */
     wrapper->dm.js_usable = env_usable;
-    tna_system_close(wrapper->system);
+    tah_system_close(wrapper->system);
     tna_children_close(wrapper);
     wrapper->system->unreachable_data = NULL;
     wrapper->system->quarantine_data = NULL;
@@ -145,7 +147,7 @@ static void tna_close(tna_napi_system *wrapper, bool env_usable) {
     tna_js_datamodel_close(&wrapper->dm, !wrapper->env_data->torn_down);
     tna_unlist(wrapper);
     wrapper->env_data->systems_closed += 1u;
-    wrapper->env_data->leaked_bytes += tna_system_leaked_bytes(wrapper->system);
+    wrapper->env_data->leaked_bytes += tah_system_leaked_bytes(wrapper->system);
 }
 
 void tna_napi_system_close_open(tna_env *data) {
@@ -185,7 +187,7 @@ static void tna_definition_notify(void *self, const ta_definition_event *event) 
     tna_napi_system *wrapper = self;
     tah_definition_origin origin = tah_definitions_note(&wrapper->system->definitions, event);
     if (wrapper->system->tracing) {
-        tna_otlp_definition_log(&wrapper->system->otlp, &(tna_otlp_definition_log_params){
+        tah_otlp_definition_log(&wrapper->system->otlp, &(tah_otlp_definition_log_params){
                                                             .event = event,
                                                             .origin = { .ptr = tah_definition_origin_name(origin),
                                                                         .len = (uint32_t)strlen(tah_definition_origin_name(origin)) },
@@ -197,7 +199,7 @@ static void tna_definition_notify(void *self, const ta_definition_event *event) 
     tna_children_forget(wrapper, event->definition);
     tah_trace_watch_forget_definition(&wrapper->system->trace_watch, event->definition);
     if (wrapper->system->tracing) {
-        tna_otlp_forget_definition(&wrapper->system->otlp, event->definition);
+        tah_otlp_forget_definition(&wrapper->system->otlp, event->definition);
     }
 }
 
@@ -225,7 +227,7 @@ tna_napi_system *tna_this(napi_env env, napi_callback_info info) {
 /* Like tna_this, but also throws "closed" for a closed system. */
 tna_napi_system *tna_open_this(napi_env env, napi_callback_info info) {
     tna_napi_system *wrapper = tna_this(env, info);
-    if (wrapper != NULL && tna_system_closed(wrapper->system)) {
+    if (wrapper != NULL && tah_system_closed(wrapper->system)) {
         tna_throw(env, "closed", "the system is closed");
         return NULL;
     }
@@ -268,7 +270,7 @@ static bool tna_parameter_value(napi_env env, napi_value object, const char *nam
  * again at creation.
  */
 static bool tna_read_parameters(napi_env env, napi_value options, ta_param_value core[TA_PARAM_COUNT], uint32_t *core_count,
-                         tna_params *napi) {
+                         tah_params *napi) {
     napi_value object = NULL;
     if (options != NULL) {
         napi_valuetype type = napi_undefined;
@@ -302,9 +304,9 @@ static bool tna_read_parameters(napi_env env, napi_value options, ta_param_value
             core[(*core_count)++] = (ta_param_value){ .param = (ta_param)param, .value = value };
         }
     }
-    tna_params_defaults(napi);
-    for (uint32_t param = 0; param < TNA_PARAM_COUNT; param += 1u) {
-        const tna_param_info *info = &tna_param_table[param];
+    tah_params_defaults(napi);
+    for (uint32_t param = 0; param < TAH_PARAM_COUNT; param += 1u) {
+        const tah_param_info *info = &tah_param_table[param];
         uint64_t value = 0;
         bool given = false;
         if (!tna_parameter_value(env, object, info->name, &value, &given)) {
@@ -332,7 +334,7 @@ static napi_value tna_parameter_table(napi_env env, napi_callback_info info) {
         return NULL;
     }
     uint32_t index = 0;
-    for (uint32_t param = 0; param < TA_PARAM_COUNT + TNA_PARAM_COUNT; param += 1u) {
+    for (uint32_t param = 0; param < TA_PARAM_COUNT + TAH_PARAM_COUNT; param += 1u) {
         const char *name = NULL;
         size_t name_len = 0;
         const char *unit = NULL;
@@ -352,7 +354,7 @@ static napi_value tna_parameter_table(napi_env env, napi_callback_info info) {
             numbers[1] = core.min;
             numbers[2] = core.max;
         } else {
-            const tna_param_info *napi = &tna_param_table[param - TA_PARAM_COUNT];
+            const tah_param_info *napi = &tah_param_table[param - TA_PARAM_COUNT];
             name = napi->name;
             name_len = strlen(name);
             unit = napi->unit;
@@ -424,13 +426,14 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     }
     ta_param_value params[TA_PARAM_COUNT];
     uint32_t param_count = 0;
-    tna_params napi_params;
+    tah_params napi_params;
     if (!tna_read_parameters(env, options_type == napi_object ? argv[1] : NULL, params, &param_count, &napi_params)) {
         free(wrapper);
         return NULL;
     }
     ta_param rejected = TA_PARAM_COUNT;
-    ta_result result = tna_system_create(&(tna_system_create_params){ .incarnation = incarnation,
+    ta_result result = tah_system_create(&(tah_system_create_params){ .platform = tna_platform(),
+                                                                      .incarnation = incarnation,
                                                                       .params = params,
                                                                       .param_count = param_count,
                                                                       .napi = &napi_params,
@@ -449,7 +452,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         return tna_throw(env, tna_result_code(result), "cannot create a system");
     }
     /* napi's buffers are allocated with the system (napi ADR 0035). */
-    wrapper->value_bytes = (size_t)napi_params.values[TNA_PARAM_VALUE_BYTES];
+    wrapper->value_bytes = (size_t)napi_params.values[TAH_PARAM_VALUE_BYTES];
     wrapper->trace_value = malloc(wrapper->value_bytes + 1u);
     uint64_t compile_text = 0;
     (void)ta_system_param(wrapper->system->core, TA_PARAM_COMPILE_TEXT_BYTES, &compile_text);
@@ -458,7 +461,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     if (wrapper->trace_value == NULL || wrapper->refusal == NULL) {
         free(wrapper->trace_value);
         free(wrapper->refusal);
-        tna_system_free(wrapper->system);
+        tah_system_free(wrapper->system);
         free(wrapper);
         return tna_throw(env, "out-of-memory", "cannot allocate the system's buffers");
     }
@@ -475,7 +478,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     wrapper->system->after_core_context = wrapper;
     if (!values_made || !tna_js_datamodel_init(&wrapper->dm, wrapper, env)) {
         tna_js_datamodel_close(&wrapper->dm, true);
-        tna_system_free(wrapper->system);
+        tah_system_free(wrapper->system);
         tna_js_datamodel_free(&wrapper->dm);
         free(wrapper->trace_value);
         free(wrapper->refusal);
@@ -484,7 +487,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     }
     if (!tna_pump_init(env, wrapper, facade, argv[1])) {
         tna_pump_close(wrapper, true);
-        tna_system_free(wrapper->system);
+        tah_system_free(wrapper->system);
         tna_js_datamodel_free(&wrapper->dm);
         tna_js_datamodel_close(&wrapper->dm, true);
         free(wrapper->trace_value);
@@ -497,7 +500,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
                                         (ta_definition_sink){ .self = wrapper, .v = &tna_definition_sink_vtable });
     if (napi_wrap(env, self, wrapper, tna_finalize, NULL, NULL) != napi_ok) {
         tna_pump_close(wrapper, true);
-        tna_system_free(wrapper->system);
+        tah_system_free(wrapper->system);
         tna_js_datamodel_free(&wrapper->dm);
         tna_js_datamodel_close(&wrapper->dm, true);
         free(wrapper->trace_value);
@@ -533,7 +536,7 @@ static napi_value tna_closed_getter(napi_env env, napi_callback_info info) {
         return NULL;
     }
     napi_value closed = NULL;
-    napi_get_boolean(env, tna_system_closed(wrapper->system), &closed);
+    napi_get_boolean(env, tah_system_closed(wrapper->system), &closed);
     return closed;
 }
 
@@ -594,7 +597,7 @@ static napi_value tna_clock_getter(napi_env env, napi_callback_info info) {
         return NULL;
     }
     napi_value clock = NULL;
-    const char *text = wrapper->system->clock.kind == TNA_CLOCK_MANUAL ? "manual" : "realtime";
+    const char *text = wrapper->system->clock.kind == TAH_CLOCK_MANUAL ? "manual" : "realtime";
     napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &clock);
     return clock;
 }
@@ -605,7 +608,7 @@ static napi_value tna_time_getter(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system_sync_time(wrapper->system);
+    tah_system_sync_time(wrapper->system);
     napi_value time = NULL;
     napi_create_double(env, (double)ta_system_time(wrapper->system->core), &time);
     return time;
@@ -655,7 +658,7 @@ static napi_value tna_release_method(napi_env env, napi_callback_info info) {
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "release: the actor is not known");
     }
-    tna_system_want_turn(wrapper->system);
+    tah_system_want_turn(wrapper->system);
     napi_value undefined = NULL;
     napi_get_undefined(env, &undefined);
     return undefined;
@@ -723,7 +726,7 @@ static napi_value tna_mailbox_method(napi_env env, napi_callback_info info) {
     if (argc < 3 || napi_get_value_uint32(env, argv[2], &limit) != napi_ok) {
         return tna_throw(env, "invalid", "mailbox: expected (slot, generation, limit)");
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     const tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
     napi_value out = NULL;
     if (napi_create_array(env, &out) != napi_ok) {
@@ -932,7 +935,7 @@ static napi_value tna_import_refusal(napi_env env, ta_result result, const tna_i
  */
 static ta_result tna_adopt(tna_napi_system *wrapper, ta_definition_id id, napi_value resolve,
                            tna_import_failure *failure) {
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     /* resolve(src) and the compilers run inside this core call (ADR 0019). */
     system->inside_core = true;
     ta_result result = tna_children_nest(wrapper, id, resolve, failure);
@@ -1040,7 +1043,7 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "define: not from inside a core call (ADR 0013)");
     }
@@ -1194,7 +1197,7 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "encodeDefinition: not from inside a core call (ADR 0013)");
     }
@@ -1408,7 +1411,7 @@ static napi_value tna_accept_done(napi_env env, tna_napi_system *wrapper, tna_ac
  * ID (a bigint) and state IDs, the targets read into the call arena. Throws
  * and returns false when it is malformed.
  */
-static bool tna_jump_argument(napi_env env, tna_system *system, napi_value value, tah_message_jump *out, bool *present) {
+static bool tna_jump_argument(napi_env env, tah_system *system, napi_value value, tah_message_jump *out, bool *present) {
     napi_valuetype type = napi_undefined;
     *present = false;
     if (value == NULL || napi_typeof(env, value, &type) != napi_ok || type == napi_undefined) {
@@ -1481,7 +1484,7 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
     if (!tna_trace_argument(env, argv[6], &trace)) {
         return NULL;
     }
-    tna_system_start_trace(wrapper->system, &trace.context);
+    tah_system_start_trace(wrapper->system, &trace.context);
     ta_event event;
     if (!tna_post_event(env, wrapper, name, argv[3], &event)) {
         return NULL;
@@ -1505,7 +1508,7 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
     }
     ta_result result = send && accepting.waiter == 0
                            ? TA_ERR_NOMEM
-                           : tna_system_post(wrapper->system, &(tah_message){
+                           : tah_system_post(wrapper->system, &(tah_message){
                                                                   .target = ta_actor_id_make(slot, generation),
                                                                   .event = &event,
                                                                   .bytes = bytes,
@@ -1561,7 +1564,7 @@ static napi_value tna_cancel_send_method(napi_env env, napi_callback_info info) 
     bool cancelled = false;
     if (waiter != NULL && waiter->generation == generation && waiter->host != NULL) {
         napi_deferred deferred = waiter->host;
-        cancelled = tna_system_cancel(wrapper->system, index);
+        cancelled = tah_system_cancel(wrapper->system, index);
         if (cancelled) {
             const char *message = strcmp(code, "timeout") == 0 ? "send: the timeout passed before the message completed"
                                                                 : "send: the signal was aborted";
@@ -1585,7 +1588,7 @@ static napi_value tna_last_send_token_getter(napi_env env, napi_callback_info in
     return out;
 }
 
-bool tna_text_argument(napi_env env, tna_system *system, napi_value value, ta_str *out) {
+bool tna_text_argument(napi_env env, tah_system *system, napi_value value, ta_str *out) {
     napi_valuetype type = napi_undefined;
     size_t length = 0;
     if (napi_typeof(env, value, &type) != napi_ok || type != napi_string ||
@@ -1622,7 +1625,7 @@ static napi_value tna_id_page_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     uint32_t from = 0;
     uint32_t limit = 0;
     if (argc < 2 || napi_get_value_uint32(env, argv[0], &from) != napi_ok ||
@@ -1637,8 +1640,8 @@ static napi_value tna_id_page_method(napi_env env, napi_callback_info info) {
     if (napi_create_arraybuffer(env, (size_t)limit * 2u * sizeof(uint32_t), &data, &buffer) != napi_ok) {
         return tna_throw(env, "out-of-memory", "idPage: cannot allocate the page");
     }
-    tna_id_page page = { .from = from, .limit = limit, .pairs = data };
-    ta_result result = tna_enumerate_ids(system, &page);
+    tah_id_page page = { .from = from, .limit = limit, .pairs = data };
+    ta_result result = tah_enumerate_ids(system, &page);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "idPage: the walk failed");
     }
@@ -1680,7 +1683,7 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "post: a named target cannot be resolved from inside a core call (ADR 0013)");
     }
@@ -1688,7 +1691,7 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
     if (!tna_trace_argument(env, argv[6], &trace)) {
         return NULL;
     }
-    tna_system_start_trace(wrapper->system, &trace.context);
+    tah_system_start_trace(wrapper->system, &trace.context);
     ta_actor_address text = {0};
     uint32_t name = 0;
     uint32_t bytes = 0;
@@ -1722,7 +1725,7 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
     }
     result = send && accepting.waiter == 0
                  ? TA_ERR_NOMEM
-                 : tna_router_post_named(system, address,
+                 : tah_router_post_named(system, address,
                                          &(tah_message){ .event = &event, .bytes = bytes, .waiter = accepting.waiter,
                                                          .trace = &trace });
     ta_address_release(address);
@@ -1730,7 +1733,7 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
         ta_event_release(&event);
         return tna_accept_failed(env, wrapper, &accepting, result);
     }
-    tna_system_want_turn(system);
+    tah_system_want_turn(system);
     return tna_accept_done(env, wrapper, &accepting);
 }
 
@@ -1745,12 +1748,12 @@ static napi_value tna_dispatch_due_method(napi_env env, napi_callback_info info)
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "dispatchDue: cannot be called from inside a core call (ADR 0013)");
     }
-    bool more_due = tna_system_dispatch_due(system);
-    tna_system_want_turn(system);
+    bool more_due = tah_system_dispatch_due(system);
+    tah_system_want_turn(system);
     napi_value result = NULL;
     napi_get_boolean(env, more_due, &result);
     return result;
@@ -1778,7 +1781,7 @@ static napi_value tna_intern_event_method(napi_env env, napi_callback_info info)
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "an event name cannot be interned from inside a core call (ADR 0013)");
     }
@@ -1914,7 +1917,7 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     if (wrapper == NULL) {
         return NULL;
     }
-    const tna_system *system = wrapper->system;
+    const tah_system *system = wrapper->system;
     const tah_sched *sched = &system->sched;
     napi_value out = NULL;
     napi_value turn = NULL;
@@ -1931,7 +1934,7 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     if (status == napi_ok) status = tna_set_number(env, out, "runnable", (double)tah_ring_count(&sched->runnable));
     if (status == napi_ok) status = tna_set_number(env, out, "ready", (double)tah_ring_count(&sched->ready));
     if (status == napi_ok) status = tna_set_number(env, out, "quarantined", (double)sched->quarantined);
-    if (status == napi_ok) status = tna_set_number(env, out, "overdue", tna_system_overdue_seconds(system));
+    if (status == napi_ok) status = tna_set_number(env, out, "overdue", tah_system_overdue_seconds(system));
     if (status == napi_ok) status = napi_create_object(env, &faults);
     for (uint32_t code = 0; status == napi_ok && code < TAH_FAULT_CODES; code += 1u) {
         if (sched->faults[code] != 0) {
@@ -1948,8 +1951,8 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     if (status == napi_ok) status = tna_histogram_object(env, &system->metrics.load_seconds, &load);
     if (status == napi_ok) status = napi_set_named_property(env, out, "load", load);
     if (status == napi_ok) status = napi_create_object(env, &loads);
-    for (uint32_t outcome = 0; status == napi_ok && outcome < TNA_LOAD_OUTCOMES; outcome += 1u) {
-        status = tna_set_number(env, loads, tna_load_outcome_name(outcome), (double)system->loads.outcomes[outcome]);
+    for (uint32_t outcome = 0; status == napi_ok && outcome < TAH_LOAD_OUTCOMES; outcome += 1u) {
+        status = tna_set_number(env, loads, tah_load_outcome_name(outcome), (double)system->loads.outcomes[outcome]);
     }
     if (status == napi_ok) status = napi_set_named_property(env, out, "loads", loads);
     if (status == napi_ok) status = tna_set_number(env, out, "waiting", (double)system->loads.waiting);

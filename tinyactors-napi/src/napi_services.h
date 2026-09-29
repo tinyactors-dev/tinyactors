@@ -50,7 +50,7 @@ napi_value tna_close_scope_method(napi_env env, napi_callback_info info);
  * MESSAGE origin, { type, scope } a SCOPED one, { type, token } a COMPUTED
  * one. Undefined leaves no origin. Throws and answers false otherwise.
  */
-bool tna_origin_argument(napi_env env, tna_system *system, napi_value value, ta_origin *out);
+bool tna_origin_argument(napi_env env, tah_system *system, napi_value value, ta_origin *out);
 napi_value tna_register_invoker_method(napi_env env, napi_callback_info info);
 napi_value tna_set_log_sink_method(napi_env env, napi_callback_info info);
 napi_value tna_report_invoke_method(napi_env env, napi_callback_info info);

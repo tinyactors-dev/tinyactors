@@ -144,7 +144,7 @@ ta_arena *tna_call_arena(tna_call *call);
 /* Zeroed memory from the call arena; throws and returns NULL on failure. */
 void *tna_call_alloc(tna_call *call, size_t size, size_t alignment);
 /* The system the call runs against, or NULL. */
-struct tna_system *tna_call_system(const tna_call *call);
+struct tah_system *tna_call_system(const tna_call *call);
 
 /* True when `status` is napi_ok; otherwise throws unless already pending. */
 bool tna_ok(tna_call *call, napi_status status);

@@ -2,7 +2,7 @@
 /*
  * The JavaScript System class over the native system (ADR 0012).
  *
- * A native System wraps one tna_system. close() is explicit, idempotent and
+ * A native System wraps one tah_system. close() is explicit, idempotent and
  * authoritative; after it every method except close() and the `closed`
  * getter throws a TinyactorsError with code "closed". The wrapper's finalizer
  * is a safety net: it closes a system that JavaScript dropped without
@@ -19,7 +19,7 @@
 
 struct tna_napi_system {
     const void *tag; /* &tna_napi_system_tag: unwrapped objects are checked */
-    tna_system *system;
+    tah_system *system;
     tna_env *env_data;
     /* The environment's list of open systems. */
     tna_napi_system *previous;
@@ -80,7 +80,7 @@ tna_napi_system *tna_open_this(napi_env env, napi_callback_info info);
 tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value);
 
 /* A string argument read into the call arena; false when it is not a string. */
-bool tna_text_argument(napi_env env, tna_system *system, napi_value value, ta_str *out);
+bool tna_text_argument(napi_env env, tah_system *system, napi_value value, ta_str *out);
 /* Adds a handle to the system's list; the handle holds the system. */
 void tna_napi_system_adopt(tna_napi_system *wrapper, tna_napi_handle *handle);
 /* Removes a handle from its system's list and frees it. */

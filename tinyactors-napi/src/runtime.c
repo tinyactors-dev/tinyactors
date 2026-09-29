@@ -158,10 +158,10 @@ napi_value tna_call_end(tna_call *call, napi_value value) {
     call->cleanups = NULL;
     if (call->temporary_used) {
         ta_arena_destroy(&call->temporary);
-    } else if (call->arena != NULL && !tna_system_closed(call->owner->system)) {
+    } else if (call->arena != NULL && !tah_system_closed(call->owner->system)) {
         tah_scratch_reset_call(&call->owner->system->scratch);
     }
-    if (call->owner != NULL && !tna_system_closed(call->owner->system)) {
+    if (call->owner != NULL && !tah_system_closed(call->owner->system)) {
         tna_napi_system_flush(call->owner);
         /* A call outside a turn that filled the staging hands the sink a request (napi ADR 0036). */
         if (!tna_trace_flush_if_full(call->env, call->owner)) {
@@ -179,7 +179,7 @@ static bool tna_call_owner(tna_call *call, tna_napi_system *owner) {
     if (call->owner != NULL) {
         return tna_invalid(call, "a handle of the same system");
     }
-    if (tna_system_closed(owner->system)) {
+    if (tah_system_closed(owner->system)) {
         tna_throw(call->env, "closed", "the system is closed");
         return false;
     }
@@ -216,7 +216,7 @@ void tna_core_leave(tna_call *call) {
     }
 }
 
-tna_system *tna_call_system(const tna_call *call) {
+tah_system *tna_call_system(const tna_call *call) {
     return call->owner == NULL ? NULL : call->owner->system;
 }
 
@@ -421,7 +421,7 @@ static void tna_handle_finalize(napi_env env, void *data, void *hint) {
     tna_napi_handle *handle = data;
     tna_napi_system *owner = handle->owner;
     handle->finalized = true;
-    if (handle->pointer == NULL || tna_system_closed(owner->system)) {
+    if (handle->pointer == NULL || tah_system_closed(owner->system)) {
         tna_napi_system_drop(handle);
         return;
     }

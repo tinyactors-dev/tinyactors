@@ -1,8 +1,8 @@
+#include "check.h"
 #include <stdio.h>
 #include <stdint.h>
 
 #include "allocator.h"
-#include "check.h"
 #include "watch.h"
 
 /* Membership is exact at sizes past the old 1024 limit, duplicates count

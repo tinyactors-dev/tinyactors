@@ -81,14 +81,14 @@ ta_result tna_scxml_codec(ta_scxml_codec *codec, ta_chart_codec *out) {
     return result;
 }
 
-ta_result tna_import_scxml(tna_system *system, const tna_import_params *params) {
+ta_result tna_import_scxml(tah_system *system, const tna_import_params *params) {
     ta_scxml_codec codec;
     tna_import_params scxml = *params;
     ta_result result = tna_scxml_codec(&codec, &scxml.codec);
     return result == TA_OK ? tna_import(system, &scxml) : result;
 }
 
-ta_result tna_import(tna_system *system, const tna_import_params *params) {
+ta_result tna_import(tah_system *system, const tna_import_params *params) {
     ta_allocator allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE);
     ta_arena arena;
     ta_result result = ta_arena_init(&arena, allocator, TNA_IMPORT_ARENA_BLOCK);
@@ -116,7 +116,7 @@ ta_result tna_import(tna_system *system, const tna_import_params *params) {
     return result;
 }
 
-ta_result tna_encode_arena(tna_system *system, ta_arena *arena) {
+ta_result tna_encode_arena(tah_system *system, ta_arena *arena) {
     return ta_arena_init(arena, tah_allocator_for(&system->allocator, TAH_MEMORY_CORE), TNA_IMPORT_ARENA_BLOCK);
 }
 
@@ -138,7 +138,7 @@ static ta_result tna_datamodel_encode(void *self, const ta_chart_encode_params *
     return codec->inner.v->encode(codec->inner.self, &inner);
 }
 
-ta_result tna_encode(tna_system *system, const tna_encode_params *params) {
+ta_result tna_encode(tah_system *system, const tna_encode_params *params) {
     ta_chart_error error = { 0 };
     ta_chart_codec codec = params->codec;
     tna_datamodel_codec renamed = { .inner = params->codec, .datamodel = params->datamodel };

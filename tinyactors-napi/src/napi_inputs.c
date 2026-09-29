@@ -14,15 +14,15 @@ static void tna_put(napi_env env, napi_value object, const char *name, napi_valu
 }
 
 void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
-    tna_system *system = wrapper->system;
-    tna_inputs *inputs = &system->inputs;
+    tah_system *system = wrapper->system;
+    tah_inputs *inputs = &system->inputs;
     if (!inputs->enabled && inputs->entries.count == 0 && inputs->touched.count == 0) {
         return;
     }
     napi_handle_scope scope = NULL;
     napi_open_handle_scope(env, &scope);
     uint32_t wake_count = 0;
-    const tna_input_wake *wakes = tna_inputs_wakes(system, &wake_count);
+    const tah_input_wake *wakes = tah_inputs_wakes(system, &wake_count);
     napi_value batch = NULL;
     napi_value list = NULL;
     napi_value wake_list = NULL;
@@ -30,7 +30,7 @@ void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *fir
                 napi_create_array_with_length(env, wake_count, &wake_list) == napi_ok;
     uint32_t at = 0;
     for (uint32_t index = 0; made && index < inputs->entries.count; index += 1u) {
-        const tna_input_entry *entry = tah_vec_at(&inputs->entries, index);
+        const tah_input_entry *entry = tah_vec_at(&inputs->entries, index);
         if (entry->bytes.count == 0) {
             continue; /* its only record was refused */
         }
@@ -62,7 +62,7 @@ void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *fir
         napi_set_element(env, wake_list, index, wake);
     }
     /* The bytes are copied into JavaScript's buffers: the entries' go back for reuse. */
-    tna_inputs_release(inputs);
+    tah_inputs_release(inputs);
     if (made) {
         tna_put(env, batch, "entries", list);
         tna_put(env, batch, "wakes", wake_list);
@@ -102,7 +102,7 @@ napi_value tna_set_input_log_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     bool is_array = false;
     uint32_t count = 0;
     if (argc >= 1 && argv[0] != NULL && napi_is_array(env, argv[0], &is_array) == napi_ok && is_array) {
@@ -121,7 +121,7 @@ napi_value tna_set_input_log_method(napi_env env, napi_callback_info info) {
             return tna_throw(env, "invalid", "setInputLog: families must be strings");
         }
     }
-    ta_result result = tna_inputs_configure(system, families, count);
+    ta_result result = tah_inputs_configure(system, families, count);
     tah_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "setInputLog: cannot keep the families");
@@ -156,7 +156,7 @@ napi_value tna_write_evicted_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     ta_actor_id actor = 0;
     if (!tna_actor_arguments(env, argv, argc, &actor)) {
         return tna_throw(env, "invalid", "writeEvicted: expected (slot, generation, wake?)");
@@ -168,7 +168,7 @@ napi_value tna_write_evicted_method(napi_env env, napi_callback_info info) {
     napi_valuetype type = napi_undefined;
     bool has_wake = argc >= 3 && argv[2] != NULL && napi_typeof(env, argv[2], &type) == napi_ok &&
                     type == napi_number && napi_get_value_double(env, argv[2], &wake) == napi_ok && wake >= 0;
-    ta_result result = tna_inputs_evicted(system, actor, has_wake, (ta_time)wake);
+    ta_result result = tah_inputs_evicted(system, actor, has_wake, (ta_time)wake);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "evict(): the input log cannot record the eviction");
     }
@@ -187,7 +187,7 @@ napi_value tna_input_forget_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     ta_actor_id actor = 0;
     if (!tna_actor_arguments(env, argv, argc, &actor)) {
         return tna_throw(env, "invalid", "inputForget: expected (slot, generation)");
@@ -195,7 +195,7 @@ napi_value tna_input_forget_method(napi_env env, napi_callback_info info) {
     ta_actor_inspection view;
     if (system->inputs.enabled && ta_actor_inspect(system->core, actor, &view) == TA_OK &&
         view.self.kind == TA_ACTOR_REF_NAMED) {
-        tna_inputs_forget(system, view.self.as.named);
+        tah_inputs_forget(system, view.self.as.named);
     }
     return NULL;
 }

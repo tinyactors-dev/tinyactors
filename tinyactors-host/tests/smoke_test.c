@@ -19,10 +19,9 @@ static int failures = 0;
         }                                                                    \
     } while (0)
 
-static void request_turn(void *self) { *(int *)self += 1; }
-static void arm_timer(void *self, uint64_t due) { (void)self; (void)due; }
-static uint64_t now(void *self) { (void)self; return 42u; }
-static void effects_ready(void *self) { (void)self; }
+static uint64_t monotonic(void *self) { *(int *)self += 1; return 42u; }
+static uint64_t wall(void *self) { (void)self; return 7u; }
+static uint64_t seed(void *self) { (void)self; return 9u; }
 
 int main(void) {
     CHECK(tah_version() == TAH_VERSION);
@@ -37,12 +36,11 @@ int main(void) {
     CHECK(!tah_mem_equal(a, b, sizeof a));
     CHECK(tah_mem_equal(a, b, 0));
 
-    int turns = 0;
-    static const tah_pump_driver_vtable pump = { request_turn, arm_timer, now };
-    static const tah_hooks_vtable hooks = { effects_ready };
-    tah_host host = { .pump = { &turns, &pump }, .hooks = { NULL, &hooks } };
-    host.pump.v->request_turn(host.pump.self);
-    CHECK(turns == 1 && host.pump.v->now(host.pump.self) == 42u);
+    int reads = 0;
+    static const tah_platform_vtable vtable = { monotonic, wall, seed };
+    tah_platform platform = { .self = &reads, .v = &vtable };
+    CHECK(platform.v->monotonic_ns(platform.self) == 42u && reads == 1);
+    CHECK(platform.v->wall_ns(platform.self) == 7u && platform.v->random_seed(platform.self) == 9u);
 
     if (failures != 0) {
         return 1;

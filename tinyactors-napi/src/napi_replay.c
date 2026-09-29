@@ -34,7 +34,7 @@ static void tna_feed_release(tna_replay_feed *feed) {
         return;
     }
     feed->closed = true;
-    bool alive = !tna_system_closed(feed->wrapper->system);
+    bool alive = !tah_system_closed(feed->wrapper->system);
     for (uint32_t index = 0; index < feed->owed_count; index += 1u) {
         if (alive) {
             ta_event_release(&feed->owed[index].event);
@@ -93,7 +93,7 @@ static ta_op_status tna_span_read(void *self, const ta_byte_read_params *params)
 
 static const ta_byte_source_vtable tna_span_vtable = { .read = tna_span_read };
 
-static uint64_t tna_le(const uint8_t *bytes, uint32_t count) {
+static uint64_t tah_le(const uint8_t *bytes, uint32_t count) {
     uint64_t value = 0;
     for (uint32_t index = count; index > 0; index -= 1u) {
         value = value << 8 | bytes[index - 1u];
@@ -140,7 +140,7 @@ static void tna_feed_host(tna_replay_feed *feed, ta_host_record *host) {
 }
 
 /* Resumes a replaying actor until it is between macrosteps; `done` when it finished. */
-static ta_result tna_replay_resume(tna_system *system, ta_actor_id actor, bool unlimited, bool *ignored, bool *done) {
+static ta_result tna_replay_resume(tah_system *system, ta_actor_id actor, bool unlimited, bool *ignored, bool *done) {
     uint32_t budget = system->budgets.microsteps != 0 ? system->budgets.microsteps : 64u;
     for (;;) {
         ta_run_status status = TA_RUN_STABLE;
@@ -255,7 +255,7 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "replay: cannot be called from inside a core call (ADR 0013)");
     }
@@ -276,8 +276,8 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
      * with: they are skipped, and that mail reaches the actor from memory. */
     size_t span = 0;
     for (;;) {
-        span = tna_record_span(feed->bytes + feed->start, feed->length - feed->start, true);
-        if (span == 0 || !tna_host_kind((ta_record_kind)tna_le(feed->bytes + feed->start + 2, 2))) {
+        span = tah_record_span(feed->bytes + feed->start, feed->length - feed->start, true);
+        if (span == 0 || !tna_host_kind((ta_record_kind)tah_le(feed->bytes + feed->start + 2, 2))) {
             break;
         }
         feed->start += span;
@@ -315,7 +315,7 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
         return tna_replay_error(env, result, "the log's first record cannot start a replaying actor");
     }
     feed->start += source.at;
-    result = tna_hook_actor_created(system, actor);
+    result = tah_hook_actor_created(system, actor);
     if (result != TA_OK) {
         return tna_replay_error(env, result, "the replaying actor cannot be scheduled");
     }
@@ -342,8 +342,8 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
 
 /* The name of an EVENT record at `record`, whose span is known, as a JavaScript string. */
 static napi_value tna_record_name(napi_env env, const uint8_t *record) {
-    uint64_t fixed = tna_le(record + 4, 4);
-    uint64_t reference = tna_le(record + 32 + 16, 8); /* the third field */
+    uint64_t fixed = tah_le(record + 4, 4);
+    uint64_t reference = tah_le(record + 32 + 16, 8); /* the third field */
     uint32_t offset = (uint32_t)reference;
     uint32_t length = (uint32_t)(reference >> 32);
     napi_value out = NULL;
@@ -363,7 +363,7 @@ static napi_value tna_replay_run_inner(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "replay: cannot be called from inside a core call (ADR 0013)");
     }
@@ -408,13 +408,13 @@ static napi_value tna_replay_run_inner(napi_env env, napi_callback_info info) {
     const char *state = "more";
     while (records < most) {
         const uint8_t *record = feed->bytes + feed->start;
-        size_t span = tna_record_span(record, feed->length - feed->start, false);
+        size_t span = tah_record_span(record, feed->length - feed->start, false);
         if (span == 0) {
             state = "need";
             break;
         }
-        ta_record_kind kind = (ta_record_kind)tna_le(record + 2, 2);
-        double time = (double)tna_le(record + 16, 8);
+        ta_record_kind kind = (ta_record_kind)tah_le(record + 2, 2);
+        double time = (double)tah_le(record + 16, 8);
         if (between && !tna_host_kind(kind)) {
             state = "life";
             break;
@@ -524,7 +524,7 @@ napi_value tna_replay_redeliver_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "replay: cannot be called from inside a core call (ADR 0013)");
     }
@@ -545,14 +545,14 @@ napi_value tna_replay_redeliver_method(napi_env env, napi_callback_info info) {
         tna_owed *owed = &feed->owed[index];
         /* A message this system queued is still in memory (waiting for this
          * very load, say) and reaches the actor from there. */
-        if (failure != TA_OK || tna_inputs_seq_is_ours(&system->inputs, owed->host_seq)) {
+        if (failure != TA_OK || tah_inputs_seq_is_ours(&system->inputs, owed->host_seq)) {
             ta_event_release(&owed->event);
             continue;
         }
         ta_trace_parent trace = { 0 };
-        tna_inputs_redeliver(&system->inputs, owed->host_seq, ta_system_time(system->core));
-        ta_result result = tna_system_post(system, &(tah_message){ .target = actor, .event = &owed->event, .trace = &trace });
-        tna_inputs_redelivered(&system->inputs);
+        tah_inputs_redeliver(&system->inputs, owed->host_seq, ta_system_time(system->core));
+        ta_result result = tah_system_post(system, &(tah_message){ .target = actor, .event = &owed->event, .trace = &trace });
+        tah_inputs_redelivered(&system->inputs);
         if (result != TA_OK) {
             ta_event_release(&owed->event);
             failure = result;
@@ -659,7 +659,7 @@ napi_value tna_checkpoint_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "checkpoint: cannot be called from inside a core call (ADR 0013)");
     }
@@ -685,7 +685,7 @@ napi_value tna_checkpoint_method(napi_env env, napi_callback_info info) {
     uint32_t owed_count = 0;
     for (uint32_t index = entry != NULL ? entry->first : 0; index != 0; index = tah_sched_envelope(&system->sched, index)->next) {
         const tah_envelope *envelope = tah_sched_envelope(&system->sched, index);
-        uint64_t seq = tna_inputs_host_seq(system, index);
+        uint64_t seq = tah_inputs_host_seq(system, index);
         if (seq != 0 && envelope->report == TAH_REPORT_NONE) {
             owed[owed_count++] = (ta_owed_message){ .host_seq = seq, .event = &envelope->event };
         }

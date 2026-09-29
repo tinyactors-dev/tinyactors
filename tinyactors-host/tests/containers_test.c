@@ -1,9 +1,9 @@
 /* The containers (ADR 0009): growth, wrapping, tombstones, reuse. */
+#include "check.h"
 #include <stdint.h>
 #include <stdio.h>
 
 #include "allocator.h"
-#include "check.h"
 #include "containers.h"
 
 static tah_allocator allocator;

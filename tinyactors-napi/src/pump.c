@@ -55,7 +55,7 @@ static bool tna_hook_option(napi_env env, napi_value object, const char *name, n
 }
 
 /* clock: "realtime" (the default) or "manual". */
-static bool tna_clock_option(napi_env env, napi_value object, tna_clock_kind *kind) {
+static bool tna_clock_option(napi_env env, napi_value object, tah_clock_kind *kind) {
     napi_value value = NULL;
     if (!tna_option(env, object, "clock", &value)) {
         return false;
@@ -70,7 +70,7 @@ static bool tna_clock_option(napi_env env, napi_value object, tna_clock_kind *ki
         tna_throw(env, "invalid", "createSystem: clock must be \"realtime\" or \"manual\"");
         return false;
     }
-    *kind = strcmp(text, "manual") == 0 ? TNA_CLOCK_MANUAL : TNA_CLOCK_REALTIME;
+    *kind = strcmp(text, "manual") == 0 ? TAH_CLOCK_MANUAL : TAH_CLOCK_REALTIME;
     return true;
 }
 
@@ -120,7 +120,7 @@ static void tna_pump_unhold(tna_napi_system *wrapper) {
 }
 
 /* The wake callback (system.h): setImmediate(turn). */
-static void tna_pump_wake(tna_system *system, void *context) {
+static void tna_pump_wake(tah_system *system, void *context) {
     tna_napi_system *wrapper = context;
     napi_env env = wrapper->env;
     napi_value global = NULL;
@@ -173,7 +173,7 @@ static void tna_pump_clear_timer(napi_env env, tna_napi_system *wrapper) {
 }
 
 /* The arm callback (system.h): setTimeout(timer, delay).unref(). */
-static void tna_pump_arm(tna_system *system, ta_time delay, void *context) {
+static void tna_pump_arm(tah_system *system, ta_time delay, void *context) {
     tna_napi_system *wrapper = context;
     napi_env env = wrapper->env;
     napi_handle_scope scope = NULL;
@@ -226,7 +226,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
         }
     }
     napi_value initial_value = NULL;
-    tna_clock_kind clock = TNA_CLOCK_REALTIME;
+    tah_clock_kind clock = TAH_CLOCK_REALTIME;
     ta_time initial = 0;
     /* The scheduling budgets and mailbox limits are parameters, which the
      * system took at creation (napi ADR 0035). */
@@ -238,7 +238,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
         !tna_hook_option(env, options, "deadLetter", &wrapper->dead_letter_hook)) {
         return false;
     }
-    if (tna_system_set_clock(wrapper->system, clock, initial) != TA_OK) {
+    if (tah_system_set_clock(wrapper->system, clock, initial) != TA_OK) {
         tna_throw(env, "invalid", "createSystem: cannot set the clock");
         return false;
     }
@@ -280,7 +280,7 @@ napi_value tna_actor_view(napi_env env, tna_napi_system *wrapper, ta_actor_id ac
 }
 
 /* The author's ID of the top-level final the actor reached, or undefined. */
-static napi_value tna_final_state(napi_env env, tna_system *system, ta_actor_id actor) {
+static napi_value tna_final_state(napi_env env, tah_system *system, ta_actor_id actor) {
     napi_value result = NULL;
     napi_get_undefined(env, &result);
     ta_actor_inspection view;
@@ -325,7 +325,7 @@ void tna_call_hook(napi_env env, napi_ref hook, napi_value argument, napi_value 
     }
 }
 
-static void tna_destroy_finished(tna_system *system, ta_actor_id actor) {
+static void tna_destroy_finished(tah_system *system, ta_actor_id actor) {
     system->inside_core = true;
     ta_result result = ta_actor_destroy(system->core, actor);
     system->inside_core = false;
@@ -335,7 +335,7 @@ static void tna_destroy_finished(tna_system *system, ta_actor_id actor) {
 }
 
 /* The actor's completion data (<donedata>), or undefined (ADR 0012, ADR 0011). */
-static napi_value tna_completion_data(napi_env env, tna_system *system, ta_actor_id actor) {
+static napi_value tna_completion_data(napi_env env, tah_system *system, ta_actor_id actor) {
     napi_value data = NULL;
     ta_actor_completion completion = { 0 };
     system->inside_core = true;
@@ -351,7 +351,7 @@ static napi_value tna_completion_data(napi_env env, tna_system *system, ta_actor
 }
 
 static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record, napi_value *first_error) {
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (wrapper->done_hook != NULL && tah_sched_lookup(&system->sched, record->actor) != NULL) {
         napi_value view = tna_actor_view(env, wrapper, record->actor);
         napi_value argument = NULL;
@@ -364,7 +364,7 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_tu
         }
     }
     /* The hook may have closed the system or destroyed the actor itself. */
-    if (wrapper->destroy_finished && !tna_system_closed(system) &&
+    if (wrapper->destroy_finished && !tah_system_closed(system) &&
         tah_sched_lookup(&system->sched, record->actor) != NULL) {
         tna_destroy_finished(system, record->actor);
     }
@@ -373,7 +373,7 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_tu
 /* A WARN log about `actor` through the trace sink, when one wants logs
  * (napi ADR 0017 section 7): the actor's session and definition, if it is
  * still resident, name it. */
-void tna_pump_host_log(tna_system *system, ta_actor_id actor, tna_otlp_host_log_params log) {
+void tna_pump_host_log(tah_system *system, ta_actor_id actor, tah_otlp_host_log_params log) {
     if (!system->tracing) {
         return;
     }
@@ -382,7 +382,7 @@ void tna_pump_host_log(tna_system *system, ta_actor_id actor, tna_otlp_host_log_
         log.session = view.session_id;
         log.definition = view.definition_id;
     }
-    tna_otlp_host_log(&system->otlp, &log);
+    tah_otlp_host_log(&system->otlp, &log);
 }
 
 void tna_fault_message(const char *operation, ta_result code, char *buffer, size_t size) {
@@ -396,7 +396,7 @@ static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tah_t
     char body[200];
     int length = snprintf(body, sizeof body, "actor quarantined: %s", message);
     tna_pump_host_log(wrapper->system, record->actor,
-                 (tna_otlp_host_log_params){ .event_name = { "tinyactors.actor.quarantined", 28 },
+                 (tah_otlp_host_log_params){ .event_name = { "tinyactors.actor.quarantined", 28 },
                                       .body = { body, length > 0 ? (uint32_t)length : 0u },
                                       .key = { "tinyactors.fault.code", 21 },
                                       .value = { code, (uint32_t)strlen(code) } });
@@ -434,7 +434,7 @@ napi_value tna_address_object(napi_env env, const ta_actor_address *address) {
 }
 
 /* The dotted text of an event name, formatted by core (ADR 0004), or NULL. */
-napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id name) {
+napi_value tna_event_text(napi_env env, tah_system *system, ta_event_name_id name) {
     char stack[256];
     uint32_t needed = 0;
     ta_event_name_format_params params = { .name = name, .buffer = stack, .capacity = sizeof stack, .needed = &needed };
@@ -469,7 +469,7 @@ static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const
     char body[64];
     int length = snprintf(body, sizeof body, "dead-lettered: %s", reason_text);
     tna_pump_host_log(wrapper->system, record->actor,
-                 (tna_otlp_host_log_params){ .event_name = { "tinyactors.message.dead_lettered", 32 },
+                 (tah_otlp_host_log_params){ .event_name = { "tinyactors.message.dead_lettered", 32 },
                                       .body = { body, length > 0 ? (uint32_t)length : 0u },
                                       .has_event = true,
                                       .event = record->event,
@@ -669,9 +669,9 @@ static void tna_resolve_waiters(napi_env env, tna_napi_system *wrapper) {
 }
 
 /* Quiet, with no turn pending and no load waiting for its loader (napi ADR 0020). */
-static bool tna_settled(const tna_system *system) {
-    return tna_system_closed(system) ||
-           (tna_system_quiet(system) && !system->turn_pending && system->loads.in_flight == 0);
+static bool tna_settled(const tah_system *system) {
+    return tah_system_closed(system) ||
+           (tah_system_quiet(system) && !system->turn_pending && system->loads.in_flight == 0);
 }
 
 void tna_pump_settle_waiters(napi_env env, tna_napi_system *wrapper) {
@@ -708,14 +708,14 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tna_napi_system *wrapper = data;
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     napi_value first_error = NULL;
-    uint64_t started = tna_monotonic_ns(NULL);
-    if (!tna_system_closed(system)) {
-        tna_system_turn(system);
+    uint64_t started = tah_system_monotonic_ns(system);
+    if (!tah_system_closed(system)) {
+        tah_system_turn(system);
         tna_settle_sends(env, wrapper);
         for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-            if (tna_system_closed(system)) {
+            if (tah_system_closed(system)) {
                 break; /* a hook closed the system */
             }
             if (record->kind == TAH_RECORD_DONE) {
@@ -727,24 +727,24 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
             }
         }
         /* Loads the turn started go to lib/system.js's loader runner (napi ADR 0020). */
-        if (!tna_system_closed(system)) {
+        if (!tah_system_closed(system)) {
             tna_loads_dispatch(env, wrapper, &first_error);
         }
         /* Services run after the hooks, in the order core called them (step 13). */
         tna_services_dispatch(env, wrapper, &first_error);
         /* Then the turn's input records, which seal the services it held
          * behind their commit (napi ADR 0032 section 6). */
-        if (!tna_system_closed(system)) {
+        if (!tah_system_closed(system)) {
             tna_inputs_dispatch(env, wrapper, &first_error);
         }
         /* Then the turn's trace records, as one batch (napi ADR 0015). */
-        if (!tna_system_closed(system)) {
+        if (!tah_system_closed(system)) {
             tna_trace_dispatch(env, wrapper, &first_error);
         }
         /* Then the runaways (ADR 0026), which a debugger reads with those
          * traces. */
         for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-            if (tna_system_closed(system)) {
+            if (tah_system_closed(system)) {
                 break;
             }
             if (record->kind == TAH_RECORD_FAULT && record->code == TA_ERR_RUNAWAY &&
@@ -757,15 +757,15 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
                 }
             }
         }
-        if (!tna_system_closed(system)) {
+        if (!tah_system_closed(system)) {
             tna_settle_sends(env, wrapper);
         }
-        tna_system_end_turn(system);
+        tah_system_end_turn(system);
         if (tna_settled(system)) {
             tna_resolve_waiters(env, wrapper);
         }
-        if (!tna_system_closed(system)) {
-            tna_system_record_turn(system, started);
+        if (!tah_system_closed(system)) {
+            tah_system_record_turn(system, started);
         }
     }
     tna_pump_unhold(wrapper);
@@ -788,8 +788,8 @@ static napi_value tna_timer_callback(napi_env env, napi_callback_info info) {
     wrapper->timeout = NULL;
     bool held = wrapper->timer_held;
     wrapper->timer_held = false;
-    if (!tna_system_closed(wrapper->system)) {
-        tna_system_timer_fired(wrapper->system);
+    if (!tah_system_closed(wrapper->system)) {
+        tah_system_timer_fired(wrapper->system);
     }
     if (held) {
         tna_napi_system_unhold(wrapper); /* may free a finalized wrapper */
@@ -798,15 +798,15 @@ static napi_value tna_timer_callback(napi_env env, napi_callback_info info) {
 }
 
 napi_value tna_pump_advance_to(napi_env env, tna_napi_system *wrapper, napi_value time_value) {
-    tna_system *system = wrapper->system;
-    if (system->clock.kind != TNA_CLOCK_MANUAL) {
+    tah_system *system = wrapper->system;
+    if (system->clock.kind != TAH_CLOCK_MANUAL) {
         return tna_throw(env, "invalid", "advanceTo() needs a system with clock: \"manual\"");
     }
     ta_time time = 0;
     if (!tna_time_value(env, time_value, "advanceTo(): time", &time)) {
         return NULL;
     }
-    ta_result result = tna_system_advance_to(system, time);
+    ta_result result = tah_system_advance_to(system, time);
     if (result == TA_ERR_BUSY) {
         return tna_throw(env, "reentrant", "advanceTo() cannot run inside a core call");
     }

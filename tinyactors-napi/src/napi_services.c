@@ -4,9 +4,9 @@
 
 #include <string.h>
 
-#include "adapters/invoker.h"
-#include "adapters/io.h"
-#include "adapters/log.h"
+#include "adapter_invoker.h"
+#include "adapter_io.h"
+#include "adapter_log.h"
 #include "events.h"
 #include "napi_trace.h"
 #include "pump.h"
@@ -60,7 +60,7 @@ static napi_value tna_value_of(napi_env env, const ta_value *value) {
     return out;
 }
 
-static napi_value tna_atom_text(napi_env env, tna_system *system, ta_atom atom) {
+static napi_value tna_atom_text(napi_env env, tah_system *system, ta_atom atom) {
     ta_str text = { 0 };
     if (ta_system_atom_text(system->core, atom, &text) != TA_OK) {
         return tna_js_undefined(env);
@@ -69,7 +69,7 @@ static napi_value tna_atom_text(napi_env env, tna_system *system, ta_atom atom) 
 }
 
 /* The send ID's text (core ADR 0048), or null when the send has none. */
-static napi_value tna_send_id_text(napi_env env, tna_system *system, ta_send_id send_id) {
+static napi_value tna_send_id_text(napi_env env, tah_system *system, ta_send_id send_id) {
     char stack[128];
     uint32_t needed = 0;
     ta_send_id_format_params params = { .send_id = send_id, .buffer = stack, .capacity = sizeof stack, .needed = &needed };
@@ -123,7 +123,7 @@ static napi_value tna_log_payload(napi_env env, tna_napi_system *wrapper, const 
 }
 
 static napi_value tna_io_payload(napi_env env, tna_napi_system *wrapper, const tah_effect *effect) {
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     napi_value payload = NULL;
     if (napi_create_object(env, &payload) != napi_ok) {
         return NULL;
@@ -142,7 +142,7 @@ static napi_value tna_io_payload(napi_env env, tna_napi_system *wrapper, const t
 }
 
 static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, const tah_effect *effect) {
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     napi_value payload = NULL;
     napi_value invocation = NULL;
     napi_value autoforward = NULL;
@@ -225,10 +225,10 @@ static napi_value tna_payload(napi_env env, tna_napi_system *wrapper, const tah_
  */
 
 void tna_services_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     tna_env *data = wrapper->env_data;
     tah_effect *effect = NULL;
-    while (!tna_system_closed(system) && (effect = tah_effects_pop(&system->effects)) != NULL) {
+    while (!tah_system_closed(system) && (effect = tah_effects_pop(&system->effects)) != NULL) {
         napi_handle_scope scope = NULL;
         napi_open_handle_scope(env, &scope);
         napi_value handler = NULL;
@@ -262,7 +262,7 @@ void tna_services_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *f
  * that does not exist (napi ADR 0022): { reason, target }, the target named
  * as a deadLetter hook names it (an ActorID, or { family, name }).
  */
-static bool tna_unreachable_data(void *context, const tna_unreachable *unreachable, ta_value *out) {
+static bool tna_unreachable_data(void *context, const tah_unreachable *unreachable, ta_value *out) {
     tna_napi_system *wrapper = context;
     if (!wrapper->dm.js_usable) {
         return false;
@@ -297,7 +297,7 @@ static bool tna_unreachable_data(void *context, const tna_unreachable *unreachab
  * child's parent gets (napi ADR 0025): { code, message }, as the fault hook
  * has them.
  */
-static bool tna_quarantine_data(void *context, const tna_quarantine_report *report, ta_value *out) {
+static bool tna_quarantine_data(void *context, const tah_quarantine_report *report, ta_value *out) {
     tna_napi_system *wrapper = context;
     if (!wrapper->dm.js_usable) {
         return false;
@@ -364,7 +364,7 @@ void tna_services_init(tna_napi_system *wrapper) {
  */
 
 /* The atom of a type string argument, interned in core. */
-static bool tna_type_atom(napi_env env, tna_system *system, napi_value value, const char *what, ta_atom *out) {
+static bool tna_type_atom(napi_env env, tah_system *system, napi_value value, const char *what, ta_atom *out) {
     napi_valuetype type = napi_undefined;
     size_t length = 0;
     if (value == NULL || napi_typeof(env, value, &type) != napi_ok || type != napi_string ||
@@ -400,7 +400,7 @@ static tna_napi_system *tna_services_this(napi_env env, napi_callback_info info,
 }
 
 /* An optional string argument copied into the call arena; empty when undefined. */
-static bool tna_optional_text(napi_env env, tna_system *system, napi_value value, ta_str *out) {
+static bool tna_optional_text(napi_env env, tah_system *system, napi_value value, ta_str *out) {
     napi_valuetype type = napi_undefined;
     *out = (ta_str){ NULL, 0 };
     if (value == NULL || napi_typeof(env, value, &type) != napi_ok || type == napi_undefined) {
@@ -433,8 +433,8 @@ napi_value tna_register_io_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL || !tna_type_atom(env, wrapper->system, argv[0], "registerIO(): expected a type string", &atom)) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
-    tna_io_registration registration = { .type = atom };
+    tah_system *system = wrapper->system;
+    tah_io_registration registration = { .type = atom };
     uint32_t index = 0;
     registration.index = &index;
     if (!tna_optional_text(env, system, argc > 1 ? argv[1] : NULL, &registration.location) ||
@@ -442,7 +442,7 @@ napi_value tna_register_io_method(napi_env env, napi_callback_info info) {
         tah_scratch_reset_call(&system->scratch);
         return tna_throw(env, "invalid", "registerIO(): options.location and options.origin must be strings");
     }
-    ta_result result = tna_io_register(system, &registration);
+    ta_result result = tah_io_register(system, &registration);
     tah_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result),
@@ -454,7 +454,7 @@ napi_value tna_register_io_method(napi_env env, napi_callback_info info) {
 }
 
 /* The registry index of a registered I/O processor type (core ADR 0068); throws otherwise. */
-static bool tna_processor_index(napi_env env, tna_system *system, napi_value type, const char *what, uint32_t *out) {
+static bool tna_processor_index(napi_env env, tah_system *system, napi_value type, const char *what, uint32_t *out) {
     ta_atom atom = 0;
     if (!tna_type_atom(env, system, type, what, &atom)) {
         return false;
@@ -478,7 +478,7 @@ static bool tna_object_member(napi_env env, napi_value object, const char *name,
     return *out != NULL;
 }
 
-bool tna_origin_argument(napi_env env, tna_system *system, napi_value value, ta_origin *out) {
+bool tna_origin_argument(napi_env env, tah_system *system, napi_value value, ta_origin *out) {
     *out = (ta_origin){ .kind = TA_ORIGIN_NONE };
     napi_valuetype type = napi_undefined;
     if (value == NULL || napi_typeof(env, value, &type) != napi_ok || type == napi_undefined) {
@@ -538,7 +538,7 @@ bool tna_origin_argument(napi_env env, tna_system *system, napi_value value, ta_
         if (kind != napi_bigint) {
             params.token = (uint64_t)number;
         }
-        if (!tna_io_renders_origins(system, params.processor)) {
+        if (!tah_io_renders_origins(system, params.processor)) {
             tna_throw(env, "invalid", "origin.token: the processor was registered without an origin template");
             return false;
         }
@@ -568,7 +568,7 @@ napi_value tna_open_scope_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "openScope(): cannot run inside a core call (ADR 0013)");
     }
@@ -608,7 +608,7 @@ napi_value tna_close_scope_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "closeScope(): cannot run inside a core call (ADR 0013)");
     }
@@ -631,8 +631,8 @@ napi_value tna_register_invoker_method(napi_env env, napi_callback_info info) {
         !tna_type_atom(env, wrapper->system, argv[0], "registerInvoker(): expected a type string", &atom)) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
-    ta_result result = ta_system_register_invoker(system->core, atom, tna_js_invoker_adapter(system));
+    tah_system *system = wrapper->system;
+    ta_result result = ta_system_register_invoker(system->core, atom, tah_js_invoker_adapter(system));
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "registerInvoker(): core refused the type");
     }
@@ -651,9 +651,9 @@ napi_value tna_set_log_sink_method(napi_env env, napi_callback_info info) {
     if (argc < 1 || napi_get_value_bool(env, argv[0], &installed) != napi_ok) {
         return tna_throw(env, "invalid", "setLogSink: expected a boolean");
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     system->log_to_js = installed;
-    ta_result result = tna_system_refresh_log_sink(system);
+    ta_result result = tah_system_refresh_log_sink(system);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "setLogSink: core refused the sink");
     }
@@ -665,7 +665,7 @@ napi_value tna_set_log_sink_method(napi_env env, napi_callback_info info) {
  */
 
 /* The event name done.invoke.<invokeid> of an invocation (SCXML 6.4). */
-static ta_result tna_done_name(tna_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
+static ta_result tna_done_name(tah_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
     static const char prefix[] = "done.invoke.";
     ta_str id = { 0 };
     ta_result result = ta_system_invoke_id_text(system->core, invoke, &id);
@@ -701,7 +701,7 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     uint32_t slot = 0;
     uint32_t generation = 0;
     uint64_t invoke = 0;
@@ -731,7 +731,7 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
             ta_value_release(&event.data);
             return NULL;
         }
-        ta_result result = tna_system_post(system, &(tah_message){ .target = parent, .event = &event, .trace = &trace,
+        ta_result result = tah_system_post(system, &(tah_message){ .target = parent, .event = &event, .trace = &trace,
                                                                    .report = TAH_REPORT_UNAVAILABLE });
         if (result != TA_OK) {
             ta_value_release(&event.data);
@@ -775,7 +775,7 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
         ta_value_release(&event.data);
         return NULL;
     }
-    ta_result result = tna_system_post(system, &(tah_message){ .target = parent, .event = &event, .trace = &trace });
+    ta_result result = tah_system_post(system, &(tah_message){ .target = parent, .event = &event, .trace = &trace });
     if (result != TA_OK) {
         ta_value_release(&event.data);
         if (result == TA_ERR_BUSY) {

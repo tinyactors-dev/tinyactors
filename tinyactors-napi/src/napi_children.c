@@ -379,7 +379,7 @@ static bool tna_clear_exception(napi_env env, char *message, size_t capacity) {
 /* Compiles chart text from `<content expr>` or `srcexpr` for this invoke,
  * holding it until the invoker has spawned the child (core ADR 0077).
  * `name` is the src it was fetched from, or empty. */
-static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes text,
+static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tah_child_params *params, ta_bytes text,
                                            ta_str name, tna_invoking parent) {
     tna_import_failure failure;
     tna_import_failure_open(&failure, wrapper->refusal, wrapper->refusal_bytes);
@@ -416,7 +416,7 @@ static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tna_c
     return TA_OP_OK;
 }
 
-static ta_op_status tna_child_definition_of(void *context, const tna_child_params *params) {
+static ta_op_status tna_child_definition_of(void *context, const tah_child_params *params) {
     tna_napi_system *wrapper = context;
     napi_env env = wrapper->env;
     const ta_invoke_request *request = params->request;
@@ -507,7 +507,7 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
  * values, only those whose names the child declares as top-level <data>.
  * A name it does not declare is not added.
  */
-static ta_op_status tna_child_binding(tna_napi_system *wrapper, const tna_child_params *params) {
+static ta_op_status tna_child_binding(tna_napi_system *wrapper, const tah_child_params *params) {
     const ta_invoke_request *request = params->request;
     napi_env env = wrapper->env;
     napi_value given = NULL;
@@ -550,7 +550,7 @@ static ta_op_status tna_child_binding(tna_napi_system *wrapper, const tna_child_
     return TA_OP_OK;
 }
 
-static ta_op_status tna_child_definition(void *context, const tna_child_params *params) {
+static ta_op_status tna_child_definition(void *context, const tah_child_params *params) {
     ta_op_status status = tna_child_definition_of(context, params);
     if (status == TA_OP_OK) {
         status = tna_child_binding(context, params);

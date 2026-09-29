@@ -1121,7 +1121,7 @@ static ta_op_status tna_fail(tna_frame *frame, const char *message) {
     return TA_OP_ERROR;
 }
 
-static bool tna_begin(tna_frame *frame, tna_js_datamodel *dm, void *instance, const ta_dm_host *host, ta_fault *fault) {
+static bool tah_begin(tna_frame *frame, tna_js_datamodel *dm, void *instance, const ta_dm_host *host, ta_fault *fault) {
     *frame = (tna_frame){ .dm = dm, .instance = instance, .fault = fault };
     if (!dm->js_usable) {
         tna_fault(frame, "javascript: no JavaScript can run while the system closes");
@@ -1142,7 +1142,7 @@ static bool tna_begin(tna_frame *frame, tna_js_datamodel *dm, void *instance, co
     return true;
 }
 
-static void tna_end(tna_frame *frame) {
+static void tah_end(tna_frame *frame) {
     tna_js_datamodel *dm = frame->dm;
     if (dm->event != NULL) {
         napi_delete_reference(dm->env, dm->event);
@@ -1292,7 +1292,7 @@ static void tna_dm_destroy_instance(void *self, void *shared, void *instance) {
 
 static ta_op_status tna_dm_declare(void *self, const ta_datamodel_declare_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -1311,13 +1311,13 @@ static ta_op_status tna_dm_declare(void *self, const ta_datamodel_declare_params
     } else if (napi_get_undefined(env, &undefined) != napi_ok || napi_set_property(env, root, key, undefined) != napi_ok) {
         status = tna_fail(&frame, "javascript: could not declare data");
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
 static ta_op_status tna_dm_set_named(void *self, const ta_datamodel_set_named_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -1331,13 +1331,13 @@ static ta_op_status tna_dm_set_named(void *self, const ta_datamodel_set_named_pa
                napi_set_property(env, root, key, value) != napi_ok) {
         status = tna_fail(&frame, "javascript: could not set data");
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
 static ta_op_status tna_dm_eval_condition(void *self, const ta_datamodel_eval_condition_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_value value = NULL;
@@ -1348,13 +1348,13 @@ static ta_op_status tna_dm_eval_condition(void *self, const ta_datamodel_eval_co
         napi_get_value_bool(frame.dm->env, flag, params->out) != napi_ok) {
         status = tna_fail(&frame, "javascript: condition threw");
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
 static ta_op_status tna_dm_eval_value(void *self, const ta_datamodel_eval_value_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_value value = NULL;
@@ -1364,13 +1364,13 @@ static ta_op_status tna_dm_eval_value(void *self, const ta_datamodel_eval_value_
     } else if (!tna_value_make(&frame.dm->wrapper->values, value, params->out)) {
         status = tna_fail(&frame, "javascript: cannot keep the value");
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
 static ta_op_status tna_dm_read_location(void *self, const ta_datamodel_read_location_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     const ta_expression *expression = tna_expression(params->shared, params->location);
@@ -1388,13 +1388,13 @@ static ta_op_status tna_dm_read_location(void *self, const ta_datamodel_read_loc
     } else if (!tna_value_make(&frame.dm->wrapper->values, value, params->out)) {
         status = tna_fail(&frame, "javascript: cannot keep the value");
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
 static ta_op_status tna_dm_assign(void *self, const ta_datamodel_assign_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -1428,13 +1428,13 @@ static ta_op_status tna_dm_assign(void *self, const ta_datamodel_assign_params *
             status = tna_fail(&frame, "javascript: assign threw");
         }
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
 static ta_op_status tna_dm_execute_script(void *self, const ta_datamodel_execute_script_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     const ta_expression *expression = tna_expression(params->shared, params->script);
@@ -1446,13 +1446,13 @@ static ta_op_status tna_dm_execute_script(void *self, const ta_datamodel_execute
     } else if (!tna_invoke(&frame, function, 0, NULL, NULL)) {
         status = tna_fail(&frame, "javascript: script threw");
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
 static ta_op_status tna_dm_make_params(void *self, const ta_datamodel_make_params_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -1474,7 +1474,7 @@ static ta_op_status tna_dm_make_params(void *self, const ta_datamodel_make_param
     if (status == TA_OP_OK && !tna_value_make(&frame.dm->wrapper->values, object, params->out)) {
         status = tna_fail(&frame, "javascript: cannot keep the params");
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
@@ -1494,7 +1494,7 @@ static ta_op_status tna_dm_value_text(void *self, const ta_datamodel_value_text_
         return TA_OP_ERROR;
     }
     tna_frame frame;
-    if (!tna_begin(&frame, dm, params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, dm, params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     /* Only copying the text can run out of memory, and that changes nothing
@@ -1503,13 +1503,13 @@ static ta_op_status tna_dm_value_text(void *self, const ta_datamodel_value_text_
     ta_op_status status = result == TA_OK      ? TA_OP_OK
                           : result == TA_ERR_NOMEM ? TA_OP_NOMEM
                                                    : tna_fail(&frame, "javascript: value has no text");
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
 static ta_op_status tna_dm_text_value(void *self, const ta_datamodel_text_value_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_value text = NULL;
@@ -1518,7 +1518,7 @@ static ta_op_status tna_dm_text_value(void *self, const ta_datamodel_text_value_
         !tna_value_make(&frame.dm->wrapper->values, text, params->out)) {
         status = tna_fail(&frame, "javascript: could not make text");
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
@@ -1555,7 +1555,7 @@ static ta_op_status tna_space_normalized(napi_env env, tna_values *values, ta_by
 
 static ta_op_status tna_dm_import_content(void *self, const ta_datamodel_import_content_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -1584,13 +1584,13 @@ static ta_op_status tna_dm_import_content(void *self, const ta_datamodel_import_
             status = tna_fail(&frame, "javascript: could not import content");
         }
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
 static ta_op_status tna_dm_foreach_snapshot(void *self, const ta_datamodel_foreach_snapshot_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -1615,7 +1615,7 @@ static ta_op_status tna_dm_foreach_snapshot(void *self, const ta_datamodel_forea
     } else {
         *params->count = length;
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
@@ -1640,14 +1640,14 @@ static bool tna_variable_name(ta_str name) {
 
 static ta_op_status tna_dm_foreach_bind(void *self, const ta_datamodel_foreach_bind_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
+    if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     /* Checked before anything is bound, so a bad name changes nothing. */
     if (!tna_variable_name(params->item) ||
         (params->index_name.ptr != NULL && !tna_variable_name(params->index_name))) {
         ta_op_status refused = tna_fail(&frame, "javascript: a <foreach> item or index is not a variable name");
-        tna_end(&frame);
+        tah_end(&frame);
         return refused;
     }
     napi_env env = frame.dm->env;
@@ -1667,7 +1667,7 @@ static ta_op_status tna_dm_foreach_bind(void *self, const ta_datamodel_foreach_b
             status = tna_fail(&frame, "javascript: cannot bind the foreach index");
         }
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
@@ -1821,7 +1821,7 @@ static ta_op_status tna_durable_piece(tna_js_datamodel *dm, const ta_byte_sink *
 
 static ta_op_status tna_durable_write(tna_js_datamodel *dm, const ta_datamodel_value_write_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, dm, NULL, NULL, params->fault)) {
+    if (!tah_begin(&frame, dm, NULL, NULL, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = dm->env;
@@ -1861,7 +1861,7 @@ static ta_op_status tna_durable_write(tna_js_datamodel *dm, const ta_datamodel_v
             status = tna_fail(&frame, "javascript: the sink failed");
         }
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
@@ -1918,7 +1918,7 @@ static bool tna_call_method(napi_env env, napi_value object, const char *name, s
 
 static ta_op_status tna_durable_read(tna_js_datamodel *dm, const ta_datamodel_value_read_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, dm, NULL, NULL, params->fault)) {
+    if (!tah_begin(&frame, dm, NULL, NULL, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = dm->env;
@@ -1973,7 +1973,7 @@ static ta_op_status tna_durable_read(tna_js_datamodel *dm, const ta_datamodel_va
     if (piece != NULL) {
         tah_free(allocator, &(ta_allocator_free_params){ .ptr = piece, .size = TNA_DURABLE_PIECE + 4u, .alignment = 1 });
     }
-    tna_end(&frame);
+    tah_end(&frame);
     return status;
 }
 
@@ -2259,7 +2259,7 @@ static napi_value tna_get_data(napi_env env, napi_callback_info info) {
     return root;
 }
 
-static const char *const tna_event_types[] = { "external", "internal", "platform" };
+static const char *const tah_event_types[] = { "external", "internal", "platform" };
 
 /* object[name] = the variable's text, unless it has no value. */
 static bool tna_set_text(napi_env env, tna_js_datamodel *dm, napi_value object, const char *name, ta_dm_text_kind kind) {
@@ -2295,7 +2295,7 @@ static napi_value tna_get_event(napi_env env, napi_callback_info info) {
     napi_value name = NULL;
     if (napi_create_object(env, &object) != napi_ok || !tna_host_text(env, dm, TA_DM_TEXT_EVENT_NAME, &name) ||
         napi_set_named_property(env, object, "name", name) != napi_ok ||
-        napi_create_string_utf8(env, tna_event_types[event->type <= TA_EVENT_PLATFORM ? event->type : 0], NAPI_AUTO_LENGTH,
+        napi_create_string_utf8(env, tah_event_types[event->type <= TA_EVENT_PLATFORM ? event->type : 0], NAPI_AUTO_LENGTH,
                                 &type) != napi_ok ||
         napi_set_named_property(env, object, "type", type) != napi_ok ||
         !tna_set_text(env, dm, object, "sendID", TA_DM_TEXT_EVENT_SENDID) ||
@@ -2409,11 +2409,11 @@ bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_
     *dm = (tna_js_datamodel){ .wrapper = wrapper, .env = env, .js_usable = true };
     tna_adapter_init(&dm->builtin, dm, (ta_str){ "javascript", 10 }, dm->builtin_name);
     /* Its buffers come from the system's parameters (napi ADR 0035). */
-    const tna_params *params = &wrapper->system->params;
+    const tah_params *params = &wrapper->system->params;
     uint64_t message_bytes = TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES;
     (void)ta_system_param(wrapper->system->core, TA_PARAM_COMPILE_MESSAGE_BYTES, &message_bytes);
-    dm->registered_capacity = (uint32_t)params->values[TNA_PARAM_REGISTERED_DATAMODELS];
-    dm->name_bytes = (uint32_t)params->values[TNA_PARAM_DATAMODEL_NAME_BYTES];
+    dm->registered_capacity = (uint32_t)params->values[TAH_PARAM_REGISTERED_DATAMODELS];
+    dm->name_bytes = (uint32_t)params->values[TAH_PARAM_DATAMODEL_NAME_BYTES];
     dm->rejection_bytes = (size_t)message_bytes + 1u;
     dm->registered = calloc(dm->registered_capacity != 0 ? dm->registered_capacity : 1u, sizeof *dm->registered);
     dm->names = calloc(dm->registered_capacity != 0 ? dm->registered_capacity : 1u, dm->name_bytes);

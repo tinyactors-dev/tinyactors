@@ -28,8 +28,8 @@ static napi_status tna_put_number(napi_env env, napi_value object, const char *n
 }
 
 void tna_loads_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
-    tna_system *system = wrapper->system;
-    if (tna_loads_pending_requests(&system->loads) == 0) {
+    tah_system *system = wrapper->system;
+    if (tah_loads_pending_requests(&system->loads) == 0) {
         return;
     }
     napi_value requests = NULL;
@@ -37,8 +37,8 @@ void tna_loads_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
         return;
     }
     uint32_t count = 0;
-    tna_load_request request;
-    while (tna_loads_next_request(&system->loads, &request)) {
+    tah_load_request request;
+    while (tah_loads_next_request(&system->loads, &request)) {
         ta_actor_address address = ta_address_view(request.address);
         napi_value item = NULL;
         napi_value why = NULL;
@@ -47,8 +47,8 @@ void tna_loads_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
             tna_put_text(env, item, "family", address.family.name) != napi_ok ||
             tna_put_text(env, item, "name", address.name) != napi_ok ||
             napi_create_string_utf8(env,
-                                    request.why == TNA_LOAD_WHY_TIMER     ? "timer"
-                                    : request.why == TNA_LOAD_WHY_SESSION ? "session"
+                                    request.why == TAH_LOAD_WHY_TIMER     ? "timer"
+                                    : request.why == TAH_LOAD_WHY_SESSION ? "session"
                                                                           : "mail",
                                     NAPI_AUTO_LENGTH, &why) != napi_ok ||
             napi_set_named_property(env, item, "why", why) != napi_ok ||
@@ -98,7 +98,7 @@ napi_value tna_set_loader_family_method(napi_env env, napi_callback_info info) {
         napi_get_value_uint32(env, argv[1], &max_waiting) != napi_ok) {
         return tna_throw(env, "invalid", "setLoader: expected a family name and maxWaiting");
     }
-    ta_result result = tna_loads_set_family(&wrapper->system->loads, family, max_waiting);
+    ta_result result = tah_loads_set_family(&wrapper->system->loads, family, max_waiting);
     tah_scratch_reset_call(&wrapper->system->scratch);
     if (result != TA_OK) {
         return tna_throw(env, "out-of-memory", "setLoader: no memory for the family");
@@ -114,30 +114,30 @@ static bool tna_load_token(napi_env env, const napi_value *argv, uint32_t *index
 
 static const struct {
     const char *name;
-    tna_load_outcome outcome;
+    tah_load_outcome outcome;
 } tna_load_outcomes[] = {
-    { "loaded", TNA_LOAD_LOADED },       { "spawned", TNA_LOAD_SPAWNED }, { "not-found", TNA_LOAD_NOT_FOUND },
-    { "rejected", TNA_LOAD_REJECTED },   { "failed", TNA_LOAD_FAILED },   { "timed-out", TNA_LOAD_TIMED_OUT },
-    { "done", TNA_LOAD_DONE },
+    { "loaded", TAH_LOAD_LOADED },       { "spawned", TAH_LOAD_SPAWNED }, { "not-found", TAH_LOAD_NOT_FOUND },
+    { "rejected", TAH_LOAD_REJECTED },   { "failed", TAH_LOAD_FAILED },   { "timed-out", TAH_LOAD_TIMED_OUT },
+    { "done", TAH_LOAD_DONE },
 };
 
 /* The WARN log of a load that failed or timed out (napi ADR 0020 section 7). */
-static void tna_load_log(tna_system *system, const tna_load *load, tna_load_outcome outcome, ta_str detail) {
+static void tna_load_log(tah_system *system, const tah_load *load, tah_load_outcome outcome, ta_str detail) {
     ta_actor_address address = ta_address_view(load->address);
     char body[512];
     int length = snprintf(body, sizeof body, "%s %.*s/%.*s: %u message(s) dropped%s%.*s",
-                          outcome == TNA_LOAD_TIMED_OUT ? "load timed out for" : "load failed for",
+                          outcome == TAH_LOAD_TIMED_OUT ? "load timed out for" : "load failed for",
                           (int)address.family.name.len, address.family.name.ptr, (int)address.name.len,
                           address.name.ptr, (unsigned)load->mail.count, detail.len != 0 ? ": " : "",
                           (int)detail.len, detail.ptr);
-    const char *event_name = outcome == TNA_LOAD_TIMED_OUT ? "tinyactors.load.timed_out" : "tinyactors.load.failed";
+    const char *event_name = outcome == TAH_LOAD_TIMED_OUT ? "tinyactors.load.timed_out" : "tinyactors.load.failed";
     tna_pump_host_log(system, 0,
-                      (tna_otlp_host_log_params){
+                      (tah_otlp_host_log_params){
                           .event_name = { event_name, (uint32_t)strlen(event_name) },
                           .body = { body, length > 0 ? (uint32_t)(length < (int)sizeof body ? length : (int)sizeof body - 1)
                                                      : 0u },
                           .key = { "tinyactors.load.outcome", 23 },
-                          .value = { tna_load_outcome_name(outcome), (uint32_t)strlen(tna_load_outcome_name(outcome)) },
+                          .value = { tah_load_outcome_name(outcome), (uint32_t)strlen(tah_load_outcome_name(outcome)) },
                       });
 }
 
@@ -151,7 +151,7 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     uint32_t index = 0;
     uint32_t generation = 0;
     ta_str outcome_text = { 0 };
@@ -159,7 +159,7 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
         !tna_text_argument(env, system, argv[2], &outcome_text)) {
         return tna_throw(env, "invalid", "completeLoad: expected (index, generation, outcome)");
     }
-    tna_load_outcome outcome = TNA_LOAD_OUTCOMES;
+    tah_load_outcome outcome = TAH_LOAD_OUTCOMES;
     for (size_t at = 0; at < sizeof tna_load_outcomes / sizeof tna_load_outcomes[0]; at += 1u) {
         if (strlen(tna_load_outcomes[at].name) == outcome_text.len &&
             memcmp(tna_load_outcomes[at].name, outcome_text.ptr, outcome_text.len) == 0) {
@@ -167,7 +167,7 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
         }
     }
     ta_actor_id actor = 0;
-    if (outcome == TNA_LOAD_LOADED || outcome == TNA_LOAD_SPAWNED) {
+    if (outcome == TAH_LOAD_LOADED || outcome == TAH_LOAD_SPAWNED) {
         uint32_t slot = 0;
         uint32_t actor_generation = 0;
         if (argc < 5 || napi_get_value_uint32(env, argv[3], &slot) != napi_ok ||
@@ -181,28 +181,28 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
     if (argc >= 6 && !tna_text_argument(env, system, argv[5], &detail)) {
         detail = (ta_str){ 0 };
     }
-    if (outcome == TNA_LOAD_OUTCOMES) {
+    if (outcome == TAH_LOAD_OUTCOMES) {
         tah_scratch_reset_call(&system->scratch);
         return tna_throw(env, "invalid", "completeLoad: unknown outcome");
     }
-    const tna_load *load = tna_loads_find(&system->loads, index, generation);
-    if (load != NULL && (outcome == TNA_LOAD_FAILED || outcome == TNA_LOAD_TIMED_OUT)) {
+    const tah_load *load = tah_loads_find(&system->loads, index, generation);
+    if (load != NULL && (outcome == TAH_LOAD_FAILED || outcome == TAH_LOAD_TIMED_OUT)) {
         tna_load_log(system, load, outcome, detail);
     }
-    ta_result result = tna_loads_finish(&system->loads, &(tna_load_finish){ .sched = &system->sched,
+    ta_result result = tah_loads_finish(&system->loads, &(tah_load_finish){ .sched = &system->sched,
                                                                             .directory = &system->directory,
                                                                             .metrics = &system->metrics,
                                                                             .index = index,
                                                                             .generation = generation,
                                                                             .outcome = outcome,
                                                                             .actor = actor,
-                                                                            .now_ns = tna_monotonic_ns(NULL),
-                                                                            .wall_ns = tna_system_wall_ns() });
+                                                                            .now_ns = tah_system_monotonic_ns(system),
+                                                                            .wall_ns = tah_system_wall_ns(system) });
     tah_scratch_reset_call(&system->scratch);
     if (result == TA_ERR_NOT_FOUND) {
         return tna_throw(env, "invalid", "completeLoad: the actor is not resident (at the load's address)");
     }
-    tna_system_want_turn(system);
+    tah_system_want_turn(system);
     tna_pump_settle_waiters(env, wrapper);
     napi_value out = NULL;
     napi_get_boolean(env, result != TA_ERR_STALE, &out);
@@ -224,7 +224,7 @@ napi_value tna_load_trace_method(napi_env env, napi_callback_info info) {
     if (argc < 2 || !tna_load_token(env, argv, &index, &generation)) {
         return tna_throw(env, "invalid", "loadTrace: expected (index, generation)");
     }
-    const tna_load *load = tna_loads_find(&wrapper->system->loads, index, generation);
+    const tah_load *load = tah_loads_find(&wrapper->system->loads, index, generation);
     if (load == NULL) {
         return tna_undefined_value(env);
     }
@@ -234,7 +234,7 @@ napi_value tna_load_trace_method(napi_env env, napi_callback_info info) {
 /* The interned address of (family, name) arguments; NULL after throwing. */
 static ta_address *tna_address_arguments(napi_env env, tna_napi_system *wrapper, const napi_value *argv,
                                          const char *what) {
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         tna_throw(env, "reentrant", "an address cannot be interned from inside a core call (ADR 0013)");
         return NULL;
@@ -273,12 +273,12 @@ napi_value tna_wake_at_method(napi_env env, napi_callback_info info) {
     if (address == NULL) {
         return NULL;
     }
-    ta_result result = tna_loads_wake_at(&wrapper->system->loads, address, (ta_time)time);
+    ta_result result = tah_loads_wake_at(&wrapper->system->loads, address, (ta_time)time);
     ta_address_release(address);
     if (result != TA_OK) {
         return tna_throw(env, "out-of-memory", "wakeAt: no memory for the wake-up");
     }
-    tna_system_arm_timer(wrapper->system);
+    tah_system_arm_timer(wrapper->system);
     return tna_undefined_value(env);
 }
 
@@ -296,7 +296,7 @@ napi_value tna_cancel_wake_method(napi_env env, napi_callback_info info) {
     if (address == NULL) {
         return NULL;
     }
-    tna_loads_cancel_wake(&wrapper->system->loads, address);
+    tah_loads_cancel_wake(&wrapper->system->loads, address);
     ta_address_release(address);
     return tna_undefined_value(env);
 }
@@ -535,13 +535,13 @@ napi_value tna_durable_value_method(napi_env env, napi_callback_info info) {
 
 /* Takes the actor back from bytes the store could not keep, so it is not lost. */
 static void tna_offload_undo(tna_napi_system *wrapper, ta_bytes bytes) {
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     ta_actor_id back = 0;
     system->inside_core = true;
     ta_result reloaded = ta_actor_load(system->core, &(ta_actor_load_params){ .bytes = bytes, .out = &back });
     system->inside_core = false;
     if (reloaded == TA_OK) {
-        (void)tna_hook_actor_created(system, back);
+        (void)tah_hook_actor_created(system, back);
     }
 }
 
@@ -556,7 +556,7 @@ static napi_value tna_offload_inner(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "unload() cannot run inside a core call (ADR 0013)");
     }
@@ -596,8 +596,8 @@ static napi_value tna_offload_inner(napi_env env, napi_callback_info info) {
                          result == TA_ERR_BUSY ? "unload(): the actor is not stable; unload it once it is idle"
                                                : "unload(): the actor cannot be offloaded");
     }
-    (void)tna_hook_actor_unloaded(system, actor);
-    result = tna_offloads_put(&system->offloads, &(tna_offload_put_params){ .address = address,
+    (void)tah_hook_actor_unloaded(system, actor);
+    result = tah_offloads_put(&system->offloads, &(tah_offload_put_params){ .address = address,
                                                                             .bytes = bytes,
                                                                             .handles = handles.handles,
                                                                             .handle_count = handles.count });
@@ -626,7 +626,7 @@ napi_value tna_has_offloaded_method(napi_env env, napi_callback_info info) {
     if (address == NULL) {
         return NULL;
     }
-    bool found = tna_offloads_find(&wrapper->system->offloads, address) != NULL;
+    bool found = tah_offloads_find(&wrapper->system->offloads, address) != NULL;
     ta_address_release(address);
     napi_value out = NULL;
     napi_get_boolean(env, found, &out);
@@ -648,7 +648,7 @@ napi_value tna_drop_offloaded_method(napi_env env, napi_callback_info info) {
     if (address == NULL) {
         return NULL;
     }
-    (void)tna_offloads_drop(&wrapper->system->offloads, address);
+    (void)tah_offloads_drop(&wrapper->system->offloads, address);
     ta_address_release(address);
     return tna_undefined_value(env);
 }
@@ -669,12 +669,12 @@ static napi_value tna_load_offloaded_inner(napi_env env, napi_callback_info info
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_system *system = wrapper->system;
+    tah_system *system = wrapper->system;
     ta_address *address = tna_address_arguments(env, wrapper, argv, "load");
     if (address == NULL) {
         return NULL;
     }
-    const tna_offload *entry = tna_offloads_find(&system->offloads, address);
+    const tah_offload *entry = tah_offloads_find(&system->offloads, address);
     if (entry == NULL) {
         ta_address_release(address);
         return tna_throw(env, "not-found", "load: the address has no offloaded actor");
@@ -698,8 +698,8 @@ static napi_value tna_load_offloaded_inner(napi_env env, napi_callback_info info
     ta_value_release(&binding);
     if (result == TA_OK) {
         /* The actor holds its own references now; the entry's go with it. */
-        (void)tna_offloads_drop(&system->offloads, address);
-        result = tna_hook_actor_created(system, actor);
+        (void)tah_offloads_drop(&system->offloads, address);
+        result = tah_hook_actor_created(system, actor);
     }
     ta_address_release(address);
     if (result != TA_OK) {

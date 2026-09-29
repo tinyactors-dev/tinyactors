@@ -568,7 +568,7 @@ napi_value tna_enc_ta_origin(tna_call *call, const ta_origin *in) {
  */
 
 bool tna_inject_ta_allocator(tna_call *call, ta_allocator *out) {
-    tna_system *system = tna_call_system(call);
+    tah_system *system = tna_call_system(call);
     if (system == NULL) {
         return tna_invalid(call, "a call that runs against a system");
     }

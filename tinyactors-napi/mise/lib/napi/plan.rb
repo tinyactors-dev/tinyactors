@@ -521,7 +521,7 @@ module NapiGen
                else
                  "a_#{actor}"
                end
-      { name: "tna_hook_actor_#{entry.fetch(:hook)}", actor: target }
+      { name: "tah_hook_actor_#{entry.fetch(:hook)}", actor: target }
     end
 
     # ------------------------------------------------------------------

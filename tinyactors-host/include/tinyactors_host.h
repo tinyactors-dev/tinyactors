@@ -50,55 +50,49 @@ TAH_API uint32_t tah_version(void);
  */
 
 /*
- * The pump driver: how the kernel's turns reach the binding's event loop.
- * The kernel decides what a turn does; the driver decides when it runs.
- * napi asks setImmediate for a turn and setTimeout for a deadline; the test
- * host runs a turn when a scenario says so; a browser build uses
- * MessageChannel and setTimeout.
+ * The platform: what the kernel needs from the machine and cannot do itself
+ * (kernel ADR 0001, section 3; step 2b). The binding implements it once and
+ * hands it to every system it creates.
+ * - `allocator` is where the kernel's memory comes from: the system record,
+ *   and the backing store of its counting allocator (allocator.h). A browser
+ *   build gives an allocator over its own heap.
+ * - `monotonic_ns` is a monotonic clock in nanoseconds; only differences
+ *   between readings matter. It drives the realtime clock, load timeouts and
+ *   turn durations.
+ * - `wall_ns` is wall-clock time in nanoseconds since the Unix epoch, for
+ *   the timestamps of exported telemetry. 0 when the platform has none.
+ * - `random_seed` is 64 random bits, to seed core's trace-ID generator once
+ *   per trace sink (core ADR 0073: core never reads the OS either).
  */
-typedef struct tah_pump_driver_vtable {
-    /* Asks for tah_turn() to run soon. Idempotent until that turn runs. */
-    void (*request_turn)(void *self);
-    /* Asks for a turn at or after `due`, a monotonic time in nanoseconds;
-     * a later call replaces the earlier deadline. UINT64_MAX disarms it. */
-    void (*arm_timer)(void *self, uint64_t due);
-    /* The binding's monotonic clock, in nanoseconds. */
-    uint64_t (*now)(void *self);
-} tah_pump_driver_vtable;
+typedef struct tah_platform_vtable {
+    uint64_t (*monotonic_ns)(void *self);
+    uint64_t (*wall_ns)(void *self);
+    uint64_t (*random_seed)(void *self);
+} tah_platform_vtable;
 typedef struct {
     void *self;
-    const tah_pump_driver_vtable *v;
-} tah_pump_driver;
-
-/*
- * Hooks: calls from the kernel into the binding's language, for what only
- * the language can do. They are filled in as the code that makes each call
- * moves into the kernel: effects (an I/O processor's send, an invoker's
- * start, cancel and forward), log records, trace requests, input-log
- * commits, loaders, and fault, done and dead-letter reports. Each hook
- * receives a record the kernel owns for the call; a binding that keeps
- * anything retains it.
- */
-typedef struct tah_hooks_vtable {
-    /* Effects queued by the last turn are ready to run in the language. */
-    void (*effects_ready)(void *self);
-} tah_hooks_vtable;
-typedef struct {
-    void *self;
-    const tah_hooks_vtable *v;
-} tah_hooks;
-
-/*
- * Errors: the kernel answers `ta_result`, core's codes, and never throws.
- * The binding maps a result to its language's errors (napi's
- * TinyactorsError codes, a Python exception), so no mapping lives here.
- */
-
-/* Everything a binding hands the kernel when it creates a system. */
-typedef struct {
+    const tah_platform_vtable *v;
     ta_allocator allocator;
-    tah_pump_driver pump;
-    tah_hooks hooks;
-} tah_host;
+} tah_platform;
+
+/*
+ * The pump driver: how the kernel's turns reach the binding's event loop.
+ * The kernel decides what a turn does (tah_system_turn(), system.h); the
+ * binding decides when it runs, through the system's `wake` callback (run
+ * a turn soon, never inside the caller) and `arm` callback (one timer that
+ * calls tah_system_timer_fired() after a delay in milliseconds). napi uses
+ * setImmediate and setTimeout; the test host runs a turn when a scenario
+ * says so; a browser build uses MessageChannel and setTimeout. They are
+ * fields of the system, set by the binding after it creates one
+ * (tah_wake_fn and tah_arm_fn in system.h).
+ *
+ * Hooks into the binding's language are callbacks on the system too: the
+ * effects queue (effects.h) the binding drains after each turn, and the
+ * per-system callbacks system.h lists (the definition an SCXML invoke
+ * starts, the data of an error.communication, a quarantine report, a
+ * fault). Errors are core's `ta_result`; the binding maps them to its
+ * language's errors, so no mapping lives here.
+ */
+
 
 #endif
