@@ -196,3 +196,55 @@ without a JavaScript runtime.
   and napi. Section 1 also named vscode, but vscode's `#MISE sources` list
   napi's `lib/`, not its C, so a change to napi's C does not rerun vscode
   either. The table follows what actually reruns.
+
+### Step 2a: the first modules move (2026-09-30)
+
+- **What moved** (commit `435336a`), from `tinyactors-napi/src` to
+  `tinyactors-host/src`, renamed `tna_` to `tah_`: `allocator`,
+  `containers`, `events`, `effects`, `directory`, `definitions`,
+  `host_metrics`, `watch` and `scheduler`, with the `allocator`,
+  `containers`, `host_metrics` and `watch` native tests. The identifiers
+  renamed in napi are exactly those declared in the moved headers,
+  outside comments, so a `tna_` name that still belongs to napi was not
+  touched.
+- **What did not move, and why (differs from the plan).** The roadmap put
+  `system`, `hooks`, `enumerate`, `router` and the adapters in this half.
+  All of them include `system.h`, and `system.h` includes `loads`,
+  `offloads`, `otlp`, `inputs` and `params`, the modules kept for step 2b.
+  The kernel may not include napi's headers, so a module can only move
+  with everything its header pulls in. These five move in step 2b, together
+  with the modules `system.h` aggregates. Their tests (`scheduler`,
+  `mailbox`, `router`, `send`, `quarantine`, `debugging`, `clock`,
+  `events`, `directory`, `enumerate`, `system`) stay in napi until then,
+  because each includes `system.h`.
+- **libc removed:** `memcpy` and `memset` became `tah_mem_copy` and
+  `tah_mem_set`. The counting allocator no longer calls `malloc`: it takes a
+  **backing `ta_allocator`** in `tah_allocator_init(allocator, backing)`,
+  which the binding provides. napi's is `tna_platform_allocator()` in the
+  new `src/platform.{c,h}` (malloc and `aligned_alloc`, as before), and the
+  kernel's tests use `check_platform_allocator()` from `tests/check.h`.
+  This is the first platform interface the moved code needed: memory is the
+  binding's, as core ADR 0023 has it for core.
+- **How napi links the kernel:** napi compiles the kernel's `src/*.c` into
+  the addon with its own compile command, into `build/obj/kernel/`, rather
+  than linking `libtinyactors_host.a`. One command per target keeps release
+  cross-compiles (zig, `mise/lib/toolchain/`) working without a second
+  archive per target. The kernel's own tasks still check it freestanding
+  and for wasm32. While napi's remaining code still uses the moved modules'
+  structs, napi compiles with the kernel's `src/` on its include path. The
+  public header is widened to what napi needs once the move is complete,
+  so this is a transitional state recorded here.
+- **Kernel tests link core:** the kernel's `build` compiles core's
+  amalgamation (`tinyactors-core/include/tinyactors.c`) once with the test
+  command and links every test program with it; `asan` compiles it in.
+- **wasm objects may leave `__indirect_function_table` undefined** beside
+  `__stack_pointer` (`mise/lib/toolchain/object_format.rb`): a call through a
+  function pointer (every vtable) refers to it, and the linker defines it
+  when it makes the module.
+- **Benchmark** (`bench-compare 3a1eaa1`, 100,000 actors, 4 alternating
+  runs): Node, nothing outside 5% (untraced ns/event unchanged). Bun:
+  ns/event within ±3% on every variant, native B/actor within ±3%,
+  allocations per event unchanged at 0.01. Two Bun RSS rows were flagged
+  (+9.7% and +8.7% on traced variants); Bun's RSS varies by that much
+  between identical runs (napi ADR 0035's notes), and native memory did not
+  change, so it is noise.
