@@ -369,3 +369,12 @@ change them.
   tests pass `TA_PARAM_MICROSTEP_LIMIT` where they set it after creation.
   The test host's `scale_test` measures the block cache by creating systems
   with the parameter.
+- **Addendum (2026-09-29): the default interpreterBytes is 64 KiB.** The
+  implementation measured the largest structural need at 3,216 bytes (mean
+  644) and still kept the provisional 256 KiB, which made every system
+  reserve almost 300 KB at creation. The Decision's own rule is "the largest
+  chart, with headroom": 65,536 bytes is about 20 times the largest chart,
+  room for about 2,000 states. A default system now allocates 100,632 bytes
+  at creation (measured with a counting allocator), against 297,048 with 256
+  KiB and 15,104 before this ADR. A chart that needs more is refused at
+  `define()` with the figure to set.

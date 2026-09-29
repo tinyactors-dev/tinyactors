@@ -317,12 +317,12 @@ static void frames_are_sized_at_creation(void) {
     CHECK(error.code == TA_COMPILE_ERROR_LIMIT);
     static const char prefix[] = "the chart needs ";
     CHECK(error.message.len > sizeof prefix && memcmp(error.message.ptr, prefix, sizeof prefix - 1u) == 0);
-    CHECK(strstr(error.message.ptr, " bytes of interpreter scratch; this system has 262144 (interpreterBytes)") != NULL);
+    CHECK(strstr(error.message.ptr, " bytes of interpreter scratch; this system has 65536 (interpreterBytes)") != NULL);
     uint64_t need = 0;
     for (const char *digit = error.message.ptr + sizeof prefix - 1u; *digit >= '0' && *digit <= '9'; digit += 1) {
         need = need * 10u + (uint64_t)(*digit - '0');
     }
-    CHECK(need > 262144u);
+    CHECK(need > 65536u);
     ta_arena_destroy(&arena);
     ta_system_destroy(system);
 

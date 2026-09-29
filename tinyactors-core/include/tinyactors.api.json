@@ -12795,7 +12795,7 @@
         },
         {
           "name": "TA_PARAM_DEFAULT_INTERPRETER_BYTES",
-          "value": 262144,
+          "value": 65536,
           "symbol": "interpreter_bytes"
         },
         {
