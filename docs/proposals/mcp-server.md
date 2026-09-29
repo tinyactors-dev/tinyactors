@@ -1,7 +1,7 @@
 # An MCP server: connect an agent to a system
 
 **Status:** Proposed (2026-09-29)
-**Touches:** tinyactors-core (a short form for registered I/O processor types); the host kernel (the mapping, implemented once); tinyactors-napi and tinyactors-test (bind it; DAP removed); tinyactors-vscode (removed); root docs and AGENTS.md
+**Touches:** tinyactors-core (every I/O processor registers a URL and a short name); the host kernel (the mapping, implemented once); tinyactors-napi and tinyactors-test (bind it; DAP removed); tinyactors-vscode (removed); root docs and AGENTS.md
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
 ## Goal
@@ -152,13 +152,17 @@ A chart replies to whoever sent its event, with `_event.origin` and
 through its I/O processor registry and origin scopes (core ADR 0068). An
 agent's `send` uses them like any other sender:
 
-- **Each served system has the MCP I/O processor.** Its type is a full
-  URL, as SCXML 6.2.5 asks of every processor ("the URI of the
-  description of the relevant Event I/O Processor"): the permanent URL of
-  this mapping's documentation, fixed when the documentation has a home.
-  Its short form is `mcp`, as `scxml` is the built-in processor's. Both
-  select it in `<send type>`; `_ioprocessors` and `_event.origintype`
-  carry the full URL.
+- **Each served system has the MCP I/O processor**, registered in core's
+  I/O processor registry (core ADR 0068) with a URL and a short name, as
+  every processor is ([Changes in core](#in-this-repository)):
+  - the URL is the permanent URL of this mapping's documentation, as
+    SCXML 6.2.5 asks ("the URI of the description of the relevant Event
+    I/O Processor"), fixed when the documentation has a home;
+  - the short name is `mcp`, as `scxml` is the built-in processor's.
+
+  Both select it in `<send type>`. `_ioprocessors` and
+  `_event.origintype` carry the URL. A reply never needs the short name:
+  it uses `_event.origintype`.
 - **Each `send` call opens an origin scope** for that processor, with the
   URI `mcp:call/<id>`, where `<id>` is minted by the server (MCP request
   IDs are the client's and can repeat across clients). The event is
@@ -399,9 +403,25 @@ they do now.
 
 # In this repository
 
-**Changes in core:** `ta_io_registration_params` takes a short form beside
-the type's URL, and core treats it as it treats `scxml` for the built-in
-processor. The built-in alias stops being a special case.
+**Changes in core:** core already keeps the I/O processor registry
+(`ta_system_register_io`, core ADR 0068), but a registration names its
+type with one atom, and the only short form is the built-in processor's
+`scxml`, hard-coded in `system.c`. SCXML 6.2.5 asks for a URL per
+processor and allows short forms as an authoring convenience, so every
+registration takes both:
+
+- `ta_io_registration_params` takes the type's URL and a short name,
+  and `<send type>` (literal or `typeexpr`) selects a processor by either;
+- the built-in processor becomes an ordinary entry at index 0, with its
+  URL and the short name `scxml`, and the special case goes;
+- `_ioprocessors` and `origintype` carry the URL; a data model may also
+  offer the short name as a key, as ADR 0068 leaves to it;
+- every caller moves in the same change: napi's `registerIO` takes a URL
+  and a short name, and so do the test host's adapters.
+
+This is a change to the registry, not to MCP: an application's own
+processors (an `http`, a `ws`) get short names the same way. It needs a
+core ADR of its own.
 
 **Stays**, because it is core API that any host uses:
 
@@ -435,9 +455,9 @@ change. Scenarios exercise them, so they probably stay.
 
 # Open questions
 
-1. **The URL of the MCP processor type.** The rule is settled (the
-   permanent URL of this mapping's documentation, short form `mcp`); the
-   URL waits for the documentation to have a home.
+1. **The URL of the MCP processor.** The rule is settled (the permanent
+   URL of this mapping's documentation, short name `mcp`); the URL waits
+   for the documentation to have a home.
 2. **Following a send's causes.** Whether the kernel follows the records'
    causes itself, or core gains a call that answers "is anything this
    input caused still runnable or due", which the database hosts would
