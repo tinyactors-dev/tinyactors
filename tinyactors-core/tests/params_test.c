@@ -316,6 +316,92 @@ static void test_ordinary_run_allocates_nothing(void) {
 }
 
 /* ------------------------------------------------------------------------
+ * The event-block cache fills on demand up to its bound (ADR 0093)
+ */
+
+enum { CACHE_ACTORS = 5, CACHE_BOUND = 3 };
+
+/* Delivers "go" to the first `count` actors, then resumes each: while they
+ * are delivered, `count` actors hold a block at once. */
+static void go_round(ta_system *system, const ta_actor_id *actors, uint32_t count) {
+    for (uint32_t index = 0; index < count; index += 1u) {
+        deliver(system, actors[index], "go");
+    }
+    for (uint32_t index = 0; index < count; index += 1u) {
+        CHECK(resume(system, actors[index]) == TA_RUN_STABLE);
+    }
+}
+
+static void test_block_cache_on_demand(void) {
+    /* Creation makes no block, whatever the bound. */
+    unsigned long before = allocations;
+    ta_param_value none[] = { { TA_PARAM_EVENT_BLOCK_CACHE, 0 } };
+    ta_system *empty = create(none, 1);
+    CHECK(empty != NULL);
+    unsigned long empty_allocations = allocations - before;
+    ta_system_destroy(empty);
+    before = allocations;
+    ta_param_value bound[] = { { TA_PARAM_EVENT_BLOCK_CACHE, CACHE_BOUND } };
+    ta_system *system = create(bound, 1);
+    CHECK(system != NULL);
+    CHECK(allocations - before == empty_allocations);
+    before = allocations;
+    ta_system *defaults = create(NULL, 0);
+    CHECK(defaults != NULL);
+    CHECK(allocations - before == empty_allocations);
+    ta_system_destroy(defaults);
+
+    ta_definition_id id = define(system, &toggle);
+    ta_actor_id actors[CACHE_ACTORS];
+    for (uint32_t index = 0; index < CACHE_ACTORS; index += 1u) {
+        actors[index] = spawn(system, id);
+        CHECK(resume(system, actors[index]) == TA_RUN_STABLE);
+    }
+    (void)event_name(system, "go");
+
+    /* Concurrency rising to 2 makes blocks for 2 at most, then none. */
+    go_round(system, actors, 2);
+    before = allocations;
+    go_round(system, actors, 2);
+    CHECK(allocations == before);
+
+    /* Rising to 5 makes 3 more; beyond the bound of 3, released blocks are freed. */
+    before = allocations;
+    unsigned long frees_before = frees;
+    go_round(system, actors, CACHE_ACTORS);
+    CHECK(allocations - before == CACHE_ACTORS - 2u);
+    CHECK(frees - frees_before == CACHE_ACTORS - CACHE_BOUND);
+
+    /* Steady state within the bound allocates nothing. */
+    before = allocations;
+    go_round(system, actors, CACHE_BOUND);
+    go_round(system, actors, CACHE_BOUND);
+    CHECK(allocations == before);
+
+    /* Above the bound, every delivery past it takes a block and frees it again. */
+    before = allocations;
+    go_round(system, actors, CACHE_ACTORS);
+    CHECK(allocations - before == CACHE_ACTORS - CACHE_BOUND);
+    ta_system_destroy(system);
+
+    /* Out of memory on the on-demand path: TA_ERR_NOMEM, nothing taken (ADR 0069). */
+    ta_system *bare = create(none, 1);
+    CHECK(bare != NULL);
+    ta_definition_id bare_id = define(bare, &toggle);
+    ta_actor_id actor = spawn(bare, bare_id);
+    CHECK(resume(bare, actor) == TA_RUN_STABLE);
+    ta_event event = { .name = event_name(bare, "go"), .type = TA_EVENT_EXTERNAL };
+    fail_at = allocations + 1u;
+    CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_ERR_NOMEM);
+    fail_at = 0;
+    CHECK(in_state(bare, actor, "a"));
+    CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_OK);
+    CHECK(resume(bare, actor) == TA_RUN_STABLE);
+    CHECK(in_state(bare, actor, "b"));
+    ta_system_destroy(bare);
+}
+
+/* ------------------------------------------------------------------------
  * The render area
  */
 
@@ -703,6 +789,7 @@ int main(void) {
     test_validation();
     test_creation_out_of_memory();
     test_ordinary_run_allocates_nothing();
+    test_block_cache_on_demand();
     test_render_overflow();
     test_event_name_depth();
     test_nested_regions();

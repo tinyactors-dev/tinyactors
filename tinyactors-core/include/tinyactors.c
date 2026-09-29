@@ -2019,7 +2019,8 @@ struct ta_system {
     ta_arena scratch;
     /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
      * newest first, linked through `next_cached`; at most `block_cache_limit`
-     * of them (ADR 0069). */
+     * of them (ADR 0069). Empty at creation: a block is made when a delivery
+     * finds none, and kept when released while there is room (ADR 0093). */
     ta_event_block *block_cache;
     uint32_t block_cache_count;
     uint32_t block_cache_limit;
@@ -2228,7 +2229,6 @@ TA_PRIVATE size_t ta_interpreter_scratch_need(const ta_definition *definition);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 TA_PRIVATE void ta_interpreter_render_fault(ta_fault *fault);
 /* Fills the event-block cache to its limit, at creation (ADR 0092 section 3). */
-TA_PRIVATE ta_result ta_interpreter_block_cache_fill(ta_system *system);
 TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system);
 /* Frees the continuation and sparse state the system keeps for a run that
  * stops (ADR 0070), at teardown. */
@@ -14917,7 +14917,7 @@ static ta_result ta_system_arena_open(ta_system *system) {
     for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
         system->nested[index] = (ta_nested_region){ 0 };
     }
-    return ta_interpreter_block_cache_fill(system);
+    return TA_OK;
 }
 
 static void ta_system_arena_close(ta_system *system) {
@@ -16560,22 +16560,6 @@ static void ta_block_settle(ta_system *system, ta_actor *actor) {
         return;
     }
     ta_block_free(system, block);
-}
-
-TA_PRIVATE ta_result ta_interpreter_block_cache_fill(ta_system *system) {
-    while (system->block_cache_count < system->block_cache_limit) {
-        ta_event_block *block = ta_mem_alloc(system->allocator, ta_event_block_bytes(TA_EVENT_BLOCK_QUEUE_INITIAL),
-                                             _Alignof(ta_event_block));
-        if (block == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        block->capacity = TA_EVENT_BLOCK_QUEUE_INITIAL;
-        block->count = 0;
-        block->next_cached = system->block_cache;
-        system->block_cache = block;
-        system->block_cache_count += 1u;
-    }
-    return TA_OK;
 }
 
 TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system) {

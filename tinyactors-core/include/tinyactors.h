@@ -3815,7 +3815,7 @@ TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
  */
 typedef enum {
     TA_PARAM_MICROSTEP_LIMIT = 0,  /* microsteps per macrostep before a runaway (ADR 0075); 0: none */
-    TA_PARAM_EVENT_BLOCK_CACHE,    /* empty event blocks kept for reuse (ADR 0069), created at creation */
+    TA_PARAM_EVENT_BLOCK_CACHE,    /* empty event blocks kept for reuse (ADR 0069), made on demand (ADR 0093) */
     TA_PARAM_EVENT_NAME_DEPTH,     /* segments an event name may have; at most 64 */
     TA_PARAM_COMPILE_MESSAGE_BYTES,/* bytes kept of a data model's rejection message (ADR 0058) */
     TA_PARAM_COMPILE_TEXT_BYTES,   /* bytes of a compile error formatted as a line (ta_compile_error_format) */
@@ -3833,7 +3833,7 @@ typedef enum {
 typedef uint32_t ta_param_default;
 enum TA_CONSTANTS_OF(ta_param_default, "TA_PARAM_DEFAULT_") {
     TA_PARAM_DEFAULT_MICROSTEP_LIMIT = 100000,
-    TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE = 4,
+    TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE = 1024,
     TA_PARAM_DEFAULT_EVENT_NAME_DEPTH = 64,
     TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES = 256,
     TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES = 1024,

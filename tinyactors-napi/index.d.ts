@@ -206,10 +206,11 @@ export interface SystemParameters {
    */
   microstepLimit?: number;
   /**
-   * Event blocks core keeps for reuse, created with the system (core ADR
-   * 0069); at most 65536. Default: `messageBudget`, the most a turn holds at
-   * once, so a warm system allocates nothing per message; lower it (about 792
-   * bytes a block) to reserve less at the price of allocating under load.
+   * Event blocks core keeps for reuse (core ADR 0069): none at creation, one
+   * made when a delivery finds none, kept when released while fewer than
+   * this many are kept (core ADR 0093); default 1024, at most 65536. A warm
+   * system allocates nothing per message while no more actors than this hold
+   * an event at once; each kept block is about 792 bytes.
    */
   eventBlockCache?: number;
   /** Segments an event name may have; default 64, from 8 to 64. */

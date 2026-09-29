@@ -54,13 +54,6 @@ function resolveParameters(given) {
     }
     resolved[name] = value;
   }
-  // A turn holds up to messageBudget core event blocks at once, so a system
-  // allocates nothing once warm only if its cache is that large (core ADR
-  // 0069; scale.js and allocations.js check it). Unless the application
-  // sets eventBlockCache, it follows messageBudget, within core's bound.
-  if (given?.eventBlockCache === undefined) {
-    resolved.eventBlockCache = Math.min(resolved.messageBudget, entries.get('eventBlockCache').max);
-  }
   return Object.freeze(resolved);
 }
 

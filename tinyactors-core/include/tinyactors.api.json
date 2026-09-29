@@ -12696,7 +12696,7 @@
           "name": "TA_PARAM_EVENT_BLOCK_CACHE",
           "value": 1,
           "symbol": "event_block_cache",
-          "doc": "empty event blocks kept for reuse (ADR 0069), created at creation"
+          "doc": "empty event blocks kept for reuse (ADR 0069), made on demand (ADR 0093)"
         },
         {
           "name": "TA_PARAM_EVENT_NAME_DEPTH",
@@ -12789,7 +12789,7 @@
         },
         {
           "name": "TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE",
-          "value": 4,
+          "value": 1024,
           "symbol": "event_block_cache"
         },
         {

@@ -115,7 +115,8 @@ struct ta_system {
     ta_arena scratch;
     /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
      * newest first, linked through `next_cached`; at most `block_cache_limit`
-     * of them (ADR 0069). */
+     * of them (ADR 0069). Empty at creation: a block is made when a delivery
+     * finds none, and kept when released while there is room (ADR 0093). */
     ta_event_block *block_cache;
     uint32_t block_cache_count;
     uint32_t block_cache_limit;

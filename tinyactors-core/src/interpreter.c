@@ -803,22 +803,6 @@ static void ta_block_settle(ta_system *system, ta_actor *actor) {
     ta_block_free(system, block);
 }
 
-ta_result ta_interpreter_block_cache_fill(ta_system *system) {
-    while (system->block_cache_count < system->block_cache_limit) {
-        ta_event_block *block = ta_mem_alloc(system->allocator, ta_event_block_bytes(TA_EVENT_BLOCK_QUEUE_INITIAL),
-                                             _Alignof(ta_event_block));
-        if (block == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        block->capacity = TA_EVENT_BLOCK_QUEUE_INITIAL;
-        block->count = 0;
-        block->next_cached = system->block_cache;
-        system->block_cache = block;
-        system->block_cache_count += 1u;
-    }
-    return TA_OK;
-}
-
 void ta_interpreter_block_cache_trim(ta_system *system) {
     while (system->block_cache_count > system->block_cache_limit) {
         ta_event_block *block = system->block_cache;

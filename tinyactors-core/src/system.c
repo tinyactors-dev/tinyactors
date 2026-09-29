@@ -151,7 +151,7 @@ static ta_result ta_system_arena_open(ta_system *system) {
     for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
         system->nested[index] = (ta_nested_region){ 0 };
     }
-    return ta_interpreter_block_cache_fill(system);
+    return TA_OK;
 }
 
 static void ta_system_arena_close(ta_system *system) {
