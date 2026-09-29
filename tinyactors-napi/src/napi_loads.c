@@ -46,8 +46,11 @@ void tna_loads_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
             tna_put_number(env, item, "generation", request.generation) != napi_ok ||
             tna_put_text(env, item, "family", address.family.name) != napi_ok ||
             tna_put_text(env, item, "name", address.name) != napi_ok ||
-            napi_create_string_utf8(env, request.why == TNA_LOAD_WHY_TIMER ? "timer" : "mail", NAPI_AUTO_LENGTH, &why) !=
-                napi_ok ||
+            napi_create_string_utf8(env,
+                                    request.why == TNA_LOAD_WHY_TIMER     ? "timer"
+                                    : request.why == TNA_LOAD_WHY_SESSION ? "session"
+                                                                          : "mail",
+                                    NAPI_AUTO_LENGTH, &why) != napi_ok ||
             napi_set_named_property(env, item, "why", why) != napi_ok ||
             napi_set_element(env, requests, count, item) != napi_ok) {
             continue;
@@ -196,7 +199,7 @@ napi_value tna_complete_load_method(napi_env env, napi_callback_info info) {
                                                                             .wall_ns = tna_system_wall_ns() });
     tna_scratch_reset_call(&system->scratch);
     if (result == TA_ERR_NOT_FOUND) {
-        return tna_throw(env, "invalid", "completeLoad: the actor is not resident at the load's address");
+        return tna_throw(env, "invalid", "completeLoad: the actor is not resident (at the load's address)");
     }
     tna_system_want_turn(system);
     tna_pump_settle_waiters(env, wrapper);

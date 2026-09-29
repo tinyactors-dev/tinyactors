@@ -126,8 +126,20 @@ export interface DeadLetterRecord {
   readonly detail?: string;
 }
 
-/** Why a loader is called (setLoader). */
-export type LoadReason = "mail" | "timer";
+/**
+ * Why a loader is called (setLoader): mail for a name, an unloaded actor's
+ * own timer, or mail a chart sent to a session of the family that has gone
+ * (napi ADR 0032 section 2).
+ */
+export type LoadReason = "mail" | "timer" | "session";
+
+/**
+ * What a loader is asked for: a named address, or, for `why` "session", a
+ * session of the family that has gone, by its text (ActorInspection.sessionID).
+ * A session of another incarnation, or one whose ID another family holds, is
+ * shown as this incarnation's session 0: `<incarnation>.0.<family>`.
+ */
+export type LoadTarget = ActorAddress | { readonly family: string; readonly sessionID: string };
 
 /**
  * What a loader returns (setLoader, napi ADR 0020). Session images are
@@ -430,12 +442,22 @@ export interface System {
    * and is delivered first, in order, once it has loaded or spawned the
    * actor. One load runs per address. `why` is "timer" when an unloaded
    * actor's own delayed send is due. `null` removes the loader.
+   *
+   * Mail a chart sends to a session of `family` that has gone or finished
+   * also waits for the loader, with `why` "session" and the target
+   * `{ family, sessionID }` (napi ADR 0032 section 2). For a session the
+   * loader answers `{ spawn, binding }`, a new instance without a name that
+   * takes the waiting mail in order, or "not-found", "reject" or `{ reject }`,
+   * which make it dead letters; anything else is a `load-failed` dead letter.
+   * One load runs per session; a chart of the family is written for a new
+   * instance receiving mail meant for an earlier one. Without a loader, mail
+   * to a gone session raises error.communication in the sender (ADR 0022).
    */
   setLoader(
     family: string,
     loader:
       | ((
-          address: ActorAddress,
+          target: LoadTarget,
           why: LoadReason,
           load: { readonly offloaded: boolean },
         ) => LoadResult | Promise<LoadResult>)

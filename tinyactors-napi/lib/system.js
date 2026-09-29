@@ -1789,6 +1789,12 @@ class System {
    * address; at most `maxWaiting` messages (default 1000) wait, and the rest
    * are dead letters with reason `waiting-full`. Pass `null` as the loader
    * to remove it.
+   *
+   * Mail a chart sends to a session of `family` that has gone also waits,
+   * with `loader({ family, sessionID }, "session", { offloaded: false })`
+   * (napi ADR 0032 section 2). For it the loader answers { spawn, binding? }
+   * (a new instance without a name takes the waiting mail), "not-found",
+   * "reject" or { reject }; one load runs per session.
    */
   setLoader(family, loader, options = {}) {
     if (typeof family !== 'string' || family === '') {
@@ -1830,6 +1836,10 @@ class System {
   async #runLoad({ index, generation, family, name, why }) {
     const key = `${family}\u0000${name}`;
     this.#loadDetails.delete(key);
+    if (why === 'session') {
+      await this.#runSessionLoad({ index, generation, key, family, sessionID: name });
+      return;
+    }
     const offloaded = this.#native.hasOffloaded(family, name);
     const entry = this.#loaders.get(family);
     if (entry === undefined) {
@@ -1871,6 +1881,66 @@ class System {
       await this.#applyLoad({ index, generation, key, address }, result);
     } catch (error) {
       this.#failLoad(key, { index, generation }, 'failed', describe(error));
+    }
+  }
+
+  // Runs the loader for a session that has gone (napi ADR 0032 section 2):
+  // it may start a new instance of the family, which takes the waiting mail.
+  async #runSessionLoad({ index, generation, key, family, sessionID }) {
+    const entry = this.#loaders.get(family);
+    if (entry === undefined) {
+      this.#completeLoad(index, generation, 'not-found');
+      return;
+    }
+    const load = { index, generation };
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        this.#failLoad(key, load, 'timed-out', `the loader did not settle within ${entry.timeout} ms`);
+      }
+    }, entry.timeout);
+    timer.unref?.();
+    let result;
+    try {
+      result = await entry.loader(Object.freeze({ family, sessionID }), 'session', Object.freeze({ offloaded: false }));
+    } catch (error) {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        this.#failLoad(key, load, 'failed', describe(error));
+      }
+      return;
+    }
+    if (settled) {
+      return; // the load timed out: nothing may use this result
+    }
+    settled = true;
+    clearTimeout(timer);
+    if (this.closed) {
+      return;
+    }
+    try {
+      if (result === 'not-found') {
+        this.#completeLoad(index, generation, 'not-found');
+      } else if (result === 'reject') {
+        this.#failLoad(key, load, 'rejected', '');
+      } else if (result !== null && typeof result === 'object' && 'reject' in result) {
+        this.#failLoad(key, load, 'rejected', String(result.reject));
+      } else if (result !== null && typeof result === 'object' && result.spawn instanceof Definition) {
+        const { spawn: definition, binding } = result;
+        if (definition.system !== this || definition.identity.family !== family) {
+          throw new TinyactorsError(`{ spawn } needs a definition of family ${family} of this system`, 'invalid');
+        }
+        const id = core.actor_spawn(this.#native, definition.id, undefined, binding, undefined,
+          this.#native.loadTrace(index, generation), undefined);
+        this.#completeLoad(index, generation, 'spawned', new ActorID(this, id.slot, id.generation));
+      } else {
+        this.#failLoad(key, load, 'failed', 'for a session, the loader returned something it cannot: expected ' +
+          '{ spawn, binding }, "not-found", "reject" or { reject }');
+      }
+    } catch (error) {
+      this.#failLoad(key, load, 'failed', describe(error));
     }
   }
 

@@ -190,6 +190,7 @@ typedef struct {
     tna_load_why why;
     const ta_trace_parent *trace;
     uint64_t now_ns;
+    bool unkeyed; /* a session this system cannot name: kept out of `by_address` */
 } tna_load_start;
 
 static ta_result tna_loads_start(tna_loads *loads, const tna_load_start *start, uint32_t *out) {
@@ -198,7 +199,7 @@ static ta_result tna_loads_start(tna_loads *loads, const tna_load_start *start, 
         return TA_ERR_NOMEM;
     }
     if (tna_vec_reserve(&loads->requests, loads->requests.count + 1u) != TA_OK ||
-        tna_map_put(&loads->by_address, (uint64_t)(uintptr_t)start->address, index) != TA_OK) {
+        (!start->unkeyed && tna_map_put(&loads->by_address, (uint64_t)(uintptr_t)start->address, index) != TA_OK)) {
         tna_load *load = tna_vec_at(&loads->loads, index);
         load->next_free = loads->free_head;
         loads->free_head = index;
@@ -210,6 +211,7 @@ static ta_result tna_loads_start(tna_loads *loads, const tna_load_start *start, 
     load->address = start->address;
     load->max_waiting = start->max_waiting;
     load->why = (uint8_t)start->why;
+    load->keyed = !start->unkeyed;
     load->started_ns = start->now_ns;
     if (start->trace != NULL) {
         load->trace = *start->trace;
@@ -273,6 +275,45 @@ ta_result tna_loads_route(tna_loads *loads, const tna_load_route *route) {
     return result;
 }
 
+bool tna_loads_family_loads(const tna_loads *loads, ta_str family) {
+    const tna_loader_family *found = loads->families.count == 0 ? NULL : tna_loads_family_named(loads, family, NULL);
+    return found != NULL && found->max_waiting != 0;
+}
+
+ta_result tna_loads_route_session(tna_loads *loads, const tna_load_session_route *route) {
+    uint64_t found = 0;
+    if (route->shared && tna_map_count(&loads->by_address) != 0 &&
+        tna_map_get(&loads->by_address, (uint64_t)(uintptr_t)route->address, &found)) {
+        return tna_loads_append(loads, route->sched, tna_vec_at(&loads->loads, (uint32_t)found), route->message);
+    }
+    uint32_t limit = tna_loads_limit(loads, route->address);
+    if (limit == 0) {
+        return TA_ERR_NOT_FOUND;
+    }
+    uint32_t index = 0;
+    ta_result result = tna_loads_start(loads, &(tna_load_start){ .address = route->address,
+                                                                  .max_waiting = limit,
+                                                                  .why = TNA_LOAD_WHY_SESSION,
+                                                                  .trace = route->message->trace,
+                                                                  .now_ns = route->now_ns,
+                                                                  .unkeyed = !route->shared },
+                                       &index);
+    if (result != TA_OK) {
+        return result;
+    }
+    tna_load *load = tna_vec_at(&loads->loads, index);
+    result = tna_loads_append(loads, route->sched, load, route->message);
+    if (result != TA_OK) {
+        loads->requests.count -= 1u;
+        if (route->shared) {
+            tna_map_remove(&loads->by_address, (uint64_t)(uintptr_t)route->address);
+        }
+        loads->in_flight -= 1u;
+        tna_loads_give(loads, index);
+    }
+    return result;
+}
+
 bool tna_loads_next_request(tna_loads *loads, tna_load_request *out) {
     while (loads->requests_head < loads->requests.count) {
         uint32_t index = *(uint32_t *)tna_vec_at(&loads->requests, loads->requests_head);
@@ -309,15 +350,23 @@ ta_result tna_loads_finish(tna_loads *loads, const tna_load_finish *finish) {
     tna_load_outcome outcome = finish->outcome;
     ta_result result = TA_OK;
     uint32_t waiting = load->mail.count;
+    bool session = load->why == TNA_LOAD_WHY_SESSION;
     if (outcome == TNA_LOAD_LOADED || outcome == TNA_LOAD_SPAWNED) {
-        ta_actor_directory_entry entry = tna_directory_find(finish->directory, load->address);
-        if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT || entry.actor != finish->actor) {
-            return TA_ERR_NOT_FOUND;
+        if (session) {
+            /* The new instance of the family has no address; it only has to be resident. */
+            if (tna_sched_lookup(finish->sched, finish->actor) == NULL) {
+                return TA_ERR_NOT_FOUND;
+            }
+        } else {
+            ta_actor_directory_entry entry = tna_directory_find(finish->directory, load->address);
+            if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT || entry.actor != finish->actor) {
+                return TA_ERR_NOT_FOUND;
+            }
         }
         result = tna_sched_hand_over(finish->sched, &load->mail, finish->actor);
         if (result != TA_OK) {
             outcome = TNA_LOAD_FAILED;
-        } else {
+        } else if (!session) {
             tna_loads_cancel_wake(loads, load->address);
         }
     }
@@ -330,7 +379,9 @@ ta_result tna_loads_finish(tna_loads *loads, const tna_load_finish *finish) {
     tna_exemplar exemplar =
         tna_exemplar_of(&load->trace.context, ta_step_key_span_id(load->trace.cause), finish->wall_ns);
     tna_histogram_record(&finish->metrics->load_seconds, seconds, &exemplar);
-    tna_map_remove(&loads->by_address, (uint64_t)(uintptr_t)load->address);
+    if (load->keyed) {
+        tna_map_remove(&loads->by_address, (uint64_t)(uintptr_t)load->address);
+    }
     loads->in_flight -= 1u;
     tna_loads_give(loads, finish->index);
     return result == TA_OK ? TA_OK : TA_ERR_NOMEM;

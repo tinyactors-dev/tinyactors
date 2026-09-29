@@ -365,6 +365,56 @@ static void a_waiting_message_can_be_withdrawn(void) {
     finish_system(system);
 }
 
+/* Posts an event named `text` for a gone session's key, as the router does (napi ADR 0032 section 2). */
+static ta_result post_session(tna_system *system, ta_address *key, bool shared, const char *text) {
+    ta_event event = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, text), .invoke_id = TA_INVOKE_ID_NONE };
+    return tna_loads_route_session(&system->loads, &(tna_load_session_route){ .sched = &system->sched,
+                                                                             .address = key,
+                                                                             .message = &(tna_message){ .event = &event },
+                                                                             .shared = shared });
+}
+
+/*
+ * Mail for a gone session: messages for one session wait on one load, which
+ * hands them, in order, to a new instance without a name; a session this
+ * system cannot name gets a load per message; a family without a loader
+ * starts none.
+ */
+static void a_gone_session_loads_a_new_instance(void) {
+    tna_system *system = make_system();
+    ta_definition_id chart = define_receiver(system);
+    ta_actor_address session_key = { .family = { .name = S("r") }, .name = S("0.4294967297.r") };
+    ta_address *key = intern(system, &session_key);
+    CHECK(post_session(system, key, true, "a") == TA_ERR_NOT_FOUND); /* no loader */
+    CHECK(tna_loads_set_family(&system->loads, S("r"), 10) == TA_OK);
+    CHECK(tna_loads_family_loads(&system->loads, S("r")) && !tna_loads_family_loads(&system->loads, S("x")));
+    CHECK(post_session(system, key, true, "a") == TA_OK);
+    CHECK(post_session(system, key, true, "b") == TA_OK);
+    tna_load_request request = next_request(system);
+    CHECK(request.why == TNA_LOAD_WHY_SESSION);
+    CHECK(!tna_loads_next_request(&system->loads, &(tna_load_request){ 0 }));
+    CHECK(finish(system, request, TNA_LOAD_SPAWNED, ta_actor_id_make(99, 7)) == TA_ERR_NOT_FOUND);
+    ta_actor_id spawned = spawn(system, chart, NULL);
+    CHECK(finish(system, request, TNA_LOAD_SPAWNED, spawned) == TA_OK);
+    mailbox_is(system, spawned, (const char *const[]){ "a", "b" }, 2u);
+    CHECK(settle(system, NULL) == 0u && system->sched.delivered == 2u);
+
+    ta_actor_address unknown_key = { .family = { .name = S("r") }, .name = S("0.0.r") };
+    ta_address *unknown = intern(system, &unknown_key);
+    CHECK(post_session(system, unknown, false, "c") == TA_OK);
+    CHECK(post_session(system, unknown, false, "d") == TA_OK);
+    tna_load_request first = next_request(system);
+    tna_load_request second = next_request(system);
+    CHECK(first.index != second.index && system->loads.in_flight == 2u);
+    CHECK(finish(system, first, TNA_LOAD_NOT_FOUND, 0) == TA_OK);
+    CHECK(finish(system, second, TNA_LOAD_NOT_FOUND, 0) == TA_OK);
+    tna_dead_reason reason = TNA_DEAD_DONE;
+    CHECK(settle(system, &reason) == 2u && reason == TNA_DEAD_NOT_FOUND);
+    ta_address_release(unknown);
+    ta_address_release(key);
+    finish_system(system);
+}
+
 int main(void) {
     waiting_mail_moves_in_order();
     a_waiting_message_can_be_withdrawn();
@@ -372,6 +422,7 @@ int main(void) {
     a_failed_load_dead_letters_its_mail();
     a_virtual_family_spawns();
     a_wake_up_starts_a_load();
+    a_gone_session_loads_a_new_instance();
     puts("loads_test passed");
     return 0;
 }

@@ -27,6 +27,15 @@
  * min-heap by due time; replacing an address's wake-up leaves the old heap
  * entry in place, and it is skipped when it comes up.
  *
+ * **Sessions** (napi ADR 0032 section 2). Mail a chart sends to a session
+ * that has gone, of a family with a loader, starts a load with `why` =
+ * session. Its address is the family and the session's text as the name,
+ * `{ family, "<incarnation>.<session>.<family>" }`: a key, never a directory
+ * entry. Mail for the same session while the load is in flight joins it. A
+ * session this system cannot name (another incarnation's, or another family
+ * holding its ID: core gives it session 0) starts a load of its own for each
+ * message, since two such messages may be for different sessions.
+ *
  * Every record and heap entry holds one reference to its address, given back
  * when it goes; tna_loads_close() gives back all of them while core is alive.
  */
@@ -39,7 +48,9 @@
 #include "scheduler.h"
 #include "tinyactors.h"
 
-typedef enum { TNA_LOAD_WHY_MAIL = 0, TNA_LOAD_WHY_TIMER } tna_load_why;
+/* SESSION: mail for a session that has gone, in a family with a loader
+ * (napi ADR 0032 section 2). */
+typedef enum { TNA_LOAD_WHY_MAIL = 0, TNA_LOAD_WHY_TIMER, TNA_LOAD_WHY_SESSION } tna_load_why;
 
 typedef enum {
     TNA_LOAD_LOADED = 0, /* the loader returned an image */
@@ -63,6 +74,7 @@ typedef struct {
     uint32_t generation;   /* half of the token JavaScript holds; never 0 */
     uint32_t next_free;
     uint8_t why;           /* tna_load_why */
+    bool keyed;            /* in `by_address`: later mail for the address joins it */
 } tna_load;
 
 typedef struct {
@@ -126,6 +138,25 @@ typedef struct {
 } tna_load_route;
 ta_result tna_loads_route(tna_loads *loads, const tna_load_route *route);
 
+/*
+ * Routes a message for a gone session of a family with a loader (router.h):
+ * into the load for `address` when one is in flight and `shared`, or into a
+ * new load with `why` = session. `address` is the session's key (above);
+ * `shared` is false for a session this system cannot name. TA_OK: accepted,
+ * perhaps as a `waiting-full` dead letter. TA_ERR_NOT_FOUND: the family has
+ * no loader. TA_ERR_BUSY and TA_ERR_NOMEM: nothing accepted.
+ */
+typedef struct {
+    tna_sched *sched;
+    ta_address *address;
+    const tna_message *message;
+    bool shared;
+    uint64_t now_ns;
+} tna_load_session_route;
+ta_result tna_loads_route_session(tna_loads *loads, const tna_load_session_route *route);
+/* Whether `family` has a loader. */
+bool tna_loads_family_loads(const tna_loads *loads, ta_str family);
+
 /* True when a load for `address` is in flight. */
 bool tna_loads_waiting(const tna_loads *loads, const ta_address *address);
 /* Whether mail for `address` would start a load: its family has a loader,
@@ -149,7 +180,8 @@ tna_load *tna_loads_find(const tna_loads *loads, uint32_t index, uint32_t genera
 
 /*
  * Finishes a load. LOADED and SPAWNED: `actor` must be the resident actor
- * at the address (TA_ERR_NOT_FOUND otherwise, and nothing changes); the
+ * at the address, or for a session's load any resident actor, which is the
+ * new instance (TA_ERR_NOT_FOUND otherwise, and nothing changes); the
  * waiting mail moves to the front of its mailbox, and its wake-up goes.
  * Other outcomes: the waiting mail becomes dead letters. Records the outcome
  * and the load's duration in `metrics`. TA_ERR_STALE: the token names no
