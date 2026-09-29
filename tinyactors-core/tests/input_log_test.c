@@ -89,6 +89,8 @@ typedef struct {
     long refuse_at; /* refuse the write that would pass this many bytes of the unit; -1: never */
     int units;
     int kept;
+    ta_system *system;       /* when set, begin reads whose record it is */
+    ta_actor_id owner;       /* ta_system_input_actor() at the last begin */
 } memory_sink;
 
 static ta_op_status sink_begin(void *self) {
@@ -100,6 +102,10 @@ static ta_op_status sink_begin(void *self) {
     sink->open = true;
     sink->unit_start = sink->log.len;
     sink->units += 1;
+    if (sink->system != NULL) {
+        ta_input_owner owner = { 0 };
+        sink->owner = ta_system_input_owner(sink->system, &owner) == TA_OK && owner.name.name.len != 0 ? owner.actor : 0;
+    }
     return TA_OP_OK;
 }
 
@@ -1808,6 +1814,32 @@ static void test_checkpoint_invocation(void) {
     destroy_system(system);
 }
 
+/* A sink that files records by actor asks whose record it writes (ta_system_input_owner). */
+static void test_input_actor(void) {
+    ta_system *system = create_system();
+    ta_definition_id definition = define(system, "hist", history_chart);
+    log_family(system, "hist");
+    the_sink.system = system;
+    ta_value binding = blob_make(4, 1);
+    ta_actor_id live = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &hist_live,
+                                                           .datamodel_binding = &binding, .out = &live }) == TA_OK);
+    CHECK(the_sink.owner == live); /* SPAWNED */
+    CHECK(run(system, live) == TA_RUN_STABLE);
+    the_sink.owner = 0;
+    deliver(system, live, "next");
+    CHECK(the_sink.owner == live); /* EVENT */
+    ta_input_owner outside = { 0 };
+    CHECK(ta_system_input_owner(system, &outside) == TA_ERR_NOT_FOUND); /* outside a record */
+    the_sink.owner = live;
+    CHECK(ta_system_write_host_record(system, &(ta_host_record_params){ .address = &hist_live,
+                                                                        .kind = TA_RECORD_EVICTED }) == TA_OK);
+    CHECK(the_sink.owner == 0); /* a host record written with no actor */
+    the_sink.system = NULL;
+    ta_value_release(&binding);
+    destroy_system(system);
+}
+
 int main(void) {
     blob_model_vtable = *ta_null_datamodel().v;
     blob_model_vtable.value_write = blob_write;
@@ -1827,6 +1859,7 @@ int main(void) {
     test_checkpoint_timelines();
     test_checkpoint_refusals();
     test_checkpoint_invocation();
+    test_input_actor();
     CHECK(live_blobs == 0);
     if (failures != 0) {
         fprintf(stderr, "input_log_test: %d failure(s)\n", failures);

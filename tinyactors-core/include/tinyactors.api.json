@@ -10718,6 +10718,54 @@
         }
       }
     },
+    "ta_input_owner": {
+      "kind": "struct",
+      "doc": "While the input sink writes a record, from its begin to its end: the actor the record belongs to and its named address, which a sink that files records by actor reads. `name` is the address's text; `address` is its handle (borrowed; a sink that keeps it retains it), null while a spawn writes SPAWNED, before it claims the address. TA_ERR_NOT_FOUND for a host record written with no actor, and outside a record.",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_actor_address"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "address": 8,
+            "name": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "address": 8,
+            "name": 12
+          }
+        }
+      }
+    },
     "ta_invoke_decl_id": {
       "kind": "alias",
       "type": {
@@ -20706,6 +20754,43 @@
           "type": {
             "builtin": "bool"
           }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_input_owner",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_input_owner"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "call"
         }
       ]
     },

@@ -3617,6 +3617,20 @@ typedef enum {
 TA_API void ta_system_set_input_sink(ta_system *system, ta_byte_sink sink);
 /* Logs the named actors of `family` (or stops logging them). */
 TA_API ta_result ta_system_log_family(ta_system *system, ta_str family, bool logged);
+/*
+ * While the input sink writes a record, from its begin to its end: the
+ * actor the record belongs to and its named address, which a sink that
+ * files records by actor reads. `name` is the address's text; `address` is
+ * its handle (borrowed; a sink that keeps it retains it), null while a
+ * spawn writes SPAWNED, before it claims the address. TA_ERR_NOT_FOUND for
+ * a host record written with no actor, and outside a record.
+ */
+typedef struct {
+    ta_actor_id actor;
+    ta_address *address;
+    ta_actor_address name;
+} ta_input_owner;
+TA_API ta_result ta_system_input_owner(const ta_system *system, TA_OUT TA_LIFETIME(call) ta_input_owner *out);
 
 /*
  * A record of the host's mailbox (ADR 0090 section 6): QUEUED when it

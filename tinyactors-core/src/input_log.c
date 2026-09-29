@@ -41,6 +41,25 @@ void ta_system_set_input_sink(ta_system *system, ta_byte_sink sink) {
     }
 }
 
+ta_result ta_system_input_owner(const ta_system *system, ta_input_owner *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *out = (ta_input_owner){ 0 };
+    const ta_actor *actor = system->input_actor;
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    out->actor = actor->record.id;
+    if (actor->record.self.kind == TA_ACTOR_REF_NAMED) {
+        out->address = actor->record.self.as.named;
+        out->name = ta_address_view(out->address);
+    } else if (system->input_spawn_address != NULL) {
+        out->name = *system->input_spawn_address; /* SPAWNED, before the claim */
+    }
+    return TA_OK;
+}
+
 ta_result ta_system_log_family(ta_system *system, ta_str family, bool logged) {
     if (system == NULL || family.ptr == NULL || family.len == 0) {
         return TA_ERR_INVALID;
@@ -316,13 +335,15 @@ ta_result ta_input_open(ta_system *system, ta_actor *actor, const ta_record_desc
         }
         seq = actor->sparse->log_seq + 1u;
     }
+    /* The sink may ask whose record it is from begin on (ta_system_input_actor). */
+    system->input_actor = actor;
     if (system->input_sink.v->begin(system->input_sink.self) != TA_OP_OK) {
+        system->input_actor = NULL;
         return TA_ERR_NOMEM;
     }
     system->input_open = true;
     system->input_status = TA_OP_OK;
     system->input_used = 0;
-    system->input_actor = actor;
     system->input_seq = seq;
     ta_result result = ta_input_emit(system, seq, record);
     if (result != TA_OK) {

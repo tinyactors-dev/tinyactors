@@ -2014,6 +2014,8 @@ struct ta_system {
     /* The actor whose next record number the open record takes, or null. */
     ta_actor *input_actor;
     uint64_t input_seq;
+    /* While a spawn writes SPAWNED: the address it is about to claim. */
+    const ta_actor_address *input_spawn_address;
     uint8_t input_scratch[TA_INPUT_SCRATCH_BYTES];
 };
 
@@ -12075,8 +12077,10 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
         record.fields[2] = ta_record_text_field(
             true, (ta_str){ .ptr = (const char *)definition->identity.revision.ptr,
                             .len = definition->identity.revision.len });
+        system->input_spawn_address = params->address;
         result = ta_input_open(system, actor, &record);
         if (result != TA_OK) {
+            system->input_spawn_address = NULL;
             ta_actor_release_slot(system, id);
             ta_actor_free(system, actor);
             return result;
@@ -12089,6 +12093,7 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
         if (result != TA_OK) {
             if (logged) {
                 ta_input_close(system, false);
+                system->input_spawn_address = NULL;
             }
             ta_actor_release_slot(system, id);
             ta_actor_free(system, actor);
@@ -12097,6 +12102,7 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
     }
     if (logged) {
         ta_input_close(system, true);
+        system->input_spawn_address = NULL;
     }
     if (params->parent != NULL) {
         /* Invoke: the invoking parent routes #_<invokeid> and autoforwarding to this child. */
@@ -19924,6 +19930,25 @@ TA_API void ta_system_set_input_sink(ta_system *system, ta_byte_sink sink) {
     }
 }
 
+TA_API ta_result ta_system_input_owner(const ta_system *system, ta_input_owner *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *out = (ta_input_owner){ 0 };
+    const ta_actor *actor = system->input_actor;
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    out->actor = actor->record.id;
+    if (actor->record.self.kind == TA_ACTOR_REF_NAMED) {
+        out->address = actor->record.self.as.named;
+        out->name = ta_address_view(out->address);
+    } else if (system->input_spawn_address != NULL) {
+        out->name = *system->input_spawn_address; /* SPAWNED, before the claim */
+    }
+    return TA_OK;
+}
+
 TA_API ta_result ta_system_log_family(ta_system *system, ta_str family, bool logged) {
     if (system == NULL || family.ptr == NULL || family.len == 0) {
         return TA_ERR_INVALID;
@@ -20199,13 +20224,15 @@ TA_PRIVATE ta_result ta_input_open(ta_system *system, ta_actor *actor, const ta_
         }
         seq = actor->sparse->log_seq + 1u;
     }
+    /* The sink may ask whose record it is from begin on (ta_system_input_actor). */
+    system->input_actor = actor;
     if (system->input_sink.v->begin(system->input_sink.self) != TA_OP_OK) {
+        system->input_actor = NULL;
         return TA_ERR_NOMEM;
     }
     system->input_open = true;
     system->input_status = TA_OP_OK;
     system->input_used = 0;
-    system->input_actor = actor;
     system->input_seq = seq;
     ta_result result = ta_input_emit(system, seq, record);
     if (result != TA_OK) {

@@ -123,6 +123,8 @@ struct ta_system {
     /* The actor whose next record number the open record takes, or null. */
     ta_actor *input_actor;
     uint64_t input_seq;
+    /* While a spawn writes SPAWNED: the address it is about to claim. */
+    const ta_actor_address *input_spawn_address;
     uint8_t input_scratch[TA_INPUT_SCRATCH_BYTES];
 };
 

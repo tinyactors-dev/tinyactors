@@ -638,8 +638,10 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
         record.fields[2] = ta_record_text_field(
             true, (ta_str){ .ptr = (const char *)definition->identity.revision.ptr,
                             .len = definition->identity.revision.len });
+        system->input_spawn_address = params->address;
         result = ta_input_open(system, actor, &record);
         if (result != TA_OK) {
+            system->input_spawn_address = NULL;
             ta_actor_release_slot(system, id);
             ta_actor_free(system, actor);
             return result;
@@ -652,6 +654,7 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
         if (result != TA_OK) {
             if (logged) {
                 ta_input_close(system, false);
+                system->input_spawn_address = NULL;
             }
             ta_actor_release_slot(system, id);
             ta_actor_free(system, actor);
@@ -660,6 +663,7 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     }
     if (logged) {
         ta_input_close(system, true);
+        system->input_spawn_address = NULL;
     }
     if (params->parent != NULL) {
         /* Invoke: the invoking parent routes #_<invokeid> and autoforwarding to this child. */
