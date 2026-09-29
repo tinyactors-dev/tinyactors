@@ -119,10 +119,11 @@ static void tna_buf_settle(tna_otlp_buf *buf, size_t used, size_t keep) {
 static bool tna_buf_room(tna_otlp_buf *buf, size_t more);
 
 /* The span staging after a request was taken: back to exactly the bound
- * when a burst grew it (a failed reallocation keeps it empty, and the next
- * span regrows it as before). */
-static void tna_spans_settle(tna_otlp_buf *buf, size_t keep) {
-    if (buf->len == 0 && buf->cap > keep) {
+ * when a burst grew it past four times a typical turn's use; a steady load
+ * that runs past the bound keeps its buffer (a failed reallocation keeps it
+ * empty, and the next span regrows it as before). */
+static void tna_spans_settle(tna_otlp_buf *buf, size_t used, size_t keep) {
+    if (buf->len == 0 && buf->cap > keep && buf->cap / 4u > used) {
         tna_buf_free(buf);
         (void)tna_buf_room(buf, keep);
     }
@@ -2246,8 +2247,9 @@ static size_t tna_typical_use(size_t typical, size_t used) {
 }
 
 void tna_otlp_end_turn(tna_otlp *otlp) {
-    bool burst = otlp->spans.len == 0 && otlp->spans.cap > tna_keep_bytes(otlp);
-    tna_spans_settle(&otlp->spans, tna_keep_bytes(otlp));
+    size_t keep = tna_keep_bytes(otlp);
+    bool burst = otlp->spans.len == 0 && otlp->spans.cap > keep && otlp->spans.cap / 4u > otlp->typical_spans;
+    tna_spans_settle(&otlp->spans, otlp->typical_spans, keep);
     if (burst && otlp->entry_count == 0) {
         /* The entries, runs and scopes of a burst go with its spans. */
         ta_allocator allocator = otlp->config.allocator;
