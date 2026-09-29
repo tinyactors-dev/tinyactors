@@ -1,5 +1,13 @@
 # Working in this repo
 
+**Layers.** Core decides what inputs mean; the host kernel
+(`tinyactors-host`) queues, records and replays them; a language binding
+(napi, the test host) owns values and their encoding; the application
+owns storage and policy. Before adding code, place it in the right layer:
+[README.md, "Layers and responsibilities"](README.md#layers-and-responsibilities).
+Code free of any language's API belongs in the kernel, not in a binding,
+and core does not handle bytes it has no use for.
+
 - use `mise run <task> <args>` for every task,
 - define tasks in ./mise/tasks/ as file tasks using `ruby` (version 4, provided by mise)
 

@@ -25,25 +25,64 @@ are in [`docs/proposals/`](docs/proposals/README.md).
   and samples trace contexts. Throughput is accepted as the baseline in
   `tinyactors-napi/docs/scale.md`; open items are in the napi roadmap's
   "Tracing" follow-ups.
-- [ ] **Close the core API gaps for log-based durability.** The core
-  capabilities that
-  [replay-based persistence](docs/proposals/replay-persistence.md#core-support-an-actor-can-be-replayed-in-place)
-  needs, as a core ADR: a time override per resume, holding an actor's
-  delayed sends out of dispatch while it replays, and withdrawing sends
-  due at or before a given time when replay ends.
+- [x] **Close the core API gaps for log-based durability.** Done:
+  replaying actors, prepare and publish (core ADR 0089), session IDs that
+  name their family (core ADR 0088), the input log and checkpoints (core
+  ADRs 0090 and 0091, napi ADRs 0032 to 0034 and 0036), and system
+  parameters (core ADRs 0092 and 0093, napi ADR 0035). Its shape is being
+  revised by the next item.
 - [ ] **Build out the rest of the napi JavaScript API.** The remaining
   steps of [the napi roadmap](tinyactors-napi/ROADMAP.md#steps).
-- [ ] **Extract the host kernel.** Move napi's host C that never touches
-  Node-API (scheduling, mailboxes, routing, the directory, timers,
-  enumeration, effects) into a shared library:
-  [Host kernel](docs/proposals/host-kernel.md). When: as the first step
-  of the browser build, which is the second host and so shapes the host
-  interface; not earlier. Until then, `test-native` fails if Node-API
-  reaches a source outside `NODE_API_SOURCES` in
-  `tinyactors-napi/mise/lib/compile.rb`, so the portable part stays
-  portable.
-- [ ] **Bootstrap a browser build.** Core compiled to WebAssembly on the
-  host kernel, with a JavaScript surface shared with napi. Core already
+- [ ] **Migrate to the host kernel, with the write-ahead log in it.**
+  Decided in [kernel ADR 0001](tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md),
+  [kernel ADR 0002](tinyactors-host/docs/adr/0002-the-kernel-keeps-the-write-ahead-log.md),
+  [core ADR 0094](tinyactors-core/docs/adr/0094-every-input-carries-its-time-and-the-input-log-leaves-core.md)
+  and [napi ADR 0037](tinyactors-napi/docs/adr/0037-napi-is-a-binding-over-the-host-kernel.md);
+  the layers are in the [README](README.md#layers-and-responsibilities).
+  The kernel is extracted now, not with the browser build, because the log
+  needs its home and the test host is a second consumer. Steps, in order;
+  each ends with `mise run test` passing, and the last with
+  `mise run test:full --all`:
+  1. **Create `tinyactors-host/`:** its `mise.toml`, build and test tasks on
+     the root toolchain, `include/tinyactors_host.h`, native tests under
+     ASan and UBSan, `check-recursion`, its `#MISE sources`, and its row in
+     AGENTS.md's table of what reruns. An empty library that builds and
+     tests.
+  2. **Move napi's Node-API-free C into the kernel,** renamed from `tna_` to
+     `tah_`, with its native tests: scheduler, router, directory, events,
+     enumerate, effects, system, allocator, containers, hooks, adapters,
+     loads, offloads, the OTLP encoder, and the host-generic parameters.
+     Split `pump.c` into the kernel's turn logic and napi's event-loop
+     glue. napi links the kernel, and its guard over `NODE_API_SOURCES`
+     goes. `bench-compare` within 5%.
+  3. **Core ADR 0094, the time on every input:** a time on
+     `ta_actor_deliver()` and `ta_actor_report_invoke()`, `at` on publish,
+     `ta_actor_set_time()` removed. `ta_actor_export_state()` and
+     `ta_actor_prepare_params.state` added. The kernel and the test host
+     migrate.
+  4. **Kernel ADR 0002, the log moves:** core's `src/input_log.c` layout,
+     writer and reader become the kernel's, at version 2 with `accepted`,
+     `delivered` and `dropped`. The kernel records at its own call sites,
+     replays by calling core, and encodes checkpoints from core's exported
+     state. napi's `inputs.c` and `napi_replay.c` become kernel code. The
+     tests move with them, among them the four timelines of core ADR 0089,
+     the out-of-memory sweeps, and the memory-bound tests.
+  5. **Core ADR 0094, the log leaves core:** remove the input sink, host
+     records, `ta_actor_replay()`, `ta_actor_prepare_params.log`,
+     `host_seq`, and checkpoint bytes from core.
+  6. **napi ADR 0037:** napi keeps its glue, data model, pump driver and
+     `lib/`. `readInputLog()` yields the new kinds, and the rest of the
+     public API is unchanged.
+  7. **The test host's hosted mode (kernel ADR 0001 section 5):** it links the
+     kernel. A scenario can create a hosted system, run turns explicitly,
+     and inspect mailboxes, dead letters and batches. Its persistence
+     scenarios (input log, replay, checkpoints, compaction) move to hosted
+     mode. Scenarios about core's semantics keep driving core directly.
+  8. **Verify:** `mise run test:full --all`, `bench-compare` against the
+     commit before step 2, and allocations per event in napi. Update the
+     kernel ADRs' implementation notes.
+- [ ] **Bootstrap a browser build.** Core and the host kernel compiled to
+  WebAssembly, with a JavaScript surface shared with napi. Core already
   compiles for `wasm32-freestanding`, but no build task or test covers
   it yet.
 - [ ] **Package and release.** One command (`npm install tinyactors`,

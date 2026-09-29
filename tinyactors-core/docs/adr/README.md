@@ -97,3 +97,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0091](0091-a-checkpoint-is-an-actors-state-at-a-record-of-its-log.md) | [A checkpoint is an actor's state at a record of its log](0091-a-checkpoint-is-an-actors-state-at-a-record-of-its-log.md) |
 | [0092](0092-system-parameters-are-fixed-at-creation-and-bound-every-buffer.md) | [System parameters are fixed at creation and bound every buffer](0092-system-parameters-are-fixed-at-creation-and-bound-every-buffer.md) |
 | [0093](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) | [The event-block cache fills on demand up to its bound](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) |
+| [0094](0094-every-input-carries-its-time-and-the-input-log-leaves-core.md) | [Every input carries its time, and the input log leaves core](0094-every-input-carries-its-time-and-the-input-log-leaves-core.md) |

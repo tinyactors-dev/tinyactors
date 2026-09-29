@@ -1,6 +1,6 @@
 # Replay-based persistence for named actors
 
-**Status:** Sketch (2026-09-23; storage cross-check added 2026-09-24)
+**Status:** Adopted → core ADRs 0088 to 0094, napi ADRs 0032 to 0037 and kernel ADR 0002 (2026-09-30); sketched 2026-09-23, storage cross-check 2026-09-24
 **Touches:** tinyactors-core (one ADR), tinyactors-napi (scheduler, pump, router, effects), later the host kernel
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 

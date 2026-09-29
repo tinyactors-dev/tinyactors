@@ -34,8 +34,8 @@ Every proposal starts with a status line:
 |---|---|---|
 | [SQLite host](sqlite-host.md) | Sketch | tinyactors-core, a new tinyactors-sqlite |
 | [PostgreSQL host](postgres-host.md) | Sketch | tinyactors-core, a new tinyactors-postgres |
-| [Host kernel](host-kernel.md) | Sketch | tinyactors-napi, future language hosts |
-| [Replay-based persistence](replay-persistence.md) | Sketch | tinyactors-core, tinyactors-napi |
+| [Host kernel](host-kernel.md) | Adopted → [kernel ADRs](../../tinyactors-host/docs/adr/README.md), [roadmap](../../ROADMAP.md) | tinyactors-napi, tinyactors-test, a new tinyactors-host |
+| [Replay-based persistence](replay-persistence.md) | Adopted → core ADRs 0088 to 0094, napi ADRs 0032 to 0037, [kernel ADR 0002](../../tinyactors-host/docs/adr/0002-the-kernel-keeps-the-write-ahead-log.md) | tinyactors-core, tinyactors-host, tinyactors-napi |
 | [Distributed actor systems](distributed-systems.md) | Sketch | tinyactors-core (conformance gaps), tinyactors-napi, the browser build |
 | [An idle actor carries no event](lean-actor-events.md) | Adopted → [core ADR 0069](../../tinyactors-core/docs/adr/0069-an-idle-actor-carries-no-event.md) | tinyactors-core, tinyactors-napi |
 | [Packaging and releases](packaging.md) | Adopted → [ADR 0001](../adr/0001-packaging-and-releases.md) | tinyxml, tinyactors-core, tinyactors-scxml, tinyactors-napi, root release tasks |

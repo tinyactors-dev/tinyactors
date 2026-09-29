@@ -1,6 +1,6 @@
 # Host kernel: share the napi plumbing with other language hosts
 
-**Status:** Sketch (2026-09-23)
+**Status:** Adopted → [kernel ADRs](../../tinyactors-host/docs/adr/README.md) and the [roadmap](../../ROADMAP.md) (2026-09-30); sketched 2026-09-23
 **Touches:** tinyactors-napi, future hosts (CPython, CRuby, a browser build over WebAssembly)
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
