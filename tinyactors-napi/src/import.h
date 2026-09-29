@@ -16,7 +16,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "system.h"
+#include "tinyactors_host.h"
 #include "ta_scxml.h"
 #include "tinyactors.h"
 

@@ -33,8 +33,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "allocator.h"
-#include "containers.h"
+#include "tinyactors_host.h"
 #include "tinyactors.h"
 
 typedef struct tna_values {

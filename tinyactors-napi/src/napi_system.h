@@ -14,7 +14,8 @@
 #include "runtime.h"
 #include "napi_children.h"
 #include "napi_datamodel.h"
-#include "system.h"
+#include "napi_params.h"
+#include "tinyactors_host.h"
 #include "values.h"
 
 struct tna_napi_system {
@@ -55,6 +56,8 @@ struct tna_napi_system {
      * allocated at creation. */
     size_t value_bytes;
     char *trace_value;
+    /* napi's own parameters (napi_params.h), fixed at creation. */
+    tna_params params;
     /* A refused document's text, and scratch to reframe it: compileTextBytes
      * plus TNA_REFUSAL_FRAME_BYTES each, allocated at creation (napi ADR
      * 0036). `children.failure` points into the same block. */

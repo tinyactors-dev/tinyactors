@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include "inputs.h"
+#include "tinyactors_host.h"
 #include "pump.h"
 #include "runtime.h"
 #include "values.h"

@@ -3,8 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "hooks.h"
-#include "loads.h"
+#include "tinyactors_host.h"
 #include "napi_trace.h"
 #include "pump.h"
 #include "runtime.h"

@@ -4,8 +4,8 @@
  * nothing left behind at close, driven without Node-API.
  */
 #include "check.h"
-#include "directory.h"
-#include "system.h"
+#include "tinyactors_host/directory.h"
+#include "tinyactors_host/system.h"
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 

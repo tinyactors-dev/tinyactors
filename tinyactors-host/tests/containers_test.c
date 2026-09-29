@@ -3,8 +3,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "allocator.h"
-#include "containers.h"
+#include "tinyactors_host/allocator.h"
+#include "tinyactors_host/containers.h"
 
 static tah_allocator allocator;
 

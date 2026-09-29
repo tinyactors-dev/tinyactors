@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "allocator.h"
+#include "tinyactors_host/allocator.h"
 
 static void counts_by_category(void) {
     tah_allocator allocator;

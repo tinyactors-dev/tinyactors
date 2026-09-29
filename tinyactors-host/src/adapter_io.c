@@ -1,10 +1,10 @@
-#include "adapter_io.h"
+#include "tinyactors_host/adapter_io.h"
 
 #include "memory.h"
 
 
-#include "inputs.h"
-#include "system.h"
+#include "tinyactors_host/inputs.h"
+#include "tinyactors_host/system.h"
 
 struct tah_io_processor {
     tah_system *system;

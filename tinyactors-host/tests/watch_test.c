@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <stdint.h>
 
-#include "allocator.h"
-#include "watch.h"
+#include "tinyactors_host/allocator.h"
+#include "tinyactors_host/watch.h"
 
 /* Membership is exact at sizes past the old 1024 limit, duplicates count
  * once, and UINT64_MAX (the empty marker) is still an ID. */

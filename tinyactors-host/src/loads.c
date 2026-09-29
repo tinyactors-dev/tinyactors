@@ -1,9 +1,9 @@
-#include "loads.h"
+#include "tinyactors_host/loads.h"
 
 #include "memory.h"
 
 
-#include "allocator.h"
+#include "tinyactors_host/allocator.h"
 
 const char *tah_load_outcome_name(tah_load_outcome outcome) {
     static const char *const names[TAH_LOAD_OUTCOMES] = {

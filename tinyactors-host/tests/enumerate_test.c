@@ -8,8 +8,8 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "enumerate.h"
-#include "system.h"
+#include "tinyactors_host/enumerate.h"
+#include "tinyactors_host/system.h"
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 #define POPULATION 100u

@@ -11,8 +11,7 @@
 #include <string.h>
 
 #include "runtime.h"
-#include "scheduler.h"
-#include "system.h"
+#include "tinyactors_host.h"
 
 /* ------------------------------------------------------------------------
  * Options

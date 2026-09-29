@@ -5,8 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "hooks.h"
-#include "inputs.h"
+#include "tinyactors_host.h"
 #include "napi_system.h"
 #include "pump.h"
 #include "runtime.h"

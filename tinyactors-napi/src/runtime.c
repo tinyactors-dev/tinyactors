@@ -7,7 +7,7 @@
 #include "napi_datamodel.h"
 #include "napi_system.h"
 #include "napi_trace.h"
-#include "system.h"
+#include "tinyactors_host.h"
 
 /* ------------------------------------------------------------------------
  * The environment

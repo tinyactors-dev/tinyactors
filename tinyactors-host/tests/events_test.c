@@ -2,8 +2,8 @@
 #include "check.h"
 #include <string.h>
 
-#include "events.h"
-#include "system.h"
+#include "tinyactors_host/events.h"
+#include "tinyactors_host/system.h"
 
 static ta_str text_of(const char *text) {
     return (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) };

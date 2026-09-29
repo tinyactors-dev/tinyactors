@@ -11,10 +11,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "allocator.h"
+#include "tinyactors_host.h"
 #include "runtime.h"
 #include "napi_system.h"
-#include "system.h"
 #include "values.h"
 
 #define TNA_MAX_SAFE_INTEGER 9007199254740991.0

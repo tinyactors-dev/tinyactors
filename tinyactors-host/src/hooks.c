@@ -1,4 +1,4 @@
-#include "hooks.h"
+#include "tinyactors_host/hooks.h"
 
 ta_result tah_hook_actor_created(tah_system *system, ta_actor_id actor) {
     ta_result result = tah_sched_add(&system->sched, actor);

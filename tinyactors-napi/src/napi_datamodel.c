@@ -2409,11 +2409,11 @@ bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_
     *dm = (tna_js_datamodel){ .wrapper = wrapper, .env = env, .js_usable = true };
     tna_adapter_init(&dm->builtin, dm, (ta_str){ "javascript", 10 }, dm->builtin_name);
     /* Its buffers come from the system's parameters (napi ADR 0035). */
-    const tah_params *params = &wrapper->system->params;
+    const tna_params *params = &wrapper->params;
     uint64_t message_bytes = TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES;
     (void)ta_system_param(wrapper->system->core, TA_PARAM_COMPILE_MESSAGE_BYTES, &message_bytes);
-    dm->registered_capacity = (uint32_t)params->values[TAH_PARAM_REGISTERED_DATAMODELS];
-    dm->name_bytes = (uint32_t)params->values[TAH_PARAM_DATAMODEL_NAME_BYTES];
+    dm->registered_capacity = (uint32_t)params->values[TNA_PARAM_REGISTERED_DATAMODELS];
+    dm->name_bytes = (uint32_t)params->values[TNA_PARAM_DATAMODEL_NAME_BYTES];
     dm->rejection_bytes = (size_t)message_bytes + 1u;
     dm->registered = calloc(dm->registered_capacity != 0 ? dm->registered_capacity : 1u, sizeof *dm->registered);
     dm->names = calloc(dm->registered_capacity != 0 ? dm->registered_capacity : 1u, dm->name_bytes);

@@ -22,7 +22,7 @@
 #include <node_api.h>
 #include <stdint.h>
 
-#include "containers.h"
+#include "tinyactors_host.h"
 #include "import.h"
 #include "tinyactors.h"
 

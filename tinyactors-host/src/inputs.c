@@ -1,11 +1,11 @@
-#include "inputs.h"
+#include "tinyactors_host/inputs.h"
 
 #include "memory.h"
 
 
-#include "allocator.h"
-#include "scheduler.h"
-#include "system.h"
+#include "tinyactors_host/allocator.h"
+#include "tinyactors_host/scheduler.h"
+#include "tinyactors_host/system.h"
 
 /* The arena's block: a turn's wake addresses usually fit in one. */
 #define TAH_INPUTS_BLOCK_BYTES 4096u

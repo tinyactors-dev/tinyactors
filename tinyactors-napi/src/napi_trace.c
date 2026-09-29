@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include "adapter_trace.h"
+#include "tinyactors_host.h"
 #include "pump.h"
 
 /* ------------------------------------------------------------------------

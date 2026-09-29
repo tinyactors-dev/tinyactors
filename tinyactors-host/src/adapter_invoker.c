@@ -1,6 +1,6 @@
-#include "adapter_invoker.h"
+#include "tinyactors_host/adapter_invoker.h"
 
-#include "system.h"
+#include "tinyactors_host/system.h"
 
 static ta_op_status tah_invoke_fault(ta_fault *fault, ta_result code, const char *message, uint32_t length) {
     *fault = (ta_fault){ .code = code, .message = { .ptr = message, .len = length } };

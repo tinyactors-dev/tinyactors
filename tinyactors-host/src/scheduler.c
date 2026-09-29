@@ -1,8 +1,8 @@
-#include "scheduler.h"
+#include "tinyactors_host/scheduler.h"
 
 #include "memory.h"
 
-#include "allocator.h"
+#include "tinyactors_host/allocator.h"
 
 #define TAH_QUEUE_CHUNK 1024u
 

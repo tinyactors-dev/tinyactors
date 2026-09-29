@@ -8,8 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "allocator.h"
-#include "offloads.h"
+#include "tinyactors_host/allocator.h"
+#include "tinyactors_host/offloads.h"
 
 static int live_references;
 

@@ -11,8 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "allocator.h"
-#include "otlp.h"
+#include "tinyactors_host/allocator.h"
+#include "tinyactors_host/otlp.h"
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 #define END {0}

@@ -1,10 +1,10 @@
-#include "router.h"
+#include "tinyactors_host/router.h"
 
 #include "memory.h"
 
 
-#include "inputs.h"
-#include "system.h"
+#include "tinyactors_host/inputs.h"
+#include "tinyactors_host/system.h"
 
 ta_result tah_router_post_named(tah_system *system, ta_address *address, const tah_message *message) {
     ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);

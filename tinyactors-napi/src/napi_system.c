@@ -8,8 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "enumerate.h"
-#include "events.h"
+#include "tinyactors_host.h"
 #include "gen/ta_napi.h"
 #include "import.h"
 #include "napi_codecs.h"
@@ -19,7 +18,6 @@
 #include "napi_loads.h"
 #include "napi_trace.h"
 #include "pump.h"
-#include "router.h"
 
 static void tna_unlist(tna_napi_system *wrapper) {
     if (!wrapper->listed) {
@@ -269,8 +267,29 @@ static bool tna_parameter_value(napi_env env, napi_value object, const char *nam
  * `napi`. lib/system.js checks names and bounds first; core checks its own
  * again at creation.
  */
+/* Reads one of the kernel's or napi's parameters into `*value` when it is given, checking its bounds. */
+static bool tna_read_parameter(napi_env env, napi_value object, const char *name, uint64_t min, uint64_t max,
+                               uint64_t *value) {
+    uint64_t given_value = 0;
+    bool given = false;
+    if (!tna_parameter_value(env, object, name, &given_value, &given)) {
+        return false;
+    }
+    if (given) {
+        if (given_value < min || given_value > max) {
+            char message[160];
+            snprintf(message, sizeof message, "createSystem(): parameters.%s must be from %llu to %llu", name,
+                     (unsigned long long)min, (unsigned long long)max);
+            tna_throw(env, "invalid", message);
+            return false;
+        }
+        *value = given_value;
+    }
+    return true;
+}
+
 static bool tna_read_parameters(napi_env env, napi_value options, ta_param_value core[TA_PARAM_COUNT], uint32_t *core_count,
-                         tah_params *napi) {
+                         tah_params *hosting, tna_params *own) {
     napi_value object = NULL;
     if (options != NULL) {
         napi_valuetype type = napi_undefined;
@@ -304,23 +323,18 @@ static bool tna_read_parameters(napi_env env, napi_value options, ta_param_value
             core[(*core_count)++] = (ta_param_value){ .param = (ta_param)param, .value = value };
         }
     }
-    tah_params_defaults(napi);
+    tah_params_defaults(hosting);
     for (uint32_t param = 0; param < TAH_PARAM_COUNT; param += 1u) {
         const tah_param_info *info = &tah_param_table[param];
-        uint64_t value = 0;
-        bool given = false;
-        if (!tna_parameter_value(env, object, info->name, &value, &given)) {
+        if (!tna_read_parameter(env, object, info->name, info->min, info->max, &hosting->values[param])) {
             return false;
         }
-        if (given) {
-            if (value < info->min || value > info->max) {
-                char message[160];
-                snprintf(message, sizeof message, "createSystem(): parameters.%s must be from %llu to %llu",
-                         info->name, (unsigned long long)info->min, (unsigned long long)info->max);
-                tna_throw(env, "invalid", message);
-                return false;
-            }
-            napi->values[param] = value;
+    }
+    tna_params_defaults(own);
+    for (uint32_t param = 0; param < TNA_PARAM_COUNT; param += 1u) {
+        const tna_param_info *info = &tna_param_table[param];
+        if (!tna_read_parameter(env, object, info->name, info->min, info->max, &own->values[param])) {
+            return false;
         }
     }
     return true;
@@ -334,7 +348,7 @@ static napi_value tna_parameter_table(napi_env env, napi_callback_info info) {
         return NULL;
     }
     uint32_t index = 0;
-    for (uint32_t param = 0; param < TA_PARAM_COUNT + TAH_PARAM_COUNT; param += 1u) {
+    for (uint32_t param = 0; param < TA_PARAM_COUNT + TAH_PARAM_COUNT + TNA_PARAM_COUNT; param += 1u) {
         const char *name = NULL;
         size_t name_len = 0;
         const char *unit = NULL;
@@ -353,8 +367,18 @@ static napi_value tna_parameter_table(napi_env env, napi_callback_info info) {
             numbers[0] = core.default_value;
             numbers[1] = core.min;
             numbers[2] = core.max;
-        } else {
+        } else if (param < TA_PARAM_COUNT + TAH_PARAM_COUNT) {
+            /* The kernel's: napi embeds the kernel, so they are napi's to its users. */
             const tah_param_info *napi = &tah_param_table[param - TA_PARAM_COUNT];
+            name = napi->name;
+            name_len = strlen(name);
+            unit = napi->unit;
+            unit_len = strlen(unit);
+            numbers[0] = napi->default_value;
+            numbers[1] = napi->min;
+            numbers[2] = napi->max;
+        } else {
+            const tna_param_info *napi = &tna_param_table[param - TA_PARAM_COUNT - TAH_PARAM_COUNT];
             name = napi->name;
             name_len = strlen(name);
             unit = napi->unit;
@@ -427,7 +451,8 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     ta_param_value params[TA_PARAM_COUNT];
     uint32_t param_count = 0;
     tah_params napi_params;
-    if (!tna_read_parameters(env, options_type == napi_object ? argv[1] : NULL, params, &param_count, &napi_params)) {
+    if (!tna_read_parameters(env, options_type == napi_object ? argv[1] : NULL, params, &param_count, &napi_params,
+                             &wrapper->params)) {
         free(wrapper);
         return NULL;
     }
@@ -436,7 +461,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
                                                                       .incarnation = incarnation,
                                                                       .params = params,
                                                                       .param_count = param_count,
-                                                                      .napi = &napi_params,
+                                                                      .hosting = &napi_params,
                                                                       .rejected = &rejected },
                                          &wrapper->system);
     if (result != TA_OK) {

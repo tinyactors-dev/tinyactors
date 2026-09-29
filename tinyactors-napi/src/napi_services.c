@@ -4,10 +4,7 @@
 
 #include <string.h>
 
-#include "adapter_invoker.h"
-#include "adapter_io.h"
-#include "adapter_log.h"
-#include "events.h"
+#include "tinyactors_host.h"
 #include "napi_trace.h"
 #include "pump.h"
 

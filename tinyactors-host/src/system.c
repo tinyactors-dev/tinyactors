@@ -1,11 +1,11 @@
-#include "system.h"
+#include "tinyactors_host/system.h"
 
 #include "memory.h"
 
-#include "adapter_invoker.h"
-#include "adapter_io.h"
-#include "adapter_log.h"
-#include "router.h"
+#include "tinyactors_host/adapter_invoker.h"
+#include "tinyactors_host/adapter_io.h"
+#include "tinyactors_host/adapter_log.h"
+#include "tinyactors_host/router.h"
 
 /* Gives the record back to the platform's allocator it came from. */
 static void tah_system_release_record(tah_system *system) {
@@ -30,8 +30,8 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
         return TA_ERR_NOMEM;
     }
     tah_params napi;
-    if (params->napi != NULL) {
-        napi = *params->napi;
+    if (params->hosting != NULL) {
+        napi = *params->hosting;
     } else {
         tah_params_defaults(&napi);
     }

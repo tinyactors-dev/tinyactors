@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "allocator.h"
+#include "tinyactors_host.h"
 
 /* Block size of the import's arena; a large document grows it on demand. */
 #define TNA_IMPORT_ARENA_BLOCK ((size_t)16384)

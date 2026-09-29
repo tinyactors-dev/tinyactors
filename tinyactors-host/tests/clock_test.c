@@ -10,10 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "events.h"
-#include "hooks.h"
-#include "scheduler.h"
-#include "system.h"
+#include "tinyactors_host/events.h"
+#include "tinyactors_host/hooks.h"
+#include "tinyactors_host/scheduler.h"
+#include "tinyactors_host/system.h"
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 

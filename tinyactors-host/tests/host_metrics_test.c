@@ -2,7 +2,7 @@
 #include "check.h"
 #include <stdio.h>
 
-#include "host_metrics.h"
+#include "tinyactors_host/host_metrics.h"
 
 /* A value lands in the first bucket whose bound is at least the value; one
  * past the last bound lands in the overflow bucket. */

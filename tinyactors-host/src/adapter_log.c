@@ -1,6 +1,6 @@
-#include "adapter_log.h"
+#include "tinyactors_host/adapter_log.h"
 
-#include "system.h"
+#include "tinyactors_host/system.h"
 
 static void tah_log_write(void *self, const ta_log_record *record) {
     tah_system *system = self;

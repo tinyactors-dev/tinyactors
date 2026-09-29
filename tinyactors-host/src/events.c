@@ -1,4 +1,4 @@
-#include "events.h"
+#include "tinyactors_host/events.h"
 
 ta_result tah_event_name_intern(ta_system *system, ta_str text, ta_event_name_id *out) {
     if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {

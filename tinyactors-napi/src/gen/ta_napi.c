@@ -10,10 +10,9 @@
 
 #include <string.h>
 
-#include "hooks.h"
 #include "runtime.h"
-#include "system.h"
 #include "tinyactors.h"
+#include "tinyactors_host.h"
 
 /* The TinyactorsErrorCode of each core result (ADR 0008). */
 const char *tna_result_code(ta_result result) {

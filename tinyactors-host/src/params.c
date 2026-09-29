@@ -1,13 +1,9 @@
-#include "params.h"
+#include "tinyactors_host/params.h"
 
 const tah_param_info tah_param_table[TAH_PARAM_COUNT] = {
     [TAH_PARAM_VALUE_BYTES] = { "valueBytes", "bytes", TAH_PARAM_DEFAULT_VALUE_BYTES, 16, 1048576 },
     [TAH_PARAM_TRACE_STAGING_BYTES] = { "traceStagingBytes", "bytes", TAH_PARAM_DEFAULT_TRACE_STAGING_BYTES, 65536,
                                         1073741824 },
-    [TAH_PARAM_REGISTERED_DATAMODELS] = { "registeredDatamodels", "data models",
-                                          TAH_PARAM_DEFAULT_REGISTERED_DATAMODELS, 0, 1024 },
-    [TAH_PARAM_DATAMODEL_NAME_BYTES] = { "datamodelNameBytes", "bytes", TAH_PARAM_DEFAULT_DATAMODEL_NAME_BYTES, 8,
-                                         256 },
     [TAH_PARAM_RESUME_BUDGET] = { "resumeBudget", "microsteps", TAH_PARAM_DEFAULT_RESUME_BUDGET, 1, 2147483647 },
     [TAH_PARAM_ACTION_BUDGET] = { "actionBudget", "units", TAH_PARAM_DEFAULT_ACTION_BUDGET, 0, 2147483647 },
     [TAH_PARAM_RESUMES_PER_TURN] = { "resumesPerTurn", "actors", TAH_PARAM_DEFAULT_RESUMES_PER_TURN, 1, 2147483647 },

@@ -1,4 +1,4 @@
-#include "effects.h"
+#include "tinyactors_host/effects.h"
 
 #include "memory.h"
 

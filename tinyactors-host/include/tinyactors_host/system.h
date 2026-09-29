@@ -63,7 +63,7 @@
 #include "params.h"
 #include "scheduler.h"
 #include "tinyactors.h"
-#include "tinyactors_host.h"
+#include "platform.h"
 
 typedef struct tah_system tah_system;
 
@@ -221,7 +221,7 @@ struct tah_system {
     bool dispatching_due;
     /* The input log (inputs.h, napi ADR 0032 section 6). */
     tah_inputs inputs;
-    /* napi's parameters, fixed at creation (napi ADR 0035). */
+    /* The kernel's parameters, fixed at creation (params.h, napi ADR 0035). */
     tah_params params;
 };
 
@@ -237,8 +237,8 @@ typedef struct {
     uint64_t incarnation;
     const ta_param_value *params;
     uint32_t param_count;
-    /* napi's own parameters (napi ADR 0035); null for their defaults. */
-    const tah_params *napi;
+    /* The kernel's parameters (params.h, napi ADR 0035); null for their defaults. */
+    const tah_params *hosting;
     /* Set to the core parameter a TA_ERR_INVALID refers to; may be null. */
     ta_param *rejected;
 } tah_system_create_params;

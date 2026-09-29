@@ -1,4 +1,4 @@
-#include "allocator.h"
+#include "tinyactors_host/allocator.h"
 
 /* Block size of the turn and call arenas; an arena grows past it on demand. */
 #define TAH_SCRATCH_BLOCK_BYTES ((size_t)16384)

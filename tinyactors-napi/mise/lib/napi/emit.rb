@@ -88,10 +88,9 @@ module NapiGen
 
         #include <string.h>
 
-        #include "hooks.h"
         #include "runtime.h"
-        #include "system.h"
         #include "tinyactors.h"
+        #include "tinyactors_host.h"
       C
       out << result_codes
       out << handle_kinds
