@@ -1,6 +1,6 @@
 # ADR 0090: Core defines the input log, its byte layout and its replay
 
-**Status:** Proposed (2026-09-29); sections 1 and 2 implemented (2026-09-29), see the implementation notes. Would amend:
+**Status:** Proposed (2026-09-29); sections 1 to 7 implemented (2026-09-29), see the implementation notes. Would amend:
 - ADR 0037: core defines the format of a log and how it replays, and still stores nothing and requires nothing;
 - ADR 0074: the data model's value codec streams through a byte sink and a byte source, and says whether its bytes are durable;
 - ADR 0089: a host replays by handing core records, instead of calling the input functions itself.
@@ -338,3 +338,41 @@ TA_API ta_result ta_actor_replay(ta_system *system, TA_IN const ta_actor_replay_
   - the offload format is unchanged byte for byte;
   - an offload now copies each value's bytes from the sink's run into the offload buffer, as it copied the arena bytes before;
   - no per-actor or per-event cost.
+
+### Sections 3 to 7
+
+- **Where:**
+  - `include/tinyactors.h`: the layout and the kinds' fields (a comment of the "input log" section), `TA_RECORD_VERSION`, `ta_record_kind`, `ta_system_set_input_sink()`, `ta_system_log_family()`, `ta_host_record_params` and `ta_system_write_host_record()`, `ta_replay_step`, `ta_host_record`, `ta_actor_replay_params` and `ta_actor_replay()`; `ta_actor_prepare_params.log` and `ta_actor_deliver_params.host_seq`.
+  - `src/input_log.{c,h}` (new): which actors are logged, the staged writer (`ta_input_open()`, `ta_input_close()`), the record builders, the framing sink around `value_write`, the reader, the value-stream source around `value_read`, and the reducer.
+  - Where records are written: `src/actor.c` (SPAWNED around the address claim in `ta_actor_spawn()`, EVENT and JUMP in `ta_actor_deliver()`, WITHDRAWN, ABANDONED, DESTROYED; `ta_actor_prepare()` reads a log), `src/invoke.c` (REPORT), `src/interpreter.c` (RELEASED and FINISHED in `ta_interpreter_resume()`), `src/system.c` (FIRED in `ta_system_dispatch_due()`; the logged bit at registration).
+  - `src/types.{c,h}`: `ta_text_writer.skip`, so a rendered text (an event name, a send ID, an origin URI) is written through a 128-byte window without a buffer of its own.
+  - napi: `bindings.rb` skips the input-log functions and types until napi ADR 0034 binds them by hand, and its generator (`mise/lib/napi/{plan,emit}.rb`) learned an `:absent` field: an optional pointer to a skipped type, left null, which is what `ta_actor_prepare_params.log` is to JavaScript today. napi installs no input sink yet, so its own recording (napi ADR 0032, 0033) is untouched.
+  - test host: `src/instruments.c` (`input.recording`, a sink that keeps the bytes and journals each record's kind; `input.log`, a source over them), `src/adapters.c`, `ruby/tinyactors_test/scenario.rb` (`recording_inputs`, `input_kinds`, `evict`, `replay_log`), `ruby/scenarios/replay.rb` (group "input log").
+- **Layout details the text left open:**
+  - a text reference's offset is from the start of the text part; `UINT32_MAX` is absent (an empty text is present with length 0);
+  - every kind field is 8 bytes: a u64, or a reference;
+  - JUMP's targets are its last fields, one reference each, after a u64 count; REPORT carries the report kind (always ERROR, see below) before `ends`;
+  - a record has at most one value (`value_count` 0 or 1).
+- **Which inputs are records:**
+  - an EVENT or DONE report goes through `ta_actor_deliver()`, so it is an EVENT record with its invoke ID; only an ERROR report is a REPORT;
+  - FIRED is written the first time a delayed send is offered: a send the router answered RETRY for has left its owner (ADR 0054), and is not written again;
+  - RELEASED is written once per macrostep, on the first resume with `no_microstep_limit` of an actor stopped past its limit;
+  - FINISHED is written when the resume that reached the final state ends; if the sink refuses it, that resume answers `TA_ERR_NOMEM` (status `TA_RUN_ERROR`) and the next writes it and answers `TA_RUN_DONE`;
+  - DESTROYED is not written for a finished actor, one the host logged EVICTED, or one the directory no longer routes its address to (an incumbent a replacement took over);
+  - SPAWNED is written by `ta_actor_spawn()` only. A replacement published without a replay (`ta_actor_prepare()` without `at` or `log`) is not reflected in the log; a logged family upgrades by replaying into a replacement. SPAWNED does not carry `pending_sends` a spawn re-arms either (ADR 0074 section 8): a host that persists by replay does not re-arm.
+- **Record numbers** live in the actor's sparse state (`log_seq`), which a logged actor now keeps: `ta_compact_sparse()` frees it no longer once the actor has written a record. A host record written for an address with no actor given has seq 0, and does not advance a number. A replay sets the actor's number to each record's, so a published copy continues it.
+- **A replaying actor's inputs are refused as runaway-stopped only for inputs:** an actor stopped past its limit takes ABANDONED and RELEASED, and host records; anything else answers `TA_ERR_BUSY`, after the record has been read.
+- **RELEASE is a sixth step** (not in the ADR's list): "resume with `no_microstep_limit` until idle" cannot be said with RUN.
+- **Replay's origins:** an event from an invocation arrives with its invoke ID and no origin, and core fills the invoke origin (ADR 0068); if the invocation is not active in the replay, the event arrives without its invoke ID. An SCXML origin is parsed back as a target (an actor reference); another processor's origin becomes a MESSAGE origin of the processor registered for its type, or none when this system has no such processor.
+- **A literal send ID** a replay meets is interned, so a system that never saw it replays it.
+- **Tests:**
+  - `tests/input_log_test.c` (new, fast): every kind byte for byte against a second writer of the layout in the test (SPAWNED with a binding, EVENT with data, a send ID, an actor origin and a host number, WITHDRAWN, FIRED, JUMP, QUEUED with data, DROPPED with seq 0, EVICTED, DESTROYED, REPORT with data, RELEASED, ABANDONED, FINISHED once); a live actor's log replayed through 1-, 7- and 4096-byte sources reproducing configuration, deep history, pending sends and the spawn's binding, and a published copy logging on; the timelines of ADR 0089 section 2 from core's own log; a log of two lives ending the first at DESTROYED; a report, a release and an abandon, a jump, a withdrawal and host records (QUEUED with data handed back, the delivered and dropped host numbers); refusals (a sink refusing `begin`; a sink refusing at every byte of a record, a sweep over every byte of the record in which the actor stays idle and the log unchanged; a value with no durable form; a timer whose FIRED is refused stays due; a refused DESTROYED leaves the actor); readers (an unknown version and kind are `TA_ERR_CORRUPT`, a newer writer's extra field is skipped, a truncated SPAWNED is `TA_ERR_CORRUPT`, a log not starting with SPAWNED and `log` with `at` are `TA_ERR_INVALID`, a replay into a published actor is `TA_ERR_INVALID`); and a counting allocator showing that delivering to a logged actor allocates exactly as much as with no sink. None is exhaustive: the byte sweep is bounded by one record's size.
+  - test host `ruby/scenarios/replay.rb`, group "input log": a named actor logged by core, evicted, and rebuilt a week later from its log read 7 bytes at a time (nothing logged or fired twice, the records' kinds as expected, a replaying actor writing none); a record the sink refuses refusing its input.
+- **Costs:**
+  - an unlogged actor: 0 bytes in `ta_actor` (232 before and after); an actor that has a sparse state for another reason pays 8 bytes more for `log_seq` (176 to 184 bytes; its three flags fill padding);
+  - a logged actor keeps a sparse state (184 bytes) from its first record on;
+  - a definition: 0 bytes (`input_logged` fills padding; 896 before and after);
+  - a system: 352 bytes (1,328 to 1,680), of which 256 are the scratch buffer (`TA_INPUT_SCRATCH_BYTES`), plus the logged families' atoms;
+  - a record: its fixed part is 32 bytes plus 8 per field; texts are padded to 8; a value costs, for each piece the data model writes, a 4-byte length and padding to 8, plus an 8-byte terminator. As written by the test: SPAWNED for `timers`/`a`/`v1` without a binding 72 bytes; EVENT `e1` with no data 96 bytes; FIRED `t1` 48; DROPPED 40; EVICTED, DESTROYED, ABANDONED and RELEASED 32;
+  - writing a record allocates nothing (tested); reading one allocates its fixed part and text part once, and frees them before the call returns;
+  - a delivery to an unlogged actor costs one flag test more.
