@@ -1,6 +1,6 @@
 # ADR 0035: A system is created with its parameters
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Applies core ADR 0092 (system parameters). Amends:
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refined by ADR 0036: the import path sizes its refusal by `compileTextBytes`, the staging bound holds outside turns and staging lives with the sink, `traceValueBytes` is `valueBytes`, and the parameters travel as one `tinyactors.params` attribute. Applies core ADR 0092 (system parameters). Amends:
 - ADR 0005 and ADR 0007: the scheduling budgets and mailbox limits become parameters;
 - ADR 0016 and ADR 0017: the trace value and log limits become parameters, and the staging buffer has a fixed size.
 **Date:** 2026-09-29

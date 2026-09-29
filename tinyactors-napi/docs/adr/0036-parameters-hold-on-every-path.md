@@ -1,6 +1,6 @@
 # ADR 0036: Parameters hold on every path
 
-**Status:** Proposed (2026-09-29). Refines napi ADR 0035 (a system is created with its parameters) on four points found while implementing it; core ADR 0093 settles the fifth, the event-block cache.
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0035 (a system is created with its parameters) on four points found while implementing it; core ADR 0093 settles the fifth, the event-block cache.
 **Date:** 2026-09-29
 
 ## Context
@@ -125,4 +125,79 @@ property at a fraction of the cost.
 
 ## Implementation notes
 
-None yet.
+- **Commits:** `ed53212` (§1), `8a31b00` and `e67dff0` (§2), `43331b1` (§3),
+  `2174e61` (§4). Core ADR 0093, decided with this one, is `ee1db2c`.
+- **§1, where:** `src/import.{c,h}` (`tna_import_failure.message` is a
+  pointer and a size; `tna_import_failure_open` and `_reset`),
+  `src/napi_children.{c,h}`, `src/napi_system.{c,h}` (one block of three
+  buffers allocated at creation: the refusal, scratch to reframe a child's
+  refusal, and the invoker's fault text, each `compileTextBytes` plus 256
+  bytes of napi's framing). The invoker's fault text had the same 1,023-byte
+  array and uses the same block. **Test:** `test/import.js`
+  (`longRefusals`): a 1,000-byte unknown target arrives whole at
+  `compileTextBytes` 16384 (1,093 bytes of text), for a document and for a
+  child nested at define(), and is cut as core cuts it at the default.
+- **§2, where:**
+  - `src/runtime.c`: `tna_call_end` hands the sink a request when a call
+    from JavaScript ends outside a turn with the staging at or past the
+    bound;
+  - `src/napi_trace.c` (`tna_trace_flush_if_full`,
+    `tna_trace_after_method`);
+  - the hand-written methods that run core outside a turn and do not use
+    `tna_call` (`completeLoad`, `offload`, `loadOffloaded`, replay's
+    `prepare` and `run`);
+  - `src/otlp.c`: `tna_otlp_init` reserves the span staging whole and
+    fails `setTraceSink` with `out-of-memory` when it cannot.
+
+  The check runs at the end of each call, not per record, so a request can
+  exceed the bound by one call's records. The largest measured was 64 KiB
+  plus under 4 KiB for 3,000 spawns at a 64 KiB bound.
+- **§2, a correction found by the benchmark (`e67dff0`).** Shrinking the
+  staging back to the bound after every request reallocated it every turn
+  under a steady traced load: each turn that stops at the bound overshoots
+  it by one macrostep. That cost 0.03 allocator calls per event in `full +
+  values`. It now shrinks only after a burst past four times a typical
+  turn's use, the rule the staging followed before, but back to the bound
+  instead of freed.
+- **§2, test:** `test/tracing.js` (`stagingBoundOutsideTurns`):
+  - no staging reserved without a sink;
+  - a sink reserves the bound whole;
+  - 3,000 spawns at 64 KiB call the sink while the loop runs, outside a
+    turn;
+  - no request past the bound plus 4 KiB;
+  - all 3,000 spawned spans arrive;
+  - removing the sink frees the staging.
+
+  `tools/otlp.js` and the debugger take whatever batches arrive, so being
+  called outside a turn needed no change there. `index.d.ts` and
+  `docs/tracing.md` say the sink can be called outside a turn and what
+  happens to an exception it throws.
+- **§3:** a rename across `src/params.{c,h}`, `src/napi_system.{c,h}`,
+  `src/napi_trace.c`, `lib/system.js`, `index.d.ts`, `README.md`,
+  `docs/tracing.md` and the tests. `setTraceSink({ valueLimit })` still
+  throws, now naming `valueBytes`.
+- **§4, where:** `lib/params.js` (`DEFAULTS_VERSION` `v1`,
+  `parameterAttribute`), `lib/system.js`. **Test:** `test/tracing.js`:
+  - a default system sends `v1` and no per-parameter attributes;
+  - changed parameters are listed in name order
+    (`v1;interpreterBytes=131072;microstepLimit=777;valueBytes=4096`);
+  - the application's own attribute wins;
+  - `defaultsVersion()` records v1's defaults, and fails when a default
+    changes without a new version.
+- **§4, request size:** a default system's first request went from 2,441
+  to 1,457 bytes (−984). The small-request test is back to its 1,000-byte
+  bound.
+- **Benchmark** (`bench-compare 5b46a4a`, 100,000 actors; Node machine
+  a99e44a37e2e, Bun c989bd79a51f):
+  - **Bun:** ns/event within 5% everywhere (untraced +0.4%). RSS per actor
+    is down in most traced variants (−48% in `decoded`), and up 6% in
+    `macrosteps`, within Bun's run-to-run spread noted in ADR 0035.
+  - **Node:** the first 2-run pass flagged +6% to +16% ns/event in traced
+    variants. A 4-run pass of the flagged variants read −0.4% to +1.5%, so
+    it was noise. RSS per actor is down up to 63% (`decoded`), from the
+    staging no longer growing on first use.
+  - **`alloc/event` reads 0.01 where it read 0.00** in every variant. That
+    is core ADR 0093's warm-up, counted from the first delivery; steady
+    state is zero (ADR 0093's notes).
+- **Memory per default system:** without a sink, native 97,464 bytes (core
+  ADR 0093's notes). With a sink, plus the staging (1 MiB by default).

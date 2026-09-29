@@ -1,6 +1,6 @@
 # ADR 0093: The event-block cache fills on demand up to its bound
 
-**Status:** Proposed (2026-09-29). Would amend ADR 0092 (the event-block cache is created up front) and refine ADR 0069 (event blocks) and ADR 0064 (the cache of blocks lent to running actors).
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Amends ADR 0092 (the event-block cache is created up front) and refine ADR 0069 (event blocks) and ADR 0064 (the cache of blocks lent to running actors).
 **Date:** 2026-09-29
 
 ## Context
@@ -82,4 +82,33 @@ zero-allocation guarantee would hold only for workloads within 64 blocks.
 
 ## Implementation notes
 
-None yet.
+- **Where:** `src/system.c` (creation no longer fills the cache),
+  `src/interpreter.c` (`ta_interpreter_block_cache_fill` removed; the take
+  and settle paths already made a block on demand and kept one while there
+  was room), `src/system.h` and `include/tinyactors.h` (the comments, and
+  `TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE` 4 → 1024). napi: `lib/params.js` no
+  longer derives the cache from `messageBudget`; `index.d.ts` says what the
+  parameter now means. Commit `ee1db2c`.
+- **Tests:** `tests/params_test.c` (`test_block_cache_on_demand`, with a
+  counting allocator):
+  - creation allocates the same with a bound of 0, of 3 and the default;
+  - concurrency rising to 2 makes 2 blocks, and then nothing;
+  - rising to 5 with a bound of 3 makes 3 more and frees 2 on release;
+  - two rounds within the bound allocate nothing;
+  - rounds past the bound take and free a block per delivery past it;
+  - out of memory on the on-demand path answers `TA_ERR_NOMEM`, the actor
+    is unchanged, and a retry is delivered (ADR 0069).
+
+  The test host's `scale_test` batched-delivery check now reads "0.00
+  allocator calls per event with the default cache (1024), 0.98 with a cache
+  of 4; creation allocated 97,272 bytes with either bound, 97,272 with
+  none". napi's `scale.js` and `allocations.js` pass with the default.
+- **Memory per default napi system** (200 systems, M4 Max): native bytes
+  908,472 → 97,464; RSS about 1.05 MB → 124 KB on Node and 120 KB on Bun.
+  The cache was most of both.
+- **Warm-up is now measured.** The blocks that creation made before, a
+  system now makes as its concurrency first rises: about 1,024 allocator
+  calls once, for a system that reaches the default bound. napi's tracing
+  bench measures from the first delivery, so its `alloc/event` reads 0.01
+  (about 1,024 calls over the run's events) where it read 0.00. Steady state
+  is still zero, which the three tests above check after their warm-up.

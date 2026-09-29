@@ -1,6 +1,6 @@
 # ADR 0092: System parameters are fixed at creation and bound every buffer
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Nesting past `interpreterNesting` is refused when the child is spawned (`TA_ERR_UNSUPPORTED`), not at `define()`, and `eventNameDepth` can only be lowered (8 to 64); see the notes. Amends:
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Nesting past `interpreterNesting` is refused when the child is spawned (`TA_ERR_UNSUPPORTED`), not at `define()`, and `eventNameDepth` can only be lowered (8 to 64); see the notes. Refined by ADR 0093: the event-block cache fills on demand up to `eventBlockCache` (default 1024) instead of being created at creation. Amends:
 - ADR 0060: interpreter frames and scratch are sized by a parameter, not per definition, and a chart that needs more is refused when it is defined;
 - ADR 0075: the microstep limit is a parameter, and each definition's limit defaults to it;
 - ADR 0023: every buffer comes from the provided allocator at creation.
