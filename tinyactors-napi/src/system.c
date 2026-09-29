@@ -26,20 +26,29 @@ ta_result tna_system_create(const tna_system_create_params *params, tna_system *
     if (system == NULL) {
         return TA_ERR_NOMEM;
     }
+    tna_params napi;
+    if (params->napi != NULL) {
+        napi = *params->napi;
+    } else {
+        tna_params_defaults(&napi);
+    }
     *system = (tna_system){
         .budgets = {
-            .resumes = TNA_DEFAULT_RESUMES_PER_TURN,
-            .messages = TNA_DEFAULT_MESSAGE_BUDGET,
-            .microsteps = TNA_DEFAULT_RESUME_BUDGET,
-            .actions = TNA_DEFAULT_ACTION_BUDGET,
+            .resumes = (uint32_t)napi.values[TNA_PARAM_RESUMES_PER_TURN],
+            .messages = (uint32_t)napi.values[TNA_PARAM_MESSAGE_BUDGET],
+            .microsteps = (uint32_t)napi.values[TNA_PARAM_RESUME_BUDGET],
+            .actions = (uint32_t)napi.values[TNA_PARAM_ACTION_BUDGET],
         },
-        .due_budget = TNA_DEFAULT_DUE_BUDGET,
+        .due_budget = (uint32_t)napi.values[TNA_PARAM_DUE_BUDGET],
         .clock = { .kind = TNA_CLOCK_REALTIME, .now = tna_monotonic_ns },
+        .params = napi,
     };
     system->clock.origin = system->clock.now(system->clock.now_context);
     tna_allocator_init(&system->allocator);
     tna_sched_init(&system->sched, tna_allocator_for(&system->allocator, TNA_MEMORY_SCHEDULING),
                    tna_allocator_for(&system->allocator, TNA_MEMORY_ENVELOPES));
+    system->sched.max_queued = (uint32_t)napi.values[TNA_PARAM_MAX_QUEUED_MESSAGES];
+    system->sched.max_retained = napi.values[TNA_PARAM_MAX_RETAINED_BYTES];
     tna_directory_init(&system->directory, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
     tna_loads_init(&system->loads, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
     tna_offloads_init(&system->offloads, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
@@ -63,6 +72,7 @@ ta_result tna_system_create(const tna_system_create_params *params, tna_system *
         .incarnation = params->incarnation,
         .params = params->params,
         .param_count = params->param_count,
+        .rejected = params->rejected,
     };
     result = ta_system_create(&config, &system->core);
     if (result != TA_OK) {

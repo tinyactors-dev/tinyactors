@@ -304,7 +304,7 @@ async function invokerLiteralSource() {
 async function doneRetried() {
   let reporter;
   const system = createSystem({
-    scheduling: { maxQueuedMessages: 2 },
+    parameters: { maxQueuedMessages: 2 },
     invokers: { job: { start(_, report) { reporter = report; } } },
   });
   const actor = system.spawn(system.define(

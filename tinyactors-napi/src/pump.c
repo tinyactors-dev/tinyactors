@@ -35,47 +35,6 @@ static bool tna_option(napi_env env, napi_value object, const char *name, napi_v
     return true;
 }
 
-/* A non-negative integer option, or `fallback` when absent. */
-static bool tna_count_option(napi_env env, napi_value object, const char *name, uint32_t *inout) {
-    napi_value value = NULL;
-    if (!tna_option(env, object, name, &value)) {
-        return false;
-    }
-    if (value == NULL) {
-        return true;
-    }
-    double number = 0;
-    if (napi_get_value_double(env, value, &number) != napi_ok || number < 0 || number > 4294967295.0 ||
-        number != (double)(uint32_t)number) {
-        char message[128];
-        snprintf(message, sizeof message, "createSystem: scheduling.%s must be a non-negative integer", name);
-        tna_throw(env, "invalid", message);
-        return false;
-    }
-    *inout = (uint32_t)number;
-    return true;
-}
-
-/* scheduling.maxRetainedBytes (ADR 0005 point 9): 0 or absent means no limit. */
-static bool tna_bytes_option(napi_env env, napi_value object, const char *name, uint64_t *out) {
-    napi_value value = NULL;
-    if (!tna_option(env, object, name, &value)) {
-        return false;
-    }
-    if (value == NULL) {
-        return true;
-    }
-    double number = 0;
-    if (napi_get_value_double(env, value, &number) != napi_ok || !(number >= 0) || number > 9007199254740991.0) {
-        char message[128];
-        snprintf(message, sizeof message, "createSystem: scheduling.%s must be a non-negative number", name);
-        tna_throw(env, "invalid", message);
-        return false;
-    }
-    *out = (uint64_t)number;
-    return true;
-}
-
 static bool tna_hook_option(napi_env env, napi_value object, const char *name, napi_ref *out) {
     napi_value value = NULL;
     if (!tna_option(env, object, name, &value)) {
@@ -253,33 +212,6 @@ static void tna_pump_arm(tna_system *system, ta_time delay, void *context) {
     napi_close_handle_scope(env, scope);
 }
 
-bool tna_pump_core_params(napi_env env, napi_value options, ta_param_value out[TNA_CORE_PARAM_COUNT]) {
-    napi_valuetype type = napi_undefined;
-    if (options != NULL) {
-        napi_typeof(env, options, &type);
-    }
-    napi_value scheduling = NULL;
-    uint32_t microstep_limit = TNA_DEFAULT_MICROSTEP_LIMIT;
-    uint32_t messages = TNA_DEFAULT_MESSAGE_BUDGET;
-    if (type == napi_object &&
-        (!tna_option(env, options, "scheduling", &scheduling) ||
-         !tna_count_option(env, scheduling, "microstepLimit", &microstep_limit) ||
-         !tna_count_option(env, scheduling, "messageBudget", &messages))) {
-        return false;
-    }
-    if (microstep_limit > 2147483647u) {
-        tna_throw(env, "invalid", "createSystem: scheduling.microstepLimit must be at most 2147483647");
-        return false;
-    }
-    /* Runaways (core ADR 0075); 0 for no limit. */
-    out[0] = (ta_param_value){ .param = TA_PARAM_MICROSTEP_LIMIT, .value = microstep_limit };
-    /* A delivered event holds a core event block until its actor is
-     * resumed, the next turn at the latest, so core keeps a turn's worth of
-     * them, created with the system (core ADRs 0069, 0092). */
-    out[1] = (ta_param_value){ .param = TA_PARAM_EVENT_BLOCK_CACHE, .value = messages > 65536u ? 65536u : messages };
-    return true;
-}
-
 bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, napi_value options) {
     wrapper->env = env;
     wrapper->destroy_finished = true;
@@ -293,23 +225,12 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
             return false;
         }
     }
-    napi_value scheduling = NULL;
     napi_value initial_value = NULL;
     tna_clock_kind clock = TNA_CLOCK_REALTIME;
     ta_time initial = 0;
-    /* Parsed again only to validate it: core took it at creation (tna_pump_core_params). */
-    uint32_t microstep_limit = TNA_DEFAULT_MICROSTEP_LIMIT;
-    tna_turn_budgets *budgets = &wrapper->system->budgets;
-    if (!tna_option(env, options, "scheduling", &scheduling) ||
-        !tna_count_option(env, scheduling, "resumeBudget", &budgets->microsteps) ||
-        !tna_count_option(env, scheduling, "actionBudget", &budgets->actions) ||
-        !tna_count_option(env, scheduling, "resumesPerTurn", &budgets->resumes) ||
-        !tna_count_option(env, scheduling, "messageBudget", &budgets->messages) ||
-        !tna_count_option(env, scheduling, "maxQueuedMessages", &wrapper->system->sched.max_queued) ||
-        !tna_bytes_option(env, scheduling, "maxRetainedBytes", &wrapper->system->sched.max_retained) ||
-        !tna_count_option(env, scheduling, "dueBudget", &wrapper->system->due_budget) ||
-        !tna_count_option(env, scheduling, "microstepLimit", &microstep_limit) ||
-        !tna_clock_option(env, options, &clock) || !tna_option(env, options, "initialTime", &initial_value) ||
+    /* The scheduling budgets and mailbox limits are parameters, which the
+     * system took at creation (napi ADR 0035). */
+    if (!tna_clock_option(env, options, &clock) || !tna_option(env, options, "initialTime", &initial_value) ||
         (initial_value != NULL && !tna_time_value(env, initial_value, "createSystem: initialTime", &initial)) ||
         !tna_finished_option(env, options, &wrapper->destroy_finished) ||
         !tna_hook_option(env, options, "done", &wrapper->done_hook) ||
@@ -317,12 +238,6 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
         !tna_hook_option(env, options, "deadLetter", &wrapper->dead_letter_hook)) {
         return false;
     }
-    if (budgets->microsteps == 0 || budgets->resumes == 0 || budgets->messages == 0 || wrapper->system->due_budget == 0) {
-        tna_throw(env, "invalid",
-                  "createSystem: scheduling.resumeBudget, resumesPerTurn, messageBudget and dueBudget must be at least 1");
-        return false;
-    }
-    (void)microstep_limit;
     if (tna_system_set_clock(wrapper->system, clock, initial) != TA_OK) {
         tna_throw(env, "invalid", "createSystem: cannot set the clock");
         return false;

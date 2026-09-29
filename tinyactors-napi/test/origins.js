@@ -191,7 +191,7 @@ async function inspectedOrigins() {
   let reporter;
   const system = createSystem({
     clock: 'manual',
-    scheduling: { resumeBudget: 1 },
+    parameters: { resumeBudget: 1 },
     io,
     invokers: { svc: { start(_, report) { reporter = report; } } },
   });

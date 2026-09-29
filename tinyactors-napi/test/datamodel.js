@@ -221,7 +221,7 @@ async function foreachNames() {
 // A small actionBudget splits a <foreach> over a large array across turns,
 // and other actors run between them (core ADR 0061; left by step 5).
 async function foreachAcrossTurns() {
-  const system = createSystem({ scheduling: { actionBudget: 50 } });
+  const system = createSystem({ parameters: { actionBudget: 50 } });
   const busy = system.spawn(
     system.define(
       statechart({ family: 'busy', revision: 'v1' })
@@ -254,7 +254,7 @@ async function handleScopes() {
     ? (require('node:v8').setFlagsFromString('--expose-gc'), require('node:vm').runInNewContext('gc'))
     : () => Bun.gc(true));
   const heap = [];
-  const system = createSystem({ scheduling: { actionBudget: 0 } });
+  const system = createSystem({ parameters: { actionBudget: 0 } });
   const definition = system.define(
     statechart({ family: 'garbage', revision: 'v1' })
       .data('items', literal(Array.from({ length: 20000 }, (_, index) => index)))
@@ -365,7 +365,7 @@ async function pingPong() {
 // with the reason and the target (napi ADR 0022), and no dead letter.
 async function originOfADestroyedSender() {
   const dead = [];
-  const system = createSystem({ scheduling: { messageBudget: 1 }, deadLetter: (record) => dead.push(record) });
+  const system = createSystem({ parameters: { messageBudget: 1 }, deadLetter: (record) => dead.push(record) });
   const receiver = system.spawn(
     system.define(
       statechart({ family: 'receiver', revision: 'v1' })

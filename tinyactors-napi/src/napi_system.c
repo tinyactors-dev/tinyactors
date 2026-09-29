@@ -42,6 +42,7 @@ const char tna_napi_system_tag = 0;
 static void tna_free_wrapper(tna_napi_system *wrapper) {
     tna_system_free(wrapper->system);
     tna_env *data = wrapper->env_data;
+    free(wrapper->trace_value);
     free(wrapper);
     tna_env_release(data);
 }
@@ -230,6 +231,156 @@ tna_napi_system *tna_open_this(napi_env env, napi_callback_info info) {
 }
 
 /* new System(facade?, options?): facade is the public System (lib/system.js). */
+/* The number named `name` in `object`, or false after throwing; absent leaves `*out` alone. */
+static bool tna_parameter_value(napi_env env, napi_value object, const char *name, uint64_t *out, bool *given) {
+    *given = false;
+    if (object == NULL) {
+        return true;
+    }
+    napi_value value = NULL;
+    napi_valuetype type = napi_undefined;
+    if (napi_get_named_property(env, object, name, &value) != napi_ok || napi_typeof(env, value, &type) != napi_ok) {
+        tna_throw(env, "invalid", "createSystem(): cannot read parameters");
+        return false;
+    }
+    if (type == napi_undefined) {
+        return true;
+    }
+    double number = 0;
+    if (type != napi_number || napi_get_value_double(env, value, &number) != napi_ok || !(number >= 0) ||
+        number > 9007199254740991.0 || number != (double)(uint64_t)number) {
+        char message[160];
+        snprintf(message, sizeof message, "createSystem(): parameters.%s must be a non-negative integer", name);
+        tna_throw(env, "invalid", message);
+        return false;
+    }
+    *out = (uint64_t)number;
+    *given = true;
+    return true;
+}
+
+/*
+ * createSystem's `parameters` (napi ADR 0035): core's (core ADR 0092),
+ * named as ta_param_info_of() names them, go to `core`; napi's go to
+ * `napi`. lib/system.js checks names and bounds first; core checks its own
+ * again at creation.
+ */
+static bool tna_read_parameters(napi_env env, napi_value options, ta_param_value core[TA_PARAM_COUNT], uint32_t *core_count,
+                         tna_params *napi) {
+    napi_value object = NULL;
+    if (options != NULL) {
+        napi_valuetype type = napi_undefined;
+        if (napi_get_named_property(env, options, "parameters", &object) != napi_ok ||
+            napi_typeof(env, object, &type) != napi_ok) {
+            tna_throw(env, "invalid", "createSystem(): cannot read parameters");
+            return false;
+        }
+        if (type == napi_undefined || type == napi_null) {
+            object = NULL;
+        } else if (type != napi_object) {
+            tna_throw(env, "invalid", "createSystem(): parameters must be an object");
+            return false;
+        }
+    }
+    *core_count = 0;
+    for (uint32_t param = 0; param < TA_PARAM_COUNT; param += 1u) {
+        ta_param_info info = { 0 };
+        char name[64];
+        if (ta_param_info_of((ta_param)param, &info) != TA_OK || info.name.len >= sizeof name) {
+            continue;
+        }
+        memcpy(name, info.name.ptr, info.name.len);
+        name[info.name.len] = '\0';
+        uint64_t value = 0;
+        bool given = false;
+        if (!tna_parameter_value(env, object, name, &value, &given)) {
+            return false;
+        }
+        if (given) {
+            core[(*core_count)++] = (ta_param_value){ .param = (ta_param)param, .value = value };
+        }
+    }
+    tna_params_defaults(napi);
+    for (uint32_t param = 0; param < TNA_PARAM_COUNT; param += 1u) {
+        const tna_param_info *info = &tna_param_table[param];
+        uint64_t value = 0;
+        bool given = false;
+        if (!tna_parameter_value(env, object, info->name, &value, &given)) {
+            return false;
+        }
+        if (given) {
+            if (value < info->min || value > info->max) {
+                char message[160];
+                snprintf(message, sizeof message, "createSystem(): parameters.%s must be from %llu to %llu",
+                         info->name, (unsigned long long)info->min, (unsigned long long)info->max);
+                tna_throw(env, "invalid", message);
+                return false;
+            }
+            napi->values[param] = value;
+        }
+    }
+    return true;
+}
+
+/* parameterTable(): every parameter's name, owner, default, bounds and unit (napi ADR 0035). */
+static napi_value tna_parameter_table(napi_env env, napi_callback_info info) {
+    (void)info;
+    napi_value array = NULL;
+    if (napi_create_array(env, &array) != napi_ok) {
+        return NULL;
+    }
+    uint32_t index = 0;
+    for (uint32_t param = 0; param < TA_PARAM_COUNT + TNA_PARAM_COUNT; param += 1u) {
+        const char *name = NULL;
+        size_t name_len = 0;
+        const char *unit = NULL;
+        size_t unit_len = 0;
+        uint64_t numbers[3];
+        const char *owner = param < TA_PARAM_COUNT ? "core" : "napi";
+        if (param < TA_PARAM_COUNT) {
+            ta_param_info core = { 0 };
+            if (ta_param_info_of((ta_param)param, &core) != TA_OK) {
+                continue;
+            }
+            name = core.name.ptr;
+            name_len = core.name.len;
+            unit = core.unit.ptr;
+            unit_len = core.unit.len;
+            numbers[0] = core.default_value;
+            numbers[1] = core.min;
+            numbers[2] = core.max;
+        } else {
+            const tna_param_info *napi = &tna_param_table[param - TA_PARAM_COUNT];
+            name = napi->name;
+            name_len = strlen(name);
+            unit = napi->unit;
+            unit_len = strlen(unit);
+            numbers[0] = napi->default_value;
+            numbers[1] = napi->min;
+            numbers[2] = napi->max;
+        }
+        napi_value entry = NULL;
+        napi_value text = NULL;
+        napi_value number = NULL;
+        if (napi_create_object(env, &entry) != napi_ok) {
+            return NULL;
+        }
+        static const char *const keys[3] = { "default", "min", "max" };
+        napi_create_string_utf8(env, name, name_len, &text);
+        napi_set_named_property(env, entry, "name", text);
+        napi_create_string_utf8(env, unit, unit_len, &text);
+        napi_set_named_property(env, entry, "unit", text);
+        napi_create_string_utf8(env, owner, NAPI_AUTO_LENGTH, &text);
+        napi_set_named_property(env, entry, "owner", text);
+        for (uint32_t key = 0; key < 3u; key += 1u) {
+            napi_create_double(env, (double)numbers[key], &number);
+            napi_set_named_property(env, entry, keys[key], number);
+        }
+        napi_set_element(env, array, index++, entry);
+    }
+    return array;
+}
+
 static napi_value tna_construct(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
     size_t argc = 2;
@@ -269,17 +420,39 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
             return tna_throw(env, "invalid", "createSystem(): incarnation must fit in 64 bits");
         }
     }
-    ta_param_value params[TNA_CORE_PARAM_COUNT];
-    if (!tna_pump_core_params(env, argv[1], params)) {
+    ta_param_value params[TA_PARAM_COUNT];
+    uint32_t param_count = 0;
+    tna_params napi_params;
+    if (!tna_read_parameters(env, options_type == napi_object ? argv[1] : NULL, params, &param_count, &napi_params)) {
         free(wrapper);
         return NULL;
     }
-    ta_result result = tna_system_create(
-        &(tna_system_create_params){ .incarnation = incarnation, .params = params, .param_count = TNA_CORE_PARAM_COUNT },
-        &wrapper->system);
+    ta_param rejected = TA_PARAM_COUNT;
+    ta_result result = tna_system_create(&(tna_system_create_params){ .incarnation = incarnation,
+                                                                      .params = params,
+                                                                      .param_count = param_count,
+                                                                      .napi = &napi_params,
+                                                                      .rejected = &rejected },
+                                         &wrapper->system);
     if (result != TA_OK) {
         free(wrapper);
+        if (result == TA_ERR_INVALID && rejected != TA_PARAM_COUNT) {
+            ta_param_info info = { 0 };
+            (void)ta_param_info_of(rejected, &info);
+            char message[160];
+            snprintf(message, sizeof message, "createSystem(): parameters.%.*s must be from %llu to %llu",
+                     (int)info.name.len, info.name.ptr, (unsigned long long)info.min, (unsigned long long)info.max);
+            return tna_throw(env, "invalid", message);
+        }
         return tna_throw(env, tna_result_code(result), "cannot create a system");
+    }
+    /* napi's buffers are allocated with the system (napi ADR 0035). */
+    wrapper->trace_value_bytes = (size_t)napi_params.values[TNA_PARAM_TRACE_VALUE_BYTES];
+    wrapper->trace_value = malloc(wrapper->trace_value_bytes + 1u);
+    if (wrapper->trace_value == NULL) {
+        tna_system_free(wrapper->system);
+        free(wrapper);
+        return tna_throw(env, "out-of-memory", "cannot allocate the system's buffers");
     }
     wrapper->env_data = data;
     bool values_made = tna_values_init(&wrapper->values, env, &wrapper->system->allocator);
@@ -290,6 +463,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     if (!values_made || !tna_js_datamodel_init(&wrapper->dm, wrapper, env)) {
         tna_js_datamodel_close(&wrapper->dm, true);
         tna_system_free(wrapper->system);
+        free(wrapper->trace_value);
         free(wrapper);
         return tna_throw(env, "out-of-memory", "cannot create the data model");
     }
@@ -297,6 +471,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);
         tna_js_datamodel_close(&wrapper->dm, true);
+        free(wrapper->trace_value);
         free(wrapper);
         return NULL;
     }
@@ -307,6 +482,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);
         tna_js_datamodel_close(&wrapper->dm, true);
+        free(wrapper->trace_value);
         free(wrapper);
         return tna_throw(env, "invalid", "cannot wrap a system");
     }
@@ -1897,5 +2073,10 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
     napi_value constructor = NULL;
     napi_status status = napi_define_class(env, "System", NAPI_AUTO_LENGTH, tna_construct, NULL,
                                            sizeof properties / sizeof properties[0], properties, &constructor);
-    return status == napi_ok ? napi_set_named_property(env, exports, "System", constructor) : status;
+    if (status != napi_ok || napi_set_named_property(env, exports, "System", constructor) != napi_ok) {
+        return napi_generic_failure;
+    }
+    napi_value table = NULL;
+    status = napi_create_function(env, "parameterTable", NAPI_AUTO_LENGTH, tna_parameter_table, NULL, &table);
+    return status == napi_ok ? napi_set_named_property(env, exports, "parameterTable", table) : status;
 }

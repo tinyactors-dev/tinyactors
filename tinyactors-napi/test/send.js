@@ -170,7 +170,7 @@ async function close() {
 
 // A full queue: post() throws, send() rejects (ADR 0008), for both limits.
 async function backpressure() {
-  const system = createSystem({ scheduling: { maxQueuedMessages: 2, maxRetainedBytes: 100 } });
+  const system = createSystem({ parameters: { maxQueuedMessages: 2, maxRetainedBytes: 100 } });
   const definition = system.define(chart());
   const actor = system.spawn(definition);
   await system.flush();
@@ -189,7 +189,7 @@ async function backpressure() {
   actor.post('ping', new Uint8Array(100)); // fits again once delivered
   await system.flush();
   assertThrows(() => actor.post('ping', 'x', { bytes: -1 }), 'invalid');
-  assertThrows(() => createSystem({ scheduling: { maxRetainedBytes: -1 } }), 'invalid');
+  assertThrows(() => createSystem({ parameters: { maxRetainedBytes: -1 } }), 'invalid');
   system.close();
 }
 

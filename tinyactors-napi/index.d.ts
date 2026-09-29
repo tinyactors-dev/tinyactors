@@ -43,7 +43,8 @@ export interface SystemOptions {
    * default 64 random bits. Tests that compare session text pass 0.
    */
   incarnation?: number | bigint;
-  scheduling?: SchedulingOptions;
+  /** System parameters, fixed at creation (core ADR 0092, napi ADR 0035); see SystemParameters. */
+  parameters?: SystemParameters;
   /**
    * What happens to an actor that reaches a top-level final state (ADR 0012):
    * "destroy" (the default) destroys it after the `done` hook returns;
@@ -188,44 +189,103 @@ export interface LoaderOptions {
   readonly maxWaiting?: number;
 }
 
-export interface SchedulingOptions {
-  /** Microsteps one resume may run before the actor yields (core's `budget`); default 64. */
+/**
+ * A system's parameters (core ADR 0092, napi ADR 0035): each set once when
+ * the system is created and never changed; an unknown name, a non-integer
+ * or a value out of bounds throws `invalid` naming the parameter and its
+ * bounds. parameterInfo() lists every one with its default, bounds and unit;
+ * System.parameters reads them back.
+ */
+export interface SystemParameters {
+  // Core's (core ADR 0092); their bounds come from core's own table.
+  /**
+   * Microsteps one macrostep may run before its actor is quarantined with
+   * fault code `runaway` (core ADR 0075); 0 for no limit; default 100000. A
+   * tenth of it writes a `tinyactors.macrostep.long` log. `release()` lets a
+   * runaway finish its macrostep; the next one has the limit again.
+   */
+  microstepLimit?: number;
+  /**
+   * Event blocks core keeps for reuse, created with the system (core ADR
+   * 0069); at most 65536. Default: `messageBudget`, the most a turn holds at
+   * once, so a warm system allocates nothing per message; lower it (about 792
+   * bytes a block) to reserve less at the price of allocating under load.
+   */
+  eventBlockCache?: number;
+  /** Segments an event name may have; default 64, from 8 to 64. */
+  eventNameDepth?: number;
+  /** Bytes kept of a data model's refusal message; default 256, from 16 to 65536. */
+  compileMessageBytes?: number;
+  /** Longest unknown target that gets a nearest-name suggestion; default 128, at most 65536. */
+  compileNearestBytes?: number;
+  /**
+   * One interpreter's frames and sets, reserved at creation; a chart that
+   * needs more is refused by define(), naming the figure. Default 65536,
+   * from 1024 to 1 GiB.
+   */
+  interpreterBytes?: number;
+  /** One run's temporaries whose size depends on content (rendered text, <param>s); default 16384, from 256 to 1 GiB. */
+  renderBytes?: number;
+  /** Interpreters running inside one another (cancelling nested invocations); default 4, from 1 to 64. */
+  interpreterNesting?: number;
+  /** Resident actors; default and maximum 2147483647 (no limit). */
+  maxActors?: number;
+  /** Pending delayed sends of one actor; default and maximum 2147483647 (no limit). */
+  maxPendingSends?: number;
+  /** Live definitions; default and maximum 2147483647 (no limit). */
+  maxDefinitions?: number;
+  // napi's.
+  /**
+   * Bytes of a value's JSON in a trace or log attribute (`values: true`); a
+   * longer value is cut and marked `<key>.truncated`. Default 1024, from 16
+   * to 1 MiB.
+   */
+  traceValueBytes?: number;
+  /**
+   * OTLP staging kept between turns; a turn whose spans pass it ends early,
+   * so the sink gets that turn's request and the next turn another. Default
+   * 1 MiB, from 64 KiB to 1 GiB.
+   */
+  traceStagingBytes?: number;
+  /** Data models registerDatamodel() may add; default 8, at most 1024. */
+  registeredDatamodels?: number;
+  /** Longest registered data model name, in bytes; default 32, from 8 to 256. */
+  datamodelNameBytes?: number;
+  /** Microsteps one resume may run before the actor yields (core's `budget`); default 64, at least 1. */
   resumeBudget?: number;
   /**
    * Units of executable content one resume may run before the actor pauses
    * inside a microstep (core ADR 0061); 0 means no limit; default 1024.
    */
   actionBudget?: number;
-  /** Runnable actors resumed in one pump turn; default 1024. */
+  /** Runnable actors resumed in one pump turn; default 1024, at least 1. */
   resumesPerTurn?: number;
-  /** Maximum due sends dispatched during one pump turn; at least 1, default 1024. */
+  /** Due sends dispatched during one pump turn; default 1024, at least 1. */
   dueBudget?: number;
-  /**
-   * Microsteps one macrostep may run before its actor is quarantined with
-   * fault code `runaway` (core ADR 0075); 0 for no limit, default 100000. A
-   * tenth of it writes a `tinyactors.macrostep.long` log. `release()` lets a
-   * runaway finish its macrostep; the next one has the limit again.
-   */
-  microstepLimit?: number;
-  /**
-   * Deliveries started during one pump turn, and dead letters reported in
-   * one turn; at least 1, default 1024.
-   */
+  /** Deliveries started, and dead letters reported, in one pump turn; default 1024, at least 1. */
   messageBudget?: number;
-  /**
-   * Maximum accepted messages not yet delivered or reported; post() throws
-   * `queue-full` beyond it. 0 or absent: no limit.
-   */
+  /** Accepted messages not yet delivered or reported; post() throws `queue-full` beyond it. 0 (default): no limit. */
   maxQueuedMessages?: number;
   /**
-   * Maximum retained-bytes estimate of the data of accepted messages not yet
-   * delivered or reported (ADR 0005 point 9); 0 or absent: no limit. The
+   * Retained-bytes estimate of the data of accepted messages not yet
+   * delivered or reported (ADR 0005 point 9); 0 (default): no limit. The
    * estimate: `options.bytes`, or 2 bytes per string code unit, byteLength
    * for buffers, 64 for other objects, 0 for primitives. Mail between actors
    * carries no estimate.
    */
   maxRetainedBytes?: number;
 }
+
+export interface ParameterInfo {
+  readonly default: number;
+  readonly min: number;
+  readonly max: number;
+  readonly unit: string;
+  readonly owner: "core" | "napi";
+}
+
+/** Every system parameter, by name (napi ADR 0035). */
+export declare function parameterInfo(): Readonly<Record<keyof SystemParameters, ParameterInfo>>;
 
 export declare function createSystem(options?: SystemOptions): System;
 
@@ -236,13 +296,15 @@ export interface System {
   readonly time: number;
   /** Core's incarnation (SystemOptions.incarnation). */
   readonly incarnation: bigint;
+  /** Every parameter's value, fixed at creation (SystemOptions.parameters). */
+  readonly parameters: Readonly<Required<SystemParameters>>;
 
   /**
    * Compile and register a chart: a statechart() builder, or a spec in the
    * generated shape (the shape core's definition export returns). A refused
    * chart throws `invalid` or `unsupported`, with core's compile error as
    * `detail` (ChartRefusal). `options.microstepLimit` overrides the system's
-   * `scheduling.microstepLimit` for this definition; 0 for no limit.
+   * `microstepLimit` parameter for this definition; 0 for no limit.
    *
    * A spec's SCXML `<invoke>`s with a literal `<content>`, or a literal
    * `src` when `options.resolve` is given, are compiled and nested as an
@@ -2346,9 +2408,12 @@ export interface TraceSinkOptions extends TraceConfiguration {
   unsampled?: boolean;
   /** Resource attributes every request carries, such as `service.name`. */
   resource?: Record<string, string>;
-  /** Event data and assigned values as JSON attributes, cut at `valueLimit` (default 256, at most 1023). */
+  /**
+   * Event data and assigned values as JSON attributes, cut at the
+   * `traceValueBytes` parameter (SystemParameters) and marked
+   * `<key>.truncated` when cut.
+   */
   values?: boolean;
-  valueLimit?: number;
   /** "cause" (default): a macrostep's parent is its cause; "link": a root, linked to its cause. */
   parent?: 'cause' | 'link';
   /** Trace IDs the system starts become a fixed sequence (tests). */

@@ -113,7 +113,7 @@ async function turnsYieldToTheEventLoop() {
   const log = [];
   const system = createSystem({
     finished: 'retain',
-    scheduling: { resumesPerTurn: 100 },
+    parameters: { resumesPerTurn: 100 },
     done: () => {
       if (log[log.length - 1] !== 'turn') {
         log.push('turn');
@@ -156,7 +156,7 @@ async function turnsYieldToTheEventLoop() {
 // other actors run between them (core ADR 0061). The null data model has no
 // <foreach> to iterate; that variant waits for the data model (step 11).
 async function actionBudgetSplitsAHandler() {
-  const system = createSystem({ scheduling: { actionBudget: 5 } });
+  const system = createSystem({ parameters: { actionBudget: 5 } });
   // The bootstrap never pauses (core ADR 0061), so the long handler belongs to
   // a state entered after it.
   const busyChart = statechart({ family: 'busy', revision: 'v1' })
@@ -209,7 +209,7 @@ async function inAsAValueFaultsAtRunTime() {
 
 // close() rejects a pending flush with `closed`; views of a closed system throw.
 async function closeSettlesFlush() {
-  const system = createSystem({ scheduling: { resumesPerTurn: 1 } });
+  const system = createSystem({ parameters: { resumesPerTurn: 1 } });
   const definition = system.define(idleChart());
   const actors = Array.from({ length: 10 }, () => system.spawn(definition));
   const pending = system.flush();
@@ -248,8 +248,8 @@ async function destroyAndReuse() {
 // Options are checked when the system is created; a hook that throws does
 // not stop the pump, and its error surfaces as an uncaught exception.
 async function optionsAndHookErrors() {
-  assertCode(() => createSystem({ scheduling: { resumeBudget: -1 } }), 'invalid');
-  assertCode(() => createSystem({ scheduling: { resumesPerTurn: 0 } }), 'invalid');
+  assertCode(() => createSystem({ parameters: { resumeBudget: -1 } }), 'invalid');
+  assertCode(() => createSystem({ parameters: { resumesPerTurn: 0 } }), 'invalid');
   assertCode(() => createSystem({ finished: 'keep' }), 'invalid');
   assertCode(() => createSystem({ done: 'nope' }), 'invalid');
 

@@ -549,7 +549,7 @@ async function console() {
 
   // Inside a microstep, where an action budget of 1 keeps this loop, core
   // refuses, and abandon says to try again.
-  const tight = createSystem({ clock: 'manual', scheduling: { actionBudget: 1 } });
+  const tight = createSystem({ clock: 'manual', parameters: { actionBudget: 1 } });
   const spinner = tight.spawn(tight.define(subscription()), { name: 'acct_3' });
   await tight.flush();
   const tightClient = new Client(tight, { allow: ALL });
@@ -654,7 +654,7 @@ async function audit() {
 // Threads with an invoked child, stack frames inside a macrostep, the
 // scopes, evaluate, setVariable and setExpression, completions.
 async function state() {
-  const system = createSystem({ clock: 'manual', scheduling: { actionBudget: 1 } });
+  const system = createSystem({ clock: 'manual', parameters: { actionBudget: 1 } });
   const child = system.define(statechart({ family: 'worker', revision: 'v1' }).data('jobs', 3).state('working'));
   const parent = system.define(subscription().state('supervising', (s) =>
     s.invoke((i) => i.type('scxml').id('kid').content(child))));
@@ -917,7 +917,7 @@ async function movedLines() {
 // says it would have stopped. `abandon` ends the macrostep and `goto` moves
 // it out of the loop.
 async function runaway() {
-  const system = createSystem({ clock: 'manual', scheduling: { microstepLimit: 50 } });
+  const system = createSystem({ clock: 'manual', parameters: { microstepLimit: 50 } });
   const chart = statechart({ family: 'spinner', revision: 'v1' });
   chart.state('idle', (s) => s.on('go', (t) => t.target('spin')));
   chart.state('spin', (s) => s.always((t) => t.target('spin')));

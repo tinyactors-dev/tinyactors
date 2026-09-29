@@ -1,7 +1,7 @@
 // A consumer's view of index.d.ts, type-checked by `mise run check-types`
 // against Node's types and ES2022 only: no DOM. It is compiled, never run.
 
-import { createSystem, named, readInputLog, serialize, statechart } from '@tinyactors/node';
+import { createSystem, named, parameterInfo, readInputLog, serialize, statechart } from '@tinyactors/node';
 import type { ActorAddress, InputRecord, ReplayReport } from '@tinyactors/node';
 
 class Money {
@@ -10,8 +10,11 @@ class Money {
 }
 
 export async function usage(): Promise<void> {
-  // A system is disposable (explicit resource management).
-  using system = createSystem();
+  // A system is disposable (explicit resource management), created with its parameters.
+  using system = createSystem({ parameters: { traceValueBytes: 16384, microstepLimit: 50_000 } });
+  const bytes16k: number = system.parameters.traceValueBytes;
+  const bound: number = parameterInfo().interpreterBytes.max;
+  void bytes16k; void bound;
   // A function charts call by name, so the chart is content core sees whole.
   system.registerFunction('full', function (this: { count: number }) { return this.count >= 10; });
   const counter = system.define(

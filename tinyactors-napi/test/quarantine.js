@@ -54,7 +54,7 @@ const REPORT = 'error.communication.invoke.w.quarantined';
 function setup(options = {}) {
   const faults = [];
   const system = createSystem({
-    scheduling: { microstepLimit: 50 },
+    parameters: { microstepLimit: 50 },
     ...options,
     fault: (record) => {
       faults.push(record);

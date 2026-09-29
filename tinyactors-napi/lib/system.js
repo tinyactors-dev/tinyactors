@@ -18,6 +18,7 @@ const { traceConfig, TRACE_KINDS } = require('./tracing');
 const { buildSnapshot } = require('./metrics');
 const { STANDARD_CLASSES, printBuiltin, printCall, printedSpec } = require('./values');
 const { durableChunks, durableReader } = require('./durable');
+const { resolveParameters } = require('./params');
 
 const NO_STATE = 4294967295;
 
@@ -234,6 +235,7 @@ class System {
   #commits = [];
   #committing = false;
   #inputFailure;
+  #parameters;
 
   static {
     nativeOf = (system) => system.#native;
@@ -243,11 +245,9 @@ class System {
 
   /**
    * Options:
-   * - scheduling: { resumeBudget, actionBudget, resumesPerTurn } (ADR 0007);
+   * - parameters: core's and napi's system parameters, fixed at creation
+   *   (core ADR 0092, napi ADR 0035); parameterInfo() lists them;
    * - finished: "destroy" (the default) or "retain" (ADR 0012);
-   * - scheduling.messageBudget: deliveries per turn, and dead letters
-   *   reported per turn; scheduling.maxQueuedMessages: post() throws
-   *   `queue-full` beyond it (ADR 0005);
    * - done({ actor, finalState, data }), fault({ actor, operation, code,
    *   message }) and deadLetter({ target, event, reason, detail?, data?,
    *   traceparent? }): hooks the pump calls at the end of a turn (ADRs
@@ -268,9 +268,15 @@ class System {
     const deadLetter = options?.deadLetter;
     const self = new WeakRef(this);
     const incarnation = incarnationOf(options?.incarnation);
-    const nativeOptions = deadLetter !== undefined && typeof deadLetter !== 'function' ? { ...options, incarnation }
-      : { ...options, incarnation, deadLetter: (letter) => self.deref()?.#deadLetter(letter, deadLetter) };
+    if (options?.scheduling !== undefined) {
+      throw new TinyactorsError('createSystem(): scheduling is now parameters (napi ADR 0035)', 'invalid');
+    }
+    const parameters = resolveParameters(options?.parameters);
+    const nativeOptions = deadLetter !== undefined && typeof deadLetter !== 'function'
+      ? { ...options, incarnation, parameters }
+      : { ...options, incarnation, parameters, deadLetter: (letter) => self.deref()?.#deadLetter(letter, deadLetter) };
     this.#native = new native.System(this, nativeOptions);
+    this.#parameters = parameters;
     this.#faultHook = typeof options?.fault === 'function' ? options.fault : undefined;
     this.#events = new EventNames(this.#native);
     const unloadValues = options?.unloadValues ?? 'serialize';
@@ -292,6 +298,11 @@ class System {
     if (log !== undefined) {
       this.setLogSink(log);
     }
+  }
+
+  /** Every system parameter's value, fixed at creation (napi ADR 0035). */
+  get parameters() {
+    return this.#parameters;
   }
 
   /**
@@ -465,8 +476,9 @@ class System {
    * - resource: resource attributes, { "service.name": "orders", ... },
    *   strings only;
    * - values: put event data and assigned values in attributes, as JSON
-   *   cut at `valueLimit` characters (default 256, at most 1023). Off by
-   *   default: values may hold personal data;
+   *   cut at the `traceValueBytes` parameter (napi ADR 0035) and marked
+   *   `<key>.truncated` when cut. Off by default: values may hold personal
+   *   data;
    * - parent: "cause" (default) parents a macrostep under the step that
    *   caused it; "link" makes it a root and links it to its cause;
    * - seed: a bigint; trace IDs the system starts (for deliveries and
@@ -479,7 +491,10 @@ class System {
     if (sink !== undefined && typeof sink !== 'function') {
       throw new TinyactorsError('setTraceSink(): expected a function or undefined', 'invalid');
     }
-    const { unsampled = false, resource = {}, values = false, valueLimit = 256, parent = 'cause', seed,
+    if (options?.valueLimit !== undefined) {
+      throw new TinyactorsError('setTraceSink(): valueLimit is now the traceValueBytes parameter (napi ADR 0035)', 'invalid');
+    }
+    const { unsampled = false, resource = {}, values = false, parent = 'cause', seed,
             logs = true, logLimit = 20 } = options ?? {};
     if (!Number.isInteger(logLimit) || logLimit < 1 || logLimit > 1e6) {
       throw new TinyactorsError('setTraceSink(): options.logLimit must be an integer from 1 to 1000000', 'invalid');
@@ -487,9 +502,6 @@ class System {
     const config = traceConfig(options ?? {}, 'setTraceSink()');
     if (parent !== 'cause' && parent !== 'link') {
       throw new TinyactorsError('setTraceSink(): options.parent must be "cause" or "link"', 'invalid');
-    }
-    if (!Number.isInteger(valueLimit) || valueLimit < 0 || valueLimit > 1023) {
-      throw new TinyactorsError('setTraceSink(): options.valueLimit must be an integer from 0 to 1023', 'invalid');
     }
     if (resource === null || typeof resource !== 'object') {
       throw new TinyactorsError('setTraceSink(): options.resource must be an object of strings', 'invalid');
@@ -507,7 +519,7 @@ class System {
       ? this.#installObserverSink()
       : this.#native.setTraceSink(sink !== undefined, config.kinds, config.watchedKinds,
                                   unsampled === true ? config.kinds : 0, config.sample,
-                                  values === true, valueLimit, parent === 'link', pairs, seed,
+                                  values === true, parent === 'link', pairs, seed,
                                   logs === false ? 0 : logLimit);
     this.#traceSink = sink;
     this.#observerSink = observed;
@@ -523,7 +535,7 @@ class System {
   // but what is watched, every kind of it, with values (ADR 0026).
   #installObserverSink() {
     const all = 2 ** TRACE_KINDS.length - 1;
-    return this.#native.setTraceSink(true, 0, all, 0, 0, true, 256, false, [], undefined, 0);
+    return this.#native.setTraceSink(true, 0, all, 0, 0, true, false, [], undefined, 0);
   }
 
   #observing(what) {
@@ -566,7 +578,7 @@ class System {
     const all = 2 ** TRACE_KINDS.length - 1;
     const remaining = wanted
       ? this.#installObserverSink()
-      : this.#native.setTraceSink(false, 0, all, 0, 0, false, 256, false, [], undefined, 0);
+      : this.#native.setTraceSink(false, 0, all, 0, 0, false, false, [], undefined, 0);
     this.#observerSink = wanted;
     if (remaining !== undefined) {
       this.#notify('traces', remaining.traces, remaining.logs);
@@ -1135,7 +1147,7 @@ class System {
    * there.
    *
    * `options.microstepLimit` overrides the system's
-   * `scheduling.microstepLimit` for this definition's actors (core ADR
+   * `microstepLimit` parameter for this definition's actors (core ADR
    * 0075): the microsteps one macrostep may run before its actor is
    * quarantined as a runaway; 0 for no limit.
    *

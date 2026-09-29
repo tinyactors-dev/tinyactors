@@ -31,7 +31,7 @@ const stateOf = (actor) => actor.inspect().activeStates.at(-1);
 
 // Per-target FIFO holds when a turn stops at its message budget.
 async function fifoAcrossTheBudget() {
-  const system = createSystem({ scheduling: { messageBudget: 2 } });
+  const system = createSystem({ parameters: { messageBudget: 2 } });
   const definition = system.define(steps());
   const actors = Array.from({ length: 20 }, () => system.spawn(definition));
   await system.flush();
@@ -160,7 +160,7 @@ async function finishedAndDestroyedTargets() {
 
 // maxQueuedMessages refuses new mail with queue-full; accepted mail is kept.
 async function backpressure() {
-  const system = createSystem({ scheduling: { maxQueuedMessages: 2 } });
+  const system = createSystem({ parameters: { maxQueuedMessages: 2 } });
   const actor = system.spawn(system.define(steps()));
   await system.flush();
   actor.post('x');
@@ -276,7 +276,7 @@ async function refusals() {
   const controller = new AbortController();
   controller.abort();
   assertCode(() => actor.post('x', undefined, { signal: controller.signal }), 'aborted');
-  assertCode(() => createSystem({ scheduling: { messageBudget: 0 } }), 'invalid');
+  assertCode(() => createSystem({ parameters: { messageBudget: 0 } }), 'invalid');
   system.close();
   assertCode(() => actor.post('x'), 'closed');
 }

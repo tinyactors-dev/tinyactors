@@ -807,7 +807,7 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
 - size-class pools behind the allocator, if the steady-state measurement
   asks for them (ADR 0014);
 - ~~a limit that quarantines runaway actors (ADR 0008)~~: **done**, core
-  ADR 0075. A macrostep that runs `scheduling.microstepLimit` microsteps
+  ADR 0075. A macrostep that runs `microstepLimit` microsteps (a parameter since napi ADR 0035)
   (default 100,000; per definition with `define(chart, {
   microstepLimit })`) quarantines its actor with fault code `runaway`,
   after a `tinyactors.macrostep.long` log at a tenth of it. It counts

@@ -530,10 +530,34 @@ async function failureLogsSayWhy() {
   }
 }
 
+// A 16 KiB payload arrives whole with traceValueBytes: 16384 (napi ADR 0035),
+// and is cut, and marked, at the default of 1024.
+async function largeValues() {
+  const payload = { body: 'x'.repeat(16000) };
+  for (const [parameters, whole] of [[{ traceValueBytes: 16384 }, true], [{}, false]]) {
+    const system = createSystem({ parameters });
+    const sink = recorder(system, { values: true });
+    const actor = system.spawn(counter(system));
+    await system.flush();
+    actor.post('go', payload);
+    await system.flush();
+    const goStep = named(sink.spans, 'scxml.microstep go');
+    const text = goStep.attributes['scxml.event.data'];
+    if (whole) {
+      assert.equal(text, JSON.stringify(payload), 'the payload arrives whole');
+      assert.equal(goStep.attributes['scxml.event.data.truncated'], undefined);
+    } else {
+      assert.equal(text.length, 1024, 'cut at the default');
+      assert.equal(goStep.attributes['scxml.event.data.truncated'], true);
+    }
+    system.close();
+  }
+}
+
 // Values only when asked for; links instead of parents when asked for.
 async function valuesAndLinks() {
-  const system = createSystem();
-  const sink = recorder(system, { values: true, valueLimit: 8 });
+  const system = createSystem({ parameters: { traceValueBytes: 16 } });
+  const sink = recorder(system, { values: true });
   const actor = system.spawn(counter(system));
   await system.flush();
   actor.post('go', { order: 'a-long-order-name' });
@@ -541,7 +565,10 @@ async function valuesAndLinks() {
   const goStep = named(sink.spans, 'scxml.microstep go');
   const assign = goStep.events.find((event) => event.name === 'scxml.assign');
   assert.equal(assign.attributes['scxml.value'], '1');
-  assert.equal(goStep.attributes['scxml.event.data'], '{"order"', 'cut at valueLimit');
+  assert.equal(assign.attributes['scxml.value.truncated'], undefined, 'a value that fits is not marked');
+  assert.equal(goStep.attributes['scxml.event.data'], '{"order":"a-long', 'cut at traceValueBytes');
+  assert.equal(goStep.attributes['scxml.event.data.truncated'], true, 'and marked as cut');
+  assert.throws(() => system.setTraceSink(() => {}, { valueLimit: 8 }), { code: 'invalid' });
 
   const linked = createSystem();
   const links = recorder(linked, { parent: 'link', kinds: ['macrostepBegin', 'macrostepEnd'] });
@@ -612,7 +639,7 @@ async function loadedAndUnloaded() {
 // The default summary carries the failure kinds: a runaway macrostep's span
 // says it ran long and was stopped (core ADR 0075), without microsteps.
 async function summaryFailures() {
-  const system = createSystem({ clock: 'manual', scheduling: { microstepLimit: 50 }, fault: () => {} });
+  const system = createSystem({ clock: 'manual', parameters: { microstepLimit: 50 }, fault: () => {} });
   const batches = [];
   system.setTraceSink((bytes) => batches.push(bytes));
   const actor = system.spawn(system.define(statechart({ family: 'loop', revision: 'v1' })
@@ -719,6 +746,7 @@ async function watchAndSample() {
   await logs();
   await failureLogsSayWhy();
   await valuesAndLinks();
+  await largeValues();
   await lifecycle();
   await summaryFailures();
   await loadedAndUnloaded();

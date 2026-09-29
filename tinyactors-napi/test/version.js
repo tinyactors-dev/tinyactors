@@ -19,6 +19,7 @@ assert.deepEqual(Object.keys(addon).sort(), [
   'literal',
   'metricsToOTLP',
   'named',
+  'parameterInfo',
   'parseTraceparent',
   'readInputLog',
   'serialize',

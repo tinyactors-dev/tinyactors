@@ -10,11 +10,14 @@ const { ChartCodecError } = require('./lib/codecs');
 const { serialize } = require('./lib/values');
 const { metricsToOTLP } = require('./lib/metrics');
 const { readInputLog } = require('./lib/inputlog');
+const { parameterInfo } = require('./lib/params');
 const { createDebugSession, DAPReader, encodeDAPMessage } = require('./lib/debug');
 
 module.exports = {
   version: native.version,
   createSystem,
+  // System parameters (napi ADR 0035): name → { default, min, max, unit, owner }.
+  parameterInfo,
   statechart,
   literal,
   content,

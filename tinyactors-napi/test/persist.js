@@ -202,7 +202,7 @@ async function replacementLosesNothing() {
 
 // publish() waits for an incumbent that is inside a macrostep.
 async function publishWhileBusy() {
-  const system = createSystem({ scheduling: { actionBudget: 1 } });
+  const system = createSystem({ parameters: { actionBudget: 1 } });
   // a --go--> b, whose entry handler is ten actions: with an action budget of
   // 1 its macrostep spans several turns.
   const chart = (revision) => statechart({ family: 'slow', revision })

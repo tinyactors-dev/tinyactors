@@ -576,7 +576,7 @@ async function reportsAndOperations() {
   const system = createSystem({
     clock: 'manual',
     incarnation: 1,
-    scheduling: { microstepLimit: 50 },
+    parameters: { microstepLimit: 50 },
     invokers: { job: { start(request, report) { reporter = report; } } },
   });
   system.setInputLog(store.sink, { families: ['worker', 'spinner'] });

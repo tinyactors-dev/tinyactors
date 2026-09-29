@@ -129,7 +129,7 @@ async function reportsAndOperations() {
   const batches = [];
   let reporter;
   const system = createSystem({
-    scheduling: { microstepLimit: 50 },
+    parameters: { microstepLimit: 50 },
     invokers: { job: { start(request, report) { reporter = report; } } },
   });
   system.setInputLog({ commit(batch) { batches.push(batch); } }, { families: ['worker', 'spinner'] });
@@ -251,7 +251,7 @@ async function aFailedCommitFaults() {
 // send: its due time while one is pending, null once none is.
 async function firedAndWakes() {
   const batches = [];
-  const system = createSystem({ clock: 'manual', scheduling: { dueBudget: 1 } });
+  const system = createSystem({ clock: 'manual', parameters: { dueBudget: 1 } });
   system.setInputLog({ commit(batch) { batches.push(batch); } }, { families: ['burst'] });
   const burst = system.spawn(system.define(statechart({ family: 'burst', revision: 'v1' })
     .data('ticks', 0)

@@ -57,9 +57,11 @@ Post each to the collector's `/v1/traces` and `/v1/logs`.
   the number dropped.
 - `unsampled`: also trace macrosteps whose traceparent is not sampled.
 - `resource`: resource attributes every request carries, strings only.
-- `values`: event data and assigned values as JSON attributes, cut at
-  `valueLimit` characters (default 256). Off by default: values may hold
-  personal data.
+- `values`: event data and assigned values as JSON attributes, cut at the
+  `traceValueBytes` system parameter (default 1024 bytes of JSON, napi ADR
+  0035) and marked `<key>.truncated` when cut, such as
+  `scxml.event.data.truncated`. Off by default: values may hold personal
+  data.
 - `parent`: `"cause"` (default) puts a macrostep under the step that
   caused it: the caller's span for a delivery with a traceparent, else the
   sending step. `"link"` makes each macrostep a trace root linked to its

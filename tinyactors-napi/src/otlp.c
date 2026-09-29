@@ -1255,8 +1255,10 @@ static bool tna_event_attributes(tna_otlp *otlp, tna_otlp_buf *buf, uint32_t fie
     }
     if (ok && otlp->config.values && event->data.v != NULL && otlp->config.host.value_text != NULL) {
         ta_str text = { NULL, 0 };
-        if (otlp->config.host.value_text(otlp->config.host.self, &event->data, &text)) {
-            ok = tna_kv_string(buf, field, LIT("scxml.event.data"), text);
+        bool cut = false;
+        if (otlp->config.host.value_text(otlp->config.host.self, &event->data, &text, &cut)) {
+            ok = tna_kv_string(buf, field, LIT("scxml.event.data"), text) &&
+                 (!cut || tna_kv_bool(buf, field, LIT("scxml.event.data.truncated"), true));
         }
     }
     return ok;
@@ -1554,8 +1556,10 @@ static bool tna_record_attributes(tna_otlp *otlp, tna_otlp_buf *buf, const ta_tr
     }
     if (ok && otlp->config.values && record->has_value && otlp->config.host.value_text != NULL) {
         ta_str text = { NULL, 0 };
-        if (otlp->config.host.value_text(otlp->config.host.self, &record->value, &text)) {
-            ok = tna_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.value"), text);
+        bool cut = false;
+        if (otlp->config.host.value_text(otlp->config.host.self, &record->value, &text, &cut)) {
+            ok = tna_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.value"), text) &&
+                 (!cut || tna_kv_bool(buf, F_EVENT_ATTRIBUTES, LIT("scxml.value.truncated"), true));
         }
     }
     if (ok && record->state != TA_STATE_NONE) {
@@ -1779,7 +1783,7 @@ static bool tna_log_attributes(tna_otlp *otlp, const ta_trace_record *record) {
 static ta_str tna_fault_text(tna_otlp *otlp, const ta_value *data, ta_str message) {
     ta_str text = { 0 };
     if (data != NULL && data->v != NULL && otlp->config.host.value_text != NULL &&
-        otlp->config.host.value_text(otlp->config.host.self, data, &text) && text.len != 0) {
+        otlp->config.host.value_text(otlp->config.host.self, data, &text, &(bool){ false }) && text.len != 0) {
         return text;
     }
     return message;
@@ -2018,7 +2022,7 @@ void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record) {
     }
     ta_str text = { 0 };
     if (record->has_value && otlp->config.host.value_text != NULL &&
-        !otlp->config.host.value_text(otlp->config.host.self, &record->value, &text)) {
+        !otlp->config.host.value_text(otlp->config.host.self, &record->value, &text, &(bool){ false })) {
         text = (ta_str){ 0 };
     }
     uint64_t now = otlp->config.host.now(otlp->config.host.self);

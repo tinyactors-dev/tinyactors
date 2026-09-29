@@ -105,7 +105,7 @@ async function abandoning() {
 
   // Inside a microstep core refuses (core ADR 0082): an action budget of 1
   // pauses this loop inside its microsteps.
-  const tight = createSystem({ clock: 'manual', scheduling: { actionBudget: 1 } });
+  const tight = createSystem({ clock: 'manual', parameters: { actionBudget: 1 } });
   const spinner = tight.spawn(tight.define(chart()));
   await tight.flush();
   spinner.post('spin');
@@ -136,7 +136,7 @@ async function withdrawing() {
 
 // What inspect() and definitions() report for a debugger.
 async function inspection() {
-  const system = createSystem({ clock: 'manual', scheduling: { resumeBudget: 1 } });
+  const system = createSystem({ clock: 'manual', parameters: { resumeBudget: 1 } });
   const definition = system.define(chart());
   const actor = system.spawn(definition, { name: 'acct' });
   await system.flush();

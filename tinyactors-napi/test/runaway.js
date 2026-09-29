@@ -63,7 +63,7 @@ const metricValue = (snapshot, name, attributes = {}) =>
 async function quarantinedThenReleased() {
   const faults = [];
   const logs = [];
-  const system = createSystem({ scheduling: { microstepLimit: 100 }, fault: (fault) => faults.push(fault) });
+  const system = createSystem({ parameters: { microstepLimit: 100 }, fault: (fault) => faults.push(fault) });
   system.setTraceSink((traces, batch) => { if (batch !== undefined) logs.push(batch); });
   const definition = system.define(counter('rw-loop', 150));
   const actor = system.spawn(definition);
@@ -106,7 +106,7 @@ async function quarantinedThenReleased() {
 
 async function overrides() {
   const faults = [];
-  const system = createSystem({ scheduling: { microstepLimit: 100 }, fault: (fault) => faults.push(fault) });
+  const system = createSystem({ parameters: { microstepLimit: 100 }, fault: (fault) => faults.push(fault) });
   const unlimited = system.define(counter('rw-none', 500), { microstepLimit: 0 });
   const roomy = system.define(counter('rw-roomy', 500), { microstepLimit: 1000 });
   const tight = system.define(counter('rw-tight', 50), { microstepLimit: 10 });
@@ -122,7 +122,7 @@ async function overrides() {
   system.close();
 
   // The system's limit off: nothing is limited.
-  const open = createSystem({ scheduling: { microstepLimit: 0 } });
+  const open = createSystem({ parameters: { microstepLimit: 0 } });
   const actor = open.spawn(open.define(counter('rw-open', 300)));
   await open.flush();
   actor.post('go');
@@ -134,7 +134,7 @@ async function overrides() {
 // A <foreach> is one microstep however many turns it pauses across.
 async function longForeach() {
   const faults = [];
-  const system = createSystem({ scheduling: { microstepLimit: 5, actionBudget: 10 }, fault: (fault) => faults.push(fault) });
+  const system = createSystem({ parameters: { microstepLimit: 5, actionBudget: 10 }, fault: (fault) => faults.push(fault) });
   const definition = system.define(
     statechart({ family: 'rw-foreach', revision: 'v1' })
       .data('n', 0)
@@ -159,7 +159,7 @@ async function longForeach() {
 // with the abandoned macrostep.
 async function abandoned() {
   const faults = [];
-  const system = createSystem({ scheduling: { microstepLimit: 100 }, fault: (fault) => faults.push(fault) });
+  const system = createSystem({ parameters: { microstepLimit: 100 }, fault: (fault) => faults.push(fault) });
   const actor = system.spawn(system.define(counter('rw-abandon', 150)));
   await system.flush();
   const waiting = actor.send('go');

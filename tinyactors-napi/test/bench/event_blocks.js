@@ -41,7 +41,7 @@ function pingChart() {
 
 async function memory() {
   const system = createSystem({
-    scheduling: { resumeBudget: 1, resumesPerTurn: 1, messageBudget: population },
+    parameters: { resumeBudget: 1, resumesPerTurn: 1, messageBudget: population },
   });
   const definition = system.define(chainChart());
   const actors = [];

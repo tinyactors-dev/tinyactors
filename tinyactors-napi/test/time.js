@@ -89,7 +89,7 @@ async function cancelled() {
 
 // Many sends due at once are dispatched at most dueBudget per turn, all of them eventually.
 async function dueBudget() {
-  const system = createSystem({ clock: 'manual', scheduling: { dueBudget: 3 } });
+  const system = createSystem({ clock: 'manual', parameters: { dueBudget: 3 } });
   const definition = system.define(idleChart(10));
   const actors = Array.from({ length: 20 }, () => system.spawn(definition));
   await system.flush();
@@ -99,7 +99,7 @@ async function dueBudget() {
   await system.flush();
   await system.advanceBy(10);
   assert.ok(actors.every((actor) => !system.exists(actor)), 'every send fired and every actor finished');
-  assert.throws(() => createSystem({ scheduling: { dueBudget: 0 } }), { code: 'invalid' });
+  assert.throws(() => createSystem({ parameters: { dueBudget: 0 } }), { code: 'invalid' });
   assert.throws(() => createSystem({ clock: 'sundial' }), { code: 'invalid' });
   assert.throws(() => createSystem({ initialTime: -1 }), { code: 'invalid' });
   system.close();

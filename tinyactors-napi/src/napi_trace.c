@@ -92,7 +92,7 @@ static void tna_host_trace_id(void *self, uint8_t out[16]) {
  * JSON.stringify runs no chart code, and a toJSON that calls into the
  * system meets the reentrancy guard.
  */
-static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out) {
+static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out, bool *cut) {
     tna_napi_system *wrapper = self;
     napi_env env = wrapper->env;
     napi_handle_scope scope = NULL;
@@ -117,11 +117,14 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out) 
               napi_call_function(env, json, stringify, 1, &js, &text) == napi_ok;
     }
     if (got && napi_typeof(env, text, &type) == napi_ok && type == napi_string) {
-        size_t limit = wrapper->trace_value_limit < sizeof wrapper->trace_value ? wrapper->trace_value_limit
-                                                                                : sizeof wrapper->trace_value - 1u;
+        /* traceValueBytes (napi ADR 0035): the buffer was sized by it at creation. */
+        size_t full = 0;
         size_t written = 0;
-        if (napi_get_value_string_utf8(env, text, wrapper->trace_value, limit + 1u, &written) == napi_ok) {
+        if (napi_get_value_string_utf8(env, text, NULL, 0, &full) == napi_ok &&
+            napi_get_value_string_utf8(env, text, wrapper->trace_value, wrapper->trace_value_bytes + 1u, &written) ==
+                napi_ok) {
             *out = (ta_str){ wrapper->trace_value, (uint32_t)written };
+            *cut = written < full;
             ok = true;
         }
     }
@@ -274,8 +277,8 @@ static bool tna_set_resource(napi_env env, tna_system *system, napi_value pairs)
 }
 
 /*
- * setTraceSink(installed, kinds, unsampled, values, valueLimit, links,
- * resource, seed): installs the encoder and the sink adapter, or core's
+ * setTraceSink(installed, kinds, unsampled, values, links, resource, seed,
+ * logLimit): installs the encoder and the sink adapter, or core's
  * null sink. Returns the bytes of the spans the previous sink left open,
  * ended now (marked incomplete), for the previous JavaScript sink, or
  * undefined.
@@ -306,8 +309,8 @@ static bool tna_trace_config(napi_env env, const napi_value *argv, tna_trace_mas
 }
 
 napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
-    size_t argc = 11;
-    napi_value argv[11] = { NULL };
+    size_t argc = 10;
+    napi_value argv[10] = { NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -323,24 +326,22 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
     tna_trace_masks masks = { 0 };
     uint32_t parts = 0;
     bool values = false;
-    uint32_t value_limit = 0;
     bool links = false;
     napi_valuetype seed_type = napi_undefined;
     uint32_t log_limit = 0;
-    if (argc < 11 || napi_get_value_bool(env, argv[0], &installed) != napi_ok ||
-        napi_get_value_uint32(env, argv[10], &log_limit) != napi_ok ||
+    if (argc < 10 || napi_get_value_bool(env, argv[0], &installed) != napi_ok ||
+        napi_get_value_uint32(env, argv[9], &log_limit) != napi_ok ||
         !tna_trace_config(env, argv + 1, &masks, &parts) ||
         napi_get_value_bool(env, argv[5], &values) != napi_ok ||
-        napi_get_value_uint32(env, argv[6], &value_limit) != napi_ok ||
-        napi_get_value_bool(env, argv[7], &links) != napi_ok || napi_typeof(env, argv[9], &seed_type) != napi_ok) {
+        napi_get_value_bool(env, argv[6], &links) != napi_ok || napi_typeof(env, argv[8], &seed_type) != napi_ok) {
         return tna_throw(env, "invalid",
                          "setTraceSink: expected (installed, kinds, watchedKinds, unsampledKinds, sample, values, "
-                         "valueLimit, links, resource, seed, logLimit)");
+                         "links, resource, seed, logLimit)");
     }
     uint64_t seed = 0;
     bool lossless = true;
     if (seed_type != napi_undefined &&
-        (seed_type != napi_bigint || napi_get_value_bigint_uint64(env, argv[9], &seed, &lossless) != napi_ok ||
+        (seed_type != napi_bigint || napi_get_value_bigint_uint64(env, argv[8], &seed, &lossless) != napi_ok ||
          !lossless)) {
         return tna_throw(env, "invalid", "setTraceSink: options.seed must be a bigint of at most 64 bits");
     }
@@ -368,8 +369,7 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
                       });
         system->tracing = true;
         ta_system_seed_trace_ids(system->core, seed_type != napi_undefined ? seed : tna_system_os_seed(system));
-        wrapper->trace_value_limit = value_limit;
-        if (!tna_set_resource(env, system, argv[8])) {
+        if (!tna_set_resource(env, system, argv[7])) {
             tna_otlp_destroy(&system->otlp);
             system->tracing = false;
             return tna_throw(env, "invalid", "setTraceSink: options.resource must map names to strings");

@@ -50,7 +50,8 @@ typedef struct {
     void (*trace_id)(void *self, uint8_t out[16]);
     /* Optional: text for a value (event data, an assigned value), valid until
      * the next call; false when there is none. Used only with `values`. */
-    bool (*value_text)(void *self, const ta_value *value, ta_str *out);
+    /* `*cut`: the text was cut at the host's limit (napi ADR 0035). */
+    bool (*value_text)(void *self, const ta_value *value, ta_str *out, bool *cut);
 } tna_otlp_host;
 
 typedef struct {

@@ -170,7 +170,7 @@ async function nested() {
 // A child that faults (a runaway, core ADR 0075) is quarantined like any
 // actor; the parent carries on (and is told, napi ADR 0025: test/quarantine.js).
 async function childFaults() {
-  const { system, faults } = setup({ scheduling: { microstepLimit: 50 } });
+  const { system, faults } = setup({ parameters: { microstepLimit: 50 } });
   const parent = system.define(`<scxml ${NS} name="steady" initial="s0">
     <datamodel><data id="n" expr="0"/></datamodel>
     <state id="s0">

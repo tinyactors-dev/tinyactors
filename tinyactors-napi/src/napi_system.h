@@ -50,8 +50,10 @@ struct tna_napi_system {
     tna_children children;        /* the SCXML invoker's children (napi ADR 0021) */
     double last_send_token;       /* the token of the last send(), for cancelSend() */
     /* Tracing with values (napi ADR 0016): a value's JSON text, cut. */
-    uint32_t trace_value_limit;
-    char trace_value[1024];
+    /* A value's JSON for a trace or log attribute: traceValueBytes (napi ADR
+     * 0035), plus a terminator, allocated at creation. */
+    size_t trace_value_bytes;
+    char *trace_value;
     napi_deferred *waiters;       /* flush() promises */
     uint32_t waiter_count;
     uint32_t waiter_capacity;

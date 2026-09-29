@@ -60,18 +60,9 @@
 #include "offloads.h"
 #include "adapters/trace.h"
 #include "otlp.h"
+#include "params.h"
 #include "scheduler.h"
 #include "tinyactors.h"
-
-/* Defaults for SchedulingOptions (ADR 0007). */
-#define TNA_DEFAULT_RESUMES_PER_TURN 1024u
-#define TNA_DEFAULT_RESUME_BUDGET 64u
-#define TNA_DEFAULT_ACTION_BUDGET 1024u
-#define TNA_DEFAULT_MESSAGE_BUDGET 1024u
-#define TNA_DEFAULT_DUE_BUDGET 1024u
-/* Microsteps one macrostep may run before its actor is a runaway (core ADR
- * 0075): far past any ordinary chart, about a tenth of a second of work. */
-#define TNA_DEFAULT_MICROSTEP_LIMIT 100000u
 
 typedef struct tna_system tna_system;
 
@@ -227,6 +218,8 @@ struct tna_system {
     bool dispatching_due;
     /* The input log (inputs.h, napi ADR 0032 section 6). */
     tna_inputs inputs;
+    /* napi's parameters, fixed at creation (napi ADR 0035). */
+    tna_params params;
 };
 
 /* TA_ERR_NOMEM when the record or core cannot be allocated. */
@@ -239,6 +232,10 @@ typedef struct {
     uint64_t incarnation;
     const ta_param_value *params;
     uint32_t param_count;
+    /* napi's own parameters (napi ADR 0035); null for their defaults. */
+    const tna_params *napi;
+    /* Set to the core parameter a TA_ERR_INVALID refers to; may be null. */
+    ta_param *rejected;
 } tna_system_create_params;
 ta_result tna_system_create(const tna_system_create_params *params, tna_system **out);
 void tna_system_close(tna_system *system);
