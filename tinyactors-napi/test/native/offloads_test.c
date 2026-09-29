@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "allocator.h"
+#include "platform.h"
 #include "check.h"
 #include "offloads.h"
 
@@ -27,7 +28,7 @@ static const ta_value_vtable counted = { .retain = counted_retain, .release = co
 
 /* An array of `count` handles, each holding one reference, in the store's allocator. */
 static ta_value *handles(ta_allocator allocator, uint32_t count) {
-    ta_value *array = tna_alloc(allocator, (size_t)count * sizeof(ta_value), _Alignof(ta_value));
+    ta_value *array = tah_alloc(allocator, (size_t)count * sizeof(ta_value), _Alignof(ta_value));
     CHECK(array != NULL);
     for (uint32_t index = 0; index < count; index += 1) {
         array[index] = (ta_value){ .self = &live_references, .v = &counted };
@@ -37,9 +38,9 @@ static ta_value *handles(ta_allocator allocator, uint32_t count) {
 }
 
 int main(void) {
-    tna_allocator counting;
-    tna_allocator_init(&counting);
-    ta_allocator allocator = tna_allocator_for(&counting, TNA_MEMORY_OTHER);
+    tah_allocator counting;
+    tah_allocator_init(&counting, tna_platform_allocator());
+    ta_allocator allocator = tah_allocator_for(&counting, TAH_MEMORY_OTHER);
     tna_offloads store;
     tna_offloads_init(&store, allocator);
 
@@ -83,8 +84,8 @@ int main(void) {
     tna_offloads_destroy(&store);
     CHECK(live_references == 0);
     CHECK(store.bytes_in_use == 0);
-    tna_map_destroy(&store.entries);
-    CHECK(tna_allocator_total(&counting).bytes_in_use == 0);
+    tah_map_destroy(&store.entries);
+    CHECK(tah_allocator_total(&counting).bytes_in_use == 0);
     puts("offloads_test passed");
     return 0;
 }

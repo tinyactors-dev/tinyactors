@@ -1,12 +1,12 @@
 #include "effects.h"
 
-#include <string.h>
+#include "memory.h"
 
-void tna_effects_init(tna_effects *effects, ta_arena *arena) {
-    *effects = (tna_effects){ .arena = arena };
+void tah_effects_init(tah_effects *effects, ta_arena *arena) {
+    *effects = (tah_effects){ .arena = arena };
 }
 
-void tna_effect_release(tna_effect *effect) {
+void tah_effect_release(tah_effect *effect) {
     if (effect->source.kind == TA_ACTOR_REF_NAMED) {
         ta_address_release(effect->source.as.named);
         effect->source = (ta_actor_ref){0};
@@ -17,13 +17,13 @@ void tna_effect_release(tna_effect *effect) {
     effect->value = (ta_value){0};
     effect->target = (ta_value){0};
     effect->params = (ta_value){0};
-    if (effect->kind == TNA_EFFECT_INVOKE_FORWARD) {
+    if (effect->kind == TAH_EFFECT_INVOKE_FORWARD) {
         ta_event_release(&effect->forwarded);
         effect->forwarded = (ta_event){0};
     }
 }
 
-static bool tna_copy_bytes(ta_arena *arena, const uint8_t *ptr, uint32_t len, const uint8_t **out) {
+static bool tah_copy_bytes(ta_arena *arena, const uint8_t *ptr, uint32_t len, const uint8_t **out) {
     if (ptr == NULL || len == 0) {
         *out = ptr;
         return true;
@@ -32,13 +32,13 @@ static bool tna_copy_bytes(ta_arena *arena, const uint8_t *ptr, uint32_t len, co
     if (copy == NULL) {
         return false;
     }
-    memcpy(copy, ptr, len);
+    tah_mem_copy(copy, ptr, len);
     *out = copy;
     return true;
 }
 
-bool tna_effects_push(tna_effects *effects, const tna_effect *effect) {
-    tna_effect *copy = effects->closed ? NULL : ta_arena_alloc(effects->arena, sizeof *copy, _Alignof(tna_effect));
+bool tah_effects_push(tah_effects *effects, const tah_effect *effect) {
+    tah_effect *copy = effects->closed ? NULL : ta_arena_alloc(effects->arena, sizeof *copy, _Alignof(tah_effect));
     if (copy != NULL) {
         *copy = *effect;
         copy->next = NULL;
@@ -47,11 +47,11 @@ bool tna_effects_push(tna_effects *effects, const tna_effect *effect) {
         const uint8_t *content = NULL;
         const uint8_t *target_text = NULL;
         bool copied =
-            tna_copy_bytes(effects->arena, (const uint8_t *)effect->label.ptr, effect->label.len, &label) &&
-            tna_copy_bytes(effects->arena, (const uint8_t *)effect->content_type.ptr, effect->content_type.len,
+            tah_copy_bytes(effects->arena, (const uint8_t *)effect->label.ptr, effect->label.len, &label) &&
+            tah_copy_bytes(effects->arena, (const uint8_t *)effect->content_type.ptr, effect->content_type.len,
                            &content_type) &&
-            tna_copy_bytes(effects->arena, effect->content.ptr, effect->content.len, &content) &&
-            tna_copy_bytes(effects->arena, (const uint8_t *)effect->target_text.ptr, effect->target_text.len,
+            tah_copy_bytes(effects->arena, effect->content.ptr, effect->content.len, &content) &&
+            tah_copy_bytes(effects->arena, (const uint8_t *)effect->target_text.ptr, effect->target_text.len,
                            &target_text);
         if (copied) {
             copy->label.ptr = (const char *)label;
@@ -68,14 +68,14 @@ bool tna_effects_push(tna_effects *effects, const tna_effect *effect) {
             return true;
         }
     }
-    tna_effect dropped = *effect;
-    tna_effect_release(&dropped);
+    tah_effect dropped = *effect;
+    tah_effect_release(&dropped);
     effects->dropped += 1u;
     return false;
 }
 
-tna_effect *tna_effects_pop(tna_effects *effects) {
-    tna_effect *effect = effects->first;
+tah_effect *tah_effects_pop(tah_effects *effects) {
+    tah_effect *effect = effects->first;
     if (effect == NULL) {
         return NULL;
     }
@@ -88,10 +88,10 @@ tna_effect *tna_effects_pop(tna_effects *effects) {
     return effect;
 }
 
-void tna_effects_close(tna_effects *effects) {
+void tah_effects_close(tah_effects *effects) {
     effects->closed = true;
-    tna_effect *effect = NULL;
-    while ((effect = tna_effects_pop(effects)) != NULL) {
-        tna_effect_release(effect);
+    tah_effect *effect = NULL;
+    while ((effect = tah_effects_pop(effects)) != NULL) {
+        tah_effect_release(effect);
     }
 }

@@ -40,14 +40,14 @@
 typedef struct tna_values {
     napi_env env;
     ta_allocator allocator;  /* the system allocator's "values" lane */
-    tna_free_list boxes;
+    tah_free_list boxes;
     const bool *torn_down;   /* the environment's cleanup hook has run */
     uint64_t *env_live;      /* boxes live in the whole environment */
     uint64_t live;           /* boxes live in this system */
     uint64_t made;           /* boxes made, for tests */
 #ifdef TNA_VALUES_TABLE
     napi_ref table;          /* model B: the handle table, a JavaScript array */
-    tna_vec free_indices;    /* model B: indices to reuse */
+    tah_vec free_indices;    /* model B: indices to reuse */
     uint32_t table_length;
 #endif
     uint32_t number_next;    /* the next number-text buffer */
@@ -57,7 +57,7 @@ typedef struct tna_values {
 #define TNA_NUMBER_TEXTS 16u
 
 /* False when model B cannot make its table. */
-bool tna_values_init(tna_values *values, napi_env env, tna_allocator *allocator);
+bool tna_values_init(tna_values *values, napi_env env, tah_allocator *allocator);
 /* Frees the free list. Boxes still live are leaks, and stay counted. */
 void tna_values_close(tna_values *values);
 

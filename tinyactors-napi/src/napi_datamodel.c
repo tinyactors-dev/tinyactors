@@ -98,7 +98,7 @@ static bool tna_primitive_add(tna_intern_table *table, ta_allocator allocator, t
         if (capacity < table->capacity) {
             return false;
         }
-        tna_intern_slot *slots = tna_alloc(allocator, (size_t)capacity * sizeof *slots, _Alignof(tna_intern_slot));
+        tna_intern_slot *slots = tah_alloc(allocator, (size_t)capacity * sizeof *slots, _Alignof(tna_intern_slot));
         if (slots == NULL) {
             return false;
         }
@@ -112,7 +112,7 @@ static bool tna_primitive_add(tna_intern_table *table, ta_allocator allocator, t
             }
         }
         if (table->slots != NULL) {
-            tna_free(allocator, &(ta_allocator_free_params){ .ptr = table->slots,
+            tah_free(allocator, &(ta_allocator_free_params){ .ptr = table->slots,
                                                             .size = (size_t)table->capacity * sizeof *table->slots,
                                                             .alignment = _Alignof(tna_intern_slot) });
         }
@@ -173,13 +173,13 @@ static void tna_expr_release(void *self, void *value, ta_allocator allocator) {
     }
     if (record->key != NULL) {
         tna_primitive_remove(&record->dm->primitives, record);
-        tna_free(values->allocator,
+        tah_free(values->allocator,
                  &(ta_allocator_free_params){ .ptr = record->key, .size = record->key_len, .alignment = 1 });
     }
     if (record->ref != NULL && !*values->torn_down) {
         napi_delete_reference(values->env, record->ref);
     }
-    tna_free(values->allocator,
+    tah_free(values->allocator,
              &(ta_allocator_free_params){ .ptr = record, .size = sizeof *record, .alignment = _Alignof(tna_expr_record) });
 }
 
@@ -253,7 +253,7 @@ static bool tna_primitive_key(napi_env env, napi_value value, napi_valuetype typ
     if (total > UINT32_MAX) {
         return false;
     }
-    uint8_t *bytes = tna_alloc(values->allocator, total, 1);
+    uint8_t *bytes = tah_alloc(values->allocator, total, 1);
     if (bytes == NULL) {
         return false;
     }
@@ -261,7 +261,7 @@ static bool tna_primitive_key(napi_env env, napi_value value, napi_valuetype typ
     bool ok = true;
     if (type == napi_string) {
         size_t units = extra / sizeof(char16_t);
-        char16_t *text = tna_alloc(values->allocator, (units + 1u) * sizeof(char16_t), _Alignof(char16_t));
+        char16_t *text = tah_alloc(values->allocator, (units + 1u) * sizeof(char16_t), _Alignof(char16_t));
         size_t copied = 0;
         ok = text != NULL && napi_get_value_string_utf16(env, value, text, units + 1u, &copied) == napi_ok &&
              copied == units;
@@ -269,12 +269,12 @@ static bool tna_primitive_key(napi_env env, napi_value value, napi_valuetype typ
             memcpy(bytes + size, text, extra);
         }
         if (text != NULL) {
-            tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = text, .size = (units + 1u) * sizeof(char16_t),
+            tah_free(values->allocator, &(ta_allocator_free_params){ .ptr = text, .size = (units + 1u) * sizeof(char16_t),
                                                                     .alignment = _Alignof(char16_t) });
         }
     } else if (type == napi_bigint) {
         size_t count = (extra - 1u) / sizeof(uint64_t);
-        uint64_t *words = count == 0 ? NULL : tna_alloc(values->allocator, count * sizeof(uint64_t), _Alignof(uint64_t));
+        uint64_t *words = count == 0 ? NULL : tah_alloc(values->allocator, count * sizeof(uint64_t), _Alignof(uint64_t));
         ok = (count == 0 || words != NULL) &&
              napi_get_value_bigint_words(env, value, &sign, &count, words) == napi_ok;
         if (ok) {
@@ -284,12 +284,12 @@ static bool tna_primitive_key(napi_env env, napi_value value, napi_valuetype typ
             }
         }
         if (words != NULL) {
-            tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = words, .size = count * sizeof(uint64_t),
+            tah_free(values->allocator, &(ta_allocator_free_params){ .ptr = words, .size = count * sizeof(uint64_t),
                                                                     .alignment = _Alignof(uint64_t) });
         }
     }
     if (!ok) {
-        tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = bytes, .size = total, .alignment = 1 });
+        tah_free(values->allocator, &(ta_allocator_free_params){ .ptr = bytes, .size = total, .alignment = 1 });
         return false;
     }
     *key = bytes;
@@ -393,7 +393,7 @@ static tna_expr_record *tna_interned(tna_js_datamodel *dm, napi_value value, tna
 
 static void tna_place_drop(tna_values *values, tna_intern_place *place) {
     if (place->key != NULL) {
-        tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = place->key, .size = place->key_len, .alignment = 1 });
+        tah_free(values->allocator, &(ta_allocator_free_params){ .ptr = place->key, .size = place->key_len, .alignment = 1 });
         place->key = NULL;
     }
 }
@@ -406,7 +406,7 @@ bool tna_expression_make(tna_js_datamodel *dm, napi_value value, tna_expr_kind k
         tna_place_drop(values, &place);
         record->references += 1u;
     } else {
-        record = tna_alloc(values->allocator, sizeof *record, _Alignof(tna_expr_record));
+        record = tah_alloc(values->allocator, sizeof *record, _Alignof(tna_expr_record));
         if (record == NULL) {
             tna_place_drop(values, &place);
             return false;
@@ -414,7 +414,7 @@ bool tna_expression_make(tna_js_datamodel *dm, napi_value value, tna_expr_kind k
         *record = (tna_expr_record){ .values = values, .dm = dm, .references = 1u, .kind = kind };
         if (napi_create_reference(dm->env, value, 1, &record->ref) != napi_ok) {
             tna_place_drop(values, &place);
-            tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = record, .size = sizeof *record,
+            tah_free(values->allocator, &(ta_allocator_free_params){ .ptr = record, .size = sizeof *record,
                                                                     .alignment = _Alignof(tna_expr_record) });
             return false;
         }
@@ -429,7 +429,7 @@ bool tna_expression_make(tna_js_datamodel *dm, napi_value value, tna_expr_kind k
             if (!tna_primitive_add(&dm->primitives, values->allocator, record)) {
                 /* Not shared, then: the record works, core just never matches it. */
                 record->key = NULL;
-                tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = place.key, .size = place.key_len,
+                tah_free(values->allocator, &(ta_allocator_free_params){ .ptr = place.key, .size = place.key_len,
                                                                         .alignment = 1 });
             }
         }
@@ -691,7 +691,7 @@ static void tna_release_compiled(ta_expression *compiled, uint32_t count, ta_all
     for (uint32_t index = 0; index < count; index += 1) {
         tna_expression_release(&compiled[index]);
     }
-    tna_free(allocator, &(ta_allocator_free_params){ .ptr = compiled,
+    tah_free(allocator, &(ta_allocator_free_params){ .ptr = compiled,
                                                     .size = (size_t)count * sizeof(ta_expression),
                                                     .alignment = _Alignof(ta_expression) });
 }
@@ -780,7 +780,7 @@ static ta_result tna_compile_all(tna_dm_adapter *adapter, const ta_datamodel_pre
     if (!dm->js_usable) {
         return TA_ERR_UNSUPPORTED;
     }
-    ta_expression *compiled = tna_alloc(params->allocator, (size_t)params->expression_count * sizeof(ta_expression),
+    ta_expression *compiled = tah_alloc(params->allocator, (size_t)params->expression_count * sizeof(ta_expression),
                                         _Alignof(ta_expression));
     if (compiled == NULL) {
         return TA_ERR_NOMEM;
@@ -1016,7 +1016,7 @@ static ta_result tna_bind_builtin(tna_js_datamodel *dm, const ta_datamodel_prepa
             continue;
         }
         if (compiled == NULL) {
-            compiled = tna_alloc(params->allocator, (size_t)params->expression_count * sizeof(ta_expression),
+            compiled = tah_alloc(params->allocator, (size_t)params->expression_count * sizeof(ta_expression),
                                  _Alignof(ta_expression));
             if (compiled == NULL) {
                 result = TA_ERR_NOMEM;
@@ -1050,7 +1050,7 @@ static ta_result tna_dm_prepare(void *self, const ta_datamodel_prepare_definitio
     if (result != TA_OK) {
         return result;
     }
-    tna_dm_shared *shared = tna_alloc(params->allocator, sizeof *shared, _Alignof(tna_dm_shared));
+    tna_dm_shared *shared = tah_alloc(params->allocator, sizeof *shared, _Alignof(tna_dm_shared));
     if (shared == NULL) {
         tna_release_compiled(compiled, params->expression_count, params->allocator);
         return TA_ERR_NOMEM;
@@ -1067,7 +1067,7 @@ static void tna_dm_destroy_definition(void *self, void *shared, ta_allocator all
     if (shared != NULL) {
         tna_dm_shared *data = shared;
         tna_release_compiled(data->compiled, data->count, allocator);
-        tna_free(allocator,
+        tah_free(allocator,
                  &(ta_allocator_free_params){ .ptr = shared, .size = sizeof(tna_dm_shared), .alignment = _Alignof(tna_dm_shared) });
     }
 }
@@ -1529,7 +1529,7 @@ static ta_op_status tna_dm_text_value(void *self, const ta_datamodel_text_value_
  * TA_OP_NOMEM when the copy cannot be allocated, which changes nothing.
  */
 static ta_op_status tna_space_normalized(napi_env env, tna_values *values, ta_bytes content, napi_value *out) {
-    char *normal = tna_alloc(values->allocator, content.len == 0 ? 1u : content.len, 1);
+    char *normal = tah_alloc(values->allocator, content.len == 0 ? 1u : content.len, 1);
     if (normal == NULL) {
         return TA_OP_NOMEM;
     }
@@ -1548,7 +1548,7 @@ static ta_op_status tna_space_normalized(napi_env env, tna_values *values, ta_by
         normal[length++] = c;
     }
     napi_status status = napi_create_string_utf8(env, normal, length, out);
-    tna_free(values->allocator,
+    tah_free(values->allocator,
              &(ta_allocator_free_params){ .ptr = normal, .size = content.len == 0 ? 1u : content.len, .alignment = 1 });
     return status == napi_ok ? TA_OP_OK : TA_OP_ERROR;
 }
@@ -1721,7 +1721,7 @@ static const ta_datamodel_vtable tna_dm_vtable = {
 #define TNA_DURABLE_PIECE 16384u
 
 static ta_allocator tna_offload_allocator(tna_js_datamodel *dm) {
-    return tna_allocator_for(&dm->wrapper->system->allocator, TNA_MEMORY_OTHER);
+    return tah_allocator_for(&dm->wrapper->system->allocator, TAH_MEMORY_OTHER);
 }
 
 static void tna_clear_exception(napi_env env) {
@@ -1771,7 +1771,7 @@ static ta_op_status tna_offload_handle(tna_js_datamodel *dm, const ta_datamodel_
     if (dm->handle_count == dm->handle_capacity) {
         uint32_t capacity = dm->handle_capacity + 1u;
         ta_allocator allocator = tna_offload_allocator(dm);
-        ta_value *grown = tna_alloc(allocator, (size_t)capacity * sizeof(ta_value), _Alignof(ta_value));
+        ta_value *grown = tah_alloc(allocator, (size_t)capacity * sizeof(ta_value), _Alignof(ta_value));
         if (grown == NULL) {
             return TA_OP_NOMEM;
         }
@@ -1779,7 +1779,7 @@ static ta_op_status tna_offload_handle(tna_js_datamodel *dm, const ta_datamodel_
             memcpy(grown, dm->handles, (size_t)dm->handle_count * sizeof(ta_value));
         }
         if (dm->handles != NULL) {
-            tna_free(allocator, &(ta_allocator_free_params){ .ptr = dm->handles,
+            tah_free(allocator, &(ta_allocator_free_params){ .ptr = dm->handles,
                                                              .size = (size_t)dm->handle_capacity * sizeof(ta_value),
                                                              .alignment = _Alignof(ta_value) });
         }
@@ -1807,7 +1807,7 @@ static ta_op_status tna_durable_piece(tna_js_datamodel *dm, const ta_byte_sink *
         return TA_OP_ERROR;
     }
     ta_allocator allocator = tna_offload_allocator(dm);
-    char *utf8 = tna_alloc(allocator, length + 1u, 1);
+    char *utf8 = tah_alloc(allocator, length + 1u, 1);
     if (utf8 == NULL) {
         return TA_OP_NOMEM;
     }
@@ -1815,7 +1815,7 @@ static ta_op_status tna_durable_piece(tna_js_datamodel *dm, const ta_byte_sink *
     ta_op_status status = napi_get_value_string_utf8(env, text, utf8, length + 1u, &written) == napi_ok
                               ? tna_sink_write(sink, utf8, written)
                               : TA_OP_ERROR;
-    tna_free(allocator, &(ta_allocator_free_params){ .ptr = utf8, .size = length + 1u, .alignment = 1 });
+    tah_free(allocator, &(ta_allocator_free_params){ .ptr = utf8, .size = length + 1u, .alignment = 1 });
     return status;
 }
 
@@ -1927,7 +1927,7 @@ static ta_op_status tna_durable_read(tna_js_datamodel *dm, const ta_datamodel_va
     napi_value global = NULL;
     napi_value reader = NULL;
     ta_allocator allocator = tna_offload_allocator(dm);
-    uint8_t *piece = tna_alloc(allocator, TNA_DURABLE_PIECE + 4u, 1);
+    uint8_t *piece = tah_alloc(allocator, TNA_DURABLE_PIECE + 4u, 1);
     ta_op_status status = piece == NULL ? TA_OP_NOMEM : TA_OP_OK;
     if (status == TA_OP_OK &&
         (dm->durable_reader == NULL || napi_get_reference_value(env, dm->durable_reader, &factory) != napi_ok ||
@@ -1971,7 +1971,7 @@ static ta_op_status tna_durable_read(tna_js_datamodel *dm, const ta_datamodel_va
         }
     }
     if (piece != NULL) {
-        tna_free(allocator, &(ta_allocator_free_params){ .ptr = piece, .size = TNA_DURABLE_PIECE + 4u, .alignment = 1 });
+        tah_free(allocator, &(ta_allocator_free_params){ .ptr = piece, .size = TNA_DURABLE_PIECE + 4u, .alignment = 1 });
     }
     tna_end(&frame);
     return status;
@@ -1987,7 +1987,7 @@ static ta_op_status tna_offload_gather(tna_js_datamodel *dm, const ta_byte_sourc
     for (;;) {
         if (*capacity - *length < TNA_DURABLE_PIECE) {
             size_t grown_capacity = *capacity == 0 ? TNA_DURABLE_PIECE : *capacity * 2u;
-            uint8_t *grown = tna_alloc(allocator, grown_capacity, 1);
+            uint8_t *grown = tah_alloc(allocator, grown_capacity, 1);
             if (grown == NULL) {
                 return TA_OP_NOMEM;
             }
@@ -1995,7 +1995,7 @@ static ta_op_status tna_offload_gather(tna_js_datamodel *dm, const ta_byte_sourc
                 memcpy(grown, *out, *length);
             }
             if (*out != NULL) {
-                tna_free(allocator, &(ta_allocator_free_params){ .ptr = *out, .size = *capacity, .alignment = 1 });
+                tah_free(allocator, &(ta_allocator_free_params){ .ptr = *out, .size = *capacity, .alignment = 1 });
             }
             *out = grown;
             *capacity = grown_capacity;
@@ -2065,7 +2065,7 @@ static ta_op_status tna_dm_value_read(void *self, const ta_datamodel_value_read_
         }
     }
     if (bytes != NULL) {
-        tna_free(tna_offload_allocator(dm), &(ta_allocator_free_params){ .ptr = bytes, .size = capacity, .alignment = 1 });
+        tah_free(tna_offload_allocator(dm), &(ta_allocator_free_params){ .ptr = bytes, .size = capacity, .alignment = 1 });
     }
     return status;
 }
@@ -2145,7 +2145,7 @@ void tna_js_datamodel_release_handles(tna_js_datamodel *dm, tna_offload_handles 
         ta_value_release(&handles.handles[index]);
     }
     if (handles.handles != NULL) {
-        tna_free(tna_offload_allocator(dm),
+        tah_free(tna_offload_allocator(dm),
                  &(ta_allocator_free_params){ .ptr = handles.handles, .size = (size_t)handles.count * sizeof(ta_value),
                                               .alignment = _Alignof(ta_value) });
     }
@@ -2477,7 +2477,7 @@ void tna_js_datamodel_after_core(tna_js_datamodel *dm) {
      * outlived core would find no table, and its cell stays valid on its own.
      */
     if (dm->primitives.slots != NULL) {
-        tna_free(dm->wrapper->values.allocator,
+        tah_free(dm->wrapper->values.allocator,
                  &(ta_allocator_free_params){ .ptr = dm->primitives.slots,
                                               .size = (size_t)dm->primitives.capacity * sizeof *dm->primitives.slots,
                                               .alignment = _Alignof(tna_intern_slot) });

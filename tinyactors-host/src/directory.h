@@ -15,7 +15,7 @@
  * absent entry equals kind NONE); resolve of an absent address writes kind
  * NONE and answers TA_ERR_NOT_FOUND.
  *
- * Teardown: tna_directory_clear() gives every reference back. The system
+ * Teardown: tah_directory_clear() gives every reference back. The system
  * calls it after uninstalling the directory and before ta_system_destroy(),
  * because core frees its address records at the end of that call.
  */
@@ -25,15 +25,15 @@
 #include "tinyactors.h"
 
 typedef struct {
-    tna_map entries; /* (uintptr_t)ta_address * -> ta_actor_id, 0 when unloaded */
-} tna_directory;
+    tah_map entries; /* (uintptr_t)ta_address * -> ta_actor_id, 0 when unloaded */
+} tah_directory;
 
-void tna_directory_init(tna_directory *directory, ta_allocator allocator);
+void tah_directory_init(tah_directory *directory, ta_allocator allocator);
 /* The adapter core calls (ta_system_set_actor_directory). */
-ta_actor_directory tna_directory_adapter(tna_directory *directory);
+ta_actor_directory tah_directory_adapter(tah_directory *directory);
 /* The entry for `address`: kind NONE when it has none. */
-ta_actor_directory_entry tna_directory_find(const tna_directory *directory, const ta_address *address);
-uint32_t tna_directory_count(const tna_directory *directory);
+ta_actor_directory_entry tah_directory_find(const tah_directory *directory, const ta_address *address);
+uint32_t tah_directory_count(const tah_directory *directory);
 /* Gives back every entry's address reference and empties the map. */
-void tna_directory_clear(tna_directory *directory);
-void tna_directory_destroy(tna_directory *directory);
+void tah_directory_clear(tah_directory *directory);
+void tah_directory_destroy(tah_directory *directory);

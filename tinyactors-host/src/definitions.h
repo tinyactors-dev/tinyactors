@@ -26,23 +26,23 @@
 #include "tinyactors.h"
 
 typedef enum {
-    TNA_ORIGIN_HOST = 0,
-    TNA_ORIGIN_NESTED,
-    TNA_ORIGIN_INVOKE,
-    TNA_ORIGINS
-} tna_definition_origin;
+    TAH_ORIGIN_HOST = 0,
+    TAH_ORIGIN_NESTED,
+    TAH_ORIGIN_INVOKE,
+    TAH_ORIGINS
+} tah_definition_origin;
 
 typedef struct {
-    tna_map origins; /* definition ID -> tna_definition_origin, for NESTED and INVOKE */
+    tah_map origins; /* definition ID -> tah_definition_origin, for NESTED and INVOKE */
     uint64_t registered;
     uint64_t retired;
     uint64_t freed;
     /* The origin of the registrations core makes now; HOST outside a child's compile. */
-    tna_definition_origin registering;
-} tna_definitions;
+    tah_definition_origin registering;
+} tah_definitions;
 
-void tna_definitions_init(tna_definitions *definitions, ta_allocator allocator);
-void tna_definitions_destroy(tna_definitions *definitions);
+void tah_definitions_init(tah_definitions *definitions, ta_allocator allocator);
+void tah_definitions_destroy(tah_definitions *definitions);
 
 /*
  * Counts one event and keeps or forgets the definition's origin, which it
@@ -50,16 +50,16 @@ void tna_definitions_destroy(tna_definitions *definitions);
  * RETIRED and FREED. If the origin cannot be kept for lack of memory, the
  * definition reads as the host's.
  */
-tna_definition_origin tna_definitions_note(tna_definitions *definitions, const ta_definition_event *event);
+tah_definition_origin tah_definitions_note(tah_definitions *definitions, const ta_definition_event *event);
 
-tna_definition_origin tna_definitions_origin(const tna_definitions *definitions, ta_definition_id definition);
+tah_definition_origin tah_definitions_origin(const tah_definitions *definitions, ta_definition_id definition);
 
-const char *tna_definition_origin_name(tna_definition_origin origin);
+const char *tah_definition_origin_name(tah_definition_origin origin);
 
 /*
  * The live definitions by origin and by whether they are retired (still
  * alive because a child or an actor uses them): `alive[origin][retired]`.
  * It walks core's definitions (core ADR 0078).
  */
-void tna_definitions_alive(const tna_definitions *definitions, const ta_system *core,
-                           uint64_t alive[TNA_ORIGINS][2]);
+void tah_definitions_alive(const tah_definitions *definitions, const ta_system *core,
+                           uint64_t alive[TAH_ORIGINS][2]);

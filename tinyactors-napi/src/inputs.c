@@ -83,16 +83,16 @@ size_t tna_record_span(const uint8_t *bytes, size_t length, bool unit) {
 
 void tna_inputs_init(tna_inputs *inputs, ta_allocator allocator) {
     *inputs = (tna_inputs){ .allocator = allocator };
-    tna_vec_init(&inputs->families, allocator, TNA_LAYOUT(ta_str));
-    tna_vec_init(&inputs->entries, allocator, TNA_LAYOUT(tna_input_entry));
-    tna_map_init(&inputs->entry_index, allocator);
-    tna_vec_init(&inputs->spare, allocator, TNA_LAYOUT(tna_vec));
-    tna_map_init(&inputs->seqs, allocator);
-    tna_map_init(&inputs->queued_address, allocator);
-    tna_map_init(&inputs->mail_count, allocator);
-    tna_map_init(&inputs->mail_since, allocator);
-    tna_vec_init(&inputs->touched, allocator, TNA_LAYOUT(tna_input_touch));
-    tna_map_init(&inputs->touched_index, allocator);
+    tah_vec_init(&inputs->families, allocator, TAH_LAYOUT(ta_str));
+    tah_vec_init(&inputs->entries, allocator, TAH_LAYOUT(tna_input_entry));
+    tah_map_init(&inputs->entry_index, allocator);
+    tah_vec_init(&inputs->spare, allocator, TAH_LAYOUT(tah_vec));
+    tah_map_init(&inputs->seqs, allocator);
+    tah_map_init(&inputs->queued_address, allocator);
+    tah_map_init(&inputs->mail_count, allocator);
+    tah_map_init(&inputs->mail_since, allocator);
+    tah_vec_init(&inputs->touched, allocator, TAH_LAYOUT(tna_input_touch));
+    tah_map_init(&inputs->touched_index, allocator);
 }
 
 /* Forgets every queued message and waiting count: the log was turned off or
@@ -101,50 +101,50 @@ static void tna_inputs_forget_mail(tna_inputs *inputs) {
     uint32_t cursor = 0;
     uint64_t key = 0;
     uint64_t value = 0;
-    while (tna_map_next(&inputs->queued_address, &cursor, &key, &value)) {
+    while (tah_map_next(&inputs->queued_address, &cursor, &key, &value)) {
         ta_address_release((ta_address *)(uintptr_t)value);
     }
-    tna_map_destroy(&inputs->queued_address);
-    tna_map_init(&inputs->queued_address, inputs->allocator);
-    tna_map_destroy(&inputs->seqs);
-    tna_map_init(&inputs->seqs, inputs->allocator);
-    tna_map_destroy(&inputs->mail_count);
-    tna_map_init(&inputs->mail_count, inputs->allocator);
-    tna_map_destroy(&inputs->mail_since);
-    tna_map_init(&inputs->mail_since, inputs->allocator);
+    tah_map_destroy(&inputs->queued_address);
+    tah_map_init(&inputs->queued_address, inputs->allocator);
+    tah_map_destroy(&inputs->seqs);
+    tah_map_init(&inputs->seqs, inputs->allocator);
+    tah_map_destroy(&inputs->mail_count);
+    tah_map_init(&inputs->mail_count, inputs->allocator);
+    tah_map_destroy(&inputs->mail_since);
+    tah_map_init(&inputs->mail_since, inputs->allocator);
 }
 
 /* Forgets this turn's touched addresses. */
 static void tna_inputs_forget_touched(tna_inputs *inputs) {
     for (uint32_t at = 0; at < inputs->touched.count; at += 1u) {
-        ta_address_release(((tna_input_touch *)tna_vec_at(&inputs->touched, at))->address);
+        ta_address_release(((tna_input_touch *)tah_vec_at(&inputs->touched, at))->address);
     }
-    tna_vec_clear(&inputs->touched);
-    tna_map_destroy(&inputs->touched_index);
-    tna_map_init(&inputs->touched_index, inputs->allocator);
+    tah_vec_clear(&inputs->touched);
+    tah_map_destroy(&inputs->touched_index);
+    tah_map_init(&inputs->touched_index, inputs->allocator);
 }
 
 static void tna_inputs_free_families(tna_inputs *inputs) {
     for (uint32_t at = 0; at < inputs->families.count; at += 1u) {
-        ta_str *family = tna_vec_at(&inputs->families, at);
-        tna_free(inputs->allocator, &(ta_allocator_free_params){
+        ta_str *family = tah_vec_at(&inputs->families, at);
+        tah_free(inputs->allocator, &(ta_allocator_free_params){
                                         .ptr = (void *)family->ptr, .size = (size_t)family->len + 1u, .alignment = 1 });
     }
-    tna_vec_clear(&inputs->families);
+    tah_vec_clear(&inputs->families);
 }
 
 void tna_inputs_release(tna_inputs *inputs) {
     for (uint32_t at = 0; at < inputs->entries.count; at += 1u) {
-        tna_input_entry *entry = tna_vec_at(&inputs->entries, at);
+        tna_input_entry *entry = tah_vec_at(&inputs->entries, at);
         ta_address_release(entry->address);
         entry->bytes.count = 0;
-        if (tna_vec_push(&inputs->spare, &entry->bytes) != TA_OK) {
-            tna_vec_destroy(&entry->bytes);
+        if (tah_vec_push(&inputs->spare, &entry->bytes) != TA_OK) {
+            tah_vec_destroy(&entry->bytes);
         }
     }
-    tna_vec_clear(&inputs->entries);
-    tna_map_destroy(&inputs->entry_index);
-    tna_map_init(&inputs->entry_index, inputs->allocator);
+    tah_vec_clear(&inputs->entries);
+    tah_map_destroy(&inputs->entry_index);
+    tah_map_init(&inputs->entry_index, inputs->allocator);
     inputs->count = 0;
     if (inputs->arena_ready) {
         ta_arena_reset(&inputs->arena);
@@ -158,21 +158,21 @@ void tna_inputs_destroy(tna_system *system) {
     }
     tna_inputs_release(inputs);
     for (uint32_t at = 0; at < inputs->spare.count; at += 1u) {
-        tna_vec_destroy(tna_vec_at(&inputs->spare, at));
+        tah_vec_destroy(tah_vec_at(&inputs->spare, at));
     }
-    tna_vec_destroy(&inputs->spare);
-    tna_vec_destroy(&inputs->entries);
-    tna_map_destroy(&inputs->entry_index);
+    tah_vec_destroy(&inputs->spare);
+    tah_vec_destroy(&inputs->entries);
+    tah_map_destroy(&inputs->entry_index);
     tna_inputs_free_families(inputs);
-    tna_vec_destroy(&inputs->families);
+    tah_vec_destroy(&inputs->families);
     tna_inputs_forget_mail(inputs);
-    tna_map_destroy(&inputs->seqs);
-    tna_map_destroy(&inputs->queued_address);
-    tna_map_destroy(&inputs->mail_count);
-    tna_map_destroy(&inputs->mail_since);
+    tah_map_destroy(&inputs->seqs);
+    tah_map_destroy(&inputs->queued_address);
+    tah_map_destroy(&inputs->mail_count);
+    tah_map_destroy(&inputs->mail_since);
     tna_inputs_forget_touched(inputs);
-    tna_vec_destroy(&inputs->touched);
-    tna_map_destroy(&inputs->touched_index);
+    tah_vec_destroy(&inputs->touched);
+    tah_map_destroy(&inputs->touched_index);
     if (inputs->arena_ready) {
         ta_arena_destroy(&inputs->arena);
         inputs->arena_ready = false;
@@ -182,7 +182,7 @@ void tna_inputs_destroy(tna_system *system) {
 
 static bool tna_inputs_family_listed(const tna_inputs *inputs, ta_str family) {
     for (uint32_t at = 0; at < inputs->families.count; at += 1u) {
-        const ta_str *listed = tna_vec_at(&inputs->families, at);
+        const ta_str *listed = tah_vec_at(&inputs->families, at);
         if (listed->len == family.len && memcmp(listed->ptr, family.ptr, family.len) == 0) {
             return true;
         }
@@ -197,21 +197,21 @@ static void tna_inputs_touch(tna_inputs *inputs, ta_address *address, bool fixed
     }
     uint64_t index = 0;
     tna_input_touch *touch = NULL;
-    if (tna_map_get(&inputs->touched_index, (uint64_t)(uintptr_t)address, &index)) {
-        touch = tna_vec_at(&inputs->touched, (uint32_t)index);
+    if (tah_map_get(&inputs->touched_index, (uint64_t)(uintptr_t)address, &index)) {
+        touch = tah_vec_at(&inputs->touched, (uint32_t)index);
     } else {
         tna_input_touch fresh = { .address = address };
-        if (tna_vec_push(&inputs->touched, &fresh) != TA_OK) {
+        if (tah_vec_push(&inputs->touched, &fresh) != TA_OK) {
             inputs->lost += 1u; /* its wake is not reported this turn */
             return;
         }
-        if (tna_map_put(&inputs->touched_index, (uint64_t)(uintptr_t)address, inputs->touched.count - 1u) != TA_OK) {
+        if (tah_map_put(&inputs->touched_index, (uint64_t)(uintptr_t)address, inputs->touched.count - 1u) != TA_OK) {
             inputs->touched.count -= 1u;
             inputs->lost += 1u;
             return;
         }
         ta_address_retain(address);
-        touch = tna_vec_at(&inputs->touched, inputs->touched.count - 1u);
+        touch = tah_vec_at(&inputs->touched, inputs->touched.count - 1u);
     }
     if (fixed) {
         touch->fixed = true;
@@ -227,27 +227,27 @@ static void tna_inputs_touch(tna_inputs *inputs, ta_address *address, bool fixed
 /* The entry for `address` this turn, made when it has none; NULL without memory. */
 static tna_input_entry *tna_inputs_entry(tna_inputs *inputs, ta_address *address) {
     uint64_t index = 0;
-    if (tna_map_get(&inputs->entry_index, (uint64_t)(uintptr_t)address, &index)) {
-        return tna_vec_at(&inputs->entries, (uint32_t)index);
+    if (tah_map_get(&inputs->entry_index, (uint64_t)(uintptr_t)address, &index)) {
+        return tah_vec_at(&inputs->entries, (uint32_t)index);
     }
     tna_input_entry entry = { .address = address };
     if (inputs->spare.count != 0) {
         inputs->spare.count -= 1u;
-        entry.bytes = *(tna_vec *)tna_vec_at(&inputs->spare, inputs->spare.count);
+        entry.bytes = *(tah_vec *)tah_vec_at(&inputs->spare, inputs->spare.count);
     } else {
-        tna_vec_init(&entry.bytes, inputs->allocator, TNA_LAYOUT(uint8_t));
+        tah_vec_init(&entry.bytes, inputs->allocator, TAH_LAYOUT(uint8_t));
     }
-    if (tna_vec_push(&inputs->entries, &entry) != TA_OK) {
-        tna_vec_destroy(&entry.bytes);
+    if (tah_vec_push(&inputs->entries, &entry) != TA_OK) {
+        tah_vec_destroy(&entry.bytes);
         return NULL;
     }
-    if (tna_map_put(&inputs->entry_index, (uint64_t)(uintptr_t)address, inputs->entries.count - 1u) != TA_OK) {
+    if (tah_map_put(&inputs->entry_index, (uint64_t)(uintptr_t)address, inputs->entries.count - 1u) != TA_OK) {
         inputs->entries.count -= 1u;
-        tna_vec_destroy(&entry.bytes);
+        tah_vec_destroy(&entry.bytes);
         return NULL;
     }
     ta_address_retain(address);
-    return tna_vec_at(&inputs->entries, inputs->entries.count - 1u);
+    return tah_vec_at(&inputs->entries, inputs->entries.count - 1u);
 }
 
 static ta_op_status tna_input_sink_begin(void *self) {
@@ -286,8 +286,8 @@ static ta_op_status tna_input_sink_write(void *self, ta_bytes bytes) {
     if (!inputs->open) {
         return TA_OP_ERROR;
     }
-    tna_input_entry *entry = tna_vec_at(&inputs->entries, inputs->open_entry);
-    if (bytes.len > UINT32_MAX - entry->bytes.count || tna_vec_reserve(&entry->bytes, entry->bytes.count + bytes.len) != TA_OK) {
+    tna_input_entry *entry = tah_vec_at(&inputs->entries, inputs->open_entry);
+    if (bytes.len > UINT32_MAX - entry->bytes.count || tah_vec_reserve(&entry->bytes, entry->bytes.count + bytes.len) != TA_OK) {
         return TA_OP_NOMEM;
     }
     memcpy((uint8_t *)entry->bytes.items + entry->bytes.count, bytes.ptr, bytes.len);
@@ -302,7 +302,7 @@ static void tna_input_sink_end(void *self, bool keep) {
         return;
     }
     inputs->open = false;
-    tna_input_entry *entry = tna_vec_at(&inputs->entries, inputs->open_entry);
+    tna_input_entry *entry = tah_vec_at(&inputs->entries, inputs->open_entry);
     if (!keep) {
         entry->bytes.count = inputs->open_start;
         return;
@@ -337,11 +337,11 @@ ta_result tna_inputs_configure(tna_system *system, const ta_str *families, uint3
         }
         inputs->arena_ready = true;
     }
-    tna_vec copies;
-    tna_vec_init(&copies, inputs->allocator, TNA_LAYOUT(ta_str));
-    ta_result result = tna_vec_reserve(&copies, count);
+    tah_vec copies;
+    tah_vec_init(&copies, inputs->allocator, TAH_LAYOUT(ta_str));
+    ta_result result = tah_vec_reserve(&copies, count);
     for (uint32_t at = 0; result == TA_OK && at < count; at += 1u) {
-        char *text = tna_alloc(inputs->allocator, (size_t)families[at].len + 1u, 1);
+        char *text = tah_alloc(inputs->allocator, (size_t)families[at].len + 1u, 1);
         if (text == NULL) {
             result = TA_ERR_NOMEM;
             break;
@@ -349,16 +349,16 @@ ta_result tna_inputs_configure(tna_system *system, const ta_str *families, uint3
         memcpy(text, families[at].ptr, families[at].len);
         text[families[at].len] = '\0';
         ta_str copy = { .ptr = text, .len = families[at].len };
-        (void)tna_vec_push(&copies, &copy);
+        (void)tah_vec_push(&copies, &copy);
     }
     for (uint32_t at = 0; result == TA_OK && at < count; at += 1u) {
         result = ta_system_log_family(system->core, families[at], true);
     }
     if (result != TA_OK) {
-        tna_vec old = inputs->families;
+        tah_vec old = inputs->families;
         inputs->families = copies;
         tna_inputs_free_families(inputs);
-        tna_vec_destroy(&inputs->families);
+        tah_vec_destroy(&inputs->families);
         inputs->families = old;
         for (uint32_t at = 0; at < count; at += 1u) {
             if (!tna_inputs_family_listed(inputs, families[at])) {
@@ -369,7 +369,7 @@ ta_result tna_inputs_configure(tna_system *system, const ta_str *families, uint3
     }
     /* Families no longer listed stop being logged. */
     for (uint32_t at = 0; at < inputs->families.count; at += 1u) {
-        ta_str *old = tna_vec_at(&inputs->families, at);
+        ta_str *old = tah_vec_at(&inputs->families, at);
         bool kept = false;
         for (uint32_t index = 0; index < count && !kept; index += 1u) {
             kept = families[index].len == old->len && memcmp(families[index].ptr, old->ptr, old->len) == 0;
@@ -379,7 +379,7 @@ ta_result tna_inputs_configure(tna_system *system, const ta_str *families, uint3
         }
     }
     tna_inputs_free_families(inputs);
-    tna_vec_destroy(&inputs->families);
+    tah_vec_destroy(&inputs->families);
     inputs->families = copies;
     inputs->enabled = count > 0;
     if (inputs->seq_base == 0) {
@@ -389,14 +389,14 @@ ta_result tna_inputs_configure(tna_system *system, const ta_str *families, uint3
     }
     /* A message queued before now has no queued record: its event has no host number. */
     tna_inputs_forget_mail(inputs);
-    tna_sched_forget_logging(&system->sched);
+    tah_sched_forget_logging(&system->sched);
     ta_system_set_input_sink(system->core, inputs->enabled
                                                ? (ta_byte_sink){ .self = system, .v = &tna_input_sink_vtable }
                                                : (ta_byte_sink){ 0 });
     system->sched.observer = inputs->enabled
-                                 ? (tna_sched_observer){ .self = system, .note = tna_inputs_note,
+                                 ? (tah_sched_observer){ .self = system, .note = tna_inputs_note,
                                                          .host_seq = tna_inputs_host_seq }
-                                 : (tna_sched_observer){ 0 };
+                                 : (tah_sched_observer){ 0 };
     return TA_OK;
 }
 
@@ -407,9 +407,9 @@ bool tna_inputs_seq_is_ours(const tna_inputs *inputs, uint64_t seq) {
 /* tna_inputs_logged(), also answering the address's handle (borrowed). */
 static bool tna_inputs_logged_handle(tna_system *system, ta_actor_id actor, ta_actor_address *address,
                                      ta_address **handle) {
-    tna_sched_entry *entry = tna_sched_lookup(&system->sched, actor);
-    if (!system->inputs.enabled || (entry != NULL && (entry->flags & TNA_SCHED_LOG_KNOWN) != 0 &&
-                                    (entry->flags & TNA_SCHED_LOGGED) == 0)) {
+    tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
+    if (!system->inputs.enabled || (entry != NULL && (entry->flags & TAH_SCHED_LOG_KNOWN) != 0 &&
+                                    (entry->flags & TAH_SCHED_LOGGED) == 0)) {
         return false;
     }
     /* Read-only, so it may run inside a router callback (the target of mail). */
@@ -425,8 +425,8 @@ static bool tna_inputs_logged_handle(tna_system *system, ta_actor_id actor, ta_a
     bool logged = view.self.kind == TA_ACTOR_REF_NAMED &&
                   tna_inputs_family_listed(&system->inputs, view.definition.family.name);
     if (entry != NULL) {
-        entry->flags |= TNA_SCHED_LOG_KNOWN;
-        entry->flags = logged ? (uint8_t)(entry->flags | TNA_SCHED_LOGGED) : (uint8_t)(entry->flags & ~TNA_SCHED_LOGGED);
+        entry->flags |= TAH_SCHED_LOG_KNOWN;
+        entry->flags = logged ? (uint8_t)(entry->flags | TAH_SCHED_LOGGED) : (uint8_t)(entry->flags & ~TAH_SCHED_LOGGED);
     }
     if (logged && address != NULL) {
         *address = ta_address_view(view.self.as.named);
@@ -449,11 +449,11 @@ bool tna_inputs_logged(tna_system *system, ta_actor_id actor, ta_actor_address *
 static void tna_inputs_mail_add(tna_inputs *inputs, ta_address *address, ta_time since) {
     uint64_t key = (uint64_t)(uintptr_t)address;
     uint64_t count = 0;
-    (void)tna_map_get(&inputs->mail_count, key, &count);
-    if (count == 0 && tna_map_put(&inputs->mail_since, key, since) != TA_OK) {
+    (void)tah_map_get(&inputs->mail_count, key, &count);
+    if (count == 0 && tah_map_put(&inputs->mail_since, key, since) != TA_OK) {
         inputs->lost += 1u;
     }
-    if (tna_map_put(&inputs->mail_count, key, count + 1u) != TA_OK) {
+    if (tah_map_put(&inputs->mail_count, key, count + 1u) != TA_OK) {
         inputs->lost += 1u;
     }
 }
@@ -462,28 +462,28 @@ static void tna_inputs_mail_add(tna_inputs *inputs, ta_address *address, ta_time
 static void tna_inputs_mail_done(tna_inputs *inputs, ta_address *address) {
     uint64_t key = (uint64_t)(uintptr_t)address;
     uint64_t count = 0;
-    if (!tna_map_get(&inputs->mail_count, key, &count)) {
+    if (!tah_map_get(&inputs->mail_count, key, &count)) {
         return;
     }
     if (count <= 1u) {
-        (void)tna_map_remove(&inputs->mail_count, key);
-        (void)tna_map_remove(&inputs->mail_since, key);
+        (void)tah_map_remove(&inputs->mail_count, key);
+        (void)tah_map_remove(&inputs->mail_since, key);
     } else {
-        (void)tna_map_put(&inputs->mail_count, key, count - 1u);
+        (void)tah_map_put(&inputs->mail_count, key, count - 1u);
     }
 }
 
 /* The queued message behind `envelope`, if the log numbered it: its host
  * number and address (retained, the caller releases it), out of the maps. */
 static bool tna_inputs_unqueue(tna_inputs *inputs, uint32_t envelope, uint64_t *seq, ta_address **address) {
-    if (!tna_map_get(&inputs->seqs, envelope, seq)) {
+    if (!tah_map_get(&inputs->seqs, envelope, seq)) {
         return false;
     }
-    (void)tna_map_remove(&inputs->seqs, envelope);
+    (void)tah_map_remove(&inputs->seqs, envelope);
     uint64_t value = 0;
     *address = NULL;
-    if (tna_map_get(&inputs->queued_address, envelope, &value)) {
-        (void)tna_map_remove(&inputs->queued_address, envelope);
+    if (tah_map_get(&inputs->queued_address, envelope, &value)) {
+        (void)tah_map_remove(&inputs->queued_address, envelope);
         *address = (ta_address *)(uintptr_t)value;
         tna_inputs_mail_done(inputs, *address);
     }
@@ -520,7 +520,7 @@ static ta_definition_id tna_inputs_family_definition(tna_system *system, ta_str 
 
 /* The resident, published actor at `address`, or 0. */
 static ta_actor_id tna_inputs_resident(tna_system *system, ta_address *address) {
-    ta_actor_directory_entry entry = tna_directory_find(&system->directory, address);
+    ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);
     if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT) {
         return 0;
     }
@@ -544,10 +544,10 @@ static ta_result tna_inputs_host_record(tna_system *system, ta_address *address,
     return result;
 }
 
-static ta_result tna_inputs_queued(tna_system *system, const tna_sched_note *note) {
+static ta_result tna_inputs_queued(tna_system *system, const tah_sched_note *note) {
     tna_inputs *inputs = &system->inputs;
-    const tna_envelope *envelope = note->message;
-    if (envelope == NULL || envelope->report != TNA_REPORT_NONE) {
+    const tah_envelope *envelope = note->message;
+    if (envelope == NULL || envelope->report != TAH_REPORT_NONE) {
         return TA_OK; /* core writes a report as it takes it */
     }
     ta_address *handle = NULL;
@@ -584,12 +584,12 @@ static ta_result tna_inputs_queued(tna_system *system, const tna_sched_note *not
         inputs->next_seq = seq;
     }
     tna_inputs_touch(inputs, handle, false, false, 0);
-    if (tna_map_put(&inputs->seqs, note->envelope, seq) != TA_OK) {
+    if (tah_map_put(&inputs->seqs, note->envelope, seq) != TA_OK) {
         inputs->lost += 1u; /* its event will carry no host number */
         return TA_OK;
     }
-    if (tna_map_put(&inputs->queued_address, note->envelope, (uint64_t)(uintptr_t)handle) != TA_OK) {
-        (void)tna_map_remove(&inputs->seqs, note->envelope);
+    if (tah_map_put(&inputs->queued_address, note->envelope, (uint64_t)(uintptr_t)handle) != TA_OK) {
+        (void)tah_map_remove(&inputs->seqs, note->envelope);
         inputs->lost += 1u;
         return TA_OK;
     }
@@ -598,7 +598,7 @@ static ta_result tna_inputs_queued(tna_system *system, const tna_sched_note *not
     return TA_OK;
 }
 
-ta_result tna_inputs_note(void *self, const tna_sched_note *note) {
+ta_result tna_inputs_note(void *self, const tah_sched_note *note) {
     tna_system *system = self;
     tna_inputs *inputs = &system->inputs;
     if (!inputs->enabled) {
@@ -606,9 +606,9 @@ ta_result tna_inputs_note(void *self, const tna_sched_note *note) {
     }
     ta_address *handle = NULL;
     switch (note->kind) {
-    case TNA_NOTE_QUEUED:
+    case TAH_NOTE_QUEUED:
         return tna_inputs_queued(system, note);
-    case TNA_NOTE_DELIVERED: {
+    case TAH_NOTE_DELIVERED: {
         /* Core wrote its `event`, which carries the host number. */
         uint64_t seq = 0;
         ta_address *queued_address = NULL;
@@ -618,7 +618,7 @@ ta_result tna_inputs_note(void *self, const tna_sched_note *note) {
         }
         return TA_OK;
     }
-    case TNA_NOTE_DROPPED: {
+    case TAH_NOTE_DROPPED: {
         uint64_t seq = 0;
         ta_address *queued_address = NULL;
         if (!tna_inputs_unqueue(inputs, note->envelope, &seq, &queued_address)) {
@@ -637,8 +637,8 @@ ta_result tna_inputs_note(void *self, const tna_sched_note *note) {
         }
         return TA_OK;
     }
-    case TNA_NOTE_SETTLED:
-    case TNA_NOTE_FINISHED:
+    case TAH_NOTE_SETTLED:
+    case TAH_NOTE_FINISHED:
         /* Its macrostep may have armed or cancelled sends, or it finished:
          * work its wake out. Core wrote what it accepted. */
         if (tna_inputs_logged_handle(system, note->actor, NULL, &handle)) {
@@ -654,7 +654,7 @@ ta_result tna_inputs_note(void *self, const tna_sched_note *note) {
 uint64_t tna_inputs_host_seq(void *self, uint32_t envelope) {
     tna_system *system = self;
     uint64_t seq = 0;
-    return tna_map_get(&system->inputs.seqs, envelope, &seq) ? seq : 0;
+    return tah_map_get(&system->inputs.seqs, envelope, &seq) ? seq : 0;
 }
 
 ta_result tna_inputs_evicted(tna_system *system, ta_actor_id actor, bool has_wake, ta_time wake) {
@@ -715,10 +715,10 @@ static bool tna_inputs_wake_of(tna_system *system, const tna_input_touch *touch,
     tna_inputs *inputs = &system->inputs;
     uint64_t key = (uint64_t)(uintptr_t)touch->address;
     uint64_t since = 0;
-    bool mail = tna_map_get(&inputs->mail_since, key, &since);
+    bool mail = tah_map_get(&inputs->mail_since, key, &since);
     *has_at = mail;
     *at = mail ? (ta_time)since : 0;
-    ta_actor_directory_entry entry = tna_directory_find(&system->directory, touch->address);
+    ta_actor_directory_entry entry = tah_directory_find(&system->directory, touch->address);
     if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT) {
         return mail;
     }
@@ -748,7 +748,7 @@ tna_input_wake *tna_inputs_wakes(tna_system *system, uint32_t *count) {
                                 ? NULL
                                 : ta_arena_alloc(&inputs->arena, (size_t)touched * sizeof *wakes, _Alignof(tna_input_wake));
     for (uint32_t at = 0; wakes != NULL && at < touched; at += 1u) {
-        const tna_input_touch *touch = tna_vec_at(&inputs->touched, at);
+        const tna_input_touch *touch = tah_vec_at(&inputs->touched, at);
         tna_input_wake wake = { 0 };
         if (!tna_inputs_wake_of(system, touch, &wake.has_at, &wake.at)) {
             continue;

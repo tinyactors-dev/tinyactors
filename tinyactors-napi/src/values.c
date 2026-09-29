@@ -33,7 +33,7 @@ static bool tna_hold(tna_values *values, napi_value value, tna_box *box) {
     napi_value table = NULL;
     uint32_t index = values->table_length;
     if (values->free_indices.count > 0) {
-        index = *(uint32_t *)tna_vec_at(&values->free_indices, values->free_indices.count - 1u);
+        index = *(uint32_t *)tah_vec_at(&values->free_indices, values->free_indices.count - 1u);
     }
     if (napi_get_reference_value(values->env, values->table, &table) != napi_ok ||
         napi_set_element(values->env, table, index, value) != napi_ok) {
@@ -66,7 +66,7 @@ static void tna_unhold(tna_box *box) {
         napi_get_undefined(values->env, &undefined) == napi_ok) {
         napi_set_element(values->env, table, box->index, undefined);
     }
-    (void)tna_vec_push(&values->free_indices, &box->index);
+    (void)tah_vec_push(&values->free_indices, &box->index);
 }
 
 #else
@@ -100,13 +100,13 @@ static void tna_box_release(void *self) {
     tna_values *values = box->values;
     tna_unhold(box);
     if (box->text != NULL) {
-        tna_free(values->allocator, &(ta_allocator_free_params){
+        tah_free(values->allocator, &(ta_allocator_free_params){
                                         .ptr = box->text, .size = (size_t)box->text_length + 1u, .alignment = 1 });
     }
     box->text = NULL;
     values->live -= 1u;
     *values->env_live -= 1u;
-    tna_free_list_give(&values->boxes, box);
+    tah_free_list_give(&values->boxes, box);
 }
 
 static const ta_value_vtable tna_box_vtable = { tna_box_retain, tna_box_release };
@@ -118,11 +118,11 @@ static const ta_value_vtable tna_true_vtable = { NULL, NULL };
 static const ta_value_vtable tna_false_vtable = { NULL, NULL };
 static const ta_value_vtable tna_number_vtable = { NULL, NULL };
 
-bool tna_values_init(tna_values *values, napi_env env, tna_allocator *allocator) {
-    *values = (tna_values){ .env = env, .allocator = tna_allocator_for(allocator, TNA_MEMORY_VALUES) };
-    tna_free_list_init(&values->boxes, values->allocator, TNA_LAYOUT(tna_box));
+bool tna_values_init(tna_values *values, napi_env env, tah_allocator *allocator) {
+    *values = (tna_values){ .env = env, .allocator = tah_allocator_for(allocator, TAH_MEMORY_VALUES) };
+    tah_free_list_init(&values->boxes, values->allocator, TAH_LAYOUT(tna_box));
 #ifdef TNA_VALUES_TABLE
-    tna_vec_init(&values->free_indices, values->allocator, TNA_LAYOUT(uint32_t));
+    tah_vec_init(&values->free_indices, values->allocator, TAH_LAYOUT(uint32_t));
     napi_value table = NULL;
     return napi_create_array(env, &table) == napi_ok && napi_create_reference(env, table, 1, &values->table) == napi_ok;
 #else
@@ -131,9 +131,9 @@ bool tna_values_init(tna_values *values, napi_env env, tna_allocator *allocator)
 }
 
 void tna_values_close(tna_values *values) {
-    tna_free_list_destroy(&values->boxes);
+    tah_free_list_destroy(&values->boxes);
 #ifdef TNA_VALUES_TABLE
-    tna_vec_destroy(&values->free_indices);
+    tah_vec_destroy(&values->free_indices);
     if (values->table != NULL && !*values->torn_down) {
         napi_delete_reference(values->env, values->table);
     }
@@ -180,13 +180,13 @@ bool tna_value_make(tna_values *values, napi_value value, ta_value *out) {
     default:
         break;
     }
-    tna_box *box = tna_free_list_take(&values->boxes);
+    tna_box *box = tah_free_list_take(&values->boxes);
     if (box == NULL) {
         return false;
     }
     *box = (tna_box){ .values = values, .references = 1u };
     if (!tna_hold(values, value, box)) {
-        tna_free_list_give(&values->boxes, box);
+        tah_free_list_give(&values->boxes, box);
         return false;
     }
     values->live += 1u;
@@ -287,7 +287,7 @@ ta_result tna_value_text(tna_values *values, const ta_value *value, ta_str *out)
             }
             return TA_ERR_INVALID;
         }
-        char *copy = tna_alloc(values->allocator, length + 1u, 1);
+        char *copy = tah_alloc(values->allocator, length + 1u, 1);
         if (copy == NULL) {
             return TA_ERR_NOMEM;
         }

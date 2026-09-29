@@ -330,7 +330,7 @@ static void tna_destroy_finished(tna_system *system, ta_actor_id actor) {
     ta_result result = ta_actor_destroy(system->core, actor);
     system->inside_core = false;
     if (result == TA_OK || result == TA_ERR_NOT_FOUND) {
-        tna_sched_remove(&system->sched, actor, TNA_DEAD_DONE);
+        tah_sched_remove(&system->sched, actor, TAH_DEAD_DONE);
     }
 }
 
@@ -350,9 +350,9 @@ static napi_value tna_completion_data(napi_env env, tna_system *system, ta_actor
     return data;
 }
 
-static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record, napi_value *first_error) {
+static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record, napi_value *first_error) {
     tna_system *system = wrapper->system;
-    if (wrapper->done_hook != NULL && tna_sched_lookup(&system->sched, record->actor) != NULL) {
+    if (wrapper->done_hook != NULL && tah_sched_lookup(&system->sched, record->actor) != NULL) {
         napi_value view = tna_actor_view(env, wrapper, record->actor);
         napi_value argument = NULL;
         napi_value data = tna_completion_data(env, system, record->actor);
@@ -365,7 +365,7 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tna_tu
     }
     /* The hook may have closed the system or destroyed the actor itself. */
     if (wrapper->destroy_finished && !tna_system_closed(system) &&
-        tna_sched_lookup(&system->sched, record->actor) != NULL) {
+        tah_sched_lookup(&system->sched, record->actor) != NULL) {
         tna_destroy_finished(system, record->actor);
     }
 }
@@ -389,7 +389,7 @@ void tna_fault_message(const char *operation, ta_result code, char *buffer, size
     snprintf(buffer, size, "%s failed: %s", operation, tna_result_code(code));
 }
 
-static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record, napi_value *first_error) {
+static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record, napi_value *first_error) {
     const char *code = tna_result_code(record->code);
     char message[160];
     tna_fault_message(record->operation, record->code, message, sizeof message);
@@ -463,9 +463,9 @@ napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id nam
  * are what posting it again needs (napi ADR 0020's restart outbox); each is
  * absent when the message had none.
  */
-static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record,
+static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record,
                                    napi_value *first_error) {
-    const char *reason_text = tna_dead_reason_name(record->reason);
+    const char *reason_text = tah_dead_reason_name(record->reason);
     char body[64];
     int length = snprintf(body, sizeof body, "dead-lettered: %s", reason_text);
     tna_pump_host_log(wrapper->system, record->actor,
@@ -513,23 +513,23 @@ static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const
  */
 
 /* The error code a dead letter's reason gives a send() (ADR 0008). */
-static const char *const tna_dead_codes[TNA_DEAD_REASONS] = {
-    [TNA_DEAD_NOT_FOUND] = "not-found",
-    [TNA_DEAD_DONE] = "done",
-    [TNA_DEAD_DESTROYED] = "not-found",
-    [TNA_DEAD_REFUSED] = "invalid",
-    [TNA_DEAD_UNLOADED] = "unloaded",
-    [TNA_DEAD_REJECTED] = "rejected",
-    [TNA_DEAD_LOAD_FAILED] = "load-failed",
-    [TNA_DEAD_LOAD_TIMEOUT] = "load-timeout",
-    [TNA_DEAD_WAITING_FULL] = "waiting-full",
+static const char *const tna_dead_codes[TAH_DEAD_REASONS] = {
+    [TAH_DEAD_NOT_FOUND] = "not-found",
+    [TAH_DEAD_DONE] = "done",
+    [TAH_DEAD_DESTROYED] = "not-found",
+    [TAH_DEAD_REFUSED] = "invalid",
+    [TAH_DEAD_UNLOADED] = "unloaded",
+    [TAH_DEAD_REJECTED] = "rejected",
+    [TAH_DEAD_LOAD_FAILED] = "load-failed",
+    [TAH_DEAD_LOAD_TIMEOUT] = "load-timeout",
+    [TAH_DEAD_WAITING_FULL] = "waiting-full",
 };
 
-static napi_value tna_settlement_error(napi_env env, const tna_settlement *settlement) {
+static napi_value tna_settlement_error(napi_env env, const tah_settlement *settlement) {
     char message[160];
     napi_value error = NULL;
-    if (settlement->kind == TNA_SETTLE_DEAD) {
-        const char *reason_text = tna_dead_reason_name(settlement->reason);
+    if (settlement->kind == TAH_SETTLE_DEAD) {
+        const char *reason_text = tah_dead_reason_name(settlement->reason);
         snprintf(message, sizeof message, "send: the message became a dead letter (%s)", reason_text);
         error = tna_error(env, tna_dead_codes[settlement->reason], message);
         napi_value detail = NULL;
@@ -541,7 +541,7 @@ static napi_value tna_settlement_error(napi_env env, const tna_settlement *settl
         }
         return error;
     }
-    if (settlement->kind == TNA_SETTLE_ABANDONED) {
+    if (settlement->kind == TAH_SETTLE_ABANDONED) {
         return tna_error(env, "abandoned",
                          "send: an operator abandoned the message's macrostep (core ADR 0082); what it did so far stays");
     }
@@ -552,10 +552,10 @@ static napi_value tna_settlement_error(napi_env env, const tna_settlement *settl
 
 /* { actor, status, consumed, completion }: the macrostep ended with the actor
  * stable or done; `consumed` is false when the message enabled no transition. */
-static napi_value tna_settlement_result(napi_env env, tna_napi_system *wrapper, const tna_settlement *settlement) {
+static napi_value tna_settlement_result(napi_env env, tna_napi_system *wrapper, const tah_settlement *settlement) {
     napi_value result = NULL;
     napi_value status = NULL;
-    bool done = settlement->kind == TNA_SETTLE_DONE;
+    bool done = settlement->kind == TAH_SETTLE_DONE;
     if (napi_create_object(env, &result) != napi_ok ||
         napi_create_string_utf8(env, done ? "done" : "stable", NAPI_AUTO_LENGTH, &status) != napi_ok ||
         tna_set(env, result, "actor", tna_actor_view(env, wrapper, settlement->actor)) != napi_ok ||
@@ -580,18 +580,18 @@ static napi_value tna_settlement_result(napi_env env, tna_napi_system *wrapper, 
  * again after them, for settlements the hooks caused.
  */
 static void tna_settle_sends(napi_env env, tna_napi_system *wrapper) {
-    tna_sched *sched = &wrapper->system->sched;
-    tna_settlement settlement;
-    while (tna_sched_settlement_pop(sched, &settlement)) {
-        tna_waiter *waiter = tna_sched_waiter(sched, settlement.waiter);
+    tah_sched *sched = &wrapper->system->sched;
+    tah_settlement settlement;
+    while (tah_sched_settlement_pop(sched, &settlement)) {
+        tah_waiter *waiter = tah_sched_waiter(sched, settlement.waiter);
         if (waiter == NULL || waiter->host == NULL) {
             continue;
         }
         napi_deferred deferred = waiter->host;
-        tna_sched_waiter_give(sched, settlement.waiter);
+        tah_sched_waiter_give(sched, settlement.waiter);
         napi_handle_scope scope = NULL;
         napi_open_handle_scope(env, &scope);
-        if (settlement.kind == TNA_SETTLE_STABLE || settlement.kind == TNA_SETTLE_DONE) {
+        if (settlement.kind == TAH_SETTLE_STABLE || settlement.kind == TAH_SETTLE_DONE) {
             napi_value result = tna_settlement_result(env, wrapper, &settlement);
             if (result != NULL) {
                 napi_resolve_deferred(env, deferred, result);
@@ -613,7 +613,7 @@ static void tna_settle_sends(napi_env env, tna_napi_system *wrapper) {
  * stopped at its microstep limit (core ADR 0075) and the actor was
  * quarantined. The effects handler hears it with the actor.
  */
-static void tna_runaway_effect(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record,
+static void tna_runaway_effect(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record,
                                napi_value *first_error) {
     tna_env *data = wrapper->env_data;
     napi_value handler = NULL;
@@ -714,13 +714,13 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
     if (!tna_system_closed(system)) {
         tna_system_turn(system);
         tna_settle_sends(env, wrapper);
-        for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
             if (tna_system_closed(system)) {
                 break; /* a hook closed the system */
             }
-            if (record->kind == TNA_RECORD_DONE) {
+            if (record->kind == TAH_RECORD_DONE) {
                 tna_done_record(env, wrapper, record, &first_error);
-            } else if (record->kind == TNA_RECORD_FAULT) {
+            } else if (record->kind == TAH_RECORD_FAULT) {
                 tna_fault_record(env, wrapper, record, &first_error);
             } else {
                 tna_dead_letter_record(env, wrapper, record, &first_error);
@@ -743,12 +743,12 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
         }
         /* Then the runaways (ADR 0026), which a debugger reads with those
          * traces. */
-        for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
             if (tna_system_closed(system)) {
                 break;
             }
-            if (record->kind == TNA_RECORD_FAULT && record->code == TA_ERR_RUNAWAY &&
-                tna_sched_lookup(&system->sched, record->actor) != NULL) {
+            if (record->kind == TAH_RECORD_FAULT && record->code == TA_ERR_RUNAWAY &&
+                tah_sched_lookup(&system->sched, record->actor) != NULL) {
                 napi_handle_scope scope = NULL;
                 napi_open_handle_scope(env, &scope);
                 tna_runaway_effect(env, wrapper, record, &first_error);
@@ -853,15 +853,15 @@ void tna_pump_close(tna_napi_system *wrapper, bool env_usable) {
         }
     }
     /* send() promises still pending reject with "closed" (ADR 0012). */
-    tna_sched *sched = &wrapper->system->sched;
+    tah_sched *sched = &wrapper->system->sched;
     napi_value closed = env_usable && sched->waiters_live > 0 ? tna_error(env, "closed", "the system was closed") : NULL;
     for (uint32_t index = 1; index < sched->waiters.count; index += 1) {
-        tna_waiter *waiter = tna_sched_waiter(sched, index);
-        if (waiter->state != TNA_WAITER_FREE) {
+        tah_waiter *waiter = tah_sched_waiter(sched, index);
+        if (waiter->state != TAH_WAITER_FREE) {
             if (closed != NULL && waiter->host != NULL) {
                 napi_reject_deferred(env, waiter->host, closed);
             }
-            tna_sched_waiter_give(sched, index);
+            tah_sched_waiter_give(sched, index);
         }
     }
     /* Waiters that cannot be settled (finalizer, teardown) are abandoned. */

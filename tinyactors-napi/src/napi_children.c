@@ -14,7 +14,7 @@ typedef struct {
 } tna_child_resolver;
 
 static ta_allocator tna_children_allocator(tna_napi_system *wrapper) {
-    return tna_allocator_for(&wrapper->system->allocator, TNA_MEMORY_OTHER);
+    return tah_allocator_for(&wrapper->system->allocator, TAH_MEMORY_OTHER);
 }
 
 /* ------------------------------------------------------------------------
@@ -81,9 +81,9 @@ ta_chart_src_resolver tna_src_resolver_adapter(tna_src_resolver *resolver) {
  */
 
 static napi_value tna_resolver_of(tna_napi_system *wrapper, ta_definition_id definition) {
-    const tna_vec *resolvers = &wrapper->children.resolvers;
+    const tah_vec *resolvers = &wrapper->children.resolvers;
     for (uint32_t at = 0; at < resolvers->count; at += 1) {
-        const tna_child_resolver *entry = tna_vec_at(resolvers, at);
+        const tna_child_resolver *entry = tah_vec_at(resolvers, at);
         if (entry->definition == definition) {
             napi_value resolve = NULL;
             return napi_get_reference_value(wrapper->env, entry->resolve, &resolve) == napi_ok ? resolve : NULL;
@@ -96,17 +96,17 @@ void tna_children_forget(tna_napi_system *wrapper, ta_definition_id definition) 
     /* In a finalizer or after the environment's cleanup hook no reference
      * may be deleted; the environment takes them with it. */
     bool usable = wrapper->dm.js_usable && !wrapper->env_data->torn_down;
-    tna_vec *resolvers = &wrapper->children.resolvers;
+    tah_vec *resolvers = &wrapper->children.resolvers;
     uint32_t kept = 0;
     for (uint32_t at = 0; at < resolvers->count; at += 1u) {
-        tna_child_resolver *entry = tna_vec_at(resolvers, at);
+        tna_child_resolver *entry = tah_vec_at(resolvers, at);
         if (entry->definition == definition) {
             if (usable) {
                 napi_delete_reference(wrapper->env, entry->resolve);
             }
             continue;
         }
-        *(tna_child_resolver *)tna_vec_at(resolvers, kept) = *entry;
+        *(tna_child_resolver *)tah_vec_at(resolvers, kept) = *entry;
         kept += 1u;
     }
     resolvers->count = kept;
@@ -117,7 +117,7 @@ ta_result tna_children_keep_resolver(tna_napi_system *wrapper, ta_definition_id 
     if (napi_create_reference(wrapper->env, resolve, 1, &entry.resolve) != napi_ok) {
         return TA_ERR_NOMEM;
     }
-    ta_result result = tna_vec_push(&wrapper->children.resolvers, &entry);
+    ta_result result = tah_vec_push(&wrapper->children.resolvers, &entry);
     if (result != TA_OK) {
         napi_delete_reference(wrapper->env, entry.resolve);
     }
@@ -219,11 +219,11 @@ static void tna_child_refused(tna_import_failure *failure, char *wrapper_scratch
 ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definition, napi_value resolve,
                             tna_import_failure *failure) {
     ta_system *core = wrapper->system->core;
-    tna_vec pending;
-    tna_vec_init(&pending, tna_children_allocator(wrapper), TNA_LAYOUT(ta_definition_id));
-    ta_result result = tna_vec_push(&pending, &definition);
+    tah_vec pending;
+    tah_vec_init(&pending, tna_children_allocator(wrapper), TAH_LAYOUT(ta_definition_id));
+    ta_result result = tah_vec_push(&pending, &definition);
     while (result == TA_OK && pending.count != 0) {
-        ta_definition_id parent = *(const ta_definition_id *)tna_vec_at(&pending, pending.count - 1u);
+        ta_definition_id parent = *(const ta_definition_id *)tah_vec_at(&pending, pending.count - 1u);
         pending.count -= 1u;
         ta_definition_inspection view;
         if (ta_definition_inspect(core, parent, &view) != TA_OK) {
@@ -272,9 +272,9 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
             }
             ta_definition_id child = 0;
             if (result == TA_OK) {
-                wrapper->system->definitions.registering = TNA_ORIGIN_NESTED;
+                wrapper->system->definitions.registering = TAH_ORIGIN_NESTED;
                 result = tna_compile_child(wrapper, text, name, parent, resolve, &child, failure);
-                wrapper->system->definitions.registering = TNA_ORIGIN_HOST;
+                wrapper->system->definitions.registering = TAH_ORIGIN_HOST;
                 if (result != TA_OK && result != TA_ERR_NOMEM) {
                     tna_child_refused(failure, wrapper->refusal_scratch, invoke, result);
                     result = result == TA_ERR_UNSUPPORTED ? TA_ERR_UNSUPPORTED : TA_ERR_INVALID;
@@ -291,11 +291,11 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
                                                                           .child = child });
             (void)ta_system_release_definition(core, child);
             if (result == TA_OK) {
-                result = tna_vec_push(&pending, &child);
+                result = tah_vec_push(&pending, &child);
             }
         }
     }
-    tna_vec_destroy(&pending);
+    tah_vec_destroy(&pending);
     return result;
 }
 
@@ -383,10 +383,10 @@ static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tna_c
                                            ta_str name, tna_invoking parent) {
     tna_import_failure failure;
     tna_import_failure_open(&failure, wrapper->refusal, wrapper->refusal_bytes);
-    wrapper->system->definitions.registering = TNA_ORIGIN_INVOKE;
+    wrapper->system->definitions.registering = TAH_ORIGIN_INVOKE;
     ta_result result =
         tna_compile_child(wrapper, text, name, parent.definition, parent.resolve, params->out, &failure);
-    wrapper->system->definitions.registering = TNA_ORIGIN_HOST;
+    wrapper->system->definitions.registering = TAH_ORIGIN_HOST;
     char thrown[512];
     if (tna_clear_exception(wrapper->env, thrown, sizeof thrown)) {
         if (result == TA_OK) {
@@ -564,7 +564,7 @@ static ta_op_status tna_child_definition(void *context, const tna_child_params *
 
 void tna_children_init(tna_napi_system *wrapper) {
     ta_allocator allocator = tna_children_allocator(wrapper);
-    tna_vec_init(&wrapper->children.resolvers, allocator, TNA_LAYOUT(tna_child_resolver));
+    tah_vec_init(&wrapper->children.resolvers, allocator, TAH_LAYOUT(tna_child_resolver));
     wrapper->children.failure[0] = '\0';
     wrapper->system->child_definition = tna_child_definition;
     wrapper->system->child_context = wrapper;
@@ -572,6 +572,6 @@ void tna_children_init(tna_napi_system *wrapper) {
 
 void tna_children_close(tna_napi_system *wrapper) {
     /* Core's teardown told of every definition it freed, so nothing is left. */
-    tna_vec_destroy(&wrapper->children.resolvers);
+    tah_vec_destroy(&wrapper->children.resolvers);
     wrapper->system->child_definition = NULL;
 }

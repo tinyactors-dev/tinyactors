@@ -38,4 +38,4 @@ ta_external_event_router tna_router_adapter(tna_system *system);
  * `address` stays the caller's. TA_ERR_BUSY: the queue is full;
  * TA_ERR_NOMEM: nothing accepted.
  */
-ta_result tna_router_post_named(tna_system *system, ta_address *address, const tna_message *message);
+ta_result tna_router_post_named(tna_system *system, ta_address *address, const tah_message *message);

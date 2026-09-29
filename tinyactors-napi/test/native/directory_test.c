@@ -19,8 +19,8 @@ static ta_address *intern(tna_system *system, ta_str family, ta_str name) {
 static void compare_and_swap(void) {
     tna_system *system = NULL;
     CHECK(tna_system_create(&(tna_system_create_params){ 0 }, &system) == TA_OK);
-    tna_directory *directory = &system->directory;
-    ta_actor_directory adapter = tna_directory_adapter(directory);
+    tah_directory *directory = &system->directory;
+    ta_actor_directory adapter = tah_directory_adapter(directory);
     ta_address *a = intern(system, S("f"), S("a"));
     ta_address *again = intern(system, S("f"), S("a"));
     CHECK(a == again); /* interned: equal addresses are one pointer */
@@ -46,25 +46,25 @@ static void compare_and_swap(void) {
                                                .address = a, .expected = two, .replacement = unloaded }) == TA_ERR_STALE);
     CHECK(adapter.v->replace(adapter.self, &(ta_actor_directory_replace_params){
                                                .address = a, .expected = one, .replacement = unloaded }) == TA_OK);
-    CHECK(tna_directory_find(directory, a).kind == TA_ACTOR_DIRECTORY_UNLOADED);
+    CHECK(tah_directory_find(directory, a).kind == TA_ACTOR_DIRECTORY_UNLOADED);
     CHECK(adapter.v->replace(adapter.self, &(ta_actor_directory_replace_params){
                                                .address = a, .expected = unloaded, .replacement = two }) == TA_OK);
-    CHECK(tna_directory_find(directory, a).actor == two.actor);
+    CHECK(tah_directory_find(directory, a).actor == two.actor);
 
     /* remove compares too, and gives the reference back */
     CHECK(adapter.v->remove(adapter.self, &(ta_actor_directory_remove_params){ .address = a, .expected = one }) ==
           TA_ERR_STALE);
     CHECK(adapter.v->remove(adapter.self, &(ta_actor_directory_remove_params){ .address = a, .expected = two }) == TA_OK);
-    CHECK(tna_directory_find(directory, a).kind == TA_ACTOR_DIRECTORY_NONE);
+    CHECK(tah_directory_find(directory, a).kind == TA_ACTOR_DIRECTORY_NONE);
     CHECK(adapter.v->remove(adapter.self, &(ta_actor_directory_remove_params){ .address = a, .expected = none }) == TA_OK);
-    CHECK(tna_directory_count(directory) == 0);
+    CHECK(tah_directory_count(directory) == 0);
 
     /* An entry left at close is given back before core goes: no leak. */
     ta_address *b = intern(system, S("f"), S("b"));
     CHECK(adapter.v->claim(adapter.self, &(ta_actor_directory_claim_params){ .address = b, .entry = unloaded }) == TA_OK);
     ta_address_release(b);
     ta_address_release(a);
-    CHECK(tna_directory_count(directory) == 1);
+    CHECK(tah_directory_count(directory) == 1);
     tna_system_close(system);
     CHECK(tna_system_leaked_bytes(system) == 0);
     tna_system_free(system);
@@ -80,7 +80,7 @@ static void named_actor_lifecycle(void) {
     CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
                                                        .spec = &spec,
                                                        .datamodel = ta_null_datamodel(),
-                                                       .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
                                                        .out = &definition,
                                                    }) == TA_OK);
     ta_definition_id id = 0;
@@ -90,13 +90,13 @@ static void named_actor_lifecycle(void) {
     CHECK(ta_actor_spawn(system->core, &(ta_actor_spawn_params){ .definition = id, .address = &name, .out = &actor }) ==
           TA_OK);
     ta_address *x = intern(system, S("f"), S("x"));
-    ta_actor_directory_entry entry = tna_directory_find(&system->directory, x);
+    ta_actor_directory_entry entry = tah_directory_find(&system->directory, x);
     CHECK(entry.kind == TA_ACTOR_DIRECTORY_RESIDENT && entry.actor == actor);
     ta_actor_id found = 0;
     CHECK(ta_actor_find(system->core, &(ta_actor_find_params){ .address = &name, .out = &found }) == TA_OK);
     CHECK(found == actor);
     CHECK(ta_actor_destroy(system->core, actor) == TA_OK);
-    CHECK(tna_directory_find(&system->directory, x).kind == TA_ACTOR_DIRECTORY_NONE);
+    CHECK(tah_directory_find(&system->directory, x).kind == TA_ACTOR_DIRECTORY_NONE);
     ta_address_release(x);
     /* A named actor still resident at close: core removes it while it tears down. */
     CHECK(ta_actor_spawn(system->core, &(ta_actor_spawn_params){ .definition = id, .address = &name, .out = &actor }) ==

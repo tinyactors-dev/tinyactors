@@ -572,7 +572,7 @@ bool tna_inject_ta_allocator(tna_call *call, ta_allocator *out) {
     if (system == NULL) {
         return tna_invalid(call, "a call that runs against a system");
     }
-    *out = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE);
+    *out = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE);
     return true;
 }
 

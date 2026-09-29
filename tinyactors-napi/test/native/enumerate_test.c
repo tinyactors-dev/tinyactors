@@ -35,7 +35,7 @@ static ta_definition_id define_chart(tna_system *system) {
     CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
                                                        .spec = &spec,
                                                        .datamodel = ta_null_datamodel(),
-                                                       .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
                                                        .out = &definition,
                                                    }) == TA_OK);
     ta_definition_id id = 0;

@@ -294,7 +294,7 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
         named = tna_text_argument(env, system, argv[4], &address.family.name) &&
                 tna_text_argument(env, system, argv[5], &address.name);
         if (!named) {
-            tna_scratch_reset_call(&system->scratch);
+            tah_scratch_reset_call(&system->scratch);
             return tna_throw(env, "invalid", "replayPrepare: the address is (family, name)");
         }
     }
@@ -310,7 +310,7 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
                                                           .out = &actor,
                                                       });
     system->inside_core = false;
-    tna_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         return tna_replay_error(env, result, "the log's first record cannot start a replaying actor");
     }
@@ -319,9 +319,9 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
     if (result != TA_OK) {
         return tna_replay_error(env, result, "the replaying actor cannot be scheduled");
     }
-    tna_sched_entry *entry = tna_sched_lookup(&system->sched, actor);
+    tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
     if (entry != NULL) {
-        entry->flags |= TNA_SCHED_REPLAYING;
+        entry->flags |= TAH_SCHED_REPLAYING;
     }
     /* Its bootstrap, from `spawned`; a checkpoint's actor is idle already. */
     bool ignored = false;
@@ -387,9 +387,9 @@ static napi_value tna_replay_run_inner(napi_env env, napi_callback_info info) {
     /* A replaying actor prepared with `at` joins here: the scheduler leaves
      * it to the replay, and a macrostep it has in progress (its bootstrap)
      * runs first. */
-    tna_sched_entry *entry = tna_sched_lookup(&system->sched, actor);
-    if (entry != NULL && (entry->flags & TNA_SCHED_REPLAYING) == 0) {
-        entry->flags |= TNA_SCHED_REPLAYING;
+    tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
+    if (entry != NULL && (entry->flags & TAH_SCHED_REPLAYING) == 0) {
+        entry->flags |= TAH_SCHED_REPLAYING;
         ta_actor_inspection view;
         if (ta_actor_inspect(system->core, actor, &view) == TA_OK && view.macrostep_in_progress) {
             bool took_nothing = false;
@@ -507,9 +507,9 @@ napi_value tna_replay_finish_method(napi_env env, napi_callback_info info) {
         napi_get_value_uint32(env, argv[2], &generation) != napi_ok) {
         return tna_throw(env, "invalid", "replayFinish: expected (feed, slot, generation)");
     }
-    tna_sched_entry *entry = tna_sched_lookup(&wrapper->system->sched, ta_actor_id_make(slot, generation));
+    tah_sched_entry *entry = tah_sched_lookup(&wrapper->system->sched, ta_actor_id_make(slot, generation));
     if (entry != NULL) {
-        entry->flags &= (uint8_t)~TNA_SCHED_REPLAYING;
+        entry->flags &= (uint8_t)~TAH_SCHED_REPLAYING;
     }
     return NULL;
 }
@@ -551,7 +551,7 @@ napi_value tna_replay_redeliver_method(napi_env env, napi_callback_info info) {
         }
         ta_trace_parent trace = { 0 };
         tna_inputs_redeliver(&system->inputs, owed->host_seq, ta_system_time(system->core));
-        ta_result result = tna_system_post(system, &(tna_message){ .target = actor, .event = &owed->event, .trace = &trace });
+        ta_result result = tna_system_post(system, &(tah_message){ .target = actor, .event = &owed->event, .trace = &trace });
         tna_inputs_redelivered(&system->inputs);
         if (result != TA_OK) {
             ta_event_release(&owed->event);
@@ -673,9 +673,9 @@ napi_value tna_checkpoint_method(napi_env env, napi_callback_info info) {
     }
     ta_actor_id actor = ta_actor_id_make(slot, generation);
     /* The messages its mailbox holds that the log numbered (ADR 0091 section 5). */
-    tna_sched_entry *entry = tna_sched_lookup(&system->sched, actor);
+    tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
     uint32_t count = 0;
-    for (uint32_t index = entry != NULL ? entry->first : 0; index != 0; index = tna_sched_envelope(&system->sched, index)->next) {
+    for (uint32_t index = entry != NULL ? entry->first : 0; index != 0; index = tah_sched_envelope(&system->sched, index)->next) {
         count += 1u;
     }
     ta_owed_message *owed = count == 0 ? NULL : calloc(count, sizeof *owed);
@@ -683,10 +683,10 @@ napi_value tna_checkpoint_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, "out-of-memory", "checkpoint: cannot list the owed messages");
     }
     uint32_t owed_count = 0;
-    for (uint32_t index = entry != NULL ? entry->first : 0; index != 0; index = tna_sched_envelope(&system->sched, index)->next) {
-        const tna_envelope *envelope = tna_sched_envelope(&system->sched, index);
+    for (uint32_t index = entry != NULL ? entry->first : 0; index != 0; index = tah_sched_envelope(&system->sched, index)->next) {
+        const tah_envelope *envelope = tah_sched_envelope(&system->sched, index);
         uint64_t seq = tna_inputs_host_seq(system, index);
-        if (seq != 0 && envelope->report == TNA_REPORT_NONE) {
+        if (seq != 0 && envelope->report == TAH_REPORT_NONE) {
             owed[owed_count++] = (ta_owed_message){ .host_seq = seq, .event = &envelope->event };
         }
     }

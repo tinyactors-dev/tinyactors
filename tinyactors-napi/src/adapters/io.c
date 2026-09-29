@@ -17,8 +17,8 @@ struct tna_io_processor {
 
 static ta_op_status tna_io_send(void *self, const ta_send *send, ta_fault *fault) {
     tna_system *system = ((tna_io_processor *)self)->system;
-    tna_effect effect = {
-        .kind = TNA_EFFECT_IO,
+    tah_effect effect = {
+        .kind = TAH_EFFECT_IO,
         .source = send->source,
         .send_id = send->send_id,
         .event = send->event,
@@ -148,12 +148,12 @@ static ta_result tna_io_text(void *self, const ta_io_text_params *params) {
 static const ta_io_vtable tna_io_vtable = { .send = tna_io_send, .text = tna_io_text };
 
 static ta_allocator tna_io_allocator(tna_system *system) {
-    return tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER);
+    return tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER);
 }
 
 static void tna_io_free_text(tna_system *system, char *text, uint32_t length) {
     if (text != NULL) {
-        tna_free(tna_io_allocator(system), &(ta_allocator_free_params){ .ptr = text, .size = length + 1u, .alignment = 1 });
+        tah_free(tna_io_allocator(system), &(ta_allocator_free_params){ .ptr = text, .size = length + 1u, .alignment = 1 });
     }
 }
 
@@ -163,7 +163,7 @@ static bool tna_io_copy_text(tna_system *system, ta_str text, char **out, uint32
     if (text.len == 0) {
         return true;
     }
-    char *copy = tna_alloc(tna_io_allocator(system), text.len + 1u, 1);
+    char *copy = tah_alloc(tna_io_allocator(system), text.len + 1u, 1);
     if (copy == NULL) {
         return false;
     }
@@ -176,7 +176,7 @@ static bool tna_io_copy_text(tna_system *system, ta_str text, char **out, uint32
 
 static tna_io_processor *tna_io_find(const tna_system *system, ta_atom type) {
     for (uint32_t index = 0; index < system->io_processors.count; index += 1) {
-        tna_io_processor *processor = *(tna_io_processor **)tna_vec_at(&system->io_processors, index);
+        tna_io_processor *processor = *(tna_io_processor **)tah_vec_at(&system->io_processors, index);
         if (processor->type == type) {
             return processor;
         }
@@ -188,13 +188,13 @@ ta_result tna_io_register(tna_system *system, const tna_io_registration *registr
     tna_io_processor *processor = tna_io_find(system, registration->type);
     bool created = processor == NULL;
     if (created) {
-        processor = tna_alloc(tna_io_allocator(system), sizeof *processor, _Alignof(tna_io_processor));
+        processor = tah_alloc(tna_io_allocator(system), sizeof *processor, _Alignof(tna_io_processor));
         if (processor == NULL) {
             return TA_ERR_NOMEM;
         }
         *processor = (tna_io_processor){ .system = system, .type = registration->type };
-        if (tna_vec_push(&system->io_processors, &processor) != TA_OK) {
-            tna_free(tna_io_allocator(system), &(ta_allocator_free_params){ .ptr = processor, .size = sizeof *processor,
+        if (tah_vec_push(&system->io_processors, &processor) != TA_OK) {
+            tah_free(tna_io_allocator(system), &(ta_allocator_free_params){ .ptr = processor, .size = sizeof *processor,
                                                                            .alignment = _Alignof(tna_io_processor) });
             return TA_ERR_NOMEM;
         }
@@ -232,7 +232,7 @@ ta_result tna_io_register(tna_system *system, const tna_io_registration *registr
 
 bool tna_io_renders_origins(const tna_system *system, uint32_t index) {
     for (uint32_t at = 0; at < system->io_processors.count; at += 1) {
-        const tna_io_processor *processor = *(tna_io_processor **)tna_vec_at(&system->io_processors, at);
+        const tna_io_processor *processor = *(tna_io_processor **)tah_vec_at(&system->io_processors, at);
         if (processor->index == index) {
             return processor->origin != NULL;
         }
@@ -242,11 +242,11 @@ bool tna_io_renders_origins(const tna_system *system, uint32_t index) {
 
 void tna_io_close(tna_system *system) {
     for (uint32_t index = 0; index < system->io_processors.count; index += 1) {
-        tna_io_processor *processor = *(tna_io_processor **)tna_vec_at(&system->io_processors, index);
+        tna_io_processor *processor = *(tna_io_processor **)tah_vec_at(&system->io_processors, index);
         tna_io_free_text(system, processor->location, processor->location_length);
         tna_io_free_text(system, processor->origin, processor->origin_length);
-        tna_free(tna_io_allocator(system), &(ta_allocator_free_params){ .ptr = processor, .size = sizeof *processor,
+        tah_free(tna_io_allocator(system), &(ta_allocator_free_params){ .ptr = processor, .size = sizeof *processor,
                                                                        .alignment = _Alignof(tna_io_processor) });
     }
-    tna_vec_destroy(&system->io_processors);
+    tah_vec_destroy(&system->io_processors);
 }

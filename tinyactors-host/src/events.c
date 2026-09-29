@@ -1,6 +1,6 @@
 #include "events.h"
 
-ta_result tna_event_name_intern(ta_system *system, ta_str text, ta_event_name_id *out) {
+ta_result tah_event_name_intern(ta_system *system, ta_str text, ta_event_name_id *out) {
     if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
         return TA_ERR_INVALID;
     }

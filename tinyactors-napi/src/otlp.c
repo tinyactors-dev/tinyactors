@@ -1365,7 +1365,7 @@ static bool tna_span_open(tna_otlp *otlp, tna_otlp_span *span, const ta_trace_re
     span->definition = record->definition;
     span->start = now;
     if (record->kind == TA_TRACE_MACROSTEP_BEGIN) {
-        otlp->last_macrostep = tna_exemplar_of(&record->context, span->span_id, now);
+        otlp->last_macrostep = tah_exemplar_of(&record->context, span->span_id, now);
     }
     span->microstep = record->key.microstep;
     return tna_step_attributes(otlp, &span->attributes, record);

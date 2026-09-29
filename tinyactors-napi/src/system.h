@@ -112,7 +112,7 @@ typedef struct {
  * ADR 0022): the sender gets error.communication instead of a dead letter.
  */
 typedef struct {
-    tna_dead_reason reason; /* TNA_DEAD_NOT_FOUND, TNA_DEAD_DONE or TNA_DEAD_UNLOADED */
+    tah_dead_reason reason; /* TAH_DEAD_NOT_FOUND, TAH_DEAD_DONE or TAH_DEAD_UNLOADED */
     const ta_actor_ref *destination;
 } tna_unreachable;
 
@@ -133,16 +133,16 @@ typedef struct {
 } tna_quarantine_report;
 
 struct tna_system {
-    tna_allocator allocator;
-    tna_scratch scratch;
+    tah_allocator allocator;
+    tah_scratch scratch;
     ta_system *core;
-    tna_sched sched;
-    tna_directory directory; /* installed on core at creation (ADR 0006) */
+    tah_sched sched;
+    tah_directory directory; /* installed on core at creation (ADR 0006) */
     /* Loads of unloaded actors, and their wake-ups (loads.h, napi ADR 0020). */
     tna_loads loads;
     /* Actors offloaded to bytes while unloaded (core ADR 0074). */
     tna_offloads offloads;
-    tna_turn_budgets budgets;
+    tah_turn_budgets budgets;
     uint32_t due_budget;   /* due sends dispatched in one turn, at least 1 */
     tna_clock clock;
     tna_wake_fn wake;
@@ -165,7 +165,7 @@ struct tna_system {
     void (*after_core)(void *context);
     void *after_core_context;
     /* Effects waiting for JavaScript (effects.h), in the turn arena. */
-    tna_effects effects;
+    tah_effects effects;
     /* The trace encoder (otlp.h), while a sink is installed (napi ADR 0016):
      * core's records become OTLP spans as they are written, and the pump
      * hands the spans that ended to JavaScript as bytes, once per turn. */
@@ -175,9 +175,9 @@ struct tna_system {
     bool log_to_js;
     /* What the sink asks core for, and what is watched (napi ADR 0017). */
     tna_trace_masks trace_masks;
-    tna_trace_watch trace_watch;
+    tah_trace_watch trace_watch;
     /* The definition lifecycle as core tells it (core ADR 0079): counts and origins. */
-    tna_definitions definitions;
+    tah_definitions definitions;
     /* The last service handle a JavaScript invoker's start was given. */
     uint64_t next_service;
     /*
@@ -208,11 +208,11 @@ struct tna_system {
     void *fault_context;
     void *quarantine_context;
     /* Reports to parents that core has not taken yet (tna_quarantine_report). */
-    tna_vec quarantine_reports;
+    tah_vec quarantine_reports;
     /* One record per registered I/O processor type (adapters/io.h, core ADR 0068). */
-    tna_vec io_processors; /* tna_io_processor * */
+    tah_vec io_processors; /* tna_io_processor * */
     /* Turn duration and timer lateness (host_metrics.h, napi ADR 0017 section 7). */
-    tna_host_metrics metrics;
+    tah_host_metrics metrics;
     /* Set while core dispatches due delayed sends: what the router is handed
      * then is a timer firing, and its lateness is recorded. */
     bool dispatching_due;
@@ -248,13 +248,13 @@ void tna_system_free(tna_system *system);
  * the event's references and the message's waiter. TA_ERR_BUSY: the queue is
  * full (max_queued or max_retained); TA_ERR_NOMEM: nothing accepted.
  */
-ta_result tna_system_post(tna_system *system, const tna_message *message);
+ta_result tna_system_post(tna_system *system, const tah_message *message);
 
 /*
  * Queues an effect (effects.h), which hands over its references, and asks
  * for a turn. False when it was dropped (closing, or no memory).
  */
-bool tna_system_effect(tna_system *system, const tna_effect *effect);
+bool tna_system_effect(tna_system *system, const tah_effect *effect);
 
 /* Encodes a trace record (otlp.h) and asks for a turn. */
 void tna_system_trace(tna_system *system, const ta_trace_record *record);
@@ -302,7 +302,7 @@ bool tna_system_dispatch_due(tna_system *system);
 /*
  * Cancels the send() waiter at `index` (ADR 0005 point 11). A message still
  * waiting for a load is withdrawn from the load's mailbox (napi ADR 0020),
- * as one in an actor's mailbox is; otherwise tna_sched_cancel(). True when
+ * as one in an actor's mailbox is; otherwise tah_sched_cancel(). True when
  * the waiter was cancelled; the caller settles and gives it back.
  */
 bool tna_system_cancel(tna_system *system, uint32_t index);

@@ -159,7 +159,7 @@ napi_value tna_call_end(tna_call *call, napi_value value) {
     if (call->temporary_used) {
         ta_arena_destroy(&call->temporary);
     } else if (call->arena != NULL && !tna_system_closed(call->owner->system)) {
-        tna_scratch_reset_call(&call->owner->system->scratch);
+        tah_scratch_reset_call(&call->owner->system->scratch);
     }
     if (call->owner != NULL && !tna_system_closed(call->owner->system)) {
         tna_napi_system_flush(call->owner);

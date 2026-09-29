@@ -150,9 +150,10 @@ module Toolchain
       def shared?(_headers) = false
       def symbol_table(_shared) = []
       def linker_defined = []
-      # A wasm object refers to the stack pointer global, which the linker
-      # defines when it makes the module.
-      def runtime_undefined(shared: false) = %w[__stack_pointer]
+      # A wasm object refers to the stack pointer global, and a call through
+      # a function pointer (a vtable) to the indirect function table; the
+      # linker defines both when it makes the module.
+      def runtime_undefined(shared: false) = %w[__stack_pointer __indirect_function_table]
       def archive_flags = []
       def position_independent = []
 

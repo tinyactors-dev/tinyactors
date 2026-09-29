@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "allocator.h"
+#include "platform.h"
 #include "check.h"
 #include "otlp.h"
 
@@ -342,7 +343,7 @@ static const ta_scxml_state_spec roots[] = {
 static const ta_scxml_spec chart = { .name = S("chain"), .states = roots };
 
 typedef struct {
-    tna_allocator allocator;
+    tah_allocator allocator;
     ta_system *core;
     ta_definition_id definition;
     ta_actor_id actor;
@@ -352,8 +353,8 @@ typedef struct {
 
 static void start(fixture *f, bool install) {
     memset(f, 0, sizeof *f);
-    tna_allocator_init(&f->allocator);
-    ta_allocator core_allocator = tna_allocator_for(&f->allocator, TNA_MEMORY_CORE);
+    tah_allocator_init(&f->allocator, tna_platform_allocator());
+    ta_allocator core_allocator = tah_allocator_for(&f->allocator, TAH_MEMORY_CORE);
     CHECK(ta_system_create(&(ta_system_config){ .allocator = core_allocator }, &f->core) == TA_OK);
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(f->core, &(ta_definition_compile_params){ .spec = &chart,
@@ -363,7 +364,7 @@ static void start(fixture *f, bool install) {
     CHECK(ta_system_register_definition(f->core, definition, &f->definition) == TA_OK);
     tna_otlp_init(&f->otlp, &(tna_otlp_config){
                                 .core = f->core,
-                                .allocator = tna_allocator_for(&f->allocator, TNA_MEMORY_OTHER),
+                                .allocator = tah_allocator_for(&f->allocator, TAH_MEMORY_OTHER),
                                 .host = { .self = &f->host, .now = stub_now, .trace_id = stub_trace_id },
                                 .version = S("0.0.0"),
                                 .wanted_kinds = UINT32_MAX,
@@ -386,7 +387,7 @@ static ta_run_status resume(fixture *f, uint32_t budget) {
 static void stop(fixture *f) {
     ta_system_destroy(f->core);
     tna_otlp_destroy(&f->otlp);
-    CHECK(tna_allocator_total(&f->allocator).bytes_in_use == 0);
+    CHECK(tah_allocator_total(&f->allocator).bytes_in_use == 0);
 }
 
 /* A macrostep that pauses between turns stays open across takes, and its
@@ -636,7 +637,7 @@ static const ta_scxml_spec other_chart = { .identity = &other_identity, .states 
                                            .sources = other_sources, .source_count = 1 };
 
 static ta_definition_id define_other(fixture *f) {
-    ta_allocator core_allocator = tna_allocator_for(&f->allocator, TNA_MEMORY_CORE);
+    ta_allocator core_allocator = tah_allocator_for(&f->allocator, TAH_MEMORY_CORE);
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(f->core, &(ta_definition_compile_params){ .spec = &other_chart,
                                                                                 .datamodel = ta_null_datamodel(),
@@ -729,11 +730,11 @@ static void scopes_out_of_memory(void) {
             if (round == 1) {
                 (void)take(&f.otlp); /* the buffers already hold some capacity */
             }
-            tna_allocator_refuse_from(&f.allocator, refuse);
+            tah_allocator_refuse_from(&f.allocator, refuse);
             (void)ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = other, .out = &second });
             (void)ta_actor_resume(f.core, &(ta_actor_resume_params){ .actor = f.actor, .budget = 100,
                                                                      .status = &(ta_run_status){ 0 } });
-            tna_allocator_refuse_from(&f.allocator, 0);
+            tah_allocator_refuse_from(&f.allocator, 0);
             ta_str bytes = take(&f.otlp);
             if (bytes.len != 0) {
                 span_view spans[32];

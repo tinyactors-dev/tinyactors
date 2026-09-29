@@ -10,8 +10,8 @@ static void tna_log_write(void *self, const ta_log_record *record) {
     if (!system->log_to_js) {
         return;
     }
-    tna_effect effect = {
-        .kind = TNA_EFFECT_LOG,
+    tah_effect effect = {
+        .kind = TAH_EFFECT_LOG,
         .source = record->source,
         .label = record->label,
         .has_value = record->has_value,

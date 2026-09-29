@@ -8,7 +8,7 @@
  * `max_waiting`. Mail for a name in such a family that has no resident actor
  * (the directory's entry is unloaded, or there is none: the family is
  * virtual) starts a **load**: a record for the address with a mailbox of its
- * own (scheduler.h's tna_mailbox). Mail that arrives while the load is in
+ * own (scheduler.h's tah_mailbox). Mail that arrives while the load is in
  * flight joins that mailbox, whether or not the actor has become resident
  * meanwhile, so it keeps its order; at most `max_waiting` messages wait, and
  * the rest are dead letters with reason `waiting-full`. There is one load
@@ -68,7 +68,7 @@ const char *tna_load_outcome_name(tna_load_outcome outcome);
 
 typedef struct {
     ta_address *address;   /* one reference; NULL while the record is free */
-    tna_mailbox mail;
+    tah_mailbox mail;
     ta_trace_parent trace; /* the first message's trace parent, or all zero */
     uint64_t started_ns;   /* monotonic, when the load started */
     uint32_t max_waiting;
@@ -91,15 +91,15 @@ typedef struct {
 
 typedef struct {
     ta_allocator allocator;
-    tna_vec families;   /* tna_loader_family */
-    tna_vec loads;      /* tna_load; index 0 is never issued */
+    tah_vec families;   /* tna_loader_family */
+    tah_vec loads;      /* tna_load; index 0 is never issued */
     uint32_t free_head;
     uint32_t in_flight; /* loads started and not finished */
-    tna_map by_address; /* (uintptr_t)address -> load index */
-    tna_vec requests;   /* uint32_t: loads JavaScript has not been told about */
+    tah_map by_address; /* (uintptr_t)address -> load index */
+    tah_vec requests;   /* uint32_t: loads JavaScript has not been told about */
     uint32_t requests_head;
-    tna_vec wakes;      /* tna_wake: a min-heap by due */
-    tna_map wake_due;   /* (uintptr_t)address -> the due time of its live wake-up */
+    tah_vec wakes;      /* tna_wake: a min-heap by due */
+    tah_map wake_due;   /* (uintptr_t)address -> the due time of its live wake-up */
     uint32_t waiting;   /* messages in every load's mailbox */
     uint64_t outcomes[TNA_LOAD_OUTCOMES];
 } tna_loads;
@@ -107,7 +107,7 @@ typedef struct {
 void tna_loads_init(tna_loads *loads, ta_allocator allocator);
 /*
  * Gives back every address reference and frees everything. The waiting
- * envelopes are the scheduler's: tna_sched_discard_mail() releases them.
+ * envelopes are the scheduler's: tah_sched_discard_mail() releases them.
  * Call it while core is alive.
  */
 void tna_loads_close(tna_loads *loads);
@@ -117,7 +117,7 @@ void tna_loads_close(tna_loads *loads);
  * it is there: a send() waiting for it was cancelled. False when it is not
  * waiting (it is in an actor's mailbox or on the dead list).
  */
-bool tna_loads_withdraw(tna_loads *loads, tna_sched *sched, uint32_t index);
+bool tna_loads_withdraw(tna_loads *loads, tah_sched *sched, uint32_t index);
 
 /* Registers `family`'s loader limit; `max_waiting` 0 removes the loader. */
 ta_result tna_loads_set_family(tna_loads *loads, ta_str family, uint32_t max_waiting);
@@ -131,9 +131,9 @@ ta_result tna_loads_set_family(tna_loads *loads, ta_str family, uint32_t max_wai
  * TA_ERR_NOMEM: nothing accepted.
  */
 typedef struct {
-    tna_sched *sched;
+    tah_sched *sched;
     ta_address *address;
-    const tna_message *message;
+    const tah_message *message;
     bool resident; /* the directory has a resident actor at `address` */
     uint64_t now_ns;
 } tna_load_route;
@@ -148,9 +148,9 @@ ta_result tna_loads_route(tna_loads *loads, const tna_load_route *route);
  * no loader. TA_ERR_BUSY and TA_ERR_NOMEM: nothing accepted.
  */
 typedef struct {
-    tna_sched *sched;
+    tah_sched *sched;
     ta_address *address;
-    const tna_message *message;
+    const tah_message *message;
     bool shared;
     uint64_t now_ns;
 } tna_load_session_route;
@@ -190,9 +190,9 @@ tna_load *tna_loads_find(const tna_loads *loads, uint32_t index, uint32_t genera
  * ready-queue entry, so the mail became `load-failed` dead letters.
  */
 typedef struct {
-    tna_sched *sched;
-    const tna_directory *directory;
-    tna_host_metrics *metrics;
+    tah_sched *sched;
+    const tah_directory *directory;
+    tah_host_metrics *metrics;
     uint32_t index;
     uint32_t generation;
     tna_load_outcome outcome;
@@ -225,7 +225,7 @@ static inline bool tna_loads_next_wake(const tna_loads *loads, ta_time *due) {
  * lack of memory keeps its wake-up for the next turn.
  */
 typedef struct {
-    const tna_directory *directory;
+    const tah_directory *directory;
     ta_time now;
     uint64_t now_ns;
 } tna_wake_fire;

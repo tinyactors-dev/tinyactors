@@ -13,6 +13,10 @@ module HostKernel
   BUILD = ROOT.join('build')
   OBJECTS = BUILD.join('objects')
   CORE_INCLUDE = ROOT.join('../tinyactors-core/include').expand_path
+  # Core's amalgamation: the kernel calls core, so every test program links
+  # it (compiled with the tests' command, not freestanding; core's own
+  # build checks core).
+  CORE_SOURCE = CORE_INCLUDE.join('tinyactors.c')
   WARNINGS = %w[-std=c11 -Wall -Wextra -Werror -pedantic].freeze
   INCLUDES = ["-I#{ROOT.join('include')}", "-I#{CORE_INCLUDE}", "-I#{ROOT.join('src')}"].freeze
   # The kernel's own sources are compiled freestanding, without the host's

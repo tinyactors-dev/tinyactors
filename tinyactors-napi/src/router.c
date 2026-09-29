@@ -7,8 +7,8 @@
 #include "inputs.h"
 #include "system.h"
 
-ta_result tna_router_post_named(tna_system *system, ta_address *address, const tna_message *message) {
-    ta_actor_directory_entry entry = tna_directory_find(&system->directory, address);
+ta_result tna_router_post_named(tna_system *system, ta_address *address, const tah_message *message) {
+    ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);
     bool resident = entry.kind == TA_ACTOR_DIRECTORY_RESIDENT;
     if (!resident || tna_loads_waiting(&system->loads, address)) {
         /* A load in flight holds the address's mail, or a loader starts one
@@ -23,17 +23,17 @@ ta_result tna_router_post_named(tna_system *system, ta_address *address, const t
         }
     }
     if (resident) {
-        tna_message resolved = *message;
+        tah_message resolved = *message;
         resolved.target = entry.actor;
-        return tna_sched_post(&system->sched, &resolved);
+        return tah_sched_post(&system->sched, &resolved);
     }
     ta_address_retain(address);
-    ta_result result = tna_sched_post_dead(&system->sched, &(tna_dead_post){
+    ta_result result = tah_sched_post_dead(&system->sched, &(tah_dead_post){
                                                                .address = address,
                                                                .message = message,
                                                                .reason = entry.kind == TA_ACTOR_DIRECTORY_UNLOADED
-                                                                             ? TNA_DEAD_UNLOADED
-                                                                             : TNA_DEAD_NOT_FOUND,
+                                                                             ? TAH_DEAD_UNLOADED
+                                                                             : TAH_DEAD_NOT_FOUND,
                                                            });
     if (result != TA_OK) {
         ta_address_release(address);
@@ -53,8 +53,8 @@ static bool tna_router_session_loads(tna_system *system, const ta_actor_ref *des
         return false;
     }
     if (destination->as.runtime != 0) {
-        const tna_sched_entry *entry = tna_sched_lookup(&system->sched, destination->as.runtime);
-        if (entry != NULL && (entry->flags & TNA_SCHED_FINISHED) == 0) {
+        const tah_sched_entry *entry = tah_sched_lookup(&system->sched, destination->as.runtime);
+        if (entry != NULL && (entry->flags & TAH_SCHED_FINISHED) == 0) {
             return false;
         }
     }
@@ -68,7 +68,7 @@ static bool tna_router_session_loads(tna_system *system, const ta_actor_ref *des
  * `<incarnation>.0.<family>`, and gets a load of its own.
  */
 static ta_result tna_router_post_session(tna_system *system, const ta_actor_ref *destination, ta_str family,
-                                         const tna_message *message) {
+                                         const tah_message *message) {
     char small[256];
     char *text = small;
     uint32_t length = 0;
@@ -135,29 +135,29 @@ static ta_result tna_router_post_session(tna_system *system, const ta_actor_ref 
  * (SCXML 6.2.4). Mail from JavaScript does not come here, and stays a dead
  * letter (ADR 0008).
  */
-static bool tna_router_unreachable(tna_system *system, const ta_actor_ref *destination, tna_dead_reason *reason) {
+static bool tna_router_unreachable(tna_system *system, const ta_actor_ref *destination, tah_dead_reason *reason) {
     if (destination->kind == TA_ACTOR_REF_NAMED) {
         ta_address *address = destination->as.named;
-        ta_actor_directory_entry entry = tna_directory_find(&system->directory, address);
+        ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);
         if (entry.kind == TA_ACTOR_DIRECTORY_RESIDENT || tna_loads_waiting(&system->loads, address) ||
             tna_loads_would_load(&system->loads, address)) {
             return false;
         }
-        *reason = entry.kind == TA_ACTOR_DIRECTORY_UNLOADED ? TNA_DEAD_UNLOADED : TNA_DEAD_NOT_FOUND;
+        *reason = entry.kind == TA_ACTOR_DIRECTORY_UNLOADED ? TAH_DEAD_UNLOADED : TAH_DEAD_NOT_FOUND;
         return true;
     }
-    const tna_sched_entry *entry = tna_sched_lookup(&system->sched, destination->as.runtime);
-    if (entry != NULL && (entry->flags & TNA_SCHED_FINISHED) == 0) {
+    const tah_sched_entry *entry = tah_sched_lookup(&system->sched, destination->as.runtime);
+    if (entry != NULL && (entry->flags & TAH_SCHED_FINISHED) == 0) {
         return false;
     }
-    *reason = entry == NULL ? TNA_DEAD_NOT_FOUND : TNA_DEAD_DONE;
+    *reason = entry == NULL ? TAH_DEAD_NOT_FOUND : TAH_DEAD_DONE;
     return true;
 }
 
-static const char *tna_router_unreachable_message(tna_dead_reason reason) {
+static const char *tna_router_unreachable_message(tah_dead_reason reason) {
     switch (reason) {
-    case TNA_DEAD_DONE: return "the target session has finished";
-    case TNA_DEAD_UNLOADED: return "the target is unloaded and no loader would bring it back";
+    case TAH_DEAD_DONE: return "the target session has finished";
+    case TAH_DEAD_UNLOADED: return "the target is unloaded and no loader would bring it back";
     default: return "no session has that ID or name";
     }
 }
@@ -165,7 +165,7 @@ static const char *tna_router_unreachable_message(tna_dead_reason reason) {
 static ta_external_event_submit_status tna_router_submit(void *self, const ta_external_event_submit_params *params) {
     tna_system *system = self;
     const ta_external_delivery *delivery = params->delivery;
-    tna_dead_reason reason = TNA_DEAD_NOT_FOUND;
+    tah_dead_reason reason = TAH_DEAD_NOT_FOUND;
     ta_str family = { 0 };
     bool to_loader = tna_router_session_loads(system, &delivery->destination, &family);
     if (!to_loader && tna_router_unreachable(system, &delivery->destination, &reason)) {
@@ -191,11 +191,11 @@ static ta_external_event_submit_status tna_router_submit(void *self, const ta_ex
     /* Mail between actors carries no retained-bytes estimate: its data is a
      * value made inside a chart, and sizing it would mean calling JavaScript. */
     /* Traced mail keeps the sending step as its parent (core ADR 0067). */
-    tna_message message = { .target = delivery->destination.as.runtime, .event = &event, .trace = &delivery->trace };
+    tah_message message = { .target = delivery->destination.as.runtime, .event = &event, .trace = &delivery->trace };
     ta_result result = to_loader ? tna_router_post_session(system, &delivery->destination, family, &message)
                        : delivery->destination.kind == TA_ACTOR_REF_NAMED
                            ? tna_router_post_named(system, delivery->destination.as.named, &message)
-                           : tna_sched_post(&system->sched, &message);
+                           : tah_sched_post(&system->sched, &message);
     if (result == TA_ERR_UNSUPPORTED) {
         /* The receiver's input log cannot hold its data (napi ADR 0034
          * section 2): no retry will change that, so the sender hears. */

@@ -5,6 +5,8 @@
 
 #include "system.h"
 
+#include "platform.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -44,30 +46,30 @@ ta_result tna_system_create(const tna_system_create_params *params, tna_system *
         .params = napi,
     };
     system->clock.origin = system->clock.now(system->clock.now_context);
-    tna_allocator_init(&system->allocator);
-    tna_sched_init(&system->sched, tna_allocator_for(&system->allocator, TNA_MEMORY_SCHEDULING),
-                   tna_allocator_for(&system->allocator, TNA_MEMORY_ENVELOPES));
+    tah_allocator_init(&system->allocator, tna_platform_allocator());
+    tah_sched_init(&system->sched, tah_allocator_for(&system->allocator, TAH_MEMORY_SCHEDULING),
+                   tah_allocator_for(&system->allocator, TAH_MEMORY_ENVELOPES));
     system->sched.max_queued = (uint32_t)napi.values[TNA_PARAM_MAX_QUEUED_MESSAGES];
     system->sched.max_retained = napi.values[TNA_PARAM_MAX_RETAINED_BYTES];
-    tna_directory_init(&system->directory, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
-    tna_loads_init(&system->loads, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
-    tna_offloads_init(&system->offloads, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
-    tna_trace_watch_init(&system->trace_watch, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
-    tna_definitions_init(&system->definitions, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
-    tna_vec_init(&system->io_processors, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
-                 TNA_LAYOUT(tna_io_processor *));
-    tna_vec_init(&system->quarantine_reports, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
-                 TNA_LAYOUT(tna_quarantine_report));
-    tna_host_metrics_init(&system->metrics);
-    tna_inputs_init(&system->inputs, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
-    ta_result result = tna_scratch_init(&system->scratch, &system->allocator);
+    tah_directory_init(&system->directory, tah_allocator_for(&system->allocator, TAH_MEMORY_DIRECTORY));
+    tna_loads_init(&system->loads, tah_allocator_for(&system->allocator, TAH_MEMORY_DIRECTORY));
+    tna_offloads_init(&system->offloads, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
+    tah_trace_watch_init(&system->trace_watch, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
+    tah_definitions_init(&system->definitions, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
+    tah_vec_init(&system->io_processors, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER),
+                 TAH_LAYOUT(tna_io_processor *));
+    tah_vec_init(&system->quarantine_reports, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER),
+                 TAH_LAYOUT(tna_quarantine_report));
+    tah_host_metrics_init(&system->metrics);
+    tna_inputs_init(&system->inputs, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
+    ta_result result = tah_scratch_init(&system->scratch, &system->allocator);
     if (result != TA_OK) {
         free(system);
         return result;
     }
-    tna_effects_init(&system->effects, &system->scratch.turn);
+    tah_effects_init(&system->effects, &system->scratch.turn);
     ta_system_config config = {
-        .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+        .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
         .initial_time = 0,
         .incarnation = params->incarnation,
         .params = params->params,
@@ -76,16 +78,16 @@ ta_result tna_system_create(const tna_system_create_params *params, tna_system *
     };
     result = ta_system_create(&config, &system->core);
     if (result != TA_OK) {
-        tna_scratch_destroy(&system->scratch);
+        tah_scratch_destroy(&system->scratch);
         free(system);
         return result;
     }
-    (void)ta_system_set_actor_directory(system->core, tna_directory_adapter(&system->directory));
+    (void)ta_system_set_actor_directory(system->core, tah_directory_adapter(&system->directory));
     (void)ta_system_set_external_event_router(system->core, tna_router_adapter(system));
     result = tna_scxml_invoker_register(system);
     if (result != TA_OK) {
         ta_system_destroy(system->core);
-        tna_scratch_destroy(&system->scratch);
+        tah_scratch_destroy(&system->scratch);
         free(system);
         return result;
     }
@@ -107,17 +109,17 @@ void tna_system_close(tna_system *system) {
     (void)ta_system_set_external_event_router(system->core, (ta_external_event_router){0});
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     /* A hook may close the system while the turn's records still own data. */
-    tna_sched_release_records(&system->sched);
-    tna_sched_discard_mail(&system->sched);
+    tah_sched_release_records(&system->sched);
+    tah_sched_discard_mail(&system->sched);
     /* Offloaded bytes may hold value handles; they go while the directory still keys them. */
     tna_offloads_destroy(&system->offloads);
-    tna_directory_clear(&system->directory);
+    tah_directory_clear(&system->directory);
     tna_loads_close(&system->loads);
     /* Waiting effects hold values and addresses; what core's teardown asks
      * of a service from here on is dropped (the adapters in adapters/). */
-    tna_effects_close(&system->effects);
+    tah_effects_close(&system->effects);
     /* Records hold values; the log goes while core is alive. */
-    system->sched.observer = (tna_sched_observer){ 0 };
+    system->sched.observer = (tah_sched_observer){ 0 };
     tna_inputs_destroy(system);
     if (system->tracing) {
         tna_otlp_destroy(&system->otlp);
@@ -127,16 +129,16 @@ void tna_system_close(tna_system *system) {
     system->core = NULL;
     /* Core held the I/O processor records as adapters until now. */
     tna_io_close(system);
-    tna_sched_destroy(&system->sched);
-    tna_vec_destroy(&system->quarantine_reports);
-    tna_trace_watch_destroy(&system->trace_watch);
+    tah_sched_destroy(&system->sched);
+    tah_vec_destroy(&system->quarantine_reports);
+    tah_trace_watch_destroy(&system->trace_watch);
     /* Core freed every definition in its teardown, so the origins are empty. */
-    tna_definitions_destroy(&system->definitions);
+    tah_definitions_destroy(&system->definitions);
     if (system->after_core != NULL) {
         system->after_core(system->after_core_context);
     }
-    tna_scratch_destroy(&system->scratch);
-    system->leaked_bytes = tna_allocator_total(&system->allocator).bytes_in_use;
+    tah_scratch_destroy(&system->scratch);
+    system->leaked_bytes = tah_allocator_total(&system->allocator).bytes_in_use;
 }
 
 bool tna_system_closed(const tna_system *system) {
@@ -177,7 +179,7 @@ static bool tna_system_due_now(const tna_system *system) {
 }
 
 bool tna_system_quiet(const tna_system *system) {
-    return tna_sched_quiet(&system->sched) && system->effects.count == 0 && system->inputs.count == 0 &&
+    return tah_sched_quiet(&system->sched) && system->effects.count == 0 && system->inputs.count == 0 &&
            system->quarantine_reports.count == 0 &&
            tna_loads_pending_requests(&system->loads) == 0 &&
            (!system->tracing || system->otlp.span_count == 0) &&
@@ -222,12 +224,12 @@ double tna_system_overdue_seconds(const tna_system *system) {
 void tna_system_record_turn(tna_system *system, uint64_t started_ns) {
     uint64_t now = tna_monotonic_ns(NULL);
     double seconds = now > started_ns ? (double)(now - started_ns) / 1e9 : 0.0;
-    tna_exemplar exemplar = { 0 };
+    tah_exemplar exemplar = { 0 };
     if (system->tracing && system->otlp.last_macrostep.set) {
         exemplar = system->otlp.last_macrostep;
         system->otlp.last_macrostep.set = false;
     }
-    tna_histogram_record(&system->metrics.turn_seconds, seconds, &exemplar);
+    tah_histogram_record(&system->metrics.turn_seconds, seconds, &exemplar);
 }
 
 void tna_system_wake_sender(tna_system *system, const ta_actor_ref *sender) {
@@ -236,13 +238,13 @@ void tna_system_wake_sender(tna_system *system, const ta_actor_ref *sender) {
     }
     ta_actor_id actor = sender->as.runtime;
     if (sender->kind == TA_ACTOR_REF_NAMED) {
-        ta_actor_directory_entry entry = tna_directory_find(&system->directory, sender->as.named);
+        ta_actor_directory_entry entry = tah_directory_find(&system->directory, sender->as.named);
         if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT) {
             return;
         }
         actor = entry.actor;
     }
-    if (tna_sched_wake(&system->sched, actor) == TA_OK) {
+    if (tah_sched_wake(&system->sched, actor) == TA_OK) {
         tna_system_want_turn(system);
     }
 }
@@ -250,10 +252,10 @@ void tna_system_wake_sender(tna_system *system, const ta_actor_ref *sender) {
 void tna_system_record_lateness(tna_system *system, ta_time due, const ta_trace_parent *trace) {
     ta_time now = ta_system_time(system->core);
     double seconds = now > due ? (double)(now - due) / 1000.0 : 0.0;
-    tna_exemplar exemplar = trace == NULL ? (tna_exemplar){ 0 }
-                                          : tna_exemplar_of(&trace->context, ta_step_key_span_id(trace->cause),
+    tah_exemplar exemplar = trace == NULL ? (tah_exemplar){ 0 }
+                                          : tah_exemplar_of(&trace->context, ta_step_key_span_id(trace->cause),
                                                             tna_system_wall_ns());
-    tna_histogram_record(&system->metrics.lateness_seconds, seconds, &exemplar);
+    tah_histogram_record(&system->metrics.lateness_seconds, seconds, &exemplar);
 }
 
 ta_result tna_system_refresh_log_sink(tna_system *system) {
@@ -284,8 +286,8 @@ void tna_system_start_trace(tna_system *system, ta_trace_context *context) {
     context->detail = detail;
 }
 
-bool tna_system_effect(tna_system *system, const tna_effect *effect) {
-    bool queued = tna_effects_push(&system->effects, effect);
+bool tna_system_effect(tna_system *system, const tah_effect *effect) {
+    bool queued = tah_effects_push(&system->effects, effect);
     if (queued) {
         tna_system_want_turn(system);
     }
@@ -410,9 +412,9 @@ static bool tna_quarantine_report_try(tna_system *system, tna_quarantine_report 
         !system->quarantine_data(system->quarantine_context, report, &event.data)) {
         return false;
     }
-    ta_result result = tna_sched_post(&system->sched, &(tna_message){ .target = report->parent, .event = &event,
+    ta_result result = tah_sched_post(&system->sched, &(tah_message){ .target = report->parent, .event = &event,
                                                                       .trace = &report->trace,
-                                                                      .report = TNA_REPORT_QUARANTINED });
+                                                                      .report = TAH_REPORT_QUARANTINED });
     if (result != TA_OK) {
         ta_value_release(&event.data);
         return false;
@@ -423,12 +425,12 @@ static bool tna_quarantine_report_try(tna_system *system, tna_quarantine_report 
 
 /* Tries the reports still waiting, keeping those that must wait again. */
 static void tna_quarantine_reports_retry(tna_system *system) {
-    tna_vec *reports = &system->quarantine_reports;
+    tah_vec *reports = &system->quarantine_reports;
     uint32_t kept = 0;
     for (uint32_t index = 0; index < reports->count; index += 1) {
-        tna_quarantine_report *report = tna_vec_at(reports, index);
+        tna_quarantine_report *report = tah_vec_at(reports, index);
         if (!tna_quarantine_report_try(system, report)) {
-            *(tna_quarantine_report *)tna_vec_at(reports, kept) = *report;
+            *(tna_quarantine_report *)tah_vec_at(reports, kept) = *report;
             kept += 1u;
         }
     }
@@ -441,9 +443,9 @@ static void tna_quarantine_reports_retry(tna_system *system) {
  * faulted; a report that must wait is kept for the next turn.
  */
 static void tna_quarantine_reports_make(tna_system *system) {
-    for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
         ta_actor_inspection view;
-        if (record->kind != TNA_RECORD_FAULT || ta_actor_inspect(system->core, record->actor, &view) != TA_OK ||
+        if (record->kind != TAH_RECORD_FAULT || ta_actor_inspect(system->core, record->actor, &view) != TA_OK ||
             !view.has_parent) {
             continue;
         }
@@ -458,7 +460,7 @@ static void tna_quarantine_reports_make(tna_system *system) {
             /* A push that fails loses the report: the parent is not told,
              * though the fault hook, the failure log and the quarantine
              * gauge still are. */
-            (void)tna_vec_push(&system->quarantine_reports, &report);
+            (void)tah_vec_push(&system->quarantine_reports, &report);
         }
     }
 }
@@ -509,7 +511,7 @@ void tna_system_turn(tna_system *system) {
         return;
     }
     tna_system_sync_time(system);
-    tna_sched_turn(&system->sched, &(tna_turn_params){
+    tah_sched_turn(&system->sched, &(tah_turn_params){
                                        .core = system->core,
                                        .arena = &system->scratch.turn,
                                        .inside_core = &system->inside_core,
@@ -532,29 +534,29 @@ void tna_system_end_turn(tna_system *system) {
     if (system->closed) {
         return;
     }
-    tna_sched_release_records(&system->sched);
-    tna_scratch_reset_turn(&system->scratch);
+    tah_sched_release_records(&system->sched);
+    tah_scratch_reset_turn(&system->scratch);
     tna_system_want_turn(system);
     tna_system_arm(system);
 }
 
 bool tna_system_cancel(tna_system *system, uint32_t index) {
-    tna_waiter *waiter = tna_sched_waiter(&system->sched, index);
+    tah_waiter *waiter = tah_sched_waiter(&system->sched, index);
     if (waiter == NULL) {
         return false;
     }
-    if (waiter->state == TNA_WAITER_QUEUED && tna_loads_withdraw(&system->loads, &system->sched, waiter->envelope)) {
-        waiter->state = TNA_WAITER_SETTLING;
+    if (waiter->state == TAH_WAITER_QUEUED && tna_loads_withdraw(&system->loads, &system->sched, waiter->envelope)) {
+        waiter->state = TAH_WAITER_SETTLING;
         return true;
     }
-    return tna_sched_cancel(&system->sched, index);
+    return tah_sched_cancel(&system->sched, index);
 }
 
-ta_result tna_system_post(tna_system *system, const tna_message *message) {
+ta_result tna_system_post(tna_system *system, const tah_message *message) {
     if (system == NULL || system->closed) {
         return TA_ERR_INVALID;
     }
-    ta_result result = tna_sched_post(&system->sched, message);
+    ta_result result = tah_sched_post(&system->sched, message);
     if (result == TA_OK) {
         tna_system_want_turn(system);
     }

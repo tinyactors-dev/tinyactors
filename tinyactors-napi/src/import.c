@@ -89,7 +89,7 @@ ta_result tna_import_scxml(tna_system *system, const tna_import_params *params) 
 }
 
 ta_result tna_import(tna_system *system, const tna_import_params *params) {
-    ta_allocator allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE);
+    ta_allocator allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE);
     ta_arena arena;
     ta_result result = ta_arena_init(&arena, allocator, TNA_IMPORT_ARENA_BLOCK);
     if (result != TA_OK) {
@@ -117,7 +117,7 @@ ta_result tna_import(tna_system *system, const tna_import_params *params) {
 }
 
 ta_result tna_encode_arena(tna_system *system, ta_arena *arena) {
-    return ta_arena_init(arena, tna_allocator_for(&system->allocator, TNA_MEMORY_CORE), TNA_IMPORT_ARENA_BLOCK);
+    return ta_arena_init(arena, tah_allocator_for(&system->allocator, TAH_MEMORY_CORE), TNA_IMPORT_ARENA_BLOCK);
 }
 
 /*

@@ -3,7 +3,7 @@
  * Dotted event-name interning (ADR 0004). No Node-API: native tests drive it.
  *
  * JavaScript keeps a Map from event-name text to ta_event_name_id per system
- * (lib/events.js). A cache miss calls tna_event_name_intern() once; a name
+ * (lib/events.js). A cache miss calls tah_event_name_intern() once; a name
  * that was seen before does no string work at all, and native post paths take
  * the numeric ID. Names are never un-interned, because core interning is
  * monotonic, so the cache never needs invalidation.
@@ -17,4 +17,4 @@
 #include "tinyactors.h"
 
 /* TA_ERR_INVALID for malformed text; TA_ERR_NOMEM from core. */
-ta_result tna_event_name_intern(ta_system *system, ta_str text, ta_event_name_id *out);
+ta_result tah_event_name_intern(ta_system *system, ta_str text, ta_event_name_id *out);

@@ -15,35 +15,35 @@ const char *tna_load_outcome_name(tna_load_outcome outcome) {
 
 void tna_loads_init(tna_loads *loads, ta_allocator allocator) {
     *loads = (tna_loads){ .allocator = allocator };
-    tna_vec_init(&loads->families, allocator, TNA_LAYOUT(tna_loader_family));
-    tna_vec_init(&loads->loads, allocator, TNA_LAYOUT(tna_load));
-    tna_map_init(&loads->by_address, allocator);
-    tna_vec_init(&loads->requests, allocator, TNA_LAYOUT(uint32_t));
-    tna_vec_init(&loads->wakes, allocator, TNA_LAYOUT(tna_wake));
-    tna_map_init(&loads->wake_due, allocator);
+    tah_vec_init(&loads->families, allocator, TAH_LAYOUT(tna_loader_family));
+    tah_vec_init(&loads->loads, allocator, TAH_LAYOUT(tna_load));
+    tah_map_init(&loads->by_address, allocator);
+    tah_vec_init(&loads->requests, allocator, TAH_LAYOUT(uint32_t));
+    tah_vec_init(&loads->wakes, allocator, TAH_LAYOUT(tna_wake));
+    tah_map_init(&loads->wake_due, allocator);
 }
 
 void tna_loads_close(tna_loads *loads) {
     for (uint32_t index = 0; index < loads->loads.count; index += 1u) {
-        tna_load *load = tna_vec_at(&loads->loads, index);
+        tna_load *load = tah_vec_at(&loads->loads, index);
         ta_address_release(load->address);
         load->address = NULL;
     }
     for (uint32_t index = 0; index < loads->wakes.count; index += 1u) {
-        tna_wake *wake = tna_vec_at(&loads->wakes, index);
+        tna_wake *wake = tah_vec_at(&loads->wakes, index);
         ta_address_release(wake->address);
     }
     for (uint32_t index = 0; index < loads->families.count; index += 1u) {
-        tna_loader_family *family = tna_vec_at(&loads->families, index);
-        tna_free(loads->allocator, &(ta_allocator_free_params){ .ptr = family->name, .size = family->length + 1u,
+        tna_loader_family *family = tah_vec_at(&loads->families, index);
+        tah_free(loads->allocator, &(ta_allocator_free_params){ .ptr = family->name, .size = family->length + 1u,
                                                                  .alignment = 1 });
     }
-    tna_vec_destroy(&loads->families);
-    tna_vec_destroy(&loads->loads);
-    tna_map_destroy(&loads->by_address);
-    tna_vec_destroy(&loads->requests);
-    tna_vec_destroy(&loads->wakes);
-    tna_map_destroy(&loads->wake_due);
+    tah_vec_destroy(&loads->families);
+    tah_vec_destroy(&loads->loads);
+    tah_map_destroy(&loads->by_address);
+    tah_vec_destroy(&loads->requests);
+    tah_vec_destroy(&loads->wakes);
+    tah_map_destroy(&loads->wake_due);
     loads->free_head = 0;
     loads->in_flight = 0;
     loads->requests_head = 0;
@@ -56,7 +56,7 @@ void tna_loads_close(tna_loads *loads) {
 
 static tna_loader_family *tna_loads_family_named(const tna_loads *loads, ta_str name, uint32_t *at) {
     for (uint32_t index = 0; index < loads->families.count; index += 1u) {
-        tna_loader_family *family = tna_vec_at(&loads->families, index);
+        tna_loader_family *family = tah_vec_at(&loads->families, index);
         if (family->length == name.len && memcmp(family->name, name.ptr, name.len) == 0) {
             if (at != NULL) {
                 *at = index;
@@ -76,9 +76,9 @@ ta_result tna_loads_set_family(tna_loads *loads, ta_str name, uint32_t max_waiti
     }
     if (family != NULL) {
         /* Loads already in flight keep the limit they started with. */
-        tna_free(loads->allocator, &(ta_allocator_free_params){ .ptr = family->name, .size = family->length + 1u,
+        tah_free(loads->allocator, &(ta_allocator_free_params){ .ptr = family->name, .size = family->length + 1u,
                                                                  .alignment = 1 });
-        tna_loader_family *last = tna_vec_at(&loads->families, loads->families.count - 1u);
+        tna_loader_family *last = tah_vec_at(&loads->families, loads->families.count - 1u);
         *family = *last;
         loads->families.count -= 1u;
         return TA_OK;
@@ -86,15 +86,15 @@ ta_result tna_loads_set_family(tna_loads *loads, ta_str name, uint32_t max_waiti
     if (max_waiting == 0) {
         return TA_OK;
     }
-    char *copy = tna_alloc(loads->allocator, (size_t)name.len + 1u, 1);
+    char *copy = tah_alloc(loads->allocator, (size_t)name.len + 1u, 1);
     if (copy == NULL) {
         return TA_ERR_NOMEM;
     }
     memcpy(copy, name.ptr, name.len);
     copy[name.len] = '\0';
     tna_loader_family fresh = { .name = copy, .length = name.len, .max_waiting = max_waiting };
-    if (tna_vec_push(&loads->families, &fresh) != TA_OK) {
-        tna_free(loads->allocator, &(ta_allocator_free_params){ .ptr = copy, .size = (size_t)name.len + 1u,
+    if (tah_vec_push(&loads->families, &fresh) != TA_OK) {
+        tah_free(loads->allocator, &(ta_allocator_free_params){ .ptr = copy, .size = (size_t)name.len + 1u,
                                                                  .alignment = 1 });
         return TA_ERR_NOMEM;
     }
@@ -118,7 +118,7 @@ tna_load *tna_loads_find(const tna_loads *loads, uint32_t index, uint32_t genera
     if (index == 0 || index >= loads->loads.count) {
         return NULL;
     }
-    tna_load *load = tna_vec_at(&loads->loads, index);
+    tna_load *load = tah_vec_at(&loads->loads, index);
     return load->address != NULL && load->generation == generation ? load : NULL;
 }
 
@@ -128,20 +128,20 @@ bool tna_loads_would_load(const tna_loads *loads, const ta_address *address) {
 
 bool tna_loads_waiting(const tna_loads *loads, const ta_address *address) {
     uint64_t index = 0;
-    return tna_map_count(&loads->by_address) != 0 &&
-           tna_map_get(&loads->by_address, (uint64_t)(uintptr_t)address, &index);
+    return tah_map_count(&loads->by_address) != 0 &&
+           tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)address, &index);
 }
 
-bool tna_loads_withdraw(tna_loads *loads, tna_sched *sched, uint32_t index) {
-    tna_envelope *envelope = tna_sched_envelope(sched, index);
+bool tna_loads_withdraw(tna_loads *loads, tah_sched *sched, uint32_t index) {
+    tah_envelope *envelope = tah_sched_envelope(sched, index);
     uint64_t load_index = 0;
     if (envelope == NULL || envelope->target != 0 || envelope->address == NULL ||
-        tna_map_count(&loads->by_address) == 0 ||
-        !tna_map_get(&loads->by_address, (uint64_t)(uintptr_t)envelope->address, &load_index)) {
+        tah_map_count(&loads->by_address) == 0 ||
+        !tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)envelope->address, &load_index)) {
         return false;
     }
-    tna_load *load = tna_vec_at(&loads->loads, (uint32_t)load_index);
-    if (!tna_sched_withdraw_waiting(sched, &load->mail, index)) {
+    tna_load *load = tah_vec_at(&loads->loads, (uint32_t)load_index);
+    if (!tah_sched_withdraw_waiting(sched, &load->mail, index)) {
         return false;
     }
     loads->waiting -= 1u;
@@ -152,28 +152,28 @@ bool tna_loads_withdraw(tna_loads *loads, tna_sched *sched, uint32_t index) {
 static uint32_t tna_loads_take(tna_loads *loads) {
     if (loads->loads.count == 0) {
         tna_load none = { 0 };
-        if (tna_vec_push(&loads->loads, &none) != TA_OK) { /* index 0 is never issued */
+        if (tah_vec_push(&loads->loads, &none) != TA_OK) { /* index 0 is never issued */
             return 0;
         }
     }
     uint32_t index = loads->free_head;
     if (index != 0) {
-        loads->free_head = ((tna_load *)tna_vec_at(&loads->loads, index))->next_free;
+        loads->free_head = ((tna_load *)tah_vec_at(&loads->loads, index))->next_free;
     } else {
         tna_load fresh = { 0 };
-        if (tna_vec_push(&loads->loads, &fresh) != TA_OK) {
+        if (tah_vec_push(&loads->loads, &fresh) != TA_OK) {
             return 0;
         }
         index = loads->loads.count - 1u;
     }
-    tna_load *load = tna_vec_at(&loads->loads, index);
+    tna_load *load = tah_vec_at(&loads->loads, index);
     uint32_t generation = load->generation == UINT32_MAX || load->generation == 0 ? 1u : load->generation + 1u;
     *load = (tna_load){ .generation = generation };
     return index;
 }
 
 static void tna_loads_give(tna_loads *loads, uint32_t index) {
-    tna_load *load = tna_vec_at(&loads->loads, index);
+    tna_load *load = tah_vec_at(&loads->loads, index);
     ta_address_release(load->address);
     load->address = NULL;
     load->next_free = loads->free_head;
@@ -199,15 +199,15 @@ static ta_result tna_loads_start(tna_loads *loads, const tna_load_start *start, 
     if (index == 0) {
         return TA_ERR_NOMEM;
     }
-    if (tna_vec_reserve(&loads->requests, loads->requests.count + 1u) != TA_OK ||
-        (!start->unkeyed && tna_map_put(&loads->by_address, (uint64_t)(uintptr_t)start->address, index) != TA_OK)) {
-        tna_load *load = tna_vec_at(&loads->loads, index);
+    if (tah_vec_reserve(&loads->requests, loads->requests.count + 1u) != TA_OK ||
+        (!start->unkeyed && tah_map_put(&loads->by_address, (uint64_t)(uintptr_t)start->address, index) != TA_OK)) {
+        tna_load *load = tah_vec_at(&loads->loads, index);
         load->next_free = loads->free_head;
         loads->free_head = index;
         return TA_ERR_NOMEM;
     }
-    (void)tna_vec_push(&loads->requests, &index); /* reserved above */
-    tna_load *load = tna_vec_at(&loads->loads, index);
+    (void)tah_vec_push(&loads->requests, &index); /* reserved above */
+    tna_load *load = tah_vec_at(&loads->loads, index);
     ta_address_retain(start->address);
     load->address = start->address;
     load->max_waiting = start->max_waiting;
@@ -223,18 +223,18 @@ static ta_result tna_loads_start(tna_loads *loads, const tna_load_start *start, 
 }
 
 /* Appends a message to a load's mailbox, or dead-letters it when it is full. */
-static ta_result tna_loads_append(tna_loads *loads, tna_sched *sched, tna_load *load, const tna_message *message) {
+static ta_result tna_loads_append(tna_loads *loads, tah_sched *sched, tna_load *load, const tah_message *message) {
     if (load->mail.count >= load->max_waiting) {
         ta_address_retain(load->address);
-        ta_result result = tna_sched_post_dead(sched, &(tna_dead_post){ .address = load->address, .message = message,
-                                                                        .reason = TNA_DEAD_WAITING_FULL });
+        ta_result result = tah_sched_post_dead(sched, &(tah_dead_post){ .address = load->address, .message = message,
+                                                                        .reason = TAH_DEAD_WAITING_FULL });
         if (result != TA_OK) {
             ta_address_release(load->address);
         }
         return result;
     }
-    ta_result result = tna_sched_post_waiting(
-        sched, &(tna_waiting_post){ .box = &load->mail, .address = load->address, .message = message });
+    ta_result result = tah_sched_post_waiting(
+        sched, &(tah_waiting_post){ .box = &load->mail, .address = load->address, .message = message });
     if (result == TA_OK) {
         loads->waiting += 1u;
     }
@@ -243,9 +243,9 @@ static ta_result tna_loads_append(tna_loads *loads, tna_sched *sched, tna_load *
 
 ta_result tna_loads_route(tna_loads *loads, const tna_load_route *route) {
     uint64_t found = 0;
-    if (tna_map_count(&loads->by_address) != 0 &&
-        tna_map_get(&loads->by_address, (uint64_t)(uintptr_t)route->address, &found)) {
-        return tna_loads_append(loads, route->sched, tna_vec_at(&loads->loads, (uint32_t)found), route->message);
+    if (tah_map_count(&loads->by_address) != 0 &&
+        tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)route->address, &found)) {
+        return tna_loads_append(loads, route->sched, tah_vec_at(&loads->loads, (uint32_t)found), route->message);
     }
     if (route->resident) {
         return TA_ERR_NOT_FOUND;
@@ -264,12 +264,12 @@ ta_result tna_loads_route(tna_loads *loads, const tna_load_route *route) {
     if (result != TA_OK) {
         return result;
     }
-    tna_load *load = tna_vec_at(&loads->loads, index);
+    tna_load *load = tah_vec_at(&loads->loads, index);
     result = tna_loads_append(loads, route->sched, load, route->message);
     if (result != TA_OK) {
         /* Nothing was accepted: the load never happened. */
         loads->requests.count -= 1u;
-        tna_map_remove(&loads->by_address, (uint64_t)(uintptr_t)route->address);
+        tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)route->address);
         loads->in_flight -= 1u;
         tna_loads_give(loads, index);
     }
@@ -283,9 +283,9 @@ bool tna_loads_family_loads(const tna_loads *loads, ta_str family) {
 
 ta_result tna_loads_route_session(tna_loads *loads, const tna_load_session_route *route) {
     uint64_t found = 0;
-    if (route->shared && tna_map_count(&loads->by_address) != 0 &&
-        tna_map_get(&loads->by_address, (uint64_t)(uintptr_t)route->address, &found)) {
-        return tna_loads_append(loads, route->sched, tna_vec_at(&loads->loads, (uint32_t)found), route->message);
+    if (route->shared && tah_map_count(&loads->by_address) != 0 &&
+        tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)route->address, &found)) {
+        return tna_loads_append(loads, route->sched, tah_vec_at(&loads->loads, (uint32_t)found), route->message);
     }
     uint32_t limit = tna_loads_limit(loads, route->address);
     if (limit == 0) {
@@ -302,12 +302,12 @@ ta_result tna_loads_route_session(tna_loads *loads, const tna_load_session_route
     if (result != TA_OK) {
         return result;
     }
-    tna_load *load = tna_vec_at(&loads->loads, index);
+    tna_load *load = tah_vec_at(&loads->loads, index);
     result = tna_loads_append(loads, route->sched, load, route->message);
     if (result != TA_OK) {
         loads->requests.count -= 1u;
         if (route->shared) {
-            tna_map_remove(&loads->by_address, (uint64_t)(uintptr_t)route->address);
+            tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)route->address);
         }
         loads->in_flight -= 1u;
         tna_loads_give(loads, index);
@@ -317,13 +317,13 @@ ta_result tna_loads_route_session(tna_loads *loads, const tna_load_session_route
 
 bool tna_loads_next_request(tna_loads *loads, tna_load_request *out) {
     while (loads->requests_head < loads->requests.count) {
-        uint32_t index = *(uint32_t *)tna_vec_at(&loads->requests, loads->requests_head);
+        uint32_t index = *(uint32_t *)tah_vec_at(&loads->requests, loads->requests_head);
         loads->requests_head += 1u;
         if (loads->requests_head == loads->requests.count) {
-            tna_vec_clear(&loads->requests);
+            tah_vec_clear(&loads->requests);
             loads->requests_head = 0;
         }
-        tna_load *load = tna_vec_at(&loads->loads, index);
+        tna_load *load = tah_vec_at(&loads->loads, index);
         if (load->address == NULL) {
             continue; /* finished before JavaScript heard of it */
         }
@@ -334,13 +334,13 @@ bool tna_loads_next_request(tna_loads *loads, tna_load_request *out) {
     return false;
 }
 
-static tna_dead_reason tna_load_dead_reason(tna_load_outcome outcome) {
+static tah_dead_reason tna_load_dead_reason(tna_load_outcome outcome) {
     switch (outcome) {
-    case TNA_LOAD_NOT_FOUND: return TNA_DEAD_NOT_FOUND;
-    case TNA_LOAD_REJECTED: return TNA_DEAD_REJECTED;
-    case TNA_LOAD_TIMED_OUT: return TNA_DEAD_LOAD_TIMEOUT;
-    case TNA_LOAD_DONE: return TNA_DEAD_DONE;
-    default: return TNA_DEAD_LOAD_FAILED;
+    case TNA_LOAD_NOT_FOUND: return TAH_DEAD_NOT_FOUND;
+    case TNA_LOAD_REJECTED: return TAH_DEAD_REJECTED;
+    case TNA_LOAD_TIMED_OUT: return TAH_DEAD_LOAD_TIMEOUT;
+    case TNA_LOAD_DONE: return TAH_DEAD_DONE;
+    default: return TAH_DEAD_LOAD_FAILED;
     }
 }
 
@@ -356,16 +356,16 @@ ta_result tna_loads_finish(tna_loads *loads, const tna_load_finish *finish) {
     if (outcome == TNA_LOAD_LOADED || outcome == TNA_LOAD_SPAWNED) {
         if (session) {
             /* The new instance of the family has no address; it only has to be resident. */
-            if (tna_sched_lookup(finish->sched, finish->actor) == NULL) {
+            if (tah_sched_lookup(finish->sched, finish->actor) == NULL) {
                 return TA_ERR_NOT_FOUND;
             }
         } else {
-            ta_actor_directory_entry entry = tna_directory_find(finish->directory, load->address);
+            ta_actor_directory_entry entry = tah_directory_find(finish->directory, load->address);
             if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT || entry.actor != finish->actor) {
                 return TA_ERR_NOT_FOUND;
             }
         }
-        result = tna_sched_hand_over(finish->sched, &load->mail, finish->actor);
+        result = tah_sched_hand_over(finish->sched, &load->mail, finish->actor);
         if (result != TA_OK) {
             outcome = TNA_LOAD_FAILED;
         } else if (!session) {
@@ -373,16 +373,16 @@ ta_result tna_loads_finish(tna_loads *loads, const tna_load_finish *finish) {
         }
     }
     if (load->mail.first != 0) {
-        tna_sched_bury_waiting(finish->sched, &load->mail, tna_load_dead_reason(outcome));
+        tah_sched_bury_waiting(finish->sched, &load->mail, tna_load_dead_reason(outcome));
     }
     loads->waiting -= waiting;
     loads->outcomes[outcome] += 1u;
     double seconds = finish->now_ns > load->started_ns ? (double)(finish->now_ns - load->started_ns) / 1e9 : 0.0;
-    tna_exemplar exemplar =
-        tna_exemplar_of(&load->trace.context, ta_step_key_span_id(load->trace.cause), finish->wall_ns);
-    tna_histogram_record(&finish->metrics->load_seconds, seconds, &exemplar);
+    tah_exemplar exemplar =
+        tah_exemplar_of(&load->trace.context, ta_step_key_span_id(load->trace.cause), finish->wall_ns);
+    tah_histogram_record(&finish->metrics->load_seconds, seconds, &exemplar);
     if (load->keyed) {
-        tna_map_remove(&loads->by_address, (uint64_t)(uintptr_t)load->address);
+        tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)load->address);
     }
     loads->in_flight -= 1u;
     tna_loads_give(loads, finish->index);
@@ -394,7 +394,7 @@ ta_result tna_loads_finish(tna_loads *loads, const tna_load_finish *finish) {
  */
 
 static tna_wake *tna_wake_at(const tna_loads *loads, uint32_t index) {
-    return tna_vec_at(&loads->wakes, index);
+    return tah_vec_at(&loads->wakes, index);
 }
 
 static void tna_wake_swap(tna_loads *loads, uint32_t a, uint32_t b) {
@@ -448,24 +448,24 @@ static tna_wake tna_wake_pop(tna_loads *loads) {
 /* True when the heap entry is its address's live wake-up. */
 static bool tna_wake_live(const tna_loads *loads, const tna_wake *wake) {
     uint64_t due = 0;
-    return tna_map_get(&loads->wake_due, (uint64_t)(uintptr_t)wake->address, &due) && due == wake->due;
+    return tah_map_get(&loads->wake_due, (uint64_t)(uintptr_t)wake->address, &due) && due == wake->due;
 }
 
 ta_result tna_loads_wake_at(tna_loads *loads, ta_address *address, ta_time due) {
-    if (tna_vec_reserve(&loads->wakes, loads->wakes.count + 1u) != TA_OK ||
-        tna_map_put(&loads->wake_due, (uint64_t)(uintptr_t)address, due) != TA_OK) {
+    if (tah_vec_reserve(&loads->wakes, loads->wakes.count + 1u) != TA_OK ||
+        tah_map_put(&loads->wake_due, (uint64_t)(uintptr_t)address, due) != TA_OK) {
         return TA_ERR_NOMEM;
     }
     ta_address_retain(address);
     tna_wake wake = { .due = due, .address = address };
-    (void)tna_vec_push(&loads->wakes, &wake); /* reserved above */
+    (void)tah_vec_push(&loads->wakes, &wake); /* reserved above */
     tna_wake_sift_up(loads, loads->wakes.count - 1u);
     return TA_OK;
 }
 
 void tna_loads_cancel_wake(tna_loads *loads, const ta_address *address) {
-    if (tna_map_count(&loads->wake_due) != 0) {
-        tna_map_remove(&loads->wake_due, (uint64_t)(uintptr_t)address);
+    if (tah_map_count(&loads->wake_due) != 0) {
+        tah_map_remove(&loads->wake_due, (uint64_t)(uintptr_t)address);
     }
 }
 
@@ -487,8 +487,8 @@ void tna_loads_fire_wakes(tna_loads *loads, const tna_wake_fire *fire) {
     ta_time due = 0;
     while (tna_loads_live_wake(loads, &due) && due <= fire->now) {
         tna_wake wake = tna_wake_pop(loads);
-        tna_map_remove(&loads->wake_due, (uint64_t)(uintptr_t)wake.address);
-        ta_actor_directory_entry entry = tna_directory_find(fire->directory, wake.address);
+        tah_map_remove(&loads->wake_due, (uint64_t)(uintptr_t)wake.address);
+        ta_actor_directory_entry entry = tah_directory_find(fire->directory, wake.address);
         uint32_t limit = tna_loads_limit(loads, wake.address);
         if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT && limit != 0 && !tna_loads_waiting(loads, wake.address)) {
             uint32_t index = 0;

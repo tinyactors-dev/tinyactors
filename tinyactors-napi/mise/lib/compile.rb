@@ -32,6 +32,11 @@ module NapiCompile
   SCXML_DIR = ROOT.join('../tinyactors-scxml').expand_path
   XML_DIR = ROOT.join('../tinyxml/include').expand_path
   CODEC_SOURCES = [SCXML_DIR.join('include/ta_scxml.c'), XML_DIR.join('txml.c')].freeze
+  # The host kernel (kernel ADR 0001): libc-free C that every host needs,
+  # compiled into the addon with the addon's own command. Its private
+  # headers are on the include path while napi still reaches into them
+  # (kernel ADR 0001, step 2 notes).
+  KERNEL_DIR = ROOT.join('../tinyactors-host').expand_path
 
   module_function
 
@@ -53,7 +58,9 @@ module NapiCompile
       "-I#{CORE_DIR}",
       "-I#{SCXML_DIR.join('include')}",
       "-I#{XML_DIR}",
-      "-I#{ROOT.join('src')}"
+      "-I#{ROOT.join('src')}",
+      "-I#{KERNEL_DIR.join('include')}",
+      "-I#{KERNEL_DIR.join('src')}"
     ]
   end
 
@@ -77,8 +84,10 @@ module NapiCompile
       end
   end
 
-  # The addon's own sources, adapters included.
-  def sources = Cache.files('src/**/*.c')
+  # The addon's own sources, adapters included, and the host kernel's.
+  def sources = Cache.files('src/**/*.c') + kernel_sources
+
+  def kernel_sources = Dir[KERNEL_DIR.join('src/*.c').to_s].sort.map { |path| Pathname.new(path) }
 
   # Where a release target's objects and addon go: build/<target>/.
   def target_dir(target) = BUILD.join(target.name)
@@ -88,6 +97,7 @@ module NapiCompile
     base = target.nil? ? OBJECTS : target_dir(target).join('obj')
     return base.join('core/tinyactors.o') if source == CORE_SOURCE
     return base.join('codec', source.basename.sub_ext('.o')) if CODEC_SOURCES.include?(source)
+    return base.join('kernel', source.basename.sub_ext('.o')) if source.to_s.start_with?("#{KERNEL_DIR}/")
 
     base.join(source.relative_path_from(ROOT).sub_ext('.o'))
   end

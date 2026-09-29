@@ -28,7 +28,7 @@ typedef struct {
     uint32_t capacity; /* 0, or a power of two */
     uint32_t count;
     bool has_max;
-} tna_id_set;
+} tah_id_set;
 
 /*
  * Watched families are names, resolved to definitions when a delivery first
@@ -42,39 +42,39 @@ typedef struct {
  */
 typedef struct {
     ta_allocator allocator;
-    tna_id_set sessions;
+    tah_id_set sessions;
     ta_str *families; /* owned copies */
     uint32_t family_count;
-    tna_id_set matched;
-    tna_id_set checked;
-} tna_trace_watch;
+    tah_id_set matched;
+    tah_id_set checked;
+} tah_trace_watch;
 
-void tna_trace_watch_init(tna_trace_watch *watch, ta_allocator allocator);
-void tna_trace_watch_destroy(tna_trace_watch *watch);
+void tah_trace_watch_init(tah_trace_watch *watch, ta_allocator allocator);
+void tah_trace_watch_destroy(tah_trace_watch *watch);
 
 typedef struct {
     const uint64_t *sessions;
     uint32_t session_count;
     const ta_str *families;
     uint32_t family_count;
-} tna_trace_watch_set_params;
+} tah_trace_watch_set_params;
 
 /* Replaces what is watched. TA_ERR_NOMEM leaves the watch as it was. */
-ta_result tna_trace_watch_set(tna_trace_watch *watch, const tna_trace_watch_set_params *params);
+ta_result tah_trace_watch_set(tah_trace_watch *watch, const tah_trace_watch_set_params *params);
 
-static inline bool tna_trace_watch_empty(const tna_trace_watch *watch) {
+static inline bool tah_trace_watch_empty(const tah_trace_watch *watch) {
     return watch == NULL || watch->sessions.count + watch->family_count == 0;
 }
 
 /* Drops a definition core has freed from `matched` and `checked` (core ADR 0079). */
-void tna_trace_watch_forget_definition(tna_trace_watch *watch, ta_definition_id definition);
+void tah_trace_watch_forget_definition(tah_trace_watch *watch, ta_definition_id definition);
 
 /* Whether `id` is in the set: constant time, for tests and the scheduler. */
-bool tna_id_set_has(const tna_id_set *set, uint64_t id);
+bool tah_id_set_has(const tah_id_set *set, uint64_t id);
 
 /*
  * Marks `trace` watched when `actor` is: its session is watched, or its
  * definition's family is. A watched delivery with no trace starts one from
  * core's generator. `trace` is left alone otherwise.
  */
-void tna_trace_watch_mark(tna_trace_watch *watch, ta_system *core, ta_actor_id actor, ta_trace_parent *trace);
+void tah_trace_watch_mark(tah_trace_watch *watch, ta_system *core, ta_actor_id actor, ta_trace_parent *trace);

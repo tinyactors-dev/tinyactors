@@ -19,7 +19,7 @@ static void no_wake(tna_system *system, void *context) {
 }
 
 enum { MAX_SETTLED = 16 };
-static tna_settlement settled[MAX_SETTLED];
+static tah_settlement settled[MAX_SETTLED];
 static uint32_t settled_count;
 
 static tna_system *make_system(void) {
@@ -41,7 +41,7 @@ static ta_definition_id define(tna_system *system, const ta_scxml_spec *spec) {
     CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
                                                        .spec = spec,
                                                        .datamodel = ta_null_datamodel(),
-                                                       .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
                                                        .out = &definition,
                                                    }) == TA_OK);
     ta_definition_id id = 0;
@@ -110,29 +110,29 @@ static ta_actor_id spawn(tna_system *system, ta_definition_id definition) {
 
 static ta_event_name_id name(tna_system *system, const char *text) {
     ta_event_name_id id = 0;
-    CHECK(tna_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &id) == TA_OK);
+    CHECK(tah_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &id) == TA_OK);
     return id;
 }
 
 static ta_result post(tna_system *system, ta_actor_id target, ta_event_name_id event) {
     ta_event message = { .name = event, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    return tna_system_post(system, &(tna_message){ .target = target, .event = &message });
+    return tna_system_post(system, &(tah_message){ .target = target, .event = &message });
 }
 
 /* Posts `event` with a fresh waiter and returns the waiter. */
 static uint32_t send(tna_system *system, ta_actor_id target, ta_event_name_id event) {
-    uint32_t waiter = tna_sched_waiter_take(&system->sched);
+    uint32_t waiter = tah_sched_waiter_take(&system->sched);
     CHECK(waiter != 0);
     ta_event message = { .name = event, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(tna_system_post(system, &(tna_message){ .target = target, .event = &message, .waiter = waiter }) == TA_OK);
+    CHECK(tna_system_post(system, &(tah_message){ .target = target, .event = &message, .waiter = waiter }) == TA_OK);
     return waiter;
 }
 
 /* Posts `event` carrying an operator transition; `waiter` may be 0. */
-static ta_result post_jump(tna_system *system, ta_actor_id target, ta_event_name_id event, const tna_message_jump *jump,
+static ta_result post_jump(tna_system *system, ta_actor_id target, ta_event_name_id event, const tah_message_jump *jump,
                            uint32_t waiter) {
     ta_event message = { .name = event, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    return tna_system_post(system, &(tna_message){ .target = target, .event = &message, .jump = jump, .waiter = waiter });
+    return tna_system_post(system, &(tah_message){ .target = target, .event = &message, .jump = jump, .waiter = waiter });
 }
 
 typedef struct {
@@ -143,17 +143,17 @@ typedef struct {
 
 /* Pops settlements as the Node-API layer does, and gives their waiters back. */
 static void collect(tna_system *system) {
-    tna_settlement settlement;
-    while (tna_sched_settlement_pop(&system->sched, &settlement)) {
+    tah_settlement settlement;
+    while (tah_sched_settlement_pop(&system->sched, &settlement)) {
         CHECK(settled_count < MAX_SETTLED);
         settled[settled_count] = settlement;
         settled_count += 1u;
-        tna_sched_waiter_give(&system->sched, settlement.waiter);
+        tah_sched_waiter_give(&system->sched, settlement.waiter);
     }
 }
 
 /* The latest settlement of `waiter` (waiter indices are reused), or NULL. */
-static const tna_settlement *settlement_of(uint32_t waiter) {
+static const tah_settlement *settlement_of(uint32_t waiter) {
     for (uint32_t index = settled_count; index > 0; index -= 1) {
         if (settled[index - 1u].waiter == waiter) {
             return &settled[index - 1u];
@@ -166,10 +166,10 @@ static const tna_settlement *settlement_of(uint32_t waiter) {
 static turn_counts turn(tna_system *system) {
     turn_counts counts = { 0 };
     tna_system_turn(system);
-    for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-        counts.faults += record->kind == TNA_RECORD_FAULT ? 1u : 0u;
-        counts.dead += record->kind == TNA_RECORD_DEAD_LETTER ? 1u : 0u;
-        counts.refused += record->kind == TNA_RECORD_DEAD_LETTER && record->reason == TNA_DEAD_REFUSED ? 1u : 0u;
+    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        counts.faults += record->kind == TAH_RECORD_FAULT ? 1u : 0u;
+        counts.dead += record->kind == TAH_RECORD_DEAD_LETTER ? 1u : 0u;
+        counts.refused += record->kind == TAH_RECORD_DEAD_LETTER && record->reason == TAH_DEAD_REFUSED ? 1u : 0u;
     }
     collect(system);
     tna_system_end_turn(system);
@@ -216,9 +216,9 @@ static const char *state_of(tna_system *system, ta_actor_id actor) {
     return text;
 }
 
-static tna_sched_state state(tna_system *system, ta_actor_id actor) {
-    const tna_sched_entry *entry = tna_sched_lookup(&system->sched, actor);
-    return entry == NULL ? TNA_SCHED_NONE : (tna_sched_state)entry->state;
+static tah_sched_state state(tna_system *system, ta_actor_id actor) {
+    const tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
+    return entry == NULL ? TAH_SCHED_NONE : (tah_sched_state)entry->state;
 }
 
 static ta_definition_id definition_of(tna_system *system, ta_actor_id actor) {
@@ -234,45 +234,45 @@ static void operator_transitions(void) {
     ta_definition_id steps = define_steps(system);
     ta_actor_id actor = spawn(system, steps);
     settle(system);
-    CHECK(sizeof(tna_sched_entry) == 16u);
-    CHECK(sizeof(tna_envelope) == 104u); /* the jump shares the address's room */
+    CHECK(sizeof(tah_sched_entry) == 16u);
+    CHECK(sizeof(tah_envelope) == 104u); /* the jump shares the address's room */
     ta_event_name_id x = name(system, "x");
     ta_event_name_id jump_event = name(system, "operator.goto");
     ta_state_id to_c[] = { 2u };
-    tna_message_jump to_c_from_root = {
+    tah_message_jump to_c_from_root = {
         .definition = steps,
         .transition = { .source = TA_STATE_NONE, .targets = to_c, .target_count = 1u },
     };
     /* Behind x: x moves a to b first, then the jump moves b to c. */
     CHECK(post(system, actor, x) == TA_OK);
-    uint32_t waiter = tna_sched_waiter_take(&system->sched);
+    uint32_t waiter = tah_sched_waiter_take(&system->sched);
     CHECK(post_jump(system, actor, jump_event, &to_c_from_root, waiter) == TA_OK);
-    const tna_envelope *queued = tna_sched_envelope(&system->sched, tna_sched_lookup(&system->sched, actor)->last);
+    const tah_envelope *queued = tah_sched_envelope(&system->sched, tah_sched_lookup(&system->sched, actor)->last);
     CHECK(queued->has_jump && queued->jump->count == 1u && queued->jump->targets[0] == 2u);
     turn_counts counts = settle(system);
     CHECK(counts.faults == 0u && counts.dead == 0u);
     CHECK(strcmp(state_of(system, actor), "c") == 0);
-    CHECK(settlement_of(waiter) != NULL && settlement_of(waiter)->kind == TNA_SETTLE_STABLE);
+    CHECK(settlement_of(waiter) != NULL && settlement_of(waiter)->kind == TAH_SETTLE_STABLE);
 
     /* From a: queued behind a jump to c, a is no longer active: refused. */
     ta_state_id to_b[] = { 1u };
-    tna_message_jump from_a = {
+    tah_message_jump from_a = {
         .definition = steps,
         .transition = { .source = 0u, .targets = to_b, .target_count = 1u },
     };
     CHECK(post(system, actor, name(system, "unknown.event")) == TA_OK); /* ignored: the actor stays in c */
-    waiter = tna_sched_waiter_take(&system->sched);
+    waiter = tah_sched_waiter_take(&system->sched);
     CHECK(post_jump(system, actor, jump_event, &from_a, waiter) == TA_OK);
     counts = settle(system);
     CHECK(counts.faults == 0u && counts.refused == 1u);
-    CHECK(state(system, actor) == TNA_SCHED_IDLE); /* not quarantined */
+    CHECK(state(system, actor) == TAH_SCHED_IDLE); /* not quarantined */
     CHECK(strcmp(state_of(system, actor), "c") == 0);
-    const tna_settlement *refused = settlement_of(waiter);
-    CHECK(refused != NULL && refused->kind == TNA_SETTLE_DEAD && refused->reason == TNA_DEAD_REFUSED);
+    const tah_settlement *refused = settlement_of(waiter);
+    CHECK(refused != NULL && refused->kind == TAH_SETTLE_DEAD && refused->reason == TAH_DEAD_REFUSED);
 
     /* A jump over another revision's state IDs is refused without reaching core. */
     ta_definition_id other = define_chain(system, false);
-    tna_message_jump foreign = {
+    tah_message_jump foreign = {
         .definition = other,
         .transition = { .source = TA_STATE_NONE, .targets = to_b, .target_count = 1u },
     };
@@ -284,7 +284,7 @@ static void operator_transitions(void) {
     /* Back to a, by a jump from the root. */
     CHECK(definition_of(system, actor) == steps);
     ta_state_id to_a[] = { 0u };
-    tna_message_jump back = {
+    tah_message_jump back = {
         .definition = steps,
         .transition = { .source = TA_STATE_NONE, .targets = to_a, .target_count = 1u },
     };
@@ -294,10 +294,10 @@ static void operator_transitions(void) {
     CHECK(strcmp(state_of(system, actor), "a") == 0);
 
     /* Jumps withdrawn, to a gone actor, or left waiting give their memory back. */
-    uint32_t withdrawn = tna_sched_waiter_take(&system->sched);
+    uint32_t withdrawn = tah_sched_waiter_take(&system->sched);
     CHECK(post_jump(system, actor, jump_event, &back, withdrawn) == TA_OK);
-    CHECK(tna_sched_cancel(&system->sched, withdrawn));
-    tna_sched_waiter_give(&system->sched, withdrawn);
+    CHECK(tah_sched_cancel(&system->sched, withdrawn));
+    tah_sched_waiter_give(&system->sched, withdrawn);
     CHECK(post_jump(system, ta_actor_id_make(900u, 1u), jump_event, &back, 0) == TA_OK);
     counts = settle(system);
     CHECK(counts.dead == 1u);
@@ -318,7 +318,7 @@ static void abandoned_macrostep(void) {
     for (int index = 0; index < 5; index += 1) {
         turn(system);
     }
-    CHECK(state(system, actor) == TNA_SCHED_RUNNABLE);
+    CHECK(state(system, actor) == TAH_SCHED_RUNNABLE);
     CHECK(settlement_of(waiter) == NULL);
 
     /* Paused inside a microstep, core refuses (core ADR 0082); the next
@@ -332,20 +332,20 @@ static void abandoned_macrostep(void) {
     CHECK(ta_actor_abandon(system->core, actor) == TA_OK);
     CHECK(tna_hook_actor_abandoned(system, actor) == TA_OK);
     collect(system);
-    const tna_settlement *abandoned = settlement_of(waiter);
-    CHECK(abandoned != NULL && abandoned->kind == TNA_SETTLE_ABANDONED);
-    CHECK(state(system, actor) == TNA_SCHED_READY); /* its next message waits */
+    const tah_settlement *abandoned = settlement_of(waiter);
+    CHECK(abandoned != NULL && abandoned->kind == TAH_SETTLE_ABANDONED);
+    CHECK(state(system, actor) == TAH_SCHED_READY); /* its next message waits */
     turn(system); /* the stale runnable entry is skipped; the next go starts another runaway */
-    CHECK(state(system, actor) == TNA_SCHED_RUNNABLE);
-    CHECK(tna_sched_mailbox_count(&system->sched, actor) == 0u);
+    CHECK(state(system, actor) == TAH_SCHED_RUNNABLE);
+    CHECK(tah_sched_mailbox_count(&system->sched, actor) == 0u);
 
     /* Abandoned with nothing waiting, it stands idle. */
     turn(system);
     CHECK(ta_actor_abandon(system->core, actor) == TA_OK);
     CHECK(tna_hook_actor_abandoned(system, actor) == TA_OK);
-    CHECK(state(system, actor) == TNA_SCHED_IDLE);
+    CHECK(state(system, actor) == TAH_SCHED_IDLE);
     turn(system);
-    CHECK(state(system, actor) == TNA_SCHED_IDLE);
+    CHECK(state(system, actor) == TAH_SCHED_IDLE);
     finish_system(system);
 }
 

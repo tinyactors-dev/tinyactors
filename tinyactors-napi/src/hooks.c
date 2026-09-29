@@ -1,7 +1,7 @@
 #include "hooks.h"
 
 ta_result tna_hook_actor_created(tna_system *system, ta_actor_id actor) {
-    ta_result result = tna_sched_add(&system->sched, actor);
+    ta_result result = tah_sched_add(&system->sched, actor);
     if (result != TA_OK) {
         system->inside_core = true;
         (void)ta_actor_destroy(system->core, actor);
@@ -13,13 +13,13 @@ ta_result tna_hook_actor_created(tna_system *system, ta_actor_id actor) {
 }
 
 ta_result tna_hook_actor_removed(tna_system *system, ta_actor_id actor) {
-    tna_sched_remove(&system->sched, actor, TNA_DEAD_DESTROYED);
+    tah_sched_remove(&system->sched, actor, TAH_DEAD_DESTROYED);
     tna_system_want_turn(system); /* its mail is reported as dead letters */
     return TA_OK;
 }
 
 ta_result tna_hook_actor_unloaded(tna_system *system, ta_actor_id actor) {
-    tna_sched_remove(&system->sched, actor, TNA_DEAD_UNLOADED);
+    tah_sched_remove(&system->sched, actor, TAH_DEAD_UNLOADED);
     tna_system_want_turn(system);
     return TA_OK;
 }
@@ -27,7 +27,7 @@ ta_result tna_hook_actor_unloaded(tna_system *system, ta_actor_id actor) {
 ta_result tna_hook_actor_published(tna_system *system, const ta_actor_publish_params *params) {
     ta_result result = TA_OK;
     if (params->incumbent != 0) {
-        result = tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){
+        result = tah_sched_transfer(&system->sched, &(tah_sched_transfer_params){
                                                         .from = params->incumbent,
                                                         .to = params->actor,
                                                     });
@@ -37,7 +37,7 @@ ta_result tna_hook_actor_published(tna_system *system, const ta_actor_publish_pa
     ta_actor_inspection view;
     if (result == TA_OK && ta_actor_inspect(system->core, params->actor, &view) == TA_OK &&
         view.macrostep_in_progress) {
-        result = tna_sched_wake(&system->sched, params->actor);
+        result = tah_sched_wake(&system->sched, params->actor);
     }
     if (result == TA_OK) {
         tna_system_want_turn(system);
@@ -48,7 +48,7 @@ ta_result tna_hook_actor_published(tna_system *system, const ta_actor_publish_pa
 ta_result tna_hook_actor_abandoned(tna_system *system, ta_actor_id actor) {
     /* Core abandoned the macrostep whatever the table knows; an actor the
      * table does not know has nothing to settle. */
-    (void)tna_sched_abandoned(&system->sched, actor);
+    (void)tah_sched_abandoned(&system->sched, actor);
     tna_system_want_turn(system); /* the settlement, and mail it may take now */
     return TA_OK;
 }

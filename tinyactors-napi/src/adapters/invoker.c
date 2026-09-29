@@ -17,8 +17,8 @@ static ta_op_status tna_js_start(void *self, const ta_invoker_start_params *para
     tna_system *system = self;
     const ta_invoke_request *request = params->request;
     uint64_t service = system->next_service + 1u;
-    tna_effect effect = {
-        .kind = TNA_EFFECT_INVOKE_START,
+    tah_effect effect = {
+        .kind = TAH_EFFECT_INVOKE_START,
         .parent = request->parent,
         .invoke_id = request->invoke_id,
         .service = service,
@@ -47,14 +47,14 @@ static ta_op_status tna_js_start(void *self, const ta_invoker_start_params *para
 static ta_op_status tna_js_cancel(void *self, uint64_t service, ta_fault *fault) {
     (void)fault;
     tna_system *system = self;
-    tna_effect effect = { .kind = TNA_EFFECT_INVOKE_CANCEL, .service = service };
+    tah_effect effect = { .kind = TAH_EFFECT_INVOKE_CANCEL, .service = service };
     (void)tna_system_effect(system, &effect); /* dropped only while closing */
     return TA_OP_OK;
 }
 
 static ta_op_status tna_js_forward(void *self, const ta_invoker_forward_params *params) {
     tna_system *system = self;
-    tna_effect effect = { .kind = TNA_EFFECT_INVOKE_FORWARD, .service = params->service_handle };
+    tah_effect effect = { .kind = TAH_EFFECT_INVOKE_FORWARD, .service = params->service_handle };
     ta_event_retain(params->event, &effect.forwarded);
     if (!tna_system_effect(system, &effect)) {
         return TNA_FAULT(params->fault, TA_ERR_NOMEM, "the invoker could not queue the forwarded event");
@@ -115,7 +115,7 @@ static ta_op_status tna_scxml_try_start(void *self, const ta_invoker_start_param
     if (result != TA_OK) {
         return TNA_FAULT(params->fault, result, "invoker.scxml: could not spawn the child");
     }
-    if (tna_sched_add(&system->sched, child) != TA_OK) {
+    if (tah_sched_add(&system->sched, child) != TA_OK) {
         (void)ta_actor_destroy(system->core, child);
         return TNA_FAULT(params->fault, TA_ERR_NOMEM, "invoker.scxml: could not schedule the child");
     }
@@ -148,10 +148,10 @@ static ta_op_status tna_scxml_start(void *self, const ta_invoker_start_params *p
         return TA_OP_NOMEM;
     }
     ta_trace_parent trace = params->request->trace;
-    ta_result result = tna_sched_post(&system->sched, &(tna_message){ .target = params->request->parent,
+    ta_result result = tah_sched_post(&system->sched, &(tah_message){ .target = params->request->parent,
                                                                       .event = &event,
                                                                       .trace = &trace,
-                                                                      .report = TNA_REPORT_FAILED });
+                                                                      .report = TAH_REPORT_FAILED });
     if (result != TA_OK) {
         ta_value_release(&event.data);
         return TA_OP_NOMEM; /* no room for the report: core starts the invocation again */
@@ -169,7 +169,7 @@ static ta_op_status tna_scxml_cancel(void *self, uint64_t service, ta_fault *fau
     }
     ta_result result = ta_actor_destroy(system->core, service);
     if (result == TA_OK || result == TA_ERR_NOT_FOUND) {
-        tna_sched_remove(&system->sched, service, TNA_DEAD_DESTROYED);
+        tah_sched_remove(&system->sched, service, TAH_DEAD_DESTROYED);
         tna_system_want_turn(system);
     }
     return TA_OP_OK;
@@ -182,7 +182,7 @@ static ta_op_status tna_scxml_forward(void *self, const ta_invoker_forward_param
     }
     ta_event event;
     ta_event_retain(params->event, &event);
-    ta_result result = tna_sched_post(&system->sched, &(tna_message){ .target = params->service_handle, .event = &event });
+    ta_result result = tah_sched_post(&system->sched, &(tah_message){ .target = params->service_handle, .event = &event });
     if (result != TA_OK) {
         ta_event_release(&event);
         return TNA_FAULT(params->fault, result, "invoker.scxml: the child's mailbox did not accept the event");

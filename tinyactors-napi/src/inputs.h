@@ -47,7 +47,7 @@ typedef struct tna_system tna_system;
 /* One address's records from this turn, back to back. */
 typedef struct {
     ta_address *address; /* retained */
-    tna_vec bytes;       /* uint8_t */
+    tah_vec bytes;       /* uint8_t */
 } tna_input_entry;
 
 /* A wake worked out for a batch: `has_at` false is none (JavaScript's null). */
@@ -70,11 +70,11 @@ typedef struct {
     ta_allocator allocator; /* the other category */
     ta_arena arena;         /* the wakes' address text, until the batch is released */
     bool arena_ready;
-    tna_vec families;       /* ta_str, each allocated */
+    tah_vec families;       /* ta_str, each allocated */
     /* This turn's records by address, and byte buffers kept for reuse. */
-    tna_vec entries;        /* tna_input_entry */
-    tna_map entry_index;    /* address -> index in `entries` */
-    tna_vec spare;          /* tna_vec of uint8_t, emptied */
+    tah_vec entries;        /* tna_input_entry */
+    tah_map entry_index;    /* address -> index in `entries` */
+    tah_vec spare;          /* tah_vec of uint8_t, emptied */
     /* The record being written: its entry and where it began. */
     bool open;
     uint32_t open_entry;
@@ -85,12 +85,12 @@ typedef struct {
     uint32_t count;
     /* The mailbox: host numbers by envelope, their addresses, and each
      * address's undelivered messages. */
-    tna_map seqs;           /* envelope index -> host_seq */
-    tna_map queued_address; /* envelope index -> its address (ta_address *, retained) */
-    tna_map mail_count;     /* address -> queued messages not yet delivered */
-    tna_map mail_since;     /* address -> when the first of them was accepted */
-    tna_vec touched;        /* tna_input_touch, this turn's addresses */
-    tna_map touched_index;  /* address -> index in `touched` */
+    tah_map seqs;           /* envelope index -> host_seq */
+    tah_map queued_address; /* envelope index -> its address (ta_address *, retained) */
+    tah_map mail_count;     /* address -> queued messages not yet delivered */
+    tah_map mail_since;     /* address -> when the first of them was accepted */
+    tah_vec touched;        /* tna_input_touch, this turn's addresses */
+    tah_map touched_index;  /* address -> index in `touched` */
     /* tna_inputs_redeliver(): the next queued message is one a replay owes,
      * which keeps its host number and gets no new `queued` record. */
     bool redelivering;
@@ -116,7 +116,7 @@ ta_result tna_inputs_configure(tna_system *system, const ta_str *families, uint3
 bool tna_inputs_logged(tna_system *system, ta_actor_id actor, ta_actor_address *address);
 
 /* The scheduler's observer (scheduler.h): `self` is the system. */
-ta_result tna_inputs_note(void *self, const tna_sched_note *note);
+ta_result tna_inputs_note(void *self, const tah_sched_note *note);
 /* The host number of the queued message behind `envelope`, 0 when none. */
 uint64_t tna_inputs_host_seq(void *self, uint32_t envelope);
 

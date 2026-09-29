@@ -99,7 +99,7 @@ napi_value tna_set_loader_family_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, "invalid", "setLoader: expected a family name and maxWaiting");
     }
     ta_result result = tna_loads_set_family(&wrapper->system->loads, family, max_waiting);
-    tna_scratch_reset_call(&wrapper->system->scratch);
+    tah_scratch_reset_call(&wrapper->system->scratch);
     if (result != TA_OK) {
         return tna_throw(env, "out-of-memory", "setLoader: no memory for the family");
     }
@@ -172,7 +172,7 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
         uint32_t actor_generation = 0;
         if (argc < 5 || napi_get_value_uint32(env, argv[3], &slot) != napi_ok ||
             napi_get_value_uint32(env, argv[4], &actor_generation) != napi_ok) {
-            tna_scratch_reset_call(&system->scratch);
+            tah_scratch_reset_call(&system->scratch);
             return tna_throw(env, "invalid", "completeLoad: a loaded or spawned outcome needs the actor");
         }
         actor = ta_actor_id_make(slot, actor_generation);
@@ -182,7 +182,7 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
         detail = (ta_str){ 0 };
     }
     if (outcome == TNA_LOAD_OUTCOMES) {
-        tna_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(&system->scratch);
         return tna_throw(env, "invalid", "completeLoad: unknown outcome");
     }
     const tna_load *load = tna_loads_find(&system->loads, index, generation);
@@ -198,7 +198,7 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
                                                                             .actor = actor,
                                                                             .now_ns = tna_monotonic_ns(NULL),
                                                                             .wall_ns = tna_system_wall_ns() });
-    tna_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(&system->scratch);
     if (result == TA_ERR_NOT_FOUND) {
         return tna_throw(env, "invalid", "completeLoad: the actor is not resident (at the load's address)");
     }
@@ -244,7 +244,7 @@ static ta_address *tna_address_arguments(napi_env env, tna_napi_system *wrapper,
     bool ok = tna_text_argument(env, system, argv[0], &text.family.name) &&
               tna_text_argument(env, system, argv[1], &text.name);
     ta_result result = ok ? ta_address_intern(system->core, &text, &address) : TA_ERR_INVALID;
-    tna_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         char message[96];
         snprintf(message, sizeof message, "%s: expected (family, name) with non-empty text", what);
@@ -360,7 +360,7 @@ napi_value tna_set_durable_codec_method(napi_env env, napi_callback_info info) {
  * the tests read a value's durable bytes through them (core ADR 0090).
  */
 typedef struct {
-    tna_allocator *allocator;
+    tah_allocator *allocator;
     uint8_t *bytes;
     size_t len;
     size_t cap;
@@ -374,13 +374,13 @@ static ta_op_status tna_gather_begin(void *self) {
 
 static ta_op_status tna_gather_write(void *self, ta_bytes bytes) {
     tna_gather_sink *sink = self;
-    ta_allocator allocator = tna_allocator_for(sink->allocator, TNA_MEMORY_OTHER);
+    ta_allocator allocator = tah_allocator_for(sink->allocator, TAH_MEMORY_OTHER);
     if (sink->len + bytes.len > sink->cap) {
         size_t cap = sink->cap == 0 ? 4096u : sink->cap;
         while (cap < sink->len + bytes.len) {
             cap *= 2u;
         }
-        uint8_t *grown = tna_alloc(allocator, cap, 1);
+        uint8_t *grown = tah_alloc(allocator, cap, 1);
         if (grown == NULL) {
             return TA_OP_NOMEM;
         }
@@ -388,7 +388,7 @@ static ta_op_status tna_gather_write(void *self, ta_bytes bytes) {
             memcpy(grown, sink->bytes, sink->len);
         }
         if (sink->bytes != NULL) {
-            tna_free(allocator, &(ta_allocator_free_params){ .ptr = sink->bytes, .size = sink->cap, .alignment = 1 });
+            tah_free(allocator, &(ta_allocator_free_params){ .ptr = sink->bytes, .size = sink->cap, .alignment = 1 });
         }
         sink->bytes = grown;
         sink->cap = cap;
@@ -490,7 +490,7 @@ napi_value tna_durable_bytes_method(napi_env env, napi_callback_info info) {
     }
     ta_value_release(&fault.data);
     if (state.bytes != NULL) {
-        tna_free(tna_allocator_for(state.allocator, TNA_MEMORY_OTHER),
+        tah_free(tah_allocator_for(state.allocator, TAH_MEMORY_OTHER),
                  &(ta_allocator_free_params){ .ptr = state.bytes, .size = state.cap, .alignment = 1 });
     }
     return result;
@@ -591,7 +591,7 @@ static napi_value tna_offload_inner(napi_env env, napi_callback_info info) {
     ta_value_release(&root);
     if (result != TA_OK) {
         tna_js_datamodel_release_handles(&wrapper->dm, handles);
-        tna_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(&system->scratch);
         return tna_throw(env, tna_result_code(result),
                          result == TA_ERR_BUSY ? "unload(): the actor is not stable; unload it once it is idle"
                                                : "unload(): the actor cannot be offloaded");
@@ -604,10 +604,10 @@ static napi_value tna_offload_inner(napi_env env, napi_callback_info info) {
     if (result != TA_OK) {
         tna_offload_undo(wrapper, bytes);
         tna_js_datamodel_release_handles(&wrapper->dm, handles);
-        tna_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(&system->scratch);
         return tna_throw(env, "out-of-memory", "unload(): no memory for the offloaded bytes");
     }
-    tna_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(&system->scratch);
     return tna_undefined_value(env);
 }
 

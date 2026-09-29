@@ -8,12 +8,12 @@ static void closes_without_leaks(void) {
     CHECK(system != NULL);
     CHECK(!tna_system_closed(system));
     /* Core allocated its system through the core lane. */
-    CHECK(tna_allocator_counters(&system->allocator, TNA_MEMORY_CORE).bytes_in_use > 0);
+    CHECK(tah_allocator_counters(&system->allocator, TAH_MEMORY_CORE).bytes_in_use > 0);
 
     tna_system_close(system);
     CHECK(tna_system_closed(system));
     CHECK(system->core == NULL);
-    CHECK(tna_allocator_total(&system->allocator).bytes_in_use == 0);
+    CHECK(tah_allocator_total(&system->allocator).bytes_in_use == 0);
     CHECK(tna_system_leaked_bytes(system) == 0);
 
     /* Close is idempotent. */

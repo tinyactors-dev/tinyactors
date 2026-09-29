@@ -60,7 +60,7 @@ static ta_definition_id define(tna_system *system, const ta_scxml_spec *spec) {
     CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
                                                        .spec = spec,
                                                        .datamodel = ta_null_datamodel(),
-                                                       .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
                                                        .out = &definition,
                                                    }) == TA_OK);
     ta_definition_id id = 0;
@@ -161,8 +161,8 @@ static void settle(tna_system *system) {
     for (int guard = 0; !tna_system_quiet(system); guard += 1) {
         CHECK(guard < 1000);
         tna_system_turn(system);
-        for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-            CHECK(record->kind != TNA_RECORD_FAULT);
+        for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+            CHECK(record->kind != TAH_RECORD_FAULT);
         }
         tna_system_end_turn(system);
     }
@@ -190,9 +190,9 @@ static bool in_state(tna_system *system, ta_actor_id actor, const char *id) {
 
 static void post(tna_system *system, ta_actor_id actor, const char *name) {
     ta_event_name_id id = 0;
-    CHECK(tna_event_name_intern(system->core, (ta_str){ .ptr = name, .len = (uint32_t)strlen(name) }, &id) == TA_OK);
+    CHECK(tah_event_name_intern(system->core, (ta_str){ .ptr = name, .len = (uint32_t)strlen(name) }, &id) == TA_OK);
     ta_event event = { .name = id, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(tna_system_post(system, &(tna_message){ .target = actor, .event = &event }) == TA_OK);
+    CHECK(tna_system_post(system, &(tah_message){ .target = actor, .event = &event }) == TA_OK);
 }
 
 /* Manual clock: nothing fires before its deadline, and deadlines fire in order. */

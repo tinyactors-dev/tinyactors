@@ -29,7 +29,7 @@
 typedef struct tna_napi_system tna_napi_system;
 
 typedef struct {
-    tna_vec resolvers; /* tna_child_resolver: define()'s resolve, per definition, until core frees it */
+    tah_vec resolvers; /* tna_child_resolver: define()'s resolve, per definition, until core frees it */
     /* The message of the last refused child chart, for the invoke's fault:
      * the wrapper's buffer of `failure_size` bytes (napi ADR 0036). */
     char *failure;

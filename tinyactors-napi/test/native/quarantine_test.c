@@ -25,7 +25,7 @@ static ta_definition_id define(tna_system *system, const ta_scxml_spec *spec) {
     CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
                                                        .spec = spec,
                                                        .datamodel = ta_null_datamodel(),
-                                                       .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
                                                        .out = &definition,
                                                    }) == TA_OK);
     ta_definition_id id = 0;
@@ -83,8 +83,8 @@ static bool in_state(tna_system *system, ta_actor_id actor, const char *state) {
 static bool turn(tna_system *system) {
     tna_system_turn(system);
     bool faulted = false;
-    for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-        faulted = faulted || record->kind == TNA_RECORD_FAULT;
+    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        faulted = faulted || record->kind == TAH_RECORD_FAULT;
     }
     tna_system_end_turn(system);
     return faulted;

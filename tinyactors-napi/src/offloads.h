@@ -31,7 +31,7 @@ typedef struct {
 
 typedef struct {
     ta_allocator allocator;
-    tna_map entries; /* (uintptr_t)ta_address * -> tna_offload * */
+    tah_map entries; /* (uintptr_t)ta_address * -> tna_offload * */
     size_t bytes_in_use;
 } tna_offloads;
 

@@ -197,7 +197,7 @@ typedef struct {
     size_t typical_logs;
     /* The latest sampled macrostep span opened, for the host's exemplars
      * (host_metrics.h); the host clears `set` when it takes it. */
-    tna_exemplar last_macrostep;
+    tah_exemplar last_macrostep;
     uint64_t dropped;          /* records lost to a failed allocation */
 } tna_otlp;
 

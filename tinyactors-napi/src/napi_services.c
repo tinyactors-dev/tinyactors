@@ -91,7 +91,7 @@ static napi_value tna_send_id_text(napi_env env, tna_system *system, ta_send_id 
 }
 
 /* Literal <content>: its text, or undefined without one. */
-static void tna_content(napi_env env, napi_value payload, const tna_effect *effect) {
+static void tna_content(napi_env env, napi_value payload, const tah_effect *effect) {
     if (effect->content.ptr == NULL) {
         return;
     }
@@ -105,7 +105,7 @@ static napi_value tna_handle(napi_env env, uint64_t handle) {
     return out;
 }
 
-static napi_value tna_log_payload(napi_env env, tna_napi_system *wrapper, const tna_effect *effect) {
+static napi_value tna_log_payload(napi_env env, tna_napi_system *wrapper, const tah_effect *effect) {
     napi_value payload = NULL;
     napi_value has_value = NULL;
     if (napi_create_object(env, &payload) != napi_ok || napi_get_boolean(env, effect->has_value, &has_value) != napi_ok) {
@@ -122,7 +122,7 @@ static napi_value tna_log_payload(napi_env env, tna_napi_system *wrapper, const 
     return payload;
 }
 
-static napi_value tna_io_payload(napi_env env, tna_napi_system *wrapper, const tna_effect *effect) {
+static napi_value tna_io_payload(napi_env env, tna_napi_system *wrapper, const tah_effect *effect) {
     tna_system *system = wrapper->system;
     napi_value payload = NULL;
     if (napi_create_object(env, &payload) != napi_ok) {
@@ -141,7 +141,7 @@ static napi_value tna_io_payload(napi_env env, tna_napi_system *wrapper, const t
     return payload;
 }
 
-static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, const tna_effect *effect) {
+static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, const tah_effect *effect) {
     tna_system *system = wrapper->system;
     napi_value payload = NULL;
     napi_value invocation = NULL;
@@ -174,7 +174,7 @@ static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, cons
     return payload;
 }
 
-static napi_value tna_cancel_payload(napi_env env, const tna_effect *effect) {
+static napi_value tna_cancel_payload(napi_env env, const tah_effect *effect) {
     napi_value payload = NULL;
     if (napi_create_object(env, &payload) != napi_ok) {
         return NULL;
@@ -183,7 +183,7 @@ static napi_value tna_cancel_payload(napi_env env, const tna_effect *effect) {
     return payload;
 }
 
-static napi_value tna_forward_payload(napi_env env, tna_napi_system *wrapper, const tna_effect *effect) {
+static napi_value tna_forward_payload(napi_env env, tna_napi_system *wrapper, const tah_effect *effect) {
     napi_value payload = NULL;
     napi_value event = NULL;
     if (napi_create_object(env, &payload) != napi_ok || napi_create_object(env, &event) != napi_ok) {
@@ -197,24 +197,24 @@ static napi_value tna_forward_payload(napi_env env, tna_napi_system *wrapper, co
 }
 
 static const char *const tna_effect_kinds[] = {
-    [TNA_EFFECT_LOG] = "log",
-    [TNA_EFFECT_IO] = "io",
-    [TNA_EFFECT_INVOKE_START] = "invoke-start",
-    [TNA_EFFECT_INVOKE_CANCEL] = "invoke-cancel",
-    [TNA_EFFECT_INVOKE_FORWARD] = "invoke-forward",
+    [TAH_EFFECT_LOG] = "log",
+    [TAH_EFFECT_IO] = "io",
+    [TAH_EFFECT_INVOKE_START] = "invoke-start",
+    [TAH_EFFECT_INVOKE_CANCEL] = "invoke-cancel",
+    [TAH_EFFECT_INVOKE_FORWARD] = "invoke-forward",
 };
 
-static napi_value tna_payload(napi_env env, tna_napi_system *wrapper, const tna_effect *effect) {
+static napi_value tna_payload(napi_env env, tna_napi_system *wrapper, const tah_effect *effect) {
     switch (effect->kind) {
-    case TNA_EFFECT_LOG:
+    case TAH_EFFECT_LOG:
         return tna_log_payload(env, wrapper, effect);
-    case TNA_EFFECT_IO:
+    case TAH_EFFECT_IO:
         return tna_io_payload(env, wrapper, effect);
-    case TNA_EFFECT_INVOKE_START:
+    case TAH_EFFECT_INVOKE_START:
         return tna_start_payload(env, wrapper, effect);
-    case TNA_EFFECT_INVOKE_CANCEL:
+    case TAH_EFFECT_INVOKE_CANCEL:
         return tna_cancel_payload(env, effect);
-    case TNA_EFFECT_INVOKE_FORWARD:
+    case TAH_EFFECT_INVOKE_FORWARD:
     default:
         return tna_forward_payload(env, wrapper, effect);
     }
@@ -227,8 +227,8 @@ static napi_value tna_payload(napi_env env, tna_napi_system *wrapper, const tna_
 void tna_services_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
     tna_system *system = wrapper->system;
     tna_env *data = wrapper->env_data;
-    tna_effect *effect = NULL;
-    while (!tna_system_closed(system) && (effect = tna_effects_pop(&system->effects)) != NULL) {
+    tah_effect *effect = NULL;
+    while (!tna_system_closed(system) && (effect = tah_effects_pop(&system->effects)) != NULL) {
         napi_handle_scope scope = NULL;
         napi_open_handle_scope(env, &scope);
         napi_value handler = NULL;
@@ -250,7 +250,7 @@ void tna_services_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *f
                 }
             }
         }
-        tna_effect_release(effect);
+        tah_effect_release(effect);
         if (scope != NULL) {
             napi_close_handle_scope(env, scope);
         }
@@ -283,7 +283,7 @@ static bool tna_unreachable_data(void *context, const tna_unreachable *unreachab
     napi_value data = NULL;
     napi_value reason = NULL;
     bool made = target != NULL && napi_create_object(env, &data) == napi_ok &&
-                napi_create_string_utf8(env, tna_dead_reason_name(unreachable->reason), NAPI_AUTO_LENGTH, &reason) ==
+                napi_create_string_utf8(env, tah_dead_reason_name(unreachable->reason), NAPI_AUTO_LENGTH, &reason) ==
                     napi_ok &&
                 napi_set_named_property(env, data, "reason", reason) == napi_ok &&
                 napi_set_named_property(env, data, "target", target) == napi_ok &&
@@ -379,7 +379,7 @@ static bool tna_type_atom(napi_env env, tna_system *system, napi_value value, co
     }
     napi_get_value_string_utf8(env, value, text, length + 1u, &length);
     ta_result result = ta_system_intern_atom(system->core, (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
-    tna_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         tna_throw(env, tna_result_code(result), "cannot intern the type");
         return false;
@@ -439,11 +439,11 @@ napi_value tna_register_io_method(napi_env env, napi_callback_info info) {
     registration.index = &index;
     if (!tna_optional_text(env, system, argc > 1 ? argv[1] : NULL, &registration.location) ||
         !tna_optional_text(env, system, argc > 2 ? argv[2] : NULL, &registration.origin)) {
-        tna_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(&system->scratch);
         return tna_throw(env, "invalid", "registerIO(): options.location and options.origin must be strings");
     }
     ta_result result = tna_io_register(system, &registration);
-    tna_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result),
                          "registerIO(): core refused the type (the SCXML event processor's type is reserved)");
@@ -548,7 +548,7 @@ bool tna_origin_argument(napi_env env, tna_system *system, napi_value value, ta_
         return false;
     }
     ta_result result = ta_io_origin_make(system->core, &params);
-    tna_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(&system->scratch);
     if (result == TA_ERR_NOT_FOUND) {
         tna_throw(env, "stale", "origin.scope: the scope is closed");
         return false;
@@ -578,13 +578,13 @@ napi_value tna_open_scope_method(napi_env env, napi_callback_info info) {
     }
     ta_str uri = { NULL, 0 };
     if (!tna_optional_text(env, system, argc > 1 ? argv[1] : NULL, &uri) || uri.len == 0) {
-        tna_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(&system->scratch);
         return tna_throw(env, "invalid", "openScope(): expected a URI string");
     }
     ta_io_scope scope = { 0, 0 };
     ta_result result =
         ta_io_scope_open(system->core, &(ta_io_scope_open_params){ .processor = processor, .uri = uri, .out = &scope });
-    tna_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "openScope(): core refused it");
     }
@@ -679,8 +679,8 @@ static ta_result tna_done_name(tna_system *system, ta_invoke_id invoke, ta_event
     }
     memcpy(text, prefix, sizeof prefix - 1u);
     memcpy(text + sizeof prefix - 1u, id.ptr, id.len);
-    result = tna_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
-    tna_scratch_reset_call(&system->scratch);
+    result = tah_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
+    tah_scratch_reset_call(&system->scratch);
     return result;
 }
 
@@ -731,8 +731,8 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
             ta_value_release(&event.data);
             return NULL;
         }
-        ta_result result = tna_system_post(system, &(tna_message){ .target = parent, .event = &event, .trace = &trace,
-                                                                   .report = TNA_REPORT_UNAVAILABLE });
+        ta_result result = tna_system_post(system, &(tah_message){ .target = parent, .event = &event, .trace = &trace,
+                                                                   .report = TAH_REPORT_UNAVAILABLE });
         if (result != TA_OK) {
             ta_value_release(&event.data);
             if (result == TA_ERR_BUSY) {
@@ -775,7 +775,7 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
         ta_value_release(&event.data);
         return NULL;
     }
-    ta_result result = tna_system_post(system, &(tna_message){ .target = parent, .event = &event, .trace = &trace });
+    ta_result result = tna_system_post(system, &(tah_message){ .target = parent, .event = &event, .trace = &trace });
     if (result != TA_OK) {
         ta_value_release(&event.data);
         if (result == TA_ERR_BUSY) {

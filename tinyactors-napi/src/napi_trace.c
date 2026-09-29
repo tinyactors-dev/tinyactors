@@ -389,7 +389,7 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
         bool reserved = tna_otlp_init(&system->otlp,
                       &(tna_otlp_config){
                           .core = system->core,
-                          .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
+                          .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER),
                           .host = { .self = wrapper, .now = tna_host_now, .trace_id = tna_host_trace_id,
                                     .value_text = tna_host_value_text },
                           .log_limit = log_limit,
@@ -492,7 +492,7 @@ static bool tna_uint64_array(napi_env env, ta_allocator allocator, napi_value ar
     if (*count == 0) {
         return true;
     }
-    *out = tna_alloc(allocator, *count * sizeof(uint64_t), _Alignof(uint64_t));
+    *out = tah_alloc(allocator, *count * sizeof(uint64_t), _Alignof(uint64_t));
     if (*out == NULL) {
         return false;
     }
@@ -507,7 +507,7 @@ static bool tna_uint64_array(napi_env env, ta_allocator allocator, napi_value ar
 
 static void tna_free_uint64s(ta_allocator allocator, uint64_t *ids, uint32_t count) {
     if (ids != NULL) {
-        tna_free(allocator, &(ta_allocator_free_params){ .ptr = ids, .size = count * sizeof(uint64_t),
+        tah_free(allocator, &(ta_allocator_free_params){ .ptr = ids, .size = count * sizeof(uint64_t),
                                                          .alignment = _Alignof(uint64_t) });
     }
 }
@@ -516,12 +516,12 @@ static void tna_free_uint64s(ta_allocator allocator, uint64_t *ids, uint32_t cou
 static void tna_free_families(ta_allocator allocator, ta_str *families, uint32_t count) {
     for (uint32_t at = 0; families != NULL && at < count; at += 1u) {
         if (families[at].ptr != NULL) {
-            tna_free(allocator, &(ta_allocator_free_params){ .ptr = (void *)families[at].ptr,
+            tah_free(allocator, &(ta_allocator_free_params){ .ptr = (void *)families[at].ptr,
                                                              .size = (size_t)families[at].len + 1u, .alignment = 1 });
         }
     }
     if (families != NULL) {
-        tna_free(allocator, &(ta_allocator_free_params){ .ptr = families, .size = count * sizeof(ta_str),
+        tah_free(allocator, &(ta_allocator_free_params){ .ptr = families, .size = count * sizeof(ta_str),
                                                          .alignment = _Alignof(ta_str) });
     }
 }
@@ -539,7 +539,7 @@ static bool tna_family_array(napi_env env, ta_allocator allocator, napi_value ar
     if (length == 0) {
         return true;
     }
-    ta_str *families = tna_alloc(allocator, length * sizeof(ta_str), _Alignof(ta_str));
+    ta_str *families = tah_alloc(allocator, length * sizeof(ta_str), _Alignof(ta_str));
     if (families == NULL) {
         return false;
     }
@@ -552,10 +552,10 @@ static bool tna_family_array(napi_env env, ta_allocator allocator, napi_value ar
         char *text = NULL;
         if (napi_get_element(env, array, at, &item) != napi_ok ||
             napi_get_value_string_utf8(env, item, NULL, 0, &size) != napi_ok || size > UINT32_MAX - 1u ||
-            (text = tna_alloc(allocator, size + 1u, 1)) == NULL ||
+            (text = tah_alloc(allocator, size + 1u, 1)) == NULL ||
             napi_get_value_string_utf8(env, item, text, size + 1u, &size) != napi_ok) {
             if (text != NULL) {
-                tna_free(allocator, &(ta_allocator_free_params){ .ptr = text, .size = size + 1u, .alignment = 1 });
+                tah_free(allocator, &(ta_allocator_free_params){ .ptr = text, .size = size + 1u, .alignment = 1 });
             }
             tna_free_families(allocator, families, length);
             return false;
@@ -577,7 +577,7 @@ napi_value tna_trace_watch_sizes_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    const tna_trace_watch *watch = &wrapper->system->trace_watch;
+    const tah_trace_watch *watch = &wrapper->system->trace_watch;
     napi_value sizes = NULL;
     napi_value sessions = NULL;
     napi_value matched = NULL;
@@ -612,7 +612,7 @@ napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    ta_allocator allocator = tna_allocator_for(&wrapper->system->allocator, TNA_MEMORY_OTHER);
+    ta_allocator allocator = tah_allocator_for(&wrapper->system->allocator, TAH_MEMORY_OTHER);
     uint64_t *sessions = NULL;
     ta_str *families = NULL;
     uint32_t session_count = 0;
@@ -621,8 +621,8 @@ napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info) {
                 tna_family_array(env, allocator, argv[1], &families, &family_count);
     ta_result result = TA_ERR_INVALID;
     if (read) {
-        result = tna_trace_watch_set(&wrapper->system->trace_watch,
-                                     &(tna_trace_watch_set_params){ .sessions = sessions,
+        result = tah_trace_watch_set(&wrapper->system->trace_watch,
+                                     &(tah_trace_watch_set_params){ .sessions = sessions,
                                                                     .session_count = session_count,
                                                                     .families = families,
                                                                     .family_count = family_count });

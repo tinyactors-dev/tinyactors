@@ -38,7 +38,7 @@ static ta_definition_id define(tna_system *system, const ta_scxml_spec *spec) {
     CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
                                                        .spec = spec,
                                                        .datamodel = ta_null_datamodel(),
-                                                       .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
                                                        .out = &definition,
                                                    }) == TA_OK);
     ta_definition_id id = 0;
@@ -79,20 +79,20 @@ static void destroy(tna_system *system, ta_actor_id actor) {
 
 static ta_event_name_id name(tna_system *system, const char *text) {
     ta_event_name_id id = 0;
-    CHECK(tna_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &id) == TA_OK);
+    CHECK(tah_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &id) == TA_OK);
     return id;
 }
 
 static ta_result post(tna_system *system, ta_actor_id target, ta_event_name_id event) {
     ta_event message = { .name = event, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    return tna_system_post(system, &(tna_message){ .target = target, .event = &message });
+    return tna_system_post(system, &(tah_message){ .target = target, .event = &message });
 }
 
 /* One turn; returns the number of records of `kind` it produced. */
-static uint32_t turn(tna_system *system, tna_record_kind kind) {
+static uint32_t turn(tna_system *system, tah_record_kind kind) {
     tna_system_turn(system);
     uint32_t count = 0;
-    for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
         count += record->kind == kind ? 1u : 0u;
     }
     tna_system_end_turn(system);
@@ -105,9 +105,9 @@ static uint32_t settle(tna_system *system) {
     for (int guard = 0; !tna_system_quiet(system); guard += 1) {
         CHECK(guard < 1000);
         tna_system_turn(system);
-        for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-            CHECK(record->kind != TNA_RECORD_FAULT);
-            dead += record->kind == TNA_RECORD_DEAD_LETTER ? 1u : 0u;
+        for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+            CHECK(record->kind != TAH_RECORD_FAULT);
+            dead += record->kind == TAH_RECORD_DEAD_LETTER ? 1u : 0u;
         }
         tna_system_end_turn(system);
     }
@@ -142,9 +142,9 @@ static const char *state_of(tna_system *system, ta_actor_id actor) {
     return text;
 }
 
-static tna_sched_state state(tna_system *system, ta_actor_id actor) {
-    const tna_sched_entry *entry = tna_sched_lookup(&system->sched, actor);
-    return entry == NULL ? TNA_SCHED_NONE : (tna_sched_state)entry->state;
+static tah_sched_state state(tna_system *system, ta_actor_id actor) {
+    const tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
+    return entry == NULL ? TAH_SCHED_NONE : (tah_sched_state)entry->state;
 }
 
 /* Per-target FIFO holds when a turn stops at its message budget. */
@@ -162,8 +162,8 @@ static void fifo_across_the_budget(void) {
     for (int index = 0; index < COUNT; index += 1) {
         CHECK(post(system, actors[index], x) == TA_OK);
         CHECK(post(system, actors[index], y) == TA_OK);
-        CHECK(state(system, actors[index]) == TNA_SCHED_READY);
-        CHECK(tna_sched_mailbox_count(&system->sched, actors[index]) == 2u);
+        CHECK(state(system, actors[index]) == TAH_SCHED_READY);
+        CHECK(tah_sched_mailbox_count(&system->sched, actors[index]) == 2u);
     }
     system->budgets.messages = 2u;
     tna_system_turn(system);
@@ -172,7 +172,7 @@ static void fifo_across_the_budget(void) {
     CHECK(settle(system) == 0u);
     for (int index = 0; index < COUNT; index += 1) {
         CHECK(strcmp(state_of(system, actors[index]), "c") == 0);
-        CHECK(state(system, actors[index]) == TNA_SCHED_IDLE);
+        CHECK(state(system, actors[index]) == TAH_SCHED_IDLE);
     }
     CHECK(system->sched.delivered == 2u * COUNT);
     CHECK(system->sched.queued == 0u);
@@ -183,9 +183,9 @@ static void fifo_across_the_budget(void) {
 static void mail_before_bootstrap(void) {
     tna_system *system = make_system();
     ta_actor_id actor = spawn(system, define_steps(system));
-    CHECK(state(system, actor) == TNA_SCHED_RUNNABLE);
+    CHECK(state(system, actor) == TAH_SCHED_RUNNABLE);
     CHECK(post(system, actor, name(system, "x")) == TA_OK);
-    CHECK(state(system, actor) == TNA_SCHED_RUNNABLE); /* only collects mail */
+    CHECK(state(system, actor) == TAH_SCHED_RUNNABLE); /* only collects mail */
     CHECK(settle(system) == 0u);
     CHECK(strcmp(state_of(system, actor), "b") == 0);
     finish_system(system);
@@ -202,12 +202,12 @@ static void stale_ids(void) {
     CHECK(ta_actor_id_slot(next) == ta_actor_id_slot(old));
     settle(system);
     CHECK(post(system, old, name(system, "x")) == TA_OK);
-    CHECK(tna_sched_mailbox_count(&system->sched, next) == 0u);
+    CHECK(tah_sched_mailbox_count(&system->sched, next) == 0u);
     CHECK(system->sched.dead_count == 1u);
     tna_system_turn(system);
-    const tna_turn_record *record = system->sched.records;
-    CHECK(record != NULL && record->kind == TNA_RECORD_DEAD_LETTER);
-    CHECK(record->actor == old && record->reason == TNA_DEAD_NOT_FOUND && record->event == name(system, "x"));
+    const tah_turn_record *record = system->sched.records;
+    CHECK(record != NULL && record->kind == TAH_RECORD_DEAD_LETTER);
+    CHECK(record->actor == old && record->reason == TAH_DEAD_NOT_FOUND && record->event == name(system, "x"));
     tna_system_end_turn(system);
     CHECK(strcmp(state_of(system, next), "a") == 0);
     CHECK(system->sched.dead_letters == 1u);
@@ -219,16 +219,16 @@ static void quarantine(void) {
     tna_system *system = make_system();
     ta_actor_id actor = spawn(system, define_steps(system));
     settle(system);
-    tna_sched_lookup(&system->sched, actor)->state = TNA_SCHED_QUARANTINED; /* as a fault leaves it */
+    tah_sched_lookup(&system->sched, actor)->state = TAH_SCHED_QUARANTINED; /* as a fault leaves it */
     CHECK(post(system, actor, name(system, "x")) == TA_OK);
-    CHECK(state(system, actor) == TNA_SCHED_QUARANTINED);
+    CHECK(state(system, actor) == TAH_SCHED_QUARANTINED);
     CHECK(tna_system_quiet(system)); /* nothing to do: the mail waits */
     CHECK(strcmp(state_of(system, actor), "a") == 0);
-    CHECK(tna_sched_release(&system->sched, actor) == TA_OK);
+    CHECK(tah_sched_release(&system->sched, actor) == TA_OK);
     tna_system_want_turn(system);
     CHECK(settle(system) == 0u);
     CHECK(strcmp(state_of(system, actor), "b") == 0);
-    CHECK(state(system, actor) == TNA_SCHED_IDLE);
+    CHECK(state(system, actor) == TAH_SCHED_IDLE);
     finish_system(system);
 }
 
@@ -242,22 +242,22 @@ static void a_fault_stays_with_its_actor(void) {
     CHECK(post(system, bad, 0x7fffffffu) == TA_OK); /* a name core never issued */
     CHECK(post(system, good, name(system, "x")) == TA_OK);
     tna_system_turn(system);
-    const tna_turn_record *record = system->sched.records;
-    CHECK(record != NULL && record->kind == TNA_RECORD_FAULT && record->actor == bad);
+    const tah_turn_record *record = system->sched.records;
+    CHECK(record != NULL && record->kind == TAH_RECORD_FAULT && record->actor == bad);
     CHECK(strcmp(record->operation, "deliver") == 0 && record->code == TA_ERR_INVALID);
     uint32_t refused = 0;
     for (; record != NULL; record = record->next) {
-        refused += record->kind == TNA_RECORD_DEAD_LETTER && record->reason == TNA_DEAD_REFUSED ? 1u : 0u;
+        refused += record->kind == TAH_RECORD_DEAD_LETTER && record->reason == TAH_DEAD_REFUSED ? 1u : 0u;
     }
     CHECK(refused == 1u); /* the refused envelope, not the actor's other mail */
     tna_system_end_turn(system);
     CHECK(settle(system) == 0u);
-    CHECK(state(system, bad) == TNA_SCHED_QUARANTINED);
+    CHECK(state(system, bad) == TAH_SCHED_QUARANTINED);
     CHECK(strcmp(state_of(system, good), "b") == 0);
     /* Mail for the quarantined actor is kept, not delivered. */
     CHECK(post(system, bad, name(system, "x")) == TA_OK);
     CHECK(settle(system) == 0u);
-    CHECK(tna_sched_mailbox_count(&system->sched, bad) == 1u);
+    CHECK(tah_sched_mailbox_count(&system->sched, bad) == 1u);
     /* Destroying it discards its mailbox as dead letters. */
     destroy(system, bad);
     CHECK(settle(system) == 1u);
@@ -282,10 +282,10 @@ static void finished_and_destroyed_targets(void) {
     for (int guard = 0; !tna_system_quiet(system); guard += 1) {
         CHECK(guard < 100);
         tna_system_turn(system);
-        for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-            done += record->kind == TNA_RECORD_DONE ? 1u : 0u;
-            if (record->kind == TNA_RECORD_DEAD_LETTER) {
-                CHECK(record->reason == TNA_DEAD_DONE && record->actor == actor);
+        for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+            done += record->kind == TAH_RECORD_DONE ? 1u : 0u;
+            if (record->kind == TAH_RECORD_DEAD_LETTER) {
+                CHECK(record->reason == TAH_DEAD_DONE && record->actor == actor);
                 dead += 1u;
             }
         }
@@ -302,7 +302,7 @@ static void finished_and_destroyed_targets(void) {
     CHECK(post(system, other, x) == TA_OK);
     destroy(system, other);
     tna_system_turn(system);
-    CHECK(system->sched.records != NULL && system->sched.records->reason == TNA_DEAD_DESTROYED);
+    CHECK(system->sched.records != NULL && system->sched.records->reason == TAH_DEAD_DESTROYED);
     tna_system_end_turn(system);
     CHECK(tna_system_quiet(system));
     finish_system(system);
@@ -318,7 +318,7 @@ static void backpressure(void) {
     CHECK(post(system, actor, x) == TA_OK);
     CHECK(post(system, actor, name(system, "y")) == TA_OK);
     CHECK(post(system, actor, x) == TA_ERR_BUSY);
-    CHECK(tna_sched_mailbox_count(&system->sched, actor) == 2u);
+    CHECK(tah_sched_mailbox_count(&system->sched, actor) == 2u);
     CHECK(settle(system) == 0u);
     CHECK(strcmp(state_of(system, actor), "c") == 0);
     CHECK(post(system, actor, x) == TA_OK); /* room again */
@@ -337,10 +337,10 @@ static void dead_letter_budget(void) {
         CHECK(post(system, gone, x) == TA_OK);
     }
     system->budgets.messages = 3u;
-    CHECK(turn(system, TNA_RECORD_DEAD_LETTER) == 3u);
-    CHECK(turn(system, TNA_RECORD_DEAD_LETTER) == 3u);
-    CHECK(turn(system, TNA_RECORD_DEAD_LETTER) == 3u);
-    CHECK(turn(system, TNA_RECORD_DEAD_LETTER) == 1u);
+    CHECK(turn(system, TAH_RECORD_DEAD_LETTER) == 3u);
+    CHECK(turn(system, TAH_RECORD_DEAD_LETTER) == 3u);
+    CHECK(turn(system, TAH_RECORD_DEAD_LETTER) == 3u);
+    CHECK(turn(system, TAH_RECORD_DEAD_LETTER) == 1u);
     CHECK(tna_system_quiet(system));
     CHECK(system->sched.dead_letters == 10u);
     finish_system(system);
@@ -348,9 +348,9 @@ static void dead_letter_budget(void) {
 
 static uint64_t addon_calls(const tna_system *system) {
     uint64_t calls = 0;
-    for (int category = 0; category < TNA_MEMORY_CATEGORY_COUNT; category += 1) {
-        if (category != TNA_MEMORY_CORE) {
-            tna_memory_counters counters = tna_allocator_counters(&system->allocator, (tna_memory_category)category);
+    for (int category = 0; category < TAH_MEMORY_CATEGORY_COUNT; category += 1) {
+        if (category != TAH_MEMORY_CORE) {
+            tah_memory_counters counters = tah_allocator_counters(&system->allocator, (tah_memory_category)category);
             calls += counters.allocations + counters.frees;
         }
     }
@@ -380,7 +380,7 @@ static void steady_state(void) {
     }
     settle(system);
     uint64_t before = addon_calls(system);
-    uint64_t core_before = tna_allocator_counters(&system->allocator, TNA_MEMORY_CORE).allocations;
+    uint64_t core_before = tah_allocator_counters(&system->allocator, TAH_MEMORY_CORE).allocations;
     for (int round = 0; round < 5; round += 1) {
         for (int index = 0; index < COUNT; index += 1) {
             CHECK(post(system, actors[index], ping) == TA_OK);
@@ -388,7 +388,7 @@ static void steady_state(void) {
         settle(system);
     }
     CHECK(addon_calls(system) == before);
-    uint64_t core_after = tna_allocator_counters(&system->allocator, TNA_MEMORY_CORE).allocations;
+    uint64_t core_after = tah_allocator_counters(&system->allocator, TAH_MEMORY_CORE).allocations;
     printf("steady state: 0 addon allocator calls, %llu core allocations for %d messages\n",
            (unsigned long long)(core_after - core_before), 5 * COUNT);
     finish_system(system);
@@ -408,18 +408,18 @@ static void transfer_on_replacement(void) {
     CHECK(post(system, incumbent, name(system, "x")) == TA_OK);
     CHECK(post(system, incumbent, name(system, "y")) == TA_OK);
     CHECK(post(system, replacement, name(system, "z")) == TA_OK);
-    CHECK(state(system, incumbent) == TNA_SCHED_READY);
-    CHECK(tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){ .from = incumbent, .to = replacement }) ==
+    CHECK(state(system, incumbent) == TAH_SCHED_READY);
+    CHECK(tah_sched_transfer(&system->sched, &(tah_sched_transfer_params){ .from = incumbent, .to = replacement }) ==
           TA_OK);
-    CHECK(tna_sched_mailbox_count(&system->sched, incumbent) == 0u);
-    CHECK(tna_sched_mailbox_count(&system->sched, replacement) == 3u);
-    CHECK(state(system, incumbent) == TNA_SCHED_IDLE);
-    CHECK(tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){ .from = incumbent, .to = replacement }) ==
+    CHECK(tah_sched_mailbox_count(&system->sched, incumbent) == 0u);
+    CHECK(tah_sched_mailbox_count(&system->sched, replacement) == 3u);
+    CHECK(state(system, incumbent) == TAH_SCHED_IDLE);
+    CHECK(tah_sched_transfer(&system->sched, &(tah_sched_transfer_params){ .from = incumbent, .to = replacement }) ==
           TA_OK); /* nothing left to move */
     CHECK(settle(system) == 0u);
     CHECK(strcmp(state_of(system, incumbent), "a") == 0);
     CHECK(strcmp(state_of(system, replacement), "final") == 0); /* x, y, then z */
-    CHECK(tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){ .from = 99u, .to = replacement }) ==
+    CHECK(tah_sched_transfer(&system->sched, &(tah_sched_transfer_params){ .from = 99u, .to = replacement }) ==
           TA_ERR_NOT_FOUND);
     finish_system(system);
 }
@@ -433,12 +433,12 @@ static void unload_with_mail(void) {
     CHECK(tna_hook_actor_unloaded(system, actor) == TA_OK); /* as after ta_actor_unload */
     tna_system_turn(system);
     uint32_t unloaded = 0;
-    for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-        unloaded += record->kind == TNA_RECORD_DEAD_LETTER && record->reason == TNA_DEAD_UNLOADED ? 1u : 0u;
+    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        unloaded += record->kind == TAH_RECORD_DEAD_LETTER && record->reason == TAH_DEAD_UNLOADED ? 1u : 0u;
     }
     tna_system_end_turn(system);
     CHECK(unloaded == 1u);
-    CHECK(tna_sched_lookup(&system->sched, actor) == NULL);
+    CHECK(tah_sched_lookup(&system->sched, actor) == NULL);
     destroy(system, actor); /* core still has it: the hook alone was driven */
     finish_system(system);
 }

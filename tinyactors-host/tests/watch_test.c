@@ -8,38 +8,38 @@
 /* Membership is exact at sizes past the old 1024 limit, duplicates count
  * once, and UINT64_MAX (the empty marker) is still an ID. */
 static void sets_answer_membership(void) {
-    tna_allocator allocator;
-    tna_allocator_init(&allocator);
-    tna_trace_watch watch;
-    tna_trace_watch_init(&watch, tna_allocator_for(&allocator, TNA_MEMORY_OTHER));
-    CHECK(tna_trace_watch_empty(&watch));
+    tah_allocator allocator;
+    tah_allocator_init(&allocator, check_platform_allocator());
+    tah_trace_watch watch;
+    tah_trace_watch_init(&watch, tah_allocator_for(&allocator, TAH_MEMORY_OTHER));
+    CHECK(tah_trace_watch_empty(&watch));
 
     static uint64_t sessions[5001];
     for (uint32_t at = 0; at < 5000; at += 1u) {
         sessions[at] = (uint64_t)at * 3u + ((uint64_t)1 << 32);
     }
     sessions[5000] = sessions[0]; /* a duplicate */
-    CHECK(tna_trace_watch_set(&watch, &(tna_trace_watch_set_params){ .sessions = sessions,
+    CHECK(tah_trace_watch_set(&watch, &(tah_trace_watch_set_params){ .sessions = sessions,
                                                                       .session_count = 5001 }) == TA_OK);
-    CHECK(!tna_trace_watch_empty(&watch));
+    CHECK(!tah_trace_watch_empty(&watch));
     CHECK(watch.sessions.count == 5000);
     for (uint32_t at = 0; at < 5000; at += 1u) {
-        CHECK(tna_id_set_has(&watch.sessions, sessions[at]));
-        CHECK(!tna_id_set_has(&watch.sessions, sessions[at] + 1u));
+        CHECK(tah_id_set_has(&watch.sessions, sessions[at]));
+        CHECK(!tah_id_set_has(&watch.sessions, sessions[at] + 1u));
     }
-    CHECK(!tna_id_set_has(&watch.sessions, UINT64_MAX));
+    CHECK(!tah_id_set_has(&watch.sessions, UINT64_MAX));
     uint64_t edge[] = { 0, 7, UINT64_MAX };
-    CHECK(tna_trace_watch_set(&watch, &(tna_trace_watch_set_params){ .sessions = edge, .session_count = 3 }) ==
+    CHECK(tah_trace_watch_set(&watch, &(tah_trace_watch_set_params){ .sessions = edge, .session_count = 3 }) ==
           TA_OK);
-    CHECK(tna_id_set_has(&watch.sessions, 0) && tna_id_set_has(&watch.sessions, 7));
-    CHECK(tna_id_set_has(&watch.sessions, UINT64_MAX) && !tna_id_set_has(&watch.sessions, 8));
+    CHECK(tah_id_set_has(&watch.sessions, 0) && tah_id_set_has(&watch.sessions, 7));
+    CHECK(tah_id_set_has(&watch.sessions, UINT64_MAX) && !tah_id_set_has(&watch.sessions, 8));
 
     /* Replacing with nothing empties it and frees the sets. */
-    CHECK(tna_trace_watch_set(&watch, &(tna_trace_watch_set_params){0}) == TA_OK);
-    CHECK(tna_trace_watch_empty(&watch));
-    CHECK(!tna_id_set_has(&watch.sessions, sessions[0]));
-    tna_trace_watch_destroy(&watch);
-    CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
+    CHECK(tah_trace_watch_set(&watch, &(tah_trace_watch_set_params){0}) == TA_OK);
+    CHECK(tah_trace_watch_empty(&watch));
+    CHECK(!tah_id_set_has(&watch.sessions, sessions[0]));
+    tah_trace_watch_destroy(&watch);
+    CHECK(tah_allocator_total(&allocator).bytes_in_use == 0);
 }
 
 static ta_definition_id define_family(ta_system *system, ta_allocator allocator, const char *family, uint32_t length) {
@@ -59,26 +59,26 @@ static ta_definition_id define_family(ta_system *system, ta_allocator allocator,
     return id;
 }
 
-static bool marked(tna_trace_watch *watch, ta_system *system, ta_actor_id actor) {
+static bool marked(tah_trace_watch *watch, ta_system *system, ta_actor_id actor) {
     ta_trace_parent trace = {0};
-    tna_trace_watch_mark(watch, system, actor, &trace);
+    tah_trace_watch_mark(watch, system, actor, &trace);
     return (trace.context.detail & TA_TRACE_DETAIL_WATCHED) != 0;
 }
 
 /* A watched family is resolved when a delivery first meets a definition, so
  * a definition registered after the watch is caught (core ADR 0078). */
 static void families_resolve_as_met(void) {
-    tna_allocator allocator;
-    tna_allocator_init(&allocator);
-    ta_allocator core_allocator = tna_allocator_for(&allocator, TNA_MEMORY_CORE);
+    tah_allocator allocator;
+    tah_allocator_init(&allocator, check_platform_allocator());
+    ta_allocator core_allocator = tah_allocator_for(&allocator, TAH_MEMORY_CORE);
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = core_allocator }, &system) == TA_OK);
-    tna_trace_watch watch;
-    tna_trace_watch_init(&watch, tna_allocator_for(&allocator, TNA_MEMORY_OTHER));
+    tah_trace_watch watch;
+    tah_trace_watch_init(&watch, tah_allocator_for(&allocator, TAH_MEMORY_OTHER));
     ta_str families[] = { { "order/invoke", 12 } };
-    CHECK(tna_trace_watch_set(&watch, &(tna_trace_watch_set_params){ .families = families, .family_count = 1 }) ==
+    CHECK(tah_trace_watch_set(&watch, &(tah_trace_watch_set_params){ .families = families, .family_count = 1 }) ==
           TA_OK);
-    CHECK(!tna_trace_watch_empty(&watch));
+    CHECK(!tah_trace_watch_empty(&watch));
 
     ta_definition_id other = define_family(system, core_allocator, "order", 5);
     ta_definition_id child = define_family(system, core_allocator, "order/invoke", 12);
@@ -93,15 +93,15 @@ static void families_resolve_as_met(void) {
     CHECK(!marked(&watch, system, plain));
     CHECK(watch.checked.count == 2 && watch.matched.count == 1);
 
-    tna_trace_watch_destroy(&watch);
+    tah_trace_watch_destroy(&watch);
     ta_system_destroy(system);
-    CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
+    CHECK(tah_allocator_total(&allocator).bytes_in_use == 0);
 }
 
 /* The definition sink a host installs: it tells the watch (core ADR 0079). */
 static void forget_freed(void *self, const ta_definition_event *event) {
     if (event->kind == TA_DEFINITION_EVENT_FREED) {
-        tna_trace_watch_forget_definition(self, event->definition);
+        tah_trace_watch_forget_definition(self, event->definition);
     }
 }
 
@@ -135,17 +135,17 @@ static ta_definition_id define_distinct(ta_system *system, ta_allocator allocato
  * findable.
  */
 static void freed_definitions_leave(void) {
-    tna_allocator allocator;
-    tna_allocator_init(&allocator);
-    ta_allocator core_allocator = tna_allocator_for(&allocator, TNA_MEMORY_CORE);
+    tah_allocator allocator;
+    tah_allocator_init(&allocator, check_platform_allocator());
+    ta_allocator core_allocator = tah_allocator_for(&allocator, TAH_MEMORY_CORE);
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = core_allocator }, &system) == TA_OK);
-    tna_trace_watch watch;
-    tna_trace_watch_init(&watch, tna_allocator_for(&allocator, TNA_MEMORY_OTHER));
+    tah_trace_watch watch;
+    tah_trace_watch_init(&watch, tah_allocator_for(&allocator, TAH_MEMORY_OTHER));
     CHECK(ta_system_set_definition_sink(system, (ta_definition_sink){ .self = &watch, .v = &forget_vtable }) ==
           TA_OK);
     ta_str watched_family = { "churn/invoke", 12 };
-    CHECK(tna_trace_watch_set(&watch, &(tna_trace_watch_set_params){ .families = &watched_family,
+    CHECK(tah_trace_watch_set(&watch, &(tah_trace_watch_set_params){ .families = &watched_family,
                                                                       .family_count = 1 }) == TA_OK);
 
     enum { ROUNDS = 300 };
@@ -172,8 +172,8 @@ static void freed_definitions_leave(void) {
     CHECK(watch.checked.count == ROUNDS - freed);
     for (uint32_t round = 0; round < ROUNDS; round += 1u) {
         bool gone = round % 3u == 0;
-        CHECK(tna_id_set_has(&watch.checked, ids[round]) == !gone);
-        CHECK(tna_id_set_has(&watch.matched, ids[round]) == (!gone && round % 2u == 0));
+        CHECK(tah_id_set_has(&watch.checked, ids[round]) == !gone);
+        CHECK(tah_id_set_has(&watch.matched, ids[round]) == (!gone && round % 2u == 0));
     }
 
     /* The rest go too: both sets return to empty. */
@@ -186,9 +186,9 @@ static void freed_definitions_leave(void) {
     CHECK(watch.checked.count == 0 && watch.matched.count == 0);
     /* Empty sets are back to the smallest table. */
     CHECK(watch.checked.capacity == 8u && watch.matched.capacity == 8u);
-    tna_trace_watch_destroy(&watch);
+    tah_trace_watch_destroy(&watch);
     ta_system_destroy(system);
-    CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
+    CHECK(tah_allocator_total(&allocator).bytes_in_use == 0);
 }
 
 /*
@@ -198,17 +198,17 @@ static void freed_definitions_leave(void) {
  * survivors stay findable.
  */
 static void sets_shrink_with_hysteresis(void) {
-    tna_allocator allocator;
-    tna_allocator_init(&allocator);
-    ta_allocator core_allocator = tna_allocator_for(&allocator, TNA_MEMORY_CORE);
+    tah_allocator allocator;
+    tah_allocator_init(&allocator, check_platform_allocator());
+    ta_allocator core_allocator = tah_allocator_for(&allocator, TAH_MEMORY_CORE);
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = core_allocator }, &system) == TA_OK);
-    tna_trace_watch watch;
-    tna_trace_watch_init(&watch, tna_allocator_for(&allocator, TNA_MEMORY_OTHER));
+    tah_trace_watch watch;
+    tah_trace_watch_init(&watch, tah_allocator_for(&allocator, TAH_MEMORY_OTHER));
     CHECK(ta_system_set_definition_sink(system, (ta_definition_sink){ .self = &watch, .v = &forget_vtable }) ==
           TA_OK);
     ta_str family = { "shrink/invoke", 13 };
-    CHECK(tna_trace_watch_set(&watch, &(tna_trace_watch_set_params){ .families = &family, .family_count = 1 }) ==
+    CHECK(tah_trace_watch_set(&watch, &(tah_trace_watch_set_params){ .families = &family, .family_count = 1 }) ==
           TA_OK);
     enum { ROUNDS = 512, KEPT = 4 };
     static ta_definition_id ids[ROUNDS];
@@ -228,7 +228,7 @@ static void sets_shrink_with_hysteresis(void) {
     CHECK(watch.checked.count == KEPT && watch.matched.count == KEPT);
     CHECK(watch.checked.capacity <= 16u && watch.matched.capacity <= 16u);
     for (uint32_t round = 0; round < KEPT; round += 1u) {
-        CHECK(tna_id_set_has(&watch.checked, ids[round]) && tna_id_set_has(&watch.matched, ids[round]));
+        CHECK(tah_id_set_has(&watch.checked, ids[round]) && tah_id_set_has(&watch.matched, ids[round]));
     }
     /* One more comes and goes at this size: the table stays as it is. */
     uint32_t settled = watch.checked.capacity;
@@ -248,8 +248,8 @@ static void sets_shrink_with_hysteresis(void) {
     /* Destroying the system frees the rest, which the sink tells the watch. */
     ta_system_destroy(system);
     CHECK(watch.checked.count == 0 && watch.checked.capacity == 8u);
-    tna_trace_watch_destroy(&watch);
-    CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
+    tah_trace_watch_destroy(&watch);
+    CHECK(tah_allocator_total(&allocator).bytes_in_use == 0);
 }
 
 int main(void) {

@@ -51,7 +51,7 @@ static ta_definition_id define_receiver(tna_system *system) {
     CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
                                                        .spec = &spec,
                                                        .datamodel = ta_null_datamodel(),
-                                                       .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
                                                        .out = &definition,
                                                    }) == TA_OK);
     ta_definition_id id = 0;
@@ -70,14 +70,14 @@ static ta_actor_id spawn(tna_system *system, ta_definition_id definition, const 
 }
 
 /* Runs turns until quiet; returns the dead letters, and the last one's reason. */
-static uint32_t settle(tna_system *system, tna_dead_reason *reason) {
+static uint32_t settle(tna_system *system, tah_dead_reason *reason) {
     uint32_t dead = 0;
     for (int guard = 0; !tna_system_quiet(system); guard += 1) {
         CHECK(guard < 1000);
         tna_system_turn(system);
-        for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-            CHECK(record->kind != TNA_RECORD_FAULT);
-            if (record->kind == TNA_RECORD_DEAD_LETTER) {
+        for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+            CHECK(record->kind != TAH_RECORD_FAULT);
+            if (record->kind == TAH_RECORD_DEAD_LETTER) {
                 dead += 1u;
                 if (reason != NULL) {
                     *reason = record->reason;
@@ -114,7 +114,7 @@ static ta_address *intern(tna_system *system, const ta_actor_address *text) {
 
 static ta_event_name_id event_name(tna_system *system, const char *text) {
     ta_event_name_id name = 0;
-    CHECK(tna_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &name) ==
+    CHECK(tah_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &name) ==
           TA_OK);
     return name;
 }
@@ -122,7 +122,7 @@ static ta_event_name_id event_name(tna_system *system, const char *text) {
 /* Posts an event named `text` to `address` as JavaScript's postNamed does. */
 static ta_result post(tna_system *system, ta_address *address, const char *text) {
     ta_event event = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, text), .invoke_id = TA_INVOKE_ID_NONE };
-    return tna_router_post_named(system, address, &(tna_message){ .event = &event });
+    return tna_router_post_named(system, address, &(tah_message){ .event = &event });
 }
 
 static tna_load_request next_request(tna_system *system) {
@@ -143,13 +143,13 @@ static ta_result finish(tna_system *system, tna_load_request request, tna_load_o
 
 /* The event names in `actor`'s mailbox, in order, must be `expected`. */
 static void mailbox_is(tna_system *system, ta_actor_id actor, const char *const *expected, uint32_t count) {
-    const tna_sched_entry *entry = tna_sched_lookup(&system->sched, actor);
+    const tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
     CHECK(entry != NULL);
     uint32_t at = 0;
-    for (uint32_t index = entry->first; index != 0; index = tna_sched_envelope(&system->sched, index)->next) {
+    for (uint32_t index = entry->first; index != 0; index = tah_sched_envelope(&system->sched, index)->next) {
         CHECK(at < count);
-        CHECK(tna_sched_envelope(&system->sched, index)->event.name == event_name(system, expected[at]));
-        CHECK(tna_sched_envelope(&system->sched, index)->target == actor);
+        CHECK(tah_sched_envelope(&system->sched, index)->event.name == event_name(system, expected[at]));
+        CHECK(tah_sched_envelope(&system->sched, index)->target == actor);
         at += 1u;
     }
     CHECK(at == count);
@@ -180,7 +180,7 @@ static void waiting_mail_moves_in_order(void) {
     ta_actor_id loaded = load(system, image);
     CHECK(post(system, address, "c") == TA_OK); /* resident, but the load is in flight: it waits too */
     ta_event direct = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, "d"), .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(tna_system_post(system, &(tna_message){ .target = loaded, .event = &direct }) == TA_OK);
+    CHECK(tna_system_post(system, &(tah_message){ .target = loaded, .event = &direct }) == TA_OK);
 
     CHECK(finish(system, request, TNA_LOAD_LOADED, loaded) == TA_OK);
     static const char *const order[] = { "a", "b", "c", "d" };
@@ -194,7 +194,7 @@ static void waiting_mail_moves_in_order(void) {
 
     /* Resident and no load in flight: mail goes straight to the actor. */
     CHECK(post(system, address, "e") == TA_OK);
-    CHECK(tna_sched_mailbox_count(&system->sched, loaded) == 1u && system->loads.in_flight == 0u);
+    CHECK(tah_sched_mailbox_count(&system->sched, loaded) == 1u && system->loads.in_flight == 0u);
     ta_address_release(address);
     finish_system(system);
 }
@@ -215,8 +215,8 @@ static void waiting_mail_is_bounded(void) {
     CHECK(post(system, address, "d") == TA_ERR_BUSY);
     system->sched.max_queued = 0;
     tna_load_request request = next_request(system); /* the pump hands it to JavaScript after a turn */
-    tna_dead_reason reason = TNA_DEAD_NOT_FOUND;
-    CHECK(settle(system, &reason) == 1u && reason == TNA_DEAD_WAITING_FULL);
+    tah_dead_reason reason = TAH_DEAD_NOT_FOUND;
+    CHECK(settle(system, &reason) == 1u && reason == TAH_DEAD_WAITING_FULL);
 
     ta_actor_id loaded = load(system, image);
     CHECK(finish(system, request, TNA_LOAD_LOADED, loaded) == TA_OK);
@@ -230,12 +230,12 @@ static void waiting_mail_is_bounded(void) {
 static void a_failed_load_dead_letters_its_mail(void) {
     static const struct {
         tna_load_outcome outcome;
-        tna_dead_reason reason;
+        tah_dead_reason reason;
     } cases[] = {
-        { TNA_LOAD_NOT_FOUND, TNA_DEAD_NOT_FOUND },
-        { TNA_LOAD_REJECTED, TNA_DEAD_REJECTED },
-        { TNA_LOAD_FAILED, TNA_DEAD_LOAD_FAILED },
-        { TNA_LOAD_TIMED_OUT, TNA_DEAD_LOAD_TIMEOUT },
+        { TNA_LOAD_NOT_FOUND, TAH_DEAD_NOT_FOUND },
+        { TNA_LOAD_REJECTED, TAH_DEAD_REJECTED },
+        { TNA_LOAD_FAILED, TAH_DEAD_LOAD_FAILED },
+        { TNA_LOAD_TIMED_OUT, TAH_DEAD_LOAD_TIMEOUT },
     };
     for (uint32_t at = 0; at < sizeof cases / sizeof cases[0]; at += 1u) {
         tna_system *system = make_system();
@@ -250,7 +250,7 @@ static void a_failed_load_dead_letters_its_mail(void) {
         /* A LOADED finish for an actor that is not at the address changes nothing. */
         CHECK(finish(system, request, TNA_LOAD_LOADED, first) == TA_ERR_NOT_FOUND);
         CHECK(finish(system, request, cases[at].outcome, 0) == TA_OK);
-        tna_dead_reason reason = TNA_DEAD_DONE;
+        tah_dead_reason reason = TAH_DEAD_DONE;
         CHECK(settle(system, &reason) == 2u && reason == cases[at].reason);
         CHECK(system->loads.outcomes[cases[at].outcome] == 1u && system->loads.waiting == 0u);
         CHECK(system->sched.dead_by_reason[cases[at].reason] == 2u);
@@ -283,8 +283,8 @@ static void a_virtual_family_spawns(void) {
     ta_actor_address other = { .family = { .name = S("r") }, .name = S("other") };
     ta_address *nobody = intern(system, &other);
     CHECK(post(system, nobody, "a") == TA_OK);
-    tna_dead_reason reason = TNA_DEAD_DONE;
-    CHECK(settle(system, &reason) == 1u && reason == TNA_DEAD_NOT_FOUND);
+    tah_dead_reason reason = TAH_DEAD_DONE;
+    CHECK(settle(system, &reason) == 1u && reason == TAH_DEAD_NOT_FOUND);
     ta_address_release(nobody);
     ta_address_release(address);
     finish_system(system);
@@ -345,7 +345,7 @@ static void a_waiting_message_can_be_withdrawn(void) {
     tna_load_request request = next_request(system);
     tna_load *record = tna_loads_find(&system->loads, request.index, request.generation);
     CHECK(record != NULL);
-    uint32_t middle = tna_sched_envelope(&system->sched, record->mail.first)->next;
+    uint32_t middle = tah_sched_envelope(&system->sched, record->mail.first)->next;
     uint32_t live = system->sched.envelopes.live;
     CHECK(tna_loads_withdraw(&system->loads, &system->sched, middle));
     CHECK(system->loads.waiting == 2u && record->mail.count == 2u);
@@ -370,7 +370,7 @@ static ta_result post_session(tna_system *system, ta_address *key, bool shared, 
     ta_event event = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, text), .invoke_id = TA_INVOKE_ID_NONE };
     return tna_loads_route_session(&system->loads, &(tna_load_session_route){ .sched = &system->sched,
                                                                              .address = key,
-                                                                             .message = &(tna_message){ .event = &event },
+                                                                             .message = &(tah_message){ .event = &event },
                                                                              .shared = shared });
 }
 
@@ -408,8 +408,8 @@ static void a_gone_session_loads_a_new_instance(void) {
     CHECK(first.index != second.index && system->loads.in_flight == 2u);
     CHECK(finish(system, first, TNA_LOAD_NOT_FOUND, 0) == TA_OK);
     CHECK(finish(system, second, TNA_LOAD_NOT_FOUND, 0) == TA_OK);
-    tna_dead_reason reason = TNA_DEAD_DONE;
-    CHECK(settle(system, &reason) == 2u && reason == TNA_DEAD_NOT_FOUND);
+    tah_dead_reason reason = TAH_DEAD_DONE;
+    CHECK(settle(system, &reason) == 2u && reason == TAH_DEAD_NOT_FOUND);
     ta_address_release(unknown);
     ta_address_release(key);
     finish_system(system);

@@ -38,7 +38,7 @@ static ta_definition_id define(tna_system *system, const ta_scxml_spec *spec) {
     CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
                                                        .spec = spec,
                                                        .datamodel = ta_null_datamodel(),
-                                                       .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
                                                        .out = &definition,
                                                    }) == TA_OK);
     ta_definition_id id = 0;
@@ -99,9 +99,9 @@ static uint32_t settle(tna_system *system) {
     for (int guard = 0; !tna_system_quiet(system); guard += 1) {
         CHECK(guard < 1000);
         tna_system_turn(system);
-        for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-            CHECK(record->kind != TNA_RECORD_FAULT);
-            dead += record->kind == TNA_RECORD_DEAD_LETTER ? 1u : 0u;
+        for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+            CHECK(record->kind != TAH_RECORD_FAULT);
+            dead += record->kind == TAH_RECORD_DEAD_LETTER ? 1u : 0u;
         }
         tna_system_end_turn(system);
     }
@@ -145,19 +145,19 @@ static void named_origin_outlives_its_sender(void) {
     system->budgets.messages = 0;
     tna_system_turn(system);
     bool done = false;
-    for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-        CHECK(record->kind != TNA_RECORD_FAULT);
-        done = done || (record->kind == TNA_RECORD_DONE && record->actor == sender);
+    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        CHECK(record->kind != TAH_RECORD_FAULT);
+        done = done || (record->kind == TAH_RECORD_DONE && record->actor == sender);
     }
     CHECK(done);
     tna_system_end_turn(system);
     system->budgets.messages = messages;
-    CHECK(tna_sched_mailbox_count(&system->sched, receiver) == 1u);
+    CHECK(tah_sched_mailbox_count(&system->sched, receiver) == 1u);
 
     destroy(system, sender); /* what finished: "destroy" does after the done hook */
 
-    const tna_sched_entry *entry = tna_sched_lookup(&system->sched, receiver);
-    const tna_envelope *envelope = tna_sched_envelope(&system->sched, entry->first);
+    const tah_sched_entry *entry = tah_sched_lookup(&system->sched, receiver);
+    const tah_envelope *envelope = tah_sched_envelope(&system->sched, entry->first);
     CHECK(envelope->event.origin.kind == TA_ORIGIN_ACTOR);
     CHECK(envelope->event.origin.as.actor.kind == TA_ACTOR_REF_NAMED);
     ta_actor_address origin = ta_address_view(envelope->event.origin.as.actor.as.named);

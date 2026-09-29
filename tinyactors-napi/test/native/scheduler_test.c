@@ -10,42 +10,43 @@
 #include "hooks.h"
 #include "scheduler.h"
 #include "system.h"
+#include "platform.h"
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 
 static void table_pages(void) {
-    tna_allocator allocator;
-    tna_allocator_init(&allocator);
-    tna_sched sched;
-    tna_sched_init(&sched, tna_allocator_for(&allocator, TNA_MEMORY_SCHEDULING),
-                   tna_allocator_for(&allocator, TNA_MEMORY_ENVELOPES));
-    CHECK(sizeof(tna_sched_entry) == 16u);
-    CHECK(tna_sched_entry_at(&sched, 0) == NULL);
+    tah_allocator allocator;
+    tah_allocator_init(&allocator, tna_platform_allocator());
+    tah_sched sched;
+    tah_sched_init(&sched, tah_allocator_for(&allocator, TAH_MEMORY_SCHEDULING),
+                   tah_allocator_for(&allocator, TAH_MEMORY_ENVELOPES));
+    CHECK(sizeof(tah_sched_entry) == 16u);
+    CHECK(tah_sched_entry_at(&sched, 0) == NULL);
 
     /* A slot in the second page allocates that page only. */
-    ta_actor_id far = ta_actor_id_make(TNA_SCHED_PAGE_ENTRIES + 5u, 3u);
-    CHECK(tna_sched_add(&sched, far) == TA_OK);
-    CHECK(tna_sched_entry_at(&sched, 0) == NULL);
-    tna_sched_entry *entry = tna_sched_lookup(&sched, far);
-    CHECK(entry != NULL && entry->state == TNA_SCHED_RUNNABLE && entry->generation == 3u);
+    ta_actor_id far = ta_actor_id_make(TAH_SCHED_PAGE_ENTRIES + 5u, 3u);
+    CHECK(tah_sched_add(&sched, far) == TA_OK);
+    CHECK(tah_sched_entry_at(&sched, 0) == NULL);
+    tah_sched_entry *entry = tah_sched_lookup(&sched, far);
+    CHECK(entry != NULL && entry->state == TAH_SCHED_RUNNABLE && entry->generation == 3u);
     CHECK(sched.known == 1u);
-    CHECK(!tna_sched_quiet(&sched));
+    CHECK(!tah_sched_quiet(&sched));
 
     /* Another generation in the same slot is not this actor. */
-    CHECK(tna_sched_lookup(&sched, ta_actor_id_make(TNA_SCHED_PAGE_ENTRIES + 5u, 4u)) == NULL);
-    tna_sched_remove(&sched, ta_actor_id_make(TNA_SCHED_PAGE_ENTRIES + 5u, 4u), TNA_DEAD_DESTROYED);
+    CHECK(tah_sched_lookup(&sched, ta_actor_id_make(TAH_SCHED_PAGE_ENTRIES + 5u, 4u)) == NULL);
+    tah_sched_remove(&sched, ta_actor_id_make(TAH_SCHED_PAGE_ENTRIES + 5u, 4u), TAH_DEAD_DESTROYED);
     CHECK(sched.known == 1u);
 
     /* Pages never move: an entry pointer survives growth of the directory. */
-    ta_actor_id later = ta_actor_id_make(40u * TNA_SCHED_PAGE_ENTRIES, 1u);
-    CHECK(tna_sched_add(&sched, later) == TA_OK);
-    CHECK(tna_sched_lookup(&sched, far) == entry);
+    ta_actor_id later = ta_actor_id_make(40u * TAH_SCHED_PAGE_ENTRIES, 1u);
+    CHECK(tah_sched_add(&sched, later) == TA_OK);
+    CHECK(tah_sched_lookup(&sched, far) == entry);
 
-    tna_sched_remove(&sched, far, TNA_DEAD_DESTROYED);
-    CHECK(tna_sched_lookup(&sched, far) == NULL);
+    tah_sched_remove(&sched, far, TAH_DEAD_DESTROYED);
+    CHECK(tah_sched_lookup(&sched, far) == NULL);
     CHECK(sched.known == 1u);
-    tna_sched_destroy(&sched);
-    CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
+    tah_sched_destroy(&sched);
+    CHECK(tah_allocator_total(&allocator).bytes_in_use == 0);
 }
 
 typedef struct {
@@ -62,7 +63,7 @@ static ta_definition_id define(tna_system *system, const ta_scxml_spec *spec) {
     CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
                                                        .spec = spec,
                                                        .datamodel = ta_null_datamodel(),
-                                                       .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
                                                        .out = &definition,
                                                    }) == TA_OK);
     ta_definition_id id = 0;
@@ -83,9 +84,9 @@ static ta_actor_residency residency(tna_system *system, ta_actor_id actor) {
     return view.residency;
 }
 
-static uint32_t count_records(const tna_system *system, tna_record_kind kind) {
+static uint32_t count_records(const tna_system *system, tah_record_kind kind) {
     uint32_t count = 0;
-    for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
         count += record->kind == kind ? 1u : 0u;
     }
     return count;
@@ -117,16 +118,16 @@ static void turns(void) {
     ta_actor_id b = spawn(system, finish_chart);
     CHECK(counter.wakes == 1u);
     CHECK(system->turn_pending);
-    CHECK(tna_sched_lookup(&system->sched, a)->state == TNA_SCHED_RUNNABLE);
+    CHECK(tah_sched_lookup(&system->sched, a)->state == TAH_SCHED_RUNNABLE);
 
     tna_system_turn(system);
     CHECK(!system->inside_core);
-    CHECK(tna_sched_lookup(&system->sched, a)->state == TNA_SCHED_IDLE);
+    CHECK(tah_sched_lookup(&system->sched, a)->state == TAH_SCHED_IDLE);
     CHECK(residency(system, a) == TA_ACTOR_IDLE);
     CHECK(residency(system, b) == TA_ACTOR_DONE);
-    CHECK(count_records(system, TNA_RECORD_DONE) == 1u);
+    CHECK(count_records(system, TAH_RECORD_DONE) == 1u);
     CHECK(system->sched.records->actor == b);
-    CHECK((tna_sched_lookup(&system->sched, b)->flags & TNA_SCHED_FINISHED) != 0);
+    CHECK((tah_sched_lookup(&system->sched, b)->flags & TAH_SCHED_FINISHED) != 0);
     tna_system_end_turn(system);
     CHECK(tna_system_quiet(system));
     CHECK(!system->turn_pending);
@@ -144,7 +145,7 @@ static void turns(void) {
     /* A slot reused by a new actor: the old ID's entry is gone. */
     ta_actor_id d = spawn(system, idle_chart);
     CHECK(ta_actor_id_slot(d) == ta_actor_id_slot(c));
-    CHECK(tna_sched_lookup(&system->sched, c) == NULL);
+    CHECK(tah_sched_lookup(&system->sched, c) == NULL);
     tna_system_turn(system);
     tna_system_end_turn(system);
     CHECK(residency(system, d) == TA_ACTOR_IDLE);
@@ -183,7 +184,7 @@ static void action_budget(void) {
     system->budgets.actions = 8u;
     ta_actor_id busy = spawn(system, chart);
     uint32_t turns = 0;
-    while (tna_sched_lookup(&system->sched, busy)->state == TNA_SCHED_RUNNABLE) {
+    while (tah_sched_lookup(&system->sched, busy)->state == TAH_SCHED_RUNNABLE) {
         tna_system_turn(system);
         tna_system_end_turn(system);
         turns += 1u;
@@ -194,7 +195,7 @@ static void action_budget(void) {
             tna_system_end_turn(system);
             turns += 1u;
             CHECK(residency(system, other) == TA_ACTOR_IDLE);
-            CHECK(tna_sched_lookup(&system->sched, busy)->state == TNA_SCHED_RUNNABLE);
+            CHECK(tah_sched_lookup(&system->sched, busy)->state == TAH_SCHED_RUNNABLE);
         }
         CHECK(turns < 100u);
     }
@@ -219,10 +220,10 @@ static void resume_limit(void) {
     for (int index = 0; index < COUNT; index += 1) {
         spawn(system, chart);
     }
-    CHECK(tna_ring_count(&system->sched.runnable) == COUNT);
+    CHECK(tah_ring_count(&system->sched.runnable) == COUNT);
     tna_system_turn(system);
     tna_system_end_turn(system);
-    CHECK(tna_ring_count(&system->sched.runnable) == COUNT - 10);
+    CHECK(tah_ring_count(&system->sched.runnable) == COUNT - 10);
     CHECK(system->turn_pending); /* work remains: another turn was asked for */
     tna_system_turn(system);
     tna_system_turn(system);

@@ -30,7 +30,7 @@ void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *fir
                 napi_create_array_with_length(env, wake_count, &wake_list) == napi_ok;
     uint32_t at = 0;
     for (uint32_t index = 0; made && index < inputs->entries.count; index += 1u) {
-        const tna_input_entry *entry = tna_vec_at(&inputs->entries, index);
+        const tna_input_entry *entry = tah_vec_at(&inputs->entries, index);
         if (entry->bytes.count == 0) {
             continue; /* its only record was refused */
         }
@@ -117,12 +117,12 @@ napi_value tna_set_input_log_method(napi_env env, napi_callback_info info) {
         napi_value item = NULL;
         if (napi_get_element(env, argv[0], at, &item) != napi_ok ||
             !tna_text_argument(env, system, item, &families[at])) {
-            tna_scratch_reset_call(&system->scratch);
+            tah_scratch_reset_call(&system->scratch);
             return tna_throw(env, "invalid", "setInputLog: families must be strings");
         }
     }
     ta_result result = tna_inputs_configure(system, families, count);
-    tna_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "setInputLog: cannot keep the families");
     }

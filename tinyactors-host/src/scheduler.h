@@ -62,58 +62,58 @@
 #include "tinyactors.h"
 #include "watch.h"
 
-#define TNA_SCHED_PAGE_BITS 12u
-#define TNA_SCHED_PAGE_ENTRIES (1u << TNA_SCHED_PAGE_BITS) /* 4,096 entries, 64 KiB */
+#define TAH_SCHED_PAGE_BITS 12u
+#define TAH_SCHED_PAGE_ENTRIES (1u << TAH_SCHED_PAGE_BITS) /* 4,096 entries, 64 KiB */
 
 typedef enum {
-    TNA_SCHED_NONE = 0,    /* no actor the addon knows */
-    TNA_SCHED_IDLE,        /* between macrosteps, nothing to do */
-    TNA_SCHED_READY,       /* has mail, is between macrosteps, and is on the ready queue */
-    TNA_SCHED_RUNNABLE,    /* on the runnable queue */
-    TNA_SCHED_QUARANTINED  /* faulted: out of scheduling until released (ADR 0008) */
-} tna_sched_state;
+    TAH_SCHED_NONE = 0,    /* no actor the addon knows */
+    TAH_SCHED_IDLE,        /* between macrosteps, nothing to do */
+    TAH_SCHED_READY,       /* has mail, is between macrosteps, and is on the ready queue */
+    TAH_SCHED_RUNNABLE,    /* on the runnable queue */
+    TAH_SCHED_QUARANTINED  /* faulted: out of scheduling until released (ADR 0008) */
+} tah_sched_state;
 
 enum {
-    TNA_SCHED_BACKOFF = 1u << 0,  /* ran out of memory: skip one turn (ADR 0008) */
-    TNA_SCHED_FINISHED = 1u << 1, /* reached a top-level final state */
+    TAH_SCHED_BACKOFF = 1u << 0,  /* ran out of memory: skip one turn (ADR 0008) */
+    TAH_SCHED_FINISHED = 1u << 1, /* reached a top-level final state */
     /* quarantined as a runaway (core ADR 0075): once released, it runs with
      * no microstep limit until its macrostep ends */
-    TNA_SCHED_UNLIMITED = 1u << 2,
+    TAH_SCHED_UNLIMITED = 1u << 2,
     /* The input log (napi ADR 0032 section 6) asked about this actor, and
      * whether it is a named actor of a logged family: a cache, so core is
      * asked once per actor, and cleared when the logged families change. */
-    TNA_SCHED_LOG_KNOWN = 1u << 3,
-    TNA_SCHED_LOGGED = 1u << 4,
+    TAH_SCHED_LOG_KNOWN = 1u << 3,
+    TAH_SCHED_LOGGED = 1u << 4,
     /* A replaying actor (napi ADR 0034): the replay resumes it itself, and
      * a turn leaves it alone until it is published. */
-    TNA_SCHED_REPLAYING = 1u << 5
+    TAH_SCHED_REPLAYING = 1u << 5
 };
 
 typedef struct {
     uint32_t generation;
-    uint8_t state; /* tna_sched_state */
+    uint8_t state; /* tah_sched_state */
     uint8_t flags;
     uint16_t reserved;
     uint32_t first; /* mailbox head envelope, 0 when empty */
     uint32_t last;  /* mailbox tail envelope, 0 when empty */
-} tna_sched_entry;
+} tah_sched_entry;
 
 /* Why a message became a dead letter (ADR 0008). */
 typedef enum {
-    TNA_DEAD_NOT_FOUND = 0, /* no resident actor has the target's ID */
-    TNA_DEAD_DONE,          /* the target reached a top-level final state */
-    TNA_DEAD_DESTROYED,     /* the target was destroyed or unloaded with mail waiting */
-    TNA_DEAD_REFUSED,       /* core refused the message itself (for example a malformed event) */
-    TNA_DEAD_UNLOADED,      /* the target is unloaded (a named address, or an actor unloaded with mail waiting) */
+    TAH_DEAD_NOT_FOUND = 0, /* no resident actor has the target's ID */
+    TAH_DEAD_DONE,          /* the target reached a top-level final state */
+    TAH_DEAD_DESTROYED,     /* the target was destroyed or unloaded with mail waiting */
+    TAH_DEAD_REFUSED,       /* core refused the message itself (for example a malformed event) */
+    TAH_DEAD_UNLOADED,      /* the target is unloaded (a named address, or an actor unloaded with mail waiting) */
     /* Mail that waited for a loader (napi ADR 0020): */
-    TNA_DEAD_REJECTED,      /* the loader answered "not now" */
-    TNA_DEAD_LOAD_FAILED,   /* the loader threw, or its result could not be used */
-    TNA_DEAD_LOAD_TIMEOUT,  /* the loader did not settle in time */
-    TNA_DEAD_WAITING_FULL   /* the address already had maxWaiting messages waiting */
-} tna_dead_reason;
+    TAH_DEAD_REJECTED,      /* the loader answered "not now" */
+    TAH_DEAD_LOAD_FAILED,   /* the loader threw, or its result could not be used */
+    TAH_DEAD_LOAD_TIMEOUT,  /* the loader did not settle in time */
+    TAH_DEAD_WAITING_FULL   /* the address already had maxWaiting messages waiting */
+} tah_dead_reason;
 
 /* The reason's name as JavaScript sees it ("not-found", "load-timeout", ...). */
-const char *tna_dead_reason_name(tna_dead_reason reason);
+const char *tah_dead_reason_name(tah_dead_reason reason);
 
 /*
  * A mailbox that belongs to an address, not an actor: mail waiting while a
@@ -124,7 +124,7 @@ typedef struct {
     uint32_t first;
     uint32_t last;
     uint32_t count;
-} tna_mailbox;
+} tah_mailbox;
 
 /*
  * An invocation's error report that waits in its parent's mailbox (napi ADR
@@ -134,11 +134,11 @@ typedef struct {
  * invocation (`invoke_id`) and the report's data.
  */
 typedef enum {
-    TNA_REPORT_NONE = 0,
-    TNA_REPORT_UNAVAILABLE, /* the service is lost; ends the invocation */
-    TNA_REPORT_QUARANTINED, /* an invoked child faulted; the invocation stays (ADR 0025) */
-    TNA_REPORT_FAILED       /* the service could not start; ends the invocation */
-} tna_report_kind;
+    TAH_REPORT_NONE = 0,
+    TAH_REPORT_UNAVAILABLE, /* the service is lost; ends the invocation */
+    TAH_REPORT_QUARANTINED, /* an invoked child faulted; the invocation stays (ADR 0025) */
+    TAH_REPORT_FAILED       /* the service could not start; ends the invocation */
+} tah_report_kind;
 
 /*
  * An operator transition a message carries (core ADR 0082), in one
@@ -149,7 +149,7 @@ typedef struct {
     ta_state_id source; /* TA_STATE_NONE: the root */
     uint32_t count;
     ta_state_id targets[];
-} tna_jump;
+} tah_jump;
 
 /*
  * One queued message. `event` holds its own references (data, named origin).
@@ -163,7 +163,7 @@ typedef struct {
     ta_actor_id target;
     union {
         ta_address *address;
-        tna_jump *jump;
+        tah_jump *jump;
     };
     /* The trace parent the message's macrostep runs under (core ADR 0067),
      * from the scheduler's free list, or NULL: only traced mail pays for
@@ -172,17 +172,17 @@ typedef struct {
     uint32_t next;   /* the next envelope in its list, 0 when last */
     uint32_t waiter; /* the send() waiting for this message, or 0 */
     uint32_t bytes;  /* counted against max_retained (ADR 0005 point 9) */
-    uint8_t reason;  /* tna_dead_reason, while on the dead list */
+    uint8_t reason;  /* tah_dead_reason, while on the dead list */
     uint8_t live;    /* taken from the store */
     uint8_t has_jump; /* `jump`, not `address` */
-    uint8_t report;   /* tna_report_kind: an error report, not a message */
-} tna_envelope;
+    uint8_t report;   /* tah_report_kind: an error report, not a message */
+} tah_envelope;
 
 /* An operator transition to accept with a message (core ADR 0082). */
 typedef struct {
     ta_definition_id definition; /* the definition the state IDs belong to */
     ta_operator_transition transition;
-} tna_message_jump;
+} tah_message_jump;
 
 /* A message to accept: the target, the event, and what it carries along. */
 typedef struct {
@@ -193,68 +193,68 @@ typedef struct {
     const ta_trace_parent *trace; /* its trace parent, or NULL (core ADR 0067) */
     /* An operator transition, or NULL; only for a target named by ID. The
      * scheduler copies it. */
-    const tna_message_jump *jump;
-    /* An error report instead of a message (tna_report_kind); `event`
+    const tah_message_jump *jump;
+    /* An error report instead of a message (tah_report_kind); `event`
      * carries its invocation and data. A report for a gone target is
      * dropped, never a dead letter. */
     uint8_t report;
-} tna_message;
+} tah_message;
 
 typedef enum {
-    TNA_WAITER_FREE = 0,
-    TNA_WAITER_QUEUED,   /* its message waits in a mailbox or on the dead list */
-    TNA_WAITER_INFLIGHT, /* core accepted the message; its macrostep runs */
-    TNA_WAITER_SETTLING  /* settled or cancelled; the Node-API layer gives it back */
-} tna_waiter_state;
+    TAH_WAITER_FREE = 0,
+    TAH_WAITER_QUEUED,   /* its message waits in a mailbox or on the dead list */
+    TAH_WAITER_INFLIGHT, /* core accepted the message; its macrostep runs */
+    TAH_WAITER_SETTLING  /* settled or cancelled; the Node-API layer gives it back */
+} tah_waiter_state;
 
 typedef struct {
     uint32_t generation; /* part of the token JavaScript holds; never 0 */
     uint32_t envelope;   /* QUEUED: the message's envelope */
     ta_actor_id actor;   /* QUEUED: the target; INFLIGHT: the actor running it */
     uint32_t next_free;
-    uint8_t state;       /* tna_waiter_state */
+    uint8_t state;       /* tah_waiter_state */
     void *host;          /* the Node-API layer's promise (a napi_deferred) */
-} tna_waiter;
+} tah_waiter;
 
 typedef enum {
-    TNA_SETTLE_STABLE, /* the message's macrostep ended with the actor stable */
-    TNA_SETTLE_DONE,   /* ... with the actor finished */
-    TNA_SETTLE_DEAD,   /* the message became a dead letter, or its actor went away */
-    TNA_SETTLE_FAULT,  /* the macrostep failed and the actor is quarantined */
-    TNA_SETTLE_ABANDONED /* an operator abandoned the macrostep (core ADR 0082) */
-} tna_settle_kind;
+    TAH_SETTLE_STABLE, /* the message's macrostep ended with the actor stable */
+    TAH_SETTLE_DONE,   /* ... with the actor finished */
+    TAH_SETTLE_DEAD,   /* the message became a dead letter, or its actor went away */
+    TAH_SETTLE_FAULT,  /* the macrostep failed and the actor is quarantined */
+    TAH_SETTLE_ABANDONED /* an operator abandoned the macrostep (core ADR 0082) */
+} tah_settle_kind;
 
 typedef struct {
     uint32_t waiter;
-    uint8_t kind;    /* tna_settle_kind */
-    uint8_t reason;  /* DEAD: tna_dead_reason */
+    uint8_t kind;    /* tah_settle_kind */
+    uint8_t reason;  /* DEAD: tah_dead_reason */
     /* STABLE, DONE: the message enabled no transition (core ADR 0089
      * section 8), SendResult.consumed false (napi ADR 0032 section 4). */
     uint8_t ignored;
     ta_result code;  /* FAULT: core's result */
     ta_actor_id actor;
-} tna_settlement;
+} tah_settlement;
 
-#define TNA_ENVELOPE_PAGE_BITS 10u
-#define TNA_ENVELOPE_PAGE_ENTRIES (1u << TNA_ENVELOPE_PAGE_BITS) /* 1,024 envelopes */
+#define TAH_ENVELOPE_PAGE_BITS 10u
+#define TAH_ENVELOPE_PAGE_ENTRIES (1u << TAH_ENVELOPE_PAGE_BITS) /* 1,024 envelopes */
 
 /* Envelopes in fixed pages, addressed by index; index 0 is never issued. */
 typedef struct {
     ta_allocator allocator; /* the envelopes category */
-    tna_vec pages;          /* tna_envelope *, one per page */
+    tah_vec pages;          /* tah_envelope *, one per page */
     uint32_t issued;        /* indices handed out so far, index 0 included */
     uint32_t free_head;     /* free list, threaded through `next` */
     uint32_t live;
-} tna_envelopes;
+} tah_envelopes;
 
 typedef enum {
-    TNA_RECORD_DONE,       /* the actor reached a top-level final state */
-    TNA_RECORD_FAULT,      /* a core call for the actor failed (ADR 0008) */
-    TNA_RECORD_DEAD_LETTER /* a message whose target is gone or finished */
-} tna_record_kind;
+    TAH_RECORD_DONE,       /* the actor reached a top-level final state */
+    TAH_RECORD_FAULT,      /* a core call for the actor failed (ADR 0008) */
+    TAH_RECORD_DEAD_LETTER /* a message whose target is gone or finished */
+} tah_record_kind;
 
-typedef struct tna_turn_record {
-    tna_record_kind kind;
+typedef struct tah_turn_record {
+    tah_record_kind kind;
     ta_actor_id actor;     /* DEAD_LETTER: the target, or 0 when it was a name with no actor */
     /* DEAD_LETTER to a named target with no actor: its text, copied into the turn arena. */
     bool has_address;
@@ -262,16 +262,16 @@ typedef struct tna_turn_record {
     const char *operation; /* FAULT: "resume", "deliver" */
     ta_result code;        /* FAULT: core's result */
     ta_event_name_id event; /* DEAD_LETTER */
-    tna_dead_reason reason; /* DEAD_LETTER */
+    tah_dead_reason reason; /* DEAD_LETTER */
     /* DEAD_LETTER: the message's data, owned by the record until
-     * tna_sched_release_records(), so a host can post it again (napi ADR
+     * tah_sched_release_records(), so a host can post it again (napi ADR
      * 0020's restart outbox). Absent when the message had none. */
     ta_value data;
     /* DEAD_LETTER: the message's trace parent, when it had one. */
     bool has_trace;
     ta_trace_parent trace;
-    struct tna_turn_record *next;
-} tna_turn_record;
+    struct tah_turn_record *next;
+} tah_turn_record;
 
 /*
  * What the input log hears from the scheduler (napi ADR 0032 section 6):
@@ -281,40 +281,40 @@ typedef struct tna_turn_record {
  * must not call back into the scheduler.
  */
 typedef enum {
-    TNA_NOTE_QUEUED,    /* `actor`, or `address` for mail that waits for a load */
-    TNA_NOTE_DELIVERED, /* ta_actor_deliver() took `message` */
-    TNA_NOTE_REPORTED,  /* ta_actor_report_invoke() took the report `message` */
-    TNA_NOTE_FINISHED,  /* `actor` reached a top-level final state */
-    TNA_NOTE_DROPPED,   /* `message` leaves the scheduler undelivered: a dead letter, a withdrawal */
-    TNA_NOTE_SETTLED    /* `actor` ended a macrostep and is stable: its pending sends may have changed */
-} tna_note_kind;
+    TAH_NOTE_QUEUED,    /* `actor`, or `address` for mail that waits for a load */
+    TAH_NOTE_DELIVERED, /* ta_actor_deliver() took `message` */
+    TAH_NOTE_REPORTED,  /* ta_actor_report_invoke() took the report `message` */
+    TAH_NOTE_FINISHED,  /* `actor` reached a top-level final state */
+    TAH_NOTE_DROPPED,   /* `message` leaves the scheduler undelivered: a dead letter, a withdrawal */
+    TAH_NOTE_SETTLED    /* `actor` ended a macrostep and is stable: its pending sends may have changed */
+} tah_note_kind;
 
 typedef struct {
-    tna_note_kind kind;
+    tah_note_kind kind;
     ta_actor_id actor;
     ta_address *address;
     uint32_t envelope;
-    const tna_envelope *message;
-} tna_sched_note;
+    const tah_envelope *message;
+} tah_sched_note;
 
 typedef struct {
     void *self; /* NULL: no observer, and the scheduler notes nothing */
     /* For QUEUED, anything but TA_OK refuses the message, which the post
      * then answers; for the other kinds the result is ignored. */
-    ta_result (*note)(void *self, const tna_sched_note *note);
+    ta_result (*note)(void *self, const tah_sched_note *note);
     /* The host number of a queued message, which delivery passes to core
      * (core ADR 0090 section 6); 0 for none. */
     uint64_t (*host_seq)(void *self, uint32_t envelope);
-} tna_sched_observer;
+} tah_sched_observer;
 
 typedef struct {
     ta_allocator allocator; /* the scheduling category */
-    tna_vec pages;          /* tna_sched_entry *, one per page */
-    tna_ring runnable;      /* ta_actor_id */
-    tna_ring ready;         /* ta_actor_id */
-    tna_envelopes envelopes;
+    tah_vec pages;          /* tah_sched_entry *, one per page */
+    tah_ring runnable;      /* ta_actor_id */
+    tah_ring ready;         /* ta_actor_id */
+    tah_envelopes envelopes;
     /* Trace parents of queued traced messages (ta_trace_parent). */
-    tna_free_list traces;
+    tah_free_list traces;
     uint32_t known;         /* entries not in state NONE */
     /* Accepted messages not yet delivered or reported: mailboxes plus the dead list. */
     uint32_t queued;
@@ -324,74 +324,74 @@ typedef struct {
     uint64_t max_retained;
     /* send() waiters: records by index (0 is never issued), a free list,
      * the actors whose macrostep a waiter follows, and settlements. */
-    tna_vec waiters;        /* tna_waiter */
+    tah_vec waiters;        /* tah_waiter */
     uint32_t waiter_free;
     uint32_t waiters_live;
-    tna_map inflight;       /* ta_actor_id -> waiter index */
-    tna_ring settled;       /* tna_settlement */
+    tah_map inflight;       /* ta_actor_id -> waiter index */
+    tah_ring settled;       /* tah_settlement */
     /* Dead letters waiting to be reported, threaded through `next`. */
     uint32_t dead_first;
     uint32_t dead_last;
     uint32_t dead_count;
     uint64_t dead_letters;  /* reported so far, with or without a hook */
     uint64_t delivered;     /* messages core accepted */
-    /* For metrics (napi ADR 0017 section 7): dead letters by tna_dead_reason,
+    /* For metrics (napi ADR 0017 section 7): dead letters by tah_dead_reason,
      * faults by -ta_result, and the actors in quarantine now. */
-    uint64_t dead_by_reason[TNA_DEAD_REASONS];
-    uint64_t faults[TNA_FAULT_CODES];
+    uint64_t dead_by_reason[TAH_DEAD_REASONS];
+    uint64_t faults[TAH_FAULT_CODES];
     uint32_t quarantined;
     /* The records of the current turn, in the turn arena. */
-    tna_turn_record *records;
-    tna_turn_record *last_record;
+    tah_turn_record *records;
+    tah_turn_record *last_record;
     uint32_t record_count;
     /* The input log's observer (napi ADR 0032 section 6), or none. */
-    tna_sched_observer observer;
-} tna_sched;
+    tah_sched_observer observer;
+} tah_sched;
 
 typedef struct {
     uint32_t resumes;    /* resume calls in one turn */
     uint32_t messages;   /* deliveries in one turn, and dead letters reported */
     uint32_t microsteps; /* core's `budget` for one resume */
     uint32_t actions;    /* core's `action_budget` for one resume; 0: no limit */
-} tna_turn_budgets;
+} tah_turn_budgets;
 
 typedef struct {
     ta_system *core;
     ta_arena *arena;   /* the turn arena: records live here */
     bool *inside_core; /* the reentrancy flag (ADR 0013 point 4) */
-    tna_turn_budgets budgets;
+    tah_turn_budgets budgets;
     /* Watched sessions and definitions (watch.h); NULL or empty: none. */
-    tna_trace_watch *watch;
+    tah_trace_watch *watch;
     /* Asked after each resume and delivery: true ends the turn there, and
      * what is left waits for the next one (napi ADR 0035's staging bound).
      * NULL: never. */
     bool (*stop)(void *context);
     void *stop_context;
-} tna_turn_params;
+} tah_turn_params;
 
 /* `allocator` for the table and queues, `envelopes` for the envelope store. */
-void tna_sched_init(tna_sched *sched, ta_allocator allocator, ta_allocator envelopes);
+void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envelopes);
 /*
  * Releases every queued message's references. Call it while core is still
  * alive (a named origin is a core handle), before ta_system_destroy().
  */
-void tna_sched_discard_mail(tna_sched *sched);
-void tna_sched_destroy(tna_sched *sched);
+void tah_sched_discard_mail(tah_sched *sched);
+void tah_sched_destroy(tah_sched *sched);
 
 /* The entry of `slot`, or NULL when its page does not exist. */
-tna_sched_entry *tna_sched_entry_at(const tna_sched *sched, uint32_t slot);
+tah_sched_entry *tah_sched_entry_at(const tah_sched *sched, uint32_t slot);
 /* The entry of the actor `actor` names, or NULL when the addon knows another
  * actor (or none) in that slot. */
-tna_sched_entry *tna_sched_lookup(const tna_sched *sched, ta_actor_id actor);
+tah_sched_entry *tah_sched_lookup(const tah_sched *sched, ta_actor_id actor);
 
 /*
  * A new actor (spawned, loaded, reconstructed, prepared): fill its entry and
  * put it on the runnable queue for bootstrap. TA_ERR_NOMEM leaves the table
  * as it was.
  */
-ta_result tna_sched_add(tna_sched *sched, ta_actor_id actor);
+ta_result tah_sched_add(tah_sched *sched, ta_actor_id actor);
 /* The actor is gone (destroyed, unloaded): dead-letter its mailbox and clear its entry. */
-void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reason);
+void tah_sched_remove(tah_sched *sched, ta_actor_id actor, tah_dead_reason reason);
 /*
  * A named actor was replaced in place (ROADMAP step 14): the mail still
  * waiting for `from` moves, in order, to the front of `to`'s mailbox, with
@@ -403,8 +403,8 @@ void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reaso
 typedef struct {
     ta_actor_id from;
     ta_actor_id to;
-} tna_sched_transfer_params;
-ta_result tna_sched_transfer(tna_sched *sched, const tna_sched_transfer_params *params);
+} tah_sched_transfer_params;
+ta_result tah_sched_transfer(tah_sched *sched, const tah_sched_transfer_params *params);
 
 /*
  * Accepts a message for `message->target` (ADR 0005 point 3). On TA_OK the
@@ -416,32 +416,32 @@ ta_result tna_sched_transfer(tna_sched *sched, const tna_sched_transfer_params *
  *   pass max_retained; nothing was accepted.
  * - TA_ERR_NOMEM: nothing was accepted.
  */
-ta_result tna_sched_post(tna_sched *sched, const tna_message *message);
+ta_result tah_sched_post(tah_sched *sched, const tah_message *message);
 /*
  * Accepts a message that is a dead letter already: its target is a name the
  * directory has no resident actor for (ADR 0006 point 4). On TA_OK the
  * envelope owns `event`'s references and the `address` reference.
- * TA_ERR_BUSY and TA_ERR_NOMEM as for tna_sched_post().
+ * TA_ERR_BUSY and TA_ERR_NOMEM as for tah_sched_post().
  */
 typedef struct {
     ta_address *address;
-    const tna_message *message;
-    tna_dead_reason reason;
-} tna_dead_post;
-ta_result tna_sched_post_dead(tna_sched *sched, const tna_dead_post *post);
+    const tah_message *message;
+    tah_dead_reason reason;
+} tah_dead_post;
+ta_result tah_sched_post_dead(tah_sched *sched, const tah_dead_post *post);
 /*
  * Accepts a message into the waiting mailbox `box` of `address` (napi ADR
  * 0020). The envelope takes its own reference to `address`. On TA_OK it
  * owns the event's references and the waiter follows the message, as for
- * tna_sched_post(); the limits of ADR 0005 point 9 count it. TA_ERR_BUSY
- * and TA_ERR_NOMEM as for tna_sched_post().
+ * tah_sched_post(); the limits of ADR 0005 point 9 count it. TA_ERR_BUSY
+ * and TA_ERR_NOMEM as for tah_sched_post().
  */
 typedef struct {
-    tna_mailbox *box;
+    tah_mailbox *box;
     ta_address *address;
-    const tna_message *message;
-} tna_waiting_post;
-ta_result tna_sched_post_waiting(tna_sched *sched, const tna_waiting_post *post);
+    const tah_message *message;
+} tah_waiting_post;
+ta_result tah_sched_post_waiting(tah_sched *sched, const tah_waiting_post *post);
 /*
  * The actor for the address was loaded: the waiting mail moves, in order,
  * to the front of `to`'s mailbox, with its send() waiters, as replacement
@@ -450,37 +450,37 @@ ta_result tna_sched_post_waiting(tna_sched *sched, const tna_waiting_post *post)
  * does not know `to`; TA_ERR_NOMEM (nothing moved) when `to` cannot join
  * the ready queue. `box` is empty afterwards on TA_OK.
  */
-ta_result tna_sched_hand_over(tna_sched *sched, tna_mailbox *box, ta_actor_id to);
+ta_result tah_sched_hand_over(tah_sched *sched, tah_mailbox *box, ta_actor_id to);
 /* The load failed: every waiting message becomes a dead letter with `reason`. */
-void tna_sched_bury_waiting(tna_sched *sched, tna_mailbox *box, tna_dead_reason reason);
+void tah_sched_bury_waiting(tah_sched *sched, tah_mailbox *box, tah_dead_reason reason);
 /*
  * Withdraws the envelope at `index` from the waiting mailbox `box` and
  * frees it, as cancelling a send() does for mail in an actor's mailbox (ADR
  * 0005 point 11). False, changing nothing, when `box` does not hold it.
  */
-bool tna_sched_withdraw_waiting(tna_sched *sched, tna_mailbox *box, uint32_t index);
+bool tah_sched_withdraw_waiting(tah_sched *sched, tah_mailbox *box, uint32_t index);
 /* The envelope at `index` (for tests and the router), or NULL. */
-tna_envelope *tna_sched_envelope(const tna_sched *sched, uint32_t index);
+tah_envelope *tah_sched_envelope(const tah_sched *sched, uint32_t index);
 /*
  * Takes `actor` out of scheduling as a fault does (ADR 0008), for a fault
  * the host found outside a core call: the input log's commit failed (napi
  * ADR 0032 section 6). True when it was not quarantined before; release()
  * puts it back.
  */
-bool tna_sched_quarantine(tna_sched *sched, ta_actor_id actor);
-/* Clears every entry's input-log cache (TNA_SCHED_LOG_KNOWN, TNA_SCHED_LOGGED). */
-void tna_sched_forget_logging(tna_sched *sched);
+bool tah_sched_quarantine(tah_sched *sched, ta_actor_id actor);
+/* Clears every entry's input-log cache (TAH_SCHED_LOG_KNOWN, TAH_SCHED_LOGGED). */
+void tah_sched_forget_logging(tah_sched *sched);
 /* Messages waiting in `actor`'s mailbox. */
-uint32_t tna_sched_mailbox_count(const tna_sched *sched, ta_actor_id actor);
+uint32_t tah_sched_mailbox_count(const tah_sched *sched, ta_actor_id actor);
 /*
  * Core gave `actor` a macrostep to run outside a delivery (for example an
  * invocation reported unavailable, which queues an internal event): an idle
  * or ready actor becomes runnable. A runnable or quarantined actor is left
  * as it is. TA_ERR_NOT_FOUND for an actor the table does not know.
  */
-ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor);
+ta_result tah_sched_wake(tah_sched *sched, ta_actor_id actor);
 /* Puts a quarantined actor back on the runnable queue (ADR 0008). */
-ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor);
+ta_result tah_sched_release(tah_sched *sched, ta_actor_id actor);
 
 /*
  * An operator abandoned the actor's macrostep (core ADR 0082): the send()
@@ -489,28 +489,28 @@ ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor);
  * skipped when popped. A quarantined one stays quarantined.
  * TA_ERR_NOT_FOUND for an actor the table does not know.
  */
-ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor);
+ta_result tah_sched_abandoned(tah_sched *sched, ta_actor_id actor);
 
 /*
- * send() waiters. tna_sched_waiter_take() returns a free waiter's index, or
- * 0 when there is no memory; give it to exactly one tna_sched_post() (or
- * back with tna_sched_waiter_give()). A settlement names the waiter it
+ * send() waiters. tah_sched_waiter_take() returns a free waiter's index, or
+ * 0 when there is no memory; give it to exactly one tah_sched_post() (or
+ * back with tah_sched_waiter_give()). A settlement names the waiter it
  * settles, which is then SETTLING until the Node-API layer gives it back.
  */
-uint32_t tna_sched_waiter_take(tna_sched *sched);
-tna_waiter *tna_sched_waiter(const tna_sched *sched, uint32_t index);
-void tna_sched_waiter_give(tna_sched *sched, uint32_t index);
-bool tna_sched_settlement_pop(tna_sched *sched, tna_settlement *out);
+uint32_t tah_sched_waiter_take(tah_sched *sched);
+tah_waiter *tah_sched_waiter(const tah_sched *sched, uint32_t index);
+void tah_sched_waiter_give(tah_sched *sched, uint32_t index);
+bool tah_sched_settlement_pop(tah_sched *sched, tah_settlement *out);
 /*
  * Cancels a pending waiter (abort or timeout). A message still in a mailbox
  * is withdrawn, so it is never delivered; one already on the dead list is
  * still reported, without its waiter; one already delivered is not undone.
  * Returns true when the waiter was pending; it is then SETTLING.
  */
-bool tna_sched_cancel(tna_sched *sched, uint32_t index);
+bool tah_sched_cancel(tah_sched *sched, uint32_t index);
 
 /* True when a turn has nothing to do. */
-bool tna_sched_quiet(const tna_sched *sched);
+bool tah_sched_quiet(const tah_sched *sched);
 
 /*
  * One bounded turn: resume runnable actors, deliver to ready actors, then
@@ -518,11 +518,11 @@ bool tna_sched_quiet(const tna_sched *sched);
  * and stay valid until the turn arena is reset. Never fails: a failure is an
  * actor's, and becomes a record.
  */
-void tna_sched_turn(tna_sched *sched, const tna_turn_params *params);
+void tah_sched_turn(tah_sched *sched, const tah_turn_params *params);
 /*
  * Releases what the turn's records own (a dead letter's data) and forgets
  * the records. The turn calls it first, so a caller that runs turns back to
  * back leaks nothing; the host calls it once it has reported them, and
  * close calls it before core goes, since values outlive nothing.
  */
-void tna_sched_release_records(tna_sched *sched);
+void tah_sched_release_records(tah_sched *sched);
