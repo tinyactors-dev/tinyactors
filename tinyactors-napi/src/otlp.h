@@ -77,8 +77,9 @@ typedef struct {
      * records, at most `log_limit` per definition and name per second;
      * 0 writes no logs. */
     uint32_t log_limit;
-    /* The staging capacity a buffer always may keep between turns: the
-     * traceStagingBytes parameter (napi ADR 0035); 0 for 1 MiB. */
+    /* The span staging, reserved whole when the sink is installed and
+     * shrunk back to it after a burst: the traceStagingBytes parameter
+     * (napi ADRs 0035 and 0036); 0 for 1 MiB. */
     size_t keep_bytes;
 } tna_otlp_config;
 
@@ -200,7 +201,10 @@ typedef struct {
     uint64_t dropped;          /* records lost to a failed allocation */
 } tna_otlp;
 
-void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config);
+/* Sets up the encoder, and reserves the span staging whole: the
+ * traceStagingBytes parameter (napi ADR 0036 section 2). False when the
+ * allocator refuses it; nothing is then kept. */
+bool tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config);
 
 /* One resource attribute, a string. */
 typedef struct {

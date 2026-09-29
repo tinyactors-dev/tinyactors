@@ -1,4 +1,5 @@
 #include "napi_replay.h"
+#include "napi_trace.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -244,7 +245,7 @@ napi_value tna_replay_push_method(napi_env env, napi_callback_info info) {
     return out;
 }
 
-napi_value tna_replay_prepare_method(napi_env env, napi_callback_info info) {
+static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info) {
     size_t argc = 6;
     napi_value argv[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
@@ -352,7 +353,7 @@ static napi_value tna_record_name(napi_env env, const uint8_t *record) {
     return out;
 }
 
-napi_value tna_replay_run_method(napi_env env, napi_callback_info info) {
+static napi_value tna_replay_run_inner(napi_env env, napi_callback_info info) {
     size_t argc = 5;
     napi_value argv[5] = { NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
@@ -720,4 +721,14 @@ napi_value tna_checkpoint_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, tna_result_code(result), message);
     }
     return NULL;
+}
+
+/* replay_prepare, then a request for the sink if it filled the staging (napi ADR 0036). */
+napi_value tna_replay_prepare_method(napi_env env, napi_callback_info info) {
+    return tna_trace_after_method(env, info, tna_replay_prepare_inner(env, info));
+}
+
+/* replay_run, then a request for the sink if it filled the staging (napi ADR 0036). */
+napi_value tna_replay_run_method(napi_env env, napi_callback_info info) {
+    return tna_trace_after_method(env, info, tna_replay_run_inner(env, info));
 }

@@ -6,6 +6,7 @@
 
 #include "napi_datamodel.h"
 #include "napi_system.h"
+#include "napi_trace.h"
 #include "system.h"
 
 /* ------------------------------------------------------------------------
@@ -162,6 +163,10 @@ napi_value tna_call_end(tna_call *call, napi_value value) {
     }
     if (call->owner != NULL && !tna_system_closed(call->owner->system)) {
         tna_napi_system_flush(call->owner);
+        /* A call outside a turn that filled the staging hands the sink a request (napi ADR 0036). */
+        if (!tna_trace_flush_if_full(call->env, call->owner)) {
+            return NULL;
+        }
     }
     return value;
 }

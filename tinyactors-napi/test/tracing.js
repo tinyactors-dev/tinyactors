@@ -558,9 +558,7 @@ async function largeValues() {
 
 // traceStagingBytes (napi ADR 0035): a turn whose spans pass the staging
 // bound ends early, so the sink gets several requests where one turn would
-// have made one large one, and no span is lost. (spawn() writes its
-// lifecycle span when it is called, outside any turn, so the bound applies
-// to what turns stage: here, the deliveries.)
+// have made one large one, and no span is lost.
 async function stagingBound() {
   const actors = 3000;
   const counts = [];
@@ -588,6 +586,37 @@ async function stagingBound() {
     system.close();
   }
   assert.ok(counts[0] > counts[1], `a small bound makes more requests: ${counts}`);
+}
+
+// The staging bound holds outside turns too (napi ADR 0036 section 2): a
+// burst of spawn() calls, each staging its lifecycle span outside any turn,
+// hands the sink a request as soon as the staging reaches the bound, so no
+// request holds more than the bound plus one call's records, and none is
+// lost. The staging is reserved while a sink is installed, and only then.
+async function stagingBoundOutsideTurns() {
+  const bound = 65536;
+  const system = createSystem({ parameters: { traceStagingBytes: bound } });
+  const reserved = () => system.stats().memory.other.bytesInUse;
+  const without = reserved();
+  assert.ok(without < bound, `no staging without a sink: ${without} bytes`);
+  const sink = recorder(system, {});
+  assert.ok(reserved() >= without + bound, `a sink reserves the staging whole: ${reserved()} bytes`);
+  const definition = counter(system);
+  await system.flush();
+  sink.batches.length = 0;
+  let duringBurst = 0;
+  for (let index = 0; index < 3000; index += 1) {
+    system.spawn(definition);
+    duringBurst = sink.batches.length;
+  }
+  assert.ok(duringBurst > 1, `the sink was called while the spawns ran, outside a turn: ${duringBurst} requests`);
+  await system.flush();
+  const largest = Math.max(...sink.batches.map((bytes) => bytes.length));
+  assert.ok(largest <= bound + 4096, `no request past the bound plus one call's records: ${largest} bytes`);
+  assert.equal(sink.names().filter((name) => name === 'scxml.spawned').length, 3000, 'every spawn traced, none dropped');
+  system.setTraceSink(undefined);
+  assert.ok(reserved() < bound, `removing the sink frees the staging: ${reserved()} bytes`);
+  system.close();
 }
 
 // Every request's resource names the system's parameters (napi ADR 0035),
@@ -802,6 +831,7 @@ async function watchAndSample() {
   await valuesAndLinks();
   await largeValues();
   await stagingBound();
+  await stagingBoundOutsideTurns();
   await parameterResource();
   await lifecycle();
   await summaryFailures();

@@ -98,10 +98,12 @@ static void tna_buf_free(tna_otlp_buf *buf) {
 }
 
 /*
- * The staging capacity a buffer always may keep between turns
- * (traceStagingBytes, napi ADR 0035). Past it, a buffer is kept only while a
- * typical turn uses a quarter of it (tna_otlp_end_turn); a turn stops early
- * once it has staged that much (tna_system_turn).
+ * The staging bound (traceStagingBytes, napi ADRs 0035 and 0036). The span
+ * staging is reserved whole when the sink is installed; a turn stops early
+ * once it has staged that much (tna_system_turn), and a call outside a turn
+ * hands the sink a request once it has (tna_trace_flush_if_full). A
+ * macrostep is never split, so a burst can grow the buffer past it for one
+ * request; the buffer shrinks back to the bound when that request is taken.
  */
 static size_t tna_keep_bytes(const tna_otlp *otlp) {
     return otlp->config.keep_bytes != 0 ? otlp->config.keep_bytes : (size_t)1 << 20;
@@ -111,6 +113,18 @@ static size_t tna_keep_bytes(const tna_otlp *otlp) {
 static void tna_buf_settle(tna_otlp_buf *buf, size_t used, size_t keep) {
     if (buf->len == 0 && buf->cap > keep && buf->cap / 4u > used) {
         tna_buf_free(buf);
+    }
+}
+
+static bool tna_buf_room(tna_otlp_buf *buf, size_t more);
+
+/* The span staging after a request was taken: back to exactly the bound
+ * when a burst grew it (a failed reallocation keeps it empty, and the next
+ * span regrows it as before). */
+static void tna_spans_settle(tna_otlp_buf *buf, size_t keep) {
+    if (buf->len == 0 && buf->cap > keep) {
+        tna_buf_free(buf);
+        (void)tna_buf_room(buf, keep);
     }
 }
 
@@ -716,7 +730,7 @@ static ta_str tna_cstr(const char *text) { return (ta_str){ text, (uint32_t)strl
 
 static void tna_span_init(tna_otlp_span *span, ta_allocator allocator);
 
-void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
+bool tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     *otlp = (tna_otlp){ .config = *config };
     ta_allocator allocator = config->allocator;
     tna_buf_init(&otlp->names, allocator);
@@ -729,6 +743,7 @@ void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     tna_span_init(&otlp->lifecycle, allocator);
     tna_buf_init(&otlp->logs, allocator);
     tna_buf_init(&otlp->log_body, allocator);
+    return tna_buf_room(&otlp->spans, tna_keep_bytes(otlp));
 }
 
 ta_result tna_otlp_set_resource(tna_otlp *otlp, const tna_otlp_attribute *attributes, uint32_t count) {
@@ -2231,8 +2246,9 @@ static size_t tna_typical_use(size_t typical, size_t used) {
 }
 
 void tna_otlp_end_turn(tna_otlp *otlp) {
-    tna_buf_settle(&otlp->spans, otlp->typical_spans, tna_keep_bytes(otlp));
-    if (otlp->spans.data == NULL && otlp->entry_count == 0) {
+    bool burst = otlp->spans.len == 0 && otlp->spans.cap > tna_keep_bytes(otlp);
+    tna_spans_settle(&otlp->spans, tna_keep_bytes(otlp));
+    if (burst && otlp->entry_count == 0) {
         /* The entries, runs and scopes of a burst go with its spans. */
         ta_allocator allocator = otlp->config.allocator;
         tna_array_free(allocator, (void **)&otlp->entries, &otlp->entry_capacity, sizeof *otlp->entries,

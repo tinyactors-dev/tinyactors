@@ -18,6 +18,17 @@
 
 /* Hands the turn's trace records to JavaScript. An exception becomes the turn's first error. */
 void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error);
+/*
+ * Outside a turn, when the staging holds traceStagingBytes or more, hands the
+ * sink a request now (napi ADR 0036 section 2): called when a call from
+ * JavaScript returns (tna_call_end) and by the native methods that run core
+ * outside a turn, so a request holds at most the bound plus one call's
+ * records. False when the sink threw; its exception is then pending.
+ */
+bool tna_trace_flush_if_full(napi_env env, tna_napi_system *wrapper);
+/* The same, for a native method on the system that returns `result`:
+ * NULL when the sink threw. */
+napi_value tna_trace_after_method(napi_env env, napi_callback_info info, napi_value result);
 /* setTraceSink(installed, kinds, unsampled, values, valueLimit, links, resource, seed). */
 napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info);
 /* The sample ratio crosses as parts of this whole. */

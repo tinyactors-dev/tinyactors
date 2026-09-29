@@ -249,10 +249,13 @@ export interface SystemParameters {
    */
   traceValueBytes?: number;
   /**
-   * OTLP staging kept between turns; a turn whose spans and logs pass it
-   * ends early, so the sink gets that turn's request and the next turn goes
-   * on, with nothing dropped. What calls between turns stage (spawn()'s
-   * lifecycle span) is not bounded by it. Default 1 MiB, from 64 KiB to 1 GiB.
+   * The OTLP staging, reserved whole while a trace sink is installed (napi
+   * ADR 0036). A turn whose spans and logs reach it ends early, so the sink
+   * gets that turn's request and the next turn goes on; a call outside a turn
+   * that fills it (a burst of spawn() calls, say) hands the sink a request
+   * before it returns. So no request holds more than this plus one call's or
+   * one macrostep's records, and nothing is dropped. Default 1 MiB, from 64
+   * KiB to 1 GiB.
    */
   traceStagingBytes?: number;
   /** Data models registerDatamodel() may add; default 8, at most 1024. */
@@ -666,7 +669,9 @@ export interface System {
   /**
    * Hand traces to `sink` as OTLP protobuf (napi ADR 0016): once per pump
    * turn, one Uint8Array holding one ExportTraceServiceRequest with the
-   * spans that ended. Post it to an OTLP/HTTP `/v1/traces` endpoint as it
+   * spans that ended. The sink is also called outside a turn, synchronously
+   * from inside the call that filled the staging (traceStagingBytes, napi
+   * ADR 0036); an exception it throws there comes out of that call. Post it to an OTLP/HTTP `/v1/traces` endpoint as it
    * is, or read it with decodeTraces(). Without a sink core builds no record.
    * Each definition's spans share one scope, whose attributes name the
    * definition by family, revision and source (napi ADR 0028).

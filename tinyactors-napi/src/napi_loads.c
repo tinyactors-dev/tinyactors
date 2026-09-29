@@ -141,7 +141,7 @@ static void tna_load_log(tna_system *system, const tna_load *load, tna_load_outc
                       });
 }
 
-napi_value tna_complete_load_method(napi_env env, napi_callback_info info) {
+static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info) {
     size_t argc = 6;
     napi_value argv[6] = { NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
@@ -546,7 +546,7 @@ static void tna_offload_undo(tna_napi_system *wrapper, ta_bytes bytes) {
 }
 
 /* offload(slot, generation): the actor is unloaded, its bytes in the store. */
-napi_value tna_offload_method(napi_env env, napi_callback_info info) {
+static napi_value tna_offload_inner(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2] = { NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
@@ -659,7 +659,7 @@ napi_value tna_drop_offloaded_method(napi_env env, napi_callback_info info) {
  * binding other than undefined replaces the data-model root the bytes
  * carry (ta_actor_load_params.datamodel_binding).
  */
-napi_value tna_load_offloaded_method(napi_env env, napi_callback_info info) {
+static napi_value tna_load_offloaded_inner(napi_env env, napi_callback_info info) {
     size_t argc = 3;
     napi_value argv[3] = { NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
@@ -716,4 +716,19 @@ napi_value tna_load_offloaded_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     return out;
+}
+
+/* complete_load, then a request for the sink if it filled the staging (napi ADR 0036). */
+napi_value tna_complete_load_method(napi_env env, napi_callback_info info) {
+    return tna_trace_after_method(env, info, tna_complete_load_inner(env, info));
+}
+
+/* offload, then a request for the sink if it filled the staging (napi ADR 0036). */
+napi_value tna_offload_method(napi_env env, napi_callback_info info) {
+    return tna_trace_after_method(env, info, tna_offload_inner(env, info));
+}
+
+/* load_offloaded, then a request for the sink if it filled the staging (napi ADR 0036). */
+napi_value tna_load_offloaded_method(napi_env env, napi_callback_info info) {
+    return tna_trace_after_method(env, info, tna_load_offloaded_inner(env, info));
 }

@@ -242,6 +242,36 @@ void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
     }
 }
 
+bool tna_trace_flush_if_full(napi_env env, tna_napi_system *wrapper) {
+    tna_system *system = wrapper->system;
+    bool pending = false;
+    if (!system->tracing || system->inside_core || wrapper->trace_flushing || tna_system_closed(system) ||
+        napi_is_exception_pending(env, &pending) != napi_ok || pending) {
+        return true;
+    }
+    size_t staged = tna_otlp_traces_size(&system->otlp) + tna_otlp_logs_size(&system->otlp);
+    if (staged < system->params.values[TNA_PARAM_TRACE_STAGING_BYTES]) {
+        return true;
+    }
+    napi_value first_error = NULL;
+    wrapper->trace_flushing = true;
+    tna_trace_dispatch(env, wrapper, &first_error);
+    wrapper->trace_flushing = false;
+    if (first_error != NULL) {
+        napi_throw(env, first_error);
+        return false;
+    }
+    return true;
+}
+
+napi_value tna_trace_after_method(napi_env env, napi_callback_info info, napi_value result) {
+    tna_napi_system *wrapper = tna_this(env, info);
+    if (wrapper == NULL || tna_system_closed(wrapper->system)) {
+        return result;
+    }
+    return tna_trace_flush_if_full(env, wrapper) ? result : NULL;
+}
+
 /* ------------------------------------------------------------------------
  * Installing the sink
  */
@@ -356,7 +386,7 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
     }
     ta_result result = ta_system_set_trace_sink(system->core, ta_null_trace_sink());
     if (result == TA_OK && installed && (masks.kinds | masks.watched_kinds | masks.unsampled_kinds) != 0) {
-        tna_otlp_init(&system->otlp,
+        bool reserved = tna_otlp_init(&system->otlp,
                       &(tna_otlp_config){
                           .core = system->core,
                           .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
@@ -368,6 +398,10 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
                           .values = values,
                           .version = { TINYACTORS_NAPI_VERSION, (uint32_t)(sizeof TINYACTORS_NAPI_VERSION - 1u) },
                       });
+        if (!reserved) {
+            tna_otlp_destroy(&system->otlp);
+            return tna_throw(env, "out-of-memory", "setTraceSink: cannot reserve the trace staging (traceStagingBytes)");
+        }
         system->tracing = true;
         ta_system_seed_trace_ids(system->core, seed_type != napi_undefined ? seed : tna_system_os_seed(system));
         if (!tna_set_resource(env, system, argv[7])) {

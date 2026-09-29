@@ -211,7 +211,7 @@ static void tna_after_core(void *context) {
 }
 
 /* Unwraps `this`; throws and returns NULL when it is not a System. */
-static tna_napi_system *tna_this(napi_env env, napi_callback_info info) {
+tna_napi_system *tna_this(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
     tna_napi_system *wrapped = NULL;
     if (napi_get_cb_info(env, info, NULL, NULL, &self, NULL) != napi_ok ||

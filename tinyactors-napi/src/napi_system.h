@@ -40,6 +40,7 @@ struct tna_napi_system {
     napi_ref timer_function;      /* the native setTimeout callback (ADR 0007 point 3) */
     napi_ref timeout;             /* the pending Timeout, for clearTimeout, or NULL */
     bool timer_held;              /* a pending timer holds the wrapper */
+    bool trace_flushing;          /* tna_trace_flush_if_full is calling the sink */
     napi_ref facade;              /* weak: the public System, for ActorID views */
     napi_ref done_hook;           /* ADR 0012 */
     napi_ref fault_hook;          /* ADR 0008 */
@@ -72,6 +73,8 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports);
 /* Closes every system still open in the environment (the cleanup hook). */
 void tna_napi_system_close_open(tna_env *data);
 /* The native System that `this` is; throws "invalid" or "closed" and returns NULL otherwise. */
+/* The wrapper of `this`, closed or not; throws and returns NULL when it is not a System. */
+tna_napi_system *tna_this(napi_env env, napi_callback_info info);
 tna_napi_system *tna_open_this(napi_env env, napi_callback_info info);
 /* The native System of a JavaScript System object, or NULL. */
 tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value);

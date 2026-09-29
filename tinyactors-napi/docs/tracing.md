@@ -7,6 +7,15 @@ ended as **OTLP protobuf**: one `Uint8Array` holding one
 those bytes as they are. tinyactors depends on no telemetry package: where
 the bytes go, and how, is yours.
 
+The staging those bytes come from is bounded by the `traceStagingBytes`
+system parameter, reserved while a sink is installed (napi ADR 0036). A turn
+that reaches it ends early and hands over its request; a call outside a turn
+that reaches it (a burst of `spawn()` calls, say) hands over a request before
+it returns. So your sink can also be called outside a turn, synchronously
+from inside that call, and what it throws there comes out of the call. No
+request holds more than the bound plus one call's or one macrostep's
+records, and nothing is dropped.
+
 ```js
 const { createSystem } = require('@tinyactors/node');
 
