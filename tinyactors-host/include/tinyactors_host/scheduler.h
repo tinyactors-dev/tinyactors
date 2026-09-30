@@ -485,6 +485,37 @@ bool tah_sched_quarantine(tah_sched *sched, ta_actor_id actor);
 void tah_sched_forget_logging(tah_sched *sched);
 /* Messages waiting in `actor`'s mailbox. */
 uint32_t tah_sched_mailbox_count(const tah_sched *sched, ta_actor_id actor);
+/* The scheduling state of `actor`: TAH_SCHED_NONE for one the table does not know. */
+tah_sched_state tah_sched_state_of(const tah_sched *sched, ta_actor_id actor);
+
+/*
+ * A queued message as a binding lists it (napi's mailbox()): borrowed from
+ * the scheduler until it next changes. Walk a mailbox from
+ * tah_sched_mailbox_first() through `next`; 0 ends it.
+ */
+typedef struct {
+    const ta_event *event;
+    const tah_jump *jump; /* its operator transition (core ADR 0082), or NULL */
+    uint32_t waiter;      /* the send() waiting for it, or 0 */
+    uint32_t next;        /* the next envelope in its mailbox, 0 when last */
+} tah_queued_message;
+/* The first envelope in `actor`'s mailbox, 0 when it is empty or unknown. */
+uint32_t tah_sched_mailbox_first(const tah_sched *sched, ta_actor_id actor);
+/* The message in `envelope`, an index a mailbox walk gave. */
+tah_queued_message tah_sched_queued_message(const tah_sched *sched, uint32_t envelope);
+
+/* The scheduler's counters, as a binding reports them (napi's stats() and metrics()). */
+typedef struct {
+    uint32_t runnable;    /* actors on the runnable queue */
+    uint32_t ready;       /* actors on the ready queue */
+    uint32_t quarantined; /* actors in quarantine now */
+    uint32_t queued;      /* accepted messages not yet delivered or reported */
+    uint64_t delivered;   /* messages core accepted */
+    uint64_t dead_letters; /* dead letters reported so far */
+    uint64_t dead_by_reason[TAH_DEAD_REASONS]; /* by tah_dead_reason */
+    uint64_t faults[TAH_FAULT_CODES];          /* by -ta_result */
+} tah_sched_stats;
+void tah_sched_read_stats(const tah_sched *sched, tah_sched_stats *out);
 /*
  * Core gave `actor` a macrostep to run outside a delivery (for example an
  * invocation reported unavailable, which queues an internal event): an idle
@@ -515,6 +546,17 @@ tah_waiter *tah_sched_waiter(const tah_sched *sched, uint32_t index);
 void tah_sched_waiter_give(tah_sched *sched, uint32_t index);
 bool tah_sched_settlement_pop(tah_sched *sched, tah_settlement *out);
 /*
+ * What a binding keeps with a waiter: its `host` (napi's promise), set
+ * after the take, and NULL for a waiter not taken; its generation, the
+ * other half of the token the binding hands out (0 for an index never
+ * issued); and the next taken waiter after `after` (0 to start), or 0 when
+ * there is none, to settle them all at close.
+ */
+void tah_sched_waiter_set_host(tah_sched *sched, uint32_t index, void *host);
+void *tah_sched_waiter_host(const tah_sched *sched, uint32_t index);
+uint32_t tah_sched_waiter_generation(const tah_sched *sched, uint32_t index);
+uint32_t tah_sched_next_waiter(const tah_sched *sched, uint32_t after);
+/*
  * Cancels a pending waiter (abort or timeout). A message still in a mailbox
  * is withdrawn, so it is never delivered; one already on the dead list is
  * still reported, without its waiter; one already delivered is not undone.
@@ -532,6 +574,9 @@ bool tah_sched_quiet(const tah_sched *sched);
  * actor's, and becomes a record.
  */
 void tah_sched_turn(tah_sched *sched, const tah_turn_params *params);
+/* The records of the last turn, in the order they happened, until
+ * tah_sched_release_records(); NULL when there are none. */
+const tah_turn_record *tah_sched_records(const tah_sched *sched);
 /*
  * Releases what the turn's records own (a dead letter's data) and forgets
  * the records. The turn calls it first, so a caller that runs turns back to

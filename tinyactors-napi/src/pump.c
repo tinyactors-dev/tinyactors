@@ -351,7 +351,7 @@ static napi_value tna_completion_data(napi_env env, tah_system *system, ta_actor
 
 static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record, napi_value *first_error) {
     tah_system *system = wrapper->system;
-    if (wrapper->done_hook != NULL && tah_sched_lookup(&system->sched, record->actor) != NULL) {
+    if (wrapper->done_hook != NULL && tah_sched_state_of(&system->sched, record->actor) != TAH_SCHED_NONE) {
         napi_value view = tna_actor_view(env, wrapper, record->actor);
         napi_value argument = NULL;
         napi_value data = tna_completion_data(env, system, record->actor);
@@ -364,7 +364,7 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_tu
     }
     /* The hook may have closed the system or destroyed the actor itself. */
     if (wrapper->destroy_finished && !tah_system_closed(system) &&
-        tah_sched_lookup(&system->sched, record->actor) != NULL) {
+        tah_sched_state_of(&system->sched, record->actor) != TAH_SCHED_NONE) {
         tna_destroy_finished(system, record->actor);
     }
 }
@@ -582,11 +582,10 @@ static void tna_settle_sends(napi_env env, tna_napi_system *wrapper) {
     tah_sched *sched = &wrapper->system->sched;
     tah_settlement settlement;
     while (tah_sched_settlement_pop(sched, &settlement)) {
-        tah_waiter *waiter = tah_sched_waiter(sched, settlement.waiter);
-        if (waiter == NULL || waiter->host == NULL) {
+        napi_deferred deferred = tah_sched_waiter_host(sched, settlement.waiter);
+        if (deferred == NULL) {
             continue;
         }
-        napi_deferred deferred = waiter->host;
         tah_sched_waiter_give(sched, settlement.waiter);
         napi_handle_scope scope = NULL;
         napi_open_handle_scope(env, &scope);
@@ -682,7 +681,7 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
     if (!tah_system_closed(system)) {
         tah_system_turn(system);
         tna_settle_sends(env, wrapper);
-        for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        for (const tah_turn_record *record = tah_sched_records(&system->sched); record != NULL; record = record->next) {
             if (tah_system_closed(system)) {
                 break; /* a hook closed the system */
             }
@@ -806,15 +805,16 @@ void tna_pump_close(tna_napi_system *wrapper, bool env_usable) {
     }
     /* send() promises still pending reject with "closed" (ADR 0012). */
     tah_sched *sched = &wrapper->system->sched;
-    napi_value closed = env_usable && sched->waiters_live > 0 ? tna_error(env, "closed", "the system was closed") : NULL;
-    for (uint32_t index = 1; index < sched->waiters.count; index += 1) {
-        tah_waiter *waiter = tah_sched_waiter(sched, index);
-        if (waiter->state != TAH_WAITER_FREE) {
-            if (closed != NULL && waiter->host != NULL) {
-                napi_reject_deferred(env, waiter->host, closed);
-            }
-            tah_sched_waiter_give(sched, index);
+    napi_value closed = NULL;
+    for (uint32_t index = tah_sched_next_waiter(sched, 0); index != 0; index = tah_sched_next_waiter(sched, index)) {
+        napi_deferred deferred = tah_sched_waiter_host(sched, index);
+        if (env_usable && closed == NULL) {
+            closed = tna_error(env, "closed", "the system was closed");
         }
+        if (closed != NULL && deferred != NULL) {
+            napi_reject_deferred(env, deferred, closed);
+        }
+        tah_sched_waiter_give(sched, index);
     }
     /* Waiters that cannot be settled (finalizer, teardown) are abandoned. */
     wrapper->waiter_count = 0;

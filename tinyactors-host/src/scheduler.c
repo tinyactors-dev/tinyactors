@@ -329,6 +329,33 @@ uint32_t tah_sched_waiter_take(tah_sched *sched) {
     return index;
 }
 
+void tah_sched_waiter_set_host(tah_sched *sched, uint32_t index, void *host) {
+    tah_waiter *waiter = tah_sched_waiter(sched, index);
+    if (waiter != NULL) {
+        waiter->host = host;
+    }
+}
+
+void *tah_sched_waiter_host(const tah_sched *sched, uint32_t index) {
+    const tah_waiter *waiter = tah_sched_waiter(sched, index);
+    return waiter == NULL ? NULL : waiter->host;
+}
+
+uint32_t tah_sched_waiter_generation(const tah_sched *sched, uint32_t index) {
+    const tah_waiter *waiter = tah_sched_waiter(sched, index);
+    return waiter == NULL ? 0 : waiter->generation;
+}
+
+uint32_t tah_sched_next_waiter(const tah_sched *sched, uint32_t after) {
+    for (uint32_t index = after + 1u; index < sched->waiters.count; index += 1u) {
+        const tah_waiter *waiter = tah_vec_at(&sched->waiters, index);
+        if (waiter->state != TAH_WAITER_FREE) {
+            return index;
+        }
+    }
+    return 0;
+}
+
 void tah_sched_waiter_give(tah_sched *sched, uint32_t index) {
     tah_waiter *waiter = tah_sched_waiter(sched, index);
     if (waiter == NULL || waiter->state == TAH_WAITER_FREE) {
@@ -640,6 +667,39 @@ uint32_t tah_sched_mailbox_count(const tah_sched *sched, ta_actor_id actor) {
         count += 1u;
     }
     return count;
+}
+
+tah_sched_state tah_sched_state_of(const tah_sched *sched, ta_actor_id actor) {
+    const tah_sched_entry *entry = tah_sched_lookup(sched, actor);
+    return entry == NULL ? TAH_SCHED_NONE : (tah_sched_state)entry->state;
+}
+
+uint32_t tah_sched_mailbox_first(const tah_sched *sched, ta_actor_id actor) {
+    const tah_sched_entry *entry = tah_sched_lookup(sched, actor);
+    return entry == NULL ? 0 : entry->first;
+}
+
+tah_queued_message tah_sched_queued_message(const tah_sched *sched, uint32_t envelope) {
+    const tah_envelope *message = tah_sched_envelope(sched, envelope);
+    return (tah_queued_message){ .event = &message->event,
+                                 .jump = message->has_jump ? message->jump : NULL,
+                                 .waiter = message->waiter,
+                                 .next = message->next };
+}
+
+void tah_sched_read_stats(const tah_sched *sched, tah_sched_stats *out) {
+    *out = (tah_sched_stats){ .runnable = tah_ring_count(&sched->runnable),
+                              .ready = tah_ring_count(&sched->ready),
+                              .quarantined = sched->quarantined,
+                              .queued = sched->queued,
+                              .delivered = sched->delivered,
+                              .dead_letters = sched->dead_letters };
+    for (uint32_t reason = 0; reason < TAH_DEAD_REASONS; reason += 1u) {
+        out->dead_by_reason[reason] = sched->dead_by_reason[reason];
+    }
+    for (uint32_t code = 0; code < TAH_FAULT_CODES; code += 1u) {
+        out->faults[code] = sched->faults[code];
+    }
 }
 
 /* ------------------------------------------------------------------------
@@ -1306,6 +1366,10 @@ static void tah_sched_report_dead(tah_sched *sched, const tah_turn_params *param
         }
         tah_envelope_give(sched, index);
     }
+}
+
+const tah_turn_record *tah_sched_records(const tah_sched *sched) {
+    return sched->records;
 }
 
 void tah_sched_release_records(tah_sched *sched) {
