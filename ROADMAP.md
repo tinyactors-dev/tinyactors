@@ -94,7 +94,7 @@ gaps left or found on the way.
   notes.)
 - [ ] **A `send()` with a timeout does not keep the process alive,** so
   napi's tests use keep-alive intervals. Decide whether a pending `send()`
-  should hold the event loop open. (napi ADR 0033's notes.)
+  should hold the event loop open. (napi ADR 0033's notes.) -- it should not.
 - [ ] **Run core's exhaustive pass after core changes.** Some full runs
   showed core's step cached after a core change (`scale_test` to four
   million actors). The last full run passed, but confirm that
@@ -120,11 +120,3 @@ gaps left or found on the way.
   build for `wasm32-freestanding`; no build task or test runs them in a
   browser yet. The binding implements `tah_platform` and a pump driver on
   `MessageChannel` and `setTimeout`.
-- [ ] **Package and release.** One command (`npm install tinyactors`,
-  `bun add tinyactors`) installs a prebuilt addon in a Node or Bun
-  project; releases are built with one command on a Mac or a Linux VM and
-  published to npm and GitHub Releases:
-  [Packaging and releases](docs/proposals/packaging.md).
-- [ ] **Demo application.** A new project, tinyactors-open-stage, uses
-  tinyactors-napi to build a web-based val.town clone where people deploy
-  their actors, hot-reload them, and connect and listen to events.
