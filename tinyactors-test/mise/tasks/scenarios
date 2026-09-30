@@ -1,5 +1,9 @@
 #!/usr/bin/env ruby
 #MISE description="Run tinyactors-test Ruby scenarios (args: [-n PATTERN] [SCENARIO_FILE...])"
+#MISE depends=["build"]
+# The build is content-gated, so this costs a few hashes when nothing
+# changed, and a kernel or core edit reaches the scenarios without a
+# separate `mise run build`.
 
 require 'pathname'
 
