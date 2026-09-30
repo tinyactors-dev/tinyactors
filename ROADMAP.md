@@ -73,9 +73,10 @@ are in [`docs/proposals/`](docs/proposals/README.md).
      state. napi's `inputs.c` and `napi_replay.c` become kernel code. The
      tests move with them, among them the four timelines of core ADR 0089,
      the out-of-memory sweeps, and the memory-bound tests.
-  5. **Core ADR 0094, the log leaves core:** remove the input sink, host
+  5. [x] **Core ADR 0094, the log leaves core:** remove the input sink, host
      records, `ta_actor_replay()`, `ta_actor_prepare_params.log`,
-     `host_seq`, and checkpoint bytes from core.
+     `host_seq`, and checkpoint bytes from core. Done: `e4b6974`; see core
+     ADR 0094's notes, "Section 2".
   6. **napi ADR 0037:** napi keeps its glue, data model, pump driver and
      `lib/`. `readInputLog()` yields the new kinds, and the rest of the
      public API is unchanged.

@@ -1,6 +1,6 @@
 # ADR 0094: Every input carries its time, and the input log leaves core
 
-**Status:** Accepted; sections 1 and 3 implemented (2026-09-30), section 2 follows the kernel's log (roadmap steps 4 and 5); see the implementation notes. Would supersede:
+**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Supersedes:
 - ADR 0090 sections 3 to 7: the record layout, the input sink, host records and the replay reducer move to the host kernel (kernel ADR 0002);
 - ADR 0091's byte form: a checkpoint becomes structured state that core exports and restores;
 - ADR 0089 section 2's `ta_actor_set_time()`: time becomes an argument of every input.
@@ -245,3 +245,52 @@ view borrows the actor's storage, as inspection does.
   (busy before bootstrap and while holding an event, done, unpublished,
   another revision, an unknown state, `at` with a state). The byte
   checkpoint (ADR 0091) keeps its own walk until step 5 removes it.
+
+### Section 2: the log leaves core (2026-09-30)
+
+Commit `e4b6974`. The host kernel had its own log (kernel ADR 0002, step
+4a), and the test host's persistence scenarios ran on it (kernel ADR 0001,
+step 7), so nothing depended on core's log any more.
+
+- **Removed from core:**
+  - `ta_system_set_input_sink`, `ta_system_log_family`,
+    `ta_system_input_owner` (with `ta_input_owner`) and
+    `ta_system_write_host_record` (with `ta_host_record_params` and
+    `ta_host_record`);
+  - `ta_actor_replay` (with `ta_replay_step` and `ta_actor_replay_params`),
+    and the byte `ta_actor_checkpoint` (with `ta_owed_message`);
+  - `ta_actor_prepare_params.log` and `ta_actor_deliver_params.host_seq`;
+  - the reducer's private `ta_actor_advance_clock`;
+  - the sparse state's `log_seq` and its three log flags, the definition's
+    `input_logged`, and the system's staging buffer and logged families;
+  - `src/input_log.{c,h}` (1,954 lines) and `tests/input_log_test.c`
+    (1,881 lines).
+- **Kept:** time on every input, replaying actors, prepare and publish, and
+  export and restore of an idle actor's state (sections 1 and 3). The
+  timelines of ADR 0089 section 2 stay covered in `tests/replay_test.c`,
+  with a time on each input.
+- **Callers:**
+  - the test host drops its `input.recording` and `input.log` instruments,
+    its core-log scenario helpers (`recording_inputs`, `input_kinds`,
+    `compact_inputs`, `replay_log`, and `evict` and `checkpoint` through
+    core), and the "input log" scenario group, whose cases run on the
+    kernel in `ruby/scenarios/hosted.rb`;
+  - napi's bindings policy and generated bindings drop the removed
+    functions;
+  - the kernel never called them.
+- **Where this differs from the text:** the jq writer's "largest write"
+  check went with the `input.recording` instrument. The jq data model's
+  unit test (`tests/json_datamodel_test.c`) still shows it writes in
+  pieces.
+- **Costs:**
+
+  | | before | after |
+  |---|---|---|
+  | `ta_system` | 1,808 bytes | 1,448 bytes |
+  | `ta_actor_sparse_state` | 184 bytes | 176 bytes |
+  | `ta_actor`, `ta_definition` | 232, 904 bytes | unchanged |
+
+  4,337 lines leave core, 1,881 of them tests.
+- **Tests:** `mise run test --all` passed: core, the kernel, the test host
+  (437 of 437 scenarios, five fewer after the group moved) and napi, with
+  IRP 176/176 on Node and Bun.

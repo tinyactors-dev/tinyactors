@@ -1,6 +1,6 @@
 # ADR 0091: A checkpoint is an actor's state at a record of its log
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Builds on ADR 0090 (the input log, its byte layout and its replay). Refines ADR 0089: a replay can start from a checkpoint instead of from `spawned`. Amended in place while Proposed, when it was implemented: a checkpoint is a unit of records rather than one record, it carries the messages the host still owes (section 5), and it carries no invocation values.
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Builds on ADR 0090 (the input log, its byte layout and its replay). Refines ADR 0089: a replay can start from a checkpoint instead of from `spawned`. Amended in place while Proposed, when it was implemented: a checkpoint is a unit of records rather than one record, it carries the messages the host still owes (section 5), and it carries no invocation values. Its byte form is superseded by ADR 0094 and removed from core (2026-09-30): core exports and restores structured state, and the host kernel encodes checkpoints (kernel ADR 0002).
 **Date:** 2026-09-29
 
 ## Context
