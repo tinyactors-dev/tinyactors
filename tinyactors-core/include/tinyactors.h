@@ -2909,9 +2909,8 @@ typedef struct {
  * structure, for a host to encode. State IDs are the definition's own
  * numbers, which its revision fixes (states are numbered in document order,
  * ADR 0060), so a state restores only under the revision it came from.
- * Pending sends are the actor's, as inspection reports them, submitted ones
- * included: a restore holds them all, and gives a submitted one back to the
- * router at publish (ADR 0095). `root` is the data model's
+ * Pending sends are the actor's, as inspection reports them; a submitted
+ * one has left the actor and is not restored. `root` is the data model's
  * root. What ta_actor_export_state() fills is borrowed from the actor and
  * the caller's arrays, except `root`, which the caller releases with
  * ta_value_release(); what ta_actor_prepare_params.state points at is
@@ -2950,11 +2949,10 @@ typedef struct {
     /*
      * A state to restore (ADR 0094 section 3), as ta_actor_export_state()
      * exported it and a host decoded it: a replaying actor whose clock
-     * starts at the state's, with its configuration, history, held sends
-     * (submitted ones too, ADR 0095) and invocations (active in core, with
-     * no invoker called), and no bootstrap. Its data is bound to
-     * `datamodel_binding`, or to the state's root when that is null. `at`
-     * must then be null.
+     * starts at the state's, with its configuration, history, held sends and
+     * invocations (active in core, with no invoker called), and no
+     * bootstrap. Its data is bound to `datamodel_binding`, or to the state's
+     * root when that is null. `at` must then be null.
      * TA_ERR_DEFINITION_MISMATCH when the state was exported under another
      * revision; TA_ERR_NOT_FOUND when it names a state or an <invoke> the
      * definition does not have.
@@ -3168,8 +3166,7 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
  * into one. Only the actor's own sends can be named (ADR 0012). It may be
  * called between macrosteps or while one is paused, allocates nothing, and
  * writes a WITHDRAWN trace record outside any macrostep. It also removes a
- * replaying actor's held sends with that ID (ADR 0089 section 7), except
- * submitted ones (ADR 0095).
+ * replaying actor's held sends with that ID (ADR 0089 section 7).
  *
  * - TA_ERR_INVALID: `send` is 0, which names no send.
  * - TA_ERR_NOT_FOUND: no resident actor has that ID, or it holds no pending
@@ -3181,24 +3178,6 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
  *   withdrawn.
  */
 TA_API ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id actor, ta_send_id send);
-
-/*
- * The run a replaying actor replays handed one of its held submitted sends
- * on (ADR 0095): a restored state holds the sends the router had refused,
- * and the host's log shows when one left. `send` names the one the router
- * took at last (the host logged its `fired`): the first held submitted send
- * with that ID, in the order they were due, is dropped. `send` 0 drops every
- * held submitted send: the actor was evicted, and they stayed with the
- * process that evicted it, as orphans (ADR 0054). Unsubmitted held sends are
- * not touched: a clock move drops them (ADR 0089 section 2). Allocates
- * nothing.
- *
- * - TA_ERR_INVALID: the actor is not replaying.
- * - TA_ERR_NOT_FOUND: no such actor, or it holds no such send. A host
- *   passes every `fired` it replays, and most name none: a delayed send the
- *   router took at its first offer, or an immediate send the replay dropped.
- */
-TA_API ta_result ta_actor_drop_submitted(ta_system *system, ta_actor_id actor, ta_send_id send);
 
 /*
  * A read-only operational view of one resident interpreter instance.

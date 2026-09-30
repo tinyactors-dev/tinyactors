@@ -407,31 +407,6 @@ static ta_str tah_replay_name(tah_system *system, ta_event_name_id name, char *b
     return (ta_str){ .ptr = buffer, .len = needed - 1u };
 }
 
-/*
- * FIRED names the send the router took: a submitted one the actor holds
- * leaves (most FIRED records name none). EVICTED leaves every submitted
- * send to the process that evicted the actor, which delivers it as an
- * orphan (core ADR 0054).
- */
-static ta_result tah_replay_drop_submitted(tah_replay *replay, ta_actor_id actor, const tah_wal_view *view) {
-    tah_system *system = replay->system;
-    ta_send_id send = 0;
-    if (view->kind == TAH_WAL_FIRED) {
-        ta_str text = { 0 };
-        if (!tah_wal_text(view, 0, &text)) {
-            return TA_OK; /* written with no send ID: it names no send */
-        }
-        ta_result result = ta_send_id_intern(system->core, text, &send);
-        if (result != TA_OK) {
-            return result;
-        }
-    }
-    system->inside_core = true;
-    ta_result result = ta_actor_drop_submitted(system->core, actor, send);
-    system->inside_core = false;
-    return result == TA_ERR_NOT_FOUND ? TA_OK : result;
-}
-
 typedef struct {
     tah_replay *replay;
     const tah_replay_run_params *params;
@@ -453,10 +428,7 @@ static ta_result tah_replay_apply(const tah_replay_step *step, bool *stop, tah_r
         return TA_OK;
     case TAH_WAL_FIRED:
     case TAH_WAL_EVICTED:
-        /* Time, which the next input's, or the publish's, moves the clock
-         * to; and a submitted send restored from a checkpoint leaves at the
-         * FIRED that took it, or at an eviction (core ADR 0095). */
-        return tah_replay_drop_submitted(replay, actor, view);
+        return TA_OK; /* time only: the next input's, or the publish's, moves the clock */
     case TAH_WAL_FINISHED:
         *stop = true;
         *state = TAH_REPLAY_FINISHED;

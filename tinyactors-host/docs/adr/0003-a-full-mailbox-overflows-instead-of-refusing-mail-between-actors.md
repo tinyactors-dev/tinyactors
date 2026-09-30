@@ -285,3 +285,44 @@ unchanged, and Bun's RSS moves as much the other way in variants next to
 it (tracing "full", -9.5%; its heap in "logged" moved -45.6% in one run
 and +82.4% in the other), so it is the runtime's collector, not this
 change: nothing it adds runs unless the queue is full.
+
+### Core ADR 0095's machinery is removed (2026-09-30)
+
+After the change above, nothing but running out of memory makes a
+submitted send in a kernel system. The router answers RETRY only when it
+cannot write `fired`, number a message, write its `accepted`, or take an
+envelope, a trace parent or a ready-queue slot; the I/O adapter answers
+`TA_OP_NOMEM`, which core treats as RETRY, only when it cannot record
+`fired` or queue the effect. Section 3 accepts that window.
+
+Core ADR 0095 served that window alone: a checkpoint taken while a
+refused send waits restores it. The same send is lost anyway by a replay
+from `spawned`, by the sender's eviction and an exit, and by a crash
+while the sender is evicted, which ADR 0095 never covered. It cost a
+public function, a rule for submitted held sends in four places of core
+(restore, clock move, `<cancel>`, withdrawal), a drop at every `fired` and
+`evicted` the kernel replays, and a `fired` that had to carry its send ID
+or refuse the send. So it is removed, as commit 5254618 added it:
+- `ta_actor_drop_submitted()` is gone, with napi's plumbing entry in
+  `bindings.rb` and the regenerated `src/gen/ta_napi.{c,h}`;
+- `ta_actor_state_restore()` and the state check skip submitted sends
+  again (core ADR 0094 section 3: exported, not restored), so the clock
+  move, publish's count, `<cancel>` and a withdrawal never meet a held
+  submitted send, and treat held sends as before;
+- the kernel's replay treats `fired` and `evicted` as time only again;
+- `tah_inputs_fired()` writes `fired` without its send ID when it cannot
+  render it, as before, instead of refusing the send.
+
+The kernel's checkpoint still writes a submitted send
+(`TAH_WAL_SEND_SUBMITTED`), as `ta_actor_export_state()` reports it; a
+restore skips it.
+
+This reintroduces no loss outside out of memory: a full queue makes no
+submitted send any more (section 1). ADR 0095's own remaining windows go
+with it: an orphan delivered after its address was loaded again could
+drop the wrong restored send, and needed a refused send to exist.
+
+Tests: core `tests/replay_test.c`'s `test_export_restores_submitted`
+becomes `test_export_leaves_submitted`: the state reports the refused
+send, and the restored actor holds only the two unsubmitted ones. The
+kernel's tests of ADR 0095 went with the change above.

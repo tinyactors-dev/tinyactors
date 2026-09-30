@@ -18,10 +18,8 @@
  *   time: ACCEPTED holds a message; DELIVERED (or JUMP) delivers the held
  *   message with the logged time and resumes the actor until idle; DROPPED
  *   forgets one; WITHDRAWN, ABANDONED and RELEASED make the operator's call
- *   again; FIRED and EVICTED carry time, which the next input's time (or
- *   the publish) applies, and drop a submitted send a checkpoint restored
- *   (core ADR 0095): FIRED the one it names, EVICTED every one; FINISHED
- *   and DESTROYED end the life. Records a
+ *   again; FIRED and EVICTED only carry time, which the next input's time
+ *   (or the publish) applies; FINISHED and DESTROYED end the life. Records a
  *   checkpoint the replay started from covers are skipped.
  * - tah_replay_redeliver() puts the messages still owed back in the
  *   published actor's mailbox, keeping their IDs.

@@ -174,22 +174,6 @@ ta_result ta_actor_hold_log(ta_system *system, ta_actor *actor, const ta_log_rec
     return result;
 }
 
-/* Whether `effect` is a held send with `send_id` (0: any) that is `submitted`. */
-static bool ta_actor_held_send_is(const ta_activation_effect *effect, ta_send_id send_id, bool submitted) {
-    return effect->kind == TA_ACTIVATION_SEND && effect->as.send.send.submitted == submitted &&
-           (send_id == 0 || effect->as.send.send.send_id == send_id);
-}
-
-/* Removes held effect `index`, keeping the order of the rest. */
-static void ta_actor_remove_held(ta_vec *entries, uint32_t index) {
-    ta_activation_effect_release(ta_vec_at(entries, index));
-    for (uint32_t at = index + 1u; at < entries->count; at += 1u) {
-        *(ta_activation_effect *)ta_vec_at(entries, at - 1u) = *(ta_activation_effect *)ta_vec_at(entries, at);
-    }
-    entries->count -= 1u;
-}
-
-/* A submitted send is not the chart's to cancel (ADR 0054), held or not. */
 bool ta_actor_cancel_held_send(ta_actor *actor, ta_send_id send_id) {
     ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse == NULL || sparse->activation_effects == NULL) {
@@ -199,55 +183,17 @@ bool ta_actor_cancel_held_send(ta_actor *actor, ta_send_id send_id) {
     bool found = false;
     for (uint32_t index = entries->count; index > 0; index -= 1u) {
         ta_activation_effect *effect = ta_vec_at(entries, index - 1u);
-        if (!ta_actor_held_send_is(effect, send_id, false)) {
+        if (effect->kind != TA_ACTIVATION_SEND || effect->as.send.send.send_id != send_id) {
             continue;
         }
-        ta_actor_remove_held(entries, index - 1u);
+        ta_activation_effect_release(effect);
+        for (uint32_t at = index; at < entries->count; at += 1u) {
+            *(ta_activation_effect *)ta_vec_at(entries, at - 1u) = *(ta_activation_effect *)ta_vec_at(entries, at);
+        }
+        entries->count -= 1u;
         found = true;
     }
     return found;
-}
-
-/* Whether a replaying actor holds a submitted send with `send_id`. */
-static bool ta_actor_holds_submitted(const ta_actor *actor, ta_send_id send_id) {
-    const ta_actor_sparse_state *sparse = actor->sparse;
-    if (sparse == NULL || sparse->activation_effects == NULL) {
-        return false;
-    }
-    const ta_vec *entries = &sparse->activation_effects->entries;
-    for (uint32_t index = 0; index < entries->count; index += 1u) {
-        if (ta_actor_held_send_is(ta_vec_at(entries, index), send_id, true)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-ta_result ta_actor_drop_submitted(ta_system *system, ta_actor_id id, ta_send_id send_id) {
-    ta_actor *actor = system == NULL ? NULL : ta_actor_lookup(system, id);
-    if (actor == NULL) {
-        return system == NULL ? TA_ERR_INVALID : TA_ERR_NOT_FOUND;
-    }
-    if (!ta_actor_replaying(actor)) {
-        return TA_ERR_INVALID;
-    }
-    ta_vec *entries = &actor->sparse->activation_effects->entries;
-    bool found = false;
-    for (uint32_t index = 0; index < entries->count;) {
-        if (!ta_actor_held_send_is(ta_vec_at(entries, index), send_id, true)) {
-            index += 1u;
-            continue;
-        }
-        ta_actor_remove_held(entries, index);
-        found = true;
-        if (send_id != 0) {
-            break; /* one `fired` took one send: the first, in the order they were due */
-        }
-    }
-    if (found) {
-        ta_actor_touch(actor);
-    }
-    return found ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
 bool ta_actor_state_active(const ta_actor *actor, ta_state_id state) {
@@ -824,6 +770,9 @@ static ta_result ta_actor_state_check(const ta_system *system, const ta_definiti
     }
     for (uint32_t index = 0; index < state->send_count; index += 1u) {
         const ta_delayed_send_info *info = &state->sends[index];
+        if (info->submitted) {
+            continue;
+        }
         if (!ta_event_name_valid(&system->event_names, info->event) || !ta_atom_valid(&system->atoms, info->io_type) ||
             (info->has_content && info->content >= definition->content_count) ||
             (info->has_target_text && info->target_text >= definition->content_count)) {
@@ -859,12 +808,9 @@ static ta_result ta_actor_state_restore(ta_system *system, ta_actor *actor, cons
     ta_result result = TA_OK;
     for (uint32_t index = 0; result == TA_OK && index < state->send_count; index += 1u) {
         const ta_delayed_send_info *info = &state->sends[index];
-        /*
-         * A submitted send is held too (ADR 0095): the router refused it
-         * and nothing durable says it was taken since. It keeps its
-         * submitted mark, so no clock move and no <cancel> drops it, and
-         * its envelope names the actor, as the one it left with did.
-         */
+        if (info->submitted) {
+            continue; /* it left the actor before the state was taken */
+        }
         ta_delayed_send send = { .owner = actor->record.id,
                                  .send_id = info->send_id,
                                  .due = info->due,
@@ -878,11 +824,7 @@ static ta_result ta_actor_state_restore(ta_system *system, ta_actor *actor, cons
                                  .has_target_text = info->has_target_text,
                                  .target_text = info->target_text,
                                  .invoke_id = TA_INVOKE_ID_NONE,
-                                 .submitted = info->submitted,
                                  .trace = info->trace };
-        if (send.submitted) {
-            send.origin = actor->record.self; /* retained below; a prepared actor has no parent */
-        }
         /* Runtime ID 0, as for ta_actor_spawn()'s pending sends, is the
          * actor itself: a host cannot know its new session in advance. */
         if (send.destination.kind == TA_ACTOR_REF_RUNTIME && send.destination.as.runtime == 0 &&
@@ -891,13 +833,11 @@ static ta_result ta_actor_state_restore(ta_system *system, ta_actor *actor, cons
             send.destination.family = definition->family;
         }
         ta_actor_ref_retain(&send.destination);
-        ta_actor_ref_retain(&send.origin);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
         result = ta_actor_hold_send(system, actor, &(ta_activation_send){ .send = send, .immediate = false });
         if (result != TA_OK) {
             ta_actor_ref_release(&send.destination);
-            ta_actor_ref_release(&send.origin);
             ta_value_release(&send.target);
             ta_value_release(&send.data);
         }
@@ -1109,10 +1049,7 @@ static uint32_t ta_actor_activation_send_count(const ta_actor *actor, const ta_t
     const ta_vec *entries = &sparse->activation_effects->entries;
     for (uint32_t index = 0; index < entries->count; index += 1u) {
         const ta_activation_effect *effect = ta_vec_at(entries, index);
-        count += effect->kind == TA_ACTIVATION_SEND &&
-                         (at == NULL || effect->as.send.send.submitted || effect->as.send.send.due > *at)
-                     ? 1u
-                     : 0u;
+        count += effect->kind == TA_ACTIVATION_SEND && (at == NULL || effect->as.send.send.due > *at) ? 1u : 0u;
     }
     return count;
 }
@@ -1286,8 +1223,7 @@ void ta_actor_move_clock(ta_actor *actor, ta_time time) {
     uint32_t kept = 0;
     for (uint32_t index = 0; index < entries->count; index += 1u) {
         ta_activation_effect *effect = ta_vec_at(entries, index);
-        /* A submitted send waits for the router, not for time (ADR 0095). */
-        if (effect->kind == TA_ACTIVATION_SEND && !effect->as.send.send.submitted && effect->as.send.send.due <= time) {
+        if (effect->kind == TA_ACTIVATION_SEND && effect->as.send.send.due <= time) {
             ta_activation_effect_release(effect);
             continue;
         }
@@ -1436,9 +1372,6 @@ static ta_result ta_actor_withdraw(ta_system *system, ta_actor *actor, ta_send_i
     /* A replaying actor's delayed sends are held, not pending (ADR 0089). */
     bool held = ta_actor_replaying(actor) && ta_actor_cancel_held_send(actor, send);
     if (ta_timer_cancel(&system->timers, list, send) != TA_OK && !held) {
-        if (ta_actor_replaying(actor) && ta_actor_holds_submitted(actor, send)) {
-            return TA_ERR_DONE; /* only submitted ones are held */
-        }
         for (uint32_t index = 0; index < list->count; index += 1u) {
             if (list->sends[index].send_id == send) {
                 return TA_ERR_DONE; /* only submitted ones are left */
