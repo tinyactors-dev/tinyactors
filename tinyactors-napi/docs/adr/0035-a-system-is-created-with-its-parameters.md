@@ -48,7 +48,7 @@ createSystem({
   },
 });
 system.parameters;   // every parameter's value, frozen
-parameterInfo();     // name → { default, min, max, unit, owner: "core" | "napi" }
+parameterInfo();     // name → { default, min, max, unit, owner: "core" | "kernel" | "napi" }
 ```
 
 - **Core's parameters go into `ta_system_config.params`,** and napi's

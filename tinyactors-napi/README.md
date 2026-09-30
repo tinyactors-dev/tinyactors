@@ -471,8 +471,9 @@ system.close();
 ```
 
 They include core's (`microstepLimit`, `interpreterBytes`, `renderBytes`,
-`maxActors`, ...) and napi's (`valueBytes`, `traceStagingBytes`, the
-scheduling budgets, the mailbox limits). Every trace request's resource
+`maxActors`, ...), the host kernel's (`valueBytes`, `traceStagingBytes`,
+the scheduling budgets, the mailbox limits) and napi's own
+(`registeredDatamodels`, `datamodelNameBytes`); `owner` says which. Every trace request's resource
 carries them as one attribute, `tinyactors.params`: the defaults' version,
 then each parameter that differs from its default, in name order
 (`v1;valueBytes=16384`), or `v1` alone, so a trace says which caps applied

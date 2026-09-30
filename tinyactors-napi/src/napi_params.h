@@ -5,7 +5,8 @@
  * napi's own system parameters (napi ADR 0035), beside core's (core ADR
  * 0092) and the kernel's (tinyactors-host's params.h): the limits of napi's
  * data-model registry. Named, bounded, set once when the system is created;
- * parameterInfo() reports them with the kernel's.
+ * parameterInfo() reports them beside the kernel's, with owner "napi"
+ * (the kernel's have owner "kernel").
  */
 #include <stdint.h>
 

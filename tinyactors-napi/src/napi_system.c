@@ -354,7 +354,7 @@ static napi_value tna_parameter_table(napi_env env, napi_callback_info info) {
         const char *unit = NULL;
         size_t unit_len = 0;
         uint64_t numbers[3];
-        const char *owner = param < TA_PARAM_COUNT ? "core" : "napi";
+        const char *owner = param < TA_PARAM_COUNT ? "core" : param < TA_PARAM_COUNT + TAH_PARAM_COUNT ? "kernel" : "napi";
         if (param < TA_PARAM_COUNT) {
             ta_param_info core = { 0 };
             if (ta_param_info_of((ta_param)param, &core) != TA_OK) {
@@ -368,15 +368,15 @@ static napi_value tna_parameter_table(napi_env env, napi_callback_info info) {
             numbers[1] = core.min;
             numbers[2] = core.max;
         } else if (param < TA_PARAM_COUNT + TAH_PARAM_COUNT) {
-            /* The kernel's: napi embeds the kernel, so they are napi's to its users. */
-            const tah_param_info *napi = &tah_param_table[param - TA_PARAM_COUNT];
-            name = napi->name;
+            /* The host kernel's: every binding over the kernel has them. */
+            const tah_param_info *kernel = &tah_param_table[param - TA_PARAM_COUNT];
+            name = kernel->name;
             name_len = strlen(name);
-            unit = napi->unit;
+            unit = kernel->unit;
             unit_len = strlen(unit);
-            numbers[0] = napi->default_value;
-            numbers[1] = napi->min;
-            numbers[2] = napi->max;
+            numbers[0] = kernel->default_value;
+            numbers[1] = kernel->min;
+            numbers[2] = kernel->max;
         } else {
             const tna_param_info *napi = &tna_param_table[param - TA_PARAM_COUNT - TAH_PARAM_COUNT];
             name = napi->name;

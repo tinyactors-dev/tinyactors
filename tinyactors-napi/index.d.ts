@@ -292,7 +292,8 @@ export interface ParameterInfo {
   readonly min: number;
   readonly max: number;
   readonly unit: string;
-  readonly owner: "core" | "napi";
+  /** Who reads it: core, the host kernel (every binding has these), or napi itself. */
+  readonly owner: "core" | "kernel" | "napi";
 }
 
 /** Every system parameter, by name (napi ADR 0035). */

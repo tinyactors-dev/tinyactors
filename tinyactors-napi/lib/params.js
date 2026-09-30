@@ -2,7 +2,8 @@
 
 // System parameters (core ADR 0092, napi ADR 0035): set once when a system
 // is created, each with a default and bounds. Core's come from its own
-// table (ta_param_info_of), napi's from the addon's; nothing is copied here.
+// table (ta_param_info_of), the host kernel's from its table
+// (tah_param_table), napi's from the addon's; nothing is copied here.
 
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
@@ -28,7 +29,7 @@ function tableOf() {
   return table;
 }
 
-/** Every parameter: name → { default, min, max, unit, owner: "core" | "napi" }. */
+/** Every parameter: name → { default, min, max, unit, owner: "core" | "kernel" | "napi" }. */
 function parameterInfo() {
   return Object.freeze(Object.fromEntries(tableOf()));
 }
