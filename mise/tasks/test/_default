@@ -54,7 +54,7 @@ steps.each do |name, command, chdir|
   # host's `bindings`, say) prints the same line when it is up to date,
   # while the step itself still runs.
   task = command.drop(2).find { |word| !word.start_with?('-') }
-  own_skip = /\[(?:\/\/[^\]:]+:)?#{Regexp.escape(task)}\] sources up-to-date, skipping/
+  own_skip = /\[(?:\/\/[^\]:]*:)?#{Regexp.escape(task)}\] sources up-to-date, skipping/
   status = Open3.popen2e(*command, chdir: chdir.to_s) do |_stdin, output, wait|
     output.each_line do |line|
       print line
