@@ -343,3 +343,23 @@ Writing the tests found two bugs, fixed in their own commits:
   could be read without its parts (CORRUPT) (`01c2a86`);
 - `tah_replay_prepare()` left the prepared actor behind, unknown to the
   caller, when its bootstrap from `spawned` ran out of memory (`65f505e`).
+
+### Step 4a, amended: checkpoints restore submitted sends (2026-09-30)
+
+Step 4a wrote a send the router had refused into a checkpoint
+(`checkpoint-send` with `TAH_WAL_SEND_SUBMITTED`), and core did not
+restore it. Since its `fired` is written only by the attempt that takes
+it, a checkpoint taken while it waited lost it after a crash. Core ADR
+0095 restores it, and changes two lines of Step 4a:
+- **"Replay treats `fired` as time only in any case" no longer holds.**
+  `fired` still moves no clock itself, but the replay passes its send ID
+  to `ta_actor_drop_submitted()`: a held submitted send with that ID was
+  taken after the checkpoint, and is not sent again.
+- **`evicted` drops every held submitted send:** the process that evicted
+  the actor keeps them as orphans and delivers them.
+- **`fired` always carries its send ID.** `tah_inputs_fired()` answers out
+  of memory, so the router answers RETRY, when it cannot render the ID.
+
+`tah_replay_read_checkpoint()` already handed the flag to core; nothing
+else in the kernel changed. The tests are in `tests/replay_test.c`; core
+ADR 0095 lists them.

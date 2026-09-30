@@ -5,7 +5,7 @@
 - ADR 0091's byte form: a checkpoint becomes structured state that core exports and restores;
 - ADR 0089 section 2's `ta_actor_set_time()`: time becomes an argument of every input.
 
-It keeps ADR 0090 sections 1 and 2 (byte sinks and sources, and the data model's streaming codec), which offload and the kernel use. It builds on kernel ADR 0001, which creates the host kernel.
+It keeps ADR 0090 sections 1 and 2 (byte sinks and sources, and the data model's streaming codec), which offload and the kernel use. It builds on kernel ADR 0001, which creates the host kernel. Section 3's restore is amended by ADR 0095 (2026-09-30): a submitted send is restored too, and goes back to the router at publish.
 **Date:** 2026-09-30
 
 ## Context

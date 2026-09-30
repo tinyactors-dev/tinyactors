@@ -23,6 +23,9 @@
  *   a timer to itself fires once; a send to another actor that fired
  *   before the stop is not sent again; one still pending at the stop fires
  *   once after publish; one that fired after the last commit fires again.
+ * - A send the router refused (RETRY) waits, submitted, when a checkpoint
+ *   is written: after a crash, the restore sends it once; a FIRED after
+ *   the checkpoint, or an eviction that leaves it as an orphan, drops it.
  * - Every allocation of the sequence (open, push, prepare, run, finish,
  *   publish, redeliver, and a checkpoint written and restored), failed
  *   once in turn: the step answers NOMEM, leaves no actor behind and
@@ -159,6 +162,7 @@ static void no_wake(tah_system *system, void *context) {
  *   zero --ping--> one --ping--> two --ping--> three
  *   zero --arm--> waiting, arming `tick` to itself in 5s (send ID t1)
  *   zero --relay--> waiting, arming `hello` to sink/b in 5s (send ID b1)
+ *   zero --now--> sent, sending `hello` to sink/b at once (send ID n1)
  *   waiting --tick--> ticked
  *   any --stop--> end (final)
  * Family "sink" (not logged), address sink/b:
@@ -176,6 +180,11 @@ static void no_wake(tah_system *system, void *context) {
                    .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR(event_text) },          \
                    .target = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR(target_text) }, \
                    .delay = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR(delay_text) } } }
+#define SEND_NOW(id_text, event_text, target_text)                                                \
+    { .kind = TA_SCXML_ACTION_SEND,                                                               \
+      .as.send = { .id = { .kind = TA_SCXML_ID_LITERAL, .as.literal = STR(id_text) },             \
+                   .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR(event_text) },          \
+                   .target = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR(target_text) } } }
 #define TARGETS(...) ((const ta_str[]){ __VA_ARGS__, END })
 #define GO(event_text, target_text) \
     { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR(event_text), .targets = TARGETS(STR(target_text)) }
@@ -188,6 +197,8 @@ static const ta_scxml_state_spec ping_states[] = {
             .actions = (const ta_scxml_action_spec[]){ SEND_SELF("t1", "tick", "5s"), END } },
           { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("relay"), .targets = TARGETS(STR("waiting")),
             .actions = (const ta_scxml_action_spec[]){ SEND_TO("b1", "hello", "5s", "#_actor_sink/b"), END } },
+          { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("now"), .targets = TARGETS(STR("sent")),
+            .actions = (const ta_scxml_action_spec[]){ SEND_NOW("n1", "hello", "#_actor_sink/b"), END } },
           GO("stop", "end"), END } },
     { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("one"),
       .transitions = (const ta_scxml_transition_spec[]){ GO("ping", "two"), GO("stop", "end"), END } },
@@ -198,6 +209,8 @@ static const ta_scxml_state_spec ping_states[] = {
     { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("waiting"),
       .transitions = (const ta_scxml_transition_spec[]){ GO("tick", "ticked"), GO("stop", "end"), END } },
     { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("ticked"),
+      .transitions = (const ta_scxml_transition_spec[]){ GO("stop", "end"), END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("sent"),
       .transitions = (const ta_scxml_transition_spec[]){ GO("stop", "end"), END } },
     { .kind = TA_SCXML_STATE_FINAL, .id = STR("end") },
     END,
@@ -1259,6 +1272,193 @@ static void timeline_crash_between_commits(void) {
 }
 
 /* ------------------------------------------------------------------------
+ * A send that waits after RETRY (core ADR 0095): the router refused it, so
+ * core keeps it as submitted, due, to offer again; the kernel writes its
+ * FIRED only on the attempt that takes it (kernel ADR 0002). A checkpoint
+ * taken while it waits holds it, a restore gives it back to the router at
+ * publish, and a replay drops it at the FIRED that took it, or at an
+ * eviction, which leaves it to the process that evicted the actor.
+ */
+
+static log_buffer waiting_checkpoint; /* written while n1 waits */
+static log_buffer waiting_after;      /* ping/p1's batches after it */
+
+static uint32_t message_budget; /* the system's, while waiting_start() sets it to 0 */
+
+/* Lifts the limits waiting_start() set: sink/b's mailbox takes mail again. */
+static void waiting_lift(tah_system *system) {
+    system->sched.max_queued = 0;
+    system->budgets.messages = message_budget;
+}
+
+static void turn_once(tah_system *system, log_buffer *log) {
+    tah_system_turn(system);
+    take(system, log);
+    tah_system_end_turn(system);
+}
+
+/* Whether the actor holds exactly one pending send, n1, submitted. */
+static bool holds_n1_submitted(tah_system *system, ta_actor_id actor) {
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system->core, actor, &view) == TA_OK);
+    return view.delayed_send_count == 1 && view.delayed_sends[0].submitted;
+}
+
+/*
+ * ping/p1 takes `now` at 1000 while sink/b's mailbox is full (one message
+ * at most, and no deliveries): n1 is refused at once and again at the
+ * turn's dispatch, and waits, submitted. The checkpoint is written then,
+ * and the limits lifted when `lift`.
+ */
+static void waiting_start(bool lift) {
+    line.log.length = waiting_checkpoint.length = waiting_after.length = 0;
+    line.system = make_system(1);
+    tah_system *system = line.system;
+    line.definition = define_ping(system);
+    ta_definition_id sink = 0;
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    CHECK(spawn_at(system, sink, &sink_address, &line.sink) == TA_OK);
+    CHECK(spawn_at(system, line.definition, &ping_address, &line.actor) == TA_OK);
+    run(system, &line.log);
+    advance(system, 1000);
+    CHECK(post(system, line.actor, "now", NULL) == TA_OK);
+    turn_once(system, &line.log); /* `now` delivered; ping/p1 runs it next turn */
+    CHECK(post(system, line.sink, "hello", NULL) == TA_OK);
+    message_budget = system->budgets.messages;
+    system->sched.max_queued = 1;
+    system->budgets.messages = 0;
+    turn_once(system, &line.log);
+    CHECK(in_state(system, line.actor, "sent") && in_state(system, line.sink, "h0"));
+    CHECK(holds_n1_submitted(system, line.actor));
+    static const tah_wal_kind kinds[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, 0 };
+    CHECK(timeline_kinds(kinds)); /* the refused attempts left no FIRED */
+
+    CHECK(tah_checkpoint_write(system, line.actor, buffer_sink(&waiting_checkpoint)) == TA_OK);
+    static record_list records;
+    read_records(waiting_checkpoint.bytes, waiting_checkpoint.length, &records);
+    CHECK(records.count == 2 && records.views[1].kind == TAH_WAL_CHECKPOINT_SEND);
+    CHECK((tah_wal_number(&records.views[1], 5) & TAH_WAL_SEND_SUBMITTED) != 0);
+    CHECK(tah_wal_number(&records.views[1], 4) == 1000);
+    if (lift) {
+        waiting_lift(system);
+    }
+}
+
+/* The checkpoint, then the batches after it. */
+static const log_buffer *waiting_log(void) {
+    static log_buffer log;
+    log.length = 0;
+    append(&log, waiting_checkpoint.bytes, waiting_checkpoint.length);
+    append(&log, waiting_after.bytes, waiting_after.length);
+    return &log;
+}
+
+/* A new process: sink/b at h0, time at 2000, ping/p1 restored from `log` and published. */
+static tah_system *waiting_restore(const log_buffer *log, restore_run *out, ta_actor_id *sink) {
+    tah_system *system = make_system(2);
+    out->definition = define_ping(system);
+    ta_definition_id definition = 0;
+    CHECK(define(system, "sink", "v1", sink_states, &definition) == TA_OK);
+    CHECK(spawn_at(system, definition, &sink_address, sink) == TA_OK);
+    run(system, NULL);
+    advance(system, 2000);
+    CHECK(restore(system, log->bytes, log->length, out) == TA_OK);
+    CHECK(out->published && in_state(system, out->actor, "sent"));
+    return system;
+}
+
+/*
+ * The process stops while n1 waits. Restored from the checkpoint alone, or
+ * in pieces, n1 goes back to the router at publish: sink/b gets it once, and
+ * the published actor records its FIRED, continuing the log's numbers.
+ */
+static void a_send_waiting_at_a_checkpoint_is_restored(void) {
+    waiting_start(false);
+    drop(line.system, line.actor); /* a crash: nothing more is recorded */
+    finish_system(line.system);
+    for (uint32_t chunk = 0; chunk <= 24; chunk += 8u) {
+        restore_run out = { .first = chunk, .chunk = chunk };
+        ta_actor_id sink = 0;
+        tah_system *system = waiting_restore(waiting_log(), &out, &sink);
+        CHECK(out.last_time == 1000);
+        static log_buffer after;
+        after.length = 0;
+        run(system, &after);
+        CHECK(in_state(system, sink, "h1")); /* once */
+        CHECK(pending_sends(system, out.actor, NULL) == 0);
+        static record_list records;
+        read_records(after.bytes, after.length, &records);
+        CHECK(records.count == 1 && records.views[0].kind == TAH_WAL_FIRED && records.views[0].seq == 4);
+        advance(system, 9000);
+        run(system, NULL);
+        CHECK(in_state(system, sink, "h1"));
+        finish_system(system);
+    }
+}
+
+/*
+ * n1 is taken after the checkpoint, and that batch is committed with its
+ * FIRED before the process stops: the replay drops n1 there, and nothing
+ * is sent again.
+ */
+static void a_send_taken_after_the_checkpoint_is_not_sent_again(void) {
+    waiting_start(true);
+    advance(line.system, 1500);
+    run(line.system, &waiting_after);
+    CHECK(in_state(line.system, line.sink, "h2")); /* the hello, then n1 */
+    static record_list records;
+    read_records(waiting_after.bytes, waiting_after.length, &records);
+    CHECK(records.count == 1 && records.views[0].kind == TAH_WAL_FIRED && records.views[0].seq == 4);
+    drop(line.system, line.actor);
+    finish_system(line.system);
+
+    restore_run out = { 0 };
+    ta_actor_id sink = 0;
+    tah_system *system = waiting_restore(waiting_log(), &out, &sink);
+    CHECK(out.last_time == 1500);
+    static log_buffer after;
+    after.length = 0;
+    run(system, &after);
+    CHECK(in_state(system, sink, "h0"));
+    CHECK(after.length == 0);
+    finish_system(system);
+}
+
+/*
+ * Evicted while n1 waits: n1 stays with the process as an orphan (core ADR
+ * 0054), which delivers it, before or after ping/p1 is restored from the
+ * checkpoint and its EVICTED. The replay drops n1 at EVICTED: sink/b gets
+ * it once.
+ */
+static void a_send_left_as_an_orphan_is_not_sent_again(void) {
+    for (int before = 0; before < 2; before += 1) {
+        waiting_start(before != 0);
+        advance(line.system, 1500);
+        CHECK(tah_inputs_evicted(line.system, line.actor, false, 0) == TA_OK);
+        drop(line.system, line.actor);
+        take(line.system, &waiting_after);
+        if (before) {
+            run(line.system, &waiting_after); /* the orphan fires; ping/p1 has no resident actor */
+            CHECK(in_state(line.system, line.sink, "h2"));
+        }
+        static record_list records;
+        read_records(waiting_after.bytes, waiting_after.length, &records);
+        CHECK(records.count == 1 && records.views[0].kind == TAH_WAL_EVICTED);
+
+        advance(line.system, 2000);
+        restore_run out = { .definition = line.definition };
+        const log_buffer *log = waiting_log();
+        CHECK(restore(line.system, log->bytes, log->length, &out) == TA_OK);
+        CHECK(out.published && in_state(line.system, out.actor, "sent"));
+        CHECK(pending_sends(line.system, out.actor, NULL) == 0);
+        waiting_lift(line.system);
+        run(line.system, NULL);
+        CHECK(in_state(line.system, line.sink, "h2")); /* the hello, then n1 once */
+        finish_system(line.system);
+    }
+}
+
+/* ------------------------------------------------------------------------
  * Running out of memory
  */
 
@@ -1365,6 +1565,9 @@ int main(void) {
     timeline_fired_before_the_stop();
     timeline_pending_at_the_stop();
     timeline_crash_between_commits();
+    a_send_waiting_at_a_checkpoint_is_restored();
+    a_send_taken_after_the_checkpoint_is_not_sent_again();
+    a_send_left_as_an_orphan_is_not_sent_again();
     survives_every_failed_allocation(exhaustive ? 1u : 16u);
     puts("replay test passed");
     return 0;

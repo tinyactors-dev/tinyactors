@@ -98,3 +98,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0092](0092-system-parameters-are-fixed-at-creation-and-bound-every-buffer.md) | [System parameters are fixed at creation and bound every buffer](0092-system-parameters-are-fixed-at-creation-and-bound-every-buffer.md) |
 | [0093](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) | [The event-block cache fills on demand up to its bound](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) |
 | [0094](0094-every-input-carries-its-time-and-the-input-log-leaves-core.md) | [Every input carries its time, and the input log leaves core](0094-every-input-carries-its-time-and-the-input-log-leaves-core.md) |
+| [0095](0095-a-checkpoint-restores-the-sends-the-router-refused.md) | [A checkpoint restores the sends the router refused](0095-a-checkpoint-restores-the-sends-the-router-refused.md) |

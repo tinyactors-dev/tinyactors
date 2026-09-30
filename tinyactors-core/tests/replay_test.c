@@ -12,7 +12,9 @@
  * - the result codes of ta_actor_prepare(), ta_actor_publish() and
  *   a time on every input and publish's `at` (ADR 0094), and withdrawing a held send;
  * - publishing runs out of memory without changing anything, at every
- *   allocation it makes.
+ *   allocation it makes;
+ * - a state holds a send the router refused, and a restore holds it until
+ *   it is published or ta_actor_drop_submitted() drops it (ADR 0095).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,6 +76,7 @@ static const ta_allocator allocator = { .self = NULL, .v = &count_vtable };
  */
 
 static int routed;
+static bool refusing; /* the router answers RETRY, and counts nothing */
 static int invoker_starts;
 static int invoker_cancels;
 static int invoker_forwards;
@@ -82,6 +85,9 @@ static int logs_written;
 static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
     (void)self;
     (void)params;
+    if (refusing) {
+        return TA_EXTERNAL_EVENT_RETRY;
+    }
     routed += 1;
     return TA_EXTERNAL_EVENT_ACCEPTED;
 }
@@ -893,6 +899,85 @@ static void test_export_restores_invocations(void) {
     destroy_system(system);
 }
 
+/*
+ * A send the router refused waits, submitted, and the state exported then
+ * holds it (ADR 0095). Restored, it is held through a clock move past its
+ * due time, <cancel> and a withdrawal do not reach it, and published it goes
+ * back to the router once. ta_actor_drop_submitted() drops it instead: by
+ * its ID, or with every submitted send.
+ */
+static void test_export_restores_submitted(void) {
+    ta_system *system = create_system();
+    ta_definition_id definition = define(system, "timers", timers);
+    refusing = true;
+    ta_actor_id live = live_until_e1(system, definition); /* `now` to b is refused */
+    refusing = false;
+    exported out;
+    CHECK(export_into(system, live, &out) == TA_OK);
+    CHECK(out.state.send_count == 3);
+    ta_send_id now = 0;
+    uint32_t submitted = 0;
+    for (uint32_t index = 0; index < out.state.send_count; index += 1u) {
+        if (out.state.sends[index].submitted) {
+            submitted += 1u;
+            now = out.state.sends[index].send_id;
+            CHECK(out.state.sends[index].due == 1000);
+        }
+    }
+    CHECK(submitted == 1 && now != 0);
+    static const ta_actor_address copy_address = { .family = { .name = STR("timers") }, .name = STR("c") };
+    static const ta_actor_address other_address = { .family = { .name = STR("timers") }, .name = STR("d") };
+    ta_result result = TA_OK;
+    ta_actor_id copy = prepare_from_state(system, definition, &copy_address, &out.state, &result);
+    CHECK(result == TA_OK);
+    ta_actor_id other = prepare_from_state(system, definition, &other_address, &out.state, &result);
+    CHECK(result == TA_OK);
+    CHECK(pending_sends(system, copy) == 0); /* held, not pending */
+
+    /* The live actor's three sends go: t1 and b1 due, `now` offered again. */
+    CHECK(ta_system_set_time(system, 7000) == TA_OK);
+    CHECK(dispatch(system) == 3 && routed == 3);
+
+    /* The clock passes t1 and b1, which fired then; `now` stays. */
+    deliver_at(system, copy, "timeout", 6000);
+    CHECK(in_state(system, copy, "timedout"));
+    CHECK(ta_actor_withdraw_send(system, copy, now) == TA_ERR_DONE);
+    CHECK(publish_at(system, copy, 6500) == TA_OK);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, copy, &view) == TA_OK);
+    CHECK(view.delayed_send_count == 1 && view.delayed_sends[0].submitted && view.delayed_sends[0].send_id == now);
+    CHECK(ta_actor_drop_submitted(system, copy, now) == TA_ERR_INVALID); /* published */
+    CHECK(dispatch(system) == 1 && routed == 4);
+    CHECK(pending_sends(system, copy) == 0);
+
+    /* Dropped: every submitted send, then by ID there is none left. */
+    CHECK(ta_actor_drop_submitted(system, other, 0) == TA_OK);
+    CHECK(ta_actor_drop_submitted(system, other, 0) == TA_ERR_NOT_FOUND);
+    CHECK(ta_actor_drop_submitted(system, other, now) == TA_ERR_NOT_FOUND);
+    CHECK(ta_actor_drop_submitted(system, 12345, now) == TA_ERR_NOT_FOUND);
+    CHECK(publish_at(system, other, 7000) == TA_OK);
+    CHECK(pending_sends(system, other) == 0);
+    CHECK(dispatch(system) == 0 && routed == 4);
+    destroy_system(system);
+
+    /* By ID: that send goes, and the unsubmitted ones stay. */
+    system = create_system();
+    definition = define(system, "timers", timers);
+    refusing = true;
+    live = live_until_e1(system, definition);
+    CHECK(ta_system_set_time(system, 1100) == TA_OK);
+    CHECK(dispatch(system) == 0); /* refused again */
+    refusing = false;
+    CHECK(export_into(system, live, &out) == TA_OK);
+    copy = prepare_from_state(system, definition, &copy_address, &out.state, &result);
+    CHECK(result == TA_OK);
+    CHECK(ta_actor_drop_submitted(system, copy, now) == TA_OK);
+    CHECK(ta_actor_drop_submitted(system, copy, now) == TA_ERR_NOT_FOUND);
+    CHECK(publish_at(system, copy, 1100) == TA_OK);
+    CHECK(pending_sends(system, copy) == 2); /* t1 and b1, due at 6000 */
+    destroy_system(system);
+}
+
 static void test_export_result_codes(void) {
     ta_system *system = create_system();
     ta_definition_id definition = define(system, "timers", timers);
@@ -951,6 +1036,7 @@ int main(void) {
     test_publish_out_of_memory();
     test_export_restores();
     test_export_restores_invocations();
+    test_export_restores_submitted();
     test_export_result_codes();
     CHECK(live_blocks == 0);
     if (failures != 0) {

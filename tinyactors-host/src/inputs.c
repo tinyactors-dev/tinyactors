@@ -863,6 +863,9 @@ ta_result tah_inputs_fired(tah_system *system, const ta_actor_ref *sender, ta_se
     }
     ta_str text = { 0 };
     bool has_text = tah_inputs_send_text(system, send, &text);
+    if (!has_text && send != 0) {
+        return TA_ERR_NOMEM; /* a replay drops the submitted send FIRED names (core ADR 0095) */
+    }
     tah_wal_record record = { .kind = TAH_WAL_FIRED,
                               .time = ta_system_time(system->core),
                               .field_count = 1,

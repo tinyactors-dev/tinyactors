@@ -84,10 +84,11 @@ gaps left or found on the way.
 - [x] **`parameterInfo()` labels the kernel's parameters as napi's.** Give
   them `owner: "kernel"`, since the test host has them too. (Kernel ADR
   0001, "Step 2b".)
-- [ ] **Checkpoints leave out two things:** invocations carry no values, and
-  sends already submitted to the router are not restored. Decide whether
-  either matters for a real chart, and record it. (Core ADR 0091's notes;
-  kernel ADR 0002, "Step 4a".)
+- [x] **Checkpoints leave out two things:** invocations carry no values, and
+  sends already submitted to the router are not restored. Decided
+  2026-09-30 in core ADR 0095: submitted sends are restored, since nothing
+  else recorded them; invocations still carry no values, since nothing
+  reads them. (Core ADR 0091's notes; kernel ADR 0002, "Step 4a".)
 - [x] **The trace staging bound is the bound plus one call,** decided
   2026-09-30 and recorded in napi ADR 0036's follow-up: a per-record check
   would call the sink from inside core.
