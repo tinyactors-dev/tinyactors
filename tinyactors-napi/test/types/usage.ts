@@ -1,7 +1,7 @@
 // A consumer's view of index.d.ts, type-checked by `mise run check-types`
 // against Node's types and ES2022 only: no DOM. It is compiled, never run.
 
-import { createSystem, named, parameterInfo, readInputLog, serialize, statechart } from '@tinyactors/node';
+import { actorURI, createSystem, named, parameterInfo, readInputLog, serialize, statechart } from '@tinyactors/node';
 import type { ActorAddress, ActorEvent, InputRecord, ReplayReport } from '@tinyactors/node';
 
 class Money {
@@ -125,7 +125,9 @@ export function typedEvents(): void {
         .send('ping', (send) => send.to(({ event }) => event?.data.from ?? '').data({ anything: true }))
         .send(({ event }) => `echo.${event?.name ?? ''}`)
         // A reply to the sender, through its I/O processor.
-        .send('pong', (send) => send.toOrigin().data({ from: 'orders' }))));
+        .send('pong', (send) => send.toOrigin().data({ from: 'orders' }))
+        // An address as a target URI, whatever its name holds.
+        .send('ping', (send) => send.to(actorURI({ family: 'pinger', name: 'eu/1' })))));
 
   statechart<{ n: number }, OrderEvents>({ family: 'orders-bad', revision: '1' })
     .state('s', (s) => s

@@ -1894,6 +1894,19 @@ export type InputRecord = { readonly time: number; readonly seq?: string } & (
 );
 
 /**
+ * The target URI of a named actor: `#_actor_<family>/<name>`, each part
+ * percent-encoded by core's encoder (core ADR 0096), so a name holding `/`
+ * or `%` can be targeted. It is the text `send(...).to()` takes and what the
+ * actor's events carry as `event.origin`:
+ *
+ *     t.send('ping', (send) => send.to(actorURI({ family: 'orders', name: 'eu/42' })))
+ *     // "#_actor_orders/eu%2F42"
+ *
+ * Throws `invalid` for an empty family or name.
+ */
+export declare function actorURI(address: ActorAddress): string;
+
+/**
  * Decode an input log (napi ADR 0034 section 5): `chunks`, the bytes a sink
  * stored, cut anywhere, yields its records in order, one at a time.
  * `classes` names the classes the log's values construct, beside the
@@ -2140,7 +2153,7 @@ export type DelaySpec<Data extends object, Event = ActorEvent> =
  * The event an expression sees as `context.event` (SCXML _event). `origin`
  * is a URI a send can target: `#_scxml_<sessionID>` or
  * `#_actor_<family>/<name>` (core ADR 0044; each part percent-encoded,
- * core ADR 0096), or an I/O processor's URI,
+ * core ADR 0096, as actorURI() writes it), or an I/O processor's URI,
  * and `originType` names the processor that reaches it, so replying is
  * `send("reply", (send) => send.toOrigin())`.
  */

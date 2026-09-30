@@ -124,9 +124,12 @@ gaps left or found on the way.
   `send("reply", (send) => send.toOrigin())` targets `event.origin` through
   `event.originType`, so it answers an actor, an invoked service or an I/O
   processor's client (`test/origins.js`).
-- [ ] **Names that contain `/`:** core's target grammar refuses `/` inside
+- [x] **Names that contain `/`:** core's target grammar refuses `/` inside
   an actor's name (`src/scxml_uri.c`). Percent-encoding in the grammar
-  (core ADR 0044), and a napi helper that builds addresses.
+  (core ADR 0044), and a napi helper that builds addresses. Done: both
+  parts of `#_actor_<family>/<name>` are percent-encoded (core ADR 0096),
+  and napi's `actorURI({ family, name })` writes one with core's encoder
+  (`ta_actor_uri_format`).
 
 ## Open
 

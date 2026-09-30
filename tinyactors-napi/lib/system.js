@@ -2873,6 +2873,16 @@ function addressOf(address, caller) {
   return address;
 }
 
+/**
+ * The target URI of a named actor, `#_actor_<family>/<name>` with both
+ * parts percent-encoded (core ADR 0096), written by core's encoder: the
+ * text a send targets it by, and its `event.origin`.
+ */
+function actorURI(address) {
+  const { family, name } = addressOf(address, 'actorURI()');
+  return native.core.actor_uri_format({ family: { name: family }, name });
+}
+
 // The io or invokers option: undefined or an object of services by type.
 function servicesOf(value, what) {
   if (value === undefined) {
@@ -2983,4 +2993,4 @@ function sessionNumber(system, text) {
   return BigInt(match[2]);
 }
 
-module.exports = { System, createSystem, nativeOf, ActorID, PreparedActor, SessionImage };
+module.exports = { System, createSystem, actorURI, nativeOf, ActorID, PreparedActor, SessionImage };

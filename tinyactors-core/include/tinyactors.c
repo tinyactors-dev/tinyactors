@@ -4619,6 +4619,17 @@ TA_API ta_result ta_scxml_target_format(const ta_system *system, const ta_scxml_
     return ta_text_finish(&writer, params->needed);
 }
 
+TA_API ta_result ta_actor_uri_format(const ta_actor_uri_format_params *params) {
+    if (params == NULL || params->needed == NULL || params->address.family.name.len == 0 ||
+        params->address.family.name.ptr == NULL || params->address.name.len == 0 ||
+        params->address.name.ptr == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_text_writer writer = { .buffer = params->buffer, .capacity = params->capacity };
+    ta_actor_uri_write(&writer, &params->address);
+    return ta_text_finish(&writer, params->needed);
+}
+
 
 TA_PRIVATE void ta_actor_ref_retain(const ta_actor_ref *ref) {
     if (ref->kind == TA_ACTOR_REF_NAMED) {

@@ -773,6 +773,22 @@ typedef struct {
 TA_API ta_result ta_scxml_target_format(const ta_system *system,
                                         TA_IN const ta_scxml_target_format_params *params);
 
+typedef struct {
+    ta_actor_address address;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *needed;
+} ta_actor_uri_format_params;
+
+/*
+ * The target URI of a named actor, `#_actor_<family>/<name>` with both parts
+ * percent-encoded (ADR 0096): the text ta_scxml_target_format() writes for
+ * that address, without a system or an interned address, so a host builds
+ * a target for any name with core's encoder. TA_ERR_INVALID for an empty
+ * family or name.
+ */
+TA_API ta_result ta_actor_uri_format(TA_IN const ta_actor_uri_format_params *params);
+
 /*
  * A session ID as text (ADR 0088): `<incarnation>.<session>.<family>`, the
  * system's incarnation and the numeric session ID in decimal, then the

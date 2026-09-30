@@ -9,7 +9,7 @@
 
 const assert = require('node:assert/strict');
 const native = require('../lib/native');
-const { createSystem, statechart } = require('..');
+const { createSystem, statechart, actorURI } = require('..');
 
 const LONG_URI = 'http://client.example/callbacks/requests/0123456789abcdef0123456789abcdef';
 
@@ -228,7 +228,8 @@ async function repliesToAnActor() {
   ), { name: 'e%/1' });
   const target = system.define(
     statechart({ family: 'caller', revision: 'v1' })
-      .state('s', (s) => s.on('go', (t) => t.send('ping', (send) => send.to('#_actor_echo%2F2/e%25%2F1').data(7)))),
+      .state('s', (s) => s.on('go', (t) => t.send('ping', (send) => send.to(actorURI({ family: 'echo/2', name: 'e%/1' }))
+        .data(7)))),
   );
   const caller = system.spawn(target, { name: 'c/1' });
   await system.flush();
@@ -236,8 +237,22 @@ async function repliesToAnActor() {
   odd.post('go', 3);
   await system.flush();
   assert.equal(oddEcho.inspect().data.from, '#_actor_caller/c%2F1', 'the origin is encoded');
+  assert.equal(oddEcho.inspect().data.from, actorURI({ family: 'caller', name: 'c/1' }), 'actorURI() writes the origin');
   assert.deepEqual(odd.inspect().data.got, { origin: '#_actor_echo/e', data: 3 }, 'a reply reaches a name with / and %');
   system.close();
+}
+
+// actorURI() is core's encoder (core ADR 0096): a plain address as it is,
+// '/', '%' and what a URI fragment may not hold as %XX.
+function buildsActorURIs() {
+  assert.equal(actorURI({ family: 'orders', name: 'o1' }), '#_actor_orders/o1');
+  assert.equal(actorURI({ family: 'orders', name: 'eu/42' }), '#_actor_orders/eu%2F42');
+  assert.equal(actorURI({ family: 'a/b', name: '100%' }), '#_actor_a%2Fb/100%25');
+  assert.equal(actorURI({ family: 'x', name: 'café #1' }), '#_actor_x/caf%C3%A9%20%231');
+  assert.equal(actorURI({ family: 'x', name: "a:b@c?d!$&'()*+,;=-._~" }), "#_actor_x/a:b@c?d!$&'()*+,;=-._~");
+  for (const bad of [{ family: '', name: 'x' }, { family: 'x', name: '' }, { family: 'x' }, null, 'x/y']) {
+    assert.throws(() => actorURI(bad), (error) => error.code === 'invalid', JSON.stringify(bad));
+  }
 }
 
 // inspect() reports each event's origin as a tagged EventOrigin, with the
@@ -319,7 +334,7 @@ async function originsAreReleased() {
     console.error(`origins.js: ${current} did not finish in time`);
     process.exit(1);
   }, Number(process.env.ORIGINS_TIMEOUT_MS ?? 60_000));
-  for (const test of [listsEveryProcessor, repliesPerClass, invokedService, repliesToAnActor, inspectedOrigins,
+  for (const test of [listsEveryProcessor, repliesPerClass, invokedService, repliesToAnActor, buildsActorURIs, inspectedOrigins,
                       originsAreReleased]) {
     current = test.name;
     await test();

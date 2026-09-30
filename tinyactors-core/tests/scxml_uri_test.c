@@ -206,6 +206,32 @@ int main(void) {
         ta_address_release(named);
     }
 
+    /* ta_actor_uri_format writes the same text with no system or handle. */
+    for (size_t index = 0; index < sizeof(encoded) / sizeof(encoded[0]); index += 1) {
+        char uri[128];
+        uint32_t uri_needed = 0;
+        ta_actor_uri_format_params params = {
+            .address = { .family = { .name = str(encoded[index].family) }, .name = str(encoded[index].name) },
+            .buffer = uri, .capacity = sizeof(uri), .needed = &uri_needed };
+        check(ta_actor_uri_format(&params) == TA_OK && strcmp(uri, encoded[index].uri) == 0 &&
+                  uri_needed == strlen(encoded[index].uri) + 1u,
+              encoded[index].uri);
+    }
+    uint32_t short_needed = 0;
+    check(ta_actor_uri_format(&(ta_actor_uri_format_params){
+              .address = { .family = { .name = str("door") }, .name = str("a/b") }, .buffer = NULL,
+              .capacity = 0, .needed = &short_needed }) == TA_ERR_NOMEM &&
+              short_needed == strlen("#_actor_door/a%2Fb") + 1u,
+          "ta_actor_uri_format measures without a buffer");
+    check(ta_actor_uri_format(&(ta_actor_uri_format_params){
+              .address = { .family = { .name = str("") }, .name = str("x") }, .needed = &short_needed }) ==
+              TA_ERR_INVALID,
+          "an empty family has no URI");
+    check(ta_actor_uri_format(&(ta_actor_uri_format_params){
+              .address = { .family = { .name = str("x") }, .name = str("") }, .needed = &short_needed }) ==
+              TA_ERR_INVALID,
+          "an empty name has no URI");
+
     /* Anything else is an invalid target (SCXML 6.2, IRP test194), and so
      * is a malformed escape. */
     const char *invalid[] = { "elsewhere", "", "#_", "#_actor_", "#_actor_door", "#_actor_/front",

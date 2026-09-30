@@ -90,3 +90,9 @@ elsewhere (an I/O processor's client, a log reader) reads differently.
   `test/origins.js` (actors named `a/b%c d`, `c/1` and `e%/1` in a family
   `echo/2` targeted, their origins encoded, and replied to with
   `toOrigin()`, on Node and Bun).
+- **A public writer (not in the decision above):** `ta_actor_uri_format()`
+  writes the URI of a family and a name with no system and no interned
+  address, so a binding builds a target with core's encoder instead of a
+  second one. napi exports it as `actorURI({ family, name })`
+  (`lib/system.js`, generated binding `core.actor_uri_format`); tested in
+  `tests/scxml_uri_test.c` and napi's `test/origins.js`.

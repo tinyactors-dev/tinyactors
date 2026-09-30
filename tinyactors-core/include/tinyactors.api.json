@@ -2935,6 +2935,72 @@
         }
       }
     },
+    "ta_actor_uri_format_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "type": "ta_actor_address"
+          }
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "needed",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "buffer"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "buffer"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "address": 0,
+            "buffer": 32,
+            "capacity": 40,
+            "needed": 48
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 28,
+          "align": 4,
+          "offsets": {
+            "address": 0,
+            "buffer": 16,
+            "capacity": 20,
+            "needed": 24
+          }
+        }
+      }
+    },
     "ta_actor_visit_params": {
       "kind": "struct",
       "doc": "Walks the resident actors (ADR 0062), invoked children included, handing `inspector` the same view ta_actor_inspect() gives for each. Actors are visited in increasing position order, starting at `from`. A position is an actor's slot, ta_actor_id_slot() of its ID: pass 0 to start, then the previous call's `next`, or the slot of an actor to resume at. No slot is TA_ACTOR_VISIT_END. A walk of everything is `from` 0 and `limit` 0, and may leave `next` null.\n\n- The walk reached the end: TA_OK, and `next` is TA_ACTOR_VISIT_END. - `limit` visits answered TA_OK (0 means no limit): TA_OK, and `next` is the position after the last actor visited. - A visit answered anything else: the walk stops with that result, and `next` is that actor's position, so calling again offers it again. An inspector ends a walk early this way. - A null `params` is TA_ERR_INVALID; so is a null `visit`, with `next` set to `from`.\n\nBetween calls, and from inside a visit, the system may change. An actor resident for the whole iteration is visited exactly once; an actor destroyed before the walk reaches it is not visited; one spawned is visited only if its position is at or after the cursor. No position is visited twice in one iteration. A call costs O(actors visited + empty slots passed).",
@@ -18646,6 +18712,32 @@
           "type": {
             "pointer": {
               "type": "ta_scxml_target_format_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_actor_uri_format",
+      "doc": "The target URI of a named actor, `#_actor_ <family >/ <name >` with both parts percent-encoded (ADR 0096): the text ta_scxml_target_format() writes for that address, without a system or an interned address, so a host builds a target for any name with core's encoder. TA_ERR_INVALID for an empty family or name.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_uri_format_params",
               "const": true
             }
           },

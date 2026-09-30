@@ -172,6 +172,12 @@ resolves when the step the message started has ended (or, with `{ until:
 the step fails; it takes a `timeout` and an `AbortSignal`. Messages to one
 actor arrive in the order they were sent.
 
+A chart targets a named actor by `#_actor_<family>/<name>`, each part
+percent-encoded, so a name may hold `/` or `%`. `actorURI()` writes it with
+core's encoder: `actorURI({ family: 'orders', name: 'eu/42' })` is
+`'#_actor_orders/eu%2F42'`, and that is also the `event.origin` of the
+actor's messages (core ADR 0096).
+
 ## Timers
 
 A delayed send is a timer that belongs to the actor. With a manual clock,

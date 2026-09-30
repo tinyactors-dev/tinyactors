@@ -9,6 +9,7 @@ assert.deepEqual(Object.keys(addon).sort(), [
   'ChartCodecError',
   'TRACE_KINDS',
   'TinyactorsError',
+  'actorURI',
   'content',
   'createSystem',
   'decodeTraces',

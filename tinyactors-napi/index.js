@@ -2,7 +2,7 @@
 
 const native = require('./lib/native');
 const { TinyactorsError } = require('./lib/errors');
-const { createSystem } = require('./lib/system');
+const { createSystem, actorURI } = require('./lib/system');
 const { statechart, literal, content, named } = require('./lib/statechart');
 const { TRACE_KINDS, parseTraceparent, formatTraceparent, stepSpanID } = require('./lib/tracing');
 const { decodeTraces } = require('./lib/otlp');
@@ -15,6 +15,8 @@ const { parameterInfo } = require('./lib/params');
 module.exports = {
   version: native.version,
   createSystem,
+  // A named actor's target URI, percent-encoded as core writes it (core ADR 0096).
+  actorURI,
   // System parameters (napi ADR 0035): name → { default, min, max, unit, owner }.
   parameterInfo,
   statechart,
