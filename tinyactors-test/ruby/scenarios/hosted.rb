@@ -32,6 +32,31 @@ TinyactorsTest.chart :hosted_timer do
   state :rung
 end
 
+TinyactorsTest.chart :hosted_box do
+  data size: 0
+
+  state :idle do
+    transition on: 'put' do
+      assign '.size', '$_event.data.blob | length'
+    end
+  end
+end
+
+TinyactorsTest.chart :hosted_seen do
+  data seen: 0
+
+  state :idle do
+    transition on: 'e1', target: :waiting do
+      assign '.seen', '.seen + 1'
+      send_event 'timeout', delay: '5s'
+    end
+  end
+  state :waiting do
+    transition on: 'timeout', target: :timedout
+  end
+  state :timedout
+end
+
 TinyactorsTest.scenarios 'hosted' do
   # Catches: the test host not linking the kernel, or a hosted system that
   # leaks what the kernel allocated for it.
@@ -87,6 +112,59 @@ TinyactorsTest.scenarios 'hosted' do
     hosted_advance(hosted, 5000)
     hosted_run(hosted)
     assert_equal [:rung], hosted_states(hosted, rebuilt)
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: a value lost or cut on its way through the kernel's log and the
+  # jq model's streaming codec.
+  scenario 'a large value is logged and replayed through the kernel' do
+    hosted = hosted_system
+    hosted_log(hosted, 'hosted_box')
+    definition = hosted_define(hosted, :hosted_box)
+    box = hosted_spawn(hosted, definition, family: 'hosted_box', name: 'big')
+    hosted_run(hosted)
+    blob = 'v' * (1024 * 1024)
+    assert_equal 'ok', hosted_post_data(hosted, box, 'put', { blob: blob })
+    hosted_run(hosted)
+    assert_equal blob.size, hosted_data(hosted, box, '.size')
+    hosted_evict(hosted, box)
+    log = hosted_store(hosted)['hosted_box/big']
+    assert log.size / 2 > blob.size, 'the value is in the log'
+    rebuilt = hosted_restore(hosted, definition, 'hosted_box', 'big', log)
+    assert_equal blob.size, hosted_data(hosted, rebuilt, '.size')
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: a checkpoint that does not hold the actor's state, or a log
+  # compacted to it that loses its pending timer.
+  scenario 'a log compacted to its checkpoint rebuilds the actor' do
+    hosted = hosted_system
+    hosted_log(hosted, 'hosted_seen')
+    definition = hosted_define(hosted, :hosted_seen)
+    live = hosted_spawn(hosted, definition, family: 'hosted_seen', name: 'k')
+    hosted_run(hosted)
+    hosted_advance(hosted, 1000)
+    hosted_post(hosted, live, 'e1')
+    hosted_run(hosted) # waiting; the timeout is due at 6000
+    checkpoint = hosted_checkpoint(hosted, live)
+    assert_equal 'ok', checkpoint[:result]
+    hosted_evict(hosted, live)
+    rebuilt = hosted_restore(hosted, definition, 'hosted_seen', 'k', checkpoint[:bytes]) # the checkpoint alone
+    assert_equal [:waiting], hosted_states(hosted, rebuilt)
+    assert_equal 1, hosted_data(hosted, rebuilt, '.seen'), 'the data came from the checkpoint'
+    hosted_advance(hosted, 6000)
+    hosted_run(hosted)
+    assert_equal [:timedout], hosted_states(hosted, rebuilt)
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: a checkpoint of an actor the log does not cover.
+  scenario 'a checkpoint needs a logged, named actor' do
+    hosted = hosted_system
+    hosted_log(hosted, 'hosted_seen')
+    unnamed = hosted_spawn(hosted, hosted_define(hosted, :hosted_seen))
+    hosted_run(hosted)
+    assert_equal 'err_invalid', hosted_checkpoint(hosted, unnamed)[:result]
     assert_equal 0, close_hosted(hosted)
   end
 end

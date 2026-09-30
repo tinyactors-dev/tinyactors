@@ -7,6 +7,7 @@
 #include "allocator.h"
 #include "json_datamodel.h"
 #include "rpc.h"
+#include "value_codec.h"
 #include "ta_rpc.h"
 
 /*
@@ -176,9 +177,18 @@ jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code) {
         &name);
     jv_free(text);
     ta_event event = {.name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
+    jv data = jv_object_get(jv_copy(params), jv_string("data"));
+    if (result == TA_OK && jv_is_valid(data) && jv_get_kind(data) != JV_KIND_NULL) {
+        /* Hosted charts use the jq data model (hosted.log). */
+        result = tat_value_decode(tat_json_datamodel(&bind->json), jv_copy(data), &event.data);
+    }
+    jv_free(data);
     if (result == TA_OK) {
         result = tah_system_post(hosted->system,
                                  &(tah_message){.target = (ta_actor_id)tat_hosted_u64(params, "actor"), .event = &event});
+        if (result != TA_OK) {
+            ta_value_release(&event.data);
+        }
     }
     return tat_encode_ta_result(bind, &result);
 }
@@ -373,4 +383,75 @@ jv tat_hosted_restore_method(tat_bind *bind, jv params, int *error_code) {
         return jv_string("hosted.restore: the log did not rebuild an actor");
     }
     return jv_number((double)actor);
+}
+
+/* A byte sink that keeps what it is given: a checkpoint, for hosted.checkpoint. */
+typedef struct {
+    uint8_t *bytes;
+    size_t length;
+    size_t capacity;
+    size_t unit_start;
+    bool failed;
+} tat_hosted_bytes;
+
+static ta_op_status tat_hosted_bytes_begin(void *self) {
+    tat_hosted_bytes *sink = self;
+    sink->unit_start = sink->length;
+    return TA_OP_OK;
+}
+
+static ta_op_status tat_hosted_bytes_write(void *self, ta_bytes bytes) {
+    tat_hosted_bytes *sink = self;
+    if (sink->length + bytes.len > sink->capacity) {
+        size_t capacity = (sink->length + bytes.len) * 2u + 64u;
+        uint8_t *grown = realloc(sink->bytes, capacity);
+        if (grown == NULL) {
+            sink->failed = true;
+            return TA_OP_NOMEM;
+        }
+        sink->bytes = grown;
+        sink->capacity = capacity;
+    }
+    for (uint32_t at = 0; at < bytes.len; at += 1u) {
+        sink->bytes[sink->length + at] = bytes.ptr[at];
+    }
+    sink->length += bytes.len;
+    return TA_OP_OK;
+}
+
+static void tat_hosted_bytes_end(void *self, bool keep) {
+    tat_hosted_bytes *sink = self;
+    if (!keep) {
+        sink->length = sink->unit_start;
+    }
+}
+
+static const ta_byte_sink_vtable tat_hosted_bytes_vtable = {
+    .begin = tat_hosted_bytes_begin, .write = tat_hosted_bytes_write, .end = tat_hosted_bytes_end};
+
+/* A checkpoint of an idle logged actor (kernel ADR 0002 section 7), in hex. */
+jv tat_hosted_checkpoint_method(tat_bind *bind, jv params, int *error_code) {
+    tat_hosted *hosted = NULL;
+    if (!tat_hosted_resolve(bind, params, &hosted)) {
+        return tat_bind_take_error(bind, error_code);
+    }
+    tat_hosted_bytes sink = {0};
+    ta_result result = tah_checkpoint_write(hosted->system, (ta_actor_id)tat_hosted_u64(params, "actor"),
+                                            (ta_byte_sink){.self = &sink, .v = &tat_hosted_bytes_vtable});
+    jv out = jv_object_set(jv_object(), jv_string("result"), tat_encode_ta_result(bind, &result));
+    if (result == TA_OK) {
+        static const char digits[] = "0123456789abcdef";
+        char *hex = malloc(sink.length * 2u + 1u);
+        if (hex != NULL) {
+            for (size_t at = 0; at < sink.length; at += 1u) {
+                hex[at * 2u] = digits[sink.bytes[at] >> 4];
+                hex[at * 2u + 1u] = digits[sink.bytes[at] & 15u];
+            }
+            hex[sink.length * 2u] = 0;
+            out = jv_object_set(out, jv_string("bytes"), jv_string(hex));
+            free(hex);
+        }
+    }
+    free(sink.bytes);
+    return out;
 }

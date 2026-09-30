@@ -522,6 +522,26 @@ module TinyactorsTest
       store
     end
 
+    def hosted_post_data(hosted, actor, event, data)
+      rpc('hosted.post', system: hosted[:hosted], actor: actor, event: event.to_s, data: data)
+    end
+
+    # A jq filter over a hosted actor's data model root.
+    def hosted_data(hosted, actor, filter = '.')
+      response = ta.actor.datamodel_root(system: hosted[:core], actor: actor)
+      raise ScenarioError, "hosted actor #{actor}: no data root (#{response[:result]})" unless response[:result] == 'ok'
+
+      root = response.dig(:out, :out)
+      return root if filter == '.'
+
+      rpc('json.transform', filter: filter, input: root).first
+    end
+
+    # A checkpoint of `actor` (kernel ADR 0002 section 7): { result:, bytes: hex }.
+    def hosted_checkpoint(hosted, actor)
+      rpc('hosted.checkpoint', system: hosted[:hosted], actor: actor)
+    end
+
     def hosted_evict(hosted, actor)
       rpc('hosted.evict', system: hosted[:hosted], actor: actor)
     end

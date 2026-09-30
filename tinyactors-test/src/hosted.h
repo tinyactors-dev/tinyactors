@@ -21,5 +21,6 @@ jv tat_hosted_log_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_batches_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_evict_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_restore_method(tat_bind *bind, jv params, int *error_code);
+jv tat_hosted_checkpoint_method(tat_bind *bind, jv params, int *error_code);
 
 #endif
