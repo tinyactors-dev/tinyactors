@@ -385,6 +385,12 @@ class ActionSequenceBuilder {
 
 class ActionBuilder extends ActionSequenceBuilder {}
 
+// toOrigin()'s target and processor: the event's _event.origin and
+// _event.origintype. One pair shared by every chart, so a chart built again
+// with toOrigin() is the same definition.
+const eventOrigin = function origin({ event }) { return event?.origin; };
+const eventOriginType = function originType({ event }) { return event?.originType; };
+
 class SendBuilder {
   #root;
   #send;
@@ -406,6 +412,18 @@ class SendBuilder {
 
   via(ioType) {
     return this.#set('type', stringSpec(ioType, 'send I/O processor type'));
+  }
+
+  /**
+   * Reply to the sender of the event being processed: the target is its
+   * origin, and the I/O processor its origin's type, so a reply reaches an
+   * actor, an invoked service or an I/O processor's client alike. An event
+   * with no origin (posted from outside) makes the send fail with
+   * error.execution. Replaces to() and via().
+   */
+  toOrigin() {
+    this.#set('target', { kind: 'expr', expr: eventOrigin });
+    return this.#set('type', { kind: 'expr', expr: eventOriginType });
   }
 
   after(delay) {

@@ -858,9 +858,10 @@ export interface PostOptions {
   /** The retained-bytes estimate of `data`, instead of the default (ADR 0005 point 9). */
   bytes?: number;
   /**
-   * Who the receiver answers with `event.origin` and `event.originType`
-   * (core ADR 0068): an I/O processor's type plus one request's reply URI,
-   * a scope from openScope(), or a token its origin template renders.
+   * Who the receiver answers with `send(...).toOrigin()`, which targets
+   * `event.origin` through `event.originType` (core ADR 0068): an I/O
+   * processor's type plus one request's reply URI, a scope from
+   * openScope(), or a token its origin template renders.
    */
   origin?: IOOrigin;
   /**
@@ -1672,6 +1673,15 @@ export type SendBlock<Data extends object, Payload = unknown, Event = ActorEvent
 export interface SendBuilder<Data extends object, Payload = unknown, Event = ActorEvent> {
   to(target: StringSpec<Data, Event>): this;
   via(ioType: StringSpec<Data, Event>): this;
+  /**
+   * Reply to the sender of the event being processed: the target is its
+   * `origin` and the I/O processor its `originType`, so the reply reaches
+   * an actor, an invoked service or an I/O processor's client alike. It
+   * replaces to() and via(). An event with no origin (one posted from
+   * outside without `origin`) makes the send raise `error.execution`. Like
+   * an inline function, it cannot be written as SCXML text.
+   */
+  toOrigin(): this;
   after(delay: DelaySpec<Data, Event>): this;
   /** id() and idLocation() replace each other: the last one called wins. */
   id(id: string): this;
@@ -2129,8 +2139,9 @@ export type DelaySpec<Data extends object, Event = ActorEvent> =
 /**
  * The event an expression sees as `context.event` (SCXML _event). `origin`
  * is a URI a send can target: `#_scxml_<sessionID>` or
- * `#_actor_<family>/<name>` (core ADR 0044), so replying is
- * `send("reply").to(({ event }) => event.origin)`.
+ * `#_actor_<family>/<name>` (core ADR 0044), or an I/O processor's URI,
+ * and `originType` names the processor that reaches it, so replying is
+ * `send("reply", (send) => send.toOrigin())`.
  */
 export interface ActorEvent<Data = unknown, Name extends string = EventName> {
   readonly name: Name;

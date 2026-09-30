@@ -2,8 +2,9 @@
 
 // I/O origins and the processor registry (core ADR 0068). A processor posts
 // an event with an origin of one of three classes; a chart answers it with
-// send(...).via(event.originType).to(event.origin), and the reply reaches the
-// processor that owns the origin. `ioProcessors` lists every processor with
+// send(...).toOrigin() (event.origin through event.originType), and the
+// reply reaches the processor that owns the origin, or the actor that sent
+// the event. `ioProcessors` lists every processor with
 // the location its template renders. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
@@ -47,7 +48,7 @@ function processors() {
 }
 
 function replier() {
-  const reply = (send) => send.via(({ event }) => event.originType).to(({ event }) => event.origin ?? '');
+  const reply = (send) => send.toOrigin();
   return statechart({ family: 'replier', revision: 'v1' })
     .data('origin', null)
     .data('origintype', null)
@@ -150,7 +151,7 @@ async function invokedService() {
     io: { svc: { send(request) { sends.push([request.event, request.type, request.target]); } } },
     invokers: { svc: { start(request, report) { reporter = report; } } },
   });
-  const reply = (send) => send.via(({ event }) => event.originType).to(({ event }) => event.origin);
+  const reply = (send) => send.toOrigin();
   const definition = system.define(
     statechart({ family: 'client', revision: 'v1' })
       .data('origin', null)
@@ -180,6 +181,40 @@ async function invokedService() {
     ['direct', 'svc', '#_svc'],
     ['bye', 'svc', '#_svc'],
   ]);
+  system.close();
+}
+
+// toOrigin() answers an actor, named or not, through the SCXML processor;
+// an event posted from outside has no origin, so the reply raises
+// error.execution.
+async function repliesToAnActor() {
+  const system = createSystem();
+  const echo = system.spawn(system.define(
+    statechart({ family: 'echo', revision: 'v1' })
+      .data('failed', null)
+      .state('s', (s) => s
+        .on('ping', (t) => t.send('pong', (send) => send.toOrigin().data(({ event }) => event.data)))
+        .on('error.execution', (t) => t.assign('failed', ({ event }) => event.name))),
+  ), { name: 'e' });
+  const asker = system.define(
+    statechart({ family: 'asker', revision: 'v1' })
+      .data('got', null)
+      .state('s', (s) => s
+        .on('go', (t) => t.send('ping', (send) => send.to('#_actor_echo/e').data(({ event }) => event.data)))
+        .on('pong', (t) => t.assign('got', ({ event }) => ({ origin: event.origin, data: event.data })))),
+  );
+  const named = system.spawn(asker, { name: 'a' });
+  const unnamed = system.spawn(asker);
+  await system.flush();
+  named.post('go', 1);
+  unnamed.post('go', 2);
+  await system.flush();
+  assert.deepEqual(named.inspect().data.got, { origin: '#_actor_echo/e', data: 1 });
+  assert.deepEqual(unnamed.inspect().data.got, { origin: '#_actor_echo/e', data: 2 });
+  assert.equal(echo.inspect().data.failed, null);
+  echo.post('ping');
+  await system.flush();
+  assert.equal(echo.inspect().data.failed, 'error.execution', 'no origin to reply to');
   system.close();
 }
 
@@ -262,7 +297,8 @@ async function originsAreReleased() {
     console.error(`origins.js: ${current} did not finish in time`);
     process.exit(1);
   }, Number(process.env.ORIGINS_TIMEOUT_MS ?? 60_000));
-  for (const test of [listsEveryProcessor, repliesPerClass, invokedService, inspectedOrigins, originsAreReleased]) {
+  for (const test of [listsEveryProcessor, repliesPerClass, invokedService, repliesToAnActor, inspectedOrigins,
+                      originsAreReleased]) {
     current = test.name;
     await test();
   }

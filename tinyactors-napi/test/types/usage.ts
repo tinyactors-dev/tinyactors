@@ -123,7 +123,9 @@ export function typedEvents(): void {
       .on('pong', (t) => t
         .send('order.cancelled', (send) => send.data({ id: 'o3' }))
         .send('ping', (send) => send.to(({ event }) => event?.data.from ?? '').data({ anything: true }))
-        .send(({ event }) => `echo.${event?.name ?? ''}`)));
+        .send(({ event }) => `echo.${event?.name ?? ''}`)
+        // A reply to the sender, through its I/O processor.
+        .send('pong', (send) => send.toOrigin().data({ from: 'orders' }))));
 
   statechart<{ n: number }, OrderEvents>({ family: 'orders-bad', revision: '1' })
     .state('s', (s) => s

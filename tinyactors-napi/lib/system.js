@@ -313,7 +313,7 @@ class System {
    * - `origin`: the URI of a computed origin (post with `origin: { type,
    *   token }`); `{token}` is the token.
    * A processor posts events with an origin so a chart can answer them
-   * with `send(...).via(({ event }) => event.originType).to(({ event }) => event.origin)`: see post().
+   * with `send(...).toOrigin()`: see post().
    */
   registerIO(type, processor, options = {}) {
     if (typeof type !== 'string' || type === '') {

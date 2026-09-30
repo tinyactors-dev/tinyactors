@@ -119,8 +119,11 @@ gaps left or found on the way.
   of the events it matches, `raise()` checks names and data, `send()` the
   data of a name of the map; types only (`index.d.ts`,
   `test/types/usage.ts`, napi README "TypeScript").
-- [ ] **A reply-to-sender target,** instead of
-  `.to(({ event }) => String(event?.origin ?? ''))`.
+- [x] **A reply-to-sender target,** instead of
+  `.to(({ event }) => String(event?.origin ?? ''))`. Done:
+  `send("reply", (send) => send.toOrigin())` targets `event.origin` through
+  `event.originType`, so it answers an actor, an invoked service or an I/O
+  processor's client (`test/origins.js`).
 - [ ] **Names that contain `/`:** core's target grammar refuses `/` inside
   an actor's name (`src/scxml_uri.c`). Percent-encoding in the grammar
   (core ADR 0044), and a napi helper that builds addresses.

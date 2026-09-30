@@ -413,8 +413,9 @@ main();
 A processor that throws, or whose promise rejects, fails the send: the
 chart gets `error.communication`. Events you post from outside can carry an
 `origin`, so a chart can answer a WebSocket connection or an HTTP request
-with `send(...).via(({ event }) => event.originType).to(({ event }) =>
-event.origin)`.
+with `send('reply', (send) => send.toOrigin())`: the target is the event's
+`origin` and the processor its `originType`. The same reply answers
+another actor or an invoked service.
 
 ## Tracing and metrics
 
