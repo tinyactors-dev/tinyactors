@@ -50,11 +50,16 @@ end
 steps.each do |name, command, chdir|
   started = clock.call
   # The output is passed through as it comes, and read for mise's skip line.
+  # Only the step's own task counts: a task it runs on the way (the test
+  # host's `bindings`, say) prints the same line when it is up to date,
+  # while the step itself still runs.
+  task = command.drop(2).find { |word| !word.start_with?('-') }
+  own_skip = /\[(?:\/\/[^\]:]+:)?#{Regexp.escape(task)}\] sources up-to-date, skipping/
   status = Open3.popen2e(*command, chdir: chdir.to_s) do |_stdin, output, wait|
     output.each_line do |line|
       print line
       $stdout.flush
-      skipped << name if line.include?('sources up-to-date, skipping')
+      skipped << name if line.match?(own_skip)
     end
     wait.value
   end
