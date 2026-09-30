@@ -25,6 +25,12 @@ generator language, and a plan for a Racket experiment.
 
 ## Summary
 
+- **Check the prior art before building.** Every property tinyjs wants
+  exists in some engine today, and the one no engine offers (suspending
+  synchronous code mid-run and writing that paused state to bytes) is one
+  tinyactors has decided not to use. See [Prior art and the case against
+  building](#prior-art-and-the-case-against-building), which applies to
+  [tinyjs, the small way](tinyjs-small.md) as well.
 - **tinyjs is a library in its own right.** It has no relation to
   tinyactors beyond the name. tinyactors is one embedder and keeps its
   adapter on its own side.
@@ -75,6 +81,70 @@ generator language, and a plan for a Racket experiment.
   compiles the fixed set of builtins into checked-in bytecode and C, and the
   frame ABI and bytecode format are generated from one source. A one-week
   experiment with explicit criteria for dropping it decides the question.
+
+## Prior art and the case against building
+
+Checked on 2026-09-30. As far as we found, no single engine combines all of
+tinyjs's properties. But each of them exists in some engine, and the one
+that does not is the one the design decisions below have removed the need
+for.
+
+| Engine | Modern ECMAScript | Bounded memory | Stops runaway code | Suspends mid-sync and resumes | Paused state to bytes | Deterministic |
+|---|---|---|---|---|---|---|
+| **Duktape** | ES5/5.1, partial ES2015 and ES2016 [12] | custom allocator | experimental abort [13] | no; coroutines cannot yield across C code [14] | no | embedder's job |
+| **QuickJS-ng** | yes, actively developed [15] | `JS_SetMemoryLimit` | interrupt handler, which aborts | no; the embedder runs the job queue, so only between jobs | no | embedder's job |
+| **XS (Moddable), xsnap (Agoric)** | about 99.9% of implemented features [16] | yes; runs on microcontrollers | metering ("computrons") | no | **yes**: heap snapshots between deliveries [17] | **yes**; snapshot hash determinism was worked on [17] |
+| **QuickJS in wasmtime** | yes | wasm memory limit | fuel | **yes**: `fuel_async_yield_interval` [18] | no; the paused stack lives in the engine | largely; fuel is deterministic |
+| **QuickJS with Asyncify** | yes | wasm memory | interrupt | only at async host calls; about 2× size and 40% speed [19] | in principle; the stack moves into linear memory | largely |
+
+**Duktape** fits badly. It is ES5.1 with partial ES2015. Its last release
+is 2.7.0, a maintenance release from February 2022 [12]. A call runs to
+completion on the embedder's thread. The only brake,
+`DUK_USE_EXEC_TIMEOUT_CHECK`, is an experimental compile-time hook that
+aborts with a `RangeError`. Its documentation says it protects against
+accidental infinite loops but "is not a reliable mechanism against
+deliberately malicious code" [13]. It has no built-in I/O, which is good.
+
+**xsnap is the closest to the whole idea**: XS with metering, deterministic
+execution, and heap snapshots written to disk and restored, running
+Agoric's contract workers in production. Its snapshots are taken between
+deliveries, which are the "quiet points" of tinyjs's memory design.
+
+**What only tinyjs would have** is the combination: suspending
+*synchronous* code mid-run, writing that paused state to bytes and resuming
+it elsewhere, freestanding C with bounded allocation, and modern
+ECMAScript, in one small library.
+
+**The design decisions have removed most of the need for it:**
+
+- The tinyactors data model never pauses. It runs to completion, and
+  running out of fuel is a fault. That is QuickJS-ng's interrupt handler
+  and memory limit, with the job queue drained within each operation.
+- A VM that is never quiet is the embedder's problem, and state is written
+  at quiet points. That is what xsnap does.
+- Long or asynchronous scripts run in an invoked child. That child could be
+  QuickJS in wasmtime with fuel yielding, or an xsnap process.
+
+The cost of tinyjs is years of work, on the scale of QuickJS or XS. The
+need it alone meets has no consumer in the current design. That mismatch,
+more than whether the design is coherent, is the argument against building
+it now.
+
+**A cheaper test of whether the gap matters:**
+
+1. Build the default ECMAScript data model on an existing engine,
+   QuickJS-ng by default, or XS/xsnap if footprint, determinism and
+   snapshots weigh more (check its license first). Fuel maps to the
+   interrupt handler and a fault raises `error.execution`. Memory is
+   bounded by the allocator and the memory limit. The job queue drains
+   within each operation. `Date` and `Math.random` come from `ta_dm_host`.
+2. Measure it against napi's guard-cost baseline
+   ([pluggable data models](pluggable-datamodels.md)): bytes per actor for a
+   context each, cost per guard, and how offloading works (serializing the
+   data model's variables, or XS snapshots).
+3. Revisit tinyjs only if real charts reach a limit that suspending mid-run
+   or writing a paused state would remove. Until then, this note is
+   research, not a plan.
 
 ## Design goals
 
@@ -1172,3 +1242,27 @@ from bytecode to C is decided the same way, one builtin at a time.
 11. tree-sitter-javascript: `grammar.js` (conflicts and externals) and
     `src/scanner.c` (the external scanner).
     <https://github.com/tree-sitter/tree-sitter-javascript>
+12. Duktape. <https://duktape.org/>; release v2.7.0,
+    <https://github.com/svaarala/duktape/releases/tag/v2.7.0>.
+13. Duktape, `DUK_USE_EXEC_TIMEOUT_CHECK`,
+    <https://github.com/svaarala/duktape/blob/master/config/config-options/DUK_USE_EXEC_TIMEOUT_CHECK.yaml>;
+    sandboxing guide,
+    <https://github.com/svaarala/duktape/blob/master/doc/sandboxing.rst>.
+14. Duktape wiki, *How to use coroutines*,
+    <https://wiki.duktape.org/howtocoroutines>; release notes for 2.2,
+    <https://github.com/svaarala/duktape/blob/master/doc/release-notes-v2-2.rst>.
+15. QuickJS-ng, *The QuickJS C API*,
+    <https://quickjs-ng.github.io/quickjs/developer-guide/intro/>; QuickJS
+    documentation, <https://bellard.org/quickjs/quickjs.html>.
+16. Moddable, *XS Conformance*,
+    <https://github.com/Moddable-OpenSource/moddable/blob/public/documentation/xs/XS%20Conformance.md>.
+17. Agoric, `@agoric/xsnap`, <https://www.npmjs.com/package/@agoric/xsnap>;
+    heap snapshots, <https://github.com/Agoric/agoric-sdk/issues/511>;
+    snapshot hash determinism,
+    <https://github.com/Agoric/agoric-sdk/issues/5227>.
+18. Wasmtime, `Store::fuel_async_yield_interval`,
+    <https://docs.wasmtime.dev/api/wasmtime/struct.Store.html>;
+    *Interrupting Execution*,
+    <https://docs.wasmtime.dev/examples-interrupting-wasm.html>.
+19. quickjs-emscripten (the Asyncify variant),
+    <https://github.com/justjake/quickjs-emscripten>.
