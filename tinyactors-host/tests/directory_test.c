@@ -6,6 +6,8 @@
 #include "check.h"
 #include "tinyactors_host/directory.h"
 #include "tinyactors_host/system.h"
+#include "directory_private.h"
+#include "system_private.h"
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 

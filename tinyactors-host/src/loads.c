@@ -4,6 +4,9 @@
 
 
 #include "tinyactors_host/allocator.h"
+#include "allocator_private.h"
+#include "loads_private.h"
+#include "host_metrics_private.h"
 
 const char *tah_load_outcome_name(tah_load_outcome outcome) {
     static const char *const names[TAH_LOAD_OUTCOMES] = {

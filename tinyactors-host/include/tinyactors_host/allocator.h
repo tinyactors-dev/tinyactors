@@ -45,21 +45,6 @@ typedef struct {
 
 typedef struct tah_allocator tah_allocator;
 
-/* What a category's ta_allocator points at: the owner and the category. */
-typedef struct {
-    tah_allocator *owner;
-    tah_memory_category category;
-} tah_allocator_lane;
-
-struct tah_allocator {
-    tah_allocator_lane lanes[TAH_MEMORY_CATEGORY_COUNT];
-    tah_memory_counters counters[TAH_MEMORY_CATEGORY_COUNT];
-    /* The platform allocator every lane allocates from (the binding's). */
-    ta_allocator backing;
-    /* Tests only: refuse every allocation of at least this many bytes; 0 refuses none. */
-    size_t refuse_from;
-};
-
 /* `backing` is the binding's platform allocator; every lane allocates from it. */
 void tah_allocator_init(tah_allocator *allocator, ta_allocator backing);
 /* A ta_allocator whose allocations count against `category`. */
@@ -85,11 +70,7 @@ void tah_allocator_refuse_from(tah_allocator *allocator, size_t bytes);
 void *tah_alloc(ta_allocator allocator, size_t size, size_t alignment);
 void tah_free(ta_allocator allocator, const ta_allocator_free_params *params);
 
-/* The turn and call arenas. */
-typedef struct {
-    ta_arena turn;
-    ta_arena call;
-} tah_scratch;
+typedef struct tah_scratch tah_scratch;
 
 ta_result tah_scratch_init(tah_scratch *scratch, tah_allocator *allocator);
 void tah_scratch_reset_turn(tah_scratch *scratch);

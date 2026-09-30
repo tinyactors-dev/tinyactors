@@ -1,6 +1,7 @@
 #include "tinyactors_host/adapter_trace.h"
 
 #include "tinyactors_host/system.h"
+#include "system_private.h"
 
 static void tah_trace_write(void *self, const ta_trace_record *record) {
     tah_system_trace(self, record); /* writing a record cannot fail (core ADR 0067) */

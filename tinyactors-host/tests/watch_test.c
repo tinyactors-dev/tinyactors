@@ -4,6 +4,8 @@
 
 #include "tinyactors_host/allocator.h"
 #include "tinyactors_host/watch.h"
+#include "allocator_private.h"
+#include "watch_private.h"
 
 /* Membership is exact at sizes past the old 1024 limit, duplicates count
  * once, and UINT64_MAX (the empty marker) is still an ID. */

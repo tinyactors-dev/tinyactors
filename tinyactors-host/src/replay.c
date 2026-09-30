@@ -10,6 +10,10 @@
 #include "tinyactors_host/scheduler.h"
 #include "tinyactors_host/system.h"
 #include "tinyactors_host/wal.h"
+#include "allocator_private.h"
+#include "inputs_private.h"
+#include "scheduler_private.h"
+#include "system_private.h"
 
 /* A message the log shows accepted and not yet delivered, owned. */
 typedef struct {

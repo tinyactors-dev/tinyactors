@@ -66,43 +66,9 @@ typedef enum {
 /* The outcome's name for metrics ("loaded", "not_found", ...). */
 const char *tah_load_outcome_name(tah_load_outcome outcome);
 
-typedef struct {
-    ta_address *address;   /* one reference; NULL while the record is free */
-    tah_mailbox mail;
-    ta_trace_parent trace; /* the first message's trace parent, or all zero */
-    uint64_t started_ns;   /* monotonic, when the load started */
-    uint32_t max_waiting;
-    uint32_t generation;   /* half of the token JavaScript holds; never 0 */
-    uint32_t next_free;
-    uint8_t why;           /* tah_load_why */
-    bool keyed;            /* in `by_address`: later mail for the address joins it */
-} tah_load;
+typedef struct tah_load tah_load;
 
-typedef struct {
-    char *name; /* a copy of the family's name */
-    uint32_t length;
-    uint32_t max_waiting;
-} tah_loader_family;
-
-typedef struct {
-    ta_time due;
-    ta_address *address; /* one reference */
-} tah_wake;
-
-typedef struct {
-    ta_allocator allocator;
-    tah_vec families;   /* tah_loader_family */
-    tah_vec loads;      /* tah_load; index 0 is never issued */
-    uint32_t free_head;
-    uint32_t in_flight; /* loads started and not finished */
-    tah_map by_address; /* (uintptr_t)address -> load index */
-    tah_vec requests;   /* uint32_t: loads JavaScript has not been told about */
-    uint32_t requests_head;
-    tah_vec wakes;      /* tah_wake: a min-heap by due */
-    tah_map wake_due;   /* (uintptr_t)address -> the due time of its live wake-up */
-    uint32_t waiting;   /* messages in every load's mailbox */
-    uint64_t outcomes[TAH_LOAD_OUTCOMES];
-} tah_loads;
+typedef struct tah_loads tah_loads;
 
 void tah_loads_init(tah_loads *loads, ta_allocator allocator);
 /*
@@ -222,18 +188,6 @@ ta_result tah_loads_finish(tah_loads *loads, const tah_load_finish *finish);
 ta_result tah_loads_wake_at(tah_loads *loads, ta_address *address, ta_time due);
 /* Forgets the wake-up of `address`, if any. */
 void tah_loads_cancel_wake(tah_loads *loads, const ta_address *address);
-/*
- * The earliest wake-up's due time; false when there is none. It may be a
- * replaced or cancelled one: that only asks for a turn early, which drops
- * it (tah_loads_fire_wakes).
- */
-static inline bool tah_loads_next_wake(const tah_loads *loads, ta_time *due) {
-    if (loads->wakes.count == 0) {
-        return false;
-    }
-    *due = ((const tah_wake *)loads->wakes.items)[0].due;
-    return true;
-}
 /*
  * Fires the wake-ups due at `now`: each whose address has no resident actor
  * and no load, in a family with a loader, starts a load with `why` = timer

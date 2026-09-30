@@ -1,4 +1,5 @@
 #include "tinyactors_host/directory.h"
+#include "directory_private.h"
 
 static uint64_t tah_directory_key(const ta_address *address) {
     return (uint64_t)(uintptr_t)address;

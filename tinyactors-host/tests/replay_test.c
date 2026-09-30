@@ -46,6 +46,9 @@
 #include "tinyactors_host/scheduler.h"
 #include "tinyactors_host/system.h"
 #include "tinyactors_host/wal.h"
+#include "inputs_private.h"
+#include "scheduler_private.h"
+#include "system_private.h"
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 #define STR(text) { .ptr = (text), .len = sizeof(text) - 1u }

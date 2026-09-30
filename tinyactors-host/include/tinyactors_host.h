@@ -45,8 +45,13 @@ TAH_API uint32_t tah_version(void);
 /*
  * The kernel's modules. A binding includes this header, and nothing from the
  * kernel's src/: these headers are its public API. The system (system.h) is
- * the entry point; the rest are the plumbing it is made of, which a binding
- * reads directly (the scheduling table, mailboxes, effects, loads).
+ * the entry point; the rest are the plumbing it is made of (the scheduling
+ * table, mailboxes, effects, loads). Their state is opaque: a binding gets
+ * a part from the system's getters and calls its functions, and the layout
+ * is in src/<module>_private.h. A struct stays defined here only when it is
+ * data the binding fills or reads (a parameter record, a record or view
+ * handed out, a snapshot, a table of callbacks, a container it embeds);
+ * `mise run check-opaque` holds the list (kernel ADR 0001, "Step 2b").
  */
 #include "tinyactors_host/adapter_invoker.h"
 #include "tinyactors_host/adapter_io.h"

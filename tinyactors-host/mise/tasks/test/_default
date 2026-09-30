@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-#MISE description="Test the host kernel: no recursion, freestanding for wasm32, the tests under AddressSanitizer and UBSan, and every test program (replay's out-of-memory sweep at every allocation only with --full)"
-#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../mise/lib/**/*", "../mise.toml"]
+#MISE description="Test the host kernel: opaque public headers, no recursion, freestanding for wasm32, the tests under AddressSanitizer and UBSan, and every test program (replay's out-of-memory sweep at every allocation only with --full)"
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../mise/lib/**/*", "../mise/ast-grep/rules/kernel-opaque-struct.yml", "../mise.toml"]
 #MISE outputs={auto=true}
 #MISE depends=["build"]
 #USAGE flag "--full" help="Also run the exhaustive checks: replay_test fails every allocation of its sweep, not a sample"
@@ -11,6 +11,7 @@ require 'etc'
 
 full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
 
+HostKernel.run('mise', 'run', 'check-opaque')
 HostKernel.run('mise', 'run', 'check-recursion')
 HostKernel.run('mise', 'run', 'check-freestanding')
 HostKernel.run('mise', 'run', 'asan')

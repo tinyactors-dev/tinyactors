@@ -8,6 +8,10 @@
 #include "tinyactors_host/scheduler.h"
 #include "tinyactors_host/system.h"
 #include "tinyactors_host/wal.h"
+#include "allocator_private.h"
+#include "inputs_private.h"
+#include "scheduler_private.h"
+#include "system_private.h"
 
 /* The arenas' block: a turn's wake addresses, or one record's text, usually fit in one. */
 #define TAH_INPUTS_BLOCK_BYTES 4096u

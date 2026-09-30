@@ -5,6 +5,7 @@
 
 #include "tinyactors_host/allocator.h"
 #include "tinyactors_host/containers.h"
+#include "allocator_private.h"
 
 static tah_allocator allocator;
 

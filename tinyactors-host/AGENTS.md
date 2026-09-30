@@ -21,6 +21,14 @@ must build wherever core does, the browser included.
 - **At most three parameters per function;** introduce a struct for more.
 - **One public header:** `include/tinyactors_host.h`, prefix `tah_`.
   `src/*.h` headers are private.
+- **The kernel's state is opaque.** A public header declares a state type
+  as `typedef struct tah_x tah_x;` with functions over it; its body goes in
+  `src/<module>_private.h`, which the kernel's sources and tests include
+  and a binding never does. A struct body stays public only when it is
+  data the binding fills or reads (a parameter record, a record or view
+  handed out, a snapshot, a table of callbacks, a container it embeds),
+  named in the root's `mise/ast-grep/rules/kernel-opaque-struct.yml`.
+  `mise run check-opaque` enforces it.
 - **Nothing of any language** (Node-API, Python, Ruby) enters the kernel:
   that belongs in a binding (README, "Layers and responsibilities").
 - Tests go in `tests/*_test.c`; they may use the host's C library, and

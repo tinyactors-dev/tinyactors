@@ -32,14 +32,7 @@ typedef enum {
     TAH_ORIGINS
 } tah_definition_origin;
 
-typedef struct {
-    tah_map origins; /* definition ID -> tah_definition_origin, for NESTED and INVOKE */
-    uint64_t registered;
-    uint64_t retired;
-    uint64_t freed;
-    /* The origin of the registrations core makes now; HOST outside a child's compile. */
-    tah_definition_origin registering;
-} tah_definitions;
+typedef struct tah_definitions tah_definitions;
 
 void tah_definitions_init(tah_definitions *definitions, ta_allocator allocator);
 void tah_definitions_destroy(tah_definitions *definitions);

@@ -3,6 +3,8 @@
 #include "memory.h"
 
 #include "tinyactors_host/allocator.h"
+#include "allocator_private.h"
+#include "scheduler_private.h"
 
 #define TAH_QUEUE_CHUNK 1024u
 

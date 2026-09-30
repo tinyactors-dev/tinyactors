@@ -3,6 +3,7 @@
 #include "memory.h"
 
 #include "tinyactors_host/allocator.h"
+#include "allocator_private.h"
 
 static size_t tah_round_up(size_t value, size_t alignment) {
     return (value + alignment - 1u) & ~(alignment - 1u);

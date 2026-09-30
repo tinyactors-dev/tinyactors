@@ -4,6 +4,7 @@
 
 #include "tinyactors_host/events.h"
 #include "tinyactors_host/system.h"
+#include "system_private.h"
 
 static ta_str text_of(const char *text) {
     return (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) };

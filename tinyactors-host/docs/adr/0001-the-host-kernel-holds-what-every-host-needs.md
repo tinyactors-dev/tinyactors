@@ -342,6 +342,8 @@ without a JavaScript runtime.
   varies that much between identical runs (napi ADR 0035's notes), and
   native bytes per actor did not change. Allocations per event stay 0.01
   everywhere.
+- **Later: the headers are opaque.** A binding no longer reads the
+  plumbing's fields; see "Opaque headers" below.
 
 ### Step 7: the test host runs hosted systems on the kernel (2026-09-30)
 
@@ -411,3 +413,90 @@ larger scope during an API outage.
   - allocations per event are unchanged at 0.01, and native bytes per actor
     move by at most +3% on traced variants;
   - the flags were run-to-run noise, as earlier steps' reruns also found.
+
+### Opaque headers (2026-09-30)
+
+The ROADMAP item that followed step 2b: `include/tinyactors_host/*.h`
+declared the full structs, and napi read or wrote 32 of `tah_system`'s 43
+fields and the test host 4. Done in six commits (`9782371`, `bc429db`,
+`89280ee`, `cd77435`, `de0b1a1`, and the one that moved the structs).
+
+- **The rule for what stays transparent.** The kernel's state is opaque:
+  the public header keeps `typedef struct tah_x tah_x;` and the body is in
+  `src/<module>_private.h`, which the kernel's sources and tests include
+  and a binding never does. A struct body stays public only when it is
+  data the binding fills or reads:
+  - parameter records (`tah_system_create_params`, `tah_message`,
+    `tah_load_finish`, `tah_otlp_config`, ...);
+  - records and views handed out (`tah_effect`, `tah_turn_record`,
+    `tah_settlement`, `tah_input_entry`, `tah_input_wake`,
+    `tah_queued_message`, `tah_load_info`, `tah_load_request`, the
+    write-ahead log's records);
+  - snapshots of counters (`tah_sched_stats`, `tah_loads_stats`,
+    `tah_definition_totals`, `tah_trace_watch_sizes`, `tah_histogram`,
+    `tah_exemplar`, `tah_memory_counters`);
+  - tables of callbacks (`tah_platform`, `tah_pump_driver`,
+    `tah_system_callbacks`);
+  - the containers a binding embeds in its own records (`tah_vec`,
+    `tah_free_list`, and the rest of `containers.h`), and `tah_params`,
+    which napi fills at creation.
+
+  The root's `mise/ast-grep/rules/kernel-opaque-struct.yml` names them, and
+  `mise run check-opaque` (in the kernel's test task) refuses any other
+  struct body in `include/`. Its test runs with `check-portability`'s.
+- **The accessors: 50 functions.**
+  - The input log's batch (4): `tah_inputs_enabled`, `_touched_count`,
+    `_entry_count`, `_entry_at`, an entry being a view of the log's
+    buffer (`tah_input_buffer`, now private).
+  - The scheduler (9): a stats snapshot, an actor's state, the turn's
+    records, a mailbox walk as `tah_queued_message`, and a waiter's host
+    (set and read), generation and the next taken waiter.
+  - Loads, offloads, OTLP, definitions, metrics and the watch (11), two of
+    them inline functions over fields before
+    (`tah_loads_pending_requests`, `tah_otlp_set_wanted`).
+  - The system (22): a getter for each part (core, allocator, scratch,
+    scheduler, directory, loads, offloads, effects, OTLP, trace watch,
+    definitions, metrics, input log, parameters), the two scratch arenas,
+    `tah_system_enter_core` / `_leave_core` / `_inside_core`, and the
+    tracing and log-sink flags.
+  - Callbacks and the clock (4): `tah_system_set_callbacks`,
+    `tah_system_set_driver`, `tah_system_turn_pending`,
+    `tah_system_clock_kind`.
+- **Callbacks are set, not created with.** The plan put them in the create
+  parameters. napi's `after_core` may run only once its values exist,
+  which is after the system is created, and a failed setup frees the
+  system before that; its pump driver must be detached before a close
+  that runs where JavaScript cannot (a finalizer). So the callbacks are
+  one `tah_system_callbacks` table with one context, set when napi is
+  ready, and none is called after close returns; the pump driver is its
+  own table, detached with `tah_system_set_driver(system, NULL)`. This
+  brings back step 1's separate pump driver, now as data rather than an
+  adapter.
+- **Wake and arm answer whether they worked.** napi's wake and arm wrote
+  `turn_pending` and `clock.armed` back when setImmediate or setTimeout
+  failed. `tah_wake_fn` and `tah_arm_fn` now return false instead, and the
+  kernel forgets the request itself.
+- **Removed:** the system's `trace_masks` (napi wrote it, nothing read
+  it), and the inline functions over fields that only the kernel uses
+  (`tah_loads_next_wake`, `tah_otlp_open_count`, `tah_trace_watch_empty`),
+  which moved to the private headers.
+- **Hot paths.** napi's generated entry points now call functions for
+  what were field reads (the reentrancy flag, core, the call arena): three
+  to five calls per core call. None of them showed:
+  - `bench-compare 3a2b957` (the commit before this work), 100,000 actors,
+    three alternating runs. Node (a99e44a37e2e): nothing outside 5%;
+    untraced 487 → 483 ns/event, RSS 760 → 761 B/actor. Bun
+    (c989bd79a51f): ns/event within 5% on every variant (untraced 406 →
+    407), native and core bytes per actor unchanged, and four RSS rows
+    flagged on traced variants (+5.5% to +9.8%).
+  - Rerun on Bun with five runs: one row left (summary, RSS +6.3%), the
+    others +4.5% or less, and `every record in 100 charts` at -0.1%.
+  - An A/A run, the baseline against itself on the same five variants,
+    showed the same bias: +3.0% to +4.6% RSS for the working tree's side
+    on `sampled out`, `summary` and `summary without logs`, with nothing
+    changed. What is left, 1% to 2%, is within Bun's run-to-run RSS
+    noise (napi ADR 0035's notes). Allocations per event stay 0.01.
+- **`mise run test:full` passed** before the last commit: the kernel's
+  tests with ASan and UBSan, 537 of 537 test host scenarios with the
+  exhaustive ones, `scale_test` to four million actors, and napi's suites
+  with `scale.js` to a million actors.

@@ -8,6 +8,7 @@
 
 #include "tinyactors_host.h"
 #include "../src/memory.h"
+#include "system_private.h"
 
 static int failures = 0;
 

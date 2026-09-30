@@ -72,12 +72,15 @@ gaps left or found on the way.
   version 2. If it still matters, take option B from the review: a native
   durable writer for plain JSON values in napi's data model, byte-exact
   with ADR 0031's printer. (napi ADR 0034's notes.)
-- [ ] **The kernel's public headers expose its internals.**
+- [x] **The kernel's public headers expose its internals.**
   `include/tinyactors_host/*.h` declare the full structs (`tah_system`,
   `tah_sched`, `tah_inputs` and more), because napi and the test host
   reach into their fields. Make the types opaque behind functions, so a
   binding cannot depend on the kernel's layout. (Kernel ADR 0001, "Step
-  2b".)
+  2b".) Done: the kernel's state is defined in `src/<module>_private.h`,
+  the bindings use 50 accessors, and `mise run check-opaque` refuses a
+  struct body in `include/` other than the data types it names (kernel ADR
+  0001, "Opaque headers").
 - [x] **Status-line pointers on the napi ADRs whose code moved.** Kernel ADR
   0001 section 6 lists them (0003 to 0008, 0012, 0014, 0016 to 0018, 0020,
   0022, 0032 to 0036), and only one carries a pointer to it.

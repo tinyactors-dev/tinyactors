@@ -1,4 +1,5 @@
 #include "tinyactors_host/definitions.h"
+#include "definitions_private.h"
 
 void tah_definitions_init(tah_definitions *definitions, ta_allocator allocator) {
     *definitions = (tah_definitions){ .registering = TAH_ORIGIN_HOST };

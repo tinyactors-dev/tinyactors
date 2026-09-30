@@ -21,19 +21,9 @@
 #include "containers.h"
 #include "tinyactors.h"
 
-typedef struct {
-    uint8_t *bytes;
-    size_t length;
-    /* References the entry holds to values its bytes name by handle. */
-    ta_value *handles;
-    uint32_t handle_count;
-} tah_offload;
+typedef struct tah_offload tah_offload;
 
-typedef struct {
-    ta_allocator allocator;
-    tah_map entries; /* (uintptr_t)ta_address * -> tah_offload * */
-    size_t bytes_in_use;
-} tah_offloads;
+typedef struct tah_offloads tah_offloads;
 
 void tah_offloads_init(tah_offloads *offloads, ta_allocator allocator);
 /*

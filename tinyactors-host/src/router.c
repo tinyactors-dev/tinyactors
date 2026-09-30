@@ -5,6 +5,8 @@
 
 #include "tinyactors_host/inputs.h"
 #include "tinyactors_host/system.h"
+#include "inputs_private.h"
+#include "system_private.h"
 
 ta_result tah_router_post_named(tah_system *system, ta_address *address, const tah_message *message) {
     ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);

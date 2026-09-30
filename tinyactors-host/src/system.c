@@ -6,6 +6,7 @@
 #include "tinyactors_host/adapter_io.h"
 #include "tinyactors_host/adapter_log.h"
 #include "tinyactors_host/router.h"
+#include "system_private.h"
 
 /* Gives the record back to the platform's allocator it came from. */
 static void tah_system_release_record(tah_system *system) {

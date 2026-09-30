@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include "tinyactors_host/allocator.h"
+#include "allocator_private.h"
 
 static void counts_by_category(void) {
     tah_allocator allocator;

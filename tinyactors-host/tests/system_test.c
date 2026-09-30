@@ -1,6 +1,7 @@
 /* The native system: create, close and free without leaks (ADR 0012). */
 #include "check.h"
 #include "tinyactors_host/system.h"
+#include "system_private.h"
 
 static void closes_without_leaks(void) {
     tah_system *system = NULL;

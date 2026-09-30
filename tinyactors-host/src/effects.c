@@ -1,6 +1,7 @@
 #include "tinyactors_host/effects.h"
 
 #include "memory.h"
+#include "effects_private.h"
 
 void tah_effects_init(tah_effects *effects, ta_arena *arena) {
     *effects = (tah_effects){ .arena = arena };

@@ -1,6 +1,8 @@
 #include "tinyactors_host/watch.h"
 
 #include "tinyactors_host/allocator.h"
+#include "allocator_private.h"
+#include "watch_private.h"
 
 #define TAH_ID_EMPTY UINT64_MAX
 

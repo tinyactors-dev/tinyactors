@@ -1,6 +1,7 @@
 #include "tinyactors_host/offloads.h"
 
 #include "memory.h"
+#include "offloads_private.h"
 
 
 void tah_offloads_init(tah_offloads *offloads, ta_allocator allocator) {

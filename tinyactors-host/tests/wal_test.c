@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "tinyactors_host.h"
+#include "system_private.h"
 
 /* A test value: a heap copy of a string, reference-counted. */
 typedef struct {

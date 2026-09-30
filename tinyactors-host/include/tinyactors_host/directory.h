@@ -24,9 +24,7 @@
 #include "containers.h"
 #include "tinyactors.h"
 
-typedef struct {
-    tah_map entries; /* (uintptr_t)ta_address * -> ta_actor_id, 0 when unloaded */
-} tah_directory;
+typedef struct tah_directory tah_directory;
 
 void tah_directory_init(tah_directory *directory, ta_allocator allocator);
 /* The adapter core calls (ta_system_set_actor_directory). */

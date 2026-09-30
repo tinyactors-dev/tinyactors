@@ -1,6 +1,7 @@
 #include "tinyactors_host/enumerate.h"
 
 #include <stddef.h>
+#include "system_private.h"
 
 typedef struct {
     tah_id_page *page;

@@ -13,6 +13,8 @@
 
 #include "tinyactors_host/allocator.h"
 #include "tinyactors_host/otlp.h"
+#include "allocator_private.h"
+#include "otlp_private.h"
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 #define END {0}

@@ -10,6 +10,8 @@
 
 #include "tinyactors_host/allocator.h"
 #include "tinyactors_host/offloads.h"
+#include "allocator_private.h"
+#include "offloads_private.h"
 
 static int live_references;
 

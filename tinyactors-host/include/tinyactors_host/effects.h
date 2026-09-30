@@ -69,14 +69,7 @@ typedef struct tah_effect {
     ta_trace_parent trace;
 } tah_effect;
 
-typedef struct {
-    ta_arena *arena;   /* the turn arena */
-    tah_effect *first;
-    tah_effect *last;
-    uint32_t count;
-    bool closed;       /* the system is closing: new effects are dropped */
-    uint64_t dropped;  /* effects that could not be queued (no memory, or closing) */
-} tah_effects;
+typedef struct tah_effects tah_effects;
 
 void tah_effects_init(tah_effects *effects, ta_arena *arena);
 /*

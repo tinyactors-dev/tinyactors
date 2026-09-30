@@ -1,0 +1,12 @@
+id: kernel-opaque-struct
+valid:
+  - "typedef struct tah_sched tah_sched;"
+  - "typedef struct { uint32_t index; uint32_t generation; } tah_load_request;"
+  - "typedef struct tah_effect { int kind; union { struct { int a; } log; } as; } tah_effect;"
+  - "typedef struct tah_turn_record { struct tah_turn_record *next; } tah_turn_record;"
+  - "struct tah_system;"
+invalid:
+  - "struct tah_system { int closed; };"
+  - "typedef struct { uint32_t known; } tah_sched;"
+  - "typedef struct tah_inputs { bool enabled; } tah_inputs;"
+  - "typedef struct { struct { int a; } inner; } tah_loads;"

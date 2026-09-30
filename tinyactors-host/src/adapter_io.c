@@ -5,6 +5,8 @@
 
 #include "tinyactors_host/inputs.h"
 #include "tinyactors_host/system.h"
+#include "inputs_private.h"
+#include "system_private.h"
 
 struct tah_io_processor {
     tah_system *system;

@@ -1,6 +1,7 @@
 #include "tinyactors_host/otlp.h"
 
 #include "memory.h"
+#include "otlp_private.h"
 
 
 /*
