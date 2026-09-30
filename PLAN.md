@@ -1,6 +1,6 @@
 # Plan: complete the ROADMAP (without the browser build)
 
-**Status: phases A to H complete (2026-09-30); phase I in progress.** Every commit below is on `main`; the
+**Status: phases A to I complete (2026-10-01).** Every commit below is on `main`; the
 gaps found on the way are in `ROADMAP.md` under "Follow-ups". Commit 12's
 test landed with commit 13, and commit 31's cost was accepted (core ADR
 0097, napi ADR 0039).
@@ -264,6 +264,10 @@ when its mailbox is full. A refused send was durable in neither log, so it
 was lost on a replay from `spawned`, after an evict and exit, and after a
 crash while its sender was evicted; core ADR 0095 fixed only the
 checkpoint path.
+
+Done (2026-10-01): 34 `0c61dd1`, 35 `a9e0be8`, 36 `192b6d5`, 37
+`1dc516d`. Commit 37 found an immediate send that a crash between two
+commits loses; it is a ROADMAP follow-up.
 
 34. **`docs(host): a full mailbox overflows instead of refusing mail between actors`**
     - A kernel ADR amending napi ADR 0005's limits and kernel ADR 0002:

@@ -7,6 +7,16 @@ the work is in the [README](README.md#layers-and-responsibilities).
 
 ## Done recently
 
+- **Mail between actors is never refused for a full mailbox (2026-10-01)**,
+  [`PLAN.md`](PLAN.md) phase I, kernel ADR 0003: past `maxQueuedMessages`
+  or `maxRetainedBytes` the router accepts it into its receiver's
+  overflow and the receiver's log records it, so a replay from `spawned`,
+  an eviction and exit, or a crash while the sender is evicted no longer
+  loses it. The overflow is counted (`stats().messages.overflow`, the
+  `tinyactors.messages.overflow` gauge, `hosted.mailboxes`). Core ADR
+  0095's restore of refused sends is removed, since only out of memory
+  makes one now; the fourth replay timeline crashes both actors and
+  delivers once.
 - **The ROADMAP's follow-ups, closed (2026-09-30)**, commit by commit as
   [`PLAN.md`](PLAN.md) lays out:
   - **Replay is tested natively in the kernel**
@@ -73,14 +83,19 @@ the work is in the [README](README.md#layers-and-responsibilities).
 
 Gaps found while closing the ones above. None is a regression.
 
-- [ ] **A refused send is lost when an actor is replayed from `spawned`,**
-  with no checkpoint: replay drops immediate sends, and delayed sends once
-  the clock passes them, without knowing the router refused them. Needs a
-  log record for the refusal. (Core ADR 0095, Consequences.)
-- [ ] **Two narrow windows around orphans:** a crash after an eviction but
-  before the orphan is delivered loses the send; an orphan delivered after
-  its address was loaded again writes its `fired` into the new actor's
-  log. (Core ADR 0095.)
+- [ ] **A crash between two commits loses an immediate send:** a delivery
+  is logged in one turn's batch and its macrostep runs in the next, whose
+  batch holds the receiver's `accepted` of any immediate `<send>`. A crash
+  between the two commits loses the send: the sender's replay drops it as
+  sent. Delayed sends are not affected. Needs a decision (kernel ADR
+  0003's notes).
+- [ ] **Out of memory can still lose a send between actors:** a router
+  RETRY leaves it submitted in the sender, logged nowhere (kernel ADR
+  0003, section 3, accepted for now).
+- [ ] **Overflow has no cap,** and `maxWaiting` still dead-letters mail
+  between actors for a loading address (`waiting-full`), and the SCXML
+  invoker's forward to a child it started is still refused at the limits
+  (kernel ADR 0003, sections 3 and 4).
 - [ ] **A partly failed redelivery can lose mail later:** the binding
   destroys the published actor, and the messages already put back are
   logged as `dropped`, so a later restore forgets them.
@@ -92,8 +107,16 @@ Gaps found while closing the ones above. None is a regression.
 - [ ] **The kernel's public headers still declare functions a binding
   cannot use** without the private layout (`tah_sched_init`,
   `tah_loads_find`, ...); move them to the private headers.
-- [ ] **The kernel holds two copies of a large value while logging it:** a
-  4 MiB value peaks at about 17 MB in the log and replay buffers.
+- [ ] **Later, with production data: the kernel's peak for a large
+  value.** Logging and replaying a 4 MiB value holds two 8 MiB blocks,
+  about 17 MB of kernel memory: the batch buffer, which
+  `tah_inputs_release()` keeps in `spare` at full capacity, and the
+  replay's copy of the pushed log, which `tah_vec_reserve()` rounds up to
+  a power of two. Candidate fixes: free a large released buffer,
+  exact-size vector growth for a one-shot reserve, block-chained entries,
+  in-place replay reads. The trade-off: a system that gets one large
+  record is likely to get more, and freeing or trimming would churn
+  memory for it. Revisit once there is production data.
 
 ## Open
 
