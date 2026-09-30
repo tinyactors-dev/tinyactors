@@ -89,14 +89,14 @@ ta_result tna_import_scxml(tah_system *system, const tna_import_params *params) 
 }
 
 ta_result tna_import(tah_system *system, const tna_import_params *params) {
-    ta_allocator allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE);
+    ta_allocator allocator = tah_allocator_for(tah_system_allocator(system), TAH_MEMORY_CORE);
     ta_arena arena;
     ta_result result = ta_arena_init(&arena, allocator, TNA_IMPORT_ARENA_BLOCK);
     if (result != TA_OK) {
         return result;
     }
     ta_import_error error = { 0 };
-    result = ta_definition_import(system->core, &(ta_definition_import_params){
+    result = ta_definition_import(tah_system_core(system), &(ta_definition_import_params){
                                                     .codec = params->codec,
                                                     .input = params->input,
                                                     .name = params->name,
@@ -110,14 +110,14 @@ ta_result tna_import(tah_system *system, const tna_import_params *params) {
                                                     .error = &error,
                                                 });
     if ((result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) && params->failure != NULL) {
-        tna_import_describe(params->failure, &error, &arena, system->core);
+        tna_import_describe(params->failure, &error, &arena, tah_system_core(system));
     }
     ta_arena_destroy(&arena);
     return result;
 }
 
 ta_result tna_encode_arena(tah_system *system, ta_arena *arena) {
-    return ta_arena_init(arena, tah_allocator_for(&system->allocator, TAH_MEMORY_CORE), TNA_IMPORT_ARENA_BLOCK);
+    return ta_arena_init(arena, tah_allocator_for(tah_system_allocator(system), TAH_MEMORY_CORE), TNA_IMPORT_ARENA_BLOCK);
 }
 
 /*
@@ -149,7 +149,7 @@ ta_result tna_encode(tah_system *system, const tna_encode_params *params) {
         renamed_vtable.encode = tna_datamodel_encode;
         codec = (ta_chart_codec){ .self = &renamed, .v = &renamed_vtable };
     }
-    ta_result result = ta_definition_encode(system->core, &(ta_definition_encode_params){
+    ta_result result = ta_definition_encode(tah_system_core(system), &(ta_definition_encode_params){
                                                               .definition = params->definition,
                                                               .codec = codec,
                                                               .arena = params->arena,

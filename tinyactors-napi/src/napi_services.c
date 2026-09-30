@@ -59,7 +59,7 @@ static napi_value tna_value_of(napi_env env, const ta_value *value) {
 
 static napi_value tna_atom_text(napi_env env, tah_system *system, ta_atom atom) {
     ta_str text = { 0 };
-    if (ta_system_atom_text(system->core, atom, &text) != TA_OK) {
+    if (ta_system_atom_text(tah_system_core(system), atom, &text) != TA_OK) {
         return tna_js_undefined(env);
     }
     return tna_text(env, text.ptr, text.len);
@@ -70,16 +70,16 @@ static napi_value tna_send_id_text(napi_env env, tah_system *system, ta_send_id 
     char stack[128];
     uint32_t needed = 0;
     ta_send_id_format_params params = { .send_id = send_id, .buffer = stack, .capacity = sizeof stack, .needed = &needed };
-    ta_result result = ta_send_id_format(system->core, &params);
+    ta_result result = ta_send_id_format(tah_system_core(system), &params);
     char *text = stack;
     if (result == TA_ERR_NOMEM && needed > sizeof stack) {
-        text = ta_arena_alloc(&system->scratch.turn, needed, 1);
+        text = ta_arena_alloc(tah_scratch_turn(tah_system_scratch(system)), needed, 1);
         if (text == NULL) {
             return tna_js_null(env);
         }
         params.buffer = text;
         params.capacity = needed;
-        result = ta_send_id_format(system->core, &params);
+        result = ta_send_id_format(tah_system_core(system), &params);
     }
     if (result != TA_OK) {
         return tna_js_null(env);
@@ -149,7 +149,7 @@ static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, cons
         return NULL;
     }
     ta_str invoke_text = { 0 };
-    napi_value invoke_id = ta_system_invoke_id_text(system->core, effect->invoke_id, &invoke_text) == TA_OK
+    napi_value invoke_id = ta_system_invoke_id_text(tah_system_core(system), effect->invoke_id, &invoke_text) == TA_OK
                                ? tna_text(env, invoke_text.ptr, invoke_text.len)
                                : tna_js_undefined(env);
     tna_put(env, payload, "handle", tna_handle(env, effect->service));
@@ -225,7 +225,7 @@ void tna_services_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *f
     tah_system *system = wrapper->system;
     tna_env *data = wrapper->env_data;
     tah_effect *effect = NULL;
-    while (!tah_system_closed(system) && (effect = tah_effects_pop(&system->effects)) != NULL) {
+    while (!tah_system_closed(system) && (effect = tah_effects_pop(tah_system_effects(system))) != NULL) {
         napi_handle_scope scope = NULL;
         napi_open_handle_scope(env, &scope);
         napi_value handler = NULL;
@@ -369,14 +369,14 @@ static bool tna_type_atom(napi_env env, tah_system *system, napi_value value, co
         tna_throw(env, "invalid", what);
         return false;
     }
-    char *text = ta_arena_alloc(&system->scratch.call, length + 1u, 1);
+    char *text = ta_arena_alloc(tah_scratch_call(tah_system_scratch(system)), length + 1u, 1);
     if (text == NULL) {
         tna_throw(env, "out-of-memory", "cannot read the type");
         return false;
     }
     napi_get_value_string_utf8(env, value, text, length + 1u, &length);
-    ta_result result = ta_system_intern_atom(system->core, (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
-    tah_scratch_reset_call(&system->scratch);
+    ta_result result = ta_system_intern_atom(tah_system_core(system), (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
+    tah_scratch_reset_call(tah_system_scratch(system));
     if (result != TA_OK) {
         tna_throw(env, tna_result_code(result), "cannot intern the type");
         return false;
@@ -389,7 +389,7 @@ static tna_napi_system *tna_services_this(napi_env env, napi_callback_info info,
         return NULL;
     }
     tna_napi_system *wrapper = tna_open_this(env, info);
-    if (wrapper != NULL && wrapper->system->inside_core) {
+    if (wrapper != NULL && tah_system_inside_core(wrapper->system)) {
         tna_throw(env, "reentrant", "services cannot be changed from inside a core call (ADR 0013)");
         return NULL;
     }
@@ -407,7 +407,7 @@ static bool tna_optional_text(napi_env env, tah_system *system, napi_value value
     if (type != napi_string || napi_get_value_string_utf8(env, value, NULL, 0, &length) != napi_ok) {
         return false;
     }
-    char *text = ta_arena_alloc(&system->scratch.call, length + 1u, 1);
+    char *text = ta_arena_alloc(tah_scratch_call(tah_system_scratch(system)), length + 1u, 1);
     if (text == NULL) {
         return false;
     }
@@ -436,11 +436,11 @@ napi_value tna_register_io_method(napi_env env, napi_callback_info info) {
     registration.index = &index;
     if (!tna_optional_text(env, system, argc > 1 ? argv[1] : NULL, &registration.location) ||
         !tna_optional_text(env, system, argc > 2 ? argv[2] : NULL, &registration.origin)) {
-        tah_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(tah_system_scratch(system));
         return tna_throw(env, "invalid", "registerIO(): options.location and options.origin must be strings");
     }
     ta_result result = tah_io_register(system, &registration);
-    tah_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(tah_system_scratch(system));
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result),
                          "registerIO(): core refused the type (the SCXML event processor's type is reserved)");
@@ -456,7 +456,7 @@ static bool tna_processor_index(napi_env env, tah_system *system, napi_value typ
     if (!tna_type_atom(env, system, type, what, &atom)) {
         return false;
     }
-    if (ta_system_find_io(system->core, atom, out) != TA_OK || *out == 0) {
+    if (ta_system_find_io(tah_system_core(system), atom, out) != TA_OK || *out == 0) {
         tna_throw(env, "invalid", "no JavaScript I/O processor is registered for the origin's type");
         return false;
     }
@@ -486,7 +486,7 @@ bool tna_origin_argument(napi_env env, tah_system *system, napi_value value, ta_
         tna_throw(env, "invalid", "origin: expected { type, uri } or { type, scope } or { type, token }");
         return false;
     }
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         tna_throw(env, "reentrant", "origin: an origin cannot be made from inside a core call (ADR 0013)");
         return false;
     }
@@ -503,7 +503,7 @@ bool tna_origin_argument(napi_env env, tah_system *system, napi_value value, ta_
             tna_throw(env, "invalid", "origin.uri: expected a string");
             return false;
         }
-        char *text = ta_arena_alloc(&system->scratch.call, length + 1u, 1);
+        char *text = ta_arena_alloc(tah_scratch_call(tah_system_scratch(system)), length + 1u, 1);
         if (text == NULL) {
             tna_throw(env, "out-of-memory", "origin: cannot read the URI");
             return false;
@@ -544,8 +544,8 @@ bool tna_origin_argument(napi_env env, tah_system *system, napi_value value, ta_
         tna_throw(env, "invalid", "origin: expected { type, uri } or { type, scope } or { type, token }");
         return false;
     }
-    ta_result result = ta_io_origin_make(system->core, &params);
-    tah_scratch_reset_call(&system->scratch);
+    ta_result result = ta_io_origin_make(tah_system_core(system), &params);
+    tah_scratch_reset_call(tah_system_scratch(system));
     if (result == TA_ERR_NOT_FOUND) {
         tna_throw(env, "stale", "origin.scope: the scope is closed");
         return false;
@@ -566,7 +566,7 @@ napi_value tna_open_scope_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "openScope(): cannot run inside a core call (ADR 0013)");
     }
     uint32_t processor = 0;
@@ -575,13 +575,13 @@ napi_value tna_open_scope_method(napi_env env, napi_callback_info info) {
     }
     ta_str uri = { NULL, 0 };
     if (!tna_optional_text(env, system, argc > 1 ? argv[1] : NULL, &uri) || uri.len == 0) {
-        tah_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(tah_system_scratch(system));
         return tna_throw(env, "invalid", "openScope(): expected a URI string");
     }
     ta_io_scope scope = { 0, 0 };
     ta_result result =
-        ta_io_scope_open(system->core, &(ta_io_scope_open_params){ .processor = processor, .uri = uri, .out = &scope });
-    tah_scratch_reset_call(&system->scratch);
+        ta_io_scope_open(tah_system_core(system), &(ta_io_scope_open_params){ .processor = processor, .uri = uri, .out = &scope });
+    tah_scratch_reset_call(tah_system_scratch(system));
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "openScope(): core refused it");
     }
@@ -606,7 +606,7 @@ napi_value tna_close_scope_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "closeScope(): cannot run inside a core call (ADR 0013)");
     }
     ta_io_scope scope = { 0, 0 };
@@ -614,7 +614,7 @@ napi_value tna_close_scope_method(napi_env env, napi_callback_info info) {
         napi_get_value_uint32(env, argv[1], &scope.generation) != napi_ok) {
         return tna_throw(env, "invalid", "closeScope(): expected a scope from openScope()");
     }
-    ta_io_scope_close(system->core, scope);
+    ta_io_scope_close(tah_system_core(system), scope);
     return tna_js_undefined(env);
 }
 
@@ -629,7 +629,7 @@ napi_value tna_register_invoker_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    ta_result result = ta_system_register_invoker(system->core, atom, tah_js_invoker_adapter(system));
+    ta_result result = ta_system_register_invoker(tah_system_core(system), atom, tah_js_invoker_adapter(system));
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "registerInvoker(): core refused the type");
     }
@@ -649,7 +649,7 @@ napi_value tna_set_log_sink_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, "invalid", "setLogSink: expected a boolean");
     }
     tah_system *system = wrapper->system;
-    system->log_to_js = installed;
+    tah_system_set_log_to_js(system, installed);
     ta_result result = tah_system_refresh_log_sink(system);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "setLogSink: core refused the sink");
@@ -665,19 +665,19 @@ napi_value tna_set_log_sink_method(napi_env env, napi_callback_info info) {
 static ta_result tna_done_name(tah_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
     static const char prefix[] = "done.invoke.";
     ta_str id = { 0 };
-    ta_result result = ta_system_invoke_id_text(system->core, invoke, &id);
+    ta_result result = ta_system_invoke_id_text(tah_system_core(system), invoke, &id);
     if (result != TA_OK) {
         return result;
     }
     size_t length = sizeof prefix - 1u + id.len;
-    char *text = ta_arena_alloc(&system->scratch.call, length, 1);
+    char *text = ta_arena_alloc(tah_scratch_call(tah_system_scratch(system)), length, 1);
     if (text == NULL) {
         return TA_ERR_NOMEM;
     }
     memcpy(text, prefix, sizeof prefix - 1u);
     memcpy(text + sizeof prefix - 1u, id.ptr, id.len);
-    result = tah_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
-    tah_scratch_reset_call(&system->scratch);
+    result = tah_event_name_intern(tah_system_core(system), (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
+    tah_scratch_reset_call(tah_system_scratch(system));
     return result;
 }
 
@@ -742,9 +742,9 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
     }
     ta_event_name_id name = 0;
     if (strcmp(kind, "done") == 0) {
-        system->inside_core = true;
+        tah_system_enter_core(system);
         ta_result result = tna_done_name(system, invoke, &name);
-        system->inside_core = false;
+        tah_system_leave_core(system);
         if (result == TA_ERR_NOMEM) {
             return tna_throw(env, "out-of-memory", "reportInvoke: cannot name the done event");
         }

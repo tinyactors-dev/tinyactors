@@ -159,7 +159,7 @@ napi_value tna_call_end(tna_call *call, napi_value value) {
     if (call->temporary_used) {
         ta_arena_destroy(&call->temporary);
     } else if (call->arena != NULL && !tah_system_closed(call->owner->system)) {
-        tah_scratch_reset_call(&call->owner->system->scratch);
+        tah_scratch_reset_call(tah_system_scratch(call->owner->system));
     }
     if (call->owner != NULL && !tah_system_closed(call->owner->system)) {
         tna_napi_system_flush(call->owner);
@@ -183,7 +183,7 @@ static bool tna_call_owner(tna_call *call, tna_napi_system *owner) {
         tna_throw(call->env, "closed", "the system is closed");
         return false;
     }
-    if (owner->system->inside_core) {
+    if (tah_system_inside_core(owner->system)) {
         tna_throw(call->env, "reentrant", "core cannot be called from inside a core call (ADR 0013)");
         return false;
     }
@@ -191,7 +191,7 @@ static bool tna_call_owner(tna_call *call, tna_napi_system *owner) {
         return tna_invalid(call, "the system before any other argument");
     }
     call->owner = owner;
-    call->core = owner->system->core;
+    call->core = tah_system_core(owner->system);
     return true;
 }
 
@@ -206,13 +206,13 @@ bool tna_call_receiver(tna_call *call, napi_value system) {
 
 void tna_core_enter(tna_call *call) {
     if (call->owner != NULL) {
-        call->owner->system->inside_core = true;
+        tah_system_enter_core(call->owner->system);
     }
 }
 
 void tna_core_leave(tna_call *call) {
     if (call->owner != NULL) {
-        call->owner->system->inside_core = false;
+        tah_system_leave_core(call->owner->system);
     }
 }
 
@@ -244,7 +244,7 @@ ta_arena *tna_call_arena(tna_call *call) {
         return call->arena;
     }
     if (call->owner != NULL) {
-        call->arena = &call->owner->system->scratch.call;
+        call->arena = tah_scratch_call(tah_system_scratch(call->owner->system));
     } else {
         ta_allocator allocator = { NULL, &tna_malloc_vtable };
         if (ta_arena_init(&call->temporary, allocator, 4096) != TA_OK) {
@@ -425,7 +425,7 @@ static void tna_handle_finalize(napi_env env, void *data, void *hint) {
         tna_napi_system_drop(handle);
         return;
     }
-    if (owner->system->inside_core) {
+    if (tah_system_inside_core(owner->system)) {
         return; /* released when the core call returns (tna_call_end) */
     }
     handle->kind->release(handle->pointer);

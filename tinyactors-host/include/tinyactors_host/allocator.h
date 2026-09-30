@@ -95,3 +95,7 @@ ta_result tah_scratch_init(tah_scratch *scratch, tah_allocator *allocator);
 void tah_scratch_reset_turn(tah_scratch *scratch);
 void tah_scratch_reset_call(tah_scratch *scratch);
 void tah_scratch_destroy(tah_scratch *scratch);
+/* The turn arena, reset when a turn ends, and the call arena, reset after
+ * each call from the binding. */
+ta_arena *tah_scratch_turn(tah_scratch *scratch);
+ta_arena *tah_scratch_call(tah_scratch *scratch);

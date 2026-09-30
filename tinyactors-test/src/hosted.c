@@ -95,14 +95,14 @@ jv tat_hosted_create_method(tat_bind *bind, jv params, int *error_code) {
     /* The input log writes values with the jq data model's codec, which
      * streams both ways (kernel ADR 0002; core ADR 0090's notes). Hosted
      * charts use the jq data model. */
-    tah_inputs_set_datamodel(&hosted->system->inputs, tat_json_datamodel(&bind->json));
+    tah_inputs_set_datamodel(tah_system_inputs(hosted->system), tat_json_datamodel(&bind->json));
     hosted->system->wake = tat_hosted_wake;
     (void)tah_system_set_clock(hosted->system, TAH_CLOCK_MANUAL, 0);
     jv out = jv_object();
     out = jv_object_set(out, jv_string("hosted"), tat_handle_register(bind, "hosted", hosted));
     /* The kernel's core system, for the generated core methods (defining
      * charts, inspecting actors); retired when the hosted system closes. */
-    out = jv_object_set(out, jv_string("core"), tat_handle_register(bind, "system", hosted->system->core));
+    out = jv_object_set(out, jv_string("core"), tat_handle_register(bind, "system", tah_system_core(hosted->system)));
     return out;
 }
 
@@ -115,7 +115,7 @@ jv tat_hosted_close_method(tat_bind *bind, jv params, int *error_code) {
         return tat_bind_take_error(bind, error_code);
     }
     tat_hosted *hosted = resolved;
-    tat_handle_retire(bind, hosted->system->core);
+    tat_handle_retire(bind, tah_system_core(hosted->system));
     tah_system_close(hosted->system);
     size_t leaked = tah_system_leaked_bytes(hosted->system);
     tah_system_free(hosted->system);
@@ -141,12 +141,12 @@ jv tat_hosted_spawn_method(tat_bind *bind, jv params, int *error_code) {
     }
     ta_actor_id actor = 0;
     tah_system *system = hosted->system;
-    system->inside_core = true;
-    ta_result result = ta_actor_spawn(system->core, &(ta_actor_spawn_params){
+    tah_system_enter_core(system);
+    ta_result result = ta_actor_spawn(tah_system_core(system), &(ta_actor_spawn_params){
                                                         .definition = (ta_definition_id)tat_hosted_u64(params, "definition"),
                                                         .address = named ? &address : NULL,
                                                         .out = &actor});
-    system->inside_core = false;
+    tah_system_leave_core(system);
     jv_free(family);
     jv_free(name);
     if (result == TA_OK) {
@@ -173,7 +173,7 @@ jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code) {
     }
     ta_event_name_id name = 0;
     ta_result result = tah_event_name_intern(
-        hosted->system->core, (ta_str){jv_string_value(text), (uint32_t)jv_string_length_bytes(jv_copy(text))},
+        tah_system_core(hosted->system), (ta_str){jv_string_value(text), (uint32_t)jv_string_length_bytes(jv_copy(text))},
         &name);
     jv_free(text);
     ta_event event = {.name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
@@ -199,7 +199,7 @@ static jv tat_hosted_text(ta_str text) {
 
 /* The turn's input-log batch, as the application would store it. */
 static void tat_hosted_take_batch(tat_hosted *hosted) {
-    tah_inputs *inputs = &hosted->system->inputs;
+    tah_inputs *inputs = tah_system_inputs(hosted->system);
     uint32_t wake_count = 0;
     (void)tah_inputs_wakes(hosted->system, &wake_count);
     static const char digits[] = "0123456789abcdef";
@@ -307,9 +307,9 @@ jv tat_hosted_evict_method(tat_bind *bind, jv params, int *error_code) {
     tah_system *system = hosted->system;
     ta_result result = tah_inputs_evicted(system, actor, false, 0);
     if (result == TA_OK) {
-        system->inside_core = true;
-        result = ta_actor_destroy(system->core, actor);
-        system->inside_core = false;
+        tah_system_enter_core(system);
+        result = ta_actor_destroy(tah_system_core(system), actor);
+        tah_system_leave_core(system);
         if (result == TA_OK) {
             (void)tah_hook_actor_removed(system, actor);
         }
@@ -363,9 +363,9 @@ jv tat_hosted_restore_method(tat_bind *bind, jv params, int *error_code) {
         ta_time at = 0;
         (void)tah_replay_last_time(replay, &at);
         tah_replay_finish(replay, actor);
-        hosted->system->inside_core = true;
-        result = ta_actor_publish(hosted->system->core, &(ta_actor_publish_params){.actor = actor, .at = &at});
-        hosted->system->inside_core = false;
+        tah_system_enter_core(hosted->system);
+        result = ta_actor_publish(tah_system_core(hosted->system), &(ta_actor_publish_params){.actor = actor, .at = &at});
+        tah_system_leave_core(hosted->system);
         uint32_t owed = 0;
         if (result == TA_OK) {
             result = tah_replay_redeliver(replay, actor, &owed);

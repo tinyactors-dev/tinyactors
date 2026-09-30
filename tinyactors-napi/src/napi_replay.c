@@ -128,7 +128,7 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "replay: cannot be called from inside a core call (ADR 0013)");
     }
     tna_replay_feed *feed = tna_feed_argument(env, wrapper, argc >= 1 ? argv[0] : NULL);
@@ -150,7 +150,7 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
         named = tna_text_argument(env, system, argv[4], &address.family.name) &&
                 tna_text_argument(env, system, argv[5], &address.name);
         if (!named) {
-            tah_scratch_reset_call(&system->scratch);
+            tah_scratch_reset_call(tah_system_scratch(system));
             return tna_throw(env, "invalid", "replayPrepare: the address is (family, name)");
         }
     }
@@ -163,7 +163,7 @@ static napi_value tna_replay_prepare_inner(napi_env env, napi_callback_info info
                                                             .out = &actor,
                                                             .found = &found,
                                                         });
-    tah_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(tah_system_scratch(system));
     if (result != TA_OK) {
         return tna_replay_error(env, result, "the log's first record cannot start a replaying actor");
     }
@@ -214,7 +214,7 @@ static napi_value tna_replay_run_inner(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "replay: cannot be called from inside a core call (ADR 0013)");
     }
     tna_replay_feed *feed = tna_feed_argument(env, wrapper, argc >= 1 ? argv[0] : NULL);
@@ -328,7 +328,7 @@ napi_value tna_replay_redeliver_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "replay: cannot be called from inside a core call (ADR 0013)");
     }
     tna_replay_feed *feed = tna_feed_argument(env, wrapper, argc >= 1 ? argv[0] : NULL);
@@ -442,7 +442,7 @@ napi_value tna_checkpoint_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "checkpoint: cannot be called from inside a core call (ADR 0013)");
     }
     uint32_t slot = 0;

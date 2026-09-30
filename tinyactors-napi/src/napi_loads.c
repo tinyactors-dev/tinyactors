@@ -28,7 +28,7 @@ static napi_status tna_put_number(napi_env env, napi_value object, const char *n
 
 void tna_loads_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
     tah_system *system = wrapper->system;
-    if (tah_loads_pending_requests(&system->loads) == 0) {
+    if (tah_loads_pending_requests(tah_system_loads(system)) == 0) {
         return;
     }
     napi_value requests = NULL;
@@ -37,7 +37,7 @@ void tna_loads_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
     }
     uint32_t count = 0;
     tah_load_request request;
-    while (tah_loads_next_request(&system->loads, &request)) {
+    while (tah_loads_next_request(tah_system_loads(system), &request)) {
         ta_actor_address address = ta_address_view(request.address);
         napi_value item = NULL;
         napi_value why = NULL;
@@ -97,8 +97,8 @@ napi_value tna_set_loader_family_method(napi_env env, napi_callback_info info) {
         napi_get_value_uint32(env, argv[1], &max_waiting) != napi_ok) {
         return tna_throw(env, "invalid", "setLoader: expected a family name and maxWaiting");
     }
-    ta_result result = tah_loads_set_family(&wrapper->system->loads, family, max_waiting);
-    tah_scratch_reset_call(&wrapper->system->scratch);
+    ta_result result = tah_loads_set_family(tah_system_loads(wrapper->system), family, max_waiting);
+    tah_scratch_reset_call(tah_system_scratch(wrapper->system));
     if (result != TA_OK) {
         return tna_throw(env, "out-of-memory", "setLoader: no memory for the family");
     }
@@ -171,7 +171,7 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
         uint32_t actor_generation = 0;
         if (argc < 5 || napi_get_value_uint32(env, argv[3], &slot) != napi_ok ||
             napi_get_value_uint32(env, argv[4], &actor_generation) != napi_ok) {
-            tah_scratch_reset_call(&system->scratch);
+            tah_scratch_reset_call(tah_system_scratch(system));
             return tna_throw(env, "invalid", "completeLoad: a loaded or spawned outcome needs the actor");
         }
         actor = ta_actor_id_make(slot, actor_generation);
@@ -181,23 +181,23 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
         detail = (ta_str){ 0 };
     }
     if (outcome == TAH_LOAD_OUTCOMES) {
-        tah_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(tah_system_scratch(system));
         return tna_throw(env, "invalid", "completeLoad: unknown outcome");
     }
-    tah_load_info load = tah_loads_info(&system->loads, index, generation);
+    tah_load_info load = tah_loads_info(tah_system_loads(system), index, generation);
     if (load.address != NULL && (outcome == TAH_LOAD_FAILED || outcome == TAH_LOAD_TIMED_OUT)) {
         tna_load_log(system, &load, outcome, detail);
     }
-    ta_result result = tah_loads_finish(&system->loads, &(tah_load_finish){ .sched = &system->sched,
-                                                                            .directory = &system->directory,
-                                                                            .metrics = &system->metrics,
+    ta_result result = tah_loads_finish(tah_system_loads(system), &(tah_load_finish){ .sched = tah_system_sched(system),
+                                                                            .directory = tah_system_directory(system),
+                                                                            .metrics = tah_system_metrics(system),
                                                                             .index = index,
                                                                             .generation = generation,
                                                                             .outcome = outcome,
                                                                             .actor = actor,
                                                                             .now_ns = tah_system_monotonic_ns(system),
                                                                             .wall_ns = tah_system_wall_ns(system) });
-    tah_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(tah_system_scratch(system));
     if (result == TA_ERR_NOT_FOUND) {
         return tna_throw(env, "invalid", "completeLoad: the actor is not resident (at the load's address)");
     }
@@ -223,7 +223,7 @@ napi_value tna_load_trace_method(napi_env env, napi_callback_info info) {
     if (argc < 2 || !tna_load_token(env, argv, &index, &generation)) {
         return tna_throw(env, "invalid", "loadTrace: expected (index, generation)");
     }
-    tah_load_info load = tah_loads_info(&wrapper->system->loads, index, generation);
+    tah_load_info load = tah_loads_info(tah_system_loads(wrapper->system), index, generation);
     if (load.address == NULL) {
         return tna_undefined_value(env);
     }
@@ -234,7 +234,7 @@ napi_value tna_load_trace_method(napi_env env, napi_callback_info info) {
 static ta_address *tna_address_arguments(napi_env env, tna_napi_system *wrapper, const napi_value *argv,
                                          const char *what) {
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         tna_throw(env, "reentrant", "an address cannot be interned from inside a core call (ADR 0013)");
         return NULL;
     }
@@ -242,8 +242,8 @@ static ta_address *tna_address_arguments(napi_env env, tna_napi_system *wrapper,
     ta_address *address = NULL;
     bool ok = tna_text_argument(env, system, argv[0], &text.family.name) &&
               tna_text_argument(env, system, argv[1], &text.name);
-    ta_result result = ok ? ta_address_intern(system->core, &text, &address) : TA_ERR_INVALID;
-    tah_scratch_reset_call(&system->scratch);
+    ta_result result = ok ? ta_address_intern(tah_system_core(system), &text, &address) : TA_ERR_INVALID;
+    tah_scratch_reset_call(tah_system_scratch(system));
     if (result != TA_OK) {
         char message[96];
         snprintf(message, sizeof message, "%s: expected (family, name) with non-empty text", what);
@@ -272,7 +272,7 @@ napi_value tna_wake_at_method(napi_env env, napi_callback_info info) {
     if (address == NULL) {
         return NULL;
     }
-    ta_result result = tah_loads_wake_at(&wrapper->system->loads, address, (ta_time)time);
+    ta_result result = tah_loads_wake_at(tah_system_loads(wrapper->system), address, (ta_time)time);
     ta_address_release(address);
     if (result != TA_OK) {
         return tna_throw(env, "out-of-memory", "wakeAt: no memory for the wake-up");
@@ -295,7 +295,7 @@ napi_value tna_cancel_wake_method(napi_env env, napi_callback_info info) {
     if (address == NULL) {
         return NULL;
     }
-    tah_loads_cancel_wake(&wrapper->system->loads, address);
+    tah_loads_cancel_wake(tah_system_loads(wrapper->system), address);
     ta_address_release(address);
     return tna_undefined_value(env);
 }
@@ -462,7 +462,7 @@ napi_value tna_durable_bytes_method(napi_env env, napi_callback_info info) {
     if (!tna_value_make(&wrapper->values, argc >= 1 ? argv[0] : tna_undefined_value(env), &value)) {
         return tna_throw(env, "out-of-memory", "durableBytes: cannot keep the value");
     }
-    tna_gather_sink state = { .allocator = &wrapper->system->allocator };
+    tna_gather_sink state = { .allocator = tah_system_allocator(wrapper->system) };
     ta_byte_sink sink = { .self = &state, .v = &tna_gather_vtable };
     ta_fault fault = { 0 };
     sink.v->begin(sink.self);
@@ -536,9 +536,9 @@ napi_value tna_durable_value_method(napi_env env, napi_callback_info info) {
 static void tna_offload_undo(tna_napi_system *wrapper, ta_bytes bytes) {
     tah_system *system = wrapper->system;
     ta_actor_id back = 0;
-    system->inside_core = true;
-    ta_result reloaded = ta_actor_load(system->core, &(ta_actor_load_params){ .bytes = bytes, .out = &back });
-    system->inside_core = false;
+    tah_system_enter_core(system);
+    ta_result reloaded = ta_actor_load(tah_system_core(system), &(ta_actor_load_params){ .bytes = bytes, .out = &back });
+    tah_system_leave_core(system);
     if (reloaded == TA_OK) {
         (void)tah_hook_actor_created(system, back);
     }
@@ -556,7 +556,7 @@ static napi_value tna_offload_inner(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "unload() cannot run inside a core call (ADR 0013)");
     }
     uint32_t slot = 0;
@@ -567,7 +567,7 @@ static napi_value tna_offload_inner(napi_env env, napi_callback_info info) {
     }
     ta_actor_id actor = ta_actor_id_make(slot, generation);
     ta_actor_inspection view;
-    ta_result result = ta_actor_inspect(system->core, actor, &view);
+    ta_result result = ta_actor_inspect(tah_system_core(system), actor, &view);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "unload(): no such actor");
     }
@@ -577,36 +577,36 @@ static napi_value tna_offload_inner(napi_env env, napi_callback_info info) {
     /* The directory keeps the unloaded address's reference, which keys the store. */
     const ta_address *address = view.self.as.named;
     ta_value root = { 0 };
-    bool has_root = ta_actor_datamodel_root(system->core, actor, &root) == TA_OK;
+    bool has_root = ta_actor_datamodel_root(tah_system_core(system), actor, &root) == TA_OK;
     tna_js_datamodel_offload_begin(&wrapper->dm);
     ta_bytes bytes = { 0 };
-    system->inside_core = true;
-    result = ta_actor_offload(system->core, &(ta_actor_offload_params){ .actor = actor,
+    tah_system_enter_core(system);
+    result = ta_actor_offload(tah_system_core(system), &(ta_actor_offload_params){ .actor = actor,
                                                                         .root = has_root ? &root : NULL,
-                                                                        .arena = &system->scratch.call,
+                                                                        .arena = tah_scratch_call(tah_system_scratch(system)),
                                                                         .out = &bytes });
-    system->inside_core = false;
+    tah_system_leave_core(system);
     tna_offload_handles handles = tna_js_datamodel_offload_end(&wrapper->dm);
     ta_value_release(&root);
     if (result != TA_OK) {
         tna_js_datamodel_release_handles(&wrapper->dm, handles);
-        tah_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(tah_system_scratch(system));
         return tna_throw(env, tna_result_code(result),
                          result == TA_ERR_BUSY ? "unload(): the actor is not stable; unload it once it is idle"
                                                : "unload(): the actor cannot be offloaded");
     }
     (void)tah_hook_actor_unloaded(system, actor);
-    result = tah_offloads_put(&system->offloads, &(tah_offload_put_params){ .address = address,
+    result = tah_offloads_put(tah_system_offloads(system), &(tah_offload_put_params){ .address = address,
                                                                             .bytes = bytes,
                                                                             .handles = handles.handles,
                                                                             .handle_count = handles.count });
     if (result != TA_OK) {
         tna_offload_undo(wrapper, bytes);
         tna_js_datamodel_release_handles(&wrapper->dm, handles);
-        tah_scratch_reset_call(&system->scratch);
+        tah_scratch_reset_call(tah_system_scratch(system));
         return tna_throw(env, "out-of-memory", "unload(): no memory for the offloaded bytes");
     }
-    tah_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(tah_system_scratch(system));
     return tna_undefined_value(env);
 }
 
@@ -626,7 +626,7 @@ napi_value tna_has_offloaded_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     ta_bytes bytes;
-    bool found = tah_offloads_bytes(&wrapper->system->offloads, address, &bytes);
+    bool found = tah_offloads_bytes(tah_system_offloads(wrapper->system), address, &bytes);
     ta_address_release(address);
     napi_value out = NULL;
     napi_get_boolean(env, found, &out);
@@ -648,7 +648,7 @@ napi_value tna_drop_offloaded_method(napi_env env, napi_callback_info info) {
     if (address == NULL) {
         return NULL;
     }
-    (void)tah_offloads_drop(&wrapper->system->offloads, address);
+    (void)tah_offloads_drop(tah_system_offloads(wrapper->system), address);
     ta_address_release(address);
     return tna_undefined_value(env);
 }
@@ -675,7 +675,7 @@ static napi_value tna_load_offloaded_inner(napi_env env, napi_callback_info info
         return NULL;
     }
     ta_bytes bytes;
-    if (!tah_offloads_bytes(&system->offloads, address, &bytes)) {
+    if (!tah_offloads_bytes(tah_system_offloads(system), address, &bytes)) {
         ta_address_release(address);
         return tna_throw(env, "not-found", "load: the address has no offloaded actor");
     }
@@ -688,17 +688,17 @@ static napi_value tna_load_offloaded_inner(napi_env env, napi_callback_info info
         return tna_throw(env, "out-of-memory", "load: cannot keep the binding");
     }
     ta_actor_id actor = 0;
-    system->inside_core = true;
-    ta_result result = ta_actor_load(system->core, &(ta_actor_load_params){
+    tah_system_enter_core(system);
+    ta_result result = ta_actor_load(tah_system_core(system), &(ta_actor_load_params){
                                                        .bytes = bytes,
                                                        .datamodel_binding = bound ? &binding : NULL,
                                                        .out = &actor });
-    system->inside_core = false;
+    tah_system_leave_core(system);
     /* Core retained the binding if it kept it. */
     ta_value_release(&binding);
     if (result == TA_OK) {
         /* The actor holds its own references now; the entry's go with it. */
-        (void)tah_offloads_drop(&system->offloads, address);
+        (void)tah_offloads_drop(tah_system_offloads(system), address);
         result = tah_hook_actor_created(system, actor);
     }
     ta_address_release(address);

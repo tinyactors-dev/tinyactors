@@ -125,6 +125,14 @@ void tah_scratch_reset_call(tah_scratch *scratch) {
     ta_arena_reset(&scratch->call);
 }
 
+ta_arena *tah_scratch_turn(tah_scratch *scratch) {
+    return &scratch->turn;
+}
+
+ta_arena *tah_scratch_call(tah_scratch *scratch) {
+    return &scratch->call;
+}
+
 void tah_scratch_destroy(tah_scratch *scratch) {
     ta_arena_destroy(&scratch->turn);
     ta_arena_destroy(&scratch->call);

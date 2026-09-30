@@ -1721,7 +1721,7 @@ static const ta_datamodel_vtable tna_dm_vtable = {
 #define TNA_DURABLE_PIECE 16384u
 
 static ta_allocator tna_offload_allocator(tna_js_datamodel *dm) {
-    return tah_allocator_for(&dm->wrapper->system->allocator, TAH_MEMORY_OTHER);
+    return tah_allocator_for(tah_system_allocator(dm->wrapper->system), TAH_MEMORY_OTHER);
 }
 
 static void tna_clear_exception(napi_env env) {
@@ -2411,7 +2411,7 @@ bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_
     /* Its buffers come from the system's parameters (napi ADR 0035). */
     const tna_params *params = &wrapper->params;
     uint64_t message_bytes = TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES;
-    (void)ta_system_param(wrapper->system->core, TA_PARAM_COMPILE_MESSAGE_BYTES, &message_bytes);
+    (void)ta_system_param(tah_system_core(wrapper->system), TA_PARAM_COMPILE_MESSAGE_BYTES, &message_bytes);
     dm->registered_capacity = (uint32_t)params->values[TNA_PARAM_REGISTERED_DATAMODELS];
     dm->name_bytes = (uint32_t)params->values[TNA_PARAM_DATAMODEL_NAME_BYTES];
     dm->rejection_bytes = (size_t)message_bytes + 1u;

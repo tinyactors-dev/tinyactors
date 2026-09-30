@@ -283,11 +283,11 @@ static napi_value tna_final_state(napi_env env, tah_system *system, ta_actor_id 
     napi_value result = NULL;
     napi_get_undefined(env, &result);
     ta_actor_inspection view;
-    if (ta_actor_inspect(system->core, actor, &view) != TA_OK || view.final_state == TA_STATE_NONE) {
+    if (ta_actor_inspect(tah_system_core(system), actor, &view) != TA_OK || view.final_state == TA_STATE_NONE) {
         return result;
     }
     ta_state_info info;
-    if (ta_definition_state(system->core, &(ta_definition_state_params){
+    if (ta_definition_state(tah_system_core(system), &(ta_definition_state_params){
                                               .definition = view.definition_id,
                                               .state = view.final_state,
                                               .out = &info,
@@ -325,11 +325,11 @@ void tna_call_hook(napi_env env, napi_ref hook, napi_value argument, napi_value 
 }
 
 static void tna_destroy_finished(tah_system *system, ta_actor_id actor) {
-    system->inside_core = true;
-    ta_result result = ta_actor_destroy(system->core, actor);
-    system->inside_core = false;
+    tah_system_enter_core(system);
+    ta_result result = ta_actor_destroy(tah_system_core(system), actor);
+    tah_system_leave_core(system);
     if (result == TA_OK || result == TA_ERR_NOT_FOUND) {
-        tah_sched_remove(&system->sched, actor, TAH_DEAD_DONE);
+        tah_sched_remove(tah_system_sched(system), actor, TAH_DEAD_DONE);
     }
 }
 
@@ -337,9 +337,9 @@ static void tna_destroy_finished(tah_system *system, ta_actor_id actor) {
 static napi_value tna_completion_data(napi_env env, tah_system *system, ta_actor_id actor) {
     napi_value data = NULL;
     ta_actor_completion completion = { 0 };
-    system->inside_core = true;
-    ta_result result = ta_actor_get_completion(system->core, actor, &completion);
-    system->inside_core = false;
+    tah_system_enter_core(system);
+    ta_result result = ta_actor_get_completion(tah_system_core(system), actor, &completion);
+    tah_system_leave_core(system);
     if (result != TA_OK || !completion.has_data || !tna_value_get(env, &completion.data, &data)) {
         napi_get_undefined(env, &data);
     }
@@ -351,7 +351,7 @@ static napi_value tna_completion_data(napi_env env, tah_system *system, ta_actor
 
 static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record, napi_value *first_error) {
     tah_system *system = wrapper->system;
-    if (wrapper->done_hook != NULL && tah_sched_state_of(&system->sched, record->actor) != TAH_SCHED_NONE) {
+    if (wrapper->done_hook != NULL && tah_sched_state_of(tah_system_sched(system), record->actor) != TAH_SCHED_NONE) {
         napi_value view = tna_actor_view(env, wrapper, record->actor);
         napi_value argument = NULL;
         napi_value data = tna_completion_data(env, system, record->actor);
@@ -364,7 +364,7 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_tu
     }
     /* The hook may have closed the system or destroyed the actor itself. */
     if (wrapper->destroy_finished && !tah_system_closed(system) &&
-        tah_sched_state_of(&system->sched, record->actor) != TAH_SCHED_NONE) {
+        tah_sched_state_of(tah_system_sched(system), record->actor) != TAH_SCHED_NONE) {
         tna_destroy_finished(system, record->actor);
     }
 }
@@ -373,15 +373,15 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_tu
  * (napi ADR 0017 section 7): the actor's session and definition, if it is
  * still resident, name it. */
 void tna_pump_host_log(tah_system *system, ta_actor_id actor, tah_otlp_host_log_params log) {
-    if (!system->tracing) {
+    if (!tah_system_tracing(system)) {
         return;
     }
     ta_actor_inspection view;
-    if (actor != 0 && ta_actor_inspect(system->core, actor, &view) == TA_OK) {
+    if (actor != 0 && ta_actor_inspect(tah_system_core(system), actor, &view) == TA_OK) {
         log.session = view.session_id;
         log.definition = view.definition_id;
     }
-    tah_otlp_host_log(&system->otlp, &log);
+    tah_otlp_host_log(tah_system_otlp(system), &log);
 }
 
 void tna_fault_message(const char *operation, ta_result code, char *buffer, size_t size) {
@@ -437,16 +437,16 @@ napi_value tna_event_text(napi_env env, tah_system *system, ta_event_name_id nam
     char stack[256];
     uint32_t needed = 0;
     ta_event_name_format_params params = { .name = name, .buffer = stack, .capacity = sizeof stack, .needed = &needed };
-    ta_result result = ta_event_name_format(system->core, &params);
+    ta_result result = ta_event_name_format(tah_system_core(system), &params);
     char *text = stack;
     if (result == TA_ERR_NOMEM && needed > sizeof stack) {
-        text = ta_arena_alloc(&system->scratch.turn, needed, 1);
+        text = ta_arena_alloc(tah_scratch_turn(tah_system_scratch(system)), needed, 1);
         if (text == NULL) {
             return NULL;
         }
         params.buffer = text;
         params.capacity = needed;
-        result = ta_event_name_format(system->core, &params);
+        result = ta_event_name_format(tah_system_core(system), &params);
     }
     napi_value out = NULL;
     if (result != TA_OK || napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &out) != napi_ok) {
@@ -579,7 +579,7 @@ static napi_value tna_settlement_result(napi_env env, tna_napi_system *wrapper, 
  * again after them, for settlements the hooks caused.
  */
 static void tna_settle_sends(napi_env env, tna_napi_system *wrapper) {
-    tah_sched *sched = &wrapper->system->sched;
+    tah_sched *sched = tah_system_sched(wrapper->system);
     tah_settlement settlement;
     while (tah_sched_settlement_pop(sched, &settlement)) {
         napi_deferred deferred = tah_sched_waiter_host(sched, settlement.waiter);
@@ -636,12 +636,12 @@ static void tna_resolve_waiters(napi_env env, tna_napi_system *wrapper) {
 }
 
 /* Quiet, with no turn pending and no load waiting for its loader (napi ADR 0020). */
-static bool tna_settled(const tah_system *system) {
+static bool tna_settled(tah_system *system) {
     if (tah_system_closed(system)) {
         return true;
     }
     tah_loads_stats loads;
-    tah_loads_read_stats(&system->loads, &loads);
+    tah_loads_read_stats(tah_system_loads(system), &loads);
     return tah_system_quiet(system) && !system->turn_pending && loads.in_flight == 0;
 }
 
@@ -685,7 +685,8 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
     if (!tah_system_closed(system)) {
         tah_system_turn(system);
         tna_settle_sends(env, wrapper);
-        for (const tah_turn_record *record = tah_sched_records(&system->sched); record != NULL; record = record->next) {
+        const tah_turn_record *records = tah_sched_records(tah_system_sched(system));
+        for (const tah_turn_record *record = records; record != NULL; record = record->next) {
             if (tah_system_closed(system)) {
                 break; /* a hook closed the system */
             }
@@ -808,7 +809,7 @@ void tna_pump_close(tna_napi_system *wrapper, bool env_usable) {
         }
     }
     /* send() promises still pending reject with "closed" (ADR 0012). */
-    tah_sched *sched = &wrapper->system->sched;
+    tah_sched *sched = tah_system_sched(wrapper->system);
     napi_value closed = NULL;
     for (uint32_t index = tah_sched_next_waiter(sched, 0); index != 0; index = tah_sched_next_waiter(sched, index)) {
         napi_deferred deferred = tah_sched_waiter_host(sched, index);

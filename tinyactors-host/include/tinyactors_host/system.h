@@ -176,8 +176,7 @@ struct tah_system {
     bool tracing;
     /* <log> records go to JavaScript's log sink (setLogSink). */
     bool log_to_js;
-    /* What the sink asks core for, and what is watched (napi ADR 0017). */
-    tah_trace_masks trace_masks;
+    /* What is watched (napi ADR 0017). */
     tah_trace_watch trace_watch;
     /* The definition lifecycle as core tells it (core ADR 0079): counts and origins. */
     tah_definitions definitions;
@@ -245,6 +244,46 @@ typedef struct {
 ta_result tah_system_create(const tah_system_create_params *params, tah_system **out);
 void tah_system_close(tah_system *system);
 bool tah_system_closed(const tah_system *system);
+
+/*
+ * The system's parts, for the binding to call their functions with. Each
+ * lives as long as the system; core, and what close destroys, only until
+ * tah_system_close().
+ */
+ta_system *tah_system_core(tah_system *system);
+tah_allocator *tah_system_allocator(tah_system *system);
+tah_scratch *tah_system_scratch(tah_system *system);
+tah_sched *tah_system_sched(tah_system *system);
+tah_directory *tah_system_directory(tah_system *system);
+tah_loads *tah_system_loads(tah_system *system);
+tah_offloads *tah_system_offloads(tah_system *system);
+tah_effects *tah_system_effects(tah_system *system);
+tah_otlp *tah_system_otlp(tah_system *system);
+tah_trace_watch *tah_system_trace_watch(tah_system *system);
+tah_definitions *tah_system_definitions(tah_system *system);
+tah_host_metrics *tah_system_metrics(tah_system *system);
+tah_inputs *tah_system_inputs(tah_system *system);
+const tah_params *tah_system_params(const tah_system *system);
+
+/*
+ * Around every core call the binding makes (ADR 0013 point 4): a binding
+ * that finds tah_system_inside_core() true refuses to call core again
+ * ("reentrant"), since the callbacks core runs may run the binding's code.
+ */
+bool tah_system_inside_core(const tah_system *system);
+void tah_system_enter_core(tah_system *system);
+void tah_system_leave_core(tah_system *system);
+
+/*
+ * The trace encoder is on (napi ADR 0016): the binding sets it up with
+ * tah_otlp_init() on tah_system_otlp() and says so here, and says so again
+ * after tah_otlp_destroy(). <log> records then go to it as well.
+ */
+bool tah_system_tracing(const tah_system *system);
+void tah_system_set_tracing(tah_system *system, bool tracing);
+/* <log> records go to the binding's log sink as effects (setLogSink); call
+ * tah_system_refresh_log_sink() after. */
+void tah_system_set_log_to_js(tah_system *system, bool log_to_js);
 size_t tah_system_leaked_bytes(const tah_system *system);
 void tah_system_free(tah_system *system);
 

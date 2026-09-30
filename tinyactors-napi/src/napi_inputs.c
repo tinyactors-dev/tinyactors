@@ -15,7 +15,7 @@ static void tna_put(napi_env env, napi_value object, const char *name, napi_valu
 
 void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
     tah_system *system = wrapper->system;
-    tah_inputs *inputs = &system->inputs;
+    tah_inputs *inputs = tah_system_inputs(system);
     if (!tah_inputs_enabled(inputs) && tah_inputs_entry_count(inputs) == 0 && tah_inputs_touched_count(inputs) == 0) {
         return;
     }
@@ -109,8 +109,8 @@ napi_value tna_set_input_log_method(napi_env env, napi_callback_info info) {
     if (argc >= 1 && argv[0] != NULL && napi_is_array(env, argv[0], &is_array) == napi_ok && is_array) {
         napi_get_array_length(env, argv[0], &count);
     }
-    ta_str *families = count == 0 ? NULL
-                                  : ta_arena_alloc(&system->scratch.call, (size_t)count * sizeof(ta_str), _Alignof(ta_str));
+    ta_arena *arena = tah_scratch_call(tah_system_scratch(system));
+    ta_str *families = count == 0 ? NULL : ta_arena_alloc(arena, (size_t)count * sizeof(ta_str), _Alignof(ta_str));
     if (count != 0 && families == NULL) {
         return tna_throw(env, "out-of-memory", "setInputLog: cannot read the families");
     }
@@ -118,12 +118,12 @@ napi_value tna_set_input_log_method(napi_env env, napi_callback_info info) {
         napi_value item = NULL;
         if (napi_get_element(env, argv[0], at, &item) != napi_ok ||
             !tna_text_argument(env, system, item, &families[at])) {
-            tah_scratch_reset_call(&system->scratch);
+            tah_scratch_reset_call(tah_system_scratch(system));
             return tna_throw(env, "invalid", "setInputLog: families must be strings");
         }
     }
     ta_result result = tah_inputs_configure(system, families, count);
-    tah_scratch_reset_call(&system->scratch);
+    tah_scratch_reset_call(tah_system_scratch(system));
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "setInputLog: cannot keep the families");
     }
@@ -162,7 +162,7 @@ napi_value tna_write_evicted_method(napi_env env, napi_callback_info info) {
     if (!tna_actor_arguments(env, argv, argc, &actor)) {
         return tna_throw(env, "invalid", "writeEvicted: expected (slot, generation, wake?)");
     }
-    if (!tah_inputs_enabled(&system->inputs)) {
+    if (!tah_inputs_enabled(tah_system_inputs(system))) {
         return NULL;
     }
     double wake = 0;
@@ -215,7 +215,7 @@ napi_value tna_withdraw_send_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "withdrawSend: cannot be called from inside a core call (ADR 0013)");
     }
     ta_actor_id actor = 0;
@@ -245,7 +245,7 @@ napi_value tna_abandon_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "abandon: cannot be called from inside a core call (ADR 0013)");
     }
     ta_actor_id actor = 0;

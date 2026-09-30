@@ -147,6 +147,86 @@ bool tah_system_closed(const tah_system *system) {
     return system == NULL || system->closed;
 }
 
+ta_system *tah_system_core(tah_system *system) {
+    return system->core;
+}
+
+tah_allocator *tah_system_allocator(tah_system *system) {
+    return &system->allocator;
+}
+
+tah_scratch *tah_system_scratch(tah_system *system) {
+    return &system->scratch;
+}
+
+tah_sched *tah_system_sched(tah_system *system) {
+    return &system->sched;
+}
+
+tah_directory *tah_system_directory(tah_system *system) {
+    return &system->directory;
+}
+
+tah_loads *tah_system_loads(tah_system *system) {
+    return &system->loads;
+}
+
+tah_offloads *tah_system_offloads(tah_system *system) {
+    return &system->offloads;
+}
+
+tah_effects *tah_system_effects(tah_system *system) {
+    return &system->effects;
+}
+
+tah_otlp *tah_system_otlp(tah_system *system) {
+    return &system->otlp;
+}
+
+tah_trace_watch *tah_system_trace_watch(tah_system *system) {
+    return &system->trace_watch;
+}
+
+tah_definitions *tah_system_definitions(tah_system *system) {
+    return &system->definitions;
+}
+
+tah_host_metrics *tah_system_metrics(tah_system *system) {
+    return &system->metrics;
+}
+
+tah_inputs *tah_system_inputs(tah_system *system) {
+    return &system->inputs;
+}
+
+const tah_params *tah_system_params(const tah_system *system) {
+    return &system->params;
+}
+
+bool tah_system_inside_core(const tah_system *system) {
+    return system->inside_core;
+}
+
+void tah_system_enter_core(tah_system *system) {
+    system->inside_core = true;
+}
+
+void tah_system_leave_core(tah_system *system) {
+    system->inside_core = false;
+}
+
+bool tah_system_tracing(const tah_system *system) {
+    return system->tracing;
+}
+
+void tah_system_set_tracing(tah_system *system, bool tracing) {
+    system->tracing = tracing;
+}
+
+void tah_system_set_log_to_js(tah_system *system, bool log_to_js) {
+    system->log_to_js = log_to_js;
+}
+
 size_t tah_system_leaked_bytes(const tah_system *system) {
     return system == NULL ? 0 : system->leaked_bytes;
 }

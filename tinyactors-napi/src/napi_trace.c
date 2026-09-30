@@ -79,7 +79,7 @@ static uint64_t tna_host_now(void *self) {
 
 static void tna_host_trace_id(void *self, uint8_t out[16]) {
     tna_napi_system *wrapper = self;
-    ta_trace_context context = ta_system_new_trace(wrapper->system->core);
+    ta_trace_context context = ta_system_new_trace(tah_system_core(wrapper->system));
     for (int at = 0; at < 8; at += 1) {
         out[at] = (uint8_t)(context.trace_id_high >> (56 - 8 * at));
         out[8 + at] = (uint8_t)(context.trace_id_low >> (56 - 8 * at));
@@ -182,10 +182,10 @@ static napi_value tna_request_value(napi_env env, tah_otlp *otlp, size_t size, t
  * neither.
  */
 static napi_value tna_trace_bytes(napi_env env, tah_system *system) {
-    tah_otlp *otlp = &system->otlp;
+    tah_otlp *otlp = tah_system_otlp(system);
     size_t traces = tah_otlp_traces_size(otlp);
     size_t logs = tah_otlp_logs_size(otlp);
-    if (!system->tracing || (traces == 0 && logs == 0)) {
+    if (!tah_system_tracing(system) || (traces == 0 && logs == 0)) {
         return NULL;
     }
     napi_value batch = NULL;
@@ -206,11 +206,11 @@ static napi_value tna_trace_bytes(napi_env env, tah_system *system) {
 
 void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
     tah_system *system = wrapper->system;
-    if (!system->tracing) {
+    if (!tah_system_tracing(system)) {
         return;
     }
-    if (tah_otlp_staged_records(&system->otlp) == 0) {
-        tah_otlp_end_turn(&system->otlp);
+    if (tah_otlp_staged_records(tah_system_otlp(system)) == 0) {
+        tah_otlp_end_turn(tah_system_otlp(system));
         return;
     }
     napi_handle_scope scope = NULL;
@@ -219,7 +219,7 @@ void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
     napi_value handler = NULL;
     napi_value argv[3] = { NULL, NULL, NULL };
     argv[2] = tna_trace_bytes(env, system);
-    tah_otlp_end_turn(&system->otlp); /* before JavaScript runs: the sink may replace the sink */
+    tah_otlp_end_turn(tah_system_otlp(system)); /* before JavaScript runs: the sink may replace the sink */
     bool callable = argv[2] != NULL && data->effects_handler != NULL && wrapper->facade != NULL &&
                     napi_get_reference_value(env, data->effects_handler, &handler) == napi_ok && handler != NULL &&
                     napi_get_reference_value(env, wrapper->facade, &argv[0]) == napi_ok && argv[0] != NULL &&
@@ -245,12 +245,12 @@ void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
 bool tna_trace_flush_if_full(napi_env env, tna_napi_system *wrapper) {
     tah_system *system = wrapper->system;
     bool pending = false;
-    if (!system->tracing || system->inside_core || wrapper->trace_flushing || tah_system_closed(system) ||
+    if (!tah_system_tracing(system) || tah_system_inside_core(system) || wrapper->trace_flushing || tah_system_closed(system) ||
         napi_is_exception_pending(env, &pending) != napi_ok || pending) {
         return true;
     }
-    size_t staged = tah_otlp_traces_size(&system->otlp) + tah_otlp_logs_size(&system->otlp);
-    if (staged < system->params.values[TAH_PARAM_TRACE_STAGING_BYTES]) {
+    size_t staged = tah_otlp_traces_size(tah_system_otlp(system)) + tah_otlp_logs_size(tah_system_otlp(system));
+    if (staged < tah_system_params(system)->values[TAH_PARAM_TRACE_STAGING_BYTES]) {
         return true;
     }
     napi_value first_error = NULL;
@@ -303,7 +303,7 @@ static bool tna_set_resource(napi_env env, tah_system *system, napi_value pairs)
         }
         used += written + 1u;
     }
-    return tah_otlp_set_resource(&system->otlp, attributes, length / 2u) == TA_OK;
+    return tah_otlp_set_resource(tah_system_otlp(system), attributes, length / 2u) == TA_OK;
 }
 
 /*
@@ -349,7 +349,7 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "setTraceSink cannot be called from inside a core call (ADR 0013)");
     }
     bool installed = false;
@@ -378,45 +378,44 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
 
     /* The previous sink's open spans end now, for the previous JavaScript sink. */
     napi_value remaining = NULL;
-    if (system->tracing) {
-        tah_otlp_end_all(&system->otlp);
+    if (tah_system_tracing(system)) {
+        tah_otlp_end_all(tah_system_otlp(system));
         remaining = tna_trace_bytes(env, system);
-        tah_otlp_destroy(&system->otlp);
-        system->tracing = false;
+        tah_otlp_destroy(tah_system_otlp(system));
+        tah_system_set_tracing(system, false);
     }
-    ta_result result = ta_system_set_trace_sink(system->core, ta_null_trace_sink());
+    ta_result result = ta_system_set_trace_sink(tah_system_core(system), ta_null_trace_sink());
     if (result == TA_OK && installed && (masks.kinds | masks.watched_kinds | masks.unsampled_kinds) != 0) {
-        bool reserved = tah_otlp_init(&system->otlp,
+        bool reserved = tah_otlp_init(tah_system_otlp(system),
                       &(tah_otlp_config){
-                          .core = system->core,
-                          .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER),
+                          .core = tah_system_core(system),
+                          .allocator = tah_allocator_for(tah_system_allocator(system), TAH_MEMORY_OTHER),
                           .host = { .self = wrapper, .now = tna_host_now, .trace_id = tna_host_trace_id,
                                     .value_text = tna_host_value_text },
                           .log_limit = log_limit,
-                          .keep_bytes = (size_t)system->params.values[TAH_PARAM_TRACE_STAGING_BYTES],
+                          .keep_bytes = (size_t)tah_system_params(system)->values[TAH_PARAM_TRACE_STAGING_BYTES],
                           .link_parents = links,
                           .values = values,
                           .version = { TINYACTORS_NAPI_VERSION, (uint32_t)(sizeof TINYACTORS_NAPI_VERSION - 1u) },
                       });
         if (!reserved) {
-            tah_otlp_destroy(&system->otlp);
+            tah_otlp_destroy(tah_system_otlp(system));
             return tna_throw(env, "out-of-memory", "setTraceSink: cannot reserve the trace staging (traceStagingBytes)");
         }
-        system->tracing = true;
-        ta_system_seed_trace_ids(system->core, seed_type != napi_undefined ? seed : tah_system_random_seed(system));
+        tah_system_set_tracing(system, true);
+        ta_system_seed_trace_ids(tah_system_core(system), seed_type != napi_undefined ? seed : tah_system_random_seed(system));
         if (!tna_set_resource(env, system, argv[7])) {
-            tah_otlp_destroy(&system->otlp);
-            system->tracing = false;
+            tah_otlp_destroy(tah_system_otlp(system));
+            tah_system_set_tracing(system, false);
             return tna_throw(env, "invalid", "setTraceSink: options.resource must map names to strings");
         }
-        system->trace_masks = masks;
-        tah_otlp_set_wanted(&system->otlp, &masks);
-        ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
-        tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(&system->otlp));
-        result = ta_system_set_trace_sink(system->core, tah_trace_sink_adapter(system, &asked));
+        tah_otlp_set_wanted(tah_system_otlp(system), &masks);
+        ta_system_set_trace_ratio(tah_system_core(system), parts, TNA_SAMPLE_WHOLE);
+        tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(tah_system_otlp(system)));
+        result = ta_system_set_trace_sink(tah_system_core(system), tah_trace_sink_adapter(system, &asked));
         if (result != TA_OK) {
-            tah_otlp_destroy(&system->otlp);
-            system->tracing = false;
+            tah_otlp_destroy(tah_system_otlp(system));
+            tah_system_set_tracing(system, false);
         }
     }
     if (result == TA_OK) {
@@ -449,19 +448,18 @@ napi_value tna_configure_traces_method(napi_env env, napi_callback_info info) {
     if (argc < 4 || !tna_trace_config(env, argv, &masks, &parts)) {
         return tna_throw(env, "invalid", "configureTraces: expected (kinds, watchedKinds, unsampledKinds, sample)");
     }
-    if (system->inside_core) {
+    if (tah_system_inside_core(system)) {
         return tna_throw(env, "reentrant", "configureTraces cannot be called from inside a core call (ADR 0013)");
     }
     napi_value undefined = NULL;
     napi_get_undefined(env, &undefined);
-    if (!system->tracing) {
+    if (!tah_system_tracing(system)) {
         return undefined;
     }
-    system->trace_masks = masks;
-    tah_otlp_set_wanted(&system->otlp, &masks);
-    ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
-    tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(&system->otlp));
-    ta_system_set_trace_sink(system->core, tah_trace_sink_adapter(system, &asked));
+    tah_otlp_set_wanted(tah_system_otlp(system), &masks);
+    ta_system_set_trace_ratio(tah_system_core(system), parts, TNA_SAMPLE_WHOLE);
+    tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(tah_system_otlp(system)));
+    ta_system_set_trace_sink(tah_system_core(system), tah_trace_sink_adapter(system, &asked));
     return undefined;
 }
 
@@ -577,7 +575,7 @@ napi_value tna_trace_watch_sizes_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tah_trace_watch_sizes watch = tah_trace_watch_measure(&wrapper->system->trace_watch);
+    tah_trace_watch_sizes watch = tah_trace_watch_measure(tah_system_trace_watch(wrapper->system));
     napi_value sizes = NULL;
     napi_value sessions = NULL;
     napi_value matched = NULL;
@@ -612,7 +610,7 @@ napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    ta_allocator allocator = tah_allocator_for(&wrapper->system->allocator, TAH_MEMORY_OTHER);
+    ta_allocator allocator = tah_allocator_for(tah_system_allocator(wrapper->system), TAH_MEMORY_OTHER);
     uint64_t *sessions = NULL;
     ta_str *families = NULL;
     uint32_t session_count = 0;
@@ -621,7 +619,7 @@ napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info) {
                 tna_family_array(env, allocator, argv[1], &families, &family_count);
     ta_result result = TA_ERR_INVALID;
     if (read) {
-        result = tah_trace_watch_set(&wrapper->system->trace_watch,
+        result = tah_trace_watch_set(tah_system_trace_watch(wrapper->system),
                                      &(tah_trace_watch_set_params){ .sessions = sessions,
                                                                     .session_count = session_count,
                                                                     .families = families,
@@ -658,7 +656,7 @@ napi_value tna_spawn_trace_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     bool watched = false;
-    if (argc >= 2 && napi_get_value_bool(env, argv[1], &watched) == napi_ok && watched && wrapper->system->tracing) {
+    if (argc >= 2 && napi_get_value_bool(env, argv[1], &watched) == napi_ok && watched && tah_system_tracing(wrapper->system)) {
         tah_system_start_trace(wrapper->system, &parent.context);
         parent.context.flags |= TA_TRACE_FLAG_SAMPLED;
         parent.context.detail |= TA_TRACE_DETAIL_WATCHED;

@@ -14,7 +14,7 @@ typedef struct {
 } tna_child_resolver;
 
 static ta_allocator tna_children_allocator(tna_napi_system *wrapper) {
-    return tah_allocator_for(&wrapper->system->allocator, TAH_MEMORY_OTHER);
+    return tah_allocator_for(tah_system_allocator(wrapper->system), TAH_MEMORY_OTHER);
 }
 
 /* ------------------------------------------------------------------------
@@ -138,7 +138,7 @@ static void tna_child_family_of(tna_napi_system *wrapper, ta_definition_id paren
     static const char suffix[] = "/invoke";
     ta_definition_inspection view;
     size_t length = 0;
-    if (ta_definition_inspect(wrapper->system->core, parent, &view) == TA_OK) {
+    if (ta_definition_inspect(tah_system_core(wrapper->system), parent, &view) == TA_OK) {
         length = view.identity.family.name.len;
         if (length > sizeof out->text - sizeof suffix) {
             length = sizeof out->text - sizeof suffix;
@@ -177,7 +177,7 @@ static ta_result tna_compile_child(tna_napi_system *wrapper, ta_bytes text, ta_s
                                                             .identity = &family.identity,
                                                         });
     if (result == TA_OK && resolve != NULL && tna_children_keep_resolver(wrapper, *out, resolve) != TA_OK) {
-        (void)ta_system_release_definition(wrapper->system->core, *out);
+        (void)ta_system_release_definition(tah_system_core(wrapper->system), *out);
         return TA_ERR_NOMEM;
     }
     return result;
@@ -218,7 +218,7 @@ static void tna_child_refused(tna_import_failure *failure, char *wrapper_scratch
 
 ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definition, napi_value resolve,
                             tna_import_failure *failure) {
-    ta_system *core = wrapper->system->core;
+    ta_system *core = tah_system_core(wrapper->system);
     tah_vec pending;
     tah_vec_init(&pending, tna_children_allocator(wrapper), TAH_LAYOUT(ta_definition_id));
     ta_result result = tah_vec_push(&pending, &definition);
@@ -272,9 +272,9 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
             }
             ta_definition_id child = 0;
             if (result == TA_OK) {
-                tah_definitions_set_registering(&wrapper->system->definitions, TAH_ORIGIN_NESTED);
+                tah_definitions_set_registering(tah_system_definitions(wrapper->system), TAH_ORIGIN_NESTED);
                 result = tna_compile_child(wrapper, text, name, parent, resolve, &child, failure);
-                tah_definitions_set_registering(&wrapper->system->definitions, TAH_ORIGIN_HOST);
+                tah_definitions_set_registering(tah_system_definitions(wrapper->system), TAH_ORIGIN_HOST);
                 if (result != TA_OK && result != TA_ERR_NOMEM) {
                     tna_child_refused(failure, wrapper->refusal_scratch, invoke, result);
                     result = result == TA_ERR_UNSUPPORTED ? TA_ERR_UNSUPPORTED : TA_ERR_INVALID;
@@ -351,7 +351,7 @@ typedef struct {
 
 static tna_invoking tna_parent_of(tna_napi_system *wrapper, ta_actor_id parent) {
     ta_actor_inspection inspection;
-    if (ta_actor_inspect(wrapper->system->core, parent, &inspection) != TA_OK) {
+    if (ta_actor_inspect(tah_system_core(wrapper->system), parent, &inspection) != TA_OK) {
         return (tna_invoking){ 0 };
     }
     return (tna_invoking){ .definition = inspection.definition_id,
@@ -383,14 +383,14 @@ static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tah_c
                                            ta_str name, tna_invoking parent) {
     tna_import_failure failure;
     tna_import_failure_open(&failure, wrapper->refusal, wrapper->refusal_bytes);
-    tah_definitions_set_registering(&wrapper->system->definitions, TAH_ORIGIN_INVOKE);
+    tah_definitions_set_registering(tah_system_definitions(wrapper->system), TAH_ORIGIN_INVOKE);
     ta_result result =
         tna_compile_child(wrapper, text, name, parent.definition, parent.resolve, params->out, &failure);
-    tah_definitions_set_registering(&wrapper->system->definitions, TAH_ORIGIN_HOST);
+    tah_definitions_set_registering(tah_system_definitions(wrapper->system), TAH_ORIGIN_HOST);
     char thrown[512];
     if (tna_clear_exception(wrapper->env, thrown, sizeof thrown)) {
         if (result == TA_OK) {
-            (void)ta_system_release_definition(wrapper->system->core, *params->out);
+            (void)ta_system_release_definition(tah_system_core(wrapper->system), *params->out);
         }
         return tna_child_fault(wrapper, params->fault, TA_ERR_INVALID, thrown);
     }
@@ -454,7 +454,7 @@ static ta_op_status tna_child_definition_of(void *context, const tah_child_param
         if (napi_get_value_string_utf8(env, data, NULL, 0, &length) != napi_ok || length > UINT32_MAX - 1u) {
             return tna_child_fault(wrapper, params->fault, TA_ERR_INVALID, "invoker.scxml: the content is not text");
         }
-        char *text = ta_arena_alloc(&wrapper->system->scratch.call, length + 1u, 1);
+        char *text = ta_arena_alloc(tah_scratch_call(tah_system_scratch(wrapper->system)), length + 1u, 1);
         if (text == NULL) {
             return TA_OP_NOMEM;
         }
@@ -475,7 +475,7 @@ static ta_op_status tna_child_definition_of(void *context, const tah_child_param
         }
         size_t length = 0;
         napi_get_value_string_utf8(env, src, NULL, 0, &length);
-        char *text = ta_arena_alloc(&wrapper->system->scratch.call, length + 1u, 1);
+        char *text = ta_arena_alloc(tah_scratch_call(tah_system_scratch(wrapper->system)), length + 1u, 1);
         if (text == NULL) {
             return TA_OP_NOMEM;
         }
@@ -483,7 +483,7 @@ static ta_op_status tna_child_definition_of(void *context, const tah_child_param
         tna_src_resolver fetcher = { .env = env, .resolve = parent.resolve };
         ta_bytes chart = { 0 };
         ta_result fetched = tna_fetch_src(&fetcher, (ta_str){ .ptr = text, .len = (uint32_t)length },
-                                          &wrapper->system->scratch.call, &chart);
+                                          tah_scratch_call(tah_system_scratch(wrapper->system)), &chart);
         char thrown[512];
         if (tna_clear_exception(env, thrown, sizeof thrown)) {
             return tna_child_fault(wrapper, params->fault, TA_ERR_INVALID, thrown);
@@ -521,7 +521,7 @@ static ta_op_status tna_child_binding(tna_napi_system *wrapper, const tah_child_
         return TA_OP_NOMEM;
     }
     const ta_scxml_spec *spec = NULL;
-    ta_result result = ta_definition_export(wrapper->system->core, &(ta_definition_export_params){
+    ta_result result = ta_definition_export(tah_system_core(wrapper->system), &(ta_definition_export_params){
                                                                        .definition = *params->out,
                                                                        .arena = &arena,
                                                                        .out = &spec,
@@ -555,7 +555,7 @@ static ta_op_status tna_child_definition(void *context, const tah_child_params *
     if (status == TA_OP_OK) {
         status = tna_child_binding(context, params);
         if (status != TA_OP_OK && *params->release) {
-            (void)ta_system_release_definition(((tna_napi_system *)context)->system->core, *params->out);
+            (void)ta_system_release_definition(tah_system_core(((tna_napi_system *)context)->system), *params->out);
             *params->release = false;
         }
     }
