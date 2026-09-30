@@ -22,7 +22,9 @@
  * - Core ADR 0089 section 2's four timelines, as the kernel logs them:
  *   a timer to itself fires once; a send to another actor that fired
  *   before the stop is not sent again; one still pending at the stop fires
- *   once after publish; one that fired after the last commit fires again.
+ *   once after publish; and one that fired after the last commit is lost
+ *   with its receiver's ACCEPTED, which the same batch held, so after a
+ *   crash of both it fires again and is delivered once.
  * - Mail between actors sent while the queue is full waits in its
  *   receiver's overflow, logged there (kernel ADR 0003): after a crash and
  *   a replay from `spawned`, after the sender's eviction and an exit, and
@@ -1097,11 +1099,60 @@ static void refuses_a_checkpoint_of_another_revision(void) {
 }
 
 /* ------------------------------------------------------------------------
+ * Both families logged, each address's records in a log of its own, as a
+ * store keeps them.
+ */
+
+static log_buffer ping_log; /* ping/p1's committed batches */
+static log_buffer sink_log; /* sink/b's */
+
+/* Appends this turn's entries to the log of their address, as a store does. */
+static void take_apart(tah_system *system) {
+    uint32_t wakes = 0;
+    (void)tah_inputs_wakes(system, &wakes);
+    tah_inputs *inputs = &system->inputs;
+    for (uint32_t index = 0; index < tah_inputs_entry_count(inputs); index += 1u) {
+        tah_input_entry entry = tah_inputs_entry_at(inputs, index);
+        bool sink = text_equal(ta_address_view(entry.address).family.name, "sink");
+        append(sink ? &sink_log : &ping_log, entry.bytes, (uint32_t)entry.length);
+    }
+    tah_inputs_release(inputs);
+}
+
+static void turn_apart(tah_system *system) {
+    tah_system_turn(system);
+    take_apart(system);
+    tah_system_end_turn(system);
+}
+
+static void run_apart(tah_system *system) {
+    for (int guard = 0; !tah_system_quiet(system); guard += 1) {
+        CHECK(guard < 1000);
+        turn_apart(system);
+    }
+    take_apart(system);
+}
+
+/* Whether `log`'s record kinds, in order, are `expected` (ended by 0). */
+static bool log_kinds(const log_buffer *log, const tah_wal_kind *expected) {
+    static record_list records;
+    read_records(log->bytes, log->length, &records);
+    for (uint32_t index = 0; index < records.count; index += 1u) {
+        if (expected[index] == 0 || records.views[index].kind != expected[index]) {
+            return false;
+        }
+    }
+    return expected[records.count] == 0;
+}
+
+/* ------------------------------------------------------------------------
  * The four timelines of core ADR 0089 section 2, under the kernel's log
  * (kernel ADR 0002): a timer's firing is a FIRED record, which carries its
- * time only, and the actor is published at the last record's time. Each
- * is replayed in the system it ran in, where sink/b counts the `hello`s it
- * got; the live ping/p1 is gone first (evicted, or lost in a crash).
+ * time only, and the actor is published at the last record's time. The
+ * first three are replayed in the system they ran in, where sink/b counts
+ * the `hello`s it got; the live ping/p1 is gone first (evicted, or lost in
+ * a crash). The fourth, a real crash, loses the whole process: both actors
+ * are logged, and both are rebuilt in a new system.
  */
 
 typedef struct {
@@ -1255,35 +1306,90 @@ static void timeline_pending_at_the_stop(void) {
     finish_system(line.system);
 }
 
+/* The record kinds of this turn's entry for `family`, before the batch is taken; 0 ends them. */
+static void batch_kinds(tah_system *system, const char *family, tah_wal_kind *out, uint32_t capacity) {
+    uint32_t count = 0;
+    tah_inputs *inputs = &system->inputs;
+    for (uint32_t index = 0; index < tah_inputs_entry_count(inputs); index += 1u) {
+        tah_input_entry entry = tah_inputs_entry_at(inputs, index);
+        if (!text_equal(ta_address_view(entry.address).family.name, family)) {
+            continue;
+        }
+        static record_list records;
+        read_records(entry.bytes, (uint32_t)entry.length, &records);
+        for (uint32_t at = 0; at < records.count; at += 1u) {
+            CHECK(count + 1u < capacity);
+            out[count++] = records.views[at].kind;
+        }
+    }
+    out[count] = 0;
+}
+
 /*
- * A crash between two commits: the batch with the relay was committed (a
- * turn at 3000 committed nothing more), the send fired at 6000, and the
- * process stopped before that batch was committed. The log ends at the
- * relay's delivery: the send is still held at publish and fires again,
- * the at-least-once window. sink/b, which got it live, gets it twice.
+ * A crash between two commits. The batch with the relay was committed (a
+ * turn at 3000 committed nothing more). At 6000 the turn that dispatched
+ * b1 wrote ping/p1's FIRED and sink/b's ACCEPTED of it into the same
+ * batch, and the process stopped before that batch, and the one with
+ * sink/b's DELIVERED, were committed. Batches commit whole and in turn
+ * order (kernel ADR 0002 section 5), so a crash keeps both records or
+ * neither: here neither. Both actors are rebuilt from their committed
+ * logs in a new system: b1 is still held at publish and fires once, and
+ * sink/b, rebuilt at h0, gets it once.
  */
 static void timeline_crash_between_commits(void) {
-    timeline_start("relay");
-    advance(line.system, 3000);
-    run(line.system, &line.log); /* the horizon: nothing to record */
-    uint32_t committed = line.log.length;
-    advance(line.system, 6000);
-    run(line.system, NULL); /* FIRED, never committed */
-    CHECK(in_state(line.system, line.sink, "h1"));
-    drop(line.system, line.actor);
-    CHECK(line.log.length == committed);
-    static const tah_wal_kind kinds[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, 0 };
-    CHECK(timeline_kinds(kinds));
+    ping_log.length = sink_log.length = 0;
+    tah_system *system = make_system_logging(1, true);
+    ta_definition_id ping = define_ping(system);
+    ta_definition_id sink = 0;
+    ta_actor_id sender = 0;
+    ta_actor_id receiver = 0;
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    CHECK(spawn_at(system, sink, &sink_address, &receiver) == TA_OK);
+    CHECK(spawn_at(system, ping, &ping_address, &sender) == TA_OK);
+    run_apart(system);
+    advance(system, 1000);
+    CHECK(post(system, sender, "relay", NULL) == TA_OK);
+    run_apart(system);
+    advance(system, 3000);
+    run_apart(system); /* the horizon: nothing to record */
+    uint32_t committed_ping = ping_log.length;
+    uint32_t committed_sink = sink_log.length;
 
-    restore_run out = { 0 };
-    static log_buffer after;
-    CHECK(timeline_replay(&out, &after) == 1);
-    CHECK(out.last_time == 1000);
-    CHECK(in_state(line.system, line.sink, "h2")); /* again */
+    advance(system, 6000);
+    tah_system_turn(system); /* dispatches b1 */
+    static tah_wal_kind kinds[8];
+    batch_kinds(system, "ping", kinds, 8);
+    CHECK(kinds[0] == TAH_WAL_FIRED && kinds[1] == 0);
+    batch_kinds(system, "sink", kinds, 8);
+    CHECK(kinds[0] == TAH_WAL_ACCEPTED && kinds[1] == 0); /* in the same batch */
+    uint32_t wakes = 0;
+    (void)tah_inputs_wakes(system, &wakes);
+    tah_inputs_release(&system->inputs); /* never committed */
+    tah_system_end_turn(system);
+    run(system, NULL); /* sink/b takes it live; that batch is lost too */
+    CHECK(in_state(system, receiver, "h1"));
+    CHECK(ping_log.length == committed_ping && sink_log.length == committed_sink);
+    finish_system(system); /* the crash */
+
+    static const tah_wal_kind ping_kinds[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, 0 };
+    static const tah_wal_kind sink_kinds[] = { TAH_WAL_SPAWNED, 0 };
+    CHECK(log_kinds(&ping_log, ping_kinds) && log_kinds(&sink_log, sink_kinds));
+    system = make_system_logging(2, true);
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    restore_run pinged = { .definition = define_ping(system) };
+    restore_run sunk = { .definition = sink, .address = &sink_address };
+    advance(system, 7000);
+    CHECK(restore(system, ping_log.bytes, ping_log.length, &pinged) == TA_OK && pinged.published);
+    CHECK(restore(system, sink_log.bytes, sink_log.length, &sunk) == TA_OK && sunk.published);
+    CHECK(pinged.last_time == 1000 && in_state(system, sunk.actor, "h0"));
+    ping_log.length = sink_log.length = 0;
+    run_apart(system);
+    CHECK(in_state(system, sunk.actor, "h1")); /* once */
+    CHECK(pending_sends(system, pinged.actor, NULL) == 0);
     static record_list records;
-    read_records(after.bytes, after.length, &records);
-    CHECK(records.views[0].kind == TAH_WAL_FIRED && records.views[0].seq == 4);
-    finish_system(line.system);
+    read_records(ping_log.bytes, ping_log.length, &records);
+    CHECK(records.count == 1 && records.views[0].kind == TAH_WAL_FIRED && records.views[0].seq == 4);
+    finish_system(system);
 }
 
 /* ------------------------------------------------------------------------
@@ -1295,49 +1401,7 @@ static void timeline_crash_between_commits(void) {
  * them. Whatever stops the process, n1 is delivered once.
  */
 
-static log_buffer ping_log; /* ping/p1's committed batches */
-static log_buffer sink_log; /* sink/b's */
-
 static uint32_t message_budget; /* the system's, while overflow_start() sets it to 0 */
-
-/* Appends this turn's entries to the log of their address, as a store does. */
-static void take_apart(tah_system *system) {
-    uint32_t wakes = 0;
-    (void)tah_inputs_wakes(system, &wakes);
-    tah_inputs *inputs = &system->inputs;
-    for (uint32_t index = 0; index < tah_inputs_entry_count(inputs); index += 1u) {
-        tah_input_entry entry = tah_inputs_entry_at(inputs, index);
-        bool sink = text_equal(ta_address_view(entry.address).family.name, "sink");
-        append(sink ? &sink_log : &ping_log, entry.bytes, (uint32_t)entry.length);
-    }
-    tah_inputs_release(inputs);
-}
-
-static void turn_apart(tah_system *system) {
-    tah_system_turn(system);
-    take_apart(system);
-    tah_system_end_turn(system);
-}
-
-static void run_apart(tah_system *system) {
-    for (int guard = 0; !tah_system_quiet(system); guard += 1) {
-        CHECK(guard < 1000);
-        turn_apart(system);
-    }
-    take_apart(system);
-}
-
-/* Whether `log`'s record kinds, in order, are `expected` (ended by 0). */
-static bool log_kinds(const log_buffer *log, const tah_wal_kind *expected) {
-    static record_list records;
-    read_records(log->bytes, log->length, &records);
-    for (uint32_t index = 0; index < records.count; index += 1u) {
-        if (expected[index] == 0 || records.views[index].kind != expected[index]) {
-            return false;
-        }
-    }
-    return expected[records.count] == 0;
-}
 
 /* Lifts the limits overflow_start() set. */
 static void overflow_lift(tah_system *system) {

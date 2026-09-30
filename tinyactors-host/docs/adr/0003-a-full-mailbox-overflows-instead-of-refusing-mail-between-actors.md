@@ -326,3 +326,33 @@ Tests: core `tests/replay_test.c`'s `test_export_restores_submitted`
 becomes `test_export_leaves_submitted`: the state reports the refused
 send, and the restored actor holds only the two unsubmitted ones. The
 kernel's tests of ADR 0095 went with the change above.
+
+### A crash loses a delayed send's firing and its receipt together (2026-10-01)
+
+`replay_test`'s fourth timeline of core ADR 0089 section 2
+(`timeline_crash_between_commits`) now logs both families and rebuilds
+both actors from their committed logs in a new system, as a crash does.
+It checks that the turn that dispatches b1 writes ping/p1's `fired` and
+sink/b's `accepted` into one batch; with that batch lost, b1 is held at
+publish, fires once, and sink/b gets it once. The old version dropped
+only the sender and let an unlogged receiver run on, and counted two
+deliveries: the "at-least-once window" core ADR 0095's Consequences
+cite, corrected there in a note.
+
+**A window that remains: an immediate send across two batches.** A
+delivery and the macrostep it starts are in different turns: the
+scheduler writes `delivered` and hands the event to core in one turn's
+deliveries, and resumes the actor in the next turn's resumes. An
+immediate `<send>` made in that macrostep is written as the receiver's
+`accepted` in the second turn's batch. A crash after the first batch is
+committed and before the second is loses the send: the sender's replay
+reruns the macrostep and drops the send as sent (core ADR 0089 section
+3), and the receiver's log never had it. Checked by hand with both
+families logged: ping/p1 given `now` in one committed batch, n1 to sink/b
+in the next, lost; after the restart ping/p1 is in `sent` and sink/b at
+`h0`. A delayed send is not affected, because its `fired` and its
+`accepted` share a batch. This is at most once, not at least once, and
+napi ADR 0033 section 7's exactly-once promise does not hold across it.
+Closing it needs a decision (for example, commit a delivery's batch only
+with its macrostep's, or resume a delivered actor in the same turn); it
+is listed in ROADMAP.md's follow-ups.

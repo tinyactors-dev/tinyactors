@@ -163,3 +163,20 @@ later events. Nothing reads its values.
     `fired` committed after the checkpoint drops it: nothing is sent again.
     An eviction drops it, whether the orphan fires before or after the
     restore in the same process: delivered once.
+
+### Correction (2026-10-01)
+
+The Consequences say "What a crash can still repeat is the window of ADR
+0089 section 2: a `fired` written and not yet committed", and the kernel
+test behind it (`timeline_crash_between_commits`) dropped only the logged
+sender while an unlogged receiver ran on, and counted two deliveries. No
+crash produces that state. The turn that dispatches a send writes the
+sender's `fired` and the receiver's `accepted` into the same batch, and
+batches commit whole and in turn order (kernel ADR 0002 section 5), so a
+crash keeps both or loses both. With both actors logged and rebuilt after
+a crash, a delayed send is delivered once. The test now does that (kernel
+ADR 0003's implementation notes). An unlogged receiver is not persisted,
+so what it did before a crash is not part of the promise.
+
+A window that does remain runs the other way, for an immediate send; it is
+recorded in kernel ADR 0003's notes.
