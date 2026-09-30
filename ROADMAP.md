@@ -57,11 +57,11 @@ are in [`docs/proposals/`](docs/proposals/README.md).
      Split `pump.c` into the kernel's turn logic and napi's event-loop
      glue. napi links the kernel, and its guard over `NODE_API_SOURCES`
      goes. `bench-compare` within 5%.
-  3. **Core ADR 0094, the time on every input:** a time on
+  3. [x] **Core ADR 0094, the time on every input:** a time on
      `ta_actor_deliver()` and `ta_actor_report_invoke()`, `at` on publish,
      `ta_actor_set_time()` removed. `ta_actor_export_state()` and
      `ta_actor_prepare_params.state` added. The kernel and the test host
-     migrate.
+     migrate. Done: core ADR 0094's notes ("Sections 1 and 3").
   4. **Kernel ADR 0002, the log moves:** core's `src/input_log.c` layout,
      writer and reader become the kernel's, at version 2 with `accepted`,
      `delivered` and `dropped`. The kernel records at its own call sites,

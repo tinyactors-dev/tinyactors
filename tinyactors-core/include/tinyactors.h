@@ -2849,6 +2849,52 @@ typedef struct {
  * active without calling an invoker. Without `at`, its visible bootstrap
  * effects are held and released by ta_actor_publish(), as for a replacement.
  */
+/* One state a history pseudo-state recorded (ADR 0094 section 3). */
+typedef struct {
+    ta_state_id history;
+    ta_state_id state;
+} ta_history_entry;
+/* An active invocation as an actor's state holds it: its ID, its type, and
+ * the <invoke> of the definition that started it (ADR 0094 section 3). */
+typedef struct {
+    ta_invoke_id id;
+    ta_atom type;
+    ta_invoke_decl_id decl;
+} ta_invoke_state;
+/*
+ * An idle actor's state (ADR 0094 section 3): what a checkpoint holds, as
+ * structure, for a host to encode. State IDs are the definition's own
+ * numbers, which its revision fixes (states are numbered in document order,
+ * ADR 0060), so a state restores only under the revision it came from.
+ * Pending sends are the actor's, as inspection reports them; a submitted
+ * one has left the actor and is not restored. `root` is the data model's
+ * root. What ta_actor_export_state() fills is borrowed from the actor and
+ * the caller's arrays, except `root`, which the caller releases with
+ * ta_value_release(); what ta_actor_prepare_params.state points at is
+ * borrowed for the call.
+ */
+typedef struct {
+    ta_definition_identity definition;
+    /* The session's generated-ID counter: send and invoke IDs (ADR 0089 section 5). */
+    uint64_t generated_ids;
+    ta_time clock;
+    /* The session's step counters (ADR 0067). */
+    uint64_t macrostep;
+    uint32_t microstep;
+    uint32_t lifecycle;
+    TA_COUNTED_BY(active_count) TA_OPTIONAL const ta_state_id *active; /* active atomic states */
+    uint32_t active_count;
+    TA_COUNTED_BY(late_count) TA_OPTIONAL const ta_state_id *late; /* late-bound data already initialized (ADR 0032) */
+    uint32_t late_count;
+    TA_COUNTED_BY(history_count) TA_OPTIONAL const ta_history_entry *history;
+    uint32_t history_count;
+    TA_COUNTED_BY(send_count) TA_OPTIONAL const ta_delayed_send_info *sends;
+    uint32_t send_count;
+    TA_COUNTED_BY(invoke_count) TA_OPTIONAL const ta_invoke_state *invokes;
+    uint32_t invoke_count;
+    ta_value root;
+} ta_actor_state;
+
 typedef struct {
     ta_actor_id incumbent;
     TA_IN TA_OPTIONAL const ta_actor_address *address;
@@ -2869,6 +2915,18 @@ typedef struct {
      * names a state or an <invoke> the definition does not have.
      */
     TA_IN TA_OPTIONAL const ta_byte_source *log;
+    /*
+     * A state to restore (ADR 0094 section 3), as ta_actor_export_state()
+     * exported it and a host decoded it: a replaying actor whose clock
+     * starts at the state's, with its configuration, history, held sends and
+     * invocations (active in core, with no invoker called), and no
+     * bootstrap. Its data is bound to `datamodel_binding`, or to the state's
+     * root when that is null. `at` and `log` must then be null.
+     * TA_ERR_DEFINITION_MISMATCH when the state was exported under another
+     * revision; TA_ERR_NOT_FOUND when it names a state or an <invoke> the
+     * definition does not have.
+     */
+    TA_IN TA_OPTIONAL const ta_actor_state *state;
 } ta_actor_prepare_params;
 typedef struct {
     ta_actor_id actor;
@@ -2919,6 +2977,34 @@ TA_API ta_result ta_actor_prepare(ta_system *system, TA_IN const ta_actor_prepar
  * - TA_ERR_NOMEM: nothing changed.
  */
 TA_API ta_result ta_actor_publish(ta_system *system, TA_IN const ta_actor_publish_params *params);
+/*
+ * Exports an idle, published actor's state (ADR 0094 section 3). The caller's
+ * arrays receive what the actor keeps as bits: the active atomic states then
+ * the late-initialized ones in `states`, the recorded history in `history`,
+ * the active invocations in `invokes`. Each total is always stored; when an
+ * array is too small it answers TA_ERR_NOMEM and fills nothing, so zero
+ * capacities are a size query. Nothing is allocated, except by the data
+ * model for `out->root`, which the caller releases.
+ * - TA_ERR_BUSY: inside a macrostep, holding an event, or with internal
+ *   events queued.
+ * - TA_ERR_DONE: it reached a top-level final state.
+ * - TA_ERR_INVALID: it is not published.
+ * - TA_ERR_NOT_FOUND: no resident actor has this ID.
+ */
+typedef struct {
+    ta_actor_id actor;
+    TA_BUFFER(state_capacity, state_count) TA_OPTIONAL ta_state_id *states;
+    uint32_t state_capacity;
+    TA_OUT TA_ALWAYS uint32_t *state_count;
+    TA_BUFFER(history_capacity, history_count) TA_OPTIONAL ta_history_entry *history;
+    uint32_t history_capacity;
+    TA_OUT TA_ALWAYS uint32_t *history_count;
+    TA_BUFFER(invoke_capacity, invoke_count) TA_OPTIONAL ta_invoke_state *invokes;
+    uint32_t invoke_capacity;
+    TA_OUT TA_ALWAYS uint32_t *invoke_count;
+    TA_OUT TA_LIFETIME(system) ta_actor_state *out;
+} ta_actor_export_params;
+TA_API ta_result ta_actor_export_state(ta_system *system, TA_IN const ta_actor_export_params *params);
 TA_API ta_result ta_actor_find(ta_system *system, TA_IN const ta_actor_find_params *params);
 /*
  * An operator transition (ADR 0082): a transition core builds when the

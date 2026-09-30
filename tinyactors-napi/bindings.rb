@@ -59,7 +59,8 @@ module TinyactorsNapiBindings
     'ta_io_origin_make' => 'I/O origins are made by the plumbing when JavaScript posts with an origin (core ADR 0068)',
     'ta_origin_release' => 'the plumbing releases the origins it makes (core ADR 0068)',
     'ta_io_scope_{open,close}' => 'scopes are opened and closed through hand-written System methods (core ADR 0068)',
-    'ta_origin_text' => 'the ta_origin codec renders an origin into the call arena (core ADR 0068)'
+    'ta_origin_text' => 'the ta_origin codec renders an origin into the call arena (core ADR 0068)',
+    'ta_actor_export_state' => 'the kernel exports an actor\'s state for its checkpoints (core ADR 0094, kernel ADR 0002)'
   }.freeze
 
   OVERRIDE_FUNCTIONS = {}.freeze

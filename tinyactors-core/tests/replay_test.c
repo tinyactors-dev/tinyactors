@@ -39,6 +39,7 @@ static int failures;
  */
 
 static long live_blocks;
+static long alloc_calls;
 static long fail_countdown = -1;
 
 static void *count_alloc(void *self, size_t size, size_t alignment) {
@@ -53,6 +54,7 @@ static void *count_alloc(void *self, size_t size, size_t alignment) {
     }
     void *block = malloc(size);
     live_blocks += block != NULL ? 1 : 0;
+    alloc_calls += 1;
     return block;
 }
 
@@ -767,6 +769,176 @@ static void test_publish_out_of_memory(void) {
     CHECK(published && refused > 0);
 }
 
+/* ------------------------------------------------------------------------
+ * An actor's state, exported and restored (ADR 0094 section 3)
+ */
+
+typedef struct {
+    ta_state_id states[16];
+    ta_history_entry history[16];
+    ta_invoke_state invokes[4];
+    uint32_t state_count;
+    uint32_t history_count;
+    uint32_t invoke_count;
+    ta_actor_state state;
+} exported;
+
+static ta_result export_into(ta_system *system, ta_actor_id actor, exported *out) {
+    return ta_actor_export_state(system, &(ta_actor_export_params){
+                                             .actor = actor,
+                                             .states = out->states, .state_capacity = 16,
+                                             .state_count = &out->state_count,
+                                             .history = out->history, .history_capacity = 16,
+                                             .history_count = &out->history_count,
+                                             .invokes = out->invokes, .invoke_capacity = 4,
+                                             .invoke_count = &out->invoke_count,
+                                             .out = &out->state,
+                                         });
+}
+
+static ta_actor_id prepare_from_state(ta_system *system, ta_definition_id definition,
+                                      const ta_actor_address *address, const ta_actor_state *state,
+                                      ta_result *result) {
+    ta_actor_id actor = 0;
+    *result = ta_actor_prepare(system, &(ta_actor_prepare_params){ .address = address, .definition = definition,
+                                                                    .state = state, .out = &actor });
+    return actor;
+}
+
+/* Export, then prepare from the state: the configuration, the history and
+ * the pending sends come back, and no bootstrap runs. */
+static void test_export_restores(void) {
+    ta_system *system = create_system();
+    ta_definition_id definition = define(system, "hist", history_chart);
+    static const ta_actor_address live_address = { .family = { .name = STR("hist") }, .name = STR("live") };
+    static const ta_actor_address copy_address = { .family = { .name = STR("hist") }, .name = STR("copy") };
+    ta_actor_id live = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &live_address,
+                                                           .out = &live }) == TA_OK);
+    CHECK(run(system, live) == TA_RUN_STABLE);
+    static const struct { ta_time at; const char *event; } inputs[] = {
+        { 100, "next" }, { 200, "arm" }, { 300, "next" }, { 400, "off" }, { 500, "arm" },
+    };
+    for (size_t index = 0; index < sizeof inputs / sizeof inputs[0]; index += 1) {
+        CHECK(ta_system_set_time(system, inputs[index].at) == TA_OK);
+        deliver(system, live, inputs[index].event);
+    }
+
+    /* A size query: zero capacities answer NOMEM with the totals. */
+    uint32_t states = 0;
+    uint32_t history = 0;
+    uint32_t invokes = 0;
+    ta_actor_state state;
+    CHECK(ta_actor_export_state(system, &(ta_actor_export_params){ .actor = live, .state_count = &states,
+                                                                   .history_count = &history,
+                                                                   .invoke_count = &invokes,
+                                                                   .out = &state }) == TA_ERR_NOMEM);
+    CHECK(states == 1 && history == 1 && invokes == 0); /* off; h recorded a3 */
+
+    exported out;
+    long before = alloc_calls;
+    CHECK(export_into(system, live, &out) == TA_OK);
+    CHECK(alloc_calls == before); /* the null data model has no root to build */
+    CHECK(out.state.active_count == 1 && out.state.active[0] == state_of(system, live, "off"));
+    CHECK(out.state.history_count == 1 && out.state.history[0].history == state_of(system, live, "h") &&
+          out.state.history[0].state == state_of(system, live, "a3"));
+    CHECK(out.state.send_count == 2 && out.state.clock == 500);
+
+    CHECK(ta_system_set_time(system, 600) == TA_OK);
+    ta_result result = TA_OK;
+    ta_actor_id copy = prepare_from_state(system, definition, &copy_address, &out.state, &result);
+    CHECK(result == TA_OK);
+    CHECK(pending_sends(system, copy) == 0); /* held, not pending */
+    CHECK(in_state(system, copy, "off"));
+    deliver_at(system, copy, "back", 600); /* through the restored history */
+    CHECK(in_state(system, copy, "a3"));
+    deliver_at(system, live, "back", 600);
+    CHECK(publish(system, copy) == TA_OK);
+    ta_actor_inspection live_view;
+    ta_actor_inspection copy_view;
+    CHECK(ta_actor_inspect(system, live, &live_view) == TA_OK);
+    CHECK(ta_actor_inspect(system, copy, &copy_view) == TA_OK);
+    CHECK(live_view.delayed_send_count == 2 && copy_view.delayed_send_count == 2);
+    for (uint32_t index = 0; index < 2 && live_view.delayed_send_count == 2 && copy_view.delayed_send_count == 2;
+         index += 1) {
+        CHECK(live_view.delayed_sends[index].due == copy_view.delayed_sends[index].due);
+        CHECK(live_view.delayed_sends[index].send_id == copy_view.delayed_sends[index].send_id);
+    }
+    destroy_system(system);
+}
+
+/* An invocation active in the state is active in the restored actor, with
+ * no invoker called, and retired as unavailable when it is published. */
+static void test_export_restores_invocations(void) {
+    ta_system *system = create_system();
+    ta_definition_id definition = define(system, "jobs", invoking);
+    static const ta_actor_address copy_address = { .family = { .name = STR("jobs") }, .name = STR("copy") };
+    ta_actor_id live = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &address_job,
+                                                           .out = &live }) == TA_OK);
+    CHECK(run(system, live) == TA_RUN_STABLE);
+    CHECK(invoker_starts == 1);
+    exported out;
+    CHECK(export_into(system, live, &out) == TA_OK);
+    CHECK(out.state.invoke_count == 1 && out.state.send_count == 1);
+    ta_result result = TA_OK;
+    ta_actor_id copy = prepare_from_state(system, definition, &copy_address, &out.state, &result);
+    CHECK(result == TA_OK);
+    CHECK(active_invoke(system, copy) == out.state.invokes[0].id);
+    CHECK(invoker_starts == 1);
+    CHECK(publish(system, copy) == TA_OK);
+    CHECK(run(system, copy) == TA_RUN_STABLE);
+    CHECK(in_state(system, copy, "lost"));
+    CHECK(invoker_starts == 1);
+    destroy_system(system);
+}
+
+static void test_export_result_codes(void) {
+    ta_system *system = create_system();
+    ta_definition_id definition = define(system, "timers", timers);
+    ta_definition_id finishing = define(system, "fin", at_once_final);
+    exported out;
+    CHECK(export_into(system, 12345, &out) == TA_ERR_NOT_FOUND);
+    ta_actor_id live = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &address_a,
+                                                           .out = &live }) == TA_OK);
+    CHECK(export_into(system, live, &out) == TA_ERR_BUSY); /* its bootstrap has not run */
+    CHECK(run(system, live) == TA_RUN_STABLE);
+    ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1,
+                                                               .time = ta_system_time(system) }) == TA_OK);
+    CHECK(export_into(system, live, &out) == TA_ERR_BUSY); /* holding an event */
+    CHECK(run(system, live) == TA_RUN_STABLE);
+    CHECK(export_into(system, live, &out) == TA_OK);
+
+    /* Another revision; a state the definition does not have. */
+    ta_actor_state other = out.state;
+    other.definition.revision = (ta_bytes){ .ptr = (const uint8_t *)"v2", .len = 2 };
+    ta_result result = TA_OK;
+    static const ta_actor_address copy_address = { .family = { .name = STR("timers") }, .name = STR("c") };
+    (void)prepare_from_state(system, definition, &copy_address, &other, &result);
+    CHECK(result == TA_ERR_DEFINITION_MISMATCH);
+    ta_state_id missing = 999;
+    ta_actor_state unknown = out.state;
+    unknown.active = &missing;
+    unknown.active_count = 1;
+    (void)prepare_from_state(system, definition, &copy_address, &unknown, &result);
+    CHECK(result == TA_ERR_NOT_FOUND);
+    ta_time at = 0;
+    CHECK(ta_actor_prepare(system, &(ta_actor_prepare_params){ .address = &copy_address, .definition = definition,
+                                                               .state = &out.state, .at = &at,
+                                                               .out = &(ta_actor_id){ 0 } }) == TA_ERR_INVALID);
+
+    /* Unpublished, and finished. */
+    ta_actor_id replay = prepare_replaying(system, definition, &copy_address, 0);
+    CHECK(export_into(system, replay, &out) == TA_ERR_INVALID);
+    ta_actor_id done = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = finishing, .out = &done }) == TA_OK);
+    CHECK(run(system, done) == TA_RUN_DONE);
+    CHECK(export_into(system, done, &out) == TA_ERR_DONE);
+    destroy_system(system);
+}
+
 int main(void) {
     test_timeline_timeout_to_self();
     test_timeline_fired_before_stop();
@@ -777,6 +949,9 @@ int main(void) {
     test_publish_retires_invocations();
     test_result_codes();
     test_publish_out_of_memory();
+    test_export_restores();
+    test_export_restores_invocations();
+    test_export_result_codes();
     CHECK(live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "replay_test: %d failure(s)\n", failures);

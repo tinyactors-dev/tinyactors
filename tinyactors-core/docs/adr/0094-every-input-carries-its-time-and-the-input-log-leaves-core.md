@@ -1,6 +1,6 @@
 # ADR 0094: Every input carries its time, and the input log leaves core
 
-**Status:** Proposed (2026-09-30). Would supersede:
+**Status:** Accepted; sections 1 and 3 implemented (2026-09-30), section 2 follows the kernel's log (roadmap steps 4 and 5); see the implementation notes. Would supersede:
 - ADR 0090 sections 3 to 7: the record layout, the input sink, host records and the replay reducer move to the host kernel (kernel ADR 0002);
 - ADR 0091's byte form: a checkpoint becomes structured state that core exports and restores;
 - ADR 0089 section 2's `ta_actor_set_time()`: time becomes an argument of every input.
@@ -172,4 +172,76 @@ view borrows the actor's storage, as inspection does.
 
 ## Implementation notes
 
-None yet.
+### Sections 1 and 3 (roadmap step 3)
+
+- **Where:** `include/tinyactors.h` (`ta_actor_deliver_params.time`,
+  `ta_invoke_report_params.time`, `ta_actor_publish_params.at`,
+  `ta_history_entry`, `ta_invoke_state`, `ta_actor_state`,
+  `ta_actor_export_params`, `ta_actor_export_state()`,
+  `ta_actor_prepare_params.state`), `src/actor.{c,h}` (the time check and
+  the clock move, publish's `at`, export and restore), `src/invoke.c`
+  (reports), `src/input_log.c` (the reducer passes each record's time).
+  Commits: `9861f8a` (section 1) and the one that adds these notes
+  (section 3).
+- **One check, one move.** `ta_actor_input_time_valid()` is the rule of
+  section 1's table; `ta_actor_move_clock()` drops held sends due by the
+  time and sets the clock, for a replaying actor only. A delivery checks
+  the time with its other `TA_ERR_INVALID` checks and moves the clock only
+  after the last step that can fail (holding the event block), so a
+  refused input changes nothing. An ERROR report moves it once the report
+  is queued. Publish counts the held sends that `at` will leave before it
+  reserves timer room, and moves the clock after the route is claimed, so
+  a refused publish changes nothing either.
+- **A prepared actor that is not replaying** (a replacement) takes inputs
+  at the system's time, like a published one.
+- **The reducer keeps a private clock move.** Records that are not inputs
+  (`fired`, `evicted`, an `abandoned` macrostep) still move a replaying
+  actor's clock: `ta_actor_advance_clock()`, private to core, which step 5
+  removes with the reducer.
+- **Callers:** the kernel's scheduler passes `ta_system_time()` read at each
+  delivery and each queued report, one field read, so no per-turn copy was
+  needed. napi: `publish(prepared, { at })` passes `at` to core, and
+  `PreparedActor.setTime()` is removed; a message sent to a replaying actor
+  is taken at the system's time, so `test/prepare.js` steps the manual clock
+  to each input's time instead. The test host: `deliver`/`post` take
+  `time:` (default the scenario's clock), `report_invoke` passes the
+  clock, `publish` takes `at:`; `set_actor_time` is removed. Every
+  `ta_actor_deliver()` and `ta_actor_report_invoke()` call in the C tests
+  of core, the codec, the kernel and the test host passes a time.
+- **Section 3 differs from the text in three ways:**
+  - **State IDs are the definition's numbers, not text.** A state restores
+    only under the revision it was exported from (the revision check), and
+    a revision fixes the numbering (document order, ADR 0060), so a number
+    is exact. The kernel may write text in its checkpoint encoding if it
+    wants a readable log.
+  - **`ta_actor_export_state()` takes a params struct** with three caller
+    arrays, following the header's list convention (a zero capacity is a
+    size query that answers `TA_ERR_NOMEM` with the totals): the active
+    states and then the late-initialized ones, the recorded history as
+    `(history, state)` pairs, and the active invocations with their
+    `<invoke>`. Pending sends are borrowed from the actor, as inspection
+    lends them; a submitted one is exported but not restored.
+  - **The state also carries the late-initialized states and the step
+    counters,** which ADR 0091's checkpoint held and a restore needs.
+  napi's generator cannot bind a function with three caller arrays, so
+  napi lists it as plumbing: the kernel calls it natively (step 4).
+- **Restoring** reuses what the checkpoint restore did: the configuration
+  and history bits set, the actor marked bootstrapped and idle, the
+  counters taken back, each unsubmitted send held (runtime ID 0 as the
+  destination meaning the actor itself, as spawn's pending sends do), each
+  invocation made active with `ta_invoke_restore()`. The data is bound to
+  `datamodel_binding`, or to the state's root. Everything the state names
+  is checked before the actor is created.
+- **Export allocates nothing** in core (a counting allocator shows it); the
+  root is the data model's, from its `inspect`.
+- **Tests:** `tests/replay_test.c`: the four timelines of ADR 0089 with a
+  time on each input and publish's `at`; the live run replayed; a time
+  refused for a live actor, backwards and in the future; publish's `at`
+  refused for a live actor and before the clock. Export: a size query;
+  export then prepare from the state reproduces the configuration, the
+  history (a `back` through it lands in `a3`) and the pending sends, and
+  runs no bootstrap; an invocation active in the state stays active with
+  no invoker called and is retired as unavailable at publish; result codes
+  (busy before bootstrap and while holding an event, done, unpublished,
+  another revision, an unknown state, `at` with a state). The byte
+  checkpoint (ADR 0091) keeps its own walk until step 5 removes it.

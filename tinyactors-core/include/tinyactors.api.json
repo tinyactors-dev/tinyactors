@@ -1327,6 +1327,165 @@
         }
       }
     },
+    "ta_actor_export_params": {
+      "kind": "struct",
+      "doc": "Exports an idle, published actor's state (ADR 0094 section 3). The caller's arrays receive what the actor keeps as bits: the active atomic states then the late-initialized ones in `states`, the recorded history in `history`, the active invocations in `invokes`. Each total is always stored; when an array is too small it answers TA_ERR_NOMEM and fills nothing, so zero capacities are a size query. Nothing is allocated, except by the data model for `out->root`, which the caller releases. - TA_ERR_BUSY: inside a macrostep, holding an event, or with internal events queued. - TA_ERR_DONE: it reached a top-level final state. - TA_ERR_INVALID: it is not published. - TA_ERR_NOT_FOUND: no resident actor has this ID.",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "states",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id"
+            }
+          },
+          "capacity": "state_capacity",
+          "needed": "state_count",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "state_capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "states"
+        },
+        {
+          "name": "state_count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "states"
+        },
+        {
+          "name": "history",
+          "type": {
+            "pointer": {
+              "type": "ta_history_entry"
+            }
+          },
+          "capacity": "history_capacity",
+          "needed": "history_count",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "history_capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "history"
+        },
+        {
+          "name": "history_count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "history"
+        },
+        {
+          "name": "invokes",
+          "type": {
+            "pointer": {
+              "type": "ta_invoke_state"
+            }
+          },
+          "capacity": "invoke_capacity",
+          "needed": "invoke_count",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "invoke_capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "invokes"
+        },
+        {
+          "name": "invoke_count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "invokes"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_state"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "system"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 88,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "states": 8,
+            "state_capacity": 16,
+            "state_count": 24,
+            "history": 32,
+            "history_capacity": 40,
+            "history_count": 48,
+            "invokes": 56,
+            "invoke_capacity": 64,
+            "invoke_count": 72,
+            "out": 80
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "states": 8,
+            "state_capacity": 12,
+            "state_count": 16,
+            "history": 20,
+            "history_capacity": 24,
+            "history_count": 28,
+            "invokes": 32,
+            "invoke_capacity": 36,
+            "invoke_count": 40,
+            "out": 44
+          }
+        }
+      }
+    },
     "ta_actor_find_params": {
       "kind": "struct",
       "fields": [
@@ -2027,7 +2186,6 @@
     },
     "ta_actor_prepare_params": {
       "kind": "struct",
-      "doc": "An unpublished actor (ADR 0037, ADR 0089): one the directory does not know. With `incumbent`, a resident named actor of the definition's family, it will replace that actor; with `incumbent` 0 it will take `address`, in the definition's family, which must then have no resident actor when it is published. `trace` is what its bootstrap runs under (ADR 0067).\n\n`at`, when non-null, makes a replaying actor (ADR 0089): its bootstrap and every later macrostep run on its own clock, which starts at `*at` (no later than ta_system_time()) and moves with each input's time (ADR 0094), and it crosses no border until it is published: its immediate sends and logs are dropped, its delayed sends are held, and its invocations become active without calling an invoker. Without `at`, its visible bootstrap effects are held and released by ta_actor_publish(), as for a replacement.",
       "fields": [
         {
           "name": "incumbent",
@@ -2106,11 +2264,24 @@
           "direction": "in",
           "optional": true,
           "doc": "A log to prepare from (ADR 0090 section 7): the source is read up to the end of its first record, a `spawned` one, which makes a replaying actor whose clock starts at the record's time and whose data is bound to its binding. `datamodel_binding` and `at` must then be null. A log may start with a checkpoint instead (ADR 0091): the source is read through its parts, and the replaying actor starts from the state it holds, at its time, with no bootstrap. TA_ERR_DEFINITION_MISMATCH when it was taken under another revision; TA_ERR_NOT_FOUND when it names a state or an <invoke > the definition does not have."
+        },
+        {
+          "name": "state",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_state",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true,
+          "doc": "A state to restore (ADR 0094 section 3), as ta_actor_export_state() exported it and a host decoded it: a replaying actor whose clock starts at the state's, with its configuration, history, held sends and invocations (active in core, with no invoker called), and no bootstrap. Its data is bound to `datamodel_binding`, or to the state's root when that is null. `at` and `log` must then be null. TA_ERR_DEFINITION_MISMATCH when the state was exported under another revision; TA_ERR_NOT_FOUND when it names a state or an <invoke > the definition does not have."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 104,
+          "size": 112,
           "align": 8,
           "offsets": {
             "incumbent": 0,
@@ -2120,11 +2291,12 @@
             "at": 32,
             "trace": 40,
             "out": 88,
-            "log": 96
+            "log": 96,
+            "state": 104
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 88,
+          "size": 96,
           "align": 8,
           "offsets": {
             "incumbent": 0,
@@ -2134,7 +2306,8 @@
             "at": 28,
             "trace": 32,
             "out": 80,
-            "log": 84
+            "log": 84,
+            "state": 88
           }
         }
       }
@@ -2686,6 +2859,206 @@
             "trace": 24,
             "pending_sends": 72,
             "pending_send_count": 76
+          }
+        }
+      }
+    },
+    "ta_actor_state": {
+      "kind": "struct",
+      "doc": "An idle actor's state (ADR 0094 section 3): what a checkpoint holds, as structure, for a host to encode. State IDs are the definition's own numbers, which its revision fixes (states are numbered in document order, ADR 0060), so a state restores only under the revision it came from. Pending sends are the actor's, as inspection reports them; a submitted one has left the actor and is not restored. `root` is the data model's root. What ta_actor_export_state() fills is borrowed from the actor and the caller's arrays, except `root`, which the caller releases with ta_value_release(); what ta_actor_prepare_params.state points at is borrowed for the call.",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_identity"
+          }
+        },
+        {
+          "name": "generated_ids",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The session's generated-ID counter: send and invoke IDs (ADR 0089 section 5)."
+        },
+        {
+          "name": "clock",
+          "type": {
+            "type": "ta_time"
+          }
+        },
+        {
+          "name": "macrostep",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The session's step counters (ADR 0067)."
+        },
+        {
+          "name": "microstep",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "lifecycle",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "active",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id",
+              "const": true
+            }
+          },
+          "count": "active_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true,
+          "doc": "active atomic states"
+        },
+        {
+          "name": "active_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "active"
+        },
+        {
+          "name": "late",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id",
+              "const": true
+            }
+          },
+          "count": "late_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true,
+          "doc": "late-bound data already initialized (ADR 0032)"
+        },
+        {
+          "name": "late_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "late"
+        },
+        {
+          "name": "history",
+          "type": {
+            "pointer": {
+              "type": "ta_history_entry",
+              "const": true
+            }
+          },
+          "count": "history_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "history_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "history"
+        },
+        {
+          "name": "sends",
+          "type": {
+            "pointer": {
+              "type": "ta_delayed_send_info",
+              "const": true
+            }
+          },
+          "count": "send_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "send_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "sends"
+        },
+        {
+          "name": "invokes",
+          "type": {
+            "pointer": {
+              "type": "ta_invoke_state",
+              "const": true
+            }
+          },
+          "count": "invoke_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "invoke_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "invokes"
+        },
+        {
+          "name": "root",
+          "type": {
+            "type": "ta_value"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 160,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "generated_ids": 32,
+            "clock": 40,
+            "macrostep": 48,
+            "microstep": 56,
+            "lifecycle": 60,
+            "active": 64,
+            "active_count": 72,
+            "late": 80,
+            "late_count": 88,
+            "history": 96,
+            "history_count": 104,
+            "sends": 112,
+            "send_count": 120,
+            "invokes": 128,
+            "invoke_count": 136,
+            "root": 144
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 96,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "generated_ids": 16,
+            "clock": 24,
+            "macrostep": 32,
+            "microstep": 40,
+            "lifecycle": 44,
+            "active": 48,
+            "active_count": 52,
+            "late": 56,
+            "late_count": 60,
+            "history": 64,
+            "history_count": 68,
+            "sends": 72,
+            "send_count": 76,
+            "invokes": 80,
+            "invoke_count": 84,
+            "root": 88
           }
         }
       }
@@ -10470,6 +10843,42 @@
         }
       }
     },
+    "ta_history_entry": {
+      "kind": "struct",
+      "doc": "An unpublished actor (ADR 0037, ADR 0089): one the directory does not know. With `incumbent`, a resident named actor of the definition's family, it will replace that actor; with `incumbent` 0 it will take `address`, in the definition's family, which must then have no resident actor when it is published. `trace` is what its bootstrap runs under (ADR 0067).\n\n`at`, when non-null, makes a replaying actor (ADR 0089): its bootstrap and every later macrostep run on its own clock, which starts at `*at` (no later than ta_system_time()) and moves with each input's time (ADR 0094), and it crosses no border until it is published: its immediate sends and logs are dropped, its delayed sends are held, and its invocations become active without calling an invoker. Without `at`, its visible bootstrap effects are held and released by ta_actor_publish(), as for a replacement.\n\nOne state a history pseudo-state recorded (ADR 0094 section 3).",
+      "fields": [
+        {
+          "name": "history",
+          "type": {
+            "type": "ta_state_id"
+          }
+        },
+        {
+          "name": "state",
+          "type": {
+            "type": "ta_state_id"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "history": 0,
+            "state": 4
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "history": 0,
+            "state": 4
+          }
+        }
+      }
+    },
     "ta_host_record": {
       "kind": "struct",
       "doc": "What a replay hands back of the host's records: for QUEUED its number and its message, owned (release it with ta_event_release()); for DROPPED its number; for an EVENT or JUMP that carried a host number, that number (the queued message it delivered).",
@@ -11260,6 +11669,50 @@
             "autoforward": 76,
             "trace": 80,
             "definition": 128
+          }
+        }
+      }
+    },
+    "ta_invoke_state": {
+      "kind": "struct",
+      "doc": "An active invocation as an actor's state holds it: its ID, its type, and the <invoke > of the definition that started it (ADR 0094 section 3).",
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_invoke_id"
+          }
+        },
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_atom"
+          }
+        },
+        {
+          "name": "decl",
+          "type": {
+            "type": "ta_invoke_decl_id"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "id": 0,
+            "type": 8,
+            "decl": 12
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "id": 0,
+            "type": 8,
+            "decl": 12
           }
         }
       }
@@ -19930,6 +20383,41 @@
           "type": {
             "pointer": {
               "type": "ta_actor_publish_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_actor_export_state",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_export_params",
               "const": true
             }
           },

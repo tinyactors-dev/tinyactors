@@ -12355,6 +12355,235 @@ static ta_result ta_actor_prepared_self(ta_system *system,
     return ta_address_intern(system, address, &out->as.named);
 }
 
+/* ------------------------------------------------------------------------
+ * An actor's state, exported and restored (ADR 0094 section 3)
+ */
+
+
+/* Everything a state names must exist in `definition`, before anything is
+ * created. */
+static ta_result ta_actor_state_check(const ta_system *system, const ta_definition *definition,
+                                      const ta_actor_state *state) {
+    const ta_definition_identity *have = &definition->identity;
+    const ta_definition_identity *want = &state->definition;
+    ta_str have_revision = { .ptr = (const char *)have->revision.ptr, .len = have->revision.len };
+    ta_str want_revision = { .ptr = (const char *)want->revision.ptr, .len = want->revision.len };
+    if (!ta_str_equal(have->family.name, want->family.name) || !ta_str_equal(have_revision, want_revision)) {
+        return TA_ERR_DEFINITION_MISMATCH;
+    }
+    if ((state->active_count != 0 && state->active == NULL) || (state->late_count != 0 && state->late == NULL) ||
+        (state->history_count != 0 && state->history == NULL) || (state->send_count != 0 && state->sends == NULL) ||
+        (state->invoke_count != 0 && state->invokes == NULL)) {
+        return TA_ERR_INVALID;
+    }
+    for (uint32_t index = 0; index < state->active_count; index += 1u) {
+        if (state->active[index] >= definition->state_count) {
+            return TA_ERR_NOT_FOUND;
+        }
+    }
+    for (uint32_t index = 0; index < state->late_count; index += 1u) {
+        if (state->late[index] >= definition->state_count) {
+            return TA_ERR_NOT_FOUND;
+        }
+    }
+    for (uint32_t index = 0; index < state->history_count; index += 1u) {
+        const ta_history_entry *entry = &state->history[index];
+        if (entry->history >= definition->state_count || entry->state >= definition->state_count ||
+            definition->states[entry->history].history_slot == UINT32_MAX) {
+            return TA_ERR_NOT_FOUND;
+        }
+    }
+    for (uint32_t index = 0; index < state->invoke_count; index += 1u) {
+        if (state->invokes[index].decl >= definition->invoke_decl_count) {
+            return TA_ERR_NOT_FOUND;
+        }
+    }
+    for (uint32_t index = 0; index < state->send_count; index += 1u) {
+        const ta_delayed_send_info *info = &state->sends[index];
+        if (info->submitted) {
+            continue;
+        }
+        if (!ta_event_name_valid(&system->event_names, info->event) || !ta_atom_valid(&system->atoms, info->io_type) ||
+            (info->has_content && info->content >= definition->content_count) ||
+            (info->has_target_text && info->target_text >= definition->content_count)) {
+            return TA_ERR_INVALID;
+        }
+    }
+    return TA_OK;
+}
+
+/* Gives a replaying actor, prepared and not bootstrapped, a checked state. */
+static ta_result ta_actor_state_restore(ta_system *system, ta_actor *actor, const ta_actor_state *state) {
+    const ta_definition *definition = actor->definition;
+    ta_configuration_clear(&actor->configuration);
+    for (uint32_t index = 0; index < state->active_count; index += 1u) {
+        ta_configuration_set_atomic(&actor->configuration, state->active[index], true);
+    }
+    for (uint32_t index = 0; index < state->late_count && actor->late_initialized != NULL; index += 1u) {
+        ta_bits_put(actor->late_initialized, state->late[index], true);
+    }
+    for (uint32_t index = 0; index < state->history_count; index += 1u) {
+        const ta_history_entry *entry = &state->history[index];
+        uint32_t slot = definition->states[entry->history].history_slot;
+        ta_bits_put(ta_history_slot_words(&actor->history, slot), entry->state, true);
+    }
+    /* It starts idle: the state it restores is past its bootstrap. */
+    actor->bootstrapped = true;
+    actor->macrostep = false;
+    actor->record.residency = TA_ACTOR_IDLE;
+    actor->next_send_id = state->generated_ids;
+    actor->trace_macrostep = state->macrostep;
+    actor->trace_microstep = state->microstep;
+    actor->trace_lifecycle = state->lifecycle;
+    ta_result result = TA_OK;
+    for (uint32_t index = 0; result == TA_OK && index < state->send_count; index += 1u) {
+        const ta_delayed_send_info *info = &state->sends[index];
+        if (info->submitted) {
+            continue; /* it left the actor before the state was taken */
+        }
+        ta_delayed_send send = { .owner = actor->record.id,
+                                 .send_id = info->send_id,
+                                 .due = info->due,
+                                 .event = info->event,
+                                 .io_type = info->io_type,
+                                 .destination = info->destination,
+                                 .target = info->target,
+                                 .data = info->data,
+                                 .has_content = info->has_content,
+                                 .content = info->content,
+                                 .has_target_text = info->has_target_text,
+                                 .target_text = info->target_text,
+                                 .invoke_id = TA_INVOKE_ID_NONE,
+                                 .trace = info->trace };
+        /* Runtime ID 0, as for ta_actor_spawn()'s pending sends, is the
+         * actor itself: a host cannot know its new session in advance. */
+        if (send.destination.kind == TA_ACTOR_REF_RUNTIME && send.destination.as.runtime == 0 &&
+            ta_system_is_scxml_io(system, send.io_type)) {
+            send.destination.as.runtime = actor->record.id;
+            send.destination.family = definition->family;
+        }
+        ta_actor_ref_retain(&send.destination);
+        ta_value_retain(&send.target);
+        ta_value_retain(&send.data);
+        result = ta_actor_hold_send(system, actor, &(ta_activation_send){ .send = send, .immediate = false });
+        if (result != TA_OK) {
+            ta_actor_ref_release(&send.destination);
+            ta_value_release(&send.target);
+            ta_value_release(&send.data);
+        }
+    }
+    for (uint32_t index = 0; result == TA_OK && index < state->invoke_count; index += 1u) {
+        const ta_invoke_state *invoke = &state->invokes[index];
+        result = ta_invoke_restore(system, actor, &(ta_invoke_restore_params){ .id = invoke->id,
+                                                                              .type = invoke->type,
+                                                                              .decl = invoke->decl });
+    }
+    return result;
+}
+
+TA_API ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_params *params) {
+    if (system == NULL || params == NULL || params->state_count == NULL || params->history_count == NULL ||
+        params->invoke_count == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *params->state_count = 0;
+    *params->history_count = 0;
+    *params->invoke_count = 0;
+    ta_actor *actor = ta_actor_lookup(system, params->actor);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (!actor->published) {
+        return TA_ERR_INVALID;
+    }
+    if (actor->finished) {
+        return TA_ERR_DONE;
+    }
+    if (actor->macrostep || ta_actor_external_event(actor) != NULL || ta_interpreter_internal_pending(actor)) {
+        return TA_ERR_BUSY;
+    }
+    const ta_definition *definition = actor->definition;
+    const ta_actor_sparse_state *sparse = actor->sparse;
+    uint32_t active = 0;
+    uint32_t late = 0;
+    uint32_t history = 0;
+    uint32_t invokes = 0;
+    for (ta_state_id state = 0; state < definition->state_count; state += 1u) {
+        active += ta_configuration_contains_atomic(&actor->configuration, state) ? 1u : 0u;
+        late += actor->late_initialized != NULL && ta_bits_get(actor->late_initialized, state) ? 1u : 0u;
+        uint32_t slot = definition->states[state].history_slot;
+        for (ta_state_id recorded = 0; slot != UINT32_MAX && recorded < definition->state_count; recorded += 1u) {
+            history += ta_bits_get(ta_history_slot_words(&actor->history, slot), recorded) ? 1u : 0u;
+        }
+    }
+    for (uint32_t index = 0; sparse != NULL && index < sparse->invoke_count; index += 1u) {
+        invokes += sparse->invokes[index].active ? 1u : 0u;
+    }
+    *params->state_count = active + late;
+    *params->history_count = history;
+    *params->invoke_count = invokes;
+    if (active + late > params->state_capacity || history > params->history_capacity ||
+        invokes > params->invoke_capacity || (active + late != 0 && params->states == NULL) ||
+        (history != 0 && params->history == NULL) || (invokes != 0 && params->invokes == NULL)) {
+        return TA_ERR_NOMEM;
+    }
+    uint32_t next_active = 0;
+    uint32_t next_late = active;
+    uint32_t next_history = 0;
+    for (ta_state_id state = 0; state < definition->state_count; state += 1u) {
+        if (ta_configuration_contains_atomic(&actor->configuration, state)) {
+            params->states[next_active++] = state;
+        }
+        if (actor->late_initialized != NULL && ta_bits_get(actor->late_initialized, state)) {
+            params->states[next_late++] = state;
+        }
+        uint32_t slot = definition->states[state].history_slot;
+        for (ta_state_id recorded = 0; slot != UINT32_MAX && recorded < definition->state_count; recorded += 1u) {
+            if (ta_bits_get(ta_history_slot_words(&actor->history, slot), recorded)) {
+                params->history[next_history++] = (ta_history_entry){ .history = state, .state = recorded };
+            }
+        }
+    }
+    uint32_t next_invoke = 0;
+    for (uint32_t index = 0; sparse != NULL && index < sparse->invoke_count; index += 1u) {
+        if (sparse->invokes[index].active) {
+            params->invokes[next_invoke++] = (ta_invoke_state){ .id = sparse->invokes[index].id,
+                                                                .type = sparse->invokes[index].type,
+                                                                .decl = sparse->invoke_meta[index].decl };
+        }
+    }
+    ta_value root = { 0 };
+    if (definition->datamodel.v->inspect != NULL) {
+        if (definition->datamodel.v->inspect(definition->datamodel.self,
+                                             &(ta_datamodel_inspect_params){ .shared = definition->datamodel_shared,
+                                                                             .instance = actor->datamodel_instance,
+                                                                             .host = &actor->host,
+                                                                             .out = &root }) != TA_OK) {
+            root = (ta_value){ 0 };
+        }
+    }
+    *params->out = (ta_actor_state){
+        .definition = definition->identity,
+        .generated_ids = actor->next_send_id,
+        .clock = ta_actor_now(system, actor),
+        .macrostep = actor->trace_macrostep,
+        .microstep = actor->trace_microstep,
+        .lifecycle = actor->trace_lifecycle,
+        .active = active != 0 ? params->states : NULL,
+        .active_count = active,
+        .late = late != 0 ? params->states + active : NULL,
+        .late_count = late,
+        .history = history != 0 ? params->history : NULL,
+        .history_count = history,
+        .sends = sparse != NULL && sparse->timers.count != 0 ? sparse->timers.sends : NULL,
+        .send_count = sparse != NULL ? sparse->timers.count : 0,
+        .invokes = invokes != 0 ? params->invokes : NULL,
+        .invoke_count = invokes,
+        .root = root,
+    };
+    return TA_OK;
+}
+
 TA_API ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
@@ -12368,6 +12597,22 @@ TA_API ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_para
     const ta_value *binding = params->datamodel_binding;
     ta_input_spawn spawn = {0};
     ta_time spawn_at = 0;
+    /* A state gives the clock, the binding and everything else (ADR 0094). */
+    const ta_actor_state *state = params->state;
+    if (state != NULL) {
+        if (params->at != NULL || params->log != NULL) {
+            return TA_ERR_INVALID;
+        }
+        ta_result checked = ta_actor_state_check(system, definition, state);
+        if (checked != TA_OK) {
+            return checked;
+        }
+        spawn_at = state->clock;
+        at = &spawn_at;
+        if (binding == NULL && state->root.v != NULL) {
+            binding = &state->root;
+        }
+    }
     if (params->log != NULL) {
         if (params->at != NULL || params->datamodel_binding != NULL) {
             return TA_ERR_INVALID;
@@ -12436,6 +12681,9 @@ TA_API ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_para
     if (result == TA_OK && spawn.kind == TA_RECORD_CHECKPOINT) {
         result = ta_input_restore(system, actor,
                                   &(ta_input_restore_params){ .spawn = &spawn, .log = params->log });
+    }
+    if (result == TA_OK && state != NULL) {
+        result = ta_actor_state_restore(system, actor, state);
     }
     ta_input_spawn_release(system, &spawn);
     if (result != TA_OK) {
