@@ -5,6 +5,9 @@
 library, not a decision. An ADR, or a proposal in `docs/proposals/`, would
 decide whether and how to build it.
 
+**See also:** [tinyjs, the small way](tinyjs-small.md), a competing
+design with the same goals and constraints and far fewer parts.
+
 ## Question
 
 Can we build a small, correct, efficient and freestanding ECMAScript engine,
