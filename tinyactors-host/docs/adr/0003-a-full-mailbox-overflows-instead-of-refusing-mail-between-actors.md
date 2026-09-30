@@ -1,6 +1,6 @@
 # ADR 0003: A full mailbox overflows instead of refusing mail between actors
 
-**Status:** Accepted (2026-09-30). Amends napi ADR 0005 point 9 (the router no longer answers RETRY for a full queue) and kernel ADR 0002 (`accepted` is written for mail accepted past the limits too). Supersedes in part core ADR 0095, whose submitted sends a full mailbox no longer makes.
+**Status:** Accepted (2026-09-30). Amends napi ADR 0005 point 9 (the router no longer answers RETRY for a full queue) and kernel ADR 0002 (`accepted` is written for mail accepted past the limits too). Supersedes in part core ADR 0095, whose submitted sends a full mailbox no longer makes. The window its notes leave open ("A window that remains") is closed by [kernel ADR 0004](0004-a-macrosteps-first-record-commits-with-what-it-sent.md).
 **Date:** 2026-09-30
 
 ## Context
