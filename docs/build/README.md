@@ -39,8 +39,11 @@ about the libraries they build.
 | `mise/lib/cache.rb`, `mise/lib/task_stamp.rb` | Content-based caching |
 | `mise/lib/c_release.rb`, `mise/lib/c_release/` | dist and the C libraries' release |
 | `mise/lib/release.rb` | What every project's release shares: tags, notes, GitHub |
+| `mise/lib/changelog.rb`, `mise/lib/changelog/`, `mise/tasks/changelog/` | A component's changelog: the evidence for a release, the section, its checks |
 | `mise/lib/build_scripts.rb`, `sgconfig.yml`, `mise/ast-grep/` | Static analysis of the build scripts |
 | `<project>/mise/tasks/`, `<project>/mise/lib/` | One project's tasks and helpers |
 
 The decisions behind the release are in
-[ADR 0001](../adr/0001-packaging-and-releases.md).
+[ADR 0001](../adr/0001-packaging-and-releases.md), and those behind its
+notes (a `CHANGELOG.md` per component, written by an agent from the
+evidence and checked) in [ADR 0002](../adr/0002-changelogs.md).

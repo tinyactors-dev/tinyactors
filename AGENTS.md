@@ -22,6 +22,25 @@ and core does not handle bytes it has no use for.
 - Keep history linear: rebase rather than merge, and never create a merge
   commit.
 
+## Releases and changelogs
+
+Each component (core, host, napi, scxml, tinyxml) has a `CHANGELOG.md` in
+its directory, and a release of it needs a section there that passes
+`mise run changelog:check <component>`
+([ADR 0002](docs/adr/0002-changelogs.md)). To prepare a release, use the
+**`release-changelog` skill**: it reads the evidence
+(`mise run changelog:draft <component>`), writes the summary and the
+upgrading text, has them reviewed, and stops for the maintainer's approval.
+Do it at release time, not between releases.
+
+- **Commit subjects and scopes are the input.** Scope a commit with the
+  component it changes (`feat(core)`, `fix(napi)`, `feat(core,host)`); a
+  breaking change has `!` (`refactor(core,host)!:`), and its body says what a
+  caller does. A subject that says only an ADR number gives the changelog
+  nothing to summarize.
+- **Do not edit a changelog below its `<!-- Generated ... -->` line**, and do
+  not commit one by hand: `mise run changelog:write` writes it.
+
 ## Tests: what to run
 
 - **`mise run test` before every commit.** It is what "a commit passes"
