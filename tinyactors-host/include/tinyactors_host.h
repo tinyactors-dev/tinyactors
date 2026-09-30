@@ -62,6 +62,7 @@ TAH_API uint32_t tah_version(void);
 #include "tinyactors_host/hooks.h"
 #include "tinyactors_host/host_metrics.h"
 #include "tinyactors_host/inputs.h"
+#include "tinyactors_host/wal.h"
 #include "tinyactors_host/loads.h"
 #include "tinyactors_host/offloads.h"
 #include "tinyactors_host/otlp.h"
