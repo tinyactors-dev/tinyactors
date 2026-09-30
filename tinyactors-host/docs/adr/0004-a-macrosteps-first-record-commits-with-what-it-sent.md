@@ -277,3 +277,40 @@ ping/p1's `<onentry>` send was lost with the bootstrap's batch, since its
 `test/input-log.js` expects `accepted` (without `seq`) before `spawned`
 for mail posted right after a spawn; `readInputLog()`'s and
 `index.d.ts`'s comments on `seq` say why.
+
+### Measurements (2026-10-01)
+
+`mise run test:full` passed with the first record held (commit cbd8cc6)
+and with `spawned` held (commit e98ae73, the repeat's test included). `scale.js` in it
+reports 328.3 native B/actor at a million actors on Node, as before (kernel
+ADR 0003's notes): unlogged actors pay nothing.
+
+`mise run bench-compare a42f5f6` (main before the first record was held)
+in `tinyactors-napi`, Node machine a99e44a37e2e and Bun machine
+c989bd79a51f, 2 alternating runs each, medians:
+
+| | Node | Bun |
+|---|---|---|
+| input log, logged, ns/event | 3,808 → 3,941 (+3.5%) | 3,384 → 3,172 (-6.3%) |
+| input log, logged without data, ns/event | 1,902 → 1,937 (+1.8%) | 1,701 → 1,667 (-2.0%) |
+| input log, logged, native B/actor | 1,020 → 1,129 (+10.6%) | 1,020 → 1,129 (+10.6%) |
+| input log, logged, log B/event | 184 → 184 | 184 → 184 |
+| input log, unlogged, ns/event | 534 → 526 (-1.7%) | 508 → 504 (-0.8%) |
+| tracing and send data, native B/actor, every variant | unchanged | unchanged |
+
+- **The logged variants' native memory, +109 B per actor,** is the held
+  first records: the input-log bench delivers one message to each of its
+  1,000 actors in one turn, so 1,000 macrosteps are open at once, each
+  with its record's buffer, an entry in `held` and one in `held_index`.
+  The buffers go back to the log's spares, and the list and the map keep
+  their size, so the memory stays at the peak of open macrosteps (at most
+  a turn's deliveries, `messageBudget`), not per actor: one buffer each
+  per concurrently open macrostep. A leaner layout (the records back to
+  back in one buffer, compacted each turn) is a ROADMAP follow-up.
+- **Throughput** of logged inputs moves within the noise, in opposite
+  directions on the two runtimes; log bytes per event are unchanged.
+- **Flagged RSS** in the unlogged variants (tracing on Node +7.4% in one
+  variant; tracing and send data on Bun +5.7% to +11.0%) comes with
+  unchanged native and heap bytes, and nothing of this decision runs
+  without a log: it is the runtimes' collectors, as kernel ADR 0003's
+  notes found for Bun.

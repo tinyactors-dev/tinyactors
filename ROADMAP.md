@@ -7,6 +7,26 @@ the work is in the [README](README.md#layers-and-responsibilities).
 
 ## Done recently
 
+- **A macrostep's first record commits with what it sent (2026-10-01)**,
+  [`PLAN.md`](PLAN.md) phase J, kernel ADR 0004: `delivered`, `jump`,
+  `released`, and `spawned` for a bootstrap, are held and written in the
+  batch of the turn the macrostep ends in, so a crash between two commits
+  no longer loses an immediate send between persisted actors, from a
+  delivery or from a bootstrap. `evict()`, `withdrawSend()` and a
+  checkpoint answer `busy` inside a logged actor's macrostep, and a replay
+  publishes at the latest record time.
+  - **Decided: a macrostep paused across turns may repeat what it sent
+    before the pause, after a crash** (at least once for those sends and
+    effects, once per crash, in order; nothing lost, and macrosteps within
+    the budgets stay exactly once). A repeat carries the same origin, and
+    the same send ID when the `<send>` has an `id`. Holding such sends
+    until the macrostep ends was built and dropped: it would stop a long
+    `<foreach>`'s messages from streaming. napi ADR 0033's section 7 is
+    reworded, and napi's README has "Crashes and repeated messages".
+  - `test:full` passed; `bench-compare a42f5f6` is within 5% for
+    throughput on Node and Bun, and a logged actor's native memory is
+    +109 B per actor in the input-log bench (the held records at the peak
+    of open macrosteps; ADR 0004's notes).
 - **Mail between actors is never refused for a full mailbox (2026-10-01)**,
   [`PLAN.md`](PLAN.md) phase I, kernel ADR 0003: past `maxQueuedMessages`
   or `maxRetainedBytes` the router accepts it into its receiver's
@@ -83,15 +103,23 @@ the work is in the [README](README.md#layers-and-responsibilities).
 
 Gaps found while closing the ones above. None is a regression.
 
-- [ ] **A crash between two commits loses an immediate send:** a delivery
-  is logged in one turn's batch and its macrostep runs in the next, whose
-  batch holds the receiver's `accepted` of any immediate `<send>`. A crash
-  between the two commits loses the send: the sender's replay drops it as
-  sent. Delayed sends are not affected. Needs a decision (kernel ADR
-  0003's notes).
 - [ ] **Out of memory can still lose a send between actors:** a router
   RETRY leaves it submitted in the sender, logged nowhere (kernel ADR
-  0003, section 3, accepted for now).
+  0003, section 3, accepted for now). Likewise a macrostep's first record
+  that waits for memory commits after what the macrostep sent, so a crash
+  meanwhile repeats those sends (kernel ADR 0004, section 2).
+- [ ] **Hold first records in less memory:** each open macrostep of a
+  logged actor keeps its record in a buffer of its own and an entry in a
+  list and a map, kept at their peak: +109 B per actor in the input-log
+  bench, where 1,000 macrosteps are open at once. The records could sit
+  back to back in one buffer, compacted each turn (kernel ADR 0004's
+  notes).
+- [ ] **A macrostep a publish starts has no first record:** a replayed
+  actor whose invocations are retired runs a macrostep at `publish()`
+  (`tah_hook_actor_published()`), which no record starts, so a replay
+  after a crash, or a later load, runs it and sends what it sends again.
+  Check whether that is by design (napi ADR 0032's retired invocations)
+  or needs a record.
 - [ ] **Overflow has no cap,** and `maxWaiting` still dead-letters mail
   between actors for a loading address (`waiting-full`), and the SCXML
   invoker's forward to a child it started is still refused at the limits
