@@ -94,7 +94,19 @@ scenario runs turns and owns the clock, which starts at zero and moves only
 when the scenario moves it, with a fixed random seed, so a hosted run is
 reproducible. Scenarios about core's semantics keep using core directly.
 
-- `hosted.create` takes `{"incarnation"?}` and returns a `hosted` handle.
+- `hosted.create` takes `{"incarnation"?}` and returns `{"hosted", "core"}`:
+  a `hosted` handle, and a `system` handle for the kernel's core system, so
+  the generated core methods (defining charts, inspecting actors) work on it.
+  The core handle is retired when the hosted system closes.
+- `hosted.spawn` takes `{"system", "definition", "family"?, "name"?}`,
+  spawns the actor in core and hands it to the kernel's scheduler, and
+  returns its actor ID.
+- `hosted.post` takes `{"system", "actor", "event"}` and puts an event
+  without data in the actor's mailbox; it answers the `ta_result` name.
+- `hosted.turn` takes `{"system", "limit"?}`, runs turns until the system is
+  quiet or `limit` turns ran (default 1), and returns `{"turns", "quiet"}`.
+- `hosted.advance` takes `{"system", "time"}` and moves the scenario's
+  clock, and core's time, to `time` milliseconds.
 - `hosted.close` takes `{"system": <hosted handle>}`, closes and frees the
   system, and returns `{"leaked": <bytes>}`: what the kernel allocated and
   did not free, which is always 0.

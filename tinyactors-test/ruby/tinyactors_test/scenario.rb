@@ -472,13 +472,55 @@ module TinyactorsTest
 
     # Hosted mode (kernel ADR 0001 section 5): a system whose actors the host
     # kernel queues, schedules and routes. Turns run when the scenario asks.
+    # Answers { hosted:, core: }: the kernel's system, and its core system for
+    # the generated core methods (inspecting actors).
     def hosted_system(incarnation: 0)
       rpc('hosted.create', incarnation: incarnation)
     end
 
     # Closes a hosted system; answers the bytes it leaked (always 0).
-    def close_hosted(handle)
-      rpc('hosted.close', system: handle)[:leaked]
+    def close_hosted(hosted)
+      rpc('hosted.close', system: hosted[:hosted])[:leaked]
+    end
+
+    # Compiles and registers a chart in a hosted system's core; answers its ID.
+    def hosted_define(hosted, chart_name)
+      chart = TinyactorsTest.charts.fetch(chart_name)
+      compiled = core('ta_definition_compile_spec',
+                      ta.definition.compile_spec(system: hosted[:core], spec: chart.to_spec,
+                                                 datamodel: datamodel_adapter(chart), allocator: allocator.adapter))
+      core('ta_system_register_definition',
+           ta.system.register_definition(system: hosted[:core], definition: compiled.fetch(:out))).fetch(:out)
+    end
+
+    def hosted_spawn(hosted, definition, family: nil, name: nil)
+      params = { system: hosted[:hosted], definition: definition }
+      params.merge!(family: family, name: name) if name
+      rpc('hosted.spawn', params)
+    end
+
+    def hosted_post(hosted, actor, event)
+      rpc('hosted.post', system: hosted[:hosted], actor: actor, event: event.to_s)
+    end
+
+    # Runs turns until the system is quiet, at most `limit`.
+    def hosted_run(hosted, limit: 100)
+      rpc('hosted.turn', system: hosted[:hosted], limit: limit)
+    end
+
+    def hosted_advance(hosted, time)
+      rpc('hosted.advance', system: hosted[:hosted], time: time)
+    end
+
+    # The names of an actor's active atomic states, read from core.
+    def hosted_states(hosted, actor)
+      view = core('ta_actor_inspect', ta.actor.inspect(system: hosted[:core], actor: actor)).fetch(:out)
+      states = core('ta_actor_active_states',
+                    ta.actor.active_states(system: hosted[:core], actor: actor, capacity: view.fetch(:active_state_count)))
+      Array(states[:states]).map do |state|
+        core('ta_definition_state', ta.definition.state(system: hosted[:core], definition: view.fetch(:definition_id),
+                                                        state: state)).fetch(:out).fetch(:id).to_sym
+      end
     end
 
     # The generated bindings, e.g. `ta.actor.spawn(system:, definition:)`.

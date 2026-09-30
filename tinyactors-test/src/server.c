@@ -231,6 +231,16 @@ static const tat_method TAT_HOST_METHODS[] = {
      "{\"host\":true,\"params\":{\"incarnation\":{\"type\":\"u64\",\"required\":false}}}"},
     {"hosted.close", tat_hosted_close_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
+    {"hosted.spawn", tat_hosted_spawn_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"definition\":{\"type\":\"u64\",\"required\":true},"
+     "\"family\":{\"type\":\"string\",\"required\":false},\"name\":{\"type\":\"string\",\"required\":false}}}"},
+    {"hosted.post", tat_hosted_post_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":true},"
+     "\"event\":{\"type\":\"string\",\"required\":true}}}"},
+    {"hosted.turn", tat_hosted_turn_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"limit\":{\"type\":\"u64\",\"required\":false}}}"},
+    {"hosted.advance", tat_hosted_advance_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"time\":{\"type\":\"u64\",\"required\":true}}}"},
 };
 
 static bool tat_register_methods(tat_server_impl *impl, ta_arena *arena) {

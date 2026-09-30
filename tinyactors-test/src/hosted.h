@@ -13,5 +13,9 @@
  */
 jv tat_hosted_create_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_close_method(tat_bind *bind, jv params, int *error_code);
+jv tat_hosted_spawn_method(tat_bind *bind, jv params, int *error_code);
+jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code);
+jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code);
+jv tat_hosted_advance_method(tat_bind *bind, jv params, int *error_code);
 
 #endif
