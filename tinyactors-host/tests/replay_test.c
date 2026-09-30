@@ -331,10 +331,10 @@ static void take(tah_system *system, log_buffer *log) {
     uint32_t wakes = 0;
     (void)tah_inputs_wakes(system, &wakes);
     tah_inputs *inputs = &system->inputs;
-    for (uint32_t index = 0; index < inputs->entries.count; index += 1u) {
-        const tah_input_entry *entry = tah_vec_at(&inputs->entries, index);
+    for (uint32_t index = 0; index < tah_inputs_entry_count(inputs); index += 1u) {
+        tah_input_entry entry = tah_inputs_entry_at(inputs, index);
         if (log != NULL) {
-            append(log, entry->bytes.items, (uint32_t)entry->bytes.count);
+            append(log, entry.bytes, (uint32_t)entry.length);
         }
     }
     tah_inputs_release(inputs);

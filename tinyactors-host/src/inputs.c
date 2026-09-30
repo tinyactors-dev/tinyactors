@@ -19,7 +19,7 @@ size_t tah_record_span(const uint8_t *bytes, size_t length, bool unit) {
 void tah_inputs_init(tah_inputs *inputs, ta_allocator allocator) {
     *inputs = (tah_inputs){ .allocator = allocator };
     tah_vec_init(&inputs->families, allocator, TAH_LAYOUT(ta_str));
-    tah_vec_init(&inputs->entries, allocator, TAH_LAYOUT(tah_input_entry));
+    tah_vec_init(&inputs->entries, allocator, TAH_LAYOUT(tah_input_buffer));
     tah_map_init(&inputs->entry_index, allocator);
     tah_vec_init(&inputs->spare, allocator, TAH_LAYOUT(tah_vec));
     tah_map_init(&inputs->actor_seq, allocator);
@@ -75,7 +75,7 @@ static void tah_inputs_free_families(tah_inputs *inputs) {
 
 void tah_inputs_release(tah_inputs *inputs) {
     for (uint32_t at = 0; at < inputs->entries.count; at += 1u) {
-        tah_input_entry *entry = tah_vec_at(&inputs->entries, at);
+        tah_input_buffer *entry = tah_vec_at(&inputs->entries, at);
         ta_address_release(entry->address);
         entry->bytes.count = 0;
         if (tah_vec_push(&inputs->spare, &entry->bytes) != TA_OK) {
@@ -90,6 +90,23 @@ void tah_inputs_release(tah_inputs *inputs) {
     if (inputs->arena_ready) {
         ta_arena_reset(&inputs->arena);
     }
+}
+
+bool tah_inputs_enabled(const tah_inputs *inputs) {
+    return inputs->enabled;
+}
+
+uint32_t tah_inputs_touched_count(const tah_inputs *inputs) {
+    return inputs->touched.count;
+}
+
+uint32_t tah_inputs_entry_count(const tah_inputs *inputs) {
+    return inputs->entries.count;
+}
+
+tah_input_entry tah_inputs_entry_at(const tah_inputs *inputs, uint32_t index) {
+    const tah_input_buffer *buffer = tah_vec_at(&inputs->entries, index);
+    return (tah_input_entry){ .address = buffer->address, .bytes = buffer->bytes.items, .length = buffer->bytes.count };
 }
 
 void tah_inputs_destroy(tah_system *system) {
@@ -168,12 +185,12 @@ static void tah_inputs_touch(tah_inputs *inputs, ta_address *address, bool fixed
  */
 
 /* The entry for `address` this turn, made when it has none; NULL without memory. */
-static tah_input_entry *tah_inputs_entry(tah_inputs *inputs, ta_address *address) {
+static tah_input_buffer *tah_inputs_entry(tah_inputs *inputs, ta_address *address) {
     uint64_t index = 0;
     if (tah_map_get(&inputs->entry_index, (uint64_t)(uintptr_t)address, &index)) {
         return tah_vec_at(&inputs->entries, (uint32_t)index);
     }
-    tah_input_entry entry = { .address = address };
+    tah_input_buffer entry = { .address = address };
     if (inputs->spare.count != 0) {
         inputs->spare.count -= 1u;
         entry.bytes = *(tah_vec *)tah_vec_at(&inputs->spare, inputs->spare.count);
@@ -218,7 +235,7 @@ typedef struct {
 static ta_result tah_inputs_write(tah_system *system, tah_inputs_target target, tah_wal_record *record,
                                   tah_input_mark *mark) {
     tah_inputs *inputs = &system->inputs;
-    tah_input_entry *entry = tah_inputs_entry(inputs, target.address);
+    tah_input_buffer *entry = tah_inputs_entry(inputs, target.address);
     if (entry == NULL) {
         if (inputs->text_ready) {
             ta_arena_reset(&inputs->text);
@@ -244,7 +261,7 @@ static ta_result tah_inputs_write(tah_system *system, tah_inputs_target target, 
     tah_system_want_turn(system); /* the batch goes out after the next turn */
     if (mark != NULL) {
         *mark = (tah_input_mark){ .open = true,
-                                  .entry = (uint32_t)(entry - (tah_input_entry *)inputs->entries.items),
+                                  .entry = (uint32_t)(entry - (tah_input_buffer *)inputs->entries.items),
                                   .start = start,
                                   .actor = target.actor,
                                   .seq_before = before };
@@ -259,7 +276,7 @@ void tah_inputs_undo(tah_system *system, tah_input_mark *mark) {
     }
     mark->open = false;
     if (mark->entry < inputs->entries.count) {
-        tah_input_entry *entry = tah_vec_at(&inputs->entries, mark->entry);
+        tah_input_buffer *entry = tah_vec_at(&inputs->entries, mark->entry);
         if (mark->start <= entry->bytes.count) {
             entry->bytes.count = mark->start;
             inputs->count -= inputs->count != 0 ? 1u : 0u;

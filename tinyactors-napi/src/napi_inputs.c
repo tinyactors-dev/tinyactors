@@ -16,7 +16,7 @@ static void tna_put(napi_env env, napi_value object, const char *name, napi_valu
 void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
     tah_system *system = wrapper->system;
     tah_inputs *inputs = &system->inputs;
-    if (!inputs->enabled && inputs->entries.count == 0 && inputs->touched.count == 0) {
+    if (!tah_inputs_enabled(inputs) && tah_inputs_entry_count(inputs) == 0 && tah_inputs_touched_count(inputs) == 0) {
         return;
     }
     napi_handle_scope scope = NULL;
@@ -29,17 +29,18 @@ void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *fir
     bool made = napi_create_object(env, &batch) == napi_ok && napi_create_array(env, &list) == napi_ok &&
                 napi_create_array_with_length(env, wake_count, &wake_list) == napi_ok;
     uint32_t at = 0;
-    for (uint32_t index = 0; made && index < inputs->entries.count; index += 1u) {
-        const tah_input_entry *entry = tah_vec_at(&inputs->entries, index);
-        if (entry->bytes.count == 0) {
+    uint32_t entries = tah_inputs_entry_count(inputs);
+    for (uint32_t index = 0; made && index < entries; index += 1u) {
+        tah_input_entry entry = tah_inputs_entry_at(inputs, index);
+        if (entry.length == 0) {
             continue; /* its only record was refused */
         }
         napi_value item = NULL;
         napi_value bytes = NULL;
         void *data = NULL;
-        ta_actor_address address = ta_address_view(entry->address);
+        ta_actor_address address = ta_address_view(entry.address);
         if (napi_create_object(env, &item) != napi_ok ||
-            napi_create_buffer_copy(env, entry->bytes.count, entry->bytes.items, &data, &bytes) != napi_ok) {
+            napi_create_buffer_copy(env, entry.length, entry.bytes, &data, &bytes) != napi_ok) {
             continue;
         }
         tna_put(env, item, "address", tna_address_object(env, &address));
@@ -161,7 +162,7 @@ napi_value tna_write_evicted_method(napi_env env, napi_callback_info info) {
     if (!tna_actor_arguments(env, argv, argc, &actor)) {
         return tna_throw(env, "invalid", "writeEvicted: expected (slot, generation, wake?)");
     }
-    if (!system->inputs.enabled) {
+    if (!tah_inputs_enabled(&system->inputs)) {
         return NULL;
     }
     double wake = 0;

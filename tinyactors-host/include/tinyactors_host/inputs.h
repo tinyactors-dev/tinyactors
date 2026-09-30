@@ -47,10 +47,18 @@
 
 typedef struct tah_system tah_system;
 
-/* One address's records from this turn, back to back. */
+/* One address's records from this turn, back to back: the log's buffer. */
 typedef struct {
     ta_address *address; /* retained */
     tah_vec bytes;       /* uint8_t */
+} tah_input_buffer;
+
+/* One address's records from this turn, as the binding takes them: borrowed
+ * from the log until tah_inputs_release(). */
+typedef struct {
+    ta_address *address; /* the log holds its reference */
+    const uint8_t *bytes;
+    size_t length;
 } tah_input_entry;
 
 /* A wake worked out for a batch: `has_at` false is none (JavaScript's null). */
@@ -91,7 +99,7 @@ typedef struct {
     ta_datamodel datamodel; /* whose codec writes and reads values */
     tah_vec families;       /* ta_str, each allocated */
     /* This turn's records by address, and byte buffers kept for reuse. */
-    tah_vec entries;        /* tah_input_entry */
+    tah_vec entries;        /* tah_input_buffer */
     tah_map entry_index;    /* address -> index in `entries` */
     tah_vec spare;          /* tah_vec of uint8_t, emptied */
     /* Records kept this turn, for tah_system_quiet(). */
@@ -206,6 +214,17 @@ void tah_inputs_redelivered(tah_inputs *inputs);
 tah_input_wake *tah_inputs_wakes(tah_system *system, uint32_t *count);
 /* Empties this turn's entries (their buffers go back for reuse) and resets the arena. */
 void tah_inputs_release(tah_inputs *inputs);
+
+/*
+ * The batch a binding takes after a turn (napi ADR 0033): whether the log
+ * is on, the addresses touched since the last take, and this turn's entries
+ * by index, from 0 to tah_inputs_entry_count(). An entry whose only record
+ * was refused has length 0.
+ */
+bool tah_inputs_enabled(const tah_inputs *inputs);
+uint32_t tah_inputs_touched_count(const tah_inputs *inputs);
+uint32_t tah_inputs_entry_count(const tah_inputs *inputs);
+tah_input_entry tah_inputs_entry_at(const tah_inputs *inputs, uint32_t index);
 
 /* The bytes of the first whole record at `bytes`, or of the checkpoint unit
  * it opens when `unit`; 0 when they are not all there yet (tah_wal_span). */

@@ -203,16 +203,16 @@ static void tat_hosted_take_batch(tat_hosted *hosted) {
     uint32_t wake_count = 0;
     (void)tah_inputs_wakes(hosted->system, &wake_count);
     static const char digits[] = "0123456789abcdef";
-    for (uint32_t index = 0; index < inputs->entries.count; index += 1u) {
-        const tah_input_entry *entry = tah_vec_at(&inputs->entries, index);
-        ta_actor_address address = ta_address_view(entry->address);
-        size_t length = entry->bytes.count;
+    for (uint32_t index = 0; index < tah_inputs_entry_count(inputs); index += 1u) {
+        tah_input_entry entry = tah_inputs_entry_at(inputs, index);
+        ta_actor_address address = ta_address_view(entry.address);
+        size_t length = entry.length;
         char *hex = malloc(length * 2u + 1u);
         if (hex == NULL) {
             continue;
         }
         for (size_t at = 0; at < length; at += 1u) {
-            uint8_t byte = ((const uint8_t *)entry->bytes.items)[at];
+            uint8_t byte = entry.bytes[at];
             hex[at * 2u] = digits[byte >> 4];
             hex[at * 2u + 1u] = digits[byte & 15u];
         }
