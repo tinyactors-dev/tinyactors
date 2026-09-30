@@ -2456,7 +2456,7 @@ class System {
    * published. It bootstraps like a spawned actor. `binding` defaults to the
    * incumbent's live data root when the new definition uses the JavaScript
    * data model. With `at`, it is a replaying actor: its clock starts at `at`
-   * and moves only with setTime() and replay(), and it crosses no border
+   * and moves with each input's time (core ADR 0094), and it crosses no border
    * until it is published. With `log`, the start of an actor's input log
    * holding at least its first record (a Uint8Array), it is a replaying
    * actor made from that record: `spawned` gives its binding and its clock,
@@ -2568,11 +2568,11 @@ class System {
     if (incumbent !== undefined && this.#native.scheduling(incumbent.slot, incumbent.generation) === 'runnable') {
       throw new TinyactorsError('publish(): the incumbent is inside a macrostep; publish once it is idle', 'busy');
     }
-    if (at !== undefined) {
-      prepared.setTime(at);
+    if (at !== undefined && (typeof at !== 'number' || !Number.isFinite(at) || at < 0)) {
+      throw new TinyactorsError('publish(): options.at must be a non-negative number of milliseconds', 'invalid');
     }
     core.actor_publish(this.#native, prepared.slot, prepared.generation,
-      incumbent?.slot ?? 0, incumbent?.generation ?? 0);
+      incumbent?.slot ?? 0, incumbent?.generation ?? 0, at === undefined ? undefined : Math.floor(at));
     if (incumbent !== undefined) {
       core.actor_destroy(this.#native, incumbent.slot, incumbent.generation);
     }
@@ -3002,18 +3002,6 @@ class PreparedActor extends ActorID {
   /** False until System.publish() publishes it. */
   get published() {
     return this.system.inspect(this).published;
-  }
-
-  /**
-   * Move a replaying actor's clock forward to `time` (core ADR 0089): not
-   * before its clock, not after the system's time, and only between
-   * macrosteps. Its held delayed sends due by then are dropped.
-   */
-  setTime(time) {
-    if (typeof time !== 'number' || !Number.isFinite(time) || time < 0) {
-      throw new TinyactorsError('setTime(): expected a non-negative number of milliseconds', 'invalid');
-    }
-    core.actor_set_time(nativeOf(this.system), this.slot, this.generation, Math.floor(time));
   }
 
   /**

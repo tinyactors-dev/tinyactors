@@ -45,16 +45,14 @@ TinyactorsTest.scenarios 'replay' do
 
     set_time 6000 + (7 * 24 * 3600 * 1000) # a week later
     replay = prepare :replay_timer, address: live.address, at: 0
-    assert_equal 'ok', set_actor_time(replay, 1000)
-    replay.deliver 'e1'
+    replay.deliver 'e1', time: 1000 # each input carries its logged time (core ADR 0094)
     assert_equal 0, replay.delayed_sends, 'the timeout is held, not pending'
-    assert_equal 'ok', set_actor_time(replay, 6000), 'time reached the timeout: it fired then'
-    replay.deliver 'timeout'
+    replay.deliver 'timeout', time: 6000 # time reached the timeout: it fired then
     assert_active replay, :timedout
     assert_equal 1, logs.size, 'the replay wrote no log'
-    assert_equal 'err_invalid', set_actor_time(replay, 1000), 'a replaying clock never goes back'
+    assert_equal 'err_invalid', replay.post('e1', time: 1000), 'a replaying clock never goes back'
 
-    assert_equal 'ok', publish(replay)
+    assert_equal 'ok', publish(replay, at: 6000)
     assert_equal ['ok', replay.handle], find(live.address), 'the address names the rebuilt actor'
     assert_equal 1, replay.data('.seen')
     assert_equal 0, replay.delayed_sends, 'nothing fires twice'
@@ -66,10 +64,8 @@ TinyactorsTest.scenarios 'replay' do
     memory_directory
     set_time 10_000
     replay = prepare :replay_timer, address: { family: { name: 'replay_timer' }, name: 'p' }, at: 0
-    assert_equal 'ok', set_actor_time(replay, 1000)
-    replay.deliver 'e1'
-    assert_equal 'ok', set_actor_time(replay, 3000), 'stopped at 3000; the timeout is due at 6000'
-    assert_equal 'ok', publish(replay)
+    replay.deliver 'e1', time: 1000
+    assert_equal 'ok', publish(replay, at: 3000), 'stopped at 3000; the timeout is due at 6000'
     advance_time 0
     assert_active replay, :timedout
   end

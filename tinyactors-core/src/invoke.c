@@ -1097,6 +1097,9 @@ static ta_result ta_invoke_logged_error(ta_system *system, ta_actor *actor, cons
     if (logged) {
         ta_input_close(system, result == TA_OK);
     }
+    if (result == TA_OK) {
+        ta_actor_move_clock(actor, params->time); /* the report's time is now the actor's (ADR 0094) */
+    }
     return result;
 }
 
@@ -1112,6 +1115,9 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
     if (index < 0) {
         return TA_ERR_NOT_FOUND;
     }
+    if (!ta_actor_input_time_valid(system, actor, params->time)) {
+        return TA_ERR_INVALID;
+    }
     ta_event event = { .type = TA_EVENT_EXTERNAL, .invoke_id = params->invoke_id };
     switch (params->kind) {
         case TA_INVOKE_REPORT_EVENT:
@@ -1124,7 +1130,7 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace });
+                                                                  .trace = params->trace, .time = params->time });
         case TA_INVOKE_REPORT_DONE: {
             ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
             if (result != TA_OK) {
@@ -1135,7 +1141,7 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             }
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace });
+                                                                  .trace = params->trace, .time = params->time });
         }
         case TA_INVOKE_REPORT_ERROR:
             return ta_invoke_logged_error(system, actor, params);

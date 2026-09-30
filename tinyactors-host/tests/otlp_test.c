@@ -426,7 +426,7 @@ static void open_across_turns(void) {
     CHECK(ta_system_intern_atom(f.core, S("go"), &go) == TA_OK);
     ta_event_name_id name = 0;
     CHECK(ta_event_name_intern(f.core, &(ta_atom_list){ .atoms = &go, .count = 1 }, &name) == TA_OK);
-    CHECK(ta_actor_deliver(f.core, &(ta_actor_deliver_params){ .actor = f.actor,
+    CHECK(ta_actor_deliver(f.core, &(ta_actor_deliver_params){ .time = ta_system_time(f.core), .actor = f.actor,
                                                                .event = &(ta_event){ .name = name } }) == TA_OK);
     CHECK(resume(&f, 100) == TA_RUN_STABLE);
     count = read_spans(take(&f.otlp), spans, 16);

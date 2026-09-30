@@ -283,7 +283,7 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 static void deliver(ta_system *system, ta_actor_id actor, const char *event) {
     ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                            .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &delivered }) == TA_OK);
     run(system, actor);
 }
 
@@ -731,7 +731,7 @@ static void test_withdrawing_inside_a_paused_macrostep(void) {
     ta_actor_id actor = spawn(system, define(system, "stepper", send_then_cancel), NULL);
     watch_withdrawals(system);
     ta_event go = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &go }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &go }) == TA_OK);
     ta_send_id t = send_id(system, "t");
     /* Delivered, not yet run: `t` does not exist yet. */
     CHECK(ta_actor_withdraw_send(system, actor, t) == TA_ERR_NOT_FOUND);

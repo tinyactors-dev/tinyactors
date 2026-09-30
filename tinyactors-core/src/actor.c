@@ -849,7 +849,9 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
     return TA_OK;
 }
 
-static uint32_t ta_actor_activation_send_count(const ta_actor *actor) {
+/* Held sends that publishing will schedule: all of them, or, with a clock
+ * move to `*at`, those due after it. */
+static uint32_t ta_actor_activation_send_count(const ta_actor *actor, const ta_time *at) {
     const ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse == NULL || sparse->activation_effects == NULL) {
         return 0;
@@ -858,7 +860,7 @@ static uint32_t ta_actor_activation_send_count(const ta_actor *actor) {
     const ta_vec *entries = &sparse->activation_effects->entries;
     for (uint32_t index = 0; index < entries->count; index += 1u) {
         const ta_activation_effect *effect = ta_vec_at(entries, index);
-        count += effect->kind == TA_ACTIVATION_SEND ? 1u : 0u;
+        count += effect->kind == TA_ACTIVATION_SEND && (at == NULL || effect->as.send.send.due > *at) ? 1u : 0u;
     }
     return count;
 }
@@ -967,8 +969,13 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
         return TA_ERR_BUSY;
     }
     bool replaying = ta_actor_replaying(actor);
+    /* A last clock move is only for a replaying actor (ADR 0094 section 1). */
+    const ta_time *at = params->at;
+    if (at != NULL && (!replaying || !ta_actor_input_time_valid(system, actor, *at))) {
+        return TA_ERR_INVALID;
+    }
     /* Everything that can fail comes first, so a refusal changes nothing. */
-    uint32_t sends = ta_actor_activation_send_count(actor);
+    uint32_t sends = ta_actor_activation_send_count(actor, at);
     ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &actor->sparse->timers, sends);
     if (result == TA_OK && replaying) {
         result = ta_invoke_prepare_retire(system, actor);
@@ -978,6 +985,9 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
     }
     if (result != TA_OK) {
         return result;
+    }
+    if (at != NULL) {
+        ta_actor_move_clock(actor, *at);
     }
     actor->published = true;
     actor->replacement_of = 0;
@@ -996,27 +1006,35 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
     return TA_OK;
 }
 
-ta_result ta_actor_set_time(ta_system *system, ta_actor_id id, ta_time now) {
-    ta_actor *actor = ta_actor_lookup(system, id);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
+/*
+ * Whether `time` may be an input's time for `actor` (ADR 0094 section 1): a
+ * replaying actor's is no earlier than its clock and no later than the
+ * system's; every other actor's is the system's own.
+ */
+bool ta_actor_input_time_valid(const ta_system *system, const ta_actor *actor, ta_time time) {
+    ta_time now = ta_clock_now(&system->clock);
     if (!ta_actor_replaying(actor)) {
-        return TA_ERR_INVALID;
+        return time == now;
+    }
+    return time >= actor->sparse->activation_effects->clock && time <= now;
+}
+
+/*
+ * Moves a replaying actor's clock to `time`, dropping every held delayed
+ * send due by then: time reached it in the run being replayed, so it fired
+ * then (ADR 0089 section 2). Nothing to do for any other actor. The caller
+ * has checked the time.
+ */
+void ta_actor_move_clock(ta_actor *actor, ta_time time) {
+    if (!ta_actor_replaying(actor)) {
+        return;
     }
     ta_activation_effects *effects = actor->sparse->activation_effects;
-    if (now < effects->clock || now > ta_clock_now(&system->clock)) {
-        return TA_ERR_INVALID;
-    }
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
-        return TA_ERR_BUSY;
-    }
-    /* Time reached these sends in the run being replayed, so they fired. */
     ta_vec *entries = &effects->entries;
     uint32_t kept = 0;
     for (uint32_t index = 0; index < entries->count; index += 1u) {
         ta_activation_effect *effect = ta_vec_at(entries, index);
-        if (effect->kind == TA_ACTIVATION_SEND && effect->as.send.send.due <= now) {
+        if (effect->kind == TA_ACTIVATION_SEND && effect->as.send.send.due <= time) {
             ta_activation_effect_release(effect);
             continue;
         }
@@ -1027,7 +1045,21 @@ ta_result ta_actor_set_time(ta_system *system, ta_actor_id id, ta_time now) {
         entries->count = kept;
         ta_actor_touch(actor);
     }
-    effects->clock = now;
+    effects->clock = time;
+}
+
+ta_result ta_actor_advance_clock(ta_system *system, ta_actor_id id, ta_time time) {
+    ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (!ta_actor_replaying(actor) || !ta_actor_input_time_valid(system, actor, time)) {
+        return TA_ERR_INVALID;
+    }
+    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
+        return TA_ERR_BUSY;
+    }
+    ta_actor_move_clock(actor, time);
     return TA_OK;
 }
 
@@ -1095,7 +1127,8 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     }
     const ta_operator_transition *transition = params->transition;
     if (!ta_event_name_valid(&system->event_names, event->name) || event->name == TA_EVENT_NAME_ROOT ||
-        (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition))) {
+        (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||
+        !ta_actor_input_time_valid(system, actor, params->time)) {
         return TA_ERR_INVALID;
     }
     /* Before busy: a finished actor never becomes free again (ADR 0055). */
@@ -1162,6 +1195,8 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
         ta_input_close(system, true);
         actor->sparse->log_released = false;
     }
+    /* Nothing below can fail: the input's time is now the actor's. */
+    ta_actor_move_clock(actor, params->time);
     ta_event_slots *slots = &actor->event_block->slots;
     ta_event_retain(&accepted, &slots->external_event);
     slots->external = TA_EXTERNAL_WAITING;

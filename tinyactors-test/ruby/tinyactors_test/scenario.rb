@@ -179,16 +179,18 @@ module TinyactorsTest
 
     # Delivers an external event and runs the system until it is quiescent.
     # `trace:` is the trace parent its macrostep runs under (ADR 0067), as
-    # TinyactorsTest.trace_parent builds it.
-    def deliver(event, data: nil, trace: nil)
-      @context.core('ta_actor_deliver', offer(event, data: data, trace: trace))
+    # TinyactorsTest.trace_parent builds it. `time:` is the input's logical
+    # time (core ADR 0094): the system's by default, and for a replaying
+    # actor the time the logged input was taken at.
+    def deliver(event, data: nil, trace: nil, time: nil)
+      @context.core('ta_actor_deliver', offer(event, data: data, trace: trace, time: time))
       @context.run_system("deliver #{event}")
     end
 
     # Offers an external event without running the system, and returns the
     # ta_actor_deliver result: "ok", "err_busy", "err_not_found", ...
-    def post(event, data: nil, trace: nil)
-      offer(event, data: data, trace: trace)[:result]
+    def post(event, data: nil, trace: nil, time: nil)
+      offer(event, data: data, trace: trace, time: time)[:result]
     end
 
     # Delivers `event` with an operator transition (ADR 0082) to the states
@@ -276,10 +278,10 @@ module TinyactorsTest
 
     private
 
-    def offer(event, data:, trace: nil, transition: nil)
+    def offer(event, data:, trace: nil, transition: nil, time: nil)
       params = { name: @context.event_name(event), type: 'external', invoke_id: INVOKE_ID_NONE }
       params[:data] = data unless data.nil?
-      delivery = { system: @context.system_handle, actor: handle, event: params }
+      delivery = { system: @context.system_handle, actor: handle, event: params, time: time || @context.now }
       delivery[:trace] = trace unless trace.nil?
       delivery[:transition] = transition unless transition.nil?
       @context.ta.actor.deliver(**delivery)
@@ -878,7 +880,7 @@ module TinyactorsTest
     # `data`, and `ends` (whether the invocation is retired, core ADR 0081).
     def report_invoke(start, kind, event: nil, data: nil, reason: nil, ends: false)
       params = { system: system_handle, actor: start.fetch(:parent), invoke_id: start.fetch(:invoke_id),
-                 kind: kind.to_s }
+                 kind: kind.to_s, time: @now }
       case kind.to_sym
       when :event
         raise ScenarioError, 'report_invoke :event needs event:' unless event
@@ -1229,9 +1231,12 @@ module TinyactorsTest
 
     # Publishes a prepared actor; returns the result. On "ok" it is checked
     # by invariants from now on.
-    def publish(prepared, incumbent: nil)
+    # `at:` is a replaying actor's last clock move before it is published
+    # (core ADR 0094): the moment the run being replayed stopped.
+    def publish(prepared, incumbent: nil, at: nil)
       params = { system: system_handle, actor: prepared.handle }
       params[:incumbent] = incumbent.handle unless incumbent.nil?
+      params[:at] = at unless at.nil?
       result = ta.actor.publish(**params)[:result]
       @actors << prepared if result == 'ok' && !@actors.include?(prepared)
       result
@@ -1301,11 +1306,6 @@ module TinyactorsTest
         end
       end
       actor
-    end
-
-    # Moves a replaying actor's clock (core ADR 0089 section 2); returns the result.
-    def set_actor_time(actor, time)
-      ta.actor.set_time(system: system_handle, actor: actor.handle, now: time)[:result]
     end
 
     # Capture, unload, and load a named actor with its current data root as

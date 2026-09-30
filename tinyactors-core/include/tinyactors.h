@@ -1449,6 +1449,8 @@ typedef struct {
     ta_invoke_id invoke_id;
     ta_invoke_report_kind kind;
     ta_trace_parent trace;
+    /* The report's logical time, as ta_actor_deliver_params.time (ADR 0094). */
+    ta_time time;
     union {
         TA_WHEN(TA_INVOKE_REPORT_EVENT) TA_IN const ta_event *event;
         TA_WHEN(TA_INVOKE_REPORT_DONE) TA_IN TA_OPTIONAL const ta_value *done_data;
@@ -2841,7 +2843,7 @@ typedef struct {
  *
  * `at`, when non-null, makes a replaying actor (ADR 0089): its bootstrap and
  * every later macrostep run on its own clock, which starts at `*at` (no
- * later than ta_system_time()) and moves only with ta_actor_set_time(), and
+ * later than ta_system_time()) and moves with each input's time (ADR 0094), and
  * it crosses no border until it is published: its immediate sends and logs
  * are dropped, its delayed sends are held, and its invocations become
  * active without calling an invoker. Without `at`, its visible bootstrap
@@ -2872,6 +2874,14 @@ typedef struct {
     ta_actor_id actor;
     /* The incumbent given to ta_actor_prepare(), or 0 for none. */
     ta_actor_id incumbent;
+    /*
+     * A replaying actor's last clock move before it is published (ADR 0094
+     * section 1): the moment the run being replayed stopped. Held delayed
+     * sends due by then are dropped, the rest are scheduled. Null for none;
+     * given for any other actor, or earlier than its clock, or later than
+     * ta_system_time(), it is TA_ERR_INVALID.
+     */
+    TA_IN TA_OPTIONAL const ta_time *at;
 } ta_actor_publish_params;
 /* Release data with ta_value_release() when has_data is true. */
 typedef struct { bool has_data; TA_RELEASE_IF(ta_value_release, has_data) ta_value data; } ta_actor_completion;
@@ -2909,16 +2919,6 @@ TA_API ta_result ta_actor_prepare(ta_system *system, TA_IN const ta_actor_prepar
  * - TA_ERR_NOMEM: nothing changed.
  */
 TA_API ta_result ta_actor_publish(ta_system *system, TA_IN const ta_actor_publish_params *params);
-/*
- * Moves a replaying actor's clock to `now` (ADR 0089 section 2): not earlier
- * than its clock, and not later than ta_system_time(). Every held delayed
- * send due at or before `now` is dropped: time reached it in the run being
- * replayed, so it fired then.
- * - TA_ERR_INVALID: the actor is not replaying, or `now` breaks that rule.
- * - TA_ERR_BUSY: the actor is inside a macrostep.
- * - TA_ERR_NOT_FOUND: no resident actor has this ID.
- */
-TA_API ta_result ta_actor_set_time(ta_system *system, ta_actor_id actor, ta_time now);
 TA_API ta_result ta_actor_find(ta_system *system, TA_IN const ta_actor_find_params *params);
 /*
  * An operator transition (ADR 0082): a transition core builds when the
@@ -2949,6 +2949,15 @@ typedef struct {
     /* The host's number for a message it logged as `queued` (ADR 0090
      * section 6), which the actor's `event` record carries; 0 for none. */
     uint64_t host_seq;
+    /*
+     * The input's logical time (ADR 0094 section 1). For a published actor,
+     * or one prepared without `at`, it is ta_system_time(). For a replaying
+     * actor it is no earlier than its previous input's and no later than the
+     * system's, and the actor's clock moves to it: every held delayed send
+     * due by then is dropped (ADR 0089 section 2). Anything else is
+     * TA_ERR_INVALID.
+     */
+    ta_time time;
 } ta_actor_deliver_params;
 /*
  * Offers an external event to a resident actor: the admission test

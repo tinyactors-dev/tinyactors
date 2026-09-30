@@ -431,7 +431,7 @@ static ta_event event_named(run *r, const char *text) {
 
 static void deliver(run *r, const char *name, ta_trace_parent trace) {
     ta_event event = event_named(r, name);
-    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .actor = r->actor, .event = &event,
+    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &event,
                                                                   .trace = trace }) == TA_OK);
 }
 
@@ -750,11 +750,11 @@ static void test_records_are_written_once(void) {
         ta_event event = event_named(&r, "go");
         refuse_at = allocations + failing;
         ta_result delivered = ta_actor_deliver(r.system,
-                                               &(ta_actor_deliver_params){ .actor = r.actor, .event = &event });
+                                               &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .event = &event });
         ta_run_status status = TA_RUN_ERROR;
         uint32_t attempts = 0;
         if (delivered == TA_ERR_NOMEM) {
-            delivered = ta_actor_deliver(r.system, &(ta_actor_deliver_params){ .actor = r.actor, .event = &event });
+            delivered = ta_actor_deliver(r.system, &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .event = &event });
         }
         CHECK(delivered == TA_OK);
         while (resume(&r, 1000, &status) == TA_ERR_NOMEM && attempts < 4u) {

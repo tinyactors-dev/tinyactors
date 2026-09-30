@@ -160,7 +160,7 @@ static void test_capture_skips_a_released_external_event(void) {
     counted_value value = { .references = 1 };
     ta_event event = { .name = f.poke, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .data = { .self = &value, .v = &counted_vtable } };
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = f.actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .event = &event }) == TA_OK);
     counted_release(&value); /* the host lets go; core holds its own */
     run_to_stable(&f);
     CHECK(value.references == 0); /* `bounce` replaced it as the current event */
@@ -176,7 +176,7 @@ static void test_capture_keeps_a_held_external_event(void) {
     counted_value value = { .references = 1 };
     ta_event event = { .name = f.poke, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .data = { .self = &value, .v = &counted_vtable } };
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = f.actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .event = &event }) == TA_OK);
     counted_release(&value);
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(f.system, &(ta_actor_capture_params){ .actor = f.actor, .out = &image }) == TA_OK);
@@ -204,7 +204,7 @@ static void test_capture_skips_a_released_origin(void) {
     ta_event event = { .name = f.poke, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .origin = { .kind = TA_ORIGIN_ACTOR,
                                    .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = origin } } };
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = f.actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .event = &event }) == TA_OK);
     ta_address_release(origin); /* core's references are now the last */
     run_to_stable(&f);          /* ...and releasing the event frees the address */
     capture_and_destroy(&f);

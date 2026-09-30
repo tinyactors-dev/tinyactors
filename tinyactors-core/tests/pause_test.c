@@ -382,7 +382,7 @@ static ta_run_status resume_once(run *r) {
         CHECK(ta_system_intern_atom(r->system, STR("refused"), &atom) == TA_OK);
         ta_event refused = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
         CHECK(ta_event_name_intern(r->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &refused.name) == TA_OK);
-        CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .actor = r->actor, .event = &refused }) == TA_ERR_BUSY);
+        CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &refused }) == TA_ERR_BUSY);
     }
     return status;
 }
@@ -402,7 +402,7 @@ static void deliver(run *r, const char *name) {
     ta_event_name_id event_name = 0;
     CHECK(ta_event_name_intern(r->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &event_name) == TA_OK);
     ta_event event = { .name = event_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .actor = r->actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &event }) == TA_OK);
 }
 
 /* The active states, by ID, appended to the trace. */

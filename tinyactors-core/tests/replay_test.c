@@ -10,7 +10,7 @@
  * - its invocations are active in core, events of the run being replayed
  *   reach their <finalize>, and publishing retires them as unavailable;
  * - the result codes of ta_actor_prepare(), ta_actor_publish() and
- *   ta_actor_set_time(), and withdrawing a held send;
+ *   a time on every input and publish's `at` (ADR 0094), and withdrawing a held send;
  * - publishing runs out of memory without changing anything, at every
  *   allocation it makes.
  */
@@ -355,11 +355,18 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
     return name;
 }
 
-static void deliver(ta_system *system, ta_actor_id actor, const char *event) {
+/* An input at `time` (ADR 0094 section 1), run to idle. */
+static void deliver_at(ta_system *system, ta_actor_id actor, const char *event, ta_time time) {
     ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                            .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered,
+                                                               .time = time }) == TA_OK);
     CHECK(run(system, actor) == TA_RUN_STABLE);
+}
+
+/* An input to a live actor, at the system's time. */
+static void deliver(ta_system *system, ta_actor_id actor, const char *event) {
+    deliver_at(system, actor, event, ta_system_time(system));
 }
 
 static ta_state_id state_of(ta_system *system, ta_actor_id actor, const char *id) {
@@ -402,6 +409,11 @@ static ta_actor_id prepare_replaying(ta_system *system, ta_definition_id definit
 
 static ta_result publish(ta_system *system, ta_actor_id actor) {
     return ta_actor_publish(system, &(ta_actor_publish_params){ .actor = actor });
+}
+
+/* Publishes a replaying actor after its last clock move, to `at`. */
+static ta_result publish_at(ta_system *system, ta_actor_id actor, ta_time at) {
+    return ta_actor_publish(system, &(ta_actor_publish_params){ .actor = actor, .at = &at });
 }
 
 static uint32_t dispatch(ta_system *system) {
@@ -451,14 +463,11 @@ static void test_timeline_timeout_to_self(void) {
     int routed_before = routed;
     CHECK(ta_system_set_time(system, 7000 + 7u * 24u * 3600u * 1000u) == TA_OK); /* a week later */
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
-    CHECK(ta_actor_set_time(system, replay, 1000) == TA_OK);
-    deliver(system, replay, "e1");
+    deliver_at(system, replay, "e1", 1000);
     CHECK(pending_sends(system, replay) == 0); /* held, not pending */
-    CHECK(ta_actor_set_time(system, replay, 6500) == TA_OK); /* t1 and b1 fired: dropped */
-    deliver(system, replay, "timeout");
+    deliver_at(system, replay, "timeout", 6500); /* t1 and b1 fired: dropped */
     CHECK(in_state(system, replay, "timedout"));
-    CHECK(ta_actor_set_time(system, replay, 7000) == TA_OK);
-    CHECK(publish(system, replay) == TA_OK);
+    CHECK(publish_at(system, replay, 7000) == TA_OK);
     ta_time deadline = 0;
     CHECK(ta_system_next_deadline(system, &deadline) == TA_ERR_NOT_FOUND);
     CHECK(routed == routed_before && logs_written == 1 && invoker_starts == 0);
@@ -477,10 +486,8 @@ static void test_timeline_fired_before_stop(void) {
 
     int routed_before = routed;
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
-    CHECK(ta_actor_set_time(system, replay, 1000) == TA_OK);
-    deliver(system, replay, "e1");
-    CHECK(ta_actor_set_time(system, replay, 7000) == TA_OK);
-    CHECK(publish(system, replay) == TA_OK);
+    deliver_at(system, replay, "e1", 1000);
+    CHECK(publish_at(system, replay, 7000) == TA_OK);
     CHECK(pending_sends(system, replay) == 0);
     CHECK(dispatch(system) == 0 && routed == routed_before);
     destroy_system(system);
@@ -498,10 +505,8 @@ static void test_timeline_pending_at_stop(void) {
     CHECK(ta_system_set_time(system, 7u * 24u * 3600u * 1000u) == TA_OK); /* a week later */
     int routed_before = routed;
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
-    CHECK(ta_actor_set_time(system, replay, 1000) == TA_OK);
-    deliver(system, replay, "e1");
-    CHECK(ta_actor_set_time(system, replay, 3000) == TA_OK); /* d = 6000 > 3000: still held */
-    CHECK(publish(system, replay) == TA_OK);
+    deliver_at(system, replay, "e1", 1000);
+    CHECK(publish_at(system, replay, 3000) == TA_OK); /* d = 6000 > 3000: still held */
     CHECK(pending_sends(system, replay) == 2);
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, replay, &view) == TA_OK);
@@ -524,10 +529,8 @@ static void test_timeline_crash_between_commits(void) {
 
     int routed_before = routed;
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
-    CHECK(ta_actor_set_time(system, replay, 1000) == TA_OK);
-    deliver(system, replay, "e1");
-    CHECK(ta_actor_set_time(system, replay, 3000) == TA_OK);
-    CHECK(publish(system, replay) == TA_OK);
+    deliver_at(system, replay, "e1", 1000);
+    CHECK(publish_at(system, replay, 3000) == TA_OK);
     CHECK(dispatch(system) == 2 && routed == routed_before + 2); /* again */
     destroy_system(system);
 }
@@ -556,8 +559,7 @@ static void test_replay_matches_live_run(void) {
 
     ta_actor_id copy = prepare_replaying(system, definition, &copy_address, 0);
     for (size_t index = 0; index < sizeof inputs / sizeof inputs[0]; index += 1) {
-        CHECK(ta_actor_set_time(system, copy, inputs[index].at) == TA_OK);
-        deliver(system, copy, inputs[index].event);
+        deliver_at(system, copy, inputs[index].event, inputs[index].at);
     }
     CHECK(routed == routed_live);
     CHECK(publish(system, copy) == TA_OK);
@@ -628,10 +630,9 @@ static void test_replayed_invocation_finalizes(void) {
     CHECK(invoker_forwards == 0);
     ta_event reply = { .name = event_name(system, "svc.reply"), .type = TA_EVENT_EXTERNAL, .invoke_id = job };
     CHECK(ta_system_set_time(system, 10) == TA_OK);
-    CHECK(ta_actor_set_time(system, replay, 10) == TA_OK);
     CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .actor = replay, .invoke_id = job,
                                                                      .kind = TA_INVOKE_REPORT_EVENT,
-                                                                     .as.event = &reply }) == TA_OK);
+                                                                     .time = 10, .as.event = &reply }) == TA_OK);
     CHECK(run(system, replay) == TA_RUN_STABLE);
     CHECK(in_state(system, replay, "finished_job"));
     CHECK(invoker_starts == 0 && invoker_cancels == 0 && invoker_forwards == 0);
@@ -678,21 +679,30 @@ static void test_result_codes(void) {
     CHECK(ta_actor_prepare(system, &(ta_actor_prepare_params){ .address = &address_a, .definition = 12345,
                                                                .out = &out }) == TA_ERR_NOT_FOUND);
 
-    /* set_time */
+    /* an input's time (ADR 0094 section 1) */
     ta_actor_id live = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &live }) == TA_OK);
     CHECK(run(system, live) == TA_RUN_STABLE);
-    CHECK(ta_actor_set_time(system, live, 0) == TA_ERR_INVALID); /* not replaying */
+    ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1, .time = 5 }) ==
+          TA_ERR_INVALID); /* a live actor's input is at the system's time */
     CHECK(ta_system_set_time(system, 100) == TA_OK);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 20);
-    CHECK(ta_actor_set_time(system, replay, 10) == TA_ERR_INVALID);  /* backwards */
-    CHECK(ta_actor_set_time(system, replay, 101) == TA_ERR_INVALID); /* the future */
-    ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1 }) == TA_OK);
-    CHECK(ta_actor_set_time(system, replay, 30) == TA_ERR_BUSY);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 10 }) ==
+          TA_ERR_INVALID); /* backwards */
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 101 }) ==
+          TA_ERR_INVALID); /* the future */
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 25 }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 30 }) ==
+          TA_ERR_BUSY);
     CHECK(publish(system, replay) == TA_ERR_BUSY); /* inside a macrostep */
     CHECK(run(system, replay) == TA_RUN_STABLE);
-    CHECK(ta_actor_set_time(system, replay, 30) == TA_OK);
+    ta_time before = 20;
+    CHECK(ta_actor_publish(system, &(ta_actor_publish_params){ .actor = replay, .at = &before }) ==
+          TA_ERR_INVALID); /* publish's `at` is not earlier than the clock */
+    ta_time live_at = 100;
+    CHECK(ta_actor_publish(system, &(ta_actor_publish_params){ .actor = live, .at = &live_at }) ==
+          TA_ERR_INVALID); /* `at` is for a replaying actor only */
 
     /* withdraw reaches a held send */
     ta_send_id t1 = 0;

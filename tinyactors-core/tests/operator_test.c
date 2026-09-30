@@ -427,7 +427,7 @@ static ta_run_status settle(run *r, uint32_t action_budget) {
 
 static ta_result offer(run *r, const char *name, const ta_operator_transition *transition) {
     ta_event event = { .name = event_name(r, name), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    return ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .actor = r->actor, .event = &event,
+    return ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &event,
                                                                   .transition = transition });
 }
 

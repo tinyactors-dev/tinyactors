@@ -1017,7 +1017,7 @@ static void tah_sched_report_one(tah_sched *sched, const tah_turn_params *params
         .ends = envelope->report != TAH_REPORT_QUARANTINED,
     };
     *params->inside_core = true;
-    ta_result result = ta_actor_report_invoke(params->core, &(ta_invoke_report_params){
+    ta_result result = ta_actor_report_invoke(params->core, &(ta_invoke_report_params){ .time = ta_system_time(params->core),
                                                                 .actor = actor,
                                                                 .invoke_id = envelope->event.invoke_id,
                                                                 .kind = TA_INVOKE_REPORT_ERROR,
@@ -1101,7 +1101,7 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
     uint64_t host_seq = sched->observer.self != NULL && sched->observer.host_seq != NULL
                             ? sched->observer.host_seq(sched->observer.self, head)
                             : 0;
-    ta_result result = ta_actor_deliver(params->core, &(ta_actor_deliver_params){
+    ta_result result = ta_actor_deliver(params->core, &(ta_actor_deliver_params){ .time = ta_system_time(params->core),
                                                          .actor = actor,
                                                          .event = &envelope->event,
                                                          .trace = trace,

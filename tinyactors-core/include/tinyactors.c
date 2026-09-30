@@ -1636,7 +1636,7 @@ typedef struct {
 typedef struct ta_activation_effects {
     ta_vec entries; /* ta_activation_effect, in authored order */
     /* A replaying actor (ADR 0089): it crosses no border until published,
-     * and `clock` is its own logical time, moved by ta_actor_set_time(). */
+     * and `clock` is its own logical time, moved by each input's time (ADR 0094). */
     bool replaying;
     ta_time clock;
     /* QUEUED records of the checkpoint the replay started from (ADR 0091)
@@ -1889,6 +1889,15 @@ TA_PRIVATE bool ta_actor_replaying(const ta_actor *actor);
 /* The time the actor lives at: a replaying actor's own clock, otherwise the
  * system's (ADR 0089 section 2). */
 TA_PRIVATE ta_time ta_actor_now(const ta_system *system, const ta_actor *actor);
+/* Whether `time` may be an input's time for `actor` (ADR 0094 section 1). */
+TA_PRIVATE bool ta_actor_input_time_valid(const ta_system *system, const ta_actor *actor, ta_time time);
+/* Moves a replaying actor's clock to a checked `time`, dropping held delayed
+ * sends due by then (ADR 0089 section 2); nothing for any other actor. */
+TA_PRIVATE void ta_actor_move_clock(ta_actor *actor, ta_time time);
+/* A replaying actor's clock moved by a record that is not an input (ADR 0090
+ * section 7's reducer): TA_ERR_INVALID, TA_ERR_BUSY or TA_ERR_NOT_FOUND as
+ * an input's time would be refused. */
+TA_PRIVATE ta_result ta_actor_advance_clock(ta_system *system, ta_actor_id actor, ta_time time);
 
 /* Materialized effects of an unpublished replacement's bootstrap. */
 TA_PRIVATE ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);
@@ -7137,6 +7146,9 @@ static ta_result ta_invoke_logged_error(ta_system *system, ta_actor *actor, cons
     if (logged) {
         ta_input_close(system, result == TA_OK);
     }
+    if (result == TA_OK) {
+        ta_actor_move_clock(actor, params->time); /* the report's time is now the actor's (ADR 0094) */
+    }
     return result;
 }
 
@@ -7152,6 +7164,9 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
     if (index < 0) {
         return TA_ERR_NOT_FOUND;
     }
+    if (!ta_actor_input_time_valid(system, actor, params->time)) {
+        return TA_ERR_INVALID;
+    }
     ta_event event = { .type = TA_EVENT_EXTERNAL, .invoke_id = params->invoke_id };
     switch (params->kind) {
         case TA_INVOKE_REPORT_EVENT:
@@ -7164,7 +7179,7 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
             /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace });
+                                                                  .trace = params->trace, .time = params->time });
         case TA_INVOKE_REPORT_DONE: {
             ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
             if (result != TA_OK) {
@@ -7175,7 +7190,7 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
             }
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace });
+                                                                  .trace = params->trace, .time = params->time });
         }
         case TA_INVOKE_REPORT_ERROR:
             return ta_invoke_logged_error(system, actor, params);
@@ -12432,7 +12447,9 @@ TA_API ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_para
     return TA_OK;
 }
 
-static uint32_t ta_actor_activation_send_count(const ta_actor *actor) {
+/* Held sends that publishing will schedule: all of them, or, with a clock
+ * move to `*at`, those due after it. */
+static uint32_t ta_actor_activation_send_count(const ta_actor *actor, const ta_time *at) {
     const ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse == NULL || sparse->activation_effects == NULL) {
         return 0;
@@ -12441,7 +12458,7 @@ static uint32_t ta_actor_activation_send_count(const ta_actor *actor) {
     const ta_vec *entries = &sparse->activation_effects->entries;
     for (uint32_t index = 0; index < entries->count; index += 1u) {
         const ta_activation_effect *effect = ta_vec_at(entries, index);
-        count += effect->kind == TA_ACTIVATION_SEND ? 1u : 0u;
+        count += effect->kind == TA_ACTIVATION_SEND && (at == NULL || effect->as.send.send.due > *at) ? 1u : 0u;
     }
     return count;
 }
@@ -12550,8 +12567,13 @@ TA_API ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_para
         return TA_ERR_BUSY;
     }
     bool replaying = ta_actor_replaying(actor);
+    /* A last clock move is only for a replaying actor (ADR 0094 section 1). */
+    const ta_time *at = params->at;
+    if (at != NULL && (!replaying || !ta_actor_input_time_valid(system, actor, *at))) {
+        return TA_ERR_INVALID;
+    }
     /* Everything that can fail comes first, so a refusal changes nothing. */
-    uint32_t sends = ta_actor_activation_send_count(actor);
+    uint32_t sends = ta_actor_activation_send_count(actor, at);
     ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &actor->sparse->timers, sends);
     if (result == TA_OK && replaying) {
         result = ta_invoke_prepare_retire(system, actor);
@@ -12561,6 +12583,9 @@ TA_API ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_para
     }
     if (result != TA_OK) {
         return result;
+    }
+    if (at != NULL) {
+        ta_actor_move_clock(actor, *at);
     }
     actor->published = true;
     actor->replacement_of = 0;
@@ -12579,27 +12604,35 @@ TA_API ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_para
     return TA_OK;
 }
 
-TA_API ta_result ta_actor_set_time(ta_system *system, ta_actor_id id, ta_time now) {
-    ta_actor *actor = ta_actor_lookup(system, id);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
+/*
+ * Whether `time` may be an input's time for `actor` (ADR 0094 section 1): a
+ * replaying actor's is no earlier than its clock and no later than the
+ * system's; every other actor's is the system's own.
+ */
+TA_PRIVATE bool ta_actor_input_time_valid(const ta_system *system, const ta_actor *actor, ta_time time) {
+    ta_time now = ta_clock_now(&system->clock);
     if (!ta_actor_replaying(actor)) {
-        return TA_ERR_INVALID;
+        return time == now;
+    }
+    return time >= actor->sparse->activation_effects->clock && time <= now;
+}
+
+/*
+ * Moves a replaying actor's clock to `time`, dropping every held delayed
+ * send due by then: time reached it in the run being replayed, so it fired
+ * then (ADR 0089 section 2). Nothing to do for any other actor. The caller
+ * has checked the time.
+ */
+TA_PRIVATE void ta_actor_move_clock(ta_actor *actor, ta_time time) {
+    if (!ta_actor_replaying(actor)) {
+        return;
     }
     ta_activation_effects *effects = actor->sparse->activation_effects;
-    if (now < effects->clock || now > ta_clock_now(&system->clock)) {
-        return TA_ERR_INVALID;
-    }
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
-        return TA_ERR_BUSY;
-    }
-    /* Time reached these sends in the run being replayed, so they fired. */
     ta_vec *entries = &effects->entries;
     uint32_t kept = 0;
     for (uint32_t index = 0; index < entries->count; index += 1u) {
         ta_activation_effect *effect = ta_vec_at(entries, index);
-        if (effect->kind == TA_ACTIVATION_SEND && effect->as.send.send.due <= now) {
+        if (effect->kind == TA_ACTIVATION_SEND && effect->as.send.send.due <= time) {
             ta_activation_effect_release(effect);
             continue;
         }
@@ -12610,7 +12643,21 @@ TA_API ta_result ta_actor_set_time(ta_system *system, ta_actor_id id, ta_time no
         entries->count = kept;
         ta_actor_touch(actor);
     }
-    effects->clock = now;
+    effects->clock = time;
+}
+
+TA_PRIVATE ta_result ta_actor_advance_clock(ta_system *system, ta_actor_id id, ta_time time) {
+    ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (!ta_actor_replaying(actor) || !ta_actor_input_time_valid(system, actor, time)) {
+        return TA_ERR_INVALID;
+    }
+    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
+        return TA_ERR_BUSY;
+    }
+    ta_actor_move_clock(actor, time);
     return TA_OK;
 }
 
@@ -12678,7 +12725,8 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     }
     const ta_operator_transition *transition = params->transition;
     if (!ta_event_name_valid(&system->event_names, event->name) || event->name == TA_EVENT_NAME_ROOT ||
-        (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition))) {
+        (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||
+        !ta_actor_input_time_valid(system, actor, params->time)) {
         return TA_ERR_INVALID;
     }
     /* Before busy: a finished actor never becomes free again (ADR 0055). */
@@ -12745,6 +12793,8 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
         ta_input_close(system, true);
         actor->sparse->log_released = false;
     }
+    /* Nothing below can fail: the input's time is now the actor's. */
+    ta_actor_move_clock(actor, params->time);
     ta_event_slots *slots = &actor->event_block->slots;
     ta_event_retain(&accepted, &slots->external_event);
     slots->external = TA_EXTERNAL_WAITING;
@@ -21408,6 +21458,7 @@ static ta_result ta_input_apply_event(ta_system *system, const ta_input_context 
                                               .actor = apply->actor->record.id,
                                               .event = &event,
                                               .transition = record->kind == TA_RECORD_JUMP ? &jump.transition : NULL,
+                                              .time = record->time,
                                           });
     }
     ta_input_jump_free(system, &jump);
@@ -21441,6 +21492,7 @@ static ta_result ta_input_apply_report(ta_system *system, const ta_input_context
                                                     .actor = apply->actor->record.id,
                                                     .invoke_id = invoke,
                                                     .kind = TA_INVOKE_REPORT_ERROR,
+                                                    .time = apply->record->time,
                                                     .as.error = &error,
                                                 });
     }
@@ -21482,7 +21534,7 @@ static ta_result ta_input_apply(ta_system *system, const ta_input_context *apply
         case TA_RECORD_ABANDONED: {
             /* The macrostep it ended is still open in the replay. */
             ta_result result = ta_actor_abandon(system, id);
-            return result == TA_OK ? ta_actor_set_time(system, id, record->time) : result;
+            return result == TA_OK ? ta_actor_advance_clock(system, id, record->time) : result;
         }
         case TA_RECORD_RELEASED:
             *step = TA_REPLAY_RELEASE;
@@ -21509,7 +21561,7 @@ static ta_result ta_input_apply(ta_system *system, const ta_input_context *apply
     if (ta_input_runaway_stopped(system, apply->actor)) {
         return TA_ERR_BUSY;
     }
-    ta_result result = ta_actor_set_time(system, id, record->time);
+    ta_result result = ta_actor_advance_clock(system, id, record->time);
     if (result != TA_OK) {
         return result;
     }

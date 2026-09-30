@@ -211,7 +211,7 @@ static void deliver(fixture *f, ta_actor_id actor, const char *name) {
     CHECK(ta_system_intern_atom(f->system, (ta_str){ .ptr = name, .len = (uint32_t)strlen(name) }, &atom) == TA_OK);
     ta_event_name_id event = 0;
     CHECK(ta_event_name_intern(f->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &event) == TA_OK);
-    CHECK(ta_actor_deliver(f->system, &(ta_actor_deliver_params){
+    CHECK(ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .time = ta_system_time(f->system),
                                           .actor = actor,
                                           .event = &(ta_event){ .name = event, .type = TA_EVENT_EXTERNAL } }) == TA_OK);
     run(f, actor);

@@ -87,7 +87,7 @@ static ta_external_event_submit_status tat_direct_submit(void *self,
             return TA_EXTERNAL_EVENT_ERROR;
         }
     }
-    ta_result result = ta_actor_deliver(self, &(ta_actor_deliver_params){ .actor = id, .event = &delivery->event, .trace = delivery->trace });
+    ta_result result = ta_actor_deliver(self, &(ta_actor_deliver_params){ .time = ta_system_time(self), .actor = id, .event = &delivery->event, .trace = delivery->trace });
     if (result == TA_OK) {
         return TA_EXTERNAL_EVENT_ACCEPTED;
     }
@@ -591,7 +591,7 @@ static ta_op_status tat_invoker_cancel(void *self, uint64_t service_handle, ta_f
 
 static ta_op_status tat_invoker_forward(void *self, const ta_invoker_forward_params *params) {
     tat_scxml_invoker *invoker = self;
-    if (ta_actor_deliver(invoker->system, &(ta_actor_deliver_params){ .actor = params->service_handle, .event = params->event }) != TA_OK) {
+    if (ta_actor_deliver(invoker->system, &(ta_actor_deliver_params){ .time = ta_system_time(invoker->system), .actor = params->service_handle, .event = params->event }) != TA_OK) {
         tat_invoker_fault(params->fault, "invoker.scxml: the child did not accept the event");
         return TA_OP_ERROR;
     }

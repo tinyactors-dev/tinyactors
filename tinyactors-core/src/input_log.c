@@ -1100,6 +1100,7 @@ static ta_result ta_input_apply_event(ta_system *system, const ta_input_context 
                                               .actor = apply->actor->record.id,
                                               .event = &event,
                                               .transition = record->kind == TA_RECORD_JUMP ? &jump.transition : NULL,
+                                              .time = record->time,
                                           });
     }
     ta_input_jump_free(system, &jump);
@@ -1133,6 +1134,7 @@ static ta_result ta_input_apply_report(ta_system *system, const ta_input_context
                                                     .actor = apply->actor->record.id,
                                                     .invoke_id = invoke,
                                                     .kind = TA_INVOKE_REPORT_ERROR,
+                                                    .time = apply->record->time,
                                                     .as.error = &error,
                                                 });
     }
@@ -1174,7 +1176,7 @@ static ta_result ta_input_apply(ta_system *system, const ta_input_context *apply
         case TA_RECORD_ABANDONED: {
             /* The macrostep it ended is still open in the replay. */
             ta_result result = ta_actor_abandon(system, id);
-            return result == TA_OK ? ta_actor_set_time(system, id, record->time) : result;
+            return result == TA_OK ? ta_actor_advance_clock(system, id, record->time) : result;
         }
         case TA_RECORD_RELEASED:
             *step = TA_REPLAY_RELEASE;
@@ -1201,7 +1203,7 @@ static ta_result ta_input_apply(ta_system *system, const ta_input_context *apply
     if (ta_input_runaway_stopped(system, apply->actor)) {
         return TA_ERR_BUSY;
     }
-    ta_result result = ta_actor_set_time(system, id, record->time);
+    ta_result result = ta_actor_advance_clock(system, id, record->time);
     if (result != TA_OK) {
         return result;
     }

@@ -209,7 +209,7 @@ static void deep_states(void) {
     ta_run_status status = TA_RUN_ERROR;
     CHECK(resume(system, actor, &status) == TA_OK && status == TA_RUN_STABLE);
     ta_event event = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
     CHECK(resume(system, actor, &status) == TA_OK && status == TA_RUN_STABLE);
     ta_state_id b = 0;
     CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){ .definition = id, .id = STR("b"),

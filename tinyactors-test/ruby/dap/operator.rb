@@ -55,7 +55,7 @@ module DAP
       event = { name: context.event_name(EVENT), type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE,
                 data: data }
       context.ta.actor.deliver(system: context.system_handle, actor: thread.handle, event: event,
-                               transition: { source: source, targets: ids })[:result]
+                               transition: { source: source, targets: ids }, time: context.now)[:result]
     end
 
     def jump_refusal(thread, targets, from, result)

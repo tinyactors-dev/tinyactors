@@ -121,7 +121,7 @@ int main(void) {
         return fail("the event name cannot be interned");
     }
     ta_event event = { .name = go, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    if (ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) != TA_OK ||
+    if (ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) != TA_OK ||
         ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) != TA_OK) {
         return fail("the event is not delivered");
     }

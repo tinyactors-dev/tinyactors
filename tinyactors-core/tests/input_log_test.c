@@ -571,7 +571,7 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 static void deliver(ta_system *system, ta_actor_id actor, const char *event) {
     ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                            .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &delivered }) == TA_OK);
     CHECK(run(system, actor) == TA_RUN_STABLE);
 }
 
@@ -879,7 +879,7 @@ static void test_golden_records(void) {
     ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL,
                     .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = from.as.actor },
                     .invoke_id = TA_INVOKE_ID_NONE, .data = data };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1, .host_seq = 41 }) ==
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = live, .event = &e1, .host_seq = 41 }) ==
           TA_OK);
     ta_scxml_target_release(&from);
     CHECK(run(system, live) == TA_RUN_STABLE);
@@ -901,7 +901,7 @@ static void test_golden_records(void) {
     ta_state_id timedout = state_of(system, live, "timedout");
     ta_event jump_event = { .name = event_name(system, "operator.jump"), .type = TA_EVENT_PLATFORM,
                             .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system),
                                        .actor = live, .event = &jump_event,
                                        .transition = &(ta_operator_transition){ .source = TA_STATE_NONE,
                                                                                  .targets = &timedout,
@@ -968,7 +968,7 @@ static void test_golden_operations(void) {
     CHECK(ta_actor_inspect(system, job, &view) == TA_OK && view.invoke_count == 1);
     ta_value report_data = blob_make(4, 1);
     ta_invoke_error error = { .reason = STR("boom"), .data = &report_data, .ends = true };
-    CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .actor = job, .invoke_id = view.invokes[0].id,
+    CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .time = ta_system_time(system), .actor = job, .invoke_id = view.invokes[0].id,
                                                                      .kind = TA_INVOKE_REPORT_ERROR,
                                                                      .as.error = &error }) == TA_OK);
     CHECK(run(system, job) == TA_RUN_STABLE && in_state(system, job, "failed"));
@@ -979,7 +979,7 @@ static void test_golden_operations(void) {
     ta_actor_id spin = spawn_named(system, chains, &chain_address);
     expect_record(&want, TA_RECORD_SPAWNED, 1, 0, (const field[]){ TXT("chains"), TXT("c"), TXT("v1") }, 3, NULL);
     ta_event go = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = spin, .event = &go }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = spin, .event = &go }) == TA_OK);
     expect_record(&want, TA_RECORD_EVENT, 2, 0,
                   (const field[]){ NUM(TA_EVENT_EXTERNAL), NUM(0), TXT("go"), ABSENT, ABSENT, ABSENT, ABSENT }, 7,
                   NULL);
@@ -990,7 +990,7 @@ static void test_golden_operations(void) {
                                                             .no_microstep_limit = true }) == TA_OK);
     CHECK(status == TA_RUN_STABLE && in_state(system, spin, "rest"));
     expect_record(&want, TA_RECORD_RELEASED, 3, 0, NULL, 0, NULL);
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = spin, .event = &go }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = spin, .event = &go }) == TA_OK);
     expect_record(&want, TA_RECORD_EVENT, 4, 0,
                   (const field[]){ NUM(TA_EVENT_EXTERNAL), NUM(0), TXT("go"), ABSENT, ABSENT, ABSENT, ABSENT }, 7,
                   NULL);
@@ -1193,7 +1193,7 @@ static void test_replay_operations(void) {
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, job, &view) == TA_OK && view.invoke_count == 1);
     ta_invoke_error error = { .reason = STR("boom"), .ends = true };
-    CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .actor = job, .invoke_id = view.invokes[0].id,
+    CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .time = ta_system_time(system), .actor = job, .invoke_id = view.invokes[0].id,
                                                                      .kind = TA_INVOKE_REPORT_ERROR,
                                                                      .as.error = &error }) == TA_OK);
     CHECK(run(system, job) == TA_RUN_STABLE);
@@ -1211,12 +1211,12 @@ static void test_replay_operations(void) {
     ta_actor_id spin = spawn_named(system, chains, &chain_address);
     ta_event go = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = spin, .event = &go }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = spin, .event = &go }) == TA_OK);
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = spin, .budget = 100, .status = &status }) ==
           TA_ERR_RUNAWAY);
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = spin, .budget = 100, .status = &status,
                                                             .no_microstep_limit = true }) == TA_OK);
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = spin, .event = &go }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = spin, .event = &go }) == TA_OK);
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = spin, .budget = 100, .status = &status }) ==
           TA_ERR_RUNAWAY);
     CHECK(ta_actor_abandon(system, spin) == TA_OK);
@@ -1242,7 +1242,7 @@ static void test_replay_operations(void) {
                                                                         .actor = live, .event = &queued }) == TA_OK);
     CHECK(ta_system_set_time(system, 1000) == TA_OK);
     ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1, .host_seq = 3 }) ==
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = live, .event = &e1, .host_seq = 3 }) ==
           TA_OK);
     CHECK(run(system, live) == TA_RUN_STABLE);
     CHECK(ta_system_write_host_record(system, &(ta_host_record_params){ .address = &address_a,
@@ -1254,7 +1254,7 @@ static void test_replay_operations(void) {
     ta_state_id idle = state_of(system, live, "idle");
     ta_event jump_event = { .name = event_name(system, "operator.jump"), .type = TA_EVENT_PLATFORM,
                             .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system),
                                        .actor = live, .event = &jump_event,
                                        .transition = &(ta_operator_transition){ .source = TA_STATE_NONE,
                                                                                  .targets = &idle,
@@ -1291,7 +1291,7 @@ static void test_refusals(void) {
 
     /* a sink that refuses the unit */
     the_sink.refuse_begin = true;
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1 }) == TA_ERR_NOMEM);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = live, .event = &e1 }) == TA_ERR_NOMEM);
     the_sink.refuse_begin = false;
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, live, &view) == TA_OK && !view.macrostep_in_progress);
@@ -1300,7 +1300,7 @@ static void test_refusals(void) {
     long refused = 0;
     for (long at = 0;; at += 1) {
         the_sink.refuse_at = at;
-        ta_result result = ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1 });
+        ta_result result = ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = live, .event = &e1 });
         the_sink.refuse_at = -1;
         if (result == TA_OK) {
             break;
@@ -1319,7 +1319,7 @@ static void test_refusals(void) {
     durable_refuses = true;
     ta_event back = { .name = event_name(system, "timeout"), .type = TA_EVENT_EXTERNAL,
                       .invoke_id = TA_INVOKE_ID_NONE, .data = data };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &back }) ==
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = live, .event = &back }) ==
           TA_ERR_UNSUPPORTED);
     durable_refuses = false;
     CHECK(the_sink.log.len == before && in_state(system, live, "waiting"));
@@ -1585,7 +1585,7 @@ static void test_checkpoint_owed(void) {
     }
     CHECK(ta_system_set_time(system, 1000) == TA_OK);
     ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1, .host_seq = 3 }) ==
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = live, .event = &e1, .host_seq = 3 }) ==
           TA_OK);
     CHECK(run(system, live) == TA_RUN_STABLE);
     memory_sink cp = { .refuse_at = -1 };
@@ -1705,7 +1705,7 @@ static void test_checkpoint_refusals(void) {
 
     /* busy: inside a macrostep */
     ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1 }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = live, .event = &e1 }) == TA_OK);
     CHECK(checkpoint_into(system, live, &cp, &with_root) == TA_ERR_BUSY);
     CHECK(run(system, live) == TA_RUN_STABLE);
 
@@ -1801,7 +1801,7 @@ static void test_checkpoint_invocation(void) {
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, job, &view) == TA_OK && view.invoke_count == 1);
     ta_invoke_error error = { .reason = STR("boom"), .ends = true };
-    CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .actor = job, .invoke_id = view.invokes[0].id,
+    CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .time = ta_system_time(system), .actor = job, .invoke_id = view.invokes[0].id,
                                                                      .kind = TA_INVOKE_REPORT_ERROR,
                                                                      .as.error = &error }) == TA_OK);
     CHECK(run(system, job) == TA_RUN_STABLE);

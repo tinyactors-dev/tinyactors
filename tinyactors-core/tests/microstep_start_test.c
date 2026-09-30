@@ -338,7 +338,7 @@ static void deliver(run *r, const char *name, const char *target) {
     ta_event event = { .name = event_name(r->system, name), .type = TA_EVENT_EXTERNAL,
                        .invoke_id = TA_INVOKE_ID_NONE };
     ta_operator_transition transition = { .source = TA_STATE_NONE, .targets = targets, .target_count = 1 };
-    ta_actor_deliver_params params = { .actor = r->actor, .event = &event,
+    ta_actor_deliver_params params = { .actor = r->actor, .event = &event, .time = ta_system_time(r->system),
                                        .transition = target == NULL ? NULL : &transition };
     ta_result result = ta_actor_deliver(r->system, &params);
     if (result == TA_ERR_NOMEM) {
@@ -457,7 +457,7 @@ static void check_start(run *r, const start_case *c) {
     /* Paused inside a microstep: busy, and not to be abandoned (ADR 0082). */
     ta_event refused = { .name = event_name(r->system, "refused"), .type = TA_EVENT_EXTERNAL,
                          .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .actor = r->actor, .event = &refused }) ==
+    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &refused }) ==
           TA_ERR_BUSY);
     CHECK(ta_actor_abandon(r->system, r->actor) == TA_ERR_BUSY);
 

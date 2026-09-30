@@ -163,7 +163,7 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 
 static void deliver(ta_system *system, ta_actor_id actor, const char *name) {
     ta_event event = { .name = event_name(system, name), .type = TA_EVENT_EXTERNAL };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
 }
 
 static bool in_state(ta_system *system, ta_actor_id actor, const char *id) {
@@ -392,10 +392,10 @@ static void test_block_cache_on_demand(void) {
     CHECK(resume(bare, actor) == TA_RUN_STABLE);
     ta_event event = { .name = event_name(bare, "go"), .type = TA_EVENT_EXTERNAL };
     fail_at = allocations + 1u;
-    CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_ERR_NOMEM);
+    CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .time = ta_system_time(bare), .actor = actor, .event = &event }) == TA_ERR_NOMEM);
     fail_at = 0;
     CHECK(in_state(bare, actor, "a"));
-    CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .time = ta_system_time(bare), .actor = actor, .event = &event }) == TA_OK);
     CHECK(resume(bare, actor) == TA_RUN_STABLE);
     CHECK(in_state(bare, actor, "b"));
     ta_system_destroy(bare);

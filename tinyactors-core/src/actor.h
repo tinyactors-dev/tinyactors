@@ -34,7 +34,7 @@ typedef struct {
 typedef struct ta_activation_effects {
     ta_vec entries; /* ta_activation_effect, in authored order */
     /* A replaying actor (ADR 0089): it crosses no border until published,
-     * and `clock` is its own logical time, moved by ta_actor_set_time(). */
+     * and `clock` is its own logical time, moved by each input's time (ADR 0094). */
     bool replaying;
     ta_time clock;
     /* QUEUED records of the checkpoint the replay started from (ADR 0091)
@@ -287,6 +287,15 @@ bool ta_actor_replaying(const ta_actor *actor);
 /* The time the actor lives at: a replaying actor's own clock, otherwise the
  * system's (ADR 0089 section 2). */
 ta_time ta_actor_now(const ta_system *system, const ta_actor *actor);
+/* Whether `time` may be an input's time for `actor` (ADR 0094 section 1). */
+bool ta_actor_input_time_valid(const ta_system *system, const ta_actor *actor, ta_time time);
+/* Moves a replaying actor's clock to a checked `time`, dropping held delayed
+ * sends due by then (ADR 0089 section 2); nothing for any other actor. */
+void ta_actor_move_clock(ta_actor *actor, ta_time time);
+/* A replaying actor's clock moved by a record that is not an input (ADR 0090
+ * section 7's reducer): TA_ERR_INVALID, TA_ERR_BUSY or TA_ERR_NOT_FOUND as
+ * an input's time would be refused. */
+ta_result ta_actor_advance_clock(ta_system *system, ta_actor_id actor, ta_time time);
 
 /* Materialized effects of an unpublished replacement's bootstrap. */
 ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);

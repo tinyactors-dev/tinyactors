@@ -578,7 +578,9 @@ export interface System {
    * It bootstraps like a spawned actor. `binding` defaults to the
    * incumbent's live data root when `definition` uses the JavaScript data
    * model. With `at`, it is a replaying actor: its clock starts at `at` and
-   * moves only with PreparedActor.setTime() and replay(), and it crosses no
+   * moves to the time of each input it takes (core ADR 0094): a message
+   * sent to it is taken at the system's time, and replay() gives each
+   * record its logged time. It crosses no
    * border (no sends, logs or invoker starts leave it) until it is
    * published. With `log`, the start of an actor's input log holding at
    * least its first record, it is a replaying actor made from that record
@@ -1651,13 +1653,6 @@ export interface PreparedActor<Data extends object> extends Actor<Data> {
   readonly incumbent?: ActorID;
   /** True when it was prepared with `at` or `log` (core ADR 0089, napi ADR 0034). */
   readonly replaying: boolean;
-  /**
-   * Move a replaying actor's clock forward to `time`: not before its clock,
-   * not after the system's time, and only between macrosteps. Held delayed
-   * sends due by then are dropped: they fired in the run being replayed.
-   * `invalid` for an actor that is not replaying, `busy` inside a macrostep.
-   */
-  setTime(time: number): void;
   /**
    * Replay the rest of this actor's input log into it (napi ADR 0034
    * section 3): `inputs` is byte chunks cut anywhere, read a chunk at a

@@ -820,29 +820,38 @@
             "builtin": "uint64_t"
           },
           "doc": "The host's number for a message it logged as `queued` (ADR 0090 section 6), which the actor's `event` record carries; 0 for none."
+        },
+        {
+          "name": "time",
+          "type": {
+            "type": "ta_time"
+          },
+          "doc": "The input's logical time (ADR 0094 section 1). For a published actor, or one prepared without `at`, it is ta_system_time(). For a replaying actor it is no earlier than its previous input's and no later than the system's, and the actor's clock moves to it: every held delayed send due by then is dropped (ADR 0089 section 2). Anything else is TA_ERR_INVALID."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "actor": 0,
             "event": 8,
             "trace": 16,
             "transition": 64,
-            "host_seq": 72
+            "host_seq": 72,
+            "time": 80
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "actor": 0,
             "event": 8,
             "trace": 16,
             "transition": 64,
-            "host_seq": 72
+            "host_seq": 72,
+            "time": 80
           }
         }
       }
@@ -2018,7 +2027,7 @@
     },
     "ta_actor_prepare_params": {
       "kind": "struct",
-      "doc": "An unpublished actor (ADR 0037, ADR 0089): one the directory does not know. With `incumbent`, a resident named actor of the definition's family, it will replace that actor; with `incumbent` 0 it will take `address`, in the definition's family, which must then have no resident actor when it is published. `trace` is what its bootstrap runs under (ADR 0067).\n\n`at`, when non-null, makes a replaying actor (ADR 0089): its bootstrap and every later macrostep run on its own clock, which starts at `*at` (no later than ta_system_time()) and moves only with ta_actor_set_time(), and it crosses no border until it is published: its immediate sends and logs are dropped, its delayed sends are held, and its invocations become active without calling an invoker. Without `at`, its visible bootstrap effects are held and released by ta_actor_publish(), as for a replacement.",
+      "doc": "An unpublished actor (ADR 0037, ADR 0089): one the directory does not know. With `incumbent`, a resident named actor of the definition's family, it will replace that actor; with `incumbent` 0 it will take `address`, in the definition's family, which must then have no resident actor when it is published. `trace` is what its bootstrap runs under (ADR 0067).\n\n`at`, when non-null, makes a replaying actor (ADR 0089): its bootstrap and every later macrostep run on its own clock, which starts at `*at` (no later than ta_system_time()) and moves with each input's time (ADR 0094), and it crosses no border until it is published: its immediate sends and logs are dropped, its delayed sends are held, and its invocations become active without calling an invoker. Without `at`, its visible bootstrap effects are held and released by ta_actor_publish(), as for a replacement.",
       "fields": [
         {
           "name": "incumbent",
@@ -2145,23 +2154,38 @@
             "type": "ta_actor_id"
           },
           "doc": "The incumbent given to ta_actor_prepare(), or 0 for none."
+        },
+        {
+          "name": "at",
+          "type": {
+            "pointer": {
+              "type": "ta_time",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true,
+          "doc": "A replaying actor's last clock move before it is published (ADR 0094 section 1): the moment the run being replayed stopped. Held delayed sends due by then are dropped, the rest are scheduled. Null for none; given for any other actor, or earlier than its clock, or later than ta_system_time(), it is TA_ERR_INVALID."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 16,
+          "size": 24,
           "align": 8,
           "offsets": {
             "actor": 0,
-            "incumbent": 8
+            "incumbent": 8,
+            "at": 16
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 16,
+          "size": 24,
           "align": 8,
           "offsets": {
             "actor": 0,
-            "incumbent": 8
+            "incumbent": 8,
+            "at": 16
           }
         }
       }
@@ -11015,6 +11039,13 @@
           }
         },
         {
+          "name": "time",
+          "type": {
+            "type": "ta_time"
+          },
+          "doc": "The report's logical time, as ta_actor_deliver_params.time (ADR 0094)."
+        },
+        {
           "name": "as",
           "type": {
             "record": {
@@ -11074,31 +11105,33 @@
       },
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "actor": 0,
             "invoke_id": 8,
             "kind": 16,
             "trace": 24,
-            "as": 72,
-            "as.event": 72,
-            "as.done_data": 72,
-            "as.error": 72
+            "time": 72,
+            "as": 80,
+            "as.event": 80,
+            "as.done_data": 80,
+            "as.error": 80
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "actor": 0,
             "invoke_id": 8,
             "kind": 16,
             "trace": 24,
-            "as": 72,
-            "as.event": 72,
-            "as.done_data": 72,
-            "as.error": 72
+            "time": 72,
+            "as": 80,
+            "as.event": 80,
+            "as.done_data": 80,
+            "as.error": 80
           }
         }
       }
@@ -19902,43 +19935,6 @@
           },
           "shape": "single",
           "direction": "in"
-        }
-      ]
-    },
-    {
-      "name": "ta_actor_set_time",
-      "doc": "Moves a replaying actor's clock to `now` (ADR 0089 section 2): not earlier than its clock, and not later than ta_system_time(). Every held delayed send due at or before `now` is dropped: time reached it in the run being replayed, so it fired then. - TA_ERR_INVALID: the actor is not replaying, or `now` breaks that rule. - TA_ERR_BUSY: the actor is inside a macrostep. - TA_ERR_NOT_FOUND: no resident actor has this ID.",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "system",
-          "type": {
-            "pointer": {
-              "type": "ta_system"
-            }
-          },
-          "shape": "handle",
-          "direction": "in"
-        },
-        {
-          "name": "actor",
-          "type": {
-            "type": "ta_actor_id"
-          }
-        },
-        {
-          "name": "now",
-          "type": {
-            "type": "ta_time"
-          }
         }
       ]
     },
