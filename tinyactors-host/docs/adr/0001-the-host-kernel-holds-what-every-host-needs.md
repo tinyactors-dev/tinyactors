@@ -1,6 +1,6 @@
 # ADR 0001: The host kernel holds what every host needs
 
-**Status:** Proposed (2026-09-30). Turns `docs/proposals/host-kernel.md` into a decision, earlier than it planned, with the test host as the second consumer. Core ADR 0094 and kernel ADR 0002 depend on it.
+**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Turns `docs/proposals/host-kernel.md` into a decision, earlier than it planned, with the test host as the second consumer. Core ADR 0094 and kernel ADR 0002 depend on it.
 **Date:** 2026-09-30
 
 ## Context
@@ -386,3 +386,28 @@ larger scope during an API outage.
 - **The scenario runner does not rebuild the test host** when kernel sources
   change. `mise run test` does, through the build step, so a scenario run
   alone after a kernel edit needs `mise run build` first.
+
+### Step 8: verification (2026-09-30)
+
+- **`mise run test:full --all` passed** at `4933310`:
+  - core;
+  - the kernel: native tests, ASan and UBSan, `check-recursion`, and
+    `check-freestanding` for `wasm32-freestanding` with no C library;
+  - the test host: 537 of 537 scenarios, the exhaustive ones included;
+  - napi: its suites, IRP 176/176 on Node and Bun, and `scale.js` to a
+    million actors on Node and Bun, with zero steady-state calls into the
+    addon and core.
+- **The first full run failed 18 exhaustive scenarios,** the out-of-memory
+  and tracing sweeps. Their probe delivery carried no time, which core ADR
+  0094 made an argument of every input, so core answered `err_invalid`
+  before the admission test. The fast pass does not run those sweeps, so
+  it went unnoticed from step 3 until here. Fixed in `4933310`.
+- **`bench-compare 3a1eaa1`** (the commit before step 2), 100,000 actors;
+  Node on machine 84c362297e3d, Bun on bbe6bf531954:
+  - the two-run pass flagged five rows: Node `decoded` heap +8.6% and
+    `summary 10%` ns +5.2%, and Bun RSS on three traced variants;
+  - rerun with four runs, **nothing is outside the 5% rule on either
+    runtime**. Node untraced is 664 → 664 ns/event, Bun untraced 572 → 568;
+  - allocations per event are unchanged at 0.01, and native bytes per actor
+    move by at most +3% on traced variants;
+  - the flags were run-to-run noise, as earlier steps' reruns also found.

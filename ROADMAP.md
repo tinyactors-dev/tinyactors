@@ -33,7 +33,7 @@ are in [`docs/proposals/`](docs/proposals/README.md).
   revised by the next item.
 - [ ] **Build out the rest of the napi JavaScript API.** The remaining
   steps of [the napi roadmap](tinyactors-napi/ROADMAP.md#steps).
-- [ ] **Migrate to the host kernel, with the write-ahead log in it.**
+- [x] **Migrate to the host kernel, with the write-ahead log in it.**
   Decided in [kernel ADR 0001](tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md),
   [kernel ADR 0002](tinyactors-host/docs/adr/0002-the-kernel-keeps-the-write-ahead-log.md),
   [core ADR 0094](tinyactors-core/docs/adr/0094-every-input-carries-its-time-and-the-input-log-leaves-core.md)
@@ -83,9 +83,14 @@ are in [`docs/proposals/`](docs/proposals/README.md).
      and inspect mailboxes, dead letters and batches. Its persistence
      scenarios (input log, replay, checkpoints, compaction) move to hosted
      mode. Scenarios about core's semantics keep driving core directly.
-  8. **Verify:** `mise run test:full --all`, `bench-compare` against the
+  8. [x] **Verify:** `mise run test:full --all`, `bench-compare` against the
      commit before step 2, and allocations per event in napi. Update the
      kernel ADRs' implementation notes.
+     Done: `test:full --all` passed, and `bench-compare 3a1eaa1` found nothing
+     outside 5% on Node or Bun; see kernel ADR 0001, "Step 8". The kernel is
+     libc-free (it builds for `wasm32-freestanding`) and powers napi and the
+     test host.
+
 - [ ] **Bootstrap a browser build.** Core and the host kernel compiled to
   WebAssembly, with a JavaScript surface shared with napi. Core already
   compiles for `wasm32-freestanding`, but no build task or test covers

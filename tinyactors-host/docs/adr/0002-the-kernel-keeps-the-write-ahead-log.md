@@ -1,6 +1,6 @@
 # ADR 0002: The kernel keeps the write-ahead log
 
-**Status:** Proposed (2026-09-30). Takes over the input log from core ADR 0090 (sections 3 to 7) and core ADR 0091 (its byte form), as core ADR 0094 decides. Keeps the behaviour of napi ADRs 0032 to 0034 and 0036, with one change of vocabulary: a message has an identity.
+**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Takes over the input log from core ADR 0090 (sections 3 to 7) and core ADR 0091 (its byte form), as core ADR 0094 decides. Keeps the behaviour of napi ADRs 0032 to 0034 and 0036, with one change of vocabulary: a message has an identity.
 **Date:** 2026-09-30
 
 ## Context
