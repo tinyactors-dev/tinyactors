@@ -948,6 +948,10 @@ static void tah_checkpoint_parts(tah_checkpoint_out *out, const tah_checkpoint_h
     tah_system *system = out->system;
     const ta_actor_state *state = &header->state;
     ta_atom scxml = ta_system_scxml_io_type(system->core);
+    /* A delayed send to the actor itself names its session (core ADR 0066):
+     * it is written as "self", so a restore points it at the new session. */
+    ta_actor_inspection inspection = { 0 };
+    uint64_t session = ta_actor_inspect(system->core, header->actor, &inspection) == TA_OK ? inspection.session_id : 0;
     for (uint32_t index = 0; index < state->send_count && out->failure == TA_OK; index += 1u) {
         const ta_delayed_send_info *send = &state->sends[index];
         char send_text[128];
@@ -969,7 +973,7 @@ static void tah_checkpoint_parts(tah_checkpoint_out *out, const tah_checkpoint_h
         name = tah_replay_name(system, send->event, name_text, sizeof name_text);
         (void)ta_system_atom_text(system->core, send->io_type, &type);
         bool self = send->io_type == scxml && send->destination.kind == TA_ACTOR_REF_RUNTIME &&
-                    send->destination.as.runtime == 0;
+                    (send->destination.as.runtime == 0 || (session != 0 && send->destination.as.runtime == session));
         bool has_destination = send->io_type == scxml && !self &&
                                tah_checkpoint_destination(system, send, destination_text, sizeof destination_text,
                                                           &destination);
