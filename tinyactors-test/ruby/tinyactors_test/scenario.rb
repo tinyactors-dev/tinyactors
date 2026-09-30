@@ -338,10 +338,6 @@ module TinyactorsTest
     DISPATCH_BUDGET = 64
 
     attr_reader :now, :instruments, :trace, :run
-    # The Scheduler that runs the system after every step. The workbench and
-    # the debug adapter share it, and a debugger steers it (`monitor=`,
-    # `hold`, `stop!`).
-    attr_reader :scheduler
     # With count_allocations: how many allocations each logical
     # ta_actor_resume made, in order.
     attr_reader :resume_costs

@@ -42,18 +42,6 @@ CData          AGENTS.md                                                 # examp
 traceId        tinyactors-napi/tools/otel-demo.js                        # OTLP/JSON field
 spanId         tinyactors-napi/tools/otel-demo.js                        # OTLP/JSON field
 
-# Field names of the Debug Adapter Protocol, which the test host's adapter
-# reads and writes as the protocol spells them, and the shared transcripts
-# write in their examples.
-threadId          tinyactors-test/{ruby/dap/*.rb,ruby/dap_selftest.rb,dap/README.md} # DAP field
-frameId           tinyactors-test/{ruby/dap/*.rb,ruby/dap_selftest.rb,dap/README.md} # DAP field
-dataId            tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
-hitBreakpointIds  tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
-exceptionId       tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
-systemProcessId   tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
-filterId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
-targetId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
-
 # llvm-readobj's name for a Mach-O header's CPU type, which the C release
 # matches to check a binary's architecture.
 CpuType        mise/lib/c_release/build.rb                               # llvm-readobj output field

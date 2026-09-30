@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-#MISE description="Build, then run the jq and ECMAScript data model, population scale, smoke, bindings, bindings generator, DSL, runner, instruments, workbench, and debug adapter self-tests, the shared DAP transcripts, the SCXML IRP import check, the export round-trip check, and scenario suites (the exhaustive scenarios, and the largest populations, only with --full)"
-#MISE sources=["bin/**/*", "bindings.rb", "dap/**/*", "ruby/**/*", "src/**/*", "tests/**/*", "vendor/**/*", "workbench/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-host/include/**/*", "../tinyactors-host/src/**/*", "../tinyxml/include/**/*", "../tinyxml/src/**/*", "../tinyactors-scxml/include/**/*", "../tinyactors-scxml/src/**/*", "../mise/lib/**/*", "../mise.toml"]
+#MISE description="Build, then run the jq and ECMAScript data model, population scale, smoke, bindings, bindings generator, DSL, runner, instruments, and workbench self-tests, the SCXML IRP import check, the export round-trip check, and scenario suites (the exhaustive scenarios, and the largest populations, only with --full)"
+#MISE sources=["bin/**/*", "bindings.rb", "ruby/**/*", "src/**/*", "tests/**/*", "vendor/**/*", "workbench/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-host/include/**/*", "../tinyactors-host/src/**/*", "../tinyxml/include/**/*", "../tinyxml/src/**/*", "../tinyactors-scxml/include/**/*", "../tinyactors-scxml/src/**/*", "../mise/lib/**/*", "../mise.toml"]
 #MISE outputs={auto=true}
 #USAGE flag "--full" help="Also run the exhaustive scenarios and the scale test's largest populations"
 
@@ -63,8 +63,6 @@ run_all([
   %w[ruby ruby/runner_selftest.rb],
   %w[ruby ruby/instruments_selftest.rb],
   %w[ruby ruby/workbench_selftest.rb],
-  %w[ruby ruby/dap_selftest.rb],
-  %w[ruby ruby/dap_transcripts.rb],
   %w[ruby ruby/scxml_irp_check.rb],
   %w[ruby ruby/export_roundtrip_check.rb]
 ], chdir: root)

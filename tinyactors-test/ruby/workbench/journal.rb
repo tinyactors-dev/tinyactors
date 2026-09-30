@@ -12,9 +12,6 @@ module Workbench
     LEVELS = %i[chart info warn error].freeze
 
     attr_reader :entries
-    # Called with each Entry as it is recorded, when set: the debug adapter
-    # turns them into output events.
-    attr_accessor :listener
 
     def initialize(limit: 500)
       @limit = limit
@@ -31,7 +28,6 @@ module Workbench
 
       text.to_s.each_line(chomp: true) do |line|
         @entries << Entry.new(at: Time.now, level: level, text: line)
-        @listener&.call(@entries.last)
       end
       @entries.shift(@entries.size - @limit) if @entries.size > @limit
       @generation += 1

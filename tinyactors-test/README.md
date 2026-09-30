@@ -8,9 +8,7 @@ Human-readable diagnostics are written to standard error.
 The Ruby driver owns scenario descriptions, scheduling choices, assertions,
 generation, shrinking, and reports. Scheduling is one loop,
 `TinyactorsTest::Scheduler` (`ruby/tinyactors_test/scheduler.rb`), which the
-scenarios, the workbench and the debug adapter share; a debugger steers it
-by holding actors out of it, stopping it between two resumes, and choosing
-the budgets of each resume. The C host owns Tinyactors objects, test
+scenarios and the workbench share. The C host owns Tinyactors objects, test
 adapters, measurements, and calls into the production API.
 
 `rpc.h` and `rpc.c` implement reusable JSON-RPC parsing, dispatch, responses,
@@ -447,15 +445,6 @@ command pane delivers events and advances logical time.
 
 See `ruby/workbench/README.md` for the directory format, the reload semantics,
 and the commands. `ruby/workbench_selftest.rb` checks it against the live host.
-
-`bin/dap` (`mise run dap`) is a debug adapter for the same directories: any
-Debug Adapter Protocol client (VS Code, nvim-dap, Emacs dape) can launch a
-workbench, stop and step its actors on `action_budget: 1`, set line
-breakpoints in the chart files, look at their data, configuration, queues
-and timers, send them events and move the clock. See
-`ruby/dap/README.md`; `ruby/dap_selftest.rb` checks it over pipes, and
-`ruby/dap_transcripts.rb` plays the DAP transcripts it shares with napi's
-adapter (`dap/README.md`).
 
 ## Vendored dependencies
 
