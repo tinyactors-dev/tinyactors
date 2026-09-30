@@ -379,3 +379,15 @@ an allocation failed. Both are fixed:
   refused makes `tah_replay_redeliver()` answer out of memory. A delivery of mail queued before the log was on numbers it the
   same way, and waits a turn when it cannot. The sweep now writes a
   checkpoint while the ping is still owed and restores it.
+- **An actor stranded with its mail.** When `tah_sched_requeue()` could
+  not push an actor back onto the ready or runnable queue, the scheduler
+  quarantined it with a `schedule` fault: it kept its mail, and the system
+  reported itself quiet. napi ADR 0008 makes out of memory retryable, not
+  a fault. Now the actor keeps its state (`READY` or `RUNNABLE`) and is
+  marked `TAH_SCHED_STRANDED`; the next turn walks the table once and puts
+  it back on its queue, and the scheduler is not quiet while any actor is
+  stranded. The walk costs time only after a requeue ran out of memory. No
+  memory per actor: the mark is the last free bit of an entry's flags, and
+  `tah_sched` gains one counter. The sweep now fails the allocations of
+  the turns too, and a fast sweep fails every allocation of the turns
+  that take the owed ping.

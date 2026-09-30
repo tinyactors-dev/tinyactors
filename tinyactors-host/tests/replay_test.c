@@ -32,7 +32,9 @@
  *   once in turn: the step answers NOMEM, leaves no actor behind and
  *   leaks nothing, and done again it succeeds. The sweep is exhaustive:
  *   the fast pass fails the first eight allocations and every 16th after,
- *   TAH_FULL=1 (mise run test --full) every one.
+ *   TAH_FULL=1 (mise run test --full) every one. The turns that take the
+ *   owed ping fail too, and every allocation of theirs is failed in the
+ *   fast pass: a quiet system holds no mail it could deliver.
  */
 #include "check.h"
 #include <string.h>
@@ -1526,10 +1528,10 @@ static bool replay_failing_at(uint64_t at) {
     uint64_t owed_id = 0;
     CHECK(tah_map_get(&system->inputs.seqs, tah_sched_lookup(&system->sched, out.actor)->first, &owed_id));
     CHECK(owed_id == pending_id);
-    paused = true; /* the turns are the scheduler's, not the replay's */
+    /* The turns that deliver it fail too: the system is quiet only once it has. */
     run(system, NULL);
-    paused = false;
     CHECK(in_state(system, out.actor, "three"));
+    CHECK(first_mail(system, out.actor) == NULL);
     static log_buffer written;
     checkpoint_or_retry(system, out.actor, &written);
     drop(system, out.actor);
@@ -1541,6 +1543,36 @@ static bool replay_failing_at(uint64_t at) {
     fail_at = 0;
     finish_system(system);
     return done;
+}
+
+/*
+ * The turns that take the owed ping after a replay, each of their
+ * allocations failed once in turn: a turn allocates little, so this sweep
+ * is fast. The ping is delivered in the end, and the system is quiet only
+ * then: an actor whose requeue ran out of memory is not left with it.
+ */
+static void turns_survive_every_failed_allocation(void) {
+    for (uint64_t at = 1;; at += 1u) {
+        CHECK(at < 200u);
+        fail_at = 0;
+        tah_system *system = make_system(2);
+        ta_definition_id definition = define_ping(system);
+        advance(system, 1000);
+        restore_run out = { .definition = definition };
+        CHECK(restore(system, live_log.bytes, live_log.length, &out) == TA_OK);
+        allocations = 0;
+        failed = false;
+        fail_at = at;
+        run(system, NULL);
+        CHECK(in_state(system, out.actor, "three"));
+        CHECK(first_mail(system, out.actor) == NULL);
+        bool done = !failed;
+        fail_at = 0;
+        finish_system(system);
+        if (done) {
+            break;
+        }
+    }
 }
 
 /*
@@ -1581,6 +1613,7 @@ int main(void) {
     a_send_waiting_at_a_checkpoint_is_restored();
     a_send_taken_after_the_checkpoint_is_not_sent_again();
     a_send_left_as_an_orphan_is_not_sent_again();
+    turns_survive_every_failed_allocation();
     survives_every_failed_allocation(exhaustive ? 1u : 16u);
     puts("replay test passed");
     return 0;

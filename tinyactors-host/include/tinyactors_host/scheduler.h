@@ -89,7 +89,11 @@ enum {
     TAH_SCHED_REPLAYING = 1u << 5,
     /* The input log wrote `released` for the macrostep a release() lifted
      * the microstep limit of (kernel ADR 0002); cleared with UNLIMITED. */
-    TAH_SCHED_RELEASE_NOTED = 1u << 6
+    TAH_SCHED_RELEASE_NOTED = 1u << 6,
+    /* READY or RUNNABLE, but on neither queue: putting it back ran out of
+     * memory. The next turn puts it on the queue its state names, and the
+     * scheduler is not quiet until it has. */
+    TAH_SCHED_STRANDED = 1u << 7
 };
 
 typedef struct {
@@ -324,6 +328,7 @@ typedef struct {
     /* Trace parents of queued traced messages (ta_trace_parent). */
     tah_free_list traces;
     uint32_t known;         /* entries not in state NONE */
+    uint32_t stranded;      /* entries marked TAH_SCHED_STRANDED, at most (a turn recounts) */
     /* Accepted messages not yet delivered or reported: mailboxes plus the dead list. */
     uint32_t queued;
     uint32_t max_queued;    /* 0: no limit (ADR 0005 point 9) */

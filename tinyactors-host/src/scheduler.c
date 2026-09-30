@@ -629,7 +629,7 @@ ta_result tah_sched_abandoned(tah_sched *sched, ta_actor_id actor) {
 
 bool tah_sched_quiet(const tah_sched *sched) {
     return tah_ring_count(&sched->runnable) == 0 && tah_ring_count(&sched->ready) == 0 && sched->dead_count == 0 &&
-           tah_ring_count(&sched->settled) == 0;
+           tah_ring_count(&sched->settled) == 0 && sched->stranded == 0;
 }
 
 uint32_t tah_sched_mailbox_count(const tah_sched *sched, ta_actor_id actor) {
@@ -870,21 +870,61 @@ static void tah_sched_fault(tah_sched *sched, const tah_turn_params *params, tah
     tah_sched_record(sched, params, record);
 }
 
-/* Puts an actor back at the end of `queue`; a failure is a fault. */
-static void tah_sched_requeue(tah_sched *sched, const tah_turn_params *params, tah_ring *queue, ta_actor_id actor) {
-    if (tah_ring_push(queue, &actor) != TA_OK) {
-        tah_sched_fault(sched, params, (tah_turn_record){ .actor = actor, .operation = "schedule", .code = TA_ERR_NOMEM });
+/*
+ * Puts an actor back at the end of `queue`, the one its state names. Out of
+ * memory, it is stranded: it keeps its state and its mail, and the next
+ * turn tries again (tah_sched_unstrand), so a quiet scheduler never holds
+ * an actor with work to do.
+ */
+static void tah_sched_requeue(tah_sched *sched, tah_ring *queue, ta_actor_id actor) {
+    if (tah_ring_push(queue, &actor) == TA_OK) {
+        return;
+    }
+    tah_sched_entry *entry = tah_sched_lookup(sched, actor);
+    if (entry != NULL && (entry->flags & TAH_SCHED_STRANDED) == 0) {
+        entry->flags |= TAH_SCHED_STRANDED;
+        sched->stranded += 1u;
     }
 }
 
+/*
+ * Puts stranded actors back on their queues, and recounts the ones still
+ * stranded. A walk of the table, only after a requeue ran out of memory.
+ */
+static void tah_sched_unstrand(tah_sched *sched) {
+    if (sched->stranded == 0) {
+        return;
+    }
+    uint32_t left = 0;
+    for (uint32_t page = 0; page < sched->pages.count; page += 1u) {
+        tah_sched_entry **entries = tah_vec_at(&sched->pages, page);
+        for (uint32_t at = 0; *entries != NULL && at < TAH_SCHED_PAGE_ENTRIES; at += 1u) {
+            tah_sched_entry *entry = &(*entries)[at];
+            if ((entry->flags & TAH_SCHED_STRANDED) == 0) {
+                continue;
+            }
+            tah_ring *queue = entry->state == TAH_SCHED_READY      ? &sched->ready
+                              : entry->state == TAH_SCHED_RUNNABLE ? &sched->runnable
+                                                                   : NULL;
+            ta_actor_id actor = ta_actor_id_make((page << TAH_SCHED_PAGE_BITS) | at, entry->generation);
+            if (queue != NULL && (left != 0 || tah_ring_push(queue, &actor) != TA_OK)) {
+                left += 1u; /* still no memory: the next turn tries again */
+                continue;
+            }
+            entry->flags &= (uint8_t)~TAH_SCHED_STRANDED;
+        }
+    }
+    sched->stranded = left;
+}
+
 /* A stable actor: ready when it has mail, idle otherwise. */
-static void tah_sched_settle(tah_sched *sched, const tah_turn_params *params, tah_sched_entry *entry, ta_actor_id actor) {
+static void tah_sched_settle(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor) {
     if (entry->first == 0) {
         entry->state = TAH_SCHED_IDLE;
         return;
     }
     entry->state = TAH_SCHED_READY;
-    tah_sched_requeue(sched, params, &sched->ready, actor);
+    tah_sched_requeue(sched, &sched->ready, actor);
 }
 
 static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params, ta_actor_id actor) {
@@ -898,7 +938,7 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
     }
     if ((entry->flags & TAH_SCHED_BACKOFF) != 0) {
         entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
-        tah_sched_requeue(sched, params, &sched->runnable, actor);
+        tah_sched_requeue(sched, &sched->runnable, actor);
         return;
     }
     if ((entry->flags & TAH_SCHED_UNLIMITED) != 0 && (entry->flags & TAH_SCHED_RELEASE_NOTED) == 0) {
@@ -923,7 +963,7 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
     /* The table is the addon's: core calls never move its pages. */
     if (result == TA_ERR_NOMEM) {
         entry->flags |= TAH_SCHED_BACKOFF;
-        tah_sched_requeue(sched, params, &sched->runnable, actor);
+        tah_sched_requeue(sched, &sched->runnable, actor);
         return;
     }
     if (result == TA_ERR_NOT_FOUND) {
@@ -942,7 +982,7 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
     }
     switch (status) {
     case TA_RUN_PAUSED:
-        tah_sched_requeue(sched, params, &sched->runnable, actor);
+        tah_sched_requeue(sched, &sched->runnable, actor);
         return;
     case TA_RUN_DONE:
         entry->flags &= (uint8_t)~(TAH_SCHED_UNLIMITED | TAH_SCHED_RELEASE_NOTED);
@@ -960,7 +1000,7 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
         entry->flags &= (uint8_t)~(TAH_SCHED_UNLIMITED | TAH_SCHED_RELEASE_NOTED);
         tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_STABLE, .ignored = ignored });
         (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_SETTLED, .actor = actor });
-        tah_sched_settle(sched, params, entry, actor);
+        tah_sched_settle(sched, entry, actor);
         return;
     }
 }
@@ -986,14 +1026,14 @@ static const ta_operator_transition *tah_sched_jump(const tah_turn_params *param
 
 /* The head envelope is a jump the actor does not accept: a dead letter with
  * reason `refused`, and the actor stands between macrosteps as before. */
-static void tah_sched_refuse_jump(tah_sched *sched, const tah_turn_params *params, tah_sched_entry *entry, ta_actor_id actor) {
+static void tah_sched_refuse_jump(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor) {
     uint32_t head = entry->first;
     entry->first = tah_sched_envelope(sched, head)->next;
     if (entry->first == 0) {
         entry->last = 0;
     }
     tah_sched_dead_append(sched, head, TAH_DEAD_REFUSED);
-    tah_sched_settle(sched, params, entry, actor);
+    tah_sched_settle(sched, entry, actor);
 }
 
 /*
@@ -1002,8 +1042,7 @@ static void tah_sched_refuse_jump(tah_sched *sched, const tah_turn_params *param
  * (`refused`), since no retry changes that; anything else, out of memory
  * above all, waits a turn.
  */
-static void tah_sched_log_refused(tah_sched *sched, const tah_turn_params *params, tah_sched_entry *entry,
-                                  ta_actor_id actor, ta_result result) {
+static void tah_sched_log_refused(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor, ta_result result) {
     if (result == TA_ERR_UNSUPPORTED) {
         uint32_t head = entry->first;
         entry->first = tah_sched_envelope(sched, head)->next;
@@ -1011,11 +1050,11 @@ static void tah_sched_log_refused(tah_sched *sched, const tah_turn_params *param
             entry->last = 0;
         }
         tah_sched_dead_append(sched, head, TAH_DEAD_REFUSED);
-        tah_sched_settle(sched, params, entry, actor);
+        tah_sched_settle(sched, entry, actor);
         return;
     }
     entry->flags |= TAH_SCHED_BACKOFF;
-    tah_sched_requeue(sched, params, &sched->ready, actor);
+    tah_sched_requeue(sched, &sched->ready, actor);
 }
 
 /* The core reason token of a report envelope (core ADR 0081). */
@@ -1040,7 +1079,7 @@ static void tah_sched_report_one(tah_sched *sched, const tah_turn_params *params
     ta_result logged = tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_REPORTING, .actor = actor,
                                                                    .envelope = head, .message = envelope });
     if (logged != TA_OK) {
-        tah_sched_log_refused(sched, params, entry, actor, logged);
+        tah_sched_log_refused(sched, entry, actor, logged);
         return;
     }
     ta_trace_parent trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0};
@@ -1066,7 +1105,7 @@ static void tah_sched_report_one(tah_sched *sched, const tah_turn_params *params
         if (result == TA_ERR_NOMEM) {
             entry->flags |= TAH_SCHED_BACKOFF; /* retryable (ADR 0008): try again next turn */
         }
-        tah_sched_requeue(sched, params, &sched->ready, actor);
+        tah_sched_requeue(sched, &sched->ready, actor);
         return;
     }
     entry->first = envelope->next;
@@ -1096,10 +1135,10 @@ static void tah_sched_report_one(tah_sched *sched, const tah_turn_params *params
     tah_envelope_give(sched, head);
     if (result == TA_OK) {
         entry->state = TAH_SCHED_RUNNABLE;
-        tah_sched_requeue(sched, params, &sched->runnable, actor);
+        tah_sched_requeue(sched, &sched->runnable, actor);
         return;
     }
-    tah_sched_settle(sched, params, entry, actor);
+    tah_sched_settle(sched, entry, actor);
 }
 
 /* Delivers the head envelope of a ready actor (ADR 0005 point 6). */
@@ -1110,7 +1149,7 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
     }
     if ((entry->flags & TAH_SCHED_BACKOFF) != 0) {
         entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
-        tah_sched_requeue(sched, params, &sched->ready, actor);
+        tah_sched_requeue(sched, &sched->ready, actor);
         return;
     }
     if (entry->first == 0) {
@@ -1130,14 +1169,14 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
     if (envelope->has_jump) {
         transition = tah_sched_jump(params, actor, envelope->jump, &jump);
         if (transition == NULL) {
-            tah_sched_refuse_jump(sched, params, entry, actor);
+            tah_sched_refuse_jump(sched, entry, actor);
             return;
         }
     }
     ta_result logged = tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERING, .actor = actor,
                                                                    .envelope = head, .message = envelope });
     if (logged != TA_OK) {
-        tah_sched_log_refused(sched, params, entry, actor, logged);
+        tah_sched_log_refused(sched, entry, actor, logged);
         return;
     }
     *params->inside_core = true;
@@ -1174,11 +1213,11 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
         tah_envelope_give(sched, head);
         sched->delivered += 1u;
         entry->state = TAH_SCHED_RUNNABLE;
-        tah_sched_requeue(sched, params, &sched->runnable, actor);
+        tah_sched_requeue(sched, &sched->runnable, actor);
         return;
     case TA_ERR_NOMEM:
         entry->flags |= TAH_SCHED_BACKOFF; /* retryable (ADR 0008): try again next turn */
-        tah_sched_requeue(sched, params, &sched->ready, actor);
+        tah_sched_requeue(sched, &sched->ready, actor);
         return;
     case TA_ERR_DONE:
         entry->state = TAH_SCHED_IDLE;
@@ -1193,7 +1232,7 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
             /* The actor does not accept the jump now (its source is no
              * longer active): the operator's input is at fault, not the
              * actor (ADR 0026). */
-            tah_sched_refuse_jump(sched, params, entry, actor);
+            tah_sched_refuse_jump(sched, entry, actor);
             return;
         }
         /*
@@ -1281,6 +1320,7 @@ void tah_sched_release_records(tah_sched *sched) {
 
 void tah_sched_turn(tah_sched *sched, const tah_turn_params *params) {
     tah_sched_release_records(sched);
+    tah_sched_unstrand(sched);
     /* Only actors queued before each phase began: a requeued actor waits for the next turn. */
     uint32_t pending = tah_ring_count(&sched->runnable);
     uint32_t limit = params->budgets.resumes < pending ? params->budgets.resumes : pending;
