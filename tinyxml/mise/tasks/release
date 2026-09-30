@@ -22,10 +22,6 @@ CRelease.release(
   project: project,
   directory: 'tinyxml',
   title: "txml #{argv.reject { |arg| arg.start_with?('--') }.first}",
-  summary: 'The first release of txml: a freestanding XML reader and writer in C, with no C library, ' \
-           'no I/O and no recursion. Each release has the header and the amalgamation to compile ' \
-           'yourself, prebuilt static and shared libraries for macOS (arm64) and Linux (x64, arm64; one ' \
-           'build for glibc and musl), and a standalone WebAssembly module with its own allocator.',
   argv: argv,
   checks: [%w[mise run amalgamate -- --check], %w[mise run test]],
   regenerate: [%w[mise run generate]],

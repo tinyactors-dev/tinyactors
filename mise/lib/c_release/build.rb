@@ -503,7 +503,7 @@ module CRelease
   # one builds on: fetched and matched against HEAD in the check stage,
   # left undefined in its libraries, linked beside them in the tests and
   # the smoke, and recorded in the manifest.
-  def release(project:, directory:, title:, summary:, argv:, checks:, regenerate:, tests:, smoke:,
+  def release(project:, directory:, title:, argv:, checks:, regenerate:, tests:, smoke:,
               readme:, sources:, extra_build: nil, extra_verify: nil, dependencies: [])
     publish = !argv.delete('--publish').nil?
     containers = argv.delete('--skip-containers').nil?
@@ -516,6 +516,7 @@ module CRelease
     Release.check_tree!(scope: [directory, 'mise'])
     tag = Release.check_version!(prefix, version)
     release_fail!("#{version} is a prerelease; C releases are MAJOR.MINOR.PATCH") if Release.parse_version(version)[3]
+    Release.check_changelog!(prefix: prefix, version: version)
     checks.each { |command| Release.run(*command, chdir: project.root) }
 
     out = project.root.join('build/release', version)
@@ -523,7 +524,7 @@ module CRelease
     external = fetched.flat_map { |dependency| api_functions(dependency[:api]) }.uniq.sort
     notes = out.join('notes.md')
     FileUtils.mkdir_p(out)
-    notes.write(Release.notes(prefix: prefix, path: prefix, title: title, summary: summary))
+    notes.write(Release.notes(prefix: prefix, version: version, title: title))
     subject = "release(#{directory}): v#{version}"
     changed = []
     committed = false

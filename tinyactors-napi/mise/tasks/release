@@ -62,6 +62,7 @@ if dev
   tag = nil
 else
   tag = Release.check_version!(PREFIX, version)
+  Release.check_changelog!(prefix: PREFIX, version: version)
 end
 names = ['@tinyactors/node'] + PLATFORMS.map { |platform| "@tinyactors/node-#{platform}" }
 taken = names.select { |name| Release.npm_published?(name, version) }
@@ -101,10 +102,7 @@ begin
   Release.fail!("package did not write #{missing.map { |t| t.basename.to_s }.join(', ')}") unless missing.empty?
   notes = RELEASE.join('notes.md')
   notes.write(dev ? "# @tinyactors/node #{version}\n\nA development build of #{Release.git('rev-parse', 'HEAD').strip}.\n" : Release.notes(
-    prefix: PREFIX, path: 'tinyactors-napi/', title: "@tinyactors/node #{version}",
-    summary: 'The first release of @tinyactors/node: SCXML statecharts as actors for Node.js and Bun, ' \
-             'on a native runtime. Prebuilt for macOS (arm64, x64) and Linux (x64, arm64; one addon for ' \
-             'glibc and musl), so installing needs no compiler.'
+    prefix: PREFIX, version: version, title: "@tinyactors/node #{version}"
   ))
   sums = Release.write_sha256sums(platforms + [main], RELEASE.join('SHA256SUMS'))
 

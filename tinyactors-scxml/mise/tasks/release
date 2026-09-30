@@ -31,11 +31,6 @@ CRelease.release(
   project: project,
   directory: 'tinyactors-scxml',
   title: "tinyactors-scxml #{argv.reject { |arg| arg.start_with?('--') }.first}",
-  summary: 'The first release of tinyactors-scxml: the SCXML 1.0 codec for tinyactors, which reads and writes ' \
-           'SCXML documents over txml, with no C library and no I/O. It ships only its own code: link the ' \
-           'tinyactors-core and tinyxml releases it names in its manifest beside it. Each release has the header ' \
-           'and the amalgamation to compile yourself, and prebuilt static and shared libraries for macOS (arm64) ' \
-           'and Linux (x64, arm64; one build for glibc and musl).',
   argv: argv,
   checks: [%w[mise run amalgamate -- --check], %w[mise run api -- --check], %w[mise run build],
            %w[mise run --force test]],

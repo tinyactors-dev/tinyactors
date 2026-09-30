@@ -131,23 +131,30 @@ module Release
     tag
   end
 
-  # Release notes: the Conventional Commits since the previous release that
-  # touch `path`, grouped by type. The first release has only `summary`: its
-  # history since the start of the repository is not a changelog.
-  def notes(prefix:, path:, title:, summary:)
-    previous = released_versions(prefix).last
-    return "# #{title}\n\n#{summary}\n" unless previous
+  # Release notes: the project's section of CHANGELOG.md for `version`
+  # (docs/adr/0002-changelogs.md). The release stops unless the section
+  # passes `mise run changelog:check`: an agent writes its summary from the
+  # evidence `changelog:draft` prints, and the release-changelog skill
+  # (.agents/skills/release-changelog) is how it gets there.
+  def notes(prefix:, version:, title:)
+    component, repo = check_changelog!(prefix: prefix, version: version)
+    section = Changelog::Document.section(Changelog::Check.changelog_text(repo, component), version)
+    "# #{title}\n\n#{Changelog::Document.release_body(section)}"
+  end
 
-    subjects = (git('log', '--format=%s', "#{prefix}v#{previous}..HEAD", '--', path) || '').lines.map(&:strip)
-    groups = { 'feat' => 'Features', 'fix' => 'Fixes' }
-    groups['perf'] = 'Performance'
-    sections = groups.filter_map do |type, heading|
-      lines = subjects.select { |subject| subject.match?(/\A#{type}(\([^)]*\))?!?:/) }
-      next if lines.empty?
-
-      "## #{heading}\n\n#{lines.map { |line| "- #{line}" }.join("\n")}\n"
+  # Fails the release unless the project's CHANGELOG.md has a section for
+  # `version` that passes `changelog:check`. A release task calls it in its
+  # check stage, before it builds anything; `notes` calls it again.
+  def check_changelog!(prefix:, version:)
+    require 'changelog' # changelog/repo.rb requires this file
+    component = Changelog.component(prefix)
+    repo = Changelog::Repo.new(REPO)
+    problems = Changelog::Check.problems(repo, component, version)
+    unless problems.empty?
+      fail!("#{component.changelog_path} is not fit to release #{version}:\n  #{problems.join("\n  ")}\n" \
+            "Write it with the release-changelog skill; `mise run changelog:check #{component.name} #{version}` repeats this check.")
     end
-    "# #{title}\n\nChanges since #{previous}.\n\n#{sections.join("\n")}"
+    [component, repo]
   end
 
   # Writes SHA256SUMS for `files` into `out`, one "<sha256>  <name>" per file.
