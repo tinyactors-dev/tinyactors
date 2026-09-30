@@ -123,6 +123,23 @@ All in a new `tinyactors-host/tests/replay_test.c`. The build finds
       0089 section 3), so nothing reads them.
     - Every project's tests run. Run `test:full`.
 
+13a. **`fix(host): a queued message keeps its ID when numbering it fails`**
+    - Found by commit 11's sweep: when `tah_inputs_number` (`src/inputs.c`)
+      runs out of memory, the message is queued without an ID, and
+      `tah_checkpoint_owed` leaves it out of a checkpoint, so it is lost
+      after a crash; a redelivered message loses its original ID the same
+      way. Refuse the input instead (nothing queued, `TA_ERR_NOMEM`), or
+      reserve the number before queueing.
+    - Extend commit 11's sweep to take the checkpoint while the message is
+      still owed.
+13b. **`fix(host): an actor whose requeue fails is not left with its mail`**
+    - Found by commit 11's sweep: when `tah_sched_requeue` cannot push an
+      actor onto the ready queue, the scheduler records a fault, the actor
+      keeps its mail, and the system reports itself quiet.
+    - Reserve the queue slot before it is needed, or keep the actor
+      runnable and retry, so a quiet system never holds undelivered mail.
+      Extend the sweep to fail allocations during the turns too.
+
 ## Phase D: make the kernel's headers opaque
 
 Napi reads or writes 32 of `tah_system`'s 43 fields about 277 times; the
