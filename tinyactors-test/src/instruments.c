@@ -222,7 +222,7 @@ static jv tat_send_target(const ta_send *send) {
 }
 
 /* The dotted text of an event name, or null when it cannot be formatted. */
-static jv tat_event_name_text(const ta_system *system, ta_event_name_id name) {
+jv tat_event_name_text(const ta_system *system, ta_event_name_id name) {
     if (system == NULL) {
         return jv_null();
     }

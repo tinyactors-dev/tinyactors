@@ -16,6 +16,7 @@ jv tat_hosted_close_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_spawn_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code);
+jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_advance_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_log_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_batches_method(tat_bind *bind, jv params, int *error_code);

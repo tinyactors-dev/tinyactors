@@ -114,7 +114,20 @@ reproducible. Scenarios about core's semantics keep using core directly.
   or a checkpoint followed by later records, is a log `hosted.restore`
   reads.
 - `hosted.turn` takes `{"system", "limit"?}`, runs turns until the system is
-  quiet or `limit` turns ran (default 1), and returns `{"turns", "quiet"}`.
+  quiet or `limit` turns ran (default 1), and returns `{"turns", "quiet",
+  "dead_letters"}`. `dead_letters` lists the dead letters those turns
+  reported, in order: `{"actor", "family"?, "name"?, "event", "reason",
+  "data"?}`, where `actor` is 0 and `family` and `name` name the address
+  when mail for a name found no actor, `reason` is the kernel's
+  (`tah_dead_reason_name`: `not-found`, `done`, `destroyed`, `unloaded`,
+  ...), and `data` is the message's data when it had any.
+- `hosted.mailboxes` takes `{"system", "actors"?}` and returns
+  `{"mailboxes", "queued", "delivered", "dead_letters"}`: for each actor ID
+  in `actors`, `{"actor", "state", "depth", "events"}` with its scheduling
+  state (`idle`, `ready`, `runnable`, `quarantined`, or `none` for an ID the
+  kernel does not know) and the names of the events in its mailbox, oldest
+  first; the messages queued and delivered so far; and the dead letters
+  reported so far, `{"total", "by_reason": {reason: count}}`.
 - `hosted.advance` takes `{"system", "time"}` and moves the scenario's
   clock, and core's time, to `time` milliseconds.
 - `hosted.log` takes `{"system", "families"}` and turns on the kernel's

@@ -57,6 +57,14 @@ TinyactorsTest.chart :hosted_seen do
   state :timedout
 end
 
+TinyactorsTest.chart :hosted_stopper do
+  state :running do
+    transition on: 'stop', target: :stopped
+    transition on: 'tick'
+  end
+  final :stopped
+end
+
 TinyactorsTest.scenarios 'hosted' do
   # Catches: the test host not linking the kernel, or a hosted system that
   # leaks what the kernel allocated for it.
@@ -98,6 +106,55 @@ TinyactorsTest.scenarios 'hosted' do
     assert hosted_run(hosted)[:quiet], 'the system is quiet after the mail was delivered'
     assert_equal [:sent], hosted_states(hosted, ping)
     assert_equal [:pinged], hosted_states(hosted, pong)
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: a post delivered at once instead of queued, a mailbox that
+  # loses its order, or a turn that leaves delivered mail in it.
+  scenario "mail waits in the kernel's mailbox, in order, until a turn" do
+    hosted = hosted_system
+    actor = hosted_spawn(hosted, hosted_define(hosted, :hosted_stopper))
+    hosted_run(hosted)
+    3.times { assert_equal 'ok', hosted_post(hosted, actor, 'tick') }
+    assert_equal 'ok', hosted_post(hosted, actor, 'stop')
+    boxes = hosted_mailboxes(hosted, actor)
+    assert_equal({ actor: actor, state: 'ready', depth: 4, events: %w[tick tick tick stop] }, boxes[:mailboxes].first)
+    assert_equal 4, boxes[:queued]
+    delivered = boxes[:delivered]
+    assert hosted_run(hosted)[:quiet]
+    assert_equal [], hosted_mailbox(hosted, actor)
+    assert_equal delivered + 4, hosted_mailboxes(hosted)[:delivered]
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: mail for a finished actor delivered, dropped silently, or
+  # reported without its data; dead-letter counters that miss it.
+  scenario 'mail for an actor that finished is a dead letter, with its data' do
+    hosted = hosted_system
+    actor = hosted_spawn(hosted, hosted_define(hosted, :hosted_stopper))
+    hosted_run(hosted)
+    hosted_post(hosted, actor, 'stop')
+    hosted_post_data(hosted, actor, 'tick', { n: 1 })
+    dead = hosted_run(hosted)[:dead_letters]
+    assert_equal [{ actor: actor, event: 'tick', reason: 'done', data: { n: 1 } }], dead
+    assert_equal({ total: 1, by_reason: { done: 1 } }, hosted_mailboxes(hosted)[:dead_letters])
+    assert_equal [], hosted_run(hosted)[:dead_letters], 'a dead letter is reported once'
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: mail that vanishes with the actor it waited for, or mail to
+  # a stale ID that joins the mailbox of whatever comes next.
+  scenario "an evicted actor's waiting mail, and mail to its old ID, are dead letters" do
+    hosted = hosted_system
+    actor = hosted_spawn(hosted, hosted_define(hosted, :hosted_stopper), family: 'hosted_stopper', name: 's')
+    hosted_run(hosted)
+    hosted_post(hosted, actor, 'tick')
+    assert_equal 'ok', hosted_evict(hosted, actor)
+    assert_equal 'ok', hosted_post(hosted, actor, 'stop')
+    dead = hosted_run(hosted)[:dead_letters]
+    assert_equal [{ actor: actor, event: 'tick', reason: 'destroyed' },
+                  { actor: actor, event: 'stop', reason: 'not-found' }], dead
+    assert_equal({ total: 2, by_reason: { destroyed: 1, 'not-found': 1 } }, hosted_mailboxes(hosted)[:dead_letters])
     assert_equal 0, close_hosted(hosted)
   end
 

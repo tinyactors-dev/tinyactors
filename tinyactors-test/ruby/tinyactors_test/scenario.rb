@@ -505,9 +505,24 @@ module TinyactorsTest
       rpc('hosted.post', system: hosted[:hosted], actor: actor, event: event.to_s)
     end
 
-    # Runs turns until the system is quiet, at most `limit`.
+    # Runs turns until the system is quiet, at most `limit`. Answers
+    # { turns:, quiet:, dead_letters: }, the dead letters those turns
+    # reported: { actor:, family:, name:, event:, reason:, data: } each,
+    # `family` and `name` for a name with no actor, `data` when it had any.
     def hosted_run(hosted, limit: 100)
       rpc('hosted.turn', system: hosted[:hosted], limit: limit)
+    end
+
+    # The kernel's mailboxes of `actors` and its counters: { mailboxes:
+    # [{ actor:, state:, depth:, events: }], queued:, delivered:,
+    # dead_letters: { total:, by_reason: { 'done' => n, ... } } }.
+    def hosted_mailboxes(hosted, *actors)
+      rpc('hosted.mailboxes', system: hosted[:hosted], actors: actors)
+    end
+
+    # The events waiting in `actor`'s mailbox, oldest first.
+    def hosted_mailbox(hosted, actor)
+      hosted_mailboxes(hosted, actor)[:mailboxes].first[:events]
     end
 
     # The kernel's input log (kernel ADR 0002) for `families`.

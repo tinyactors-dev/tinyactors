@@ -5,6 +5,7 @@
 #include <tinyactors_host.h>
 
 #include "allocator.h"
+#include "instruments.h"
 #include "json_datamodel.h"
 #include "rpc.h"
 #include "value_codec.h"
@@ -239,6 +240,30 @@ static void tat_hosted_take_batch(tat_hosted *hosted) {
     tah_inputs_release(inputs);
 }
 
+/* The turn's dead letters, from its records (kernel ADR 0001 section 5):
+ * {"actor", "family"?, "name"?, "event", "reason", "data"?} each. */
+static jv tat_hosted_dead_letters(tah_system *system, jv list) {
+    ta_system *core = tah_system_core(system);
+    for (const tah_turn_record *record = tah_sched_records(tah_system_sched(system)); record != NULL;
+         record = record->next) {
+        if (record->kind != TAH_RECORD_DEAD_LETTER) {
+            continue;
+        }
+        jv item = jv_object_set(jv_object(), jv_string("actor"), jv_number((double)record->actor));
+        if (record->has_address) {
+            item = jv_object_set(item, jv_string("family"), tat_hosted_text(record->address.family.name));
+            item = jv_object_set(item, jv_string("name"), tat_hosted_text(record->address.name));
+        }
+        item = jv_object_set(item, jv_string("event"), tat_event_name_text(core, record->event));
+        item = jv_object_set(item, jv_string("reason"), jv_string(tah_dead_reason_name(record->reason)));
+        if (record->data.v != NULL) {
+            item = jv_object_set(item, jv_string("data"), tat_value_encode(&record->data));
+        }
+        list = jv_array_append(list, item);
+    }
+    return list;
+}
+
 /* Runs turns until the system is quiet, at most `limit` (default 1). */
 jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
@@ -247,8 +272,10 @@ jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code) {
     }
     uint64_t limit = tat_hosted_u64(params, "limit");
     uint64_t turns = 0;
+    jv dead = jv_array();
     for (; turns < (limit == 0 ? 1 : limit); turns += 1) {
         tah_system_turn(hosted->system);
+        dead = tat_hosted_dead_letters(hosted->system, dead);
         tat_hosted_take_batch(hosted);
         tah_system_end_turn(hosted->system);
         if (tah_system_quiet(hosted->system)) {
@@ -257,7 +284,72 @@ jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code) {
         }
     }
     jv out = jv_object_set(jv_object(), jv_string("turns"), jv_number((double)turns));
-    return jv_object_set(out, jv_string("quiet"), jv_bool(tah_system_quiet(hosted->system)));
+    out = jv_object_set(out, jv_string("quiet"), jv_bool(tah_system_quiet(hosted->system)));
+    return jv_object_set(out, jv_string("dead_letters"), dead);
+}
+
+static const char *tat_hosted_state_name(tah_sched_state state) {
+    switch (state) {
+    case TAH_SCHED_IDLE:
+        return "idle";
+    case TAH_SCHED_READY:
+        return "ready";
+    case TAH_SCHED_RUNNABLE:
+        return "runnable";
+    case TAH_SCHED_QUARANTINED:
+        return "quarantined";
+    case TAH_SCHED_NONE:
+        break;
+    }
+    return "none";
+}
+
+/*
+ * The mailboxes of `actors` (kernel ADR 0001 section 5), each
+ * {"actor", "state", "depth", "events"}, with the queued events' names in
+ * delivery order, and the scheduler's counters: messages queued, delivered,
+ * and the dead letters reported so far, by reason.
+ */
+jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
+    tat_hosted *hosted = NULL;
+    if (!tat_hosted_resolve(bind, params, &hosted)) {
+        return tat_bind_take_error(bind, error_code);
+    }
+    tah_sched *sched = tah_system_sched(hosted->system);
+    ta_system *core = tah_system_core(hosted->system);
+    jv actors = jv_object_get(jv_copy(params), jv_string("actors"));
+    int count = jv_get_kind(actors) == JV_KIND_ARRAY ? jv_array_length(jv_copy(actors)) : 0;
+    jv boxes = jv_array();
+    for (int index = 0; index < count; index += 1) {
+        jv id = jv_array_get(jv_copy(actors), index);
+        ta_actor_id actor = jv_get_kind(id) == JV_KIND_NUMBER ? (ta_actor_id)jv_number_value(id) : 0;
+        jv_free(id);
+        jv events = jv_array();
+        for (uint32_t envelope = tah_sched_mailbox_first(sched, actor); envelope != 0;) {
+            tah_queued_message message = tah_sched_queued_message(sched, envelope);
+            events = jv_array_append(events, tat_event_name_text(core, message.event->name));
+            envelope = message.next;
+        }
+        jv box = jv_object_set(jv_object(), jv_string("actor"), jv_number((double)actor));
+        box = jv_object_set(box, jv_string("state"), jv_string(tat_hosted_state_name(tah_sched_state_of(sched, actor))));
+        box = jv_object_set(box, jv_string("depth"), jv_number((double)tah_sched_mailbox_count(sched, actor)));
+        boxes = jv_array_append(boxes, jv_object_set(box, jv_string("events"), events));
+    }
+    jv_free(actors);
+    tah_sched_stats stats;
+    tah_sched_read_stats(sched, &stats);
+    jv reasons = jv_object();
+    for (uint32_t reason = 0; reason < TAH_DEAD_REASONS; reason += 1u) {
+        if (stats.dead_by_reason[reason] != 0) {
+            reasons = jv_object_set(reasons, jv_string(tah_dead_reason_name((tah_dead_reason)reason)),
+                                    jv_number((double)stats.dead_by_reason[reason]));
+        }
+    }
+    jv dead = jv_object_set(jv_object(), jv_string("total"), jv_number((double)stats.dead_letters));
+    jv out = jv_object_set(jv_object(), jv_string("mailboxes"), boxes);
+    out = jv_object_set(out, jv_string("queued"), jv_number((double)stats.queued));
+    out = jv_object_set(out, jv_string("delivered"), jv_number((double)stats.delivered));
+    return jv_object_set(out, jv_string("dead_letters"), jv_object_set(dead, jv_string("by_reason"), reasons));
 }
 
 /* Moves the scenario's clock, and core's time with it, to `time` (ms). */
