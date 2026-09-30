@@ -1,6 +1,6 @@
 # ADR 0034: The input log is core's records, as bytes
 
-**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Applies core ADR 0090 (the input log, its byte layout and its replay) and core ADR 0091 (checkpoints). Would refine napi ADRs 0032 and 0033: the records become bytes core writes, the replay driver becomes core's reducer, and checkpoints are added.
+**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Applies core ADR 0090 (the input log, its byte layout and its replay) and core ADR 0091 (checkpoints). Would refine napi ADRs 0032 and 0033: the records become bytes core writes, the replay driver becomes core's reducer, and checkpoints are added. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-29
 
 ## Context

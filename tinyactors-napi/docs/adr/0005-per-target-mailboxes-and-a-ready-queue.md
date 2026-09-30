@@ -1,7 +1,7 @@
 # ADR 0005: Per-target mailboxes and a ready queue
 
 **Status:** Accepted; scheduling table and envelope free list added with ADR 0014; `send()` waiters and retained bytes added in ROADMAP step 12; Refined by napi ADR 0035: `maxQueuedMessages` and `maxRetainedBytes` are system parameters, set at creation.
-delivery results refined when step 6 was built
+delivery results refined when step 6 was built. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-23
 
 ## Context

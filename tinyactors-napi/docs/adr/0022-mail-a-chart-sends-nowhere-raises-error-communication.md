@@ -1,6 +1,6 @@
 # ADR 0022: Mail a chart sends nowhere raises `error.communication`
 
-**Status:** Accepted and implemented. Refines ADR 0006 point 4 and ADR 0008 point 1: mail a chart sends to a target that does not exist is no longer a dead letter. Refined by ADR 0032 section 2: mail for a session that has gone, of a family with a loader, waits for that loader instead of raising error.communication.
+**Status:** Accepted and implemented. Refines ADR 0006 point 4 and ADR 0008 point 1: mail a chart sends to a target that does not exist is no longer a dead letter. Refined by ADR 0032 section 2: mail for a session that has gone, of a family with a loader, waits for that loader instead of raising error.communication. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-25
 
 ## Context

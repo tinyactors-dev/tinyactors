@@ -1,6 +1,6 @@
 # ADR 0008: Faults are per actor
 
-**Status:** Accepted Refined by ADR 0022: a chart's mail to a target that does not exist is `error.communication` in the sender, not a dead letter; mail from JavaScript is unchanged. Refined by ADR 0025: quarantining an invoked child also tells its parent.
+**Status:** Accepted Refined by ADR 0022: a chart's mail to a target that does not exist is `error.communication` in the sender, not a dead letter; mail from JavaScript is unchanged. Refined by ADR 0025: quarantining an invoked child also tells its parent. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-23
 
 ## Context

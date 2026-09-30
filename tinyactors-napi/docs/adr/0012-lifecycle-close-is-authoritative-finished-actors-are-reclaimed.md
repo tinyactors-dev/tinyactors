@@ -1,6 +1,6 @@
 # ADR 0012: Lifecycle: close is authoritative, finished actors are reclaimed
 
-**Status:** Accepted
+**Status:** Accepted. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-23
 
 ## Context

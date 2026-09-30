@@ -1,6 +1,6 @@
 # ADR 0036: Parameters hold on every path
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0035 (a system is created with its parameters) on four points found while implementing it; core ADR 0093 settles the fifth, the event-block cache.
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0035 (a system is created with its parameters) on four points found while implementing it; core ADR 0093 settles the fifth, the event-block cache. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-29
 
 ## Context

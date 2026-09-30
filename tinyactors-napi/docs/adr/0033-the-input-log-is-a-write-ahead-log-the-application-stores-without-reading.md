@@ -1,6 +1,6 @@
 # ADR 0033: The input log is a write-ahead log the application stores without reading
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0032 sections 6 to 8: the batch shape, the loader's `{ replay }` answer, `requeue`, and eviction. It replaces the dispatch horizon (core ADR 0089 section 2) with a record per fired timer, for the reasons below. Refined by napi ADR 0034: entries carry bytes in core's layout instead of records, core writes and replays them, and checkpoints are added.
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0032 sections 6 to 8: the batch shape, the loader's `{ replay }` answer, `requeue`, and eviction. It replaces the dispatch horizon (core ADR 0089 section 2) with a record per fired timer, for the reasons below. Refined by napi ADR 0034: entries carry bytes in core's layout instead of records, core writes and replays them, and checkpoints are added. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-29
 
 ## Context

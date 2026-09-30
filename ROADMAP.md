@@ -78,7 +78,7 @@ gaps left or found on the way.
   reach into their fields. Make the types opaque behind functions, so a
   binding cannot depend on the kernel's layout. (Kernel ADR 0001, "Step
   2b".)
-- [ ] **Status-line pointers on the napi ADRs whose code moved.** Kernel ADR
+- [x] **Status-line pointers on the napi ADRs whose code moved.** Kernel ADR
   0001 section 6 lists them (0003 to 0008, 0012, 0014, 0016 to 0018, 0020,
   0022, 0032 to 0036), and only one carries a pointer to it.
 - [ ] **`parameterInfo()` labels the kernel's parameters as napi's.** Give

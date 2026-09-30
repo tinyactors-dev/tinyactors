@@ -1,6 +1,6 @@
 # ADR 0006: The addon routes actor-to-actor events
 
-**Status:** Accepted; named addresses use tinyactors-core ADR 0065 (proposed) Point 4 refined by ADR 0022: mail a chart sends to a target that does not exist raises `error.communication` in the sender instead of becoming a dead letter.
+**Status:** Accepted; named addresses use tinyactors-core ADR 0065 (proposed) Point 4 refined by ADR 0022: mail a chart sends to a target that does not exist raises `error.communication` in the sender instead of becoming a dead letter. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-23
 
 ## Context

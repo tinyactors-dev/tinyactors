@@ -1,7 +1,7 @@
 # ADR 0003: Singular calls are primary; enumeration is paged
 
 **Status:** Accepted; paging uses tinyactors-core ADR 0062. Amended by
-ROADMAP step 9: `actors()` inspects each actor when it reaches it.
+ROADMAP step 9: `actors()` inspects each actor when it reaches it. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-23
 
 ## Context

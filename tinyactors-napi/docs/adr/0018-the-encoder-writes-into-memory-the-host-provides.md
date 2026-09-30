@@ -1,6 +1,6 @@
 # ADR 0018: The encoder writes into memory the host provides
 
-**Status:** Accepted and implemented; see the implementation notes. It removed a copy and a zero-fill but did not measurably speed up the traced path. Refines ADR 0016 point 3 and ADR 0017 section 4.
+**Status:** Accepted and implemented; see the implementation notes. It removed a copy and a zero-fill but did not measurably speed up the traced path. Refines ADR 0016 point 3 and ADR 0017 section 4. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-25
 
 ## Context
