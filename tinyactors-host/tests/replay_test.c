@@ -27,7 +27,8 @@
  *   is written: after a crash, the restore sends it once; a FIRED after
  *   the checkpoint, or an eviction that leaves it as an orphan, drops it.
  * - Every allocation of the sequence (open, push, prepare, run, finish,
- *   publish, redeliver, and a checkpoint written and restored), failed
+ *   publish, redeliver, a checkpoint written while the mail is still owed
+ *   and restored, then one written after it is taken), failed
  *   once in turn: the step answers NOMEM, leaves no actor behind and
  *   leaks nothing, and done again it succeeds. The sweep is exhaustive:
  *   the fast pass fails the first eight allocations and every 16th after,
@@ -1497,9 +1498,10 @@ static void checkpoint_or_retry(tah_system *system, ta_actor_id actor, log_buffe
 /*
  * The whole sequence with its `at`th allocation failed: the live log
  * replayed in 16-byte pieces (open, push, prepare, run, finish, publish,
- * redeliver), then, once a turn has taken the owed ping, a checkpoint of
- * the result written and restored at the address in turn. Answers whether
- * an allocation failed.
+ * redeliver); a checkpoint written while the ping is still owed, and
+ * restored: the ping is back with its ID; then, once a turn has taken it,
+ * a checkpoint of the result written and restored at the address in turn.
+ * Answers whether an allocation failed.
  */
 static bool replay_failing_at(uint64_t at) {
     fail_at = 0;
@@ -1513,6 +1515,17 @@ static bool replay_failing_at(uint64_t at) {
     restore_run out = { .first = 16, .chunk = 16, .definition = definition };
     restore_or_retry(system, &live_log, &out);
     CHECK(out.redelivered == 1 && in_state(system, out.actor, "two"));
+    /* A checkpoint while the ping is still owed holds it, with its ID. */
+    static log_buffer owing;
+    checkpoint_or_retry(system, out.actor, &owing);
+    drop(system, out.actor);
+    out = (restore_run){ .first = 16, .chunk = 16, .definition = definition };
+    restore_or_retry(system, &owing, &out);
+    CHECK(out.redelivered == 1 && in_state(system, out.actor, "two"));
+    CHECK(first_mail(system, out.actor) != NULL);
+    uint64_t owed_id = 0;
+    CHECK(tah_map_get(&system->inputs.seqs, tah_sched_lookup(&system->sched, out.actor)->first, &owed_id));
+    CHECK(owed_id == pending_id);
     paused = true; /* the turns are the scheduler's, not the replay's */
     run(system, NULL);
     paused = false;

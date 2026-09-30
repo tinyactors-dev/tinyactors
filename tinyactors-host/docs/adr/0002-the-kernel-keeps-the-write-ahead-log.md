@@ -363,3 +363,19 @@ it, a checkpoint taken while it waited lost it after a crash. Core ADR
 `tah_replay_read_checkpoint()` already handed the flag to core; nothing
 else in the kernel changed. The tests are in `tests/replay_test.c`; core
 ADR 0095 lists them.
+
+### Step 4b: what the sweep found in the mailbox (2026-09-30)
+
+The replay sweep above avoided two paths where the kernel lost mail when
+an allocation failed. Both are fixed:
+- **A message queued without its ID.** `tah_inputs_number()` put the
+  message's ID in two maps after its `accepted` record was written, and
+  when a map could not grow the message was queued anyway, unnumbered.
+  `tah_checkpoint_owed()` skips unnumbered mail, so a checkpoint left it
+  out, and a message a replay redelivered lost its original ID the same
+  way. Now the ID is reserved first: the post is refused with out of
+  memory and nothing is queued, the same answer a batch that cannot grow
+  gives. A refused `accepted` takes the ID back. A redelivery that is
+  refused makes `tah_replay_redeliver()` answer out of memory. A delivery of mail queued before the log was on numbers it the
+  same way, and waits a turn when it cannot. The sweep now writes a
+  checkpoint while the ping is still owed and restores it.

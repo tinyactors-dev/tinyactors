@@ -576,20 +576,33 @@ static ta_actor_id tah_inputs_resident(tah_system *system, ta_address *address) 
     return ta_actor_inspect(system->core, entry.actor, &view) == TA_OK && view.published ? entry.actor : 0;
 }
 
-/* Numbers `envelope` as message `seq` for `handle`, which it waits for. */
-static void tah_inputs_number(tah_inputs *inputs, uint32_t envelope, uint64_t seq, ta_address *handle, ta_time since) {
-    tah_inputs_touch(inputs, handle, false, false, 0);
+/*
+ * Numbers `envelope` as message `seq` for `handle`, which it waits for.
+ * TA_ERR_NOMEM numbers nothing: a message is never queued without its ID,
+ * which a checkpoint and a redelivery need.
+ */
+static ta_result tah_inputs_number(tah_inputs *inputs, uint32_t envelope, uint64_t seq, ta_address *handle,
+                                   ta_time since) {
     if (tah_map_put(&inputs->seqs, envelope, seq) != TA_OK) {
-        inputs->lost += 1u; /* its delivery will be written with a new ACCEPTED */
-        return;
+        return TA_ERR_NOMEM;
     }
     if (tah_map_put(&inputs->queued_address, envelope, (uint64_t)(uintptr_t)handle) != TA_OK) {
         (void)tah_map_remove(&inputs->seqs, envelope);
-        inputs->lost += 1u;
-        return;
+        return TA_ERR_NOMEM;
     }
     ta_address_retain(handle);
+    tah_inputs_touch(inputs, handle, false, false, 0);
     tah_inputs_mail_add(inputs, handle, since);
+    return TA_OK;
+}
+
+/* Takes back what tah_inputs_number() did for `envelope`. */
+static void tah_inputs_unnumber(tah_inputs *inputs, uint32_t envelope) {
+    uint64_t seq = 0;
+    ta_address *address = NULL;
+    if (tah_inputs_unqueue(inputs, envelope, &seq, &address)) {
+        ta_address_release(address);
+    }
 }
 
 static ta_result tah_inputs_queued(tah_system *system, const tah_sched_note *note) {
@@ -614,15 +627,19 @@ static ta_result tah_inputs_queued(tah_system *system, const tah_sched_note *not
     ta_time since = owed ? inputs->redeliver_since : ta_system_time(system->core);
     uint64_t seq = owed ? inputs->redeliver_seq : inputs->next_seq + 1u;
     inputs->redelivering = false;
+    /* Its ID first: a message the log cannot number is not accepted. */
+    ta_result result = tah_inputs_number(inputs, note->envelope, seq, handle, since);
+    if (result != TA_OK) {
+        return result;
+    }
     if (!owed) {
-        ta_result result = tah_inputs_accepted(system, (tah_inputs_target){ .address = handle, .actor = actor }, seq,
-                                               envelope);
+        result = tah_inputs_accepted(system, (tah_inputs_target){ .address = handle, .actor = actor }, seq, envelope);
         if (result != TA_OK) {
+            tah_inputs_unnumber(inputs, note->envelope);
             return result; /* not accepted: the log could not hold it */
         }
         inputs->next_seq = seq;
     }
-    tah_inputs_number(inputs, note->envelope, seq, handle, since);
     return TA_OK;
 }
 
@@ -643,12 +660,16 @@ static ta_result tah_inputs_delivering(tah_system *system, const tah_sched_note 
     uint64_t seq = 0;
     if (!tah_map_get(&inputs->seqs, note->envelope, &seq)) {
         seq = inputs->next_seq + 1u;
-        ta_result result = tah_inputs_accepted(system, target, seq, note->message);
+        ta_result result = tah_inputs_number(inputs, note->envelope, seq, handle, ta_system_time(system->core));
         if (result != TA_OK) {
+            return result; /* the delivery waits a turn */
+        }
+        result = tah_inputs_accepted(system, target, seq, note->message);
+        if (result != TA_OK) {
+            tah_inputs_unnumber(inputs, note->envelope);
             return result;
         }
         inputs->next_seq = seq;
-        tah_inputs_number(inputs, note->envelope, seq, handle, ta_system_time(system->core));
     }
     const tah_envelope *envelope = note->message;
     tah_wal_record record = { .kind = TAH_WAL_DELIVERED,
