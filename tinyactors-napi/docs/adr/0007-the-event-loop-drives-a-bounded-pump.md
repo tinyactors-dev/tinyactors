@@ -1,6 +1,6 @@
 # ADR 0007: The event loop drives a bounded pump
 
-**Status:** Accepted; turns yield to I/O and the clock is read every turn (amended) Refined by napi ADR 0035: the turn budgets are system parameters, and a turn also ends once it has staged `traceStagingBytes` of trace records. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
+**Status:** Accepted; turns yield to I/O and the clock is read every turn (amended) Refined by napi ADR 0035: the turn budgets are system parameters, and a turn also ends once it has staged `traceStagingBytes` of trace records. Amended 2026-09-30: a pending `send()`, with or without a timeout, does not hold the process (Consequences). Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-23
 
 ## Context
@@ -108,6 +108,14 @@ unless someone called `flush()`, and delayed sends never fired.
 - A delayed send due later does not hold `flush()`, and its timer does not
   hold the process. A script that must see a delayed send fire keeps the
   process alive itself (a server does anyway), or uses the manual clock.
+- A pending `send()` does not hold the process either, with or without a
+  `timeout` (decided 2026-09-30). Its promise settles only through the
+  system's own work, a signal or its timer, and each of those is something
+  the application keeps alive when it needs the answer: an idle process
+  waiting on a `send()` is a process with nothing left to do. The timeout
+  timer is unreferenced, as the delayed-send timer and a loader's timeout
+  are. A script that awaits a `send()` whose answer comes only from its
+  timeout keeps the process alive itself, as napi's tests do.
 
 - Any single turn is bounded by the budgets, and other JavaScript runs
   between turns.

@@ -309,7 +309,8 @@ cleanup, which is the native queue under another name.
 
 The scheduler must not keep an otherwise idle process alive. Its ports are
 unreferenced where the runtime supports that operation and are closed when the
-system closes.
+system closes. A pending `send()` and its `timeout` timer do not keep the
+process alive either (ADR 0007).
 
 An optional Worker-hosted facade may use Worker `postMessage` as its ingress
 transport. That is a distinct mode with structured-clone semantics: the real

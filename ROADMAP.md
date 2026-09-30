@@ -92,9 +92,10 @@ gaps left or found on the way.
   can exceed it by one call's records (under 4 KiB measured). Tighten it
   to per record, or record the bound as "plus one call". (napi ADR 0036's
   notes.)
-- [ ] **A `send()` with a timeout does not keep the process alive,** so
-  napi's tests use keep-alive intervals. Decide whether a pending `send()`
-  should hold the event loop open. (napi ADR 0033's notes.) -- it should not.
+- [x] **A `send()` with a timeout does not keep the process alive,** and
+  neither does any pending `send()`: decided 2026-09-30 and recorded in
+  napi ADR 0007 (Consequences). Tests that wait for a timeout keep the
+  process alive themselves.
 - [ ] **Run the test host's exhaustive pass after core changes.** Some
   full runs showed the test host's step cached after a core change
   (`scale_test` to four million actors; core itself has no exhaustive

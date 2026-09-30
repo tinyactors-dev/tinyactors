@@ -915,7 +915,11 @@ export interface IOProcessorOptions {
 export interface SendOptions extends PostOptions {
   /** "completed" (default): the message's macrostep ended; "accepted": it is queued. */
   until?: "completed" | "accepted";
-  /** Reject with `timeout`, and withdraw the message if still queued, after this many milliseconds. */
+  /**
+   * Reject with `timeout`, and withdraw the message if still queued, after
+   * this many milliseconds. The timer does not keep the process alive, and
+   * neither does a pending send() (ADR 0007).
+   */
   timeout?: number;
 }
 

@@ -295,7 +295,7 @@ async function droppedAndJump() {
     await new Promise((done) => { release = done; });
     return { spawn: definition };
   });
-  // A send()'s timeout does not keep the process alive, and nothing else would.
+  // A send()'s timeout does not keep the process alive (ADR 0007), and nothing else would.
   const alive = setInterval(() => {}, 1000);
   await assert.rejects(system.send({ family: 'counter', name: 'slow' }, 'inc', undefined, { timeout: 5 }),
     (error) => error.code === 'timeout');

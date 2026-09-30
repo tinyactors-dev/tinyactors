@@ -382,7 +382,7 @@ async function droppedAndLiteralSendIDs() {
   await first.flush();
   first.setLoader('ledger', () => new Promise(() => {}));
   await g.send('go'); // queued for the ledger, with its send ID
-  const alive = setInterval(() => {}, 1000); // a send()'s timeout does not keep the process alive
+  const alive = setInterval(() => {}, 1000); // a send()'s timeout does not keep the process alive (ADR 0007)
   await assert.rejects(first.send({ family: 'ledger', name: 'main' }, 'ping', undefined, { timeout: 5 }),
     (error) => error.code === 'timeout'); // queued, then withdrawn
   clearInterval(alive);

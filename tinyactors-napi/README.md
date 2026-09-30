@@ -207,7 +207,8 @@ main();
 ```
 
 The default clock is real time, and an idle system's timer does not keep
-the process alive.
+the process alive. Neither does a pending `send()`, nor its `timeout`: a
+script that waits for a timeout keeps the process alive itself.
 
 ## Unloading and virtual actors
 
