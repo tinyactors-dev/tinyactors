@@ -167,4 +167,31 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 'err_invalid', hosted_checkpoint(hosted, unnamed)[:result]
     assert_equal 0, close_hosted(hosted)
   end
+
+  # Catches: a log that cannot be replayed by another system, or a crash
+  # that loses the actor's pending timer. The first system is dropped after
+  # its batches were stored, as a crash would leave them.
+  scenario 'after a crash, another system rebuilds the actor from the stored log' do
+    first = hosted_system(incarnation: 1)
+    hosted_log(first, 'hosted_seen')
+    live = hosted_spawn(first, hosted_define(first, :hosted_seen), family: 'hosted_seen', name: 'c')
+    hosted_run(first)
+    hosted_advance(first, 1000)
+    hosted_post(first, live, 'e1')
+    hosted_run(first) # waiting; the timeout is due at 6000
+    store = hosted_store(first)
+    close_hosted(first)
+
+    second = hosted_system(incarnation: 2)
+    hosted_log(second, 'hosted_seen')
+    definition = hosted_define(second, :hosted_seen)
+    hosted_advance(second, 2000)
+    rebuilt = hosted_restore(second, definition, 'hosted_seen', 'c', store['hosted_seen/c'])
+    assert_equal [:waiting], hosted_states(second, rebuilt)
+    assert_equal 1, hosted_data(second, rebuilt, '.seen')
+    hosted_advance(second, 6000)
+    hosted_run(second)
+    assert_equal [:timedout], hosted_states(second, rebuilt)
+    assert_equal 0, close_hosted(second)
+  end
 end

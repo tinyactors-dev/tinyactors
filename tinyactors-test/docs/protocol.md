@@ -101,8 +101,14 @@ reproducible. Scenarios about core's semantics keep using core directly.
 - `hosted.spawn` takes `{"system", "definition", "family"?, "name"?}`,
   spawns the actor in core and hands it to the kernel's scheduler, and
   returns its actor ID.
-- `hosted.post` takes `{"system", "actor", "event"}` and puts an event
-  without data in the actor's mailbox; it answers the `ta_result` name.
+- `hosted.post` takes `{"system", "actor", "event", "data"?}` and puts the
+  event in the actor's mailbox, with `data` as a jq value; it answers the
+  `ta_result` name.
+- `hosted.checkpoint` takes `{"system", "actor"}` and writes a checkpoint of
+  an idle, logged, named actor with the kernel's encoder (kernel ADR 0002
+  section 7): `{"result", "bytes"?}`, the bytes in hex. A checkpoint alone,
+  or a checkpoint followed by later records, is a log `hosted.restore`
+  reads.
 - `hosted.turn` takes `{"system", "limit"?}`, runs turns until the system is
   quiet or `limit` turns ran (default 1), and returns `{"turns", "quiet"}`.
 - `hosted.advance` takes `{"system", "time"}` and moves the scenario's
