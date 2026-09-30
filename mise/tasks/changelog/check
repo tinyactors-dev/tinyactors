@@ -1,0 +1,30 @@
+#!/usr/bin/env ruby
+#MISE description="Check a release's section of CHANGELOG.md against the repository: the prose cites real commits and names every breaking change, the generated lists are current"
+#USAGE arg "<component>" help="core, host, napi, scxml or tinyxml"
+#USAGE arg "[version]" help="The version to check (default: the newest section)"
+# vim:ft=ruby
+
+# The release tasks run this through Release.notes; run it by hand to see
+# what a release would refuse. docs/adr/0002-changelogs.md.
+
+require 'changelog'
+
+name = ENV['usage_component'] || ARGV[0]
+version = ENV['usage_version'] || ARGV[1]
+abort 'usage: mise run changelog:check <component> [version]' unless name
+
+begin
+  component = Changelog.component(name)
+  repo = Changelog::Repo.new
+  text = Changelog::Check.changelog_text(repo, component)
+  version ||= Changelog::Document.sections(text.to_s).first&.version
+  abort "changelog:check: #{component.changelog_path} has no release section" unless version
+  Release.parse_version(version)
+
+  problems = Changelog::Check.problems(repo, component, version, text: text)
+  problems.each { |problem| warn "changelog:check: #{problem}" }
+  abort "changelog:check: #{component.name} #{version}: #{problems.size} problem(s)" unless problems.empty?
+  puts "changelog:check: #{component.name} #{version} is fit to release"
+rescue Changelog::Error => e
+  abort "changelog:check: #{e.message}"
+end

@@ -1,0 +1,199 @@
+#!/usr/bin/env ruby
+#MISE description="Self-test for the changelog tooling: a repository it builds, the ledger, the API delta, the evidence, and every check's pass and failure"
+# vim:ft=ruby
+
+# Each case builds a small repository with a release tag and some commits,
+# and runs what `changelog:draft`, `changelog:write` and `changelog:check`
+# run. The cases that must fail are wrong on purpose.
+
+require 'fileutils'
+require 'json'
+require 'open3'
+require 'tmpdir'
+require 'changelog'
+
+failures = []
+check = lambda do |description, actual, expected|
+  failures << "#{description}: expected #{expected.inspect}, got #{actual.inspect}" unless actual == expected
+end
+includes = lambda do |description, haystack, needle|
+  failures << "#{description}: #{needle.inspect} not in #{haystack.inspect}" unless haystack.include?(needle)
+end
+
+def api(functions:, size:)
+  JSON.pretty_generate(
+    'version' => '0.1.0',
+    'functions' => functions.map { |name| { 'name' => name, 'doc' => 'x', 'implemented' => true, 'returns' => { 'builtin' => 'int' }, 'params' => [] } },
+    'types' => { 'point' => { 'kind' => 'struct', 'fields' => [{ 'name' => 'x', 'type' => { 'builtin' => 'int' } }],
+                              'layout' => { 'x86_64' => { 'size' => size } } } },
+    'constants' => [{ 'name' => 'TA_LIMIT', 'value' => 1 }, { 'name' => 'TA_VERSION_MINOR', 'value' => size }]
+  ) + "\n"
+end
+
+# A repository with tinyactors-core released as 0.1.0.
+def build_repo(dir)
+  repo = Changelog::Repo.new(dir)
+  git = lambda do |*args|
+    out, err, status = Open3.capture3('git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com',
+                                      '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', *args, chdir: dir.to_s)
+    raise "git #{args.join(' ')}: #{err}" unless status.success?
+
+    out
+  end
+  git.call('init', '--quiet', '--initial-branch=main')
+  commit = lambda do |subject, body: nil, **files|
+    files.each do |path, content|
+      file = dir.join(path)
+      FileUtils.mkdir_p(file.dirname)
+      file.write(content)
+    end
+    git.call('add', '-A')
+    git.call('commit', '--quiet', '-m', [subject, body].compact.join("\n\n"))
+    git.call('rev-parse', 'HEAD').strip
+  end
+  [repo, git, commit]
+end
+
+Dir.mktmpdir('changelog-test') do |tmp|
+  dir = Pathname.new(tmp)
+  repo, git, commit = build_repo(dir)
+  core = Changelog.component('core')
+
+  commit.call('feat: the first version',
+              'tinyactors-core/include/tinyactors.api.json' => api(functions: %w[ta_old ta_keep], size: 8),
+              'tinyactors-core/src/a.c' => "a\n")
+  git.call('tag', '--annotate', 'tinyactors-core/v0.1.0', '-m', 'first')
+  check.call('the last release', repo.last_version(core), '0.1.0')
+  check.call('no release of host yet', repo.last_version(Changelog.component('host')), nil)
+
+  # First release: core has a tag, napi does not.
+  first = Changelog::Evidence.gather(repo, Changelog.component('napi'))
+  check.call('a first release lists no commits', first.commits, [])
+  includes.call('the first release packet says so', first.packet, 'its first release')
+
+  commit.call('docs(adr): core ADR 0100 names the removal',
+              'tinyactors-core/docs/adr/0100-remove-ta-old.md' =>
+                "# ADR 0100: Remove ta_old\n\n**Status:** Accepted\n\n## Decision\n\nGone.\n\n## Implementation notes\n\nta_old was removed; ta_fresh replaces it.\n")
+  breaking = commit.call('feat(core)!: ta_old is removed, ta_fresh replaces it (core ADR 0100)',
+                         body: "Callers of ta_old call ta_fresh.\n\nCo-Authored-By: Someone <a@example.com>",
+                         'tinyactors-core/include/tinyactors.api.json' => api(functions: %w[ta_keep ta_fresh], size: 16),
+                         'tinyactors-core/src/a.c' => "b\n")
+  commit.call('fix(napi): a call site', 'tinyactors-core/src/call.c' => "call\n", 'tinyactors-napi/x.js' => "x\n")
+  commit.call('feat(test-host): a harness change that edits core', 'tinyactors-core/src/harness.c' => "h\n")
+  commit.call('feat(core): ta_keep reports more', 'tinyactors-core/src/b.c' => "c\n")
+  commit.call('docs: a root note', 'NOTES.md' => "n\n")
+  commit.call('ci', 'tinyactors-core/src/c.c' => "d\n")
+  commit.call('docs(core): changelog for 0.2.0', 'tinyactors-core/CHANGELOG.md' => "# x\n")
+
+  evidence = Changelog::Evidence.gather(repo, core)
+  subjects = evidence.commits.map(&:subject)
+  check.call('the ledger is attributed by scope, then by path',
+             subjects,
+             ['ci', 'feat(core): ta_keep reports more', 'feat(test-host): a harness change that edits core',
+              'feat(core)!: ta_old is removed, ta_fresh replaces it (core ADR 0100)',
+              'docs(adr): core ADR 0100 names the removal'])
+  check.call('a breaking commit', evidence.breaking_commits.map(&:hash), [breaking])
+  check.call('the trailer is not part of a body', evidence.commits.find(&:breaking).body.include?('Co-Authored-By'), false)
+  check.call('removed API', evidence.delta.removed.map(&:key), ['function ta_old'])
+  check.call('added API', evidence.delta.added.map(&:key), ['function ta_fresh'])
+  check.call('changed API (a layout), version macros ignored', evidence.delta.changed.map { |entity, _| entity.key }, ['struct point'])
+  check.call('a changed layout shows as lines',
+             Changelog::APISurface.line_diff(*evidence.delta.changed.first),
+             ['- layout.x86_64.size = 8', '+ layout.x86_64.size = 16'])
+  check.call('a removed function and a changed struct break callers', evidence.delta.breaking_names, %w[ta_old point])
+  check.call('the proposed version below 1.0', evidence.proposed_version.first, '0.2.0')
+  includes.call('the packet carries the ADR notes', evidence.packet, 'ta_fresh replaces it.')
+  includes.call('the packet flags a breaking commit', evidence.packet, "#{breaking[0, 7]} feat(core)!: ta_old is removed, ta_fresh replaces it (core ADR 0100)  [BREAKING]")
+  includes.call('the packet lists a subject that says little', evidence.packet, 'Commits whose subject says little')
+  check.call('a thin subject', Changelog::Ledger.thin(evidence.commits).map(&:subject), ['ci'])
+
+  write = lambda do |version, summary, upgrading|
+    section = Changelog::Document.render(evidence, version: version, date: '2026-10-05', summary: summary, upgrading: upgrading)
+    Changelog::Document.insert(nil, core, version, section)
+  end
+  problems = lambda do |text, version = '0.2.0'|
+    Changelog::Check.problems(repo, core, version, text: text)
+  end
+
+  summary = "Core no longer owns the input log (#{breaking[0, 7]}); `ta_fresh` replaces `ta_old`.\nIt is about moving responsibility out of core."
+  upgrading = "Call `ta_fresh` where you called `ta_old` (#{breaking[0, 7]}); `point` grew, so rebuild against the new header."
+  good = write.call('0.2.0', summary, upgrading)
+  check.call('a complete section passes', problems.call(good), [])
+  includes.call('the section lists the breaking commit', good, "- ta_old is removed, ta_fresh replaces it (core ADR 0100) (#{breaking[0, 7]})")
+  includes.call('the section lists the removed API', good, '- function `ta_old`')
+  check.call('the release body drops the heading and marker',
+                Changelog::Document.release_body(Changelog::Document.section(good, '0.2.0')).include?('Generated by'), false)
+
+  check.call('no changelog file', problems.call(nil).size, 1)
+  check.call('no section for the version', problems.call(good, '0.3.0').first.start_with?('tinyactors-core/CHANGELOG.md has no section'), true)
+  check.call('a version that is not higher', problems.call(good.sub('0.2.0', '0.1.0'), '0.1.0').any? { |p| p.include?('not higher') }, true)
+  check.call('a patch bump for a breaking release', problems.call(good.sub('0.2.0', '0.1.1'), '0.1.1').any? { |p| p.include?('lower than the proposed 0.2.0') }, true)
+
+  check.call('a placeholder', problems.call(write.call('0.2.0', "#{summary}\nTODO more", upgrading)).any? { |p| p.include?('placeholder') }, true)
+  check.call('an empty summary', problems.call(write.call('0.2.0', '', upgrading)).any? { |p| p.include?('Summary is empty') }, true)
+  check.call('a long summary', problems.call(write.call('0.2.0', "#{summary} #{'word ' * 500}", upgrading)).any? { |p| p.include?('words') }, true)
+  check.call('a breaking commit not cited',
+             problems.call(write.call('0.2.0', 'Things moved; `ta_fresh` replaces `ta_old`.', upgrading.sub(breaking[0, 7], 'the commit'))).any? { |p| p.include?("breaking commit #{breaking[0, 7]}") }, true)
+  check.call('no upgrading section for a breaking release', problems.call(write.call('0.2.0', summary, nil)).any? { |p| p.include?('no "### Upgrading"') }, true)
+  check.call('a removed symbol not named in Upgrading',
+             problems.call(write.call('0.2.0', summary, "Rebuild (#{breaking[0, 7]}); `point` grew.")).any? { |p| p.include?('does not mention the removed or changed `ta_old`') }, true)
+  check.call('a hash that is not in the range',
+             problems.call(write.call('0.2.0', "#{summary} See abcdef1.", upgrading)).any? { |p| p.include?('cites abcdef1') }, true)
+  check.call('an identifier the evidence does not have',
+             problems.call(write.call('0.2.0', "#{summary} It adds `ta_invented()`.", upgrading)).any? { |p| p.include?('`ta_invented()` is not in the evidence') }, true)
+  check.call('a code phrase that is not an identifier is not checked',
+             problems.call(write.call('0.2.0', "#{summary} Run `mise run test`.", upgrading)), [])
+  check.call('an edited generated list', problems.call(good.sub('- function `ta_old`', '- function `ta_nothing`')).any? { |p| p.include?('generated part') }, true)
+
+  commit.call('feat(core): ta_more', 'tinyactors-core/src/d.c' => "e\n")
+  check.call('a new commit makes the generated part stale',
+             Changelog::Check.problems(repo, core, '0.2.0', text: good).any? { |p| p.include?('generated part') }, true)
+
+  # A hash may be all digits: it cites a commit, but an English word or a
+  # number is not taken for one to validate.
+  check.call('a citation of an all-digit hash', Changelog::Check.possible_hashes('see (1974305) and defaced'), %w[1974305 defaced])
+  check.call('only a mixed hex token is validated', Changelog::Check.cited_hashes('see 1974305, defaced, 4194304, abc1234'), ['abc1234'])
+
+  # A first release needs only its summary.
+  napi = Changelog.component('napi')
+  napi_evidence = Changelog::Evidence.gather(repo, napi)
+  first_section = Changelog::Document.render(napi_evidence, version: '0.1.0', date: '2026-10-05', summary: 'The first release.')
+  check.call('a first release needs a summary only',
+             Changelog::Check.problems(repo, napi, '0.1.0', text: Changelog::Document.insert(nil, napi, '0.1.0', first_section)), [])
+
+  # Sections are inserted newest first, and one version replaces itself.
+  older = Changelog::Document.insert(nil, core, '0.1.0', "## [0.1.0] - 2026-09-28\n\n### Summary\n\nFirst.\n")
+  section = Changelog::Document.render(evidence, version: '0.2.0', date: '2026-10-05', summary: summary, upgrading: upgrading)
+  both = Changelog::Document.insert(older, core, '0.2.0', section)
+  check.call('newest first', Changelog::Document.sections(both).map(&:version), %w[0.2.0 0.1.0])
+  again = Changelog::Document.insert(both, core, '0.2.0', section)
+  check.call('a version replaces itself', again, both)
+  check.call('a section keeps its summary', Changelog::Document.section(both, '0.1.0').summary, 'First.')
+
+  # ADR references.
+  check.call('ADR references',
+             Changelog::ADRs.references_in('core ADR 0094 section 2; ADRs 0090 and 0091; kernel ADR 0002'),
+             [['core', '0094'], [nil, '0090'], [nil, '0091'], ['host', '0002']])
+
+  # TypeScript: the surface is what a file exports.
+  ts = Changelog::Repo.new(dir)
+  commit.call('feat(napi): declarations',
+              'tinyactors-napi/index.d.ts' => "/** The version. */\nexport const version: string;\n// status: unimplemented\nexport interface Options {\n  a: string;\n}\nexport function go(n: number): void;\n")
+  old = Changelog::APISurface.surface(ts, napi, 'HEAD')
+  check.call('the exports of a declaration file', old.keys.sort, ['export Options', 'export go', 'export version'])
+  commit.call('feat(napi): more declarations',
+              'tinyactors-napi/index.d.ts' => "export const version: string;\nexport interface Options {\n  a: string;\n  b?: number;\n}\n")
+  delta = Changelog::APISurface.delta(old, Changelog::APISurface.surface(ts, napi, 'HEAD'))
+  check.call('a removed export', delta.removed.map(&:name), ['go'])
+  check.call('a changed export, by a member',
+             delta.changed.map { |entity, prior| [entity.name, Changelog::APISurface.line_diff(entity, prior)] },
+             [['Options', ['+ b?: number;']]])
+end
+
+if failures.empty?
+  puts 'changelog-test: the ledger, API delta, evidence, document and checks behave as specified'
+else
+  failures.each { |failure| puts "changelog-test: #{failure}" }
+  puts "changelog-test: #{failures.size} failure(s)"
+  exit 1
+end

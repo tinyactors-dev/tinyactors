@@ -1,0 +1,22 @@
+#!/usr/bin/env ruby
+#MISE description="Print the evidence a release's changelog is written from: the commits since the last release, the public API delta, the ADR notes, the proposed version"
+#USAGE arg "<component>" help="core, host, napi, scxml or tinyxml"
+# vim:ft=ruby
+
+# The first step of the release-changelog skill (.agents/skills/release-changelog).
+# Writes nothing: the packet goes to stdout. Its text is what `changelog:check`
+# lets the summary draw identifiers from, so a summary is written from this
+# output and nothing else. docs/adr/0002-changelogs.md.
+
+require 'changelog'
+
+name = ENV['usage_component'].to_s
+name = ARGV.first.to_s if name.empty?
+abort 'usage: mise run changelog:draft <component>' if name.empty?
+
+begin
+  repo = Changelog::Repo.new
+  puts Changelog::Evidence.gather(repo, Changelog.component(name)).packet
+rescue Changelog::Error => e
+  abort "changelog:draft: #{e.message}"
+end

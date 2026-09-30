@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+#MISE description="Write a release's section of CHANGELOG.md: the agent's summary and upgrading text, and the lists generated from the commits and the API delta; then check it"
+#USAGE arg "<component>" help="core, host, napi, scxml or tinyxml"
+#USAGE arg "<version>" help="The version being released, MAJOR.MINOR.PATCH"
+#USAGE flag "--summary <file>" help="File holding the Summary (required)"
+#USAGE flag "--upgrading <file>" help="File holding the Upgrading text (required when the release breaks something)"
+#USAGE flag "--date <date>" help="The release date, YYYY-MM-DD (default: today, UTC)"
+# vim:ft=ruby
+
+# Replaces the section of the same version, or adds one above the newest.
+# The file is left written when the check fails, so the prose can be fixed
+# and this run again. docs/adr/0002-changelogs.md.
+
+require 'changelog'
+require 'optparse'
+
+options = { summary: ENV['usage_summary'], upgrading: ENV['usage_upgrading'], date: ENV['usage_date'] }
+parser = OptionParser.new do |o|
+  o.on('--summary FILE') { |v| options[:summary] = v }
+  o.on('--upgrading FILE') { |v| options[:upgrading] = v }
+  o.on('--date DATE') { |v| options[:date] = v }
+end
+rest = parser.parse(ARGV.dup)
+name = ENV['usage_component'] || rest[0]
+version = ENV['usage_version'] || rest[1]
+unless name && version && options[:summary]
+  abort 'usage: mise run changelog:write <component> <version> --summary FILE [--upgrading FILE] [--date DATE]'
+end
+
+begin
+  Release.parse_version(version)
+  component = Changelog.component(name)
+  repo = Changelog::Repo.new
+  summary = File.read(options[:summary])
+  upgrading = options[:upgrading] ? File.read(options[:upgrading]) : nil
+  date = options[:date] || Time.now.utc.strftime('%Y-%m-%d')
+  abort "changelog:write: #{date} is not a date (YYYY-MM-DD)" unless date.match?(/\A\d{4}-\d{2}-\d{2}\z/)
+
+  evidence = Changelog::Evidence.gather(repo, component)
+  section = Changelog::Document.render(evidence, version: version, date: date, summary: summary, upgrading: upgrading)
+  path = repo.root.join(component.changelog_path)
+  text = Changelog::Document.insert(path.file? ? path.read : nil, component, version, section)
+  path.write(text)
+  puts "changelog:write: wrote #{component.changelog_path} for #{version} at #{evidence.head[0, 12]}"
+
+  problems = Changelog::Check.problems(repo, component, version, text: text)
+  problems.each { |problem| warn "changelog:write: #{problem}" }
+  abort "changelog:write: #{problems.size} problem(s); edit the prose and run this again" unless problems.empty?
+  puts 'changelog:write: the section passes changelog:check'
+rescue Changelog::Error => e
+  abort "changelog:write: #{e.message}"
+end
