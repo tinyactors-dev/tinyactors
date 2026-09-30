@@ -469,9 +469,15 @@ module TinyactorsTest
     # Hosted mode (kernel ADR 0001 section 5): a system whose actors the host
     # kernel queues, schedules and routes. Turns run when the scenario asks.
     # Answers { hosted:, core: }: the kernel's system, and its core system for
-    # the generated core methods (inspecting actors).
-    def hosted_system(incarnation: 0)
-      rpc('hosted.create', incarnation: incarnation)
+    # the generated core methods (inspecting actors). Its memory comes from
+    # the scenario's counting `allocator`, so a budget or an armed fault
+    # reaches the kernel and its core, and teardown's leak check covers it;
+    # `allocator: nil` gives it libc's. Answers the ta_result name when the
+    # kernel could not create the system (a budget too small).
+    def hosted_system(incarnation: 0, allocator: self.allocator)
+      params = { incarnation: incarnation }
+      params[:allocator] = allocator.adapter if allocator
+      rpc('hosted.create', params)
     end
 
     # Closes a hosted system; answers the bytes it leaked (always 0).

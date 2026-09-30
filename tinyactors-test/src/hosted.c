@@ -79,19 +79,29 @@ jv tat_hosted_create_method(tat_bind *bind, jv params, int *error_code) {
         chosen = (uint64_t)jv_number_value(incarnation);
     }
     jv_free(incarnation);
+    /* The platform's memory: libc, or an allocator adapter such as the
+     * scenario's allocator.counting, whose budget and faults then reach the
+     * kernel and its core (core ADR 0023). */
+    ta_allocator allocator = tat_libc_allocator();
+    jv chosen_allocator = jv_object_get(jv_copy(params), jv_string("allocator"));
+    bool decoded = !jv_is_valid(chosen_allocator) || jv_get_kind(chosen_allocator) == JV_KIND_NULL ||
+                   tat_adapter_decode(bind, chosen_allocator, "ta_allocator", &allocator, sizeof allocator);
+    jv_free(chosen_allocator);
+    if (!decoded) {
+        return tat_bind_take_error(bind, error_code);
+    }
     tat_hosted *hosted = calloc(1, sizeof *hosted);
     if (hosted == NULL) {
         *error_code = RPC_INTERNAL_ERROR;
         return jv_string("hosted.create: out of memory");
     }
     tah_platform platform = {
-        .self = &hosted->clock, .v = &tat_hosted_platform_vtable, .allocator = tat_libc_allocator()};
+        .self = &hosted->clock, .v = &tat_hosted_platform_vtable, .allocator = allocator};
     ta_result result = tah_system_create(
         &(tah_system_create_params){.platform = platform, .incarnation = chosen}, &hosted->system);
     if (result != TA_OK) {
         free(hosted);
-        *error_code = RPC_INTERNAL_ERROR;
-        return jv_string("hosted.create: the kernel could not create a system");
+        return tat_encode_ta_result(bind, &result);
     }
     hosted->batches = jv_array();
     /* The input log writes values with the jq data model's codec, which

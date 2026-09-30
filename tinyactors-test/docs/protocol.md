@@ -94,10 +94,14 @@ scenario runs turns and owns the clock, which starts at zero and moves only
 when the scenario moves it, with a fixed random seed, so a hosted run is
 reproducible. Scenarios about core's semantics keep using core directly.
 
-- `hosted.create` takes `{"incarnation"?}` and returns `{"hosted", "core"}`:
-  a `hosted` handle, and a `system` handle for the kernel's core system, so
-  the generated core methods (defining charts, inspecting actors) work on it.
-  The core handle is retired when the hosted system closes.
+- `hosted.create` takes `{"incarnation"?, "allocator"?}` and returns
+  `{"hosted", "core"}`: a `hosted` handle, and a `system` handle for the
+  kernel's core system, so the generated core methods (defining charts,
+  inspecting actors) work on it. The core handle is retired when the hosted
+  system closes. `allocator` is an allocator adapter, libc's when absent;
+  with an `allocator.counting` instrument its budget and armed faults reach
+  the kernel and core. When the kernel cannot create the system it returns
+  the `ta_result` name instead (`"err_nomem"` under a small budget).
 - `hosted.spawn` takes `{"system", "definition", "family"?, "name"?}`,
   spawns the actor in core and hands it to the kernel's scheduler, and
   returns its actor ID.

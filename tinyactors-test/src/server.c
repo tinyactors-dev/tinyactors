@@ -228,7 +228,8 @@ static const tat_method TAT_HOST_METHODS[] = {
     {"handle.fixture", tat_handle_fixture_method,
      "{\"host\":true,\"params\":{\"type\":{\"type\":\"string\",\"required\":true}}}"},
     {"hosted.create", tat_hosted_create_method,
-     "{\"host\":true,\"params\":{\"incarnation\":{\"type\":\"u64\",\"required\":false}}}"},
+     "{\"host\":true,\"params\":{\"incarnation\":{\"type\":\"u64\",\"required\":false},"
+     "\"allocator\":{\"type\":\"adapter:ta_allocator\",\"required\":false}}}"},
     {"hosted.close", tat_hosted_close_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
     {"hosted.spawn", tat_hosted_spawn_method,

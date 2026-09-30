@@ -65,6 +65,28 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(system), 'the kernel freed everything'
   end
 
+  # Catches: a hosted system that takes its memory from libc whatever the
+  # scenario hands it, so a budget or an armed fault never reaches the
+  # kernel; or a close that gives back less than the kernel took.
+  scenario "a hosted system's memory comes from the scenario's allocator" do
+    before = allocator.stats[:live_bytes]
+    hosted = hosted_system
+    assert allocator.stats[:live_bytes] > before, 'the kernel allocated through the counting allocator'
+    assert_equal 0, close_hosted(hosted)
+    assert_equal before, allocator.stats[:live_bytes], 'closing gave back everything'
+  end
+
+  # Catches: a system half-created under a budget, or one that keeps what
+  # it had allocated when a later allocation fails.
+  scenario 'a hosted system that cannot get its memory is not created' do
+    before = allocator.stats[:live_bytes]
+    AllocationFailure.tighten(self, headroom: 64)
+    assert_equal 'err_nomem', hosted_system
+    allocator.budget(0)
+    assert_equal before, allocator.stats[:live_bytes], 'the refused create kept nothing'
+    assert_equal 0, close_hosted(hosted_system), 'with room, the same create works'
+  end
+
   # Catches: mail between actors that bypasses the kernel's mailboxes and
   # router, or a turn that does not run what was posted.
   scenario 'mail between two actors goes through the kernel' do
