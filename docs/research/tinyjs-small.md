@@ -12,9 +12,10 @@ compiler written in Racket, two back ends that share a generated ABI, three
 memory regions with a write barrier, and a verifier for bytecode. Can the
 same goals be met, under the same constraints, with far fewer parts?
 
-The approach is PicoLisp's: pick the simplest algorithm that is known to
-work, use one mechanism for each job, and put the effort into the
-implementation of that one mechanism instead of into more mechanisms [1].
+The approach is PicoLisp's: as few mechanisms as possible, each a simple
+algorithm that is known to work, with the effort put into implementing
+them well rather than into adding more. Its author sums it up as "Less may
+be More" [1].
 
 ## Summary
 
@@ -57,13 +58,42 @@ implementation of that one mechanism instead of into more mechanisms [1].
 
 ## What "the PicoLisp approach" means here
 
-PicoLisp is an interpreter only. It has one data type underneath
-everything, the cell; code is data and is evaluated directly; its collector
-is a plain mark and sweep. Its author argues that a small number of
-uniform mechanisms, implemented carefully, beats a large number of
-specialised ones for the programs it targets [1]. We do not copy PicoLisp's
-data structures, which are designed for Lisp, not for ECMAScript. We copy
-its rules:
+Burger's paper [1] argues against four "myths" that make Lisps heavy:
+that Lisp needs a compiler, many data types, lexical binding, and more
+advanced structures than property lists. Its claims, and what this design
+takes from each:
+
+- **No compiler.** PicoLisp evaluates the tree of S-expressions directly.
+  The paper argues that a compiler brings two "rather different
+  architectures" into one system, that the time spent compiling is lost
+  when code is loaded, run once and discarded (as its application server
+  does with each request's source file), and that the tree mostly acts as
+  glue between built-in nodes where the time is spent. We take the first
+  two points unchanged: tinyjs's two compilers and two back ends are the
+  two architectures, and a guard compiled for one evaluation is the
+  run-once case. The third point is weaker for us (see Why no bytecode
+  below).
+- **Few data types.** PicoLisp has three (numbers, symbols, lists), built
+  from one cell, because fewer types mean fewer checks at run time and
+  "simplicity ... by far outweighs the speed and space considerations".
+  ECMAScript fixes its own types, so we take the principle, not the cell:
+  one value format, one frame kind, no separate integer type.
+- **Dynamic, shallow binding.** Not applicable: ECMAScript scope is
+  lexical. What the paper values in it, that a variable's value is found
+  with no search, the resolver's slots give us too.
+- **Property lists.** PicoLisp tried hash tables and self-adjusting binary
+  trees for properties and went back to plain lists of key-value pairs,
+  because the break-even point was higher than expected once the cost of
+  the whole system was counted. Its only concession to speed is a
+  last-recently-used scheme, which its author had "no concrete evidence"
+  was needed. Objects here start the same way (see Values, objects and
+  strings).
+
+The conclusion is "Less may be More", with a remedy for the cases where
+speed does matter: "just coding a few critical functions in C usually
+solves the problem". That is the split between the prelude and leaf C
+below. We do not copy PicoLisp's data structures, which are designed for
+Lisp. We copy its rules:
 
 1. **One way to do each thing.** One kind of frame, one form of code, one
    heap, one traversal, one language for the builtins.
@@ -71,7 +101,7 @@ its rules:
 3. **The state is a few registers and a heap.** Suspension, collection and
    writing a state follow from that without further design.
 4. **Textbook algorithms with known bounds.** CEK machine, Cheney copying,
-   property lists with a hash index for large objects, a backtracking
+   property lists searched in order, a backtracking
    RegExp matcher, merge sort. The effort goes into the representation and
    the inner loops.
 5. **A fast path needs a measurement and stays local.** A faster
@@ -223,7 +253,17 @@ dominated by entering the evaluation, and a tree the parser already built
 is entered with no compile step. The tree is also what tools read: the
 cursor, the source spans and the running code are one structure, so a
 debugger's "current position" is a CST node with nothing to map back.
-If loops turn out to matter, the remedy is to lay expression subtrees out
+
+PicoLisp's speed argument carries over only in part. Burger measured an
+interpreted PicoLisp against CLisp, compiled and interpreted [1]. On list
+processing, where the time goes into powerful built-in functions, the
+interpreter was 2.58 times faster than compiled CLisp. On a recursive
+Fibonacci, which is only arithmetic and control flow, compiled CLisp was
+about twice as fast. The nodes of a guard (`>`, `&&`, a property read)
+are small, like Fibonacci's and unlike `mapcar`'s, so we expect the second
+result, not the first: a tree walker slower on such code than a good
+bytecode VM, by a factor to be measured. Leaf operands and pure subtrees
+(above) are the answer inside the design. If loops turn out to matter, the remedy is to lay expression subtrees out
 in post-order in the resolver's output, which makes them read like stack
 code, and keep the machine; see Risks.
 
@@ -405,9 +445,12 @@ Simple representations, each chosen to make one inner loop short.
   reservation (below).
 - **Objects are a prototype, flags, and a property list**: an array of
   entries (key, value, attributes) in insertion order, which gives the
-  spec's enumeration order for free. Up to a threshold (about eight entries,
-  to be measured) lookup is a linear scan. Above it, the object gets a hash
-  index over the same entries. Keys compare by cached hash and length
+  spec's enumeration order for free. Lookup is a linear scan, as in
+  PicoLisp, which moved from hash tables and balanced trees back to plain
+  lists [1]. PicoLisp's other trick, moving the last key found to the
+  front, is not available, because it would change the order. A hash index
+  over the same entries, for objects above a size a benchmark chooses, is
+  the remedy if objects used as large maps appear (see Risks). Keys compare by cached hash and length
   first, then by content, so there is no intern table to keep per VM.
   Symbols compare by identity. Deleted entries leave a tombstone, and the
   collector drops tombstones when it copies the object.
@@ -582,6 +625,7 @@ tell which design it is using.
 | Heap frames dominate | allocation rate and collections per evaluation in profiles | a contiguous frame stack, with the generator's frames copied out at `yield` (a few frames, since generators are shallow). The machine |
 | Full collections too costly | collection time on VMs with a large live heap | a nursery with a barrier. The heap module |
 | Prelude builtins too slow | `map`, `sort`, promises in profiles | more leaf C for the byte work; a C fast path for the ordinary case, beside the prelude function it shortcuts, tested against it. One builtin at a time |
+| Linear lookup on large objects | objects used as maps with many keys, in profiles | a hash index over the property list above a measured size. The object module |
 | Quadratic concatenation | `s += x` loops in real charts | ropes. The string module |
 | The prelude leaks | a test262 failure that observes a prelude step | a new refusal in the prelude-mode table |
 
@@ -638,9 +682,11 @@ so the two can be compared.
 
 ## Sources
 
-1. Burger. *PicoLisp: A Radical Approach to Application Development.*
-   2006. <https://software-lab.de/radical.pdf>; PicoLisp,
-   <https://picolisp.com/>.
+1. Burger. *Pico Lisp: A Radical Approach to Application Development.*
+   Software Lab, 22 June 2006. <https://software-lab.de/radical.pdf>.
+   The benchmarks it reports were run on a 266 MHz Pentium notebook
+   against CLisp; they are an indication of the argument, not figures to
+   compare with.
 2. Felleisen, Friedman. *Control Operators, the SECD-Machine, and the
    λ-Calculus.* Formal Description of Programming Concepts III, 1986.
    The CEK machine.
