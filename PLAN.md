@@ -1,6 +1,6 @@
 # Plan: complete the ROADMAP (without the browser build)
 
-**Status: complete (2026-09-30).** Every commit below is on `main`; the
+**Status: phases A to H complete (2026-09-30); phase I in progress.** Every commit below is on `main`; the
 gaps found on the way are in `ROADMAP.md` under "Follow-ups". Commit 12's
 test landed with commit 13, and commit 31's cost was accepted (core ADR
 0097, napi ADR 0039).
@@ -256,6 +256,42 @@ accessors.
 32. **`feat(napi): a helper for naming effects`**
     - A short napi ADR for its shape first; it expands to
       `send(...).via(...)`.
+
+## Phase I: mail between actors is never refused for a full mailbox
+
+Decided 2026-09-30 (option B): the receiver's log accepts a message even
+when its mailbox is full. A refused send was durable in neither log, so it
+was lost on a replay from `spawned`, after an evict and exit, and after a
+crash while its sender was evicted; core ADR 0095 fixed only the
+checkpoint path.
+
+34. **`docs(host): a full mailbox overflows instead of refusing mail between actors`**
+    - A kernel ADR amending napi ADR 0005's limits and kernel ADR 0002:
+      the router always accepts mail between actors (writing `accepted`
+      for a logged receiver); past `maxQueuedMessages` or
+      `maxRetainedBytes` it waits in the receiver's overflow, in arrival
+      order, and the scheduler moves it into the mailbox as room appears.
+    - Defaults, open to change: no new cap on overflow (memory as before,
+      when overflow waited in the senders); one rule for logged and
+      unlogged receivers; mail from JavaScript keeps `queue-full`; out of
+      memory can still answer RETRY.
+35. **`feat(host): the router overflows full mailboxes`**
+    - Kernel scheduler and router; overflow counted in the stats snapshot,
+      napi's `stats()` and metrics, the test host's `hosted.mailboxes`.
+    - Replay and redelivery keep overflowed mail as owed, in order.
+    - Tests: kernel, test host scenarios, napi (a full mailbox, a crash,
+      a replay from `spawned`, an evict and exit: delivered once).
+36. **`refactor(core,host)!: remove the checkpoint's submitted-send special case`**
+    - What core ADR 0095 added for full mailboxes goes if nothing needs it
+      any more (`ta_actor_drop_submitted()`, the drop at `fired` and
+      `evicted`); submitted sends stay only for out-of-memory retries.
+      A note on ADR 0095 says what was superseded.
+37. **`test(host): a crash loses a delayed send's firing and its receipt together`**
+    - Commit 10's fourth timeline dropped only the logged sender while an
+      unlogged receiver ran on, a state no crash produces, and asserted two
+      deliveries. With both logged and crashing together, the send is
+      delivered once. Correct the "at-least-once window" in core ADR 0095's
+      notes the same way.
 
 ## Last
 
