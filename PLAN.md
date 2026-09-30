@@ -1,6 +1,6 @@
 # Plan: complete the ROADMAP (without the browser build)
 
-**Status: phases A to I complete (2026-10-01).** Every commit below is on `main`; the
+**Status: phases A to I complete; phase J in progress (2026-10-01).** Every commit below is on `main`; the
 gaps found on the way are in `ROADMAP.md` under "Follow-ups". Commit 12's
 test landed with commit 13, and commit 31's cost was accepted (core ADR
 0097, napi ADR 0039).
@@ -296,6 +296,33 @@ commits loses; it is a ROADMAP follow-up.
       deliveries. With both logged and crashing together, the send is
       delivered once. Correct the "at-least-once window" in core ADR 0095's
       notes the same way.
+
+## Phase J: a macrostep's first record commits with what it sent
+
+Found by commit 37: a delivery's `delivered` is always in turn N's batch
+and the macrostep it starts runs in turn N+1 (the scheduler resumes before
+it delivers), so an immediate send to another logged actor was lost by a
+crash between the two commits. Decided 2026-10-01: direction B (spike on
+branch `worktree-agent-a978a1fb4b1f680cc`), extended to paused macrosteps
+and bootstraps. Direction A (finish the macrostep in its delivery turn)
+was rejected: it gives up napi ADR 0007's fairness.
+
+38. **`docs(host): a macrostep's first record commits with what it sent`**
+    - Kernel ADR 0004: the rule, the spike's findings, A rejected and why.
+39. **`fix(host): delivered is written when its macrostep ends`**
+    - The spike's change: the first record of a macrostep (`delivered`,
+      `jump`, `released`) is held and written in the batch of the turn it
+      ends in; the ordering rule; replay publishes at the latest record
+      time; eviction answers BUSY inside a macrostep; out of memory retries.
+40. **`feat(host): a paused macrostep holds what it sends until it ends`**
+    - A logged actor's macrostep that pauses across turns keeps its mail
+      and effects in an outbox, released with its first record, so a crash
+      re-runs it with nothing already visible.
+41. **`fix(host): a new actor's first macrostep commits with its spawned`**
+    - The same rule with `spawned` as the first record, for bootstraps that
+      run a turn after the spawn (`resumesPerTurn`, `<invoke>`).
+42. **`docs: close the crash windows in the ROADMAP`**
+    - `bench-compare` and `test:full` results in ADR 0004's notes.
 
 ## Last
 
