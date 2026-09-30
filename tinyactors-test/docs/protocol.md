@@ -85,6 +85,20 @@ or set a budget before the call that first passes the adapter to core. Only the
 kinds whose adapter needs no system handle can be created this way:
 `allocator.counting`, `directory.memory`, and `inspector.recording`.
 
+### Hosted mode
+
+The `hosted.*` methods run a system through the host kernel
+(`tinyactors-host`, kernel ADR 0001 section 5) instead of through core calls
+a scenario makes one by one. The kernel queues, schedules and routes; the
+scenario runs turns and owns the clock, which starts at zero and moves only
+when the scenario moves it, with a fixed random seed, so a hosted run is
+reproducible. Scenarios about core's semantics keep using core directly.
+
+- `hosted.create` takes `{"incarnation"?}` and returns a `hosted` handle.
+- `hosted.close` takes `{"system": <hosted handle>}`, closes and frees the
+  system, and returns `{"leaked": <bytes>}`: what the kernel allocated and
+  did not free, which is always 0.
+
 ## Generated methods
 
 `mise run bindings` generates one method per public function in

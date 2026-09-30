@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "binding.h"
+#include "hosted.h"
 #include "instruments.h"
 #include "jq.h"
 #include "rpc.h"
@@ -226,6 +227,10 @@ static const tat_method TAT_HOST_METHODS[] = {
      "\"args\":{\"type\":\"json\",\"required\":false}}}"},
     {"handle.fixture", tat_handle_fixture_method,
      "{\"host\":true,\"params\":{\"type\":{\"type\":\"string\",\"required\":true}}}"},
+    {"hosted.create", tat_hosted_create_method,
+     "{\"host\":true,\"params\":{\"incarnation\":{\"type\":\"u64\",\"required\":false}}}"},
+    {"hosted.close", tat_hosted_close_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
 };
 
 static bool tat_register_methods(tat_server_impl *impl, ta_arena *arena) {

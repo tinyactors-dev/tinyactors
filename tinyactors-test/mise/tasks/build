@@ -40,6 +40,12 @@ CORE_DIST_HEADER = CORE_DIST_INCLUDE.join('tinyactors.h')
 # profile (-O2), which is also what a plain `mise run dist` in core publishes
 # by default.
 CORE_DIST_LIBRARY = CORE.join('dist/lib/release/libtinyactors.a')
+# The host kernel (tinyactors-host, kernel ADR 0001): its public headers and
+# the archive its own build task makes. Hosted mode (src/hosted.c) runs actors
+# through it; scenarios about core's semantics still drive core directly.
+KERNEL = WORKSPACE.join('tinyactors-host')
+KERNEL_INCLUDE = KERNEL.join('include')
+KERNEL_LIBRARY = KERNEL.join('build/libtinyactors_host.a')
 # The SCXML codec (ADR 0053) is compiled from its sources into the host, and
 # links txml's published archive. See ../tinyactors-scxml/README.md.
 SCXML = WORKSPACE.join('tinyactors-scxml')
@@ -125,6 +131,7 @@ end
 # before anything below compiles or links against them.
 run('mise', 'run', 'dist', chdir: CORE)
 run('mise', 'run', 'dist', chdir: XML)
+run('mise', 'run', 'build', chdir: KERNEL)
 
 # The generated bindings are cached by mise's own stamp, which survives
 # `rm -rf build`; force the task when what it generates is gone. `bindings`
@@ -181,6 +188,7 @@ host_sources = [
   ROOT.join('src/binding.c'),
   ROOT.join('src/adapters.c'),
   ROOT.join('src/instruments.c'),
+  ROOT.join('src/hosted.c'),
   SCXML.join('include/ta_scxml.c'),
   BUILD.join('gen/ta_rpc.c')
 ]
@@ -193,9 +201,11 @@ host_command = [
   "-I#{PREFIX.join('include')}",
   "-I#{JQ_BUILD.join('src')}",
   "-I#{CORE_DIST_INCLUDE}",
+  "-I#{KERNEL_INCLUDE}",
   "-I#{SCXML.join('include')}",
   "-I#{XML_DIST_INCLUDE}",
   *host_sources.map(&:to_s),
+  KERNEL_LIBRARY.to_s,
   CORE_DIST_LIBRARY.to_s,
   XML_DIST_LIBRARY.to_s,
   libjq.to_s,
@@ -207,7 +217,7 @@ host_command = [
   host_binary.to_s
 ]
 link('tinyactors-test', host_binary, host_command,
-     [*host_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, SCXML.join('include/ta_scxml.h'),
+     [*host_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, KERNEL_LIBRARY, *Dir[KERNEL_INCLUDE.join('**/*.h').to_s].sort.map { |p| Pathname.new(p) }, SCXML.join('include/ta_scxml.h'),
       XML_DIST_INCLUDE.join('txml.h'), XML_DIST_LIBRARY, libjq, libonig, libqjs], compiler_id)
 
 json_binary = BUILD.join('json_datamodel_test')

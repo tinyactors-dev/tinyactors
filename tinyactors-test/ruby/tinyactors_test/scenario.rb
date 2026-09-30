@@ -470,6 +470,17 @@ module TinyactorsTest
       @driver.call(method, params)
     end
 
+    # Hosted mode (kernel ADR 0001 section 5): a system whose actors the host
+    # kernel queues, schedules and routes. Turns run when the scenario asks.
+    def hosted_system(incarnation: 0)
+      rpc('hosted.create', incarnation: incarnation)
+    end
+
+    # Closes a hosted system; answers the bytes it leaked (always 0).
+    def close_hosted(handle)
+      rpc('hosted.close', system: handle)[:leaked]
+    end
+
     # The generated bindings, e.g. `ta.actor.spawn(system:, definition:)`.
     def ta
       @driver.ta
