@@ -884,6 +884,11 @@ ta_result tah_replay_prepare(tah_replay *replay, const tah_replay_prepare_params
             bool done = false;
             result = tah_replay_resume(system, actor, false, &ignored, &done);
             if (result != TA_OK && result != TA_ERR_RUNAWAY) {
+                /* The caller is never given this actor: it must not stay. */
+                system->inside_core = true;
+                (void)ta_actor_destroy(system->core, actor);
+                system->inside_core = false;
+                (void)tah_hook_actor_removed(system, actor);
                 return result;
             }
         }
