@@ -1,0 +1,25 @@
+#!/usr/bin/env ruby
+#MISE description="Test the host kernel: no recursion, freestanding for wasm32, the tests under AddressSanitizer and UBSan, and every test program (replay's out-of-memory sweep at every allocation only with --full)"
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../mise/lib/**/*", "../mise.toml"]
+#MISE outputs={auto=true}
+#MISE depends=["build"]
+#USAGE flag "--full" help="Also run the exhaustive checks: replay_test fails every allocation of its sweep, not a sample"
+# vim:ft=ruby
+
+require_relative '../../kernel'
+require 'etc'
+
+full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
+
+HostKernel.run('mise', 'run', 'check-recursion')
+HostKernel.run('mise', 'run', 'check-freestanding')
+HostKernel.run('mise', 'run', 'asan')
+
+# TAH_FULL=1: a test program runs its exhaustive checks (AGENTS.md, "Where a
+# new test goes"). The sanitizer builds above keep to the fast ones.
+exhaustive = full ? { 'TAH_FULL' => '1' } : {}
+failed = HostKernel.tests.reject do |test|
+  system(exhaustive, HostKernel::BUILD.join(test).to_s, chdir: HostKernel::ROOT.to_s)
+end
+abort "tinyactors-host: failed: #{failed.join(', ')}" unless failed.empty?
+puts "tinyactors-host: #{HostKernel.tests.size} test program(s) pass#{full ? ', exhaustive checks included' : ''}"

@@ -308,3 +308,38 @@ from a second binding:
 They found one bug, a checkpoint's self-send (`3cb4e60`). An out-of-memory
 sweep over replay stays with napi's and the kernel's existing
 `inputs_test` sweeps, and is not repeated per binding.
+
+### Step 4b: native replay tests after all (2026-09-30)
+
+`tests/replay_test.c` now exists. It drives `replay.c` as a binding
+does (open, push, prepare, run, finish, `ta_actor_publish()` with the
+published hook, redeliver), and covers Step 4a's list of what was left:
+- prepare, run and redeliver: the log pushed whole, cut in two at every
+  byte and in small pieces; MORE, NEED and FINISHED; owed mail put back
+  with its ID and data, and record numbers that continue the log's;
+- the checkpoint round trip: a restore from a checkpoint alone, from a
+  checkpoint followed by the records after it, and from a whole log with
+  a checkpoint in the middle; `tah_checkpoint_write`'s refusals;
+- two lives at one address (ENDED, then LIFE), CORRUPT and
+  DEFINITION_MISMATCH;
+- core ADR 0089 section 2's four timelines, as the kernel logs them (a
+  timer's firing is a `fired` record carrying time only). All four behave
+  as that ADR describes;
+- an out-of-memory sweep over the whole sequence, a checkpoint written and
+  restored included: each failed step answers NOMEM, leaves no actor
+  behind and leaks nothing, and succeeds when done again. The turn that
+  delivers the owed mail between the two runs no failure: the scheduler's
+  out-of-memory handling is `inputs_test`'s and the scheduler's to sweep.
+
+**This sweep replaces the line above that an out-of-memory sweep over
+replay "is not repeated per binding".** It is the kernel's, so no binding
+needs one. The sweep is exhaustive (AGENTS.md): the fast pass fails the
+first eight allocations and every 16th after; `mise run test --full`
+(`test:full`) sets `TAH_FULL=1`, and fails every one.
+
+Writing the tests found two bugs, fixed in their own commits:
+- `tah_wal_span()` answered a checkpoint unit whole when the bytes ended
+  right after its CHECKPOINT record, so a checkpoint pushed in pieces
+  could be read without its parts (CORRUPT) (`01c2a86`);
+- `tah_replay_prepare()` left the prepared actor behind, unknown to the
+  caller, when its bootstrap from `spawned` ran out of memory (`65f505e`).

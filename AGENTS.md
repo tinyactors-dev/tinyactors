@@ -53,7 +53,9 @@ and core does not handle bytes it has no use for.
   - the test host's exhaustive scenarios (below);
   - `scale_test` up to four million actors (the fast pass stops at
     200,000);
-  - napi's `scale.js` on Bun as well as Node, and up to a million actors.
+  - napi's `scale.js` on Bun as well as Node, and up to a million actors;
+  - the host kernel's out-of-memory sweep over replay at every allocation
+    (`replay_test` with `TAH_FULL=1`; the fast pass samples it).
 
   Run it before a release, and before committing a change to core's
   allocation, pause and resume, offload and paging, or trace-writing paths,

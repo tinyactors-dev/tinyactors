@@ -23,6 +23,12 @@
  *   a timer to itself fires once; a send to another actor that fired
  *   before the stop is not sent again; one still pending at the stop fires
  *   once after publish; one that fired after the last commit fires again.
+ * - Every allocation of the sequence (open, push, prepare, run, finish,
+ *   publish, redeliver, and a checkpoint written and restored), failed
+ *   once in turn: the step answers NOMEM, leaves no actor behind and
+ *   leaks nothing, and done again it succeeds. The sweep is exhaustive:
+ *   the fast pass fails the first eight allocations and every 16th after,
+ *   TAH_FULL=1 (mise run test --full) every one.
  */
 #include "check.h"
 #include <string.h>
@@ -47,8 +53,12 @@
 static uint64_t allocations;
 static uint64_t fail_at;
 static bool failed;
+static bool paused; /* neither counts nor fails */
 
 static void *failing_alloc(void *self, size_t size, size_t alignment) {
+    if (paused) {
+        return check_platform_alloc(self, size, alignment);
+    }
     allocations += 1u;
     if (fail_at != 0 && allocations == fail_at) {
         failed = true;
@@ -1248,7 +1258,98 @@ static void timeline_crash_between_commits(void) {
     finish_system(line.system);
 }
 
+/* ------------------------------------------------------------------------
+ * Running out of memory
+ */
+
+static uint32_t actors_of(tah_system *system, ta_definition_id definition) {
+    ta_definition_inspection view;
+    CHECK(ta_definition_inspect(system->core, definition, &view) == TA_OK);
+    return view.actor_count;
+}
+
+/*
+ * One step of the sequence under a failing allocation: a step that failed
+ * answers NOMEM and leaves no actor of its making behind, and doing it
+ * again succeeds.
+ */
+static void restore_or_retry(tah_system *system, const log_buffer *log, restore_run *out) {
+    uint32_t before = actors_of(system, out->definition);
+    ta_result result = restore(system, log->bytes, log->length, out);
+    if (result != TA_OK) {
+        CHECK(result == TA_ERR_NOMEM);
+        CHECK(!out->published && actors_of(system, out->definition) == before);
+        result = restore(system, log->bytes, log->length, out);
+    }
+    CHECK(result == TA_OK && out->published);
+}
+
+static void checkpoint_or_retry(tah_system *system, ta_actor_id actor, log_buffer *sink) {
+    sink->length = 0;
+    ta_result result = tah_checkpoint_write(system, actor, buffer_sink(sink));
+    if (result != TA_OK) {
+        CHECK(result == TA_ERR_NOMEM && sink->length == 0);
+        result = tah_checkpoint_write(system, actor, buffer_sink(sink));
+    }
+    CHECK(result == TA_OK && sink->length != 0);
+}
+
+/*
+ * The whole sequence with its `at`th allocation failed: the live log
+ * replayed in 16-byte pieces (open, push, prepare, run, finish, publish,
+ * redeliver), then, once a turn has taken the owed ping, a checkpoint of
+ * the result written and restored at the address in turn. Answers whether
+ * an allocation failed.
+ */
+static bool replay_failing_at(uint64_t at) {
+    fail_at = 0;
+    tah_system *system = make_system(2);
+    ta_definition_id definition = define_ping(system);
+    advance(system, 1000);
+    allocations = 0;
+    failed = false;
+    fail_at = at;
+
+    restore_run out = { .first = 16, .chunk = 16, .definition = definition };
+    restore_or_retry(system, &live_log, &out);
+    CHECK(out.redelivered == 1 && in_state(system, out.actor, "two"));
+    paused = true; /* the turns are the scheduler's, not the replay's */
+    run(system, NULL);
+    paused = false;
+    CHECK(in_state(system, out.actor, "three"));
+    static log_buffer written;
+    checkpoint_or_retry(system, out.actor, &written);
+    drop(system, out.actor);
+    restore_run again = { .first = 16, .chunk = 16, .definition = definition };
+    restore_or_retry(system, &written, &again);
+    CHECK(again.redelivered == 0 && in_state(system, again.actor, "three"));
+
+    bool done = !failed;
+    fail_at = 0;
+    finish_system(system);
+    return done;
+}
+
+/*
+ * The sequence's allocations failed once in turn, until a run fails none:
+ * the first eight, then every `step`th (1: every one).
+ */
+static void survives_every_failed_allocation(uint64_t step) {
+    uint32_t sweeps = 0;
+    for (uint64_t at = 1;; at += at < 8u ? 1u : step) {
+        sweeps += 1u;
+        if (replay_failing_at(at)) {
+            break;
+        }
+    }
+    CHECK(sweeps > 10);
+    CHECK(step != 1 || sweeps > 40); /* the whole sequence allocates more than 40 times */
+}
+
 int main(void) {
+    /* TAH_FULL=1 (mise run test --full): every allocation of the sweep. */
+    const char *full = getenv("TAH_FULL");
+    bool exhaustive = full != NULL && strcmp(full, "1") == 0;
     replays_a_log_cut_anywhere();
     replays_a_log_in_small_pieces();
     runs_in_windows();
@@ -1264,6 +1365,7 @@ int main(void) {
     timeline_fired_before_the_stop();
     timeline_pending_at_the_stop();
     timeline_crash_between_commits();
+    survives_every_failed_allocation(exhaustive ? 1u : 16u);
     puts("replay test passed");
     return 0;
 }
