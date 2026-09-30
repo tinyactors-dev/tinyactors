@@ -119,7 +119,8 @@ static void tna_pump_unhold(tna_napi_system *wrapper) {
 }
 
 /* The wake callback (system.h): setImmediate(turn). */
-static void tna_pump_wake(tah_system *system, void *context) {
+static bool tna_pump_wake(tah_system *system, void *context) {
+    (void)system;
     tna_napi_system *wrapper = context;
     napi_env env = wrapper->env;
     napi_value global = NULL;
@@ -138,12 +139,10 @@ static void tna_pump_wake(tah_system *system, void *context) {
             ok = false;
         }
     }
-    if (!ok) {
-        system->turn_pending = false; /* a later request tries again */
-    }
     if (scope != NULL) {
         napi_close_handle_scope(env, scope);
     }
+    return ok; /* false: a later request tries again */
 }
 
 /* Calls global[name](arguments...) and stores the result in `out` (may be NULL). */
@@ -172,13 +171,13 @@ static void tna_pump_clear_timer(napi_env env, tna_napi_system *wrapper) {
 }
 
 /* The arm callback (system.h): setTimeout(timer, delay).unref(). */
-static void tna_pump_arm(tah_system *system, ta_time delay, void *context) {
+static bool tna_pump_arm(tah_system *system, ta_time delay, void *context) {
     tna_napi_system *wrapper = context;
     napi_env env = wrapper->env;
     napi_handle_scope scope = NULL;
+    (void)system;
     if (napi_open_handle_scope(env, &scope) != napi_ok) {
-        system->clock.armed = false;
-        return;
+        return false;
     }
     tna_pump_clear_timer(env, wrapper);
     napi_value argv[2] = { NULL, NULL };
@@ -206,9 +205,9 @@ static void tna_pump_arm(tah_system *system, ta_time delay, void *context) {
         if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
             napi_get_and_clear_last_exception(env, &error);
         }
-        system->clock.armed = false;
     }
     napi_close_handle_scope(env, scope);
+    return ok;
 }
 
 bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, napi_value options) {
@@ -251,9 +250,8 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
         tna_throw(env, "out-of-memory", "cannot set up the pump");
         return false;
     }
-    wrapper->system->wake = tna_pump_wake;
-    wrapper->system->wake_context = wrapper;
-    wrapper->system->clock.arm = tna_pump_arm;
+    tah_system_set_driver(wrapper->system,
+                          &(tah_pump_driver){ .wake = tna_pump_wake, .arm = tna_pump_arm, .context = wrapper });
     return true;
 }
 
@@ -642,7 +640,7 @@ static bool tna_settled(tah_system *system) {
     }
     tah_loads_stats loads;
     tah_loads_read_stats(tah_system_loads(system), &loads);
-    return tah_system_quiet(system) && !system->turn_pending && loads.in_flight == 0;
+    return tah_system_quiet(system) && !tah_system_turn_pending(system) && loads.in_flight == 0;
 }
 
 void tna_pump_settle_waiters(napi_env env, tna_napi_system *wrapper) {
@@ -755,7 +753,7 @@ static napi_value tna_timer_callback(napi_env env, napi_callback_info info) {
 
 napi_value tna_pump_advance_to(napi_env env, tna_napi_system *wrapper, napi_value time_value) {
     tah_system *system = wrapper->system;
-    if (system->clock.kind != TAH_CLOCK_MANUAL) {
+    if (tah_system_clock_kind(system) != TAH_CLOCK_MANUAL) {
         return tna_throw(env, "invalid", "advanceTo() needs a system with clock: \"manual\"");
     }
     ta_time time = 0;
@@ -788,9 +786,7 @@ void tna_pump_close(tna_napi_system *wrapper, bool env_usable) {
     if (env == NULL) {
         return;
     }
-    wrapper->system->wake = NULL;
-    wrapper->system->clock.arm = NULL;
-    wrapper->system->clock.armed = false;
+    tah_system_set_driver(wrapper->system, NULL);
     if (env_usable) {
         tna_pump_clear_timer(env, wrapper);
     } else if (wrapper->timeout != NULL && !wrapper->env_data->torn_down) {

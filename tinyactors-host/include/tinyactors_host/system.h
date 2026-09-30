@@ -67,14 +67,27 @@
 
 typedef struct tah_system tah_system;
 
-/* Asks the host to run tah_system_turn() soon, never inside the caller. */
-typedef void (*tah_wake_fn)(tah_system *system, void *context);
+/*
+ * Asks the host to run tah_system_turn() soon, never inside the caller.
+ * False: no turn is coming (the host could not schedule one), and a later
+ * request asks again.
+ */
+typedef bool (*tah_wake_fn)(tah_system *system, void *context);
 /*
  * Asks the host for one timer that calls tah_system_timer_fired() after
  * `delay` milliseconds, replacing any timer it armed before. It must not keep
- * the process alive (ADR 0007 point 3).
+ * the process alive (ADR 0007 point 3). False: no timer is armed, and the
+ * next turn arms again.
  */
-typedef void (*tah_arm_fn)(tah_system *system, ta_time delay, void *context);
+typedef bool (*tah_arm_fn)(tah_system *system, ta_time delay, void *context);
+
+/* The binding's pump driver (ADR 0007): how the system asks for turns and
+ * timers. `arm` may be NULL when the binding only uses the manual clock. */
+typedef struct {
+    tah_wake_fn wake;
+    tah_arm_fn arm;
+    void *context;
+} tah_pump_driver;
 /* A monotonic clock in nanoseconds; only differences between readings matter. */
 typedef uint64_t (*tah_now_fn)(void *context);
 
@@ -86,7 +99,6 @@ typedef struct {
     uint64_t origin;       /* realtime: `now` at creation, in nanoseconds */
     tah_now_fn now;        /* realtime: the monotonic clock (a test may replace it) */
     void *now_context;
-    tah_arm_fn arm;        /* realtime: the host timer (pump.c) */
     bool armed;            /* a host timer is pending */
     ta_time armed_deadline;
 } tah_clock;
@@ -133,6 +145,45 @@ typedef struct {
     const char *operation;
 } tah_quarantine_report;
 
+/*
+ * What the system asks the binding's language layer (tah_system_set_callbacks).
+ * Each may be NULL; all get `context`. None is called after
+ * tah_system_close() returns.
+ */
+typedef struct {
+    void *context;
+    /*
+     * The in-system SCXML invoker (adapter_invoker.c) asks which registered
+     * definition an invoke starts: the child nested when the parent was
+     * defined, the one its content or src names, or chart text it compiles
+     * (napi ADR 0024). TA_OP_ERROR with `fault` saying why, TA_OP_NOMEM.
+     * NULL: the invoker refuses every invoke.
+     */
+    ta_op_status (*child_definition)(void *context, const tah_child_params *params);
+    /*
+     * The data of the error.communication a chart gets for mail to a target
+     * that does not exist (napi ADR 0022): napi makes { reason, target }.
+     * False leaves the event without data.
+     */
+    bool (*unreachable_data)(void *context, const tah_unreachable *unreachable, ta_value *out);
+    /*
+     * The data of the error a quarantined child's parent gets (napi ADR
+     * 0025): napi makes { code, message }, as the fault hook sees them.
+     * False: no memory, so the report waits for a later turn. NULL: the
+     * event has no data.
+     */
+    bool (*quarantine_data)(void *context, const tah_quarantine_report *report, ta_value *out);
+    /* The data of an invocation's `failed` report: { code, message } (napi
+     * ADR 0032 section 3); NULL leaves it without data. */
+    bool (*fault_data)(void *context, int32_t code, ta_str message, ta_value *out);
+    /*
+     * Called by close after core is destroyed and before the leak count:
+     * the binding frees what core released into it (napi's value-box free
+     * list, ADR 0011).
+     */
+    void (*after_core)(void *context);
+} tah_system_callbacks;
+
 struct tah_system {
     /* What the binding gives the kernel from the machine (tinyactors_host.h). */
     tah_platform platform;
@@ -148,8 +199,7 @@ struct tah_system {
     tah_turn_budgets budgets;
     uint32_t due_budget;   /* due sends dispatched in one turn, at least 1 */
     tah_clock clock;
-    tah_wake_fn wake;
-    void *wake_context;
+    tah_pump_driver driver;
     bool turn_pending; /* wake was called and the turn has not run yet */
     bool closed;
     /*
@@ -160,13 +210,7 @@ struct tah_system {
     bool inside_core;
     /* Bytes still in use when close finished; nonzero means a leak. */
     size_t leaked_bytes;
-    /*
-     * Called by close after core is destroyed and before the leak count:
-     * the Node-API layer frees what core released into it (the value-box
-     * free list, ADR 0011).
-     */
-    void (*after_core)(void *context);
-    void *after_core_context;
+    tah_system_callbacks callbacks;
     /* Effects waiting for JavaScript (effects.h), in the turn arena. */
     tah_effects effects;
     /* The trace encoder (otlp.h), while a sink is installed (napi ADR 0016):
@@ -182,33 +226,6 @@ struct tah_system {
     tah_definitions definitions;
     /* The last service handle a JavaScript invoker's start was given. */
     uint64_t next_service;
-    /*
-     * The in-system SCXML invoker (adapters/invoker.c) asks the Node-API
-     * layer which registered definition an invoke starts: the child nested
-     * when the parent was defined, the one its content or src names, or
-     * chart text it compiles (napi ADR 0024, napi_children.h). TA_OP_ERROR with `fault` saying why, TA_OP_NOMEM.
-     */
-    ta_op_status (*child_definition)(void *context, const tah_child_params *params);
-    void *child_context;
-    /*
-     * The data of the error.communication a chart gets for mail to a target
-     * that does not exist (napi ADR 0022): the Node-API layer makes
-     * { reason, target }. False leaves the event without data.
-     */
-    bool (*unreachable_data)(void *context, const tah_unreachable *unreachable, ta_value *out);
-    void *unreachable_context;
-    /*
-     * The data of the error a quarantined child's parent gets (napi ADR
-     * 0025): the Node-API layer makes { code, message }, as the fault hook
-     * sees them. False: no memory, so the report waits for a later turn.
-     * Without the callback the event has no data.
-     */
-    bool (*quarantine_data)(void *context, const tah_quarantine_report *report, ta_value *out);
-    /* The data of an invocation's `failed` report: { code, message } (napi
-     * ADR 0032 section 3); NULL leaves it without data. */
-    bool (*fault_data)(void *context, int32_t code, ta_str message, ta_value *out);
-    void *fault_context;
-    void *quarantine_context;
     /* Reports to parents that core has not taken yet (tah_quarantine_report). */
     tah_vec quarantine_reports;
     /* One record per registered I/O processor type (adapters/io.h, core ADR 0068). */
@@ -284,6 +301,20 @@ void tah_system_set_tracing(tah_system *system, bool tracing);
 /* <log> records go to the binding's log sink as effects (setLogSink); call
  * tah_system_refresh_log_sink() after. */
 void tah_system_set_log_to_js(tah_system *system, bool log_to_js);
+
+/* Installs the binding's callbacks (tah_system_callbacks), replacing any
+ * before; NULL removes them. */
+void tah_system_set_callbacks(tah_system *system, const tah_system_callbacks *callbacks);
+/*
+ * Installs the binding's pump driver; NULL detaches it: the system asks for
+ * no turn or timer after, and a timer it armed counts as gone. A binding
+ * detaches before it closes the system from where its callbacks cannot run.
+ */
+void tah_system_set_driver(tah_system *system, const tah_pump_driver *driver);
+/* Whether a turn was asked for and has not run yet. */
+bool tah_system_turn_pending(const tah_system *system);
+/* The clock tah_system_set_clock() chose (realtime unless it was called). */
+tah_clock_kind tah_system_clock_kind(const tah_system *system);
 size_t tah_system_leaked_bytes(const tah_system *system);
 void tah_system_free(tah_system *system);
 

@@ -185,8 +185,8 @@ static ta_external_event_submit_status tah_router_submit(void *self, const ta_ex
     if (!to_loader && tah_router_unreachable(system, &delivery->destination, &reason)) {
         const char *text = tah_router_unreachable_message(reason);
         ta_fault fault = { .code = TA_ERR_NOT_FOUND, .message = { text, (uint32_t)tah_str_length(text) } };
-        if (system->unreachable_data != NULL) {
-            (void)system->unreachable_data(system->unreachable_context,
+        if (system->callbacks.unreachable_data != NULL) {
+            (void)system->callbacks.unreachable_data(system->callbacks.context,
                                            &(tah_unreachable){ .reason = reason, .destination = &delivery->destination },
                                            &fault.data);
         }

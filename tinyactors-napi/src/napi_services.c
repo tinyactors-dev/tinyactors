@@ -346,14 +346,11 @@ static bool tna_fault_data(void *context, int32_t code, ta_str message, ta_value
     return made;
 }
 
-void tna_services_init(tna_napi_system *wrapper) {
-    tna_children_init(wrapper);
-    wrapper->system->unreachable_data = tna_unreachable_data;
-    wrapper->system->unreachable_context = wrapper;
-    wrapper->system->quarantine_data = tna_quarantine_data;
-    wrapper->system->quarantine_context = wrapper;
-    wrapper->system->fault_data = tna_fault_data;
-    wrapper->system->fault_context = wrapper;
+void tna_services_init(tna_napi_system *wrapper, tah_system_callbacks *callbacks) {
+    tna_children_init(wrapper, callbacks);
+    callbacks->unreachable_data = tna_unreachable_data;
+    callbacks->quarantine_data = tna_quarantine_data;
+    callbacks->fault_data = tna_fault_data;
 }
 
 /* ------------------------------------------------------------------------

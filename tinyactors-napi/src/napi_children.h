@@ -36,7 +36,8 @@ typedef struct {
     size_t failure_size;
 } tna_children;
 
-void tna_children_init(tna_napi_system *wrapper);
+/* Sets up the children's state, and puts the invoker's callback in `callbacks`. */
+void tna_children_init(tna_napi_system *wrapper, tah_system_callbacks *callbacks);
 /* Keeps `resolve` (a function) with `definition`, for its children's src. */
 ta_result tna_children_keep_resolver(tna_napi_system *wrapper, ta_definition_id definition, napi_value resolve);
 /*

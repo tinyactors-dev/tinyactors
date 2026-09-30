@@ -85,10 +85,10 @@ static ta_op_status tah_scxml_try_start(void *self, const ta_invoker_start_param
     ta_definition_id definition = 0;
     ta_value binding = { NULL, NULL };
     bool release = false;
-    if (system->child_definition == NULL) {
+    if (system->callbacks.child_definition == NULL) {
         return TAH_FAULT(params->fault, TA_ERR_INVALID, "invoker.scxml: the system is closing");
     }
-    ta_op_status status = system->child_definition(system->child_context,
+    ta_op_status status = system->callbacks.child_definition(system->callbacks.context,
                                                    &(tah_child_params){ .request = request,
                                                                         .out = &definition,
                                                                         .binding = &binding,
@@ -140,8 +140,8 @@ static ta_op_status tah_scxml_start(void *self, const ta_invoker_start_params *p
     }
     ta_fault *fault = params->fault;
     ta_event event = { .type = TA_EVENT_PLATFORM, .invoke_id = params->request->invoke_id };
-    bool made = system->fault_data == NULL ||
-                system->fault_data(system->fault_context, fault->code, fault->message, &event.data);
+    bool made = system->callbacks.fault_data == NULL ||
+                system->callbacks.fault_data(system->callbacks.context, fault->code, fault->message, &event.data);
     ta_value_release(&fault->data);
     *fault = (ta_fault){ 0 };
     if (!made) {

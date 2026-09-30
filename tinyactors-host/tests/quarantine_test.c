@@ -15,9 +15,10 @@
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 
-static void no_wake(tah_system *system, void *context) {
+static bool no_wake(tah_system *system, void *context) {
     (void)system;
     (void)context;
+    return true;
 }
 
 static ta_definition_id define(tah_system *system, const ta_scxml_spec *spec) {
@@ -95,11 +96,13 @@ static void reports(uint32_t fail_data) {
     /* A runaway at 50 microsteps (core ADR 0075), a parameter fixed at creation (core ADR 0092). */
     ta_param_value limit[] = { { .param = TA_PARAM_MICROSTEP_LIMIT, .value = 50 } };
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform(), .params = limit, .param_count = 1 }, &system) == TA_OK);
-    system->wake = no_wake;
-    system->child_definition = child_definition;
+    tah_system_set_driver(system, &(tah_pump_driver){ .wake = no_wake });
     data_script script = { .fail_data = fail_data };
-    system->quarantine_data = quarantine_data;
-    system->quarantine_context = &script;
+    tah_system_set_callbacks(system, &(tah_system_callbacks){
+                                         .context = &script,
+                                         .child_definition = child_definition,
+                                         .quarantine_data = quarantine_data,
+                                     });
 
     /* The child loops for ever; the parent waits for it in `waiting`. */
     ta_str spin_target[] = { S("spin"), { 0 } };
@@ -166,11 +169,13 @@ static void parent_gone(void) {
     /* A runaway at 50 microsteps (core ADR 0075), a parameter fixed at creation (core ADR 0092). */
     ta_param_value limit[] = { { .param = TA_PARAM_MICROSTEP_LIMIT, .value = 50 } };
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform(), .params = limit, .param_count = 1 }, &system) == TA_OK);
-    system->wake = no_wake;
-    system->child_definition = child_definition;
+    tah_system_set_driver(system, &(tah_pump_driver){ .wake = no_wake });
     data_script script = { .fail_data = 1 };
-    system->quarantine_data = quarantine_data;
-    system->quarantine_context = &script;
+    tah_system_set_callbacks(system, &(tah_system_callbacks){
+                                         .context = &script,
+                                         .child_definition = child_definition,
+                                         .quarantine_data = quarantine_data,
+                                     });
 
     ta_str spin_target[] = { S("spin"), { 0 } };
     ta_scxml_transition_spec spin[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = spin_target }, { 0 } };

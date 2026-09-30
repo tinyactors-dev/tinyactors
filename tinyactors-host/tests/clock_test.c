@@ -17,9 +17,10 @@
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 
-static void no_wake(tah_system *system, void *context) {
+static bool no_wake(tah_system *system, void *context) {
     (void)system;
     (void)context;
+    return true;
 }
 
 /* The fake monotonic clock, in nanoseconds. */
@@ -32,19 +33,19 @@ static uint64_t read_fake(void *context) {
 /* The host timers the system asked for. */
 static uint32_t armed_count;
 static ta_time armed_delay;
-static void record_arm(tah_system *system, ta_time delay, void *context) {
+static bool record_arm(tah_system *system, ta_time delay, void *context) {
     (void)system;
     (void)context;
     armed_count += 1u;
     armed_delay = delay;
+    return true;
 }
 
 static tah_system *make_system(tah_clock_kind kind, ta_time initial) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
-    system->wake = no_wake;
+    tah_system_set_driver(system, &(tah_pump_driver){ .wake = no_wake, .arm = record_arm });
     system->clock.now = read_fake;
-    system->clock.arm = record_arm;
     CHECK(tah_system_set_clock(system, kind, initial) == TA_OK);
     return system;
 }

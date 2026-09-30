@@ -136,8 +136,8 @@ void tah_system_close(tah_system *system) {
     tah_trace_watch_destroy(&system->trace_watch);
     /* Core freed every definition in its teardown, so the origins are empty. */
     tah_definitions_destroy(&system->definitions);
-    if (system->after_core != NULL) {
-        system->after_core(system->after_core_context);
+    if (system->callbacks.after_core != NULL) {
+        system->callbacks.after_core(system->callbacks.context);
     }
     tah_scratch_destroy(&system->scratch);
     system->leaked_bytes = tah_allocator_total(&system->allocator).bytes_in_use;
@@ -225,6 +225,25 @@ void tah_system_set_tracing(tah_system *system, bool tracing) {
 
 void tah_system_set_log_to_js(tah_system *system, bool log_to_js) {
     system->log_to_js = log_to_js;
+}
+
+void tah_system_set_callbacks(tah_system *system, const tah_system_callbacks *callbacks) {
+    system->callbacks = callbacks == NULL ? (tah_system_callbacks){ 0 } : *callbacks;
+}
+
+void tah_system_set_driver(tah_system *system, const tah_pump_driver *driver) {
+    system->driver = driver == NULL ? (tah_pump_driver){ 0 } : *driver;
+    if (driver == NULL) {
+        system->clock.armed = false;
+    }
+}
+
+bool tah_system_turn_pending(const tah_system *system) {
+    return system->turn_pending;
+}
+
+tah_clock_kind tah_system_clock_kind(const tah_system *system) {
+    return system->clock.kind;
 }
 
 size_t tah_system_leaked_bytes(const tah_system *system) {
@@ -425,7 +444,7 @@ void tah_system_arm_timer(tah_system *system) {
 static void tah_system_arm(tah_system *system) {
     tah_clock *clock = &system->clock;
     ta_time deadline = 0;
-    if (system->closed || clock->kind != TAH_CLOCK_REALTIME || clock->arm == NULL ||
+    if (system->closed || clock->kind != TAH_CLOCK_REALTIME || system->driver.arm == NULL ||
         !tah_system_next_deadline(system, &deadline)) {
         return;
     }
@@ -440,7 +459,9 @@ static void tah_system_arm(tah_system *system) {
     }
     clock->armed = true;
     clock->armed_deadline = deadline;
-    clock->arm(system, deadline - now, system->wake_context);
+    if (!system->driver.arm(system, deadline - now, system->driver.context)) {
+        clock->armed = false; /* the next turn arms again */
+    }
 }
 
 void tah_system_timer_fired(tah_system *system) {
@@ -458,8 +479,8 @@ void tah_system_want_turn(tah_system *system) {
         return;
     }
     system->turn_pending = true;
-    if (system->wake != NULL) {
-        system->wake(system, system->wake_context);
+    if (system->driver.wake != NULL && !system->driver.wake(system, system->driver.context)) {
+        system->turn_pending = false; /* a later request asks again */
     }
 }
 
@@ -472,8 +493,8 @@ void tah_system_want_turn(tah_system *system) {
  */
 static bool tah_quarantine_report_try(tah_system *system, tah_quarantine_report *report) {
     ta_event event = { .type = TA_EVENT_PLATFORM, .invoke_id = report->invoke_id };
-    if (system->quarantine_data != NULL &&
-        !system->quarantine_data(system->quarantine_context, report, &event.data)) {
+    if (system->callbacks.quarantine_data != NULL &&
+        !system->callbacks.quarantine_data(system->callbacks.context, report, &event.data)) {
         return false;
     }
     ta_result result = tah_sched_post(&system->sched, &(tah_message){ .target = report->parent, .event = &event,

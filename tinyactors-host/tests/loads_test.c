@@ -19,15 +19,16 @@
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 
-static void no_wake(tah_system *system, void *context) {
+static bool no_wake(tah_system *system, void *context) {
     (void)system;
     (void)context;
+    return true;
 }
 
 static tah_system *make_system(void) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
-    system->wake = no_wake;
+    tah_system_set_driver(system, &(tah_pump_driver){ .wake = no_wake });
     CHECK(tah_system_set_clock(system, TAH_CLOCK_MANUAL, 0) == TA_OK);
     return system;
 }

@@ -139,9 +139,6 @@ static void tna_close(tna_napi_system *wrapper, bool env_usable) {
     wrapper->dm.js_usable = env_usable;
     tah_system_close(wrapper->system);
     tna_children_close(wrapper);
-    wrapper->system->unreachable_data = NULL;
-    wrapper->system->quarantine_data = NULL;
-    wrapper->system->fault_data = NULL;
     tna_js_datamodel_close(&wrapper->dm, !wrapper->env_data->torn_down);
     tna_unlist(wrapper);
     wrapper->env_data->systems_closed += 1u;
@@ -499,8 +496,10 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     bool values_made = tna_values_init(&wrapper->values, env, tah_system_allocator(wrapper->system));
     wrapper->values.torn_down = &data->torn_down;
     wrapper->values.env_live = &data->values_live;
-    wrapper->system->after_core = tna_after_core;
-    wrapper->system->after_core_context = wrapper;
+    /* after_core from here on, since close gives the values back; the
+     * services' callbacks join it once they are set up. */
+    tah_system_callbacks callbacks = { .context = wrapper, .after_core = tna_after_core };
+    tah_system_set_callbacks(wrapper->system, &callbacks);
     if (!values_made || !tna_js_datamodel_init(&wrapper->dm, wrapper, env)) {
         tna_js_datamodel_close(&wrapper->dm, true);
         tah_system_free(wrapper->system);
@@ -524,7 +523,8 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         free(wrapper);
         return NULL;
     }
-    tna_services_init(wrapper);
+    tna_services_init(wrapper, &callbacks);
+    tah_system_set_callbacks(wrapper->system, &callbacks);
     (void)ta_system_set_definition_sink(tah_system_core(wrapper->system),
                                         (ta_definition_sink){ .self = wrapper, .v = &tna_definition_sink_vtable });
     if (napi_wrap(env, self, wrapper, tna_finalize, NULL, NULL) != napi_ok) {
@@ -626,7 +626,7 @@ static napi_value tna_clock_getter(napi_env env, napi_callback_info info) {
         return NULL;
     }
     napi_value clock = NULL;
-    const char *text = wrapper->system->clock.kind == TAH_CLOCK_MANUAL ? "manual" : "realtime";
+    const char *text = tah_system_clock_kind(wrapper->system) == TAH_CLOCK_MANUAL ? "manual" : "realtime";
     napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &clock);
     return clock;
 }

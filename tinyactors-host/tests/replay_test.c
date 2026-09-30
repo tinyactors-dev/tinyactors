@@ -153,9 +153,10 @@ static ta_op_status text_read(void *self, const ta_datamodel_value_read_params *
 
 static const ta_datamodel_vtable codec_vtable = { .value_write = text_write, .value_read = text_read };
 
-static void no_wake(tah_system *system, void *context) {
+static bool no_wake(tah_system *system, void *context) {
     (void)system;
     (void)context;
+    return true;
 }
 
 /* ------------------------------------------------------------------------
@@ -269,7 +270,7 @@ static tah_system *make_system(uint64_t incarnation) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = failing_platform(), .incarnation = incarnation },
                             &system) == TA_OK);
-    system->wake = no_wake;
+    tah_system_set_driver(system, &(tah_pump_driver){ .wake = no_wake });
     CHECK(tah_system_set_clock(system, TAH_CLOCK_MANUAL, 0) == TA_OK);
     tah_inputs_set_datamodel(&system->inputs, (ta_datamodel){ .self = NULL, .v = &codec_vtable });
     static const ta_str families[] = { STR("ping") };

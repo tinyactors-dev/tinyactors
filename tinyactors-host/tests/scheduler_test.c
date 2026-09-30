@@ -52,9 +52,10 @@ typedef struct {
     uint32_t wakes;
 } wake_counter;
 
-static void count_wake(tah_system *system, void *context) {
+static bool count_wake(tah_system *system, void *context) {
     (void)system;
     ((wake_counter *)context)->wakes += 1u;
+    return true;
 }
 
 static ta_definition_id define(tah_system *system, const ta_scxml_spec *spec) {
@@ -95,8 +96,7 @@ static void turns(void) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
     wake_counter counter = { 0 };
-    system->wake = count_wake;
-    system->wake_context = &counter;
+    tah_system_set_driver(system, &(tah_pump_driver){ .wake = count_wake, .context = &counter });
 
     /* idle: a stable chart. finish: an eventless transition to a final. */
     ta_scxml_state_spec idle_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle") }, { 0 } };

@@ -562,16 +562,14 @@ static ta_op_status tna_child_definition(void *context, const tah_child_params *
     return status;
 }
 
-void tna_children_init(tna_napi_system *wrapper) {
+void tna_children_init(tna_napi_system *wrapper, tah_system_callbacks *callbacks) {
     ta_allocator allocator = tna_children_allocator(wrapper);
     tah_vec_init(&wrapper->children.resolvers, allocator, TAH_LAYOUT(tna_child_resolver));
     wrapper->children.failure[0] = '\0';
-    wrapper->system->child_definition = tna_child_definition;
-    wrapper->system->child_context = wrapper;
+    callbacks->child_definition = tna_child_definition;
 }
 
 void tna_children_close(tna_napi_system *wrapper) {
     /* Core's teardown told of every definition it freed, so nothing is left. */
     tah_vec_destroy(&wrapper->children.resolvers);
-    wrapper->system->child_definition = NULL;
 }

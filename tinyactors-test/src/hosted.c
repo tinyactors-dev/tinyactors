@@ -43,9 +43,11 @@ static uint64_t tat_hosted_seed(void *self) {
 }
 
 /* Turns run when a scenario asks (hosted.turn), so a wake needs no loop. */
-static void tat_hosted_wake(tah_system *system, void *context) {
+/* Turns run when a scenario asks for them: the request stands until then. */
+static bool tat_hosted_wake(tah_system *system, void *context) {
     (void)system;
     (void)context;
+    return true;
 }
 
 static bool tat_hosted_resolve(tat_bind *bind, jv params, tat_hosted **out) {
@@ -96,7 +98,7 @@ jv tat_hosted_create_method(tat_bind *bind, jv params, int *error_code) {
      * streams both ways (kernel ADR 0002; core ADR 0090's notes). Hosted
      * charts use the jq data model. */
     tah_inputs_set_datamodel(tah_system_inputs(hosted->system), tat_json_datamodel(&bind->json));
-    hosted->system->wake = tat_hosted_wake;
+    tah_system_set_driver(hosted->system, &(tah_pump_driver){ .wake = tat_hosted_wake });
     (void)tah_system_set_clock(hosted->system, TAH_CLOCK_MANUAL, 0);
     jv out = jv_object();
     out = jv_object_set(out, jv_string("hosted"), tat_handle_register(bind, "hosted", hosted));

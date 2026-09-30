@@ -87,9 +87,10 @@ static ta_op_status text_write(void *self, const ta_datamodel_value_write_params
 
 static ta_datamodel_vtable codec_vtable = { .value_write = text_write };
 
-static void no_wake(tah_system *system, void *context) {
+static bool no_wake(tah_system *system, void *context) {
     (void)system;
     (void)context;
+    return true;
 }
 
 /* ------------------------------------------------------------------------
@@ -99,7 +100,7 @@ static void no_wake(tah_system *system, void *context) {
 static tah_system *make_system(void) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = failing_platform() }, &system) == TA_OK);
-    system->wake = no_wake;
+    tah_system_set_driver(system, &(tah_pump_driver){ .wake = no_wake });
     tah_inputs_set_datamodel(&system->inputs, (ta_datamodel){ .self = NULL, .v = &codec_vtable });
     static const ta_str families[] = { { "ping", 4 } };
     CHECK(tah_inputs_configure(system, families, 1) == TA_OK);
