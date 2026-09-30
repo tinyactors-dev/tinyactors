@@ -1,7 +1,7 @@
 # An MCP server: connect an agent to a system
 
 **Status:** Proposed (2026-09-29)
-**Touches:** tinyactors-core (every I/O processor registers a URL and a short name); the host kernel (the mapping, implemented once); tinyactors-napi and tinyactors-test (bind it; DAP removed); tinyactors-vscode (removed); root docs and AGENTS.md
+**Touches:** tinyactors-core (every I/O processor registers a URL and a short name); the host kernel (the mapping, implemented once); tinyactors-napi and tinyactors-test (bind it). The DAP adapters and tinyactors-vscode were removed on 2026-09-30, ahead of it.
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
 ## Goal
@@ -11,7 +11,8 @@ actors, read their configuration and data, send them events and read their
 replies, load them, move a wedged one out of its state. It is a debugger
 for an agent, over the Model Context Protocol (MCP), revision 2026-07-28.
 
-This replaces the Debug Adapter Protocol (DAP) adapters. Building them
+This replaces the Debug Adapter Protocol (DAP) adapters, which were
+removed on 2026-09-30 ahead of it. Building them
 found the core interfaces a debugger needs, and those stay (see
 [In this repository](#in-this-repository)). DAP itself is less useful than
 MCP:
@@ -433,25 +434,25 @@ core ADR of its own.
 | C5 | source spans on decode and encode (core ADR 0085) |
 | C6 | a resume that stops before a microstep's first unit (core ADR 0086) |
 
-**Goes**, in the change that lands the MCP servers:
+**Gone** (removed on 2026-09-30, ahead of the MCP servers):
 
 - napi: `createDebugSession`, `lib/debug.js`, `lib/debug/`, `DAPReader`,
   `encodeDAPMessage`, the `dap-server` task, `test/debug.js`,
   `test/dap-transcripts.js`, and their declarations in `index.d.ts`;
-  napi ADR 0026 is superseded, and the DAP permissions (`allow`) go with
-  it;
+  the DAP permissions (`allow`) and audit hook went with them, and napi
+  ADR 0026's status says so;
 - the test host: `ruby/dap/`, `ruby/dap.rb`, `bin/dap`,
   `ruby/dap_selftest.rb`, `ruby/dap_client.rb`, `ruby/dap_transcripts.rb`,
-  and `dap/`; the MCP transcripts take its place as `tinyactors-test/mcp/`;
+  and `dap/`; the MCP transcripts will take its place as
+  `tinyactors-test/mcp/`;
 - whatever of the Scheduler only the debugger used: `hold`, `stop!`, the
   monitor;
 - `tinyactors-vscode`, whose purpose was testing the DAP adapters;
 - `docs/debug-adapter.md`, and the AGENTS.md section on the VS Code
   extension. `docs/proposals/debug-adapter.md` stays as history.
 
-Whether core's stepping hooks (`pause_at_microstep_start`, action budgets)
-become unused once the workbench no longer steps is checked in that
-change. Scenarios exercise them, so they probably stay.
+Core's stepping hooks (`pause_at_microstep_start`, action budgets) stay:
+the pausing and operator scenarios use them.
 
 # Open questions
 
@@ -482,5 +483,6 @@ change. Scenarios exercise them, so they probably stay.
 - SCXML 1.0 (`tinyactors-core/docs/internal/scxml.md`): 6.2.4 (the target
   of a send), C.1 (the SCXML Event I/O Processor and its `#_` targets),
   5.10 (names beginning with `_` are reserved).
-- What it replaces: [the debug adapter proposal](debug-adapter.md),
-  [the status of every DAP message](../debug-adapter.md), napi ADR 0026.
+- What it replaces: [the debug adapter proposal](debug-adapter.md), napi
+  ADR 0026; the status of every DAP message was `docs/debug-adapter.md`,
+  in the history before its removal.

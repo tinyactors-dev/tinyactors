@@ -7,6 +7,11 @@ the work is in the [README](README.md#layers-and-responsibilities).
 
 ## Done recently
 
+- **The DAP adapters are removed (2026-09-30),** ahead of
+  [the MCP server proposal](docs/proposals/mcp-server.md): napi's
+  `createDebugSession`, the test host's `bin/dap`, the shared DAP
+  transcripts and tinyactors-vscode. The core features they needed stay
+  (core ADRs 0082 to 0086).
 - **The host kernel (2026-09-30).** `tinyactors-host/` holds what every
   host needs: scheduling, mailboxes, the router, the directory, loads,
   offloads, the OTLP encoder, and the write-ahead log.
@@ -123,8 +128,3 @@ gaps left or found on the way.
 - [ ] **Demo application.** A new project, tinyactors-open-stage, uses
   tinyactors-napi to build a web-based val.town clone where people deploy
   their actors, hot-reload them, and connect and listen to events.
-- [ ] **Finish the debug adapter.** Both adapters run: Ruby in
-  tinyactors-test and JavaScript in napi (core ADRs 0082 to 0086, napi ADR
-  0026). What is left is in
-  [the status of every DAP message](docs/debug-adapter.md);
-  [the design](docs/proposals/debug-adapter.md).

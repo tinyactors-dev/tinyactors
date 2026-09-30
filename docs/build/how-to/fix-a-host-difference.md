@@ -58,7 +58,7 @@ for one between machines, `Tool` for a program. See
 [Capture a domain concept](capture-a-domain-concept.md). The script then
 calls a method, and has no branch.
 
-A difference that is not about the toolchain (the debug adapter's paths)
+A difference that is not about the toolchain (how a path is spelled)
 is fixed where it is, by comparing what the file system resolves rather
 than what was typed.
 

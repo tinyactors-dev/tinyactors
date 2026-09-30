@@ -1,6 +1,6 @@
 # A debug adapter: attach to an actor, poke it, unwedge it
 
-**Status:** Adopted (2026-09-26) → [status of every DAP message](../debug-adapter.md), [ROADMAP.md](../../ROADMAP.md)
+**Status:** Adopted (2026-09-26), then removed (2026-09-30): both adapters, their status page and the VS Code extension were deleted ahead of [the MCP server proposal](mcp-server.md), which replaces them. The core features they needed stay (see that proposal, "In this repository"). Kept as history.
 **Touches:** tinyactors-core (source spans, operator transitions, images across systems, inspection), tinyactors-scxml, tinyactors-test (a Ruby adapter), tinyactors-napi (a JavaScript adapter and scheduler changes), a new VS Code extension
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
