@@ -31,4 +31,3 @@
 #include "store.h"
 #include "system.h"
 #include "interpreter.h"
-#include "input_log.h"

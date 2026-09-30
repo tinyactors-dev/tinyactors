@@ -1,6 +1,5 @@
 #include "actor.h"
 #include "interpreter.h"
-#include "input_log.h"
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     if (system == NULL) {
@@ -647,46 +646,15 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
         ta_actor_free(system, actor); /* frees what was re-armed, too */
         return result;
     }
-    /* A named actor of a logged family starts its log (ADR 0090): the
-     * record is kept only if the claim below succeeds. */
-    bool logged = params->address != NULL && system->input_sink.v != NULL && definition->input_logged;
-    if (logged) {
-        ta_record_desc record = { .kind = TA_RECORD_SPAWNED,
-                                  .time = ta_clock_now(&system->clock),
-                                  .field_count = 3,
-                                  .value = params->datamodel_binding,
-                                  .definition = definition };
-        record.fields[0] = ta_record_text_field(true, params->address->family.name);
-        record.fields[1] = ta_record_text_field(true, params->address->name);
-        record.fields[2] = ta_record_text_field(
-            true, (ta_str){ .ptr = (const char *)definition->identity.revision.ptr,
-                            .len = definition->identity.revision.len });
-        system->input_spawn_address = params->address;
-        result = ta_input_open(system, actor, &record);
-        if (result != TA_OK) {
-            system->input_spawn_address = NULL;
-            ta_actor_release_slot(system, id);
-            ta_actor_free(system, actor);
-            return result;
-        }
-    }
     /* The claim is the last fallible step: bootstrap has not run yet, so a
      * refused address leaves no trace of this spawn anywhere. */
     if (params->address != NULL) {
         result = ta_actor_claim_address(system, actor, params->address);
         if (result != TA_OK) {
-            if (logged) {
-                ta_input_close(system, false);
-                system->input_spawn_address = NULL;
-            }
             ta_actor_release_slot(system, id);
             ta_actor_free(system, actor);
             return result;
         }
-    }
-    if (logged) {
-        ta_input_close(system, true);
-        system->input_spawn_address = NULL;
     }
     if (params->parent != NULL) {
         /* Invoke: the invoking parent routes #_<invokeid> and autoforwarding to this child. */
@@ -994,15 +962,13 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
     if (definition == NULL || definition->retired) {
         return TA_ERR_NOT_FOUND;
     }
-    /* A log's first record gives the clock and the binding (ADR 0090). */
     const ta_time *at = params->at;
     const ta_value *binding = params->datamodel_binding;
-    ta_input_spawn spawn = {0};
     ta_time spawn_at = 0;
     /* A state gives the clock, the binding and everything else (ADR 0094). */
     const ta_actor_state *state = params->state;
     if (state != NULL) {
-        if (params->at != NULL || params->log != NULL) {
+        if (params->at != NULL) {
             return TA_ERR_INVALID;
         }
         ta_result checked = ta_actor_state_check(system, definition, state);
@@ -1015,34 +981,18 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
             binding = &state->root;
         }
     }
-    if (params->log != NULL) {
-        if (params->at != NULL || params->datamodel_binding != NULL) {
-            return TA_ERR_INVALID;
-        }
-        ta_result read = ta_input_read_spawn(
-            system, &(ta_input_spawn_params){ .log = params->log, .definition = definition, .out = &spawn });
-        if (read != TA_OK) {
-            return read;
-        }
-        spawn_at = spawn.time;
-        at = &spawn_at;
-        binding = spawn.has_binding ? &spawn.binding : NULL;
-    }
     if (at != NULL && *at > ta_clock_now(&system->clock)) {
-        ta_input_spawn_release(system, &spawn);
         return TA_ERR_INVALID;
     }
     ta_actor_ref self = {0};
     ta_result result = ta_actor_prepared_self(system, params, definition, &self);
     if (result != TA_OK) {
-        ta_input_spawn_release(system, &spawn);
         return result;
     }
     ta_actor *actor = NULL;
     result = ta_actor_new(system, definition, &actor);
     if (result != TA_OK) {
         ta_actor_ref_release(&self);
-        ta_input_spawn_release(system, &spawn);
         return result;
     }
     ta_actor_id id = actor->record.id;
@@ -1056,8 +1006,6 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
         } else {
             effects->replaying = true;
             effects->clock = *at;
-            /* A replay from a log continues its numbering. */
-            actor->sparse->log_seq = spawn.seq;
         }
     }
     /* A traced bootstrap's parent waits in an event block (ADR 0067). */
@@ -1078,16 +1026,9 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
             });
         actor->datamodel_initialized = result == TA_OK;
     }
-    /* A log that starts with a checkpoint gives the actor its state, and
-     * no bootstrap runs (ADR 0091 section 3). */
-    if (result == TA_OK && spawn.kind == TA_RECORD_CHECKPOINT) {
-        result = ta_input_restore(system, actor,
-                                  &(ta_input_restore_params){ .spawn = &spawn, .log = params->log });
-    }
     if (result == TA_OK && state != NULL) {
         result = ta_actor_state_restore(system, actor, state);
     }
-    ta_input_spawn_release(system, &spawn);
     if (result != TA_OK) {
         ta_actor_release_slot(system, id);
         ta_actor_free(system, actor);
@@ -1296,21 +1237,6 @@ void ta_actor_move_clock(ta_actor *actor, ta_time time) {
     effects->clock = time;
 }
 
-ta_result ta_actor_advance_clock(ta_system *system, ta_actor_id id, ta_time time) {
-    ta_actor *actor = ta_actor_lookup(system, id);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    if (!ta_actor_replaying(actor) || !ta_actor_input_time_valid(system, actor, time)) {
-        return TA_ERR_INVALID;
-    }
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
-        return TA_ERR_BUSY;
-    }
-    ta_actor_move_clock(actor, time);
-    return TA_OK;
-}
-
 /*
  * Checks an I/O origin against the registry, and gives an event from one of
  * the actor's invocations an invoke origin when it has none (ADR 0068).
@@ -1331,37 +1257,6 @@ static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor 
     }
     (void)ta_invoke_origin_for(system, actor, event->invoke_id, &event->origin);
     return TA_OK;
-}
-
-typedef struct {
-    const ta_event *event;
-    const ta_operator_transition *transition;
-    uint64_t host_seq;
-} ta_actor_delivery_log;
-
-/* Opens the EVENT or JUMP record of a delivery (ADR 0090). */
-static ta_result ta_actor_log_delivery(ta_system *system, ta_actor *actor, const ta_actor_delivery_log *delivery) {
-    const ta_operator_transition *transition = delivery->transition;
-    ta_record_desc record = { .kind = transition != NULL ? TA_RECORD_JUMP : TA_RECORD_EVENT,
-                              .time = ta_actor_now(system, actor),
-                              .value = &delivery->event->data,
-                              .definition = actor->definition };
-    ta_record_event_texts texts;
-    ta_input_event_fields(&(ta_record_event_params){ .system = system,
-                                                     .actor = actor,
-                                                     .event = delivery->event,
-                                                     .host_seq = delivery->host_seq },
-                          &texts, &record);
-    if (transition != NULL) {
-        bool rooted = transition->source == TA_STATE_NONE;
-        record.fields[record.field_count++] = ta_record_text_field(
-            !rooted, rooted ? (ta_str){ 0 }
-                            : ta_atom_text(&system->atoms, actor->definition->states[transition->source].name));
-        record.fields[record.field_count++] = ta_record_number(transition->target_count);
-        record.targets = transition->targets;
-        record.target_count = transition->target_count;
-    }
-    return ta_input_open(system, actor, &record);
 }
 
 ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
@@ -1397,19 +1292,6 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     if (result != TA_OK) {
         return result;
     }
-    /* A logged actor's record is written first, and kept only if the
-     * delivery takes (ADR 0090 section 5). */
-    bool logged = ta_input_logged(system, actor);
-    if (logged) {
-        result = ta_actor_log_delivery(system, actor, &(ta_actor_delivery_log){
-                                                          .event = &accepted,
-                                                          .transition = transition,
-                                                          .host_seq = params->host_seq,
-                                                      });
-        if (result != TA_OK) {
-            return result;
-        }
-    }
     /* The operator transition, and the event block the event lives in until
      * its macrostep ends (ADR 0069), are the steps here that can fail, and
      * they change nothing when they do. */
@@ -1418,9 +1300,6 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
         jump = ta_mem_alloc(system->allocator, ta_operator_jump_bytes(transition->target_count),
                             _Alignof(ta_operator_jump));
         if (jump == NULL) {
-            if (logged) {
-                ta_input_close(system, false);
-            }
             return TA_ERR_NOMEM;
         }
         jump->source = transition->source;
@@ -1434,14 +1313,7 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
                         &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(jump->target_count),
                                                      .alignment = _Alignof(ta_operator_jump) });
         }
-        if (logged) {
-            ta_input_close(system, false);
-        }
         return result;
-    }
-    if (logged) {
-        ta_input_close(system, true);
-        actor->sparse->log_released = false;
     }
     /* Nothing below can fail: the input's time is now the actor's. */
     ta_actor_move_clock(actor, params->time);
@@ -1473,19 +1345,7 @@ ta_result ta_actor_abandon(ta_system *system, ta_actor_id id) {
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    bool logged = ta_input_logged(system, actor);
-    if (logged) {
-        ta_record_desc record = { .kind = TA_RECORD_ABANDONED, .time = ta_actor_now(system, actor) };
-        ta_result result = ta_input_open(system, actor, &record);
-        if (result != TA_OK) {
-            return result;
-        }
-    }
-    ta_result result = ta_interpreter_abandon(system, actor);
-    if (logged) {
-        ta_input_close(system, result == TA_OK);
-    }
-    return result;
+    return ta_interpreter_abandon(system, actor);
 }
 
 /*
@@ -1504,22 +1364,7 @@ ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_send_id s
     if (actor == NULL || ta_actor_timers(actor) == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    /* A logged actor's WITHDRAWN is kept only if a send was withdrawn (ADR 0090). */
-    bool logged = ta_input_logged(system, actor);
-    if (logged) {
-        ta_record_desc record = { .kind = TA_RECORD_WITHDRAWN, .time = ta_actor_now(system, actor) };
-        ta_record_event_texts texts = { .system = system };
-        ta_input_send_field(&texts, send, &record);
-        ta_result result = ta_input_open(system, actor, &record);
-        if (result != TA_OK) {
-            return result;
-        }
-    }
-    ta_result result = ta_actor_withdraw(system, actor, send);
-    if (logged) {
-        ta_input_close(system, result == TA_OK);
-    }
-    return result;
+    return ta_actor_withdraw(system, actor, send);
 }
 
 static ta_result ta_actor_withdraw(ta_system *system, ta_actor *actor, ta_send_id send) {
@@ -1563,19 +1408,6 @@ ta_actor_ref ta_actor_runtime_ref(const ta_system *system, ta_actor_id id) {
     return (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .family = ta_actor_family_of(system, id), .as.runtime = id };
 }
 
-/* The directory still routes the actor's address to it. */
-static bool ta_actor_holds_address(ta_system *system, const ta_actor *actor) {
-    if (actor->record.self.kind != TA_ACTOR_REF_NAMED || system->directory.v == NULL ||
-        system->directory.v->resolve == NULL) {
-        return false;
-    }
-    ta_actor_directory_entry entry = { 0 };
-    ta_result result = system->directory.v->resolve(
-        system->directory.self,
-        &(ta_actor_directory_resolve_params){ .address = actor->record.self.as.named, .out = &entry });
-    return result == TA_OK && entry.kind == TA_ACTOR_DIRECTORY_RESIDENT && entry.actor == actor->record.id;
-}
-
 ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     ta_actor *actor = ta_actor_lookup(system, id);
     if (actor == NULL) {
@@ -1592,16 +1424,6 @@ ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
     if (result != TA_OK) {
         return result;
-    }
-    /* A logged actor that ends here, rather than finishing, being evicted
-     * or being replaced at its address, records it (ADR 0090). */
-    if (ta_input_logged(system, actor) && !actor->finished && !(sparse != NULL && sparse->log_evicted) &&
-        ta_actor_holds_address(system, actor)) {
-        ta_record_desc record = { .kind = TA_RECORD_DESTROYED, .time = ta_actor_now(system, actor) };
-        result = ta_input_write(system, actor, &record);
-        if (result != TA_OK) {
-            return result;
-        }
     }
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_DESTROYED, NULL);

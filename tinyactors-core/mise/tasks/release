@@ -21,7 +21,7 @@ argv = ARGV.dup
 # TESTS_WITH_RUNTIME) use the public API alone, so they link against the
 # packed libraries unchanged; each runs in well under a second.
 PACKED_TESTS = %w[version_test delayed_send_test null_datamodel_test session_image_test pause_test operator_test
-                  trace_test inspection_test retirement_test replay_test input_log_test send_id_test].freeze
+                  trace_test inspection_test retirement_test replay_test send_id_test].freeze
 
 CRelease.release(
   project: project,

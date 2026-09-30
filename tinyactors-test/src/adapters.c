@@ -663,8 +663,6 @@ const tat_adapter TAT_ADAPTERS[] = {
     {"trace.recording", "ta_trace_sink", sizeof(ta_trace_sink), tat_make_recording_trace},
     {"definition.recording", "ta_definition_sink", sizeof(ta_definition_sink), tat_make_recording_definition},
     {"inspector.recording", "ta_actor_inspector", sizeof(ta_actor_inspector), tat_make_recording_inspector},
-    {"input.recording", "ta_byte_sink", sizeof(ta_byte_sink), tat_make_input_recording},
-    {"input.log", "ta_byte_source", sizeof(ta_byte_source), tat_make_input_log},
 };
 
 const size_t TAT_ADAPTER_COUNT = sizeof(TAT_ADAPTERS) / sizeof(TAT_ADAPTERS[0]);

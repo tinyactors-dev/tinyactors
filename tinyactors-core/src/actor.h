@@ -148,16 +148,8 @@ typedef struct {
     ta_timer_list timers;
     bool has_parent;
     bool completion_pending;
-    /* The input log (ADR 0090), in the padding: `finished` is written,
-     * the host logged the actor `evicted`, and the running macrostep's
-     * release from its microstep limit is written. */
-    bool log_finished;
-    bool log_evicted;
-    bool log_released;
     /* A microstep paused inside executable content (ADR 0061), or null. */
     ta_continuation *paused;
-    /* The number of its last input-log record (ADR 0090): the next is one more. */
-    uint64_t log_seq;
 } ta_actor_sparse_state;
 
 struct ta_actor {
@@ -295,7 +287,6 @@ void ta_actor_move_clock(ta_actor *actor, ta_time time);
 /* A replaying actor's clock moved by a record that is not an input (ADR 0090
  * section 7's reducer): TA_ERR_INVALID, TA_ERR_BUSY or TA_ERR_NOT_FOUND as
  * an input's time would be refused. */
-ta_result ta_actor_advance_clock(ta_system *system, ta_actor_id actor, ta_time time);
 
 /* Materialized effects of an unpublished replacement's bootstrap. */
 ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);

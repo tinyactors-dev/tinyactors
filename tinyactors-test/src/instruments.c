@@ -38,7 +38,6 @@ typedef enum {
     TAT_INSTRUMENT_REQUEST,
     TAT_INSTRUMENT_TRACE,
     TAT_INSTRUMENT_DEFINITION,
-    TAT_INSTRUMENT_INPUT,
 } tat_instrument_kind;
 
 static const char *const TAT_INSTRUMENT_KINDS[] = {
@@ -46,7 +45,6 @@ static const char *const TAT_INSTRUMENT_KINDS[] = {
     "invoker.scripted",   "io.recording",     "log.recording",
     "inspector.recording", "io.peer",          "io.connection",
     "io.request",         "trace.recording",  "definition.recording",
-    "input.recording",
 };
 
 /* allocator.counting: the size and alignment of every live allocation. */
@@ -152,21 +150,6 @@ typedef struct tat_instrument {
     tat_invoker_state invoker;
     tat_inspector_state inspector;
     tat_endpoint_state endpoint;
-    /* input.recording: the bytes of the records core kept (core ADR 0090),
-     * where each ends, and input.log's read position over them. */
-    struct {
-        uint8_t *bytes;
-        size_t len;
-        size_t cap;
-        size_t unit_start;
-        size_t *ends;
-        size_t end_count;
-        size_t end_cap;
-        size_t read_at;
-        size_t largest_write; /* the largest single write core made: a writer that streams keeps it small */
-        uint32_t piece;
-        bool open;
-    } input;
     /* trace.recording: the sink's mask and whether it traces unsampled
      * macrosteps, fixed when it is created. */
     uint32_t trace_kinds;
@@ -2016,215 +1999,6 @@ static jv tat_control_endpoint(tat_instrument *instrument, const char *command, 
                                                      : ""));
 }
 
-/* ------------------------------------------------------------------------
- * input.recording and input.log
- *
- * input.recording is the system's input sink (core ADR 0090): it keeps the
- * bytes of every record core keeps, and journals each as "record" {kind,
- * record_seq, time, bytes}. "fail" arms op "begin" or "write" (answered
- * TA_OP_NOMEM, so core refuses the input). "truncate" {"records": n} keeps
- * the first n records, as a crash after the n-th commit would, and
- * rewinds. "compact" {"records": n} drops the first n units, as a store that
- * kept a checkpoint and let go of the records it covers does (core ADR
- * 0091), and rewinds. input.log is a byte source over the same bytes, config
- * {"name": <the input.recording's name>, "piece"?: n (default 4096)}:
- * "rewind" {"piece"?: n} reads it again from the start, "remaining" says
- * how many bytes are left.
- */
-
-static const char *const TAT_RECORD_KINDS[] = {
-    "none",     "spawned",   "event",    "jump",      "report", "fired",   "withdrawn",
-    "abandoned", "released", "finished", "destroyed", "queued", "dropped", "evicted",
-    "checkpoint", "checkpoint_history", "checkpoint_send", "checkpoint_invoke",
-};
-
-static uint64_t tat_input_le(const uint8_t *bytes, uint32_t count) {
-    uint64_t value = 0;
-    for (uint32_t index = 0; index < count; index += 1) {
-        value |= (uint64_t)bytes[index] << (8u * index);
-    }
-    return value;
-}
-
-static ta_op_status tat_input_begin(void *self) {
-    tat_instrument *instrument = self;
-    jv spec;
-    if (tat_take_fault(instrument, "begin", &spec)) {
-        jv_free(spec);
-        tat_journal(instrument, "begin", jv_object_set(jv_object(), jv_string("injected"), jv_true()));
-        return TA_OP_NOMEM;
-    }
-    instrument->input.open = true;
-    instrument->input.unit_start = instrument->input.len;
-    return TA_OP_OK;
-}
-
-static ta_op_status tat_input_write(void *self, ta_bytes bytes) {
-    tat_instrument *instrument = self;
-    jv spec;
-    if (tat_take_fault(instrument, "write", &spec)) {
-        jv_free(spec);
-        tat_journal(instrument, "write", jv_object_set(jv_object(), jv_string("injected"), jv_true()));
-        return TA_OP_NOMEM;
-    }
-    if (instrument->input.len + bytes.len > instrument->input.cap) {
-        size_t cap = (instrument->input.len + bytes.len) * 2u + 256u;
-        uint8_t *grown = realloc(instrument->input.bytes, cap);
-        if (grown == NULL) {
-            return TA_OP_NOMEM;
-        }
-        instrument->input.bytes = grown;
-        instrument->input.cap = cap;
-    }
-    if (bytes.len != 0) {
-        memcpy(instrument->input.bytes + instrument->input.len, bytes.ptr, bytes.len);
-    }
-    instrument->input.len += bytes.len;
-    if (bytes.len > instrument->input.largest_write) {
-        instrument->input.largest_write = bytes.len;
-    }
-    return TA_OP_OK;
-}
-
-static void tat_input_end(void *self, bool keep) {
-    tat_instrument *instrument = self;
-    instrument->input.open = false;
-    size_t start = instrument->input.unit_start;
-    if (!keep || instrument->input.len - start < 32u) {
-        instrument->input.len = start;
-        return;
-    }
-    if (instrument->input.end_count == instrument->input.end_cap) {
-        size_t cap = instrument->input.end_cap == 0 ? 16 : instrument->input.end_cap * 2;
-        size_t *grown = realloc(instrument->input.ends, cap * sizeof(size_t));
-        if (grown == NULL) {
-            instrument->input.len = start;
-            return;
-        }
-        instrument->input.ends = grown;
-        instrument->input.end_cap = cap;
-    }
-    instrument->input.ends[instrument->input.end_count++] = instrument->input.len;
-    const uint8_t *header = instrument->input.bytes + start;
-    uint64_t kind = tat_input_le(header + 2, 2);
-    jv entry = jv_object();
-    entry = jv_object_set(entry, jv_string("kind"),
-                          jv_string(kind < sizeof TAT_RECORD_KINDS / sizeof TAT_RECORD_KINDS[0] ? TAT_RECORD_KINDS[kind]
-                                                                                                : "unknown"));
-    entry = jv_object_set(entry, jv_string("record_seq"), tat_u64(tat_input_le(header + 8, 8)));
-    entry = jv_object_set(entry, jv_string("time"), tat_u64(tat_input_le(header + 16, 8)));
-    entry = jv_object_set(entry, jv_string("bytes"), tat_u64(instrument->input.len - start));
-    tat_journal(instrument, "record", entry);
-}
-
-static const ta_byte_sink_vtable TAT_INPUT_SINK = {
-    .begin = tat_input_begin, .write = tat_input_write, .end = tat_input_end,
-};
-
-static ta_op_status tat_input_read(void *self, const ta_byte_read_params *params) {
-    tat_instrument *instrument = self;
-    size_t left = instrument->input.len - instrument->input.read_at;
-    uint32_t count = params->capacity < instrument->input.piece ? params->capacity : instrument->input.piece;
-    if (count > left) {
-        count = (uint32_t)left;
-    }
-    if (count != 0) {
-        memcpy(params->buffer, instrument->input.bytes + instrument->input.read_at, count);
-    }
-    instrument->input.read_at += count;
-    *params->got = count;
-    return TA_OP_OK;
-}
-
-static const ta_byte_source_vtable TAT_INPUT_SOURCE = { .read = tat_input_read };
-
-bool tat_make_input_recording(tat_bind *bind, jv config, void *out) {
-    bool created = false;
-    tat_instrument *instrument = tat_instrument_resolve(bind, config, TAT_INSTRUMENT_INPUT, NULL, false, &created);
-    if (instrument == NULL) {
-        return false;
-    }
-    if (instrument->input.piece == 0) {
-        instrument->input.piece = 4096;
-    }
-    *(ta_byte_sink *)out = (ta_byte_sink){ .self = instrument, .v = &TAT_INPUT_SINK };
-    return true;
-}
-
-bool tat_make_input_log(tat_bind *bind, jv config, void *out) {
-    jv name = jv_is_valid(config) && jv_get_kind(config) == JV_KIND_OBJECT ? jv_object_get(jv_copy(config), jv_string("name"))
-                                                                            : jv_invalid();
-    tat_instrument *instrument = jv_get_kind(name) == JV_KIND_STRING ? tat_instrument_find(jv_string_value(name)) : NULL;
-    jv_free(name);
-    if (instrument == NULL || instrument->kind != TAT_INSTRUMENT_INPUT) {
-        return tat_fail(bind, "input.log needs config.name, the name of an input.recording instrument");
-    }
-    jv piece = jv_object_get(jv_copy(config), jv_string("piece"));
-    if (jv_get_kind(piece) == JV_KIND_NUMBER && jv_number_value(piece) >= 1) {
-        instrument->input.piece = (uint32_t)jv_number_value(piece);
-    }
-    jv_free(piece);
-    if (instrument->input.piece == 0) {
-        instrument->input.piece = 4096;
-    }
-    *(ta_byte_source *)out = (ta_byte_source){ .self = instrument, .v = &TAT_INPUT_SOURCE };
-    return true;
-}
-
-static jv tat_control_input(tat_instrument *instrument, const char *command, jv args, int *error_code) {
-    static const char *const ops[] = { "begin", "write", NULL };
-    if (strcmp(command, "fail") == 0) {
-        return tat_arm_fault(instrument, ops, args, error_code);
-    }
-    if (strcmp(command, "rewind") == 0 || strcmp(command, "truncate") == 0) {
-        jv piece = jv_object_get(jv_copy(args), jv_string("piece"));
-        if (jv_get_kind(piece) == JV_KIND_NUMBER && jv_number_value(piece) >= 1) {
-            instrument->input.piece = (uint32_t)jv_number_value(piece);
-        }
-        jv_free(piece);
-        if (strcmp(command, "truncate") == 0) {
-            jv records = jv_object_get(jv_copy(args), jv_string("records"));
-            size_t keep = jv_get_kind(records) == JV_KIND_NUMBER ? (size_t)jv_number_value(records) : 0;
-            jv_free(records);
-            if (keep > instrument->input.end_count) {
-                return tat_invalid(error_code, jv_string("truncate: fewer records than that were kept"));
-            }
-            instrument->input.end_count = keep;
-            instrument->input.len = keep == 0 ? 0 : instrument->input.ends[keep - 1];
-        }
-        instrument->input.read_at = 0;
-        return jv_object_set(jv_object(), jv_string("bytes"), tat_u64(instrument->input.len));
-    }
-    if (strcmp(command, "compact") == 0) {
-        jv records = jv_object_get(jv_copy(args), jv_string("records"));
-        size_t drop = jv_get_kind(records) == JV_KIND_NUMBER ? (size_t)jv_number_value(records) : 0;
-        jv_free(records);
-        if (drop > instrument->input.end_count) {
-            return tat_invalid(error_code, jv_string("compact: fewer records than that were kept"));
-        }
-        size_t cut = drop == 0 ? 0 : instrument->input.ends[drop - 1];
-        memmove(instrument->input.bytes, instrument->input.bytes + cut, instrument->input.len - cut);
-        instrument->input.len -= cut;
-        for (size_t index = drop; index < instrument->input.end_count; index += 1) {
-            instrument->input.ends[index - drop] = instrument->input.ends[index] - cut;
-        }
-        instrument->input.end_count -= drop;
-        instrument->input.read_at = 0;
-        return jv_object_set(jv_object(), jv_string("bytes"), tat_u64(instrument->input.len));
-    }
-    if (strcmp(command, "remaining") == 0) {
-        return jv_object_set(jv_object(), jv_string("bytes"),
-                             tat_u64(instrument->input.len - instrument->input.read_at));
-    }
-    if (strcmp(command, "stats") == 0) {
-        jv stats = jv_object_set(jv_object(), jv_string("bytes"), tat_u64(instrument->input.len));
-        return jv_object_set(stats, jv_string("largest_write"), tat_u64(instrument->input.largest_write));
-    }
-    return tat_invalid(error_code, jv_string("input.recording commands: fail {op: begin | write}, rewind {piece?}, "
-                                             "truncate {records, piece?}, compact {records}, remaining, stats"));
-}
-
-/* {"name", "command", "args"?}: steers one instrument between steps. */
 jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
     jv error;
     tat_instrument *instrument = tat_named(bind, params, true, error_code, &error);
@@ -2272,9 +2046,6 @@ jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
         case TAT_INSTRUMENT_CONNECTION:
         case TAT_INSTRUMENT_REQUEST:
             result = tat_control_endpoint(instrument, jv_string_value(command), args, error_code);
-            break;
-        case TAT_INSTRUMENT_INPUT:
-            result = tat_control_input(instrument, jv_string_value(command), args, error_code);
             break;
         case TAT_INSTRUMENT_IO:
         default:

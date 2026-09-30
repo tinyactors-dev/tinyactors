@@ -318,9 +318,6 @@ struct ta_definition {
     /* The system whose atoms and event names this definition uses. */
     ta_system *system;
     bool registered;
-    /* Its family is logged (ADR 0090 section 5): its named actors write
-     * their inputs to the system's input sink. */
-    bool input_logged;
     /* Intrusive list of compiled definitions not yet registered. */
     ta_definition *unregistered_previous;
     ta_definition *unregistered_next;
