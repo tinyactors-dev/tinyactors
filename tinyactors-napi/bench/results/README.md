@@ -26,7 +26,7 @@ numbers from another day or another machine.
 | `machine`, `commit`, `dirty` | the signature, the build (short hash), and whether the tree had changes |
 | `time`, `runtime` | when (UTC) and exactly which runtime |
 | `conditionsBefore`, `conditionsAfter` | `loadAverage` (1, 5, 15 min) and macOS `cpuSpeedLimit` around the run; not part of the signature |
-| `variant`, `population`, `rounds` | what ran: the tracing configuration (`test/bench/tracing.js`), actors, timed rounds |
+| `variant`, `population`, `rounds` | what ran: the tracing configuration (`test/bench/tracing.js`) or the input-log variant (`test/bench/input_log.js`, which adds `messagesPerActor` per round), actors, timed rounds |
 | `throughput` | `eventsPerSecondMedian`, `eventsPerSecondBest`, and `nsPerEvent` (from the best round) |
 | `memory.coreBytesPerActor` | core's allocator bytes in use per actor, after spawning |
 | `memory.nativeBytesPerActor` | the addon's bytes in use per actor, by category (`total`, `core`, `envelopes`, `scheduling`, `values`, `directory`, `scratch`, `other`) |
@@ -34,6 +34,7 @@ numbers from another day or another machine.
 | `memory.allocatorCallsPerEvent` | allocations plus frees per delivered event over the timed rounds |
 | `memory.peakRSSBytes` | the process's peak RSS so far (cumulative across variants in one run) |
 | `memory.otlpBytesPerEvent` | OTLP bytes the trace sink received per event, when tracing |
+| `memory.logBytesPerEvent` | input-log bytes the sink received per message, when logged |
 | `error` | instead of the above, when a variant could not run on that build |
 
 Read a folder with `jq`, for example the untraced line of every commit:

@@ -66,11 +66,15 @@ gaps left or found on the way.
   binary until `mise run build`. Make `scenarios` depend on the build, or
   list the kernel in its sources. (Kernel ADR 0001, "Step 7".) Done:
   `scenarios` depends on `build`.
-- [ ] **The cost of a logged input:** +5.5 µs on Node and +3.8 µs on Bun per
+- [x] **The cost of a logged input:** +5.5 µs on Node and +3.8 µs on Bun per
   message, measured before the value was written once. Measure it again at
   version 2. If it still matters, take option B from the review: a native
   durable writer for plain JSON values in napi's data model, byte-exact
-  with ADR 0031's printer. (napi ADR 0034's notes.)
+  with ADR 0031's printer. (napi ADR 0034's notes.) Done: at version 2 a
+  logged message costs +3.2 µs on Node and +2.5 µs on Bun, the value under
+  2 µs of it; option B is not built. `test/bench/input_log.js` measures it
+  in `mise run bench` and `bench-compare` (napi ADR 0034, addendum of
+  2026-09-30).
 - [x] **The kernel's public headers expose its internals.**
   `include/tinyactors_host/*.h` declare the full structs (`tah_system`,
   `tah_sched`, `tah_inputs` and more), because napi and the test host

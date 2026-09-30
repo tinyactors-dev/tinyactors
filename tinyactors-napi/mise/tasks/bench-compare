@@ -8,8 +8,9 @@
 # Absolute figures move between days on one machine (the same build ran at
 # 622 and then 443 ns per event), so builds are compared side by side: the
 # old commit is built in a temporary git worktree, then old and new run
-# alternately (--runs times each, default 2), with today's bench script
-# against both packages. For each variant it prints the old and new medians
+# alternately (--runs times each, default 2), with today's bench scripts
+# (test/bench/tracing.js at each population, test/bench/input_log.js at its
+# own) against both packages. For each variant it prints the old and new medians
 # of throughput and memory and the change, and flags a change past 5% in
 # the worse direction. --store also appends every run's records to
 # bench/results/<machine signature>/ (bench/results/README.md). The
@@ -43,7 +44,8 @@ METRICS = [
   ['RSS B/actor', %w[memory rssBytesPerActor], :higher],
   ['heap B/actor', %w[memory heapBytesPerActor], :higher],
   ['alloc/event', %w[memory allocatorCallsPerEvent], :higher],
-  ['OTLP B/event', %w[memory otlpBytesPerEvent], :higher]
+  ['OTLP B/event', %w[memory otlpBytesPerEvent], :higher],
+  ['log B/event', %w[memory logBytesPerEvent], :higher]
 ].freeze
 
 def median(values)
@@ -68,47 +70,55 @@ Dir.mktmpdir('tinyactors-bench-compare') do |tmp|
 
     options[:runtimes].each do |runtime|
       signature = NapiMachine.signature(runtime, root)
-      options[:populations].each do |population|
-        collected = { old: [], new: [] }
-        runs.times do
-          { old: [old_root, old_commit, false], new: [root, new_commit, dirty] }.each do |side, (dir, commit, side_dirty)|
-            before = NapiMachine.conditions
-            result = NapiBench.run(dir: dir, runtime: runtime, population: population, variants: options[:variants])
-            after = NapiMachine.conditions
-            records = NapiBench.records(result, signature: signature, commit: commit, dirty: side_dirty,
-                                                before: before, after: after)
-            NapiBench.store(records, signature) if store
-            collected[side].concat(records)
-          end
-        end
+      NapiBench::BENCHES.each do |bench|
+        NapiBench.populations(bench, options).each do |population|
+          collected = { old: [], new: [] }
+          skipped = false
+          runs.times do
+            { old: [old_root, old_commit, false], new: [root, new_commit, dirty] }.each do |side, (dir, commit, side_dirty)|
+              before = NapiMachine.conditions
+              result = NapiBench.run(dir: dir, runtime: runtime, population: population, variants: options[:variants],
+                                     script: bench[:script])
+              skipped = true if result.nil?
+              next if result.nil?
 
-        puts "#{runtime}, #{population} actors, #{old_commit} → #{new_commit}#{dirty ? ' (dirty)' : ''}, " \
-             "machine #{signature['hash']}, #{runs} alternating runs each, medians"
-        variants = collected[:new].map { |record| record['variant'] }.uniq
-        flagged = 0
-        variants.each do |variant|
-          old_runs = collected[:old].select { |record| record['variant'] == variant && !record['error'] }
-          new_runs = collected[:new].select { |record| record['variant'] == variant && !record['error'] }
-          if old_runs.empty? || new_runs.empty?
-            puts "  #{variant}: #{old_runs.empty? ? old_commit : new_commit} could not run it"
-            next
+              after = NapiMachine.conditions
+              records = NapiBench.records(result, signature: signature, commit: commit, dirty: side_dirty,
+                                                  before: before, after: after)
+              NapiBench.store(records, signature) if store
+              collected[side].concat(records)
+            end
           end
-          puts "  #{variant}"
-          METRICS.each do |label, path, worse|
-            old_value = median(old_runs.map { |record| record.dig(*path) })
-            new_value = median(new_runs.map { |record| record.dig(*path) })
-            next if old_value.nil? && new_value.nil?
+          next if skipped
 
-            change = old_value.nil? || new_value.nil? || old_value.zero? ? nil : (new_value - old_value) / old_value * 100
-            flag = !change.nil? && (worse == :higher ? change > 5 : change < -5)
-            flagged += 1 if flag
-            digits = label == 'alloc/event' ? 2 : 0
-            puts format('    %-16s %12s %12s %9s%s', label, NapiBench.num(old_value, digits), NapiBench.num(new_value, digits),
-                        change.nil? ? '-' : format('%+.1f%%', change), flag ? '  ← worse than 5%' : '')
+          puts "#{bench[:name]}: #{runtime}, #{population} actors, #{old_commit} → #{new_commit}#{dirty ? ' (dirty)' : ''}, " \
+               "machine #{signature['hash']}, #{runs} alternating runs each, medians"
+          variants = collected[:new].map { |record| record['variant'] }.uniq
+          flagged = 0
+          variants.each do |variant|
+            old_runs = collected[:old].select { |record| record['variant'] == variant && !record['error'] }
+            new_runs = collected[:new].select { |record| record['variant'] == variant && !record['error'] }
+            if old_runs.empty? || new_runs.empty?
+              puts "  #{variant}: #{old_runs.empty? ? old_commit : new_commit} could not run it"
+              next
+            end
+            puts "  #{variant}"
+            METRICS.each do |label, path, worse|
+              old_value = median(old_runs.map { |record| record.dig(*path) })
+              new_value = median(new_runs.map { |record| record.dig(*path) })
+              next if old_value.nil? && new_value.nil?
+
+              change = old_value.nil? || new_value.nil? || old_value.zero? ? nil : (new_value - old_value) / old_value * 100
+              flag = !change.nil? && (worse == :higher ? change > 5 : change < -5)
+              flagged += 1 if flag
+              digits = label == 'alloc/event' ? 2 : 0
+              puts format('    %-16s %12s %12s %9s%s', label, NapiBench.num(old_value, digits), NapiBench.num(new_value, digits),
+                          change.nil? ? '-' : format('%+.1f%%', change), flag ? '  ← worse than 5%' : '')
+            end
           end
+          puts "  #{flagged.zero? ? 'nothing' : flagged} outside the 5% rule"
+          puts
         end
-        puts "  #{flagged.zero? ? 'nothing' : flagged} outside the 5% rule"
-        puts
       end
     end
   ensure

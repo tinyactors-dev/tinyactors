@@ -7,15 +7,24 @@ require 'time'
 require 'tmpdir'
 require_relative 'machine'
 
-# Runs test/bench/tracing.js and turns its --json output into records keyed
-# by machine signature (bench/results/README.md), for `mise run bench` and
-# `mise run bench-compare`. Every record carries throughput and memory
+# Runs the benches in test/bench/ and turns their --json output into records
+# keyed by machine signature (bench/results/README.md), for `mise run bench`
+# and `mise run bench-compare`. Every record carries throughput and memory
 # together; a report never gives one without the other.
 module NapiBench
   ROOT = File.expand_path('../../..', __dir__)
   RESULTS = File.join(ROOT, 'bench', 'results')
-  SCRIPT = File.join(ROOT, 'test', 'bench', 'tracing.js')
   RUNTIMES = %w[node bun].freeze
+  # The bench scripts, each with its populations: the tracing bench takes the
+  # ones given on the command line; the input-log bench keeps napi ADR
+  # 0034's shape, 1,000 actors (each taking 50 messages a round).
+  BENCHES = [
+    { name: 'tracing', script: File.join(ROOT, 'test', 'bench', 'tracing.js'), populations: nil },
+    { name: 'input log', script: File.join(ROOT, 'test', 'bench', 'input_log.js'), populations: [1000] }
+  ].freeze
+
+  # The populations to run `bench` at, given the command line's.
+  def self.populations(bench, options) = bench[:populations] || options[:populations]
 
   module_function
 
@@ -31,10 +40,12 @@ module NapiBench
   # each variant in a process of its own, because RSS measured after an
   # earlier variant's system closed reads memory the allocator kept. Returns
   # { 'runtime', 'records' } with one record per variant. `variants` is a
-  # comma-separated filter (nil: every variant the script defines).
-  def run(dir:, runtime:, population:, variants: nil, script: SCRIPT)
+  # comma-separated filter (nil: every variant the script defines); the
+  # script's first variant, its baseline, always runs with it, and a script
+  # none of whose variants the filter names does not run (nil).
+  def run(dir:, runtime:, population:, script:, variants: nil)
     Dir.mktmpdir('tinyactors-bench') do |tmp|
-      local = File.join(dir, 'test', 'bench', '.bench-run.js')
+      local = File.join(dir, 'test', 'bench', ".bench-run-#{File.basename(script)}")
       # The script requires '../..': run a copy inside `dir`, so an older
       # build is measured by today's script.
       FileUtils.cp(script, local)
@@ -44,7 +55,10 @@ module NapiBench
         listed, status = Open3.capture2(*command, local, '--list', chdir: dir)
         abort "tinyactors-napi: listing the bench's variants failed (#{runtime})" unless status.success?
         wanted = variants&.split(',')&.map(&:strip)
-        names = JSON.parse(listed).select { |name| wanted.nil? || name == 'untraced' || wanted.include?(name) }
+        listed = JSON.parse(listed)
+        return nil if wanted && (listed & wanted).empty?
+
+        names = listed.select { |name| wanted.nil? || name == listed.first || wanted.include?(name) }
         results = names.map.with_index do |name, at|
           out = File.join(tmp, "#{at}.json")
           log, status = Open3.capture2e(*command, local, population.to_s, "--variants=#{name}", '--exclusive',
@@ -108,7 +122,8 @@ module NapiBench
     ['RSS B/actor', ->(r) { num(r.dig('memory', 'rssBytesPerActor')) }],
     ['heap B/actor', ->(r) { num(r.dig('memory', 'heapBytesPerActor')) }],
     ['alloc/event', ->(r) { num(r.dig('memory', 'allocatorCallsPerEvent'), 2) }],
-    ['OTLP B/event', ->(r) { num(r.dig('memory', 'otlpBytesPerEvent')) }]
+    ['OTLP B/event', ->(r) { num(r.dig('memory', 'otlpBytesPerEvent')) }],
+    ['log B/event', ->(r) { num(r.dig('memory', 'logBytesPerEvent')) }]
   ].freeze
 
   # A table of throughput and memory side by side, one row per variant.

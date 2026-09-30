@@ -230,3 +230,43 @@ Replay never needs it.
   flagged are RSS decreases (Node `decoded` −6.4%, Bun `full + values`
   −6.7%). The benchmark installs no input log, so it does not exercise the
   reader.
+
+### Addendum (2026-09-30): a logged input measured at version 2; no native writer
+
+- **What was measured.** The figures above came from a script that was
+  not committed, and at layout version 1, which wrote a message's value
+  twice (`queued`, then `event`). Version 2 (kernel ADR 0002) writes it
+  once, in `accepted`; `delivered` names it by identity. The bench is now
+  `test/bench/input_log.js`, which `mise run bench` and `mise run
+  bench-compare` run beside the tracing bench: 1,000 named actors of one
+  family, 50 `inc` messages to each per round and one flush, five rounds,
+  with an input log whose sink counts the batches' bytes and drops them.
+- **Figures** (`mise run bench`, commit `ecf3693` plus this bench; Apple M4
+  Max, machines a99e44a37e2e for Node 22.23.2 and c989bd79a51f for Bun
+  1.4.1; best round):
+
+  | | unlogged, data `{ by: 1 }` | logged, data `{ by: 1 }` | logged, no data |
+  |---|---|---|---|
+  | Node ns/message | 504 | 3,712 (+3.2 µs) | 1,823 (+1.3 µs) |
+  | Bun ns/message | 450 | 2,927 (+2.5 µs) | 1,450 (+1.0 µs) |
+  | log bytes/message | - | 184 | 160 |
+  | allocator calls/message | 0.01 | 2.09 | 0.09 |
+  | native B/actor (both) | 657 | 1,020 | 1,020 |
+  | RSS B/actor, Node / Bun | 3,310 / 7,651 | 7,324 / 14,959 | 7,455 / 17,646 |
+  | heap B/actor, Node / Bun | 444 / 353 | 501 / 523 | 500 / 523 |
+
+  So a logged message costs +3.2 µs on Node and +2.5 µs on Bun, against
+  +5.5 and +3.8 µs in the addendum above (another day: only this run's
+  figures compare with each other). The value is about 1.9 µs (Node) and
+  1.5 µs (Bun) of it, and the two allocator calls per message: the one
+  durable write through JavaScript per value. A `bench-compare HEAD` of
+  the same tree (2 alternating runs) gave the same ns per message within
+  1%. Native bytes per actor grow by 363 with a log installed; RSS per actor
+  at 1,000 actors is noisy.
+- **Decision (the owner's, 2026-09-30): option B is not built.** A native durable writer for plain
+  JSON values (byte-exact with ADR 0031's printer) would save at most the
+  value's share, under 2 µs per message, while adding a second printer
+  that must stay byte-exact with `lib/durable.js`. At version 2 the cost
+  is about 6x an unlogged message, and it is paid only by the families an
+  application logs. The bench stays, so a change to this path is compared
+  side by side.
