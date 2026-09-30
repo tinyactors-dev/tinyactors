@@ -1565,7 +1565,9 @@ module TinyactorsTest
       end
 
       event = { name: probe_event, type: 'external', invoke_id: INVOKE_ID_NONE }
-      refused = ta.actor.deliver(system: system_handle, actor: id, event: event)[:result]
+      # The input's time is the system's (core ADR 0094 section 1), so the
+      # answer is the admission test's, not a time error.
+      refused = ta.actor.deliver(system: system_handle, actor: id, event: event, time: now)[:result]
       expected = inspection[:has_completion] ? 'err_done' : 'err_busy'
       raise AssertionFailed, "#{where}: an event offered to it was answered #{refused}" unless refused == expected
       return id unless fault[:on_stop] == :cycle
