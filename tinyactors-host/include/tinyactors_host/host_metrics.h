@@ -55,6 +55,14 @@ typedef struct {
 } tah_host_metrics;
 
 void tah_host_metrics_init(tah_host_metrics *metrics);
+
+typedef enum {
+    TAH_HISTOGRAM_TURN = 0, /* turn_seconds */
+    TAH_HISTOGRAM_LATENESS, /* lateness_seconds */
+    TAH_HISTOGRAM_LOAD      /* load_seconds */
+} tah_histogram_kind;
+/* One of the host's histograms, for a binding to report. */
+const tah_histogram *tah_host_metrics_histogram(const tah_host_metrics *metrics, tah_histogram_kind kind);
 /* An exemplar for the step `span_id` of `context`, set only when the
  * context is a sampled trace: an unsampled one has no trace to link to. */
 tah_exemplar tah_exemplar_of(const ta_trace_context *context, uint64_t span_id, uint64_t time_ns);

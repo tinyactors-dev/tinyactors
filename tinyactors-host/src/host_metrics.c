@@ -66,3 +66,15 @@ void tah_histogram_record(tah_histogram *histogram, double value, const tah_exem
         histogram->exemplars[bucket].value = value;
     }
 }
+
+const tah_histogram *tah_host_metrics_histogram(const tah_host_metrics *metrics, tah_histogram_kind kind) {
+    switch (kind) {
+    case TAH_HISTOGRAM_LATENESS:
+        return &metrics->lateness_seconds;
+    case TAH_HISTOGRAM_LOAD:
+        return &metrics->load_seconds;
+    case TAH_HISTOGRAM_TURN:
+    default:
+        return &metrics->turn_seconds;
+    }
+}

@@ -80,3 +80,12 @@ void tah_definitions_alive(const tah_definitions *definitions, const ta_system *
         from = (uint32_t)(page[count - 1u] & 0xffffffffu) + 1u;
     }
 }
+
+void tah_definitions_set_registering(tah_definitions *definitions, tah_definition_origin origin) {
+    definitions->registering = origin;
+}
+
+tah_definition_totals tah_definitions_totals(const tah_definitions *definitions) {
+    return (tah_definition_totals){
+        .registered = definitions->registered, .retired = definitions->retired, .freed = definitions->freed };
+}

@@ -209,7 +209,7 @@ void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
     if (!system->tracing) {
         return;
     }
-    if (system->otlp.span_count == 0 && system->otlp.log_count == 0) {
+    if (tah_otlp_staged_records(&system->otlp) == 0) {
         tah_otlp_end_turn(&system->otlp);
         return;
     }
@@ -410,9 +410,9 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
             return tna_throw(env, "invalid", "setTraceSink: options.resource must map names to strings");
         }
         system->trace_masks = masks;
-        tah_otlp_set_wanted(&system->otlp, masks.kinds, masks.watched_kinds, masks.unsampled_kinds);
+        tah_otlp_set_wanted(&system->otlp, &masks);
         ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
-        tah_trace_masks asked = tna_trace_masks_asked(&masks, system->otlp.config.log_limit != 0);
+        tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(&system->otlp));
         result = ta_system_set_trace_sink(system->core, tah_trace_sink_adapter(system, &asked));
         if (result != TA_OK) {
             tah_otlp_destroy(&system->otlp);
@@ -458,9 +458,9 @@ napi_value tna_configure_traces_method(napi_env env, napi_callback_info info) {
         return undefined;
     }
     system->trace_masks = masks;
-    tah_otlp_set_wanted(&system->otlp, masks.kinds, masks.watched_kinds, masks.unsampled_kinds);
+    tah_otlp_set_wanted(&system->otlp, &masks);
     ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
-    tah_trace_masks asked = tna_trace_masks_asked(&masks, system->otlp.config.log_limit != 0);
+    tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(&system->otlp));
     ta_system_set_trace_sink(system->core, tah_trace_sink_adapter(system, &asked));
     return undefined;
 }
@@ -577,17 +577,17 @@ napi_value tna_trace_watch_sizes_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    const tah_trace_watch *watch = &wrapper->system->trace_watch;
+    tah_trace_watch_sizes watch = tah_trace_watch_measure(&wrapper->system->trace_watch);
     napi_value sizes = NULL;
     napi_value sessions = NULL;
     napi_value matched = NULL;
     napi_value checked = NULL;
     napi_value capacity = NULL;
     if (napi_create_object(env, &sizes) != napi_ok ||
-        napi_create_uint32(env, watch->sessions.count, &sessions) != napi_ok ||
-        napi_create_uint32(env, watch->matched.count, &matched) != napi_ok ||
-        napi_create_uint32(env, watch->checked.count, &checked) != napi_ok ||
-        napi_create_uint32(env, watch->matched.capacity + watch->checked.capacity, &capacity) != napi_ok ||
+        napi_create_uint32(env, watch.sessions, &sessions) != napi_ok ||
+        napi_create_uint32(env, watch.matched, &matched) != napi_ok ||
+        napi_create_uint32(env, watch.checked, &checked) != napi_ok ||
+        napi_create_uint32(env, watch.capacity, &capacity) != napi_ok ||
         napi_set_named_property(env, sizes, "sessions", sessions) != napi_ok ||
         napi_set_named_property(env, sizes, "matched", matched) != napi_ok ||
         napi_set_named_property(env, sizes, "checked", checked) != napi_ok ||

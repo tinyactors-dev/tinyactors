@@ -66,6 +66,16 @@ static inline bool tah_trace_watch_empty(const tah_trace_watch *watch) {
     return watch == NULL || watch->sessions.count + watch->family_count == 0;
 }
 
+/* How big the watch is (napi's traceWatchSizes(), for tests): IDs in each
+ * set, and the slots `matched` and `checked` hold together. */
+typedef struct {
+    uint32_t sessions;
+    uint32_t matched;
+    uint32_t checked;
+    uint32_t capacity;
+} tah_trace_watch_sizes;
+tah_trace_watch_sizes tah_trace_watch_measure(const tah_trace_watch *watch);
+
 /* Drops a definition core has freed from `matched` and `checked` (core ADR 0079). */
 void tah_trace_watch_forget_definition(tah_trace_watch *watch, ta_definition_id definition);
 

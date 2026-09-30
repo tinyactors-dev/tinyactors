@@ -272,9 +272,9 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
             }
             ta_definition_id child = 0;
             if (result == TA_OK) {
-                wrapper->system->definitions.registering = TAH_ORIGIN_NESTED;
+                tah_definitions_set_registering(&wrapper->system->definitions, TAH_ORIGIN_NESTED);
                 result = tna_compile_child(wrapper, text, name, parent, resolve, &child, failure);
-                wrapper->system->definitions.registering = TAH_ORIGIN_HOST;
+                tah_definitions_set_registering(&wrapper->system->definitions, TAH_ORIGIN_HOST);
                 if (result != TA_OK && result != TA_ERR_NOMEM) {
                     tna_child_refused(failure, wrapper->refusal_scratch, invoke, result);
                     result = result == TA_ERR_UNSUPPORTED ? TA_ERR_UNSUPPORTED : TA_ERR_INVALID;
@@ -383,10 +383,10 @@ static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tah_c
                                            ta_str name, tna_invoking parent) {
     tna_import_failure failure;
     tna_import_failure_open(&failure, wrapper->refusal, wrapper->refusal_bytes);
-    wrapper->system->definitions.registering = TAH_ORIGIN_INVOKE;
+    tah_definitions_set_registering(&wrapper->system->definitions, TAH_ORIGIN_INVOKE);
     ta_result result =
         tna_compile_child(wrapper, text, name, parent.definition, parent.resolve, params->out, &failure);
-    wrapper->system->definitions.registering = TAH_ORIGIN_HOST;
+    tah_definitions_set_registering(&wrapper->system->definitions, TAH_ORIGIN_HOST);
     char thrown[512];
     if (tna_clear_exception(wrapper->env, thrown, sizeof thrown)) {
         if (result == TA_OK) {

@@ -2317,3 +2317,17 @@ void tah_otlp_destroy(tah_otlp *otlp) {
     tah_buf_free(&otlp->text);
     *otlp = (tah_otlp){ 0 };
 }
+
+void tah_otlp_set_wanted(tah_otlp *otlp, const tah_trace_masks *masks) {
+    otlp->config.wanted_kinds = masks->kinds;
+    otlp->config.wanted_watched_kinds = masks->watched_kinds;
+    otlp->config.wanted_unsampled_kinds = masks->unsampled_kinds;
+}
+
+uint32_t tah_otlp_staged_records(const tah_otlp *otlp) {
+    return otlp->span_count + otlp->log_count;
+}
+
+bool tah_otlp_logs_enabled(const tah_otlp *otlp) {
+    return otlp->config.log_limit != 0;
+}

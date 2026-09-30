@@ -51,6 +51,9 @@ typedef struct {
 ta_result tah_offloads_put(tah_offloads *offloads, const tah_offload_put_params *params);
 /* The entry for `address`, or null. */
 const tah_offload *tah_offloads_find(const tah_offloads *offloads, const ta_address *address);
+/* The bytes kept for `address`, borrowed until the entry is dropped or
+ * replaced; false when it has none. */
+bool tah_offloads_bytes(const tah_offloads *offloads, const ta_address *address, ta_bytes *out);
 /* Frees the entry for `address`, releasing its handles; false when it had none. */
 bool tah_offloads_drop(tah_offloads *offloads, const ta_address *address);
 uint32_t tah_offloads_count(const tah_offloads *offloads);

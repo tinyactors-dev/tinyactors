@@ -310,3 +310,10 @@ void tah_trace_watch_mark(tah_trace_watch *watch, ta_system *core, ta_actor_id a
     trace->context.flags |= TA_TRACE_FLAG_SAMPLED;
     trace->context.detail |= TA_TRACE_DETAIL_WATCHED;
 }
+
+tah_trace_watch_sizes tah_trace_watch_measure(const tah_trace_watch *watch) {
+    return (tah_trace_watch_sizes){ .sessions = watch->sessions.count,
+                                    .matched = watch->matched.count,
+                                    .checked = watch->checked.count,
+                                    .capacity = watch->matched.capacity + watch->checked.capacity };
+}

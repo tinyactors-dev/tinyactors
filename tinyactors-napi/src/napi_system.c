@@ -1956,9 +1956,10 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     napi_value load = NULL;
     napi_value loads = NULL;
     napi_status status = napi_create_object(env, &out);
-    if (status == napi_ok) status = tna_histogram_object(env, &system->metrics.turn_seconds, &turn);
+    if (status == napi_ok) status = tna_histogram_object(env, tah_host_metrics_histogram(&system->metrics, TAH_HISTOGRAM_TURN), &turn);
     if (status == napi_ok) status = napi_set_named_property(env, out, "turn", turn);
-    if (status == napi_ok) status = tna_histogram_object(env, &system->metrics.lateness_seconds, &lateness);
+    if (status == napi_ok) status = tna_histogram_object(env, tah_host_metrics_histogram(&system->metrics, TAH_HISTOGRAM_LATENESS),
+                                                              &lateness);
     if (status == napi_ok) status = napi_set_named_property(env, out, "lateness", lateness);
     if (status == napi_ok) status = tna_set_number(env, out, "runnable", (double)sched.runnable);
     if (status == napi_ok) status = tna_set_number(env, out, "ready", (double)sched.ready);
@@ -1977,23 +1978,28 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     }
     if (status == napi_ok) status = napi_set_named_property(env, out, "deadLetters", dead);
     /* Loads of unloaded actors (napi ADR 0020): outcomes, duration, waiting mail. */
-    if (status == napi_ok) status = tna_histogram_object(env, &system->metrics.load_seconds, &load);
+    if (status == napi_ok) {
+        status = tna_histogram_object(env, tah_host_metrics_histogram(&system->metrics, TAH_HISTOGRAM_LOAD), &load);
+    }
+    tah_loads_stats load_stats;
+    tah_loads_read_stats(&system->loads, &load_stats);
     if (status == napi_ok) status = napi_set_named_property(env, out, "load", load);
     if (status == napi_ok) status = napi_create_object(env, &loads);
     for (uint32_t outcome = 0; status == napi_ok && outcome < TAH_LOAD_OUTCOMES; outcome += 1u) {
-        status = tna_set_number(env, loads, tah_load_outcome_name(outcome), (double)system->loads.outcomes[outcome]);
+        status = tna_set_number(env, loads, tah_load_outcome_name(outcome), (double)load_stats.outcomes[outcome]);
     }
     if (status == napi_ok) status = napi_set_named_property(env, out, "loads", loads);
-    if (status == napi_ok) status = tna_set_number(env, out, "waiting", (double)system->loads.waiting);
+    if (status == napi_ok) status = tna_set_number(env, out, "waiting", (double)load_stats.waiting);
     /* The definition lifecycle (core ADR 0079): events, and what is alive by origin. */
     napi_value definitions = NULL;
     napi_value alive = NULL;
     uint64_t counts[TAH_ORIGINS][2];
     tah_definitions_alive(&system->definitions, system->core, counts);
     if (status == napi_ok) status = napi_create_object(env, &definitions);
-    if (status == napi_ok) status = tna_set_number(env, definitions, "registered", (double)system->definitions.registered);
-    if (status == napi_ok) status = tna_set_number(env, definitions, "retired", (double)system->definitions.retired);
-    if (status == napi_ok) status = tna_set_number(env, definitions, "freed", (double)system->definitions.freed);
+    tah_definition_totals totals = tah_definitions_totals(&system->definitions);
+    if (status == napi_ok) status = tna_set_number(env, definitions, "registered", (double)totals.registered);
+    if (status == napi_ok) status = tna_set_number(env, definitions, "retired", (double)totals.retired);
+    if (status == napi_ok) status = tna_set_number(env, definitions, "freed", (double)totals.freed);
     if (status == napi_ok) status = napi_create_array_with_length(env, TAH_ORIGINS * 2u, &alive);
     for (uint32_t origin = 0, at = 0; status == napi_ok && origin < TAH_ORIGINS; origin += 1u) {
         for (uint32_t retired = 0; status == napi_ok && retired < 2u; retired += 1u, at += 1u) {

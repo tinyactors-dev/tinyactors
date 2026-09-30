@@ -172,12 +172,28 @@ typedef struct {
     tah_load_why why;
 } tah_load_request;
 bool tah_loads_next_request(tah_loads *loads, tah_load_request *out);
-static inline uint32_t tah_loads_pending_requests(const tah_loads *loads) {
-    return loads->requests.count - loads->requests_head;
-}
+/* Loads JavaScript has not been told about yet. */
+uint32_t tah_loads_pending_requests(const tah_loads *loads);
 
 /* The load a token names, or NULL when it has finished (a stale token). */
 tah_load *tah_loads_find(const tah_loads *loads, uint32_t index, uint32_t generation);
+
+/* A load in flight, as a binding reports it: `address` NULL when the token
+ * names none (it finished). Borrowed until the load finishes. */
+typedef struct {
+    const ta_address *address;
+    uint32_t waiting;      /* messages in its mailbox */
+    ta_trace_parent trace; /* the first message's trace parent, or all zero */
+} tah_load_info;
+tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t generation);
+
+/* The loads' counters (napi's metrics() and flush()). */
+typedef struct {
+    uint32_t in_flight; /* loads started and not finished */
+    uint32_t waiting;   /* messages in every load's mailbox */
+    uint64_t outcomes[TAH_LOAD_OUTCOMES];
+} tah_loads_stats;
+void tah_loads_read_stats(const tah_loads *loads, tah_loads_stats *out);
 
 /*
  * Finishes a load. LOADED and SPAWNED: `actor` must be the resident actor

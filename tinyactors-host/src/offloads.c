@@ -62,6 +62,15 @@ const tah_offload *tah_offloads_find(const tah_offloads *offloads, const ta_addr
                                                                                   : NULL;
 }
 
+bool tah_offloads_bytes(const tah_offloads *offloads, const ta_address *address, ta_bytes *out) {
+    const tah_offload *entry = tah_offloads_find(offloads, address);
+    if (entry == NULL) {
+        return false;
+    }
+    *out = (ta_bytes){ .ptr = entry->bytes, .len = (uint32_t)entry->length };
+    return true;
+}
+
 bool tah_offloads_drop(tah_offloads *offloads, const ta_address *address) {
     uint64_t key = (uint64_t)(uintptr_t)address;
     uint64_t value = 0;

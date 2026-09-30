@@ -637,8 +637,12 @@ static void tna_resolve_waiters(napi_env env, tna_napi_system *wrapper) {
 
 /* Quiet, with no turn pending and no load waiting for its loader (napi ADR 0020). */
 static bool tna_settled(const tah_system *system) {
-    return tah_system_closed(system) ||
-           (tah_system_quiet(system) && !system->turn_pending && system->loads.in_flight == 0);
+    if (tah_system_closed(system)) {
+        return true;
+    }
+    tah_loads_stats loads;
+    tah_loads_read_stats(&system->loads, &loads);
+    return tah_system_quiet(system) && !system->turn_pending && loads.in_flight == 0;
 }
 
 void tna_pump_settle_waiters(napi_env env, tna_napi_system *wrapper) {

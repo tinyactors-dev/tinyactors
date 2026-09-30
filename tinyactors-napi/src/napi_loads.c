@@ -121,13 +121,13 @@ static const struct {
 };
 
 /* The WARN log of a load that failed or timed out (napi ADR 0020 section 7). */
-static void tna_load_log(tah_system *system, const tah_load *load, tah_load_outcome outcome, ta_str detail) {
+static void tna_load_log(tah_system *system, const tah_load_info *load, tah_load_outcome outcome, ta_str detail) {
     ta_actor_address address = ta_address_view(load->address);
     char body[512];
     int length = snprintf(body, sizeof body, "%s %.*s/%.*s: %u message(s) dropped%s%.*s",
                           outcome == TAH_LOAD_TIMED_OUT ? "load timed out for" : "load failed for",
                           (int)address.family.name.len, address.family.name.ptr, (int)address.name.len,
-                          address.name.ptr, (unsigned)load->mail.count, detail.len != 0 ? ": " : "",
+                          address.name.ptr, (unsigned)load->waiting, detail.len != 0 ? ": " : "",
                           (int)detail.len, detail.ptr);
     const char *event_name = outcome == TAH_LOAD_TIMED_OUT ? "tinyactors.load.timed_out" : "tinyactors.load.failed";
     tna_pump_host_log(system, 0,
@@ -184,9 +184,9 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
         tah_scratch_reset_call(&system->scratch);
         return tna_throw(env, "invalid", "completeLoad: unknown outcome");
     }
-    const tah_load *load = tah_loads_find(&system->loads, index, generation);
-    if (load != NULL && (outcome == TAH_LOAD_FAILED || outcome == TAH_LOAD_TIMED_OUT)) {
-        tna_load_log(system, load, outcome, detail);
+    tah_load_info load = tah_loads_info(&system->loads, index, generation);
+    if (load.address != NULL && (outcome == TAH_LOAD_FAILED || outcome == TAH_LOAD_TIMED_OUT)) {
+        tna_load_log(system, &load, outcome, detail);
     }
     ta_result result = tah_loads_finish(&system->loads, &(tah_load_finish){ .sched = &system->sched,
                                                                             .directory = &system->directory,
@@ -223,11 +223,11 @@ napi_value tna_load_trace_method(napi_env env, napi_callback_info info) {
     if (argc < 2 || !tna_load_token(env, argv, &index, &generation)) {
         return tna_throw(env, "invalid", "loadTrace: expected (index, generation)");
     }
-    const tah_load *load = tah_loads_find(&wrapper->system->loads, index, generation);
-    if (load == NULL) {
+    tah_load_info load = tah_loads_info(&wrapper->system->loads, index, generation);
+    if (load.address == NULL) {
         return tna_undefined_value(env);
     }
-    return tna_trace_parent_object(env, &load->trace);
+    return tna_trace_parent_object(env, &load.trace);
 }
 
 /* The interned address of (family, name) arguments; NULL after throwing. */
@@ -625,7 +625,8 @@ napi_value tna_has_offloaded_method(napi_env env, napi_callback_info info) {
     if (address == NULL) {
         return NULL;
     }
-    bool found = tah_offloads_find(&wrapper->system->offloads, address) != NULL;
+    ta_bytes bytes;
+    bool found = tah_offloads_bytes(&wrapper->system->offloads, address, &bytes);
     ta_address_release(address);
     napi_value out = NULL;
     napi_get_boolean(env, found, &out);
@@ -673,8 +674,8 @@ static napi_value tna_load_offloaded_inner(napi_env env, napi_callback_info info
     if (address == NULL) {
         return NULL;
     }
-    const tah_offload *entry = tah_offloads_find(&system->offloads, address);
-    if (entry == NULL) {
+    ta_bytes bytes;
+    if (!tah_offloads_bytes(&system->offloads, address, &bytes)) {
         ta_address_release(address);
         return tna_throw(env, "not-found", "load: the address has no offloaded actor");
     }
@@ -689,7 +690,7 @@ static napi_value tna_load_offloaded_inner(napi_env env, napi_callback_info info
     ta_actor_id actor = 0;
     system->inside_core = true;
     ta_result result = ta_actor_load(system->core, &(ta_actor_load_params){
-                                                       .bytes = { .ptr = entry->bytes, .len = entry->length },
+                                                       .bytes = bytes,
                                                        .datamodel_binding = bound ? &binding : NULL,
                                                        .out = &actor });
     system->inside_core = false;

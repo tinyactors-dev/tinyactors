@@ -37,6 +37,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "adapter_trace.h"
 #include "host_metrics.h"
 #include "tinyactors.h"
 
@@ -289,12 +290,11 @@ void tah_otlp_end_turn(tah_otlp *otlp);
 void tah_otlp_end_all(tah_otlp *otlp);
 
 /* Changes the kinds the user asked for (configureTraces). */
-static inline void tah_otlp_set_wanted(tah_otlp *otlp, uint32_t kinds, uint32_t watched_kinds,
-                                       uint32_t unsampled_kinds) {
-    otlp->config.wanted_kinds = kinds;
-    otlp->config.wanted_watched_kinds = watched_kinds;
-    otlp->config.wanted_unsampled_kinds = unsampled_kinds;
-}
+void tah_otlp_set_wanted(tah_otlp *otlp, const tah_trace_masks *masks);
+/* Spans and log records staged since the last tah_otlp_end_turn(). */
+uint32_t tah_otlp_staged_records(const tah_otlp *otlp);
+/* Whether the encoder keeps log records (its config's log_limit is not 0). */
+bool tah_otlp_logs_enabled(const tah_otlp *otlp);
 
 /* Spans still open (for tests). */
 static inline uint32_t tah_otlp_open_count(const tah_otlp *otlp) { return otlp->open_count; }

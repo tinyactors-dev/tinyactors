@@ -56,6 +56,18 @@ tah_definition_origin tah_definitions_origin(const tah_definitions *definitions,
 
 const char *tah_definition_origin_name(tah_definition_origin origin);
 
+/* The origin of the registrations core makes from now on: NESTED or INVOKE
+ * while the binding compiles a child for core, HOST again after. */
+void tah_definitions_set_registering(tah_definitions *definitions, tah_definition_origin origin);
+
+/* Definitions registered, retired and freed so far (core ADR 0079). */
+typedef struct {
+    uint64_t registered;
+    uint64_t retired;
+    uint64_t freed;
+} tah_definition_totals;
+tah_definition_totals tah_definitions_totals(const tah_definitions *definitions);
+
 /*
  * The live definitions by origin and by whether they are retired (still
  * alive because a child or an actor uses them): `alive[origin][retired]`.

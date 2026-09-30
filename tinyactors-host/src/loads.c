@@ -115,6 +115,25 @@ static uint32_t tah_loads_limit(const tah_loads *loads, const ta_address *addres
  * Loads
  */
 
+uint32_t tah_loads_pending_requests(const tah_loads *loads) {
+    return loads->requests.count - loads->requests_head;
+}
+
+tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t generation) {
+    const tah_load *load = tah_loads_find(loads, index, generation);
+    if (load == NULL) {
+        return (tah_load_info){ 0 };
+    }
+    return (tah_load_info){ .address = load->address, .waiting = load->mail.count, .trace = load->trace };
+}
+
+void tah_loads_read_stats(const tah_loads *loads, tah_loads_stats *out) {
+    *out = (tah_loads_stats){ .in_flight = loads->in_flight, .waiting = loads->waiting };
+    for (uint32_t outcome = 0; outcome < TAH_LOAD_OUTCOMES; outcome += 1u) {
+        out->outcomes[outcome] = loads->outcomes[outcome];
+    }
+}
+
 tah_load *tah_loads_find(const tah_loads *loads, uint32_t index, uint32_t generation) {
     if (index == 0 || index >= loads->loads.count) {
         return NULL;
