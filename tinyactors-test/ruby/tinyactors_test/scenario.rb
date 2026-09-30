@@ -572,6 +572,14 @@ module TinyactorsTest
       rpc('hosted.advance', system: hosted[:hosted], time: time)
     end
 
+    # The time of the hosted core's next delayed send, or nil when none is pending.
+    def hosted_next_deadline(hosted)
+      response = ta.system.next_deadline(system: hosted[:core])
+      return nil if response[:result] == 'err_not_found'
+
+      Integer(core('ta_system_next_deadline', response).fetch(:out))
+    end
+
     # The names of an actor's active atomic states, read from core.
     def hosted_states(hosted, actor)
       view = core('ta_actor_inspect', ta.actor.inspect(system: hosted[:core], actor: actor)).fetch(:out)

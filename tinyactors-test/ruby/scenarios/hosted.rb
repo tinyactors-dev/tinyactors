@@ -65,6 +65,49 @@ TinyactorsTest.chart :hosted_stopper do
   final :stopped
 end
 
+# Core ADR 0089 section 2's timelines 2 and 3: a delayed send to another
+# actor, which the input log records as FIRED when it fires.
+TinyactorsTest.chart :hosted_relay do
+  state :idle do
+    transition on: 'relay', target: :waiting do
+      send_event 'hello', to: '#_actor_hosted_sink/b', delay: '5s'
+    end
+  end
+  state :waiting
+end
+
+TinyactorsTest.chart :hosted_sink do
+  state :h0 do
+    transition on: 'hello', target: :h1
+  end
+  state :h1 do
+    transition on: 'hello', target: :h2
+  end
+  state :h2
+end
+
+module HostedRelay
+  # A week, in milliseconds: how long a relay stays evicted before its restore.
+  WEEK = 7 * 24 * 3600 * 1000
+
+  # hosted_relay/p1 and hosted_sink/b, both spawned at 0; p1 is logged and
+  # arms `hello` to b at 1000, due at 6000. Answers [hosted, relay
+  # definition, relay, sink].
+  def self.start(context, incarnation: 0)
+    hosted = context.hosted_system(incarnation: incarnation)
+    context.hosted_log(hosted, 'hosted_relay')
+    sink = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_sink), family: 'hosted_sink', name: 'b')
+    definition = context.hosted_define(hosted, :hosted_relay)
+    relay = context.hosted_spawn(hosted, definition, family: 'hosted_relay', name: 'p1')
+    context.hosted_run(hosted)
+    context.hosted_advance(hosted, 1000)
+    context.hosted_post(hosted, relay, 'relay')
+    context.hosted_run(hosted)
+    context.assert_equal 6000, context.hosted_next_deadline(hosted)
+    [hosted, definition, relay, sink]
+  end
+end
+
 TinyactorsTest.scenarios 'hosted' do
   # Catches: the test host not linking the kernel, or a hosted system that
   # leaks what the kernel allocated for it.
@@ -272,5 +315,76 @@ TinyactorsTest.scenarios 'hosted' do
     hosted_run(second)
     assert_equal [:timedout], hosted_states(second, rebuilt)
     assert_equal 0, close_hosted(second)
+  end
+
+  # Timeline 2 (E >= d). Catches: a replay that sends again what the live
+  # actor sent before it stopped: FIRED in the log drops the held send at
+  # publish, so the rebuilt relay holds nothing and b hears it once.
+  scenario 'a send to another actor that fired before the eviction does not fire again' do
+    hosted, definition, relay, sink = HostedRelay.start(self)
+    hosted_advance(hosted, 6000)
+    hosted_run(hosted)
+    assert_equal [:h1], hosted_states(hosted, sink)
+    hosted_advance(hosted, 7000)
+    assert_equal 'ok', hosted_evict(hosted, relay)
+    log = hosted_store(hosted)['hosted_relay/p1']
+
+    hosted_advance(hosted, 7000 + HostedRelay::WEEK)
+    rebuilt = hosted_restore(hosted, definition, 'hosted_relay', 'p1', log)
+    hosted_run(hosted)
+    assert_equal [:waiting], hosted_states(hosted, rebuilt)
+    assert_equal nil, hosted_next_deadline(hosted), 'the rebuilt relay holds no send'
+    assert_equal [:h1], hosted_states(hosted, sink), 'b heard it once'
+    assert_equal({}, hosted_store(hosted), 'the rebuilt relay recorded nothing')
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Timeline 2 after a crash: the log ends at FIRED, whose time alone is the
+  # publish time and covers the send. Catches: a send fired again by the
+  # process that restores the actor.
+  scenario 'a send to another actor that fired before a crash does not fire after it' do
+    first, _definition, _relay, sink = HostedRelay.start(self, incarnation: 1)
+    hosted_advance(first, 6000)
+    hosted_run(first)
+    assert_equal [:h1], hosted_states(first, sink)
+    log = hosted_store(first)['hosted_relay/p1']
+    close_hosted(first)
+
+    second = hosted_system(incarnation: 2)
+    hosted_log(second, 'hosted_relay')
+    sink = hosted_spawn(second, hosted_define(second, :hosted_sink), family: 'hosted_sink', name: 'b')
+    definition = hosted_define(second, :hosted_relay)
+    hosted_advance(second, 6000 + HostedRelay::WEEK)
+    rebuilt = hosted_restore(second, definition, 'hosted_relay', 'p1', log)
+    hosted_run(second)
+    assert_equal [:waiting], hosted_states(second, rebuilt)
+    assert_equal nil, hosted_next_deadline(second), 'the rebuilt relay holds no send'
+    assert_equal [:h0], hosted_states(second, sink), 'the send is not made again'
+    assert_equal 0, close_hosted(second)
+  end
+
+  # Timeline 3 (E < d). Catches: a send still pending at the eviction that
+  # the replay loses, or fires more than once: it is held at publish, fires
+  # at the next dispatch, and the rebuilt relay records its FIRED.
+  scenario 'a send to another actor still pending at the eviction fires once after the restore' do
+    hosted, definition, relay, sink = HostedRelay.start(self)
+    hosted_advance(hosted, 3000)
+    assert_equal 'ok', hosted_evict(hosted, relay)
+    hosted_run(hosted)
+    assert_equal [:h0], hosted_states(hosted, sink)
+    log = hosted_store(hosted)['hosted_relay/p1']
+    assert_equal nil, hosted_next_deadline(hosted), 'the send left with the evicted relay'
+
+    hosted_advance(hosted, HostedRelay::WEEK)
+    rebuilt = hosted_restore(hosted, definition, 'hosted_relay', 'p1', log)
+    hosted_run(hosted)
+    assert_equal [:h1], hosted_states(hosted, sink), 'b heard it after the restore'
+    assert_equal nil, hosted_next_deadline(hosted)
+    assert !hosted_store(hosted)['hosted_relay/p1'].empty?, 'the rebuilt relay recorded that it fired'
+    hosted_advance(hosted, 2 * HostedRelay::WEEK)
+    hosted_run(hosted)
+    assert_equal [:h1], hosted_states(hosted, sink), 'once'
+    assert_equal [:waiting], hosted_states(hosted, rebuilt)
+    assert_equal 0, close_hosted(hosted)
   end
 end
