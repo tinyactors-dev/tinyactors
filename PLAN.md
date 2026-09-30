@@ -1,5 +1,10 @@
 # Plan: complete the ROADMAP (without the browser build)
 
+**Status: complete (2026-09-30).** Every commit below is on `main`; the
+gaps found on the way are in `ROADMAP.md` under "Follow-ups". Commit 12's
+test landed with commit 13, and commit 31's cost was accepted (core ADR
+0097, napi ADR 0039).
+
 A series of commits on `main`. Each commit passes `mise run test` and ticks
 its item in `ROADMAP.md`. A commit that touches core's hot paths, replay or
 allocation also runs `mise run test:full` and says so in its message.

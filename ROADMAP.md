@@ -7,6 +7,40 @@ the work is in the [README](README.md#layers-and-responsibilities).
 
 ## Done recently
 
+- **The ROADMAP's follow-ups, closed (2026-09-30)**, commit by commit as
+  [`PLAN.md`](PLAN.md) lays out:
+  - **Replay is tested natively in the kernel**
+    (`tinyactors-host/tests/replay_test.c`): prepare, run and redelivery; a
+    checkpoint round trip and life boundaries; core ADR 0089's four
+    timelines; an out-of-memory sweep over replay (every allocation in
+    `test:full`, sampled in the fast pass). It found four kernel bugs,
+    fixed on the way: a checkpoint cut after its first record, a prepared
+    actor orphaned by a failed bootstrap, a message queued without its ID,
+    and an actor left with its mail when its requeue failed (kernel ADR
+    0002's notes).
+  - **Checkpoints restore the sends the router refused** (core ADR 0095);
+    invocations still carry no values, since nothing reads them.
+  - **The kernel's headers are opaque:** 50 accessors, the state in
+    `src/<module>_private.h`, and `mise run check-opaque` (kernel ADR 0001,
+    "Opaque headers"). `bench-compare` within 5% on Node and Bun.
+  - **The test host's hosted mode is finished:** allocators, mailboxes and
+    dead letters, loaders, a log that cannot grow, values written in pieces
+    (kernel ADR 0001, "Hosted mode finished").
+  - **Decisions recorded:** a pending `send()` does not hold the process
+    (napi ADR 0007); the trace staging bound is the bound plus one call
+    (napi ADR 0036); a logged input costs +3.2 µs on Node and +2.5 µs on
+    Bun at log version 2, and no native durable writer is built (napi ADR
+    0034).
+  - **Smaller fixes:** `parameterInfo()` gives the kernel's parameters
+    `owner: "kernel"`; the moved napi ADRs point to the kernel; the
+    scenario runner builds first; `test:full` reruns every exhaustive pass.
+- **Granary's feedback (2026-09-30):** typed event maps,
+  `statechart<Data, Events>()`; a reply-to-sender target, `toOrigin()`;
+  percent-encoded names in target URIs (core ADR 0096) and `actorURI()`.
+- **The rest of napi's JavaScript API (2026-09-30):** event data leaving a
+  session is a copy, as SCXML C.1 requires (core ADR 0097, napi ADR 0039;
+  the cost is accepted, to be optimized later), and `effect()` names an
+  effect sent through the `effects` I/O processor (napi ADR 0038).
 - **The DAP adapters are removed (2026-09-30),** ahead of
   [the MCP server proposal](docs/proposals/mcp-server.md): napi's
   `createDebugSession`, the test host's `bin/dap`, the shared DAP
@@ -35,106 +69,34 @@ the work is in the [README](README.md#layers-and-responsibilities).
     to 0034 and 0036);
   - system parameters (core ADRs 0092 and 0093, napi ADR 0035).
 
-## Follow-ups from the kernel work
+## Follow-ups
 
-Each names where it was recorded. None is a known regression; they are
-gaps left or found on the way.
+Gaps found while closing the ones above. None is a regression.
 
-- [ ] **Native replay tests in the kernel.** `tinyactors-host/tests/replay_test.c`
-  was never written: three attempts stalled during an API outage. It
-  should cover:
-  - prepare, run and redelivery;
-  - a checkpoint round trip, and life boundaries;
-  - the four timelines of core ADR 0089 section 2;
-  - an out-of-memory sweep over replay.
-
-  Replay is covered today only through the test host's hosted scenarios
-  and napi's `replay.js`. (Kernel ADR 0002, "Step 4b".)
-- [x] **Finish the test host's hosted mode.** Done: `hosted.create` takes
-  the scenarios' counting and budget allocators; `hosted.turn` reports
-  dead letters and load requests, `hosted.mailboxes` the mailboxes and
-  dead-letter counters, `hosted.set_loader` and `hosted.load` summon an
-  actor through a loader answered from the scenario's store, and
-  `hosted.stats` the value writer's largest piece and core's memory. New
-  scenarios cover core ADR 0089's timelines 2 and 3, an input refused when
-  the log cannot grow (with an exhaustive allocation sweep), and a 4 MiB
-  value written in pieces of at most 4 KiB with core's peak at 173 KB.
-  (Kernel ADR 0001, "Step 7" and its "Hosted mode finished" note; core ADR
-  0094, "Section 2".)
-- [x] **The scenario runner does not rebuild the test host** when kernel
-  sources change, so `mise run scenarios` after a kernel edit runs a stale
-  binary until `mise run build`. Make `scenarios` depend on the build, or
-  list the kernel in its sources. (Kernel ADR 0001, "Step 7".) Done:
-  `scenarios` depends on `build`.
-- [x] **The cost of a logged input:** +5.5 µs on Node and +3.8 µs on Bun per
-  message, measured before the value was written once. Measure it again at
-  version 2. If it still matters, take option B from the review: a native
-  durable writer for plain JSON values in napi's data model, byte-exact
-  with ADR 0031's printer. (napi ADR 0034's notes.) Done: at version 2 a
-  logged message costs +3.2 µs on Node and +2.5 µs on Bun, the value under
-  2 µs of it; option B is not built. `test/bench/input_log.js` measures it
-  in `mise run bench` and `bench-compare` (napi ADR 0034, addendum of
-  2026-09-30).
-- [x] **The kernel's public headers expose its internals.**
-  `include/tinyactors_host/*.h` declare the full structs (`tah_system`,
-  `tah_sched`, `tah_inputs` and more), because napi and the test host
-  reach into their fields. Make the types opaque behind functions, so a
-  binding cannot depend on the kernel's layout. (Kernel ADR 0001, "Step
-  2b".) Done: the kernel's state is defined in `src/<module>_private.h`,
-  the bindings use 50 accessors, and `mise run check-opaque` refuses a
-  struct body in `include/` other than the data types it names (kernel ADR
-  0001, "Opaque headers").
-- [x] **Status-line pointers on the napi ADRs whose code moved.** Kernel ADR
-  0001 section 6 lists them (0003 to 0008, 0012, 0014, 0016 to 0018, 0020,
-  0022, 0032 to 0036), and only one carries a pointer to it.
-- [x] **`parameterInfo()` labels the kernel's parameters as napi's.** Give
-  them `owner: "kernel"`, since the test host has them too. (Kernel ADR
-  0001, "Step 2b".)
-- [x] **Checkpoints leave out two things:** invocations carry no values, and
-  sends already submitted to the router are not restored. Decided
-  2026-09-30 in core ADR 0095: submitted sends are restored, since nothing
-  else recorded them; invocations still carry no values, since nothing
-  reads them. (Core ADR 0091's notes; kernel ADR 0002, "Step 4a".)
-- [x] **The trace staging bound is the bound plus one call,** decided
-  2026-09-30 and recorded in napi ADR 0036's follow-up: a per-record check
-  would call the sink from inside core.
-- [x] **A `send()` with a timeout does not keep the process alive,** and
-  neither does any pending `send()`: decided 2026-09-30 and recorded in
-  napi ADR 0007 (Consequences). Tests that wait for a timeout keep the
-  process alive themselves.
-- [x] **Run the test host's exhaustive pass after core changes.** Some
-  full runs showed the test host's step cached after a core change
-  (`scale_test` to four million actors; core itself has no exhaustive
-  mode). Two causes are fixed: the root runner took a subtask's skip line
-  (`bindings`) for the step's own, and each project's `test:full` shared
-  its fast pass's stamp without forcing. Confirmed: `test:full` after
-  core ADR 0095's change ran `scale_test` to four million actors.
-
-## From granary's feedback, still open
-
-- [x] **Typed event maps on the chart builder:** `statechart<Data, Events>()`,
-  so a transition's `event.data` is typed and event names are checked.
-  Done: `on()` checks each item of a descriptor against the map (platform
-  events and `*` always pass), a transition's `context.event` is the union
-  of the events it matches, `raise()` checks names and data, `send()` the
-  data of a name of the map; types only (`index.d.ts`,
-  `test/types/usage.ts`, napi README "TypeScript").
-- [x] **A reply-to-sender target,** instead of
-  `.to(({ event }) => String(event?.origin ?? ''))`. Done:
-  `send("reply", (send) => send.toOrigin())` targets `event.origin` through
-  `event.originType`, so it answers an actor, an invoked service or an I/O
-  processor's client (`test/origins.js`).
-- [x] **Names that contain `/`:** core's target grammar refuses `/` inside
-  an actor's name (`src/scxml_uri.c`). Percent-encoding in the grammar
-  (core ADR 0044), and a napi helper that builds addresses. Done: both
-  parts of `#_actor_<family>/<name>` are percent-encoded (core ADR 0096),
-  and napi's `actorURI({ family, name })` writes one with core's encoder
-  (`ta_actor_uri_format`).
+- [ ] **A refused send is lost when an actor is replayed from `spawned`,**
+  with no checkpoint: replay drops immediate sends, and delayed sends once
+  the clock passes them, without knowing the router refused them. Needs a
+  log record for the refusal. (Core ADR 0095, Consequences.)
+- [ ] **Two narrow windows around orphans:** a crash after an eviction but
+  before the orphan is delivered loses the send; an orphan delivered after
+  its address was loaded again writes its `fired` into the new actor's
+  log. (Core ADR 0095.)
+- [ ] **A partly failed redelivery can lose mail later:** the binding
+  destroys the published actor, and the messages already put back are
+  logged as `dropped`, so a later restore forgets them.
+- [ ] **Make napi's copy of sent data cheaper:** +11 to 14% for `{ by: 1 }`
+  and +36 to 40% for nested containers (napi ADR 0039's notes).
+- [ ] **A chart that uses `toOrigin()` cannot be written out as SCXML:**
+  napi's source-text expressions do not read `_event.origin` and
+  `_event.originType`.
+- [ ] **The kernel's public headers still declare functions a binding
+  cannot use** without the private layout (`tah_sched_init`,
+  `tah_loads_find`, ...); move them to the private headers.
+- [ ] **The kernel holds two copies of a large value while logging it:** a
+  4 MiB value peaks at about 17 MB in the log and replay buffers.
 
 ## Open
 
-- [ ] **Build out the rest of the napi JavaScript API.** The remaining
-  steps of [the napi roadmap](tinyactors-napi/ROADMAP.md#steps).
 - [ ] **Bootstrap a browser build.** Core and the host kernel compiled to
   WebAssembly, with a JavaScript surface shared with napi. Both already
   build for `wasm32-freestanding`; no build task or test runs them in a
