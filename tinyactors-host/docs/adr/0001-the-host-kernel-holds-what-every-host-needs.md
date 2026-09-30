@@ -388,6 +388,8 @@ larger scope during an API outage.
 - **The scenario runner does not rebuild the test host** when kernel sources
   change. `mise run test` does, through the build step, so a scenario run
   alone after a kernel edit needs `mise run build` first.
+- **Later: hosted mode is finished**, with the inspection section 5
+  promised and a loader; see "Hosted mode finished" below.
 
 ### Step 8: verification (2026-09-30)
 
@@ -500,3 +502,39 @@ fields and the test host 4. Done in six commits (`9782371`, `bc429db`,
   tests with ASan and UBSan, 537 of 537 test host scenarios with the
   exhaustive ones, `scale_test` to four million actors, and napi's suites
   with `scale.js` to a million actors.
+
+### Hosted mode finished (2026-09-30)
+
+The ROADMAP item that followed step 7, in six commits (`e54008a`,
+`32d8a7c`, `5748ed6`, `1558f8d`, `3252dbc`, and the one that added this
+note). The methods are documented in the test host's `docs/protocol.md`
+("Hosted mode" and "Loads").
+
+- **`hosted.create` takes an allocator adapter,** libc's when absent. The
+  Ruby helper hands it the scenario's `allocator.counting`, so budgets and
+  armed faults reach the kernel and core, and teardown's leak check
+  covers hosted systems.
+- **Inspection (section 5).** `hosted.turn` returns the dead letters its
+  turns reported, from the turn records (actor or address, event, reason
+  by `tah_dead_reason_name`, data). The new `hosted.mailboxes` walks
+  mailboxes with `tah_sched_mailbox_first` and `tah_sched_queued_message`
+  and reads `tah_sched_read_stats` for the dead letters by reason.
+- **A loader.** `hosted.set_loader` calls `tah_loads_set_family`;
+  `hosted.post` also posts by family and name (`tah_router_post_named`).
+  An RPC server cannot call the scenario back mid-turn, so `hosted.turn`
+  drains `tah_loads_next_request` into `loads`, and the scenario answers
+  each with the new `hosted.load`: it replays the stored log with the
+  calls `hosted.restore` makes, or spawns, or refuses, then
+  `tah_loads_finish`. The replay both share now publishes through
+  `tah_hook_actor_published`, as napi and the kernel's tests do.
+- **`hosted.stats`** reports the largest piece the jq model's durable
+  writer handed the log (a wrapper around the log's data model counts
+  it) and `tah_allocator_counters` for core and in total.
+- **Scenarios** (`ruby/scenarios/hosted.rb`, 8 to 22): mailboxes and dead
+  letters (3), a hosted system on the scenario's allocator (2), core ADR
+  0089's timelines 2 and 3 (3, one after a crash in another system), the
+  loader (3), an input refused when the log cannot grow (2, the
+  allocation sweep exhaustive), and a 4 MiB value written in pieces of at
+  most 4 KiB while core's allocations peak at about 173 KB.
+- **The test host's request limit** is 16 MiB, up from 8: a stored log
+  travels as hex, so a 4 MiB value's log is over 8 MiB.

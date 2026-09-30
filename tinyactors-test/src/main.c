@@ -6,7 +6,8 @@
 #include "allocator.h"
 #include "server.h"
 
-enum { TAT_MAX_REQUEST_BYTES = 8 * 1024 * 1024 };
+/* A hosted log travels as hex, twice its size: a 4 MiB value's log fits. */
+enum { TAT_MAX_REQUEST_BYTES = 16 * 1024 * 1024 };
 
 int main(void) {
     tat_server server = {0};
@@ -23,7 +24,7 @@ int main(void) {
             break;
         }
         if (length > TAT_MAX_REQUEST_BYTES) {
-            fputs("tinyactors-test: request exceeds 8 MiB\n", stderr);
+            fputs("tinyactors-test: request exceeds 16 MiB\n", stderr);
             free(line);
             tat_server_destroy(&server);
             return 2;

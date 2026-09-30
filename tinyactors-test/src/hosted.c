@@ -22,9 +22,21 @@ typedef struct {
     uint64_t now_ns;
 } tat_hosted_clock;
 
+/*
+ * The input log's data model: the jq model's codec, counting what its
+ * durable writer hands the log, so a scenario can see that a large value
+ * reaches the log in pieces (hosted.stats).
+ */
+typedef struct {
+    ta_datamodel inner;
+    size_t largest_write;
+    uint64_t bytes_written;
+} tat_hosted_values;
+
 typedef struct {
     tah_system *system;
     tat_hosted_clock clock;
+    tat_hosted_values values;
     /* Batches the kernel's input log handed over since the last
      * hosted.batches: [{"family", "name", "bytes": hex}], one per address
      * per turn, in turn order. */
@@ -68,6 +80,53 @@ static uint64_t tat_hosted_u64(jv params, const char *name) {
     return out;
 }
 
+/* The log's sink, seen through the counter: each write is one piece. */
+typedef struct {
+    ta_byte_sink inner;
+    tat_hosted_values *values;
+} tat_hosted_counted_sink;
+
+static ta_op_status tat_hosted_counted_begin(void *self) {
+    tat_hosted_counted_sink *sink = self;
+    return sink->inner.v->begin == NULL ? TA_OP_OK : sink->inner.v->begin(sink->inner.self);
+}
+
+static ta_op_status tat_hosted_counted_write(void *self, ta_bytes bytes) {
+    tat_hosted_counted_sink *sink = self;
+    if (bytes.len > sink->values->largest_write) {
+        sink->values->largest_write = bytes.len;
+    }
+    sink->values->bytes_written += bytes.len;
+    return sink->inner.v->write(sink->inner.self, bytes);
+}
+
+static void tat_hosted_counted_end(void *self, bool keep) {
+    tat_hosted_counted_sink *sink = self;
+    if (sink->inner.v->end != NULL) {
+        sink->inner.v->end(sink->inner.self, keep);
+    }
+}
+
+static const ta_byte_sink_vtable tat_hosted_counted_vtable = {
+    .begin = tat_hosted_counted_begin, .write = tat_hosted_counted_write, .end = tat_hosted_counted_end};
+
+static ta_op_status tat_hosted_value_write(void *self, const ta_datamodel_value_write_params *params) {
+    tat_hosted_values *values = self;
+    tat_hosted_counted_sink sink = {.inner = params->sink, .values = values};
+    ta_datamodel_value_write_params counted = *params;
+    counted.sink = (ta_byte_sink){.self = &sink, .v = &tat_hosted_counted_vtable};
+    return values->inner.v->value_write(values->inner.self, &counted);
+}
+
+static ta_op_status tat_hosted_value_read(void *self, const ta_datamodel_value_read_params *params) {
+    tat_hosted_values *values = self;
+    return values->inner.v->value_read(values->inner.self, params);
+}
+
+/* The log only writes and reads values (kernel ADR 0002). */
+static const ta_datamodel_vtable tat_hosted_values_vtable = {
+    .value_write = tat_hosted_value_write, .value_read = tat_hosted_value_read};
+
 static const tah_platform_vtable tat_hosted_platform_vtable = {
     .monotonic_ns = tat_hosted_monotonic,
     .wall_ns = tat_hosted_wall,
@@ -109,7 +168,9 @@ jv tat_hosted_create_method(tat_bind *bind, jv params, int *error_code) {
     /* The input log writes values with the jq data model's codec, which
      * streams both ways (kernel ADR 0002; core ADR 0090's notes). Hosted
      * charts use the jq data model. */
-    tah_inputs_set_datamodel(tah_system_inputs(hosted->system), tat_json_datamodel(&bind->json));
+    hosted->values.inner = tat_json_datamodel(&bind->json);
+    tah_inputs_set_datamodel(tah_system_inputs(hosted->system),
+                             (ta_datamodel){.self = &hosted->values, .v = &tat_hosted_values_vtable});
     tah_system_set_driver(hosted->system, &(tah_pump_driver){ .wake = tat_hosted_wake });
     (void)tah_system_set_clock(hosted->system, TAH_CLOCK_MANUAL, 0);
     jv out = jv_object();
@@ -741,4 +802,30 @@ jv tat_hosted_checkpoint_method(tat_bind *bind, jv params, int *error_code) {
     }
     free(sink.bytes);
     return out;
+}
+
+static jv tat_hosted_memory(tah_memory_counters counters) {
+    jv out = jv_object_set(jv_object(), jv_string("bytes_in_use"), jv_number((double)counters.bytes_in_use));
+    out = jv_object_set(out, jv_string("peak_bytes"), jv_number((double)counters.peak_bytes));
+    return jv_object_set(out, jv_string("largest_block"), jv_number((double)counters.largest_block));
+}
+
+/*
+ * What the input log's value writer wrote (the largest piece and the bytes
+ * in all), and the kernel's memory counters for what core allocates and
+ * for everything: {"values": {...}, "memory": {"core", "total"}}.
+ */
+jv tat_hosted_stats_method(tat_bind *bind, jv params, int *error_code) {
+    tat_hosted *hosted = NULL;
+    if (!tat_hosted_resolve(bind, params, &hosted)) {
+        return tat_bind_take_error(bind, error_code);
+    }
+    jv values = jv_object_set(jv_object(), jv_string("largest_write"), jv_number((double)hosted->values.largest_write));
+    values = jv_object_set(values, jv_string("bytes_written"), jv_number((double)hosted->values.bytes_written));
+    tah_allocator *allocator = tah_system_allocator(hosted->system);
+    jv memory = jv_object_set(jv_object(), jv_string("core"),
+                              tat_hosted_memory(tah_allocator_counters(allocator, TAH_MEMORY_CORE)));
+    memory = jv_object_set(memory, jv_string("total"), tat_hosted_memory(tah_allocator_total(allocator)));
+    jv out = jv_object_set(jv_object(), jv_string("values"), values);
+    return jv_object_set(out, jv_string("memory"), memory);
 }

@@ -597,6 +597,13 @@ module TinyactorsTest
       rpc('json.transform', filter: filter, input: root).first
     end
 
+    # What the input log's value writer wrote, { largest_write:, bytes_written: },
+    # and the kernel's memory counters: { values:, memory: { core:, total: } },
+    # each { bytes_in_use:, peak_bytes:, largest_block: }.
+    def hosted_stats(hosted)
+      rpc('hosted.stats', system: hosted[:hosted])
+    end
+
     # A checkpoint of `actor` (kernel ADR 0002 section 7): { result:, bytes: hex }.
     def hosted_checkpoint(hosted, actor)
       rpc('hosted.checkpoint', system: hosted[:hosted], actor: actor)

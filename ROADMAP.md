@@ -50,19 +50,17 @@ gaps left or found on the way.
 
   Replay is covered today only through the test host's hosted scenarios
   and napi's `replay.js`. (Kernel ADR 0002, "Step 4b".)
-- [ ] **Finish the test host's hosted mode.** Kernel ADR 0001 section 5
-  promised inspecting mailboxes and dead letters, which has no method yet.
-  Also missing:
-  - two of core ADR 0089's four timelines as hosted scenarios: the send to
-    another actor that fired before the stop, and the send still pending
-    at the stop. The pending timer and the crash are covered;
-  - a summons through a loader, rather than an explicit `hosted.restore`;
-  - an input refused because the log could not grow. The core-log version
-    of that scenario was removed in step 5;
-  - the "largest write" check on the jq writer, lost with the
-    `input.recording` instrument. Only the unit test covers it now.
-
-  (Kernel ADR 0001, "Step 7"; core ADR 0094, "Section 2".)
+- [x] **Finish the test host's hosted mode.** Done: `hosted.create` takes
+  the scenarios' counting and budget allocators; `hosted.turn` reports
+  dead letters and load requests, `hosted.mailboxes` the mailboxes and
+  dead-letter counters, `hosted.set_loader` and `hosted.load` summon an
+  actor through a loader answered from the scenario's store, and
+  `hosted.stats` the value writer's largest piece and core's memory. New
+  scenarios cover core ADR 0089's timelines 2 and 3, an input refused when
+  the log cannot grow (with an exhaustive allocation sweep), and a 4 MiB
+  value written in pieces of at most 4 KiB with core's peak at 173 KB.
+  (Kernel ADR 0001, "Step 7" and its "Hosted mode finished" note; core ADR
+  0094, "Section 2".)
 - [ ] **The scenario runner does not rebuild the test host** when kernel
   sources change, so `mise run scenarios` after a kernel edit runs a stale
   binary until `mise run build`. Make `scenarios` depend on the build, or

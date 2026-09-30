@@ -268,6 +268,32 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted)
   end
 
+  # Catches: a data model or kernel framing that holds a whole value while
+  # it is logged or replayed. The jq model writes in pieces (core ADR 0090's
+  # notes); its heap is jq's, so the kernel's core counters show core's
+  # side: no copy of the value, whatever its size. What the core log's
+  # 'a large value is logged and replayed in pieces' checked.
+  scenario 'a large value is written to the log in pieces, and core holds no copy of it' do
+    hosted = hosted_system
+    hosted_log(hosted, 'hosted_box')
+    definition = hosted_define(hosted, :hosted_box)
+    box = hosted_spawn(hosted, definition, family: 'hosted_box', name: 'big')
+    hosted_run(hosted)
+    blob = 'v' * (4 * 1024 * 1024)
+    assert_equal 'ok', hosted_post_data(hosted, box, 'put', { blob: blob })
+    hosted_run(hosted)
+    assert_equal blob.size, hosted_data(hosted, box, '.size')
+    written = hosted_stats(hosted)[:values]
+    assert written[:bytes_written] > blob.size, 'the value went through the writer'
+    assert written[:largest_write] <= 8192, "the value reached the log in pieces, the largest #{written[:largest_write]} bytes"
+    hosted_evict(hosted, box)
+    rebuilt = hosted_restore(hosted, definition, 'hosted_box', 'big', hosted_store(hosted)['hosted_box/big'])
+    assert_equal blob.size, hosted_data(hosted, rebuilt, '.size')
+    peak = hosted_stats(hosted).dig(:memory, :core, :peak_bytes)
+    assert peak < blob.size / 4, "core's allocations peaked at #{peak} bytes for a #{blob.size}-byte value"
+    assert_equal 0, close_hosted(hosted)
+  end
+
   # Catches: a checkpoint that does not hold the actor's state, or a log
   # compacted to it that loses its pending timer.
   scenario 'a log compacted to its checkpoint rebuilds the actor' do

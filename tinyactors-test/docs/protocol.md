@@ -6,7 +6,7 @@ for diagnostics and must never contain protocol messages.
 
 Requests and responses use the JSON-RPC 2.0 object shapes. The initial server
 implements individual requests and notifications; JSON-RPC batch arrays are not
-supported. Each input line is limited to 8 MiB.
+supported. Each input line is limited to 16 MiB.
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"system.ping","params":{"value":42}}
@@ -167,6 +167,12 @@ reproducible. Scenarios about core's semantics keep using core directly.
   returns `{"result", "outcome", "actor"?}`: `result` is `err_stale` for a
   load already answered, and `outcome` is `spawned` when a `loaded` request
   found no life in the log, `failed` when the replay or spawn failed.
+- `hosted.stats` takes `{"system"}` and returns `{"values", "memory"}`:
+  what the input log's value writer wrote, `{"largest_write",
+  "bytes_written"}` (the jq model's durable writer, counted where it hands
+  the log each piece), and the kernel's memory counters for what core
+  allocates and for everything, `{"core", "total"}`, each
+  `{"bytes_in_use", "peak_bytes", "largest_block"}`.
 - `hosted.close` takes `{"system": <hosted handle>}`, closes and frees the
   system, and returns `{"leaked": <bytes>}`: what the kernel allocated and
   did not free, which is always 0.

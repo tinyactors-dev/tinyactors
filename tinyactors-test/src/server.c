@@ -252,6 +252,7 @@ static const tat_method TAT_HOST_METHODS[] = {
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"index\":{\"type\":\"u64\",\"required\":true},"
      "\"generation\":{\"type\":\"u64\",\"required\":true},\"outcome\":{\"type\":\"string\",\"required\":false},"
      "\"definition\":{\"type\":\"u64\",\"required\":false},\"log\":{\"type\":\"string\",\"required\":false}}}"},
+    {"hosted.stats", tat_hosted_stats_method, "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
     {"hosted.checkpoint", tat_hosted_checkpoint_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":true}}}"},
     {"hosted.log", tat_hosted_log_method,
