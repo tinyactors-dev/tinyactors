@@ -62,25 +62,23 @@ are in [`docs/proposals/`](docs/proposals/README.md).
      `ta_actor_set_time()` removed. `ta_actor_export_state()` and
      `ta_actor_prepare_params.state` added. The kernel and the test host
      migrate. Done: core ADR 0094's notes ("Sections 1 and 3").
-  4. **4a done:** [kernel ADR 0002, step 4a](tinyactors-host/docs/adr/0002-the-kernel-keeps-the-write-ahead-log.md#step-4a-the-kernel-writes-and-replays-the-log-2026-09-30)
-     (the kernel writes, replays and checkpoints the log at version 2;
-     napi runs on it). 4b: the kernel's own replay tests, among them core
-     ADR 0089's four timelines; see the notes.
-     **Kernel ADR 0002, the log moves:** core's `src/input_log.c` layout,
-     writer and reader become the kernel's, at version 2 with `accepted`,
-     `delivered` and `dropped`. The kernel records at its own call sites,
-     replays by calling core, and encodes checkpoints from core's exported
-     state. napi's `inputs.c` and `napi_replay.c` become kernel code. The
-     tests move with them, among them the four timelines of core ADR 0089,
-     the out-of-memory sweeps, and the memory-bound tests.
+  4. [x] **Kernel ADR 0002, the log moves:** the kernel writes, replays and
+     checkpoints the log at version 2 (`accepted`, `delivered`, `dropped`),
+     recording at its own call sites and replaying by calling core; napi
+     runs on it. Done: [kernel ADR 0002, step 4a](tinyactors-host/docs/adr/0002-the-kernel-keeps-the-write-ahead-log.md#step-4a-the-kernel-writes-and-replays-the-log-2026-09-30).
+     Changed on the way: replay's tests come from the test host's hosted
+     scenarios and napi's `replay.js` instead of native kernel tests, whose
+     three attempts stalled during an API outage (kernel ADR 0002, "Step
+     4b"). The order changed too: step 7 ran before step 5, because the test
+     host still used core's log.
   5. [x] **Core ADR 0094, the log leaves core:** remove the input sink, host
      records, `ta_actor_replay()`, `ta_actor_prepare_params.log`,
      `host_seq`, and checkpoint bytes from core. Done: `e4b6974`; see core
      ADR 0094's notes, "Section 2".
-  6. **napi ADR 0037:** napi keeps its glue, data model, pump driver and
+  6. [x] **napi ADR 0037:** napi keeps its glue, data model, pump driver and
      `lib/`. `readInputLog()` yields the new kinds, and the rest of the
      public API is unchanged.
-  7. **The test host's hosted mode (kernel ADR 0001 section 5):** it links the
+  7. [x] **The test host's hosted mode (kernel ADR 0001 section 5):** it links the
      kernel. A scenario can create a hosted system, run turns explicitly,
      and inspect mailboxes, dead letters and batches. Its persistence
      scenarios (input log, replay, checkpoints, compaction) move to hosted

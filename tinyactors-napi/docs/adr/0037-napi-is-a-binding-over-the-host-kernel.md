@@ -1,6 +1,6 @@
 # ADR 0037: napi is a binding over the host kernel
 
-**Status:** Proposed (2026-09-30). Applies kernel ADRs 0001 and 0002 and core ADR 0094. Code decided in napi ADRs 0003 to 0008, 0012, 0014, 0016 to 0018, 0020, 0022 and 0032 to 0036 moves to the kernel; those ADRs stay here as the record.
+**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Applies kernel ADRs 0001 and 0002 and core ADR 0094. Code decided in napi ADRs 0003 to 0008, 0012, 0014, 0016 to 0018, 0020, 0022 and 0032 to 0036 moves to the kernel; those ADRs stay here as the record.
 **Date:** 2026-09-30
 
 ## Context
@@ -69,4 +69,32 @@ once per turn. Replays pass the logged time, which is the kernel's job.
 
 ## Implementation notes
 
-None yet.
+The migration happened in the kernel's steps (kernel ADR 0001 steps 2a and
+2b, kernel ADR 0002 step 4a, core ADR 0094). This ADR's part was to confirm
+what napi keeps.
+
+- **napi's C** is `addon.c`, the `napi_*.c` glue, `values.c`, `runtime.c`,
+  `runtime_codecs.c` and `pump.c` (the setImmediate and setTimeout pump
+  driver), plus four files that use no Node-API, each kept on purpose:
+  - `platform.c` is napi's implementation of the kernel's `tah_platform`:
+    libc memory, the monotonic and wall clocks, and the random seed. It is
+    the one place a binding may use libc.
+  - `napi_params.c` holds the two data-model registry limits, which are
+    napi's own parameters: the registry is napi's data model's.
+  - `import.c` runs `define(text, { format })` through the SCXML codec.
+    The kernel does not link the codec; hosts import documents their own
+    way (the test host calls core's import directly). If a second binding
+    needs the same wrapper, it moves then.
+  - `runtime_codecs.c` converts generated calls' arguments. It reaches
+    Node-API through `runtime.h`.
+- **`napi_replay.c` is a thin binding over the kernel's `replay.c`:** it feeds
+  JavaScript's chunks to `tah_replay_push` and resumes within the pump.
+- **The public API is unchanged, except `readInputLog()`,** which yields
+  version 2's kinds (`accepted`, `delivered`, `dropped`). The README says
+  so.
+- **The Node-API guard (`NODE_API_SOURCES`) is gone** (step 2b): the kernel
+  cannot include Node-API, so the boundary no longer depends on a check.
+- **Measured** in the steps that moved code (kernel ADR 0001's notes):
+  `bench-compare` stayed within 5% on Node, and allocations per event were
+  unchanged. The final comparison against the commit before the migration
+  is in step 8's notes.

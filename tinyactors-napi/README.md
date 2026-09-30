@@ -331,7 +331,8 @@ keeps the log from `spawned` upgrades by replaying it:
 `await prepared.replay(restOfTheChunks)`, then `system.publish(prepared)`.
 
 `readInputLog(chunks)` decodes a log into plain records, one at a time, for
-an audit trail. Effects that leave the process are at most once across a
+an audit trail: `accepted` carries a message and its data once, and
+`delivered` or `dropped` names it by `id` (kernel ADR 0002). Effects that leave the process are at most once across a
 crash; mail between persisted actors is exactly once. Expressions should
 read `context.time` rather than the wall clock, so a replay computes what
 the live run did.
