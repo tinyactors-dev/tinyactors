@@ -16,7 +16,7 @@ const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
 const { traceConfig } = require('./tracing');
 const { buildSnapshot } = require('./metrics');
-const { STANDARD_CLASSES, printBuiltin, printCall, printedSpec } = require('./values');
+const { STANDARD_CLASSES, copier, printBuiltin, printCall, printedSpec } = require('./values');
 const { durableChunks, durableReader } = require('./durable');
 const { parameterAttribute, resolveParameters } = require('./params');
 
@@ -265,6 +265,7 @@ class System {
     }
     this.#native.setOffloadValues(v8.serialize, v8.deserialize, unloadValues === 'handles');
     this.#native.setDurableCodec(durableChunks, durableReader);
+    this.#native.setCopyOut(copier(this.#classes));
     for (const [name, constructor] of Object.entries(STANDARD_CLASSES)) {
       this.registerClass(name, constructor);
     }

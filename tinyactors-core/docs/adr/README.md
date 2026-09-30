@@ -100,3 +100,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0094](0094-every-input-carries-its-time-and-the-input-log-leaves-core.md) | [Every input carries its time, and the input log leaves core](0094-every-input-carries-its-time-and-the-input-log-leaves-core.md) |
 | [0095](0095-a-checkpoint-restores-the-sends-the-router-refused.md) | [A checkpoint restores the sends the router refused](0095-a-checkpoint-restores-the-sends-the-router-refused.md) |
 | [0096](0096-actor-addresses-are-percent-encoded-in-target-uris.md) | [Actor addresses are percent-encoded in target URIs](0096-actor-addresses-are-percent-encoded-in-target-uris.md) |
+| [0097](0097-event-data-leaving-a-session-is-a-copy.md) | [Event data leaving a session is a copy](0097-event-data-leaving-a-session-is-a-copy.md) |

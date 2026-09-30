@@ -336,6 +336,23 @@ napi_value tna_set_offload_values_method(napi_env env, napi_callback_info info) 
     return tna_undefined_value(env);
 }
 
+/* setCopyOut(copy): lib/values.js's copier for this system (napi ADR 0039). */
+napi_value tna_set_copy_out_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (argc < 1 || !tna_js_datamodel_set_copy_out(&wrapper->dm, argv[0])) {
+        return tna_throw(env, "out-of-memory", "setCopyOut: cannot keep the function");
+    }
+    return tna_undefined_value(env);
+}
+
 /* setDurableCodec(chunks, reader): lib/durable.js's two functions (napi ADR 0034). */
 napi_value tna_set_durable_codec_method(napi_env env, napi_callback_info info) {
     size_t argc = 2;

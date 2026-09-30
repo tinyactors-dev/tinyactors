@@ -26,7 +26,7 @@ numbers from another day or another machine.
 | `machine`, `commit`, `dirty` | the signature, the build (short hash), and whether the tree had changes |
 | `time`, `runtime` | when (UTC) and exactly which runtime |
 | `conditionsBefore`, `conditionsAfter` | `loadAverage` (1, 5, 15 min) and macOS `cpuSpeedLimit` around the run; not part of the signature |
-| `variant`, `population`, `rounds` | what ran: the tracing configuration (`test/bench/tracing.js`) or the input-log variant (`test/bench/input_log.js`, which adds `messagesPerActor` per round), actors, timed rounds |
+| `variant`, `population`, `rounds` | what ran: the tracing configuration (`test/bench/tracing.js`) or the input-log or send-data variant (`test/bench/input_log.js`, `test/bench/send_data.js`, which add `messagesPerActor` per round), actors, timed rounds |
 | `throughput` | `eventsPerSecondMedian`, `eventsPerSecondBest`, and `nsPerEvent` (from the best round) |
 | `memory.coreBytesPerActor` | core's allocator bytes in use per actor, after spawning |
 | `memory.nativeBytesPerActor` | the addon's bytes in use per actor, by category (`total`, `core`, `envelopes`, `scheduling`, `values`, `directory`, `scratch`, `other`) |

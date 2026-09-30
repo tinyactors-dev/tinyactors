@@ -147,6 +147,10 @@ bool tna_value_ours(const ta_value *value) {
            v == &tna_false_vtable || v == &tna_number_vtable;
 }
 
+bool tna_value_boxed(const ta_value *value) {
+    return value->v == &tna_box_vtable;
+}
+
 bool tna_value_absent(const ta_value *value) {
     return value == NULL || value->v == NULL;
 }

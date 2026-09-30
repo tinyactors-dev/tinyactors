@@ -903,6 +903,19 @@ typedef struct { void *shared; void *instance; ta_bytes content; const ta_dm_hos
  */
 typedef struct { void *shared; void *instance; ta_expr_id array; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT uint32_t *count; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_foreach_snapshot_params;
 typedef struct { void *shared; void *instance; TA_IN const ta_value *snapshot; uint32_t index; ta_str item; ta_str index_name; const ta_dm_host *host; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_foreach_bind_params;
+/*
+ * A value leaving the session (ADR 0097, SCXML C.1): the data of a <send>
+ * to anything but #_internal, the params and content expr of an <invoke>,
+ * and an event autoforwarded to an invocation. copy_out answers a value
+ * the session can no longer change: a copy, or `value` itself retained
+ * when the session cannot change it anyway (an immutable value). Core
+ * sends *out in place of `value` and releases `value`.
+ *
+ * Null means every value of the data model is immutable, so sharing is a
+ * copy: core retains `value`. TA_OP_NOMEM changes nothing, and the step
+ * runs again (ADR 0070); TA_OP_ERROR is error.execution with `fault`.
+ */
+typedef struct { void *shared; void *instance; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_copy_out_params;
 typedef struct ta_datamodel_vtable {
     /*
      * The SCXML data-model name this adapter implements, e.g. "null" or
@@ -931,6 +944,7 @@ typedef struct ta_datamodel_vtable {
     ta_op_status (*foreach_bind)(void *self, TA_IN const ta_datamodel_foreach_bind_params *params);
     TA_OPTIONAL ta_op_status (*value_write)(void *self, TA_IN const ta_datamodel_value_write_params *params);
     TA_OPTIONAL ta_op_status (*value_read)(void *self, TA_IN const ta_datamodel_value_read_params *params);
+    TA_OPTIONAL ta_op_status (*copy_out)(void *self, TA_IN const ta_datamodel_copy_out_params *params);
 } ta_datamodel_vtable TA_VTABLE;
 typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel TA_ADAPTER;
 

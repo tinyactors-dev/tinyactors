@@ -1674,6 +1674,61 @@ static ta_op_status tna_dm_foreach_bind(void *self, const ta_datamodel_foreach_b
 static ta_op_status tna_dm_value_write(void *self, const ta_datamodel_value_write_params *params);
 static ta_op_status tna_dm_value_read(void *self, const ta_datamodel_value_read_params *params);
 
+/*
+ * A value leaving the session (core ADR 0097, napi ADR 0039). An inline
+ * primitive, a string, a bigint, a symbol and a function are shared, as
+ * nothing the session does changes them; an object goes through lib's
+ * copier, which answers a copy, or the object itself when nothing says how
+ * to copy it, so it keeps its box. An exception (a described value whose
+ * class is not registered, a getter that throws) is error.execution.
+ */
+static ta_op_status tna_dm_copy_out(void *self, const ta_datamodel_copy_out_params *params) {
+    tna_js_datamodel *dm = tna_dm_of(self);
+    if (!tna_value_boxed(params->value)) {
+        *params->out = *params->value;
+        ta_value_retain(params->out);
+        return TA_OP_OK;
+    }
+    /*
+     * A frame of its own, lighter than tah_begin's: the copier runs no chart
+     * code, so the call in progress (the context's host and instance) stays
+     * as it was. It is on the path of every send with data, and each
+     * Node-API call counts (napi ADR 0039's measurement).
+     */
+    tna_frame frame = { .dm = dm, .fault = params->fault };
+    if (!dm->js_usable) {
+        return tna_fail(&frame, "javascript: no JavaScript can run while the system closes");
+    }
+    napi_env env = dm->env;
+    napi_handle_scope scope = NULL;
+    if (napi_open_handle_scope(env, &scope) != napi_ok) {
+        return tna_fail(&frame, "javascript: cannot open a handle scope");
+    }
+    napi_value value = NULL;
+    napi_value copy_out = NULL;
+    napi_value copy = NULL;
+    napi_valuetype type = napi_undefined;
+    bool same = true;
+    ta_op_status status = TA_OP_OK;
+    if (!tna_value_get(env, params->value, &value) || napi_typeof(env, value, &type) != napi_ok) {
+        status = tna_fail(&frame, "javascript: not a JavaScript value");
+    } else if (type == napi_object) {
+        if (dm->copy_out == NULL || napi_get_reference_value(env, dm->copy_out, &copy_out) != napi_ok ||
+            copy_out == NULL || napi_call_function(env, value, copy_out, 1, &value, &copy) != napi_ok ||
+            napi_strict_equals(env, value, copy, &same) != napi_ok) {
+            status = tna_fail(&frame, "javascript: the value cannot be copied");
+        } else if (!same && !tna_value_make(&dm->wrapper->values, copy, params->out)) {
+            status = tna_fail(&frame, "javascript: cannot keep the copy");
+        }
+    }
+    if (status == TA_OP_OK && same) {
+        *params->out = *params->value;
+        ta_value_retain(params->out);
+    }
+    napi_close_handle_scope(env, scope);
+    return status;
+}
+
 static const ta_datamodel_vtable tna_dm_vtable = {
     .name = { "javascript", 10 },
     .prepare_definition = tna_dm_prepare,
@@ -1698,6 +1753,7 @@ static const ta_datamodel_vtable tna_dm_vtable = {
     .foreach_bind = tna_dm_foreach_bind,
     .value_write = tna_dm_value_write,
     .value_read = tna_dm_value_read,
+    .copy_out = tna_dm_copy_out,
 };
 
 /* ------------------------------------------------------------------------
@@ -2102,6 +2158,18 @@ ta_op_status tna_js_datamodel_value_read(tna_js_datamodel *dm, const ta_datamode
     return tna_dm_value_read(&dm->builtin, params);
 }
 
+bool tna_js_datamodel_set_copy_out(tna_js_datamodel *dm, napi_value copy) {
+    napi_ref copy_ref = NULL;
+    if (napi_create_reference(dm->env, copy, 1, &copy_ref) != napi_ok) {
+        return false;
+    }
+    if (dm->copy_out != NULL) {
+        napi_delete_reference(dm->env, dm->copy_out);
+    }
+    dm->copy_out = copy_ref;
+    return true;
+}
+
 bool tna_js_datamodel_set_durable(tna_js_datamodel *dm, napi_value chunks, napi_value reader) {
     napi_ref chunks_ref = NULL;
     napi_ref reader_ref = NULL;
@@ -2501,7 +2569,7 @@ void tna_js_datamodel_free(tna_js_datamodel *dm) {
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable) {
     tna_js_datamodel_after_core(dm);
     napi_ref *refs[] = { &dm->context, &dm->json_parse, &dm->array_from, &dm->functions, &dm->classes, &dm->serialize, &dm->deserialize,
-                         &dm->durable_chunks, &dm->durable_reader, &dm->objects };
+                         &dm->durable_chunks, &dm->durable_reader, &dm->copy_out, &dm->objects };
     for (size_t at = 0; at < sizeof refs / sizeof refs[0]; at += 1) {
         if (*refs[at] != NULL && refs_usable) {
             napi_delete_reference(dm->env, *refs[at]);

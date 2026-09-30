@@ -3,6 +3,8 @@
 **Status:** Accepted. Amended on 2026-09-23: build one `napi_ref` per box
 first, and measure it against a handle table before choosing. Measured the
 same day: one `napi_ref` per box (model A) stays; see the result below.
+Refined by ADR 0039 (2026-09-30): a value a chart sends out of its session
+is copied, not shared.
 **Date:** 2026-09-23
 
 ## Context

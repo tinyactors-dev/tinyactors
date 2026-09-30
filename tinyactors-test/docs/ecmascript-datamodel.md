@@ -136,8 +136,14 @@ following:
   `instanceof Object` and other constructor checks behave the same way;
 - functions run against **their creator's** globals. After the creator's
   session is destroyed, they see an `In()` that throws and `undefined`
-  system variables;
-- mutations are visible to both sessions (aliasing).
+  system variables.
+
+Mutations are not visible to the other session: a value leaving a session
+is copied (core ADR 0097, `tat_js_copy_out`) with QuickJS's structured
+serialization (`JS_WriteObject`, then `JS_ReadObject` in the utility
+context), so the receiver gets objects of the utility realm, with the
+`instanceof` caveat above. A value that serialization refuses (a function,
+or an object holding one) is still shared, and aliases as before.
 
 Mixed-model refusal (section 6) limits sharing to ECMAScript-to-ECMAScript
 sessions. Values that cross RPC are WIRE values and do not have this
@@ -148,7 +154,7 @@ invoker goes through the codec (6.1).
 
 | Case | What happens |
 |---|---|
-| Event data queued to another session | The value is shared (retained) and is freed through the runtime. The sender's context can already be gone. |
+| Event data queued to another session | A copy made in the utility context (core ADR 0097), retained by the queue and freed through the runtime. The sender's context can already be gone. |
 | Delayed send that outlives the sender (submitted record, or `sender == NULL` dispatch) | The record holds the wrapper. Delivery retains it. Only the runtime is needed. |
 | Completion data read after the child is destroyed | `ta_actor_get_completion` retains while the child is alive. The wrapper stays valid after the child is gone. RPC encoding (2.1) uses the utility context. |
 | A function called after its session died | Its realm stays alive (1.4). `In()` throws. System variables read as `undefined`. |

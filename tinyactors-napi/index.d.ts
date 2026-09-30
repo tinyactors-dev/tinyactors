@@ -704,8 +704,8 @@ export interface System {
    * address is resolved through the directory when the post is accepted; a
    * name with no resident actor is a dead letter too (ADR 0006). Throws
    * `queue-full` at maxQueuedMessages or maxRetainedBytes. `data` is any JavaScript value, shared
-   * with the receiver, not copied (ADR 0011); the receiver's expressions see
-   * it as `context.event.data`.
+   * with the receiver, not copied (ADR 0011; mail enters a session, napi ADR
+   * 0039); the receiver's expressions see it as `context.event.data`.
    */
   post(target: ActorTarget, event: EventName, data?: unknown, options?: PostOptions): void;
 
@@ -1700,7 +1700,11 @@ export interface SendBuilder<Data extends object, Payload = unknown, Event = Act
   /** id() and idLocation() replace each other: the last one called wins. */
   id(id: string): this;
   idLocation(location: keyof Data & string | Location<Data, string, Event>): this;
-  /** The event's data; for an event of the chart's map, of that event's type. */
+  /**
+   * The event's data; for an event of the chart's map, of that event's type.
+   * It leaves the session as a copy (napi ADR 0039), except for a send to
+   * `#_internal`.
+   */
   data(value: ValueInput<Data, Payload, Event>): this;
   param(name: string, value: ValueInput<Data, unknown, Event>): this;
 }

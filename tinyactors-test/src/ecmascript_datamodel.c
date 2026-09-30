@@ -1522,6 +1522,42 @@ static ta_op_status tat_js_foreach_bind(void *self, const ta_datamodel_foreach_b
     return ok ? TA_OP_OK : tat_js_error(instance, params->fault, "ecmascript: could not bind foreach variables");
 }
 
+/*
+ * A value leaving the session (core ADR 0097, SCXML C.1): a copy by QuickJS's
+ * structured serialization, JS_WriteObject then JS_ReadObject in the utility
+ * context, so a mutation in one session never shows in the other. A wire
+ * value is JSON text and a primitive cannot change, so both are shared, and
+ * so is a value the serialization refuses (a function, or an object holding
+ * one): it is shared as it was before copying existed.
+ */
+static ta_op_status tat_js_copy_out(void *self, const ta_datamodel_copy_out_params *params) {
+    (void)self;
+    tat_js_value *wrapped = tat_js_unwrap(params->value);
+    JSValue copy = JS_UNDEFINED;
+    if (wrapped != NULL && !wrapped->wire && JS_IsObject(wrapped->value)) {
+        JSContext *utility = wrapped->state->utility;
+        tat_js_begin_work(wrapped->state);
+        size_t length = 0;
+        uint8_t *bytes = JS_IsFunction(utility, wrapped->value)
+                             ? NULL
+                             : JS_WriteObject(utility, &length, wrapped->value, JS_WRITE_OBJ_REFERENCE);
+        if (bytes != NULL) {
+            copy = JS_ReadObject(utility, bytes, length, JS_READ_OBJ_REFERENCE);
+            js_free(utility, bytes);
+        }
+        if (bytes == NULL || JS_IsException(copy)) {
+            tat_js_clear_exception(utility);
+            copy = JS_UNDEFINED;
+        }
+    }
+    if (JS_IsUndefined(copy)) {
+        *params->out = *params->value;
+        ta_value_retain(params->out);
+        return TA_OP_OK;
+    }
+    return tat_js_wrap(wrapped->state, copy, false, params->out) == TA_OK ? TA_OP_OK : TA_OP_NOMEM;
+}
+
 static const ta_datamodel_vtable TAT_JS_DATAMODEL_VTABLE = {
     .name = {.ptr = "ecmascript", .len = 10},
     .prepare_definition = tat_js_prepare,
@@ -1546,6 +1582,7 @@ static const ta_datamodel_vtable TAT_JS_DATAMODEL_VTABLE = {
     .foreach_bind = tat_js_foreach_bind,
     .value_write = tat_js_value_write,
     .value_read = tat_js_value_read,
+    .copy_out = tat_js_copy_out,
 };
 
 ta_datamodel tat_js_datamodel(tat_js_datamodel_context *context) {

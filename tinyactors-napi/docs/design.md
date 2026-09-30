@@ -246,9 +246,11 @@ deletes the Node-API reference when the count reaches zero. Clone shares the
 same box instead of structured-cloning the JavaScript value.
 
 The system therefore owns the value's lifetime, not exclusive mutation rights.
-If application code mutates an object after sending it, a later actor may see
-that mutation. An optional higher-level copy policy can call `structuredClone`
-before submission, but copying is not the native binding's default semantic.
+If application code mutates an object after posting it, the receiving actor
+may see that mutation. Data a chart sends out of its session is different:
+core asks the data model for a copy (core ADR 0097), and napi's copier
+answers one (ADR 0039), so a chart's later mutation never shows in the
+receiver.
 
 All reference operations and system destruction occur on the owning JavaScript
 thread.

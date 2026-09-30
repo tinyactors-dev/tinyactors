@@ -370,4 +370,159 @@ function printedSpec(spec, print, datamodel) {
   return { ...walk(spec), datamodel };
 }
 
-module.exports = { serialize, STANDARD_CLASSES, construction, printBuiltin, printCall, printedSpec, standardName, described, refuse };
+// ---------------------------------------------------------------------------
+// Copying (core ADR 0097, napi ADR 0039): a value leaving a session, as
+// data a <send> sends to anything but #_internal, an invocation's params
+// and content, and an autoforwarded event's data. The receiver gets a copy,
+// so a mutation on either side never shows on the other (SCXML C.1).
+//
+// - Plain objects (prototype Object.prototype or null) and arrays are
+//   copied: an object's own enumerable string-keyed properties, read as
+//   values (a getter runs), and an array's elements, holes kept.
+// - Date, RegExp, Map, Set, ArrayBuffer, DataView, the standard typed
+//   arrays and Buffer are copied, and so are a Map's keys and values and a
+//   Set's items.
+// - A value that describes itself ([serialize](), ADR 0031) is rebuilt with
+//   the class registered under its name, from a copy of its arguments.
+// - Everything else is shared, as all values were before: primitives,
+//   which cannot change, functions, and objects nothing says how to copy (a
+//   class instance without [serialize](), or whose name nothing is
+//   registered under, a Promise, a WeakMap, ...). A [serialize]() or a
+//   getter that throws makes the copy throw, which is error.execution.
+// - Shared references and cycles are kept: an object met twice is copied
+//   once. The walk keeps its work in an array, not on the JavaScript stack,
+//   except for a described value's arguments, copied as a value of their
+//   own.
+
+const PLAIN = 0;
+const ARRAY = 1;
+const MAP = 2;
+const SET = 3;
+
+const STANDARD_COPIES = new Map([
+  [Date.prototype, (value) => new Date(value.getTime())],
+  [RegExp.prototype, (value) => {
+    const copy = new RegExp(value.source, value.flags);
+    copy.lastIndex = value.lastIndex;
+    return copy;
+  }],
+  [ArrayBuffer.prototype, (value) => value.slice(0)],
+  [DataView.prototype, (value) => new DataView(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength))],
+  ...[...TYPED_ARRAYS].map((constructor) => [constructor.prototype, (value) => new constructor(value)]),
+]);
+if (typeof Buffer === 'function') {
+  STANDARD_COPIES.set(Buffer.prototype, (value) => Buffer.from(value));
+}
+
+// The function that copies a value for a system, whose registered classes
+// are `classes` (name -> constructor), read at each copy.
+function copier(classes) {
+  const copyOut = (value) => {
+    if (value === null || typeof value !== 'object') {
+      return value;
+    }
+    // The common case, a plain object of primitives, without the walk.
+    if (Object.getPrototypeOf(value) === Object.prototype) {
+      const keys = Object.keys(value);
+      const copy = {};
+      let index = 0;
+      for (; index < keys.length; index += 1) {
+        const key = keys[index];
+        const item = value[key];
+        if ((item !== null && typeof item === 'object') || key === '__proto__') {
+          break;
+        }
+        copy[key] = item;
+      }
+      if (index === keys.length) {
+        return copy;
+      }
+    }
+    return walk(value);
+  };
+  const walk = (value) => {
+    const pending = [];
+    let seen;
+    let root;
+    // A new copy of `item`, empty when it is a container, which then waits
+    // in `pending` to be filled; `item` itself when it is shared.
+    const make = (item) => {
+      const prototype = Object.getPrototypeOf(item);
+      if (Array.isArray(item)) {
+        const copy = new Array(item.length);
+        pending.push(item, copy, ARRAY);
+        return copy;
+      }
+      if (prototype === Object.prototype || prototype === null) {
+        const copy = prototype === null ? Object.create(null) : {};
+        pending.push(item, copy, PLAIN);
+        return copy;
+      }
+      if (typeof item[serialize] === 'function') {
+        const description = described(item);
+        const constructor = classes[description.name];
+        return typeof constructor === 'function' ? new constructor(...copyOut(description.arguments)) : item;
+      }
+      if (prototype === Map.prototype) {
+        const copy = new Map();
+        pending.push(item, copy, MAP);
+        return copy;
+      }
+      if (prototype === Set.prototype) {
+        const copy = new Set();
+        pending.push(item, copy, SET);
+        return copy;
+      }
+      const standard = STANDARD_COPIES.get(prototype);
+      return standard === undefined ? item : standard(item);
+    };
+    // The copy of a value met inside the walk. Only a value holding another
+    // container needs to remember what it copied.
+    const copyOf = (item) => {
+      if (item === null || typeof item !== 'object') {
+        return item;
+      }
+      seen ??= new Map([[value, root]]);
+      let copy = seen.get(item);
+      if (copy === undefined) {
+        copy = make(item);
+        seen.set(item, copy);
+      }
+      return copy;
+    };
+    root = make(value);
+    while (pending.length !== 0) {
+      const kind = pending.pop();
+      const copy = pending.pop();
+      const source = pending.pop();
+      if (kind === ARRAY) {
+        for (let index = 0; index < source.length; index += 1) {
+          if (index in source) {
+            copy[index] = copyOf(source[index]);
+          }
+        }
+      } else if (kind === PLAIN) {
+        for (const key of Object.keys(source)) {
+          const item = source[key];
+          if (key === '__proto__') {
+            Object.defineProperty(copy, key, { value: copyOf(item), enumerable: true, writable: true, configurable: true });
+          } else {
+            copy[key] = copyOf(item);
+          }
+        }
+      } else if (kind === MAP) {
+        for (const [key, item] of source) {
+          copy.set(copyOf(key), copyOf(item));
+        }
+      } else {
+        for (const item of source) {
+          copy.add(copyOf(item));
+        }
+      }
+    }
+    return root;
+  };
+  return copyOut;
+}
+
+module.exports = { serialize, STANDARD_CLASSES, construction, printBuiltin, printCall, printedSpec, standardName, described, refuse, copier };

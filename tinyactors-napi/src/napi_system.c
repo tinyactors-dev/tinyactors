@@ -2111,6 +2111,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "cancelWake", NULL, tna_cancel_wake_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setOffloadValues", NULL, tna_set_offload_values_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setDurableCodec", NULL, tna_set_durable_codec_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "setCopyOut", NULL, tna_set_copy_out_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "durableBytes", NULL, tna_durable_bytes_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "durableValue", NULL, tna_durable_value_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "offload", NULL, tna_offload_method, NULL, NULL, NULL, napi_default_method, NULL },

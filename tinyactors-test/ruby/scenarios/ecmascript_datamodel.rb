@@ -78,6 +78,45 @@ TinyactorsTest.chart :ecma_receiver, datamodel: 'ecmascript' do
   end
 end
 
+# Event data leaving a session is a copy (core ADR 0097, SCXML C.1): what
+# the sender changes after a <send> does not show in the receiver.
+TinyactorsTest.chart :ecma_copy_to_self, datamodel: 'ecmascript' do
+  data box: { expr: '({n: 1})' }, got: { expr: 'null' }, later: { expr: 'null' }
+  state :idle do
+    on_entry do
+      send_event 'got', data: 'box'
+      assign 'box.n', '2'
+    end
+    transition on: 'got', target: :received do
+      assign 'got', '_event.data'
+      assign 'got.n', '3'
+      assign 'later', 'box.n'
+    end
+  end
+  state :received
+end
+
+TinyactorsTest.chart :ecma_copy_child, datamodel: nil do
+  data :shared
+  state :work do
+    on_entry do
+      send_event 'report', to: '#_parent', data: 'shared'
+      assign 'shared.n', '2'
+    end
+  end
+end
+
+TinyactorsTest.chart :ecma_copy_parent, datamodel: 'ecmascript' do
+  data sent: { expr: '({n: 1})' }, report: { expr: 'null' }
+  state :waiting do
+    invoke chart: :ecma_copy_child, params: { shared: 'sent' }
+    transition on: 'report', target: :reported do
+      assign 'report', '_event.data'
+    end
+  end
+  state :reported
+end
+
 TinyactorsTest.scenarios 'ecmascript data model' do
   scenario 'a jq parent cannot invoke an ECMAScript child' do
     parent = spawn :jq_parent_of_ecma
@@ -98,6 +137,18 @@ TinyactorsTest.scenarios 'ecmascript data model' do
     assert parent.done?, 'the parent finished'
     assert_equal({ isarr: true, sum: 6, label: 'hi' }, parent.data('.report'))
     assert_equal({ finished: 'hi' }, parent.data('.done'))
+  end
+
+  scenario 'data sent to self is a copy taken when the send runs' do
+    actor = spawn :ecma_copy_to_self
+    assert_equal({ n: 3 }, actor.data('.got'))
+    assert_equal 2, actor.data('.later'), 'the receiver changing its copy leaves the sender as it was'
+  end
+
+  scenario 'data sent to the parent is a copy the child cannot change' do
+    parent = spawn :ecma_copy_parent
+    assert_equal({ n: 1 }, parent.data('.report'))
+    assert_equal({ n: 1 }, parent.data('.sent'))
   end
 
   scenario 'RPC event data arrives as values of the receiving session' do

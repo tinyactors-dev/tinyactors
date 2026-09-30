@@ -79,8 +79,10 @@ and never run.
 ## Benchmarks
 
 `mise run bench [population ...]` runs the tracing bench
-(`test/bench/tracing.js`) and the input-log bench (`test/bench/input_log.js`,
-a logged input against an unlogged one, napi ADR 0034) on Node and Bun and
+(`test/bench/tracing.js`), the input-log bench (`test/bench/input_log.js`,
+a logged input against an unlogged one, napi ADR 0034) and the send-data
+bench (`test/bench/send_data.js`, actor-to-actor sends with and without
+data, whose data is copied, napi ADR 0039) on Node and Bun and
 prints throughput and memory side by side; `mise run bench-compare <commit>`
 builds another commit beside the working tree and runs both alternately on
 this machine, flagging changes past 5%. Results are stored under

@@ -5617,6 +5617,104 @@
         }
       }
     },
+    "ta_datamodel_copy_out_params": {
+      "kind": "struct",
+      "doc": "A value leaving the session (ADR 0097, SCXML C.1): the data of a <send > to anything but #_internal, the params and content expr of an <invoke >, and an event autoforwarded to an invocation. copy_out answers a value the session can no longer change: a copy, or `value` itself retained when the session cannot change it anyway (an immutable value). Core sends *out in place of `value` and releases `value`.\n\nNull means every value of the data model is immutable, so sharing is a copy: core retains `value`. TA_OP_NOMEM changes nothing, and the step runs again (ADR 0070); TA_OP_ERROR is error.execution with `fault`.",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host",
+              "const": true
+            }
+          },
+          "shape": "view",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "release": "ta_value_release"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "TA_OP_ERROR",
+          "lifetime": "call"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "shared": 0,
+            "instance": 8,
+            "value": 16,
+            "host": 24,
+            "out": 32,
+            "fault": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "shared": 0,
+            "instance": 4,
+            "value": 8,
+            "host": 12,
+            "out": 16,
+            "fault": 20
+          }
+        }
+      }
+    },
     "ta_datamodel_declare_params": {
       "kind": "struct",
       "doc": "Named top-level data bindings (SCXML <data >). `name` is the author's data ID, borrowed for the call. declare() creates the binding with the data model's uninitialized representation; set_named() installs an initializer's value. Late binding declares every binding at bootstrap and sets each one only when its state is first entered (ADR 0032).\n\n`bound` may be null. declare() sets `*bound` when the instance's binding already supplies a value for `name` (e.g. <param >s passed to an invoked child); the core then skips that binding's initializer.",
@@ -8049,11 +8147,52 @@
           "shape": "callback",
           "direction": "in",
           "optional": true
+        },
+        {
+          "name": "copy_out",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_op_status"
+                  },
+                  "success": "TA_OP_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "params",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_datamodel_copy_out_params",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in",
+          "optional": true
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 192,
+          "size": 200,
           "align": 8,
           "offsets": {
             "name": 0,
@@ -8078,11 +8217,12 @@
             "foreach_snapshot": 160,
             "foreach_bind": 168,
             "value_write": 176,
-            "value_read": 184
+            "value_read": 184,
+            "copy_out": 192
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 96,
+          "size": 100,
           "align": 4,
           "offsets": {
             "name": 0,
@@ -8107,7 +8247,8 @@
             "foreach_snapshot": 80,
             "foreach_bind": 84,
             "value_write": 88,
-            "value_read": 92
+            "value_read": 92,
+            "copy_out": 96
           }
         }
       }

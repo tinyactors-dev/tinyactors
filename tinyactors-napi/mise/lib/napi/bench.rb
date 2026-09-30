@@ -17,10 +17,12 @@ module NapiBench
   RUNTIMES = %w[node bun].freeze
   # The bench scripts, each with its populations: the tracing bench takes the
   # ones given on the command line; the input-log bench keeps napi ADR
-  # 0034's shape, 1,000 actors (each taking 50 messages a round).
+  # 0034's shape, 1,000 actors (each taking 50 messages a round); the
+  # send-data bench napi ADR 0039's, 10,000 actors in a ring.
   BENCHES = [
     { name: 'tracing', script: File.join(ROOT, 'test', 'bench', 'tracing.js'), populations: nil },
-    { name: 'input log', script: File.join(ROOT, 'test', 'bench', 'input_log.js'), populations: [1000] }
+    { name: 'input log', script: File.join(ROOT, 'test', 'bench', 'input_log.js'), populations: [1000] },
+    { name: 'send data', script: File.join(ROOT, 'test', 'bench', 'send_data.js'), populations: [10_000] }
   ].freeze
 
   # The populations to run `bench` at, given the command line's.

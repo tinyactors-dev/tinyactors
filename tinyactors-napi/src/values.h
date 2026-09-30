@@ -74,6 +74,8 @@ bool tna_value_make(tna_values *values, napi_value value, ta_value *out);
 bool tna_value_get(napi_env env, const ta_value *value, napi_value *out);
 /* True when this module made `value` (box or inline primitive). */
 bool tna_value_ours(const ta_value *value);
+/* True when `value` is a box: not absent and not an inline primitive. */
+bool tna_value_boxed(const ta_value *value);
 /* True when `value` is absent: no data at all. */
 bool tna_value_absent(const ta_value *value);
 /*

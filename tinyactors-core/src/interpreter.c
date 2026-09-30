@@ -1982,6 +1982,19 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
                                           .result = TA_EXEC_FAILED, .code = TA_ERR_UNSUPPORTED,
                                           .message = "a <send> with a delay cannot target #_internal" });
     }
+    if (result == TA_OK && !(state->scxml_io && state->scxml.kind == TA_SCXML_TARGET_INTERNAL)) {
+        /*
+         * The data leaves the session (ADR 0097, SCXML C.1), to another
+         * session, an I/O processor or this session's external queue: what
+         * the receiver gets is a copy made now, when the <send> runs (SCXML
+         * 6.2), which nothing this session does later can change. An event
+         * for #_internal stays in the session and is not copied.
+         */
+        result = ta_core_fault(fault, &(ta_core_fault_params){
+                                          .result = ta_op_result(ta_interpreter_copy_out(it, &state->data, fault)),
+                                          .code = TA_ERR_UNSUPPORTED,
+                                          .message = "the data model cannot copy the <send> data" });
+    }
     return result;
 }
 
@@ -4396,6 +4409,28 @@ ta_actor_sparse_state *ta_interpreter_sparse(ta_system *system, ta_actor *actor)
 ta_op_status ta_interpreter_eval(ta_interpreter *it, const ta_interpreter_value_params *params) {
     return ta_eval_source(it, &(ta_value_params){ .source = params->source, .out = params->out,
                                                   .fault = params->fault });
+}
+
+ta_op_status ta_interpreter_copy_out(ta_interpreter *it, ta_value *value, ta_fault *fault) {
+    const ta_definition *definition = it->definition;
+    const ta_datamodel_vtable *v = definition->datamodel.v;
+    if (value->v == NULL || v->copy_out == NULL) {
+        return TA_OP_OK;
+    }
+    ta_value copy = {0};
+    ta_op_status status = v->copy_out(definition->datamodel.self, &(ta_datamodel_copy_out_params){
+                                                                       .shared = definition->datamodel_shared,
+                                                                       .instance = it->actor->datamodel_instance,
+                                                                       .value = value,
+                                                                       .host = &it->actor->host,
+                                                                       .out = &copy,
+                                                                       .fault = fault,
+                                                                   });
+    if (status == TA_OP_OK) {
+        ta_value_release(value);
+        *value = copy;
+    }
+    return status;
 }
 
 ta_result ta_interpreter_execution_error(ta_interpreter *it, ta_fault *fault) {

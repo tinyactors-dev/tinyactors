@@ -23,7 +23,10 @@ It separates statechart semantics from an embedder-selected data language and va
 - pausing/resuming executable content;
 - definition and action IR;
 - when system variables change;
-- when a foreach begins, advances and ends.
+- when a foreach begins, advances and ends;
+- when a value leaves the session (ADR 0097): `<send>` data to anything
+  but `#_internal`, an `<invoke>`'s params and content, autoforwarded
+  event data.
 
 ## The data model owns
 
@@ -34,6 +37,8 @@ It separates statechart semantics from an embedder-selected data language and va
 - script semantics;
 - interpretation of opaque literals/content;
 - collection shallow-copy semantics and iteration order;
+- what a copy of a value leaving the session is (`copy_out`, ADR 0097),
+  or that its values cannot change, so sharing them is a copy;
 - host-native representation of system variables;
 - conversion of incoming event data to a legal value;
 - aggregation of named parameter pairs;

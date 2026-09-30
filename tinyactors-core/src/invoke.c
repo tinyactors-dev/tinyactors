@@ -429,6 +429,11 @@ static ta_result ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke_de
         status = ta_interpreter_eval(it, &(ta_interpreter_value_params){
                                              .source = decl->data, .out = &values->data, .fault = &values->fault });
     }
+    /* The content expr and the params leave the session for the invoked
+     * service (ADR 0097), so it gets copies of them. */
+    if (status == TA_OP_OK) {
+        status = ta_interpreter_copy_out(it, &values->data, &values->fault);
+    }
     if (status != TA_OP_OK || decl->params.length == 0) {
         return ta_invoke_op(status);
     }
@@ -460,6 +465,9 @@ static ta_result ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke_de
                                     .out = &values->params,
                                     .fault = &values->fault,
                                 });
+    }
+    if (status == TA_OP_OK) {
+        status = ta_interpreter_copy_out(it, &values->params, &values->fault);
     }
     for (uint32_t index = 0; index < evaluated; index += 1) {
         ta_value_release(&named[index].value);
@@ -777,34 +785,49 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
     if (meta.replayed) {
         return TA_OK; /* nothing runs behind it to forward to */
     }
-    if (meta.has_child) {
-        /* Autoforwarding is an exact envelope copy, including the invoke ID
-         * that identifies the child which originally sent the event. */
-        ta_event copy = *event;
-        ta_result result = ta_invoke_submit(it->system, &(ta_invoke_delivery){
-                                                            .sender = it->actor,
-                                                            .destination = ta_actor_runtime_ref(it->system,
-                                                                                                meta.child),
-                                                            .event = copy,
-                                                            .trace = ta_interpreter_trace_here(it),
-                                                        });
-        if (result == TA_OK) {
-            /* Written once it is committed: a submit that fails runs again (ADR 0070). */
-            ta_interpreter_trace_forward(it, sparse->invokes[index].id, event);
-        }
-        return result;
+    if (!meta.has_child && (meta.invoker.v == NULL || meta.invoker.v->forward == NULL)) {
+        return TA_OK;
     }
-    if (meta.invoker.v != NULL && meta.invoker.v->forward != NULL) {
-        ta_fault fault = {0};
+    /*
+     * Autoforwarding is an exact envelope copy, including the invoke ID that
+     * identifies the child which originally sent the event, and its data
+     * leaves the session: the invocation gets a copy of it (ADR 0097). Data
+     * that cannot be copied is not forwarded, and is error.execution here.
+     */
+    ta_event copy = *event;
+    ta_value_retain(&copy.data);
+    ta_fault fault = {0};
+    ta_op_status copied = ta_interpreter_copy_out(it, &copy.data, &fault);
+    if (copied != TA_OP_OK) {
+        ta_value_release(&copy.data);
+        if (copied == TA_OP_NOMEM) {
+            ta_value_release(&fault.data);
+            return TA_ERR_NOMEM;
+        }
+        return ta_interpreter_execution_error(it, &fault);
+    }
+    ta_result result = TA_OK;
+    if (meta.has_child) {
+        result = ta_invoke_submit(it->system, &(ta_invoke_delivery){
+                                                  .sender = it->actor,
+                                                  .destination = ta_actor_runtime_ref(it->system, meta.child),
+                                                  .event = copy,
+                                                  .trace = ta_interpreter_trace_here(it),
+                                              });
+    } else {
         (void)meta.invoker.v->forward(meta.invoker.self, &(ta_invoker_forward_params){
                                                               .service_handle = sparse->invokes[index].service_handle,
-                                                              .event = event,
+                                                              .event = &copy,
                                                               .fault = &fault,
                                                           });
         ta_value_release(&fault.data);
-        ta_interpreter_trace_forward(it, sparse->invokes[index].id, event);
     }
-    return TA_OK;
+    if (result == TA_OK) {
+        /* Written once it is committed: a submit that fails runs again (ADR 0070). */
+        ta_interpreter_trace_forward(it, sparse->invokes[index].id, &copy);
+    }
+    ta_value_release(&copy.data);
+    return result;
 }
 
 /* The active invocation an event came from, or -1. */

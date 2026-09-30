@@ -1,6 +1,6 @@
 # ADR 0050: Envelope data is shared by retain, not cloned
 
-**Status:** Accepted; refines ADR 0006, applies ADR 0033; the open question about `ta_value_clone` and `ta_event_clone` was settled on 2026-09-23 by removing them
+**Status:** Accepted; refines ADR 0006, applies ADR 0033; the open question about `ta_value_clone` and `ta_event_clone` was settled on 2026-09-23 by removing them; refined by ADR 0097: a value leaving a session is first copied by the data model's `copy_out`, then shared by retain
 **Date:** 2026-09-20
 
 ## Context

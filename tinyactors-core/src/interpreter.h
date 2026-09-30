@@ -167,6 +167,13 @@ typedef struct {
 
 ta_actor_sparse_state *ta_interpreter_sparse(ta_system *system, ta_actor *actor);
 ta_op_status ta_interpreter_eval(ta_interpreter *it, const ta_interpreter_value_params *params);
+/*
+ * Replaces *value, which is about to leave the session, with the data
+ * model's copy_out of it (ADR 0097). An absent value stays as it is, and so
+ * does every value of a data model without copy_out, which shares. On
+ * failure *value is unchanged and still the caller's.
+ */
+ta_op_status ta_interpreter_copy_out(ta_interpreter *it, ta_value *value, ta_fault *fault);
 /* Queues error.execution; returns TA_OK unless queueing itself failed. */
 ta_result ta_interpreter_execution_error(ta_interpreter *it, ta_fault *fault);
 /* Makes sure the actor's queue has room for one more internal event, so

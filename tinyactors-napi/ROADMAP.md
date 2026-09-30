@@ -767,11 +767,13 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
 
 **SCXML conformance gaps** (found while checking the spec for the
 [distributed systems proposal](../docs/proposals/distributed-systems.md)):
-- event data sent between sessions is shared, not copied. SCXML C.1 says it
-  MUST be a copy, so that a mutation in one session never shows in the
-  other. The JavaScript data model shares objects by reference (ADR 0011).
-  Fixing it needs a core data-model operation for values leaving a session
-  (gap G4);
+- ~~event data sent between sessions is shared, not copied~~: done (gap
+  G4, core ADR 0097, ADR 0039). Core calls the data model's `copy_out` on
+  `<send>` data to anything but `#_internal`, an invocation's params and
+  content, and autoforwarded data; napi's copier copies plain data, the
+  standard classes and values with `[serialize]()`, and shares functions
+  and other class instances. A send with an object costs 11 to 40% more
+  (ADR 0039, "Cost");
 - ~~`ioProcessors` lists only the SCXML processor~~: done (gap G2, core
   ADR 0068). `ioProcessors` lists every processor, with the location its
   `registerIO(type, processor, { location })` template renders. Gaps G1 and

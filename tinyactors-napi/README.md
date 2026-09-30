@@ -178,6 +178,18 @@ core's encoder: `actorURI({ family: 'orders', name: 'eu/42' })` is
 `'#_actor_orders/eu%2F42'`, and that is also the `event.origin` of the
 actor's messages (core ADR 0096).
 
+Data a chart sends is a copy (SCXML C.1, napi ADR 0039): after
+`send('add', (send) => send.data(function () { return this.cart; }))`,
+changing `this.cart` does not change what the receiver got, and the
+receiver changing its event data does not change the sender's. The same
+holds for an I/O processor's `request.data`, an invoked child's params,
+and autoforwarded events. Plain objects, arrays, `Date`, `Map`, `Set`,
+`RegExp`, typed arrays, `Buffer` and values that describe themselves with
+`[serialize]()` (their class registered with `registerClass()`) are
+copied; functions and other class instances are shared, as before.
+`raise()` and mail you `post()` or `send()` from JavaScript are not
+copied: they do not leave a session.
+
 ## Timers
 
 A delayed send is a timer that belongs to the actor. With a manual clock,
