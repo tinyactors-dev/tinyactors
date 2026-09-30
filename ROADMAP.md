@@ -96,13 +96,13 @@ gaps left or found on the way.
   neither does any pending `send()`: decided 2026-09-30 and recorded in
   napi ADR 0007 (Consequences). Tests that wait for a timeout keep the
   process alive themselves.
-- [ ] **Run the test host's exhaustive pass after core changes.** Some
+- [x] **Run the test host's exhaustive pass after core changes.** Some
   full runs showed the test host's step cached after a core change
   (`scale_test` to four million actors; core itself has no exhaustive
   mode). Two causes are fixed: the root runner took a subtask's skip line
   (`bindings`) for the step's own, and each project's `test:full` shared
-  its fast pass's stamp without forcing. Confirm with `test:full --all`
-  after a core change.
+  its fast pass's stamp without forcing. Confirmed: `test:full` after
+  core ADR 0095's change ran `scale_test` to four million actors.
 
 ## From granary's feedback, still open
 
