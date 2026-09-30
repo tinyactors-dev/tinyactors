@@ -107,6 +107,24 @@ reproducible. Scenarios about core's semantics keep using core directly.
   quiet or `limit` turns ran (default 1), and returns `{"turns", "quiet"}`.
 - `hosted.advance` takes `{"system", "time"}` and moves the scenario's
   clock, and core's time, to `time` milliseconds.
+- `hosted.log` takes `{"system", "families"}` and turns on the kernel's
+  input log (kernel ADR 0002) for the named actors of those families. Its
+  values are written with the jq data model's codec, so hosted charts use
+  the jq data model.
+- `hosted.batches` takes `{"system"}` and returns the batches handed over
+  since the last call, one per address per turn, in turn order:
+  `[{"family", "name", "bytes"}]`, with the bytes in lowercase hex. A
+  scenario stores them as an application would: each address's bytes
+  appended in order.
+- `hosted.evict` takes `{"system", "actor"}`: the kernel records `evicted`,
+  and the actor is destroyed, so its log is its only state.
+- `hosted.restore` takes `{"system", "definition", "family", "name", "log"}`,
+  where `log` is the address's stored bytes in hex, and rebuilds the actor
+  with the kernel's replay: it prepares it from the log's first record,
+  applies the records, publishes it at the last record's time, and puts
+  the messages the log still owes back in its mailbox. It returns the new
+  actor's ID. It is called explicitly rather than from a loader: napi's
+  loader orchestration is napi's, and this method tests the kernel's part.
 - `hosted.close` takes `{"system": <hosted handle>}`, closes and frees the
   system, and returns `{"leaked": <bytes>}`: what the kernel allocated and
   did not free, which is always 0.

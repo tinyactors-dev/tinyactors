@@ -5,6 +5,7 @@
 #include <tinyactors_host.h>
 
 #include "allocator.h"
+#include "json_datamodel.h"
 #include "rpc.h"
 #include "ta_rpc.h"
 
@@ -21,6 +22,10 @@ typedef struct {
 typedef struct {
     tah_system *system;
     tat_hosted_clock clock;
+    /* Batches the kernel's input log handed over since the last
+     * hosted.batches: [{"family", "name", "bytes": hex}], one per address
+     * per turn, in turn order. */
+    jv batches;
 } tat_hosted;
 
 static uint64_t tat_hosted_monotonic(void *self) {
@@ -85,6 +90,11 @@ jv tat_hosted_create_method(tat_bind *bind, jv params, int *error_code) {
         *error_code = RPC_INTERNAL_ERROR;
         return jv_string("hosted.create: the kernel could not create a system");
     }
+    hosted->batches = jv_array();
+    /* The input log writes values with the jq data model's codec, which
+     * streams both ways (kernel ADR 0002; core ADR 0090's notes). Hosted
+     * charts use the jq data model. */
+    tah_inputs_set_datamodel(&hosted->system->inputs, tat_json_datamodel(&bind->json));
     hosted->system->wake = tat_hosted_wake;
     (void)tah_system_set_clock(hosted->system, TAH_CLOCK_MANUAL, 0);
     jv out = jv_object();
@@ -108,6 +118,7 @@ jv tat_hosted_close_method(tat_bind *bind, jv params, int *error_code) {
     tah_system_close(hosted->system);
     size_t leaked = tah_system_leaked_bytes(hosted->system);
     tah_system_free(hosted->system);
+    jv_free(hosted->batches);
     tat_handle_retire(bind, hosted);
     free(hosted);
     return jv_object_set(jv_object(), jv_string("leaked"), jv_number((double)leaked));
@@ -172,6 +183,40 @@ jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code) {
     return tat_encode_ta_result(bind, &result);
 }
 
+static jv tat_hosted_text(ta_str text) {
+    return jv_string_sized(text.ptr, (int)text.len);
+}
+
+/* The turn's input-log batch, as the application would store it. */
+static void tat_hosted_take_batch(tat_hosted *hosted) {
+    tah_inputs *inputs = &hosted->system->inputs;
+    uint32_t wake_count = 0;
+    (void)tah_inputs_wakes(hosted->system, &wake_count);
+    static const char digits[] = "0123456789abcdef";
+    for (uint32_t index = 0; index < inputs->entries.count; index += 1u) {
+        const tah_input_entry *entry = tah_vec_at(&inputs->entries, index);
+        ta_actor_address address = ta_address_view(entry->address);
+        size_t length = entry->bytes.count;
+        char *hex = malloc(length * 2u + 1u);
+        if (hex == NULL) {
+            continue;
+        }
+        for (size_t at = 0; at < length; at += 1u) {
+            uint8_t byte = ((const uint8_t *)entry->bytes.items)[at];
+            hex[at * 2u] = digits[byte >> 4];
+            hex[at * 2u + 1u] = digits[byte & 15u];
+        }
+        hex[length * 2u] = 0;
+        jv item = jv_object();
+        item = jv_object_set(item, jv_string("family"), tat_hosted_text(address.family.name));
+        item = jv_object_set(item, jv_string("name"), tat_hosted_text(address.name));
+        item = jv_object_set(item, jv_string("bytes"), jv_string(hex));
+        free(hex);
+        hosted->batches = jv_array_append(hosted->batches, item);
+    }
+    tah_inputs_release(inputs);
+}
+
 /* Runs turns until the system is quiet, at most `limit` (default 1). */
 jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
@@ -182,6 +227,7 @@ jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code) {
     uint64_t turns = 0;
     for (; turns < (limit == 0 ? 1 : limit); turns += 1) {
         tah_system_turn(hosted->system);
+        tat_hosted_take_batch(hosted);
         tah_system_end_turn(hosted->system);
         if (tah_system_quiet(hosted->system)) {
             turns += 1;
@@ -202,4 +248,129 @@ jv tat_hosted_advance_method(tat_bind *bind, jv params, int *error_code) {
     hosted->clock.now_ns = time * 1000000u;
     ta_result result = tah_system_advance_to(hosted->system, (ta_time)time);
     return tat_encode_ta_result(bind, &result);
+}
+
+/* Logs the named actors of `families` (kernel ADR 0002). */
+jv tat_hosted_log_method(tat_bind *bind, jv params, int *error_code) {
+    tat_hosted *hosted = NULL;
+    if (!tat_hosted_resolve(bind, params, &hosted)) {
+        return tat_bind_take_error(bind, error_code);
+    }
+    jv list = jv_object_get(jv_copy(params), jv_string("families"));
+    int count = jv_get_kind(list) == JV_KIND_ARRAY ? jv_array_length(jv_copy(list)) : 0;
+    ta_str families[16];
+    jv held[16];
+    if (count > 16) {
+        count = 16;
+    }
+    for (int index = 0; index < count; index += 1) {
+        held[index] = jv_array_get(jv_copy(list), index);
+        families[index] = (ta_str){jv_string_value(held[index]),
+                                   (uint32_t)jv_string_length_bytes(jv_copy(held[index]))};
+    }
+    ta_result result = tah_inputs_configure(hosted->system, families, (uint32_t)count);
+    for (int index = 0; index < count; index += 1) {
+        jv_free(held[index]);
+    }
+    jv_free(list);
+    return tat_encode_ta_result(bind, &result);
+}
+
+/* The batches since the last call, and forgets them. */
+jv tat_hosted_batches_method(tat_bind *bind, jv params, int *error_code) {
+    tat_hosted *hosted = NULL;
+    if (!tat_hosted_resolve(bind, params, &hosted)) {
+        return tat_bind_take_error(bind, error_code);
+    }
+    jv out = hosted->batches;
+    hosted->batches = jv_array();
+    return out;
+}
+
+/* Evicts an idle named actor: its log becomes its only state. */
+jv tat_hosted_evict_method(tat_bind *bind, jv params, int *error_code) {
+    tat_hosted *hosted = NULL;
+    if (!tat_hosted_resolve(bind, params, &hosted)) {
+        return tat_bind_take_error(bind, error_code);
+    }
+    ta_actor_id actor = (ta_actor_id)tat_hosted_u64(params, "actor");
+    tah_system *system = hosted->system;
+    ta_result result = tah_inputs_evicted(system, actor, false, 0);
+    if (result == TA_OK) {
+        system->inside_core = true;
+        result = ta_actor_destroy(system->core, actor);
+        system->inside_core = false;
+        if (result == TA_OK) {
+            (void)tah_hook_actor_removed(system, actor);
+        }
+    }
+    tat_hosted_take_batch(hosted);
+    return tat_encode_ta_result(bind, &result);
+}
+
+static uint8_t tat_hosted_nibble(char c) {
+    return (uint8_t)(c <= '9' ? c - '0' : c - 'a' + 10);
+}
+
+/*
+ * Rebuilds a named actor from its log (hex bytes, one address's batches back
+ * to back) with the kernel's replay: prepare, run, publish at the last
+ * record's time, then redeliver the messages still owed. Answers the actor.
+ */
+jv tat_hosted_restore_method(tat_bind *bind, jv params, int *error_code) {
+    tat_hosted *hosted = NULL;
+    if (!tat_hosted_resolve(bind, params, &hosted)) {
+        return tat_bind_take_error(bind, error_code);
+    }
+    jv log = jv_object_get(jv_copy(params), jv_string("log"));
+    jv family = jv_object_get(jv_copy(params), jv_string("family"));
+    jv name = jv_object_get(jv_copy(params), jv_string("name"));
+    const char *hex = jv_string_value(log);
+    size_t length = (size_t)jv_string_length_bytes(jv_copy(log)) / 2u;
+    uint8_t *bytes = malloc(length == 0 ? 1 : length);
+    for (size_t at = 0; bytes != NULL && at < length; at += 1u) {
+        bytes[at] = (uint8_t)(tat_hosted_nibble(hex[at * 2u]) << 4 | tat_hosted_nibble(hex[at * 2u + 1u]));
+    }
+    ta_actor_address address = {
+        .family = {.name = {jv_string_value(family), (uint32_t)jv_string_length_bytes(jv_copy(family))}},
+        .name = {jv_string_value(name), (uint32_t)jv_string_length_bytes(jv_copy(name))}};
+    tah_replay *replay = bytes == NULL ? NULL : tah_replay_open(hosted->system);
+    ta_result result = replay == NULL ? TA_ERR_NOMEM : tah_replay_push(replay, bytes, length);
+    ta_actor_id actor = 0;
+    bool found = false;
+    if (result == TA_OK) {
+        result = tah_replay_prepare(replay, &(tah_replay_prepare_params){
+                                                .definition = (ta_definition_id)tat_hosted_u64(params, "definition"),
+                                                .address = &address, .out = &actor, .found = &found});
+    }
+    tah_replay_state state = TAH_REPLAY_MORE;
+    while (result == TA_OK && found && state == TAH_REPLAY_MORE) {
+        uint32_t records = 0;
+        result = tah_replay_run(replay, &(tah_replay_run_params){
+                                            .actor = actor, .most = 256, .state = &state, .records = &records});
+    }
+    if (result == TA_OK && found) {
+        ta_time at = 0;
+        (void)tah_replay_last_time(replay, &at);
+        tah_replay_finish(replay, actor);
+        hosted->system->inside_core = true;
+        result = ta_actor_publish(hosted->system->core, &(ta_actor_publish_params){.actor = actor, .at = &at});
+        hosted->system->inside_core = false;
+        uint32_t owed = 0;
+        if (result == TA_OK) {
+            result = tah_replay_redeliver(replay, actor, &owed);
+        }
+    }
+    if (replay != NULL) {
+        tah_replay_free(replay);
+    }
+    free(bytes);
+    jv_free(log);
+    jv_free(family);
+    jv_free(name);
+    if (result != TA_OK || !found) {
+        *error_code = RPC_INTERNAL_ERROR;
+        return jv_string("hosted.restore: the log did not rebuild an actor");
+    }
+    return jv_number((double)actor);
 }

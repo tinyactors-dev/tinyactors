@@ -241,6 +241,15 @@ static const tat_method TAT_HOST_METHODS[] = {
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"limit\":{\"type\":\"u64\",\"required\":false}}}"},
     {"hosted.advance", tat_hosted_advance_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"time\":{\"type\":\"u64\",\"required\":true}}}"},
+    {"hosted.log", tat_hosted_log_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"families\":{\"type\":\"json\",\"required\":true}}}"},
+    {"hosted.batches", tat_hosted_batches_method, "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
+    {"hosted.evict", tat_hosted_evict_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":true}}}"},
+    {"hosted.restore", tat_hosted_restore_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"definition\":{\"type\":\"u64\",\"required\":true},"
+     "\"family\":{\"type\":\"string\",\"required\":true},\"name\":{\"type\":\"string\",\"required\":true},"
+     "\"log\":{\"type\":\"string\",\"required\":true}}}"},
 };
 
 static bool tat_register_methods(tat_server_impl *impl, ta_arena *arena) {

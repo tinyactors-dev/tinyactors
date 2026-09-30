@@ -67,4 +67,26 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal [:rung], hosted_states(hosted, timer)
     assert_equal 0, close_hosted(hosted)
   end
+
+  # Catches: a log that misses an input, or a replay that loses the pending
+  # timer: the rebuilt actor must be where the live one was, and its timeout
+  # must still fire.
+  scenario 'an evicted actor is rebuilt from its input log, with its timer' do
+    hosted = hosted_system
+    hosted_log(hosted, 'hosted_timer')
+    definition = hosted_define(hosted, :hosted_timer)
+    timer = hosted_spawn(hosted, definition, family: 'hosted_timer', name: 't')
+    hosted_run(hosted)
+    hosted_post(hosted, timer, 'arm')
+    hosted_run(hosted)
+    assert_equal 'ok', hosted_evict(hosted, timer)
+    store = hosted_store(hosted)
+    assert !store['hosted_timer/t'].empty?, 'the log holds records for the actor'
+    rebuilt = hosted_restore(hosted, definition, 'hosted_timer', 't', store['hosted_timer/t'])
+    assert_equal [:armed], hosted_states(hosted, rebuilt)
+    hosted_advance(hosted, 5000)
+    hosted_run(hosted)
+    assert_equal [:rung], hosted_states(hosted, rebuilt)
+    assert_equal 0, close_hosted(hosted)
+  end
 end

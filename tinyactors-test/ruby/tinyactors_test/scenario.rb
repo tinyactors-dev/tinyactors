@@ -508,6 +508,29 @@ module TinyactorsTest
       rpc('hosted.turn', system: hosted[:hosted], limit: limit)
     end
 
+    # The kernel's input log (kernel ADR 0002) for `families`.
+    def hosted_log(hosted, *families)
+      rpc('hosted.log', system: hosted[:hosted], families: families.map(&:to_s))
+    end
+
+    # The batches since the last call, as the application would store them:
+    # a hash of "family/name" => hex bytes, each address's records in order.
+    def hosted_store(hosted, store = Hash.new { |hash, key| hash[key] = +'' })
+      rpc('hosted.batches', system: hosted[:hosted]).each do |entry|
+        store["#{entry[:family]}/#{entry[:name]}"] << entry[:bytes]
+      end
+      store
+    end
+
+    def hosted_evict(hosted, actor)
+      rpc('hosted.evict', system: hosted[:hosted], actor: actor)
+    end
+
+    # Rebuilds `family/name` from its stored log with the kernel's replay.
+    def hosted_restore(hosted, definition, family, name, log)
+      rpc('hosted.restore', system: hosted[:hosted], definition: definition, family: family, name: name, log: log)
+    end
+
     def hosted_advance(hosted, time)
       rpc('hosted.advance', system: hosted[:hosted], time: time)
     end
