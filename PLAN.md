@@ -303,9 +303,12 @@ Found by commit 37: a delivery's `delivered` is always in turn N's batch
 and the macrostep it starts runs in turn N+1 (the scheduler resumes before
 it delivers), so an immediate send to another logged actor was lost by a
 crash between the two commits. Decided 2026-10-01: direction B (spike on
-branch `worktree-agent-a978a1fb4b1f680cc`), extended to paused macrosteps
-and bootstraps. Direction A (finish the macrostep in its delivery turn)
-was rejected: it gives up napi ADR 0007's fairness.
+branch `worktree-agent-a978a1fb4b1f680cc`), extended to bootstraps.
+Direction A (finish the macrostep in its delivery turn) was rejected: it
+gives up napi ADR 0007's fairness. A macrostep paused across turns may
+repeat, after a crash, what it sent before the pause: accepted by the
+owner, since holding it until the macrostep ends would stop a long
+macrostep's sends from streaming.
 
 38. **`docs(host): a macrostep's first record commits with what it sent`**
     - Kernel ADR 0004: the rule, the spike's findings, A rejected and why.
@@ -314,10 +317,13 @@ was rejected: it gives up napi ADR 0007's fairness.
       `jump`, `released`) is held and written in the batch of the turn it
       ends in; the ordering rule; replay publishes at the latest record
       time; eviction answers BUSY inside a macrostep; out of memory retries.
-40. **`feat(host): a paused macrostep holds what it sends until it ends`**
-    - A logged actor's macrostep that pauses across turns keeps its mail
-      and effects in an outbox, released with its first record, so a crash
-      re-runs it with nothing already visible.
+40. **`docs(napi): a paused macrostep may repeat its sends after a crash`**
+    - Landed as two commits: `test(host)`, a paused macrostep's repeat
+      carries the original's origin, and its send ID when the `<send>` has
+      an `id`; then the docs: kernel ADR 0004 section 3, napi ADR 0033's
+      note rewording section 7, and the README's "Crashes and repeated
+      messages". Holding a paused macrostep's sends until it ends was
+      built, then dropped (ADR 0004, "Considered and rejected").
 41. **`fix(host): a new actor's first macrostep commits with its spawned`**
     - The same rule with `spawned` as the first record, for bootstraps that
       run a turn after the spawn (`resumesPerTurn`, `<invoke>`).

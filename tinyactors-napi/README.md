@@ -349,10 +349,60 @@ keeps the log from `spawned` upgrades by replaying it:
 
 `readInputLog(chunks)` decodes a log into plain records, one at a time, for
 an audit trail: `accepted` carries a message and its data once, and
-`delivered` or `dropped` names it by `id` (kernel ADR 0002). Effects that leave the process are at most once across a
-crash; mail between persisted actors is exactly once. Expressions should
-read `context.time` rather than the wall clock, so a replay computes what
-the live run did.
+`delivered` or `dropped` names it by `id` (kernel ADR 0002). Mail between
+persisted actors is exactly once across a crash, and effects that leave
+the process at most once, except what a long macrostep sent before a
+pause (next section). Expressions should read `context.time` rather than
+the wall clock, so a replay computes what the live run did.
+
+## Crashes and repeated messages
+
+A macrostep that runs longer than one turn's budgets (`resumeBudget`,
+`actionBudget`: a long `<foreach>`, a large script) pauses and goes on in
+the next turn, and what it sent before the pause is committed then. If
+the process crashes before the macrostep ends, its message is delivered
+again after the restart, the macrostep runs again from its start, and
+**what it sent before the pause is sent again**, effects included (kernel
+ADR 0004). Nothing is lost, and a macrostep within the budgets is exactly
+once. A repeat carries the same `origin`, and the same `sendid` when the
+`<send>` has an `id`.
+
+If a repeat would hurt:
+
+- **Don't send from long macrosteps: loop with events.** The chart sends
+  itself `next` per item, so each item is a short macrostep, and each send
+  is exactly once.
+- **Make receivers idempotent on business keys**, such as a reservation
+  keyed by (order, SKU). That also absorbs a client's HTTP retries.
+- **Guard with states:** an event with no transition in the receiver's
+  current state is ignored.
+- **Give outward effects an idempotency key** built from the business
+  key, for example `Idempotency-Key: order-42-charge`.
+
+```js
+const { statechart } = require('@tinyactors/node');
+
+// One item per macrostep: each `reserve` is sent exactly once, even across a crash.
+const order = statechart({ family: 'order', revision: 'v1' })
+  .data('order', null)
+  .data('items', [])
+  .data('next', 0)
+  .state('idle', (s) => s.on('place', (t) => t
+    .assign('order', ({ event }) => event.data.order)
+    .assign('items', ({ event }) => event.data.items)
+    .target('reserving')))
+  .state('reserving', (s) => s
+    .entry((e) => e.send('step'))             // no target: to itself, a macrostep of its own
+    .on('step', (t) => t
+      .when(function () { return this.next < this.items.length; })
+      .send('reserve', (send) => send.to('#_actor_stock/main').data(function () {
+        return { order: this.order, sku: this.items[this.next] }; // the business key
+      }))
+      .assign('next', function () { return this.next + 1; })
+      .send('step'))                            // the next item, in the next macrostep
+    .on('step', (t) => t.target('placed')))
+  .state('placed');
+```
 
 ## Invoking child charts
 

@@ -1,6 +1,6 @@
 # ADR 0004: A macrostep's first record commits with what it sent
 
-**Status:** Accepted (2026-10-01). Amends kernel ADR 0002 (when `delivered`, `jump`, `released` and `spawned` are written, and the time a replay publishes at) and closes the window kernel ADR 0003's notes leave open ("A window that remains"). Restores napi ADR 0033 section 7 (exactly once between persisted actors) across a crash between two commits, keeping napi ADR 0007's turn budgets.
+**Status:** Accepted (2026-10-01). Amends kernel ADR 0002 (when `delivered`, `jump`, `released` and `spawned` are written, and the time a replay publishes at) and closes the window kernel ADR 0003's notes leave open ("A window that remains"). Restores napi ADR 0033 section 7 (exactly once between persisted actors) across a crash between two commits, keeping napi ADR 0007's turn budgets, except for what a macrostep paused across turns sent before its pause, which a crash may repeat (section 3).
 **Date:** 2026-10-01
 
 ## Context
@@ -39,15 +39,14 @@ committed together. They are not:
 - **Effects that leave the process** (I/O processor sends, invoker starts,
   cancels and forwards) are held until their turn's batch commits (napi
   ADR 0033 section 7). Of a paused macrostep they are released before its
-  later turns commit, so a crash re-runs the macrostep and performs them
-  again: at least once, where section 7 promises at most once.
+  later turns commit.
 
 ## Decision
 
 ### 1. The rule
 
 > **A macrostep's first record is written in the batch of the turn the
-> macrostep ends in, together with everything the macrostep sent.**
+> macrostep ends in, together with what the macrostep sent in that turn.**
 
 A macrostep's first record is the one a replay starts it from:
 - `delivered` or `jump`, for a delivered message or invoker report;
@@ -57,9 +56,11 @@ A macrostep's first record is the one a replay starts it from:
 The macrostep ends when a resume leaves the actor stable or finished, or
 stops it with a fault (a runaway included): the scheduler's new note
 `TAH_NOTE_ENDED`. A crash therefore keeps a macrostep's first record and
-what it sent together, or loses both: then its message is still
-`accepted` and not `delivered` in the log, the replay puts it back in the
-mailbox, and the macrostep runs again, once.
+what it sent in its last turn together, or loses both: then its message
+is still `accepted` and not `delivered` in the log, the replay puts it
+back in the mailbox, and the macrostep runs again, once. A macrostep that
+ends in the turn it runs in (every macrostep within the budgets) sends
+exactly once; one paused across turns is section 3's case.
 
 ### 2. The first record is held
 
@@ -75,7 +76,7 @@ record is held:
   accepted for the actor, mail dropped, and its timers' firings do not
   change what a replay of the macrostep does (a firing is time only);
 - anything else follows it. `finished`, `abandoned` and `destroyed` write
-  the held record, and what the macrostep sent (section 3), first;
+  the held record first;
 - `evicted` answers `TA_ERR_BUSY` while a macrostep is open (napi ADR
   0032's eviction is between macrosteps anyway); so does `withdrawn`
   (`tah_system_withdraw_send()`), since writing the first record early
@@ -99,88 +100,78 @@ for it, since a crash would leave it owed. `finished` fixes the address's
 wake to none.
 
 **Out of memory.** When the held record cannot be written at the end, it
-stays held, marked ended, with the macrostep's outbox (section 3); the next
-turn writes both first (`tah_inputs_retry()`), and the system is not quiet
-until it has. A checkpoint of an actor with such a record writes it first,
+stays held, marked ended; the next turn writes it first
+(`tah_inputs_retry()`), and the system is not quiet until it has. A crash
+before then repeats the macrostep's sends, as in section 3. A checkpoint of an actor with such a record writes it first,
 or answers out of memory.
 
 **Removal.** An actor removed with its first record still held and no
 record of the end (a binding that destroyed it without
 `tah_inputs_destroying()`, or a replacement) drops the record, so its
-message stays owed in the log; its outbox is released, as the actor sent
-it. napi's `publish()` refuses an incumbent inside a macrostep (`busy`),
-so no napi replacement reaches this.
+message stays owed in the log. napi's `publish()` refuses an incumbent
+inside a macrostep (`busy`), so no napi replacement reaches this.
 
-### 3. A paused macrostep holds what it sends: the outbox
+### 3. A paused macrostep may repeat what it sent before the pause, after a crash
 
-While a logged actor's macrostep runs, the kernel notes what it sends:
-- every message the kernel accepts into a mailbox, or into the wait for a
-  loader, while the actor is resumed: mail between actors from the router,
-  mail to itself by its name, an SCXML child's forwards, a report of an
-  invocation that failed to start. Mail to unlogged receivers is included,
-  so a macrostep's mail arrives in the order it was sent;
-- every effect the resume queues except `<log>`: I/O processor sends and
-  JavaScript invokers' starts, cancels and forwards.
+A macrostep that a budget pauses (`resumeBudget`, 64 microsteps, or
+`actionBudget`, 1,024 units, by default: a long `<foreach>`, a large
+script, a chain of eventless transitions) runs in several turns. What it
+sent in a turn before its last is committed with that turn: the
+receivers' `accepted` records, and its effects released after that
+batch. Its first record comes later, with its last turn.
 
-**When the resume ends the macrostep,** nothing moves: the first record is
-written into the same batch, beside the `accepted` records and before the
-effects are handed to the binding. This is the common case, and costs one
-entry in a reused list per message sent.
+A crash between those commits leaves the message owed: the replay puts it
+back, the macrostep runs again from its start, and it sends again what it
+sent before the pause. **That is accepted as a fact of logged delivery:**
+- nothing is lost (section 1): what the macrostep sent in its last turn,
+  and everything after, is sent once;
+- the sender's state is never wrong: the log never had the macrostep, so
+  the replay rebuilds the sender as it was before it;
+- a macrostep that ends in the turn it runs in, which is every macrostep
+  within the budgets, stays exactly once;
+- what repeats is only what was sent before the pause, once per crash, in
+  the order it was first sent;
+- outward effects of a paused macrostep (I/O processor sends, invoker
+  starts, cancels and forwards) repeat the same way;
+- a bootstrap paused across turns is a macrostep like any other.
 
-**When the resume pauses,** what the resume sent moves to the actor's
-**outbox**:
-- the `accepted` records it wrote are cut out of the turn's entries;
-- the messages stay in their receivers' mailboxes, in order, but are
-  **held**: a receiver whose next message is held is not delivered it,
-  and waits (it is offered again on later turns, as after out of memory);
-- the effects leave the turn's effect queue, copied out of the turn arena.
+**A repeat is recognizable.** Its event carries the same origin (the
+sender's address, `#_actor_<family>/<name>`) and, when the `<send>` has an
+`id`, the same send ID as the original. A `<send>` without an `id` gives
+its event no send ID (SCXML 5.10.1), and the log's message identity
+differs between the copies, so a receiver that must drop repeats keys
+them on the business data they carry.
 
-When the macrostep ends, its outbox is released with its first record, in
-the order it was sent: the `accepted` records go into that turn's entries
-with their receivers' next record numbers, the messages can be delivered,
-and the effects join that turn's queue, so napi's write-ahead hold holds
-them until that batch commits.
-
-- **A held message that leaves undelivered** (its receiver destroyed,
-  unloaded or finished, its load failed) leaves no record at all: its
-  `accepted` was never written, and after a crash the sender's replay does
-  not send it again.
-- **A checkpoint** of a receiver leaves held messages out of its owed
-  mail; their `accepted` follows in the log when they are released.
-- **A fault ends the macrostep:** a faulted or runaway macrostep's outbox
-  is released with its first record. Live behaviour does not change: the
-  receivers get what the macrostep sent before the fault, and a replay
-  faults at the same place and drops those sends as sent.
-- **Abandoned or destroyed:** the outbox is released before `abandoned`
-  or `destroyed`, as the first record is.
-- **Unlogged actors are unchanged:** nothing is noted for them, and the
-  log off installs no observer.
+**Mitigations,** for chart authors (napi's README, "Crashes and repeated
+messages"):
+- do not send from a long macrostep where a repeat would hurt: loop with
+  events instead, the chart sending itself `next` per item, so that each
+  item is a short macrostep and each send is exactly once;
+- make receivers idempotent on business keys (a reservation keyed by
+  order and SKU), which also absorbs a client's HTTP retries;
+- guard with states: an event that has no transition in the receiver's
+  state is ignored;
+- give outward effects an idempotency key built from the business key,
+  for example `Idempotency-Key: order-42-charge`.
 
 ## Consequences
 
 - **Exactly once between persisted actors holds across a crash between
-  commits,** for immediate sends, sends of paused macrosteps and of
-  bootstraps. Effects of a paused macrostep are at most once again.
-- **Receivers of a long macrostep's sends get them when it ends,** not
-  when they were sent. SCXML allows it: an external event may be delivered
-  at any later time, and the sender cannot observe the difference. A
-  receiver whose next message is held waits for it, so mail behind it
-  waits too (first in, first out at the receiver, kernel ADR 0003).
+  commits** for every macrostep that ends in the turn it runs in, sends of
+  a bootstrap included. What a macrostep paused across turns sent before
+  its pause is at least once: a crash may repeat it (section 3).
 - **A logged actor's `delivered` appears in the log after the records of
   the turns its macrostep ran in,** with the delivery's time. A reader
   pairing `accepted` with `delivered` by identity (napi's `readInputLog`)
-  is unaffected; one reading times in order is not.
+  is unaffected; one reading times in order is not. A new actor's
+  `spawned` can follow mail accepted for it before its bootstrap ended.
 - **Operators:** `evict()` and `withdrawSend()` of a logged actor inside a
-  macrostep answer `busy`.
+  macrostep answer `busy`, and so does a checkpoint.
 - **Costs:**
   - per logged actor between macrosteps: nothing;
   - per open macrostep of a logged actor: its first record (about 40 to
     80 bytes) in a buffer reused from the log's spares;
-  - per message a logged actor sends: one entry in a list reused by every
-    resume;
-  - a paused macrostep's outbox is bounded by what that one macrostep
-    sends; its records use the log's spare buffers and its effects are
-    allocated each, and freed when released;
+  - per message: nothing;
   - with the log off, nothing.
 
 ## Considered and rejected
@@ -193,19 +184,20 @@ them until that batch commits.
   turns: the budgets' pause points, the trace staging bound's stop between
   resumes, and an operator acting on a paused actor. It also does nothing
   for a macrostep that pauses.
-- **B1 alone (the first record held, no outbox):** the spike on branch
-  `worktree-agent-a978a1fb4b1f680cc`. It closes the window for a macrostep
-  that ends in one resume, and turns a paused macrostep's loss into a
-  duplicate: its test `a_paused_run_sends_twice_after_a_crash` delivered a
-  message twice after a crash. The outbox (section 3) completes it.
+- **Hold a paused macrostep's messages and effects until it ends,** and
+  release them with its first record. It was built and passed the tests,
+  but it batches a long `<foreach>`'s messages instead of streaming them:
+  a receiver gets nothing, and waits with its later mail, until the whole
+  macrostep ends. Streaming matters more than a repeat after a crash.
+- **Count what a paused macrostep sent before each pause, and drop the
+  first sends of the re-run.** It needs a record per pause and a match of
+  the re-run's sends against it, and the same for effects: much
+  complexity for a rare window, which chart authors can close themselves
+  (section 3's mitigations).
 - **B2: hold whole batches while a macrostep started in them is open.**
   Simple to state, but under steady load some macrostep is always open,
   so the binding could hold batches indefinitely and nothing would commit.
-  Scoped per actor, it becomes this decision's outbox.
-- **Stage mail at the router, and post it when the macrostep ends.** The
-  router answers a chart synchronously (an unreachable target, data the
-  receiver cannot log), and those answers need the post. Posting at once
-  and holding the envelope keeps every answer where it is today.
+  Scoped per actor, it is the hold above, rejected for the same reason.
 - **Log a paused macrostep's progress,** so a replay resumes where it
   paused. Core has no such record, and a macrostep is the unit a replay
   runs.
@@ -242,5 +234,15 @@ Tests (`replay_test`): `immediate_send_survives_a_crash_between_commits`
 (fails before this change: sink/b stays in `h0`), and
 `a_macrostep_is_not_evicted` (eviction, withdrawal and a checkpoint answer
 BUSY until the macrostep ends; DELIVERED keeps the delivery's time).
-`a_paused_macrostep_sends_twice_after_a_crash` records the gap section 3
-closes: a paused macrostep's first send is delivered twice after a crash.
+
+### A paused macrostep's repeat (2026-10-01)
+
+`replay_test`'s `a_paused_macrostep_repeats_its_sends_after_a_crash`
+replaces the spike's `a_paused_run_sends_twice_after_a_crash`: a
+macrostep paused between two microsteps sends n1, the batch with n1's
+`accepted` commits, and a crash loses the batch with n2 and the first
+record. After the restart sink/b gets n1 twice, then n2. In sink/b's log
+the two copies of n1 carry the same event name, send ID and origin
+(`#_actor_ping/p1`, with its type), and different message identities. The
+same chart with `<send>`s that have no `id` gives neither copy a send ID;
+the origin still matches.

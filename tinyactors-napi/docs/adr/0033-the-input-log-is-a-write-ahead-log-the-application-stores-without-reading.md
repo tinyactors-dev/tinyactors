@@ -1,6 +1,6 @@
 # ADR 0033: The input log is a write-ahead log the application stores without reading
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0032 sections 6 to 8: the batch shape, the loader's `{ replay }` answer, `requeue`, and eviction. It replaces the dispatch horizon (core ADR 0089 section 2) with a record per fired timer, for the reasons below. Refined by napi ADR 0034: entries carry bytes in core's layout instead of records, core writes and replays them, and checkpoints are added. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md). Section 7's exactly once between persisted actors, and at most once for effects, hold across a crash between two commits since [kernel ADR 0004](../../../tinyactors-host/docs/adr/0004-a-macrosteps-first-record-commits-with-what-it-sent.md): a macrostep's first record commits with what it sent.
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0032 sections 6 to 8: the batch shape, the loader's `{ replay }` answer, `requeue`, and eviction. It replaces the dispatch horizon (core ADR 0089 section 2) with a record per fired timer, for the reasons below. Refined by napi ADR 0034: entries carry bytes in core's layout instead of records, core writes and replays them, and checkpoints are added. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md). Section 7 reworded by [kernel ADR 0004](../../../tinyactors-host/docs/adr/0004-a-macrosteps-first-record-commits-with-what-it-sent.md) (implementation note of 2026-10-01): mail between persisted actors is exactly once, except that a macrostep paused across turns may repeat, after a crash, what it sent before the pause; outward effects likewise.
 **Date:** 2026-09-29
 
 ## Context
@@ -370,3 +370,31 @@ held in memory whole.
       actor at its old due time;
     - the next mail starts a fresh actor;
     - a restart replays the new life only.
+
+### Section 7 across a crash between two commits (2026-10-01)
+
+Kernel ADR 0004 found that section 7's argument needs a macrostep's input
+and what it sent to commit together, and that they never did: a
+delivery's `delivered` was in one turn's batch and the macrostep it
+started ran in a later turn. A crash between the two commits lost an
+immediate send between persisted actors. Since kernel ADR 0004 a
+macrostep's first record (`delivered`, `jump`, `released`, or `spawned`
+for a bootstrap) is written in the batch of the turn the macrostep ends
+in, with what it sent in that turn. Section 7 now reads:
+
+- **Inputs, and mail between persisted actors:** exactly once, except
+  that a macrostep paused across turns by `resumeBudget` or
+  `actionBudget` may repeat, after a crash, what it sent before the
+  pause: the macrostep runs again from its start when its owed message is
+  delivered again. Nothing is lost, the sender's state is never wrong,
+  and only what was sent before the pause repeats, once per crash, in
+  order. A macrostep within the budgets is exactly once.
+- **Effects that leave the process:** at most once, with the same
+  exception: a paused macrostep's effects released before the pause may
+  be performed again after a crash.
+
+A repeat carries the same origin and, when its `<send>` has an `id`, the
+same send ID. The README's "Crashes and repeated messages" tells chart
+authors how to keep repeats harmless: loop with events instead of long
+macrosteps, idempotent receivers keyed on business data, states as
+guards, and idempotency keys on outward effects.
