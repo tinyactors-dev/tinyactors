@@ -62,7 +62,8 @@ generator language, and a plan for a Racket experiment.
 - **tinyactors can use it without changing core.** The data-model vtable
   stays synchronous: an evaluation runs to completion, running out of fuel
   is a fault, and asynchronous host work is expressed the SCXML way, with
-  `<send>` and `<invoke>`.
+  `<send>` and `<invoke>`. Long or asynchronous scripts run in their own VM
+  as an invoked child, where they can pause and await freely.
 - **Racket as the build-time generator is likely high leverage**, if it only
   compiles the fixed set of builtins into checked-in bytecode and C, and the
   frame ABI and bytecode format are generated from one source. A one-week
@@ -212,6 +213,25 @@ A state names its program by hash. Resuming needs both. "Keep the image to
 resume" therefore means keeping the state; the program is usually shared
 and cached.
 
+**Bytes are untrusted input.** Reading a state, or a program cached as
+bytes, verifies it before anything runs:
+
+- code outside ROM contains no intrinsic opcodes (below), since the
+  run-time compiler never emits them and only a damaged or crafted state
+  could contain them;
+- register indices, jump targets and frame sizes are in range;
+- every heap reference is in range and correctly tagged.
+
+The verifier is generated from the same opcode table as the compilers and
+the dispatch loop, so it cannot fall out of step with them. Verification
+costs time proportional to the code and heap being read, and nothing while
+running.
+
+**Reading a state leaves the arena empty.** Every object in the state,
+including those in the arena of a VM that was not quiet, is placed in the
+permanent heap. So writing a state and reading it back is promotion and
+compaction at once (see Memory).
+
 ## The pipeline
 
 ### `tjs_parse`: source to CST
@@ -324,7 +344,16 @@ handle (see Memory).
 
 Spec operations are transcribed into the IR nearly line by line:
 `ToPrimitive`, `OrdinaryGet`, `Array.prototype.sort`, promise jobs, Proxy
-traps, iterator protocols. The syntax below is illustrative:
+traps, iterator protocols.
+
+**The surface is a small s-expression core with macros**, a Racket `#lang`.
+The core stays near the size of S5's, under 35 forms [9], so nanopass
+takes it directly and every pass has little to handle. Macros cover
+repeated patterns such as `for-each` and `IteratorClose`. Every definition
+carries its spec section, and forms can carry step annotations, so each
+line is traceable to the spec and the annotations flow through to `#line`
+directives. Builtins are written and reviewed with LLM assistance, so
+familiarity with Racket does not limit who can change them. For example:
 
 ```scheme
 ;; ECMA-262 13.15.3 ApplyStringOrNumericBinaryOperator, opText = +
@@ -375,7 +404,9 @@ defunctionalize.
   program cannot reach a matter of filtering data when compiling. Devtools
   can step into a builtin if that is wanted. The bytecode needs intrinsics
   for everything the IR can express that user JS cannot, such as reaching
-  a built-in object without going through a mutable prototype.
+  a built-in object without going through a mutable prototype. Intrinsic
+  opcodes are valid only in ROM code, and reading bytes enforces that (see
+  Two artifacts).
 - **User JS is bytecode, compiled at run time.** The dispatch loop handles
   common cases inline and pushes a builtin frame only for the rest:
 
@@ -571,9 +602,13 @@ collection each time the VM becomes quiet.
 - **The limit of this design.** A VM that is never quiet, for example one
   with a timer loop that always leaves a host token pending, never resets
   its arena and so has no collector until it reaches its arena limit, which
-  throws a catchable error. Because frames are data, every root is precise
-  and known, so promotion while the VM is not quiet can be added later if
-  such a host appears.
+  throws a catchable error. Reclaiming it is the embedder's job, with a
+  mechanism that already exists: writing the state and reading it back
+  promotes the arena and compacts the permanent heap in one step, quiet or
+  not, because reading a state leaves the arena empty. `tjs_compact` does
+  the same in memory for embedders that never write states. It copies
+  everything, not only recent objects, so the embedder chooses how often.
+  tinyactors gets it whenever it offloads an actor.
 
 ### Compaction and the codec
 
@@ -582,8 +617,9 @@ collection each time the VM becomes quiet.
 - **Compaction is a copy from the roots.** Writing a state is a copying
   traversal from the roots, and reading it back produces a compact heap. A
   full collection is therefore "write the state and read it again", which
-  tinyactors already does whenever it offloads an actor. Hosts that never
-  offload call `tjs_compact`.
+  tinyactors already does whenever it offloads an actor. It works whether or
+  not the VM is quiet. Embedders that never write states call
+  `tjs_compact`.
 - **A limit makes growth visible.** A cap on permanent heap size turns
   unbounded growth into an error the host can see, never a crash.
 - **One traversal, three uses.** Promotion (arena to permanent heap),
@@ -594,7 +630,8 @@ collection each time the VM becomes quiet.
 ### Details
 
 - **A written state includes the arena** when the VM is not quiet: paused
-  and detached frames, pending jobs, and everything they reach.
+  and detached frames, pending jobs, and everything they reach. Reading it
+  back puts all of it in the permanent heap.
 - **Objects move, so hosts hold handles**, never pointers. The handle table
   is a root, and promotion updates it.
 - **WeakMap entries** whose key did not survive need ephemeron handling
@@ -640,13 +677,29 @@ the bindings would register it by default.
   clock comes from core through `ta_dm_host`. The entropy dependency must be
   seeded from something the host kernel records.
 
-A slow script is therefore stopped, not paused, and host operations cannot
-be awaited from a script. If a chart ever needs that, a core ADR can add a
-paused status and a resume entry to the vtable. It would have to keep the
-guarantees of ADR 0061 (pausing inside executable content), ADR 0070
-(saving a pause cannot fail) and ADR 0047 (no repeated effects), and the
-host kernel would record the values passed to `tjs_settle`. tinyjs already
-supports that mode, so nothing in the library waits on the decision.
+A slow script is therefore stopped, not paused, and a script in executable
+content cannot await the host.
+
+**Long or asynchronous scripts run as an invoked child.** The host registers
+a tinyjs invoker (`<invoke type="…tinyjs">`). The script runs in its own VM
+as a child session, outside any microstep, so it can pause on fuel and
+await host tokens freely. It reports back with events: `done.invoke`
+carrying its result, or `<send>` to the parent. The parent keeps processing
+events while the child waits, as SCXML intends, and replay goes through the
+events the log already records.
+
+- The child cannot change the parent's data model directly. Results come
+  back as event data, and the parent assigns them.
+- The child's VM needs offloading and replay as a host invoker: its state
+  written and read with the rest of the host's data, and the values passed
+  to `tjs_settle` recorded by the host kernel. That is work in the kernel,
+  not in core.
+
+The data-model vtable never pauses. A pausing vtable would add states to
+core's continuation, make every vtable operation resumable, and reopen
+ADR 0070 (saving a pause cannot fail) and ADR 0047 (no repeated effects), to
+serve only a script that must both await the host and change its own
+actor's data in the same action.
 
 ## Architectures considered
 
@@ -744,9 +797,11 @@ in, and `mise run generated` fails when the output is stale.
    compiler and the dispatch loop include them. A test has builtins and
    user code call each other in both directions, with builtins both as
    bytecode and as C.
-2. **Only one person can change a builtin.** Keep the IR close to spec
-   pseudo-code, and add builtins from a template. Contributors who don't
-   change builtins never need Racket.
+2. **Only one person can change a builtin.** Builtins are written and
+   reviewed with LLM assistance, which removes Racket familiarity as a
+   barrier. Keep the IR core small and annotated with spec steps, and add
+   builtins from a template. Contributors who don't change builtins never
+   need Racket.
 3. **The build splits across languages.** Racket is pinned in the root
    `mise.toml` and runs only behind a Ruby task (`mise run generate`).
 4. **Scope creep.** Compiling user JS to C ahead of time in Racket, reading
@@ -784,8 +839,9 @@ in, and `mise run generated` fails when the output is stale.
    freestanding, with no undefined symbols at -O0 and -O2, passes a
    recursion check and a check of at most three parameters, and compiles
    with the pinned clang and `zig cc`.
-2. The builtins read like the spec. Someone who doesn't know Racket can
-   review `ordinary-to-primitive` against section 7.1.1.1.
+2. The builtins read like the spec. A reviewer can check
+   `ordinary-to-primitive` against section 7.1.1.1 step by step, using its
+   annotations.
 3. A random differential test (IR interpreter against the harness running
    the generated bytecode and C) finds a bug deliberately planted in the
    liveness pass.
@@ -826,17 +882,6 @@ compare against, run again on the same machine. Budgets, and CI checks that
 enforce them, follow from the baselines and are recorded in the ADR that
 sets them, as core's ADRs record their per-actor costs. Which builtins move
 from bytecode to C is decided the same way, one builtin at a time.
-
-## Open questions
-
-- **The IR's surface.** Its exact syntax and set of forms, and the set of
-  bytecode intrinsics the builtins need that user JS does not have.
-- **Promotion while the VM is not quiet.** Needed only if a host keeps a VM
-  busy forever (see Memory). The roots are precise, so it is an addition,
-  not a redesign.
-- **A data-model vtable that can pause.** Needed only if a chart must await
-  host work from a script (see Using tinyjs from tinyactors). It would be a
-  core ADR.
 
 ## Sources
 
