@@ -1352,6 +1352,26 @@ ta_result ta_send_id_parse(const ta_system *system, ta_str text, ta_send_id *out
     return TA_OK;
 }
 
+ta_result ta_send_id_intern(ta_system *system, ta_str text, ta_send_id *out) {
+    if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
+        return TA_ERR_INVALID;
+    }
+    ta_send_id id = ta_send_id_from_text(system, text);
+    if (id == 0) {
+        ta_atom atom = 0;
+        ta_result result = ta_atom_intern(&system->atoms, text, &atom);
+        if (result != TA_OK) {
+            return result;
+        }
+        id = ta_send_id_from_text(system, text);
+    }
+    if (id == 0) {
+        return TA_ERR_INVALID;
+    }
+    *out = id;
+    return TA_OK;
+}
+
 ta_result ta_send_id_format(const ta_system *system, const ta_send_id_format_params *params) {
     if (system == NULL || params == NULL || params->needed == NULL) {
         return TA_ERR_INVALID;

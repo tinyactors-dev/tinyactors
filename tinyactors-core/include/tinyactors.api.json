@@ -19302,6 +19302,48 @@
       ]
     },
     {
+      "name": "ta_send_id_intern",
+      "doc": "Interns a send ID's text and answers its ID: ta_send_id_parse() for text this system may never have seen, such as a literal ID a log written by another process names (kernel ADR 0002). TA_ERR_INVALID for empty text; TA_ERR_NOMEM when a literal cannot be interned.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_send_id"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ]
+    },
+    {
       "name": "ta_send_id_format",
       "doc": "The text of a send ID, following the buffer convention: `*needed` receives the size including the terminating NUL, and a too-small buffer yields TA_ERR_NOMEM without writing, so a zero capacity is a size query. TA_ERR_NOT_FOUND when the send has no ID.",
       "public": true,
@@ -22842,6 +22884,48 @@
           "direction": "out",
           "valid_on": "success",
           "lifetime": "system"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_intern_invoke_id",
+      "doc": "The invocation ID `text` names, interning it: the inverse of ta_system_invoke_id_text(), for a host that restores an invocation a log written by another process names (kernel ADR 0002). TA_ERR_INVALID for empty text; TA_ERR_NOMEM when it cannot be interned.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_invoke_id"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
         }
       ]
     },

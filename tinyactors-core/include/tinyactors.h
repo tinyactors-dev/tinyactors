@@ -803,6 +803,13 @@ TA_API uint64_t ta_system_incarnation(const ta_system *system);
 TA_API ta_result ta_send_id_parse(const ta_system *system,
                                   ta_str text,
                                   TA_OUT ta_send_id *out);
+/*
+ * Interns a send ID's text and answers its ID: ta_send_id_parse() for text
+ * this system may never have seen, such as a literal ID a log written by
+ * another process names (kernel ADR 0002). TA_ERR_INVALID for empty text;
+ * TA_ERR_NOMEM when a literal cannot be interned.
+ */
+TA_API ta_result ta_send_id_intern(ta_system *system, ta_str text, TA_OUT ta_send_id *out);
 
 typedef struct {
     ta_send_id send_id;
@@ -4188,6 +4195,13 @@ TA_API ta_result ta_system_atom_text(const ta_system *system,
 TA_API ta_result ta_system_invoke_id_text(const ta_system *system,
                                           ta_invoke_id invoke,
                                           TA_OUT TA_LIFETIME(system) ta_str *out);
+/*
+ * The invocation ID `text` names, interning it: the inverse of
+ * ta_system_invoke_id_text(), for a host that restores an invocation a log
+ * written by another process names (kernel ADR 0002). TA_ERR_INVALID for
+ * empty text; TA_ERR_NOMEM when it cannot be interned.
+ */
+TA_API ta_result ta_system_intern_invoke_id(ta_system *system, ta_str text, TA_OUT ta_invoke_id *out);
 TA_API ta_result ta_event_name_intern(ta_system *system,
                                       TA_IN const ta_atom_list *segments,
                                       TA_OUT ta_event_name_id *out);

@@ -29,6 +29,13 @@ ta_result ta_invoke_id_from_text(ta_system *system, ta_str text, ta_invoke_id *o
     return result;
 }
 
+ta_result ta_system_intern_invoke_id(ta_system *system, ta_str text, ta_invoke_id *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    return ta_invoke_id_from_text(system, text, out);
+}
+
 ta_str ta_invoke_id_text(const ta_system *system, ta_invoke_id invoke) {
     if (invoke == 0 || invoke == TA_INVOKE_ID_NONE || invoke - 1u >= TA_ATOM_NONE) {
         return (ta_str){0};

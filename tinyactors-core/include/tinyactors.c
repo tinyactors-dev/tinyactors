@@ -6078,6 +6078,13 @@ TA_PRIVATE ta_result ta_invoke_id_from_text(ta_system *system, ta_str text, ta_i
     return result;
 }
 
+TA_API ta_result ta_system_intern_invoke_id(ta_system *system, ta_str text, ta_invoke_id *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    return ta_invoke_id_from_text(system, text, out);
+}
+
 TA_PRIVATE ta_str ta_invoke_id_text(const ta_system *system, ta_invoke_id invoke) {
     if (invoke == 0 || invoke == TA_INVOKE_ID_NONE || invoke - 1u >= TA_ATOM_NONE) {
         return (ta_str){0};
@@ -17404,6 +17411,26 @@ TA_API ta_result ta_send_id_parse(const ta_system *system, ta_str text, ta_send_
     ta_send_id id = ta_send_id_from_text(system, text);
     if (id == 0) {
         return TA_ERR_NOT_FOUND;
+    }
+    *out = id;
+    return TA_OK;
+}
+
+TA_API ta_result ta_send_id_intern(ta_system *system, ta_str text, ta_send_id *out) {
+    if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
+        return TA_ERR_INVALID;
+    }
+    ta_send_id id = ta_send_id_from_text(system, text);
+    if (id == 0) {
+        ta_atom atom = 0;
+        ta_result result = ta_atom_intern(&system->atoms, text, &atom);
+        if (result != TA_OK) {
+            return result;
+        }
+        id = ta_send_id_from_text(system, text);
+    }
+    if (id == 0) {
+        return TA_ERR_INVALID;
     }
     *out = id;
     return TA_OK;

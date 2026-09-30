@@ -133,6 +133,30 @@ int main(void) {
     check(literal != generated, "a literal ID is not the generated one");
     check(strcmp(format(system, literal, buffer, sizeof(buffer)), "timeout") == 0, "the literal's text");
 
+    /* Interning: text another process wrote, which this system has not seen
+     * (kernel ADR 0002), becomes the ID parsing then finds. */
+    ta_send_id interned = 0;
+    check(ta_send_id_intern(system, str("from-a-log"), &interned) == TA_OK, "intern an unseen literal");
+    check(interned != 0, "an interned ID is not the absent one");
+    check(strcmp(format(system, interned, buffer, sizeof(buffer)), "from-a-log") == 0, "its text");
+    ta_send_id again = 0;
+    check(ta_send_id_parse(system, str("from-a-log"), &again) == TA_OK && again == interned, "parse finds it after");
+    check(ta_send_id_intern(system, str("#_send.7"), &again) == TA_OK &&
+              strcmp(format(system, again, buffer, sizeof(buffer)), "#_send.7") == 0,
+          "a generated ID interns to itself");
+    check(ta_send_id_intern(system, str(""), &again) == TA_ERR_INVALID, "empty text does not intern");
+
+    /* Invocation IDs: interning is the inverse of their text. */
+    ta_invoke_id invoke = TA_INVOKE_ID_NONE;
+    ta_str invoke_text = { 0 };
+    check(ta_system_intern_invoke_id(system, str("state.9"), &invoke) == TA_OK, "intern an invoke ID");
+    check(ta_system_invoke_id_text(system, invoke, &invoke_text) == TA_OK && invoke_text.len == 7 &&
+              memcmp(invoke_text.ptr, "state.9", 7) == 0,
+          "its text");
+    ta_invoke_id same = TA_INVOKE_ID_NONE;
+    check(ta_system_intern_invoke_id(system, str("state.9"), &same) == TA_OK && same == invoke, "the same text, the same ID");
+    check(ta_system_intern_invoke_id(system, str(""), &same) == TA_ERR_INVALID, "empty text is no invoke ID");
+
     ta_system_destroy(system);
 
     if (failures != 0) {
