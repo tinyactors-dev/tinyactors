@@ -1,6 +1,6 @@
 # ADR 0095: A checkpoint restores the sends the router refused
 
-**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Amends ADR 0091 section 1 ("a send the router already refused once is not in it") and ADR 0094 section 3's restore ("a submitted one is exported but not restored"). Keeps ADR 0091 section 1's rule that an invocation carries no values, for the reason below. Builds on kernel ADR 0002, whose log writes `fired` only on the attempt that takes a send.
+**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Amends ADR 0091 section 1 ("a send the router already refused once is not in it") and ADR 0094 section 3's restore ("a submitted one is exported but not restored"). Keeps ADR 0091 section 1's rule that an invocation carries no values, for the reason below. Builds on kernel ADR 0002, whose log writes `fired` only on the attempt that takes a send. Superseded in part by [kernel ADR 0003](../../../tinyactors-host/docs/adr/0003-a-full-mailbox-overflows-instead-of-refusing-mail-between-actors.md): a full mailbox no longer makes a submitted send.
 **Date:** 2026-09-30
 
 ## Context
