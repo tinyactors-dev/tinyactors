@@ -119,6 +119,45 @@ module HostedRelay
   end
 end
 
+module HostedOverflow
+  # hosted_ping/a sends `ping` to hosted_pong/p while the queue is full
+  # (maxQueuedMessages 1, taken by the application's `noise` for p): the
+  # router accepts it into p's overflow (kernel ADR 0003), and p's log
+  # records it. Both families are logged. Answers [hosted, ping, pong].
+  def self.start(context, incarnation: 1)
+    hosted = context.hosted_system(incarnation: incarnation, max_queued_messages: 1)
+    context.hosted_log(hosted, 'hosted_ping', 'hosted_pong')
+    ping = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_ping), family: 'hosted_ping', name: 'a')
+    pong = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_pong), family: 'hosted_pong', name: 'p')
+    context.hosted_run(hosted)
+    context.hosted_post(hosted, ping, 'go')
+    context.hosted_run(hosted, limit: 1) # `go` delivered; a runs it next turn
+    context.assert_equal 'ok', context.hosted_post(hosted, pong, 'noise')
+    context.assert_equal 'err_busy', context.hosted_post(hosted, pong, 'noise'), "the application's mail is refused"
+    context.hosted_run(hosted, limit: 1) # a sends `ping`; p takes `noise`
+    boxes = context.hosted_mailboxes(hosted, pong)
+    context.assert_equal 1, boxes[:overflow]
+    context.assert_equal %w[ping], boxes[:mailboxes].first[:events]
+    context.assert_equal nil, context.hosted_next_deadline(hosted), 'a holds no send it waits to make'
+    [hosted, ping, pong]
+  end
+
+  # Another process rebuilds a and p from `store`; answers p's states once it has run.
+  def self.restart(context, store)
+    hosted = context.hosted_system(incarnation: 2)
+    context.hosted_log(hosted, 'hosted_ping', 'hosted_pong')
+    ping_definition = context.hosted_define(hosted, :hosted_ping)
+    pong_definition = context.hosted_define(hosted, :hosted_pong)
+    ping = context.hosted_restore(hosted, ping_definition, 'hosted_ping', 'a', store['hosted_ping/a'])
+    pong = context.hosted_restore(hosted, pong_definition, 'hosted_pong', 'p', store['hosted_pong/p'])
+    context.hosted_run(hosted)
+    context.assert_equal [:sent], context.hosted_states(hosted, ping)
+    states = context.hosted_states(hosted, pong)
+    context.assert_equal 0, context.close_hosted(hosted)
+    states
+  end
+end
+
 TinyactorsTest.scenarios 'hosted' do
   # Catches: the test host not linking the kernel, or a hosted system that
   # leaks what the kernel allocated for it.
@@ -179,6 +218,38 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal [], hosted_mailbox(hosted, actor)
     assert_equal delivered + 4, hosted_mailboxes(hosted)[:delivered]
     assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: a full queue that refuses mail between actors, so the send
+  # waits in the sender, logged nowhere (kernel ADR 0003); overflow that is
+  # delivered before there is room, or never.
+  scenario 'mail between actors waits in the overflow of a full queue, and is delivered once' do
+    hosted, _ping, pong = HostedOverflow.start(self)
+    assert_equal [:waiting], hosted_states(hosted, pong)
+    assert hosted_run(hosted)[:quiet]
+    assert_equal [:pinged], hosted_states(hosted, pong)
+    boxes = hosted_mailboxes(hosted, pong)
+    assert_equal [0, 0], [boxes[:queued], boxes[:overflow]]
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: overflowed mail lost by a crash: the sender's replay from
+  # `spawned` drops its send as sent, so only the receiver's log can hold it.
+  scenario 'mail in the overflow survives a crash and a replay from spawned' do
+    hosted, = HostedOverflow.start(self)
+    store = hosted_store(hosted)
+    close_hosted(hosted) # a crash: nothing more is recorded
+    assert_equal [:pinged], HostedOverflow.restart(self, store), 'p gets the ping once'
+  end
+
+  # Catches: overflowed mail that leaves with an evicted sender and dies
+  # with the process (the orphan of a send the router refused).
+  scenario "mail in the overflow survives the sender's eviction and an exit" do
+    hosted, ping, = HostedOverflow.start(self)
+    assert_equal 'ok', hosted_evict(hosted, ping)
+    store = hosted_store(hosted)
+    close_hosted(hosted)
+    assert_equal [:pinged], HostedOverflow.restart(self, store), 'p gets the ping once'
   end
 
   # Catches: mail for a finished actor delivered, dropped silently, or

@@ -11,7 +11,10 @@ struct tah_sched_entry {
     uint32_t generation;
     uint8_t state; /* tah_sched_state */
     uint8_t flags;
-    uint16_t reserved;
+    /* 1: on the room queue, READY with its head in the overflow (kernel ADR
+     * 0003); 0 for a stale entry of the queue, which is skipped. */
+    uint8_t parked;
+    uint8_t reserved;
     uint32_t first; /* mailbox head envelope, 0 when empty */
     uint32_t last;  /* mailbox tail envelope, 0 when empty */
 };
@@ -49,9 +52,12 @@ struct tah_envelope {
     uint32_t waiter; /* the send() waiting for this message, or 0 */
     uint32_t bytes;  /* counted against max_retained (ADR 0005 point 9) */
     uint8_t reason;  /* tah_dead_reason, while on the dead list */
-    uint8_t live;    /* taken from the store */
-    uint8_t has_jump; /* `jump`, not `address` */
-    uint8_t report;   /* tah_report_kind: an error report, not a message */
+    uint8_t report;  /* tah_report_kind: an error report, not a message */
+    uint8_t live : 1;     /* taken from the store */
+    uint8_t has_jump : 1; /* `jump`, not `address` */
+    /* Accepted past the limits (kernel ADR 0003): counted in `overflow`, not
+     * in `queued` and `retained`, and not delivered until it is moved in. */
+    uint8_t overflow : 1;
 };
 
 struct tah_waiter {
@@ -85,6 +91,12 @@ struct tah_sched {
     /* Accepted messages not yet delivered or reported: mailboxes plus the dead list. */
     uint32_t queued;
     uint32_t max_queued;    /* 0: no limit (ADR 0005 point 9) */
+    /* Mail between actors accepted past the limits and not moved in yet
+     * (kernel ADR 0003): it counts in neither `queued` nor `retained`. */
+    uint32_t overflow;
+    /* ta_actor_id: ready actors whose head waits in the overflow, in the
+     * order they asked for room (kernel ADR 0003). */
+    tah_ring room;
     /* Retained-bytes estimates of queued messages, and their limit (0: none). */
     uint64_t retained;
     uint64_t max_retained;

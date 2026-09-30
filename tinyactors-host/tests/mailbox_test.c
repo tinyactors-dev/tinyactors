@@ -2,7 +2,8 @@
  * Mailboxes, the ready queue and dead letters (ADRs 0005, 0008, 0014),
  * driven without Node-API: per-target FIFO across the message budget, mail
  * before bootstrap, stale IDs, quarantine with an empty mailbox, finished and
- * destroyed targets, backpressure, the dead-letter budget, a fault that stays
+ * destroyed targets, backpressure, mail between actors that overflows past
+ * the limits (kernel ADR 0003), the dead-letter budget, a fault that stays
  * with its actor, and no allocator call in steady state.
  */
 #include "check.h"
@@ -329,6 +330,69 @@ static void backpressure(void) {
     finish_system(system);
 }
 
+/* Mail between actors, as the router posts it: past the limits it overflows (kernel ADR 0003). */
+static ta_result post_between(tah_system *system, ta_actor_id target, ta_event_name_id event) {
+    ta_event message = { .name = event, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    return tah_system_post(system, &(tah_message){ .target = target, .event = &message, .may_overflow = true });
+}
+
+static bool counted(tah_system *system, uint32_t queued, uint32_t overflow) {
+    tah_sched_stats stats;
+    tah_sched_read_stats(&system->sched, &stats);
+    return stats.queued == queued && stats.overflow == overflow;
+}
+
+static bool head_overflows(tah_system *system, ta_actor_id actor) {
+    return tah_sched_queued_message(&system->sched, tah_sched_mailbox_first(&system->sched, actor)).overflow;
+}
+
+/*
+ * Past max_queued, mail between actors is accepted as overflow, in
+ * arrival order, while the application's mail is still refused. Nothing is
+ * delivered from the overflow while there is no room, and a system with
+ * nothing else to do is quiet. Room goes to the actors in the order they
+ * asked for it, one message each; overflow to an actor that goes is a dead
+ * letter like the rest of its mailbox.
+ */
+static void overflow_between_actors(void) {
+    tah_system *system = make_system();
+    ta_definition_id chart = define_steps(system);
+    ta_actor_id hog = spawn(system, chart);
+    ta_actor_id first = spawn(system, chart);
+    ta_actor_id second = spawn(system, chart);
+    ta_actor_id gone = spawn(system, chart);
+    settle(system);
+    system->sched.max_queued = 1u;
+    ta_event_name_id x = name(system, "x");
+    ta_event_name_id y = name(system, "y");
+    CHECK(tah_sched_quarantine(&system->sched, hog));
+    CHECK(post(system, hog, x) == TA_OK); /* the queue is full, and nothing delivers from it */
+    CHECK(post(system, first, x) == TA_ERR_BUSY);
+    CHECK(post_between(system, first, x) == TA_OK);
+    CHECK(post_between(system, second, x) == TA_OK);
+    CHECK(post_between(system, first, y) == TA_OK);
+    CHECK(post_between(system, gone, x) == TA_OK);
+    CHECK(counted(system, 5u, 4u));
+    CHECK(tah_sched_mailbox_count(&system->sched, first) == 2u);
+    CHECK(post(system, first, x) == TA_ERR_BUSY);
+    CHECK(settle(system) == 0u); /* they wait for room, and the system is quiet */
+    CHECK(strcmp(state_of(system, first), "a") == 0 && strcmp(state_of(system, second), "a") == 0);
+
+    destroy(system, gone); /* its overflow is a dead letter, and makes no room */
+    CHECK(turn(system, TAH_RECORD_DEAD_LETTER) == 1u);
+    CHECK(counted(system, 4u, 3u));
+    destroy(system, hog); /* its mail goes as a dead letter, and makes room for one */
+    CHECK(turn(system, TAH_RECORD_DEAD_LETTER) == 1u);
+    CHECK(counted(system, 3u, 2u));
+    CHECK(!head_overflows(system, first) && head_overflows(system, second)); /* first asked first */
+    CHECK(settle(system) == 0u);
+    CHECK(strcmp(state_of(system, first), "c") == 0 && strcmp(state_of(system, second), "b") == 0);
+    CHECK(counted(system, 0u, 0u));
+    CHECK(post(system, first, name(system, "z")) == TA_OK); /* the application's mail is taken again */
+    settle(system);
+    finish_system(system);
+}
+
 /* At most `messages` dead letters are reported per turn. */
 static void dead_letter_budget(void) {
     tah_system *system = make_system();
@@ -469,6 +533,7 @@ int main(void) {
     a_fault_stays_with_its_actor();
     finished_and_destroyed_targets();
     backpressure();
+    overflow_between_actors();
     dead_letter_budget();
     steady_state();
     close_with_mail();

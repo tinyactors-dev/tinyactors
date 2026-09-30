@@ -207,7 +207,12 @@ static ta_external_event_submit_status tah_router_submit(void *self, const ta_ex
     /* Mail between actors carries no retained-bytes estimate: its data is a
      * value made inside a chart, and sizing it would mean calling JavaScript. */
     /* Traced mail keeps the sending step as its parent (core ADR 0067). */
-    tah_message message = { .target = delivery->destination.as.runtime, .event = &event, .trace = &delivery->trace };
+    /* Past the queue's limits it waits in the receiver's overflow: a chart
+     * cannot retry, and a refused send is logged nowhere (kernel ADR 0003). */
+    tah_message message = { .target = delivery->destination.as.runtime,
+                            .event = &event,
+                            .trace = &delivery->trace,
+                            .may_overflow = true };
     ta_result result = to_loader ? tah_router_post_session(system, &delivery->destination, family, &message)
                        : delivery->destination.kind == TA_ACTOR_REF_NAMED
                            ? tah_router_post_named(system, delivery->destination.as.named, &message)
@@ -225,7 +230,7 @@ static ta_external_event_submit_status tah_router_submit(void *self, const ta_ex
     if (result != TA_OK) {
         ta_event_release(&event);
         tah_inputs_undo(system, &fired);
-        return TA_EXTERNAL_EVENT_RETRY; /* full, or out of memory: core offers it again */
+        return TA_EXTERNAL_EVENT_RETRY; /* out of memory: core offers it again */
     }
     if (system->dispatching_due) {
         tah_system_record_lateness(system, delivery->due, &delivery->trace);

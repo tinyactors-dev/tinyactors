@@ -19,6 +19,13 @@
  * delivers the head envelope of up to `messages` ready actors, acting on
  * ta_actor_deliver()'s result alone (tinyactors-core ADR 0055).
  *
+ * Overflow (kernel ADR 0003): mail between actors is accepted past the
+ * limits of ADR 0005 point 9, marked as overflow, and joins its receiver's
+ * mailbox in arrival order. It is not delivered until the queue has room:
+ * a ready actor whose head is overflow waits on the room queue, and each
+ * turn moves one message in for each waiting actor, in the order they
+ * asked, while there is room.
+ *
  * Dead letters: mail whose target is gone or finished moves to the dead
  * list, and each turn reports at most `messages` of them as records, so one
  * dead actor with a deep mailbox cannot make a turn long. Mail for a stale
@@ -164,6 +171,9 @@ typedef struct {
      * carries its invocation and data. A report for a gone target is
      * dropped, never a dead letter. */
     uint8_t report;
+    /* Mail between actors (kernel ADR 0003): past the limits it is accepted
+     * as overflow instead of refused with TA_ERR_BUSY. */
+    bool may_overflow;
 } tah_message;
 
 typedef enum {
@@ -329,7 +339,8 @@ ta_result tah_sched_transfer(tah_sched *sched, const tah_sched_transfer_params *
  * - A target the table does not know (stale or unknown ID) or one that has
  *   finished: accepted as a dead letter at once.
  * - TA_ERR_BUSY: the queue is at max_queued, or the message's bytes would
- *   pass max_retained; nothing was accepted.
+ *   pass max_retained; nothing was accepted. A message that `may_overflow`
+ *   is accepted as overflow instead (kernel ADR 0003).
  * - TA_ERR_NOMEM: nothing was accepted.
  */
 ta_result tah_sched_post(tah_sched *sched, const tah_message *message);
@@ -386,7 +397,7 @@ tah_envelope *tah_sched_envelope(const tah_sched *sched, uint32_t index);
 bool tah_sched_quarantine(tah_sched *sched, ta_actor_id actor);
 /* Clears every entry's input-log cache (TAH_SCHED_LOG_KNOWN, TAH_SCHED_LOGGED). */
 void tah_sched_forget_logging(tah_sched *sched);
-/* Messages waiting in `actor`'s mailbox. */
+/* Messages waiting in `actor`'s mailbox, its overflow included. */
 uint32_t tah_sched_mailbox_count(const tah_sched *sched, ta_actor_id actor);
 /* The scheduling state of `actor`: TAH_SCHED_NONE for one the table does not know. */
 tah_sched_state tah_sched_state_of(const tah_sched *sched, ta_actor_id actor);
@@ -401,6 +412,7 @@ typedef struct {
     const tah_jump *jump; /* its operator transition (core ADR 0082), or NULL */
     uint32_t waiter;      /* the send() waiting for it, or 0 */
     uint32_t next;        /* the next envelope in its mailbox, 0 when last */
+    bool overflow;        /* it waits in the overflow for room (kernel ADR 0003) */
 } tah_queued_message;
 /* The first envelope in `actor`'s mailbox, 0 when it is empty or unknown. */
 uint32_t tah_sched_mailbox_first(const tah_sched *sched, ta_actor_id actor);
@@ -412,7 +424,8 @@ typedef struct {
     uint32_t runnable;    /* actors on the runnable queue */
     uint32_t ready;       /* actors on the ready queue */
     uint32_t quarantined; /* actors in quarantine now */
-    uint32_t queued;      /* accepted messages not yet delivered or reported */
+    uint32_t queued;      /* accepted messages not yet delivered or reported, the overflow included */
+    uint32_t overflow;    /* ... of them accepted past the limits and not moved in yet (kernel ADR 0003) */
     uint64_t delivered;   /* messages core accepted */
     uint64_t dead_letters; /* dead letters reported so far */
     uint64_t dead_by_reason[TAH_DEAD_REASONS]; /* by tah_dead_reason */

@@ -81,6 +81,8 @@ function buildSnapshot({ startTime, time, systemName, system, definitions, host 
     }
   }
   metric('tinyactors.messages.queued', '{message}', 'gauge').points.push({ attributes: base, value: host.queued });
+  // Mail between actors accepted past the limits, waiting for room (kernel ADR 0003).
+  metric('tinyactors.messages.overflow', '{message}', 'gauge').points.push({ attributes: base, value: host.overflow });
   metric('tinyactors.messages.delivered', '{message}', 'sum').points.push({ attributes: base, value: host.delivered });
   const dead = metric('tinyactors.messages.dead_lettered', '{message}', 'sum');
   for (const [reason, count] of Object.entries(host.native.deadLetters)) {

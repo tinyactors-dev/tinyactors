@@ -631,11 +631,17 @@ bool tah_system_cancel(tah_system *system, uint32_t index) {
     if (waiter == NULL) {
         return false;
     }
-    if (waiter->state == TAH_WAITER_QUEUED && tah_loads_withdraw(&system->loads, &system->sched, waiter->envelope)) {
+    bool cancelled = waiter->state == TAH_WAITER_QUEUED &&
+                     tah_loads_withdraw(&system->loads, &system->sched, waiter->envelope);
+    if (cancelled) {
         waiter->state = TAH_WAITER_SETTLING;
-        return true;
+    } else {
+        cancelled = tah_sched_cancel(&system->sched, index);
     }
-    return tah_sched_cancel(&system->sched, index);
+    if (cancelled) {
+        tah_system_want_turn(system); /* a withdrawn message makes room the overflow may wait for (kernel ADR 0003) */
+    }
+    return cancelled;
 }
 
 ta_result tah_system_post(tah_system *system, const tah_message *message) {

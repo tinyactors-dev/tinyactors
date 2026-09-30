@@ -613,8 +613,10 @@ ta_result tah_replay_redeliver(tah_replay *replay, ta_actor_id actor, uint32_t *
         }
         ta_trace_parent trace = { 0 };
         tah_inputs_redeliver(&system->inputs, owed->id, ta_system_time(system->core));
+        /* The log accepted it already: past the limits it overflows (kernel ADR 0003). */
         ta_result result = tah_system_post(system, &(tah_message){ .target = actor, .event = &owed->event,
-                                                                   .trace = &trace, .report = owed->report });
+                                                                   .trace = &trace, .report = owed->report,
+                                                                   .may_overflow = true });
         tah_inputs_redelivered(&system->inputs);
         if (result != TA_OK) {
             ta_event_release(&owed->event);

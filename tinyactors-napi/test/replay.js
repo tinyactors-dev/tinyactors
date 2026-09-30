@@ -4,8 +4,9 @@
 // to 0034): named actors whose write-ahead log an in-memory store keeps in
 // two tables, a log of opaque bytes and a wake per address; evicted, woken,
 // and brought back by a loader that answers { replay: { spawn, inputs } };
-// crashes between commits; checkpoints and compaction; an upgrade by
-// replay; a long log streamed from an async generator. Runs on Node and Bun.
+// crashes between commits; mail between actors past a full queue;
+// checkpoints and compaction; an upgrade by replay; a long log streamed
+// from an async generator. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
 const { createSystem, statechart, readInputLog } = require('..');
@@ -364,6 +365,64 @@ async function crashWithMailInFlight() {
   assert.equal(main.inspect().data.hellos, 1, 'the queued hello is delivered once');
   assert.equal(main.inspect().data.pings, 1, 'the ping lost in the crash is sent again, once');
   second.close();
+}
+
+// Mail between persisted actors past a full queue (kernel ADR 0003): the
+// sender's delayed ping fires while the queue is at maxQueuedMessages (mail
+// waiting for a load that never finishes holds it). The router accepts the
+// ping into the ledger's overflow and the ledger's log records it, so the
+// sender holds nothing. After a crash, or the sender's eviction and an
+// exit, a new system replays both from their logs: the ping is delivered
+// once. Before, it waited in the sender, logged nowhere, and was lost.
+async function mailPastAFullQueue() {
+  const sender = () => statechart({ family: 'sender', revision: 'v1' })
+    .state('s', (s) => s
+      .on('arm', (t) => t.send('ping', (send) => send.id('p1').to('#_actor_ledger/main').after(1000)))
+      .on('peek', (t) => t.target('s')));
+  for (const evicted of [false, true]) {
+    const store = memoryStore();
+    const first = createSystem({ clock: 'manual', incarnation: 1, parameters: { maxQueuedMessages: 1 } });
+    first.setInputLog(store.sink, { families: ['sender', 'ledger'] });
+    first.setLoader('elsewhere', () => new Promise(() => {}));
+    const book = first.spawn(first.define(ledger()), { name: 'main' });
+    const a = first.spawn(first.define(sender()), { name: 'a' });
+    await first.flush();
+    await first.advanceTo(1000);
+    await a.send('arm'); // the ping is due at 2000
+    first.post({ family: 'elsewhere', name: 'x' }, 'hold'); // waits for a load: the queue is full
+    assert.throws(() => first.post(book, 'hello'), (error) => error.code === 'queue-full');
+    await first.advanceTo(2000);
+    await first.flush();
+    assert.deepEqual(first.stats().messages, { queued: 2, overflow: 1, delivered: first.stats().messages.delivered,
+                                               deadLetters: 0 });
+    const overflow = first.metrics().metrics.find((m) => m.name === 'tinyactors.messages.overflow');
+    assert.equal(overflow.points[0].value, 1);
+    assert.deepEqual(first.mailbox(book).map((m) => m.event), ['ping'], 'it waits for room in the ledger\'s mailbox');
+    assert.equal(book.inspect().data.pings, 0);
+    assert.deepEqual(a.inspect().delayedSends, [], 'the sender holds nothing');
+    const ledgerKinds = (await store.records({ family: 'ledger', name: 'main' })).map((r) => r.kind);
+    assert.deepEqual(ledgerKinds, ['spawned', 'accepted'], "the ledger's log accepted the ping");
+    if (evicted) {
+      first.evict(a);
+      await first.flush();
+    }
+    first.close(); // a crash, or an exit
+
+    const second = createSystem({ clock: 'manual', incarnation: 2, initialTime: 5000 });
+    second.setInputLog(store.sink, { families: ['sender', 'ledger'] });
+    const definitions = { ledger: second.define(ledger()), sender: second.define(sender()) };
+    second.setLoader('ledger', store.loader(definitions));
+    second.setLoader('sender', store.loader(definitions));
+    store.wakeAll(second);
+    await second.advanceTo(5001);
+    await settle(second);
+    const main = second.findActor({ family: 'ledger', name: 'main' });
+    assert.equal(main.inspect().data.pings, 1, 'the ping is delivered once');
+    await second.send({ family: 'sender', name: 'a' }, 'peek'); // the sender comes back holding nothing
+    await settle(second);
+    assert.equal(main.inspect().data.pings, 1, 'and not sent again');
+    second.close();
+  }
 }
 
 // A queued message that was withdrawn is `dropped`, and a replay after a
@@ -817,6 +876,7 @@ async function refusals() {
   await evictedTimeoutFiresOnTime();
   await timeoutAfterARestart();
   await crashWithMailInFlight();
+  await mailPastAFullQueue();
   await droppedAndLiteralSendIDs();
   await jumpReplayed();
   await finishedIsDone();

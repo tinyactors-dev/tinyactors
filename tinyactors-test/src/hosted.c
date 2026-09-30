@@ -158,8 +158,12 @@ jv tat_hosted_create_method(tat_bind *bind, jv params, int *error_code) {
     }
     tah_platform platform = {
         .self = &hosted->clock, .v = &tat_hosted_platform_vtable, .allocator = allocator};
+    /* The kernel's limit on queued messages (napi ADR 0035), when given. */
+    tah_params hosting;
+    tah_params_defaults(&hosting);
+    hosting.values[TAH_PARAM_MAX_QUEUED_MESSAGES] = tat_hosted_u64(params, "max_queued_messages");
     ta_result result = tah_system_create(
-        &(tah_system_create_params){.platform = platform, .incarnation = chosen}, &hosted->system);
+        &(tah_system_create_params){.platform = platform, .incarnation = chosen, .hosting = &hosting}, &hosted->system);
     if (result != TA_OK) {
         free(hosted);
         return tat_encode_ta_result(bind, &result);
@@ -409,8 +413,9 @@ static const char *tat_hosted_state_name(tah_sched_state state) {
 /*
  * The mailboxes of `actors` (kernel ADR 0001 section 5), each
  * {"actor", "state", "depth", "events"}, with the queued events' names in
- * delivery order, and the scheduler's counters: messages queued, delivered,
- * and the dead letters reported so far, by reason.
+ * delivery order, and the scheduler's counters: messages queued (the
+ * overflow included), those of them in the overflow (kernel ADR 0003),
+ * delivered, and the dead letters reported so far, by reason.
  */
 jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
@@ -450,6 +455,7 @@ jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
     jv dead = jv_object_set(jv_object(), jv_string("total"), jv_number((double)stats.dead_letters));
     jv out = jv_object_set(jv_object(), jv_string("mailboxes"), boxes);
     out = jv_object_set(out, jv_string("queued"), jv_number((double)stats.queued));
+    out = jv_object_set(out, jv_string("overflow"), jv_number((double)stats.overflow));
     out = jv_object_set(out, jv_string("delivered"), jv_number((double)stats.delivered));
     return jv_object_set(out, jv_string("dead_letters"), jv_object_set(dead, jv_string("by_reason"), reasons));
 }

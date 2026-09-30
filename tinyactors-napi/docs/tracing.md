@@ -125,7 +125,7 @@ and `tinyactors.actors.occupancy`: how many actors are in each state (by
 | `tinyactors.actors.quarantined` | gauge | Actors taken out of scheduling after a fault (ADR 0008). |
 | `tinyactors.faults` | sum | Faults by `tinyactors.fault.code`. |
 | `tinyactors.messages.dead_lettered` | sum | Dead letters by `tinyactors.dead_letter.reason`. |
-| `tinyactors.messages.queued`, `.delivered`, `tinyactors.memory.usage` | gauge, sum, gauge | Mail and memory. |
+| `tinyactors.messages.queued`, `.overflow`, `.delivered`, `tinyactors.memory.usage` | gauge, gauge, sum, gauge | Mail and memory; `.overflow` is mail between actors past the queue's limits (kernel ADR 0003). |
 | `tinyactors.definitions` | gauge | Definitions alive, by `tinyactors.definition.origin` (`host`: `define()`; `nested`: an inline child compiled with its parent; `invoke`: chart text compiled when an `<invoke>` ran) and `tinyactors.definition.state` (`live`, or `retired` but still used by a child or an actor). |
 | `tinyactors.definitions.registered`, `.retired`, `.freed` | sum | The definition lifecycle (core ADR 0079). A `registered` count that keeps climbing while `freed` keeps pace is **churn**: an invoke compiling new chart text for every child. A `registered` count that climbs while `freed` does not is a leak. |
 

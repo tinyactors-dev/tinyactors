@@ -474,9 +474,12 @@ module TinyactorsTest
     # reaches the kernel and its core, and teardown's leak check covers it;
     # `allocator: nil` gives it libc's. Answers the ta_result name when the
     # kernel could not create the system (a budget too small).
-    def hosted_system(incarnation: 0, allocator: self.allocator)
+    # `max_queued_messages` is the kernel's limit on queued messages (napi
+    # ADR 0035); nil leaves it at its default, none.
+    def hosted_system(incarnation: 0, allocator: self.allocator, max_queued_messages: nil)
       params = { incarnation: incarnation }
       params[:allocator] = allocator.adapter if allocator
+      params[:max_queued_messages] = max_queued_messages if max_queued_messages
       rpc('hosted.create', params)
     end
 
@@ -557,8 +560,10 @@ module TinyactorsTest
     end
 
     # The kernel's mailboxes of `actors` and its counters: { mailboxes:
-    # [{ actor:, state:, depth:, events: }], queued:, delivered:,
-    # dead_letters: { total:, by_reason: { 'done' => n, ... } } }.
+    # [{ actor:, state:, depth:, events: }], queued:, overflow:, delivered:,
+    # dead_letters: { total:, by_reason: { 'done' => n, ... } } }. `queued`
+    # includes the `overflow`, mail between actors accepted past the
+    # limits (kernel ADR 0003).
     def hosted_mailboxes(hosted, *actors)
       rpc('hosted.mailboxes', system: hosted[:hosted], actors: actors)
     end

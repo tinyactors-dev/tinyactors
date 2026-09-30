@@ -19,8 +19,10 @@
  *
  * The envelope keeps the event by retaining it (tinyactors-core ADRs 0050
  * and 0065): the data, and a named origin's address, are shared, never
- * copied. RETRY is only for resource limits: the queue is at
- * maxQueuedMessages, or an envelope cannot be allocated (ADR 0006 point 3).
+ * copied. Mail between actors is accepted past maxQueuedMessages and
+ * maxRetainedBytes, as overflow (kernel ADR 0003), so RETRY is only for
+ * running out of memory: an envelope, a log record or a message's ID that
+ * cannot be allocated (ADR 0006 point 3).
  */
 #include "scheduler.h"
 #include "tinyactors.h"
@@ -35,7 +37,8 @@ ta_external_event_router tah_router_adapter(tah_system *system);
  * a loader and it has no resident actor (napi ADR 0020); otherwise the
  * resident actor's mailbox, or a dead letter when the name has none. `message->target`
  * is ignored. On TA_OK the system owns the event's references and the waiter;
- * `address` stays the caller's. TA_ERR_BUSY: the queue is full;
- * TA_ERR_NOMEM: nothing accepted.
+ * `address` stays the caller's. TA_ERR_BUSY: the queue is full and the
+ * message may not overflow (tah_message.may_overflow); TA_ERR_NOMEM:
+ * nothing accepted.
  */
 ta_result tah_router_post_named(tah_system *system, ta_address *address, const tah_message *message);

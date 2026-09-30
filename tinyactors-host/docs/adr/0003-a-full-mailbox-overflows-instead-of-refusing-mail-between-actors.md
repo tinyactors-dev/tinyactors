@@ -188,3 +188,100 @@ hears what was dropped.
 - **A separate overflow list per receiver.** It needs two more indices in
   every scheduling-table entry, 8 bytes per actor, for mail that the
   mailbox list can hold in order with one mark.
+
+## Implementation notes
+
+### The router overflows full mailboxes (2026-09-30)
+
+**Where things are.**
+
+- **`tah_message.may_overflow`** (`scheduler.h`) asks for section 2. The
+  router sets it for all its mail (`tah_router_submit()`), and so does
+  `tah_replay_redeliver()` for owed mail. `tah_sched_post()`,
+  `tah_sched_post_waiting()` and `tah_sched_post_dead()` accept such a
+  message past the limits instead of answering `TA_ERR_BUSY`, and mark its
+  envelope. Everything else posts without it and is refused as before.
+- **The envelope's mark** (`tah_envelope.overflow`) is a bit beside `live`
+  and `has_jump`, which became bit-fields: the envelope stays 104 bytes.
+  A marked envelope counts in `tah_sched.overflow`, not in `queued` and
+  `retained`, until it is moved in (`tah_sched_move_in()`). Giving it back
+  uncounts it from whichever it is in.
+- **The room queue** (`tah_sched.room`, a ring of actor IDs, allocated at
+  its first push) and **the parked mark** (`tah_sched_entry.parked`, one
+  byte of the entry's reserved two: the entry stays 16 bytes):
+  - a delivery whose head is overflow moves it in when there is room and
+    no actor waits for room; otherwise the actor is parked on the room
+    queue and stays `READY`, off the ready queue;
+  - `tah_sched_unpark()` runs before a turn's deliveries and after its
+    dead-letter reports. While there is room it pops parked actors, moves
+    each one's head in and puts it on the ready queue;
+  - an entry whose actor was woken, given new mail at its head by a
+    transfer or a load's hand-over, finished or removed has its mark
+    cleared, and its entry on the room queue is skipped when popped.
+- **Quiet:** a scheduler with parked actors and room is not quiet; one
+  with parked actors and no room is, so a full system does not spin.
+  `tah_system_cancel()` asks for a turn, since a withdrawn message makes
+  room.
+- **Counters:** `tah_sched_stats.overflow`, and `queued` now includes it.
+  napi's `stats().messages.overflow` and the metric
+  `tinyactors.messages.overflow` (a gauge); the test host's
+  `hosted.mailboxes` answers `overflow`, and `hosted.create` takes
+  `max_queued_messages`. `tah_queued_message.overflow` marks a message in
+  a mailbox walk.
+
+**What needed no change, and why.** Overflowed mail is in the receiver's
+mailbox list, so everything that walks or moves the list handles it:
+- `accepted` is written by the `QUEUED` note, before the envelope is
+  linked, as for any message;
+- a checkpoint's owed messages (`tah_checkpoint_owed()`), in order;
+- a replacement's transfer and a load's hand-over, which keep the marks;
+- a destroy's, unload's or finish's dead letters (the test host's
+  `hosted.evict` of an actor with mail waiting makes them dead letters
+  too), and napi's `evict()`, which refuses while any mail waits.
+
+**Tests.**
+
+- `mailbox_test`, `overflow_between_actors`: past `max_queued` the mail
+  between actors is accepted, in order, and the application's is refused;
+  nothing overflowed is delivered without room, and the system is quiet;
+  room goes to the actor that asked first; overflow to an actor that is
+  destroyed is a dead letter and makes no room; the counters return to 0.
+- `replay_test`, both families logged, each address's records in its own
+  log: n1 sent to sink/b while the queue is full overflows, with its
+  `accepted` in sink/b's log and nothing held by ping/p1. It is delivered
+  once when room appears; after a crash and a replay of both from
+  `spawned`; after ping/p1's eviction and an exit; and from a checkpoint
+  of sink/b, which owes it.
+- The test host's hosted scenarios: the same through `hosted.create`'s
+  limit, a crash and an eviction.
+- napi `test/replay.js`, `mailPastAFullQueue` on Node and Bun: a delayed
+  send that fires while mail waiting for a load holds the queue full; a
+  crash, and an eviction and exit, then a new system that loads both from
+  their logs: the ping is delivered once.
+- **Replaced:** `replay_test`'s three tests of a send waiting in the sender
+  after RETRY (core ADR 0095's kernel tests). A full queue no longer makes
+  one; core's own tests of ADR 0095 still ran until the change below.
+
+**Costs, measured.** Per actor nothing: the scheduling entry stays 16
+bytes and the envelope 104; `tah_sched` grows by 88 bytes per system (the
+room queue's ring and a counter), and the ring allocates nothing until an
+actor parks. `scale.js` in `test:full` reports 328.3 native B/actor at a
+million actors, on Node and Bun, and still no allocator call in steady
+state. `mise run bench-compare 0c61dd1` (Node machine a99e44a37e2e, Bun
+machine c989bd79a51f), with the variants the first two runs flagged run
+again four times each:
+
+| | Node | Bun |
+|---|---|---|
+| tracing, untraced, ns/event | 497 → 485 (-2.3%) | 413 → 416 (+0.7%) |
+| tracing, summary without logs, ns/event | 952 → 965 (+1.4%) | 889 → 899 (+1.2%) |
+| tracing, full + values, RSS B/actor | 1,462 → 1,453 (-0.6%) | 1,372 → 1,519 (+10.7%) |
+| input log, logged, ns/event | 3,929 → 3,977 (+1.2%) | 3,230 → 3,157 (-2.3%) |
+| native B/actor, every variant | unchanged | unchanged |
+
+Bun's RSS in "full + values" is the one figure outside the 5% rule. Its
+core, native and heap bytes per actor and its allocations per event are
+unchanged, and Bun's RSS moves as much the other way in variants next to
+it (tracing "full", -9.5%; its heap in "logged" moved -45.6% in one run
+and +82.4% in the other), so it is the runtime's collector, not this
+change: nothing it adds runs unless the queue is full.

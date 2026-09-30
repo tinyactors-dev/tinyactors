@@ -2729,7 +2729,7 @@ class System {
       systemName: this.#metricsName,
       system: numbers(core.system_counters(native)),
       definitions,
-      host: { queued: stats.messages.queued, delivered: stats.messages.delivered, memory,
+      host: { queued: stats.messages.queued, overflow: stats.messages.overflow, delivered: stats.messages.delivered, memory,
               native: native.hostMetrics() },
     });
   }

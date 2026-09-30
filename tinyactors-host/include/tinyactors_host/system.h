@@ -256,7 +256,8 @@ void tah_system_free(tah_system *system);
 /*
  * Accepts a message and asks for a turn (ADR 0005). On TA_OK the system owns
  * the event's references and the message's waiter. TA_ERR_BUSY: the queue is
- * full (max_queued or max_retained); TA_ERR_NOMEM: nothing accepted.
+ * full (max_queued or max_retained) and the message may not overflow;
+ * TA_ERR_NOMEM: nothing accepted.
  */
 ta_result tah_system_post(tah_system *system, const tah_message *message);
 

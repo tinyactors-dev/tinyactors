@@ -275,14 +275,19 @@ export interface SystemParameters {
   dueBudget?: number;
   /** Deliveries started, and dead letters reported, in one pump turn; default 1024, at least 1. */
   messageBudget?: number;
-  /** Accepted messages not yet delivered or reported; post() throws `queue-full` beyond it. 0 (default): no limit. */
+  /**
+   * Accepted messages not yet delivered or reported; post() and send()
+   * are refused with `queue-full` beyond it. Mail between actors is never
+   * refused: past the limit it waits in its receiver's overflow, and is
+   * delivered as room appears (kernel ADR 0003). 0 (default): no limit.
+   */
   maxQueuedMessages?: number;
   /**
    * Retained-bytes estimate of the data of accepted messages not yet
    * delivered or reported (ADR 0005 point 9); 0 (default): no limit. The
    * estimate: `options.bytes`, or 2 bytes per string code unit, byteLength
    * for buffers, 64 for other objects, 0 for primitives. Mail between actors
-   * carries no estimate.
+   * carries no estimate, and is never refused (see maxQueuedMessages).
    */
   maxRetainedBytes?: number;
 }
@@ -809,8 +814,14 @@ export interface SystemStats {
   /** Allocations plus frees: zero growth in steady state is the test signal. */
   readonly allocatorCalls: number;
   readonly messages: {
-    /** Accepted messages not yet delivered or reported as dead letters. */
+    /** Accepted messages not yet delivered or reported as dead letters, the overflow included. */
     readonly queued: number;
+    /**
+     * Of them, mail between actors accepted past maxQueuedMessages or
+     * maxRetainedBytes (kernel ADR 0003): it waits in its receiver's
+     * mailbox and is delivered as room appears.
+     */
+    readonly overflow: number;
     readonly delivered: number;
     readonly deadLetters: number;
   };
