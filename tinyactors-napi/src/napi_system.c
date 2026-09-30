@@ -510,6 +510,10 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         free(wrapper);
         return tna_throw(env, "out-of-memory", "cannot create the data model");
     }
+    /* The input log writes values with the built-in data model's codec
+     * (kernel ADR 0002): every data model napi offers holds its values. */
+    tah_inputs_set_datamodel(&wrapper->system->inputs,
+                             (ta_datamodel){ .self = &wrapper->dm.builtin, .v = &wrapper->dm.builtin.vtable });
     if (!tna_pump_init(env, wrapper, facade, argv[1])) {
         tna_pump_close(wrapper, true);
         tah_system_free(wrapper->system);
@@ -2111,11 +2115,14 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "setInputLog", NULL, tna_set_input_log_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "writeEvicted", NULL, tna_write_evicted_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "inputForget", NULL, tna_input_forget_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "withdrawSend", NULL, tna_withdraw_send_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "abandon", NULL, tna_abandon_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayFeed", NULL, tna_replay_feed_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayPush", NULL, tna_replay_push_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayPrepare", NULL, tna_replay_prepare_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayRun", NULL, tna_replay_run_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayFinish", NULL, tna_replay_finish_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "replayLastTime", NULL, tna_replay_last_time_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayRedeliver", NULL, tna_replay_redeliver_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayClose", NULL, tna_replay_close_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "checkpoint", NULL, tna_checkpoint_method, NULL, NULL, NULL, napi_default_method, NULL },

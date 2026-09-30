@@ -171,6 +171,14 @@ static const char *tah_router_unreachable_message(tah_dead_reason reason) {
 static ta_external_event_submit_status tah_router_submit(void *self, const ta_external_event_submit_params *params) {
     tah_system *system = self;
     const ta_external_delivery *delivery = params->delivery;
+    /* A logged sender's timer fired: the input log says so, and a send it
+     * cannot record waits, as one the router could not take (kernel ADR 0002).
+     * Only a RETRY undoes the record: an error consumed the send too. */
+    tah_input_mark fired = { 0 };
+    if (system->dispatching_due && delivery->event.origin.kind == TA_ORIGIN_ACTOR &&
+        tah_inputs_fired(system, &delivery->event.origin.as.actor, delivery->event.send_id, &fired) != TA_OK) {
+        return TA_EXTERNAL_EVENT_RETRY;
+    }
     tah_dead_reason reason = TAH_DEAD_NOT_FOUND;
     ta_str family = { 0 };
     bool to_loader = tah_router_session_loads(system, &delivery->destination, &family);
@@ -214,6 +222,7 @@ static ta_external_event_submit_status tah_router_submit(void *self, const ta_ex
     }
     if (result != TA_OK) {
         ta_event_release(&event);
+        tah_inputs_undo(system, &fired);
         return TA_EXTERNAL_EVENT_RETRY; /* full, or out of memory: core offers it again */
     }
     if (system->dispatching_due) {

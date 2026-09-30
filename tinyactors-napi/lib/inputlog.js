@@ -1,11 +1,11 @@
 'use strict';
 
-// Reading an input log for an audit trail (napi ADR 0034 section 5): core's
-// portable record layout (core ADRs 0090 and 0091) decoded into plain
-// records, one at a time, from byte chunks cut anywhere. Replay never needs
-// this: core reads its own records. Values are decoded with the built-in
-// data model's reader (napi ADR 0031), so a class the log names must be in
-// `classes`, beside the standard ones.
+// Reading an input log for an audit trail (napi ADR 0034 section 5): the
+// host kernel's record layout, version 2 (kernel ADR 0002 section 4, wal.h),
+// decoded into plain records, one at a time, from byte chunks cut anywhere.
+// Replay never needs this: the kernel reads its own records. Values are
+// decoded with the built-in data model's reader (napi ADR 0031), so a class
+// the log names must be in `classes`, beside the standard ones.
 
 const { TinyactorsError } = require('./errors');
 const { STANDARD_CLASSES } = require('./values');
@@ -13,31 +13,35 @@ const { durableReader } = require('./durable');
 
 const HEADER = 32;
 const ABSENT = 0xffffffff;
-const VERSION = 1;
+const VERSION = 2;
 const EVENT_TYPES = ['external', 'internal', 'platform'];
+const REPORTS = [undefined, 'unavailable', 'quarantined', 'failed'];
+// A checkpoint-send's flags (TAH_WAL_SEND_*): which value streams follow.
+const SEND_DATA = 1;
+const SEND_TARGET = 2;
 
-// Each kind's name and fields, in core's order: `t` a text, `n` a number,
-// `list` a count followed by that many texts (core's trailing lists).
+// Each kind's name and fields, in the kernel's order: `t` a text, `n` a
+// number, `id` a message identity, `list` a count followed by that many texts.
 const KINDS = {
   1: { kind: 'spawned', fields: ['t:family', 't:name', 't:revision'], values: ['binding'] },
-  2: { kind: 'event', fields: ['n:type', 'n:hostSeq', 't:name', 't:sendID', 't:origin', 't:originType', 't:invokeID'], values: ['data'] },
-  3: { kind: 'jump', fields: ['n:type', 'n:hostSeq', 't:name', 't:sendID', 't:origin', 't:originType', 't:invokeID', 't:source', 'list:targets'], values: ['data'] },
-  4: { kind: 'report', fields: ['n:reportKind', 'n:ends', 't:invokeID', 't:reason'], values: ['data'] },
-  5: { kind: 'fired', fields: ['t:sendID'], values: [] },
-  6: { kind: 'withdrawn', fields: ['t:sendID'], values: [] },
-  7: { kind: 'abandoned', fields: [], values: [] },
-  8: { kind: 'released', fields: [], values: [] },
-  9: { kind: 'finished', fields: ['t:finalState'], values: [] },
-  10: { kind: 'destroyed', fields: [], values: [] },
-  11: { kind: 'queued', fields: ['n:type', 'n:hostSeq', 't:name', 't:sendID', 't:origin', 't:originType', 't:invokeID'], values: ['data'] },
-  12: { kind: 'dropped', fields: ['n:hostSeq'], values: [] },
-  13: { kind: 'evicted', fields: [], values: [] },
-  14: { kind: 'checkpoint', fields: ['t:family', 't:name', 't:revision', 'n:counter', 'n:macrostep', 'n:microstep',
-                                     'n:lifecycle', 'n:parts', 'n:owed', 'n:activeCount', 'n:lateCount'], values: ['data'] },
-  15: { kind: 'checkpoint-history', fields: ['t:history', 'list:states'], values: [] },
-  16: { kind: 'checkpoint-send', fields: ['t:sendID', 't:name', 't:type', 't:target', 'n:due', 'n:flags',
+  2: { kind: 'accepted', fields: ['id:id', 'n:type', 't:name', 't:sendID', 't:origin', 't:originType', 't:invokeID',
+                                  'n:report', 't:reason', 'n:ends'], values: ['data'] },
+  3: { kind: 'delivered', fields: ['id:id'], values: [] },
+  4: { kind: 'jump', fields: ['id:id', 't:source', 'list:targets'], values: [] },
+  5: { kind: 'dropped', fields: ['id:id'], values: [] },
+  6: { kind: 'fired', fields: ['t:sendID'], values: [] },
+  7: { kind: 'withdrawn', fields: ['t:sendID'], values: [] },
+  8: { kind: 'abandoned', fields: [], values: [] },
+  9: { kind: 'released', fields: [], values: [] },
+  10: { kind: 'finished', fields: ['t:finalState'], values: [] },
+  11: { kind: 'destroyed', fields: [], values: [] },
+  12: { kind: 'evicted', fields: [], values: [] },
+  13: { kind: 'checkpoint', fields: ['t:family', 't:name', 't:revision', 'n:counter', 'n:macrostep', 'n:microstep',
+                                     'n:lifecycle', 'n:parts', 'n:owed', 'n:activeCount', 'n:lateCount', 'n:historyCount'],
+        values: ['data'] },
+  14: { kind: 'checkpoint-send', fields: ['t:sendID', 't:name', 't:type', 't:target', 'n:due', 'n:flags',
                                           'n:targetContent', 'n:content'], values: ['data', 'targetValue'] },
-  17: { kind: 'checkpoint-invoke', fields: ['t:invokeID', 't:type', 'n:index'], values: [] },
+  15: { kind: 'checkpoint-invoke', fields: ['t:invokeID', 't:type', 'n:index'], values: [] },
 };
 
 const corrupt = (why) => new TinyactorsError(`readInputLog(): ${why}`, 'invalid');
@@ -109,6 +113,10 @@ function decode(bytes, at, classes, utf8) {
     if (type === 'n') {
       record[name] = le(bytes, at + HEADER + 8 * field, 8);
       field += 1;
+    } else if (type === 'id') {
+      // A message's identity is text: it is 64 bits.
+      record[name] = le(bytes, at + HEADER + 8 * field, 8).toString();
+      field += 1;
     } else if (type === 't') {
       const value = text(field);
       if (value !== undefined) {
@@ -125,20 +133,22 @@ function decode(bytes, at, classes, utf8) {
       }
     }
   }
-  // Texts past the named fields: a checkpoint's active and late-bound state lists.
+  // Numbers past the named fields: a checkpoint's active states, the states
+  // whose late-bound data is initialized, and its history as pairs.
   if (shape.kind === 'checkpoint') {
-    record.active = [];
-    record.late = [];
-    for (let index = 0; index < Number(record.activeCount); index += 1) {
-      record.active.push(text(field + index));
-    }
-    for (let index = 0; index < Number(record.lateCount); index += 1) {
-      record.late.push(text(field + Number(record.activeCount) + index));
-    }
+    const number = () => Number(le(bytes, at + HEADER + 8 * field++, 8));
+    record.active = Array.from({ length: Number(record.activeCount) }, number);
+    record.late = Array.from({ length: Number(record.lateCount) }, number);
+    record.history = Array.from({ length: Number(record.historyCount) }, () => ({ history: number(), state: number() }));
     delete record.activeCount;
     delete record.lateCount;
+    delete record.historyCount;
   }
   let valueAt = textAt + pad8(textBytes);
+  // A checkpoint-send's flags say which of its values are present.
+  const valueNames = shape.kind === 'checkpoint-send'
+    ? shape.values.filter((_, index) => (Number(record.flags) & [SEND_DATA, SEND_TARGET][index]) !== 0)
+    : shape.values;
   for (let index = 0; index < valueCount; index += 1) {
     const reader = durableReader(classes);
     for (;;) {
@@ -151,32 +161,29 @@ function decode(bytes, at, classes, utf8) {
       reader.push(bytes.subarray(valueAt + 4, valueAt + 4 + chunk));
       valueAt += pad8(4 + chunk);
     }
-    record[shape.values[index] ?? `value${index}`] = reader.end();
+    record[valueNames[index] ?? `value${index}`] = reader.end();
   }
   // Friendlier forms of the numbers an audit reads.
   if (record.type !== undefined && typeof record.type === 'bigint') {
     record.type = EVENT_TYPES[Number(record.type)] ?? 'external';
   }
-  // A host number (the mailbox's, core ADR 0090 section 6) is text: it is 64 bits.
-  if (typeof record.hostSeq === 'bigint') {
-    record.hostSeq = record.hostSeq === 0n ? undefined : record.hostSeq.toString();
-    if (record.hostSeq === undefined) {
-      delete record.hostSeq;
-    }
+  // An invocation's error report says so, and whether it ends the invocation.
+  const report = REPORTS[Number(record.report ?? 0n)];
+  const ends = record.ends;
+  delete record.report;
+  delete record.ends;
+  if (report !== undefined) {
+    record.report = report;
+    record.ends = ends !== 0n;
   }
   if (record.seq === '0') {
-    delete record.seq; // a host record written while no actor was resident
+    delete record.seq; // written while no actor was resident
   }
-  if (typeof record.ends === 'bigint') {
-    record.ends = record.ends !== 0n;
-  }
-  if (record.family !== undefined && record.name !== undefined && shape.kind !== 'event' && shape.kind !== 'queued' &&
-      shape.kind !== 'jump') {
+  if (record.family !== undefined && record.name !== undefined) {
     record.address = { family: record.family, name: record.name };
     delete record.family;
     delete record.name;
   }
-  delete record.reportKind;
   for (const name of Object.keys(record)) {
     if (typeof record[name] === 'bigint') {
       record[name] = Number(record[name]);

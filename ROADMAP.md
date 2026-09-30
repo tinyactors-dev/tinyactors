@@ -62,7 +62,11 @@ are in [`docs/proposals/`](docs/proposals/README.md).
      `ta_actor_set_time()` removed. `ta_actor_export_state()` and
      `ta_actor_prepare_params.state` added. The kernel and the test host
      migrate. Done: core ADR 0094's notes ("Sections 1 and 3").
-  4. **Kernel ADR 0002, the log moves:** core's `src/input_log.c` layout,
+  4. **4a done:** [kernel ADR 0002, step 4a](tinyactors-host/docs/adr/0002-the-kernel-keeps-the-write-ahead-log.md#step-4a-the-kernel-writes-and-replays-the-log-2026-09-30)
+     (the kernel writes, replays and checkpoints the log at version 2;
+     napi runs on it). 4b: the kernel's own replay tests, among them core
+     ADR 0089's four timelines; see the notes.
+     **Kernel ADR 0002, the log moves:** core's `src/input_log.c` layout,
      writer and reader become the kernel's, at version 2 with `accepted`,
      `delivered` and `dropped`. The kernel records at its own call sites,
      replays by calling core, and encodes checkpoints from core's exported

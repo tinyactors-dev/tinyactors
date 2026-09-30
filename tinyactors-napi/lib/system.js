@@ -2260,7 +2260,8 @@ class System {
       this.#native.replayFinish(feed, prepared.slot, prepared.generation);
       let actor;
       try {
-        actor = this.#publishCore(prepared);
+        // At the last record's time: the timers that fell due by then fired (kernel ADR 0002).
+        actor = this.#publishCore(prepared, report.lastTime);
       } catch (error) {
         if (error instanceof TinyactorsError && error.code === 'done') {
           this.#dropPrepared(prepared);
@@ -2551,7 +2552,9 @@ class System {
     if (feed !== undefined) {
       this.#native.replayFinish(feed, prepared.slot, prepared.generation);
     }
-    const actor = this.#publishCore(prepared, options.at);
+    // A replaying actor publishes at its log's last record's time unless told otherwise (napi ADR 0033).
+    const at = options.at ?? (feed !== undefined ? this.#native.replayLastTime(feed) : undefined);
+    const actor = this.#publishCore(prepared, at);
     if (feed !== undefined) {
       prepared[FEED] = undefined;
       try {
@@ -2646,7 +2649,7 @@ class System {
    */
   abandon(actor) {
     const { slot, generation } = actorOf(this, actor);
-    core.actor_abandon(this.#native, slot, generation);
+    this.#native.abandon(slot, generation);
   }
 
   /**
@@ -2671,7 +2674,7 @@ class System {
       throw error;
     }
     try {
-      core.actor_withdraw_send(this.#native, slot, generation, id);
+      this.#native.withdrawSend(slot, generation, id);
     } catch (error) {
       if (error instanceof TinyactorsError && error.code === 'not-found') {
         throw new TinyactorsError(`withdrawSend(): the actor has no pending send ${sendID}`, 'not-found');

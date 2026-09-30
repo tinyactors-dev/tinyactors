@@ -86,7 +86,10 @@ enum {
     TAH_SCHED_LOGGED = 1u << 4,
     /* A replaying actor (napi ADR 0034): the replay resumes it itself, and
      * a turn leaves it alone until it is published. */
-    TAH_SCHED_REPLAYING = 1u << 5
+    TAH_SCHED_REPLAYING = 1u << 5,
+    /* The input log wrote `released` for the macrostep a release() lifted
+     * the microstep limit of (kernel ADR 0002); cleared with UNLIMITED. */
+    TAH_SCHED_RELEASE_NOTED = 1u << 6
 };
 
 typedef struct {
@@ -281,12 +284,16 @@ typedef struct tah_turn_record {
  * must not call back into the scheduler.
  */
 typedef enum {
-    TAH_NOTE_QUEUED,    /* `actor`, or `address` for mail that waits for a load */
-    TAH_NOTE_DELIVERED, /* ta_actor_deliver() took `message` */
-    TAH_NOTE_REPORTED,  /* ta_actor_report_invoke() took the report `message` */
-    TAH_NOTE_FINISHED,  /* `actor` reached a top-level final state */
-    TAH_NOTE_DROPPED,   /* `message` leaves the scheduler undelivered: a dead letter, a withdrawal */
-    TAH_NOTE_SETTLED    /* `actor` ended a macrostep and is stable: its pending sends may have changed */
+    TAH_NOTE_QUEUED,     /* `actor`, or `address` for mail that waits for a load */
+    TAH_NOTE_DELIVERING, /* ta_actor_deliver() is about to be offered `message` (kernel ADR 0002 section 3) */
+    TAH_NOTE_DELIVERED,  /* ta_actor_deliver() took `message` */
+    TAH_NOTE_UNDELIVERED, /* ... or did not: what DELIVERING wrote is undone */
+    TAH_NOTE_REPORTING,  /* ta_actor_report_invoke() is about to be offered the report `message` */
+    TAH_NOTE_REPORTED,   /* ta_actor_report_invoke() took the report `message` */
+    TAH_NOTE_RELEASING,  /* `actor`, a runaway an operator released, resumes without its microstep limit */
+    TAH_NOTE_FINISHED,   /* `actor` reached a top-level final state */
+    TAH_NOTE_DROPPED,    /* `message` leaves the scheduler undelivered: a dead letter, a withdrawal */
+    TAH_NOTE_SETTLED     /* `actor` ended a macrostep and is stable: its pending sends may have changed */
 } tah_note_kind;
 
 typedef struct {
@@ -300,11 +307,12 @@ typedef struct {
 typedef struct {
     void *self; /* NULL: no observer, and the scheduler notes nothing */
     /* For QUEUED, anything but TA_OK refuses the message, which the post
-     * then answers; for the other kinds the result is ignored. */
+     * then answers. For DELIVERING and REPORTING, TA_ERR_UNSUPPORTED makes
+     * the message a dead letter (`refused`) and anything else but TA_OK
+     * waits a turn, as running out of memory does; UNDELIVERED follows a
+     * DELIVERING or REPORTING core refused. For the other kinds the result
+     * is ignored. */
     ta_result (*note)(void *self, const tah_sched_note *note);
-    /* The host number of a queued message, which delivery passes to core
-     * (core ADR 0090 section 6); 0 for none. */
-    uint64_t (*host_seq)(void *self, uint32_t envelope);
 } tah_sched_observer;
 
 typedef struct {

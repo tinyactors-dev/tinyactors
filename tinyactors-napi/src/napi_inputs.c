@@ -192,10 +192,68 @@ napi_value tna_input_forget_method(napi_env env, napi_callback_info info) {
     if (!tna_actor_arguments(env, argv, argc, &actor)) {
         return tna_throw(env, "invalid", "inputForget: expected (slot, generation)");
     }
-    ta_actor_inspection view;
-    if (system->inputs.enabled && ta_actor_inspect(system->core, actor, &view) == TA_OK &&
-        view.self.kind == TA_ACTOR_REF_NAMED) {
-        tah_inputs_forget(system, view.self.as.named);
+    /* `destroyed`, written before the actor goes (kernel ADR 0002): an
+     * actor whose end cannot be recorded is not destroyed. */
+    ta_result result = tah_inputs_destroying(system, actor);
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "destroy(): the input log cannot record the end of the actor");
+    }
+    return NULL;
+}
+
+/* withdrawSend(slot, generation, send): the operator's withdrawal, recorded
+ * in the input log ahead of core's (kernel ADR 0002). */
+napi_value tna_withdraw_send_method(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value argv[3] = { NULL, NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tah_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "withdrawSend: cannot be called from inside a core call (ADR 0013)");
+    }
+    ta_actor_id actor = 0;
+    uint64_t send = 0;
+    bool lossless = false;
+    if (!tna_actor_arguments(env, argv, argc, &actor) || argc < 3 ||
+        napi_get_value_bigint_uint64(env, argv[2], &send, &lossless) != napi_ok || !lossless) {
+        return tna_throw(env, "invalid", "withdrawSend: expected (slot, generation, send ID)");
+    }
+    ta_result result = tah_system_withdraw_send(system, actor, send);
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "withdrawSend: core refused");
+    }
+    return NULL;
+}
+
+/* abandon(slot, generation): the operator abandons the actor's macrostep,
+ * recorded in the input log ahead of core's call (kernel ADR 0002). */
+napi_value tna_abandon_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tah_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "abandon: cannot be called from inside a core call (ADR 0013)");
+    }
+    ta_actor_id actor = 0;
+    if (!tna_actor_arguments(env, argv, argc, &actor)) {
+        return tna_throw(env, "invalid", "abandon: expected (slot, generation)");
+    }
+    ta_result result = tah_system_abandon(system, actor);
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "abandon: core refused");
     }
     return NULL;
 }

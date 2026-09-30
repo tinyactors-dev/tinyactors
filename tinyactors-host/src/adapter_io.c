@@ -18,6 +18,11 @@ struct tah_io_processor {
 
 static ta_op_status tah_io_send(void *self, const ta_send *send, ta_fault *fault) {
     tah_system *system = ((tah_io_processor *)self)->system;
+    /* A logged sender's timer fired (kernel ADR 0002): recorded first, or it waits. */
+    tah_input_mark fired = { 0 };
+    if (system->dispatching_due && tah_inputs_fired(system, &send->source, send->send_id, &fired) != TA_OK) {
+        return TA_OP_NOMEM;
+    }
     tah_effect effect = {
         .kind = TAH_EFFECT_IO,
         .source = send->source,
@@ -46,6 +51,7 @@ static ta_op_status tah_io_send(void *self, const ta_send *send, ta_fault *fault
         }
         /* Nothing was queued, which is running out of memory, not a failed
          * send: core keeps the send and offers it again (core ADR 0070). */
+        tah_inputs_undo(system, &fired);
         return TA_OP_NOMEM;
     }
     if (system->dispatching_due) {
@@ -183,6 +189,11 @@ static tah_io_processor *tah_io_find(const tah_system *system, ta_atom type) {
         }
     }
     return NULL;
+}
+
+uint32_t tah_io_index_of(const tah_system *system, ta_atom type) {
+    const tah_io_processor *processor = tah_io_find(system, type);
+    return processor != NULL ? processor->index : 0;
 }
 
 ta_result tah_io_register(tah_system *system, const tah_io_registration *registration) {

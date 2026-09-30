@@ -26,8 +26,8 @@
 # Keys are File.fnmatch patterns; {a,b} lists alternatives.
 module TinyactorsNapiBindings
   HOOKED_FUNCTIONS = {
-    'ta_actor_spawn' => { hook: 'created', actor: 'params.out',
-                          reason: 'puts the new actor on the runnable queue for bootstrap (step 5)' },
+    'ta_actor_spawn' => { hook: 'spawned', actor: 'params.out',
+                          reason: 'records `spawned` in the input log (kernel ADR 0002), and puts the new actor on the runnable queue for bootstrap (step 5)' },
     'ta_actor_load' => { hook: 'created', actor: 'params.out',
                          reason: 'puts the loaded actor on the runnable queue (step 14)' },
     'ta_actor_reconstruct' => { hook: 'created', actor: 'params.out',
@@ -38,13 +38,12 @@ module TinyactorsNapiBindings
     'ta_actor_unload' => { hook: 'unloaded', actor: 'params.actor',
                            reason: "dead-letters the actor's mailbox as unloaded (step 14)" },
     'ta_actor_publish' => { hook: 'published', actor: 'params',
-                            reason: "moves the incumbent's waiting mail to the published actor, and wakes it (step 14, core ADR 0089)" },
-    'ta_actor_abandon' => { hook: 'abandoned', actor: 'actor',
-                            reason: "settles the send() of the abandoned macrostep and the actor's scheduling (ADR 0026)" }
+                            reason: "moves the incumbent's waiting mail to the published actor, and wakes it (step 14, core ADR 0089)" }
   }.freeze
 
   PLUMBING_FUNCTIONS = {
     'ta_actor_{deliver,resume,publish_completion}' => 'the pump delivers and resumes (ADRs 0005, 0007)',
+    'ta_actor_{abandon,withdraw_send}' => "an operator's action is recorded in the input log ahead of the call (kernel ADR 0002): System#abandon and System#withdrawSend reach tah_system_abandon and tah_system_withdraw_send",
     'ta_actor_offload' => 'unload() offloads into the native offload store, which owns the bytes (core ADR 0074)',
     'ta_system_{dispatch_due,set_time}' => 'the clock belongs to the pump (ADR 0007)',
     'ta_system_set_{external_event_router,actor_directory}' => 'installed at system creation (ADR 0006)',

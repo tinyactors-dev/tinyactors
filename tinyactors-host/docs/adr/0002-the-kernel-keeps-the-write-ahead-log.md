@@ -156,4 +156,135 @@ covers. The revision rule and the compaction trade-off are unchanged
 
 ## Implementation notes
 
-None yet.
+### Step 4a: the kernel writes and replays the log (2026-09-30)
+
+ROADMAP "Migrate to the host kernel", step 4, first half. Sections 1 to 7
+are implemented. napi and its tests run on them; the test host is untouched.
+
+**Where things are.**
+
+- **`wal.h`/`wal.c`: the layout, version 2.**
+  - `tah_wal_write` writes one record and restores the buffer on refusal.
+  - `tah_wal_read` and `tah_wal_span` read records in place.
+  - `tah_wal_read_value` decodes a value through the data model's codec.
+  - The prefix is `wal`, not `log`: `check-recursion` compiles the kernel
+    as one unit, and `tah_log_*` is taken by the OTLP encoder's log
+    records.
+- **`inputs.c`: recording at the call sites.** It answers the scheduler's
+  notes and the lifecycle hooks, and is not core's input sink:
+  - `tah_inputs_configure` no longer installs the sink or calls
+    `ta_system_log_family`;
+  - `tah_inputs_set_datamodel` names the codec, which napi sets to its
+    built-in data model.
+- **`replay.c`: the replay driver and checkpoints.** napi's
+  `napi_replay.c` is now Node-API glue over them, and its JavaScript shapes
+  are unchanged.
+
+**Decisions.**
+
+- **A record is written before core is called.** Each record is written
+  into the turn's entry, and a `tah_input_mark` (entry, offset, the actor's
+  previous record number) undoes it when core refuses.
+  - The scheduler has three new notes: `DELIVERING` before
+    `ta_actor_deliver`, `REPORTING` before `ta_actor_report_invoke`, and
+    `UNDELIVERED` when either refused.
+  - For `DELIVERING` and `REPORTING`, `unsupported` makes a dead letter
+    (`refused`). Any other failure waits a turn, as out-of-memory does.
+- **Record numbers.** `seq` counts a resident actor's records in its life,
+  from 1 at `spawned`, and `inputs.actor_seq` tracks it.
+  - A record written while the address has no resident actor (mail waiting
+    for a loader, a `dropped` for it) has seq 0.
+  - A replay's published actor continues from the log's last number
+    (`tah_replay_finish`).
+- **`accepted` is written when the message is queued**, invoker reports
+  included (an empty name, and `report` set to the kind).
+  - A message a replay owes keeps its identity when it is put back, and
+    gets no second `accepted`.
+  - A delivery of an envelope with no identity (queued before the log was
+    turned on) writes `accepted` first.
+- **`released`** is written at the first resume without the microstep limit
+  after a release (`TAH_SCHED_RELEASE_NOTED`). A release that lifts
+  nothing, such as after an abandon, writes nothing, as before.
+- **`withdrawn` and `abandoned`** come from `tah_system_withdraw_send` and
+  `tah_system_abandon`, which record, then call core. napi's
+  `withdrawSend` and `abandon` call them. `ta_actor_abandon` lost its
+  generated hook, and `ta_actor_{abandon,withdraw_send}` are plumbing in
+  `bindings.rb`.
+- **`destroyed`** comes from `tah_inputs_destroying` (napi's
+  `inputForget`); `spawned` comes from the new `tah_hook_actor_spawned`,
+  which destroys the actor again when the record cannot be written.
+- **`fired`** is written by the router and the I/O adapter while due sends
+  are dispatched.
+  - It is written before the post, and a record that cannot be written
+    answers RETRY (`TA_OP_NOMEM` from the I/O adapter).
+  - Only a RETRY undoes it: an error (an unreachable target, data the
+    receiver cannot log) consumed the send as well.
+  - A send retried after a RETRY writes one `fired`, on the attempt that
+    took it. Replay treats `fired` as time only in any case.
+- **Replay** follows section 6:
+  - `accepted` records are held as owed and deduplicated by identity;
+  - `delivered` or `jump` delivers or reports the held message at the
+    logged time;
+  - `fired` and `evicted` carry time only;
+  - napi publishes at the last record's time (`replayLastTime`).
+- **Deviations in replay from version 1:**
+  - mail accepted before a life's first record (it waited for a load) is
+    held as owed, where version 1 skipped it: `delivered` now needs the
+    content from `accepted`;
+  - a `jump` whose target no longer resolves in the revision answers
+    `invalid`.
+- **Checkpoints moved in this step, not in 4b,** because napi's checkpoint
+  tests must stay green.
+  - `tah_checkpoint_write` writes the unit: `checkpoint`, one
+    `checkpoint-send` per pending send, one `checkpoint-invoke` per active
+    invocation, and an `accepted` per owed message. It writes from
+    `ta_actor_export_state` through the sink, one record at a time; the
+    largest record (the data root) is held in memory once.
+  - Restoring reads it into `ta_actor_prepare_params.state`. Records with
+    seq at or below the checkpoint's are skipped, and a checkpoint unit in
+    the middle of a log is skipped.
+- **Two core additions:** `ta_send_id_intern` and
+  `ta_system_intern_invoke_id`, so replay can turn logged text back into
+  IDs (commit c7d1502).
+- **Removed:** the scheduler observer's `host_seq`. Delivery no longer
+  passes a host number to core.
+
+**Tests.**
+
+- `wal_test`: every kind, the golden header bytes, reads in pieces of 1, 2,
+  5 and 4096 bytes, the checkpoint unit's span, refusal of an unknown
+  version or kind, restore after `unsupported`, and an out-of-memory sweep.
+- `inputs_test`, at the call sites:
+  - a life's records, golden;
+  - the refusal of data with no durable form, which leaves no record and no
+    gap in the record numbers;
+  - an out-of-memory sweep over every allocation from spawn to finish, each
+    leaving whole records, numbers without gaps, no delivery without its
+    acceptance, and nothing leaked.
+- napi's `input-log.js` and `replay.js` use the new kinds. `replay.js`
+  writes its hand-made logs at version 2 and checks that a 10 MB value is
+  logged once.
+
+**Measurement: bytes per logged message.** A message `inc` with data
+`{ by: 1 }` took 240 bytes at version 1 (`queued` and `event`, 120 each;
+napi ADR 0034). It now takes **184 bytes**: `accepted` 144 and `delivered`
+40, measured in napi and checked in `inputs_test`. The value is written
+once, not twice.
+
+**Left for step 4b (and step 5).**
+
+- **Core still has its log**, compiled but unused by the kernel and napi:
+  the input sink, host records, `ta_actor_replay`,
+  `ta_actor_prepare_params.log`, `host_seq` on deliver, and checkpoint
+  bytes. Its tests (the v1 layout, core ADR 0089's four timelines, the
+  checkpoint sweeps) still run in core. Step 5 removes them, once their
+  equivalents are in the kernel's tests.
+- **Core ADR 0089's four timelines** as kernel tests (hosted, through
+  `replay.c`) are not written yet. napi's `replay.js` covers them end to
+  end.
+- **The test host still drives core's log** (`ta_system_log_family`,
+  `ta_actor_replay` in `scenario.rb`). Its persistence scenarios move to
+  hosted mode in step 7, and must before step 5 lands.
+- **`replay.c` has no native test of its own** beyond what napi
+  exercises: prepare, run, redeliver, checkpoint round trip, and an
+  out-of-memory sweep over replay are the next kernel tests to write.

@@ -1,7 +1,8 @@
 'use strict';
 
-// The input log (napi ADRs 0032 to 0034): the records of what core accepted
-// for the named actors of the logged families, in core's portable layout,
+// The input log (napi ADRs 0032 to 0034, kernel ADR 0002): the records of
+// the inputs the named actors of the logged families took, in the kernel's
+// layout (version 2),
 // handed to the sink once per turn as { entries: [{ address, bytes }],
 // wakes } and read back with readInputLog(); the turn's services held until
 // its batch commits; a failed commit that quarantines the batch's actors;
@@ -80,16 +81,16 @@ async function recordsEachKind() {
   const of = async (name) => (await kinds(batches)).filter((kind) => kind.endsWith(`:${name}`)).map((kind) => kind.split(':')[0]);
   assert.deepEqual(await of('c1'), [
     'spawned',
-    'queued', 'event', // inc
-    'queued', 'event', // ping
-    'queued', 'event', // arm
+    'accepted', 'delivered', // inc
+    'accepted', 'delivered', // ping
+    'accepted', 'delivered', // arm
     'withdrawn',
-    'queued', 'event', 'finished', // stop
+    'accepted', 'delivered', 'finished', // stop
   ]);
   assert.deepEqual(await of('p1'), [
     'spawned',
-    'queued', 'event', // go
-    'queued', 'event', 'finished', // pong
+    'accepted', 'delivered', // go
+    'accepted', 'delivered', 'finished', // pong
   ]);
   const [spawned] = records;
   assert.equal(spawned.revision, 'v1');
@@ -98,17 +99,17 @@ async function recordsEachKind() {
   const withdrawn = records.find((input) => input.kind === 'withdrawn');
   assert.equal(withdrawn.sendID, 'tick1');
 
-  // A queued record and its event share a host number; mail between actors keeps its origin.
-  const queued = records.filter((input) => input.kind === 'queued');
-  const events = records.filter((input) => input.kind === 'event');
-  assert.equal(queued.length, events.length);
-  for (const input of queued) {
-    const event = events.find((candidate) => candidate.hostSeq === input.hostSeq);
-    assert.ok(event, `host number ${input.hostSeq} is delivered`);
-    assert.equal(event.name, input.name);
-    assert.deepEqual(event.data, input.data);
+  // A message's content is written once, when it is accepted; its delivery
+  // names it by identity. Mail between actors keeps its origin.
+  const events = records.filter((input) => input.kind === 'accepted');
+  const delivered = records.filter((input) => input.kind === 'delivered');
+  assert.equal(events.length, delivered.length);
+  for (const input of events) {
+    assert.equal(typeof input.id, 'string', 'an identity is text: it is 64 bits');
+    assert.ok(delivered.some((candidate) => candidate.id === input.id), `message ${input.id} is delivered`);
   }
-  assert.equal(new Set(queued.map((input) => input.hostSeq)).size, queued.length, 'host numbers are unique');
+  assert.deepEqual(Object.keys(delivered[0]).sort(), ['id', 'kind', 'seq', 'time'], 'a delivery carries no content');
+  assert.equal(new Set(events.map((input) => input.id)).size, events.length, 'identities are unique');
   // Each actor's records are numbered from 1, in order.
   for (const name of ['c1', 'p1']) {
     const own = (await entriesOf(batches)).filter(({ address }) => address.name === name).map(({ record }) => Number(record.seq));
@@ -143,11 +144,14 @@ async function reportsAndOperations() {
   reporter.unavailable({ why: 'gone' });
   await system.flush();
   assert.deepEqual(worker.inspect().activeStates, ['lost']);
-  const report = (await recordsOf(batches)).find((input) => input.kind === 'report');
+  const report = (await recordsOf(batches)).find((input) => input.kind === 'accepted' && input.report !== undefined);
   assert.ok(report, 'the report is recorded');
   assert.equal(report.invokeID, 'work');
   assert.equal(report.reason, 'unavailable');
+  assert.equal(report.report, 'unavailable');
   assert.equal(report.ends, true);
+  assert.ok((await recordsOf(batches)).some((input) => input.kind === 'delivered' && input.id === report.id),
+    'and delivered like a message');
   assert.ok(report.data !== undefined, 'with the data of the report');
 
   const spinner = system.spawn(system.define(statechart({ family: 'spinner', revision: 'v1' })
@@ -301,11 +305,11 @@ async function droppedAndJump() {
   await new Promise((done) => setTimeout(done, 5));
   await system.flush();
   const slow = (await entriesOf(batches)).filter(({ address }) => address.name === 'slow').map(({ record }) => record);
-  const queued = slow.find((record) => record.kind === 'queued');
+  const queued = slow.find((record) => record.kind === 'accepted');
   const dropped = slow.find((record) => record.kind === 'dropped');
   assert.ok(dropped, 'the withdrawn message is dropped');
-  assert.equal(dropped.hostSeq, queued.hostSeq);
-  assert.ok(!slow.some((record) => record.kind === 'event'), 'and never delivered');
+  assert.equal(dropped.id, queued.id);
+  assert.ok(!slow.some((record) => record.kind === 'delivered'), 'and never delivered');
 
   const c = system.spawn(definition, { name: 'ender' });
   await system.flush();
@@ -313,8 +317,8 @@ async function droppedAndJump() {
   system.post(c, 'inc');
   await system.flush();
   const ender = (await entriesOf(batches)).filter(({ address }) => address.name === 'ender').map(({ record }) => record);
-  const late = ender.filter((record) => record.kind === 'queued')[1];
-  assert.ok(ender.some((record) => record.kind === 'dropped' && record.hostSeq === late.hostSeq), 'buried with its actor');
+  const late = ender.filter((record) => record.kind === 'accepted')[1];
+  assert.ok(ender.some((record) => record.kind === 'dropped' && record.id === late.id), 'buried with its actor');
 
   const j = system.spawn(system.define(statechart({ family: 'counter', revision: 'v2' })
     .state('a', (s) => s.on('x', (t) => t.target('a')))
@@ -326,11 +330,14 @@ async function droppedAndJump() {
   assert.ok(jump, 'the operator transition is a jump');
   assert.equal(jump.record.source, undefined, 'from the root');
   assert.deepEqual(jump.record.targets, ['b'], 'by state names');
+  const goto = (await recordsOf(batches)).find((record) => record.kind === 'accepted' && record.id === jump.record.id);
+  assert.equal(goto.name, 'operator.goto', 'the jump delivers the message accepted before it');
+  assert.deepEqual(goto.data, { why: 'test' });
   system.close();
 }
 
-// Mail that waits for a loader is queued under its address, and its event
-// carries the same seq once the loader brought the actor.
+// Mail that waits for a loader is accepted under its address, and its
+// delivery names the same identity once the loader brought the actor.
 async function queuedWhileALoaderRuns() {
   const batches = [];
   let release;
@@ -343,15 +350,16 @@ async function queuedWhileALoaderRuns() {
   });
   system.post({ family: 'counter', name: 'lazy' }, 'inc', { n: 1 });
   await new Promise((done) => setTimeout(done, 5));
-  const queued = (await entriesOf(batches)).filter(({ record }) => record.kind === 'queued');
+  const queued = (await entriesOf(batches)).filter(({ record }) => record.kind === 'accepted');
   assert.equal(queued.length, 1);
+  assert.equal(queued[0].record.seq, undefined, 'written while no actor was resident');
   assert.deepEqual(queued[0].address, { family: 'counter', name: 'lazy' });
   assert.equal(typeof wakesOf(batches, 'lazy').at(-1), 'number', 'mail it owes needs it back');
   release();
   await new Promise((done) => setTimeout(done, 5));
   await system.flush();
-  const event = (await recordsOf(batches)).find((input) => input.kind === 'event');
-  assert.equal(event.hostSeq, queued[0].record.hostSeq);
+  const event = (await recordsOf(batches)).find((input) => input.kind === 'delivered');
+  assert.equal(event.id, queued[0].record.id);
   assert.equal(wakesOf(batches, 'lazy').at(-1), null, 'delivered, and nothing pending');
   system.close();
 }

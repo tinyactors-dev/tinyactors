@@ -11,6 +11,11 @@
  *   (ADR 0005). If that cannot be allocated, it destroys the new actor
  *   again and answers TA_ERR_NOMEM, so no actor exists that the scheduler
  *   does not know.
+ * - tah_hook_actor_spawned: after ta_actor_spawn. For a named actor of a
+ *   logged family it writes SPAWNED with the data the actor was bound to
+ *   (kernel ADR 0002), then does what tah_hook_actor_created does. A record
+ *   that cannot be written destroys the actor again and answers why: a
+ *   binding with no durable form is TA_ERR_UNSUPPORTED.
  * - tah_hook_actor_removed: after ta_actor_destroy. It moves the actor's
  *   mailbox to the dead letters, clears its scheduling entry, and asks for a
  *   turn so the dead letters are reported.
@@ -35,6 +40,7 @@
 #include "tinyactors.h"
 
 ta_result tah_hook_actor_created(tah_system *system, ta_actor_id actor);
+ta_result tah_hook_actor_spawned(tah_system *system, ta_actor_id actor);
 ta_result tah_hook_actor_removed(tah_system *system, ta_actor_id actor);
 ta_result tah_hook_actor_unloaded(tah_system *system, ta_actor_id actor);
 ta_result tah_hook_actor_published(tah_system *system, const ta_actor_publish_params *params);

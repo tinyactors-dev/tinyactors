@@ -1708,61 +1708,58 @@ export interface InputBatch {
 
 /**
  * One record of an input log as readInputLog() decodes it for an audit
- * trail (napi ADR 0034 section 5): core's vocabulary (core ADRs 0090 and
- * 0091), at logical time `time`, numbered `seq` in its actor's log.
- * `queued` is a message accepted into the actor's mailbox, or waiting for
- * its family's loader; its `event` (or `jump`) record carries the same
- * `hostSeq` when it is delivered, its `dropped` record when it never will
- * be. `fired` is a delayed send the actor dispatched. A checkpoint is its
- * `checkpoint` record and the parts after it.
+ * trail (napi ADR 0034 section 5): the host kernel's vocabulary (kernel ADR
+ * 0002, layout version 2), at logical time `time`, numbered `seq` in its
+ * actor's life (no `seq` for one written while the actor was not resident).
+ * `accepted` is a message taken into the actor's mailbox, or waiting for its
+ * family's loader, with its content, once; its `delivered` (or `jump`)
+ * record names the same `id` when it is delivered, its `dropped` record when
+ * it never will be. An invocation's error report is an `accepted` message
+ * with `report` set. `fired` is a delayed send the actor dispatched. A
+ * checkpoint is its `checkpoint` record and the parts after it.
  */
 export type InputRecord = { readonly time: number; readonly seq?: string } & (
   | { readonly kind: "spawned"; readonly address: ActorAddress; readonly revision: string; readonly binding?: unknown }
   | {
-      readonly kind: "queued" | "event";
-      readonly hostSeq?: string;
-      readonly name: EventName;
+      readonly kind: "accepted";
+      /** The message's identity, 64 bits as decimal text. */
+      readonly id: string;
+      /** Absent for an invocation's error report, which core names. */
+      readonly name?: EventName;
       readonly type: "external" | "internal" | "platform";
       readonly data?: unknown;
       readonly sendID?: string;
       readonly origin?: string;
       readonly originType?: string;
       readonly invokeID?: string;
+      /** An invocation's error report, not a message, and whether it ends the invocation. */
+      readonly report?: "unavailable" | "quarantined" | "failed";
+      readonly reason?: string;
+      readonly ends?: boolean;
     }
+  | { readonly kind: "delivered" | "dropped"; readonly id: string }
   | {
-      /** An operator transition (core ADR 0082), by state names; no `source` for the root. */
+      /** An operator transition (core ADR 0082) delivering message `id`, by state names; no `source` for the root. */
       readonly kind: "jump";
-      readonly hostSeq?: string;
-      readonly name: EventName;
-      readonly type: "external" | "internal" | "platform";
-      readonly data?: unknown;
-      readonly sendID?: string;
-      readonly origin?: string;
-      readonly originType?: string;
+      readonly id: string;
       readonly source?: string;
       readonly targets: readonly string[];
-    }
-  | {
-      readonly kind: "report";
-      readonly invokeID: string;
-      readonly reason: string;
-      readonly data?: unknown;
-      readonly ends: boolean;
     }
   | { readonly kind: "withdrawn" | "fired"; readonly sendID: string }
   | { readonly kind: "abandoned" | "released" | "evicted" | "destroyed" }
   | { readonly kind: "finished"; readonly finalState?: string }
-  | { readonly kind: "dropped"; readonly hostSeq: string }
   | {
       readonly kind: "checkpoint";
       readonly address: ActorAddress;
       readonly revision: string;
-      readonly active: readonly string[];
-      readonly late: readonly string[];
+      /** The definition's own state numbers, which its revision fixes. */
+      readonly active: readonly number[];
+      readonly late: readonly number[];
+      readonly history: readonly { readonly history: number; readonly state: number }[];
       readonly data?: unknown;
       readonly [field: string]: unknown;
     }
-  | { readonly kind: "checkpoint-history" | "checkpoint-send" | "checkpoint-invoke"; readonly [field: string]: unknown }
+  | { readonly kind: "checkpoint-send" | "checkpoint-invoke"; readonly [field: string]: unknown }
 );
 
 /**

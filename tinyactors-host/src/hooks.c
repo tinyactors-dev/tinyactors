@@ -12,7 +12,26 @@ ta_result tah_hook_actor_created(tah_system *system, ta_actor_id actor) {
     return TA_OK;
 }
 
+ta_result tah_hook_actor_spawned(tah_system *system, ta_actor_id actor) {
+    /* SPAWNED first, while the actor is as its binding made it (kernel ADR 0002). */
+    tah_input_mark mark = { 0 };
+    ta_result result = tah_inputs_spawned(system, actor, &mark);
+    if (result == TA_OK) {
+        result = tah_hook_actor_created(system, actor);
+        if (result != TA_OK) {
+            tah_inputs_undo(system, &mark);
+        }
+        return result;
+    }
+    system->inside_core = true;
+    (void)ta_actor_destroy(system->core, actor);
+    system->inside_core = false;
+    tah_inputs_removed(system, actor);
+    return result;
+}
+
 ta_result tah_hook_actor_removed(tah_system *system, ta_actor_id actor) {
+    tah_inputs_removed(system, actor);
     tah_sched_remove(&system->sched, actor, TAH_DEAD_DESTROYED);
     tah_system_want_turn(system); /* its mail is reported as dead letters */
     return TA_OK;

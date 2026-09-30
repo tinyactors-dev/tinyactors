@@ -32,6 +32,8 @@ typedef struct {
 
 /* Registers (or re-registers) a type; TA_ERR_NOMEM, or core's refusal. */
 ta_result tah_io_register(tah_system *system, const tah_io_registration *registration);
+/* The registry index of the processor registered for `type`, or 0 when none is. */
+uint32_t tah_io_index_of(const tah_system *system, ta_atom type);
 /* True when the processor at registry `index` renders computed origins. */
 bool tah_io_renders_origins(const tah_system *system, uint32_t index);
 /* Frees every record; core must no longer hold them (after ta_system_destroy). */

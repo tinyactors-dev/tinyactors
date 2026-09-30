@@ -127,8 +127,8 @@ function heap() {
   return process.memoryUsage().heapUsed;
 }
 
-// Records in core's portable layout (core ADR 0090 section 3), written by
-// hand: a 32-byte header, 8-byte fields (a number, or a text's offset and
+// Records in the kernel's layout, version 2 (kernel ADR 0002 section 4),
+// written by hand: a 32-byte header, 8-byte fields (a number, or a text's offset and
 // length), the text part, and value streams of chunks.
 function record({ kind, seq, time, fields, value }) {
   const texts = [];
@@ -151,7 +151,7 @@ function record({ kind, seq, time, fields, value }) {
   const valueBytes = value === undefined ? undefined : Buffer.from(value, 'utf8');
   const valueLength = valueBytes === undefined ? 0 : 4 + valueBytes.length + pad(4 + valueBytes.length) + 8;
   const out = Buffer.alloc(fixed + textLength + pad(textLength) + valueLength);
-  out.writeUInt16LE(1, 0);
+  out.writeUInt16LE(2, 0);
   out.writeUInt16LE(kind, 2);
   out.writeUInt32LE(fixed, 4);
   out.writeBigUInt64LE(BigInt(seq), 8);
@@ -180,8 +180,13 @@ function record({ kind, seq, time, fields, value }) {
 
 const spawnedRecord = (seq, time, family, name, revision) =>
   record({ kind: 1, seq, time, fields: [family, name, revision] });
-const eventRecord = (seq, time, name, data) =>
-  record({ kind: 2, seq, time, fields: [0n, 0n, name, undefined, undefined, undefined, undefined], value: data });
+// A message as the kernel logs it: accepted with its content (message `id`),
+// then delivered by identity, one record number each.
+const eventRecord = (seq, time, id, name, data) => Buffer.concat([
+  record({ kind: 2, seq, time, fields: [BigInt(id), 0n, name, undefined, undefined, undefined, undefined, 0n, undefined, 0n],
+           value: data }),
+  record({ kind: 3, seq: seq + 1, time, fields: [BigInt(id)] }),
+]);
 
 // Lets a loader's promise settle and the turns after it run.
 async function settle(system) {
@@ -254,7 +259,7 @@ async function endToEnd() {
   assert.deepEqual(logs, ['added', 'added'], 'the replay wrote no log');
   assert.equal(starts, 1, 'the replay started no service');
   const newer = (await store.records({ family: 'order', name: 'o1' })).slice(logged).map((r) => r.kind);
-  assert.deepEqual(newer, ['queued', 'event'], 'only the mail that summoned it is logged, once');
+  assert.deepEqual(newer, ['accepted', 'delivered'], 'only the mail that summoned it is logged, once');
 
   await system.advanceTo(2200); // the reminder armed at 1200
   await system.flush();
@@ -338,7 +343,7 @@ async function crashWithMailInFlight() {
   first.setLoader('ledger', () => new Promise(() => {})); // the ledger's load never finishes
   first.post({ family: 'ledger', name: 'main' }, 'hello'); // queued, waiting for the load
   await new Promise((resolve) => setTimeout(resolve, 20)); // a turn commits it
-  assert.ok((await store.records({ family: 'ledger', name: 'main' })).some((r) => r.kind === 'queued'), 'the hello is queued');
+  assert.ok((await store.records({ family: 'ledger', name: 'main' })).some((r) => r.kind === 'accepted'), 'the hello is accepted');
   assert.ok(store.wakes.has('ledger/main'), 'and the ledger owes it');
   store.frozen = true; // the crash: nothing after this point is committed
   const moved = first.advanceTo(3000).catch(() => {});
@@ -383,7 +388,7 @@ async function droppedAndLiteralSendIDs() {
   clearInterval(alive);
   await new Promise((resolve) => setTimeout(resolve, 20));
   const kinds = (await store.records({ family: 'ledger', name: 'main' })).map((r) => r.kind);
-  assert.deepEqual(kinds.filter((kind) => kind === 'queued' || kind === 'dropped'), ['queued', 'queued', 'dropped']);
+  assert.deepEqual(kinds.filter((kind) => kind === 'accepted' || kind === 'dropped'), ['accepted', 'accepted', 'dropped']);
   first.close();
 
   const second = createSystem({ clock: 'manual', incarnation: 2 });
@@ -633,7 +638,7 @@ async function reportsAndOperations() {
 
 // A long log streamed from an async generator, as a database cursor would
 // hand it: replay holds one record and one chunk, so memory does not grow
-// with the log. The log is written by hand in core's layout (core ADR 0090),
+// with the log. The log is written by hand in the kernel's layout (wal.h),
 // which is what makes it portable.
 async function streamsALongLog() {
   const count = 100000;
@@ -649,13 +654,13 @@ async function streamsALongLog() {
       if (index % 10000 === 0) {
         peak = Math.max(peak, heap() - baseline);
       }
-      yield eventRecord(index + 1, index, 'inc', `{"payload":"${payload}${index}"}`);
+      yield eventRecord(2 * index, index, index, 'inc', `{"payload":"${payload}${index}"}`);
     }
   }
   const prepared = system.prepare(definition, { address: { family: 'counter', name: 'long' },
                                                 log: spawnedRecord(1, 0, 'counter', 'long', 'v1') });
   const report = await prepared.replay(cursor());
-  assert.equal(report.inputs, count);
+  assert.equal(report.inputs, 2 * count, 'each message is accepted, then delivered');
   assert.equal(prepared.inspect().data.n, count);
   assert.ok(peak < 40 * 1024 * 1024, `the log is not held: the heap grew by at most ${Math.round(peak / 1048576)} MB`);
   system.close();
@@ -679,7 +684,8 @@ async function aLargeValue() {
   system.evict(live);
   await system.flush();
   const bytes = store.read({ family: 'box', name: 'b' }).reduce((total, chunk) => total + chunk.length, 0);
-  assert.ok(bytes > 2 * value.length, `logged as \`queued\` and \`event\`: ${bytes} bytes`);
+  // Written once (kernel ADR 0002 section 2): `accepted` holds it, `delivered` names it.
+  assert.ok(bytes > value.length && bytes < value.length + 65536, `logged once: ${bytes} bytes`);
   // Hand the log back in 64 KiB pieces.
   const pieces = function* () {
     for (const chunk of store.read({ family: 'box', name: 'b' })) {

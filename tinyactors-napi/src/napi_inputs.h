@@ -21,5 +21,9 @@ void tna_inputs_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *fir
 napi_value tna_set_input_log_method(napi_env env, napi_callback_info info);
 /* writeEvicted(slot, generation, wake?). */
 napi_value tna_write_evicted_method(napi_env env, napi_callback_info info);
-/* inputForget(slot, generation). */
+/* inputForget(slot, generation): `destroyed`, before destroy(). */
 napi_value tna_input_forget_method(napi_env env, napi_callback_info info);
+/* withdrawSend(slot, generation, send ID as a bigint). */
+napi_value tna_withdraw_send_method(napi_env env, napi_callback_info info);
+/* abandon(slot, generation). */
+napi_value tna_abandon_method(napi_env env, napi_callback_info info);
