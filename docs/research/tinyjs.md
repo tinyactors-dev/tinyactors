@@ -31,9 +31,12 @@ generator language, and a plan for a Racket experiment.
   is plain data (Danvy et al. [1]). Any builtin or spec operation that can
   call back into user code is written in one small IR in direct style. A
   compiler turns it into a resumable state machine: a frame struct holding
-  the variables live at each suspension point, a resume label, and a
-  `switch`. User JS compiles to register bytecode with the same frame
-  layout. Only work with a low constant bound stays in hand-written C.
+  the variables live at each suspension point, and a resume label. User JS
+  and the builtins compile to register bytecode with one frame layout.
+  Builtins are embedded as bytecode data by default, and a builtin moves to
+  a generated C state machine only when measurements show it is hot. Only
+  work with a low constant bound stays in hand-written C. The one
+  hand-written resumable exception is the RegExp matcher.
 - **Every suspension is one-shot**: fuel running out, `await`, `yield`, a
   pending host promise. That is the cheap case in Chez Scheme [4].
   Suspending returns to the host with the frames left in place. Resuming
@@ -50,15 +53,20 @@ generator language, and a plan for a Racket experiment.
   slowdown confined to functions that contain a direct `eval`.
 - **Memory needs no general-purpose collector.** A read-only region, a
   permanent heap per VM, and an evaluation arena per run, plus a write
-  barrier and a remembered set. At the end of a run, what survives is copied
+  barrier and a remembered set. When the VM becomes quiet (no paused
+  frames, no queued jobs, no pending host tokens), what survives is copied
   into the permanent heap by a Cheney scan, which needs no stack. This is a
-  generational minor collection run only at evaluation boundaries. The
+  generational minor collection run only at those boundaries. The
   permanent heap is compacted by writing the state and reading it back. One
   traversal serves promotion, compaction, state images and the object codec.
+- **tinyactors can use it without changing core.** The data-model vtable
+  stays synchronous: an evaluation runs to completion, running out of fuel
+  is a fault, and asynchronous host work is expressed the SCXML way, with
+  `<send>` and `<invoke>`.
 - **Racket as the build-time generator is likely high leverage**, if it only
-  compiles the fixed set of builtins into checked-in C and the frame ABI is
-  generated from one source. A one-week experiment with explicit criteria
-  for dropping it decides the question.
+  compiles the fixed set of builtins into checked-in bytecode and C, and the
+  frame ABI and bytecode format are generated from one source. A one-week
+  experiment with explicit criteria for dropping it decides the question.
 
 ## Design goals
 
@@ -130,7 +138,9 @@ applied to tinyjs.
 - **Leaf C must be bounded.** Hand-written C may only do work with a low
   constant bound (formatting a number, one table lookup), or work that
   charges fuel in proportion to its size and runs in chunks within
-  `tjs_limits`. Anything that can call user code is written in the IR.
+  `tjs_limits`. Anything that can call user code is written in the IR. The
+  only hand-written C that suspends is the RegExp matcher (layer 0), whose
+  state is already explicit data.
 
 ## Standards scope
 
@@ -179,6 +189,9 @@ tjs_result tjs_run(tjs_vm *vm, TJS_IN const tjs_run_params *params);
   continues on the next `tjs_run`.
 - **`TJS_RUN_WAITING`** means the job queue is empty and only host tokens
   are outstanding.
+- **`tjs_abort`** ends the current run from outside, for a host that treats
+  running out of fuel as a failure rather than a pause. It unwinds every
+  frame like an uncatchable termination: no `catch` or `finally` runs.
 - **Timers, the scheduler and module loading** are not part of ECMA-262.
   The host defines them as globals or through a loader. The order of
   promise jobs is fixed by the spec. The order in which the host settles
@@ -232,8 +245,9 @@ and cached.
 
 ### `tjs_run`: executing a program over a state
 
-One trampoline drives two kinds of frames: bytecode frames for user code,
-and generated state machines for builtins. The trampoline loop:
+One trampoline drives every frame: bytecode frames for user code and for
+builtins, generated C state machines for the builtins moved to C, and the
+RegExp matcher's frames. The trampoline loop:
 
 - runs the top frame's step;
 - when a frame returns, pops it and re-enters the caller at its label;
@@ -258,9 +272,17 @@ Bounded work only. It never suspends and never calls into JS.
   binary.
 - String concatenation as a rope node, which is O(1). Flattening a rope
   happens later, in chunks that are charged fuel.
-- A RegExp engine with an explicit backtracking stack. It charges fuel and
-  is bounded by `tjs_limits`, which also defeats ReDoS. It is written as
-  resumable code if matching must be suspendable.
+- The RegExp matcher: a backtracking engine whose whole state (pattern
+  position, input position, backtrack stack) is explicit data. It is the one
+  piece of hand-written C that suspends. The matcher is a frame kind of its
+  own: it charges fuel in its inner loop, and when fuel runs out it returns
+  mid-match with its state in the frame, so a long match pauses like
+  anything else instead of failing or stalling the host. Only real limits
+  (`tjs_limits` on backtrack stack size, and memory) stop a match, which
+  also bounds ReDoS. Its frame can be large, and a paused match's backtrack
+  stack is part of the arena and of a written state. The outer protocol
+  (`RegExpBuiltinExec`, `Symbol.replace` with a function replacer, the
+  `lastIndex` and `exec` lookups) calls user code and is written in the IR.
 
 ### Layer 1: the resumable IR
 
@@ -275,6 +297,30 @@ jumps). Every function is marked with its effect:
 
 The spec's `?` ("rethrow an abrupt completion") needs no code, because every
 `call` carries an exception continuation.
+
+**Exceptions and `finally`.** A `try` gives its frame a handler label. A
+thrown value unwinds to the nearest frame with a handler label, the same
+way in generated C and in bytecode. A `finally` block is a join point that
+receives a completion record, its type (normal, throw, return, break,
+continue) and its value, exactly as the spec models it. After the block
+runs, a small switch on the type rethrows, returns or continues, unless the
+block itself completed abruptly and so replaced the completion. Each
+`finally` exists once in the code, and the record costs two frame slots,
+only in functions that use it. This matters for builtins: `IteratorClose`
+puts `finally`-like logic in every builtin that loops over a user iterable,
+such as `Array.from` and `Promise.all`.
+
+**Generators and `await` are primitives of the machine**, not rewritten
+away by each compiler. `yield` and `await` detach the running frame, and
+resuming the generator or settling the awaited promise reattaches it. This
+is Chez's "seal the segment" [4] at the smallest size: JS generators are
+shallow, since `yield` appears only in the generator's own body and never in
+a function it calls, so the detached part is always exactly one frame. One
+mechanism covers generators, async functions, async generators, and
+builtins that await. The costs: references inside a frame are relative,
+because frames move between regions; the trampoline has states for detach
+and reattach; and a detached frame is a heap object that promotion must
+handle (see Memory).
 
 Spec operations are transcribed into the IR nearly line by line:
 `ToPrimitive`, `OrdinaryGet`, `Array.prototype.sort`, promise jobs, Proxy
@@ -312,14 +358,43 @@ language.
    `o` and the loop index survive a call.
 3. **Defunctionalization.** Return points become values of a resume label.
    The continuation is now data: a label plus the live slots.
-4. **Frame layout.** Emit one frame struct per function: a header (function
-   ID, resume label, the caller's offset) plus the slots.
+4. **Frame layout.** Emit one frame layout per function: a header (function
+   ID, resume label, the caller's offset), the slots, and two slots for a
+   completion record in functions that have a `finally`.
 
 ### Layer 3: two back ends from one IR
 
-- **Build time: builtins become C state machines.** These are generated and
-  checked in, like `txml.c`. A step function returns after every call and
-  never calls a callee itself:
+Builtins and user code compile to the same register bytecode by default. A
+bytecode frame is the frame layout above: the program counter is the resume
+label and the registers are the slots, so there is almost nothing to
+defunctionalize.
+
+- **Builtins are bytecode, embedded as data.** The build compiles the IR
+  builtins to bytecode and checks it in, like `txml.c`. This is the smallest
+  form, gives one execution path to test, and makes dropping builtins a
+  program cannot reach a matter of filtering data when compiling. Devtools
+  can step into a builtin if that is wanted. The bytecode needs intrinsics
+  for everything the IR can express that user JS cannot, such as reaching
+  a built-in object without going through a mutable prototype.
+- **User JS is bytecode, compiled at run time.** The dispatch loop handles
+  common cases inline and pushes a builtin frame only for the rest:
+
+  ```c
+  case TJS_OP_ADD:
+      if (tjs_both_numbers(l, r)) { R(dst) = tjs_number(tjs_num(l) + tjs_num(r)); break; }
+      if (tjs_both_strings(l, r)) { R(dst) = tjs_string_concat(vm, l, r);         break; }
+      frame->pc = pc; frame->pending = dst;
+      return tjs_push_add(vm, l, r);
+  ```
+
+- **Hot builtins move to C state machines, one at a time, when
+  measurements show it pays.** Candidates are `map`, `sort` and the promise
+  machinery. The same IR compiles to a C step function that returns after
+  every call and never calls a callee itself. This is what defunctionalization
+  is for: C has no resumable program counter. A C builtin is faster and
+  runs under native debuggers, but it is verbose machine code, which costs
+  most on wasm and in embedded flash. The static version can decide per
+  builtin. `add` as a C state machine:
 
   ```c
   typedef struct { tjs_frame header; tjs_value a; tjs_value b; } tjs_add_frame;
@@ -348,28 +423,16 @@ language.
   }
   ```
 
-- **Run time: user JS becomes register bytecode.** Here the program counter
-  is the resume label and the registers are the frame, so there is almost
-  nothing to defunctionalize. The dispatch loop handles common cases inline
-  and pushes an IR frame only for the rest:
-
-  ```c
-  case TJS_OP_ADD:
-      if (tjs_both_numbers(l, r)) { R(dst) = tjs_number(tjs_num(l) + tjs_num(r)); break; }
-      if (tjs_both_strings(l, r)) { R(dst) = tjs_string_concat(vm, l, r);         break; }
-      frame->pc = pc; frame->pending = dst;
-      return tjs_push_add(vm, l, r);
-  ```
-
-A fast path is also possible in generated code: the primitive case of
+A fast path is also possible inside a builtin: the primitive case of
 `ToPrimitive` can be inlined so that no frame is pushed.
 
-**Only the build-time path needs the hard middle of the compiler.** CPS,
-liveness and defunctionalization exist to make C resumable. The run-time
-compiler is a conventional bytecode compiler. The two share a contract, not
-passes: the frame ABI, the value representation, exception unwinding, and
-fuel accounting. The ABI should be generated from one source into a header
-(`tjs_abi.h`) that both sides use.
+**The build-time and run-time compilers share a contract, not passes.** The
+build-time compiler (IR to bytecode and C) uses liveness to size frames
+and, for C, defunctionalization. The run-time compiler (JS to bytecode) is a
+conventional bytecode compiler. Both must agree on the frame layout, the
+bytecode format and opcodes, the value representation, exception unwinding
+and fuel accounting. That contract should be generated from one source into
+a header (`tjs_abi.h`) and an opcode table that both sides use.
 
 ### A worked trace: suspending inside `valueOf`
 
@@ -382,12 +445,16 @@ Fuel runs out on a back-edge of the `while` loop, and `tjs_run` returns
 `TJS_RUN_OUT_OF_FUEL`. The frame region is left as it is:
 
 ```
-┌ guard            (bytecode)  pc after ADD, pending → r2, r0 = 3, r1 = unit
-├ add              (C)         label L2, a = 3     ← left operand was primitive: no frame
-├ to-primitive     (C)         label after ordinary-to-primitive
-├ ordinary-to-prim (C)         label after call-function, o = unit, i = 0
-└ valueOf          (bytecode)  pc = loop back-edge, its registers
+┌ guard            (user code) pc after ADD, pending → r2, r0 = 3, r1 = unit
+├ add              (builtin)   label L2, a = 3     ← left operand was primitive: no frame
+├ to-primitive     (builtin)   label after ordinary-to-primitive
+├ ordinary-to-prim (builtin)   label after call-function, o = unit, i = 0
+└ valueOf          (user code) pc = loop back-edge, its registers
 ```
+
+Every frame is bytecode; the builtin frames resume at the IR labels shown.
+The picture is the same if a builtin has been moved to C: its frame then
+holds a C resume label instead of a program counter.
 
 The host can call `tjs_run` again later, or write the state and resume it
 elsewhere. On resume:
@@ -408,9 +475,11 @@ returns control to the host instead of to a callee.
   stack discipline. This is the "resizable stack" that Farvardin and Reppy
   found the best all-round choice [7]. They advise against mutable linked
   heap frames.
-- A frame that must outlive the stack discipline (a suspended generator or
-  async function) moves out of the region when it yields. This is Chez's
-  "seal the segment" for one-shot continuations [4].
+- A frame that must outlive the stack discipline, a suspended generator or
+  async function, is detached when it yields or awaits and reattached when
+  it resumes. Generators are shallow, so this is always exactly one frame.
+  This is Chez's "seal the segment" for one-shot continuations [4]. References
+  inside a frame are relative, so a frame can move between regions.
 - Short runs only bump a pointer to make frames and never involve the
   collector.
 
@@ -468,16 +537,21 @@ returns control to the host instead of to a callee.
 ## Memory: regions instead of a general collector
 
 A general-purpose collector is not needed. What is needed is a minor
-collection at each evaluation boundary.
+collection each time the VM becomes quiet.
 
 ### Three regions
 
-- **ROM.** Shared and read-only: programs and the frozen built-in objects.
-  A write into a ROM object first copies it into the permanent heap. That
-  is how realms stay lazy: a VM pays only for the built-in objects it
-  changes.
+- **ROM.** Shared and read-only: programs, the builtins' bytecode, and the
+  frozen built-in objects. A write into a ROM object first copies it into
+  the permanent heap. That is how realms stay lazy: a VM pays only for the
+  built-in objects it changes.
 - **Permanent heap.** One per VM.
-- **Evaluation arena.** One per run. Allocation bumps a pointer.
+- **Evaluation arena.** Allocation bumps a pointer. The arena lives from the
+  first run after the VM was last quiet until the VM is quiet again. A VM
+  is *quiet* when no frames are paused or detached, the job queue is empty,
+  and no host token is pending. Every run in between, including runs that
+  resume after `OUT_OF_FUEL` or after a host settles a token, allocates into
+  the same arena.
 
 ### Write barrier and promotion
 
@@ -485,13 +559,21 @@ collection at each evaluation boundary.
   is in the permanent heap and the value is in the evaluation arena. With
   offsets tagged by region this is one comparison. If both hold, the slot
   goes into a remembered set.
-- **Promotion.** When a run completes (`DONE` or `THREW`), everything
-  reachable from the remembered set, the result, the job queue and host
-  handles is copied into the permanent heap by a Cheney scan. The scan
-  queue is the destination region itself, so there is no stack and no
-  recursion. The arena is then reset in O(1).
+- **Promotion.** When the VM becomes quiet, everything reachable from the
+  remembered set, the last result and host handles is copied into the
+  permanent heap by a Cheney scan. The scan queue is the destination region
+  itself, so there is no stack and no recursion. The arena is then reset in
+  O(1). Suspending never promotes, so it stays O(1): a promise reaction
+  that captured a closure in one run and fires in a later run finds it
+  where it was.
 - **Cost.** Proportional to what survives. A guard that keeps nothing costs
   a bump pointer and a reset.
+- **The limit of this design.** A VM that is never quiet, for example one
+  with a timer loop that always leaves a host token pending, never resets
+  its arena and so has no collector until it reaches its arena limit, which
+  throws a catchable error. Because frames are data, every root is precise
+  and known, so promotion while the VM is not quiet can be added later if
+  such a host appears.
 
 ### Compaction and the codec
 
@@ -511,19 +593,15 @@ collection at each evaluation boundary.
 
 ### Details
 
-- **A paused run keeps its arena**, because its frames live there. A reset
-  waits until the run completes, and a written state includes the arena of
-  a paused run.
-- **Long async runs can outgrow their arena.** Because frames are data,
-  every root is precise and known, so a promotion in the middle of a run
-  can be added later. Start with a limit that throws a catchable error.
+- **A written state includes the arena** when the VM is not quiet: paused
+  and detached frames, pending jobs, and everything they reach.
 - **Objects move, so hosts hold handles**, never pointers. The handle table
   is a root, and promotion updates it.
 - **WeakMap entries** whose key did not survive need ephemeron handling
   during promotion: repeat until nothing more is copied. Dead keys in the
   permanent heap disappear at the next compaction.
-- **Collection points are deterministic**: run completion, writing a state,
-  and explicit compaction.
+- **Collection points are deterministic**: the VM becoming quiet, writing a
+  state, and explicit compaction.
 
 ## Using tinyjs from tinyactors
 
@@ -539,17 +617,36 @@ The layer rules in the root `README.md` place this adapter outside core,
 which ships only the null data model (core ADR 0057). The host kernel and
 the bindings would register it by default.
 
-What changes in tinyactors itself:
+**The data-model vtable stays synchronous, and core does not change.**
 
-- **The data-model vtable must be able to pause.** It is synchronous today:
-  `ta_op_status` is OK, ERROR or NOMEM. It needs a paused status and a way
-  to resume. `ta_continuation` must record that an action is part-way
-  through evaluation. This is a core ADR, and it must keep the guarantees
-  of ADR 0061 (pausing inside executable content), ADR 0070 (saving a pause
-  cannot fail) and ADR 0047 (no repeated effects).
-- **Replay must see host inputs.** Values passed to `tjs_settle`, the clock
-  and the entropy seed must enter the input log, so replay stays
-  deterministic.
+- **Each vtable operation runs to completion.** The adapter calls `tjs_run`
+  until it answers `DONE` or `THREW`, with a fuel budget per operation that
+  the adapter configures. Promise jobs that need no host token drain inside
+  the same operation, so code that uses promises internally still works.
+- **Running out of fuel is a fault, not a pause.** When the budget is spent,
+  the adapter ends the run with `tjs_abort`, and core raises
+  `error.execution` as for any other failed expression or script. The abort
+  unwinds every frame like an uncatchable termination: no `catch` or
+  `finally` runs, as with V8's `TerminateExecution`. The VM is then quiet,
+  so its arena is promoted and reset. Effects the script made before the
+  abort remain, as they do when a script throws, and the rest of the block
+  is skipped as SCXML requires.
+- **Asynchronous host work uses SCXML, not `await`.** A chart that needs the
+  host to do something slow uses `<send>` or `<invoke>` and receives the
+  answer as an event. The adapter registers no host function that returns a
+  pending token, so `tjs_run` cannot answer `WAITING`. If an application
+  registers one and a script awaits it, that is a fault too.
+- **Replay needs nothing new.** Events are already in the input log. The
+  clock comes from core through `ta_dm_host`. The entropy dependency must be
+  seeded from something the host kernel records.
+
+A slow script is therefore stopped, not paused, and host operations cannot
+be awaited from a script. If a chart ever needs that, a core ADR can add a
+paused status and a resume entry to the vtable. It would have to keep the
+guarantees of ADR 0061 (pausing inside executable content), ADR 0070
+(saving a pause cannot fail) and ADR 0047 (no repeated effects), and the
+host kernel would record the values passed to `tjs_settle`. tinyjs already
+supports that mode, so nothing in the library waits on the decision.
 
 ## Architectures considered
 
@@ -559,7 +656,7 @@ code that re-enters user code is made resumable.
 | | A: AST interpreter | B: bytecode, builtins self-hosted in JS | C: derived from the spec text | D: resumable IR compiled to state machines |
 |---|---|---|---|---|
 | How builtins become resumable | hand-written C state machines | written in strict JS, compiled to bytecode | ecmarkup compiled to IR (ESMeta-style) | written in IR; the compiler derives the state machines |
-| Size | smallest engine | medium | largest | medium (bytecode for builtins) to larger (C for builtins) |
+| Size | smallest engine | medium | largest | medium: builtins are bytecode, a few hot ones C |
 | Short expressions | good | good | poor | good (fast paths) |
 | Loops and scripts | fair | best | poor | best |
 | Cost of compliance | high and ongoing | medium | high up front, low per feature | medium, close to transcribing the spec |
@@ -629,21 +726,24 @@ code that re-enters user code is made resumable.
 
 ## Generator language: Racket, Ruby or C
 
-The build-time generator compiles the IR builtins to C and generates the
-frame ABI header. It never runs in an ordinary build: its output is checked
+The build-time generator compiles the IR builtins to bytecode, and the
+builtins that measurements promote to C state machines, and generates the
+frame ABI header and the opcode table. It never runs in an ordinary build: its output is checked
 in, and `mise run generated` fails when the output is stale.
 
 | Generator | Assessment |
 |---|---|
-| **Racket** | The best tools for this job. Nanopass gives checked intermediate languages. A `#lang` with `syntax-parse` gives a builtin language with good error messages and source locations, which become `#line` directives back to the IR and the spec step. A reference interpreter, or a PLT Redex model, makes random differential testing of the generated C possible. The cost is a second language beside the Ruby tasks. |
+| **Racket** | The best tools for this job. Nanopass gives checked intermediate languages. A `#lang` with `syntax-parse` gives a builtin language with good error messages and source locations, which become `#line` directives back to the IR and the spec step. A reference interpreter, or a PLT Redex model, makes random differential testing of the generated bytecode and C possible. The cost is a second language beside the Ruby tasks. |
 | **Ruby** (the repo's task language) | Workable, since pattern matching handles trees. But we would build IR checking, source locations and a reference interpreter ourselves: the parts that give the leverage, without the leverage. |
 | **C** (one compiler with two back ends) | No duplication. But every pass must follow the house style (freestanding, no recursion, at most three parameters), which is the most expensive way to write a compiler, and the build-time path doesn't need those constraints. |
 
 **Where Racket goes wrong, and the mitigations:**
 
 1. **The two compilers drift apart.** Racket generates `tjs_abi.h` (frame
-   structs, label enums, value tags), and the C compiler includes it. A test
-   has builtins and user code call each other in both directions.
+   layouts, label enums, value tags) and the opcode table, and the run-time
+   compiler and the dispatch loop include them. A test has builtins and
+   user code call each other in both directions, with builtins both as
+   bytecode and as C.
 2. **Only one person can change a builtin.** Keep the IR close to spec
    pseudo-code, and add builtins from a template. Contributors who don't
    change builtins never need Racket.
@@ -662,16 +762,21 @@ in, and `mise run generated` fails when the output is stale.
 1. Pin Racket (minimal) with mise, and check that the nanopass package
    installs and runs on it.
 2. Define a small IR `#lang`: `define`, `let*`, `if`, `for-each`, `call`,
-   `leaf`, `return`, `throw`, and spec-step annotations.
+   `leaf`, `return`, `throw`, `try`/`finally` with completion records, and
+   spec-step annotations.
 3. Write four builtins in it: `add` (13.15.3), `to-primitive` (7.1.1),
-   `ordinary-to-primitive` (7.1.1.1) and `Array.prototype.map`.
+   `ordinary-to-primitive` (7.1.1.1) and `Array.prototype.map`. If time
+   allows, add the iterable path of `Array.from`, for `IteratorClose` and
+   `finally`.
 4. Write passes: parse to IR, check effects (no `leaf` reaches a `call`),
-   CPS conversion, liveness and slot sharing, defunctionalization, frame
-   layout, then emit C and `tjs_abi.h` with `#line` directives.
+   CPS conversion, liveness and slot sharing, frame layout, then two
+   emitters: bytecode as checked-in data, and, for `add`, a C state machine
+   through defunctionalization. Emit `tjs_abi.h` and the opcode table, with
+   `#line` directives in the C.
 5. Write a reference interpreter for the IR in Racket.
 6. Write a minimal C harness: a value representation, an object with a
-   `valueOf`, a trampoline with fuel, and a small bytecode loop that
-   executes `ADD` and a call into a bytecode `valueOf`.
+   `valueOf`, a trampoline with fuel, and a bytecode loop that runs `ADD`,
+   the builtins' bytecode, and a call into a bytecode `valueOf`.
 
 **Success criteria:**
 
@@ -681,9 +786,11 @@ in, and `mise run generated` fails when the output is stale.
    with the pinned clang and `zig cc`.
 2. The builtins read like the spec. Someone who doesn't know Racket can
    review `ordinary-to-primitive` against section 7.1.1.1.
-3. A random differential test (IR interpreter against generated C) finds a
-   bug deliberately planted in the liveness pass.
-4. The trace above works end to end. The C bytecode loop calls `add`,
+3. A random differential test (IR interpreter against the harness running
+   the generated bytecode and C) finds a bug deliberately planted in the
+   liveness pass.
+4. The trace above works end to end, twice: once with every builtin as
+   bytecode, and once with `add` as C. The bytecode loop reaches `add`,
    `add` calls a bytecode `valueOf`, fuel runs out inside the loop, the
    frames are written to bytes and read back, and the run resumes to
    `"3kg"`.
@@ -698,23 +805,38 @@ in, and `mise run generated` fails when the output is stale.
   Ruby. The IR and the ABI are the real design, so little is lost.
 - If 4 fails, revisit design D itself before choosing a language.
 
+## Costs and budgets
+
+Budgets are derived from measurements, not set in advance. The Racket
+experiment and a thin vertical slice after it (parse, compile and run a
+guard, promotion, writing and reading a state) produce the first figures:
+
+- binary size of the runtime alone, of the runtime with the compiler, and
+  of a static build, for the host and for wasm;
+- bytes per idle VM, and per VM after its first write to a built-in object;
+- time and allocations per trivial guard, and per short script;
+- cost of suspending and resuming, of promotion, and of writing and reading
+  a state.
+
+They are reported as the benchmark rules in `AGENTS.md` require:
+throughput and memory together, the machine named, builds compared side by
+side. The guard cost of napi's current JavaScript data model, measured in
+[pluggable data models](pluggable-datamodels.md), is the baseline to
+compare against, run again on the same machine. Budgets, and CI checks that
+enforce them, follow from the baselines and are recorded in the ADR that
+sets them, as core's ADRs record their per-actor costs. Which builtins move
+from bytecode to C is decided the same way, one builtin at a time.
+
 ## Open questions
 
-- **The IR's exact form.** How many forms, how exceptions and `finally` are
-  expressed, and whether iterators and generators are primitives or
-  library code.
-- **Builtins as bytecode or as C.** When to compile builtins to C (faster,
-  larger) rather than to bytecode (smaller), and whether the static version
-  should decide per builtin.
-- **Paused frames and closures.** How the frames of a paused run and the
-  closures created during it interact with promotion at the end of the run.
-- **RegExp.** Whether matching is suspendable (written in the IR) or bounded
-  leaf C with fuel and chunking.
-- **Budgets.** Real figures for size, bytes per VM and cost per evaluation,
-  to be measured, not estimated, and recorded per the benchmark rules in
-  `AGENTS.md`.
-- **The tinyactors side.** The core ADR for a data-model vtable that can
-  pause, and how host tokens enter the input log.
+- **The IR's surface.** Its exact syntax and set of forms, and the set of
+  bytecode intrinsics the builtins need that user JS does not have.
+- **Promotion while the VM is not quiet.** Needed only if a host keeps a VM
+  busy forever (see Memory). The roots are precise, so it is an addition,
+  not a redesign.
+- **A data-model vtable that can pause.** Needed only if a chart must await
+  host work from a script (see Using tinyjs from tinyactors). It would be a
+  core ADR.
 
 ## Sources
 
