@@ -88,10 +88,9 @@ gaps left or found on the way.
   sends already submitted to the router are not restored. Decide whether
   either matters for a real chart, and record it. (Core ADR 0091's notes;
   kernel ADR 0002, "Step 4a".)
-- [ ] **The trace staging bound is checked when a call ends,** so a request
-  can exceed it by one call's records (under 4 KiB measured). Tighten it
-  to per record, or record the bound as "plus one call". (napi ADR 0036's
-  notes.)
+- [x] **The trace staging bound is the bound plus one call,** decided
+  2026-09-30 and recorded in napi ADR 0036's follow-up: a per-record check
+  would call the sink from inside core.
 - [x] **A `send()` with a timeout does not keep the process alive,** and
   neither does any pending `send()`: decided 2026-09-30 and recorded in
   napi ADR 0007 (Consequences). Tests that wait for a timeout keep the

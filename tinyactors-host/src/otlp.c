@@ -105,6 +105,9 @@ static void tah_buf_free(tah_otlp_buf *buf) {
  * hands the sink a request once it has (tna_trace_flush_if_full). A
  * macrostep is never split, so a burst can grow the buffer past it for one
  * request; the buffer shrinks back to the bound when that request is taken.
+ * The bound is therefore the bound plus one call's (or one macrostep's)
+ * records, never checked per record: a per-record check would call the
+ * sink from inside core (napi ADR 0036, follow-up of 2026-09-30).
  */
 static size_t tah_keep_bytes(const tah_otlp *otlp) {
     return otlp->config.keep_bytes != 0 ? otlp->config.keep_bytes : (size_t)1 << 20;

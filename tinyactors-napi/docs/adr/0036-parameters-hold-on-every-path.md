@@ -1,6 +1,6 @@
 # ADR 0036: Parameters hold on every path
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0035 (a system is created with its parameters) on four points found while implementing it; core ADR 0093 settles the fifth, the event-block cache. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0035 (a system is created with its parameters) on four points found while implementing it; core ADR 0093 settles the fifth, the event-block cache. The staging bound is the bound plus one call (follow-up of 2026-09-30). Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
 **Date:** 2026-09-29
 
 ## Context
@@ -201,3 +201,24 @@ property at a fraction of the cost.
     state is zero (ADR 0093's notes).
 - **Memory per default system:** without a sink, native 97,464 bytes (core
   ADR 0093's notes). With a sink, plus the staging (1 MiB by default).
+
+### Follow-up of 2026-09-30: the bound is the bound plus one call
+
+Decided: §2's bound is **`traceStagingBytes` plus the records of one
+call** (or of one macrostep, inside a turn), not plus one record. A request
+is checked against the bound between macrosteps (`tah_system_staging_full`
+in the kernel) and when a call from JavaScript ends
+(`tna_trace_flush_if_full`, `tna_trace_after_method`), never per record.
+
+- **Why not per record.** A per-record check would have to hand the sink a
+  request from inside a core call: in the middle of a macrostep, with
+  `inside_core` set, where napi does not call JavaScript. It would also add
+  a branch to every span and log the encoder appends, on the traced hot
+  path. The overshoot it would remove is small and measured: under 4 KiB
+  for 3,000 spawns at a 64 KiB bound.
+- **What holds.** No request is larger than the bound plus one call's (or
+  one macrostep's) records, and the staging shrinks back to the bound once
+  that request is taken. `test/tracing.js` (`stagingBoundOutsideTurns`)
+  asserts the bound plus 4 KiB.
+- §2's first point ("no request is larger than `traceStagingBytes` plus one
+  record") is corrected by this note; the ADR's text stays as the record.
