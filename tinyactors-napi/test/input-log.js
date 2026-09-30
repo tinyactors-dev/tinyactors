@@ -79,20 +79,24 @@ async function recordsEachKind() {
   }
   // An entry holds one address's records of a turn: each address's own order is core's.
   const of = async (name) => (await kinds(batches)).filter((kind) => kind.endsWith(`:${name}`)).map((kind) => kind.split(':')[0]);
+  // Mail posted before an actor's bootstrap ended comes before its
+  // `spawned`, which waits for the bootstrap's end (kernel ADR 0004).
   assert.deepEqual(await of('c1'), [
+    'accepted', // inc
     'spawned',
-    'accepted', 'delivered', // inc
+    'delivered', // inc
     'accepted', 'delivered', // ping
     'accepted', 'delivered', // arm
     'withdrawn',
     'accepted', 'delivered', 'finished', // stop
   ]);
   assert.deepEqual(await of('p1'), [
+    'accepted', // go
     'spawned',
-    'accepted', 'delivered', // go
+    'delivered', // go
     'accepted', 'delivered', 'finished', // pong
   ]);
-  const [spawned] = records;
+  const spawned = records.find((input) => input.kind === 'spawned');
   assert.equal(spawned.revision, 'v1');
   assert.deepEqual(spawned.binding, { n: 5 }, 'the binding as it was at the spawn');
   assert.equal(spawned.slot, undefined, 'no native fields');
@@ -110,10 +114,14 @@ async function recordsEachKind() {
   }
   assert.deepEqual(Object.keys(delivered[0]).sort(), ['id', 'kind', 'seq', 'time'], 'a delivery carries no content');
   assert.equal(new Set(events.map((input) => input.id)).size, events.length, 'identities are unique');
-  // Each actor's records are numbered from 1, in order.
+  // Each actor's records are numbered from 1 at `spawned`, in order; mail
+  // accepted before its bootstrap ended has no number (kernel ADR 0004).
   for (const name of ['c1', 'p1']) {
-    const own = (await entriesOf(batches)).filter(({ address }) => address.name === name).map(({ record }) => Number(record.seq));
-    assert.deepEqual(own, own.map((_, index) => index + 1), `${name}'s records are numbered in order`);
+    const own = (await entriesOf(batches)).filter(({ address }) => address.name === name).map(({ record }) => record);
+    assert.equal(own[0].kind, 'accepted');
+    assert.equal(own[0].seq, undefined, `${name}'s mail before its bootstrap ended is outside its life`);
+    const numbered = own.slice(1).map((record) => Number(record.seq));
+    assert.deepEqual(numbered, numbered.map((_, index) => index + 1), `${name}'s records are numbered in order`);
   }
   const ping = events.find((input) => input.name === 'ping');
   assert.equal(ping.origin, '#_actor_pinger/p1');

@@ -1870,7 +1870,8 @@ export interface InputBatch {
  * One record of an input log as readInputLog() decodes it for an audit
  * trail (napi ADR 0034 section 5): the host kernel's vocabulary (kernel ADR
  * 0002, layout version 2), at logical time `time`, numbered `seq` in its
- * actor's life (no `seq` for one written while the actor was not resident).
+ * actor's life (no `seq` for one written outside it: while the actor was
+ * not resident, or before its bootstrap ended, kernel ADR 0004).
  * `accepted` is a message taken into the actor's mailbox, or waiting for its
  * family's loader, with its content, once; its `delivered` (or `jump`)
  * record names the same `id` when it is delivered, its `dropped` record when

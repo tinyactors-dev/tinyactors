@@ -367,7 +367,10 @@ static ta_result tah_inputs_hold(tah_system *system, tah_inputs_target target, t
         }
         return result;
     }
-    tah_input_held held = { .actor = target.actor, .address = target.address, .bytes = tah_inputs_bytes(inputs) };
+    tah_input_held held = { .actor = target.actor,
+                            .address = target.address,
+                            .bytes = tah_inputs_bytes(inputs),
+                            .life = record->kind == TAH_WAL_SPAWNED };
     record->seq = 0; /* filled in when it is written */
     result = tah_wal_write(record, &(tah_wal_write_params){ .out = &held.bytes, .datamodel = inputs->datamodel });
     if (inputs->text_ready) {
@@ -421,6 +424,11 @@ static ta_result tah_inputs_write(tah_system *system, tah_inputs_target target, 
             ta_arena_reset(&inputs->text);
         }
         return TA_ERR_NOMEM;
+    }
+    /* Before its held SPAWNED, an actor's records are outside its life: seq 0 (kernel ADR 0004). */
+    held = tah_inputs_held_of(inputs, target.actor, &held_at);
+    if (held != NULL && held->life) {
+        target.actor = 0;
     }
     uint64_t before = tah_inputs_actor_seq(inputs, target.actor);
     record->seq = target.actor != 0 ? before + 1u : 0;
@@ -1032,9 +1040,8 @@ ta_result tah_inputs_note(void *self, const tah_sched_note *note) {
  * Lifecycle records
  */
 
-ta_result tah_inputs_spawned(tah_system *system, ta_actor_id actor, tah_input_mark *mark) {
+ta_result tah_inputs_spawned(tah_system *system, ta_actor_id actor) {
     ta_address *handle = NULL;
-    *mark = (tah_input_mark){ 0 };
     if (!tah_inputs_logged_handle(system, actor, NULL, &handle)) {
         return TA_OK;
     }
@@ -1058,7 +1065,8 @@ ta_result tah_inputs_spawned(tah_system *system, ta_actor_id actor, tah_input_ma
         .values = { &binding },
     };
     tah_inputs_set_actor_seq(&system->inputs, actor, 0); /* a new life: its records count from 1 */
-    ta_result result = tah_inputs_write(system, (tah_inputs_target){ .address = handle, .actor = actor }, &record, mark);
+    /* Held until its bootstrap macrostep ends (kernel ADR 0004). */
+    ta_result result = tah_inputs_hold(system, (tah_inputs_target){ .address = handle, .actor = actor }, &record);
     ta_value_release(&binding);
     return result;
 }

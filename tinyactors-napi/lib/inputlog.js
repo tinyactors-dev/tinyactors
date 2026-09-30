@@ -177,7 +177,7 @@ function decode(bytes, at, classes, utf8) {
     record.ends = ends !== 0n;
   }
   if (record.seq === '0') {
-    delete record.seq; // written while no actor was resident
+    delete record.seq; // outside a life: no actor was resident, or its bootstrap had not ended (kernel ADR 0004)
   }
   if (record.family !== undefined && record.name !== undefined) {
     record.address = { family: record.family, name: record.name };

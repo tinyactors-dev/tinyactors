@@ -246,3 +246,34 @@ the two copies of n1 carry the same event name, send ID and origin
 (`#_actor_ping/p1`, with its type), and different message identities. The
 same chart with `<send>`s that have no `id` gives neither copy a send ID;
 the origin still matches.
+
+### A bootstrap's first record is `spawned` (2026-10-01)
+
+Section 1 for bootstraps:
+- **`tah_inputs_spawned()`** renders `spawned` and holds it
+  (`tah_inputs_hold()`) instead of writing it: the bootstrap's resume ends
+  with `TAH_NOTE_ENDED` like any macrostep's, and the record goes into
+  that turn's batch. Its `mark` parameter is gone:
+  `tah_hook_actor_spawned()` lets go of the held record with
+  `tah_inputs_removed()` when the actor cannot be scheduled.
+- **Records before it:** the held record is marked `life`, and a record
+  written for the actor meanwhile (mail accepted before the bootstrap
+  ended, typically a post right after the spawn) has seq 0, outside the
+  life; `spawned` takes 1 when it is written. The replay already held such
+  mail as owed. `tah_replay_prepare()` keeps the latest time too, since
+  that mail can be later than the `spawned` after it.
+- **A crash before the bootstrap's batch** loses the spawn with what the
+  bootstrap sent. A log that has only such mail and no life is loaded as
+  napi's loader loads any log with no life: a fresh spawn, with the owed
+  mail delivered to it.
+- **Children started by `<invoke>`** are unnamed and never logged, so they
+  have no `spawned` to hold.
+
+Tests (`replay_test`): `a_bootstrap_send_survives_a_crash_between_commits`
+(written first, failed before this change: with one resume per turn,
+ping/p1's `<onentry>` send was lost with the bootstrap's batch, since its
+`spawned` had committed a turn earlier) and
+`mail_before_a_bootstrap_ends_is_outside_its_life`. napi's
+`test/input-log.js` expects `accepted` (without `seq`) before `spawned`
+for mail posted right after a spawn; `readInputLog()`'s and
+`index.d.ts`'s comments on `seq` say why.

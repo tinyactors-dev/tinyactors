@@ -22,12 +22,12 @@ typedef struct tah_input_touch {
 } tah_input_touch;
 
 /*
- * A macrostep's first record (DELIVERED, JUMP or RELEASED), held from the
- * start of the macrostep until it ends: it goes into the batch of the turn
- * the macrostep ends in, beside the ACCEPTED records of what it sent, so a
- * crash keeps both or neither (kernel ADR 0004). Its bytes are written
- * when the macrostep starts, with that time; its seq is filled in when it
- * goes into the batch.
+ * A macrostep's first record (DELIVERED, JUMP or RELEASED, or SPAWNED for
+ * a bootstrap), held from the start of the macrostep until it ends: it goes
+ * into the batch of the turn the macrostep ends in, beside the ACCEPTED
+ * records of what it sent, so a crash keeps both or neither (kernel ADR
+ * 0004). Its bytes are written when the macrostep starts, with that time;
+ * its seq is filled in when it goes into the batch.
  */
 typedef struct {
     ta_actor_id actor;
@@ -35,6 +35,7 @@ typedef struct {
     tah_vec bytes;       /* uint8_t: one record, seq 0 */
     bool ended;          /* the macrostep ended and the record could not be written: the next turn tries again */
     bool owed;           /* its message still counts as waiting for the address (its wake) until it is written */
+    bool life;           /* SPAWNED: the actor's records before it are outside its life, and have seq 0 */
 } tah_input_held;
 
 /*

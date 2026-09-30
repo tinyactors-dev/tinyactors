@@ -826,8 +826,12 @@ ta_result tah_replay_prepare(tah_replay *replay, const tah_replay_prepare_params
         if (result != TA_OK) {
             return result;
         }
+        /* The latest time (kernel ADR 0004): mail accepted for a new actor
+         * before its bootstrap ended comes before its later-timed SPAWNED. */
+        if (!replay->has_time || view.time > replay->last_time) {
+            replay->last_time = view.time;
+        }
         replay->has_time = true;
-        replay->last_time = view.time;
         if (view.kind == TAH_WAL_ACCEPTED || view.kind == TAH_WAL_DROPPED || view.kind == TAH_WAL_EVICTED ||
             view.kind == TAH_WAL_FIRED) {
             if (view.kind == TAH_WAL_ACCEPTED) {

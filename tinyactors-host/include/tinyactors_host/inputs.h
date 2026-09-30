@@ -11,7 +11,8 @@
  * into the turn's buffer for the actor's address, calls core with the
  * input's time, and keeps the record when core took the input or cuts it
  * off again when it did not (a mark, tah_input_mark). A macrostep's first
- * record (DELIVERED, JUMP or RELEASED) is made when the macrostep starts,
+ * record (DELIVERED, JUMP or RELEASED, and SPAWNED for a bootstrap) is
+ * made when the macrostep starts,
  * with that time, and written into the batch of the turn it ends in,
  * beside what it sent (kernel ADR 0004). A value is written by
  * the data model's codec (tah_inputs_set_datamodel), so an input carrying a
@@ -28,7 +29,8 @@
  *
  * Record numbers (seq) count a resident actor's records in its life, from
  * 1 at SPAWNED; a record written while an address has no resident actor
- * (mail waiting for a loader) has seq 0.
+ * (mail waiting for a loader), or before its actor's held SPAWNED (mail
+ * for it before its bootstrap ends), has seq 0.
  *
  * Wakes (napi ADR 0033 section 4): every address a record names in a turn
  * is touched, and when the batch is taken its wake is worked out: the
@@ -97,8 +99,10 @@ ta_result tah_inputs_note(void *self, const tah_sched_note *note);
 bool tah_inputs_seq_is_ours(const tah_inputs *inputs, uint64_t seq);
 
 /* A logged actor was spawned (tah_hook_actor_spawned): SPAWNED, with its
- * data as it was bound. Anything but TA_OK refuses the spawn. */
-ta_result tah_inputs_spawned(tah_system *system, ta_actor_id actor, tah_input_mark *mark);
+ * data as it was bound, held as the first record of its bootstrap
+ * macrostep (kernel ADR 0004); tah_inputs_removed() lets go of it. Anything
+ * but TA_OK refuses the spawn. */
+ta_result tah_inputs_spawned(tah_system *system, ta_actor_id actor);
 /* Writes `evicted` for the logged actor about to be destroyed, and fixes
  * its wake: `has_wake` false is none. TA_ERR_BUSY inside a macrostep
  * (kernel ADR 0004). */

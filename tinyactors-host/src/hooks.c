@@ -14,13 +14,13 @@ ta_result tah_hook_actor_created(tah_system *system, ta_actor_id actor) {
 }
 
 ta_result tah_hook_actor_spawned(tah_system *system, ta_actor_id actor) {
-    /* SPAWNED first, while the actor is as its binding made it (kernel ADR 0002). */
-    tah_input_mark mark = { 0 };
-    ta_result result = tah_inputs_spawned(system, actor, &mark);
+    /* SPAWNED first, while the actor is as its binding made it (kernel ADR
+     * 0002); it is held until the bootstrap ends (kernel ADR 0004). */
+    ta_result result = tah_inputs_spawned(system, actor);
     if (result == TA_OK) {
-        result = tah_hook_actor_created(system, actor);
+        result = tah_hook_actor_created(system, actor); /* destroys the actor when it fails */
         if (result != TA_OK) {
-            tah_inputs_undo(system, &mark);
+            tah_inputs_removed(system, actor);
         }
         return result;
     }

@@ -1635,6 +1635,104 @@ static void a_paused_macrostep_repeats_its_sends_after_a_crash(const char *revis
     }
 }
 
+/*
+ * Revision "boot" of family "ping": its first state's <onentry> sends n1 to
+ * sink/b at once, in the actor's bootstrap macrostep.
+ */
+static const ta_scxml_state_spec boot_states[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("b0"),
+      .onentry = (const ta_scxml_handler_spec[]){
+          { .actions = (const ta_scxml_action_spec[]){ SEND_NOW("n1", "hello", "#_actor_sink/b"), END } }, { 0 } } },
+    END,
+};
+
+/*
+ * A crash between the batch of a spawn and the batch of the bootstrap
+ * macrostep it starts (kernel ADR 0004, section 1). With one resume per
+ * turn, an unlogged pong/p0 spawned first takes the next turn's resume, so
+ * ping/p1's bootstrap, and n1's ACCEPTED in sink/b's log, are a turn after
+ * its spawn. The process stops after that turn was committed and before
+ * the bootstrap's was. The committed logs are loaded in a new system as
+ * napi's loader does: a log with a life is replayed, and an address whose
+ * log has none is spawned afresh. sink/b gets n1 once.
+ */
+static void a_bootstrap_send_survives_a_crash_between_commits(void) {
+    ping_log.length = sink_log.length = 0;
+    tah_system *system = make_system_logging(1, true);
+    ta_definition_id boot = 0;
+    ta_definition_id sink = 0;
+    ta_definition_id filler = 0;
+    ta_actor_id receiver = 0;
+    ta_actor_id first = 0;
+    ta_actor_id booted = 0;
+    CHECK(define(system, "ping", "boot", boot_states, &boot) == TA_OK);
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    CHECK(define(system, "pong", "v1", sink_states, &filler) == TA_OK);
+    CHECK(spawn_at(system, sink, &sink_address, &receiver) == TA_OK);
+    run_apart(system);
+    system->budgets.resumes = 1;
+    static const ta_actor_address pong_address = { .family = { .name = STR("pong") }, .name = STR("p0") };
+    CHECK(spawn_at(system, filler, &pong_address, &first) == TA_OK);
+    CHECK(spawn_at(system, boot, &ping_address, &booted) == TA_OK);
+    turn_apart(system); /* pong/p0's bootstrap: committed */
+    static tah_wal_kind kinds[8];
+    tah_system_turn(system); /* ping/p1's bootstrap sends n1 */
+    batch_kinds(system, "sink", kinds, 8);
+    CHECK(kinds[0] == TAH_WAL_ACCEPTED);
+    uint32_t wakes = 0;
+    (void)tah_inputs_wakes(system, &wakes);
+    tah_inputs_release(&system->inputs); /* never committed */
+    tah_system_end_turn(system);
+    finish_system(system); /* the crash */
+
+    system = make_system_logging(2, true);
+    CHECK(define(system, "ping", "boot", boot_states, &boot) == TA_OK);
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    restore_run sunk = { .definition = sink, .address = &sink_address };
+    advance(system, 7000);
+    CHECK(restore(system, sink_log.bytes, sink_log.length, &sunk) == TA_OK && sunk.published);
+    CHECK(ping_log.length == 0); /* its SPAWNED waited for the bootstrap's batch, and went with it */
+    CHECK(spawn_at(system, boot, &ping_address, &booted) == TA_OK); /* no life in its log */
+    run(system, NULL);
+    CHECK(in_state(system, sunk.actor, "h1")); /* n1, once */
+    finish_system(system);
+}
+
+/*
+ * Mail for an actor accepted before its bootstrap ends is written before
+ * its SPAWNED, with seq 0, outside its life (kernel ADR 0004): the replay
+ * holds it as owed, as mail that waited for a loader, and delivers it at
+ * its DELIVERED.
+ */
+static void mail_before_a_bootstrap_ends_is_outside_its_life(void) {
+    ping_log.length = 0;
+    tah_system *system = make_system(1);
+    ta_definition_id ping = define_ping(system);
+    ta_actor_id actor = 0;
+    advance(system, 500);
+    CHECK(spawn_at(system, ping, &ping_address, &actor) == TA_OK);
+    advance(system, 600);
+    CHECK(post(system, actor, "ping", NULL) == TA_OK); /* before any turn: before the bootstrap */
+    run(system, &ping_log);
+    CHECK(in_state(system, actor, "one"));
+    finish_system(system);
+
+    static record_list records;
+    read_records(ping_log.bytes, ping_log.length, &records);
+    CHECK(records.count == 3);
+    CHECK(records.views[0].kind == TAH_WAL_ACCEPTED && records.views[0].seq == 0 && records.views[0].time == 600);
+    CHECK(records.views[1].kind == TAH_WAL_SPAWNED && records.views[1].seq == 1 && records.views[1].time == 500);
+    CHECK(records.views[2].kind == TAH_WAL_DELIVERED && records.views[2].seq == 2);
+    system = make_system(2);
+    restore_run restored = { .definition = define_ping(system) };
+    advance(system, 1000);
+    CHECK(restore(system, ping_log.bytes, ping_log.length, &restored) == TA_OK && restored.published);
+    CHECK(restored.redelivered == 0 && restored.last_time == 600); /* the latest record time */
+    run(system, NULL);
+    CHECK(in_state(system, restored.actor, "one"));
+    finish_system(system);
+}
+
 /* ------------------------------------------------------------------------
  * Mail between actors past the queue's limits (kernel ADR 0003). ping/p1
  * sends n1 to sink/b while the queue is full: the router accepts it into
@@ -1922,6 +2020,8 @@ int main(void) {
     a_macrostep_is_not_evicted();
     a_paused_macrostep_repeats_its_sends_after_a_crash("fan", fan_states, true);
     a_paused_macrostep_repeats_its_sends_after_a_crash("anon", anon_states, false);
+    a_bootstrap_send_survives_a_crash_between_commits();
+    mail_before_a_bootstrap_ends_is_outside_its_life();
     overflow_is_delivered_when_there_is_room();
     overflow_survives_a_crash();
     overflow_survives_an_eviction_and_exit();
