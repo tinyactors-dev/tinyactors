@@ -95,11 +95,13 @@ gaps left or found on the way.
 - [ ] **A `send()` with a timeout does not keep the process alive,** so
   napi's tests use keep-alive intervals. Decide whether a pending `send()`
   should hold the event loop open. (napi ADR 0033's notes.) -- it should not.
-- [ ] **Run core's exhaustive pass after core changes.** Some full runs
-  showed core's step cached after a core change (`scale_test` to four
-  million actors). The last full run passed, but confirm that
-  `test:full --all` reruns core's exhaustive part whenever core's sources
-  changed.
+- [ ] **Run the test host's exhaustive pass after core changes.** Some
+  full runs showed the test host's step cached after a core change
+  (`scale_test` to four million actors; core itself has no exhaustive
+  mode). Two causes are fixed: the root runner took a subtask's skip line
+  (`bindings`) for the step's own, and each project's `test:full` shared
+  its fast pass's stamp without forcing. Confirm with `test:full --all`
+  after a core change.
 
 ## From granary's feedback, still open
 
