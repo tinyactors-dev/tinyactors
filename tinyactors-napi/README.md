@@ -484,6 +484,43 @@ then each parameter that differs from its default, in name order
 Types are included (`index.d.ts`). `statechart<Data>()` types an actor's
 data, so `assign()`, `data()` and `inspect().data` are checked against it.
 
+`statechart<Data, Events>()` also takes the events the chart handles, as a
+map from name to data (an interface or a type):
+
+```ts
+interface OrderEvents {
+  'order.placed': { id: string; total: number };
+  'order.cancelled': { id: string };
+  tick: undefined;
+}
+
+statechart<{ total: number }, OrderEvents>({ family: 'orders', revision: 'v1' })
+  .data('total', 0)
+  .state('open', (s) => s
+    .on('order.placed', (t) => t.assign('total', function ({ event }) {
+      return this.total + (event?.data.total ?? 0); // event.data is { id, total }
+    }))
+    .on('order', (t) => t.raise('tick'))            // order.placed and order.cancelled
+    .on('done.invoke.payment error.*')              // platform events: data unknown
+    // .on('order.shipped')                         // type error: no such event
+    // .raise('order.cancelled')                    // type error: its data is missing
+  );
+```
+
+- `on()` takes an SCXML event descriptor: a space-separated list, each item
+  a name that also matches the names it prefixes on a `.` boundary
+  (`order` and `order.*` match `order.placed`), or `*`. An item that
+  matches no event of the map is a type error. Descriptors of platform
+  events (`done.state.<id>`, `done.invoke.<id>`, `error.*`, ...) are always
+  accepted; list an invoked child's own events in the map to type them.
+- In that transition's expressions, `context.event` is a union of the
+  matched events, so `event.name` narrows `event.data`.
+- `raise()` takes a name of the map, and requires its data unless the type
+  admits `undefined`. `send()` accepts any name, since it may go to another
+  actor, and checks `data()` for a name of the map.
+- Without an event map every name is accepted and `event.data` is
+  `unknown`. The map is types only: nothing changes at run time.
+
 ## Development builds
 
 Builds of unreleased commits are published under the `next` dist-tag, so a

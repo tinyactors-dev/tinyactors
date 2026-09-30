@@ -327,7 +327,7 @@ export interface System {
    * name a data model registerDatamodel() registered.
    */
   define<Data extends object = Record<string, unknown>>(
-    source: DefinitionSpec | DefinitionBuilder<Data>,
+    source: DefinitionSpec | DefinitionBuilder<Data, any>,
     options?: { microstepLimit?: number; resolve?: (src: string) => string | Uint8Array | undefined },
   ): Definition<Data>;
   /**
@@ -1381,9 +1381,97 @@ export interface StatechartOptions extends DefinitionIdentity {
  * cannot be written as text, and building it again with new closures makes
  * another definition.
  */
-export declare function statechart<Data extends object>(
+export declare function statechart<Data extends object, Events extends object = Record<string, unknown>>(
   options: StatechartOptions,
-): DefinitionBuilder<Data>;
+): DefinitionBuilder<Data, Events>;
+
+/*
+ * Typed event maps. statechart<Data, Events>() takes the events the chart
+ * handles as a map from name to data, `{ inc: { by: number }; reset: undefined }`
+ * (an interface or a type). With one, on() refuses a descriptor that matches
+ * no event of the map, a transition's expressions see `context.event` as the
+ * events its descriptor matches, and raise() and send() check the data of
+ * an event of the map. With the default, `Record<string, unknown>`, every
+ * name is accepted and `event.data` is unknown, as in an untyped chart.
+ *
+ * A descriptor is SCXML's (3.12.1): a space-separated list of names, each
+ * matching that name and the names it prefixes on a `.` boundary (`"order"`
+ * matches `order.placed`), with an optional trailing `.*` (`"order.*"`), or
+ * `*` for every event. A descriptor for a platform event (`done`, `done.*`,
+ * `done.state.<id>`, `done.invoke.<id>`, `error`, `error.*`,
+ * `error.execution`, ...) is always accepted, with data `unknown`: list an
+ * invoked child's own events in the map to type them.
+ */
+
+/** The name of an event the platform raises: a state's or an invocation's completion, or an error. */
+export type PlatformEventName = `done.state.${string}` | `done.invoke.${string}` | `error.${string}`;
+
+/** The names in an event descriptor's space-separated list. */
+export type EventDescriptors<Descriptor extends string> =
+  Descriptor extends `${infer First} ${infer Rest}`
+    ? EventDescriptors<First> | EventDescriptors<Rest>
+    : Descriptor extends "" ? never : Descriptor;
+
+type DescriptorPrefix<Descriptor extends string> = Descriptor extends `${infer Prefix}.*` ? Prefix : Descriptor;
+
+type DescriptorMatches<Name extends string, Descriptor extends string> =
+  Descriptor extends "*"
+    ? true
+    : Name extends DescriptorPrefix<Descriptor> | `${DescriptorPrefix<Descriptor>}.${string}` ? true : false;
+
+type DescriptorIsPlatform<Descriptor extends string> =
+  DescriptorPrefix<Descriptor> extends "done" | "error" | `done.${string}` | `error.${string}` ? true : false;
+
+type MapNames<Events extends object> = keyof Events & string;
+
+type MatchedNames<Events extends object, Descriptor extends string> = {
+  [Name in MapNames<Events>]: true extends (Descriptor extends string ? DescriptorMatches<Name, Descriptor> : never) ? Name : never;
+}[MapNames<Events>];
+
+type UnmatchedDescriptors<Events extends object, Descriptor extends string> =
+  EventDescriptors<Descriptor> extends infer Each
+    ? Each extends string
+      ? Each extends "*"
+        ? never
+        : DescriptorIsPlatform<Each> extends true
+          ? never
+          : [MatchedNames<Events, Each>] extends [never] ? Each : never
+      : never
+    : never;
+
+/**
+ * `Descriptor` when it names an event of `Events` (or a platform event, or
+ * `*`) in each item of its list, otherwise a message saying which item
+ * matches nothing. Any descriptor, for a chart with no event map.
+ */
+export type CheckedEventDescriptor<Events extends object, Descriptor extends string> =
+  string extends keyof Events
+    ? Descriptor
+    : [UnmatchedDescriptors<Events, Descriptor>] extends [never]
+      ? Descriptor
+      : `no event in the chart's event map matches "${UnmatchedDescriptors<Events, Descriptor>}"`;
+
+/**
+ * The event a transition on `Descriptor` sees as `context.event`: a union
+ * with one member per event of the map the descriptor matches, each with
+ * that name and data; a platform event's data is unknown.
+ */
+export type TransitionEvent<Events extends object, Descriptor extends string> =
+  string extends keyof Events
+    ? ActorEvent<Events[keyof Events]>
+    :
+      | { [Name in MatchedNames<Events, EventDescriptors<Descriptor>>]: ActorEvent<Events[Name], Name> }[MatchedNames<Events, EventDescriptors<Descriptor>>]
+      | ("*" extends EventDescriptors<Descriptor>
+        ? ActorEvent
+        : true extends (EventDescriptors<Descriptor> extends infer Each extends string ? DescriptorIsPlatform<Each> : never)
+          ? ActorEvent<unknown, PlatformEventName>
+          : never);
+
+/** The data argument of raise(): required when the event's data cannot be undefined. */
+export type EventDataArgument<Data extends object, Payload, Event> =
+  undefined extends Payload
+    ? [data?: ValueInput<Data, Payload, Event>]
+    : [data: ValueInput<Data, Payload, Event>];
 
 export type Target = string | readonly string[];
 declare const literalValueBrand: unique symbol;
@@ -1431,39 +1519,39 @@ export declare function content(
   options?: { readonly mediaType?: string },
 ): ContentValue;
 
-export type ValueInput<Data extends object, Value = unknown> =
+export type ValueInput<Data extends object, Value = unknown, Event = ActorEvent> =
   | (Value extends (...arguments_: never[]) => unknown ? never : Value)
   | LiteralValue<Value>
   | ContentValue
   | NamedFunction
-  | Expression<Data, Value>;
+  | Expression<Data, Value, Event>;
 
-export interface DefinitionBuilder<Data extends object>
-  extends StateContainerBuilder<Data, DefinitionBuilder<Data>> {
+export interface DefinitionBuilder<Data extends object, Events extends object = Record<string, unknown>>
+  extends StateContainerBuilder<Data, DefinitionBuilder<Data, Events>, Events> {
   /** `initial` is data even when it is a function; content() is parsed (see content()). */
   data<Key extends keyof Data & string>(name: Key, initial: Data[Key] | ContentValue): this;
   dataExpression<Key extends keyof Data & string>(
     name: Key,
     initial: Expression<Data, Data[Key]> | NamedFunction,
   ): this;
-  initial(target: Target, actions?: ActionBlock<Data>): this;
+  initial(target: Target, actions?: ActionBlock<Data, Events>): this;
   /** A script run once at initialization, after early-bound data (SCXML 3.2.2). */
   script(run: Script<Data> | NamedFunction): this;
   build(): DefinitionSpec;
 }
 
-export type ActionBlock<Data extends object> = (
-  actions: ActionBuilder<Data>,
+export type ActionBlock<Data extends object, Events extends object = Record<string, unknown>, Event = ActorEvent> = (
+  actions: ActionBuilder<Data, Events, Event>,
 ) => void;
 
-export type StateBlock<Data extends object> = (
-  state: StateBuilder<Data>,
+export type StateBlock<Data extends object, Events extends object = Record<string, unknown>> = (
+  state: StateBuilder<Data, Events>,
 ) => void;
 
-export interface StateContainerBuilder<Data extends object, Self> {
-  state(id: string, build?: StateBlock<Data>): Self;
-  parallel(id: string, build: StateBlock<Data>): Self;
-  final(id: string, build?: StateBlock<Data>): Self;
+export interface StateContainerBuilder<Data extends object, Self, Events extends object = Record<string, unknown>> {
+  state(id: string, build?: StateBlock<Data, Events>): Self;
+  parallel(id: string, build: StateBlock<Data, Events>): Self;
+  final(id: string, build?: StateBlock<Data, Events>): Self;
   /**
    * A history state. `build` gives it its default transition, which it
    * needs exactly one of, with always(): `h => h.always(t => t.target("a"))`.
@@ -1471,15 +1559,15 @@ export interface StateContainerBuilder<Data extends object, Self> {
   history(
     id: string,
     depth: "shallow" | "deep",
-    build: StateBlock<Data>,
+    build: StateBlock<Data, Events>,
   ): Self;
 }
 
-export interface StateBuilder<Data extends object>
-  extends StateContainerBuilder<Data, StateBuilder<Data>> {
+export interface StateBuilder<Data extends object, Events extends object = Record<string, unknown>>
+  extends StateContainerBuilder<Data, StateBuilder<Data, Events>, Events> {
   /** Override the kind normally inferred from the builder method and children. */
   kind(kind: StateKind): this;
-  initial(target: Target, actions?: ActionBlock<Data>): this;
+  initial(target: Target, actions?: ActionBlock<Data, Events>): this;
 
   /** `initial` is data even when it is a function; content() is parsed (see content()). */
   data<Key extends keyof Data & string>(name: Key, initial: Data[Key] | ContentValue): this;
@@ -1489,85 +1577,115 @@ export interface StateBuilder<Data extends object>
   ): this;
 
   /** Each call creates one separately-failing executable-content block. */
-  entry(build: ActionBlock<Data>): this;
-  exit(build: ActionBlock<Data>): this;
+  entry(build: ActionBlock<Data, Events>): this;
+  exit(build: ActionBlock<Data, Events>): this;
 
-  /** Add an external transition in document order. */
-  on(event: EventName, build?: TransitionBlock<Data>): this;
+  /**
+   * Add an external transition in document order, on an SCXML event
+   * descriptor (a space-separated list; see the typed event maps above).
+   * With an event map, a descriptor that matches none of its events is a
+   * type error, and the transition's expressions see `context.event` as
+   * the events it matches.
+   */
+  on<const Descriptor extends string>(
+    event: CheckedEventDescriptor<Events, Descriptor>,
+    build?: TransitionBlock<Data, Events, TransitionEvent<Events, Descriptor>>,
+  ): this;
   /** Add an eventless transition in document order. */
-  always(build: TransitionBlock<Data>): this;
-  invoke(build: InvokeBlock<Data>): this;
+  always(build: TransitionBlock<Data, Events>): this;
+  invoke(build: InvokeBlock<Data, Events>): this;
   doneData(build: DoneDataBlock<Data>): this;
 }
 
-export type TransitionBlock<Data extends object> = (
-  transition: TransitionBuilder<Data>,
+export type TransitionBlock<Data extends object, Events extends object = Record<string, unknown>, Event = ActorEvent> = (
+  transition: TransitionBuilder<Data, Events, Event>,
 ) => void;
 
-export interface TransitionBuilder<Data extends object>
-  extends ActionSequenceBuilder<Data, TransitionBuilder<Data>> {
+export interface TransitionBuilder<Data extends object, Events extends object = Record<string, unknown>, Event = ActorEvent>
+  extends ActionSequenceBuilder<Data, TransitionBuilder<Data, Events, Event>, Events, Event> {
   /** A function, named(), or source text: "In('s')", a data name, or "name()". */
-  when(condition: Condition<Data> | NamedFunction | string): this;
+  when(condition: Condition<Data, Event> | NamedFunction | string): this;
   target(target: Target): this;
   internal(): this;
   external(): this;
 }
 
-export interface ActionBuilder<Data extends object>
-  extends ActionSequenceBuilder<Data, ActionBuilder<Data>> {}
+export interface ActionBuilder<Data extends object, Events extends object = Record<string, unknown>, Event = ActorEvent>
+  extends ActionSequenceBuilder<Data, ActionBuilder<Data, Events, Event>, Events, Event> {}
 
-export interface ActionSequenceBuilder<Data extends object, Self> {
-  raise(event: EventName, data?: ValueInput<Data>): Self;
+export interface ActionSequenceBuilder<
+  Data extends object,
+  Self,
+  Events extends object = Record<string, unknown>,
+  Event = ActorEvent,
+> {
+  /**
+   * Raise an internal event. With an event map, `event` is one of its
+   * names, and `data` has that event's type (required unless it admits
+   * undefined).
+   */
+  raise<const Name extends MapNames<Events>>(event: Name, ...data: EventDataArgument<Data, Events[Name], Event>): Self;
 
-  send(event: StringSpec<Data>, build?: SendBlock<Data>): Self;
-  cancel(sendID: StringSpec<Data>): Self;
+  /**
+   * Send an event. A send may go to another actor, whose events this
+   * chart's map does not list, so any name is accepted; for a name of the
+   * map, the send's data() has that event's type.
+   */
+  send<const Name extends string>(
+    event: Name | NamedFunction | Expression<Data, string, Event>,
+    build?: SendBlock<Data, Name extends keyof Events ? Events[Name] : unknown, Event>,
+  ): Self;
+  cancel(sendID: StringSpec<Data, Event>): Self;
 
   /** Assign a declared top-level data property. */
   assign<Key extends keyof Data & string>(
     location: Key,
-    value: ValueInput<Data, Data[Key]>,
+    value: ValueInput<Data, Data[Key], Event>,
   ): Self;
   /** Assign through an explicit location, for nested or computed storage. */
   assignAt<Value>(
-    location: Location<Data, Value>,
-    value: ValueInput<Data, Value>,
+    location: Location<Data, Value, Event>,
+    value: ValueInput<Data, Value, Event>,
   ): Self;
 
-  script(run: Script<Data> | NamedFunction): Self;
-  log(label?: string, value?: Expression<Data> | NamedFunction | string): Self;
+  script(run: Script<Data, Event> | NamedFunction): Self;
+  log(label?: string, value?: Expression<Data, unknown, Event> | NamedFunction | string): Self;
 
   choose(
-    condition: Condition<Data> | NamedFunction | string,
-    then: ActionBlock<Data>,
-    otherwise?: ActionBlock<Data>,
+    condition: Condition<Data, Event> | NamedFunction | string,
+    then: ActionBlock<Data, Events, Event>,
+    otherwise?: ActionBlock<Data, Events, Event>,
   ): Self;
 
   forEach<Item>(
-    array: Expression<Data, readonly Item[]> | NamedFunction | (keyof Data & string) | LiteralValue<readonly Item[]>,
+    array: Expression<Data, readonly Item[], Event> | NamedFunction | (keyof Data & string) | LiteralValue<readonly Item[]>,
     item: keyof Data & string,
-    build: ActionBlock<Data>,
+    build: ActionBlock<Data, Events, Event>,
     index?: keyof Data & string,
   ): Self;
 }
 
-export type SendBlock<Data extends object> = (send: SendBuilder<Data>) => void;
-
-export interface SendBuilder<Data extends object> {
-  to(target: StringSpec<Data>): this;
-  via(ioType: StringSpec<Data>): this;
-  after(delay: DelaySpec<Data>): this;
-  /** id() and idLocation() replace each other: the last one called wins. */
-  id(id: string): this;
-  idLocation(location: keyof Data & string | Location<Data, string>): this;
-  data(value: ValueInput<Data>): this;
-  param(name: string, value: ValueInput<Data>): this;
-}
-
-export type InvokeBlock<Data extends object> = (
-  invoke: InvokeBuilder<Data>,
+export type SendBlock<Data extends object, Payload = unknown, Event = ActorEvent> = (
+  send: SendBuilder<Data, Payload, Event>,
 ) => void;
 
-export interface InvokeBuilder<Data extends object> {
+export interface SendBuilder<Data extends object, Payload = unknown, Event = ActorEvent> {
+  to(target: StringSpec<Data, Event>): this;
+  via(ioType: StringSpec<Data, Event>): this;
+  after(delay: DelaySpec<Data, Event>): this;
+  /** id() and idLocation() replace each other: the last one called wins. */
+  id(id: string): this;
+  idLocation(location: keyof Data & string | Location<Data, string, Event>): this;
+  /** The event's data; for an event of the chart's map, of that event's type. */
+  data(value: ValueInput<Data, Payload, Event>): this;
+  param(name: string, value: ValueInput<Data, unknown, Event>): this;
+}
+
+export type InvokeBlock<Data extends object, Events extends object = Record<string, unknown>> = (
+  invoke: InvokeBuilder<Data, Events>,
+) => void;
+
+export interface InvokeBuilder<Data extends object, Events extends object = Record<string, unknown>> {
   /** id() and idLocation() replace each other: the last one called wins. */
   id(id: string): this;
   idLocation(location: keyof Data & string | Location<Data, string>): this;
@@ -1576,7 +1694,7 @@ export interface InvokeBuilder<Data extends object> {
   content(value: ValueInput<Data>): this;
   param(name: string, value: ValueInput<Data>): this;
   autoforward(enabled?: boolean): this;
-  finalize(build: ActionBlock<Data>): this;
+  finalize(build: ActionBlock<Data, Events>): this;
 }
 
 export type DoneDataBlock<Data extends object> = (
@@ -1956,9 +2074,10 @@ export interface SessionImage<Data extends object = Record<string, unknown>> {
  * JavaScript data-model callbacks
  * -------------------------------------------------------------------------- */
 
-export interface EvaluationContext<Data extends object> {
+export interface EvaluationContext<Data extends object, Event = ActorEvent> {
   readonly data: Data;
-  readonly event?: ActorEvent;
+  /** The event being processed; in a transition of a chart with an event map, the events it matches. */
+  readonly event?: Event;
   readonly sessionID: string;
   readonly name?: string;
   /**
@@ -1972,24 +2091,24 @@ export interface EvaluationContext<Data extends object> {
   inState(state: string): boolean;
 }
 
-export type Expression<Data extends object, Result = unknown> = (
+export type Expression<Data extends object, Result = unknown, Event = ActorEvent> = (
   this: Data,
-  context: EvaluationContext<Data>,
+  context: EvaluationContext<Data, Event>,
 ) => Result;
 
-export type Condition<Data extends object> = Expression<Data, unknown>;
+export type Condition<Data extends object, Event = ActorEvent> = Expression<Data, unknown, Event>;
 
-export type Script<Data extends object> = (
+export type Script<Data extends object, Event = ActorEvent> = (
   this: Data,
-  context: EvaluationContext<Data>,
+  context: EvaluationContext<Data, Event>,
 ) => void;
 
-export interface Location<Data extends object, Value = unknown> {
-  get(this: Data, context: EvaluationContext<Data>): Value;
-  set(this: Data, value: Value, context: EvaluationContext<Data>): void;
+export interface Location<Data extends object, Value = unknown, Event = ActorEvent> {
+  get(this: Data, context: EvaluationContext<Data, Event>): Value;
+  set(this: Data, value: Value, context: EvaluationContext<Data, Event>): void;
 }
 
-export type StringSpec<Data extends object> = string | NamedFunction | Expression<Data, string>;
+export type StringSpec<Data extends object, Event = ActorEvent> = string | NamedFunction | Expression<Data, string, Event>;
 
 /**
  * A number is milliseconds, written as `${number}ms` for core, which takes
@@ -2000,12 +2119,12 @@ export type StringSpec<Data extends object> = string | NamedFunction | Expressio
  * delay as it is, so it returns an SCXML duration ("500ms"), as a delayexpr
  * does.
  */
-export type DelaySpec<Data extends object> =
+export type DelaySpec<Data extends object, Event = ActorEvent> =
   | number
   | `${number}ms`
   | `${number}s`
   | NamedFunction
-  | Expression<Data, number | string>;
+  | Expression<Data, number | string, Event>;
 
 /**
  * The event an expression sees as `context.event` (SCXML _event). `origin`
@@ -2013,8 +2132,8 @@ export type DelaySpec<Data extends object> =
  * `#_actor_<family>/<name>` (core ADR 0044), so replying is
  * `send("reply").to(({ event }) => event.origin)`.
  */
-export interface ActorEvent<Data = unknown> {
-  readonly name: EventName;
+export interface ActorEvent<Data = unknown, Name extends string = EventName> {
+  readonly name: Name;
   readonly type: "external" | "internal" | "platform";
   readonly sendID?: string;
   readonly origin?: string;

@@ -112,8 +112,13 @@ gaps left or found on the way.
 
 ## From granary's feedback, still open
 
-- [ ] **Typed event maps on the chart builder:** `statechart<Data, Events>()`,
+- [x] **Typed event maps on the chart builder:** `statechart<Data, Events>()`,
   so a transition's `event.data` is typed and event names are checked.
+  Done: `on()` checks each item of a descriptor against the map (platform
+  events and `*` always pass), a transition's `context.event` is the union
+  of the events it matches, `raise()` checks names and data, `send()` the
+  data of a name of the map; types only (`index.d.ts`,
+  `test/types/usage.ts`, napi README "TypeScript").
 - [ ] **A reply-to-sender target,** instead of
   `.to(({ event }) => String(event?.origin ?? ''))`.
 - [ ] **Names that contain `/`:** core's target grammar refuses `/` inside

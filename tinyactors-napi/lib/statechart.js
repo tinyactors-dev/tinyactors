@@ -815,6 +815,11 @@ class DefinitionBuilder extends StateContainerBuilder {
 /**
  * Begin an ordered statechart definition. The builder is mutable until
  * build() or System.define() consumes it.
+ *
+ * index.d.ts types it as `statechart<Data, Events>()`: an event map checks
+ * on(), raise() and send() and types `context.event` in a transition's
+ * expressions. That is types only: at run time any descriptor and name is
+ * taken, as core matches descriptors against the events that arrive.
  */
 function statechart(options) {
   return new DefinitionBuilder(options);
