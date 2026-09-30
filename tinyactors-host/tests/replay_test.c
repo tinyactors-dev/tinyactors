@@ -9,6 +9,16 @@
  *   messages accepted and never delivered go back in its mailbox with
  *   their IDs and data, delivered with no second ACCEPTED and record
  *   numbers that continue the log's.
+ * - A checkpoint round-trips: restored from it alone, the actor has the
+ *   configuration, held send and owed mail it recorded, and its own
+ *   checkpoint is the same bytes but for the clock; records after it that it
+ *   covers are skipped, and a checkpoint inside a log is skipped. What
+ *   tah_checkpoint_write refuses, and a sink that refuses keeps nothing.
+ * - Two lives at one address: ENDED at DESTROYED, LIFE at the next
+ *   `spawned`, and the last life is the one published.
+ * - Bytes that are no log, a life that starts with anything but its first
+ *   record and a delivery never accepted are CORRUPT; a checkpoint of
+ *   another revision is DEFINITION_MISMATCH.
  */
 #include "check.h"
 #include <string.h>
@@ -265,7 +275,15 @@ static void advance(tah_system *system, ta_time time) {
 typedef struct {
     uint8_t bytes[16384];
     uint32_t length;
+    uint32_t unit_start; /* where the unit a sink began starts */
+    bool refuse;         /* the sink refuses what it is given */
 } log_buffer;
+
+static void append(log_buffer *log, const uint8_t *bytes, uint32_t length) {
+    CHECK(log->length + length <= sizeof log->bytes);
+    memcpy(log->bytes + log->length, bytes, length);
+    log->length += length;
+}
 
 static void take(tah_system *system, log_buffer *log) {
     uint32_t wakes = 0;
@@ -274,9 +292,7 @@ static void take(tah_system *system, log_buffer *log) {
     for (uint32_t index = 0; index < inputs->entries.count; index += 1u) {
         const tah_input_entry *entry = tah_vec_at(&inputs->entries, index);
         if (log != NULL) {
-            CHECK(log->length + entry->bytes.count <= sizeof log->bytes);
-            memcpy(log->bytes + log->length, entry->bytes.items, entry->bytes.count);
-            log->length += (uint32_t)entry->bytes.count;
+            append(log, entry->bytes.items, (uint32_t)entry->bytes.count);
         }
     }
     tah_inputs_release(inputs);
@@ -291,6 +307,35 @@ static void run(tah_system *system, log_buffer *log) {
         tah_system_end_turn(system);
     }
     take(system, log);
+}
+
+/* A log_buffer as a checkpoint's sink: a unit is kept whole, or not at all. */
+static ta_op_status buffer_begin(void *self) {
+    log_buffer *log = self;
+    log->unit_start = log->length;
+    return TA_OP_OK;
+}
+
+static ta_op_status buffer_write(void *self, ta_bytes bytes) {
+    log_buffer *log = self;
+    if (log->refuse) {
+        return TA_OP_NOMEM;
+    }
+    append(log, bytes.ptr, bytes.len);
+    return TA_OP_OK;
+}
+
+static void buffer_end(void *self, bool keep) {
+    log_buffer *log = self;
+    if (!keep) {
+        log->length = log->unit_start;
+    }
+}
+
+static const ta_byte_sink_vtable buffer_sink_vtable = { .begin = buffer_begin, .write = buffer_write, .end = buffer_end };
+
+static ta_byte_sink buffer_sink(log_buffer *log) {
+    return (ta_byte_sink){ .self = log, .v = &buffer_sink_vtable };
 }
 
 /* A log's records, read back. */
@@ -339,6 +384,16 @@ static bool in_state(tah_system *system, ta_actor_id actor, const char *id) {
     return text_equal(info.id, id);
 }
 
+/* The actor's pending delayed sends; `due` is the first one's due time. */
+static uint32_t pending_sends(tah_system *system, ta_actor_id actor, ta_time *due) {
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system->core, actor, &view) == TA_OK);
+    if (due != NULL && view.delayed_send_count != 0) {
+        *due = view.delayed_sends[0].due;
+    }
+    return view.delayed_send_count;
+}
+
 /* The message at the head of the actor's mailbox, or NULL. */
 static const tah_envelope *first_mail(tah_system *system, ta_actor_id actor) {
     tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
@@ -373,6 +428,7 @@ typedef struct {
     uint32_t first;  /* bytes pushed before the first prepare */
     uint32_t chunk;  /* bytes pushed each time more are needed; 0 is the rest */
     uint32_t most;   /* records a window applies; 0 is 256 */
+    ta_definition_id definition;
     /* Answers. */
     bool found;
     ta_actor_id actor;
@@ -380,16 +436,19 @@ typedef struct {
     uint32_t records;       /* records the windows applied */
     uint32_t windows;       /* windows that answered MORE */
     uint32_t needs;         /* windows that answered NEED with a piece still to push */
+    uint32_t ended;         /* lives that ended with DESTROYED */
     ta_time last_time;
     bool published;
     uint32_t redelivered;
 } restore_run;
 
 typedef struct {
+    tah_system *system;
     tah_replay *replay;
     const uint8_t *bytes;
     uint32_t length;
     uint32_t pushed;
+    restore_run *out;
 } feed;
 
 /* Pushes the next piece; false when the log is all pushed. */
@@ -405,19 +464,83 @@ static bool feed_more(feed *in, uint32_t size, ta_result *result) {
     return true;
 }
 
+/* Prepares an actor from the log's next life, pushing pieces until its first record is there. */
+static ta_result feed_prepare(feed *in) {
+    restore_run *out = in->out;
+    ta_result result = TA_OK;
+    for (;;) {
+        result = tah_replay_prepare(in->replay, &(tah_replay_prepare_params){
+                                                    .definition = out->definition, .address = &ping_address,
+                                                    .out = &out->actor, .found = &out->found });
+        if (result != TA_OK || out->found || !feed_more(in, out->chunk, &result) || result != TA_OK) {
+            return result;
+        }
+    }
+}
+
+/* Runs windows until a life ends, or the log does (NEED with nothing left to push). */
+static ta_result feed_run(feed *in, bool between) {
+    restore_run *out = in->out;
+    out->state = TAH_REPLAY_MORE;
+    for (;;) {
+        uint32_t records = 0;
+        ta_result result = tah_replay_run(in->replay, &(tah_replay_run_params){
+                                                          .actor = out->actor,
+                                                          .most = out->most != 0 ? out->most : 256u,
+                                                          .between = between,
+                                                          .state = &out->state,
+                                                          .records = &records });
+        out->records += records;
+        if (result != TA_OK || out->state == TAH_REPLAY_FINISHED || out->state == TAH_REPLAY_ENDED ||
+            out->state == TAH_REPLAY_LIFE) {
+            return result;
+        }
+        if (out->state == TAH_REPLAY_MORE) {
+            out->windows += 1u;
+            continue;
+        }
+        /* NEED: the next piece, or the end of the log. */
+        if (!feed_more(in, out->chunk, &result)) {
+            CHECK(tah_replay_buffered(in->replay) == 0); /* the log ends between records */
+            return TA_OK;
+        }
+        if (result != TA_OK) {
+            return result;
+        }
+        out->needs += 1u;
+    }
+}
+
+/* Publishes the replayed actor at the last record's time, then puts back the mail it owes. */
+static ta_result feed_publish(feed *in) {
+    restore_run *out = in->out;
+    tah_system *system = in->system;
+    CHECK(tah_replay_last_time(in->replay, &out->last_time));
+    tah_replay_finish(in->replay, out->actor);
+    system->inside_core = true;
+    ta_actor_publish_params publish = { .actor = out->actor, .at = &out->last_time };
+    ta_result result = ta_actor_publish(system->core, &publish);
+    system->inside_core = false;
+    if (result == TA_OK) {
+        result = tah_hook_actor_published(system, &publish);
+    }
+    out->published = result == TA_OK;
+    return result == TA_OK ? tah_replay_redeliver(in->replay, out->actor, &out->redelivered) : result;
+}
+
 /*
- * Rebuilds ping/p1 from `bytes` in `system` and publishes it. A life that
- * ends in a final state is dropped, not published. On a failure the
- * actor, prepared or published, is destroyed, as napi does; the result says
- * why.
+ * Rebuilds ping/p1 from `bytes` in `system` and publishes it, as napi's
+ * #replayAt does: a life that ended (DESTROYED) is dropped once the mail
+ * before the next life is read, and the next life replayed; a life that
+ * ends in a final state is dropped, not published. On a failure the actor,
+ * prepared or published, is destroyed; the result says why.
  */
-static ta_result restore(tah_system *system, ta_definition_id definition, const uint8_t *bytes, uint32_t length,
-                         restore_run *out) {
+static ta_result restore(tah_system *system, const uint8_t *bytes, uint32_t length, restore_run *out) {
     out->found = false;
     out->actor = 0;
-    out->records = out->windows = out->needs = out->redelivered = 0;
+    out->records = out->windows = out->needs = out->ended = out->redelivered = 0;
     out->published = false;
-    feed in = { .replay = tah_replay_open(system), .bytes = bytes, .length = length };
+    feed in = { .system = system, .replay = tah_replay_open(system), .bytes = bytes, .length = length, .out = out };
     if (in.replay == NULL) {
         return TA_ERR_NOMEM;
     }
@@ -425,50 +548,27 @@ static ta_result restore(tah_system *system, ta_definition_id definition, const 
     if (out->first != 0) {
         (void)feed_more(&in, out->first, &result);
     }
-    while (result == TA_OK) {
-        result = tah_replay_prepare(in.replay, &(tah_replay_prepare_params){
-                                                   .definition = definition, .address = &ping_address,
-                                                   .out = &out->actor, .found = &out->found });
-        if (result != TA_OK || out->found || !feed_more(&in, out->chunk, &result)) {
+    for (;;) {
+        if (result == TA_OK) {
+            result = feed_prepare(&in);
+        }
+        if (result != TA_OK || !out->found) {
             break;
         }
-    }
-    out->state = TAH_REPLAY_MORE;
-    while (result == TA_OK && out->found) {
-        uint32_t records = 0;
-        result = tah_replay_run(in.replay, &(tah_replay_run_params){ .actor = out->actor,
-                                                                     .most = out->most != 0 ? out->most : 256u,
-                                                                     .state = &out->state, .records = &records });
-        out->records += records;
-        if (result != TA_OK || out->state == TAH_REPLAY_FINISHED || out->state == TAH_REPLAY_ENDED ||
-            out->state == TAH_REPLAY_LIFE) {
+        result = feed_run(&in, false);
+        if (result != TA_OK || out->state != TAH_REPLAY_ENDED) {
             break;
         }
-        if (out->state == TAH_REPLAY_MORE) {
-            out->windows += 1u;
-            continue;
-        }
-        /* NEED: the next piece, or the end of the log. */
-        if (!feed_more(&in, out->chunk, &result)) {
-            CHECK(tah_replay_buffered(in.replay) == 0); /* the log ends between records */
+        out->ended += 1u;
+        result = feed_run(&in, true); /* mail between the lives goes to the next one */
+        drop(system, out->actor);
+        out->found = false;
+        if (result != TA_OK || out->state != TAH_REPLAY_LIFE) {
             break;
         }
-        out->needs += 1u;
     }
     if (result == TA_OK && out->found && out->state == TAH_REPLAY_NEED) {
-        CHECK(tah_replay_last_time(in.replay, &out->last_time));
-        tah_replay_finish(in.replay, out->actor);
-        system->inside_core = true;
-        ta_actor_publish_params publish = { .actor = out->actor, .at = &out->last_time };
-        result = ta_actor_publish(system->core, &publish);
-        system->inside_core = false;
-        if (result == TA_OK) {
-            result = tah_hook_actor_published(system, &publish);
-        }
-        out->published = result == TA_OK;
-        if (result == TA_OK) {
-            result = tah_replay_redeliver(in.replay, out->actor, &out->redelivered);
-        }
+        result = feed_publish(&in);
     }
     if (out->found && (result != TA_OK || out->state == TAH_REPLAY_FINISHED)) {
         drop(system, out->actor);
@@ -540,8 +640,8 @@ static void replays_a_log_cut_anywhere(void) {
         tah_system *system = make_system(2);
         ta_definition_id definition = define_ping(system);
         advance(system, 1000);
-        restore_run out = { .first = cut, .chunk = 0 };
-        CHECK(restore(system, definition, live_log.bytes, live_log.length, &out) == TA_OK);
+        restore_run out = { .first = cut, .chunk = 0, .definition = definition };
+        CHECK(restore(system, live_log.bytes, live_log.length, &out) == TA_OK);
         check_restored(system, &out);
         run(system, NULL);
         CHECK(in_state(system, out.actor, "three"));
@@ -555,8 +655,8 @@ static void replays_a_log_in_small_pieces(void) {
         tah_system *system = make_system(2);
         ta_definition_id definition = define_ping(system);
         advance(system, 1000);
-        restore_run out = { .first = chunk, .chunk = chunk };
-        CHECK(restore(system, definition, live_log.bytes, live_log.length, &out) == TA_OK);
+        restore_run out = { .first = chunk, .chunk = chunk, .definition = definition };
+        CHECK(restore(system, live_log.bytes, live_log.length, &out) == TA_OK);
         check_restored(system, &out);
         CHECK(out.needs >= 5); /* every record after `spawned` came in more than one piece */
         finish_system(system);
@@ -568,8 +668,8 @@ static void runs_in_windows(void) {
     tah_system *system = make_system(2);
     ta_definition_id definition = define_ping(system);
     advance(system, 1000);
-    restore_run out = { .most = 1 };
-    CHECK(restore(system, definition, live_log.bytes, live_log.length, &out) == TA_OK);
+    restore_run out = { .most = 1, .definition = definition };
+    CHECK(restore(system, live_log.bytes, live_log.length, &out) == TA_OK);
     check_restored(system, &out);
     CHECK(out.windows == 5 && out.needs == 0);
     finish_system(system);
@@ -577,8 +677,8 @@ static void runs_in_windows(void) {
     system = make_system(2);
     definition = define_ping(system);
     advance(system, 1000);
-    out = (restore_run){ .most = 2 };
-    CHECK(restore(system, definition, live_log.bytes, live_log.length, &out) == TA_OK);
+    out = (restore_run){ .most = 2, .definition = definition };
+    CHECK(restore(system, live_log.bytes, live_log.length, &out) == TA_OK);
     check_restored(system, &out);
     CHECK(out.windows == 2); /* 2, 2, then 1 and NEED */
     finish_system(system);
@@ -592,8 +692,8 @@ static void redelivers_with_the_logged_id(void) {
     tah_system *system = make_system(2);
     ta_definition_id definition = define_ping(system);
     advance(system, 1000);
-    restore_run out = { 0 };
-    CHECK(restore(system, definition, live_log.bytes, live_log.length, &out) == TA_OK);
+    restore_run out = { .definition = definition };
+    CHECK(restore(system, live_log.bytes, live_log.length, &out) == TA_OK);
     check_restored(system, &out);
     CHECK(!tah_inputs_seq_is_ours(&system->inputs, pending_id));
     static log_buffer after;
@@ -635,13 +735,310 @@ static void a_finished_life_is_not_published(void) {
 
     system = make_system(2);
     definition = define_ping(system);
-    restore_run out = { .first = 7, .chunk = 7 };
-    CHECK(restore(system, definition, log.bytes, log.length, &out) == TA_OK);
+    restore_run out = { .first = 7, .chunk = 7, .definition = definition };
+    CHECK(restore(system, log.bytes, log.length, &out) == TA_OK);
     CHECK(out.found && out.state == TAH_REPLAY_FINISHED && !out.published);
     CHECK(out.records == 4); /* two ACCEPTED, and the stop's DELIVERED ends it (its FINISHED is not read) */
     ta_actor_id found = 0;
     CHECK(ta_actor_find(system->core, &(ta_actor_find_params){ .address = &ping_address, .out = &found }) ==
           TA_ERR_NOT_FOUND);
+    finish_system(system);
+}
+
+/* ------------------------------------------------------------------------
+ * Checkpoints (kernel ADR 0002 section 7)
+ */
+
+/*
+ * A live run with a checkpoint: spawned at 0; at 100 `arm` holds a tick
+ * to itself due at 5100; at 200 a ping with data is accepted and owed when
+ * the checkpoint is written, before that turn's batch is committed; at
+ * 6000 the tick fires and both are delivered.
+ */
+static log_buffer before_checkpoint; /* the batches committed before it */
+static log_buffer checkpoint;        /* the checkpoint unit */
+static log_buffer after_checkpoint;  /* the batches committed after it */
+
+static void live_run_with_a_checkpoint(void) {
+    before_checkpoint.length = checkpoint.length = after_checkpoint.length = 0;
+    tah_system *system = make_system(1);
+    ta_definition_id definition = define_ping(system);
+    ta_actor_id actor = 0;
+    CHECK(spawn_at(system, definition, &ping_address, &actor) == TA_OK);
+    run(system, &before_checkpoint);
+    advance(system, 100);
+    CHECK(post(system, actor, "arm", NULL) == TA_OK);
+    run(system, &before_checkpoint);
+    advance(system, 200);
+    CHECK(post(system, actor, "ping", "{\"n\":3}") == TA_OK);
+    CHECK(tah_checkpoint_write(system, actor, buffer_sink(&checkpoint)) == TA_OK);
+    take(system, &after_checkpoint); /* the ping's ACCEPTED, which the checkpoint covers */
+    advance(system, 6000);
+    run(system, &after_checkpoint);
+    CHECK(in_state(system, actor, "ticked"));
+
+    static record_list records;
+    read_records(checkpoint.bytes, checkpoint.length, &records);
+    CHECK(records.count == 3);
+    CHECK(records.views[0].kind == TAH_WAL_CHECKPOINT && records.views[0].time == 200);
+    CHECK(records.views[1].kind == TAH_WAL_CHECKPOINT_SEND && tah_wal_number(&records.views[1], 4) == 5100);
+    CHECK((tah_wal_number(&records.views[1], 5) & TAH_WAL_SEND_SELF) != 0);
+    CHECK(records.views[2].kind == TAH_WAL_ACCEPTED);
+    uint64_t covered = records.views[0].seq;
+    for (uint32_t index = 1; index < records.count; index += 1u) {
+        CHECK(records.views[index].seq == covered);
+    }
+    CHECK(tah_wal_span(checkpoint.bytes, checkpoint.length, true) == checkpoint.length);
+    read_records(after_checkpoint.bytes, after_checkpoint.length, &records);
+    CHECK(records.views[0].kind == TAH_WAL_ACCEPTED && records.views[0].seq == covered);
+    CHECK(records.views[records.count - 1u].seq > covered);
+    finish_system(system);
+}
+
+/*
+ * Whether two checkpoints are the same bytes but for each record's time,
+ * which is `time` in `restored`: a published actor's clock is the system's.
+ */
+static bool same_but_time(const log_buffer *restored, const log_buffer *original, ta_time time) {
+    if (restored->length != original->length) {
+        return false;
+    }
+    static log_buffer masked;
+    masked = *restored;
+    for (uint32_t at = 0; at < masked.length;) {
+        tah_wal_view view;
+        CHECK(tah_wal_read(masked.bytes + at, masked.length - at, &view) == TA_OK);
+        CHECK(view.time == time);
+        memcpy(masked.bytes + at + 16u, original->bytes + at + 16u, 8u); /* u64 time, after version, kind, size and seq */
+        at += (uint32_t)view.span;
+    }
+    return memcmp(masked.bytes, original->bytes, masked.length) == 0;
+}
+
+/*
+ * A checkpoint as the whole log restores the state it holds: the
+ * configuration, the tick still held, the owed ping back in the mailbox
+ * with its data; and a checkpoint of the restored actor is the same
+ * bytes, but for the time: published, its clock is the system's.
+ */
+static void restores_from_a_checkpoint(void) {
+    live_run_with_a_checkpoint();
+    for (uint32_t chunk = 0; chunk <= 16; chunk += 4u) {
+        tah_system *system = make_system(2);
+        ta_definition_id definition = define_ping(system);
+        advance(system, 1000);
+        restore_run out = { .first = chunk, .chunk = chunk, .definition = definition };
+        CHECK(restore(system, checkpoint.bytes, checkpoint.length, &out) == TA_OK);
+        CHECK(out.found && out.published && out.records == 0);
+        CHECK(out.last_time == 200); /* the actor's clock when it was written */
+        CHECK(in_state(system, out.actor, "waiting"));
+        ta_time due = 0;
+        CHECK(pending_sends(system, out.actor, &due) == 1 && due == 5100);
+        CHECK(out.redelivered == 1);
+        const tah_envelope *mail = first_mail(system, out.actor);
+        CHECK(mail != NULL && event_named(system, mail->event.name, "ping"));
+        CHECK(value_is(&mail->event.data, "{\"n\":3}"));
+
+        static log_buffer again;
+        again.length = 0;
+        CHECK(tah_checkpoint_write(system, out.actor, buffer_sink(&again)) == TA_OK);
+        CHECK(same_but_time(&again, &checkpoint, 1000));
+
+        /* The tick fires once, at its due time, and the ping is taken as it was live. */
+        advance(system, 6000);
+        run(system, NULL);
+        CHECK(in_state(system, out.actor, "ticked"));
+        CHECK(pending_sends(system, out.actor, NULL) == 0);
+        finish_system(system);
+    }
+}
+
+/*
+ * The checkpoint, then the batches after it: the records it covers are
+ * skipped, the rest applied. And the whole log with the checkpoint in the
+ * middle: prepared from `spawned`, the checkpoint unit is skipped.
+ */
+static void continues_after_a_checkpoint(void) {
+    static log_buffer log;
+    for (int whole = 0; whole < 2; whole += 1) {
+        log.length = 0;
+        if (whole) {
+            append(&log, before_checkpoint.bytes, before_checkpoint.length);
+        }
+        append(&log, checkpoint.bytes, checkpoint.length);
+        append(&log, after_checkpoint.bytes, after_checkpoint.length);
+        for (uint32_t chunk = 0; chunk <= 24; chunk += 8u) {
+            tah_system *system = make_system(2);
+            ta_definition_id definition = define_ping(system);
+            advance(system, 7000);
+            restore_run out = { .first = chunk, .chunk = chunk, .definition = definition };
+            CHECK(restore(system, log.bytes, log.length, &out) == TA_OK);
+            CHECK(out.found && out.published);
+            CHECK(out.last_time == 6000);
+            CHECK(in_state(system, out.actor, "ticked"));
+            CHECK(pending_sends(system, out.actor, NULL) == 0); /* the tick fired, and is not held */
+            CHECK(out.redelivered == 0);
+            run(system, NULL);
+            CHECK(in_state(system, out.actor, "ticked"));
+            finish_system(system);
+        }
+    }
+}
+
+/* What tah_checkpoint_write refuses, and a sink that refuses keeps nothing. */
+static void checkpoint_refusals(void) {
+    tah_system *system = make_system(1);
+    ta_definition_id definition = define_ping(system);
+    ta_actor_id anonymous = 0;
+    CHECK(ta_actor_spawn(system->core, &(ta_actor_spawn_params){ .definition = definition, .out = &anonymous }) == TA_OK);
+    CHECK(tah_hook_actor_created(system, anonymous) == TA_OK);
+    ta_actor_id actor = 0;
+    CHECK(spawn_at(system, definition, &ping_address, &actor) == TA_OK);
+    run(system, NULL);
+    static log_buffer sink;
+    sink.length = 0;
+    CHECK(tah_checkpoint_write(system, anonymous, buffer_sink(&sink)) == TA_ERR_INVALID);
+    CHECK(sink.length == 0);
+    sink.refuse = true;
+    CHECK(tah_checkpoint_write(system, actor, buffer_sink(&sink)) == TA_ERR_NOMEM);
+    CHECK(sink.length == 0);
+    sink.refuse = false;
+    CHECK(tah_checkpoint_write(system, actor, buffer_sink(&sink)) == TA_OK);
+    CHECK(sink.length != 0);
+    finish_system(system);
+}
+
+/*
+ * Two lives at one address: the first destroyed (DESTROYED ends it), the
+ * second spawned again. The replay answers ENDED, then LIFE at the second
+ * `spawned`, and publishes the second life.
+ */
+static void replays_the_last_of_two_lives(void) {
+    static log_buffer log;
+    log.length = 0;
+    tah_system *system = make_system(1);
+    ta_definition_id definition = define_ping(system);
+    ta_actor_id actor = 0;
+    CHECK(spawn_at(system, definition, &ping_address, &actor) == TA_OK);
+    run(system, &log);
+    advance(system, 100);
+    CHECK(post(system, actor, "ping", NULL) == TA_OK);
+    run(system, &log);
+    CHECK(tah_inputs_destroying(system, actor) == TA_OK);
+    drop(system, actor);
+    run(system, &log);
+    uint32_t first_life = log.length;
+    advance(system, 200);
+    CHECK(spawn_at(system, definition, &ping_address, &actor) == TA_OK);
+    run(system, &log);
+    for (ta_time at = 300; at <= 400; at += 100) {
+        advance(system, at);
+        CHECK(post(system, actor, "ping", NULL) == TA_OK);
+        run(system, &log);
+    }
+    CHECK(in_state(system, actor, "two"));
+    finish_system(system);
+
+    static record_list records;
+    read_records(log.bytes, first_life, &records);
+    CHECK(records.count == 4 && records.views[3].kind == TAH_WAL_DESTROYED);
+
+    /* By hand: each state in turn. */
+    system = make_system(2);
+    definition = define_ping(system);
+    advance(system, 1000);
+    tah_replay *replay = tah_replay_open(system);
+    CHECK(replay != NULL);
+    CHECK(tah_replay_push(replay, log.bytes, log.length) == TA_OK);
+    bool found = false;
+    CHECK(tah_replay_prepare(replay, &(tah_replay_prepare_params){ .definition = definition, .address = &ping_address,
+                                                                   .out = &actor, .found = &found }) == TA_OK);
+    CHECK(found);
+    tah_replay_state state = TAH_REPLAY_MORE;
+    uint32_t count = 0;
+    CHECK(tah_replay_run(replay, &(tah_replay_run_params){ .actor = actor, .most = 100, .state = &state,
+                                                           .records = &count }) == TA_OK);
+    CHECK(state == TAH_REPLAY_ENDED && count == 3);
+    CHECK(in_state(system, actor, "one"));
+    CHECK(tah_replay_run(replay, &(tah_replay_run_params){ .actor = actor, .most = 100, .between = true,
+                                                           .state = &state, .records = &count }) == TA_OK);
+    CHECK(state == TAH_REPLAY_LIFE && count == 0);
+    drop(system, actor);
+    CHECK(tah_replay_prepare(replay, &(tah_replay_prepare_params){ .definition = definition, .address = &ping_address,
+                                                                   .out = &actor, .found = &found }) == TA_OK);
+    CHECK(found);
+    CHECK(tah_replay_run(replay, &(tah_replay_run_params){ .actor = actor, .most = 100, .state = &state,
+                                                           .records = &count }) == TA_OK);
+    CHECK(state == TAH_REPLAY_NEED && count == 4);
+    CHECK(in_state(system, actor, "two"));
+    drop(system, actor);
+    tah_replay_free(replay);
+    finish_system(system);
+
+    /* As a binding drives it, in pieces. */
+    for (uint32_t chunk = 0; chunk <= 30; chunk += 10u) {
+        system = make_system(2);
+        definition = define_ping(system);
+        advance(system, 1000);
+        restore_run out = { .first = chunk, .chunk = chunk, .definition = definition };
+        CHECK(restore(system, log.bytes, log.length, &out) == TA_OK);
+        CHECK(out.ended == 1 && out.published && out.last_time == 400);
+        CHECK(in_state(system, out.actor, "two"));
+        /* The second life's record numbers continue. */
+        static log_buffer after;
+        after.length = 0;
+        CHECK(post(system, out.actor, "ping", NULL) == TA_OK);
+        run(system, &after);
+        read_records(after.bytes, after.length, &records);
+        CHECK(records.count == 2 && records.views[0].seq == 6);
+        finish_system(system);
+    }
+}
+
+/* Bytes that are no log, and a life that starts with anything but its first record: CORRUPT. */
+static void refuses_a_corrupt_log(void) {
+    static uint8_t garbage[64];
+    memset(garbage, 0xff, sizeof garbage);
+    tah_system *system = make_system(2);
+    ta_definition_id definition = define_ping(system);
+    advance(system, 1000);
+    restore_run out = { .definition = definition };
+    CHECK(restore(system, garbage, sizeof garbage, &out) == TA_ERR_CORRUPT);
+    CHECK(!out.found);
+
+    /* The live log without its `spawned`: its first record is an ACCEPTED, then a DELIVERED. */
+    static record_list records;
+    read_records(live_log.bytes, live_log.length, &records);
+    uint32_t spawned = (uint32_t)records.views[0].span;
+    uint32_t accepted = (uint32_t)records.views[1].span;
+    CHECK(restore(system, live_log.bytes + spawned + accepted, live_log.length - spawned - accepted, &out) ==
+          TA_ERR_CORRUPT);
+    CHECK(!out.found);
+
+    /* A delivery of a message the log never accepted. */
+    static log_buffer log;
+    log.length = 0;
+    append(&log, live_log.bytes, spawned);
+    append(&log, live_log.bytes + spawned + accepted, live_log.length - spawned - accepted);
+    CHECK(restore(system, log.bytes, log.length, &out) == TA_ERR_CORRUPT);
+    ta_actor_id found = 0;
+    CHECK(ta_actor_find(system->core, &(ta_actor_find_params){ .address = &ping_address, .out = &found }) ==
+          TA_ERR_NOT_FOUND);
+    finish_system(system);
+}
+
+/* A checkpoint of revision v1 prepared with revision v2: DEFINITION_MISMATCH, and nothing made. */
+static void refuses_a_checkpoint_of_another_revision(void) {
+    tah_system *system = make_system(2);
+    ta_definition_id definition = 0;
+    CHECK(define(system, "ping", "v2", ping_states, &definition) == TA_OK);
+    advance(system, 1000);
+    restore_run out = { .definition = definition };
+    CHECK(restore(system, checkpoint.bytes, checkpoint.length, &out) == TA_ERR_DEFINITION_MISMATCH);
+    CHECK(!out.found);
+    /* A `spawned` names no state: the same revision rule does not apply to it. */
+    CHECK(restore(system, live_log.bytes, live_log.length, &out) == TA_OK);
+    CHECK(out.published && in_state(system, out.actor, "two"));
     finish_system(system);
 }
 
@@ -651,6 +1048,12 @@ int main(void) {
     runs_in_windows();
     redelivers_with_the_logged_id();
     a_finished_life_is_not_published();
+    restores_from_a_checkpoint();
+    continues_after_a_checkpoint();
+    checkpoint_refusals();
+    replays_the_last_of_two_lives();
+    refuses_a_corrupt_log();
+    refuses_a_checkpoint_of_another_revision();
     puts("replay test passed");
     return 0;
 }
