@@ -741,6 +741,12 @@ typedef struct {
  *   #_actor_<family>/<name>    a named actor by its logical address
  *   #_<invokeid>               an invocation of the sending session
  *
+ * In `#_actor_<family>/<name>` each part is percent-encoded (ADR 0096):
+ * format writes every byte an RFC 3986 fragment may not hold, and '/' and
+ * '%', as %XX; parse decodes %XX and takes any other byte but '/' as it is,
+ * so a name holding '/' round-trips. A '%' not followed by two hex digits
+ * is an invalid target.
+ *
  * A session URI whose text is not a session ID names no session: it parses
  * as runtime actor 0, which never exists, so a send to it is inaccessible
  * (SCXML C.1) rather than invalid. TA_ERR_INVALID means an invalid target,

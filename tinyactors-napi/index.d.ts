@@ -2139,7 +2139,8 @@ export type DelaySpec<Data extends object, Event = ActorEvent> =
 /**
  * The event an expression sees as `context.event` (SCXML _event). `origin`
  * is a URI a send can target: `#_scxml_<sessionID>` or
- * `#_actor_<family>/<name>` (core ADR 0044), or an I/O processor's URI,
+ * `#_actor_<family>/<name>` (core ADR 0044; each part percent-encoded,
+ * core ADR 0096), or an I/O processor's URI,
  * and `originType` names the processor that reaches it, so replying is
  * `send("reply", (send) => send.toOrigin())`.
  */

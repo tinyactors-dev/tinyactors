@@ -1,6 +1,6 @@
 # ADR 0044: Core owns the SCXML target URI grammar
 
-**Status:** Accepted; amends ADR 0040, applies ADR 0031. The session URI grammar is extended by ADR 0088: `#_scxml_<incarnation>.<session>.<family>`, the text of every session ID; a bare `#_scxml_<n>` still parses.
+**Status:** Accepted; amends ADR 0040, applies ADR 0031. The session URI grammar is extended by ADR 0088: `#_scxml_<incarnation>.<session>.<family>`, the text of every session ID; a bare `#_scxml_<n>` still parses. Amended by [ADR 0096](0096-actor-addresses-are-percent-encoded-in-target-uris.md): both parts of `#_actor_<family>/<name>` are percent-encoded.
 **Date:** 2026-09-20
 
 ## Context

@@ -143,9 +143,74 @@ int main(void) {
               TA_ERR_INVALID,
           "an empty family has no text");
 
-    /* Anything else is an invalid target (SCXML 6.2, IRP test194). */
+    /*
+     * ADR 0096: a family and a name are percent-encoded, so either may hold
+     * '/' or '%'. Parse decodes %XX in either case of hex digit, and takes
+     * any other byte but '/' as it is.
+     */
+    struct {
+        const char *uri;
+        const char *family;
+        const char *name;
+    } decoded[] = {
+        { "#_actor_door/a%2Fb", "door", "a/b" },
+        { "#_actor_sh%2Fop/x%25y", "sh/op", "x%y" },
+        { "#_actor_door/a%2fb", "door", "a/b" },
+        { "#_actor_door/%41", "door", "A" },
+        { "#_actor_x/caf\xc3\xa9", "x", "caf\xc3\xa9" },
+        { "#_actor_x/a b#c", "x", "a b#c" },
+        { "#_actor_x/%2F", "x", "/" },
+    };
+    for (size_t index = 0; index < sizeof(decoded) / sizeof(decoded[0]); index += 1) {
+        check(ta_scxml_target_parse(system, str(decoded[index].uri), &target) == TA_OK &&
+                  target.kind == TA_SCXML_TARGET_ACTOR && target.as.actor.kind == TA_ACTOR_REF_NAMED &&
+                  str_is(ta_address_view(target.as.actor.as.named).family.name, decoded[index].family) &&
+                  str_is(ta_address_view(target.as.actor.as.named).name, decoded[index].name),
+              decoded[index].uri);
+        ta_scxml_target_release(&target);
+    }
+    /* An encoded and a hand-written spelling of one address are one handle. */
+    check(ta_scxml_target_parse(system, str("#_actor_door/%66ront"), &target) == TA_OK &&
+              ta_scxml_target_parse(system, str("#_actor_door/front"), &again) == TA_OK &&
+              target.as.actor.as.named == again.as.actor.as.named,
+          "%66ront is front");
+    ta_scxml_target_release(&again);
+    ta_scxml_target_release(&target);
+
+    /* Format encodes '/', '%', and what a fragment may not hold; it keeps
+     * the unreserved characters, the sub-delims, ':', '@' and '?'. */
+    struct {
+        const char *family;
+        const char *name;
+        const char *uri;
+    } encoded[] = {
+        { "door", "a/b", "#_actor_door/a%2Fb" },
+        { "sh/op", "x%y", "#_actor_sh%2Fop/x%25y" },
+        { "x", "caf\xc3\xa9", "#_actor_x/caf%C3%A9" },
+        { "x", "a b#c\"<>\\^`{|}", "#_actor_x/a%20b%23c%22%3C%3E%5C%5E%60%7B%7C%7D" },
+        { "x", "\x01\x7f", "#_actor_x/%01%7F" },
+        { "x", "a:b@c?d!$&'()*+,;=-._~", "#_actor_x/a:b@c?d!$&'()*+,;=-._~" },
+    };
+    for (size_t index = 0; index < sizeof(encoded) / sizeof(encoded[0]); index += 1) {
+        ta_address *named = NULL;
+        ta_actor_address address = { .family = { .name = str(encoded[index].family) }, .name = str(encoded[index].name) };
+        check(ta_address_intern(system, &address, &named) == TA_OK, encoded[index].uri);
+        ta_scxml_target written = { .kind = TA_SCXML_TARGET_ACTOR,
+                                    .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = named } };
+        char uri[128];
+        check(strcmp(format(system, written, uri, sizeof(uri)), encoded[index].uri) == 0, encoded[index].uri);
+        /* ... and parse reads it back to the same address. */
+        check(ta_scxml_target_parse(system, str(uri), &target) == TA_OK && target.as.actor.as.named == named,
+              encoded[index].uri);
+        ta_scxml_target_release(&target);
+        ta_address_release(named);
+    }
+
+    /* Anything else is an invalid target (SCXML 6.2, IRP test194), and so
+     * is a malformed escape. */
     const char *invalid[] = { "elsewhere", "", "#_", "#_actor_", "#_actor_door", "#_actor_/front",
-                              "#_actor_door/", "#_actor_a/b/c" };
+                              "#_actor_door/", "#_actor_a/b/c", "#_actor_door/a%", "#_actor_door/a%2",
+                              "#_actor_door/a%zz", "#_actor_d%G1/x", "#_actor_door/%%41" };
     for (size_t index = 0; index < sizeof(invalid) / sizeof(invalid[0]); index += 1) {
         check(ta_scxml_target_parse(system, str(invalid[index]), &target) == TA_ERR_INVALID,
               invalid[index][0] == '\0' ? "(empty)" : invalid[index]);
@@ -155,7 +220,7 @@ int main(void) {
      * $_event.origin reach its sender. */
     char buffer[128];
     const char *round_trip[] = { "#_internal", "#_parent", "#_scxml_42", "#_scxml_0.42.shop.cart/invoke",
-                                 "#_actor_door/front", "#_worker" };
+                                 "#_actor_door/front", "#_actor_sh%2Fop/a%2Fb%25c", "#_worker" };
     for (size_t index = 0; index < sizeof(round_trip) / sizeof(round_trip[0]); index += 1) {
         check(ta_scxml_target_parse(system, str(round_trip[index]), &target) == TA_OK,
               round_trip[index]);

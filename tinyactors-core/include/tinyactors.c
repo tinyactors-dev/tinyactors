@@ -572,6 +572,8 @@ ta_result ta_fault_to_internal_event(ta_system *system,
 
 /* Writes the URI of `target`; false when its kind has no URI (SELF, INVALID). */
 TA_PRIVATE bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writer, const ta_scxml_target *target);
+/* `#_actor_<family>/<name>` with both parts percent-encoded (ADR 0096). */
+TA_PRIVATE void ta_actor_uri_write(ta_text_writer *writer, const ta_actor_address *address);
 
 /* A session ID's text, <incarnation>.<session>.<family> (ADR 0088). */
 typedef struct {
@@ -4262,7 +4264,8 @@ TA_API ta_trace_context ta_system_new_trace(ta_system *system) {
  *   #_scxml_<session>          a session by its session ID (ADR 0066), whose
  *                              text is <incarnation>.<n>.<family> (ADR 0088),
  *                              or a bare <n> a document may write
- *   #_actor_<family>/<name>    a named actor by its logical address
+ *   #_actor_<family>/<name>    a named actor by its logical address, each
+ *                              part percent-encoded (ADR 0096)
  *   #_<invokeid>               an invocation of the sending session
  *
  * A session URI whose text is not a session ID names no session, which is
@@ -4293,23 +4296,142 @@ static bool ta_uri_prefix(ta_str *text, const char *prefix) {
     return true;
 }
 
-/* "<family>/<name>": both parts are non-empty and hold no further slash. */
-static bool ta_uri_address(ta_str text, ta_actor_address *out) {
+/*
+ * ADR 0096: in `#_actor_<family>/<name>` each part is percent-encoded. A
+ * byte an RFC 3986 fragment may hold is written as it is, except '/', which
+ * separates the parts: the unreserved characters, the sub-delims, ':', '@'
+ * and '?'. Every other byte, '/' and '%' among them, is written as %XX
+ * with upper-case hex digits.
+ */
+static bool ta_uri_keeps(uint8_t byte) {
+    if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || (byte >= '0' && byte <= '9')) {
+        return true;
+    }
+    switch (byte) {
+        case '-': case '.': case '_': case '~':
+        case '!': case '$': case '&': case '\'': case '(': case ')': case '*': case '+': case ',': case ';': case '=':
+        case ':': case '@': case '?':
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void ta_uri_put_part(ta_text_writer *writer, ta_str part) {
+    static const char hex[] = "0123456789ABCDEF";
+    if (part.len == 0) {
+        return;
+    }
+    uint32_t run = 0;
+    for (uint32_t index = 0; index < part.len; index += 1) {
+        uint8_t byte = (uint8_t)part.ptr[index];
+        if (ta_uri_keeps(byte)) {
+            continue;
+        }
+        ta_text_put(writer, (ta_str){ .ptr = part.ptr + run, .len = index - run });
+        char escape[3] = { '%', hex[byte >> 4u], hex[byte & 0x0fu] };
+        ta_text_put(writer, (ta_str){ .ptr = escape, .len = 3 });
+        run = index + 1u;
+    }
+    ta_text_put(writer, (ta_str){ .ptr = part.ptr + run, .len = part.len - run });
+}
+
+TA_PRIVATE void ta_actor_uri_write(ta_text_writer *writer, const ta_actor_address *address) {
+    ta_text_put(writer, ta_str_from_cstr(TA_URI_ADDRESS));
+    ta_uri_put_part(writer, address->family.name);
+    ta_text_put(writer, (ta_str){ .ptr = "/", .len = 1 });
+    ta_uri_put_part(writer, address->name);
+}
+
+/* The value of a hex digit, or -1. */
+static int ta_uri_hex(char digit) {
+    if (digit >= '0' && digit <= '9') {
+        return digit - '0';
+    }
+    if (digit >= 'a' && digit <= 'f') {
+        return digit - 'a' + 10;
+    }
+    if (digit >= 'A' && digit <= 'F') {
+        return digit - 'A' + 10;
+    }
+    return -1;
+}
+
+/*
+ * Decodes a percent-encoded part into `out` (NULL only measures it) and
+ * sets `*length` to its decoded length; false for a '%' not followed by two
+ * hex digits. Any other byte is taken as it is, so a document may write a
+ * name by hand without encoding what needs no decoding.
+ */
+static bool ta_uri_decode(ta_str part, char *out, uint32_t *length) {
+    uint32_t written = 0;
+    for (uint32_t index = 0; index < part.len; index += 1) {
+        char byte = part.ptr[index];
+        if (byte == '%') {
+            if (index + 2u >= part.len) {
+                return false;
+            }
+            int high = ta_uri_hex(part.ptr[index + 1u]);
+            int low = ta_uri_hex(part.ptr[index + 2u]);
+            if (high < 0 || low < 0) {
+                return false;
+            }
+            byte = (char)((high << 4) | low);
+            index += 2u;
+        }
+        if (out != NULL) {
+            out[written] = byte;
+        }
+        written += 1u;
+    }
+    *length = written;
+    return true;
+}
+
+/*
+ * "<family>/<name>", both parts non-empty with no further unencoded slash,
+ * interned decoded (ADR 0065). A malformed escape is TA_ERR_INVALID.
+ */
+static ta_result ta_uri_address_intern(ta_system *system, ta_str text, ta_address **out) {
     uint32_t slash = 0;
+    bool encoded = false;
     while (slash < text.len && text.ptr[slash] != '/') {
+        encoded = encoded || text.ptr[slash] == '%';
         slash += 1;
     }
     if (slash == 0 || slash + 1u >= text.len) {
-        return false;
+        return TA_ERR_INVALID;
     }
+    ta_str family = { .ptr = text.ptr, .len = slash };
     ta_str name = { .ptr = text.ptr + slash + 1u, .len = text.len - slash - 1u };
     for (uint32_t index = 0; index < name.len; index += 1) {
         if (name.ptr[index] == '/') {
-            return false;
+            return TA_ERR_INVALID;
         }
+        encoded = encoded || name.ptr[index] == '%';
     }
-    *out = (ta_actor_address){ .family = { .name = { .ptr = text.ptr, .len = slash } }, .name = name };
-    return true;
+    if (!encoded) {
+        return ta_address_intern(system, &(ta_actor_address){ .family = { .name = family }, .name = name }, out);
+    }
+    uint32_t family_length = 0;
+    uint32_t name_length = 0;
+    if (!ta_uri_decode(family, NULL, &family_length) || !ta_uri_decode(name, NULL, &name_length)) {
+        return TA_ERR_INVALID;
+    }
+    size_t size = (size_t)family_length + name_length;
+    char *decoded = ta_mem_alloc(system->allocator, size, 1);
+    if (decoded == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    (void)ta_uri_decode(family, decoded, &family_length);
+    (void)ta_uri_decode(name, decoded + family_length, &name_length);
+    ta_result result = ta_address_intern(
+        system,
+        &(ta_actor_address){ .family = { .name = { .ptr = decoded, .len = family_length } },
+                             .name = { .ptr = decoded + family_length, .len = name_length } },
+        out);
+    ta_mem_free(system->allocator, decoded, &(ta_allocator_free_params){ .ptr = decoded, .size = size, .alignment = 1 });
+    return result;
 }
 
 /* Decimal digits only, at least one, no overflow. */
@@ -4411,13 +4533,9 @@ TA_API ta_result ta_scxml_target_parse(ta_system *system, ta_str text, ta_scxml_
     }
     ta_str rest = text;
     if (ta_uri_prefix(&rest, TA_URI_ADDRESS)) {
-        ta_actor_address address;
-        if (!ta_uri_address(rest, &address)) {
-            return TA_ERR_INVALID;
-        }
         /* The target holds a reference to the interned address (ADR 0065). */
         ta_address *named = NULL;
-        ta_result result = ta_address_intern(system, &address, &named);
+        ta_result result = ta_uri_address_intern(system, rest, &named);
         if (result != TA_OK) {
             return result;
         }
@@ -4476,10 +4594,7 @@ TA_PRIVATE bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writ
         case TA_SCXML_TARGET_ACTOR:
             if (target->as.actor.kind == TA_ACTOR_REF_NAMED) {
                 ta_actor_address view = ta_address_view(target->as.actor.as.named);
-                ta_text_put(writer, ta_str_from_cstr(TA_URI_ADDRESS));
-                ta_text_put(writer, view.family.name);
-                ta_text_put(writer, (ta_str){ .ptr = "/", .len = 1 });
-                ta_text_put(writer, view.name);
+                ta_actor_uri_write(writer, &view);
                 return true;
             }
             /* A runtime reference is written as its session (ADR 0066, ADR 0088). */

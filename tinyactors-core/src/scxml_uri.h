@@ -14,6 +14,8 @@
 
 /* Writes the URI of `target`; false when its kind has no URI (SELF, INVALID). */
 bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writer, const ta_scxml_target *target);
+/* `#_actor_<family>/<name>` with both parts percent-encoded (ADR 0096). */
+void ta_actor_uri_write(ta_text_writer *writer, const ta_actor_address *address);
 
 /* A session ID's text, <incarnation>.<session>.<family> (ADR 0088). */
 typedef struct {

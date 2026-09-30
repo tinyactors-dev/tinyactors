@@ -215,6 +215,28 @@ async function repliesToAnActor() {
   echo.post('ping');
   await system.flush();
   assert.equal(echo.inspect().data.failed, 'error.execution', 'no origin to reply to');
+
+  // Core ADR 0096: a name holding '/' or '%' is percent-encoded in its URI,
+  // so it can be targeted and its origin answered.
+  const odd = system.spawn(asker, { name: 'a/b%c d' });
+  const oddEcho = system.spawn(system.define(
+    statechart({ family: 'echo/2', revision: 'v1' })
+      .data('from', null)
+      .state('s', (s) => s.on('ping', (t) => t
+        .assign('from', ({ event }) => event.origin)
+        .send('pong', (send) => send.toOrigin().data(({ event }) => event.data)))),
+  ), { name: 'e%/1' });
+  const target = system.define(
+    statechart({ family: 'caller', revision: 'v1' })
+      .state('s', (s) => s.on('go', (t) => t.send('ping', (send) => send.to('#_actor_echo%2F2/e%25%2F1').data(7)))),
+  );
+  const caller = system.spawn(target, { name: 'c/1' });
+  await system.flush();
+  caller.post('go');
+  odd.post('go', 3);
+  await system.flush();
+  assert.equal(oddEcho.inspect().data.from, '#_actor_caller/c%2F1', 'the origin is encoded');
+  assert.deepEqual(odd.inspect().data.got, { origin: '#_actor_echo/e', data: 3 }, 'a reply reaches a name with / and %');
   system.close();
 }
 

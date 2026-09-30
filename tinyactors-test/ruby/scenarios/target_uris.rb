@@ -12,7 +12,8 @@ module TargetURIs
   #
   # The parsed shape is the ta_scxml_target the codec encodes: `kind` and
   # the member its kind selects. Every spelling core accepts formats back to
-  # itself, except the one row where parsing is deliberately not injective.
+  # itself, except the rows where parsing is deliberately not injective: an
+  # unreadable session ID, and an address written other than core writes it.
   TABLE = [
     ['#_internal', { kind: 'internal' }, '#_internal',
      'the sender\'s own internal queue'],
@@ -24,6 +25,20 @@ module TargetURIs
      { kind: 'actor', actor: { kind: 'named', family: { name: 'subscription' }, name: 'sub_1' } },
      '#_actor_subscription/sub_1',
      'a named actor by its logical address'],
+    # Core ADR 0096: each part of an address is percent-encoded, so a family
+    # or a name may hold '/' and '%'.
+    ['#_actor_sub%2Fscription/a%2Fb%25c%20d',
+     { kind: 'actor', actor: { kind: 'named', family: { name: 'sub/scription' }, name: 'a/b%c d' } },
+     '#_actor_sub%2Fscription/a%2Fb%25c%20d',
+     'an address holding "/", "%" and a space, encoded'],
+    ['#_actor_subscription/caf%C3%A9',
+     { kind: 'actor', actor: { kind: 'named', family: { name: 'subscription' }, name: 'café' } },
+     '#_actor_subscription/caf%C3%A9',
+     'a name that is not ASCII is encoded byte by byte'],
+    ['#_actor_subscription/a%2fb c',
+     { kind: 'actor', actor: { kind: 'named', family: { name: 'subscription' }, name: 'a/b c' } },
+     '#_actor_subscription/a%2Fb%20c',
+     'lower-case hex and a byte left unencoded are read, and written as core writes them'],
     # A session URI whose text is not a session ID names no session: it
     # parses as runtime actor 0, which never exists, so a send to it is
     # inaccessible (SCXML C.1, test496) rather than invalid. It is the one
@@ -35,7 +50,9 @@ module TargetURIs
 
   # Targets no grammar rule accepts: TA_ERR_INVALID, which a send reports
   # as error.execution (test194).
-  INVALID = ['elsewhere', '', '#', '#_', '#_actor_', '#_actor_subscription/', '#_actor_/sub_1'].freeze
+  INVALID = ['elsewhere', '', '#', '#_', '#_actor_', '#_actor_subscription/', '#_actor_/sub_1',
+             '#_actor_subscription/a/b', '#_actor_subscription/a%', '#_actor_subscription/a%2',
+             '#_actor_subscription/a%zz'].freeze
 end
 
 TinyactorsTest.scenarios 'target URIs' do
