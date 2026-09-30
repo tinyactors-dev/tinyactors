@@ -1516,14 +1516,47 @@ static const ta_scxml_state_spec fan_states[] = {
     END,
 };
 
+/* Revision "anon" of family "ping": `fan` as in "fan", with send IDs core generates. */
+#define SEND_ANON(event_text, target_text)                                                        \
+    { .kind = TA_SCXML_ACTION_SEND,                                                               \
+      .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR(event_text) },          \
+                   .target = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR(target_text) } } }
+static const ta_scxml_state_spec anon_states[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("zero"),
+      .transitions = (const ta_scxml_transition_spec[]){
+          { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("fan"), .targets = TARGETS(STR("f1")),
+            .actions = (const ta_scxml_action_spec[]){ SEND_ANON("hello", "#_actor_sink/b"), END } },
+          END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("f1"),
+      .transitions = (const ta_scxml_transition_spec[]){
+          { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = TARGETS(STR("f2")),
+            .actions = (const ta_scxml_action_spec[]){ SEND_ANON("hello", "#_actor_sink/b"), END } },
+          END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("f2") },
+    END,
+};
+
+/* Whether two views' text fields `index` are both absent, or the same text. */
+static bool same_text(const tah_wal_view *left, const tah_wal_view *right, uint32_t index) {
+    ta_str a = { 0 };
+    ta_str b = { 0 };
+    bool has_a = tah_wal_text(left, index, &a);
+    bool has_b = tah_wal_text(right, index, &b);
+    return has_a == has_b && a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, a.len) == 0);
+}
+
 /*
- * A macrostep a budget pauses runs in several turns. Here what it sent in
- * a turn before its last is still committed before its first record: a
- * crash after that commit redelivers the message, the macrostep runs
- * again, and n1 reaches sink/b twice. The outbox of kernel ADR 0004
- * section 3 closes this (the next commit makes it exactly once).
+ * A macrostep a budget pauses runs in several turns, and what it sent in a
+ * turn before its last is committed before its first record (kernel ADR
+ * 0004 section 3). A crash after that commit redelivers the message, the
+ * macrostep runs again from its start, and n1 reaches sink/b twice: once
+ * per crash, and in order. Its ACCEPTED in sink/b's log carries the same
+ * origin as the original's, and the same send ID when the <send> has an
+ * `id` (`named`); a <send> without one gives neither copy a send ID. Only
+ * the message identity differs.
  */
-static void a_paused_macrostep_sends_twice_after_a_crash(void) {
+static void a_paused_macrostep_repeats_its_sends_after_a_crash(const char *revision, const ta_scxml_state_spec *states,
+                                                               bool named) {
     ping_log.length = sink_log.length = 0;
     tah_system *system = make_system_logging(1, true);
     system->budgets.microsteps = 1;
@@ -1531,7 +1564,7 @@ static void a_paused_macrostep_sends_twice_after_a_crash(void) {
     ta_definition_id sink = 0;
     ta_actor_id sender = 0;
     ta_actor_id receiver = 0;
-    CHECK(define(system, "ping", "fan", fan_states, &fan) == TA_OK);
+    CHECK(define(system, "ping", revision, states, &fan) == TA_OK);
     CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
     CHECK(spawn_at(system, sink, &sink_address, &receiver) == TA_OK);
     CHECK(spawn_at(system, fan, &ping_address, &sender) == TA_OK);
@@ -1559,19 +1592,47 @@ static void a_paused_macrostep_sends_twice_after_a_crash(void) {
     tah_system_end_turn(system);
     finish_system(system); /* the crash */
 
+    uint32_t committed = sink_log.length;
     system = make_system_logging(2, true);
-    CHECK(define(system, "ping", "fan", fan_states, &fan) == TA_OK);
+    CHECK(define(system, "ping", revision, states, &fan) == TA_OK);
     CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
     restore_run pinged = { .definition = fan };
     restore_run sunk = { .definition = sink, .address = &sink_address };
     advance(system, 7000);
     CHECK(restore(system, ping_log.bytes, ping_log.length, &pinged) == TA_OK && pinged.published);
-    CHECK(restore(system, sink_log.bytes, sink_log.length, &sunk) == TA_OK && sunk.published);
+    CHECK(restore(system, sink_log.bytes, committed, &sunk) == TA_OK && sunk.published);
     CHECK(pinged.redelivered == 1 && sunk.redelivered == 1); /* `fan`; n1 */
-    run(system, NULL);
+    run_apart(system); /* the second life's records follow the first's in both logs */
     CHECK(in_state(system, pinged.actor, "f2"));
     CHECK(in_state(system, sunk.actor, "h3")); /* n1 twice, and n2 */
     finish_system(system);
+
+    /* sink/b's log accepted the first send before the crash, then its
+     * repeat and the second send after it. */
+    static record_list records;
+    read_records(sink_log.bytes, sink_log.length, &records);
+    const tah_wal_view *copies[3] = { NULL, NULL, NULL };
+    uint32_t count = 0;
+    for (uint32_t index = 0; index < records.count; index += 1u) {
+        if (records.views[index].kind == TAH_WAL_ACCEPTED) {
+            CHECK(count < 3);
+            copies[count++] = &records.views[index];
+        }
+    }
+    CHECK(count == 3);
+    CHECK(tah_wal_number(copies[0], 0) != tah_wal_number(copies[1], 0)); /* two messages */
+    CHECK(same_text(copies[0], copies[1], 2));                          /* event name */
+    CHECK(same_text(copies[0], copies[1], 3));                          /* send ID */
+    CHECK(same_text(copies[0], copies[1], 4) && same_text(copies[0], copies[1], 5)); /* origin, origin type */
+    ta_str send = { 0 };
+    ta_str origin = { 0 };
+    CHECK(tah_wal_text(copies[0], 4, &origin) && text_equal(origin, "#_actor_ping/p1"));
+    if (named) {
+        CHECK(tah_wal_text(copies[0], 3, &send) && text_equal(send, "n1"));
+        CHECK(!same_text(copies[1], copies[2], 3)); /* the second send is another send */
+    } else {
+        CHECK(!tah_wal_text(copies[0], 3, &send)); /* a <send> with no `id` gives its event no send ID (SCXML 5.10.1) */
+    }
 }
 
 /* ------------------------------------------------------------------------
@@ -1859,7 +1920,8 @@ int main(void) {
     timeline_crash_between_commits();
     immediate_send_survives_a_crash_between_commits();
     a_macrostep_is_not_evicted();
-    a_paused_macrostep_sends_twice_after_a_crash();
+    a_paused_macrostep_repeats_its_sends_after_a_crash("fan", fan_states, true);
+    a_paused_macrostep_repeats_its_sends_after_a_crash("anon", anon_states, false);
     overflow_is_delivered_when_there_is_room();
     overflow_survives_a_crash();
     overflow_survives_an_eviction_and_exit();
