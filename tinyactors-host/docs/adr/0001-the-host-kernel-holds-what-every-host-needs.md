@@ -342,3 +342,47 @@ without a JavaScript runtime.
   varies that much between identical runs (napi ADR 0035's notes), and
   native bytes per actor did not change. Allocations per event stay 0.01
   everywhere.
+
+### Step 7: the test host runs hosted systems on the kernel (2026-09-30)
+
+Done by the coordinator directly, in small commits (`f8fee89`, `f11cce1`,
+`5c83fcb`, `a36b727`, `7a54fda`), after several agents stalled on the
+larger scope during an API outage.
+
+- **The test host links the kernel.** Its build task runs the kernel's
+  build and links `tinyactors-host/build/libtinyactors_host.a` into the host
+  binary, with only the kernel's public headers on the include path.
+- **`src/hosted.{c,h}` is the test host's binding.**
+  - Its platform is libc memory, a clock the scenario owns (it starts at 0
+    and moves only with `hosted.advance`) and a fixed random seed, so a
+    hosted run is reproducible.
+  - Its pump driver is "run a turn when the scenario asks": `wake` does
+    nothing, and `hosted.turn` runs turns until the system is quiet.
+  - It gives the kernel's input log the jq data model, whose codec streams
+    both ways.
+- **The hosted methods** are documented in `docs/protocol.md` ("Hosted
+  mode"): `hosted.create` / `close` / `spawn` / `post` / `turn` / `advance`
+  / `log` / `batches` / `evict` / `restore` / `checkpoint`.
+  - `hosted.create` also answers the kernel's core system as an ordinary
+    `system` handle, so charts are defined and actors inspected with the
+    generated core methods, with no second path for them.
+  - `hosted.restore` replays a stored log explicitly (prepare, run,
+    publish, redeliver) rather than from a loader, because napi's loader
+    orchestration is napi's and this tests the kernel's part.
+- **Scenarios** (`ruby/scenarios/hosted.rb`, eight of them) cover:
+  - mail between named actors through the kernel's mailboxes and router;
+  - a delayed send on the scenario's clock;
+  - an evicted actor rebuilt from its log with its timer;
+  - a 1 MiB value logged and replayed;
+  - a log compacted to its checkpoint;
+  - a checkpoint of an unnamed actor refused;
+  - a crash: another system, with another incarnation, restores the actor
+    from the stored log, and its pending timer fires.
+- **A kernel bug found and fixed** (`3cb4e60`): the checkpoint encoder wrote
+  a delayed send to the actor itself as the old session's address, so after
+  a restore the timeout went nowhere.
+- **Scenarios about core's semantics** keep driving core directly, as
+  section 5 decided.
+- **The scenario runner does not rebuild the test host** when kernel sources
+  change. `mise run test` does, through the build step, so a scenario run
+  alone after a kernel edit needs `mise run build` first.

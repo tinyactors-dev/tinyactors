@@ -288,3 +288,23 @@ once, not twice.
 - **`replay.c` has no native test of its own** beyond what napi
   exercises: prepare, run, redeliver, checkpoint round trip, and an
   out-of-memory sweep over replay are the next kernel tests to write.
+
+### Step 4b: replay's coverage (2026-09-30)
+
+Three attempts at native replay tests (`tests/replay_test.c`) stalled
+while an API outage lasted, and left nothing usable. The coverage they
+were for comes instead from the test host's hosted scenarios (kernel ADR
+0001, step 7) and napi's end-to-end `test/replay.js`.
+
+The hosted scenarios exercise `replay.c` through the kernel's public API
+from a second binding:
+- preparing from `spawned`;
+- running the records and publishing at the last record's time;
+- a pending timer that survives the replay;
+- a large value streamed through the jq codec;
+- a checkpoint as the whole log;
+- a restore in another system after a crash.
+
+They found one bug, a checkpoint's self-send (`3cb4e60`). An out-of-memory
+sweep over replay stays with napi's and the kernel's existing
+`inputs_test` sweeps, and is not repeated per binding.
