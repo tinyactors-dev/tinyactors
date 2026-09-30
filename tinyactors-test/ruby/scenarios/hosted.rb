@@ -461,3 +461,85 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted)
   end
 end
+
+# Core ADR 0094 section 2: the kernel records an input before core takes
+# it, so an input whose record cannot be written is refused, and nothing
+# changes: not the log, not the actor, not its mailbox. What was the core
+# log's 'an input whose record the sink refuses changes nothing'.
+module HostedRefusal
+  # A logged hosted_counter at hosted_counter/q that took one bump, its
+  # batches stored. Answers [hosted, definition, counter, store].
+  def self.start(context)
+    hosted = context.hosted_system
+    context.hosted_log(hosted, 'hosted_counter')
+    definition = context.hosted_define(hosted, :hosted_counter)
+    counter = context.hosted_spawn(hosted, definition, family: 'hosted_counter', name: 'q')
+    context.hosted_run(hosted)
+    context.hosted_post_data(hosted, counter, 'bump', { tag: 'first' })
+    context.hosted_run(hosted)
+    [hosted, definition, counter, context.hosted_store(hosted)]
+  end
+
+  # The actor, its mailbox and its stored log say it took `tags`, and
+  # replaying the log rebuilds the same actor.
+  def self.check(context, hosted, definition, counter, store, tags)
+    context.hosted_run(hosted)
+    context.hosted_store(hosted, store)
+    context.assert_equal tags, context.hosted_data(hosted, counter, '.seen')
+    context.assert_equal [], context.hosted_mailbox(hosted, counter)
+    context.assert_equal 'ok', context.hosted_evict(hosted, counter)
+    context.hosted_store(hosted, store)
+    rebuilt = context.hosted_restore(hosted, definition, 'hosted_counter', 'q', store['hosted_counter/q'])
+    context.assert_equal tags, context.hosted_data(hosted, rebuilt, '.seen'), 'the log holds exactly what the actor took'
+  end
+end
+
+TinyactorsTest.scenarios 'hosted, when the log cannot grow' do
+  # Catches: an input taken although its record could not be written, so
+  # the actor moves on and its log does not say so; or a refusal that
+  # leaves the message queued anyway.
+  scenario 'an input is refused when the log cannot grow, and nothing changes' do
+    hosted, definition, counter, store = HostedRefusal.start(self)
+    logged = store['hosted_counter/q'].dup
+    # Room for the envelope and the small allocations, not for a 64 KiB record.
+    AllocationFailure.tighten(self, headroom: 16 * 1024)
+    assert_equal 'err_nomem', hosted_post_data(hosted, counter, 'bump', { tag: 'refused', pad: 'p' * 65_536 })
+    allocator.budget(0)
+    refused = allocator.entries('alloc_failed')
+    assert !refused.empty? && refused.all? { |entry| entry[:alignment] == 1 }, "the log's byte buffer is what failed"
+    assert_equal [], hosted_mailbox(hosted, counter), 'nothing was queued'
+    hosted_run(hosted)
+    assert_equal logged, hosted_store(hosted, store)['hosted_counter/q'], 'nothing was logged'
+    assert_equal %w[first], hosted_data(hosted, counter, '.seen'), 'the actor did not take it'
+    assert_equal 'ok', hosted_post_data(hosted, counter, 'bump', { tag: 'second', pad: 'p' * 65_536 })
+    HostedRefusal.check(self, hosted, definition, counter, store, %w[first second])
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # The same property at every allocation a post makes, for values that
+  # fit the log's buffer and values that make it grow. Catches: a failure
+  # path of the kernel's post or record writer that keeps half of an input.
+  scenario 'a post refused at any allocation changes nothing', exhaustive: true do
+    hosted, definition, counter, store = HostedRefusal.start(self)
+    tags = %w[first]
+    [0, 1024, 65_536, 1024 * 1024].each do |size|
+      data = { tag: "s#{size}", pad: 'p' * size }
+      before = allocator.stats[:allocations]
+      assert_equal 'ok', hosted_post_data(hosted, counter, 'bump', data)
+      allocations = allocator.stats[:allocations] - before
+      tags << "s#{size}"
+      hosted_run(hosted)
+      allocations.times do |failing|
+        allocator.arm_fault(after: failing, count: 1)
+        result = hosted_post_data(hosted, counter, 'bump', data.merge(tag: "s#{size}f#{failing}"))
+        allocator.clear_faults
+        assert %w[ok err_nomem].include?(result), "post #{size}/#{failing}: #{result}"
+        tags << "s#{size}f#{failing}" if result == 'ok'
+        assert_equal(result == 'ok' ? 1 : 0, hosted_mailbox(hosted, counter).size, "post #{size}/#{failing}")
+        hosted_run(hosted)
+      end
+    end
+    HostedRefusal.check(self, hosted, definition, counter, store, tags)
+    assert_equal 0, close_hosted(hosted)
+  end
+end
