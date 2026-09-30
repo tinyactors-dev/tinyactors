@@ -206,7 +206,7 @@ tjs_result tjs_run(tjs_vm *vm, TJS_IN const tjs_run_params *params);
 |---|---|---|
 | Made by | `tjs_compile` | `tjs_run`, `tjs_state_read` |
 | Changes | never | on every run |
-| Holds | bytecode, constants, source spans, the builtins it reaches | permanent heap, paused frames and their arena, job queue, pending host tokens, code compiled at run time |
+| Holds | bytecode, constants, source spans, the builtins it reaches | permanent heap, paused frames and their arena, job queue, pending host tokens, code compiled at run time, module instances and the module map |
 | Shared | across VMs, content-addressed by hash | one per VM |
 
 A state names its program by hash. Resuming needs both. "Keep the image to
@@ -220,7 +220,9 @@ bytes, verifies it before anything runs:
   run-time compiler never emits them and only a damaged or crafted state
   could contain them;
 - register indices, jump targets and frame sizes are in range;
-- every heap reference is in range and correctly tagged.
+- every heap reference is in range and correctly tagged;
+- every program hash in the module map (see Modules) names a program that
+  is available, and module records are consistent with their programs.
 
 The verifier is generated from the same opcode table as the compilers and
 the dispatch loop, so it cannot fall out of step with them. Verification
@@ -564,6 +566,99 @@ returns control to the host instead of to a callee.
   end.
 - There is no code injection, which matters for charts built from untrusted
   input.
+
+## Modules
+
+Modules do not change the architecture. They are always strict, so they
+match the profile exactly, and the spec already leaves loading to the host.
+What they add is spec work and four points of friction, each with an answer
+inside the design.
+
+### Where modules fit as they are
+
+- **Loading is the host's job in the spec.** `HostLoadImportedModule` asks
+  the host for a module, and the host answers later through
+  `FinishLoadingImportedModule`. That is a pending token and `tjs_settle`.
+  The host fetches the source and calls `tjs_compile` for each module;
+  tinyjs does no I/O.
+- **Programs and state split cleanly.** A module's compiled code is a
+  program: immutable, content-addressed, shared across VMs. Its instance
+  (environment, status, namespace object, the error it threw, if any) is part
+  of the state and lives in the permanent heap like any other object.
+- **Top-level `await` is ordinary `await`.** An async module body is one
+  frame that detaches when it awaits.
+- **`import.meta`** is filled in by the host through
+  `HostGetImportMetaProperties`, so it is deterministic.
+
+### Graph algorithms without recursion
+
+The spec writes `InnerModuleLinking` and `InnerModuleEvaluation` as
+recursive depth-first searches, Tarjan's strongly connected components, to
+handle import cycles. Evaluation with top-level `await` adds an intricate
+algorithm for async modules and their dependents, which has needed
+corrections in past editions. All of it is written in the IR with an
+explicit stack of frames, the pattern core uses since ADR 0060. It is a
+priority for test262 coverage.
+
+### `import()` loads code at run time, like `eval`
+
+A dynamic `import()` whose specifier is known only at run time needs the
+compiler at run time, unless the module was compiled in advance. It follows
+the two versions of the library:
+
+- **With the compiler**, the host loads the module, compiles it and settles
+  the token.
+- **Without it**, `import()` reaches only modules the host compiled in
+  advance: a bundle of programs plus a table from specifiers to programs.
+  Any other specifier rejects the promise. This is conformant, because the
+  host may refuse to load a module.
+- **The static version** knows the whole graph when compiling. It resolves
+  every import statically and can merge the graph into one program.
+
+### The module map is deterministic and part of the state
+
+The spec requires that the same referrer and specifier always yield the
+same module. The host keeps that map, but a state resumed elsewhere must see
+the same answers. So the map, from referrer and specifier to program hash,
+is part of the state, and reading a state verifies it (see Two artifacts).
+A host that replays records the order in which loads are settled, as for
+any other token.
+
+### Imports are live bindings
+
+An imported name is a view of the exporting module's variable, not a copy,
+and it is in the temporal dead zone until that module initializes it. This
+is observable in cycles. Linking resolves each import to a slot in the
+exporting module's environment, so a read costs one indirection. The static
+version resolves slots when compiling. A TDZ check is emitted only for
+imports inside a cycle, which the linker knows.
+
+### What modules cost
+
+- In the IR and the builtins: cyclic module records, linking, evaluation
+  with top-level `await`, namespace objects (exotic objects), and JSON
+  modules if the targeted edition includes them.
+- In the public API: entry points to compile a module, link a graph and
+  supply loaded modules. Their exact shape is left to the API design.
+- In verification: module records and the module map.
+
+### Modules in tinyactors
+
+SCXML's ECMAScript data model uses Scripts, not modules. `<script>`
+elements share one global environment, and a Script cannot contain `import`
+declarations. Libraries reach a chart in two ways:
+
+- The adapter loads a module graph, bundled with the definition, into each
+  VM when it starts. Scripts use it through globals the modules set up, or
+  through `import()`.
+- With the synchronous vtable, `import()` of a bundled module resolves inside
+  the same operation when its top-level code awaits nothing from the host,
+  because its jobs drain before the operation returns.
+
+A module whose top-level `await` waits on the host would leave the VM
+waiting, which in executable content is a fault. Such a module runs in an
+invoked child, like any long or asynchronous script (see Using tinyjs from
+tinyactors).
 
 ## Memory: regions instead of a general collector
 
