@@ -259,6 +259,10 @@ static void test_every_kind(void) {
     size_t unit = tah_wal_span(bytes + at, out.count - at, true);
     CHECK(at + unit == out.count);
     CHECK(tah_wal_span(bytes + at, out.count - at - 1u, true) == 0);
+    /* Cut right after the CHECKPOINT record: its parts are still to come. */
+    size_t header = tah_wal_span(bytes + at, out.count - at, false);
+    CHECK(header < unit);
+    CHECK(tah_wal_span(bytes + at, header, true) == 0);
 
     /* Incomplete bytes are not a record yet; a version or kind this build
      * does not know is refused. */

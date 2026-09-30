@@ -235,11 +235,14 @@ static size_t tah_wal_one_span(const uint8_t *bytes, size_t length) {
 
 size_t tah_wal_span(const uint8_t *bytes, size_t length, bool unit) {
     size_t first = tah_wal_one_span(bytes, length);
-    if (first == 0 || first == length || !unit || tah_wal_le(bytes + TAH_WAL_KIND_AT, 2) != TAH_WAL_CHECKPOINT) {
+    if (first == 0 || !unit || tah_wal_le(bytes + TAH_WAL_KIND_AT, 2) != TAH_WAL_CHECKPOINT) {
         return first;
     }
+    /* Bytes that are no record (their whole length: the reader says so)
+     * are not a unit. A checkpoint record that ends exactly where the
+     * bytes do is one, still waiting for its parts. */
     size_t fixed = (size_t)tah_wal_le(bytes + TAH_WAL_FIXED_AT, 4);
-    if (fixed < TAH_WAL_HEADER + 8u * TAH_WAL_CHECKPOINT_FIELDS) {
+    if (fixed < TAH_WAL_HEADER + 8u * TAH_WAL_CHECKPOINT_FIELDS || (fixed & 7u) != 0u) {
         return first;
     }
     uint64_t more = tah_wal_le(bytes + TAH_WAL_HEADER + 8u * 7u, 8) + tah_wal_le(bytes + TAH_WAL_HEADER + 8u * 8u, 8);
