@@ -423,6 +423,31 @@ with `send('reply', (send) => send.toOrigin())`: the target is the event's
 `origin` and the processor its `originType`. The same reply answers
 another actor or an invoked service.
 
+A chart that asks for effects by name can say so with `effect(name, data?,
+build?)`: it is `send(name)` through the processor registered as
+`effects` (exported as `EFFECTS`), so the processor dispatches on
+`request.event` and a test swaps in a recording one:
+
+```js
+const effects = {
+  send(request, context) {
+    const run = { charge: chargeCard, 'email.receipt': sendReceipt }[request.event];
+    return run(request.data, context);
+  },
+};
+
+const checkout = statechart({ family: 'checkout', revision: 'v1' })
+  .state('cart', (s) => s.on('pay', (t) => t.target('paying')
+    .effect('charge', ({ event }) => ({ amount: event.data.total }))
+    .effect('email.receipt', undefined, (send) => send.after('1s'))));
+
+const system = createSystem({ io: { effects } });
+```
+
+The third argument is the send's block: `send.via('mail')` sends one
+effect through another processor. An exported chart shows a plain `send`
+(napi ADR 0038).
+
 ## Tracing and metrics
 
 ```js

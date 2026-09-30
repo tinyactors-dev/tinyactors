@@ -5,7 +5,7 @@
 
 const assert = require('node:assert/strict');
 const native = require('../lib/native');
-const { createSystem, statechart } = require('..');
+const { createSystem, statechart, EFFECTS } = require('..');
 
 const later = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -53,6 +53,36 @@ async function logSink() {
 }
 
 // An asynchronous I/O processor completes by posting an event back.
+// effect() (napi ADR 0038) is a send through the 'effects' processor: its
+// name and data reach it; its block can move it to another processor and
+// give it an ID; and the spec holds a plain send.
+async function effects() {
+  const requests = [];
+  const recorder = { send(request) { requests.push(request); } };
+  const system = createSystem({ io: { [EFFECTS]: recorder, mail: recorder } });
+  assert.equal(EFFECTS, 'effects');
+  const chart = statechart({ family: 'shop', revision: 'v1' })
+    .state('idle', (s) => s.on('checkout', (t) => t
+      .effect('charge', ({ event }) => ({ amount: event.data.total }))
+      .effect('stock.reserve')
+      .effect('email.receipt', 'thanks', (send) => send.via('mail').id('receipt'))));
+  const definition = system.define(chart);
+  const actor = system.spawn(definition);
+  actor.post('checkout', { total: 42 });
+  await system.flush();
+  assert.deepEqual(requests.map((request) => [request.type, request.event, request.data, request.sendID]), [
+    ['effects', 'charge', { amount: 42 }, null],
+    ['effects', 'stock.reserve', undefined, null],
+    ['mail', 'email.receipt', 'thanks', 'receipt'],
+  ]);
+  const [action] = definition.export().states[0].transitions[0].actions;
+  assert.equal(action.kind, 'send');
+  assert.deepEqual(action.send.type, { kind: 'literal', literal: 'effects' });
+  assert.throws(() => statechart({ family: 'x', revision: 'v1' })
+    .state('s', (s) => s.on('e', (t) => t.effect('charge', 1, 'not a block'))), { code: 'invalid' });
+  system.close();
+}
+
 async function ioCompletes() {
   const requests = [];
   const system = createSystem({
@@ -476,7 +506,7 @@ async function steadyState() {
     process.exit(1);
   }, Number(process.env.SERVICES_TIMEOUT_MS ?? 60_000));
   for (const test of [
-    logSink, ioCompletes, ioLiteralTarget, ioFails, delayedCustomSend, javascriptInvoker, invokerLiteralSource, doneRetried, unavailableInvoker, scxmlInvoker, scxmlCancel,
+    logSink, effects, ioCompletes, ioLiteralTarget, ioFails, delayedCustomSend, javascriptInvoker, invokerLiteralSource, doneRetried, unavailableInvoker, scxmlInvoker, scxmlCancel,
     closeCancels, steadyState,
   ]) {
     current = test.name;

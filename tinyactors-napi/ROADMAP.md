@@ -818,7 +818,10 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
   unloading it, which keeps graceful restarts easy to reason about. With
   ADR 0020's loader, a loader answers "not now" during shutdown so mail
   does not load the actor straight back;
-- a helper for naming effects that expands to `send(...).via(...)`;
+- ~~a helper for naming effects that expands to `send(...).via(...)`~~:
+  **done**, ADR 0038. `effect(name, data?, build?)` on every action
+  sequence is `send(name)` through the processor registered as `effects`
+  (`EFFECTS`), typed as `send()`; its block can change the processor;
 - ~~an xstate baseline next to the plain-object one in `scale.js`~~: done.
   `SCALE_BASELINES=xstate,object` runs it; `docs/scale.md` has the numbers.
 

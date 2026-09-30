@@ -1021,6 +1021,8 @@ export type PrintableExpression =
  * without depending on this package.
  */
 export declare const serialize: unique symbol;
+/** The I/O processor type a chart's effect() sends through unless it says another (napi ADR 0038). */
+export declare const EFFECTS: "effects";
 
 /**
  * What `value[serialize]()` returns: `name`, the identifier its
@@ -1634,6 +1636,18 @@ export interface ActionSequenceBuilder<
    */
   send<const Name extends string>(
     event: Name | NamedFunction | Expression<Data, string, Event>,
+    build?: SendBlock<Data, Name extends keyof Events ? Events[Name] : unknown, Event>,
+  ): Self;
+  /**
+   * Ask for an effect by name (napi ADR 0038): `send(name)` through the I/O
+   * processor registered as `EFFECTS` (`"effects"`), with `data` when given,
+   * then `build` on the same send builder, which can change the processor
+   * with via(), delay the send or give it an ID. Typed as send(): for a
+   * name of the chart's map, `data` has that event's type.
+   */
+  effect<const Name extends string>(
+    event: Name | NamedFunction | Expression<Data, string, Event>,
+    data?: ValueInput<Data, Name extends keyof Events ? Events[Name] : unknown, Event>,
     build?: SendBlock<Data, Name extends keyof Events ? Events[Name] : unknown, Event>,
   ): Self;
   cancel(sendID: StringSpec<Data, Event>): Self;

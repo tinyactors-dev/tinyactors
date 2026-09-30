@@ -1,7 +1,7 @@
 // A consumer's view of index.d.ts, type-checked by `mise run check-types`
 // against Node's types and ES2022 only: no DOM. It is compiled, never run.
 
-import { actorURI, createSystem, named, parameterInfo, readInputLog, serialize, statechart } from '@tinyactors/node';
+import { EFFECTS, actorURI, createSystem, named, parameterInfo, readInputLog, serialize, statechart } from '@tinyactors/node';
 import type { ActorAddress, ActorEvent, InputRecord, ReplayReport } from '@tinyactors/node';
 
 class Money {
@@ -127,7 +127,15 @@ export function typedEvents(): void {
         // A reply to the sender, through its I/O processor.
         .send('pong', (send) => send.toOrigin().data({ from: 'orders' }))
         // An address as a target URI, whatever its name holds.
-        .send('ping', (send) => send.to(actorURI({ family: 'pinger', name: 'eu/1' })))));
+        .send('ping', (send) => send.to(actorURI({ family: 'pinger', name: 'eu/1' }))))
+      // effect(): a send through the "effects" processor, typed as send().
+      .on('order.cancelled', (t) => t
+        .effect('order.placed', { id: 'o4', total: 1 })
+        .effect('refund', ({ event }) => ({ id: event?.data.id ?? '' }))
+        .effect('email.receipt', undefined, (send) => send.via('mail').after('1s').id('receipt'))
+        .effect(({ event }) => `audit.${event?.name ?? ''}`)));
+  const effectsType: 'effects' = EFFECTS;
+  void effectsType;
 
   statechart<{ n: number }, OrderEvents>({ family: 'orders-bad', revision: '1' })
     .state('s', (s) => s
@@ -149,7 +157,11 @@ export function typedEvents(): void {
         // @ts-expect-error order.cancelled's data is { id: string }
         .raise('order.cancelled', { id: 1 })
         // @ts-expect-error a send of an event of the map checks its data
-        .send('order.placed', (send) => send.data({ id: 'o' }))));
+        .send('order.placed', (send) => send.data({ id: 'o' }))
+        // @ts-expect-error so does an effect's
+        .effect('order.placed', { id: 'o' })
+        // @ts-expect-error effect()'s build is a send block
+        .effect('charge', 1, (send) => send.target('x'))));
 
   // Without an event map, every name is accepted and data is unknown, as before.
   statechart<{ n: number }>({ family: 'untyped', revision: '1' })

@@ -280,6 +280,10 @@ function block(root, build, what) {
   return actions.actions;
 }
 
+// The I/O processor type effect() sends through unless its block says
+// another (napi ADR 0038).
+const EFFECTS = 'effects';
+
 // Actions shared by transitions, handlers, initial transitions and
 // <finalize>. Each method appends one action spec to `this.actions`.
 class ActionSequenceBuilder {
@@ -318,6 +322,25 @@ class ActionSequenceBuilder {
       build(new SendBuilder(this.#root, send));
     }
     return this.#push({ kind: 'send', send });
+  }
+
+  /**
+   * Ask for an effect by name (napi ADR 0038): send(name) through the I/O
+   * processor registered as EFFECTS ('effects'), with `data` when given,
+   * then `build` on the same send builder, which can change the processor,
+   * delay the send or give it an ID.
+   */
+  effect(name, data, build) {
+    if (build !== undefined && typeof build !== 'function') {
+      throw invalid('effect(): expected a function that receives the send builder');
+    }
+    return this.send(name, (send) => {
+      send.via(EFFECTS);
+      if (data !== undefined) {
+        send.data(data);
+      }
+      build?.(send);
+    });
   }
 
   cancel(sendID) {
@@ -843,4 +866,4 @@ function statechart(options) {
   return new DefinitionBuilder(options);
 }
 
-module.exports = { statechart, literal, content, named, isLiteral, DefinitionBuilder, literalBrand };
+module.exports = { statechart, literal, content, named, isLiteral, DefinitionBuilder, literalBrand, EFFECTS };
