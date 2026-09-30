@@ -22,6 +22,22 @@ typedef struct tah_input_touch {
 } tah_input_touch;
 
 /*
+ * A macrostep's first record (DELIVERED, JUMP or RELEASED), held from the
+ * start of the macrostep until it ends: it goes into the batch of the turn
+ * the macrostep ends in, beside the ACCEPTED records of what it sent, so a
+ * crash keeps both or neither (kernel ADR 0004). Its bytes are written
+ * when the macrostep starts, with that time; its seq is filled in when it
+ * goes into the batch.
+ */
+typedef struct {
+    ta_actor_id actor;
+    ta_address *address; /* retained */
+    tah_vec bytes;       /* uint8_t: one record, seq 0 */
+    bool ended;          /* the macrostep ended and the record could not be written: the next turn tries again */
+    bool owed;           /* its message still counts as waiting for the address (its wake) until it is written */
+} tah_input_held;
+
+/*
  * A record written ahead of the core call it belongs to: undone
  * (tah_inputs_undo) when core refused the input. `open` false is nothing
  * to undo.
@@ -33,6 +49,13 @@ struct tah_input_mark {
     ta_actor_id actor;  /* whose record number it took, or 0 */
     uint64_t seq_before;
 };
+
+/*
+ * Writes `actor`'s held first record now, when its macrostep ended while
+ * memory ran out (kernel ADR 0004): a checkpoint must follow it.
+ * TA_ERR_BUSY while the macrostep is open, TA_ERR_NOMEM when it cannot.
+ */
+ta_result tah_inputs_write_first(tah_system *system, ta_actor_id actor);
 
 struct tah_inputs {
     bool enabled;
@@ -51,8 +74,13 @@ struct tah_inputs {
     uint32_t count;
     /* A resident logged actor's last record number (actor ID -> seq). */
     tah_map actor_seq;
-    /* The record written ahead of the delivery or report in progress. */
-    tah_input_mark pending;
+    /* The open macrosteps of logged actors: their first records, held. */
+    tah_vec held;           /* tah_input_held */
+    tah_map held_index;     /* actor ID -> index in `held` */
+    uint32_t ended;         /* held records whose macrostep ended, waiting for memory */
+    /* The actor whose first record the delivery or report in progress
+     * holds, until core takes it or refuses it; 0 for none. */
+    ta_actor_id offering;
     /* The mailbox: message IDs by envelope, their addresses, and each
      * address's undelivered messages. */
     tah_map seqs;           /* envelope index -> message ID */

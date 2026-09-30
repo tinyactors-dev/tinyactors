@@ -549,8 +549,14 @@ ta_result tah_replay_run(tah_replay *replay, const tah_replay_run_params *params
             }
         }
         replay->start += (uint32_t)view.span;
+        /* The latest time, not the last record's: a delivery's record carries
+         * the time it was delivered, and is written when the macrostep it
+         * started ends, after records of later times (a firing meanwhile;
+         * kernel ADR 0004). */
+        if (!replay->has_time || view.time > replay->last_time) {
+            replay->last_time = view.time;
+        }
         replay->has_time = true;
-        replay->last_time = view.time;
         if (view.seq > replay->last_seq) {
             replay->last_seq = view.seq;
         }
@@ -1062,6 +1068,11 @@ ta_result tah_checkpoint_write(tah_system *system, ta_actor_id actor, ta_byte_si
     ta_actor_address address = { 0 };
     if (!tah_inputs_logged(system, actor, &address)) {
         return TA_ERR_INVALID;
+    }
+    /* The checkpoint's record number covers its last macrostep's first record (kernel ADR 0004). */
+    ta_result first = tah_inputs_write_first(system, actor);
+    if (first != TA_OK) {
+        return first;
     }
     ta_allocator allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER);
     uint32_t state_count = 0;

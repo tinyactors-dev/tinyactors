@@ -250,7 +250,8 @@ typedef enum {
     TAH_NOTE_RELEASING,  /* `actor`, a runaway an operator released, resumes without its microstep limit */
     TAH_NOTE_FINISHED,   /* `actor` reached a top-level final state */
     TAH_NOTE_DROPPED,    /* `message` leaves the scheduler undelivered: a dead letter, a withdrawal */
-    TAH_NOTE_SETTLED     /* `actor` ended a macrostep and is stable: its pending sends may have changed */
+    TAH_NOTE_SETTLED,    /* `actor` ended a macrostep and is stable: its pending sends may have changed */
+    TAH_NOTE_ENDED       /* `actor`'s macrostep ended: stable, finished, or stopped by a fault (before SETTLED or FINISHED) */
 } tah_note_kind;
 
 typedef struct {

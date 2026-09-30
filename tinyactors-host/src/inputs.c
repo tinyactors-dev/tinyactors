@@ -33,10 +33,69 @@ void tah_inputs_init(tah_inputs *inputs, ta_allocator allocator) {
     tah_map_init(&inputs->mail_since, allocator);
     tah_vec_init(&inputs->touched, allocator, TAH_LAYOUT(tah_input_touch));
     tah_map_init(&inputs->touched_index, allocator);
+    tah_vec_init(&inputs->held, allocator, TAH_LAYOUT(tah_input_held));
+    tah_map_init(&inputs->held_index, allocator);
 }
 
 void tah_inputs_set_datamodel(tah_inputs *inputs, ta_datamodel datamodel) {
     inputs->datamodel = datamodel;
+}
+
+/* The held first record of `actor`'s open macrostep, or NULL; `index` is its place. */
+static tah_input_held *tah_inputs_held_of(const tah_inputs *inputs, ta_actor_id actor, uint32_t *index) {
+    uint64_t at = 0;
+    if (actor == 0 || inputs->held.count == 0 || !tah_map_get(&inputs->held_index, actor, &at)) {
+        return NULL;
+    }
+    *index = (uint32_t)at;
+    return tah_vec_at(&inputs->held, (uint32_t)at);
+}
+
+/* Whether `actor`'s macrostep is open: its first record is held and it has not ended. */
+static bool tah_inputs_open(const tah_inputs *inputs, ta_actor_id actor) {
+    uint32_t index = 0;
+    const tah_input_held *held = tah_inputs_held_of(inputs, actor, &index);
+    return held != NULL && !held->ended;
+}
+
+/* Gives a record's byte buffer back for reuse. */
+static void tah_inputs_spare(tah_inputs *inputs, tah_vec *bytes) {
+    bytes->count = 0;
+    if (tah_vec_push(&inputs->spare, bytes) != TA_OK) {
+        tah_vec_destroy(bytes);
+    }
+}
+
+/* An emptied byte buffer: a spare one, or a new one. */
+static tah_vec tah_inputs_bytes(tah_inputs *inputs) {
+    tah_vec bytes;
+    if (inputs->spare.count != 0) {
+        inputs->spare.count -= 1u;
+        return *(tah_vec *)tah_vec_at(&inputs->spare, inputs->spare.count);
+    }
+    tah_vec_init(&bytes, inputs->allocator, TAH_LAYOUT(uint8_t));
+    return bytes;
+}
+
+/* Lets go of held record `index`: the last one takes its place. */
+static void tah_inputs_unhold(tah_inputs *inputs, uint32_t index) {
+    tah_input_held *held = tah_vec_at(&inputs->held, index);
+    (void)tah_map_remove(&inputs->held_index, held->actor);
+    inputs->ended -= held->ended ? 1u : 0u;
+    ta_address_release(held->address);
+    tah_inputs_spare(inputs, &held->bytes);
+    uint32_t last = inputs->held.count - 1u;
+    if (index != last) {
+        *held = *(tah_input_held *)tah_vec_at(&inputs->held, last);
+        (void)tah_map_put(&inputs->held_index, held->actor, index); /* the key is there: no allocation */
+    }
+    inputs->held.count = last;
+}
+
+static void tah_inputs_forget_held(tah_inputs *inputs) {
+    while (inputs->held.count != 0) {
+        tah_inputs_unhold(inputs, inputs->held.count - 1u);
+    }
 }
 
 /* Forgets every queued message and waiting count: the log was turned off or
@@ -56,6 +115,7 @@ static void tah_inputs_forget_mail(tah_inputs *inputs) {
     tah_map_init(&inputs->mail_count, inputs->allocator);
     tah_map_destroy(&inputs->mail_since);
     tah_map_init(&inputs->mail_since, inputs->allocator);
+    tah_inputs_forget_held(inputs);
 }
 
 /* Forgets this turn's touched addresses. */
@@ -90,7 +150,7 @@ void tah_inputs_release(tah_inputs *inputs) {
     tah_map_destroy(&inputs->entry_index);
     tah_map_init(&inputs->entry_index, inputs->allocator);
     inputs->count = 0;
-    inputs->pending = (tah_input_mark){ 0 };
+    inputs->offering = 0;
     if (inputs->arena_ready) {
         ta_arena_reset(&inputs->arena);
     }
@@ -115,6 +175,9 @@ tah_input_entry tah_inputs_entry_at(const tah_inputs *inputs, uint32_t index) {
 
 void tah_inputs_destroy(tah_system *system) {
     tah_inputs *inputs = &system->inputs;
+    tah_inputs_forget_held(inputs);
+    tah_vec_destroy(&inputs->held);
+    tah_map_destroy(&inputs->held_index);
     tah_inputs_release(inputs);
     for (uint32_t at = 0; at < inputs->spare.count; at += 1u) {
         tah_vec_destroy(tah_vec_at(&inputs->spare, at));
@@ -231,6 +294,110 @@ typedef struct {
     ta_actor_id actor; /* the resident actor whose record it is, or 0 */
 } tah_inputs_target;
 
+static void tah_inputs_mail_done(tah_inputs *inputs, ta_address *address);
+
+/*
+ * Writes `actor`'s held first record into this turn's entry for its
+ * address, with the actor's next record number: its macrostep has ended,
+ * or a record that must follow it is about to be written (kernel ADR
+ * 0004). Out of memory the record stays held, marked ended, and the next
+ * turn tries again (tah_inputs_retry); TA_ERR_NOMEM says so.
+ */
+static ta_result tah_inputs_flush(tah_system *system, ta_actor_id actor) {
+    tah_inputs *inputs = &system->inputs;
+    uint32_t index = 0;
+    tah_input_held *held = tah_inputs_held_of(inputs, actor, &index);
+    if (held == NULL) {
+        return TA_OK;
+    }
+    tah_input_buffer *entry = tah_inputs_entry(inputs, held->address);
+    uint32_t start = entry != NULL ? entry->bytes.count : 0;
+    uint32_t length = held->bytes.count;
+    uint64_t seq = tah_inputs_actor_seq(inputs, actor) + 1u;
+    if (entry == NULL || tah_vec_reserve(&entry->bytes, start + length) != TA_OK ||
+        tah_map_put(&inputs->actor_seq, actor, seq) != TA_OK) {
+        if (!held->ended) {
+            held->ended = true;
+            inputs->ended += 1u;
+        }
+        return TA_ERR_NOMEM;
+    }
+    uint8_t *bytes = held->bytes.items;
+    for (uint32_t at = 0; at < 8u; at += 1u) {
+        bytes[8u + at] = (uint8_t)(seq >> (8u * at)); /* the fixed part's u64 seq (wal.h) */
+    }
+    tah_mem_copy((uint8_t *)entry->bytes.items + start, bytes, length);
+    entry->bytes.count = start + length;
+    inputs->count += 1u;
+    tah_inputs_touch(inputs, held->address, false, false, 0);
+    if (held->owed) {
+        tah_inputs_mail_done(inputs, held->address);
+    }
+    tah_inputs_unhold(inputs, index);
+    tah_system_want_turn(system); /* the batch goes out after the next turn */
+    return TA_OK;
+}
+
+ta_result tah_inputs_write_first(tah_system *system, ta_actor_id actor) {
+    return tah_inputs_open(&system->inputs, actor) ? TA_ERR_BUSY : tah_inputs_flush(system, actor);
+}
+
+/* Writes the held first records whose macrosteps ended while memory ran out. */
+void tah_inputs_retry(tah_system *system) {
+    tah_inputs *inputs = &system->inputs;
+    for (uint32_t index = inputs->held.count; inputs->ended != 0 && index > 0; index -= 1u) {
+        tah_input_held *held = tah_vec_at(&inputs->held, index - 1u);
+        if (held->ended) {
+            (void)tah_inputs_flush(system, held->actor); /* moves only the ones after it */
+        }
+    }
+}
+
+/*
+ * Holds `record`, the first record of `target.actor`'s macrostep, until the
+ * macrostep ends (tah_inputs_flush). A first record still held (its
+ * macrostep ended while memory ran out) is written first.
+ */
+static ta_result tah_inputs_hold(tah_system *system, tah_inputs_target target, tah_wal_record *record) {
+    tah_inputs *inputs = &system->inputs;
+    ta_result result = tah_inputs_flush(system, target.actor);
+    if (result != TA_OK) {
+        if (inputs->text_ready) {
+            ta_arena_reset(&inputs->text);
+        }
+        return result;
+    }
+    tah_input_held held = { .actor = target.actor, .address = target.address, .bytes = tah_inputs_bytes(inputs) };
+    record->seq = 0; /* filled in when it is written */
+    result = tah_wal_write(record, &(tah_wal_write_params){ .out = &held.bytes, .datamodel = inputs->datamodel });
+    if (inputs->text_ready) {
+        ta_arena_reset(&inputs->text);
+    }
+    if (result == TA_OK && tah_vec_push(&inputs->held, &held) != TA_OK) {
+        result = TA_ERR_NOMEM;
+    } else if (result == TA_OK && tah_map_put(&inputs->held_index, target.actor, inputs->held.count - 1u) != TA_OK) {
+        inputs->held.count -= 1u;
+        result = TA_ERR_NOMEM;
+    }
+    if (result != TA_OK) {
+        tah_inputs_spare(inputs, &held.bytes);
+        return result;
+    }
+    ta_address_retain(target.address);
+    return TA_OK;
+}
+
+/*
+ * Whether a record of `kind` must follow the held first record of the
+ * actor's macrostep (kernel ADR 0004, "The ordering rule"). Mail accepted
+ * for it, mail dropped and its timers' firings do not change what a replay
+ * of the macrostep does (a firing is time only), so they may come first;
+ * anything else is ordered after it.
+ */
+static bool tah_inputs_follows_first(tah_wal_kind kind) {
+    return kind != TAH_WAL_ACCEPTED && kind != TAH_WAL_DROPPED && kind != TAH_WAL_FIRED;
+}
+
 /*
  * Appends `record` (its seq and time filled in here) to `target`'s entry.
  * `mark`, when given, lets the caller undo it. The record's rendered text
@@ -239,6 +406,15 @@ typedef struct {
 static ta_result tah_inputs_write(tah_system *system, tah_inputs_target target, tah_wal_record *record,
                                   tah_input_mark *mark) {
     tah_inputs *inputs = &system->inputs;
+    uint32_t held_at = 0;
+    tah_input_held *held = tah_inputs_held_of(inputs, target.actor, &held_at);
+    if (held != NULL && (held->ended || tah_inputs_follows_first(record->kind)) &&
+        tah_inputs_flush(system, target.actor) != TA_OK && tah_inputs_follows_first(record->kind)) {
+        if (inputs->text_ready) {
+            ta_arena_reset(&inputs->text);
+        }
+        return TA_ERR_NOMEM;
+    }
     tah_input_buffer *entry = tah_inputs_entry(inputs, target.address);
     if (entry == NULL) {
         if (inputs->text_ready) {
@@ -587,6 +763,21 @@ static bool tah_inputs_unqueue(tah_inputs *inputs, uint32_t envelope, uint64_t *
     return true;
 }
 
+/* A delivered message out of the maps: its address (retained, the caller
+ * releases it) keeps counting it as waiting until its macrostep's first
+ * record is written (tah_inputs_flush), so a batch before that one wakes
+ * the address for it. */
+static bool tah_inputs_unqueue_held(tah_inputs *inputs, uint32_t envelope, ta_address **address) {
+    uint64_t value = 0;
+    *address = NULL;
+    if (!tah_map_remove(&inputs->seqs, envelope) || !tah_map_get(&inputs->queued_address, envelope, &value)) {
+        return false;
+    }
+    (void)tah_map_remove(&inputs->queued_address, envelope);
+    *address = (ta_address *)(uintptr_t)value;
+    return true;
+}
+
 /* The resident, published actor at `address`, or 0. */
 static ta_actor_id tah_inputs_resident(tah_system *system, ta_address *address) {
     ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);
@@ -665,14 +856,15 @@ static ta_result tah_inputs_queued(tah_system *system, const tah_sched_note *not
 }
 
 /*
- * DELIVERED, or JUMP for a message carrying an operator transition, written
+ * DELIVERED, or JUMP for a message carrying an operator transition, made
  * ahead of core's ta_actor_deliver() (or ta_actor_report_invoke() for a
- * report). A message the log has no ACCEPTED record of (it was queued
- * before the log was on) gets one first.
+ * report), with the delivery's time, and held until the macrostep it
+ * starts ends (tah_inputs_hold). A message the log has no ACCEPTED record
+ * of (it was queued before the log was on) gets one first.
  */
 static ta_result tah_inputs_delivering(tah_system *system, const tah_sched_note *note) {
     tah_inputs *inputs = &system->inputs;
-    inputs->pending = (tah_input_mark){ 0 };
+    inputs->offering = 0;
     ta_address *handle = NULL;
     if (note->message == NULL || !tah_inputs_logged_handle(system, note->actor, NULL, &handle)) {
         return TA_OK;
@@ -719,7 +911,11 @@ static ta_result tah_inputs_delivering(tah_system *system, const tah_sched_note 
         record.texts = targets;
         record.text_count = jump->count;
     }
-    return tah_inputs_write(system, target, &record, &inputs->pending);
+    ta_result result = tah_inputs_hold(system, target, &record);
+    if (result == TA_OK) {
+        inputs->offering = note->actor;
+    }
+    return result;
 }
 
 /* FINISHED, with the top-level final state the actor reached. */
@@ -735,6 +931,10 @@ static void tah_inputs_finished(tah_system *system, ta_actor_id actor, ta_addres
     if (tah_inputs_write(system, (tah_inputs_target){ .address = handle, .actor = actor }, &record, NULL) != TA_OK) {
         system->inputs.lost += 1u; /* a replay reaches the final state anyway */
     }
+    /* Nothing will need it back, though an earlier batch's wake counted the
+     * message of the macrostep that finished it, and the actor may be
+     * reclaimed before this batch's wakes are worked out. */
+    tah_inputs_touch(&system->inputs, handle, true, false, 0);
 }
 
 ta_result tah_inputs_note(void *self, const tah_sched_note *note) {
@@ -750,20 +950,36 @@ ta_result tah_inputs_note(void *self, const tah_sched_note *note) {
     case TAH_NOTE_DELIVERING:
     case TAH_NOTE_REPORTING:
         return tah_inputs_delivering(system, note);
-    case TAH_NOTE_UNDELIVERED:
-        tah_inputs_undo(system, &inputs->pending);
+    case TAH_NOTE_UNDELIVERED: {
+        uint32_t index = 0;
+        if (tah_inputs_held_of(inputs, inputs->offering, &index) != NULL) {
+            tah_inputs_unhold(inputs, index); /* core refused it: no macrostep started */
+        }
+        inputs->offering = 0;
         return TA_OK;
+    }
     case TAH_NOTE_DELIVERED:
     case TAH_NOTE_REPORTED: {
-        inputs->pending = (tah_input_mark){ 0 };
+        uint32_t index = 0;
+        tah_input_held *held = tah_inputs_held_of(inputs, inputs->offering, &index);
+        inputs->offering = 0;
         uint64_t seq = 0;
         ta_address *queued_address = NULL;
-        if (tah_inputs_unqueue(inputs, note->envelope, &seq, &queued_address)) {
+        bool numbered = held != NULL ? tah_inputs_unqueue_held(inputs, note->envelope, &queued_address)
+                                     : tah_inputs_unqueue(inputs, note->envelope, &seq, &queued_address);
+        if (numbered) {
+            if (held != NULL) {
+                held->owed = queued_address != NULL;
+            }
             tah_inputs_touch(inputs, queued_address, false, false, 0);
             ta_address_release(queued_address);
         }
         return TA_OK;
     }
+    case TAH_NOTE_ENDED:
+        /* Its first record goes into this turn's batch, beside what the macrostep sent. */
+        (void)tah_inputs_flush(system, note->actor);
+        return TA_OK;
     case TAH_NOTE_DROPPED: {
         uint64_t seq = 0;
         ta_address *queued_address = NULL;
@@ -786,9 +1002,10 @@ ta_result tah_inputs_note(void *self, const tah_sched_note *note) {
     }
     case TAH_NOTE_RELEASING:
         if (tah_inputs_logged_handle(system, note->actor, NULL, &handle)) {
+            /* It starts the rest of a macrostep, held as a delivery's record is. */
             tah_wal_record record = { .kind = TAH_WAL_RELEASED, .time = ta_system_time(system->core) };
-            if (tah_inputs_write(system, (tah_inputs_target){ .address = handle, .actor = note->actor }, &record,
-                                 NULL) != TA_OK) {
+            if (tah_inputs_hold(system, (tah_inputs_target){ .address = handle, .actor = note->actor }, &record) !=
+                TA_OK) {
                 inputs->lost += 1u;
             }
         }
@@ -851,6 +1068,9 @@ ta_result tah_inputs_evicted(tah_system *system, ta_actor_id actor, bool has_wak
     if (!tah_inputs_logged_handle(system, actor, NULL, &handle)) {
         return TA_OK;
     }
+    if (tah_inputs_open(&system->inputs, actor)) {
+        return TA_ERR_BUSY; /* inside a macrostep: a replay could not stop where it stopped */
+    }
     tah_wal_record record = { .kind = TAH_WAL_EVICTED, .time = ta_system_time(system->core) };
     ta_result result = tah_inputs_write(system, (tah_inputs_target){ .address = handle, .actor = actor }, &record, NULL);
     if (result == TA_OK) {
@@ -883,6 +1103,18 @@ ta_result tah_inputs_destroying(tah_system *system, ta_actor_id actor) {
 }
 
 void tah_inputs_removed(tah_system *system, ta_actor_id actor) {
+    tah_inputs *inputs = &system->inputs;
+    uint32_t index = 0;
+    tah_input_held *held = tah_inputs_held_of(inputs, actor, &index);
+    if (held != NULL) {
+        /* Gone inside a macrostep, with no record of its end (a
+         * replacement took its address, say): its message stays owed in
+         * the log (kernel ADR 0004, "Removal"). */
+        if (held->owed) {
+            tah_inputs_mail_done(inputs, held->address);
+        }
+        tah_inputs_unhold(inputs, index);
+    }
     (void)tah_map_remove(&system->inputs.actor_seq, actor);
 }
 
@@ -920,6 +1152,9 @@ ta_result tah_inputs_fired(tah_system *system, const ta_actor_ref *sender, ta_se
 ta_result tah_system_withdraw_send(tah_system *system, ta_actor_id actor, ta_send_id send) {
     tah_input_mark mark = { 0 };
     ta_address *handle = NULL;
+    if (tah_inputs_open(&system->inputs, actor)) {
+        return TA_ERR_BUSY; /* a replay cannot withdraw in the middle of a macrostep (kernel ADR 0004) */
+    }
     if (tah_inputs_logged_handle(system, actor, NULL, &handle)) {
         ta_str text = { 0 };
         bool has_text = tah_inputs_send_text(system, send, &text);

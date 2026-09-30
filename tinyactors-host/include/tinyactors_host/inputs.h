@@ -10,7 +10,10 @@
  * Recording happens before core is called: the kernel writes the record
  * into the turn's buffer for the actor's address, calls core with the
  * input's time, and keeps the record when core took the input or cuts it
- * off again when it did not (a mark, tah_input_mark). A value is written by
+ * off again when it did not (a mark, tah_input_mark). A macrostep's first
+ * record (DELIVERED, JUMP or RELEASED) is made when the macrostep starts,
+ * with that time, and written into the batch of the turn it ends in,
+ * beside what it sent (kernel ADR 0004). A value is written by
  * the data model's codec (tah_inputs_set_datamodel), so an input carrying a
  * value with no durable form is refused before core sees it
  * (TA_ERR_UNSUPPORTED). Entries' byte buffers are reset, not freed, after
@@ -97,7 +100,8 @@ bool tah_inputs_seq_is_ours(const tah_inputs *inputs, uint64_t seq);
  * data as it was bound. Anything but TA_OK refuses the spawn. */
 ta_result tah_inputs_spawned(tah_system *system, ta_actor_id actor, tah_input_mark *mark);
 /* Writes `evicted` for the logged actor about to be destroyed, and fixes
- * its wake: `has_wake` false is none. */
+ * its wake: `has_wake` false is none. TA_ERR_BUSY inside a macrostep
+ * (kernel ADR 0004). */
 ta_result tah_inputs_evicted(tah_system *system, ta_actor_id actor, bool has_wake, ta_time wake);
 /* The logged actor is about to be destroyed by an application (not evicted,
  * not finished, not replaced): DESTROYED, and nothing needs its address
@@ -120,6 +124,11 @@ ta_result tah_inputs_fired(tah_system *system, const ta_actor_ref *sender, ta_se
  */
 ta_result tah_inputs_accepted_record(tah_system *system, const tah_envelope *envelope, uint64_t id, uint64_t session,
                                      tah_wal_record *out);
+/*
+ * Writes the held first records of macrosteps that ended while memory ran
+ * out (kernel ADR 0004). A turn calls it first.
+ */
+void tah_inputs_retry(tah_system *system);
 /* Cuts off a record written ahead of a core call that refused its input. */
 void tah_inputs_undo(tah_system *system, tah_input_mark *mark);
 
@@ -132,7 +141,9 @@ void tah_inputs_set_actor_seq(tah_inputs *inputs, ta_actor_id actor, uint64_t se
  * An operator's actions, recorded ahead of the core call (kernel ADR 0002
  * section 2): ta_actor_withdraw_send() as WITHDRAWN, and ta_actor_abandon()
  * as ABANDONED, followed by the scheduler's abandon hook. They answer
- * core's result; a record that cannot be written refuses the action.
+ * core's result; a record that cannot be written refuses the action. A
+ * withdrawal inside a logged actor's macrostep answers TA_ERR_BUSY (kernel
+ * ADR 0004).
  */
 ta_result tah_system_withdraw_send(tah_system *system, ta_actor_id actor, ta_send_id send);
 ta_result tah_system_abandon(tah_system *system, ta_actor_id actor);

@@ -1088,6 +1088,7 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
         return;
     }
     if (result != TA_OK) {
+        (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
         if (result == TA_ERR_RUNAWAY) {
             /* Quarantined as a runaway: an operator's release() lets this
              * macrostep finish; the next one has the limit again. */
@@ -1101,6 +1102,11 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
     case TA_RUN_PAUSED:
         tah_sched_requeue(sched, &sched->runnable, actor);
         return;
+    default:
+        break;
+    }
+    (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
+    switch (status) {
     case TA_RUN_DONE:
         entry->flags &= (uint8_t)~(TAH_SCHED_UNLIMITED | TAH_SCHED_RELEASE_NOTED);
         tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_DONE, .ignored = ignored });

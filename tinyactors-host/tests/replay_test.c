@@ -25,6 +25,11 @@
  *   once after publish; and one that fired after the last commit is lost
  *   with its receiver's ACCEPTED, which the same batch held, so after a
  *   crash of both it fires again and is delivered once.
+ * - A macrostep's first record commits with what it sent (kernel ADR
+ *   0004): an immediate send survives a crash between the delivery's
+ *   commit and the macrostep's; until the macrostep ends its actor is not
+ *   evicted, withdrawn from or checkpointed, and its DELIVERED keeps the
+ *   delivery's time.
  * - Mail between actors sent while the queue is full waits in its
  *   receiver's overflow, logged there (kernel ADR 0003): after a crash and
  *   a replay from `spawned`, after the sender's eviction and an exit, and
@@ -1392,6 +1397,183 @@ static void timeline_crash_between_commits(void) {
     finish_system(system);
 }
 
+/*
+ * A crash between the batch of a delivery and the batch of the macrostep
+ * it starts. ping/p1 is given `now` at 1000, and its macrostep sends n1
+ * to sink/b at once. The scheduler delivers in one turn and resumes the
+ * delivered actor in the next turn's resumes, so the macrostep, and n1's
+ * ACCEPTED in sink/b's log, are in a later turn than the delivery. The
+ * process stops after the turn that delivered `now` was committed and
+ * before the turn that ran its macrostep was. DELIVERED waits for the
+ * macrostep's end (kernel ADR 0004), so the committed log still owes
+ * `now`. Both actors are rebuilt from their committed logs in a new
+ * system: ping/p1 runs the macrostep again, and sink/b gets n1 once.
+ */
+static void immediate_send_survives_a_crash_between_commits(void) {
+    ping_log.length = sink_log.length = 0;
+    tah_system *system = make_system_logging(1, true);
+    ta_definition_id ping = define_ping(system);
+    ta_definition_id sink = 0;
+    ta_actor_id sender = 0;
+    ta_actor_id receiver = 0;
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    CHECK(spawn_at(system, sink, &sink_address, &receiver) == TA_OK);
+    CHECK(spawn_at(system, ping, &ping_address, &sender) == TA_OK);
+    run_apart(system);
+    advance(system, 1000);
+    CHECK(post(system, sender, "now", NULL) == TA_OK);
+    /* The turns until the one that runs the macrostep are committed. */
+    static tah_wal_kind kinds[8];
+    for (int guard = 0;; guard += 1) {
+        CHECK(guard < 8);
+        tah_system_turn(system);
+        batch_kinds(system, "sink", kinds, 8);
+        if (kinds[0] != 0) {
+            break; /* this turn's batch has n1's ACCEPTED */
+        }
+        take_apart(system);
+        tah_system_end_turn(system);
+    }
+    CHECK(kinds[0] == TAH_WAL_ACCEPTED); /* and sink/b's DELIVERED of it, in the same turn */
+    CHECK(in_state(system, sender, "sent"));
+    uint32_t wakes = 0;
+    (void)tah_inputs_wakes(system, &wakes);
+    tah_inputs_release(&system->inputs); /* never committed */
+    tah_system_end_turn(system);
+    run(system, NULL); /* sink/b takes n1 live; that batch is lost too */
+    CHECK(in_state(system, receiver, "h1"));
+    finish_system(system); /* the crash */
+
+    static const tah_wal_kind sink_kinds[] = { TAH_WAL_SPAWNED, 0 };
+    CHECK(log_kinds(&sink_log, sink_kinds));
+    system = make_system_logging(2, true);
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    restore_run pinged = { .definition = define_ping(system) };
+    restore_run sunk = { .definition = sink, .address = &sink_address };
+    advance(system, 7000);
+    CHECK(restore(system, ping_log.bytes, ping_log.length, &pinged) == TA_OK && pinged.published);
+    CHECK(restore(system, sink_log.bytes, sink_log.length, &sunk) == TA_OK && sunk.published);
+    run(system, NULL);
+    CHECK(in_state(system, pinged.actor, "sent"));
+    CHECK(in_state(system, sunk.actor, "h1")); /* n1, once */
+    finish_system(system);
+}
+
+/*
+ * A macrostep's first record is written when the macrostep ends (kernel ADR
+ * 0004): until then its actor is not evicted, no send of it is withdrawn,
+ * and no checkpoint of it is written.
+ */
+static void a_macrostep_is_not_evicted(void) {
+    ping_log.length = sink_log.length = 0;
+    tah_system *system = make_system_logging(1, true);
+    ta_definition_id ping = define_ping(system);
+    ta_definition_id sink = 0;
+    ta_actor_id sender = 0;
+    ta_actor_id receiver = 0;
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    CHECK(spawn_at(system, sink, &sink_address, &receiver) == TA_OK);
+    CHECK(spawn_at(system, ping, &ping_address, &sender) == TA_OK);
+    run_apart(system);
+    advance(system, 1000);
+    CHECK(post(system, sender, "now", NULL) == TA_OK);
+    turn_apart(system); /* delivered; its macrostep is next turn's */
+    static const tah_wal_kind held[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, 0 };
+    CHECK(log_kinds(&ping_log, held)); /* no DELIVERED yet */
+    CHECK(tah_inputs_evicted(system, sender, false, 0) == TA_ERR_BUSY);
+    ta_send_id n1 = 0;
+    CHECK(ta_send_id_intern(system->core, S("n1"), &n1) == TA_OK);
+    CHECK(tah_system_withdraw_send(system, sender, n1) == TA_ERR_BUSY);
+    log_buffer checkpoint = { 0 };
+    CHECK(tah_checkpoint_write(system, sender, buffer_sink(&checkpoint)) == TA_ERR_BUSY && checkpoint.length == 0);
+    run_apart(system);
+    static const tah_wal_kind ended[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, 0 };
+    CHECK(log_kinds(&ping_log, ended));
+    static record_list records;
+    read_records(ping_log.bytes, ping_log.length, &records);
+    CHECK(records.views[2].time == 1000 && records.views[2].seq == 3); /* the delivery's time */
+    CHECK(tah_inputs_evicted(system, sender, false, 0) == TA_OK);
+    finish_system(system);
+}
+
+/*
+ * Family "ping", revision "fan": `fan` sends n1 to sink/b, and an eventless
+ * transition sends n2, so with one microstep per resume the macrostep runs
+ * in two turns.
+ */
+static const ta_scxml_state_spec fan_states[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("zero"),
+      .transitions = (const ta_scxml_transition_spec[]){
+          { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("fan"), .targets = TARGETS(STR("f1")),
+            .actions = (const ta_scxml_action_spec[]){ SEND_NOW("n1", "hello", "#_actor_sink/b"), END } },
+          END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("f1"),
+      .transitions = (const ta_scxml_transition_spec[]){
+          { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = TARGETS(STR("f2")),
+            .actions = (const ta_scxml_action_spec[]){ SEND_NOW("n2", "hello", "#_actor_sink/b"), END } },
+          END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("f2") },
+    END,
+};
+
+/*
+ * A macrostep a budget pauses runs in several turns. Here what it sent in
+ * a turn before its last is still committed before its first record: a
+ * crash after that commit redelivers the message, the macrostep runs
+ * again, and n1 reaches sink/b twice. The outbox of kernel ADR 0004
+ * section 3 closes this (the next commit makes it exactly once).
+ */
+static void a_paused_macrostep_sends_twice_after_a_crash(void) {
+    ping_log.length = sink_log.length = 0;
+    tah_system *system = make_system_logging(1, true);
+    system->budgets.microsteps = 1;
+    ta_definition_id fan = 0;
+    ta_definition_id sink = 0;
+    ta_actor_id sender = 0;
+    ta_actor_id receiver = 0;
+    CHECK(define(system, "ping", "fan", fan_states, &fan) == TA_OK);
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    CHECK(spawn_at(system, sink, &sink_address, &receiver) == TA_OK);
+    CHECK(spawn_at(system, fan, &ping_address, &sender) == TA_OK);
+    run_apart(system);
+    advance(system, 1000);
+    CHECK(post(system, sender, "fan", NULL) == TA_OK);
+    static tah_wal_kind kinds[8];
+    int sent = 0;
+    for (int guard = 0;; guard += 1) {
+        CHECK(guard < 8);
+        tah_system_turn(system);
+        batch_kinds(system, "sink", kinds, 8);
+        sent += kinds[0] == TAH_WAL_ACCEPTED ? 1 : 0;
+        if (sent == 2) {
+            break; /* n2's turn: never committed */
+        }
+        take_apart(system); /* n1's turn is committed */
+        tah_system_end_turn(system);
+    }
+    static const tah_wal_kind held[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, 0 };
+    CHECK(log_kinds(&ping_log, held)); /* the first record waits for the macrostep's end */
+    uint32_t wakes = 0;
+    (void)tah_inputs_wakes(system, &wakes);
+    tah_inputs_release(&system->inputs);
+    tah_system_end_turn(system);
+    finish_system(system); /* the crash */
+
+    system = make_system_logging(2, true);
+    CHECK(define(system, "ping", "fan", fan_states, &fan) == TA_OK);
+    CHECK(define(system, "sink", "v1", sink_states, &sink) == TA_OK);
+    restore_run pinged = { .definition = fan };
+    restore_run sunk = { .definition = sink, .address = &sink_address };
+    advance(system, 7000);
+    CHECK(restore(system, ping_log.bytes, ping_log.length, &pinged) == TA_OK && pinged.published);
+    CHECK(restore(system, sink_log.bytes, sink_log.length, &sunk) == TA_OK && sunk.published);
+    CHECK(pinged.redelivered == 1 && sunk.redelivered == 1); /* `fan`; n1 */
+    run(system, NULL);
+    CHECK(in_state(system, pinged.actor, "f2"));
+    CHECK(in_state(system, sunk.actor, "h3")); /* n1 twice, and n2 */
+    finish_system(system);
+}
+
 /* ------------------------------------------------------------------------
  * Mail between actors past the queue's limits (kernel ADR 0003). ping/p1
  * sends n1 to sink/b while the queue is full: the router accepts it into
@@ -1675,6 +1857,9 @@ int main(void) {
     timeline_fired_before_the_stop();
     timeline_pending_at_the_stop();
     timeline_crash_between_commits();
+    immediate_send_survives_a_crash_between_commits();
+    a_macrostep_is_not_evicted();
+    a_paused_macrostep_sends_twice_after_a_crash();
     overflow_is_delivered_when_there_is_room();
     overflow_survives_a_crash();
     overflow_survives_an_eviction_and_exit();

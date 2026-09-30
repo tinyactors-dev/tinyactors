@@ -84,7 +84,10 @@ typedef struct {
 } tah_replay_run_params;
 ta_result tah_replay_run(tah_replay *replay, const tah_replay_run_params *params);
 
-/* The time of the last record read, and whether there was one. */
+/* The latest time of the records read, and whether there was one. A
+ * delivery's record carries the delivery's time and follows records of the
+ * later turns its macrostep ran in (kernel ADR 0004), so the last record's
+ * time can be an earlier one. */
 bool tah_replay_last_time(const tah_replay *replay, ta_time *out);
 /* The replaying actor is about to be published: the scheduler takes it
  * back, and its record numbers continue from the log's. */

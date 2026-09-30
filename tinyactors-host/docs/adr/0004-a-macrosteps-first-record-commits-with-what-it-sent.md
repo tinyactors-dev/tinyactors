@@ -209,3 +209,38 @@ them until that batch commits.
 - **Log a paused macrostep's progress,** so a replay resumes where it
   paused. Core has no such record, and a macrostep is the unit a replay
   runs.
+
+## Implementation notes
+
+### The first record is held (2026-10-01)
+
+Section 2, from the spike (commit b2ccaab, reviewed and renamed):
+- **`inputs.c`:** `tah_inputs_hold()` renders a first record into a spare
+  byte buffer with seq 0 and keeps it per actor (`tah_input_held`, found
+  by `held_index`); `tah_inputs_flush()` copies it into the turn's entry
+  and patches the record number in (the fixed part's `seq`). DELIVERING,
+  REPORTING and RELEASING hold; UNDELIVERED lets go (core refused, no
+  macrostep started); `tah_inputs_write()` applies the ordering rule
+  (`tah_inputs_follows_first()`).
+- **The scheduler** notes `TAH_NOTE_ENDED` after a resume that leaves the
+  actor stable or finished, or stops it with a fault, before SETTLED or
+  FINISHED.
+- **Out of memory:** the record stays held and `ended`; `tah_inputs_retry()`
+  runs first in each turn, and `tah_system_quiet()` is false while any
+  waits. `tah_checkpoint_write()` writes it first
+  (`tah_inputs_write_first()`), and answers `TA_ERR_BUSY` inside a
+  macrostep.
+- **Operators:** `tah_inputs_evicted()` and `tah_system_withdraw_send()`
+  answer `TA_ERR_BUSY` inside a logged actor's macrostep.
+- **Replay:** `tah_replay_last_time()` is the latest record time.
+- **Wakes:** a delivered message whose first record is held keeps counting
+  in its address's `mail_count` until the record is written; `finished`
+  fixes the wake to none (napi's `input-log.js` caught a stale wake
+  without it).
+
+Tests (`replay_test`): `immediate_send_survives_a_crash_between_commits`
+(fails before this change: sink/b stays in `h0`), and
+`a_macrostep_is_not_evicted` (eviction, withdrawal and a checkpoint answer
+BUSY until the macrostep ends; DELIVERED keeps the delivery's time).
+`a_paused_macrostep_sends_twice_after_a_crash` records the gap section 3
+closes: a paused macrostep's first send is delivered twice after a crash.
