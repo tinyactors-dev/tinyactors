@@ -19,6 +19,10 @@
  * - Bytes that are no log, a life that starts with anything but its first
  *   record and a delivery never accepted are CORRUPT; a checkpoint of
  *   another revision is DEFINITION_MISMATCH.
+ * - Core ADR 0089 section 2's four timelines, as the kernel logs them:
+ *   a timer to itself fires once; a send to another actor that fired
+ *   before the stop is not sent again; one still pending at the stop fires
+ *   once after publish; one that fired after the last commit fires again.
  */
 #include "check.h"
 #include <string.h>
@@ -189,7 +193,19 @@ static const ta_scxml_state_spec ping_states[] = {
     END,
 };
 
+static const ta_scxml_state_spec sink_states[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("h0"),
+      .transitions = (const ta_scxml_transition_spec[]){ GO("hello", "h1"), END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("h1"),
+      .transitions = (const ta_scxml_transition_spec[]){ GO("hello", "h2"), END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("h2"),
+      .transitions = (const ta_scxml_transition_spec[]){ GO("hello", "h3"), END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("h3") },
+    END,
+};
+
 static const ta_actor_address ping_address = { .family = { .name = STR("ping") }, .name = STR("p1") };
+static const ta_actor_address sink_address = { .family = { .name = STR("sink") }, .name = STR("b") };
 
 static ta_result define(tah_system *system, const char *family, const char *revision, const ta_scxml_state_spec *states,
                         ta_definition_id *out) {
@@ -1042,6 +1058,196 @@ static void refuses_a_checkpoint_of_another_revision(void) {
     finish_system(system);
 }
 
+/* ------------------------------------------------------------------------
+ * The four timelines of core ADR 0089 section 2, under the kernel's log
+ * (kernel ADR 0002): a timer's firing is a FIRED record, which carries its
+ * time only, and the actor is published at the last record's time. Each
+ * is replayed in the system it ran in, where sink/b counts the `hello`s it
+ * got; the live ping/p1 is gone first (evicted, or lost in a crash).
+ */
+
+typedef struct {
+    tah_system *system;
+    ta_definition_id definition;
+    ta_actor_id actor; /* ping/p1 */
+    ta_actor_id sink;  /* sink/b */
+    log_buffer log;    /* ping/p1's committed batches */
+} timeline;
+
+static timeline line;
+
+/* ping/p1 spawned at 0 and given `event` at 1000; sink/b at h0. */
+static void timeline_start(const char *event) {
+    line.log.length = 0;
+    line.system = make_system(1);
+    line.definition = define_ping(line.system);
+    ta_definition_id sink = 0;
+    CHECK(define(line.system, "sink", "v1", sink_states, &sink) == TA_OK);
+    CHECK(spawn_at(line.system, sink, &sink_address, &line.sink) == TA_OK);
+    CHECK(spawn_at(line.system, line.definition, &ping_address, &line.actor) == TA_OK);
+    run(line.system, &line.log);
+    advance(line.system, 1000);
+    CHECK(post(line.system, line.actor, event, NULL) == TA_OK);
+    run(line.system, &line.log);
+    ta_time due = 0;
+    CHECK(pending_sends(line.system, line.actor, &due) == 1 && due == 6000);
+}
+
+/* Evicted at the system's time: EVICTED, and the actor destroyed. */
+static void timeline_evict(void) {
+    CHECK(tah_inputs_evicted(line.system, line.actor, false, 0) == TA_OK);
+    drop(line.system, line.actor);
+    run(line.system, &line.log);
+}
+
+/* The log's record kinds, in order, are `expected` (ended by 0). */
+static bool timeline_kinds(const tah_wal_kind *expected) {
+    static record_list records;
+    read_records(line.log.bytes, line.log.length, &records);
+    for (uint32_t index = 0; index < records.count; index += 1u) {
+        if (expected[index] == 0 || records.views[index].kind != expected[index]) {
+            return false;
+        }
+    }
+    return expected[records.count] == 0;
+}
+
+/* Replays ping/p1 from its log, then runs the system; answers the records it wrote after. */
+static uint32_t timeline_replay(restore_run *out, log_buffer *after) {
+    out->definition = line.definition;
+    CHECK(restore(line.system, line.log.bytes, line.log.length, out) == TA_OK);
+    CHECK(out->published);
+    after->length = 0;
+    run(line.system, after);
+    static record_list records;
+    read_records(after->bytes, after->length, &records);
+    return records.count;
+}
+
+/*
+ * A timeout to itself: t1 fires at 6000 (FIRED), comes back as `tick`,
+ * delivered at 6000, and the actor is evicted at 7000. Replayed a week
+ * later: the delivery at 6000 drops the held t1, the chart takes its tick,
+ * and nothing is held at publish: nothing fires twice.
+ */
+static void timeline_timeout_to_self(void) {
+    timeline_start("arm");
+    advance(line.system, 6000);
+    run(line.system, &line.log);
+    CHECK(in_state(line.system, line.actor, "ticked"));
+    advance(line.system, 7000);
+    timeline_evict();
+    static const tah_wal_kind kinds[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, TAH_WAL_FIRED,
+                                          TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, TAH_WAL_EVICTED, 0 };
+    CHECK(timeline_kinds(kinds));
+
+    advance(line.system, 7000 + 7u * 24u * 3600u * 1000u);
+    restore_run out = { 0 };
+    static log_buffer after;
+    CHECK(timeline_replay(&out, &after) == 0);
+    CHECK(out.last_time == 7000);
+    CHECK(in_state(line.system, out.actor, "ticked"));
+    CHECK(pending_sends(line.system, out.actor, NULL) == 0);
+    ta_time deadline = 0;
+    CHECK(ta_system_next_deadline(line.system->core, &deadline) == TA_ERR_NOT_FOUND);
+    finish_system(line.system);
+}
+
+/*
+ * A send to sink/b that fired at 6000, before the actor was evicted at
+ * 7000 (E >= d): replay drops it at publish, and nothing fires. The same
+ * when the process stopped right after the batch with FIRED was committed:
+ * FIRED's time alone is the publish time, and it covers the send.
+ */
+static void timeline_fired_before_the_stop(void) {
+    for (int evicted = 0; evicted < 2; evicted += 1) {
+        timeline_start("relay");
+        advance(line.system, 6000);
+        run(line.system, &line.log);
+        CHECK(in_state(line.system, line.sink, "h1"));
+        if (evicted) {
+            advance(line.system, 7000);
+            timeline_evict();
+        } else {
+            drop(line.system, line.actor); /* a crash: nothing more is recorded */
+        }
+        static const tah_wal_kind kinds[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, TAH_WAL_FIRED,
+                                              TAH_WAL_EVICTED, 0 };
+        static const tah_wal_kind crashed[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, TAH_WAL_FIRED, 0 };
+        CHECK(timeline_kinds(evicted ? kinds : crashed));
+
+        advance(line.system, 7000 + 7u * 24u * 3600u * 1000u);
+        restore_run out = { 0 };
+        static log_buffer after;
+        CHECK(timeline_replay(&out, &after) == 0);
+        CHECK(out.last_time == (evicted ? 7000u : 6000u));
+        CHECK(in_state(line.system, out.actor, "waiting"));
+        CHECK(pending_sends(line.system, out.actor, NULL) == 0);
+        CHECK(in_state(line.system, line.sink, "h1")); /* b got it once */
+        finish_system(line.system);
+    }
+}
+
+/*
+ * The actor was evicted at 3000, before the send to sink/b was due at
+ * 6000 (E < d): still held at publish, a week later, it fires once at the
+ * next dispatch, and the published actor records it.
+ */
+static void timeline_pending_at_the_stop(void) {
+    timeline_start("relay");
+    advance(line.system, 3000);
+    timeline_evict();
+    CHECK(in_state(line.system, line.sink, "h0"));
+    static const tah_wal_kind kinds[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, TAH_WAL_EVICTED, 0 };
+    CHECK(timeline_kinds(kinds));
+
+    advance(line.system, 7u * 24u * 3600u * 1000u);
+    restore_run out = { 0 };
+    static log_buffer after;
+    CHECK(timeline_replay(&out, &after) == 1);
+    CHECK(out.last_time == 3000);
+    static record_list records;
+    read_records(after.bytes, after.length, &records);
+    CHECK(records.views[0].kind == TAH_WAL_FIRED && records.views[0].seq == 5);
+    CHECK(in_state(line.system, line.sink, "h1")); /* once */
+    CHECK(pending_sends(line.system, out.actor, NULL) == 0);
+    advance(line.system, 8u * 24u * 3600u * 1000u);
+    run(line.system, NULL);
+    CHECK(in_state(line.system, line.sink, "h1"));
+    finish_system(line.system);
+}
+
+/*
+ * A crash between two commits: the batch with the relay was committed (a
+ * turn at 3000 committed nothing more), the send fired at 6000, and the
+ * process stopped before that batch was committed. The log ends at the
+ * relay's delivery: the send is still held at publish and fires again,
+ * the at-least-once window. sink/b, which got it live, gets it twice.
+ */
+static void timeline_crash_between_commits(void) {
+    timeline_start("relay");
+    advance(line.system, 3000);
+    run(line.system, &line.log); /* the horizon: nothing to record */
+    uint32_t committed = line.log.length;
+    advance(line.system, 6000);
+    run(line.system, NULL); /* FIRED, never committed */
+    CHECK(in_state(line.system, line.sink, "h1"));
+    drop(line.system, line.actor);
+    CHECK(line.log.length == committed);
+    static const tah_wal_kind kinds[] = { TAH_WAL_SPAWNED, TAH_WAL_ACCEPTED, TAH_WAL_DELIVERED, 0 };
+    CHECK(timeline_kinds(kinds));
+
+    restore_run out = { 0 };
+    static log_buffer after;
+    CHECK(timeline_replay(&out, &after) == 1);
+    CHECK(out.last_time == 1000);
+    CHECK(in_state(line.system, line.sink, "h2")); /* again */
+    static record_list records;
+    read_records(after.bytes, after.length, &records);
+    CHECK(records.views[0].kind == TAH_WAL_FIRED && records.views[0].seq == 4);
+    finish_system(line.system);
+}
+
 int main(void) {
     replays_a_log_cut_anywhere();
     replays_a_log_in_small_pieces();
@@ -1054,6 +1260,10 @@ int main(void) {
     replays_the_last_of_two_lives();
     refuses_a_corrupt_log();
     refuses_a_checkpoint_of_another_revision();
+    timeline_timeout_to_self();
+    timeline_fired_before_the_stop();
+    timeline_pending_at_the_stop();
+    timeline_crash_between_commits();
     puts("replay test passed");
     return 0;
 }
