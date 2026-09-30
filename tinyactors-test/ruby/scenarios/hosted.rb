@@ -65,6 +65,17 @@ TinyactorsTest.chart :hosted_stopper do
   final :stopped
 end
 
+TinyactorsTest.chart :hosted_counter do
+  data count: 0, seen: []
+
+  state :counting do
+    transition on: 'bump' do
+      assign '.count', '.count + 1'
+      assign '.seen', '.seen + [$_event.data.tag]'
+    end
+  end
+end
+
 # Core ADR 0089 section 2's timelines 2 and 3: a delayed send to another
 # actor, which the input log records as FIRED when it fires.
 TinyactorsTest.chart :hosted_relay do
@@ -385,6 +396,68 @@ TinyactorsTest.scenarios 'hosted' do
     hosted_run(hosted)
     assert_equal [:h1], hosted_states(hosted, sink), 'once'
     assert_equal [:waiting], hosted_states(hosted, rebuilt)
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: mail for an evicted actor that is lost or a dead letter although
+  # its family has a loader; a load whose waiting mail is not delivered, or
+  # delivered out of order; a loaded actor that did not get its state back.
+  scenario 'mail to an evicted actor loads it from its log and delivers the mail' do
+    hosted = hosted_system
+    hosted_log(hosted, 'hosted_counter')
+    definition = hosted_define(hosted, :hosted_counter)
+    counter = hosted_spawn(hosted, definition, family: 'hosted_counter', name: 'c')
+    hosted_run(hosted)
+    hosted_post_to(hosted, 'hosted_counter', 'c', 'bump', data: { tag: 'a' })
+    hosted_run(hosted)
+    assert_equal 'ok', hosted_evict(hosted, counter)
+    store = hosted_store(hosted)
+
+    assert_equal 'ok', hosted_set_loader(hosted, 'hosted_counter')
+    assert_equal 'ok', hosted_post_to(hosted, 'hosted_counter', 'c', 'bump', data: { tag: 'b' })
+    assert_equal 'ok', hosted_post_to(hosted, 'hosted_counter', 'c', 'bump', data: { tag: 'c' })
+    run = hosted_run(hosted)
+    assert_equal [{ family: 'hosted_counter', name: 'c', why: 'mail' }],
+                 run[:loads].map { |load| load.slice(:family, :name, :why) }
+    assert_equal [], run[:dead_letters]
+    loaded = hosted_load(hosted, run[:loads].first, definition: definition, log: store['hosted_counter/c'])
+    assert_equal 'ok', loaded[:result]
+    assert_equal 'loaded', loaded[:outcome]
+    assert hosted_run(hosted)[:quiet]
+    assert_equal 3, hosted_data(hosted, loaded[:actor], '.count')
+    assert_equal %w[a b c], hosted_data(hosted, loaded[:actor], '.seen'), 'the waiting mail came after the log, in order'
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: a load for a name the store has never seen that cannot start an
+  # actor, or a loader-backed run that loses the mail that started it.
+  scenario 'mail to a name the store has never seen spawns it through the loader' do
+    hosted = hosted_system
+    hosted_log(hosted, 'hosted_counter')
+    definition = hosted_define(hosted, :hosted_counter)
+    hosted_set_loader(hosted, 'hosted_counter')
+    hosted_post_to(hosted, 'hosted_counter', 'fresh', 'bump', data: { tag: 'x' })
+    answers = hosted_run_loading(hosted, {}, { 'hosted_counter' => definition })
+    assert_equal [%w[ok spawned]], answers.map { |answer| [answer[:result], answer[:outcome]] }
+    assert_equal %w[x], hosted_data(hosted, answers.first[:actor], '.seen')
+    assert_equal 0, close_hosted(hosted)
+  end
+
+  # Catches: a load that cannot be answered keeping its mail forever, or
+  # dropping it silently; a load's mailbox that grows past max_waiting.
+  scenario 'a load the loader cannot answer turns its waiting mail into dead letters' do
+    hosted = hosted_system
+    hosted_define(hosted, :hosted_counter)
+    hosted_set_loader(hosted, 'hosted_counter', max_waiting: 1)
+    hosted_post_to(hosted, 'hosted_counter', 'gone', 'bump', data: { tag: 'kept' })
+    hosted_post_to(hosted, 'hosted_counter', 'gone', 'bump', data: { tag: 'over' })
+    run = hosted_run(hosted)
+    assert_equal [['waiting-full', { tag: 'over' }]], run[:dead_letters].map { |dead| [dead[:reason], dead[:data]] }
+    assert_equal 'not-found', hosted_load(hosted, run[:loads].first, outcome: 'not-found')[:outcome]
+    dead = hosted_run(hosted)[:dead_letters]
+    assert_equal [['not-found', { tag: 'kept' }]], dead.map { |letter| [letter[:reason], letter[:data]] }
+    assert_equal 'err_stale', hosted_load(hosted, run[:loads].first, outcome: 'not-found')[:result],
+                 'a load is answered once'
     assert_equal 0, close_hosted(hosted)
   end
 end

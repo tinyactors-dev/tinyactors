@@ -236,7 +236,8 @@ static const tat_method TAT_HOST_METHODS[] = {
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"definition\":{\"type\":\"u64\",\"required\":true},"
      "\"family\":{\"type\":\"string\",\"required\":false},\"name\":{\"type\":\"string\",\"required\":false}}}"},
     {"hosted.post", tat_hosted_post_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":true},"
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":false},"
+     "\"family\":{\"type\":\"string\",\"required\":false},\"name\":{\"type\":\"string\",\"required\":false},"
      "\"event\":{\"type\":\"string\",\"required\":true},\"data\":{\"type\":\"json\",\"required\":false}}}"},
     {"hosted.turn", tat_hosted_turn_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"limit\":{\"type\":\"u64\",\"required\":false}}}"},
@@ -244,6 +245,13 @@ static const tat_method TAT_HOST_METHODS[] = {
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actors\":{\"type\":\"json\",\"required\":false}}}"},
     {"hosted.advance", tat_hosted_advance_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"time\":{\"type\":\"u64\",\"required\":true}}}"},
+    {"hosted.set_loader", tat_hosted_set_loader_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"family\":{\"type\":\"string\",\"required\":true},"
+     "\"max_waiting\":{\"type\":\"u64\",\"required\":true}}}"},
+    {"hosted.load", tat_hosted_load_method,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"index\":{\"type\":\"u64\",\"required\":true},"
+     "\"generation\":{\"type\":\"u64\",\"required\":true},\"outcome\":{\"type\":\"string\",\"required\":false},"
+     "\"definition\":{\"type\":\"u64\",\"required\":false},\"log\":{\"type\":\"string\",\"required\":false}}}"},
     {"hosted.checkpoint", tat_hosted_checkpoint_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":true}}}"},
     {"hosted.log", tat_hosted_log_method,

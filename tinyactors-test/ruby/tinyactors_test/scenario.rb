@@ -505,10 +505,53 @@ module TinyactorsTest
       rpc('hosted.post', system: hosted[:hosted], actor: actor, event: event.to_s)
     end
 
+    # Posts to `family/name`, as an application does: to the resident actor,
+    # or into a load when there is none and the family has a loader.
+    def hosted_post_to(hosted, family, name, event, data: nil)
+      params = { system: hosted[:hosted], family: family, name: name, event: event.to_s }
+      params[:data] = data unless data.nil?
+      rpc('hosted.post', params)
+    end
+
+    # Gives `family` a loader: mail for one of its names with no actor starts
+    # a load, which hosted_run hands back in `loads`.
+    def hosted_set_loader(hosted, family, max_waiting: 16)
+      rpc('hosted.set_loader', system: hosted[:hosted], family: family, max_waiting: max_waiting)
+    end
+
+    # Answers a load request from hosted_run's `loads` as a loader would:
+    # `outcome: 'loaded'` replays `log` (hex; a fresh actor of `definition`
+    # when it is empty), 'spawned' spawns one, and 'not-found', 'rejected',
+    # 'failed' or 'timed-out' turn the waiting mail into dead letters.
+    # Answers { result:, outcome:, actor: }.
+    def hosted_load(hosted, request, definition: nil, log: nil, outcome: 'loaded')
+      params = { system: hosted[:hosted], index: request[:index], generation: request[:generation], outcome: outcome }
+      params[:definition] = definition if definition
+      params[:log] = log if log
+      rpc('hosted.load', params)
+    end
+
+    # Runs turns and answers every load they start from `store` (as
+    # hosted_store fills it), with the definition `definitions` names for the
+    # family, until the system is quiet. Answers the answers to the loads.
+    def hosted_run_loading(hosted, store, definitions, limit: 100)
+      answers = []
+      loop do
+        run = hosted_run(hosted, limit: limit)
+        run[:loads].each do |request|
+          answers << hosted_load(hosted, request, definition: definitions.fetch(request[:family]),
+                                                  log: store["#{request[:family]}/#{request[:name]}"])
+        end
+        return answers if run[:loads].empty? && run[:quiet]
+      end
+    end
+
     # Runs turns until the system is quiet, at most `limit`. Answers
-    # { turns:, quiet:, dead_letters: }, the dead letters those turns
-    # reported: { actor:, family:, name:, event:, reason:, data: } each,
-    # `family` and `name` for a name with no actor, `data` when it had any.
+    # { turns:, quiet:, dead_letters:, loads: }: the dead letters those turns
+    # reported, { actor:, family:, name:, event:, reason:, data: } each,
+    # `family` and `name` for a name with no actor, `data` when it had any;
+    # and the loads started, { index:, generation:, family:, name:, why: }
+    # each, which the scenario answers with hosted_load.
     def hosted_run(hosted, limit: 100)
       rpc('hosted.turn', system: hosted[:hosted], limit: limit)
     end

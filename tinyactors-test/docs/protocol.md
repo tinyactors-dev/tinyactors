@@ -107,7 +107,10 @@ reproducible. Scenarios about core's semantics keep using core directly.
   returns its actor ID.
 - `hosted.post` takes `{"system", "actor", "event", "data"?}` and puts the
   event in the actor's mailbox, with `data` as a jq value; it answers the
-  `ta_result` name.
+  `ta_result` name. With `"family"` and `"name"` in place of `"actor"` it
+  posts to the address, as an application does: to its resident actor,
+  into a load when it has none and its family has a loader (see "Loads"
+  below), and otherwise as a dead letter.
 - `hosted.checkpoint` takes `{"system", "actor"}` and writes a checkpoint of
   an idle, logged, named actor with the kernel's encoder (kernel ADR 0002
   section 7): `{"result", "bytes"?}`, the bytes in hex. A checkpoint alone,
@@ -115,12 +118,14 @@ reproducible. Scenarios about core's semantics keep using core directly.
   reads.
 - `hosted.turn` takes `{"system", "limit"?}`, runs turns until the system is
   quiet or `limit` turns ran (default 1), and returns `{"turns", "quiet",
-  "dead_letters"}`. `dead_letters` lists the dead letters those turns
+  "dead_letters", "loads"}`. `dead_letters` lists the dead letters those turns
   reported, in order: `{"actor", "family"?, "name"?, "event", "reason",
   "data"?}`, where `actor` is 0 and `family` and `name` name the address
   when mail for a name found no actor, `reason` is the kernel's
   (`tah_dead_reason_name`: `not-found`, `done`, `destroyed`, `unloaded`,
-  ...), and `data` is the message's data when it had any.
+  ...), and `data` is the message's data when it had any. `loads` lists
+  the loads started since the last `hosted.turn`, which the scenario
+  answers with `hosted.load` (see "Loads" below).
 - `hosted.mailboxes` takes `{"system", "actors"?}` and returns
   `{"mailboxes", "queued", "delivered", "dead_letters"}`: for each actor ID
   in `actors`, `{"actor", "state", "depth", "events"}` with its scheduling
@@ -146,11 +151,47 @@ reproducible. Scenarios about core's semantics keep using core directly.
   with the kernel's replay: it prepares it from the log's first record,
   applies the records, publishes it at the last record's time, and puts
   the messages the log still owes back in its mailbox. It returns the new
-  actor's ID. It is called explicitly rather than from a loader: napi's
-  loader orchestration is napi's, and this method tests the kernel's part.
+  actor's ID. `hosted.load` makes the same calls when it answers a load.
+- `hosted.set_loader` takes `{"system", "family", "max_waiting"}` and gives
+  the family a loader (`tah_loads_set_family`): at most `max_waiting`
+  messages wait for each load, and 0 removes the loader.
+- `hosted.load` takes `{"system", "index", "generation", "outcome"?,
+  "definition"?, "log"?}` and answers the load request `index` and
+  `generation` name. `outcome` is `loaded` (the default), `spawned`,
+  `not-found`, `rejected`, `failed` or `timed-out`. `loaded` rebuilds the
+  actor from `log` (hex) as `hosted.restore` does, or, when `log` is empty
+  or absent, spawns a fresh actor of `definition` at the address, as
+  `spawned` does. Then the kernel finishes the load (`tah_loads_finish`),
+  which moves the waiting mail into the actor's mailbox or, for the other
+  outcomes, makes it dead letters. It
+  returns `{"result", "outcome", "actor"?}`: `result` is `err_stale` for a
+  load already answered, and `outcome` is `spawned` when a `loaded` request
+  found no life in the log, `failed` when the replay or spawn failed.
 - `hosted.close` takes `{"system": <hosted handle>}`, closes and frees the
   system, and returns `{"leaked": <bytes>}`: what the kernel allocated and
   did not free, which is always 0.
+
+#### Loads
+
+An RPC server cannot call the scenario back in the middle of a turn, so a
+hosted loader works in two steps, as napi's does across its event loop
+(napi ADR 0020):
+
+1. Mail for an address with no resident actor, in a family with a loader
+   (`hosted.set_loader`), starts a load in the kernel: the mail waits in the
+   load's own mailbox, up to `max_waiting` messages (the rest are
+   `waiting-full` dead letters), and further mail for the address joins it.
+   The mail can come from `hosted.post` by name or from a chart's `<send>`.
+2. `hosted.turn` hands each new load out once in `loads`, with the
+   address and why it started (`mail`, `timer`, `session`). The scenario
+   plays the application's loader: it looks the address up in its store
+   (the batches `hosted.batches` gave it) and answers with `hosted.load`,
+   which replays the stored log, or spawns a fresh actor, or refuses. The
+   next `hosted.turn` delivers the mail that waited.
+
+The Ruby helpers are `hosted_set_loader`, `hosted_post_to`, `hosted_load`,
+and `hosted_run_loading`, which runs turns and answers every load from a
+store until the system is quiet.
 
 ## Generated methods
 
