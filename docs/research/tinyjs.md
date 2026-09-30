@@ -45,8 +45,12 @@ generator language, and a plan for a Racket experiment.
   Suspending returns to the host with the frames left in place. Resuming
   jumps to the top frame's label. Nothing is copied.
 - **The pipeline is `tjs_parse` → CST, `tjs_compile` → program, and
-  `tjs_run` over a program plus a state.** Parsing and compiling are not
-  interruptible. They are bounded by limits and never recurse. The program
+  `tjs_run` over a program plus a state.** The parser is a push parser with
+  tinyxml's feed, step and budget contract: it accepts input in chunks and
+  suspends when it needs more. Both parsers, for JS and for RegExp patterns,
+  are recursive descent written in the IR, so the same compiler makes them
+  stackless and resumable. Compiling is not interruptible. Nothing recurses
+  and everything is bounded by limits. The program
   is immutable and shareable. The state (heap, paused frames, job queue) is
   what gets resumed and can be written to bytes.
 - **`eval` and `new Function` are an optional dependency.** The compiler is
@@ -150,7 +154,11 @@ applied to tinyjs.
 
 - **In scope:** ECMA-262, strict mode only. Every function is strict. Modules
   are always strict, so they fit naturally.
-- **Out of scope:** sloppy mode, Annex B, and ECMA-402 (Intl). If the
+- **Out of scope:** sloppy mode, Annex B, and ECMA-402 (Intl). Annex B
+  includes the lenient RegExp syntax browsers accept (a lone `]` or `{`,
+  unnecessary escapes such as `\-`), and patterns written for the web
+  sometimes rely on it. The test262 selection and real-world code will show
+  how much that costs. If the
   targeted edition includes Temporal, its time-zone data comes from the
   host.
 - **Choosing test262 tests:** run tests flagged `onlyStrict`, and run default
@@ -239,18 +247,122 @@ compaction at once (see Memory).
 
 ## The pipeline
 
-### `tjs_parse`: source to CST
+### `tjs_parse`: a push parser from source to CST
 
-- Tightly packed CST nodes in an arena, in pre-order. Each node records its
-  kind, its source range as `offset`/`length`, and the index just past its
-  subtree. This is tinyxml's node column.
-- A `tjs_cursor` is a document plus an index: `first_child`,
-  `next_sibling`, `parent`, and reading kind, span and text. Devtools
-  (outline, highlighting, linters) are built on the cursor.
-- The parser is not interruptible, but it is iterative: an explicit stack of
-  operators and frames in the arena. Its time and memory are bounded by
-  `tjs_limits` (source size, nesting depth).
-- A syntax error is data: a document error with a position, as in tinyxml.
+**The contract is tinyxml's** ([tinyxml ADR 0009](../../tinyxml/docs/adr/0009-pausable-parsing-through-feed-step-and-budget.md),
+[ADR 0021](../../tinyxml/docs/adr/0021-the-scanner-is-a-table-of-resumable-states.md)).
+The host stages bytes and steps the parser:
+
+```c
+tjs_result tjs_parse_feed(tjs_parser *parser, TJS_IN const tjs_parse_feed_params *params); /* chunk, final */
+tjs_step   tjs_parse_step(tjs_parser *parser);  /* PROGRESS, NEED_INPUT, NEED_MEMORY, DONE, FAILED */
+```
+
+A step budget, counted in tokens or nodes, returns control at a known
+point. `final = true` says the last chunk has arrived. Some decisions need
+it: whether `return` at the end of a chunk is followed by an expression,
+whether a semicolon is inserted at the end of input, whether an identifier
+ends there. A syntax error is data, a document error with a position, as in
+tinyxml.
+
+**The CST is a pre-order column with open nodes.** Nodes are tightly packed
+in an arena. Each records its kind, its source range as `offset`/`length`,
+and the index just past its subtree, which is tinyxml's node column. A node
+is appended when its production starts and marked open until it finishes,
+like `TXML_NODE_OPEN`. A `tjs_cursor` is a document plus an index:
+`first_child`, `next_sibling`, `parent`, and reading kind, span and text.
+Devtools (outline, highlighting, linters) are built on the cursor, and can
+walk a partial tree while a streaming parse is still running.
+
+**The grammar is recursive descent written in the IR**, shaped like the
+spec. Macros in the Racket `#lang` cover the spec's grammar notation:
+
+| Spec notation | In the IR |
+|---|---|
+| `[Yield, Await, In, Return]` parameters | macro arguments, expanded into variants |
+| `[lookahead ∉ { … }]` | a `peek` test |
+| `[no LineTerminator here]` | a flag on the peeked token |
+| lexical goals (`InputElementDiv`, `InputElementRegExp`, `…TemplateTail`, …) | chosen by the calling production. Recursive descent always knows its context, so choosing between `/` and a regular expression is trivial. |
+| cover grammars (arrow parameters, destructuring assignment, `async` arrows) | parse the cover, then refine it in place in the CST, as the spec's "is covering" steps do. With cover grammars, JS needs no backtracking. |
+| automatic semicolon insertion | one `semicolon` form: a real `;`, or an inserted one when a line break precedes the next token, the next token is `}`, or input has ended |
+
+```scheme
+;; 14.10 ReturnStatement[Yield, Await] :
+;;   return ;
+;;   return [no LineTerminator here] Expression[+In, ?Yield, ?Await] ;
+(production (return-statement yield await)
+  (node 'ReturnStatement
+    (expect 'return)
+    (unless (or (peek? '|;|) (newline-before?) (peek? '|}|) (at-end?))
+      (expression #:in #t #:yield yield #:await await))
+    (semicolon)))
+```
+
+`peek?`, `expect` and `at-end?` are the suspension points. The compiler
+turns each production into a frame and each token request into a place
+where the parser can return `NEED_INPUT` (see the parser profile in layer
+2). Recursion becomes frames in the parser's arena stack, never C
+recursion, so the parser is stackless and push-capable with no hand-written
+stack. Refining a cover node rewrites its kind in place; its shape stays the
+same.
+
+**The lexers are generated DFAs.** Racket compiles the token definitions
+(identifiers, numbers, strings, template pieces, punctuators, comments) into
+DFA transitions emitted as C. A DFA is resumable by construction: its state
+and the start of the current token are all that a chunk boundary can cut.
+Two parts of tinyxml ADR 0021 carry over. The feed validates UTF-8 and holds
+back a character cut off at the end of a chunk, so the lexer never sees half
+a character. Long tokens (strings, templates, comments) stream into a pool
+run, so a token is bounded by the document limit, not the input window.
+Lookups in the Unicode identifier tables are leaf C, shared with the
+runtime.
+
+**Parser speed.** Recursive descent pushes a frame per nonterminal, and
+JS's expression grammar is about twenty levels deep for each primary
+expression. Binary operators are therefore one precedence-climbing loop in
+the IR, and the compiler inlines productions that only wrap another.
+Parsing speed matters for dynamic code and for startup, so it is measured
+(see Costs and budgets).
+
+**Why not LR tables.** A table-driven LR push parser, in the style of
+Lemon, Bison's push API or tree-sitter, has a tight loop, compact tables,
+proven push parsing and well-studied error recovery. But JS fits LR badly:
+tree-sitter's JavaScript grammar declares 18 GLR conflicts, most of them
+cover-grammar cases such as `object` against `object_pattern`, and needs a
+hand-written external scanner for 8 tokens, including automatic semicolons,
+regular-expression patterns and template characters [11]. tree-sitter does
+not aim to validate its input, so a conformant parser needs more still.
+Bottom-up parsing also produces nodes in post-order, which does not match
+the pre-order column, and an LR(1) generator for C would be a project of its
+own (`parser-tools/yacc` builds LALR tables for Racket, not C).
+
+### The RegExp pattern parser
+
+It is built the same way, from the same `#lang`, with three differences.
+
+- **Its input is always complete.** A pattern arrives as the body of a
+  regular-expression token, which the JS parser checks for early errors
+  while parsing, or as a string passed to `new RegExp(s)`. Its token
+  requests never suspend in practice. Groups, lookarounds and the `v`
+  flag's nested classes still recurse, and the compiler turns that
+  recursion into frames, as for the JS parser.
+- **It lives in the runtime (`tjs.c`)**, even in the static version,
+  because `new RegExp(s)` builds patterns at run time without the JS
+  compiler. Its cost is bounded by the string length limit and charged as
+  fuel.
+- **Some checks happen at the end.** Backreferences, named or numbered, can
+  refer forward to a group defined later in the pattern, so group names
+  and the capture count are resolved by one fix-up pass at the end. The
+  parser then emits the program for the matcher (layer 0), whose opcodes
+  come from the same generated table as the rest.
+
+### Testing the parsers
+
+tinyxml's differential property carries over. Every test input is parsed
+at feeds of 1, 2, 3 and 7 bytes and whole, split at every byte, at several
+step budgets, and with every allocation refused in turn, and each run must
+produce an identical CST. test262's syntax tests (negative tests and early
+errors) are the conformance oracle.
 
 ### `tjs_compile`: CST to program
 
@@ -305,7 +417,9 @@ Bounded work only. It never suspends and never calls into JS.
   anything else instead of failing or stalling the host. Only real limits
   (`tjs_limits` on backtrack stack size, and memory) stop a match, which
   also bounds ReDoS. Its frame can be large, and a paused match's backtrack
-  stack is part of the arena and of a written state. The outer protocol
+  stack is part of the arena and of a written state. The pattern parser
+  that produces the matcher's program is generated (see The RegExp pattern
+  parser). The outer protocol
   (`RegExpBuiltinExec`, `Symbol.replace` with a function replacer, the
   `lastIndex` and `exec` lookups) calls user code and is written in the IR.
 
@@ -395,6 +509,24 @@ language.
 4. **Frame layout.** Emit one frame layout per function: a header (function
    ID, resume label, the caller's offset), the slots, and two slots for a
    completion record in functions that have a `finally`.
+
+**The parser profile.** The parsers go through the same passes with three
+differences. Slots are C scalars (node indices, token kinds, flags), not JS
+values, so the IR has typed slots. Frames live in the parser's own arena
+stack, whose depth is the nesting depth, bounded by `tjs_limits`. And a
+token request compiles to an inline fast path: when a complete token is
+buffered, the code continues in straight C without a trip through the
+trampoline, and only a token that is not complete yet stores the label and
+returns:
+
+```c
+case TJS_RETURN_L1:
+    if (!tjs_lex_peek(p, TJS_GOAL_REGEXP, &tok)) { f->label = TJS_RETURN_L1; return TJS_STEP_NEED_INPUT; }
+    ...
+```
+
+Suspending costs nothing on the common path, and a paused parse is frames
+of a known layout, like any other.
 
 ### Layer 3: two back ends from one IR
 
@@ -870,6 +1002,12 @@ code that re-enters user code is made resumable.
   for ES5.1 strict mode. It reduces the language to under 35 syntactic
   forms and was tested against conformance suites [9]. It is the closest
   existing model of the IR the builtins would be written in.
+- **JavaScript is awkward for LR parsing.** tree-sitter's JavaScript
+  grammar declares 18 GLR conflicts, mostly between cover-grammar forms
+  (`object`/`object_pattern`, `array`/`array_pattern`,
+  `primary_expression`/`arrow_function`), and uses a hand-written external
+  scanner for 8 tokens, including automatic semicolons, regular-expression
+  patterns and template characters [11].
 - **Nanopass is available for Racket.** It is a Racket package; its README
   says it was tested on Racket 6.0 to 6.2 [10]. Whether it runs unchanged
   on current Racket (mise offers 9.1 to 9.3, the minimal distribution
@@ -930,6 +1068,10 @@ in, and `mise run generated` fails when the output is stale.
 6. Write a minimal C harness: a value representation, an object with a
    `valueOf`, a trampoline with fuel, and a bytecode loop that runs `ADD`,
    the builtins' bytecode, and a call into a bytecode `valueOf`.
+7. Write a parser slice in the parser profile: `return` with automatic
+   semicolon insertion, an arrow function through its cover grammar, a
+   template literal, and a regular-expression literal, with a generated DFA
+   lexer, emitting a pre-order CST.
 
 **Success criteria:**
 
@@ -951,13 +1093,19 @@ in, and `mise run generated` fails when the output is stale.
 5. Frame sizes match the hand analysis: `add` has one value slot plus its
    reused argument slot, and `ordinary-to-primitive` keeps `o` and the
    index.
+6. The parser slice produces an identical CST for every input fed one byte
+   at a time, split at every byte, and whole, and returns `NEED_INPUT`
+   rather than guessing wherever the answer depends on `final`.
 
 **Decision:**
 
-- If all five criteria pass, Racket is the generator.
+- If all six criteria pass, Racket is the generator.
 - If 1 or 2 fail, keep the IR and the ABI design and write the generator in
   Ruby. The IR and the ABI are the real design, so little is lost.
 - If 4 fails, revisit design D itself before choosing a language.
+- If 6 fails, the parsers need another approach (LR tables, or a
+  hand-written iterative parser) before the builtins' generator is in
+  question.
 
 ## Costs and budgets
 
@@ -969,6 +1117,8 @@ guard, promotion, writing and reading a state) produce the first figures:
   of a static build, for the host and for wasm;
 - bytes per idle VM, and per VM after its first write to a built-in object;
 - time and allocations per trivial guard, and per short script;
+- parser throughput, whole and fed in small chunks, and CST bytes per
+  source byte;
 - cost of suspending and resuming, of promotion, and of writing and reading
   a state.
 
@@ -1019,3 +1169,6 @@ from bytecode to C is decided the same way, one builtin at a time.
    <https://cs.brown.edu/~sk/Publications/Papers/Published/pclpk-s5-semantics/paper.pdf>
 10. nanopass-framework-racket.
     <https://github.com/nanopass/nanopass-framework-racket>
+11. tree-sitter-javascript: `grammar.js` (conflicts and externals) and
+    `src/scanner.c` (the external scanner).
+    <https://github.com/tree-sitter/tree-sitter-javascript>
