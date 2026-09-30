@@ -34,8 +34,7 @@ steps = [
   # --full: the exhaustive scenarios, and scale_test up to four million actors.
   ['test host', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyactors-test')],
   # --full: scale.js on Bun too, and up to a million actors.
-  ['napi', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyactors-napi')],
-  ['vscode', ['mise', 'run', *flags.call], root.join('tinyactors-vscode')]
+  ['napi', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyactors-napi')]
 ]
 
 clock = -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }

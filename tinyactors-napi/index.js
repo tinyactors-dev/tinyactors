@@ -11,7 +11,6 @@ const { serialize } = require('./lib/values');
 const { metricsToOTLP } = require('./lib/metrics');
 const { readInputLog } = require('./lib/inputlog');
 const { parameterInfo } = require('./lib/params');
-const { createDebugSession, DAPReader, encodeDAPMessage } = require('./lib/debug');
 
 module.exports = {
   version: native.version,
@@ -39,10 +38,4 @@ module.exports = {
   metricsToOTLP,
   // An input log decoded for an audit trail (napi ADR 0034).
   readInputLog,
-  // The debug adapter (napi ADR 0026): a DAP session the application puts
-  // behind its own transport, and the base protocol's framing for byte
-  // streams.
-  createDebugSession,
-  DAPReader,
-  encodeDAPMessage,
 };

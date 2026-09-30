@@ -1,7 +1,7 @@
 #pragma once
 /*
  * Importing charts with a codec (napi ADRs 0019 and 0027, core ADRs 0053 and
- * 0076), and writing a definition back with one (napi ADR 0026, core ADR
+ * 0076), and writing a definition back with one (napi ADR 0027, core ADR
  * 0085).
  *
  * define(text, { format }) decodes the document with the codec `format`
@@ -85,8 +85,7 @@ ta_result tna_import_scxml(tah_system *system, const tna_import_params *params);
 
 /*
  * Writes `definition` in a codec's syntax, with where each element landed
- * in it (core ADR 0085): Definition.encode(), and the debugger's virtual
- * source for a chart whose spans name no file it can open.
+ * in it (core ADR 0085): Definition.encode().
  */
 typedef struct {
     ta_definition_id definition;

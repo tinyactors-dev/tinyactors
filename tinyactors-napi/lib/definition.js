@@ -30,7 +30,7 @@ const idOrNull = (id) => (id === NONE ? null : id);
 
 // Core's lookups by ID (core ADRs 0042 and 0071), in the public shapes
 // (ChartState, ChartTransition, ...). Every reader in the addon goes
-// through these, the Definition methods and the debug adapter alike.
+// through these.
 //
 // Core answers `not-found` both for an ID out of range and for a freed
 // definition. An ID is a question, so out of range answers undefined; a
@@ -364,6 +364,5 @@ class Definition {
 }
 
 module.exports = {
-  Definition, EncodedChart, ENCODE, identityOf, NONE,
-  readState, findState, readTransition, readAction, readExpression, readContent, readInvoke, exportSpec,
+  Definition, EncodedChart, ENCODE, identityOf, readState, findState, readContent,
 };

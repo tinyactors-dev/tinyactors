@@ -372,11 +372,9 @@ export interface System {
       /**
        * What the document is called (a codec other than SCXML gets it as
        * ChartDecodeContext.name), such as its path or a file:// URL: the
-       * source its spans name (core ADR 0085), which sourceOf() answers and
-       * a debugger opens (napi ADR 0026). Without it the spans name no
-       * source, and a debug session shows the chart as SCXML it writes from
-       * the definition, by `sourceReference`. A child fetched by `src` or `srcexpr` is named by
-       * that src; a child inline in `<content>` has no name, since its lines
+       * source its spans name (core ADR 0085), which sourceOf() answers.
+       * Without it the spans name no source. A child fetched by `src` or
+       * `srcexpr` is named by that src; a child inline in `<content>` has no name, since its lines
        * count from the start of its content.
        */
       name?: string;
@@ -2532,122 +2530,3 @@ export declare function parseTraceparent(header: string | undefined):
 export declare function formatTraceparent(span: { traceID: string; spanID: string; sampled?: boolean; flags?: number }): string;
 /** `session`: the numeric session ID, or a session ID's text (`scxml.session_id`, ActorInspection.sessionID). */
 export declare function stepSpanID(session: bigint | number | string, macrostep: bigint | number, microstep?: number): string;
-
-// ---------------------------------------------------------------------------
-// The debug adapter (napi ADR 0026)
-
-/**
- * A poke a debug session may be allowed on the live actor: `send` an event,
- * `set` its data model, `goto` (operator transitions, abandon, cancel and
- * replace), and `evaluate` expressions. With none, the session only watches.
- */
-export type DebugPermission = 'send' | 'set' | 'goto' | 'evaluate';
-
-/** One record for the audit hook. `time` is milliseconds since the epoch. */
-export type DebugAuditEntry = {
-  time: number;
-  /** DebugSession.id. */
-  session: number;
-  /** While attached: the actor's label and its session ID. */
-  actor?: string;
-  /** As text (ActorInspection.sessionID). */
-  sessionID?: string;
-} & (
-  | { type: 'attach'; allow: DebugPermission[]; [detail: string]: unknown }
-  | { type: 'detach'; reason: string }
-  /** A line breakpoint's source is `path`, or `sourceReference` for SCXML the session wrote. */
-  | { type: 'breakpoints'; kind: 'line' | 'function' | 'data' | 'exception'; [detail: string]: unknown }
-  /** A console line, before it runs. */
-  | { type: 'command'; text: string }
-  | { type: 'evaluate'; context: string; expression: string }
-  /** A poke: send, set, goto, abandon, cancel, replace. */
-  | { type: 'mutation'; operation: string; [detail: string]: unknown }
-);
-
-export interface DebugSessionOptions {
-  /**
-   * The pokes an attach may ask for (default none: watch only).
-   *
-   * `evaluate` runs arbitrary JavaScript in this process: watch, hover and
-   * console expressions, breakpoint conditions and logpoint `{expression}`
-   * parts. Grant it only to someone who may run code on the host. Without
-   * it the Variables pane, the console commands and setVariable still work.
-   * Each evaluation checks the permissions of the attach it runs under: a
-   * condition set before an attach that did not keep `evaluate` never runs,
-   * and the client hears that breakpoint changed to unverified; a logpoint's
-   * parts are then written as they are.
-   */
-  allow?: DebugPermission[];
-  /**
-   * Hears every attach, detach, breakpoint change (exception filters
-   * included), console command, evaluation and mutation before it happens;
-   * throwing refuses it. Evaluations include a breakpoint condition and a
-   * logpoint part at each hit (context "condition", "logpoint"), and a
-   * setVariable or setExpression value that is not JSON (context
-   * "setVariable", "setExpression"), before it runs. A refused condition
-   * does not fire, a refused logpoint part is written as `<refused>`, and
-   * the console says why. A detach is recorded after it happens and cannot
-   * be refused.
-   */
-  audit?: (entry: DebugAuditEntry) => void;
-  /** Takes each outgoing DAP message (an object). */
-  send: (message: DAPMessage) => void;
-}
-
-/** A Debug Adapter Protocol message: a request, response or event. */
-export interface DAPMessage {
-  seq: number;
-  type: 'request' | 'response' | 'event';
-  [field: string]: unknown;
-}
-
-/**
- * A DAP session over one attached actor, which it watches and pokes and
- * never stops (ADR 0026): the client hears it stopped on entry, and after
- * each of its macrosteps a stop that keeps the focus and an `invalidated`
- * event for the variables; breakpoints are
- * tracepoints. It opens no socket and checks no credentials: put it behind
- * the application's transport and authentication, and decide each user's
- * permissions before creating it.
- */
-export interface DebugSession {
-  readonly id: number;
-  readonly allow: DebugPermission[];
-  /** True while an actor is attached. */
-  readonly attached: boolean;
-  /**
-   * Takes one incoming message. Requests are answered in the order they
-   * arrive; the promise settles once this one is answered.
-   */
-  receive(message: DAPMessage): Promise<void>;
-  /** The transport closed: detach without answering. */
-  close(): void;
-}
-
-export declare function createDebugSession(system: System, options: DebugSessionOptions): DebugSession;
-
-/**
- * The base protocol's framing for a byte stream (stdio, a TCP socket):
- * push() each chunk; `onMessage` gets each whole message in order. Chunks
- * may split a header, a body or a UTF-8 sequence anywhere, and a string
- * chunk may split a surrogate pair. Header fields other than
- * Content-Length are ignored.
- *
- * A malformed stream throws an `invalid` TinyactorsError from push(), and
- * every later push() throws `invalid` too: a stream cannot be
- * resynchronized once a length is in doubt, so close the connection.
- * Malformed is: headers that are not UTF-8, longer than 8 KiB without the
- * blank line, or with a line that is not `Name: value`; no Content-Length,
- * two, or one that is not a decimal number of at most 64 MiB; a body that
- * is not UTF-8 JSON, or not an object with an integer `seq` and a `type`
- * of "request", "response" or "event". An exception from `onMessage`
- * propagates from push() but leaves the reader usable; messages already
- * buffered behind it arrive with the next push().
- */
-export declare class DAPReader {
-  constructor(onMessage: (message: DAPMessage) => void);
-  push(chunk: Uint8Array | string): void;
-}
-
-/** One message as bytes: the Content-Length header, then its JSON. */
-export declare function encodeDAPMessage(message: object): Uint8Array;

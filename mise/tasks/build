@@ -49,6 +49,3 @@ xml.run('build')
 
 scxml = Project.new(ROOT.join('tinyactors-scxml'))
 scxml.run('build')
-
-vscode = Project.new(ROOT.join('tinyactors-vscode'))
-vscode.run('build')

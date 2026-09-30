@@ -40,9 +40,8 @@ and core does not handle bytes it has no use for.
   | `tinyactors-core` code or tests     | all of them                              |
   | `tinyactors-host` (the host kernel) | the kernel, the test host, napi          |
   | `tinyxml`, `tinyactors-scxml`       | that one, the scxml codec, test host, napi |
-  | `tinyactors-test`                   | test host, and napi when `dap/` or the IRP importer changed |
-  | `tinyactors-napi`                   | napi, vscode                             |
-  | `tinyactors-vscode`                 | vscode                                   |
+  | `tinyactors-test`                   | test host, and napi when the IRP importer changed |
+  | `tinyactors-napi`                   | napi                                     |
   | root `mise/lib`, `mise.toml`        | all of them                              |
   | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
 
@@ -133,16 +132,6 @@ so no outside code depends on an API or ABI staying the same.
   session is working in at the same time, such as `tinyactors-napi` during
   its rewrite. Change the call sites there too, keep the edit to those
   lines, and say in your report which of its files you touched.
-
-## The VS Code extension is a test client
-
-`tinyactors-vscode` is experimental and internal: it exists mainly to test
-the debug adapters (the test host's and tinyactors-napi's) against a real
-Debug Adapter Protocol client, and to record demos. It is not published or
-supported. Keep it to what that needs: do not add features for their own
-sake, and change its configuration freely, like any other private API
-here. Adapter behaviour belongs in the adapters and the shared DAP
-transcripts, not in the extension.
 
 ## Acronyms
 

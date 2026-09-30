@@ -77,7 +77,7 @@ module TinyactorsNapiBindings
     'ta_null_datamodel' => 'the plumbing chooses the data model; it is injected into compile_spec',
     'ta_null_trace_sink' => 'the tracing hook installs it when no JavaScript callback is registered (core ADR 0067)',
     'ta_null_definition_sink' => 'the native System always installs its own definition sink (core ADR 0079)',
-    'ta_definition_{import,encode}' => 'src/import.c calls them with the SCXML codec, for define(text, { format: \'scxml\' }) and the debug session\'s encodeDefinition() (ADRs 0019, 0026)'
+    'ta_definition_{import,encode}' => 'src/import.c calls them with the SCXML codec, for define(text, { format: \'scxml\' }) and Definition.encode() (ADRs 0019, 0027)'
   }.freeze
 
   # Types whose codec is hand-written in src/runtime.c.
@@ -121,7 +121,7 @@ module TinyactorsNapiBindings
     'ta_datamodel_*_params' => 'data-model callback arguments (step 11)',
     'ta_expression_{host,rejection}' => 'data-model plumbing (step 11)',
     'ta_dm_text_params' => 'data-model callback argument (step 11)',
-    'ta_definition_{import,encode}_params' => 'src/import.c fills them; neither call is bound (ADRs 0019, 0026)',
+    'ta_definition_{import,encode}_params' => 'src/import.c fills them; neither call is bound (ADRs 0019, 0027)',
     'ta_chart_{decode,encode}_params' => 'chart codec callback arguments',
     'ta_chart_{codec_info,error,position}' => 'chart codec results; no codec is registered yet',
     'ta_import_error' => 'chart codec result; no codec is registered yet',

@@ -54,25 +54,6 @@ systemProcessId   tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP
 filterId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
 targetId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
 
-# Debug Adapter Protocol message fields (microsoft/debug-adapter-protocol),
-# which napi's debug adapter reads and writes as the protocol spells them.
-threadId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,test/dap-transcripts.js,tools/dap-server.js,README.md}   # DAP field
-frameId            tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
-dataId             tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
-targetId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
-filterId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
-exceptionId        tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
-hitBreakpointIds   tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
-
-# The Id attribute of the VSIX package manifest (vsx-schema/2011), which
-# the extension's packager writes and its test reads back.
-Id             tinyactors-vscode/{mise/tasks/build,test/package.test.js}  # VSIX manifest attribute
-
-# VS Code's own names, which the demo-recording director calls: the
-# command workbench.debug.action.focusRepl and the vscode.Uri class.
-focusRepl      tinyactors-vscode/.agents/skills/record-demo-video/{SKILL.md,scripts/director/*.js}  # VS Code command
-Uri            tinyactors-vscode/.agents/skills/record-demo-video/scripts/director/*.js            # VS Code API
-
 # llvm-readobj's name for a Mach-O header's CPU type, which the C release
 # matches to check a binary's architecture.
 CpuType        mise/lib/c_release/build.rb                               # llvm-readobj output field

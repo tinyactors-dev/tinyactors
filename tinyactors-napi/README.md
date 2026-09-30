@@ -14,9 +14,7 @@ devices, sessions, workflows.
   builder or as SCXML documents. A manual clock makes timers deterministic
   in tests, and `inspect()` shows exactly where an actor is.
 - **Observable in production.** Every step can be traced as OpenTelemetry
-  spans and counted as metrics, with no telemetry dependency, and a Debug
-  Adapter Protocol session lets a debugger watch a live actor without
-  stopping it.
+  spans and counted as metrics, with no telemetry dependency.
 
 ## Install
 
@@ -478,48 +476,6 @@ carries them as one attribute, `tinyactors.params`: the defaults' version,
 then each parameter that differs from its default, in name order
 (`v1;valueBytes=16384`), or `v1` alone, so a trace says which caps applied
 (napi ADR 0036).
-
-## Debugging a live actor
-
-`createDebugSession()` speaks the Debug Adapter Protocol, so a debugger
-such as nvim-dap or Emacs dape (or VS Code, through a debug extension) can
-attach to one actor of a running system. It shows the actor's
-configuration, data, queues and timers, and breakpoints act as
-tracepoints: the actor is watched, never stopped.
-
-```js
-const net = require('node:net');
-const { createSystem, statechart, createDebugSession, DAPReader, encodeDAPMessage } = require('@tinyactors/node');
-
-const system = createSystem();
-const light = system.define(statechart({ family: 'light', revision: 'v1' })
-  .state('off', (s) => s.on('toggle', (t) => t.target('on')))
-  .state('on', (s) => s.on('toggle', (t) => t.target('off'))));
-system.spawn(light, { name: 'lamp' });
-
-// One Debug Adapter Protocol session per connection. Put this behind your own
-// authentication: `allow` decides what the client may do to the live actor.
-const server = net.createServer((socket) => {
-  const session = createDebugSession(system, {
-    allow: ['send'],                                   // watch, and send events; no code execution
-    audit: (entry) => console.error('debug:', entry.type),
-    send: (message) => socket.write(encodeDAPMessage(message)),
-  });
-  const reader = new DAPReader((message) => session.receive(message));
-  socket.on('data', (chunk) => {
-    try { reader.push(chunk); } catch { socket.destroy(); }
-  });
-  socket.on('close', () => session.close());
-});
-server.listen(4711, '127.0.0.1');
-```
-
-A client attaches with `{ "address": "light/lamp" }`. The session opens no
-socket and checks no credentials itself. What a client may do is up to
-`allow`: `send` events, `set` data, `goto` (operator transitions) and
-`evaluate`. `evaluate` runs JavaScript in your process, so grant it only
-to someone who may run code on the host. `audit` hears every action first,
-and can refuse it by throwing.
 
 ## TypeScript
 

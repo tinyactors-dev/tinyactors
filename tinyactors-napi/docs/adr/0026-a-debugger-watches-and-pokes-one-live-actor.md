@@ -1,6 +1,6 @@
 # ADR 0026: A debugger watches and pokes one live actor
 
-**Status:** Accepted and implemented (2026-09-26). Applies tinyactors-core ADRs 0082 to 0085 to the addon; extends ADR 0005 (scheduling states) and ADR 0008 (faults); sits beside ADR 0020 (the loader's waiting mail) and core ADR 0075 (runaway quarantine), see "Beside the loader and the runaway limit".
+**Status:** Accepted and implemented (2026-09-26). The DAP session (`createDebugSession`, `DAPReader`, `encodeDAPMessage`), its permissions and audit hook were removed on 2026-09-30, as the MCP server proposal (`../../../docs/proposals/mcp-server.md`) plans; the operator transitions, abandoning, withdrawing a send, `mailbox()` and the inspection fields stay. Applies tinyactors-core ADRs 0082 to 0085 to the addon; extends ADR 0005 (scheduling states) and ADR 0008 (faults); sits beside ADR 0020 (the loader's waiting mail) and core ADR 0075 (runaway quarantine), see "Beside the loader and the runaway limit".
 **Date:** 2026-09-26
 
 ## Context

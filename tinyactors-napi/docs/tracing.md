@@ -222,8 +222,7 @@ the one value you cannot do without.
   is still named.
 
 The full attribute table is in napi ADR 0016's implementation notes;
-`scxml.fault.message` on span events came later, for the debug adapter's
-exception texts.
+`scxml.fault.message` on span events came later, for exception texts.
 
 ## Objects instead of bytes
 

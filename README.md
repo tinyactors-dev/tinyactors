@@ -68,10 +68,6 @@ Two rules follow from the table:
   driver: a binding that exercises core, and the kernel, from scenarios.
 - `tinyactors-scxml/` is the SCXML codec, and `tinyxml/` the XML reader it
   is built on.
-- `tinyactors-vscode/` contains an experimental, internal VS Code extension
-  that registers the debug type for both hosts' debug adapters. It exists
-  mainly to test the adapters against a real DAP client; it is not a
-  supported product.
 - `docs/proposals/` holds outlines of possible future work, such as new
   hosts. They are not plans or decisions; see its README.
 - `docs/research/` holds background research that informed the designs,

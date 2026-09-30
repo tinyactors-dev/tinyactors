@@ -14,7 +14,7 @@ const { DefinitionBuilder } = require('./statechart');
 const { ActorID } = require('./actor');
 const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
-const { traceConfig, TRACE_KINDS } = require('./tracing');
+const { traceConfig } = require('./tracing');
 const { buildSnapshot } = require('./metrics');
 const { STANDARD_CLASSES, printBuiltin, printCall, printedSpec } = require('./values');
 const { durableChunks, durableReader } = require('./durable');
@@ -151,20 +151,6 @@ let nativeOf;
 // (src/napi_services.h). It is one function for the environment, so no
 // native reference keeps a System alive.
 let effectHandler;
-// observe(system, { traces, log, runaway, defined, deadLetter, dropped }):
-// what lib/debug.js reads beside the application (ADR 0026).
-// `traces(traces, logs)` gets every turn's OTLP bytes the application's
-// trace sink gets, installing a sink of its own when the application has
-// none; `log(record)` every <log> record; `runaway(actor)` each actor
-// quarantined as a runaway (core ADR 0075); `defined(id)` each definition
-// define() registered, a new one or one answered by identity (core ADR
-// 0077), whose spans may have moved (core ADR 0085); `deadLetter(record)`
-// every dead letter, as the application's deadLetter hook gets it, just
-// before it does; `dropped({ source, sendID, event, type, target, error })`
-// each <send> an I/O processor failed, as its sender gets
-// error.communication for it. Observers never change what the application
-// hears. Returns { stop() }. index.js does not export it.
-let observe;
 
 // The SCXML invoker type core normalizes "scxml" and its URI to (core
 // ADR 0016); the in-system SCXML invoker is registered under it.
@@ -198,10 +184,6 @@ class System {
   #logSink;
   #traceSink;
   #traceConfig = {};
-  // observe() observers, and whether the native sink is installed for them
-  // alone (the application has none).
-  #observers = new Set();
-  #observerSink = false;
   // Active watchTraces() handles, and every definition's identity, for the
   // watches and for metrics().
   #watches = new Set();
@@ -240,7 +222,6 @@ class System {
   static {
     nativeOf = (system) => system.#native;
     effectHandler = (system, kind, payload) => system.#effect(kind, payload);
-    observe = (system, observer) => system.#observe(observer);
   }
 
   /**
@@ -259,9 +240,8 @@ class System {
     if (options !== undefined && (options === null || typeof options !== 'object')) {
       throw new TinyactorsError('createSystem options must be an object', 'invalid');
     }
-    // The native hook is always this system's, so observers hear dead
-    // letters too; the application's hook, when it has one, gets each as
-    // before. Anything else the application passed is the native side's to
+    // The native hook is always this system's, so a dead letter of mail
+    // that waited for a failed load carries why it failed. Anything else the application passed is the native side's to
     // refuse. The native side holds its hooks strongly, so the hook reaches
     // this system through a WeakRef: a system the application drops without
     // close() is still finalized, as with the environment-wide effect handler.
@@ -453,7 +433,7 @@ class System {
       throw new TinyactorsError('setLogSink(): expected a function or undefined', 'invalid');
     }
     this.#logSink = sink;
-    this.#native.setLogSink(sink !== undefined || this.#observing('log'));
+    this.#native.setLogSink(sink !== undefined);
   }
 
   /**
@@ -523,74 +503,15 @@ class System {
     }
     pairs.push(...this.#parameterResource(resource));
     const previous = this.#traceSink;
-    const observed = sink === undefined && this.#observing('traces');
-    const remaining = observed
-      ? this.#installObserverSink()
-      : this.#native.setTraceSink(sink !== undefined, config.kinds, config.watchedKinds,
-                                  unsampled === true ? config.kinds : 0, config.sample,
-                                  values === true, parent === 'link', pairs, seed,
-                                  logs === false ? 0 : logLimit);
+    const remaining = this.#native.setTraceSink(sink !== undefined, config.kinds, config.watchedKinds,
+                                                unsampled === true ? config.kinds : 0, config.sample,
+                                                values === true, parent === 'link', pairs, seed,
+                                                logs === false ? 0 : logLimit);
     this.#traceSink = sink;
-    this.#observerSink = observed;
     this.#traceConfig = { detail: options?.detail, kinds: options?.kinds, sample: options?.sample,
                           unsampled: unsampled === true };
     if (remaining !== undefined) {
       previous?.(remaining.traces, remaining.logs);
-      this.#notify('traces', remaining.traces, remaining.logs);
-    }
-  }
-
-  // The native sink observers get when the application has none: nothing
-  // but what is watched, every kind of it, with values (ADR 0026).
-  #installObserverSink() {
-    const all = 2 ** TRACE_KINDS.length - 1;
-    return this.#native.setTraceSink(true, 0, all, 0, 0, true, false, this.#parameterResource({}), undefined, 0);
-  }
-
-  #observing(what) {
-    for (const observer of this.#observers) {
-      if (typeof observer[what] === 'function') return true;
-    }
-    return false;
-  }
-
-  // Calls `what` of every observer that has it.
-  #notify(what, ...args) {
-    for (const observer of this.#observers) {
-      observer[what]?.(...args);
-    }
-  }
-
-  #observe(observer) {
-    this.#observers.add(observer);
-    this.#applyObservers();
-    return Object.freeze({
-      stop: () => {
-        if (this.#observers.delete(observer) && !this.closed) {
-          this.#applyObservers();
-        }
-      },
-    });
-  }
-
-  // Installs or removes the observers' own trace sink, and turns <log>
-  // records on or off, as the observers and the application need them.
-  #applyObservers() {
-    this.#native.setLogSink(this.#logSink !== undefined || this.#observing('log'));
-    if (this.#traceSink !== undefined) {
-      return;
-    }
-    const wanted = this.#observing('traces');
-    if (wanted === this.#observerSink) {
-      return;
-    }
-    const all = 2 ** TRACE_KINDS.length - 1;
-    const remaining = wanted
-      ? this.#installObserverSink()
-      : this.#native.setTraceSink(false, 0, all, 0, 0, false, false, this.#parameterResource({}), undefined, 0);
-    this.#observerSink = wanted;
-    if (remaining !== undefined) {
-      this.#notify('traces', remaining.traces, remaining.logs);
     }
   }
 
@@ -614,11 +535,8 @@ class System {
       merged.kinds = undefined;
     }
     const config = traceConfig(merged, 'configureTraces()');
-    if (!this.#observerSink) {
-      // An observers' own sink keeps its masks: they are not the application's.
-      this.#native.configureTraces(config.kinds, config.watchedKinds, merged.unsampled ? config.kinds : 0,
-                                   config.sample);
-    }
+    this.#native.configureTraces(config.kinds, config.watchedKinds, merged.unsampled ? config.kinds : 0,
+                                 config.sample);
     this.#traceConfig = merged;
   }
 
@@ -694,10 +612,6 @@ class System {
         return;
       case 'trace':
         this.#traceSink?.(payload.traces, payload.logs);
-        this.#notify('traces', payload.traces, payload.logs);
-        return;
-      case 'runaway':
-        this.#notify('runaway', payload);
         return;
       case 'inputs':
         this.#commitInputs(payload);
@@ -725,7 +639,6 @@ class System {
     switch (kind) {
       case 'log':
         this.#logSink?.(payload);
-        this.#notify('log', payload);
         return;
       case 'io':
         this.#runIO(payload);
@@ -880,14 +793,6 @@ class System {
   #communicationError(request, error) {
     if (this.closed || request.source === undefined) {
       return;
-    }
-    if (this.#observers.size > 0) {
-      try {
-        this.#notify('dropped', { source: request.source, sendID: request.sendID, event: request.event,
-                                  type: request.type, target: request.target, error });
-      } catch {
-        // An observer's failure is its own.
-      }
     }
     try {
       this.post(request.source, 'error.communication', { sendID: request.sendID, type: request.type, error });
@@ -1178,8 +1083,7 @@ class System {
    * Uint8Array, or undefined for a src it does not know, which refuses the
    * document. Without it, any `src` is refused. `options.name` is what the
    * document is called, such as its path or a file:// URL: the source its
-   * spans name (core ADR 0085), which Definition.sourceOf() answers and a
-   * debugger opens.
+   * spans name (core ADR 0085), which Definition.sourceOf() answers.
    * An `<invoke type="scxml">` whose child chart is inline in `<content>`,
    * or a literal `src` that `resolve` fetches, is compiled now, as part of
    * this definition (napi ADR 0024, core ADR 0077): a broken child refuses
@@ -1239,7 +1143,6 @@ class System {
     if (limit !== undefined) {
       core.definition_set_microstep_limit(this.#native, id, limit === 0 ? MICROSTEP_LIMIT_NONE : limit);
     }
-    this.#notify('defined', id);
     return new Definition(this, this.#native, id);
   }
 
@@ -2425,18 +2328,8 @@ class System {
   }
 
   // A dead letter of mail that waited for a failed load carries why it failed.
-  // One dead letter: observers first, never letting them fail the turn,
-  // then the application's hook, whose exceptions are the application's.
   #deadLetter(letter, hook) {
-    const record = this.#withLoadDetail(letter);
-    if (this.#observers.size > 0) {
-      try {
-        this.#notify('deadLetter', record);
-      } catch {
-        // An observer's failure is its own.
-      }
-    }
-    hook?.(record);
+    hook?.(this.#withLoadDetail(letter));
   }
 
   #withLoadDetail(letter) {
@@ -3090,4 +2983,4 @@ function sessionNumber(system, text) {
   return BigInt(match[2]);
 }
 
-module.exports = { System, createSystem, nativeOf, observe, sessionNumber, ActorID, PreparedActor, SessionImage };
+module.exports = { System, createSystem, nativeOf, ActorID, PreparedActor, SessionImage };

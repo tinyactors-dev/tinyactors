@@ -137,9 +137,8 @@ an eventless transition. `internal()` changes a transition's kind.
 The builder records where each state, transition, initial transition and
 action was written: the file, line and column of the builder call, from a
 V8 call site, as a source span of the spec (core ADR 0085).
-`definition.sourceOf(kind, id)` reads one back by core's ID, which is how a
-debugger places trace records and breakpoints in the JavaScript that wrote
-the chart. Spans never change a revision. The capture costs about 5 to 7 µs
+`definition.sourceOf(kind, id)` reads one back by core's ID, which places
+a trace record in the JavaScript that wrote the chart. Spans never change a revision. The capture costs about 5 to 7 µs
 per element when the chart is defined and nothing afterwards. A call is
 located at its own statement: JavaScriptCore (Bun) places a call inside a
 chain that spans lines less exactly than V8 does.
@@ -287,9 +286,9 @@ acceptance or completion of the message's macrostep. Queue depth and retained
 data size limits provide backpressure. Closing a system rejects queued and
 pending messages.
 
-### Poking one actor for a debugger
+### Operating one actor
 
-A debugger watches one actor and pokes it; it never stops it
+An operator can poke one actor without stopping it
 ([ADR 0026](adr/0026-a-debugger-watches-and-pokes-one-live-actor.md)). An
 operator transition (core ADR 0082) travels in the envelope behind the
 actor's queued mail, abandoning a macrostep settles the send() that waited
