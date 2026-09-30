@@ -538,3 +538,9 @@ note). The methods are documented in the test host's `docs/protocol.md`
   most 4 KiB while core's allocations peak at about 173 KB.
 - **The test host's request limit** is 16 MiB, up from 8: a stored log
   travels as hex, so a 4 MiB value's log is over 8 MiB.
+
+### The scenario runner builds first (2026-09-30)
+
+Step 7's last point is fixed by `b37d6ba`: `tinyactors-test`'s
+`scenarios` task depends on `build`, which is content-gated, so a kernel
+edit reaches the scenarios without a separate `mise run build`.

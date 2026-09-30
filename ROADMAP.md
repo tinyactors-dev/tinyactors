@@ -61,10 +61,11 @@ gaps left or found on the way.
   value written in pieces of at most 4 KiB with core's peak at 173 KB.
   (Kernel ADR 0001, "Step 7" and its "Hosted mode finished" note; core ADR
   0094, "Section 2".)
-- [ ] **The scenario runner does not rebuild the test host** when kernel
+- [x] **The scenario runner does not rebuild the test host** when kernel
   sources change, so `mise run scenarios` after a kernel edit runs a stale
   binary until `mise run build`. Make `scenarios` depend on the build, or
-  list the kernel in its sources. (Kernel ADR 0001, "Step 7".)
+  list the kernel in its sources. (Kernel ADR 0001, "Step 7".) Done:
+  `scenarios` depends on `build`.
 - [ ] **The cost of a logged input:** +5.5 µs on Node and +3.8 µs on Bun per
   message, measured before the value was written once. Measure it again at
   version 2. If it still matters, take option B from the review: a native
