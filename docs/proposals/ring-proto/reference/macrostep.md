@@ -121,33 +121,27 @@ A macrostep's records reach c2h in this order:
    [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog);
 3. its `c2h.fence`.
 
-The fence is the only transaction core offers.
+**The fence reports that a macrostep ended. It does not gate effects or
+commit storage.** The host may execute each effect as soon as it reads the
+record, for recorded and unrecorded sessions alike. It need not wait for
+the fence or for a journal write.
 
-| | Before the fence | After the fence |
-|---|---|---|
-| The host may | read the records and copy them into its own memory, releasing ring space | everything: release effects to I/O processors and invokers, persist, reply |
-| The host must not | act on any effect: send, start an invocation, reply over HTTP | – |
-| A recorded session | – | persist its `c2h.input` first, then release its effects ([recording-and-replay.md](recording-and-replay.md)) |
-| Local mail | is on the macrostep's outgoing list, on no queue | joins the run queue, or a waiting list if its target isn't resident |
+When `ta_run` returns on a budget pause, the host can drain c2h, execute
+sends, invocations and logs, release ring space, and post answers on h2c.
+The next `ta_run` resumes the macrostep. No collection of effects has to
+be held until the fence. An application may choose its own buffering or
+durability policy, with its own memory bounds.
 
-Why this matters: a crash before the fence loses the macrostep completely,
-input and effects alike. A crash after the input is persisted but before the
-effects are released loses only effects, and the replayed session believes
-it performed them. Either way, **what a session remembers includes
-everything it did**. The other order would be a session that did something
-it doesn't remember. The chart's own retries handle effects that were lost.
+A crash or operator abandonment can occur after some effects have already
+run. Neither the fence nor abandonment rolls them back. Charts and I/O
+processors use timeouts, retries and business-key idempotency for work that
+matters. Recording observes inputs independently of effect execution;
+[replay seeds a new execution](recording-and-replay.md).
 
-**What the host holds is its own choice.** With a budget, `ta_run` can
-return in the middle of a macrostep, and the host can then:
-
-- **copy and release.** The c2h space is freed. The host holds the records
-  until the fence, in its own memory. This is cheap in Node; in an embedded
-  host it may not be.
-- **leave them in the ring.** c2h fills up, and the macrostep's next effect
-  fails as `error.execution.capacity.c2h`. So `c2hBytes` bounds how much one
-  macrostep can do, and the chart is told when it tries to do more.
-
-Neither option is a queue that grows without anyone deciding.
+Local mail joins the run queue at the fence because core runs one macrostep
+at a time. Its outgoing list is scheduling state, not a host effect hold.
+An abandoned macrostep frees that list, while effects the host already
+executed remain executed.
 
 ## Two kinds of exhaustion
 

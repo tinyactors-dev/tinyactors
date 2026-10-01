@@ -2,15 +2,22 @@
 
 **Status:** Sketch (2026-10-01), part of [the ring protocol proposal](../README.md)
 
-Replay is an application decision. Core does not know where its inputs
-come from. It gives the application three things:
+**Replay is for seeding new execution.** Core feeds supplied inputs into a
+prepared session to derive a chart configuration and data model values.
+Publishing starts live execution from that result. The result may differ
+from the earlier execution: replay does not promise to restore its state,
+resource failures, scheduling or in-flight messages.
+
+The application chooses the inputs, their times, the compatible definition
+and the new system's parameters. Core gives it three things:
 
 - a lossless record of the inputs a recorded session took;
 - a way to feed them back without crossing any border;
-- a way to put the rebuilt session on the route.
+- a way to put the seeded session on the route.
 
-Everything else is the application's: whether to record, where to store
-the records, when to truncate, and which sessions to replay.
+Everything else is the application's: whether to record, where and when to
+store the records, when to truncate, and which inputs to use as a seed.
+Recording does not hold effects or require persistence before execution.
 
 ## Which sessions are recorded
 
@@ -33,7 +40,7 @@ afterwards.
 Anonymous actors have no address, so they are never recorded. That
 matches today's recorder, which records named actors only.
 
-## The log is `c2h.input`
+## Input observations are `c2h.input`
 
 When a recorded session takes an envelope, core writes
 [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) before any
@@ -56,9 +63,10 @@ A recorded session's log is:
 3. optionally [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate)
    records, which let the log be truncated (see [Checkpoints](#checkpoints)).
 
-This replaces the kernel's recorder (`tinyactors-host/src/recorder.c`) and
-core's input log byte layout (core ADR 0090). The ring record *is* the
-byte layout.
+This replaces the kernel's recorder (`tinyactors-host/src/recorder.c`).
+The old input log byte layout (core ADR 0090) was already removed by kernel
+ADR 0006. The ring is an observation format; the application chooses its
+journal format, encoding vrefs with the binding's codec.
 
 ### Why record from c2h and not from h2c
 
@@ -79,41 +87,39 @@ what clock. The order also depends on core's fairness rule between mail
 and admitted input ([envelope.md](envelope.md)), which the host does not
 see.
 
-### Persist before acting on the fence
+### Recording and effects are independent
 
-A recorded session's `c2h.input` comes before its
-[`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence), as do its
-effects. The host:
+A recorded session's `c2h.input` precedes the effects of the macrostep it
+starts. The host may execute each effect on receipt, including when
+`ta_run` returns during a budget pause. It need not wait for
+[`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence), the recorder or
+storage. The same rule applies to unrecorded sessions.
 
-1. reads up to the fence;
-2. encodes and persists the `c2h.input`;
-3. then releases the effects (sends, invocations, logs).
+The application chooses when to encode and persist input observations.
+Retaining a vref keeps a value alive but does not freeze mutable data: the
+recorder must encode or copy any input data it wants to preserve before
+later chart execution can change it. This is a value-lifetime requirement,
+not an effect hold.
 
-The result is that **a session's memory is a superset of what it did**:
-
-- a crash before step 2 loses the input and its effects together, so
-  nothing happened;
-- a crash between steps 2 and 3 replays an input whose effects never left.
-  The chart must recover from that, with a timeout or a retry, and
-  [S04](../scenarios/S04-crash-campaign-recorded.md) shows how.
-
-For a session that is **not** recorded, the fence gives no guarantee
-that matters. The host may release its effects as it reads them.
-
-This refines napi ADR 0040, which removed the write-ahead hold and made
-effects at least once. Here the hold comes back, for recorded sessions
-only, and costs memory for one macrostep's records.
+A crash may leave an executed effect with no journaled input, or a
+journaled input whose effect never executed. A `c2h.input` is written when
+the input is taken, so it may also describe a macrostep that never reached
+its fence. The application may use completion reports to select seeds,
+but neither recording nor a fence is a durability acknowledgement.
+Charts and I/O processors use their own retries, resync and business-key
+idempotency. The protocol introduces no write-ahead hold.
 
 ## Replay
 
-Replay feeds the log back under a session prepared to replay (core ADR
-0089):
+Replay feeds the application's seed inputs into a session prepared to
+replay (core ADR 0089). A journal is one source of seeds; fixtures and
+application-selected inputs are others:
 
 ```
 h2c.spawn   {address, revision, flags: replaying_from_clock, clock: <spawned.at>}
 h2c.event   {name, type, sendid, origin, ..., data: <decoded>}   at = input.at   ×N
 h2c.invoke_report {...}                                          for source invoke_report
-h2c.publish {address, at: <time the run being replayed stopped>}
+h2c.publish {address, at: <time chosen for the seeded session>}
 ```
 
 - [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) with the
@@ -130,8 +136,8 @@ h2c.publish {address, at: <time the run being replayed stopped>}
   would have had go to `tel` with the `suppressed` flag
   ([telemetry.md](telemetry.md)).
 - **Its delayed sends are held in the pool, with their due times.** A
-  held send due by an input's time is dropped, because the input stream
-  says what happened next.
+  held send due by an input's time is dropped. The supplied input stream
+  determines what the new session processes during seeding.
 - [`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish) puts it
   on the route:
   - held delayed sends due by `at` are dropped (core ADR 0094 section 1),
@@ -141,22 +147,31 @@ h2c.publish {address, at: <time the run being replayed stopped>}
   - [`c2h.published`](../protocol/generated/MESSAGES.md#c2hpublished)
     reports the counts.
 
-Because timers are envelopes in the pool, replay rebuilds them without
-help. No host-side reducer is needed. That is one reason this proposal
+Because timers are envelopes in the pool, replay derives pending timers
+without a host-side reducer. That is one reason this proposal
 keeps delayed sends in core ([envelope.md](envelope.md), "Delayed
 sends").
 
-### What replay does not restore
+### The result is a seed, not an exact restoration
+
+Replayed actions execute under the new definition and resource conditions.
+For example, a send that failed for a full pool in the old execution may
+succeed during seeding, producing different configuration and data model
+values. Budgets, ring draining, effect suppression and data model behavior
+can also change the result. This is expected and accepted.
+
+Per-session input observations also do not restore:
 
 - **Mail the session sent that was still in flight.** Its receivers did
   not take it, and replay does not send it again.
 - **Mail sent to the session that it had not taken yet.** It never
   appears in the log.
-- **Effects released after the last fence persisted.** They happened, but
-  the replayed session believes they did not happen, or the reverse.
+- **Which effects executed or became durable.** Input observations and
+  completion reports do not establish either fact.
 
-Each actor's memory stays consistent with what that actor did. Two actors
-can still disagree with each other. See
+The seeded state is the result of the supplied inputs in the new execution.
+It need not match the earlier actor or the outside world. Applications
+resync and retry where that matters. See
 [S05](../scenarios/S05-crash-both-recorded.md).
 
 ## Checkpoints
@@ -171,8 +186,8 @@ for a stable recorded session's state. Core answers with
 - `input_seq` names the last `c2h.input` it includes.
 
 A checkpoint is one artifact. Replay from it is
-[`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) `{image}` with its
-`replaying` flag, followed by the inputs after `input_seq`, followed by
+[`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) `{state: image}`
+as a replaying session, followed by selected inputs after `input_seq`, then
 [`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish).
 
 The application decides when to checkpoint, for example every N inputs or
@@ -184,19 +199,16 @@ when the log passes a size. It may then delete the log's inputs up to
 | | Session replay | Whole-system replay |
 |---|---|---|
 | What is recorded | `c2h.input` of the recorded sessions | every h2c record, plus the system parameters and the definitions' revisions |
-| What it rebuilds | one session at a time, alone | every session, together, including mail that was in flight between them |
-| Requires | a deterministic data model | a deterministic data model, the same parameters (a capacity error depends on `poolEnvelopes`), the same definitions |
+| What it seeds | one session at a time, alone | several sessions together, including local mail the new execution generates |
+| Requires | inputs and times, a compatible definition and data model | an input stream, definitions and data models, and parameters chosen for the new execution |
 | Cost | one record per input of the recorded sessions | one record per external input, time move, load and unload of the whole system |
 
-Whole-system replay works because h2c is the only way anything enters the
-system ([ring.md](ring.md)), and core's scheduling of mail is a
-deterministic function of what is in the pool ([envelope.md](envelope.md)).
-Given the same h2c stream, core makes the same macrosteps in the same
-order.
-
-It closes the gap that session replay leaves: mail that was in flight
-between two actors at the crash is reconstructed, because its sender's
-macrostep is replayed in the same system as its receiver.
+Whole-system replay feeds an h2c stream into a new system. The stream can
+come from an earlier recording, but it does not determine the old run's
+budget boundaries, ring draining, resource availability or exact crash cut.
+Suppressed external effects also use different resources. Even with the
+same definitions and parameters, the new configuration, values and pending
+mail may differ. Exact reconstruction is not the contract.
 
 ### How a whole-system replay runs
 
@@ -204,7 +216,7 @@ macrostep is replayed in the same system as its receiver.
    `replaying` flag.** Sessions that a replaying `h2c.spawn` creates are
    replaying sessions.
 2. **Mail between replaying sessions is delivered**, as envelopes on the
-   run queue, exactly as it was the first time.
+   run queue, as generated by the new execution.
 3. **Effects that would leave the process are suppressed:** no `c2h.send`,
    `c2h.invoke` or `c2h.log`. They go to `tel` with the `suppressed` flag.
 4. **One [`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish) with
@@ -215,14 +227,13 @@ macrostep is replayed in the same system as its receiver.
 
 - **Mail is delivered because it is internal state.** Mail between
   sessions never crossed the border the first time, so delivering it again
-  repeats nothing the outside world saw. It is also the whole point:
-  delivering it is what rebuilds the mail that was in flight at the crash.
-- **Effects are suppressed for the same reason as in a session replay.**
-  They already happened, or the charts' own retries cover them if they did
-  not. A replay must not send a notification twice.
-- **One flag on every record, not a mode of the system,** so the stream
-  replays the same way whether the host feeds it at once or in pieces. Core
-  needs no state beyond what the records say.
+  produces no external effect while seeding. Delivering it lets the
+  sessions derive state together; it does not restore an old queue.
+- **Effects are suppressed while seeding.** Configuration and values are
+  derived before live execution begins. Publish does not release those
+  suppressed effects; live charts decide what to send next.
+- **A flag identifies replay inputs.** Feeding the stream at once or in
+  pieces may change resource conditions and the state that is derived.
 - **One publish for all.** Publishing sessions one by one would let a
   published session's mail reach a session still replaying, or the other
   way round. One publish switches the whole system to live at a single
@@ -231,32 +242,27 @@ macrostep is replayed in the same system as its receiver.
 **Unloading inside a whole-system replay.** Unloading only bounds memory, and
 an image never outlives its process
 ([unloading.md](unloading.md#unloading-bounds-memory-it-is-not-persistence)).
-So a whole-system replay always starts from an empty system, and every
-[`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) in the recording
-loads an image that an [`h2c.unload`](../protocol/generated/MESSAGES.md#h2cunload)
-earlier in the same recording produced. Replay runs that unload again and
-gets the same image back, given a deterministic data model. The recorded
+For a whole-system seed that starts from an empty system, a recorded
+[`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) may refer to an image
+that an [`h2c.unload`](../protocol/generated/MESSAGES.md#h2cunload) earlier
+in the recording produced. The new execution runs that unload
+and produces its own image, which may differ from the old one. The recorded
 `h2c.load` holds a blob handle from the old process, which means nothing
 now. The replaying host gives core the image the matching unload just
 produced. No image is ever stored for replay.
 
-The unloads and loads must still be replayed at the same points. When a
-session is unloaded decides when mail for it waits, and so the order of
-macrosteps and how full the pool is.
-
-**Open:**
-
-- Whether effects of sessions that never crashed (inputs after the last
-  fence the host acted on) should be released at publish instead of
-  suppressed.
+The application maps load records to images produced in the new execution.
+It must handle an unavailable or incompatible image as a load failure.
+Unload and load inputs influence waiting mail and pool usage; they do not
+establish the earlier system's scheduling or state.
 
 
 ## Derived actors resync instead of replaying
 
 A **derived actor** holds a view of other actors' state, like the
 progress tracker in [S01](../scenarios/S01-fanout.md). Recording it gains
-little. Replay restores what it took, but not mail that was in flight to
-it, so its view is still behind ([S05](../scenarios/S05-crash-both-recorded.md)).
+little. Replay derives a view from the supplied inputs without establishing
+the source's current state ([S05](../scenarios/S05-crash-both-recorded.md)).
 
 The pattern is in the chart:
 
@@ -265,8 +271,9 @@ The pattern is in the chart:
 2. That actor answers with its current state, from its data model.
 3. The derived actor replaces its view.
 
-This works whether the source was replayed, started fresh, or never
-crashed. Derived actors should not be recorded.
+This reads the source's current state whether it was seeded by replay,
+started fresh, or never crashed. Starting derived actors fresh is a useful
+application policy; recording them is not required for resync.
 
 ## Checking a replay for divergence
 
@@ -279,7 +286,9 @@ streams:
   mean the chart took the same path;
 - a different `value_text` for an ASSIGN means the data model diverged.
 
-Core does nothing special for this. Because `tel` is lossy, a check can
+Differences are expected when the new execution uses different conditions;
+they are not a replay contract violation. Core does nothing special for
+this comparison. Because `tel` is lossy, a check can
 only report a divergence when both streams are complete (no
 [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) in either
 stream). It is a debugging aid, not a guarantee.

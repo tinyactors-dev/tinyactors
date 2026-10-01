@@ -102,18 +102,20 @@ the JavaScript heap. That concern applied only to the rejected option (b)
 ([below](#decided-the-data-model-stays-a-synchronous-vtable)), where core
 would hold references to values that live elsewhere.
 
-## Determinism is the data model's business
+## Replay derives new state
 
-Replay gives the data model the same calls, in the same order, with the
-same inputs. Whether that yields the same state depends on the data model
-alone:
+Replay evaluates the supplied inputs under the chosen definition and the
+new execution's resource conditions. It derives configuration and data
+model values before publish. Those values may differ from an earlier run:
 
 - a JavaScript `<script>` that calls `Date.now()` or `Math.random()` is
   not deterministic;
 - the data model may forbid such calls, record them, or accept the
-  divergence.
+  divergence;
+- capacity failures, budgets, ring draining and effect suppression may
+  also change which actions run, even with a deterministic data model.
 
-Core makes no promise beyond "the same inputs, in the same order".
+Reproducing the earlier state is not the replay contract.
 [recording-and-replay.md](recording-and-replay.md) describes how a host
 can detect a divergence with telemetry.
 

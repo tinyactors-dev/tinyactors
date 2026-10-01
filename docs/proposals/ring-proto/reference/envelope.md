@@ -111,8 +111,9 @@ target isn't resident. They go on that address's waiting list (below).
   scheduler is the policy the kernel held and this design deletes:
   fairness between targets, round robin, starvation. One queue in arrival
   order has no policy apart from `fairnessRatio`.
-- **Arrival order is deterministic.** Given the same h2c stream, the same
-  envelopes arrive in the same order. Whole-system replay depends on that
+- **Arrival order is explicit.** Each execution orders its runnable
+  envelopes by arrival. Replay uses the same scheduling rule to seed a new
+  execution, whose order may differ as resource conditions change
   ([recording-and-replay.md](recording-and-replay.md#session-replay-and-whole-system-replay)).
 - **It costs one list head per system**, not one per actor.
 
@@ -145,8 +146,9 @@ it is below the watermark. Internal work goes first, so work already started
 finishes before new work comes in. The ratio keeps two sessions that mail
 each other forever from shutting out external input.
 
-The ratio is part of the system's parameters. Under system replay, the same
-parameters give the same order ([recording-and-replay.md](recording-and-replay.md)).
+The ratio is part of the system's parameters. A new execution may choose a
+different ratio, including when seeded by replay
+([recording-and-replay.md](recording-and-replay.md)).
 
 ## Mail between local sessions
 
@@ -166,20 +168,21 @@ system, `#_parent`, `#_<invokeid>`) doesn't go to c2h:
    [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed)
    after the fence ([below](#envelopes-for-an-address-that-isnt-resident)).
 
-So a receiver never sees mail from a macrostep that didn't commit. A macrostep
+So local receivers run after the sender's macrostep ends. A macrostep
 an operator abandons (ADR 0082) frees its outgoing list. No mail
 crosses the host, so no JavaScript runs for it and no vref leaves core.
 
 **Why mail waits for the fence:**
 
-- **One rule for every effect.** Effects on c2h are released at the fence,
-  and mail is an effect too. If mail ran earlier, a receiver could act on
-  something its sender then failed to commit, for example a macrostep an
-  operator abandons.
+- **One running macrostep.** A local receiver cannot run while its sender
+  is paused. The outgoing list keeps that scheduling boundary explicit.
+  Host effects on c2h may execute before the fence; they are independent
+  of this local scheduling rule and cannot be rolled back by abandonment.
 - **Cause comes before effect in the log.** A recorded sender's
   [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) is on c2h
   before the receiver can take the mail and write its own `c2h.input`. A
-  log read in order never shows an effect before its cause.
+  stream read in order shows the sender's input observation first. This
+  is an observation order, not a durability guarantee.
 - **It costs nothing.** Under run to completion the receiver couldn't run
   before the fence anyway. The outgoing list only decides *when* the mail
   becomes visible, not how soon it runs.
@@ -238,12 +241,11 @@ inside a macrostep. Core writes its `c2h.send` with `macrostep` 0, and no
 [`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence) follows. The host
 may act on it at once.
 
-**Why there is no fence:** the macrostep that scheduled the send committed
-long ago, at its own fence, and that is when the send became certain. Firing
-it changes no session's state, so there is nothing to commit and nothing to
-roll back. A fence would mark the end of a macrostep that doesn't exist.
-Recording loses nothing either: the scheduling macrostep's input is in the
-log, so replay schedules the send again.
+**Why there is no fence:** this record is not part of a running macrostep.
+A fence would report the end of a macrostep that doesn't exist. Like every
+other c2h effect, the host may execute it on receipt. Journaling its owner's
+inputs does not establish whether the effect executed; replay seeds new
+state and suppresses external effects while doing so.
 
 ## Envelopes for an address that isn't resident
 

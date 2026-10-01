@@ -9,10 +9,12 @@ computed. [`render.rb`](render.rb) turns the model into other formats:
 
 | Command (in this directory) | Writes |
 |---|---|
-| `mise exec -- ruby render.rb all` | all three files below, into `generated/` |
-| `mise exec -- ruby render.rb markdown` | [`generated/MESSAGES.md`](generated/MESSAGES.md): the reference every document links to |
-| `mise exec -- ruby render.rb json` | [`generated/messages.json`](generated/messages.json): for tools, such as a test host's decoder |
-| `mise exec -- ruby render.rb c` | [`generated/ring_proto.h`](generated/ring_proto.h): C structs with `_Static_assert`s on their sizes |
+| `mise run ring-proto:render` | all three files below, into `generated/` |
+
+The generated files are [`MESSAGES.md`](generated/MESSAGES.md), the reference
+every document links to; [`messages.json`](generated/messages.json), for tools
+such as a test host's decoder; and [`ring_proto.h`](generated/ring_proto.h),
+C structs with `_Static_assert`s on their sizes.
 
 The generated files are committed so the proposal can be read without running
 anything. After editing the catalog, render again.
@@ -42,7 +44,7 @@ How rings carry records is in [reference/ring.md](../reference/ring.md).
 ## The DSL
 
 ```ruby
-message 'c2h.fence', code: 0x0208, summary: 'A macrostep committed' do
+message 'c2h.fence', code: 0x0208, summary: 'A macrostep ended' do
   doc 'Everything the macrostep wrote to c2h comes before its fence. ...'
   field :macrostep, :macrostep
   field :effects, :u32, 'records this macrostep wrote to c2h, the fence excluded'

@@ -5,6 +5,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 - The data model is not on a ring. Core calls ta_datamodel_vtable synchronously, as today (reference/data-model.md). Only its results cross the rings, as value references.
 - Defining a chart, creating a system and the operator calls (inspect, abandon, operator transitions) stay ordinary API calls: they are control, not traffic (ARCHITECTURE.md, "Two kinds of call").
 - A vref in a c2h record is a reference core retained for the host. The host releases it when it has used the record. A vref in an h2c record is one the host retained for core; core releases it when the envelope holding it is freed.
+- Replay seeds new execution: supplied inputs derive configuration and data model values, which may differ from an earlier run. External effects are suppressed while seeding. In live execution the host may execute effects on receipt, independently of recording, persistence or c2h.fence.
 
 ## Rings
 
@@ -35,7 +36,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x0205` | [`c2h.invoke_cancel`](#c2hinvoke_cancel) | Cancel an invocation | 48 |
 | `0x0206` | [`c2h.invoke_forward`](#c2hinvoke_forward) | Autoforward an event to an invocation | 88 |
 | `0x0207` | [`c2h.log`](#c2hlog) | A <log> | 56 |
-| `0x0208` | [`c2h.fence`](#c2hfence) | A macrostep committed | 56 |
+| `0x0208` | [`c2h.fence`](#c2hfence) | A macrostep ended | 56 |
 | `0x0209` | [`c2h.wake`](#c2hwake) | Call core back at this time | 40 |
 | `0x020A` | [`c2h.bounced`](#c2hbounced) | An h2c record was not run | 56 |
 | `0x020B` | [`c2h.load_needed`](#c2hload_needed) | Envelopes wait for an unloaded address | 48 |
@@ -91,7 +92,7 @@ Header `session` names a resident session, or is 0 and `target` gives an address
 
 `0x0103` on `h2c`, 72 fixed bytes. Create a session.
 
-With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish.
+With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish. Inputs seed new configuration and data model values; exact restoration is not promised.
 
 With `state`, the session is restored from a checkpoint (c2h.state, core ADR 0091) as a replaying session whose clock starts at the state's; the c2h.input records after the checkpoint follow. This is how a session survives a restart. h2c.load is not: it only pages a session back into memory within one process.
 
@@ -117,7 +118,7 @@ An empty `address` publishes every replaying session at once: the end of a whole
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 32 | `address` | text | family/name, or empty for every replaying session |
-| 40 | `at` | time | the moment the replayed run stopped |
+| 40 | `at` | time | the time chosen for the seeded session |
 
 - may be answered by: [`c2h.published`](#c2hpublished), [`c2h.bounced`](#c2hbounced)
 
@@ -212,7 +213,7 @@ For a recorded session this is the first record of its log.
 
 `0x0202` on `c2h`, 112 fixed bytes. A recorded session took an input.
 
-Written when a recorded session takes an envelope, before any effect of the macrostep it starts. It is the replay log: these records, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), rebuild the session.
+Written when a recorded session takes an envelope, before any effect of the macrostep it starts. These observations, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), seed a new execution. Recording imposes no persistence-before-effects rule.
 
 Not written for an input a replaying session takes: that input is already in the log being replayed. A session restored from c2h.state and replayed starts writing c2h.input again after h2c.publish.
 
@@ -235,9 +236,9 @@ Not written for an input a replaying session takes: that input is already in the
 
 `0x0203` on `c2h`, 88 fixed bytes. A send for an I/O processor.
 
-Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host acts on it after the macrostep's c2h.fence.
+Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.fence or persistence.
 
-A delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no fence follows, and the host may act on it at once. Why: the macrostep that scheduled it committed at its own fence, and firing it changes no session, so there is nothing to commit and nothing to roll back (reference/envelope.md, "A due send to an I/O processor has no fence").
+A delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no fence follows, and the host may act on it at once. A fence would report the end of a macrostep that does not exist (reference/envelope.md, "A due send to an I/O processor has no fence").
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -304,9 +305,9 @@ A delayed send that becomes due on h2c.time is written outside any macrostep: it
 
 ## c2h.fence
 
-`0x0208` on `c2h`, 56 fixed bytes. A macrostep committed.
+`0x0208` on `c2h`, 56 fixed bytes. A macrostep ended.
 
-Everything the macrostep wrote to c2h comes before its fence. The host acts on none of it before the fence: a recorded session’s c2h.input is persisted first, then its effects are released (reference/macrostep.md, "The fence").
+Everything the macrostep wrote to c2h comes before its fence. The host may already have executed effects on receipt. The fence reports completion and status; it is neither an effect hold nor a durability acknowledgement (reference/macrostep.md, "The fence").
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|

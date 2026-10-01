@@ -32,8 +32,9 @@ open.
 | S08.8 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.fence`][c2h.fence], [`c2h.wake`][c2h.wake] `{t0+60s+ε}` | Then the click re-enters `attempt`. It cancels attempt 2's `t` exactly and schedules another. n5 is sent a third time, and the processor removes the duplicate. |
 
 In both orders the chart sees exactly one timeout or none, never a
-cancelled one. h2c fixes the order, and core alone decides what each
-input means. So replaying the same h2c stream gives the same answer
+cancelled one. h2c fixes the input order, and core alone owns cancellation.
+A replay seed uses these rules in its new execution; different resource
+conditions may still produce different configuration and values
 ([recording and replay](../reference/recording-and-replay.md#session-replay-and-whole-system-replay)).
 
 ## The rejected alternative: the host keeps the timers

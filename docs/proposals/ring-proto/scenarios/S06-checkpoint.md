@@ -6,6 +6,11 @@ A recorded campaign with 10,000 notifications has a long log: one input
 per acknowledgement. The host takes a checkpoint, truncates the log, and
 after a crash restores the checkpoint and replays only the tail.
 
+The checkpoint supplies starting state for a new execution. Replaying the
+tail derives configuration and data model values under its new resource
+conditions; it does not guarantee the old final state or effect history.
+Effects in live execution may run on receipt, independently of journaling.
+
 **Parameters:** `poolEnvelopes` 16384, `admissionWatermark` 75% (12,288 envelopes),
 `fairnessRatio` 8, `nameAreaBytes` 64 KiB, `h2cBytes` 1 MiB, `c2hBytes`
 4 MiB, `telBytes` 1 MiB, `maxRecordBytes` 4096. Recorded: `campaign/*`.
@@ -38,7 +43,7 @@ The proposal rejects this alternative, where timers live in the host
 rather than in the pool ([envelope](../reference/envelope.md)). Under it,
 the image would not hold `t`. The host would have to store its own
 pending timers for the session, encoded by its own codec, at the same
-fence as `c2h.state`. That makes two artifacts that must be written
+snapshot boundary as `c2h.state`. That makes two artifacts that must be written
 together. Keeping timers in the pool keeps a checkpoint to one artifact.
 
 ## Who drops what, who retries how

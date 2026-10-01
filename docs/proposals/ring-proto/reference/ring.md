@@ -102,8 +102,9 @@ The producer works on a private write position, then publishes it:
 
 A producer may commit after every record, or after several. Core commits
 c2h after every record, so a host whose `ta_run` returned on a budget pause
-can copy a long macrostep's records out before its fence. It still may not
-act on them before the fence ([macrostep.md](macrostep.md#the-fence)).
+can execute a long macrostep's effects and release their ring space before
+its fence. The fence reports completion; it does not hold effects
+([macrostep.md](macrostep.md#the-fence)).
 
 ### A record never splits across the end: the pad
 
@@ -246,11 +247,11 @@ object never passes through it.
 **There are exactly three because there are three delivery guarantees, not
 three purposes.** Splitting by purpose instead was considered and rejected:
 
-- **Recording on a ring of its own** (inputs of recorded sessions apart from
-  effects) would break the one order the host relies on: a macrostep's
-  `c2h.input`, then its effects, then its `c2h.fence`. A host that persists
-  the input before releasing the effects needs the input, the effects and
-  the fence in one stream ([recording-and-replay.md](recording-and-replay.md)).
+- **Recording on a ring of its own** would add another lossless core-to-host
+  stream without a new delivery guarantee. c2h already carries input
+  observations, effects and completion reports in order. That order lets
+  the host relate them; it imposes no persistence-before-effects rule
+  ([recording-and-replay.md](recording-and-replay.md)).
 - **Recording on tel**, "replay is driven by tracing", fails because tel
   drops. A replay log that can lose an input isn't one.
 - **Telemetry on c2h** would let a slow OTLP exporter fail a chart's sends.

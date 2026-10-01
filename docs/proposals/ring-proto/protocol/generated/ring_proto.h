@@ -255,7 +255,7 @@ typedef struct {
 } trp_c2h_log;
 _Static_assert(sizeof(trp_c2h_log) == 56, "c2h.log");
 
-/* c2h.fence: A macrostep committed. */
+/* c2h.fence: A macrostep ended. */
 typedef struct {
     trp_header header;
     uint64_t macrostep;

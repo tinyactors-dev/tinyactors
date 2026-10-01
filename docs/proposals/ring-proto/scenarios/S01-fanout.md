@@ -35,8 +35,8 @@ chart into one.
 | S01.9 | – | – | s1 takes it (`s1.m3`). Core looks up `send` and `requested`, both authored atoms, so the descriptor `send.requested` matches. `idle` → `active` → `attempt` → `sending`. Six `assign`s and a `script` go through the data model vtable. They are not on any ring. |
 | S01.10 | – | – | `attempt`'s `onentry` schedules `t` (`sending.timeout`, due t0+30s), before any fanout. **pool 2/64.** |
 | S01.11 | c2h | 5 × [`c2h.send`][c2h.send] `0x0203` `{x-notify, notify:, notification, data: n1…n5, sendid: #_send.2, .4, .6, .8, .10}` | The `foreach`: each `x-notify` send is a c2h record. Its `idlocation` assigns the sendid in the data model. Each `progress.sent` is an envelope for s2. **pool 7/64.** |
-| S01.12 | c2h | [`c2h.fence`][c2h.fence] `{s1.m3, stable, effects: 5, mail: 6}`, [`c2h.wake`][c2h.wake] `{due: t0+30s}` | The macrostep commits. The `send.requested` envelope is freed: **pool 6/64.** |
-| S01.13 | – | – | The host acts on nothing before the fence. Now it hands the five notifications to the notify processor. The processor stores a key `(recipient, n.id)` for each, with a time to live, and dispatches them. |
+| S01.12 | c2h | [`c2h.fence`][c2h.fence] `{s1.m3, stable, effects: 5, mail: 6}`, [`c2h.wake`][c2h.wake] `{due: t0+30s}` | The macrostep ends. The `send.requested` envelope is freed: **pool 6/64.** |
+| S01.13 | – | – | The host hands each notification to the notify processor as it reads its send record. It need not wait for the fence; a budget pause would let earlier sends stream before the macrostep ends. The processor stores a key `(recipient, n.id)` for each, with a time to live, and dispatches them. |
 | S01.14 | c2h | 5 × ([`c2h.send`][c2h.send] `{x-ws}`, [`c2h.fence`][c2h.fence] `{s2.m3…m7}`) | s2 takes five `progress.sent` envelopes and pushes five updates. **pool 1/64:** only `t` is left. |
 
 ## Outcomes
@@ -58,7 +58,7 @@ chart into one.
 | S01.22 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5, #_send.17}`, [`c2h.fence`][c2h.fence] `{s1.m9, effects: 1, mail: 2}`, [`c2h.wake`][c2h.wake] `{t0+60s}` | `sending.timeout`: `retrying` (attempt 2, `sent` cleared) → `attempt`, with a new `t` → `sending`. `todo` is `[n5]`. Exiting `attempt` cancelled the old `t`, which was the envelope being taken, so the cancel does nothing. **pool 2/64.** |
 | S01.23 | h2c | [`h2c.event`][h2c.event] `{notify.ack, n5}` | The relay is back. |
 | S01.24 | c2h | [`c2h.send`][c2h.send] `{x-http-reply, target: http:req/9f, name: ok}`, [`c2h.fence`][c2h.fence] `{s1.m10}`, [`c2h.wake`][c2h.wake] `{none}` | `pending` is empty. The eventless transition goes to `complete`. Exiting `attempt` cancels `t`, and the envelope is removed. `complete` replies to the click and sends `progress.done`. |
-| S01.25 | – | – | After the fence, the host writes HTTP 200 on request `9f`. If the browser gave up after 30 seconds, the host posts `error.communication` for that sendid. `active` has gone, but `complete` ignores errors because it has no transition for them. The click was idempotent anyway ([S03](S03-crash-unrecorded.md)). |
+| S01.25 | – | – | On receipt of the reply send, the host writes HTTP 200 on request `9f`, independently of the fence or journaling. If the browser gave up after 30 seconds, the host posts `error.communication` for that sendid. `active` has gone, but `complete` ignores errors because it has no transition for them. The click was idempotent anyway ([S03](S03-crash-unrecorded.md)). |
 
 ## Who drops what, who retries how
 

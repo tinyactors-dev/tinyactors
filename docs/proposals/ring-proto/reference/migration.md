@@ -25,7 +25,7 @@ below.
 |---|---|---|
 | `scheduler.h`, `scheduler.c` | 1,465 | Mailboxes, runnable actors, turn budgets, dead letters. Replaced by core's pool and its run queue ([envelope.md](envelope.md)), run to completion ([macrostep.md](macrostep.md)) and `ta_run`'s budget. |
 | `router.h`, `router.c` | 232 | `ta_external_event_router` for mail between sessions. Mail between local sessions is an envelope in core. Anything else is a [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend). |
-| `effects.h`, `effects.c` | 98 | The per-turn effect queue that kept effects until JavaScript could run. Replaced by c2h, up to the fence. |
+| `effects.h`, `effects.c` | 98 | The per-turn effect queue that kept effects until JavaScript could run. Replaced by c2h records executable on receipt, including before the fence. |
 | `adapter_io.h`, `adapter_io.c` | 260 | The I/O processor adapter that copied sends into effects. Replaced by `c2h.send`. |
 | `adapter_invoker.h`, `adapter_invoker.c` | 210 | The invoker adapter. Replaced by [`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke), [`c2h.invoke_cancel`](../protocol/generated/MESSAGES.md#c2hinvoke_cancel), [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward) and [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report). |
 | `adapter_log.h`, `adapter_log.c` | 34 | The buffered log sink. Replaced by [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog). |
@@ -75,7 +75,7 @@ napi becomes a binding over core and its rings. What it keeps:
 - the pump, reduced to a short loop:
   1. post h2c;
   2. call `ta_run`;
-  3. read c2h up to each fence, then hand records to I/O processors, invokers and the recorder;
+  3. read each c2h record and hand it to I/O processors, invokers or the recorder on receipt; fences report completion;
   4. drain `tel` into the OTLP encoder;
   5. set one timer from [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake).
 
@@ -103,7 +103,8 @@ from "after warm-up" to "always, in a macrostep".
 
 - `hosted.post` writes h2c;
 - `hosted.turn` calls `ta_run`;
-- `hosted.batches` returns the c2h records up to each fence, decoded by
+- `hosted.batches` returns available c2h records, including records before
+  a pending fence, decoded by
   the catalog's JSON form ([`protocol/generated/messages.json`](../protocol/generated/messages.json)).
 
 A scenario then reads as an h2c script, with expected c2h records. That
@@ -131,7 +132,8 @@ What core loses:
 - interning of run-time names;
 - per-actor sparse state for delayed sends;
 - ADR 0070's machinery for stopping where it stands inside a macrostep;
-- ADR 0090's input log byte layout (`c2h.input` is the layout);
+- no input log byte layout returns: kernel ADR 0006 already removed ADR
+  0090's format; `c2h.input` observes inputs for application-owned journals;
 - `TA_OP_NOMEM` in `ta_op_status`. A data model or invoker that runs out of
   its own memory answers `TA_OP_ERROR`, and the chart sees
   `error.execution` ([macrostep.md](macrostep.md)). napi's data model and
@@ -149,7 +151,7 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0007 Structured interned event names | every name interned into a trie that only grows | **refined**: authored names only; run-time names are bytes, matched by lookup |
 | 0011 The host owns external scheduling | the host chooses which actor receives which event | **superseded**: core schedules everything in its pool; the host chooses the order of h2c |
 | 0012 Logical time and engine-owned delayed sends | | **kept**; time enters only by `h2c.time` and each input's `at` |
-| 0015 Synchronous I/O callbacks | I/O processor called inside the macrostep | **superseded**: `c2h.send` is a record, acted on after the fence |
+| 0015 Synchronous I/O callbacks | I/O processor called inside the macrostep | **superseded**: `c2h.send` is a record executable on receipt, including before the fence |
 | 0016 Invocation is a pluggable service boundary | invoker vtable | **refined**: the boundary is records |
 | 0026, 0054 Delayed sends: actor-owned, globally indexed | sparse state per owner; global index of owners | **refined**: delayed sends are envelopes; the index is over the pool; they still travel with their owner's image |
 | 0029 No per-actor external mailbox is required by core | no queue in core | **superseded**: core has a pool, with a list head per actor |
@@ -163,8 +165,8 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0069 An idle actor carries no event | event blocks | **refined**: the taken event stays in its envelope; no blocks |
 | 0070 A run that runs out of memory stops where it stands | stopping inside a macrostep | **superseded** for core's memory; capacity becomes `error.execution.capacity` |
 | 0074 An unloaded actor is offloaded to bytes | | **kept**; `c2h.unloaded` carries them |
-| 0089, 0094 Replay before publish; every input carries its time | | **kept**; the records are h2c |
-| 0090 Core defines the input log's byte layout | a layout of its own | **superseded**: `c2h.input` is the log |
+| 0089, 0094 Replay before publish; every input carries its time | | **refined**: h2c inputs seed new execution before publish; exact restoration is not promised |
+| 0090 Core defines the input log's byte layout | already removed by kernel ADR 0006 | remains removed; `c2h.input` is an observation, not a durable journal format |
 | 0091, 0095 Checkpoints; refused sends restored | sends the router refused are restored with the checkpoint | 0091 **kept** (`c2h.state`); 0095 **superseded**: nothing is refused after the fact, a send fails in its macrostep |
 | 0092 Parameters bound every buffer | | **kept**; new parameters ([BEHAVIORS.md](../BEHAVIORS.md#parameters)) |
 | 0093 The event-block cache fills on demand | | **superseded** by the pool, which may fill on demand in the same way |
@@ -177,11 +179,11 @@ history, with a status line pointing at the ADR that removes the kernel.
 | Kernel ADR | Decision | Replaced by |
 |---|---|---|
 | 0001 The kernel holds what every host needs | a C kernel between core and bindings | core holds it, as rings and a pool |
-| 0002 The kernel keeps the write-ahead log | | `c2h.input` |
+| 0002 The kernel keeps the write-ahead log | already superseded by 0006 | no WAL returns; `c2h.input` observes inputs |
 | 0003 A full mailbox overflows instead of refusing mail between actors | overflow | the opposite: a full pool **refuses**, as `error.execution.capacity` in the sender |
-| 0004 A macrostep's first record commits with what it sent | | `c2h.fence` |
-| 0005 An actor's log is an inbox with acknowledgements | | `c2h.input` + fence; effects held for recorded sessions |
-| 0006 Actors record their events through the application | the recorder | the `recorded` bit + `c2h.input` |
+| 0004 A macrostep's first record commits with what it sent | already superseded by 0006 | `c2h.fence` reports completion without committing storage or holding effects |
+| 0005 An actor's log is an inbox with acknowledgements | already superseded by 0006 | no write-ahead hold or durability acknowledgement returns |
+| 0006 Actors record their events through the application | the recorder | the `recorded` bit + `c2h.input`; journaling remains the application's, and replay seeds new execution |
 
 ### napi ADRs that depend on the kernel
 
@@ -195,10 +197,10 @@ history, with a status line pointing at the ADR that removes the kernel.
 | 0015 to 0018 Tracing hook, OTLP, encoder | refined: drains `tel` |
 | 0020 Mail for an unloaded actor waits while a loader brings it back | refined: waits in core's pool; the loader answers `c2h.load_needed` |
 | 0022 Mail a chart sends nowhere raises error.communication | kept, now done by recycling the envelope |
-| 0032 to 0034 Persistence by replay; the input log | refined: `c2h.input` |
+| 0032 to 0034 Persistence by replay; the input log | already superseded by kernel ADR 0006; input observations become `c2h.input` |
 | 0035, 0036 Parameters | refined: kernel parameters go |
 | 0037 napi is a binding over the host kernel | superseded: a binding over core's rings |
-| 0040 Effects are not held | refined: held to the fence for recorded sessions only |
+| 0040 Effects are not held | kept: effects may execute on receipt for every live session, independently of fences and journaling |
 
 ### ADRs to write
 
@@ -218,8 +220,9 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
    travel in images. Refines 0026 and 0054.
 5. **Only authored names are interned.** Run-time names are bytes,
    matched by lookup. Refines 0007. Fixes the memory that grows today.
-6. **Recorded sessions write their inputs to c2h.** The fence, persisting
-   before releasing. Supersedes 0090 and 0095.
+6. **Recorded sessions expose input observations on c2h.** Journaling is
+   application policy. Replay seeds new execution before publish; effects
+   execute on receipt in live execution, without a write-ahead hold.
 7. **Telemetry is a lossy ring.** Values as text. Refines 0067.
 8. In `docs/adr/` (the repository's own): **remove `tinyactors-host`**.
    Supersedes kernel ADRs 0001 to 0006.
@@ -281,15 +284,20 @@ changes every binding in the same change.
 - **The SQLite and PostgreSQL sketches** ([sqlite-host.md](../../sqlite-host.md),
   [postgres-host.md](../../postgres-host.md)) keep a `ta_mailbox` table
   and drain it into core. With the pool in core, the table holds only
-  what the host has not yet posted to h2c. `ta_outbox` is the c2h records
-  after the fence. Both sketches also keep session images as durable
+  what the host has not yet posted to h2c. `ta_outbox` is an application
+  policy for c2h effects, which the protocol permits on receipt. Both
+  sketches also keep session images as durable
   state, which this proposal rules out: an image only bounds memory
   ([unloading.md](unloading.md#unloading-bounds-memory-it-is-not-persistence)).
   They would persist a session as [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate)
   plus its [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) records,
-  written in the same transaction as `ta_outbox`. Both sketches carry a note
-  saying so. Neither has been tried.
-- **Whole-system replay**: the open point in
-  [recording-and-replay.md](recording-and-replay.md). How it treats
-  images is settled: images never outlive their process, so a replay
-  produces again every image it loads.
+  journaled on the application's schedule. A shared transaction with
+  `ta_outbox` is the application's choice, not a protocol requirement.
+  Their persistence notes would need updating to this contract. Neither
+  has been tried.
+- **Replay seeds new execution.** It derives configuration and data model
+  values and may produce different state. Recording adds no effect hold
+  or write-ahead rule. Whole-system replay uses images produced by the new
+  execution, with load failures handled by the host; it does not restore
+  the old system's exact in-flight mail
+  ([recording-and-replay.md](recording-and-replay.md)).

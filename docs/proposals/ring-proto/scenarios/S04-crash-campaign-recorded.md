@@ -5,19 +5,20 @@
 The same crash as [S03](S03-crash-unrecorded.md), but the host records
 every session whose address matches `campaign/*`
 ([recording and replay](../reference/recording-and-replay.md)). The
-campaign is rebuilt by replaying its inputs and then published, and its
-timeout survives. The tracker is not recorded. It shows zero until it
-resyncs, and its resync is what puts it right.
+campaign uses its inputs to seed a new execution and is then published.
+For this seed its timeout is pending. The tracker is not recorded. It shows
+zero until it resyncs, and its resync is what puts it right.
 
 **Parameters:** as in [S01](S01-fanout.md). Recorded: `campaign/*`.
 
 ## The log, as the host persisted it
 
 Every record of a recorded session carries the common flag `recorded`.
-The host appends each [`c2h.input`][c2h.input] `0x0202` to the
-campaign's log **before it acts on that macrostep's
-[`c2h.fence`][c2h.fence]**. The binding's codec encodes `data`, because
-a vref means nothing outside the process.
+The host journals [`c2h.input`][c2h.input] `0x0202` observations on its
+own schedule. It executes effects on receipt without waiting for a journal
+write or [`c2h.fence`][c2h.fence]. In this example the entries below reached
+storage before the crash. The binding's codec encodes `data`, because a
+vref means nothing outside the process.
 
 | Log entry | Record | Source |
 |---|---|---|
@@ -28,7 +29,10 @@ a vref means nothing outside the process.
 | L7 | `c2h.input {notify.rejected n4}` | `h2c` |
 | L8 | `c2h.input {error.communication, sendid: #_send.10}`, at t0+2s | `h2c` |
 
-Then the process crashes, at the same point as in S03.
+Then the process crashes, at the same point as in S03. The following seed
+uses the same definition and reaches the illustrated state. Different
+resource conditions or a compatible new definition may derive different
+configuration and data model values; that is accepted.
 
 ## Restart
 
@@ -37,7 +41,7 @@ Then the process crashes, at the same point as in S03.
 | S04.1 | h2c | [`h2c.spawn`][h2c.spawn] `0x0103` `{campaign/42, revision, flag replaying_from_clock, clock: L1's time}` | The campaign is prepared to replay (core ADR 0089). It is not on the route yet. |
 | S04.2 | c2h | [`c2h.spawned`][c2h.spawned] `{flags: replaying, recorded}` | |
 | S04.3 | h2c | 7 × [`h2c.event`][h2c.event] `0x0102` `{flag replaying, at: the logged time}` from L2–L8 | Each input carries its logged time (core ADR 0094), so no `h2c.time` is needed. L3's data is decoded into new JavaScript objects (`v1'`). |
-| S04.4 | tel | [`tel.trace`][tel.trace] `0x0301` `{SENT, flag suppressed}`, … | The replayed macrosteps run exactly as before. The data model vtable is called as before, so **the JavaScript data model is rebuilt**: data model calls are computation, not effects ([data model](../reference/data-model.md)). Effects do not cross the border: no `c2h.send`, no tracker mail. Telemetry shows them as suppressed. Core writes no `c2h.input` for replayed inputs, because the host already has them. |
+| S04.4 | tel | [`tel.trace`][tel.trace] `0x0301` `{SENT, flag suppressed}`, … | The supplied inputs derive a new chart configuration and JavaScript data model values: data model calls are computation, not effects ([data model](../reference/data-model.md)). Effects do not cross the border while seeding: no `c2h.send`, no tracker mail. Telemetry shows them as suppressed. Core writes no `c2h.input` for replay inputs. |
 | S04.5 | – | – | The delayed send `t` (due t0+30s) is held in the pool under the session's clock. **pool 1/64.** |
 | S04.6 | h2c | [`h2c.publish`][h2c.publish] `0x0104` `{campaign/42, at: t0+2s}` | `at` is the time of L8, the last thing the run did before the crash. |
 | S04.7 | c2h | [`c2h.published`][c2h.published] `0x020F` `{replayed: 7, dropped_timers: 0}`, [`c2h.wake`][c2h.wake] `0x0209` `{t0+30s}` | `t` was due after `at`, so it is scheduled. Had it been due by `at`, it would have fired before the crash, and that firing would be in the log as an input. The campaign is in `attempt`/`sending` with `pending = {n5}`, `sent = {n1…n4}`, attempt 1, and `replyTo` = the dead `http:req/9f`. |
@@ -59,9 +63,9 @@ Then the process crashes, at the same point as in S03.
 Suppose the tracker had no `progress.sync`. It would show zero for this
 campaign forever: the replay suppressed every `progress.*` message the
 campaign regenerated, because to the campaign those were already sent.
-Per-session replay keeps **each** session's memory consistent with what
-that session did. It does nothing to keep two sessions consistent with
-each other. Derived actors resync ([S05](S05-crash-both-recorded.md)).
+Per-session replay derives state from the supplied inputs. It does not
+establish which effects executed earlier or keep two sessions consistent
+with each other. Derived actors resync ([S05](S05-crash-both-recorded.md)).
 
 ## Who drops what, who retries how
 

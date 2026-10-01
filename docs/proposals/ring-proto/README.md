@@ -22,9 +22,18 @@ A macrostep **allocates nothing**. When something is full, the result is a
 - or the sending chart, as an SCXML error event.
 
 Nobody keeps an overflow queue. The host kernel (`tinyactors-host`) is no
-longer needed. Its scheduler becomes the pool. Its WAL, recorder and replay
-become `c2h.input` records and the replay core already has. Its effects queue
-becomes `c2h` up to each fence.
+longer needed. Its scheduler becomes the pool. Its recorder and replay
+become `c2h.input` observations and the replay core already has; its WAL was
+already removed by kernel ADR 0006. Its effects queue becomes `c2h`, which
+the host may execute as it reads. A fence reports
+macrostep completion and does not hold effects.
+
+**Replay is for seeding new execution.** Feeding inputs into a prepared
+session derives a chart configuration and data model values, then publish
+starts live execution from that result. Different resource conditions,
+budgets or compatible definitions may produce a different result. Recording
+does not require persistence before effects, and replay does not promise
+restoration of the old execution or its in-flight messages.
 
 The idea follows io_uring (submission and completion rings shared between two
 parties) and sans-I/O protocol libraries, such as Rust's raft implementations

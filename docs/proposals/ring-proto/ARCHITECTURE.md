@@ -11,7 +11,7 @@ details. Messages are cited by stable ID; all of them are in
 | Layer | Today | With the ring protocol |
 |---|---|---|
 | **Core** | Semantics. Calls vtables for the router, I/O, invokers, the data model, the directory and the trace sink. Holds delayed sends. No queues. | Semantics **and the inputs it has not run yet**: the envelope pool, the deadline index and the name area. It writes rings instead of calling most vtables. Only the data model stays a vtable. |
-| **Host kernel** (`tinyactors-host`) | Mailboxes, scheduler, router, effects queue, WAL, recorder, replay, loads, offloads, OTLP | **Deleted.** OTLP encoding stays as a library function that reads `tel`. |
+| **Host kernel** (`tinyactors-host`) | Mailboxes, scheduler, router, effects queue, recorder, replay, loads, offloads, OTLP; the WAL was removed by kernel ADR 0006 | **Deleted.** OTLP encoding stays as a library function that reads `tel`. |
 | **Binding** (napi, the test host) | Values, the data model, the pump, the public API, plus glue to the kernel | Values, the data model, and a loop that drives the rings ([below](#the-host-loop)) |
 | **Application** | Storage and policy | Storage and policy, unchanged: what to record, how to answer at the edge, I/O processors |
 
@@ -75,9 +75,12 @@ on an edge input:  if h2c has room: post h2c.event / h2c.spawn; else refuse (503
 on wake timer:     post h2c.time(now)
 loop:
   ta_run(budget)                         # admits from h2c, runs macrosteps to completion
-  read c2h up to each c2h.fence:
-    recorded session?  persist its c2h.input first          (policy)
-    then act: c2h.send → I/O processor, c2h.invoke → invoker, c2h.log → logger
+  read each available c2h record:
+    c2h.input         → recorder; journal on the application's schedule
+    c2h.send          → I/O processor, immediately on receipt
+    c2h.invoke / c2h.invoke_cancel / c2h.invoke_forward → invoker, on receipt
+    c2h.log           → logger, on receipt
+    c2h.fence         → report macrostep completion; no effect hold
   c2h.wake            → (re)arm the one timer
   c2h.load_needed     → fetch the image → h2c.load, or h2c.load_failed
   c2h.unloaded        → store image and wake_at in the index of unloaded sessions
@@ -110,14 +113,15 @@ belongs to the middle of a macrostep.
    allocates. A resource that is full fails the action as
    `error.execution.capacity`. ([S02](scenarios/S02-full-pool.md))
 5. **Fence.** Core writes [`c2h.fence`](protocol/generated/MESSAGES.md#c2hfence)
-   and frees the envelope. The host persists, then acts.
+   and frees the envelope. The host may already have executed effects
+   during a budget pause; recording and persistence follow application policy.
    ([S01](scenarios/S01-fanout.md))
 
 ## The life of a send
 
 | `<send>` to | Becomes | Delivered | Full | Reference |
 |---|---|---|---|---|
-| An I/O processor, no delay | [`c2h.send`](protocol/generated/MESSAGES.md#c2hsend) | after the fence, by the host | `c2h` has no room: `error.execution.capacity` | [ring](reference/ring.md) |
+| An I/O processor, no delay | [`c2h.send`](protocol/generated/MESSAGES.md#c2hsend) | on receipt, by the host, including before the fence | `c2h` has no room: `error.execution.capacity` | [ring](reference/ring.md) |
 | A local session (`#_scxml_…`, an actor URI) | an envelope on the run queue, at the fence | when core takes it | pool or name area is full: `error.execution.capacity` | [envelope](reference/envelope.md) |
 | Anything, with a delay | an envelope in the deadline index | when `h2c.time` reaches its due time: mail is taken, an I/O send becomes `c2h.send` | as above | [envelope](reference/envelope.md) |
 | An unloaded session | an envelope that waits; `c2h.load_needed` | after `h2c.load` | as above; if the load fails, the envelope becomes `error.communication` for its sender | [unloading](reference/unloading.md) |
@@ -142,13 +146,16 @@ cancelled delayed send never arrives. ([S08](scenarios/S08-cancel-and-second-cli
   session is spawned or loaded. A recorded session's inputs appear as
   [`c2h.input`](protocol/generated/MESSAGES.md#c2hinput) before the effects
   they cause.
-- **The application persists them before it acts on the fence.** That is the
-  whole write-ahead rule.
+- **Recording observes inputs; the application owns journaling.** Effects
+  may execute on receipt, independently of recording or persistence.
 - To replay a session, post `h2c.spawn` with the replaying flag, then the
   recorded inputs, then `h2c.publish`.
-- To replay a whole system, record `h2c` together with the parameters and the
-  definitions. Core's scheduling is deterministic, so in-flight mail is
-  rebuilt too.
+- **Replay seeds new execution:** it derives configuration and data model
+  values before publish. It may produce different state as definitions,
+  resource conditions, budgets and draining change.
+- A whole-system h2c stream can seed several sessions together, including
+  local mail generated by that new execution. It does not restore the old
+  system's exact scheduling or in-flight mail.
 
 Details: [reference/recording-and-replay.md](reference/recording-and-replay.md).
 Crash cases: [S03](scenarios/S03-crash-unrecorded.md),

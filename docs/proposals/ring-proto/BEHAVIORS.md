@@ -59,11 +59,17 @@ One crash, partway through the fanout ([S03](scenarios/S03-crash-unrecorded.md#a
 the campaign has n5 pending, two tracker deltas are in flight, and `t`
 is due later.
 
+Replay uses selected journal entries to seed new configuration and data
+model values. The examples below show one outcome with the illustrated
+definitions and resource conditions, not a promise to restore the old run.
+The host may execute effects on receipt, before a fence or journal write;
+a crash can separate any of those observations and actions.
+
 | | **Tracker not recorded** | **Tracker recorded** |
 |---|---|---|
 | **Campaign not recorded** | Both start fresh. The user's next click runs the whole campaign again, and the processor deduplicates n1–n3. Correct. [S03](scenarios/S03-crash-unrecorded.md) | The tracker replays its old view of a campaign that no longer exists. Pointless: never record a derived actor without its source. |
 | **Campaign recorded** | The campaign is replayed, and `t` survives in the pool. The fresh tracker shows zero until its bootstrap resync, and is then correct. A click or `t` sends n5 again. [S04](scenarios/S04-crash-campaign-recorded.md) | Both are replayed. **The two in-flight deltas are lost by both sides**, and the replayed tracker is `live`, so it does not resync until told to. Worse than not recording it. [S05](scenarios/S05-crash-both-recorded.md#per-session-replay) |
-| **Whole system recorded** (the h2c stream) | – | Everything in core is rebuilt, including the in-flight deltas. Only effects that left the process are suppressed. [S05](scenarios/S05-crash-both-recorded.md#whole-system-replay) |
+| **Whole system recorded** (the h2c stream) | – | The stream seeds the sessions together. They generate new local mail; old in-flight deltas and exact state are not restored by contract. External effects are suppressed while seeding. [S05](scenarios/S05-crash-both-recorded.md#whole-system-replay) |
 
 In every row, what crossed the border and was never acknowledged is
 recovered the same way: the chart's `pending`, its timeout or the user's
@@ -191,8 +197,8 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
   Past a few thousand, two chatty actors look like an outage to every
   client.
 - **What it drives:** latency for external input against throughput for
-  chains of internal mail. Whole-system replay needs the same value, or
-  the order differs.
+  chains of internal mail. A seed may use a different value and derive a
+  different order and state.
 - **How it surfaces:** no error anywhere. **Host:** the gap between an
   h2c record's `at` and its `c2h.input` or first effect. **Client:**
   slower answers.
@@ -243,8 +249,9 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 - **What it bounds:** the c2h ring. Unit: bytes.
 - **Default 262,144 (256 KiB).** A `c2h.send` is 88 fixed bytes plus
   sendid, type, target and name, about 150 bytes in all. That allows about
-  1,700 sends in one macrostep before the host has to copy records out
-  during budget pauses. A fanout of 1,000 fits as it is. Bigger fanouts
+  1,700 sends between drains. During budget pauses the host may execute
+  effects and release ring space before the fence. A fanout of 1,000 fits
+  as it is. Bigger fanouts
   should be clocked by acknowledgements
   ([windowed chart](charts/campaign-windowed.scxml)).
 - **Minimum 4 × `maxRecordBytes`,** so the c2h reserve (input, fence and

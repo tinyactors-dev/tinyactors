@@ -6,9 +6,9 @@ The same crash, with `campaign/*` and `progress/*` both recorded per
 session. Recording the tracker does not help: two deltas were in the
 pool, and both sides' replays agree they never happened. A replayed
 tracker is also worse off than a fresh one, because it doesn't resync on
-its own. Then the same crash once more, recovered by **replaying the
-whole system from its h2c stream**, which gets the two deltas back
-exactly.
+its own. Then the same crash once more, using **replay of the whole system
+from its h2c stream** to seed a new execution together. That execution
+generates its own local mail; it does not recover the old pool exactly.
 
 **Parameters:** as in [S01](S01-fanout.md).
 
@@ -31,38 +31,38 @@ them.
 | S05.6 | h2c | [`h2c.event`][h2c.event] `{progress/42, progress.resync}` | Something has to tell it. Here the host sends `progress.resync` to every recorded derived actor after publishing. A browser reconnect could do the same. |
 | S05.7 | c2h | [`c2h.send`][c2h.send] `{x-ws}` | `syncing` → snapshot → `live`, correct. |
 
-**Lesson:** record the actors whose state is primary, such as the
-campaign. Let derived actors start fresh and resync. The fence plus
-per-session replay gives consistency within a session, never between
-two sessions.
+**Lesson:** journal inputs useful for seeding primary actors, such as the
+campaign. Let derived actors start fresh and resync with the current source.
+Neither a fence nor replay establishes what executed before a crash.
 
 ## Whole-system replay
 
 An application can instead record **the h2c stream itself**: every record
-it posted, in order. With the same definitions and the same system
-parameters, everything else core does follows from that stream. This
-includes the order of mail between sessions, which pool envelope runs
-next, and whether a send hits a capacity error
+it posted, in order, then use that stream to seed a new execution together
 ([recording and replay](../reference/recording-and-replay.md#session-replay-and-whole-system-replay)).
-The data model must be deterministic, which is its own business.
+This execution's configuration, values and pending mail may differ, even
+with the same definitions and parameters. The stream does not record
+budgets, ring draining or the exact point core stopped.
 
 | Step | Ring | Record | What happens |
 |---|---|---|---|
 | S05.8 | – | – | The persisted stream is S01.1–S01.17: both spawns, `h2c.time` t0, `send.requested`, and the processor's five results. It does not include S01.20, because the crash came first. |
-| S05.9 | – | – | The host creates a system with the **recorded** parameters (`poolEnvelopes` 64, …) and registers the same revisions. |
-| S05.10 | h2c | Every recorded record, each with the common flag `replaying` | Core runs both sessions together. Mail between them is delivered inside core as it was the first time. Only effects leaving the process (`c2h.send`, `c2h.invoke`, …) are suppressed. |
-| S05.11 | – | – | The stream ends where the crash was. The pool now holds what it held then: `t` and **the two in-flight deltas**. **pool 3/64.** |
+| S05.9 | – | – | The host chooses parameters and compatible definitions for the new execution; this example starts with the old settings. |
+| S05.10 | h2c | Every selected record, each with the common flag `replaying` | Core runs both sessions together. Mail they generate is delivered inside core. Effects leaving the process (`c2h.send`, `c2h.invoke`, …) are suppressed while seeding. |
+| S05.11 | – | – | The selected stream ends. The new execution has its own configuration, values, timers and pending mail. Which tracker deltas are still pending depends on this execution's scheduling and resource conditions; the old **pool 3/64** is not a recovery guarantee. |
 | S05.12 | h2c | [`h2c.publish`][h2c.publish] `{address: "", at: t0+2s}` | An empty address publishes every replaying session at once. |
-| S05.13 | c2h | [`c2h.published`][c2h.published] × 2, then [`c2h.send`][c2h.send] `{x-ws}` × 2 | s2 takes `progress.rejected` and `progress.failed`, which it never saw before the crash. The tracker is exact, with no resync. |
+| S05.13 | c2h | [`c2h.published`][c2h.published] × 2, then live effects | Both sessions begin live execution from the derived state. The host may execute effects on receipt. A tracker resync reads the campaign's current state; replay does not promise the old view or exactly two pending deltas. |
 
 What whole-system replay costs:
+
 - The log holds every input of every session, including those of
   sessions nobody cares about.
-- The system's parameters are part of the recording. Replaying with a
-  larger pool could turn a capacity error into a success, and the run
-  would diverge.
-- Truncating the log needs a checkpoint of the whole system, not of one
-  session ([S06](S06-checkpoint.md) shows the per-session form).
+- Parameters and definitions are useful context for selecting a new seed.
+  A larger pool could turn an old capacity error into a success and derive
+  different state. That is accepted.
+- Seeding from a shorter stream requires the application to choose suitable
+  starting state. A per-session checkpoint ([S06](S06-checkpoint.md)) is
+  not a snapshot of all sessions and their shared queues.
 
 It still loses what left the process and was never acknowledged. n5 is
 suppressed exactly as in S04, and the chart's retry covers it.
@@ -72,7 +72,7 @@ suppressed exactly as in S04, and the chart's retry covers it.
 | What was lost | Lost by | Told how | Retried by |
 |---|---|---|---|
 | Two tracker deltas in flight | per-session replay (S05.4) | nobody | the tracker's resync, which something must trigger (S05.6) |
-| The same deltas | not lost under whole-system replay (S05.11) | – | – |
+| The old in-flight deltas | whole-system replay generates new mail rather than restoring the old queue (S05.11) | no exact recovery report | resync reads the current source state |
 | n5 | the crash; replay suppresses it | the campaign's `pending` | the second click or the timeout ([S04.12](S04-crash-campaign-recorded.md#then-either-of-two-things-finishes-the-job)) |
 
 [h2c.time]: ../protocol/generated/MESSAGES.md#h2ctime

@@ -24,6 +24,11 @@ note 'A vref in a c2h record is a reference core retained for the host. ' \
      'The host releases it when it has used the record. A vref in an h2c ' \
      'record is one the host retained for core; core releases it when the ' \
      'envelope holding it is freed.'
+note 'Replay seeds new execution: supplied inputs derive configuration and ' \
+     'data model values, which may differ from an earlier run. External ' \
+     'effects are suppressed while seeding. In live execution the host may ' \
+     'execute effects on receipt, independently of recording, persistence ' \
+     'or c2h.fence.'
 
 # ---------------------------------------------------------------- rings
 
@@ -135,7 +140,8 @@ end
 message 'h2c.spawn', code: 0x0103, summary: 'Create a session' do
   doc 'With the replaying flag the session is prepared to replay (core ' \
       'ADR 0089): its clock starts at `clock`, it crosses no border, and ' \
-      'it is published with h2c.publish.'
+      'it is published with h2c.publish. Inputs seed new configuration ' \
+      'and data model values; exact restoration is not promised.'
   doc 'With `state`, the session is restored from a checkpoint (c2h.state, ' \
       'core ADR 0091) as a replaying session whose clock starts at the ' \
       "state's; the c2h.input records after the checkpoint follow. This is " \
@@ -157,7 +163,7 @@ message 'h2c.publish', code: 0x0104, summary: 'End a replay and put the session 
   doc 'An empty `address` publishes every replaying session at once: the ' \
       'end of a whole-system replay (reference/recording-and-replay.md).'
   field :address, :text, 'family/name, or empty for every replaying session'
-  field :at, :time, 'the moment the replayed run stopped'
+  field :at, :time, 'the time chosen for the seeded session'
   replies_with 'c2h.published', 'c2h.bounced'
 end
 
@@ -220,9 +226,10 @@ end
 
 message 'c2h.input', code: 0x0202, summary: 'A recorded session took an input' do
   doc 'Written when a recorded session takes an envelope, before any ' \
-      'effect of the macrostep it starts. It is the replay log: these ' \
-      'records, fed back as h2c.event and h2c.invoke_report under ' \
-      'h2c.spawn(replaying), rebuild the session.'
+      'effect of the macrostep it starts. These observations, ' \
+      'fed back as h2c.event and h2c.invoke_report under ' \
+      'h2c.spawn(replaying), seed a new execution. Recording imposes no ' \
+      'persistence-before-effects rule.'
   doc 'Not written for an input a replaying session takes: that input is ' \
       'already in the log being replayed. A session restored from c2h.state ' \
       'and replayed starts writing c2h.input again after h2c.publish.'
@@ -242,14 +249,13 @@ end
 message 'c2h.send', code: 0x0203, summary: 'A send for an I/O processor' do
   doc 'Mail to a local session never appears here: it is an envelope ' \
       '(reference/envelope.md). A delayed send to an I/O processor waits ' \
-      'in the pool and is written when due. The host acts on it after the ' \
-      "macrostep's c2h.fence."
+      'in the pool and is written when due. The host may execute the send ' \
+      'on receipt, without waiting for c2h.fence or persistence.'
   doc 'A delayed send that becomes due on h2c.time is written outside any ' \
       'macrostep: its `macrostep` is 0, no fence follows, and the host may ' \
-      'act on it at once. Why: the macrostep that scheduled it committed at ' \
-      'its own fence, and firing it changes no session, so there is nothing ' \
-      'to commit and nothing to roll back (reference/envelope.md, "A due ' \
-      'send to an I/O processor has no fence").'
+      'act on it at once. A fence would report the end of a macrostep ' \
+      'that does not exist (reference/envelope.md, "A due send to an ' \
+      'I/O processor has no fence").'
   field :macrostep, :macrostep, '0 for a delayed send that became due'
   field :sendid, :text
   field :io_type, :text
@@ -291,11 +297,11 @@ message 'c2h.log', code: 0x0207, summary: 'A <log>' do
   field :value, :vref
 end
 
-message 'c2h.fence', code: 0x0208, summary: 'A macrostep committed' do
+message 'c2h.fence', code: 0x0208, summary: 'A macrostep ended' do
   doc 'Everything the macrostep wrote to c2h comes before its fence. The ' \
-      'host acts on none of it before the fence: a recorded session’s ' \
-      'c2h.input is persisted first, then its effects are released ' \
-      '(reference/macrostep.md, "The fence").'
+      'host may already have executed effects on receipt. The fence ' \
+      'reports completion and status; it is neither an effect hold nor ' \
+      'a durability acknowledgement (reference/macrostep.md, "The fence").'
   field :macrostep, :macrostep
   field :effects, :u32, 'records this macrostep wrote to c2h, the fence excluded'
   field :mail, :u32, 'envelopes it put in the pool'
