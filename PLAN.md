@@ -1,6 +1,6 @@
 # Plan: complete the ROADMAP (without the browser build)
 
-**Status: phases A to J complete (2026-10-01).** Every commit below is on `main`; the
+**Status: phases A to J complete, phase K planned (2026-10-01).** Every commit of phases A to J is on `main`; the
 gaps found on the way are in `ROADMAP.md` under "Follow-ups". Commit 12's
 test landed with commit 13, and commit 31's cost was accepted (core ADR
 0097, napi ADR 0039).
@@ -329,6 +329,212 @@ macrostep's sends from streaming.
       run a turn after the spawn (`resumesPerTurn`, `<invoke>`).
 42. **`docs: close the crash windows in the ROADMAP`**
     - `bench-compare` and `test:full` results in ADR 0004's notes.
+
+## Phase K: an actor's log is an inbox with acknowledgements
+
+Decided 2026-10-01 (the owner: "Level 1"): kernel ADR 0005 and napi ADR
+0040 (commit `0244ac0`). With at-least-once delivery accepted, a logged
+actor's log is `accepted` messages and a `done` per message, written when
+its macrostep ends; a replay runs the done messages in done order and
+delivers the rest again. Phase J's held first record and napi's
+write-ahead hold go, with the operator records, `finished`, `evicted`,
+the `busy` answers Phase J added, and `send()`'s `until`.
+
+Rules for every commit of this phase:
+- **Migrate every caller in the same commit** (AGENTS.md): a change of
+  record kinds updates the kernel, napi (`lib/inputlog.js`,
+  `readInputLog()`, `index.d.ts`'s `InputRecord`, its tests) and the test
+  host's hosted mode (`hosted.c`, `scenario.rb`, `ruby/scenarios/hosted.rb`)
+  together, so each commit passes `mise run test`.
+- **A commit that changes replay, the scheduler's delivery path or
+  allocation in `inputs.c`** also runs `mise run test:full` and says so.
+- **Tests first where a commit closes a window:** write the crash test,
+  see it fail on the commit before, then change the code.
+
+43. **`feat(host)!: done replaces dropped, at log version 3`**
+    - `TAH_WAL_DONE` with its reason in the header's `flags` (`dead-letter`
+      with the dead reason, `withdrawn`); `TAH_WAL_VERSION` 3, and a
+      version-2 log refused as unknown. `dropped` goes.
+    - The replay forgets a message on a `done` whose reason is not
+      `processed`.
+    - Tests: `wal_test` (the new kind's golden bytes, version 2 refused),
+      `inputs_test` (a dead letter and a withdrawn `send()` write `done`),
+      `replay_test` (a dead-lettered message is not redelivered), napi's
+      `input-log.js` and `replay.js`.
+44. **`test(host): a delayed send's due time is the same in the replay`**
+    - Kernel ADR 0005 section 3 (open): core takes a macrostep's time at
+      its first resume and a live `<send delay>` reads the system clock,
+      while the replay runs the macrostep at the logged delivery time.
+      A `replay_test` (and a hosted scenario) with a clock that moves
+      between a delivery and its first resume, and between two resumes of
+      a paused macrostep: the restored actor's pending send has the live
+      due time.
+    - If it differs, stop and report: the fix is a core decision (the due
+      time read from the macrostep's time, core ADR 0094 section 1), and
+      `done`'s time follows from it. Record the finding in kernel ADR
+      0005's notes either way.
+45. **`feat(host)!: an operator transition is an accepted message`**
+    - `accepted` carries the transition (source, targets, by state ID);
+      the `jump` record goes. While Phase J's hold remains, the held first
+      record of a jump is `delivered`.
+    - Tests: `replay_test` (a jump replayed, a jump whose target no longer
+      resolves answers `invalid`), napi `replay.js` ("a jump replayed",
+      by state names in `readInputLog()`).
+46. **`fix(host): a bootstrap is a message, and spawned is written at the spawn`**
+    - `spawned` gains an ID and is written at the spawn, not held; the
+      bootstrap's end writes the held `delivered` naming it.
+    - The replay holds the bootstrap as the life's first owed message; a
+      life whose bootstrap is not delivered is prepared without `at` from
+      the logged binding, so the bootstrap runs live at publish, and no
+      second `spawned` is written.
+    - Tests (`replay_test`): `a_bootstrap_send_survives_a_crash_between_commits`
+      stays green; new `a_crash_before_the_bootstrap_ends_runs_it_once_after_the_restart`
+      (its `<onentry>` send reaches the receiver once, its owed mail is
+      delivered after it); `mail_before_a_bootstrap_ends_is_outside_its_life`
+      becomes "is in its life, owed".
+47. **`fix(host)!: done replaces delivered, and nothing is held`**
+    - Remove Phase J's machinery: `tah_inputs_hold()`, `tah_input_held`,
+      `held`, `held_index`, `tah_inputs_flush()`'s patched record numbers,
+      `tah_inputs_follows_first()`, `tah_inputs_write_first()`. Records are
+      numbered in the order they are written.
+    - A map of open macrosteps of logged actors (actor -> message ID and
+      time, as the scheduler's `inflight`); `done` written at
+      `TAH_NOTE_ENDED` into that turn's entry.
+    - Out of memory: the entry is marked ended and written first in the
+      next turn (`tah_inputs_retry()` stays, smaller); the actor gets no
+      new message before, and the system is not quiet meanwhile; a
+      checkpoint writes it first.
+    - Wakes: a message counts until its `done`. The replay applies `done`
+      (deliver and run). `evict()`, `withdrawSend()` and checkpoints keep
+      their `busy` until commits 49 and 51.
+    - Tests (`replay_test`, `inputs_test`):
+      `immediate_send_survives_a_crash_between_commits` and
+      `a_paused_macrostep_repeats_its_sends_after_a_crash` stay green;
+      new `a_done_that_waits_for_memory_holds_the_next_message`; the
+      golden life of records; the out-of-memory sweep over spawn to finish
+      (exhaustive in `--full`). napi `input-log.js`: `done` follows its
+      macrostep's records; the wake of a delivered, unfinished macrostep.
+    - `test:full`; `mise run bench-compare <commit 46>` in napi: logged
+      native B/actor should fall back towards 1,020 (kernel ADR 0004's
+      notes: 1,129).
+48. **`feat(host)!: a runaway's macrostep stays open until an operator ends it`**
+    - A runaway stop no longer ends the macrostep for the log. Release
+      sets `released` on its `done`; abandon writes `done` with reason
+      `abandoned` and the count of whole microsteps it ran. The
+      `released` and `abandoned` kinds go.
+    - The replay runs a `released` macrostep without the limit, and an
+      `abandoned` one for exactly its count (a resume with that microstep
+      budget, then `ta_actor_abandon()`); count 0 delivers nothing.
+    - `send()`'s `runaway` rejection is unchanged (napi ADR 0040
+      section 2).
+    - Tests: `replay_test` (released, abandoned after 0, 1 and several
+      microsteps, a crash while a runaway waits: after the restart the
+      macrostep runs again and stops at its limit again); napi
+      `runaway.js` and `operate.js` record kinds.
+49. **`feat(host,napi)!: a withdrawal is an input taken between macrosteps`**
+    - Settle first (kernel ADR 0005 section 5, open): ahead of the
+      actor's mail or behind it; a withdrawal of a runaway's send; the
+      promise's result type.
+    - `tah_system_withdraw_send()` queues an `accepted` withdrawal; the
+      scheduler applies it between macrosteps (`ta_actor_withdraw_send()`)
+      and writes `done`. The `withdrawn` kind and Phase J's `busy` go.
+    - napi: `withdrawSend()` returns a promise that settles as `send()`
+      does (done and committed), rejecting `not-found` or `done`;
+      `index.d.ts`, README, `test/operate.js`, `test/types/usage.ts`.
+    - Tests: `replay_test` (a withdrawal inside a paused macrostep waits
+      for its end; a macrostep that arms the same send ID before and after
+      the call replays to the live set of sends).
+50. **`refactor(host)!: no finished or evicted records`**
+    - The replay stops at a final state by itself; the wake knows a
+      finished actor; the replay publishes at the latest record time,
+      `fired` covering the timers an eviction dispatched. `evict()` still
+      returns the eviction time.
+    - Tests: `replay_test` (a finished history ends the load `done`; an
+      evicted actor's due timers do not fire twice), hosted
+      `an evicted actor is rebuilt from its input log, with its timer`,
+      napi `replay.js`.
+51. **`feat(host,napi): evict inside a macrostep`**
+    - The open macrostep's message stays owed; the load waits for the
+      commit of the batch of the eviction's turn (kernel ADR 0005 section
+      5, open: settle here); redelivery skips only the IDs the kernel still
+      holds queued, not every message of this incarnation (napi ADR
+      0033's notes).
+    - napi: `evict()` no longer throws `busy` inside a macrostep;
+      `index.d.ts`.
+    - Tests: napi `replay.js` (evict a paused macrostep, load: it runs
+      again from its start and repeats what it sent before the pause, with
+      the same origin and send ID); a hosted scenario of the same.
+52. **`fix(host): a message removed without a decision stays owed`**
+    - ROADMAP follow-up "A partly failed redelivery can lose mail later":
+      an actor removed by an eviction, a failed load or redelivery, or
+      `close()` writes no `done` for its mail.
+    - Test: `replay_test`, a redelivery that fails halfway, the actor
+      destroyed, a restore: every message is delivered once.
+53. **`feat(napi)!: effects run when their turn asks for them`**
+    - Remove `#held`, `#release()` and the held list in `#commits`;
+      `#service()` runs at once. A failed commit stops later commits and
+      the system's effects, and quarantines the batch's actors, as before.
+    - `index.d.ts`: `setInputLog`'s and `InputLog`'s JSDoc; README.
+    - Tests: `input-log.js` ("held services" and "no sink, no hold" become
+      "effects run before the commit"); `replay.js` ("outward effects at
+      most once across a crash" becomes "at least once").
+54. **`feat(napi)!: send() resolves once its message is done and committed`**
+    - The pump builds a settlement's result when it settles, and lib
+      resolves it after the commit of that turn's batch, while a log is
+      installed; dead letters and faults likewise; `timeout`, `aborted`
+      and `closed` at once; `input-log` when the commit fails.
+    - Settle first (napi ADR 0040 section 2, open): whether `flush()`
+      waits for pending commits.
+    - Tests (`send.js`, `input-log.js`): a commit held open keeps
+      `send()` pending, and resolving it resolves the send; a failed
+      commit rejects with `input-log`; a timeout while the commit is
+      pending rejects with `timeout`; no log installed: unchanged.
+55. **`feat(napi)!: remove send()'s until`**
+    - `SendOptions.until` and its validation; `index.d.ts`, README,
+      `docs/design.md`, `test/send.js`, `test/types/usage.ts`
+      (`@ts-expect-error` on `until`); `mise run check-types`.
+56. **`test(test): hosted scenarios for the inbox's contract`**
+    - Kernel ADR 0005 section 9 across crashes at every batch boundary of
+      a two-actor exchange: an immediate send (once), a paused
+      macrostep's send (repeated, same origin and send ID), a bootstrap's
+      send (once), a timer (fires once), a resolved send's message (done
+      in the restored log).
+    - The sweep over every boundary is exhaustive; the fast pass keeps
+      three boundaries.
+57. **`fix(host): a macrostep with a submitted send is not done until the router takes it`**
+    - Only if the owner accepts kernel ADR 0005 section 8's proposal; the
+      last loss window under out of memory (kernel ADR 0003 section 3).
+    - Test: `inputs_test`'s sweep with a router RETRY between two logged
+      actors and a crash after the sender's turn: the send arrives once.
+    - `test:full`.
+58. **`docs: the inbox in the READMEs, design notes and ROADMAP`**
+    - napi README "Crashes and repeated messages" reworded around the
+      contract, citing kernel ADR 0005 and napi ADR 0040; `docs/design.md`;
+      `index.d.ts`'s `InputRecord` comment.
+    - Implementation notes on kernel ADR 0005 and napi ADR 0040.
+    - ROADMAP: "Done recently"; follow-ups closed ("Hold first records in
+      less memory", "A partly failed redelivery", the out-of-memory window
+      if commit 57 landed) or restated ("A macrostep a publish starts has
+      no first record" becomes "has no message", kernel ADR 0005
+      Consequences).
+59. **`docs: bench-compare and test:full for phase K`**
+    - `mise run bench-compare <commit before 43>` in napi on Node and Bun
+      (throughput, native B/actor, log B/event, the machine signatures);
+      `mise run test:full --all`. Results in kernel ADR 0005's notes and
+      the ROADMAP.
+
+Open points, and the commit that settles each (kernel ADR 0005 and napi
+ADR 0040 mark them "(open)"):
+- `done`'s time, and whether due times already differ between a live run
+  and its replay: commit 44.
+- A withdrawal's place in the queue, a runaway's withdrawal, and
+  `withdrawSend()`'s result: commit 49.
+- An eviction's load waiting for the eviction turn's commit; `evict()`
+  with mail waiting: commit 51.
+- `flush()` and pending commits: commit 54.
+- A submitted send keeping its macrostep open: commit 57.
+- A macrostep that `publish()` starts has no message: not in this phase;
+  a ROADMAP follow-up.
 
 ## Last
 
