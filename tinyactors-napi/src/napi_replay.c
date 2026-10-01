@@ -630,6 +630,9 @@ napi_value tna_replay_events_done_method(napi_env env, napi_callback_info info) 
         napi_get_value_uint32(env, argv[1], &generation) != napi_ok) {
         return tna_throw(env, "invalid", "replayEventsDone: expected (slot, generation)");
     }
-    tah_replay_events_done(wrapper->system, ta_actor_id_make(slot, generation));
+    ta_result result = tah_replay_events_done(wrapper->system, ta_actor_id_make(slot, generation));
+    if (result != TA_OK) {
+        return tna_replay_error(env, result, "the actor cannot be published");
+    }
     return NULL;
 }

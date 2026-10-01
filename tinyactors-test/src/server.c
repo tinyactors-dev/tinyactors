@@ -251,19 +251,18 @@ static const tat_method TAT_HOST_METHODS[] = {
     {"hosted.load", tat_hosted_load_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"index\":{\"type\":\"u64\",\"required\":true},"
      "\"generation\":{\"type\":\"u64\",\"required\":true},\"outcome\":{\"type\":\"string\",\"required\":false},"
-     "\"definition\":{\"type\":\"u64\",\"required\":false},\"log\":{\"type\":\"string\",\"required\":false}}}"},
+     "\"definition\":{\"type\":\"u64\",\"required\":false},\"at\":{\"type\":\"u64\",\"required\":false},"
+     "\"journal\":{\"type\":\"json\",\"required\":false}}}"},
     {"hosted.stats", tat_hosted_stats_method, "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
-    {"hosted.checkpoint", tat_hosted_checkpoint_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":true}}}"},
-    {"hosted.log", tat_hosted_log_method,
+    {"hosted.record", tat_hosted_record_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"families\":{\"type\":\"json\",\"required\":true}}}"},
-    {"hosted.batches", tat_hosted_batches_method, "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
+    {"hosted.records", tat_hosted_records_method, "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
     {"hosted.evict", tat_hosted_evict_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":true}}}"},
     {"hosted.restore", tat_hosted_restore_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"definition\":{\"type\":\"u64\",\"required\":true},"
      "\"family\":{\"type\":\"string\",\"required\":true},\"name\":{\"type\":\"string\",\"required\":true},"
-     "\"log\":{\"type\":\"string\",\"required\":true}}}"},
+     "\"at\":{\"type\":\"u64\",\"required\":false},\"journal\":{\"type\":\"json\",\"required\":true}}}"},
 };
 
 static bool tat_register_methods(tat_server_impl *impl, ta_arena *arena) {

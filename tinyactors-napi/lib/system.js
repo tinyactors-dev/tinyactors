@@ -2196,7 +2196,15 @@ class System {
         this.#dropPrepared(prepared);
         return undefined;
       }
-      this.#native.replayEventsDone(prepared.slot, prepared.generation);
+      try {
+        this.#native.replayEventsDone(prepared.slot, prepared.generation); // runs the bootstrap of an empty journal
+      } catch (error) {
+        if (error instanceof TinyactorsError && error.code === 'done') {
+          this.#dropPrepared(prepared);
+          return undefined;
+        }
+        throw error;
+      }
       const actor = this.#publishCore(prepared, prepared[LAST_AT]);
       // A published replay replaces whatever unload() offloaded to this address.
       this.#native.dropOffloaded(address.family, address.name);

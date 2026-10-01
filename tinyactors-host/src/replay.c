@@ -1344,9 +1344,12 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
     return result;
 }
 
-void tah_replay_events_done(tah_system *system, ta_actor_id actor) {
+ta_result tah_replay_events_done(tah_system *system, ta_actor_id actor) {
+    bool finished = false;
+    ta_result result = tah_replay_settle(system, actor, &finished);
     tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
     if (entry != NULL) {
         entry->flags &= (uint8_t)~TAH_SCHED_REPLAYING;
     }
+    return result == TA_OK && finished ? TA_ERR_DONE : result;
 }

@@ -22,25 +22,15 @@ typedef struct {
     uint64_t now_ns;
 } tat_hosted_clock;
 
-/*
- * The input log's data model: the jq model's codec, counting what its
- * durable writer hands the log, so a scenario can see that a large value
- * reaches the log in pieces (hosted.stats).
- */
-typedef struct {
-    ta_datamodel inner;
-    size_t largest_write;
-    uint64_t bytes_written;
-} tat_hosted_values;
-
 typedef struct {
     tah_system *system;
     tat_hosted_clock clock;
-    tat_hosted_values values;
-    /* Batches the kernel's input log handed over since the last
-     * hosted.batches: [{"family", "name", "bytes": hex}], one per address
-     * per turn, in turn order. */
-    jv batches;
+    /* The recorder's records since the last hosted.records, in turn order:
+     * [{"family", "name", "at", "event": {...}}], and the wakes they gave,
+     * {"family/name": at or null}, the latest for each address (kernel ADR
+     * 0006 section 2). */
+    jv records;
+    jv wakes;
 } tat_hosted;
 
 static uint64_t tat_hosted_monotonic(void *self) {
@@ -79,53 +69,6 @@ static uint64_t tat_hosted_u64(jv params, const char *name) {
     jv_free(value);
     return out;
 }
-
-/* The log's sink, seen through the counter: each write is one piece. */
-typedef struct {
-    ta_byte_sink inner;
-    tat_hosted_values *values;
-} tat_hosted_counted_sink;
-
-static ta_op_status tat_hosted_counted_begin(void *self) {
-    tat_hosted_counted_sink *sink = self;
-    return sink->inner.v->begin == NULL ? TA_OP_OK : sink->inner.v->begin(sink->inner.self);
-}
-
-static ta_op_status tat_hosted_counted_write(void *self, ta_bytes bytes) {
-    tat_hosted_counted_sink *sink = self;
-    if (bytes.len > sink->values->largest_write) {
-        sink->values->largest_write = bytes.len;
-    }
-    sink->values->bytes_written += bytes.len;
-    return sink->inner.v->write(sink->inner.self, bytes);
-}
-
-static void tat_hosted_counted_end(void *self, bool keep) {
-    tat_hosted_counted_sink *sink = self;
-    if (sink->inner.v->end != NULL) {
-        sink->inner.v->end(sink->inner.self, keep);
-    }
-}
-
-static const ta_byte_sink_vtable tat_hosted_counted_vtable = {
-    .begin = tat_hosted_counted_begin, .write = tat_hosted_counted_write, .end = tat_hosted_counted_end};
-
-static ta_op_status tat_hosted_value_write(void *self, const ta_datamodel_value_write_params *params) {
-    tat_hosted_values *values = self;
-    tat_hosted_counted_sink sink = {.inner = params->sink, .values = values};
-    ta_datamodel_value_write_params counted = *params;
-    counted.sink = (ta_byte_sink){.self = &sink, .v = &tat_hosted_counted_vtable};
-    return values->inner.v->value_write(values->inner.self, &counted);
-}
-
-static ta_op_status tat_hosted_value_read(void *self, const ta_datamodel_value_read_params *params) {
-    tat_hosted_values *values = self;
-    return values->inner.v->value_read(values->inner.self, params);
-}
-
-/* The log only writes and reads values (kernel ADR 0002). */
-static const ta_datamodel_vtable tat_hosted_values_vtable = {
-    .value_write = tat_hosted_value_write, .value_read = tat_hosted_value_read};
 
 static const tah_platform_vtable tat_hosted_platform_vtable = {
     .monotonic_ns = tat_hosted_monotonic,
@@ -168,13 +111,8 @@ jv tat_hosted_create_method(tat_bind *bind, jv params, int *error_code) {
         free(hosted);
         return tat_encode_ta_result(bind, &result);
     }
-    hosted->batches = jv_array();
-    /* The input log writes values with the jq data model's codec, which
-     * streams both ways (kernel ADR 0002; core ADR 0090's notes). Hosted
-     * charts use the jq data model. */
-    hosted->values.inner = tat_json_datamodel(&bind->json);
-    tah_inputs_set_datamodel(tah_system_inputs(hosted->system),
-                             (ta_datamodel){.self = &hosted->values, .v = &tat_hosted_values_vtable});
+    hosted->records = jv_array();
+    hosted->wakes = jv_object();
     tah_system_set_driver(hosted->system, &(tah_pump_driver){ .wake = tat_hosted_wake });
     (void)tah_system_set_clock(hosted->system, TAH_CLOCK_MANUAL, 0);
     jv out = jv_object();
@@ -198,14 +136,15 @@ jv tat_hosted_close_method(tat_bind *bind, jv params, int *error_code) {
     tah_system_close(hosted->system);
     size_t leaked = tah_system_leaked_bytes(hosted->system);
     tah_system_free(hosted->system);
-    jv_free(hosted->batches);
+    jv_free(hosted->records);
+    jv_free(hosted->wakes);
     tat_handle_retire(bind, hosted);
     free(hosted);
     return jv_object_set(jv_object(), jv_string("leaked"), jv_number((double)leaked));
 }
 
 /* Spawns an actor of `definition`, at `address` when it is not NULL,
- * through core, and hands it to the kernel's scheduler (and input log). */
+ * through core, and hands it to the kernel's scheduler. */
 static ta_result tat_hosted_spawn_at(tah_system *system, ta_definition_id definition, const ta_actor_address *address,
                                      ta_actor_id *actor) {
     tah_system_enter_core(system);
@@ -261,7 +200,7 @@ jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code) {
     ta_event event = {.name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
     jv data = jv_object_get(jv_copy(params), jv_string("data"));
     if (result == TA_OK && jv_is_valid(data) && jv_get_kind(data) != JV_KIND_NULL) {
-        /* Hosted charts use the jq data model (hosted.log). */
+        /* Hosted charts use the jq data model. */
         result = tat_value_decode(tat_json_datamodel(&bind->json), jv_copy(data), &event.data);
     }
     jv_free(data);
@@ -295,34 +234,55 @@ static jv tat_hosted_text(ta_str text) {
     return jv_string_sized(text.ptr, (int)text.len);
 }
 
-/* The turn's input-log batch, as the application would store it. */
-static void tat_hosted_take_batch(tat_hosted *hosted) {
-    tah_inputs *inputs = tah_system_inputs(hosted->system);
-    uint32_t wake_count = 0;
-    (void)tah_inputs_wakes(hosted->system, &wake_count);
-    static const char digits[] = "0123456789abcdef";
-    for (uint32_t index = 0; index < tah_inputs_entry_count(inputs); index += 1u) {
-        tah_input_entry entry = tah_inputs_entry_at(inputs, index);
-        ta_actor_address address = ta_address_view(entry.address);
-        size_t length = entry.length;
-        char *hex = malloc(length * 2u + 1u);
-        if (hex == NULL) {
+static const char *tat_hosted_event_type(ta_event_type type) {
+    return type == TA_EVENT_PLATFORM ? "platform" : type == TA_EVENT_INTERNAL ? "internal" : "external";
+}
+
+/* The recorder's records and wakes, as the application would journal them (kernel ADR 0006 section 2). */
+static void tat_hosted_take_records(tat_hosted *hosted) {
+    tah_system *system = hosted->system;
+    ta_arena arena;
+    bool arena_ready = ta_arena_init(&arena, tat_libc_allocator(), 1024) == TA_OK;
+    for (uint32_t index = 0; arena_ready && index < tah_recorder_count(system); index += 1u) {
+        tah_record record = tah_recorder_record(system, index);
+        tah_record_texts texts;
+        if (tah_recorder_texts(system, index, ta_arena_allocator(&arena), &texts) != TA_OK) {
             continue;
         }
-        for (size_t at = 0; at < length; at += 1u) {
-            uint8_t byte = entry.bytes[at];
-            hex[at * 2u] = digits[byte >> 4];
-            hex[at * 2u + 1u] = digits[byte & 15u];
+        jv event = jv_object_set(jv_object(), jv_string("name"), tat_hosted_text(texts.name));
+        event = jv_object_set(event, jv_string("type"), jv_string(tat_hosted_event_type(texts.type)));
+        if (texts.send_id.len != 0) {
+            event = jv_object_set(event, jv_string("send_id"), tat_hosted_text(texts.send_id));
         }
-        hex[length * 2u] = 0;
-        jv item = jv_object();
-        item = jv_object_set(item, jv_string("family"), tat_hosted_text(address.family.name));
-        item = jv_object_set(item, jv_string("name"), tat_hosted_text(address.name));
-        item = jv_object_set(item, jv_string("bytes"), jv_string(hex));
-        free(hex);
-        hosted->batches = jv_array_append(hosted->batches, item);
+        if (texts.origin.len != 0) {
+            event = jv_object_set(event, jv_string("origin"), tat_hosted_text(texts.origin));
+            event = jv_object_set(event, jv_string("origin_type"), tat_hosted_text(texts.origin_type));
+        }
+        if (texts.invoke_id.len != 0) {
+            event = jv_object_set(event, jv_string("invoke_id"), tat_hosted_text(texts.invoke_id));
+        }
+        if (record.event->data.v != NULL) {
+            event = jv_object_set(event, jv_string("data"), tat_value_encode(&record.event->data));
+        }
+        jv item = jv_object_set(jv_object(), jv_string("family"), tat_hosted_text(record.address.family.name));
+        item = jv_object_set(item, jv_string("name"), tat_hosted_text(record.address.name));
+        item = jv_object_set(item, jv_string("at"), jv_number((double)record.at));
+        hosted->records = jv_array_append(hosted->records, jv_object_set(item, jv_string("event"), event));
+        ta_arena_reset(&arena);
     }
-    tah_inputs_release(inputs);
+    if (arena_ready) {
+        ta_arena_destroy(&arena);
+    }
+    uint32_t count = 0;
+    const tah_record_wake *wakes = tah_recorder_wakes(system, &count);
+    for (uint32_t index = 0; index < count; index += 1u) {
+        jv key = jv_string_fmt("%.*s/%.*s", (int)wakes[index].address.family.name.len,
+                               wakes[index].address.family.name.ptr, (int)wakes[index].address.name.len,
+                               wakes[index].address.name.ptr);
+        hosted->wakes = jv_object_set(hosted->wakes, key,
+                                      wakes[index].has_at ? jv_number((double)wakes[index].at) : jv_null());
+    }
+    tah_recorder_release(system);
 }
 
 /* The turn's dead letters, from its records (kernel ADR 0001 section 5):
@@ -380,7 +340,7 @@ jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code) {
     for (; turns < (limit == 0 ? 1 : limit); turns += 1) {
         tah_system_turn(hosted->system);
         dead = tat_hosted_dead_letters(hosted->system, dead);
-        tat_hosted_take_batch(hosted);
+        tat_hosted_take_records(hosted);
         tah_system_end_turn(hosted->system);
         loads = tat_hosted_load_requests(hosted->system, loads);
         if (tah_system_quiet(hosted->system)) {
@@ -472,8 +432,8 @@ jv tat_hosted_advance_method(tat_bind *bind, jv params, int *error_code) {
     return tat_encode_ta_result(bind, &result);
 }
 
-/* Logs the named actors of `families` (kernel ADR 0002). */
-jv tat_hosted_log_method(tat_bind *bind, jv params, int *error_code) {
+/* Records the named actors of `families` (kernel ADR 0006 section 2). */
+jv tat_hosted_record_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
     if (!tat_hosted_resolve(bind, params, &hosted)) {
         return tat_bind_take_error(bind, error_code);
@@ -490,7 +450,7 @@ jv tat_hosted_log_method(tat_bind *bind, jv params, int *error_code) {
         families[index] = (ta_str){jv_string_value(held[index]),
                                    (uint32_t)jv_string_length_bytes(jv_copy(held[index]))};
     }
-    ta_result result = tah_inputs_configure(hosted->system, families, (uint32_t)count);
+    ta_result result = tah_recorder_configure(hosted->system, families, (uint32_t)count);
     for (int index = 0; index < count; index += 1) {
         jv_free(held[index]);
     }
@@ -498,18 +458,21 @@ jv tat_hosted_log_method(tat_bind *bind, jv params, int *error_code) {
     return tat_encode_ta_result(bind, &result);
 }
 
-/* The batches since the last call, and forgets them. */
-jv tat_hosted_batches_method(tat_bind *bind, jv params, int *error_code) {
+/* The records and wakes since the last call, and forgets them: {"records", "wakes"}. */
+jv tat_hosted_records_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
     if (!tat_hosted_resolve(bind, params, &hosted)) {
         return tat_bind_take_error(bind, error_code);
     }
-    jv out = hosted->batches;
-    hosted->batches = jv_array();
+    tat_hosted_take_records(hosted);
+    jv out = jv_object_set(jv_object(), jv_string("records"), hosted->records);
+    out = jv_object_set(out, jv_string("wakes"), hosted->wakes);
+    hosted->records = jv_array();
+    hosted->wakes = jv_object();
     return out;
 }
 
-/* Evicts an idle named actor: its log becomes its only state. */
+/* Evicts an idle named actor: its journal becomes its only state, and its wake its first pending send. */
 jv tat_hosted_evict_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
     if (!tat_hosted_resolve(bind, params, &hosted)) {
@@ -517,8 +480,11 @@ jv tat_hosted_evict_method(tat_bind *bind, jv params, int *error_code) {
     }
     ta_actor_id actor = (ta_actor_id)tat_hosted_u64(params, "actor");
     tah_system *system = hosted->system;
-    ta_result result = tah_inputs_evicted(system, actor, false, 0);
+    ta_actor_inspection view;
+    ta_result result = ta_actor_inspect(tah_system_core(system), actor, &view);
     if (result == TA_OK) {
+        tah_recorder_evicted(system, actor, view.delayed_send_count != 0,
+                             view.delayed_send_count != 0 ? view.delayed_sends[0].due : 0);
         tah_system_enter_core(system);
         result = ta_actor_destroy(tah_system_core(system), actor);
         tah_system_leave_core(system);
@@ -526,102 +492,136 @@ jv tat_hosted_evict_method(tat_bind *bind, jv params, int *error_code) {
             (void)tah_hook_actor_removed(system, actor);
         }
     }
-    tat_hosted_take_batch(hosted);
+    tat_hosted_take_records(hosted);
     return tat_encode_ta_result(bind, &result);
-}
-
-static uint8_t tat_hosted_nibble(char c) {
-    return (uint8_t)(c <= '9' ? c - '0' : c - 'a' + 10);
-}
-
-/* The bytes of lowercase hex text, malloc'd; NULL when out of memory. */
-static uint8_t *tat_hosted_unhex(jv text, size_t *length) {
-    const char *hex = jv_get_kind(text) == JV_KIND_STRING ? jv_string_value(text) : "";
-    *length = jv_get_kind(text) == JV_KIND_STRING ? (size_t)jv_string_length_bytes(jv_copy(text)) / 2u : 0;
-    uint8_t *bytes = malloc(*length == 0 ? 1 : *length);
-    for (size_t at = 0; bytes != NULL && at < *length; at += 1u) {
-        bytes[at] = (uint8_t)(tat_hosted_nibble(hex[at * 2u]) << 4 | tat_hosted_nibble(hex[at * 2u + 1u]));
-    }
-    return bytes;
 }
 
 typedef struct {
     ta_definition_id definition;
     const ta_actor_address *address;
-    const uint8_t *bytes;
-    size_t length;
+    ta_time at;     /* when the actor's life began */
+    jv journal;     /* [{"event", "at"}], borrowed */
     ta_actor_id actor; /* out */
-    bool found;        /* out: the log held a life to rebuild */
 } tat_hosted_replay_params;
 
-/*
- * Rebuilds a named actor from its log (one address's batches back to back)
- * with the kernel's replay: prepare, run, publish at the last record's time,
- * then redeliver the messages still owed. `found` is false for a log with no
- * life in it, and nothing is rebuilt.
- */
-static ta_result tat_hosted_replay(tah_system *system, tat_hosted_replay_params *params) {
-    params->found = false;
-    tah_replay *replay = tah_replay_open(system);
-    ta_result result = replay == NULL ? TA_ERR_NOMEM : tah_replay_push(replay, params->bytes, params->length);
+/* One journaled event, replayed into `actor` (kernel ADR 0006 section 3). */
+static ta_result tat_hosted_replay_one(tat_bind *bind, tah_system *system, ta_actor_id actor, jv entry, ta_time *last) {
+    jv event = jv_object_get(jv_copy(entry), jv_string("event"));
+    jv at = jv_object_get(jv_copy(entry), jv_string("at"));
+    jv texts[6] = {jv_object_get(jv_copy(event), jv_string("name")), jv_object_get(jv_copy(event), jv_string("type")),
+                   jv_object_get(jv_copy(event), jv_string("send_id")), jv_object_get(jv_copy(event), jv_string("origin")),
+                   jv_object_get(jv_copy(event), jv_string("origin_type")),
+                   jv_object_get(jv_copy(event), jv_string("invoke_id"))};
+    ta_str views[6];
+    for (int index = 0; index < 6; index += 1) {
+        views[index] = jv_get_kind(texts[index]) == JV_KIND_STRING
+                           ? (ta_str){jv_string_value(texts[index]), (uint32_t)jv_string_length_bytes(jv_copy(texts[index]))}
+                           : (ta_str){0};
+    }
+    ta_event_type type = TA_EVENT_EXTERNAL;
+    if (views[1].len == 8 && memcmp(views[1].ptr, "platform", 8) == 0) {
+        type = TA_EVENT_PLATFORM;
+    } else if (views[1].len == 8 && memcmp(views[1].ptr, "internal", 8) == 0) {
+        type = TA_EVENT_INTERNAL;
+    }
+    ta_value value = {0};
+    jv data = jv_object_get(jv_copy(event), jv_string("data"));
+    ta_result result = TA_OK;
+    if (jv_is_valid(data) && jv_get_kind(data) != JV_KIND_NULL) {
+        result = tat_value_decode(tat_json_datamodel(&bind->json), jv_copy(data), &value);
+    }
+    ta_time time = jv_get_kind(at) == JV_KIND_NUMBER ? (ta_time)jv_number_value(at) : 0;
     if (result == TA_OK) {
-        result = tah_replay_prepare(replay, &(tah_replay_prepare_params){.definition = params->definition,
-                                                                         .address = params->address,
-                                                                         .out = &params->actor,
-                                                                         .found = &params->found});
+        result = tah_replay_event(system, &(tah_replay_event_params){
+                                              .actor = actor, .name = views[0], .type = type, .send_id = views[2],
+                                              .origin = views[3], .origin_type = views[4], .invoke_id = views[5],
+                                              .data = value.v != NULL ? &value : NULL, .time = time});
+        *last = time;
     }
-    tah_replay_state state = TAH_REPLAY_MORE;
-    while (result == TA_OK && params->found && state == TAH_REPLAY_MORE) {
-        uint32_t records = 0;
-        result = tah_replay_run(replay, &(tah_replay_run_params){
-                                            .actor = params->actor, .most = 256, .state = &state, .records = &records});
+    ta_value_release(&value);
+    jv_free(data);
+    for (int index = 0; index < 6; index += 1) {
+        jv_free(texts[index]);
     }
-    if (result == TA_OK && params->found) {
-        ta_time at = 0;
-        (void)tah_replay_last_time(replay, &at);
-        tah_replay_finish(replay, params->actor);
-        ta_actor_publish_params publish = {.actor = params->actor, .at = &at};
+    jv_free(at);
+    jv_free(event);
+    return result;
+}
+
+/*
+ * Rebuilds a named actor from its journal (kernel ADR 0006 section 3):
+ * prepared at `at`, each event replayed at its time, published at the last
+ * one's. TA_ERR_DONE when the journal ends in a final state: nothing is
+ * published, and the prepared actor is gone.
+ */
+static ta_result tat_hosted_replay(tat_bind *bind, tah_system *system, tat_hosted_replay_params *params) {
+    ta_time at = params->at;
+    tah_system_enter_core(system);
+    ta_result result = ta_actor_prepare(tah_system_core(system), &(ta_actor_prepare_params){
+                                                                     .address = params->address,
+                                                                     .definition = params->definition,
+                                                                     .at = &at,
+                                                                     .out = &params->actor});
+    tah_system_leave_core(system);
+    if (result == TA_OK) {
+        result = tah_hook_actor_created(system, params->actor);
+    }
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_time last = at;
+    int count = jv_get_kind(params->journal) == JV_KIND_ARRAY ? jv_array_length(jv_copy(params->journal)) : 0;
+    for (int index = 0; result == TA_OK && index < count; index += 1) {
+        jv entry = jv_array_get(jv_copy(params->journal), index);
+        result = tat_hosted_replay_one(bind, system, params->actor, entry, &last);
+        jv_free(entry);
+    }
+    if (result == TA_OK) {
+        result = tah_replay_events_done(system, params->actor);
+    }
+    if (result == TA_OK) {
+        ta_actor_publish_params publish = {.actor = params->actor, .at = &last};
         tah_system_enter_core(system);
         result = ta_actor_publish(tah_system_core(system), &publish);
         tah_system_leave_core(system);
         if (result == TA_OK) {
             result = tah_hook_actor_published(system, &publish);
         }
-        uint32_t owed = 0;
-        if (result == TA_OK) {
-            result = tah_replay_redeliver(replay, params->actor, &owed);
-        }
     }
-    if (replay != NULL) {
-        tah_replay_free(replay);
+    if (result != TA_OK) {
+        tah_system_enter_core(system);
+        if (ta_actor_destroy(tah_system_core(system), params->actor) == TA_OK) {
+            tah_system_leave_core(system);
+            (void)tah_hook_actor_removed(system, params->actor);
+        } else {
+            tah_system_leave_core(system);
+        }
+        params->actor = 0;
     }
     return result;
 }
 
-/* Rebuilds a named actor from its log (hex) with the kernel's replay; answers the actor. */
+/* Rebuilds `family/name` from its journal; answers the actor, or the ta_result name. */
 jv tat_hosted_restore_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
     if (!tat_hosted_resolve(bind, params, &hosted)) {
         return tat_bind_take_error(bind, error_code);
     }
-    jv log = jv_object_get(jv_copy(params), jv_string("log"));
+    jv journal = jv_object_get(jv_copy(params), jv_string("journal"));
     jv family = jv_object_get(jv_copy(params), jv_string("family"));
     jv name = jv_object_get(jv_copy(params), jv_string("name"));
-    size_t length = 0;
-    uint8_t *bytes = tat_hosted_unhex(log, &length);
     ta_actor_address address = {
         .family = {.name = {jv_string_value(family), (uint32_t)jv_string_length_bytes(jv_copy(family))}},
         .name = {jv_string_value(name), (uint32_t)jv_string_length_bytes(jv_copy(name))}};
     tat_hosted_replay_params replay = {.definition = (ta_definition_id)tat_hosted_u64(params, "definition"),
-                                       .address = &address, .bytes = bytes, .length = length};
-    ta_result result = bytes == NULL ? TA_ERR_NOMEM : tat_hosted_replay(hosted->system, &replay);
-    free(bytes);
-    jv_free(log);
+                                       .address = &address, .at = (ta_time)tat_hosted_u64(params, "at"),
+                                       .journal = journal};
+    ta_result result = tat_hosted_replay(bind, hosted->system, &replay);
+    jv_free(journal);
     jv_free(family);
     jv_free(name);
-    if (result != TA_OK || !replay.found) {
-        *error_code = RPC_INTERNAL_ERROR;
-        return jv_string("hosted.restore: the log did not rebuild an actor");
+    if (result != TA_OK) {
+        return tat_encode_ta_result(bind, &result);
     }
     return jv_number((double)replay.actor);
 }
@@ -689,23 +689,24 @@ jv tat_hosted_load_method(tat_bind *bind, jv params, int *error_code) {
         /* Borrowed from the load, which holds it until it finishes. */
         ta_actor_address address = ta_address_view(load.address);
         ta_definition_id definition = (ta_definition_id)tat_hosted_u64(params, "definition");
-        jv log = jv_object_get(jv_copy(params), jv_string("log"));
-        size_t length = 0;
-        uint8_t *bytes = outcome == TAH_LOAD_LOADED ? tat_hosted_unhex(log, &length) : NULL;
-        jv_free(log);
-        tat_hosted_replay_params replay = {.definition = definition, .address = &address, .bytes = bytes, .length = length};
-        if (outcome == TAH_LOAD_LOADED && bytes == NULL) {
-            result = TA_ERR_NOMEM;
-        } else if (length != 0) {
-            result = tat_hosted_replay(system, &replay);
+        jv journal = jv_object_get(jv_copy(params), jv_string("journal"));
+        bool replaying = outcome == TAH_LOAD_LOADED && jv_get_kind(journal) == JV_KIND_ARRAY &&
+                         jv_array_length(jv_copy(journal)) > 0;
+        if (replaying) {
+            tat_hosted_replay_params replay = {.definition = definition, .address = &address,
+                                               .at = (ta_time)tat_hosted_u64(params, "at"), .journal = journal};
+            result = tat_hosted_replay(bind, system, &replay);
             actor = replay.actor;
-        }
-        free(bytes);
-        if (result == TA_OK && !replay.found) {
-            /* No life in the log (or none asked for): a new actor at the address. */
+            if (result == TA_ERR_DONE) {
+                outcome = TAH_LOAD_NOT_FOUND; /* the journal ends in a final state */
+                result = TA_OK;
+            }
+        } else {
+            /* No journal (or none asked for): a new actor at the address. */
             outcome = TAH_LOAD_SPAWNED;
             result = tat_hosted_spawn_at(system, definition, &address, &actor);
         }
+        jv_free(journal);
         if (result != TA_OK) {
             outcome = TAH_LOAD_FAILED;
             actor = 0;
@@ -739,99 +740,21 @@ jv tat_hosted_load_method(tat_bind *bind, jv params, int *error_code) {
     return out;
 }
 
-/* A byte sink that keeps what it is given: a checkpoint, for hosted.checkpoint. */
-typedef struct {
-    uint8_t *bytes;
-    size_t length;
-    size_t capacity;
-    size_t unit_start;
-    bool failed;
-} tat_hosted_bytes;
-
-static ta_op_status tat_hosted_bytes_begin(void *self) {
-    tat_hosted_bytes *sink = self;
-    sink->unit_start = sink->length;
-    return TA_OP_OK;
-}
-
-static ta_op_status tat_hosted_bytes_write(void *self, ta_bytes bytes) {
-    tat_hosted_bytes *sink = self;
-    if (sink->length + bytes.len > sink->capacity) {
-        size_t capacity = (sink->length + bytes.len) * 2u + 64u;
-        uint8_t *grown = realloc(sink->bytes, capacity);
-        if (grown == NULL) {
-            sink->failed = true;
-            return TA_OP_NOMEM;
-        }
-        sink->bytes = grown;
-        sink->capacity = capacity;
-    }
-    for (uint32_t at = 0; at < bytes.len; at += 1u) {
-        sink->bytes[sink->length + at] = bytes.ptr[at];
-    }
-    sink->length += bytes.len;
-    return TA_OP_OK;
-}
-
-static void tat_hosted_bytes_end(void *self, bool keep) {
-    tat_hosted_bytes *sink = self;
-    if (!keep) {
-        sink->length = sink->unit_start;
-    }
-}
-
-static const ta_byte_sink_vtable tat_hosted_bytes_vtable = {
-    .begin = tat_hosted_bytes_begin, .write = tat_hosted_bytes_write, .end = tat_hosted_bytes_end};
-
-/* A checkpoint of an idle logged actor (kernel ADR 0002 section 7), in hex. */
-jv tat_hosted_checkpoint_method(tat_bind *bind, jv params, int *error_code) {
-    tat_hosted *hosted = NULL;
-    if (!tat_hosted_resolve(bind, params, &hosted)) {
-        return tat_bind_take_error(bind, error_code);
-    }
-    tat_hosted_bytes sink = {0};
-    ta_result result = tah_checkpoint_write(hosted->system, (ta_actor_id)tat_hosted_u64(params, "actor"),
-                                            (ta_byte_sink){.self = &sink, .v = &tat_hosted_bytes_vtable});
-    jv out = jv_object_set(jv_object(), jv_string("result"), tat_encode_ta_result(bind, &result));
-    if (result == TA_OK) {
-        static const char digits[] = "0123456789abcdef";
-        char *hex = malloc(sink.length * 2u + 1u);
-        if (hex != NULL) {
-            for (size_t at = 0; at < sink.length; at += 1u) {
-                hex[at * 2u] = digits[sink.bytes[at] >> 4];
-                hex[at * 2u + 1u] = digits[sink.bytes[at] & 15u];
-            }
-            hex[sink.length * 2u] = 0;
-            out = jv_object_set(out, jv_string("bytes"), jv_string(hex));
-            free(hex);
-        }
-    }
-    free(sink.bytes);
-    return out;
-}
-
 static jv tat_hosted_memory(tah_memory_counters counters) {
     jv out = jv_object_set(jv_object(), jv_string("bytes_in_use"), jv_number((double)counters.bytes_in_use));
     out = jv_object_set(out, jv_string("peak_bytes"), jv_number((double)counters.peak_bytes));
     return jv_object_set(out, jv_string("largest_block"), jv_number((double)counters.largest_block));
 }
 
-/*
- * What the input log's value writer wrote (the largest piece and the bytes
- * in all), and the kernel's memory counters for what core allocates and
- * for everything: {"values": {...}, "memory": {"core", "total"}}.
- */
+/* The kernel's memory counters for what core allocates and for everything: {"memory": {"core", "total"}}. */
 jv tat_hosted_stats_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
     if (!tat_hosted_resolve(bind, params, &hosted)) {
         return tat_bind_take_error(bind, error_code);
     }
-    jv values = jv_object_set(jv_object(), jv_string("largest_write"), jv_number((double)hosted->values.largest_write));
-    values = jv_object_set(values, jv_string("bytes_written"), jv_number((double)hosted->values.bytes_written));
     tah_allocator *allocator = tah_system_allocator(hosted->system);
     jv memory = jv_object_set(jv_object(), jv_string("core"),
                               tat_hosted_memory(tah_allocator_counters(allocator, TAH_MEMORY_CORE)));
     memory = jv_object_set(memory, jv_string("total"), tat_hosted_memory(tah_allocator_total(allocator)));
-    jv out = jv_object_set(jv_object(), jv_string("values"), values);
-    return jv_object_set(out, jv_string("memory"), memory);
+    return jv_object_set(jv_object(), jv_string("memory"), memory);
 }

@@ -158,7 +158,7 @@ static ta_result replay(world *w, ta_actor_id actor, const char *name, ta_time t
 }
 
 static void publish(world *w, ta_actor_id actor, ta_time at) {
-    tah_replay_events_done(w->system, actor);
+    CHECK(tah_replay_events_done(w->system, actor) == TA_OK);
     ta_actor_publish_params params = { .actor = actor, .at = &at };
     CHECK(ta_actor_publish(w->system->core, &params) == TA_OK);
     CHECK(tah_hook_actor_published(w->system, &params) == TA_OK);
@@ -269,6 +269,16 @@ static void finished(void) {
     finish_world(&w);
 }
 
+/* An empty journal: the bootstrap runs before publish, which then succeeds. */
+static void empty_journal(void) {
+    world w = make_world();
+    ta_actor_id actor = prepare(&w, 0);
+    publish(&w, actor, 0);
+    run(w.system);
+    CHECK(in_state(w.system, actor, "zero"));
+    finish_world(&w);
+}
+
 static void refusals(void) {
     world w = make_world();
     CHECK(tah_system_advance_to(w.system, 5000) == TA_OK);
@@ -289,6 +299,7 @@ int main(void) {
     timer_after_publish();
     timer_fired_in_journal();
     finished();
+    empty_journal();
     refusals();
     puts("tinyactors-host event replay test passed");
     return 0;

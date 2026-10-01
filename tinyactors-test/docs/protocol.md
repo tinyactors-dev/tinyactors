@@ -111,11 +111,6 @@ reproducible. Scenarios about core's semantics keep using core directly.
   posts to the address, as an application does: to its resident actor,
   into a load when it has none and its family has a loader (see "Loads"
   below), and otherwise as a dead letter.
-- `hosted.checkpoint` takes `{"system", "actor"}` and writes a checkpoint of
-  an idle, logged, named actor with the kernel's encoder (kernel ADR 0002
-  section 7): `{"result", "bytes"?}`, the bytes in hex. A checkpoint alone,
-  or a checkpoint followed by later records, is a log `hosted.restore`
-  reads.
 - `hosted.turn` takes `{"system", "limit"?}`, runs turns until the system is
   quiet or `limit` turns ran (default 1), and returns `{"turns", "quiet",
   "dead_letters", "loads"}`. `dead_letters` lists the dead letters those turns
@@ -135,44 +130,47 @@ reproducible. Scenarios about core's semantics keep using core directly.
   reported so far, `{"total", "by_reason": {reason: count}}`.
 - `hosted.advance` takes `{"system", "time"}` and moves the scenario's
   clock, and core's time, to `time` milliseconds.
-- `hosted.log` takes `{"system", "families"}` and turns on the kernel's
-  input log (kernel ADR 0002) for the named actors of those families. Its
-  values are written with the jq data model's codec, so hosted charts use
-  the jq data model.
-- `hosted.batches` takes `{"system"}` and returns the batches handed over
-  since the last call, one per address per turn, in turn order:
-  `[{"family", "name", "bytes"}]`, with the bytes in lowercase hex. A
-  scenario stores them as an application would: each address's bytes
-  appended in order.
-- `hosted.evict` takes `{"system", "actor"}`: the kernel records `evicted`,
-  and the actor is destroyed, so its log is its only state.
-- `hosted.restore` takes `{"system", "definition", "family", "name", "log"}`,
-  where `log` is the address's stored bytes in hex, and rebuilds the actor
-  with the kernel's replay: it prepares it from the log's first record,
-  applies the records, publishes it at the last record's time, and puts
-  the messages the log still owes back in its mailbox. It returns the new
-  actor's ID. `hosted.load` makes the same calls when it answers a load.
+- `hosted.record` takes `{"system", "families"}` and records the events
+  the named actors of those families take (kernel ADR 0006 section 2).
+- `hosted.records` takes `{"system"}` and returns what was recorded since
+  the last call, `{"records", "wakes"}`: `records` is `[{"family", "name",
+  "at", "event"}]` in the order the actors' macrosteps ended, each `event`
+  as the chart saw it, `{"name", "type", "send_id"?, "origin"?,
+  "origin_type"?, "invoke_id"?, "data"?}`, with `data` a jq value; `wakes`
+  is `{"family/name": time or null}`, the latest wake of each address. A
+  scenario keeps them as an application would: each address's events in
+  order (its journal), and its latest wake.
+- `hosted.evict` takes `{"system", "actor"}`: the actor is destroyed, its
+  wake (its first pending delayed send, or none) is reported, and its
+  journal is its only state.
+- `hosted.restore` takes `{"system", "definition", "family", "name",
+  "journal", "at"?}`, where `journal` is the address's events,
+  `[{"event", "at"}]`, and rebuilds the actor (kernel ADR 0006 section 3):
+  it prepares a replaying actor at `at` (when its life began, default 0),
+  replays each event at its time, and publishes it at the last one's. It
+  returns the new actor's ID, or the `ta_result` name (`err_done` for a
+  journal that ends in a final state). `hosted.load` makes the same calls
+  when it answers a load.
 - `hosted.set_loader` takes `{"system", "family", "max_waiting"}` and gives
   the family a loader (`tah_loads_set_family`): at most `max_waiting`
   messages wait for each load, and 0 removes the loader.
 - `hosted.load` takes `{"system", "index", "generation", "outcome"?,
-  "definition"?, "log"?}` and answers the load request `index` and
+  "definition"?, "journal"?, "at"?}` and answers the load request `index` and
   `generation` name. `outcome` is `loaded` (the default), `spawned`,
   `not-found`, `rejected`, `failed` or `timed-out`. `loaded` rebuilds the
-  actor from `log` (hex) as `hosted.restore` does, or, when `log` is empty
+  actor from `journal` as `hosted.restore` does, or, when it is empty
   or absent, spawns a fresh actor of `definition` at the address, as
   `spawned` does. Then the kernel finishes the load (`tah_loads_finish`),
   which moves the waiting mail into the actor's mailbox or, for the other
   outcomes, makes it dead letters. It
   returns `{"result", "outcome", "actor"?}`: `result` is `err_stale` for a
   load already answered, and `outcome` is `spawned` when a `loaded` request
-  found no life in the log, `failed` when the replay or spawn failed.
-- `hosted.stats` takes `{"system"}` and returns `{"values", "memory"}`:
-  what the input log's value writer wrote, `{"largest_write",
-  "bytes_written"}` (the jq model's durable writer, counted where it hands
-  the log each piece), and the kernel's memory counters for what core
-  allocates and for everything, `{"core", "total"}`, each
-  `{"bytes_in_use", "peak_bytes", "largest_block"}`.
+  had no journal, `not-found` when the journal ends in a final state, and
+  `failed` when the replay or spawn failed.
+- `hosted.stats` takes `{"system"}` and returns `{"memory"}`: the
+  kernel's memory counters for what core allocates and for everything,
+  `{"core", "total"}`, each `{"bytes_in_use", "peak_bytes",
+  "largest_block"}`.
 - `hosted.close` takes `{"system": <hosted handle>}`, closes and frees the
   system, and returns `{"leaked": <bytes>}`: what the kernel allocated and
   did not free, which is always 0.
@@ -191,8 +189,8 @@ hosted loader works in two steps, as napi's does across its event loop
 2. `hosted.turn` hands each new load out once in `loads`, with the
    address and why it started (`mail`, `timer`, `session`). The scenario
    plays the application's loader: it looks the address up in its store
-   (the batches `hosted.batches` gave it) and answers with `hosted.load`,
-   which replays the stored log, or spawns a fresh actor, or refuses. The
+   (the journals `hosted.records` gave it) and answers with `hosted.load`,
+   which replays the stored journal, or spawns a fresh actor, or refuses. The
    next `hosted.turn` delivers the mail that waited.
 
 The Ruby helpers are `hosted_set_loader`, `hosted_post_to`, `hosted_load`,

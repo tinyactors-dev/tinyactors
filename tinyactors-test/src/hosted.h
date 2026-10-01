@@ -18,13 +18,12 @@ jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_advance_method(tat_bind *bind, jv params, int *error_code);
-jv tat_hosted_log_method(tat_bind *bind, jv params, int *error_code);
-jv tat_hosted_batches_method(tat_bind *bind, jv params, int *error_code);
+jv tat_hosted_record_method(tat_bind *bind, jv params, int *error_code);
+jv tat_hosted_records_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_evict_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_restore_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_set_loader_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_load_method(tat_bind *bind, jv params, int *error_code);
 jv tat_hosted_stats_method(tat_bind *bind, jv params, int *error_code);
-jv tat_hosted_checkpoint_method(tat_bind *bind, jv params, int *error_code);
 
 #endif

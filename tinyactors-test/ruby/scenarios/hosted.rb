@@ -76,15 +76,17 @@ TinyactorsTest.chart :hosted_counter do
   end
 end
 
-# Core ADR 0089 section 2's timelines 2 and 3: a delayed send to another
-# actor, which the input log records as FIRED when it fires.
+# A delayed send to another actor: its firing is not an event of the
+# sender (kernel ADR 0006, notes of 2026-10-01).
 TinyactorsTest.chart :hosted_relay do
   state :idle do
     transition on: 'relay', target: :waiting do
       send_event 'hello', to: '#_actor_hosted_sink/b', delay: '5s'
     end
   end
-  state :waiting
+  state :waiting do
+    transition on: 'note'
+  end
 end
 
 TinyactorsTest.chart :hosted_sink do
@@ -101,12 +103,12 @@ module HostedRelay
   # A week, in milliseconds: how long a relay stays evicted before its restore.
   WEEK = 7 * 24 * 3600 * 1000
 
-  # hosted_relay/p1 and hosted_sink/b, both spawned at 0; p1 is logged and
-  # arms `hello` to b at 1000, due at 6000. Answers [hosted, relay
-  # definition, relay, sink].
+  # hosted_relay/p1 and hosted_sink/b, both spawned at 0; p1 is recorded
+  # and arms `hello` to b at 1000, due at 6000. Answers [hosted, relay
+  # definition, relay, sink, store].
   def self.start(context, incarnation: 0)
     hosted = context.hosted_system(incarnation: incarnation)
-    context.hosted_log(hosted, 'hosted_relay')
+    context.hosted_record(hosted, 'hosted_relay')
     sink = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_sink), family: 'hosted_sink', name: 'b')
     definition = context.hosted_define(hosted, :hosted_relay)
     relay = context.hosted_spawn(hosted, definition, family: 'hosted_relay', name: 'p1')
@@ -115,18 +117,20 @@ module HostedRelay
     context.hosted_post(hosted, relay, 'relay')
     context.hosted_run(hosted)
     context.assert_equal 6000, context.hosted_next_deadline(hosted)
-    [hosted, definition, relay, sink]
+    store = context.hosted_store(hosted)
+    context.assert_equal 6000, store.wakes['hosted_relay/p1']
+    [hosted, definition, relay, sink, store]
   end
 end
 
 module HostedOverflow
   # hosted_ping/a sends `ping` to hosted_pong/p while the queue is full
   # (maxQueuedMessages 1, taken by the application's `noise` for p): the
-  # router accepts it into p's overflow (kernel ADR 0003), and p's log
-  # records it. Both families are logged. Answers [hosted, ping, pong].
+  # router accepts it into p's overflow (kernel ADR 0003). Both families
+  # are recorded. Answers [hosted, ping, pong].
   def self.start(context, incarnation: 1)
     hosted = context.hosted_system(incarnation: incarnation, max_queued_messages: 1)
-    context.hosted_log(hosted, 'hosted_ping', 'hosted_pong')
+    context.hosted_record(hosted, 'hosted_ping', 'hosted_pong')
     ping = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_ping), family: 'hosted_ping', name: 'a')
     pong = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_pong), family: 'hosted_pong', name: 'p')
     context.hosted_run(hosted)
@@ -138,23 +142,7 @@ module HostedOverflow
     boxes = context.hosted_mailboxes(hosted, pong)
     context.assert_equal 1, boxes[:overflow]
     context.assert_equal %w[ping], boxes[:mailboxes].first[:events]
-    context.assert_equal nil, context.hosted_next_deadline(hosted), 'a holds no send it waits to make'
     [hosted, ping, pong]
-  end
-
-  # Another process rebuilds a and p from `store`; answers p's states once it has run.
-  def self.restart(context, store)
-    hosted = context.hosted_system(incarnation: 2)
-    context.hosted_log(hosted, 'hosted_ping', 'hosted_pong')
-    ping_definition = context.hosted_define(hosted, :hosted_ping)
-    pong_definition = context.hosted_define(hosted, :hosted_pong)
-    ping = context.hosted_restore(hosted, ping_definition, 'hosted_ping', 'a', store['hosted_ping/a'])
-    pong = context.hosted_restore(hosted, pong_definition, 'hosted_pong', 'p', store['hosted_pong/p'])
-    context.hosted_run(hosted)
-    context.assert_equal [:sent], context.hosted_states(hosted, ping)
-    states = context.hosted_states(hosted, pong)
-    context.assert_equal 0, context.close_hosted(hosted)
-    states
   end
 end
 
@@ -220,9 +208,8 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: a full queue that refuses mail between actors, so the send
-  # waits in the sender, logged nowhere (kernel ADR 0003); overflow that is
-  # delivered before there is room, or never.
+  # Catches: a full queue that refuses mail between actors (kernel ADR
+  # 0003); overflow that is delivered before there is room, or never.
   scenario 'mail between actors waits in the overflow of a full queue, and is delivered once' do
     hosted, _ping, pong = HostedOverflow.start(self)
     assert_equal [:waiting], hosted_states(hosted, pong)
@@ -233,23 +220,24 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: overflowed mail lost by a crash: the sender's replay from
-  # `spawned` drops its send as sent, so only the receiver's log can hold it.
-  scenario 'mail in the overflow survives a crash and a replay from spawned' do
+  # What a crash costs is explicit (kernel ADR 0006 section 5): mail p had
+  # not taken is in no journal, and a's rebuild does not send it again, so
+  # delivery is at most once where nothing retries. Catches: a rebuild that
+  # resends what a replayed macrostep sent.
+  scenario 'mail in the overflow at a crash is lost unless its sender retries' do
     hosted, = HostedOverflow.start(self)
     store = hosted_store(hosted)
     close_hosted(hosted) # a crash: nothing more is recorded
-    assert_equal [:pinged], HostedOverflow.restart(self, store), 'p gets the ping once'
-  end
+    assert_equal %w[go], store.journals['hosted_ping/a'].map { |entry| entry[:event][:name] }
+    assert_equal [], store.journals['hosted_pong/p'], "p's `noise` was delivered, but its macrostep had not ended"
 
-  # Catches: overflowed mail that leaves with an evicted sender and dies
-  # with the process (the orphan of a send the router refused).
-  scenario "mail in the overflow survives the sender's eviction and an exit" do
-    hosted, ping, = HostedOverflow.start(self)
-    assert_equal 'ok', hosted_evict(hosted, ping)
-    store = hosted_store(hosted)
-    close_hosted(hosted)
-    assert_equal [:pinged], HostedOverflow.restart(self, store), 'p gets the ping once'
+    again = hosted_system(incarnation: 2)
+    ping = hosted_restore(again, hosted_define(again, :hosted_ping), 'hosted_ping', 'a', store.journals['hosted_ping/a'])
+    pong = hosted_restore(again, hosted_define(again, :hosted_pong), 'hosted_pong', 'p', store.journals['hosted_pong/p'])
+    hosted_run(again)
+    assert_equal [:sent], hosted_states(again, ping)
+    assert_equal [:waiting], hosted_states(again, pong), 'the ping is not sent again'
+    assert_equal 0, close_hosted(again)
   end
 
   # Catches: mail for a finished actor delivered, dropped silently, or
@@ -297,12 +285,12 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: a log that misses an input, or a replay that loses the pending
-  # timer: the rebuilt actor must be where the live one was, and its timeout
-  # must still fire.
-  scenario 'an evicted actor is rebuilt from its input log, with its timer' do
+  # Catches: a journal that misses an event, or a replay that loses the
+  # pending timer: the rebuilt actor must be where the live one was, and its
+  # timeout must still fire; an eviction that stores no wake.
+  scenario 'an evicted actor is rebuilt from its journal, with its timer' do
     hosted = hosted_system
-    hosted_log(hosted, 'hosted_timer')
+    hosted_record(hosted, 'hosted_timer')
     definition = hosted_define(hosted, :hosted_timer)
     timer = hosted_spawn(hosted, definition, family: 'hosted_timer', name: 't')
     hosted_run(hosted)
@@ -310,20 +298,24 @@ TinyactorsTest.scenarios 'hosted' do
     hosted_run(hosted)
     assert_equal 'ok', hosted_evict(hosted, timer)
     store = hosted_store(hosted)
-    assert !store['hosted_timer/t'].empty?, 'the log holds records for the actor'
-    rebuilt = hosted_restore(hosted, definition, 'hosted_timer', 't', store['hosted_timer/t'])
+    assert_equal [{ event: { name: 'arm', type: 'external' }, at: 0 }], store.journals['hosted_timer/t']
+    assert_equal 5000, store.wakes['hosted_timer/t'], 'the eviction stored its timer as the wake'
+    rebuilt = hosted_restore(hosted, definition, 'hosted_timer', 't', store.journals['hosted_timer/t'])
     assert_equal [:armed], hosted_states(hosted, rebuilt)
     hosted_advance(hosted, 5000)
     hosted_run(hosted)
     assert_equal [:rung], hosted_states(hosted, rebuilt)
+    ring = hosted_store(hosted).journals['hosted_timer/t']
+    assert_equal [['ring', 5000, '#_actor_hosted_timer/t']], ring.map { |entry| [entry.dig(:event, :name), entry[:at], entry.dig(:event, :origin)] },
+                 'the timeout it sent itself is in its journal'
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: a value lost or cut on its way through the kernel's log and the
-  # jq model's streaming codec.
-  scenario 'a large value is logged and replayed through the kernel' do
+  # Catches: a value lost or cut on its way through the recorder and the
+  # replay, or a kernel or core that holds a copy of it.
+  scenario 'a large value is recorded and replayed, and core holds no copy of it' do
     hosted = hosted_system
-    hosted_log(hosted, 'hosted_box')
+    hosted_record(hosted, 'hosted_box')
     definition = hosted_define(hosted, :hosted_box)
     box = hosted_spawn(hosted, definition, family: 'hosted_box', name: 'big')
     hosted_run(hosted)
@@ -332,78 +324,21 @@ TinyactorsTest.scenarios 'hosted' do
     hosted_run(hosted)
     assert_equal blob.size, hosted_data(hosted, box, '.size')
     hosted_evict(hosted, box)
-    log = hosted_store(hosted)['hosted_box/big']
-    assert log.size / 2 > blob.size, 'the value is in the log'
-    rebuilt = hosted_restore(hosted, definition, 'hosted_box', 'big', log)
-    assert_equal blob.size, hosted_data(hosted, rebuilt, '.size')
-    assert_equal 0, close_hosted(hosted)
-  end
-
-  # Catches: a data model or kernel framing that holds a whole value while
-  # it is logged or replayed. The jq model writes in pieces (core ADR 0090's
-  # notes); its heap is jq's, so the kernel's core counters show core's
-  # side: no copy of the value, whatever its size. What the core log's
-  # 'a large value is logged and replayed in pieces' checked.
-  scenario 'a large value is written to the log in pieces, and core holds no copy of it' do
-    hosted = hosted_system
-    hosted_log(hosted, 'hosted_box')
-    definition = hosted_define(hosted, :hosted_box)
-    box = hosted_spawn(hosted, definition, family: 'hosted_box', name: 'big')
-    hosted_run(hosted)
-    blob = 'v' * (4 * 1024 * 1024)
-    assert_equal 'ok', hosted_post_data(hosted, box, 'put', { blob: blob })
-    hosted_run(hosted)
-    assert_equal blob.size, hosted_data(hosted, box, '.size')
-    written = hosted_stats(hosted)[:values]
-    assert written[:bytes_written] > blob.size, 'the value went through the writer'
-    assert written[:largest_write] <= 8192, "the value reached the log in pieces, the largest #{written[:largest_write]} bytes"
-    hosted_evict(hosted, box)
-    rebuilt = hosted_restore(hosted, definition, 'hosted_box', 'big', hosted_store(hosted)['hosted_box/big'])
+    journal = hosted_store(hosted).journals['hosted_box/big']
+    assert_equal blob.size, journal.first.dig(:event, :data, :blob).size, 'the value is in the journal'
+    rebuilt = hosted_restore(hosted, definition, 'hosted_box', 'big', journal)
     assert_equal blob.size, hosted_data(hosted, rebuilt, '.size')
     peak = hosted_stats(hosted).dig(:memory, :core, :peak_bytes)
     assert peak < blob.size / 4, "core's allocations peaked at #{peak} bytes for a #{blob.size}-byte value"
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: a checkpoint that does not hold the actor's state, or a log
-  # compacted to it that loses its pending timer.
-  scenario 'a log compacted to its checkpoint rebuilds the actor' do
-    hosted = hosted_system
-    hosted_log(hosted, 'hosted_seen')
-    definition = hosted_define(hosted, :hosted_seen)
-    live = hosted_spawn(hosted, definition, family: 'hosted_seen', name: 'k')
-    hosted_run(hosted)
-    hosted_advance(hosted, 1000)
-    hosted_post(hosted, live, 'e1')
-    hosted_run(hosted) # waiting; the timeout is due at 6000
-    checkpoint = hosted_checkpoint(hosted, live)
-    assert_equal 'ok', checkpoint[:result]
-    hosted_evict(hosted, live)
-    rebuilt = hosted_restore(hosted, definition, 'hosted_seen', 'k', checkpoint[:bytes]) # the checkpoint alone
-    assert_equal [:waiting], hosted_states(hosted, rebuilt)
-    assert_equal 1, hosted_data(hosted, rebuilt, '.seen'), 'the data came from the checkpoint'
-    hosted_advance(hosted, 6000)
-    hosted_run(hosted)
-    assert_equal [:timedout], hosted_states(hosted, rebuilt)
-    assert_equal 0, close_hosted(hosted)
-  end
-
-  # Catches: a checkpoint of an actor the log does not cover.
-  scenario 'a checkpoint needs a logged, named actor' do
-    hosted = hosted_system
-    hosted_log(hosted, 'hosted_seen')
-    unnamed = hosted_spawn(hosted, hosted_define(hosted, :hosted_seen))
-    hosted_run(hosted)
-    assert_equal 'err_invalid', hosted_checkpoint(hosted, unnamed)[:result]
-    assert_equal 0, close_hosted(hosted)
-  end
-
-  # Catches: a log that cannot be replayed by another system, or a crash
-  # that loses the actor's pending timer. The first system is dropped after
-  # its batches were stored, as a crash would leave them.
-  scenario 'after a crash, another system rebuilds the actor from the stored log' do
+  # Catches: a journal that cannot be replayed by another system, or a
+  # crash that loses the actor's pending timer. The first system is dropped
+  # after its records were stored, as a crash would leave them.
+  scenario 'after a crash, another system rebuilds the actor from the stored journal' do
     first = hosted_system(incarnation: 1)
-    hosted_log(first, 'hosted_seen')
+    hosted_record(first, 'hosted_seen')
     live = hosted_spawn(first, hosted_define(first, :hosted_seen), family: 'hosted_seen', name: 'c')
     hosted_run(first)
     hosted_advance(first, 1000)
@@ -413,10 +348,9 @@ TinyactorsTest.scenarios 'hosted' do
     close_hosted(first)
 
     second = hosted_system(incarnation: 2)
-    hosted_log(second, 'hosted_seen')
     definition = hosted_define(second, :hosted_seen)
     hosted_advance(second, 2000)
-    rebuilt = hosted_restore(second, definition, 'hosted_seen', 'c', store['hosted_seen/c'])
+    rebuilt = hosted_restore(second, definition, 'hosted_seen', 'c', store.journals['hosted_seen/c'])
     assert_equal [:waiting], hosted_states(second, rebuilt)
     assert_equal 1, hosted_data(second, rebuilt, '.seen')
     hosted_advance(second, 6000)
@@ -425,70 +359,53 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(second)
   end
 
-  # Timeline 2 (E >= d). Catches: a replay that sends again what the live
-  # actor sent before it stopped: FIRED in the log drops the held send at
-  # publish, so the rebuilt relay holds nothing and b hears it once.
-  scenario 'a send to another actor that fired before the eviction does not fire again' do
-    hosted, definition, relay, sink = HostedRelay.start(self)
+  # Kernel ADR 0006, notes of 2026-10-01. Catches: a firing that leaves the
+  # sender's stored wake naming it, so every restart reloads the sender and
+  # repeats the send. A rebuild before the relay takes another event repeats
+  # the send once (at least once, accepted); none after another event.
+  scenario 'a send to another actor that fired repeats at most once on a rebuild' do
+    hosted, definition, relay, sink, store = HostedRelay.start(self)
     hosted_advance(hosted, 6000)
     hosted_run(hosted)
     assert_equal [:h1], hosted_states(hosted, sink)
+    hosted_store(hosted, store)
+    assert_equal nil, store.wakes['hosted_relay/p1'], 'the firing moved the wake'
     hosted_advance(hosted, 7000)
     assert_equal 'ok', hosted_evict(hosted, relay)
-    log = hosted_store(hosted)['hosted_relay/p1']
+    hosted_store(hosted, store)
+    assert_equal nil, store.wakes['hosted_relay/p1'], 'nothing reloads the evicted relay'
 
     hosted_advance(hosted, 7000 + HostedRelay::WEEK)
-    rebuilt = hosted_restore(hosted, definition, 'hosted_relay', 'p1', log)
+    rebuilt = hosted_restore(hosted, definition, 'hosted_relay', 'p1', store.journals['hosted_relay/p1'])
     hosted_run(hosted)
-    assert_equal [:waiting], hosted_states(hosted, rebuilt)
-    assert_equal nil, hosted_next_deadline(hosted), 'the rebuilt relay holds no send'
-    assert_equal [:h1], hosted_states(hosted, sink), 'b heard it once'
-    assert_equal({}, hosted_store(hosted), 'the rebuilt relay recorded nothing')
+    assert_equal [:h2], hosted_states(hosted, sink), 'repeated once'
+    assert_equal nil, hosted_next_deadline(hosted)
+    hosted_post(hosted, rebuilt, 'note')
+    hosted_run(hosted)
+    assert_equal 'ok', hosted_evict(hosted, rebuilt)
+    hosted_store(hosted, store)
+    hosted_restore(hosted, definition, 'hosted_relay', 'p1', store.journals['hosted_relay/p1'])
+    hosted_run(hosted)
+    assert_equal [:h2], hosted_states(hosted, sink), 'not repeated after another event'
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Timeline 2 after a crash: the log ends at FIRED, whose time alone is the
-  # publish time and covers the send. Catches: a send fired again by the
-  # process that restores the actor.
-  scenario 'a send to another actor that fired before a crash does not fire after it' do
-    first, _definition, _relay, sink = HostedRelay.start(self, incarnation: 1)
-    hosted_advance(first, 6000)
-    hosted_run(first)
-    assert_equal [:h1], hosted_states(first, sink)
-    log = hosted_store(first)['hosted_relay/p1']
-    close_hosted(first)
-
-    second = hosted_system(incarnation: 2)
-    hosted_log(second, 'hosted_relay')
-    sink = hosted_spawn(second, hosted_define(second, :hosted_sink), family: 'hosted_sink', name: 'b')
-    definition = hosted_define(second, :hosted_relay)
-    hosted_advance(second, 6000 + HostedRelay::WEEK)
-    rebuilt = hosted_restore(second, definition, 'hosted_relay', 'p1', log)
-    hosted_run(second)
-    assert_equal [:waiting], hosted_states(second, rebuilt)
-    assert_equal nil, hosted_next_deadline(second), 'the rebuilt relay holds no send'
-    assert_equal [:h0], hosted_states(second, sink), 'the send is not made again'
-    assert_equal 0, close_hosted(second)
-  end
-
-  # Timeline 3 (E < d). Catches: a send still pending at the eviction that
-  # the replay loses, or fires more than once: it is held at publish, fires
-  # at the next dispatch, and the rebuilt relay records its FIRED.
+  # Catches: a send still pending at the eviction that the rebuild loses,
+  # or fires more than once.
   scenario 'a send to another actor still pending at the eviction fires once after the restore' do
-    hosted, definition, relay, sink = HostedRelay.start(self)
+    hosted, definition, relay, sink, store = HostedRelay.start(self)
     hosted_advance(hosted, 3000)
     assert_equal 'ok', hosted_evict(hosted, relay)
     hosted_run(hosted)
     assert_equal [:h0], hosted_states(hosted, sink)
-    log = hosted_store(hosted)['hosted_relay/p1']
+    hosted_store(hosted, store)
+    assert_equal 6000, store.wakes['hosted_relay/p1'], 'the wake still names the pending send'
     assert_equal nil, hosted_next_deadline(hosted), 'the send left with the evicted relay'
 
     hosted_advance(hosted, HostedRelay::WEEK)
-    rebuilt = hosted_restore(hosted, definition, 'hosted_relay', 'p1', log)
+    rebuilt = hosted_restore(hosted, definition, 'hosted_relay', 'p1', store.journals['hosted_relay/p1'])
     hosted_run(hosted)
     assert_equal [:h1], hosted_states(hosted, sink), 'b heard it after the restore'
-    assert_equal nil, hosted_next_deadline(hosted)
-    assert !hosted_store(hosted)['hosted_relay/p1'].empty?, 'the rebuilt relay recorded that it fired'
     hosted_advance(hosted, 2 * HostedRelay::WEEK)
     hosted_run(hosted)
     assert_equal [:h1], hosted_states(hosted, sink), 'once'
@@ -499,9 +416,9 @@ TinyactorsTest.scenarios 'hosted' do
   # Catches: mail for an evicted actor that is lost or a dead letter although
   # its family has a loader; a load whose waiting mail is not delivered, or
   # delivered out of order; a loaded actor that did not get its state back.
-  scenario 'mail to an evicted actor loads it from its log and delivers the mail' do
+  scenario 'mail to an evicted actor loads it from its journal and delivers the mail' do
     hosted = hosted_system
-    hosted_log(hosted, 'hosted_counter')
+    hosted_record(hosted, 'hosted_counter')
     definition = hosted_define(hosted, :hosted_counter)
     counter = hosted_spawn(hosted, definition, family: 'hosted_counter', name: 'c')
     hosted_run(hosted)
@@ -517,12 +434,13 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal [{ family: 'hosted_counter', name: 'c', why: 'mail' }],
                  run[:loads].map { |load| load.slice(:family, :name, :why) }
     assert_equal [], run[:dead_letters]
-    loaded = hosted_load(hosted, run[:loads].first, definition: definition, log: store['hosted_counter/c'])
+    loaded = hosted_load(hosted, run[:loads].first, definition: definition, journal: store.journals['hosted_counter/c'])
     assert_equal 'ok', loaded[:result]
     assert_equal 'loaded', loaded[:outcome]
     assert hosted_run(hosted)[:quiet]
     assert_equal 3, hosted_data(hosted, loaded[:actor], '.count')
-    assert_equal %w[a b c], hosted_data(hosted, loaded[:actor], '.seen'), 'the waiting mail came after the log, in order'
+    assert_equal %w[a b c], hosted_data(hosted, loaded[:actor], '.seen'), 'the waiting mail came after the journal, in order'
+    assert_equal %w[a b c], hosted_store(hosted, store).journals['hosted_counter/c'].map { |entry| entry.dig(:event, :data, :tag) }
     assert_equal 0, close_hosted(hosted)
   end
 
@@ -530,11 +448,11 @@ TinyactorsTest.scenarios 'hosted' do
   # actor, or a loader-backed run that loses the mail that started it.
   scenario 'mail to a name the store has never seen spawns it through the loader' do
     hosted = hosted_system
-    hosted_log(hosted, 'hosted_counter')
+    hosted_record(hosted, 'hosted_counter')
     definition = hosted_define(hosted, :hosted_counter)
     hosted_set_loader(hosted, 'hosted_counter')
     hosted_post_to(hosted, 'hosted_counter', 'fresh', 'bump', data: { tag: 'x' })
-    answers = hosted_run_loading(hosted, {}, { 'hosted_counter' => definition })
+    answers = hosted_run_loading(hosted, empty_hosted_store, { 'hosted_counter' => definition })
     assert_equal [%w[ok spawned]], answers.map { |answer| [answer[:result], answer[:outcome]] }
     assert_equal %w[x], hosted_data(hosted, answers.first[:actor], '.seen')
     assert_equal 0, close_hosted(hosted)
@@ -555,88 +473,6 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal [['not-found', { tag: 'kept' }]], dead.map { |letter| [letter[:reason], letter[:data]] }
     assert_equal 'err_stale', hosted_load(hosted, run[:loads].first, outcome: 'not-found')[:result],
                  'a load is answered once'
-    assert_equal 0, close_hosted(hosted)
-  end
-end
-
-# Core ADR 0094 section 2: the kernel records an input before core takes
-# it, so an input whose record cannot be written is refused, and nothing
-# changes: not the log, not the actor, not its mailbox. What was the core
-# log's 'an input whose record the sink refuses changes nothing'.
-module HostedRefusal
-  # A logged hosted_counter at hosted_counter/q that took one bump, its
-  # batches stored. Answers [hosted, definition, counter, store].
-  def self.start(context)
-    hosted = context.hosted_system
-    context.hosted_log(hosted, 'hosted_counter')
-    definition = context.hosted_define(hosted, :hosted_counter)
-    counter = context.hosted_spawn(hosted, definition, family: 'hosted_counter', name: 'q')
-    context.hosted_run(hosted)
-    context.hosted_post_data(hosted, counter, 'bump', { tag: 'first' })
-    context.hosted_run(hosted)
-    [hosted, definition, counter, context.hosted_store(hosted)]
-  end
-
-  # The actor, its mailbox and its stored log say it took `tags`, and
-  # replaying the log rebuilds the same actor.
-  def self.check(context, hosted, definition, counter, store, tags)
-    context.hosted_run(hosted)
-    context.hosted_store(hosted, store)
-    context.assert_equal tags, context.hosted_data(hosted, counter, '.seen')
-    context.assert_equal [], context.hosted_mailbox(hosted, counter)
-    context.assert_equal 'ok', context.hosted_evict(hosted, counter)
-    context.hosted_store(hosted, store)
-    rebuilt = context.hosted_restore(hosted, definition, 'hosted_counter', 'q', store['hosted_counter/q'])
-    context.assert_equal tags, context.hosted_data(hosted, rebuilt, '.seen'), 'the log holds exactly what the actor took'
-  end
-end
-
-TinyactorsTest.scenarios 'hosted, when the log cannot grow' do
-  # Catches: an input taken although its record could not be written, so
-  # the actor moves on and its log does not say so; or a refusal that
-  # leaves the message queued anyway.
-  scenario 'an input is refused when the log cannot grow, and nothing changes' do
-    hosted, definition, counter, store = HostedRefusal.start(self)
-    logged = store['hosted_counter/q'].dup
-    # Room for the envelope and the small allocations, not for a 64 KiB record.
-    AllocationFailure.tighten(self, headroom: 16 * 1024)
-    assert_equal 'err_nomem', hosted_post_data(hosted, counter, 'bump', { tag: 'refused', pad: 'p' * 65_536 })
-    allocator.budget(0)
-    refused = allocator.entries('alloc_failed')
-    assert !refused.empty? && refused.all? { |entry| entry[:alignment] == 1 }, "the log's byte buffer is what failed"
-    assert_equal [], hosted_mailbox(hosted, counter), 'nothing was queued'
-    hosted_run(hosted)
-    assert_equal logged, hosted_store(hosted, store)['hosted_counter/q'], 'nothing was logged'
-    assert_equal %w[first], hosted_data(hosted, counter, '.seen'), 'the actor did not take it'
-    assert_equal 'ok', hosted_post_data(hosted, counter, 'bump', { tag: 'second', pad: 'p' * 65_536 })
-    HostedRefusal.check(self, hosted, definition, counter, store, %w[first second])
-    assert_equal 0, close_hosted(hosted)
-  end
-
-  # The same property at every allocation a post makes, for values that
-  # fit the log's buffer and values that make it grow. Catches: a failure
-  # path of the kernel's post or record writer that keeps half of an input.
-  scenario 'a post refused at any allocation changes nothing', exhaustive: true do
-    hosted, definition, counter, store = HostedRefusal.start(self)
-    tags = %w[first]
-    [0, 1024, 65_536, 1024 * 1024].each do |size|
-      data = { tag: "s#{size}", pad: 'p' * size }
-      before = allocator.stats[:allocations]
-      assert_equal 'ok', hosted_post_data(hosted, counter, 'bump', data)
-      allocations = allocator.stats[:allocations] - before
-      tags << "s#{size}"
-      hosted_run(hosted)
-      allocations.times do |failing|
-        allocator.arm_fault(after: failing, count: 1)
-        result = hosted_post_data(hosted, counter, 'bump', data.merge(tag: "s#{size}f#{failing}"))
-        allocator.clear_faults
-        assert %w[ok err_nomem].include?(result), "post #{size}/#{failing}: #{result}"
-        tags << "s#{size}f#{failing}" if result == 'ok'
-        assert_equal(result == 'ok' ? 1 : 0, hosted_mailbox(hosted, counter).size, "post #{size}/#{failing}")
-        hosted_run(hosted)
-      end
-    end
-    HostedRefusal.check(self, hosted, definition, counter, store, tags)
     assert_equal 0, close_hosted(hosted)
   end
 end

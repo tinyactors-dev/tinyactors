@@ -127,8 +127,13 @@ typedef struct {
  * TA_ERR_NOMEM.
  */
 ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *params);
-/* The replaying actor is about to be published: the scheduler takes it back. */
-void tah_replay_events_done(tah_system *system, ta_actor_id actor);
+/*
+ * The replaying actor is about to be published: its bootstrap runs to its
+ * end if no event ran it (an empty journal), and the scheduler takes it
+ * back. TA_ERR_DONE when it reached a final state; what core answers
+ * otherwise.
+ */
+ta_result tah_replay_events_done(tah_system *system, ta_actor_id actor);
 
 /*
  * Writes a checkpoint of `actor`, an idle, published, named actor of a

@@ -155,6 +155,15 @@ async function invocations() {
   system.close();
 }
 
+// An empty journal: publish() runs the bootstrap first.
+async function emptyJournal() {
+  const { system, counterDefinition } = world();
+  const prepared = system.prepare(counterDefinition, { address: { family: 'counter', name: 'c' }, at: 0 });
+  const actor = system.publish(prepared);
+  assert.deepEqual(actor.inspect().activeStates, ['idle']);
+  system.close();
+}
+
 async function refusals() {
   const { system, counterDefinition } = world();
   await system.advanceTo(5000);
@@ -176,6 +185,7 @@ async function main() {
   await timerInJournal();
   await timerAfterPublish();
   await invocations();
+  await emptyJournal();
   await refusals();
   console.log('replay-events: ok');
 }

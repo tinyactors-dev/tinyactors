@@ -523,14 +523,15 @@ module TinyactorsTest
     end
 
     # Answers a load request from hosted_run's `loads` as a loader would:
-    # `outcome: 'loaded'` replays `log` (hex; a fresh actor of `definition`
-    # when it is empty), 'spawned' spawns one, and 'not-found', 'rejected',
-    # 'failed' or 'timed-out' turn the waiting mail into dead letters.
+    # `outcome: 'loaded'` replays `journal` (the address's recorded events,
+    # its life begun at `at`; a fresh actor of `definition` when it is
+    # empty), 'spawned' spawns one, and 'not-found', 'rejected', 'failed' or
+    # 'timed-out' turn the waiting mail into dead letters.
     # Answers { result:, outcome:, actor: }.
-    def hosted_load(hosted, request, definition: nil, log: nil, outcome: 'loaded')
+    def hosted_load(hosted, request, definition: nil, journal: nil, at: 0, outcome: 'loaded')
       params = { system: hosted[:hosted], index: request[:index], generation: request[:generation], outcome: outcome }
       params[:definition] = definition if definition
-      params[:log] = log if log
+      params.merge!(journal: journal, at: at) if journal
       rpc('hosted.load', params)
     end
 
@@ -543,7 +544,7 @@ module TinyactorsTest
         run = hosted_run(hosted, limit: limit)
         run[:loads].each do |request|
           answers << hosted_load(hosted, request, definition: definitions.fetch(request[:family]),
-                                                  log: store["#{request[:family]}/#{request[:name]}"])
+                                                  journal: store.journals["#{request[:family]}/#{request[:name]}"])
         end
         return answers if run[:loads].empty? && run[:quiet]
       end
@@ -573,17 +574,27 @@ module TinyactorsTest
       hosted_mailboxes(hosted, actor)[:mailboxes].first[:events]
     end
 
-    # The kernel's input log (kernel ADR 0002) for `families`.
-    def hosted_log(hosted, *families)
-      rpc('hosted.log', system: hosted[:hosted], families: families.map(&:to_s))
+    # Records the events of the named actors of `families` (kernel ADR 0006).
+    def hosted_record(hosted, *families)
+      rpc('hosted.record', system: hosted[:hosted], families: families.map(&:to_s))
     end
 
-    # The batches since the last call, as the application would store them:
-    # a hash of "family/name" => hex bytes, each address's records in order.
-    def hosted_store(hosted, store = Hash.new { |hash, key| hash[key] = +'' })
-      rpc('hosted.batches', system: hosted[:hosted]).each do |entry|
-        store["#{entry[:family]}/#{entry[:name]}"] << entry[:bytes]
+    # What an application journals: each address's events in order,
+    # "family/name" => [{ event:, at: }], and its latest wake, "family/name"
+    # => time or nil.
+    HostedStore = Struct.new(:journals, :wakes) do
+      def self.empty = new(Hash.new { |hash, key| hash[key] = [] }, {})
+    end
+
+    def empty_hosted_store = HostedStore.empty
+
+    # The records and wakes since the last call, added to `store`.
+    def hosted_store(hosted, store = HostedStore.empty)
+      batch = rpc('hosted.records', system: hosted[:hosted])
+      batch[:records].each do |record|
+        store.journals["#{record[:family]}/#{record[:name]}"] << { event: record[:event], at: record[:at] }
       end
+      batch[:wakes].each { |address, at| store.wakes[address.to_s] = at }
       store
     end
 
@@ -602,25 +613,23 @@ module TinyactorsTest
       rpc('json.transform', filter: filter, input: root).first
     end
 
-    # What the input log's value writer wrote, { largest_write:, bytes_written: },
-    # and the kernel's memory counters: { values:, memory: { core:, total: } },
-    # each { bytes_in_use:, peak_bytes:, largest_block: }.
+    # The kernel's memory counters: { memory: { core:, total: } }, each
+    # { bytes_in_use:, peak_bytes:, largest_block: }.
     def hosted_stats(hosted)
       rpc('hosted.stats', system: hosted[:hosted])
-    end
-
-    # A checkpoint of `actor` (kernel ADR 0002 section 7): { result:, bytes: hex }.
-    def hosted_checkpoint(hosted, actor)
-      rpc('hosted.checkpoint', system: hosted[:hosted], actor: actor)
     end
 
     def hosted_evict(hosted, actor)
       rpc('hosted.evict', system: hosted[:hosted], actor: actor)
     end
 
-    # Rebuilds `family/name` from its stored log with the kernel's replay.
-    def hosted_restore(hosted, definition, family, name, log)
-      rpc('hosted.restore', system: hosted[:hosted], definition: definition, family: family, name: name, log: log)
+    # Rebuilds `family/name` from its journal (kernel ADR 0006 section 3): an
+    # actor prepared at `at`, when its life began, takes each event at its
+    # time and is published at the last one's. Answers the actor, or the
+    # ta_result name ('err_done' for a journal that ends in a final state).
+    def hosted_restore(hosted, definition, family, name, journal, at: 0)
+      rpc('hosted.restore', system: hosted[:hosted], definition: definition, family: family, name: name,
+                            journal: journal, at: at)
     end
 
     def hosted_advance(hosted, time)

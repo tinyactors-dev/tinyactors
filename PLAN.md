@@ -381,7 +381,8 @@ Rules for every commit of this phase:
 48. **`feat(test): hosted mode records events and replays them`**
     - Hosted methods for the recorder and event replay; the hosted
       scenarios move to them.
-49. **`refactor(test)!: hosted mode has no input log`**
+49. **`refactor(test)!: hosted mode has no input log`** (landed with 48:
+    the scenarios moved and the old methods went in one change)
     - Remove `hosted.log`, `batches`, `restore` over bytes and
       `checkpoint`, and their scenarios.
 50. **`refactor(napi)!: no input log`**
