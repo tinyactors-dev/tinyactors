@@ -33,9 +33,6 @@ napi_value tna_cancel_wake_method(napi_env env, napi_callback_info info);
 /* Offloaded actors (core ADR 0074). */
 napi_value tna_set_offload_values_method(napi_env env, napi_callback_info info);
 napi_value tna_set_copy_out_method(napi_env env, napi_callback_info info);
-napi_value tna_set_durable_codec_method(napi_env env, napi_callback_info info);
-napi_value tna_durable_bytes_method(napi_env env, napi_callback_info info);
-napi_value tna_durable_value_method(napi_env env, napi_callback_info info);
 napi_value tna_offload_method(napi_env env, napi_callback_info info);
 napi_value tna_has_offloaded_method(napi_env env, napi_callback_info info);
 napi_value tna_drop_offloaded_method(napi_env env, napi_callback_info info);

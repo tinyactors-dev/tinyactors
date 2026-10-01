@@ -147,10 +147,6 @@ struct tna_js_datamodel {
      */
     napi_ref serialize;
     napi_ref deserialize;
-    /* A value's durable bytes (core ADR 0090): lib/durable.js's
-     * durableChunks(value) and durableReader(classes). */
-    napi_ref durable_chunks;
-    napi_ref durable_reader;
     /* lib/values.js's copier for this system: a value leaving a session
      * (core ADR 0097, napi ADR 0039). */
     napi_ref copy_out;
@@ -182,8 +178,6 @@ typedef struct {
     bool by_handle;
 } tna_offload_values;
 bool tna_js_datamodel_set_offload(tna_js_datamodel *dm, const tna_offload_values *values);
-/* Installs the durable codec's two functions (napi ADR 0034 section 2). */
-bool tna_js_datamodel_set_durable(tna_js_datamodel *dm, napi_value chunks, napi_value reader);
 /* Installs the function that copies a value leaving a session (napi ADR 0039). */
 bool tna_js_datamodel_set_copy_out(tna_js_datamodel *dm, napi_value copy);
 /* The built-in data model's value codec (core ADR 0090 section 2). */

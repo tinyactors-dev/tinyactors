@@ -1,8 +1,8 @@
 // A consumer's view of index.d.ts, type-checked by `mise run check-types`
 // against Node's types and ES2022 only: no DOM. It is compiled, never run.
 
-import { EFFECTS, actorURI, createSystem, named, parameterInfo, readInputLog, serialize, statechart } from '@tinyactors/node';
-import type { ActorAddress, ActorEvent, InputRecord, ReplayReport } from '@tinyactors/node';
+import { EFFECTS, actorURI, createSystem, named, parameterInfo, serialize, statechart } from '@tinyactors/node';
+import type { ActorAddress, ActorEvent, RecordBatch, RecordedEvent, SendResult } from '@tinyactors/node';
 
 class Money {
   constructor(readonly amount: number, readonly currency: string) {}
@@ -39,36 +39,30 @@ export async function usage(): Promise<void> {
   await actor.send('add', undefined, { signal: controller.signal });
   controller.abort();
 
-  // Persistence by replay (napi ADRs 0032 to 0034): a write-ahead log of
-  // opaque bytes the application stores without parsing, a loader that
-  // answers { replay }, wakes, eviction, checkpoints, an upgrade by replay,
-  // and an audit read.
-  const log = new Map<string, Uint8Array[]>();
+  // Persistence by the application's journal (kernel ADR 0006): a
+  // recorder that journals each address's events and keeps its wake, a
+  // loader that answers { replay }, wakes, eviction, and a rebuild by hand.
+  const journal = new Map<string, RecordedEvent[]>();
   const wakes = new Map<string, number>();
   const key = (address: ActorAddress) => `${address.family}/${address.name}`;
-  system.setInputLog({
-    commit({ entries, wakes: changed }) {
-      for (const { address, bytes } of entries) log.set(key(address), [...(log.get(key(address)) ?? []), bytes]);
-      for (const { address, at } of changed) at === null ? wakes.delete(key(address)) : wakes.set(key(address), at);
-    },
+  system.setRecorder(({ records, wakes: changed }: RecordBatch) => {
+    for (const { address, event, at } of records) {
+      journal.set(key(address), [...(journal.get(key(address)) ?? []), { event: JSON.parse(JSON.stringify(event)), at }]);
+    }
+    for (const { address, at } of changed) at === null ? wakes.delete(key(address)) : wakes.set(key(address), at);
   }, { families: ['counter'] });
   system.setLoader('counter', (target) => ('name' in target
-    ? { replay: { spawn: counter, inputs: log.get(key(target)) ?? [], onReport: (report) => void report.ignored } }
+    ? { replay: { spawn: counter, at: 0, events: journal.get(key(target)) ?? [] } }
     : 'not-found'));
-  const checkpoint: Uint8Array[] = [];
-  system.checkpoint(actor, (chunk) => checkpoint.push(chunk));
   const evictedAt: number = system.evict(actor);
   void evictedAt;
   system.wakeAt({ family: 'counter', name: 'a' }, wakes.get('counter/a') ?? 0);
-  const history = log.get('counter/again') ?? [];
-  const prepared = system.prepare(counter, { address: { family: 'counter', name: 'again' }, log: history[0] ?? new Uint8Array() });
-  const report: ReplayReport = await prepared.replay(history.slice(1));
-  system.publish(prepared);
-  for await (const record of readInputLog(history)) {
-    const kind: InputRecord['kind'] = record.kind;
-    void kind;
+  const prepared = system.prepare(counter, { address: { family: 'counter', name: 'again' }, at: 0 });
+  for (const { event, at } of journal.get('counter/again') ?? []) {
+    const result: SendResult = prepared.replay(event, at);
+    void result.consumed;
   }
-  void report.inputs;
+  system.publish(prepared);
 }
 
 // Typed event maps: statechart<Data, Events>() checks on(), raise() and

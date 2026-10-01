@@ -9,7 +9,6 @@ const { decodeTraces } = require('./lib/otlp');
 const { ChartCodecError } = require('./lib/codecs');
 const { serialize } = require('./lib/values');
 const { metricsToOTLP } = require('./lib/metrics');
-const { readInputLog } = require('./lib/inputlog');
 const { parameterInfo } = require('./lib/params');
 
 module.exports = {
@@ -41,5 +40,4 @@ module.exports = {
   // Metrics (core ADR 0072, napi ADR 0017): system.metrics() and its OTLP bytes.
   metricsToOTLP,
   // An input log decoded for an audit trail (napi ADR 0034).
-  readInputLog,
 };

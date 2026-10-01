@@ -12,7 +12,7 @@
 #include "gen/ta_napi.h"
 #include "import.h"
 #include "napi_codecs.h"
-#include "napi_inputs.h"
+#include "napi_operate.h"
 #include "napi_recorder.h"
 #include "napi_replay.h"
 #include "napi_services.h"
@@ -2112,10 +2112,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "wakeAt", NULL, tna_wake_at_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "cancelWake", NULL, tna_cancel_wake_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setOffloadValues", NULL, tna_set_offload_values_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "setDurableCodec", NULL, tna_set_durable_codec_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setCopyOut", NULL, tna_set_copy_out_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "durableBytes", NULL, tna_durable_bytes_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "durableValue", NULL, tna_durable_value_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "offload", NULL, tna_offload_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "hasOffloaded", NULL, tna_has_offloaded_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "dropOffloaded", NULL, tna_drop_offloaded_method, NULL, NULL, NULL, napi_default_method, NULL },
@@ -2124,23 +2121,13 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "setTraceWatch", NULL, tna_set_trace_watch_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "traceWatchSizes", NULL, tna_trace_watch_sizes_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "reportInvoke", NULL, tna_report_invoke_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "setInputLog", NULL, tna_set_input_log_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "writeEvicted", NULL, tna_write_evicted_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "inputForget", NULL, tna_input_forget_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "recorderEvicted", NULL, tna_recorder_evicted_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "recorderForget", NULL, tna_recorder_forget_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "withdrawSend", NULL, tna_withdraw_send_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "abandon", NULL, tna_abandon_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "replayFeed", NULL, tna_replay_feed_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "replayPush", NULL, tna_replay_push_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "replayPrepare", NULL, tna_replay_prepare_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "replayRun", NULL, tna_replay_run_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "replayFinish", NULL, tna_replay_finish_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "replayLastTime", NULL, tna_replay_last_time_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "replayRedeliver", NULL, tna_replay_redeliver_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "replayClose", NULL, tna_replay_close_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setRecorder", NULL, tna_set_recorder_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayEvent", NULL, tna_replay_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayEventsDone", NULL, tna_replay_events_done_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "checkpoint", NULL, tna_checkpoint_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "dispatchDue", NULL, tna_dispatch_due_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };

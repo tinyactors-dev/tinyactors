@@ -20,7 +20,6 @@ assert.deepEqual(Object.keys(addon).sort(), [
   'named',
   'parameterInfo',
   'parseTraceparent',
-  'readInputLog',
   'serialize',
   'statechart',
   'stepSpanID',

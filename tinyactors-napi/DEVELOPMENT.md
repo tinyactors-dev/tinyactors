@@ -80,7 +80,8 @@ and never run.
 
 `mise run bench [population ...]` runs the tracing bench
 (`test/bench/tracing.js`), the input-log bench (`test/bench/input_log.js`,
-a logged input against an unlogged one, napi ADR 0034) and the send-data
+a recorded input against an unrecorded one, kernel ADR 0006; on a build
+from before it, the input log of napi ADR 0034) and the send-data
 bench (`test/bench/send_data.js`, actor-to-actor sends with and without
 data, whose data is copied, napi ADR 0039) on Node and Bun and
 prints throughput and memory side by side; `mise run bench-compare <commit>`

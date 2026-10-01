@@ -270,15 +270,15 @@ it again with `{ binding, pendingSends }`.
 
 ## Persistence by replay
 
-A named actor can live on as the log of its inputs: record what it took,
-evict it, and rebuild it from the log when it is needed again (core ADRs
-0088 to 0091, napi ADRs 0032 to 0034). `system.setInputLog()` installs a
-write-ahead log: each turn your sink gets a batch, and nothing the turn
-caused leaves the process until you have stored it. Core writes the records
-as bytes in a portable layout; you append them to the address's log without
-parsing them, and hand the log back when tinyactors asks for the actor.
-Storage is yours: two tables are enough, a log of bytes per address and a
-wake per address.
+A named actor can live on as the journal of the events it took: record
+them, evict it, and rebuild it from the journal when it is needed again
+(kernel ADR 0006). `system.setRecorder()` hands your recorder, once per
+turn, the events the actors of the families you name took, as their charts
+saw them (`ActorEvent`s), each with the time it was taken, and when each
+address must be woken. You journal them as you like; to rebuild an actor,
+you replay its journal into an actor that crosses nothing until it is
+published. Storage is yours: two tables are enough, a journal of events
+per address and a wake per address.
 
 ```js
 const { createSystem, statechart } = require('@tinyactors/node');
@@ -288,32 +288,32 @@ const counter = statechart({ family: 'counter', revision: 'v1' })
   .state('s', (s) => s.on('inc', (t) => t.assign('n', ({ data }) => data.n + 1)));
 
 // Your store: two database tables in real life.
-const logs = new Map();  // address -> its log: byte chunks, appended in order
-const wakes = new Map(); // address -> when tinyactors needs the actor back
+const journals = new Map(); // address -> its events, { event, at }, in order
+const wakes = new Map();    // address -> when tinyactors needs the actor back
 const key = ({ family, name }) => `${family}/${name}`;
 
 async function main() {
   const system = createSystem();
   const definition = system.define(counter);
 
-  // Store each batch in one transaction. A turn's effects wait for commit().
-  system.setInputLog({
-    commit({ entries, wakes: changed }) {
-      for (const { address, bytes } of entries) logs.set(key(address), [...(logs.get(key(address)) ?? []), bytes]);
-      for (const { address, at } of changed) at === null ? wakes.delete(key(address)) : wakes.set(key(address), { address, at });
-    },
+  // Journal each batch, serializing the events during the call.
+  system.setRecorder(({ records, wakes: changed }) => {
+    for (const { address, event, at } of records) {
+      journals.set(key(address), [...(journals.get(key(address)) ?? []), JSON.parse(JSON.stringify({ event, at }))]);
+    }
+    for (const { address, at } of changed) at === null ? wakes.delete(key(address)) : wakes.set(key(address), { address, at });
   }, { families: ['counter'] });
 
-  // The whole loader: an address's log, handed back as it was stored.
-  system.setLoader('counter', (address) => ({ replay: { spawn: definition, inputs: logs.get(key(address)) ?? [] } }));
+  // The whole loader: an address's journal, replayed into an actor whose life began at 0.
+  system.setLoader('counter', (address) => ({ replay: { spawn: definition, at: 0, events: journals.get(key(address)) ?? [] } }));
 
-  // After a restart: bring back every actor that has a timer due or mail it owes.
+  // After a restart: bring back every actor that has a timer due.
   for (const { address, at } of wakes.values()) system.wakeAt(address, at);
 
   const c = system.spawn(definition, { name: 'c' });
   await c.send('inc');
   await c.send('inc');
-  system.evict(c); // its log is now its only state
+  system.evict(c); // its journal is now its only state
   await system.flush();
   await system.send({ family: 'counter', name: 'c' }, 'inc'); // replayed, then takes the new mail
   console.log(system.findActor({ family: 'counter', name: 'c' }).data().n); // 3
@@ -323,55 +323,43 @@ async function main() {
 main();
 ```
 
-A replay crosses no border: it sends nothing, starts no service and writes
-no log. Delayed sends that fired in the run it replays are dropped, and the
-ones still pending fire once, late if their time has passed; an evicted
-actor's wake brings it back when its next timer is due. Messages queued for
-it and never delivered before a crash are delivered after its replay.
+Rebuilding by hand is three calls: `system.prepare(definition, { address,
+at })`, `prepared.replay(event, at)` for each journaled event, then
+`system.publish(prepared)`. A replay crosses no border: it sends nothing,
+starts no service and writes no log. A timeout the actor sent itself is in
+its journal, so the rebuild reproduces it exactly; one still pending fires
+once, late if its time has passed, and an evicted actor's wake brings it
+back when its next timer is due. An event is recorded once the macrostep it
+started has ended, and the turn's batch reaches your recorder before the
+turn's `send()` promises settle: a caller that needs a message durable
+awaits `send()`, then your journal's write.
 
-**Memory stays bounded.** The `inputs` a loader returns may be an async
-iterable of byte chunks cut anywhere, such as a database cursor: a replay
-holds one record and one chunk, never the log. Values stream through in
-pieces, in the built-in data model's durable text (JSON, and
-`new Name(arguments)` for dates, maps, sets and classes that describe
-themselves); an input carrying a value with no durable form, such as a
-function or a cycle, is refused with `unsupported`.
-
-**Checkpoints bound the time a replay takes.**
-`system.checkpoint(actor, (chunk) => ...)` writes the actor's state in the
-same layout. A log that starts with a checkpoint replays from it, so a store
-may replace the records before it with the checkpoint once it is durable.
-The trade-off is upgrades: a checkpoint loads only under its own revision,
-so a store that compacts upgrades by migrating the state, while one that
-keeps the log from `spawned` upgrades by replaying it:
-`system.prepare(v2, { incumbent, log: firstChunk })`,
-`await prepared.replay(restOfTheChunks)`, then `system.publish(prepared)`.
-
-`readInputLog(chunks)` decodes a log into plain records, one at a time, for
-an audit trail: `accepted` carries a message and its data once, and
-`delivered` or `dropped` names it by `id` (kernel ADR 0002). Mail between
-persisted actors is exactly once across a crash, and effects that leave
-the process at most once, except what a long macrostep sent before a
-pause (next section). Expressions should read `context.time` rather than
-the wall clock, so a replay computes what the live run did.
+Your journal can hold any `ActorEvent`s, not only what the recorder hands
+you: domain facts a chart sends to a journal I/O processor, a fixture in a
+test, an export from another system. To upgrade, replay the journal into
+the new revision: `system.prepare(v2, { incumbent, at })`, then `replay`
+and `publish`.
 
 ## Crashes and repeated messages
 
-A macrostep that runs longer than one turn's budgets (`resumeBudget`,
-`actionBudget`: a long `<foreach>`, a large script) pauses and goes on in
-the next turn, and what it sent before the pause is committed then. If
-the process crashes before the macrostep ends, its message is delivered
-again after the restart, the macrostep runs again from its start, and
-**what it sent before the pause is sent again**, effects included (kernel
-ADR 0004). Nothing is lost, and a macrostep within the budgets is exactly
-once. A repeat carries the same `origin`, and the same `sendid` when the
-`<send>` has an `id`.
+What a crash costs is explicit (kernel ADR 0006 section 5). Events your
+recorder was handed but did not store yet are lost from the journal, and
+an event is recorded only once the macrostep it started has ended, so a
+crash before then leaves it out. Mail a receiver had not taken is in no
+journal. Recovery is end to end: a sender that needs an answer times out
+and retries, and a client retries its request. So delivery is **at least
+once where someone retries**, and at most once where nothing does. A
+rebuilt actor may also repeat once a delayed send to another actor or to
+an I/O processor that fired after the last event it took (see below). A
+repeat carries the same `origin`, and the same `sendid` when the `<send>`
+has an `id`.
 
 If a repeat would hurt:
 
-- **Don't send from long macrosteps: loop with events.** The chart sends
-  itself `next` per item, so each item is a short macrostep, and each send
-  is exactly once.
+- **Loop with events rather than sending from one long macrostep.** The
+  chart sends itself `next` per item, so each item is a short macrostep of
+  its own, recorded when it ends: a rebuild after a crash resumes at the
+  item it had reached, and a retry repeats at most one item.
 - **Make receivers idempotent on business keys**, such as a reservation
   keyed by (order, SKU). That also absorbs a client's HTTP retries.
 - **Guard with states:** an event with no transition in the receiver's
@@ -399,7 +387,7 @@ const reminder = statechart({ family: 'reminder', revision: 'v1' })
 ```js
 const { statechart } = require('@tinyactors/node');
 
-// One item per macrostep: each `reserve` is sent exactly once, even across a crash.
+// One item per macrostep: a rebuild resumes at the item it had reached.
 const order = statechart({ family: 'order', revision: 'v1' })
   .data('order', null)
   .data('items', [])

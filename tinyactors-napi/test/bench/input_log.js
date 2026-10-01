@@ -1,7 +1,8 @@
 'use strict';
 
-// Bench (not part of `mise run test`): what a logged input costs (napi ADR
-// 0034, kernel ADR 0002). Runs on Node and Bun.
+// Bench (not part of `mise run test`): what a recorded input costs (kernel
+// ADR 0006; before it, the input log of napi ADR 0034 and kernel ADR 0002).
+// Runs on Node and Bun.
 //
 //   node --expose-gc test/bench/input_log.js [actors] [--variants=a,b,...]
 //        [--exclusive] [--json=<file>] [--list]
@@ -15,11 +16,12 @@
 // round posts 50 `inc` messages to every actor and flushes once; five
 // rounds, reporting the median and best events per second:
 // - unlogged: no input log, each message with data `{ by: 1 }`;
-// - logged: an input log for the family, whose sink counts the bytes of each
-//   batch and drops them, each message with data `{ by: 1 }`; so each
-//   message writes an `accepted` record with its value and a `delivered`
-//   record (layout version 2);
-// - logged without data: the same, with no data, so no value is written.
+// - logged: a recorder for the family that journals each event as an
+//   application would, JSON.stringify of { event, at }, counting the bytes,
+//   each message with data `{ by: 1 }`. On a build from before kernel ADR
+//   0006 (bench-compare), an input log whose sink counts each batch's bytes
+//   instead, so the two are compared side by side;
+// - logged without data: the same, with no data.
 // Memory is measured after the actors are spawned and a GC ran, as in
 // tracing.js, and `memory.logBytesPerEvent` is the bytes the sink received
 // per message over the timed rounds.
@@ -49,11 +51,24 @@ function settle() {
 }
 
 const sink = { commit(batch) { for (const entry of batch.entries) bytesOut += entry.bytes.length; } };
+// What an application's journal writes for each recorded event.
+const recorder = (batch) => {
+  for (const record of batch.records) bytesOut += JSON.stringify({ event: record.event, at: record.at }).length;
+};
+
+// The recorder, or on a build without one, the input log it replaced.
+function record(system) {
+  if (typeof system.setRecorder === 'function') {
+    system.setRecorder(recorder, { families: [FAMILY] });
+  } else {
+    system.setInputLog(sink, { families: [FAMILY] });
+  }
+}
 
 async function measure({ logged, data }) {
   const before = settle();
   const system = createSystem();
-  if (logged) system.setInputLog(sink, { families: [FAMILY] });
+  if (logged) record(system);
   const definition = system.define(chart());
   const actors = [];
   for (let at = 0; at < population; at += 1) actors.push(system.spawn(definition, { name: `a${at}` }));
