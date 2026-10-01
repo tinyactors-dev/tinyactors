@@ -334,6 +334,44 @@ started has ended, and the turn's batch reaches your recorder before the
 turn's `send()` promises settle: a caller that needs a message durable
 awaits `send()`, then your journal's write.
 
+**Example: an allow list.** The people who may manage pull requests, kept
+by one actor whose journal explains every change: who granted or revoked
+whom, when, and through what (`test/allow-list.js` runs it whole). Each
+change is also written to an audit I/O processor and told to a notifier
+actor, and the list watches a directory service that can revoke people.
+
+```js
+const allowList = statechart({ family: 'allow-list', revision: 'v1' })
+  .data('people', [])
+  .state('open', (s) => s
+    .invoke((i) => i.type('directory').id('dir'))
+    .on('grant', (t) => t
+      .when(({ data, event }) => !data.people.includes(event.data.person))
+      .assign('people', ({ data, event }) => [...data.people, event.data.person])
+      .send('granted', (send) => send.via('audit').data(({ event }) => event.data))
+      .send('changed', (send) => send.to('#_actor_notifier/main')))
+    .on('revoke', (t) => t
+      .assign('people', ({ data, event }) => data.people.filter((p) => p !== event.data.person))
+      .send('revoked', (send) => send.via('audit').data(({ event }) => event.data))
+      .send('changed', (send) => send.to('#_actor_notifier/main'))));
+
+// Journal: the list's events as the chart saw them, with their times.
+const journal = [];
+system.setRecorder(({ records }) => {
+  for (const { event, at } of records) journal.push(JSON.parse(JSON.stringify({ event, at })));
+}, { families: ['allow-list'] });
+
+// ... grant alice (by owner), grant bob (by alice), the directory revokes alice ...
+// journal: grant alice/owner @1000, grant bob/alice @2000,
+//          revoke alice/directory @3000 (invocationID "dir")
+
+// Rebuild, in this process or another: nothing reaches the audit processor,
+// the directory invoker or the notifier until publish().
+const prepared = system.prepare(definition, { address: { family: 'allow-list', name: 'pull-requests' }, at: 0 });
+for (const { event, at } of journal) prepared.replay(event, at);
+const list = system.publish(prepared); // people: ['bob']
+```
+
 Your journal can hold any `ActorEvent`s, not only what the recorder hands
 you: domain facts a chart sends to a journal I/O processor, a fixture in a
 test, an export from another system. To upgrade, replay the journal into
