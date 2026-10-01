@@ -162,13 +162,14 @@ napi_value tna_write_evicted_method(napi_env env, napi_callback_info info) {
     if (!tna_actor_arguments(env, argv, argc, &actor)) {
         return tna_throw(env, "invalid", "writeEvicted: expected (slot, generation, wake?)");
     }
-    if (!tah_inputs_enabled(tah_system_inputs(system))) {
-        return NULL;
-    }
     double wake = 0;
     napi_valuetype type = napi_undefined;
     bool has_wake = argc >= 3 && argv[2] != NULL && napi_typeof(env, argv[2], &type) == napi_ok &&
                     type == napi_number && napi_get_value_double(env, argv[2], &wake) == napi_ok && wake >= 0;
+    tah_recorder_evicted(system, actor, has_wake, (ta_time)wake);
+    if (!tah_inputs_enabled(tah_system_inputs(system))) {
+        return NULL;
+    }
     ta_result result = tah_inputs_evicted(system, actor, has_wake, (ta_time)wake);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "evict(): the input log cannot record the eviction");
@@ -195,6 +196,7 @@ napi_value tna_input_forget_method(napi_env env, napi_callback_info info) {
     }
     /* `destroyed`, written before the actor goes (kernel ADR 0002): an
      * actor whose end cannot be recorded is not destroyed. */
+    tah_recorder_forget(system, actor);
     ta_result result = tah_inputs_destroying(system, actor);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "destroy(): the input log cannot record the end of the actor");

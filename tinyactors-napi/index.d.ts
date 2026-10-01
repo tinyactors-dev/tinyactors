@@ -180,7 +180,42 @@ export type LoadResult<Data extends object = object> =
         readonly inputs: Iterable<Uint8Array> | AsyncIterable<Uint8Array>;
         readonly onReport?: (report: ReplayReport) => void;
       };
+    }
+  | {
+      /**
+       * Rebuild the actor from the application's journal of its events
+       * (kernel ADR 0006 section 3): an actor of `spawn`, prepared at `at`
+       * (when its life began) with `binding`, takes each journaled event at
+       * its time, with nothing crossing the border, and is published at the
+       * last event's time; the mail that waited for the load follows. A
+       * journal that ends in a final state ends the load `done`. Any other
+       * failure is `load-failed`. For a named address only.
+       */
+      readonly replay: {
+        readonly spawn: Definition<Data>;
+        readonly at: number;
+        readonly binding?: Partial<Data> | Data;
+        readonly events: Iterable<RecordedEvent> | AsyncIterable<RecordedEvent>;
+      };
     };
+
+/** An event an actor took, and when: what a journal keeps (kernel ADR 0006). */
+export interface RecordedEvent {
+  readonly event: ActorEvent;
+  readonly at: number;
+}
+
+/** One record of a recorder's batch: the actor's address, the event it took, and when. */
+export interface EventRecord extends RecordedEvent {
+  readonly address: ActorAddress;
+}
+
+/** What a recorder gets once per turn (kernel ADR 0006 section 2). */
+export interface RecordBatch {
+  readonly records: readonly EventRecord[];
+  /** When each address must be woken, or null when it need not be. */
+  readonly wakes: readonly { readonly address: ActorAddress; readonly at: number | null }[];
+}
 
 export interface LoaderOptions {
   /** Milliseconds the loader may take; after that its mail is `load-timeout` (default 5000). */
@@ -636,6 +671,21 @@ export interface System {
    * removes the sink; what it held runs once the commits before it are done.
    */
   setInputLog(sink: InputLog | null, options?: { readonly families: readonly string[] }): void;
+
+  /**
+   * Record the events the named actors of `families` take (kernel ADR 0006
+   * section 2): once per turn, `recorder(batch)` gets the events whose
+   * macrosteps ended, as the charts saw them, with their times, in the order
+   * the actors took them, and the wakes of the addresses touched. Journal
+   * them, and rebuild an actor by replaying its journal: prepare() with
+   * `at`, PreparedActor.replay(event, at) for each, publish(); or answer a
+   * loader with { replay: { spawn, at, events } }. After a restart, call
+   * wakeAt(address, at) for every stored wake. An event's data is shared with
+   * the actor: serialize it during the call. A turn's batch is handed over
+   * before its send() promises settle. A recorder that throws is reported
+   * as the turn's error. `null` stops recording.
+   */
+  setRecorder(recorder: ((batch: RecordBatch) => void) | null, options?: { readonly families: readonly string[] }): void;
 
   /**
    * Remove a stable named actor so that its input log becomes its only

@@ -13,6 +13,7 @@
 #include "import.h"
 #include "napi_codecs.h"
 #include "napi_inputs.h"
+#include "napi_recorder.h"
 #include "napi_replay.h"
 #include "napi_services.h"
 #include "napi_loads.h"
@@ -2136,6 +2137,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "replayLastTime", NULL, tna_replay_last_time_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayRedeliver", NULL, tna_replay_redeliver_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayClose", NULL, tna_replay_close_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "setRecorder", NULL, tna_set_recorder_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayEvent", NULL, tna_replay_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayEventsDone", NULL, tna_replay_events_done_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "checkpoint", NULL, tna_checkpoint_method, NULL, NULL, NULL, napi_default_method, NULL },

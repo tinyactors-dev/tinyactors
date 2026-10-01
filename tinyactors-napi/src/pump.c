@@ -1,6 +1,7 @@
 #include "pump.h"
 
 #include "napi_inputs.h"
+#include "napi_recorder.h"
 
 #include "napi_loads.h"
 #include "napi_services.h"
@@ -706,6 +707,11 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
          * behind their commit (napi ADR 0032 section 6). */
         if (!tah_system_closed(system)) {
             tna_inputs_dispatch(env, wrapper, &first_error);
+        }
+        /* Then the events the turn's ended macrosteps took, before any send()
+         * of the turn settles (kernel ADR 0006 section 2). */
+        if (!tah_system_closed(system)) {
+            tna_recorder_dispatch(env, wrapper, &first_error);
         }
         /* Then the turn's trace records, as one batch (napi ADR 0015). */
         if (!tah_system_closed(system)) {

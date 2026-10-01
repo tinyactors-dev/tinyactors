@@ -134,12 +134,15 @@ static bool tah_recorder_family_listed(const tah_recorder *recorder, ta_str fami
 }
 
 /* The address of `actor` when it is a published named actor of a recorded family (borrowed), or NULL. */
-static ta_address *tah_recorder_address_of(tah_system *system, ta_actor_id actor) {
+static ta_address *tah_recorder_address_of(tah_system *system, ta_actor_id actor, uint64_t *session) {
     ta_actor_inspection view;
     if (ta_actor_inspect(system->core, actor, &view) != TA_OK || !view.published ||
         view.self.kind != TA_ACTOR_REF_NAMED ||
         !tah_recorder_family_listed(&system->recorder, view.definition.family.name)) {
         return NULL;
+    }
+    if (session != NULL) {
+        *session = view.session_id;
     }
     return view.self.as.named;
 }
@@ -216,11 +219,13 @@ static void tah_recorder_offering(tah_system *system, const tah_sched_note *note
         tah_recorded_release(&recorder->offered);
         recorder->offering = false;
     }
-    ta_address *address = tah_recorder_address_of(system, note->actor);
+    uint64_t session = 0;
+    ta_address *address = tah_recorder_address_of(system, note->actor, &session);
     if (address == NULL || note->message == NULL) {
         return;
     }
-    tah_recorded recorded = { .actor = note->actor, .address = address, .at = ta_system_time(system->core) };
+    tah_recorded recorded = { .actor = note->actor, .address = address, .at = ta_system_time(system->core),
+                              .session = session };
     if (note->kind == TAH_NOTE_REPORTING) {
         if (tah_recorder_report_event(system, note->message, &recorded.event) != TA_OK) {
             recorder->lost += 1u;
@@ -305,7 +310,7 @@ void tah_recorder_note(tah_system *system, const tah_sched_note *note) {
     case TAH_NOTE_SETTLED:
     case TAH_NOTE_FINISHED: {
         /* Its macrostep may have armed or cancelled sends: work its wake out. */
-        ta_address *address = tah_recorder_address_of(system, note->actor);
+        ta_address *address = tah_recorder_address_of(system, note->actor, NULL);
         if (address != NULL) {
             tah_recorder_touch_address(recorder, address, false, false, 0);
         }
@@ -326,9 +331,10 @@ void tah_recorder_removed(tah_system *system, ta_actor_id actor) {
 }
 
 void tah_recorder_evicted(tah_system *system, ta_actor_id actor, bool has_wake, ta_time wake) {
-    ta_address *address = system->recorder.enabled ? tah_recorder_address_of(system, actor) : NULL;
+    ta_address *address = system->recorder.enabled ? tah_recorder_address_of(system, actor, NULL) : NULL;
     if (address != NULL) {
         tah_recorder_touch_address(&system->recorder, address, true, has_wake, wake);
+        tah_system_want_turn(system); /* the wake goes out with the next turn's batch */
     }
 }
 
@@ -343,6 +349,64 @@ uint32_t tah_recorder_count(const tah_system *system) {
 tah_record tah_recorder_record(const tah_system *system, uint32_t index) {
     const tah_recorded *recorded = tah_vec_at(&system->recorder.records, index);
     return (tah_record){ .address = ta_address_view(recorded->address), .event = &recorded->event, .at = recorded->at };
+}
+
+/* An event name's dotted text, in `arena`. */
+static ta_result tah_recorder_name_text(const tah_system *system, ta_event_name_id name, ta_allocator arena, ta_str *out) {
+    uint32_t needed = 0;
+    (void)ta_event_name_format(system->core, &(ta_event_name_format_params){ .name = name, .needed = &needed });
+    char *buffer = needed == 0 ? NULL : tah_alloc(arena, needed, 1);
+    if (buffer == NULL ||
+        ta_event_name_format(system->core, &(ta_event_name_format_params){ .name = name, .buffer = buffer,
+                                                                           .capacity = needed, .needed = &needed }) != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
+    *out = (ta_str){ .ptr = buffer, .len = needed - 1u };
+    return TA_OK;
+}
+
+/* A send ID's text, in `arena`; empty for none. */
+static ta_result tah_recorder_send_text(const tah_system *system, ta_send_id send, ta_allocator arena, ta_str *out) {
+    uint32_t needed = 0;
+    if (send == 0) {
+        return TA_OK;
+    }
+    (void)ta_send_id_format(system->core, &(ta_send_id_format_params){ .send_id = send, .needed = &needed });
+    char *buffer = needed == 0 ? NULL : tah_alloc(arena, needed, 1);
+    if (buffer == NULL ||
+        ta_send_id_format(system->core, &(ta_send_id_format_params){ .send_id = send, .buffer = buffer,
+                                                                     .capacity = needed, .needed = &needed }) != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
+    *out = (ta_str){ .ptr = buffer, .len = needed - 1u };
+    return TA_OK;
+}
+
+ta_result tah_recorder_texts(const tah_system *system, uint32_t index, ta_allocator arena, tah_record_texts *out) {
+    const tah_recorded *recorded = tah_vec_at(&system->recorder.records, index);
+    const ta_event *event = &recorded->event;
+    *out = (tah_record_texts){ .type = event->type };
+    ta_result result = tah_recorder_name_text(system, event->name, arena, &out->name);
+    if (result == TA_OK) {
+        result = tah_recorder_send_text(system, event->send_id, arena, &out->send_id);
+    }
+    if (result == TA_OK && event->origin.kind != TA_ORIGIN_NONE) {
+        result = ta_origin_text(system->core, &(ta_origin_text_params){ .origin = &event->origin,
+                                                                        .session_id = recorded->session,
+                                                                        .arena = arena,
+                                                                        .type = &out->origin_type,
+                                                                        .uri = &out->origin });
+        if (result == TA_ERR_NOT_FOUND) {
+            out->origin = (ta_str){ 0 };
+            out->origin_type = (ta_str){ 0 };
+            result = TA_OK; /* an origin with no text: a closed scope */
+        }
+    }
+    if (result == TA_OK && event->invoke_id != TA_INVOKE_ID_NONE &&
+        ta_system_invoke_id_text(system->core, event->invoke_id, &out->invoke_id) != TA_OK) {
+        out->invoke_id = (ta_str){ 0 };
+    }
+    return result;
 }
 
 static bool tah_recorder_copy(tah_recorder *recorder, ta_str text, ta_str *out) {

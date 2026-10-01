@@ -145,6 +145,8 @@ typedef struct {
     char names[8][32];
     char addresses[8][32];
     ta_time times[8];
+    bool send_ids[8];
+    char origins[8][32];
     uint32_t wakes;
     char wake_addresses[8][32];
     bool wake_has[8];
@@ -169,6 +171,16 @@ static void take(world *w, batch *out) {
                                                         .name = record.event->name, .buffer = name,
                                                         .capacity = sizeof name, .needed = &needed }) == TA_OK);
         text_into(out->names[index], sizeof out->names[index], (ta_str){ .ptr = name, .len = needed - 1u });
+        ta_arena arena;
+        CHECK(ta_arena_init(&arena, check_platform_allocator(), 1024) == TA_OK);
+        tah_record_texts texts;
+        CHECK(tah_recorder_texts(w->system, index, ta_arena_allocator(&arena), &texts) == TA_OK);
+        CHECK(texts.name.len == needed - 1u && memcmp(texts.name.ptr, name, texts.name.len) == 0);
+        CHECK(texts.type == TA_EVENT_EXTERNAL);
+        CHECK(texts.invoke_id.len == 0);
+        out->send_ids[index] = texts.send_id.len != 0;
+        text_into(out->origins[index], sizeof out->origins[index], texts.origin);
+        ta_arena_destroy(&arena);
         text_into(out->addresses[index], sizeof out->addresses[index], record.address.name);
         out->times[index] = record.at;
     }
@@ -216,6 +228,7 @@ static void records_a_delivery(void) {
     CHECK(strcmp(b.names[0], "ping") == 0);
     CHECK(strcmp(b.addresses[0], "p1") == 0);
     CHECK(b.times[0] == 1000);
+    CHECK(b.origins[0][0] == '\0' && !b.send_ids[0]); /* posted from outside: no origin, no send ID */
     CHECK(b.wakes == 1 && strcmp(b.wake_addresses[0], "p1") == 0 && !b.wake_has[0]);
     finish_world(&w);
 }
@@ -281,6 +294,8 @@ static void wakes(void) {
     CHECK(tah_system_advance_to(w.system, 6000) == TA_OK);
     CHECK(run(&w, &b) == 1); /* the tick it sent itself */
     CHECK(strcmp(b.names[0], "tick") == 0 && b.times[0] == 6000);
+    CHECK(b.send_ids[0]); /* the delayed send's ID, t1 */
+    CHECK(strcmp(b.origins[0], "#_actor_ping/p1") == 0);
     CHECK(b.wakes == 1 && !b.wake_has[0]);
 
     tah_recorder_evicted(w.system, actor, true, 9000);
@@ -304,12 +319,12 @@ static void close_with_records(void) {
     world w = make_world();
     ta_actor_id actor = spawn(&w, w.ping, &ping_address);
     post(&w, actor, "ping");
-    for (int guard = 0; !tah_system_quiet(w.system); guard += 1) {
-        CHECK(guard < 100);
+    for (int turns = 0; turns < 3; turns += 1) {
         tah_system_turn(w.system);
         tah_system_end_turn(w.system);
     }
     CHECK(tah_recorder_count(w.system) == 1);
+    CHECK(!tah_system_quiet(w.system)); /* records wait for the binding */
     finish_world(&w);
 }
 

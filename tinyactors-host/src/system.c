@@ -285,6 +285,7 @@ static bool tah_system_due_now(const tah_system *system) {
 bool tah_system_quiet(const tah_system *system) {
     return tah_sched_quiet(&system->sched) && system->effects.count == 0 && system->inputs.count == 0 &&
            system->inputs.ended == 0 &&
+           system->recorder.records.count == 0 && system->recorder.touched.count == 0 &&
            system->quarantine_reports.count == 0 &&
            tah_loads_pending_requests(&system->loads) == 0 &&
            (!system->tracing || system->otlp.span_count == 0) &&

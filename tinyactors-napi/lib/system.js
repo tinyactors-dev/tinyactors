@@ -216,6 +216,9 @@ class System {
   // services held since the last batch, the batches waiting to commit (one
   // commits at a time, in turn order), and the first commit that failed.
   #inputLog;
+  // The application's recorder (kernel ADR 0006 section 2), and its families.
+  #recorder;
+  #recorded = new Set();
   #faultHook;
   #held = [];
   #commits = [];
@@ -429,6 +432,42 @@ class System {
   }
 
   /**
+   * Record the events the named actors of `families` take (kernel ADR 0006
+   * section 2): once per turn, `recorder(batch)` gets { records, wakes }.
+   * Each record is { address, event, at }: the event as the chart saw it
+   * (an ActorEvent) and the time it was taken, recorded once the macrostep
+   * it started ended, in the order the actors took them. Each wake is {
+   * address, at }: when the address must be woken (its first pending
+   * delayed send), or null when it need not be. Journal them as you like,
+   * and rebuild an actor by replaying its journal: prepare() with `at`,
+   * replay(event, at) for each, then publish(); after a restart, call
+   * wakeAt(address, at) for every stored wake. An event's `data` is shared
+   * with the actor: serialize it during the call. The batch of a turn is
+   * handed over before the turn's send() promises settle. A recorder that
+   * throws is reported as the turn's error, and recording goes on. `null`
+   * stops recording.
+   */
+  setRecorder(recorder, options = {}) {
+    if (recorder === null) {
+      this.#native.setRecorder(null);
+      this.#recorder = undefined;
+      this.#recorded = new Set();
+      return;
+    }
+    if (typeof recorder !== 'function') {
+      throw new TinyactorsError('setRecorder(): expected a function, or null', 'invalid');
+    }
+    const families = options?.families;
+    if (!Array.isArray(families) || families.length === 0 ||
+        families.some((family) => typeof family !== 'string' || family === '')) {
+      throw new TinyactorsError('setRecorder(): options.families must be a non-empty array of family names', 'invalid');
+    }
+    this.#native.setRecorder(families);
+    this.#recorder = recorder;
+    this.#recorded = new Set(families);
+  }
+
+  /**
    * Send `<log>` records to `sink` ({ source, label, hasValue, value }), at
    * the end of the pump turn that ran them (core ADR 0045). Without a sink a
    * <log> only evaluates its expression.
@@ -620,6 +659,9 @@ class System {
         return;
       case 'inputs':
         this.#commitInputs(payload);
+        return;
+      case 'record':
+        this.#recorder?.(payload);
         return;
       default:
         return;
@@ -1612,7 +1654,7 @@ class System {
    */
   destroy(actor) {
     const { slot, generation } = actorOf(this, actor);
-    if (this.#inputLog !== undefined) {
+    if (this.#inputLog !== undefined || this.#recorder !== undefined) {
       const self = this.#destination(core.actor_inspect(this.#native, slot, generation).self);
       if (self !== null && !(self instanceof ActorID)) {
         this.#native.inputForget(slot, generation);
@@ -2097,7 +2139,9 @@ class System {
       this.#completeLoad(index, generation, 'spawned', this.#spawnAt(result, load));
     } else if (result !== null && typeof result === 'object' && result.replay !== null &&
                typeof result.replay === 'object') {
-      const actor = await this.#replayAt(result.replay, load);
+      const actor = result.replay.events !== undefined
+        ? await this.#replayEventsAt(result.replay, load)
+        : await this.#replayAt(result.replay, load);
       if (!this.closed) {
         if (actor === undefined) {
           this.#completeLoad(index, generation, 'done'); // the history ends in a final state
@@ -2109,6 +2153,59 @@ class System {
       this.#failLoad(key, load, 'failed', 'the loader returned something it cannot: expected "offloaded", ' +
         'a SessionImage, { image, restore }, { spawn, binding, pendingSends }, { replay }, "not-found", "reject" ' +
         'or { reject }');
+    }
+  }
+
+  // A loader's { replay: { spawn, at, binding, events } } (kernel ADR 0006
+  // section 3): `events` is the address's journal, an iterable or async
+  // iterable of { event, at }. An actor prepared at `at` (when its life
+  // began) takes each event at its time and is published at the last one's;
+  // the load's waiting mail follows. A journal that ends in a final state
+  // answers undefined: the load ends `done`. On any failure the prepared
+  // actor is destroyed and the load fails.
+  async #replayEventsAt(replay, load) {
+    const { address } = load;
+    const { spawn: definition, at, binding, events } = replay;
+    if (!(definition instanceof Definition) || definition.system !== this ||
+        definition.identity.family !== address.family) {
+      throw new TinyactorsError(`{ replay } needs a definition of family ${address.family} of this system`, 'invalid');
+    }
+    if (typeof at !== 'number' || !Number.isFinite(at) || at < 0) {
+      throw new TinyactorsError('{ replay }: `at`, when the actor\'s life began, must be a non-negative number', 'invalid');
+    }
+    const open = events?.[Symbol.asyncIterator] ?? events?.[Symbol.iterator];
+    if (events === null || typeof events !== 'object' || typeof open !== 'function') {
+      throw new TinyactorsError('{ replay }: `events` must be an iterable or async iterable of { event, at }', 'invalid');
+    }
+    const prepared = this.prepare(definition, { address, at, ...(binding === undefined ? {} : { binding }) });
+    try {
+      let finished = false;
+      for await (const entry of events) {
+        if (this.closed) {
+          throw new TinyactorsError('replay: the system was closed', 'closed');
+        }
+        if (entry === null || typeof entry !== 'object') {
+          throw new TinyactorsError('{ replay }: each entry of `events` is { event, at }', 'invalid');
+        }
+        if (this[REPLAY_EVENT](prepared, entry.event, entry.at).status === 'done') {
+          finished = true;
+          break;
+        }
+      }
+      if (finished) {
+        this.#dropPrepared(prepared);
+        return undefined;
+      }
+      this.#native.replayEventsDone(prepared.slot, prepared.generation);
+      const actor = this.#publishCore(prepared, prepared[LAST_AT]);
+      // A published replay replaces whatever unload() offloaded to this address.
+      this.#native.dropOffloaded(address.family, address.name);
+      return actor;
+    } catch (error) {
+      if (!this.closed) {
+        this.#dropPrepared(prepared);
+      }
+      throw error;
     }
   }
 
@@ -3031,3 +3128,4 @@ function sessionNumber(system, text) {
 }
 
 module.exports = { System, createSystem, actorURI, nativeOf, ActorID, PreparedActor, SessionImage };
+

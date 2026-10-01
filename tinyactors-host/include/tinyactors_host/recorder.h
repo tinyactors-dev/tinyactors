@@ -47,6 +47,17 @@ bool tah_recorder_enabled(const tah_system *system);
 /* This turn's records, in the order their macrosteps ended. */
 uint32_t tah_recorder_count(const tah_system *system);
 tah_record tah_recorder_record(const tah_system *system, uint32_t index);
+/* A record's event as texts, the fields of the event the chart saw (`_event`); an absent one is empty. */
+typedef struct {
+    ta_str name;
+    ta_event_type type;
+    ta_str send_id;
+    ta_str origin;
+    ta_str origin_type;
+    ta_str invoke_id;
+} tah_record_texts;
+/* Renders record `index`'s texts into `arena`; TA_ERR_NOMEM when it cannot. */
+ta_result tah_recorder_texts(const tah_system *system, uint32_t index, ta_allocator arena, tah_record_texts *out);
 /* This turn's wakes; NULL when there are none. */
 const tah_record_wake *tah_recorder_wakes(tah_system *system, uint32_t *count);
 /* Releases this turn's records and wakes, once the binding took them. */

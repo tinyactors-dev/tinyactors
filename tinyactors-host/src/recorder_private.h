@@ -13,6 +13,7 @@ typedef struct {
     ta_address *address;
     ta_event event;
     ta_time at;
+    uint64_t session; /* the receiver's session, which renders a computed origin */
 } tah_recorded;
 
 /* An address whose wake this turn reports; `fixed` gives it outright (an eviction, a forget). */
