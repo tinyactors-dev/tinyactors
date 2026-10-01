@@ -11,7 +11,6 @@
 #include "directory_private.h"
 #include "effects_private.h"
 #include "host_metrics_private.h"
-#include "inputs_private.h"
 #include "loads_private.h"
 #include "offloads_private.h"
 #include "otlp_private.h"
@@ -80,13 +79,11 @@ struct tah_system {
     /* Set while core dispatches due delayed sends: what the router is handed
      * then is a timer firing, and its lateness is recorded. */
     bool dispatching_due;
-    /* The input log (inputs.h, napi ADR 0032 section 6). */
-    tah_inputs inputs;
     /* The recorder (recorder.h, kernel ADR 0006 section 2). */
     tah_recorder recorder;
     /* The kernel's parameters, fixed at creation (params.h, napi ADR 0035). */
     tah_params params;
 };
 
-/* Points the scheduler's observer at the input log and the recorder, while either is on. */
+/* Points the scheduler's observer at the recorder while it is on. */
 void tah_system_observe(tah_system *system);

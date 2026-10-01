@@ -6,7 +6,7 @@
  * memory needs, free of any language's API. A language binding (napi, the
  * test host, a future CPython or browser build) links it and implements
  * the host interface declared here; the kernel gives it back the system,
- * actors, turns, mailboxes, routing and the write-ahead log.
+ * actors, turns, mailboxes, routing, the recorder and event replay.
  *
  * The kernel is libc-free C, like core: no I/O, no threads, memory only
  * through the allocator it is given, no recursion, and no C standard
@@ -66,8 +66,6 @@ TAH_API uint32_t tah_version(void);
 #include "tinyactors_host/events.h"
 #include "tinyactors_host/hooks.h"
 #include "tinyactors_host/host_metrics.h"
-#include "tinyactors_host/inputs.h"
-#include "tinyactors_host/wal.h"
 #include "tinyactors_host/loads.h"
 #include "tinyactors_host/offloads.h"
 #include "tinyactors_host/otlp.h"

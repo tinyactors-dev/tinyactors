@@ -15,7 +15,8 @@
  *
  * The data model, with its streaming codec (core ADR 0090, sections 1 and
  * 2), is core's `ta_datamodel`: a data model encodes and decodes its own
- * values, and the kernel calls its codec for the write-ahead log.
+ * values, and the kernel calls its codec to offload an actor (core ADR
+ * 0074).
  */
 
 /*

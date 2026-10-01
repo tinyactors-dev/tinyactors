@@ -8,5 +8,5 @@ valid:
 invalid:
   - "struct tah_system { int closed; };"
   - "typedef struct { uint32_t known; } tah_sched;"
-  - "typedef struct tah_inputs { bool enabled; } tah_inputs;"
+  - "typedef struct tah_recorder { bool enabled; } tah_recorder;"
   - "typedef struct { struct { int a; } inner; } tah_loads;"

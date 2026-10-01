@@ -5,6 +5,7 @@
 #include "tinyactors_host/adapter_invoker.h"
 #include "tinyactors_host/adapter_io.h"
 #include "tinyactors_host/adapter_log.h"
+#include "tinyactors_host/hooks.h"
 #include "tinyactors_host/router.h"
 #include "system_private.h"
 
@@ -64,7 +65,6 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
     tah_vec_init(&system->quarantine_reports, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER),
                  TAH_LAYOUT(tah_quarantine_report));
     tah_host_metrics_init(&system->metrics);
-    tah_inputs_init(&system->inputs, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
     tah_recorder_init(&system->recorder, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
     ta_result result = tah_scratch_init(&system->scratch, &system->allocator);
     if (result != TA_OK) {
@@ -124,7 +124,6 @@ void tah_system_close(tah_system *system) {
     tah_effects_close(&system->effects);
     /* Records hold values; the log goes while core is alive. */
     system->sched.observer = (tah_sched_observer){ 0 };
-    tah_inputs_destroy(system);
     tah_recorder_destroy(&system->recorder);
     if (system->tracing) {
         tah_otlp_destroy(&system->otlp);
@@ -198,9 +197,6 @@ tah_host_metrics *tah_system_metrics(tah_system *system) {
     return &system->metrics;
 }
 
-tah_inputs *tah_system_inputs(tah_system *system) {
-    return &system->inputs;
-}
 
 const tah_params *tah_system_params(const tah_system *system) {
     return &system->params;
@@ -283,8 +279,7 @@ static bool tah_system_due_now(const tah_system *system) {
 }
 
 bool tah_system_quiet(const tah_system *system) {
-    return tah_sched_quiet(&system->sched) && system->effects.count == 0 && system->inputs.count == 0 &&
-           system->inputs.ended == 0 &&
+    return tah_sched_quiet(&system->sched) && system->effects.count == 0 &&
            system->recorder.records.count == 0 && system->recorder.touched.count == 0 &&
            system->quarantine_reports.count == 0 &&
            tah_loads_pending_requests(&system->loads) == 0 &&
@@ -601,7 +596,6 @@ void tah_system_turn(tah_system *system) {
         return;
     }
     tah_system_sync_time(system);
-    tah_inputs_retry(system);
     tah_sched_turn(&system->sched, &(tah_turn_params){
                                        .core = system->core,
                                        .arena = &system->scratch.turn,
@@ -660,16 +654,34 @@ ta_result tah_system_post(tah_system *system, const tah_message *message) {
     return result;
 }
 
-/* The scheduler's one observer: the input log, whose answer counts, then the recorder. */
-static ta_result tah_system_note(void *self, const tah_sched_note *note) {
-    tah_system *system = self;
-    ta_result result = system->inputs.enabled ? tah_inputs_note(self, note) : TA_OK;
-    tah_recorder_note(system, note);
-    return result;
+/* The scheduler's observer: the recorder. */
+static void tah_system_note(void *self, const tah_sched_note *note) {
+    tah_recorder_note(self, note);
 }
 
 void tah_system_observe(tah_system *system) {
-    system->sched.observer = system->inputs.enabled || system->recorder.enabled
+    system->sched.observer = system->recorder.enabled
                                  ? (tah_sched_observer){ .self = system, .note = tah_system_note }
                                  : (tah_sched_observer){ 0 };
+}
+
+ta_result tah_system_withdraw_send(tah_system *system, ta_actor_id actor, ta_send_id send) {
+    system->inside_core = true;
+    ta_result result = ta_actor_withdraw_send(system->core, actor, send);
+    system->inside_core = false;
+    if (result == TA_OK) {
+        /* Its wake may move (kernel ADR 0006 section 2). */
+        ta_actor_inspection view;
+        if (ta_actor_inspect(system->core, actor, &view) == TA_OK) {
+            tah_recorder_fired(system, &view.self);
+        }
+    }
+    return result;
+}
+
+ta_result tah_system_abandon(tah_system *system, ta_actor_id actor) {
+    system->inside_core = true;
+    ta_result result = ta_actor_abandon(system->core, actor);
+    system->inside_core = false;
+    return result == TA_OK ? tah_hook_actor_abandoned(system, actor) : result;
 }

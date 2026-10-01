@@ -3,10 +3,8 @@
 #include "memory.h"
 
 
-#include "tinyactors_host/inputs.h"
 #include "tinyactors_host/recorder.h"
 #include "tinyactors_host/system.h"
-#include "inputs_private.h"
 #include "system_private.h"
 
 struct tah_io_processor {
@@ -21,11 +19,6 @@ struct tah_io_processor {
 
 static ta_op_status tah_io_send(void *self, const ta_send *send, ta_fault *fault) {
     tah_system *system = ((tah_io_processor *)self)->system;
-    /* A logged sender's timer fired (kernel ADR 0002): recorded first, or it waits. */
-    tah_input_mark fired = { 0 };
-    if (system->dispatching_due && tah_inputs_fired(system, &send->source, send->send_id, &fired) != TA_OK) {
-        return TA_OP_NOMEM;
-    }
     tah_effect effect = {
         .kind = TAH_EFFECT_IO,
         .source = send->source,
@@ -54,7 +47,6 @@ static ta_op_status tah_io_send(void *self, const ta_send *send, ta_fault *fault
         }
         /* Nothing was queued, which is running out of memory, not a failed
          * send: core keeps the send and offers it again (core ADR 0070). */
-        tah_inputs_undo(system, &fired);
         return TA_OP_NOMEM;
     }
     if (system->dispatching_due) {

@@ -122,6 +122,6 @@ struct tah_sched {
     tah_turn_record *records;
     tah_turn_record *last_record;
     uint32_t record_count;
-    /* The input log's observer (napi ADR 0032 section 6), or none. */
+    /* The recorder's observer (kernel ADR 0006 section 2), or none. */
     tah_sched_observer observer;
 };

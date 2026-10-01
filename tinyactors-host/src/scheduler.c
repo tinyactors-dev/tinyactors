@@ -75,21 +75,18 @@ static void tah_jump_give(tah_sched *sched, tah_envelope *envelope) {
     envelope->has_jump = 0;
 }
 
-/* Tells the input log's observer, when there is one (napi ADR 0032 section 6). */
-static ta_result tah_sched_note_to(const tah_sched *sched, tah_sched_note note) {
+/* Tells the recorder, when there is one (kernel ADR 0006 section 2). */
+static void tah_sched_note_to(const tah_sched *sched, tah_sched_note note) {
     if (sched->observer.self == NULL) {
-        return TA_OK;
+        return;
     }
     note.message = note.envelope != 0 ? tah_sched_envelope(sched, note.envelope) : NULL;
-    return sched->observer.note(sched->observer.self, &note);
+    sched->observer.note(sched->observer.self, &note);
 }
 
 /* Releases the envelope's references and returns it to the free list. */
 static void tah_envelope_give(tah_sched *sched, uint32_t index) {
     tah_envelope *envelope = tah_sched_envelope(sched, index);
-    /* Delivered mail was noted already and left the log's map: this is mail
-     * that leaves undelivered (ADR 0033 section 3). */
-    (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DROPPED, .actor = envelope->target, .envelope = index });
     if (envelope->overflow) {
         sched->overflow -= 1u;
     } else {
@@ -228,18 +225,6 @@ tah_sched_entry *tah_sched_lookup(const tah_sched *sched, ta_actor_id actor) {
         return NULL;
     }
     return entry;
-}
-
-void tah_sched_forget_logging(tah_sched *sched) {
-    for (uint32_t page = 0; page < sched->pages.count; page += 1u) {
-        tah_sched_entry **entries = tah_vec_at(&sched->pages, page);
-        if (*entries == NULL) {
-            continue;
-        }
-        for (uint32_t at = 0; at < TAH_SCHED_PAGE_ENTRIES; at += 1u) {
-            (*entries)[at].flags &= (uint8_t)~(TAH_SCHED_LOG_KNOWN | TAH_SCHED_LOGGED);
-        }
-    }
 }
 
 /* The entry of `slot`, allocating its page (and the directory up to it). */
@@ -652,7 +637,7 @@ ta_result tah_sched_abandoned(tah_sched *sched, ta_actor_id actor) {
     }
     tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_ABANDONED });
     /* The macrostep a release() lifted the microstep limit for is gone. */
-    entry->flags &= (uint8_t)~(TAH_SCHED_UNLIMITED | TAH_SCHED_RELEASE_NOTED);
+    entry->flags &= (uint8_t)~TAH_SCHED_UNLIMITED;
     if (entry->state != TAH_SCHED_RUNNABLE) {
         return TA_OK; /* quarantined (a runaway's release() then finds it stable), or core abandoned an event the addon never delivered */
     }
@@ -860,14 +845,6 @@ ta_result tah_sched_post(tah_sched *sched, const tah_message *message) {
         tah_sched_dead_append(sched, index, entry == NULL ? TAH_DEAD_NOT_FOUND : TAH_DEAD_DONE);
         return TA_OK;
     }
-    /* The input log records it first: a message it cannot record is not taken. */
-    ta_result admitted = tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_QUEUED, .actor = target, .envelope = index });
-    if (admitted != TA_OK) {
-        /* The caller keeps the event on failure: the envelope gives back only its own. */
-        tah_sched_envelope(sched, index)->event = (ta_event){ 0 };
-        tah_envelope_give(sched, index);
-        return admitted;
-    }
     if (entry->last != 0) {
         tah_sched_envelope(sched, entry->last)->next = index;
     } else {
@@ -905,13 +882,6 @@ ta_result tah_sched_post_waiting(tah_sched *sched, const tah_waiting_post *post)
     ta_address_retain(post->address);
     tah_envelope *envelope = tah_sched_envelope(sched, index);
     envelope->address = post->address; /* a dead letter names it if the load fails */
-    /* The input log records it first: a message it cannot record is not taken. */
-    ta_result admitted = tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_QUEUED, .address = post->address, .envelope = index });
-    if (admitted != TA_OK) {
-        envelope->event = (ta_event){ 0 };
-        tah_envelope_give(sched, index);
-        return admitted;
-    }
     tah_mailbox *box = post->box;
     if (box->last != 0) {
         tah_sched_envelope(sched, box->last)->next = index;
@@ -1058,12 +1028,6 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
         tah_sched_requeue(sched, &sched->runnable, actor);
         return;
     }
-    if ((entry->flags & TAH_SCHED_UNLIMITED) != 0 && (entry->flags & TAH_SCHED_RELEASE_NOTED) == 0) {
-        /* A runaway an operator released finishes its macrostep with no
-         * limit: the input log says so once (kernel ADR 0002). */
-        entry->flags |= TAH_SCHED_RELEASE_NOTED;
-        (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_RELEASING, .actor = actor });
-    }
     ta_run_status status = TA_RUN_STABLE;
     bool ignored = false;
     ta_actor_resume_params resume = {
@@ -1088,7 +1052,7 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
         return;
     }
     if (result != TA_OK) {
-        (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
+        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
         if (result == TA_ERR_RUNAWAY) {
             /* Quarantined as a runaway: an operator's release() lets this
              * macrostep finish; the next one has the limit again. */
@@ -1105,24 +1069,24 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
     default:
         break;
     }
-    (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
+    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
     switch (status) {
     case TA_RUN_DONE:
-        entry->flags &= (uint8_t)~(TAH_SCHED_UNLIMITED | TAH_SCHED_RELEASE_NOTED);
+        entry->flags &= (uint8_t)~TAH_SCHED_UNLIMITED;
         tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_DONE, .ignored = ignored });
         entry->state = TAH_SCHED_IDLE;
         tah_sched_bury(sched, entry, TAH_DEAD_DONE);
         if ((entry->flags & TAH_SCHED_FINISHED) == 0) {
             entry->flags |= TAH_SCHED_FINISHED;
             tah_sched_record(sched, params, (tah_turn_record){ .kind = TAH_RECORD_DONE, .actor = actor });
-            (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_FINISHED, .actor = actor });
+            tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_FINISHED, .actor = actor });
         }
         return;
     case TA_RUN_STABLE:
     default:
-        entry->flags &= (uint8_t)~(TAH_SCHED_UNLIMITED | TAH_SCHED_RELEASE_NOTED);
+        entry->flags &= (uint8_t)~TAH_SCHED_UNLIMITED;
         tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_STABLE, .ignored = ignored });
-        (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_SETTLED, .actor = actor });
+        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_SETTLED, .actor = actor });
         tah_sched_settle(sched, entry, actor);
         return;
     }
@@ -1159,27 +1123,6 @@ static void tah_sched_refuse_jump(tah_sched *sched, tah_sched_entry *entry, ta_a
     tah_sched_settle(sched, entry, actor);
 }
 
-/*
- * The input log could not record the head envelope's delivery (kernel ADR
- * 0002 section 3): a value with no durable form makes it a dead letter
- * (`refused`), since no retry changes that; anything else, out of memory
- * above all, waits a turn.
- */
-static void tah_sched_log_refused(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor, ta_result result) {
-    if (result == TA_ERR_UNSUPPORTED) {
-        uint32_t head = entry->first;
-        entry->first = tah_sched_envelope(sched, head)->next;
-        if (entry->first == 0) {
-            entry->last = 0;
-        }
-        tah_sched_dead_append(sched, head, TAH_DEAD_REFUSED);
-        tah_sched_settle(sched, entry, actor);
-        return;
-    }
-    entry->flags |= TAH_SCHED_BACKOFF;
-    tah_sched_requeue(sched, &sched->ready, actor);
-}
-
 /* The core reason token of a report envelope (core ADR 0081). */
 static ta_str tah_report_reason(uint8_t kind) {
     switch (kind) {
@@ -1199,12 +1142,7 @@ static ta_str tah_report_reason(uint8_t kind) {
 static void tah_sched_report_one(tah_sched *sched, const tah_turn_params *params, tah_sched_entry *entry,
                                  ta_actor_id actor, uint32_t head) {
     tah_envelope *envelope = tah_sched_envelope(sched, head);
-    ta_result logged = tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_REPORTING, .actor = actor,
-                                                                   .envelope = head, .message = envelope });
-    if (logged != TA_OK) {
-        tah_sched_log_refused(sched, entry, actor, logged);
-        return;
-    }
+    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_REPORTING, .actor = actor, .envelope = head });
     ta_trace_parent trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0};
     bool has_data = envelope->event.data.v != NULL;
     ta_invoke_error error = {
@@ -1222,7 +1160,7 @@ static void tah_sched_report_one(tah_sched *sched, const tah_turn_params *params
                                                             });
     *params->inside_core = false;
     if (result != TA_OK) {
-        (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_UNDELIVERED, .actor = actor, .envelope = head });
+        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_UNDELIVERED, .actor = actor, .envelope = head });
     }
     if (result == TA_ERR_NOMEM || result == TA_ERR_BUSY) {
         if (result == TA_ERR_NOMEM) {
@@ -1236,7 +1174,7 @@ static void tah_sched_report_one(tah_sched *sched, const tah_turn_params *params
         entry->last = 0;
     }
     if (result == TA_OK) {
-        (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_REPORTED, .actor = actor, .envelope = head });
+        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_REPORTED, .actor = actor, .envelope = head });
     }
     if (envelope->waiter != 0) {
         /* A replayed report (napi ADR 0032 section 7) follows the macrostep
@@ -1349,12 +1287,7 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
             return;
         }
     }
-    ta_result logged = tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERING, .actor = actor,
-                                                                   .envelope = head, .message = envelope });
-    if (logged != TA_OK) {
-        tah_sched_log_refused(sched, entry, actor, logged);
-        return;
-    }
+    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERING, .actor = actor, .envelope = head });
     *params->inside_core = true;
     ta_result result = ta_actor_deliver(params->core, &(ta_actor_deliver_params){ .time = ta_system_time(params->core),
                                                          .actor = actor,
@@ -1364,7 +1297,7 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
                                                      });
     *params->inside_core = false;
     if (result != TA_OK) {
-        (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_UNDELIVERED, .actor = actor, .envelope = head });
+        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_UNDELIVERED, .actor = actor, .envelope = head });
     }
     switch (result) {
     case TA_OK:
@@ -1385,7 +1318,7 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
                                         (tah_settlement){ .kind = TAH_SETTLE_FAULT, .code = TA_ERR_NOMEM, .actor = actor });
             }
         }
-        (void)tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERED, .actor = actor, .envelope = head });
+        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERED, .actor = actor, .envelope = head });
         tah_envelope_give(sched, head);
         sched->delivered += 1u;
         entry->state = TAH_SCHED_RUNNABLE;

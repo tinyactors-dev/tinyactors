@@ -56,7 +56,6 @@
 #include "allocator.h"
 #include "directory.h"
 #include "effects.h"
-#include "inputs.h"
 #include "loads.h"
 #include "offloads.h"
 #include "adapter_trace.h"
@@ -214,7 +213,6 @@ tah_otlp *tah_system_otlp(tah_system *system);
 tah_trace_watch *tah_system_trace_watch(tah_system *system);
 tah_definitions *tah_system_definitions(tah_system *system);
 tah_host_metrics *tah_system_metrics(tah_system *system);
-tah_inputs *tah_system_inputs(tah_system *system);
 const tah_params *tah_system_params(const tah_system *system);
 
 /*
@@ -350,3 +348,7 @@ void tah_system_arm_timer(tah_system *system);
 /* The host timer fired: move time, ask for a turn, and arm for what is left. */
 void tah_system_timer_fired(tah_system *system);
 
+/* An operator withdraws `actor`'s pending delayed send (core ADR 0084); its address's wake is reported again. */
+ta_result tah_system_withdraw_send(tah_system *system, ta_actor_id actor, ta_send_id send);
+/* An operator abandons `actor`'s macrostep (core ADR 0082), then tah_hook_actor_abandoned(). */
+ta_result tah_system_abandon(tah_system *system, ta_actor_id actor);

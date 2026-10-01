@@ -1,7 +1,0 @@
-#!/usr/bin/env ruby
-#MISE description="The host kernel's whole suite, the exhaustive checks included"
-
-# --force: the fast and the full pass share one `outputs={auto=true}`
-# stamp, so after a fast pass mise would call the full one up to date and
-# skip the exhaustive part.
-exec('mise', 'run', '--force', 'test', '--full')

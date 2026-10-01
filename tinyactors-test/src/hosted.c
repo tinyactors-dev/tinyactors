@@ -151,7 +151,7 @@ static ta_result tat_hosted_spawn_at(tah_system *system, ta_definition_id defini
     ta_result result = ta_actor_spawn(tah_system_core(system), &(ta_actor_spawn_params){
                                                                    .definition = definition, .address = address, .out = actor});
     tah_system_leave_core(system);
-    return result == TA_OK ? tah_hook_actor_spawned(system, *actor) : result;
+    return result == TA_OK ? tah_hook_actor_created(system, *actor) : result;
 }
 
 /* Spawns an actor through core and hands it to the kernel's scheduler. */

@@ -510,10 +510,6 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         free(wrapper);
         return tna_throw(env, "out-of-memory", "cannot create the data model");
     }
-    /* The input log writes values with the built-in data model's codec
-     * (kernel ADR 0002): every data model napi offers holds its values. */
-    tah_inputs_set_datamodel(tah_system_inputs(wrapper->system),
-                             (ta_datamodel){ .self = &wrapper->dm.builtin, .v = &wrapper->dm.builtin.vtable });
     if (!tna_pump_init(env, wrapper, facade, argv[1])) {
         tna_pump_close(wrapper, true);
         tah_system_free(wrapper->system);
@@ -642,29 +638,6 @@ static napi_value tna_time_getter(napi_env env, napi_callback_info info) {
     napi_value time = NULL;
     napi_create_double(env, (double)ta_system_time(tah_system_core(wrapper->system)), &time);
     return time;
-}
-
-/* release(slot, generation): puts a quarantined actor back into scheduling (ADR 0008). */
-/* quarantine(slot, generation): true when the actor was not quarantined before (napi ADR 0032 section 6). */
-static napi_value tna_quarantine_method(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2] = { NULL, NULL };
-    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
-        return NULL;
-    }
-    tna_napi_system *wrapper = tna_open_this(env, info);
-    uint32_t slot = 0;
-    uint32_t generation = 0;
-    if (wrapper == NULL) {
-        return NULL;
-    }
-    if (napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
-        napi_get_value_uint32(env, argv[1], &generation) != napi_ok) {
-        return tna_throw(env, "invalid", "quarantine: expected (slot, generation)");
-    }
-    napi_value out = NULL;
-    napi_get_boolean(env, tah_sched_quarantine(tah_system_sched(wrapper->system), ta_actor_id_make(slot, generation)), &out);
-    return out;
 }
 
 static napi_value tna_release_method(napi_env env, napi_callback_info info) {
@@ -2081,7 +2054,6 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "clock", NULL, NULL, tna_clock_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "time", NULL, NULL, tna_time_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "quarantine", NULL, tna_quarantine_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "mailbox", NULL, tna_mailbox_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },

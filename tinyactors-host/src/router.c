@@ -3,10 +3,8 @@
 #include "memory.h"
 
 
-#include "tinyactors_host/inputs.h"
 #include "tinyactors_host/recorder.h"
 #include "tinyactors_host/system.h"
-#include "inputs_private.h"
 #include "system_private.h"
 
 ta_result tah_router_post_named(tah_system *system, ta_address *address, const tah_message *message) {
@@ -174,14 +172,6 @@ static const char *tah_router_unreachable_message(tah_dead_reason reason) {
 static ta_external_event_submit_status tah_router_submit(void *self, const ta_external_event_submit_params *params) {
     tah_system *system = self;
     const ta_external_delivery *delivery = params->delivery;
-    /* A logged sender's timer fired: the input log says so, and a send it
-     * cannot record waits, as one the router could not take (kernel ADR 0002).
-     * Only a RETRY undoes the record: an error consumed the send too. */
-    tah_input_mark fired = { 0 };
-    if (system->dispatching_due && delivery->event.origin.kind == TA_ORIGIN_ACTOR &&
-        tah_inputs_fired(system, &delivery->event.origin.as.actor, delivery->event.send_id, &fired) != TA_OK) {
-        return TA_EXTERNAL_EVENT_RETRY;
-    }
     tah_dead_reason reason = TAH_DEAD_NOT_FOUND;
     ta_str family = { 0 };
     bool to_loader = tah_router_session_loads(system, &delivery->destination, &family);
@@ -221,19 +211,8 @@ static ta_external_event_submit_status tah_router_submit(void *self, const ta_ex
                        : delivery->destination.kind == TA_ACTOR_REF_NAMED
                            ? tah_router_post_named(system, delivery->destination.as.named, &message)
                            : tah_sched_post(&system->sched, &message);
-    if (result == TA_ERR_UNSUPPORTED) {
-        /* The receiver's input log cannot hold its data (napi ADR 0034
-         * section 2): no retry will change that, so the sender hears. */
-        ta_event_release(&event);
-        static const char text[] = "the receiver logs its inputs, and the data has no durable form";
-        if (params->fault != NULL) {
-            *params->fault = (ta_fault){ .code = TA_ERR_UNSUPPORTED, .message = { text, (uint32_t)(sizeof text - 1u) } };
-        }
-        return TA_EXTERNAL_EVENT_ERROR;
-    }
     if (result != TA_OK) {
         ta_event_release(&event);
-        tah_inputs_undo(system, &fired);
         return TA_EXTERNAL_EVENT_RETRY; /* out of memory: core offers it again */
     }
     if (system->dispatching_due) {
