@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The campaign: the brutal stress-test chart of the ring protocol proposal.
+  Address: campaign/<id>. See README.md for what it demonstrates and
+  ../scenarios/ for walkthroughs that cite it.
+
+  Reliability lives here, not in the protocol:
+  - the attempt timeout `t` is scheduled when an attempt starts, before the
+    fanout, so a capacity error inside the fanout cannot lose it;
+  - a capacity error parks the fanout in `throttled`, which resumes on the
+    next acknowledgement or after a short delay;
+  - a timeout, or a second click, sends every notification still pending
+    again; the notify I/O processor removes duplicates by its own key.
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="campaign" initial="campaign">
+
+  <datamodel>
+    <data id="campaignID" expr="null"/>
+    <data id="tracker" expr="null"/>        <!-- '#_actor_progress/<id>' -->
+    <data id="batch" expr="[]"/>            <!-- notification objects, living in the data model -->
+    <data id="pending" expr="new Set()"/>   <!-- IDs not yet acknowledged or rejected -->
+    <data id="sent" expr="new Set()"/>      <!-- IDs sent in this attempt -->
+    <data id="todo" expr="[]"/>
+    <data id="sendOf" expr="({})"/>         <!-- notification ID → sendid (idlocation) -->
+    <data id="idOf" expr="({})"/>           <!-- sendid → notification ID -->
+    <data id="replyTo" expr="null"/>        <!-- the HTTP request to answer -->
+    <data id="attempt" expr="0"/>
+    <data id="maxAttempts" expr="5"/>
+    <data id="counts" expr="({ sent: 0, acked: 0, rejected: 0, failed: 0 })"/>
+  </datamodel>
+
+  <state id="campaign" initial="idle">
+
+    <!-- The tracker resyncs: answer from our own counts, in any state. -->
+    <transition event="progress.sync">
+      <send targetexpr="_event.origin" event="progress.snapshot">
+        <param name="counts" expr="counts"/>
+        <param name="pending" expr="pending.size"/>
+      </send>
+    </transition>
+
+    <state id="idle">
+      <transition event="send.requested" target="active">
+        <assign location="campaignID" expr="_event.data.campaignID"/>
+        <assign location="tracker" expr="'#_actor_progress/' + _event.data.campaignID"/>
+        <assign location="batch" expr="_event.data.notifications"/>
+        <assign location="pending" expr="new Set(batch.map(n => n.id))"/>
+        <assign location="replyTo" expr="_event.origin"/>
+        <assign location="attempt" expr="1"/>
+      </transition>
+    </state>
+
+    <state id="active" initial="attempt">
+
+      <!-- Outcomes of notifications, whatever the attempt is doing. -->
+      <transition event="notify.ack">
+        <script>pending.delete(_event.data.id); counts.acked++;</script>
+        <send targetexpr="tracker" event="progress.acked"><param name="id" expr="_event.data.id"/></send>
+        <raise event="outcome.received"/>
+      </transition>
+      <transition event="notify.rejected">
+        <script>pending.delete(_event.data.id); counts.rejected++;</script>
+        <send targetexpr="tracker" event="progress.rejected">
+          <param name="id" expr="_event.data.id"/>
+          <param name="reason" expr="_event.data.reason"/>
+        </send>
+        <raise event="outcome.received"/>
+      </transition>
+      <!-- A notification never reached the processor: send it again next attempt. -->
+      <transition event="error.communication" cond="_event.sendid in idOf">
+        <script>sent.delete(idOf[_event.sendid]); counts.failed++;</script>
+        <send targetexpr="tracker" event="progress.failed"><param name="id" expr="idOf[_event.sendid]"/></send>
+      </transition>
+      <!-- Progress mail that could not be delivered (tracker gone): progress is optional. -->
+      <transition event="error.communication"/>
+
+      <transition cond="pending.size === 0" target="complete"/>
+
+      <!-- A second click: answer that request instead, and send everything pending again. -->
+      <transition event="send.requested" target="attempt">
+        <assign location="replyTo" expr="_event.origin"/>
+        <assign location="sent" expr="new Set()"/>
+      </transition>
+
+      <transition event="sending.timeout" target="retrying"/>
+
+      <!-- One attempt. Its timeout is scheduled first, before any fanout. -->
+      <state id="attempt" initial="sending">
+        <onentry>
+          <send id="t" event="sending.timeout" delay="30s"/>
+        </onentry>
+        <onexit>
+          <cancel sendid="t"/>
+        </onexit>
+
+        <!-- Any capacity error during the fanout parks it. -->
+        <transition event="error.execution.capacity" target="throttled"/>
+
+        <state id="sending">
+          <onentry>
+            <assign location="todo" expr="batch.filter(n => pending.has(n.id) &amp;&amp; !sent.has(n.id))"/>
+            <foreach array="todo" item="n">
+              <send type="x-notify" target="notify:" event="notification"
+                    namelist="n" idlocation="sendOf[n.id]"/>
+              <script>idOf[sendOf[n.id]] = n.id; sent.add(n.id); counts.sent++;</script>
+              <send targetexpr="tracker" event="progress.sent"><param name="id" expr="n.id"/></send>
+            </foreach>
+          </onentry>
+        </state>
+
+        <state id="throttled">
+          <onentry>
+            <send id="r" event="throttle.resume" delay="2s"/>
+          </onentry>
+          <onexit>
+            <cancel sendid="r"/>
+          </onexit>
+          <!-- The resume timer itself found no room: wait for an acknowledgement. -->
+          <transition event="error.execution.capacity"/>
+          <transition event="throttle.resume" target="sending"/>
+          <transition event="outcome.received" target="sending"/>
+        </state>
+      </state>
+
+      <state id="retrying">
+        <onentry>
+          <assign location="attempt" expr="attempt + 1"/>
+          <assign location="sent" expr="new Set()"/>
+        </onentry>
+        <transition cond="attempt &gt; maxAttempts" target="gaveUp"/>
+        <transition target="attempt"/>
+      </state>
+    </state>
+
+    <state id="complete">
+      <onentry>
+        <send type="x-http-reply" targetexpr="replyTo" event="ok"><param name="counts" expr="counts"/></send>
+        <send targetexpr="tracker" event="progress.done"/>
+      </onentry>
+      <!-- A click after success is answered at once. -->
+      <transition event="send.requested">
+        <send type="x-http-reply" targetexpr="_event.origin" event="ok"><param name="counts" expr="counts"/></send>
+      </transition>
+    </state>
+
+    <state id="gaveUp">
+      <onentry>
+        <send type="x-http-reply" targetexpr="replyTo" event="failed"><param name="pending" expr="[...pending]"/></send>
+        <send targetexpr="tracker" event="progress.gave_up"/>
+      </onentry>
+      <transition event="send.requested" target="active">
+        <assign location="replyTo" expr="_event.origin"/>
+        <assign location="attempt" expr="1"/>
+        <assign location="sent" expr="new Set()"/>
+      </transition>
+    </state>
+  </state>
+</scxml>

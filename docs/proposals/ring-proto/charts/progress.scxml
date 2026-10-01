@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The progress tracker: a live view of one campaign. Address progress/<id>.
+  The host spawns it with data { campaignID } (h2c.spawn, `data`).
+
+  Its state is derived from the campaign's, so it is never worth recording:
+  when it starts, and whenever it is told to, it asks the campaign for an
+  absolute snapshot (progress.sync) and applies deltas on top. Mail between
+  a pair of sessions is delivered in order (reference/envelope.md), so a
+  delta the campaign sent before its snapshot arrives before it, and the
+  snapshot overwrites it: no delta is counted twice.
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="progress" initial="tracker">
+
+  <datamodel>
+    <data id="campaignID" expr="null"/>
+    <data id="campaign" expr="null"/>
+    <data id="counts" expr="({ sent: 0, acked: 0, rejected: 0, failed: 0 })"/>
+    <data id="pending" expr="null"/>
+    <data id="phase" expr="'unknown'"/>
+  </datamodel>
+
+  <state id="tracker" initial="syncing">
+    <onentry>
+      <assign location="campaign" expr="'#_actor_campaign/' + campaignID"/>
+    </onentry>
+
+    <!-- Deltas, applied in every state. -->
+    <transition event="progress.sent"><script>counts.sent++;</script><raise event="changed"/></transition>
+    <transition event="progress.acked"><script>counts.acked++;</script><raise event="changed"/></transition>
+    <transition event="progress.rejected"><script>counts.rejected++;</script><raise event="changed"/></transition>
+    <transition event="progress.failed"><script>counts.failed++;</script><raise event="changed"/></transition>
+    <transition event="progress.done"><assign location="phase" expr="'done'"/><raise event="changed"/></transition>
+    <transition event="progress.gave_up"><assign location="phase" expr="'gave up'"/><raise event="changed"/></transition>
+
+    <!-- Push the view to the browsers watching it. -->
+    <transition event="changed">
+      <send type="x-ws" targetexpr="'ws:progress/' + campaignID" event="progress.update">
+        <param name="counts" expr="counts"/>
+        <param name="pending" expr="pending"/>
+        <param name="phase" expr="phase"/>
+      </send>
+    </transition>
+
+    <!-- An operator or a browser asks for a fresh view. -->
+    <transition event="progress.resync" target="syncing"/>
+
+    <state id="syncing">
+      <onentry>
+        <send targetexpr="campaign" event="progress.sync"/>
+        <send id="syncTimeout" event="sync.timeout" delay="5s"/>
+      </onentry>
+      <onexit>
+        <cancel sendid="syncTimeout"/>
+      </onexit>
+      <transition event="progress.snapshot" target="live">
+        <assign location="counts" expr="_event.data.counts"/>
+        <assign location="pending" expr="_event.data.pending"/>
+        <raise event="changed"/>
+      </transition>
+      <!-- The campaign is unloaded or busy: ask again. -->
+      <transition event="sync.timeout" target="syncing"/>
+      <!-- The sync could not be delivered at all: sync.timeout asks again.
+           Re-entering here at once would loop as fast as mail can fail. -->
+      <transition event="error.communication"/>
+    </state>
+
+    <state id="live">
+      <!-- The windowed campaign sends absolute snapshots instead of deltas. -->
+      <transition event="progress.snapshot">
+        <assign location="counts" expr="_event.data.counts"/>
+        <raise event="changed"/>
+      </transition>
+    </state>
+  </state>
+</scxml>

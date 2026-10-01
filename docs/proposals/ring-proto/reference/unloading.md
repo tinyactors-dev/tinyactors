@@ -1,0 +1,151 @@
+# Unloading and loading sessions
+
+**Status:** Sketch (2026-10-01), part of [the ring protocol proposal](../README.md)
+
+A session that is not in memory is **unloaded**. Its image is the host's
+to keep. Core only asks for it back. This document covers the five
+records that move a session out of memory and back in, and the one index
+the host keeps for unloaded sessions.
+
+## The records
+
+| Record | Direction | Meaning |
+|---|---|---|
+| [`h2c.unload`](../protocol/generated/MESSAGES.md#h2cunload) | host → core | page this stable session out |
+| [`c2h.unloaded`](../protocol/generated/MESSAGES.md#c2hunloaded) | core → host | here is its image, and when it next needs to run (`wake_at`) |
+| [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed) | core → host | envelopes wait for this unloaded address |
+| [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) | host → core | here is the image |
+| [`c2h.loaded`](../protocol/generated/MESSAGES.md#c2hloaded) | core → host | it is resident again |
+| [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed) | host → core | there is no image, or it cannot be read |
+
+## Unloading
+
+The host decides when to unload, for example when a session has been idle
+for a while, or when the number of resident actors passes its own cap.
+That is policy, and it stays the host's.
+
+```
+h2c.unload   {address: "campaign:42"}
+c2h.unloaded {address, image: <blob>, wake_at: t0+30s, flags: has_wake}
+```
+
+- Core writes the image through a byte sink the binding provides (core
+  ADR 0090's `ta_byte_sink`) and names the result by a `blob` handle. The
+  image holds the configuration, the data model root through
+  `value_write`, and **the session's delayed sends**: they leave the pool
+  with their owner, as they do today under core ADR 0054, whose storage the
+  pool replaces ([envelope.md](envelope.md#delayed-sends-envelopes-with-a-due-time)).
+- `wake_at` is the earliest of those delayed sends. Without the `has_wake`
+  flag, the session has no timer and needs no wakeup.
+- Core frees the actor slot and the envelopes the delayed sends used.
+- [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced) with
+  reason `has_mail` answers an `h2c.unload` for a session that has
+  envelopes waiting. The host tries again later.
+
+Writing an image happens between macrosteps, so it may call the binding,
+and it does not touch the macrostep invariant
+([macrostep.md](macrostep.md)). Core's own memory for the image is the
+byte sink's, which is the host's.
+
+## The host's index of unloaded sessions
+
+Core's deadline index covers only envelopes in the pool, which belong to
+resident sessions ([envelope.md](envelope.md)). For unloaded sessions, the
+host keeps an index of `wake_at`, and posts `h2c.load` when one comes
+due.
+
+| Host | Index |
+|---|---|
+| napi | a `Map` from address to `{image, wake_at}`, plus a min-heap by `wake_at`, plus **one** timer for the earliest. The timer for resident sessions is set by [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake). The host may merge the two into one `setTimeout`. |
+| SQLite host | `CREATE TABLE unloaded(address TEXT PRIMARY KEY, image BLOB, wake_at INTEGER)` with an index on `wake_at`. The next wakeup is `SELECT min(wake_at)`. |
+| PostgreSQL host | the same table, read by a background worker |
+| test host | an ordered list. The tests move time explicitly. |
+
+When a wakeup comes due, the host posts the image and then the time:
+
+```
+h2c.load {address, image}
+h2c.time {at: now}          # the delayed send that was due fires as an envelope
+```
+
+This is what `tah_record_wake` and the wakeup heap in
+`tinyactors-host/src/loads.c` do today. It becomes host policy over two
+records instead of a kernel module.
+
+## Loading when mail arrives
+
+An envelope for an unloaded address can be an `h2c.event`, or mail from a
+local session. It does not fail. It **waits in the pool**:
+
+1. Core puts the envelope on the address's waiting list, and writes
+   `c2h.load_needed {address, waiting: 1}`. The record is written once per
+   address until it is answered.
+2. More envelopes for the same address join the list, in order. Core
+   writes nothing more.
+3. The host answers in one of three ways:
+   - [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) with the
+     image. The waiting envelopes become runnable, in order, before
+     anything sent to the session later. Core writes `c2h.loaded`.
+   - [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) at the
+     address, for a virtual family where the first message creates the
+     actor (napi ADR 0020, the loader's `{ spawn }` result). The waiting
+     envelopes go to the new session.
+   - [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed)
+     with a reason. The waiting envelopes are recycled (below).
+
+How long the host takes is the host's business: it may read a file, query
+a database or call a service. Core does not time out a load. A host that
+wants a timeout posts `h2c.load_failed {reason: "timeout"}` itself, as
+napi's loader timeout does today (napi ADR 0020).
+
+### Waiting envelopes count against the pool
+
+The waiting list is threaded through envelopes in the pool, as the run
+queue is ([envelope.md](envelope.md#the-lists-an-envelope-can-be-on)). So a load that takes long
+holds pool capacity:
+
+- admission from h2c stops when the pool reaches `admissionWatermark`
+  ([parameters.md](parameters.md)), and the host refuses at its edge;
+- a local `<send>` to the waiting address fails as
+  `error.execution.capacity` once the pool is full.
+
+This replaces napi's per-family `maxWaiting` and the `waiting-full` dead
+letters. **Open:** whether a per-address cap is still worth having, so
+that one slow load cannot take the whole pool. It would be one more
+parameter (`maxWaitingPerAddress`), and the envelope's address list would
+need a count.
+
+### Recycling on `h2c.load_failed`
+
+Each waiting envelope is handled in place, with no new memory:
+
+| Waiting envelope | Becomes |
+|---|---|
+| mail from a local session | `error.communication` for its sender, in the same envelope ([envelope.md](envelope.md), "Recycling"). `_event.sendid` names the failed send. |
+| an `h2c.event` | dropped, and its vref released. A `tel.trace` record of the new trace kind `DEAD_LETTER` says so, as [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed) specifies. The host learns nothing on `c2h`. It already decided the load failed, so it knows the event is lost. |
+| a timer that fell due | cannot happen: a timer belongs to its owner, and an unloaded owner's timers are in its image |
+
+[`c2h.destroyed`](../protocol/generated/MESSAGES.md#c2hdestroyed) recycles
+a destroyed session's waiting envelopes the same way.
+
+### Mail for a session that has gone
+
+Today, mail a chart sends to a session ID (not an address) that is no
+longer resident starts a load keyed by the session's text (napi ADR 0032
+section 2, `TAH_LOAD_WHY_SESSION`). In this design the envelope's target
+is that text in the name area ([names.md](names.md)), and
+`c2h.load_needed.address` carries it. The host's index maps it to an
+image as before.
+
+## What this replaces
+
+| Today | In this design |
+|---|---|
+| `tinyactors-host/include/tinyactors_host/loads.h`, `src/loads.c` (about 530 lines): load records, waiting mailboxes, `max_waiting`, the wakeup min-heap, load outcomes | waiting lists in core's pool; `c2h.load_needed` / `h2c.load` / `h2c.spawn` / `h2c.load_failed`; the wakeup index is the host's (a `Map` and a heap, or a SQL index) |
+| `tinyactors-host/include/tinyactors_host/offloads.h`, `src/offloads.c`: the bytes of offloaded actors, kept per address | the host keeps the `blob` from `c2h.unloaded` wherever it likes |
+| `tinyactors-host/src/directory.c`: the in-memory directory and its unloaded entries | core's directory of resident sessions. Unloaded addresses are the host's index. **Open:** whether core still needs a directory vtable (`ta_actor_directory_vtable`), or whether "not resident" simply means "ask with `c2h.load_needed`" |
+| `tinyactors-napi/src/napi_loads.c` (about 550 lines): JavaScript loaders, timeouts, results | the loader stays in JavaScript, and calls `h2c.load`, `h2c.spawn` or `h2c.load_failed` |
+| napi's dead letters `waiting-full`, `not-found`, `rejected`, `load-failed` | recycled `error.communication` to senders, or dropped external events reported on `tel` |
+
+See [migration.md](migration.md) for the full list, and
+[S07](../scenarios/S07-unloaded-tracker.md) for a walkthrough.

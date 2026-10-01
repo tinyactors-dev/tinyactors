@@ -1,0 +1,1469 @@
+{
+  "title": "Ring protocol records",
+  "notes": [
+    "The data model is not on a ring. Core calls ta_datamodel_vtable synchronously, as today (reference/data-model.md). Only its results cross the rings, as value references.",
+    "Defining a chart, creating a system and the operator calls (inspect, abandon, operator transitions) stay ordinary API calls: they are control, not traffic (ARCHITECTURE.md, \"Two kinds of call\").",
+    "A vref in a c2h record is a reference core retained for the host. The host releases it when it has used the record. A vref in an h2c record is one the host retained for core; core releases it when the envelope holding it is freed."
+  ],
+  "header": [
+    {
+      "name": "kind",
+      "type": "u16",
+      "doc": "the message's code",
+      "offset": 0
+    },
+    {
+      "name": "flags",
+      "type": "u16",
+      "doc": "the message's flags (bits 0..7) and the common flags (bits 8..15)",
+      "offset": 2
+    },
+    {
+      "name": "size",
+      "type": "u32",
+      "doc": "the whole record in bytes, header and tail included, a multiple of 8",
+      "offset": 4
+    },
+    {
+      "name": "seq",
+      "type": "seq",
+      "doc": "the sequence number in this ring, from 1, with no gaps on a lossless ring",
+      "offset": 8
+    },
+    {
+      "name": "session",
+      "type": "session",
+      "doc": "the session the record is about, or 0",
+      "offset": 16
+    },
+    {
+      "name": "at",
+      "type": "time",
+      "doc": "the system clock when it was written (h2c: the input's time)",
+      "offset": 24
+    }
+  ],
+  "common_flags": [
+    {
+      "name": "replaying",
+      "bit": 8,
+      "doc": "part of a replay (reference/recording-and-replay.md). On c2h and tel: written by a replaying session. On h2c: an input of a replay; under a whole-system replay every h2c record carries it, sessions it spawns replay, mail between them is delivered as envelopes, and effects that would leave the process are suppressed until h2c.publish"
+    },
+    {
+      "name": "recorded",
+      "bit": 9,
+      "doc": "the session is recorded: its inputs appear as c2h.input"
+    }
+  ],
+  "rings": [
+    {
+      "name": "h2c",
+      "producer": "host",
+      "consumer": "core",
+      "loss": "none",
+      "when_full": "The host cannot post. It refuses at its edge (for example HTTP 503) or keeps the input itself. Core never waits on h2c.",
+      "doc": "Admission. Every input the system will ever see enters here, in the host order. Core moves a record into the envelope pool only while the pool is below its admission watermark."
+    },
+    {
+      "name": "c2h",
+      "producer": "core",
+      "consumer": "host",
+      "loss": "none",
+      "when_full": "A record an action would write does not fit: the action fails as error.execution.capacity. Core starts a macrostep only when c2h has room for its reserve (c2h.input, c2h.fence and one record of the largest size). A run never waits.",
+      "doc": "Everything that leaves the process or must not be lost: effects for I/O processors and invokers, fences, bounces, load requests, images, and the inputs of recorded sessions."
+    },
+    {
+      "name": "tel",
+      "producer": "core",
+      "consumer": "host",
+      "loss": "drop",
+      "when_full": "The record is dropped and counted. The next tel.dropped says how many. Telemetry never slows the system.",
+      "doc": "Observability: the trace records of core ADR 0067 under the existing kind masks and sampling. Never used for replay."
+    }
+  ],
+  "enums": [
+    {
+      "name": "event_type",
+      "base": "u8",
+      "values": [
+        {
+          "name": "platform",
+          "value": 0,
+          "doc": ""
+        },
+        {
+          "name": "internal",
+          "value": 1,
+          "doc": ""
+        },
+        {
+          "name": "external",
+          "value": 2,
+          "doc": ""
+        }
+      ],
+      "doc": "What _event.type says (SCXML 5.10.1)."
+    },
+    {
+      "name": "input_source",
+      "base": "u8",
+      "values": [
+        {
+          "name": "h2c",
+          "value": 0,
+          "doc": "an h2c.event; source_seq is its h2c seq"
+        },
+        {
+          "name": "mail",
+          "value": 1,
+          "doc": "a <send> from another local session; from_session names it"
+        },
+        {
+          "name": "timer",
+          "value": 2,
+          "doc": "a delayed send that became due; from_session sent it"
+        },
+        {
+          "name": "platform",
+          "value": 3,
+          "doc": "core made it: error.communication for undeliverable mail, done.invoke, ..."
+        },
+        {
+          "name": "invoke_report",
+          "value": 4,
+          "doc": "an h2c.invoke_report"
+        }
+      ],
+      "doc": "Where the envelope behind a c2h.input came from."
+    },
+    {
+      "name": "fence_status",
+      "base": "u8",
+      "values": [
+        {
+          "name": "stable",
+          "value": 0,
+          "doc": "the session waits for its next input"
+        },
+        {
+          "name": "done",
+          "value": 1,
+          "doc": "the session reached a top-level final state; c2h.finished follows"
+        },
+        {
+          "name": "runaway",
+          "value": 2,
+          "doc": "the microstep limit stopped it (core ADR 0075); the session is stable"
+        },
+        {
+          "name": "abandoned",
+          "value": 3,
+          "doc": "an operator abandoned it (core ADR 0082)"
+        },
+        {
+          "name": "capacity",
+          "value": 4,
+          "doc": "a microstep's reserve could not be restored; the macrostep ended there (reference/envelope.md, \"Running out\"); a tel.trace says why"
+        }
+      ],
+      "doc": "How a macrostep ended."
+    },
+    {
+      "name": "bounce_reason",
+      "base": "u8",
+      "values": [
+        {
+          "name": "no_such_address",
+          "value": 1,
+          "doc": "no session has the address and its family has no loader"
+        },
+        {
+          "name": "no_such_definition",
+          "value": 2,
+          "doc": "the revision is not registered"
+        },
+        {
+          "name": "address_taken",
+          "value": 3,
+          "doc": "h2c.spawn for an address that is resident"
+        },
+        {
+          "name": "has_mail",
+          "value": 4,
+          "doc": "h2c.unload for a session with envelopes waiting"
+        },
+        {
+          "name": "not_replaying",
+          "value": 5,
+          "doc": "h2c.publish for a session that is not replaying"
+        },
+        {
+          "name": "invalid",
+          "value": 6,
+          "doc": "the record breaks the protocol; detail says how"
+        }
+      ],
+      "doc": "Why core handed an h2c record back unrun."
+    },
+    {
+      "name": "capacity_resource",
+      "base": "u8",
+      "values": [
+        {
+          "name": "pool",
+          "value": 1,
+          "doc": "no free envelope for mail or a delayed send (poolEnvelopes)"
+        },
+        {
+          "name": "names",
+          "value": 2,
+          "doc": "no room in the name area for a run-time name (nameAreaBytes)"
+        },
+        {
+          "name": "c2h",
+          "value": 3,
+          "doc": "no room on c2h for the record the action writes (c2hBytes)"
+        },
+        {
+          "name": "internal",
+          "value": 4,
+          "doc": "the internal queue is full; <raise> failed"
+        },
+        {
+          "name": "record",
+          "value": 5,
+          "doc": "the record would be larger than maxRecordBytes"
+        }
+      ],
+      "doc": "The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (reference/macrostep.md, \"Two kinds of exhaustion\")."
+    },
+    {
+      "name": "invoke_report_kind",
+      "base": "u8",
+      "values": [
+        {
+          "name": "done",
+          "value": 0,
+          "doc": "the invoked service finished: done.invoke.<id>"
+        },
+        {
+          "name": "error",
+          "value": 1,
+          "doc": "it failed: error.communication.invoke.<id>.<reason> (core ADR 0081)"
+        }
+      ],
+      "doc": ""
+    },
+    {
+      "name": "destroy_reason",
+      "base": "u8",
+      "values": [
+        {
+          "name": "finished",
+          "value": 0,
+          "doc": ""
+        },
+        {
+          "name": "operator",
+          "value": 1,
+          "doc": "h2c.destroy"
+        },
+        {
+          "name": "parent_exited",
+          "value": 2,
+          "doc": "its invoking state exited"
+        }
+      ],
+      "doc": ""
+    }
+  ],
+  "types": [
+    {
+      "name": "u8",
+      "size": 1,
+      "align": 1,
+      "doc": "unsigned 8-bit integer"
+    },
+    {
+      "name": "u16",
+      "size": 2,
+      "align": 2,
+      "doc": "unsigned 16-bit integer"
+    },
+    {
+      "name": "u32",
+      "size": 4,
+      "align": 4,
+      "doc": "unsigned 32-bit integer"
+    },
+    {
+      "name": "u64",
+      "size": 8,
+      "align": 8,
+      "doc": "unsigned 64-bit integer"
+    },
+    {
+      "name": "i32",
+      "size": 4,
+      "align": 4,
+      "doc": "signed 32-bit integer"
+    },
+    {
+      "name": "bool",
+      "size": 1,
+      "align": 1,
+      "doc": "0 or 1"
+    },
+    {
+      "name": "time",
+      "size": 8,
+      "align": 8,
+      "doc": "nanoseconds on the system clock that h2c.time moves"
+    },
+    {
+      "name": "seq",
+      "size": 8,
+      "align": 8,
+      "doc": "a record's sequence number in its ring"
+    },
+    {
+      "name": "session",
+      "size": 8,
+      "align": 8,
+      "doc": "a session ID (core ADR 0066); 0 means the system itself"
+    },
+    {
+      "name": "macrostep",
+      "size": 8,
+      "align": 8,
+      "doc": "a macrostep's number within its session"
+    },
+    {
+      "name": "vref",
+      "size": 8,
+      "align": 8,
+      "doc": "a value reference: a slot in the binding's value table; 0 means none"
+    },
+    {
+      "name": "blob",
+      "size": 8,
+      "align": 8,
+      "doc": "a host-owned byte buffer, read or written through a byte source or sink (core ADR 0090)"
+    },
+    {
+      "name": "span",
+      "size": 8,
+      "align": 4,
+      "doc": "u32 offset from the record start, u32 length, into the tail"
+    },
+    {
+      "name": "text",
+      "size": 8,
+      "align": 4,
+      "doc": "a span of UTF-8 text in the tail"
+    },
+    {
+      "name": "bytes",
+      "size": 8,
+      "align": 4,
+      "doc": "a span of bytes in the tail"
+    }
+  ],
+  "messages": [
+    {
+      "id": "h2c.time",
+      "code": 257,
+      "ring": "h2c",
+      "summary": "Move the system clock",
+      "doc": "The header `at` is the new time. It never moves back. Delayed sends due by then become runnable envelopes, in due order, then send order.",
+      "fields": [],
+      "flags": [],
+      "replies": [
+        "c2h.wake"
+      ],
+      "fixed_size": 32,
+      "see": []
+    },
+    {
+      "id": "h2c.event",
+      "code": 258,
+      "ring": "h2c",
+      "summary": "An external event for a session",
+      "doc": "Header `session` names a resident session, or is 0 and `target` gives an address. Admitted into the pool when the pool is below its watermark. An event for an unloaded address waits in the pool and core asks for the session with c2h.load_needed.",
+      "fields": [
+        {
+          "name": "target",
+          "type": "text",
+          "doc": "the address (family/name), when session is 0",
+          "offset": 32
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "doc": "the dotted event name, as bytes (reference/names.md)",
+          "offset": 40
+        },
+        {
+          "name": "sendid",
+          "type": "text",
+          "doc": "_event.sendid, or empty",
+          "offset": 48
+        },
+        {
+          "name": "origin",
+          "type": "text",
+          "doc": "_event.origin, or empty",
+          "offset": 56
+        },
+        {
+          "name": "origin_type",
+          "type": "text",
+          "doc": "_event.origintype, or empty",
+          "offset": 64
+        },
+        {
+          "name": "data",
+          "type": "vref",
+          "doc": "_event.data",
+          "offset": 72
+        },
+        {
+          "name": "type",
+          "type": "event_type",
+          "doc": "almost always external",
+          "offset": 80
+        }
+      ],
+      "flags": [],
+      "replies": [
+        "c2h.input",
+        "c2h.bounced",
+        "c2h.load_needed"
+      ],
+      "fixed_size": 88,
+      "see": []
+    },
+    {
+      "id": "h2c.spawn",
+      "code": 259,
+      "ring": "h2c",
+      "summary": "Create a session",
+      "doc": "With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish.",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "family/name",
+          "offset": 32
+        },
+        {
+          "name": "revision",
+          "type": "bytes",
+          "doc": "the definition's revision hash",
+          "offset": 40
+        },
+        {
+          "name": "data",
+          "type": "vref",
+          "doc": "the data model binding, or 0",
+          "offset": 48
+        },
+        {
+          "name": "clock",
+          "type": "time",
+          "doc": "with replaying_from_clock: the replayed run’s start",
+          "offset": 56
+        }
+      ],
+      "flags": [
+        {
+          "name": "replaying_from_clock",
+          "bit": 0,
+          "doc": "the session replays; `clock` is where its run began"
+        }
+      ],
+      "replies": [
+        "c2h.spawned",
+        "c2h.bounced"
+      ],
+      "fixed_size": 64,
+      "see": []
+    },
+    {
+      "id": "h2c.publish",
+      "code": 260,
+      "ring": "h2c",
+      "summary": "End a replay and put the session on the route",
+      "doc": "Held delayed sends due by `at` are dropped; the rest stay in the pool under their due times (core ADR 0094). Active invocations are retired with error.communication.invoke.<id>.unavailable.\n\nAn empty `address` publishes every replaying session at once: the end of a whole-system replay (reference/recording-and-replay.md).",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "family/name, or empty for every replaying session",
+          "offset": 32
+        },
+        {
+          "name": "at",
+          "type": "time",
+          "doc": "the moment the replayed run stopped",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [
+        "c2h.published",
+        "c2h.bounced"
+      ],
+      "fixed_size": 48,
+      "see": []
+    },
+    {
+      "id": "h2c.load",
+      "code": 261,
+      "ring": "h2c",
+      "summary": "Bring an unloaded session back",
+      "doc": "Usually the answer to c2h.load_needed. Its delayed sends rejoin the pool. Waiting envelopes for it become runnable.\n\nWith replaying, the image is a checkpoint (c2h.state): the session replays the c2h.input records after it and is published with h2c.publish, as a spawned replaying session is.",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "image",
+          "type": "blob",
+          "doc": "the bytes c2h.unloaded gave",
+          "offset": 40
+        }
+      ],
+      "flags": [
+        {
+          "name": "replaying",
+          "bit": 0,
+          "doc": "restore a checkpoint as a replaying session"
+        }
+      ],
+      "replies": [
+        "c2h.loaded",
+        "c2h.bounced"
+      ],
+      "fixed_size": 48,
+      "see": []
+    },
+    {
+      "id": "h2c.load_failed",
+      "code": 262,
+      "ring": "h2c",
+      "summary": "The session cannot be loaded",
+      "doc": "Every envelope waiting for the address is recycled: mail becomes error.communication for its sender, in the same envelope (reference/envelope.md, \"Recycling\"); external events are dropped and reported as tel.trace with a new trace kind, DEAD_LETTER, naming the event and the reason.",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "doc": "",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 48,
+      "see": []
+    },
+    {
+      "id": "h2c.unload",
+      "code": 263,
+      "ring": "h2c",
+      "summary": "Page a stable session out",
+      "doc": "",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        }
+      ],
+      "flags": [],
+      "replies": [
+        "c2h.unloaded",
+        "c2h.bounced"
+      ],
+      "fixed_size": 40,
+      "see": []
+    },
+    {
+      "id": "h2c.checkpoint",
+      "code": 264,
+      "ring": "h2c",
+      "summary": "Ask for a recorded session's state",
+      "doc": "",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        }
+      ],
+      "flags": [],
+      "replies": [
+        "c2h.state",
+        "c2h.bounced"
+      ],
+      "fixed_size": 40,
+      "see": []
+    },
+    {
+      "id": "h2c.invoke_report",
+      "code": 265,
+      "ring": "h2c",
+      "summary": "An invoked service finished or failed",
+      "doc": "Header `session` is the invoking session.",
+      "fields": [
+        {
+          "name": "invokeid",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "doc": "for error: the reason segment",
+          "offset": 40
+        },
+        {
+          "name": "data",
+          "type": "vref",
+          "doc": "done data or error data",
+          "offset": 48
+        },
+        {
+          "name": "kind",
+          "type": "invoke_report_kind",
+          "doc": "",
+          "offset": 56
+        }
+      ],
+      "flags": [],
+      "replies": [
+        "c2h.input"
+      ],
+      "fixed_size": 64,
+      "see": []
+    },
+    {
+      "id": "h2c.destroy",
+      "code": 266,
+      "ring": "h2c",
+      "summary": "End a session now",
+      "doc": "",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        }
+      ],
+      "flags": [],
+      "replies": [
+        "c2h.destroyed",
+        "c2h.bounced"
+      ],
+      "fixed_size": 40,
+      "see": []
+    },
+    {
+      "id": "c2h.spawned",
+      "code": 513,
+      "ring": "c2h",
+      "summary": "A session exists",
+      "doc": "For a recorded session this is the first record of its log.",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "revision",
+          "type": "bytes",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "parent",
+          "type": "session",
+          "doc": "the invoking session, or 0",
+          "offset": 48
+        },
+        {
+          "name": "cause_seq",
+          "type": "seq",
+          "doc": "the h2c.spawn, or 0 for an <invoke>",
+          "offset": 56
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 64,
+      "see": []
+    },
+    {
+      "id": "c2h.input",
+      "code": 514,
+      "ring": "c2h",
+      "summary": "A recorded session took an input",
+      "doc": "Written when a recorded session takes an envelope, before any effect of the macrostep it starts. It is the replay log: these records, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), rebuild the session.\n\nNot written for an input a replaying session takes: that input is already in the log being replayed. A session restored from c2h.state and replayed starts writing c2h.input again after h2c.publish.",
+      "fields": [
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "source_seq",
+          "type": "seq",
+          "doc": "source h2c: the h2c seq",
+          "offset": 40
+        },
+        {
+          "name": "from_session",
+          "type": "session",
+          "doc": "source mail or timer: the sender",
+          "offset": 48
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "doc": "",
+          "offset": 56
+        },
+        {
+          "name": "sendid",
+          "type": "text",
+          "doc": "",
+          "offset": 64
+        },
+        {
+          "name": "origin",
+          "type": "text",
+          "doc": "",
+          "offset": 72
+        },
+        {
+          "name": "origin_type",
+          "type": "text",
+          "doc": "",
+          "offset": 80
+        },
+        {
+          "name": "invokeid",
+          "type": "text",
+          "doc": "",
+          "offset": 88
+        },
+        {
+          "name": "data",
+          "type": "vref",
+          "doc": "",
+          "offset": 96
+        },
+        {
+          "name": "source",
+          "type": "input_source",
+          "doc": "",
+          "offset": 104
+        },
+        {
+          "name": "type",
+          "type": "event_type",
+          "doc": "",
+          "offset": 105
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 112,
+      "see": []
+    },
+    {
+      "id": "c2h.send",
+      "code": 515,
+      "ring": "c2h",
+      "summary": "A send for an I/O processor",
+      "doc": "Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host acts on it after the macrostep's c2h.fence.\n\nA delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no fence follows, and the host may act on it at once.",
+      "fields": [
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "0 for a delayed send that became due",
+          "offset": 32
+        },
+        {
+          "name": "sendid",
+          "type": "text",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "io_type",
+          "type": "text",
+          "doc": "",
+          "offset": 48
+        },
+        {
+          "name": "target",
+          "type": "text",
+          "doc": "",
+          "offset": 56
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "doc": "",
+          "offset": 64
+        },
+        {
+          "name": "data",
+          "type": "vref",
+          "doc": "the namelist and params, aggregated by the data model",
+          "offset": 72
+        },
+        {
+          "name": "content",
+          "type": "vref",
+          "doc": "<content>, or 0",
+          "offset": 80
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 88,
+      "see": [
+        "c2h.fence"
+      ]
+    },
+    {
+      "id": "c2h.invoke",
+      "code": 516,
+      "ring": "c2h",
+      "summary": "Start an invocation",
+      "doc": "",
+      "fields": [
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "invokeid",
+          "type": "text",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "doc": "",
+          "offset": 48
+        },
+        {
+          "name": "src",
+          "type": "text",
+          "doc": "",
+          "offset": 56
+        },
+        {
+          "name": "data",
+          "type": "vref",
+          "doc": "",
+          "offset": 64
+        },
+        {
+          "name": "autoforward",
+          "type": "bool",
+          "doc": "",
+          "offset": 72
+        }
+      ],
+      "flags": [],
+      "replies": [
+        "h2c.invoke_report"
+      ],
+      "fixed_size": 80,
+      "see": []
+    },
+    {
+      "id": "c2h.invoke_cancel",
+      "code": 517,
+      "ring": "c2h",
+      "summary": "Cancel an invocation",
+      "doc": "",
+      "fields": [
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "invokeid",
+          "type": "text",
+          "doc": "",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 48,
+      "see": []
+    },
+    {
+      "id": "c2h.invoke_forward",
+      "code": 518,
+      "ring": "c2h",
+      "summary": "Autoforward an event to an invocation",
+      "doc": "",
+      "fields": [
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "invokeid",
+          "type": "text",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "doc": "",
+          "offset": 48
+        },
+        {
+          "name": "sendid",
+          "type": "text",
+          "doc": "",
+          "offset": 56
+        },
+        {
+          "name": "origin",
+          "type": "text",
+          "doc": "",
+          "offset": 64
+        },
+        {
+          "name": "data",
+          "type": "vref",
+          "doc": "",
+          "offset": 72
+        },
+        {
+          "name": "type",
+          "type": "event_type",
+          "doc": "",
+          "offset": 80
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 88,
+      "see": []
+    },
+    {
+      "id": "c2h.log",
+      "code": 519,
+      "ring": "c2h",
+      "summary": "A <log>",
+      "doc": "",
+      "fields": [
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "value",
+          "type": "vref",
+          "doc": "",
+          "offset": 48
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 56,
+      "see": []
+    },
+    {
+      "id": "c2h.fence",
+      "code": 520,
+      "ring": "c2h",
+      "summary": "A macrostep committed",
+      "doc": "Everything the macrostep wrote to c2h comes before its fence. The host acts on none of it before the fence: a recorded session’s c2h.input is persisted first, then its effects are released (reference/macrostep.md, \"The fence\").",
+      "fields": [
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "effects",
+          "type": "u32",
+          "doc": "records this macrostep wrote to c2h, the fence excluded",
+          "offset": 40
+        },
+        {
+          "name": "mail",
+          "type": "u32",
+          "doc": "envelopes it put in the pool",
+          "offset": 44
+        },
+        {
+          "name": "status",
+          "type": "fence_status",
+          "doc": "",
+          "offset": 48
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 56,
+      "see": []
+    },
+    {
+      "id": "c2h.wake",
+      "code": 521,
+      "ring": "c2h",
+      "summary": "Call core back at this time",
+      "doc": "The earliest due delayed send in the pool changed. One timer in the host's event loop is enough.",
+      "fields": [
+        {
+          "name": "due",
+          "type": "time",
+          "doc": "",
+          "offset": 32
+        }
+      ],
+      "flags": [
+        {
+          "name": "none",
+          "bit": 0,
+          "doc": "nothing is due: cancel the timer"
+        }
+      ],
+      "replies": [
+        "h2c.time"
+      ],
+      "fixed_size": 40,
+      "see": []
+    },
+    {
+      "id": "c2h.bounced",
+      "code": 522,
+      "ring": "c2h",
+      "summary": "An h2c record was not run",
+      "doc": "Core hands it back with a reason and keeps nothing of it. The host decides whether to post it again.",
+      "fields": [
+        {
+          "name": "source_seq",
+          "type": "seq",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "detail",
+          "type": "text",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "reason",
+          "type": "bounce_reason",
+          "doc": "",
+          "offset": 48
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 56,
+      "see": []
+    },
+    {
+      "id": "c2h.load_needed",
+      "code": 523,
+      "ring": "c2h",
+      "summary": "Envelopes wait for an unloaded address",
+      "doc": "Written once per address until h2c.load or h2c.load_failed answers it.\n\nFor a family whose first message creates the actor, h2c.spawn answers it.",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "waiting",
+          "type": "u32",
+          "doc": "envelopes waiting for it",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [
+        "h2c.load",
+        "h2c.spawn",
+        "h2c.load_failed"
+      ],
+      "fixed_size": 48,
+      "see": []
+    },
+    {
+      "id": "c2h.loaded",
+      "code": 524,
+      "ring": "c2h",
+      "summary": "A session is resident again",
+      "doc": "",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "cause_seq",
+          "type": "seq",
+          "doc": "the h2c.load",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 48,
+      "see": []
+    },
+    {
+      "id": "c2h.unloaded",
+      "code": 525,
+      "ring": "c2h",
+      "summary": "A session left memory",
+      "doc": "The image holds the session's state and its delayed sends. The host keeps it, and wake_at, in its own index of unloaded sessions, and posts h2c.load when wake_at comes.",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "image",
+          "type": "blob",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "wake_at",
+          "type": "time",
+          "doc": "its earliest delayed send",
+          "offset": 48
+        }
+      ],
+      "flags": [
+        {
+          "name": "has_wake",
+          "bit": 0,
+          "doc": "wake_at is meaningful"
+        }
+      ],
+      "replies": [],
+      "fixed_size": 56,
+      "see": []
+    },
+    {
+      "id": "c2h.state",
+      "code": 526,
+      "ring": "c2h",
+      "summary": "A recorded session's state at a point of its log",
+      "doc": "A checkpoint (core ADR 0091). Its delayed sends are inside the image, so it is one artifact. Replaying from it needs only the c2h.input records after input_seq.",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "image",
+          "type": "blob",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "input_seq",
+          "type": "seq",
+          "doc": "the last c2h.input it includes",
+          "offset": 48
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 56,
+      "see": []
+    },
+    {
+      "id": "c2h.published",
+      "code": 527,
+      "ring": "c2h",
+      "summary": "A replayed session is live",
+      "doc": "",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "replayed",
+          "type": "u32",
+          "doc": "inputs it replayed",
+          "offset": 40
+        },
+        {
+          "name": "dropped_timers",
+          "type": "u32",
+          "doc": "held delayed sends due by `at`",
+          "offset": 44
+        },
+        {
+          "name": "retired_invokes",
+          "type": "u32",
+          "doc": "",
+          "offset": 48
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 56,
+      "see": []
+    },
+    {
+      "id": "c2h.finished",
+      "code": 528,
+      "ring": "c2h",
+      "summary": "A session reached a top-level final state",
+      "doc": "Mail to a local parent (done.invoke) is an envelope; this record is for the host's books.",
+      "fields": [
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "donedata",
+          "type": "vref",
+          "doc": "",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 48,
+      "see": []
+    },
+    {
+      "id": "c2h.destroyed",
+      "code": 529,
+      "ring": "c2h",
+      "summary": "A session is gone",
+      "doc": "Envelopes still waiting for it are recycled as for h2c.load_failed.",
+      "fields": [
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "reason",
+          "type": "destroy_reason",
+          "doc": "",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 48,
+      "see": []
+    },
+    {
+      "id": "tel.trace",
+      "code": 769,
+      "ring": "tel",
+      "summary": "One trace record (core ADR 0067)",
+      "doc": "The fields of ta_trace_record that its kind names. Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring.",
+      "fields": [
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "trace_id_high",
+          "type": "u64",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "trace_id_low",
+          "type": "u64",
+          "doc": "",
+          "offset": 48
+        },
+        {
+          "name": "cause_session",
+          "type": "session",
+          "doc": "",
+          "offset": 56
+        },
+        {
+          "name": "cause_macrostep",
+          "type": "macrostep",
+          "doc": "",
+          "offset": 64
+        },
+        {
+          "name": "microstep",
+          "type": "u32",
+          "doc": "",
+          "offset": 72
+        },
+        {
+          "name": "state",
+          "type": "u32",
+          "doc": "",
+          "offset": 76
+        },
+        {
+          "name": "transition",
+          "type": "u32",
+          "doc": "",
+          "offset": 80
+        },
+        {
+          "name": "action",
+          "type": "u32",
+          "doc": "",
+          "offset": 84
+        },
+        {
+          "name": "iteration",
+          "type": "u32",
+          "doc": "",
+          "offset": 88
+        },
+        {
+          "name": "trace_kind",
+          "type": "u16",
+          "doc": "ta_trace_kind",
+          "offset": 92
+        },
+        {
+          "name": "position",
+          "type": "u8",
+          "doc": "ta_trace_at",
+          "offset": 94
+        },
+        {
+          "name": "result",
+          "type": "bool",
+          "doc": "",
+          "offset": 95
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "doc": "",
+          "offset": 96
+        },
+        {
+          "name": "value_text",
+          "type": "text",
+          "doc": "",
+          "offset": 104
+        },
+        {
+          "name": "states",
+          "type": "bytes",
+          "doc": "u32 state IDs: exited, entered, history, counted in the tail",
+          "offset": 112
+        }
+      ],
+      "flags": [
+        {
+          "name": "truncated",
+          "bit": 0,
+          "doc": "value_text was cut"
+        },
+        {
+          "name": "suppressed",
+          "bit": 1,
+          "doc": "an effect a replaying session did not perform"
+        }
+      ],
+      "replies": [],
+      "fixed_size": 120,
+      "see": []
+    },
+    {
+      "id": "tel.dropped",
+      "code": 770,
+      "ring": "tel",
+      "summary": "Telemetry records were dropped",
+      "doc": "",
+      "fields": [
+        {
+          "name": "count",
+          "type": "u64",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "first_seq",
+          "type": "seq",
+          "doc": "the seq the first dropped record would have had",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 48,
+      "see": []
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The campaign, clocked by acknowledgements. Same job as campaign.scxml,
+  but no macrostep can run out of room:
+  - an attempt sends a window of `windowSize` notifications;
+  - each acknowledgement, rejection or communication error sends at most one
+    more;
+  - progress goes to the tracker as one absolute snapshot per macrostep,
+    not one message per notification.
+  Per macrostep it writes at most windowSize c2h.send records and puts at
+  most two envelopes in the pool (one progress.snapshot, one timer),
+  however large the batch is. See scenarios/S02-full-pool.md.
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="campaign" initial="campaign">
+
+  <datamodel>
+    <data id="campaignID" expr="null"/>
+    <data id="tracker" expr="null"/>
+    <data id="batch" expr="[]"/>
+    <data id="pending" expr="new Set()"/>
+    <data id="queue" expr="[]"/>            <!-- notifications this attempt has not sent yet -->
+    <data id="window" expr="[]"/>
+    <data id="next" expr="null"/>
+    <data id="idOf" expr="({})"/>
+    <data id="lastSendID" expr="null"/>
+    <data id="windowSize" expr="4"/>
+    <data id="replyTo" expr="null"/>
+    <data id="attempt" expr="0"/>
+    <data id="maxAttempts" expr="5"/>
+    <data id="counts" expr="({ sent: 0, acked: 0, rejected: 0, failed: 0 })"/>
+  </datamodel>
+
+  <state id="campaign" initial="idle">
+    <transition event="progress.sync">
+      <send targetexpr="_event.origin" event="progress.snapshot">
+        <param name="counts" expr="counts"/>
+        <param name="pending" expr="pending.size"/>
+      </send>
+    </transition>
+
+    <state id="idle">
+      <transition event="send.requested" target="active">
+        <assign location="campaignID" expr="_event.data.campaignID"/>
+        <assign location="tracker" expr="'#_actor_progress/' + _event.data.campaignID"/>
+        <assign location="batch" expr="_event.data.notifications"/>
+        <assign location="pending" expr="new Set(batch.map(n => n.id))"/>
+        <assign location="replyTo" expr="_event.origin"/>
+        <assign location="attempt" expr="1"/>
+      </transition>
+    </state>
+
+    <state id="active" initial="attempt">
+      <transition cond="pending.size === 0" target="complete"/>
+      <transition event="send.requested" target="attempt">
+        <assign location="replyTo" expr="_event.origin"/>
+      </transition>
+      <transition event="sending.timeout" target="retrying"/>
+
+      <state id="attempt">
+        <onentry>
+          <send id="t" event="sending.timeout" delay="30s"/>
+          <assign location="queue" expr="batch.filter(n => pending.has(n.id))"/>
+          <assign location="window" expr="queue.splice(0, windowSize)"/>
+          <foreach array="window" item="n">
+            <send type="x-notify" target="notify:" event="notification"
+                  namelist="n" idlocation="lastSendID"/>
+            <script>idOf[lastSendID] = n.id; counts.sent++;</script>
+          </foreach>
+          <send targetexpr="tracker" event="progress.snapshot"><param name="counts" expr="counts"/></send>
+        </onentry>
+        <onexit>
+          <cancel sendid="t"/>
+        </onexit>
+
+        <!-- One outcome frees one place in the window. -->
+        <transition event="notify.ack">
+          <script>pending.delete(_event.data.id); counts.acked++;</script>
+          <raise event="window.slot"/>
+        </transition>
+        <transition event="notify.rejected">
+          <script>pending.delete(_event.data.id); counts.rejected++;</script>
+          <raise event="window.slot"/>
+        </transition>
+        <transition event="error.communication" cond="_event.sendid in idOf">
+          <!-- Back in the queue, but its slot stays taken: a processor that is
+               down is not hammered. The next attempt starts a full window. -->
+          <script>counts.failed++; queue.push(batch.find(n => n.id === idOf[_event.sendid]));</script>
+        </transition>
+        <transition event="error.communication"/>
+
+        <transition event="window.slot" cond="queue.length &gt; 0">
+          <assign location="next" expr="queue.shift()"/>
+          <send type="x-notify" target="notify:" event="notification" idlocation="lastSendID">
+            <param name="n" expr="next"/>
+          </send>
+          <script>idOf[lastSendID] = next.id; counts.sent++;</script>
+          <send targetexpr="tracker" event="progress.snapshot"><param name="counts" expr="counts"/></send>
+        </transition>
+        <transition event="window.slot">
+          <send targetexpr="tracker" event="progress.snapshot"><param name="counts" expr="counts"/></send>
+        </transition>
+      </state>
+
+      <state id="retrying">
+        <onentry>
+          <assign location="attempt" expr="attempt + 1"/>
+        </onentry>
+        <transition cond="attempt &gt; maxAttempts" target="gaveUp"/>
+        <transition target="attempt"/>
+      </state>
+    </state>
+
+    <state id="complete">
+      <onentry>
+        <send type="x-http-reply" targetexpr="replyTo" event="ok"><param name="counts" expr="counts"/></send>
+        <send targetexpr="tracker" event="progress.done"/>
+      </onentry>
+      <transition event="send.requested">
+        <send type="x-http-reply" targetexpr="_event.origin" event="ok"><param name="counts" expr="counts"/></send>
+      </transition>
+    </state>
+
+    <state id="gaveUp">
+      <onentry>
+        <send type="x-http-reply" targetexpr="replyTo" event="failed"><param name="pending" expr="[...pending]"/></send>
+        <send targetexpr="tracker" event="progress.gave_up"/>
+      </onentry>
+      <transition event="send.requested" target="active">
+        <assign location="replyTo" expr="_event.origin"/>
+        <assign location="attempt" expr="1"/>
+      </transition>
+    </state>
+  </state>
+</scxml>
