@@ -7,7 +7,7 @@
 - the invoker contract: a start's failure is reported, not answered;
 - the generation of invoke IDs, which moves from a counter per system to one per session.
 
-It would extend ADR 0072: a resume says whether its event was ignored. It would replace ADR 0084 section 7 (withdrawal by due time). It serves `docs/proposals/replay-persistence.md`, and feedback from granary, an application built on `@tinyactors/node`. ADR 0090 moves the recording and the replay into core (a host hands `ta_actor_replay()` records instead of calling the input functions), and ADR 0091 lets a replay start from a checkpoint.
+It would extend ADR 0072: a resume says whether its event was ignored. It would replace ADR 0084 section 7 (withdrawal by due time). It serves `docs/proposals/replay-persistence.md`, and feedback from granary, an application built on `@tinyactors/node`. ADR 0090 moves the recording and the replay into core (a host hands `ta_actor_replay()` records instead of calling the input functions), and ADR 0091 lets a replay start from a checkpoint. Superseded in part by [kernel ADR 0005](../../../tinyactors-host/docs/adr/0005-an-actors-log-is-an-inbox-with-acknowledgements.md) (2026-10-01): section 2's last clock move after an eviction is the latest record time (no `evicted` record); section 7's operations are a withdrawal taken between macrosteps, and release and abandon carried by the macrostep's `done`; Scope's third condition no longer holds (effects run before their commit), and a replay stays exact because a message whose `done` did not commit is run again live, not replayed.
 **Date:** 2026-09-29
 
 ## Context

@@ -5,7 +5,7 @@
 - ADR 0022: mail to a gone session of a family with a loader goes to that loader;
 - the replacement API (`prepareReplacement`, `activate`), which becomes `prepare` and `publish`.
 
-It serves the feedback from granary in `docs/proposals/replay-persistence.md`. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
+It serves the feedback from granary in `docs/proposals/replay-persistence.md`. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md). Superseded in part by [kernel ADR 0005](../../../tinyactors-host/docs/adr/0005-an-actors-log-is-an-inbox-with-acknowledgements.md) and [napi ADR 0040](0040-effects-are-not-held-and-send-resolves-once-its-message-is-done-and-committed.md) (2026-10-01): section 6's write-ahead hold is removed (effects run when their turn asks for them), and section 8's `busy` inside a macrostep goes.
 **Date:** 2026-09-29
 
 ## Context
