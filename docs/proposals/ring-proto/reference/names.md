@@ -96,6 +96,22 @@ event's text, every segment it compares against with equality is a known
 atom, and gets the same atom from the lookup. The answers are the same as
 matching on the interned text.
 
+**Why resolve when the envelope is taken, not when it is admitted:**
+
+- **The envelope stays small.** Resolving at admission would mean storing
+  the resolved atoms in every envelope: up to `eventNameDepth` × 4 bytes
+  each, most of it unused. Resolving when taken uses scratch. Only one
+  macrostep runs at a time, so one buffer is enough for the whole system.
+- **The answer is current.** A definition registered while an envelope
+  waits (for a load, or behind a long queue) adds atoms. Resolving when the
+  envelope is taken sees them, so a name that was UNKNOWN at admission
+  still matches the new definition's descriptors.
+- **Admission stays cheap,** and envelopes that never run (recycled or
+  dropped) never cost a lookup.
+- **It is one lookup per segment per macrostep,** which is the cost
+  matching already has. It is paid once per taken event, not again for each
+  descriptor.
+
 ### Worked examples
 
 The definition's descriptors are `order`, `order.*.paid`,
@@ -141,7 +157,7 @@ holds its first chunk and the total length ([envelope.md](envelope.md)).
 **When it is full,** it behaves as a full pool does:
 
 - admission from h2c stops above `admissionWatermark`;
-- a `<send>` whose text doesn't fit fails as `error.execution.capacity`.
+- a `<send>` whose text doesn't fit fails as `error.execution.capacity.names`.
 
 [envelope.md](envelope.md#running-out) covers both.
 

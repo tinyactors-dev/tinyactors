@@ -105,7 +105,7 @@ queue is ([envelope.md](envelope.md#the-lists-an-envelope-can-be-on)). So a load
 holds pool capacity:
 
 - admission from h2c stops when the pool reaches `admissionWatermark`
-  ([parameters.md](parameters.md)), and the host refuses at its edge;
+  ([BEHAVIORS.md](../BEHAVIORS.md#parameters)), and the host refuses at its edge;
 - a local `<send>` to the waiting address fails as
   `error.execution.capacity` once the pool is full.
 

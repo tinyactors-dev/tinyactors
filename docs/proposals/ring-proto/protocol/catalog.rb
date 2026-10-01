@@ -239,7 +239,10 @@ message 'c2h.send', code: 0x0203, summary: 'A send for an I/O processor' do
       "macrostep's c2h.fence."
   doc 'A delayed send that becomes due on h2c.time is written outside any ' \
       'macrostep: its `macrostep` is 0, no fence follows, and the host may ' \
-      'act on it at once.'
+      'act on it at once. Why: the macrostep that scheduled it committed at ' \
+      'its own fence, and firing it changes no session, so there is nothing ' \
+      'to commit and nothing to roll back (reference/envelope.md, "A due ' \
+      'send to an I/O processor has no fence").'
   field :macrostep, :macrostep, '0 for a delayed send that became due'
   field :sendid, :text
   field :io_type, :text

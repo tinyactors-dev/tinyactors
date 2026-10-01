@@ -802,7 +802,7 @@
       "code": 515,
       "ring": "c2h",
       "summary": "A send for an I/O processor",
-      "doc": "Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host acts on it after the macrostep's c2h.fence.\n\nA delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no fence follows, and the host may act on it at once.",
+      "doc": "Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host acts on it after the macrostep's c2h.fence.\n\nA delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no fence follows, and the host may act on it at once. Why: the macrostep that scheduled it committed at its own fence, and firing it changes no session, so there is nothing to commit and nothing to roll back (reference/envelope.md, \"A due send to an I/O processor has no fence\").",
       "fields": [
         {
           "name": "macrostep",

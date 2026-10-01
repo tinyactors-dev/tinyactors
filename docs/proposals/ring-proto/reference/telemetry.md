@@ -42,7 +42,7 @@ host reads them with the same code.
 A trace record's value (an ASSIGN's new value, a CONDITION's result, a
 RAISED event's data) is rendered by the data model's `value_text` and
 carried as text, cut at `telemetryValueBytes`
-([parameters.md](parameters.md)). A cut value carries the `truncated`
+([BEHAVIORS.md](../BEHAVIORS.md#parameters)). A cut value carries the `truncated`
 flag.
 
 The reason is ownership. A vref hands a reference to the reader

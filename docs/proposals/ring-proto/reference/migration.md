@@ -36,7 +36,7 @@ below.
 | `directory.h`, `directory.c` | 118 | The in-memory directory with unloaded entries. Core keeps the resident ones. Unloaded addresses are in the host's index. |
 | `events.h`, `events.c` | 30 | The cache of interned event names (napi ADR 0004). Run-time names are bytes now ([names.md](names.md)). |
 | `hooks.h`, `hooks.c` | 57 | Post-call hooks that told the plumbing about new and removed actors. There is no plumbing left to tell. [`c2h.spawned`](../protocol/generated/MESSAGES.md#c2hspawned) and [`c2h.destroyed`](../protocol/generated/MESSAGES.md#c2hdestroyed) carry the same facts. |
-| `params.h`, `params.c` | 22 | Kernel parameters. Removed or replaced ([parameters.md](parameters.md)). |
+| `params.h`, `params.c` | 22 | Kernel parameters. Removed or replaced ([BEHAVIORS.md](../BEHAVIORS.md#removed-parameters)). |
 | `system.h`, `system.c` | 687 | The native system record, the pump driver, entering and leaving core. What is left is napi's: one `ta_system`, its rings, and the pump. |
 | `version.c` | 6 | |
 | **Total** | **about 4,600** | |
@@ -166,7 +166,7 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0089, 0094 Replay before publish; every input carries its time | | **kept**; the records are h2c |
 | 0090 Core defines the input log's byte layout | a layout of its own | **superseded**: `c2h.input` is the log |
 | 0091, 0095 Checkpoints; refused sends restored | sends the router refused are restored with the checkpoint | 0091 **kept** (`c2h.state`); 0095 **superseded**: nothing is refused after the fact, a send fails in its macrostep |
-| 0092 Parameters bound every buffer | | **kept**; new parameters ([parameters.md](parameters.md)) |
+| 0092 Parameters bound every buffer | | **kept**; new parameters ([BEHAVIORS.md](../BEHAVIORS.md#parameters)) |
 | 0093 The event-block cache fills on demand | | **superseded** by the pool, which may fill on demand in the same way |
 
 ### Kernel ADRs 0001 to 0006
@@ -254,23 +254,25 @@ Each step builds and passes `mise run test`, and is committed on its own
 Steps 4 to 6 are the expensive ones. Each removes a vtable from core and
 changes every binding in the same change.
 
+## Decided along the way
+
+- **The data model stays a synchronous vtable.** Data model requests on the
+  ring ("option (b)") are rejected: in-process data models gain nothing,
+  and every action would have to become resumable in the middle
+  ([data-model.md](data-model.md#decided-the-data-model-stays-a-synchronous-vtable)).
+- **A `ta_system` is not thread-safe.** The rings are used on the system's
+  own thread only. A host that works on other threads puts its own queue or
+  channel in front of the system ([ring.md](ring.md#one-thread)), so core
+  needs no atomics. This is what core ADR 0017 already assumes.
+
 ## Open questions
 
 - **Fairness.** Is a ratio of mail to admitted input enough, or does
   core need round robin across targets so that one busy actor cannot
   delay another's mail? ([envelope.md](envelope.md))
 - **Default sizes.** The pool, the name area and the rings
-  ([parameters.md](parameters.md)). Busy servers and test suites pull in
-  opposite directions.
-- **Option (b).** Data model requests on the ring
-  ([data-model.md](data-model.md)). Not needed for napi, the test host or
-  the SQLite sketch.
-- **Rings shared across threads.** The design assumes one thread per
-  system, as core ADR 0017 does. A host whose I/O runs on another thread
-  would read c2h and write h2c from there. That works only with
-  single-producer, single-consumer rings with atomic head and tail
-  ([ring.md](ring.md)). Core still runs on one thread. Whether to promise
-  this is **open**.
+  ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Busy servers and test suites
+  pull in opposite directions.
 - **The MCP server proposal** ([mcp-server.md](../../mcp-server.md))
   places its mapping in the host kernel, "implemented once". With the
   kernel gone, it needs a new home. Candidates: a small C library beside

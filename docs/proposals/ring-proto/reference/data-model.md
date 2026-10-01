@@ -21,7 +21,9 @@ The data model's own memory is not core's memory. A JavaScript `assign`
 may allocate as much as it likes: the rule that a macrostep never
 allocates ([macrostep.md](macrostep.md)) is about core's allocator. A data
 model that runs out of memory answers `TA_OP_ERROR`, and the chart sees
-`error.execution`, as today.
+`error.execution`. `TA_OP_NOMEM` and the pause it caused are removed.
+Why is in
+[macrostep.md](macrostep.md#what-this-replaces-the-out-of-memory-stop-adrs-0047-0070).
 
 ## Value references
 
@@ -96,8 +98,9 @@ send the session holds in the pool. The image holds bytes, not vrefs.
 Loading calls `value_read`.
 
 This is why unloading does not have "two halves", one in core and one in
-the JavaScript heap. That concern applied only to option (b), below,
-where core would hold references to values that live elsewhere.
+the JavaScript heap. That concern applied only to the rejected option (b)
+([below](#decided-the-data-model-stays-a-synchronous-vtable)), where core
+would hold references to values that live elsewhere.
 
 ## Determinism is the data model's business
 
@@ -114,50 +117,35 @@ Core makes no promise beyond "the same inputs, in the same order".
 [recording-and-replay.md](recording-and-replay.md) describes how a host
 can detect a divergence with telemetry.
 
-## Option (b): data model requests on the ring
+## Decided: the data model stays a synchronous vtable
 
-This option stays open, and nothing here builds it.
+An earlier iteration of the design kept a second option open, "option (b)":
+every data model call would become a request record on c2h (`dm.assign`,
+`dm.eval`, `dm.foreach`, ...), and the macrostep would suspend until the
+answer arrived on h2c. **It is rejected.** The data model stays a vtable
+that core calls synchronously, inside the macrostep.
 
-**What it is.** Each data model call becomes a request record on c2h
-(`dm.assign`, `dm.eval`, `dm.foreach`, ...). The macrostep suspends until
-the matching answer arrives on h2c. The data model could then live in
-another process, or behind an asynchronous API.
+**Why:**
 
-**What it would need:**
-
-1. **Suspension inside an action.** ADR 0061 continuations suspend
-   *between* units of executable content, "never while an action runs".
-   An `<assign>` is one unit, and its data model call is inside it. Each
-   action would have to split into an issue stage and a completion stage,
-   with the continuation holding the half-done action.
-2. **ADR 0047 and ADR 0070 still hold.** A step that is interrupted must
-   have had no effect that doing it again would repeat. A suspended
-   `<send>` that has evaluated its `eventexpr` but not yet written its
-   record must not evaluate it again on resume. The continuation would
-   have to keep the evaluated parts. It is reserved before the run, so
-   it would have to be sized for the largest action's intermediate
-   results.
-3. **One continuation per suspended session.** Under run to completion
-   ([macrostep.md](macrostep.md)) one continuation per system is enough,
-   because nothing else runs while a macrostep is paused. A data model
-   that answers slowly would block the whole system, unless core goes
-   back to interleaving, which the pool design gave up.
-4. **A round trip per expression.** The fanout in
-   [S01](../scenarios/S01-fanout.md) makes about four data model calls
-   per iteration. On a ring, each is a write, a host wakeup and a read.
-
-**When it would pay off.** Only when the data model cannot be called
-synchronously:
-
-- it is out of process, such as a database server for the
-  [PostgreSQL host](../../postgres-host.md);
-- it is behind an asynchronous API;
-- a WebAssembly core talks to a data model on another thread.
-
-The record format keeps the door open. A data model request would be one
-more message kind (code range `0x04xx` is free). An in-process binding
-could answer it inline, which is what the vtable already does.
-
-**Open:** whether the [SQLite host](../../sqlite-host.md) needs this. It
-does not if SQL runs on the same connection, synchronously, as that
-sketch assumes.
+- **In-process data models gain nothing from it.** napi, the test host, and
+  the SQLite and PostgreSQL sketches (core runs inside the database
+  connection) all call their data model synchronously. On a ring, each call
+  would cost a write, a host turn and a read, about four per iteration of
+  the [S01](../scenarios/S01-fanout.md) fanout, to do what a function call
+  does.
+- **It would make every action resumable in the middle.** ADR 0061
+  continuations suspend *between* units of executable content, "never while
+  an action runs". With requests on a ring, every `<assign>`, `<send>` and
+  `<foreach>` would split into an issue stage and a completion stage. The
+  continuation would have to hold the half-done action and the results it
+  already evaluated, so that resuming never evaluates them twice. That
+  means more state in the continuation, more code in every action, and the
+  ADR 0047/0070 kind of reasoning about interrupted steps that this design
+  removes ([macrostep.md](macrostep.md#what-this-replaces-the-out-of-memory-stop-adrs-0047-0070)).
+- **It would undo run to completion.** A slow answer would block the whole
+  system, unless core went back to interleaving sessions, with one
+  continuation for each.
+- **A data model in another process can still be served synchronously.**
+  The binding's vtable may block on it. A system runs on one thread
+  ([ring.md](ring.md#one-thread)), so blocking it is the binding's choice to
+  make, and nothing in core changes.

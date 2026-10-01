@@ -50,7 +50,7 @@ lists the ADRs this reverses.)
 | Recording, replay, checkpoints | Core writes `c2h.input` and `c2h.state`; the application stores them | [reference/recording-and-replay.md](reference/recording-and-replay.md) |
 | Telemetry and OTLP | Core writes `tel`; a library encodes OTLP | [reference/telemetry.md](reference/telemetry.md) |
 | Unloading and loading | Core writes images and asks for loads; the host stores images and wakes | [reference/unloading.md](reference/unloading.md) |
-| Parameters | `ta_system` creation | [reference/parameters.md](reference/parameters.md) |
+| Parameters | `ta_system` creation | [BEHAVIORS.md](BEHAVIORS.md#parameters) |
 
 ## Two kinds of call
 
@@ -163,14 +163,19 @@ Crash cases: [S03](scenarios/S03-crash-unrecorded.md),
 | `h2c`, `c2h`, `tel`; the envelope pool; the name area; scratch; one continuation; one internal queue | its record (about 332 bytes today) and its list heads; its invocation slots, sized by the definition | compiled chart; authored names, interned |
 
 Nothing in the table grows during a macrostep. The data model's own memory
-belongs to the data model. Figures are in [reference/parameters.md](reference/parameters.md)
+belongs to the data model. Figures are in [BEHAVIORS.md](BEHAVIORS.md#parameters)
 and [reference/envelope.md](reference/envelope.md).
 
 ## Threads
 
-One `ta_system` runs on one thread, as today. The rings are single-producer,
-single-consumer:
-- an in-process host on the same thread reads and writes them directly;
-- a host on another thread, or one that only forwards to another process
-  (the test host), uses the acquire/release counters in the control block
-  ([reference/ring.md](reference/ring.md)).
+**A `ta_system` is not thread-safe.** Core and the host take turns on the
+system's own thread, and only that thread touches the rings. A host that
+works on other threads (an I/O thread pool, a Node worker) puts its own
+queue or channel in front of the system. Separate systems share nothing,
+so they may run on separate threads. The test host forwards records between
+its process and its client, and it too touches the rings only from the
+system's thread.
+
+Why: no atomics or memory ordering in core, the same code on an MCU or in
+wasm, and a data model (JavaScript) that is single-threaded anyway
+([reference/ring.md](reference/ring.md#one-thread)).

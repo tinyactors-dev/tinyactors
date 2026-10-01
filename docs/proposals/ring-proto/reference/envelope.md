@@ -73,7 +73,7 @@ measurements:
 |---|---|
 | One envelope | 72 bytes, plus 4 for its slot in the deadline index |
 | Default pool, 4,096 envelopes | about 304 KiB |
-| Default name area | 64 KiB (`nameAreaBytes`, 65,536) |
+| Default name area | 256 KiB (`nameAreaBytes`, 262,144): one 64-byte chunk per envelope ([BEHAVIORS.md](../BEHAVIORS.md#nameareabytes)) |
 | Default internal queue, 256 entries of about 48 bytes | about 12 KiB (`internalQueueEvents`) |
 | Per actor | the head of its own pending delayed sends: +4 bytes on today's 332 (ADR 0092: "an actor stays at 332 bytes") |
 | Today, for comparison | napi's event blocks prefilled at about 811 KB per system before ADR 0093, each queued event (`ta_queued_event`) 96 bytes, and the kernel's mailboxes on top |
@@ -101,6 +101,20 @@ nothing is busy.
 
 The one case where envelopes must wait for a particular target is when that
 target isn't resident. They go on that address's waiting list (below).
+
+**Why one queue:**
+
+- **Run to completion makes queues per target pointless.** They exist to
+  hold mail for a busy target while others run. Here no target is ever busy
+  when core picks the next envelope.
+- **Queues per target need a scheduler to choose between them.** That
+  scheduler is the policy the kernel held and this design deletes:
+  fairness between targets, round robin, starvation. One queue in arrival
+  order has no policy apart from `fairnessRatio`.
+- **Arrival order is deterministic.** Given the same h2c stream, the same
+  envelopes arrive in the same order. Whole-system replay depends on that
+  ([recording-and-replay.md](recording-and-replay.md#session-replay-and-whole-system-replay)).
+- **It costs one list head per system**, not one per actor.
 
 ## Admission: from h2c into the pool
 
@@ -156,6 +170,20 @@ So a receiver never sees mail from a macrostep that didn't commit. A macrostep
 an operator abandons (ADR 0082) frees its outgoing list. No mail
 crosses the host, so no JavaScript runs for it and no vref leaves core.
 
+**Why mail waits for the fence:**
+
+- **One rule for every effect.** Effects on c2h are released at the fence,
+  and mail is an effect too. If mail ran earlier, a receiver could act on
+  something its sender then failed to commit, for example a macrostep an
+  operator abandons.
+- **Cause comes before effect in the log.** A recorded sender's
+  [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) is on c2h
+  before the receiver can take the mail and write its own `c2h.input`. A
+  log read in order never shows an effect before its cause.
+- **It costs nothing.** Under run to completion the receiver couldn't run
+  before the fence anyway. The outgoing list only decides *when* the mail
+  becomes visible, not how soon it runs.
+
 Mail to an address in another system or process isn't local. It is a
 [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend) for the host's SCXML
 I/O processor.
@@ -181,10 +209,41 @@ envelopes in the pool.**
   whenever the head of the index changes. The host needs one timer.
 - **Timers to an I/O processor take an envelope too**, until they are due.
   So a fanout of 10,000 per-notification timeouts takes 10,000 envelopes, and
-  the 10,001st `<send delay>` fails as `error.execution.capacity`.
+  the 10,001st `<send delay>` fails as `error.execution.capacity.pool`.
 
 What it replaces: ADR 0054's per-owner storage, the sparse state it grows,
 and the global index ordering owners. The per-owner list stays, as `owner_next`.
+
+**Why core keeps the timers, and not the host (option B):**
+
+- **`<cancel>` is exact.** Core fires a timer only when it reads
+  `h2c.time`, with nothing queued in between. A cancelled timer never
+  arrives. If the host kept timers, a timer that fired just before the
+  cancel would still arrive, and a chart that reuses a sendid would act on
+  it.
+- **The capacity is shared.** A timer is an envelope like any other, so a
+  fanout of 10,000 timeouts is limited by the pool, not by slots per actor.
+- **The host needs only one timer.** It needs that one timer, set by
+  [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake), plus its index of
+  unloaded sessions ([unloading.md](unloading.md)).
+- **A session's state is one artifact.** Its pending timers are inside its
+  image and its [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate).
+  Replaying a session rebuilds them, so the host needs no reducer over
+  suppressed sends.
+
+### A due send to an I/O processor has no fence
+
+A timer for an I/O processor becomes due while core handles `h2c.time`, not
+inside a macrostep. Core writes its `c2h.send` with `macrostep` 0, and no
+[`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence) follows. The host
+may act on it at once.
+
+**Why there is no fence:** the macrostep that scheduled the send committed
+long ago, at its own fence, and that is when the send became certain. Firing
+it changes no session's state, so there is nothing to commit and nothing to
+roll back. A fence would mark the end of a macrostep that doesn't exist.
+Recording loses nothing either: the scheduling macrostep's input is in the
+log, so replay schedules the send again.
 
 ## Envelopes for an address that isn't resident
 
@@ -242,7 +301,7 @@ its slot while `_event` names it, and is freed at the fence. This is ADR
 Internal events (`<raise>`, `done.state.*`, `error.*`, and `done.invoke.*`
 for a child that ends inside the running macrostep) never leave the running
 session, so they don't take envelopes. They go on a **fixed internal queue**
-of `internalQueueEvents` entries ([parameters.md](parameters.md)), allocated at
+of `internalQueueEvents` entries ([BEHAVIORS.md](../BEHAVIORS.md#parameters)), allocated at
 creation:
 
 - an entry is a fixed slot: the name (an authored ID, or a name-area chunk
@@ -258,7 +317,9 @@ creation:
   ([Running out](#running-out)).
 
 A pool that is full therefore never stops a chart from raising its own
-events, and a full internal queue never stops mail.
+events, and a full internal queue never stops mail. Why the queue is kept
+apart from the pool is in
+[macrostep.md](macrostep.md#the-internal-queue-fixed-with-one-reserved-slot).
 
 ## Running out
 

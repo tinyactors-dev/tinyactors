@@ -198,14 +198,41 @@ It closes the gap that session replay leaves: mail that was in flight
 between two actors at the crash is reconstructed, because its sender's
 macrostep is replayed in the same system as its receiver.
 
+### How a whole-system replay runs
+
+1. **Every h2c record of the recorded stream is posted again with the
+   `replaying` flag.** Sessions that a replaying `h2c.spawn` creates are
+   replaying sessions.
+2. **Mail between replaying sessions is delivered**, as envelopes on the
+   run queue, exactly as it was the first time.
+3. **Effects that would leave the process are suppressed:** no `c2h.send`,
+   `c2h.invoke` or `c2h.log`. They go to `tel` with the `suppressed` flag.
+4. **One [`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish) with
+   an empty address** ends the replay, and publishes every replaying
+   session at once.
+
+**Why it works this way:**
+
+- **Mail is delivered because it is internal state.** Mail between
+  sessions never crossed the border the first time, so delivering it again
+  repeats nothing the outside world saw. It is also the whole point:
+  delivering it is what rebuilds the mail that was in flight at the crash.
+- **Effects are suppressed for the same reason as in a session replay.**
+  They already happened, or the charts' own retries cover them if they did
+  not. A replay must not send a notification twice.
+- **One flag on every record, not a mode of the system,** so the stream
+  replays the same way whether the host feeds it at once or in pieces. Core
+  needs no state beyond what the records say.
+- **One publish for all.** Publishing sessions one by one would let a
+  published session's mail reach a session still replaying, or the other
+  way round. One publish switches the whole system to live at a single
+  point in the input order.
+
 **Open:**
 
-- Whole-system replay suppresses effects for the whole stream, as session
-  replay does: every h2c record carries the `replaying` flag, and an
-  `h2c.publish` with an empty address publishes every session at once. The
-  catalog has both. **Open:** whether effects of sessions that never crashed
-  (inputs after the last fence the host acted on) should be released at
-  publish instead of suppressed.
+- Whether effects of sessions that never crashed (inputs after the last
+  fence the host acted on) should be released at publish instead of
+  suppressed.
 - How it interacts with sessions that were loaded from images that were
   written outside the recorded stream.
 

@@ -52,7 +52,7 @@ Put the queue in core, give it a fixed size, and those problems go away. See
    loaded. Nothing else allocates.
    ([reference/macrostep.md](reference/macrostep.md))
 2. **All memory is bounded by parameters.**
-   ([reference/parameters.md](reference/parameters.md))
+   ([BEHAVIORS.md](BEHAVIORS.md#parameters))
 3. **Every overflow is a refusal to someone who can retry:**
    - the external client (`h2c` is full, so the host refuses at its edge);
    - the sending chart (`error.execution.capacity`);
@@ -88,7 +88,7 @@ Reference documents, one for each building block:
 | Recording and replay: `c2h.input`, checkpoints, replaying a whole system | [reference/recording-and-replay.md](reference/recording-and-replay.md) |
 | Telemetry: the lossy ring, OTLP | [reference/telemetry.md](reference/telemetry.md) |
 | Unloading and loading sessions | [reference/unloading.md](reference/unloading.md) |
-| System parameters | [reference/parameters.md](reference/parameters.md) |
+| System parameters: defaults, bounds, what they drive | [BEHAVIORS.md](BEHAVIORS.md#parameters) |
 | What is deleted, which ADRs change, and open questions | [reference/migration.md](reference/migration.md) |
 
 ## The worked example
@@ -124,6 +124,11 @@ The scenarios run this example through:
   - per-actor event blocks and their cache (ADRs 0069, 0093);
   - the input log format (ADR 0090);
   - interning at run time.
+- **Unchanged, by decision:**
+  - the data model stays a synchronous vtable
+    ([reference/data-model.md](reference/data-model.md#decided-the-data-model-stays-a-synchronous-vtable));
+  - a `ta_system` is not thread-safe. A host with other threads puts its
+    own queue in front of it ([reference/ring.md](reference/ring.md#one-thread)).
 - **Found on the way:** core interns every event name computed at run time
   into tables that only grow. Any long-running system that computes event
   names leaks memory. An HTTP endpoint that maps request fields to event names

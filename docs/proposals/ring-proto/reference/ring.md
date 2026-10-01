@@ -12,19 +12,19 @@ three. The records themselves are defined in
 
 ## What a ring is
 
-- **One producer and one consumer.** Each ring has exactly one writer and
-  one reader. No ring is shared between two writers, so it needs no lock
-  and no compare-and-swap. The only shared state is two counters.
+- **One producer and one consumer, on one thread.** Each ring has exactly
+  one writer and one reader, and both run on the system's own thread
+  ([One thread](#one-thread)). A ring needs no lock, no compare-and-swap and
+  no atomics. Its state is two counters.
 - **Bytes, not slots.** A ring is a byte buffer of `h2cBytes`, `c2hBytes`
   or `telBytes`. Records have different sizes, so a ring holds many small
   records or a few large ones.
 - **Core allocates it when the system is created**, from the system's
-  allocator (core ADR 0023), like every other buffer (core ADR 0092). A host
-  that wants the rings in memory shared with another process passes an
-  allocator that hands out that memory. Nothing changes size after creation.
+  allocator (core ADR 0023), like every other buffer (core ADR 0092).
+  Nothing changes size after creation.
 - **It is not a call.** Writing a record does not run the reader. The reader
   looks when it is next its turn: core when the host calls `ta_run`, the host
-  when `ta_run` returns (or, with a host on another thread, when it polls).
+  when `ta_run` returns.
 
 This is the same idea as the trace sink (`ta_trace_sink`, core ADR 0067),
 with one change: the sink was a callback per record, and a ring is a buffer
@@ -51,9 +51,7 @@ The usage counters exist so a host can make decisions at its edge without
 asking core. For example, it can answer HTTP 503 while `admitting` is
 false, before h2c is even full.
 
-Each ring's `head` and `tail` sit on cache lines of their own (64 bytes
-apart), so a producer and consumer on two threads do not slow each other
-down. The control block is a few hundred bytes per system.
+The control block is a few hundred bytes per system.
 
 ## Records
 
@@ -93,21 +91,19 @@ The producer works on a private write position, then publishes it:
 
 1. **Reserve.** Round the record's size up to 8. If
    `capacity - (head - tail)` is smaller than that, the ring is full (see
-   [When a ring is full](#when-a-ring-is-full)). The producer reads `tail`
-   with acquire ordering.
+   [When a ring is full](#when-a-ring-is-full)).
 2. **Wrap if needed.** If the record does not fit between the write
    position and the end of the buffer, write a **pad** there (below), and
    reserve from the start of the buffer instead. Both the pad and the
    record must fit.
 3. **Fill** the header, the fixed fields and the tail in place. Nothing is
    visible to the reader yet.
-4. **Commit.** Store the new `head` with release ordering. The reader can
-   now see the record, and everything written into it.
+4. **Commit.** Store the new `head`. The reader can now see the record.
 
 A producer may commit after every record, or after several. Core commits
-c2h after every record, so a host on another thread can start copying a
-long macrostep's records out before its fence. It still may not act on them
-before the fence ([macrostep.md](macrostep.md#the-fence)).
+c2h after every record, so a host whose `ta_run` returned on a budget pause
+can copy a long macrostep's records out before its fence. It still may not
+act on them before the fence ([macrostep.md](macrostep.md#the-fence)).
 
 ### A record never splits across the end: the pad
 
@@ -133,12 +129,12 @@ The cost is at most `maxRecordBytes - 8` bytes left unused per wrap.
 
 ## Reading: look, use, release
 
-1. **Look.** Load `head` with acquire ordering. Everything between the read
-   position and `head` is committed records.
+1. **Look.** Read `head`. Everything between the read position and `head`
+   is committed records.
 2. **Use.** Read the record in place. A host that keeps a record past
    release copies it. That includes the bytes its spans point to.
-3. **Release.** Store the new `tail` with release ordering. The producer may
-   now overwrite those bytes.
+3. **Release.** Store the new `tail`. The producer may now overwrite those
+   bytes.
 
 A reader may release a batch at once. Releasing is what makes room, so a
 host that holds records unreleased keeps the ring full.
@@ -168,7 +164,7 @@ are three:
 | Ring | Producer | When full | Who retries |
 |---|---|---|---|
 | `h2c` | host | The host cannot post. It refuses at its edge (HTTP 503, or it stops reading a socket), or keeps the input in its own memory. Core never waits on h2c. | The external client, or the host by its own policy |
-| `c2h` | core | An action whose record does not fit fails as `error.execution.capacity`, and the rest of its block is abandoned. A run never waits. | The sending chart |
+| `c2h` | core | An action whose record does not fit fails as `error.execution.capacity.c2h`, and the rest of its block is abandoned. A run never waits. | The sending chart |
 | `tel` | core | The record is dropped and counted. The next [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) reports it. | Nobody: telemetry is allowed to be incomplete |
 
 ### The c2h reserve
@@ -183,7 +179,7 @@ that ends every macrostep. So:
 > `c2h.fence`, and one record of `maxRecordBytes`.**
 
 The last part is for the action that finds c2h full: its failure becomes
-`error.execution.capacity` in the internal queue, and the macrostep still
+`error.execution.capacity.c2h` in the internal queue, and the macrostep still
 reaches its fence. Every action that writes to c2h first checks that the
 room left after its own record still holds the fence. So an action can
 fail, but the fence can't.
@@ -195,24 +191,36 @@ work the same way: [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced)
 [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake). If c2h has no room
 for one, core doesn't consume the h2c record or event that would cause it.
 
-## One thread, or two
+## One thread
 
-- **In one thread (napi, the test host, most embedders).** Core and the host
-  take turns. The host writes h2c, calls `ta_run(budget)`, and reads c2h and
-  tel when it returns. Core calls the data model through its vtable during
-  the run ([data-model.md](data-model.md)), on the same thread. The atomics
-  are uncontended and cost almost nothing.
-- **With a host on another thread** (a C host that does its I/O on a thread
-  of its own). The I/O thread produces h2c and consumes c2h and tel while
-  core runs on its own thread. Acquire and release on `head` and `tail` are
-  all the ordering needed: a committed record's bytes are visible before
-  its `head`.
-  - The data model must still be callable from core's thread. That is why
-    napi stays on one thread: its data model is JavaScript.
-- **Across processes** (a debugger, a sidecar). This works if the
-  allocator places the rings in shared memory. But vrefs and blobs refer to
-  the binding's tables in core's process, so a reader in another process
-  sees only the bytes in the record.
+**A `ta_system` is not thread-safe, and neither are its rings.** Core and
+the host take turns on the system's own thread. The host writes h2c, calls
+`ta_run(budget)`, and reads c2h and tel when it returns. Core calls the data
+model through its vtable during the run, on the same thread
+([data-model.md](data-model.md)).
+
+A host that does work on other threads (a C server with an I/O thread pool,
+a Node worker) puts **its own queue or channel in front of the system**.
+Other threads hand inputs to the system's thread through it, and that
+thread alone touches the rings. Separate systems may run on separate
+threads, since they share nothing.
+
+**Why one owner thread:**
+
+- **No atomics, no memory ordering, no cache-line padding.** The counters
+  are plain loads and stores. The same code runs unchanged on an MCU, in
+  wasm without threads, and in Node.
+- **The data model is single-threaded anyway.** JavaScript must be called
+  from the thread that owns it, so napi could never have run core and its
+  data model apart.
+- **The hand-off a threaded host needs already exists in its runtime**
+  (a channel, a libuv async handle, an MPSC queue). That is where policy
+  about blocking, batching and backpressure between threads belongs, and
+  it is the host's policy.
+- **Reading across processes is not offered.** vrefs and blobs name the
+  binding's tables in core's process, so a record means little outside it.
+  A tool that wants to watch a system goes through the host, or through
+  the test host's protocol.
 
 ## Values and buffers across a ring
 

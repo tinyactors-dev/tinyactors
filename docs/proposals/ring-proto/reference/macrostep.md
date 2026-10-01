@@ -22,8 +22,8 @@ records, and what happens when something runs out. The rings are in
    ([data-model.md](data-model.md)).
 2. **All memory is bounded by parameters.** Every queue, ring and text
    buffer has a size set when the system is created: `poolEnvelopes`,
-   `nameAreaBytes`, `h2cBytes`, `c2hBytes`, `telBytes`, `maxRecordBytes`
-   ([parameters.md](parameters.md)).
+   `nameAreaBytes`, `internalQueueEvents`, `h2cBytes`, `c2hBytes`, `telBytes`,
+   `maxRecordBytes` ([BEHAVIORS.md](../BEHAVIORS.md#parameters)).
 3. **Every overflow becomes a refusal to someone who can retry.** Nobody
    keeps a hidden queue that grows. There are three who can retry:
 
@@ -144,7 +144,7 @@ return in the middle of a macrostep, and the host can then:
   until the fence, in its own memory. This is cheap in Node; in an embedded
   host it may not be.
 - **leave them in the ring.** c2h fills up, and the macrostep's next effect
-  fails as `error.execution.capacity`. So `c2hBytes` bounds how much one
+  fails as `error.execution.capacity.c2h`. So `c2hBytes` bounds how much one
   macrostep can do, and the chart is told when it tries to do more.
 
 Neither option is a queue that grows without anyone deciding.
@@ -178,6 +178,46 @@ executable content:
 
 The error can always be raised, because a slot in the fixed internal queue
 is kept free for it ([envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool)).
+
+**Why the resource is the last segment of the name,** and not only a field
+of `_event.data`:
+
+- **A chart chooses by matching, which is how SCXML chooses.** A chart that
+  only cares that something ran out matches `error.execution.capacity`. One
+  that handles a full pool differently from a name that is too long matches
+  `error.execution.capacity.pool`. Neither needs a condition that reads the
+  data.
+- **It stays SCXML-compatible.** Every name is still an `error.execution`
+  prefix match. A chart written without capacity errors in mind catches
+  them in its existing `error.execution` handler.
+- **The set is closed.** The catalog's enum lists the resources, so a chart
+  author can see every name that can occur.
+
+## The internal queue: fixed, with one reserved slot
+
+Internal events (`<raise>`, `done.state.*`, `error.*`) go on a fixed queue
+of `internalQueueEvents` entries, allocated when the system is created, not
+into the pool. One slot is always free for the `error.execution.capacity`
+the queue itself may need. A `<raise>` that finds no other free slot fails
+as `error.execution.capacity.internal`. The mechanics are in
+[envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool).
+
+**Why not envelopes:**
+
+- **Internal events never outlive their macrostep.** They need no admission,
+  no deadline, no waiting list and no recycling, which is everything the
+  pool provides.
+- **They shouldn't compete with mail.** If they came from the pool, a full
+  pool would stop a chart from raising its own events, and a chart raising
+  in a loop would starve every other session's mail. Separate memory keeps a
+  fault inside the chart that causes it.
+- **Only one queue is live at a time.** Under run to completion, one
+  interpreter runs at the top level, so the system needs one queue, plus one
+  per nested interpreter, sized once. That replaces ADR 0064's queue lent to
+  each actor and its cache.
+- **The reserved slot makes the error itself unable to fail.** Every other
+  capacity error is raised into this queue. Without a slot kept back,
+  reporting "no room" could find no room.
 
 ### Consequence for chart authors: order inside a block matters
 
@@ -234,6 +274,22 @@ leaves `ta_op_status`, and with it the last path that stops a run where it
 stands: a shortage anywhere becomes a refusal the chart sees. The price is
 that a passing memory shortage in the host becomes chart behaviour, which is
 what charts are for ([migration.md](migration.md)).
+
+**Why an error and not a pause:**
+
+- **The memory is the data model's, not core's.** Core can't free it and
+  can't know when it will be free. A pause that waits for it is a guess.
+- **A pause could not be resumed safely.** An operation that ran out of
+  memory partway, such as an `<assign>` that built half an object in the
+  JavaScript heap, may already have changed something. ADR 0047's retry is
+  safe only for operations that changed nothing, and core can't check that
+  for a foreign data model.
+- **Charts are built to handle errors.** `error.execution` is the SCXML
+  answer to an operation that failed. The chart's own structure (retry,
+  give up, report) decides, as it does for every other refusal.
+- **It deletes the last of the machinery.** With no `TA_OP_NOMEM`, nothing
+  in a macrostep can stop it where it stands. ADR 0070's stop and resume,
+  and ADR 0047's retry guarantee, have nothing left to protect.
 
 The out-of-memory sweeps in the test suites (fail every allocation in turn)
 become much smaller for core. A macrostep has no allocation to fail, so the
