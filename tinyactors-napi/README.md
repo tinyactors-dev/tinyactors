@@ -378,6 +378,23 @@ If a repeat would hurt:
   current state is ignored.
 - **Give outward effects an idempotency key** built from the business
   key, for example `Idempotency-Key: order-42-charge`.
+- **A delayed effect that must happen once: a timeout to itself, then the
+  send.** An actor rebuilt from its journal of recorded events
+  (`setRecorder()`, kernel ADR 0006) may repeat once a delayed send to
+  another actor or to an I/O processor that fired before it took its last
+  event: that firing is not one of its events. A timeout it sends itself
+  is: replay rebuilds it exactly, and the send made in its handler happens
+  once.
+
+```js
+// Not: .send('remind', (send) => send.to('#_actor_mailer/main').after(60_000))
+const reminder = statechart({ family: 'reminder', revision: 'v1' })
+  .state('idle', (s) => s.on('arm', (t) => t.target('armed')
+    .send('due', (send) => send.after(60_000))))         // a timeout to itself: in its own journal
+  .state('armed', (s) => s.on('due', (t) => t.target('sent')
+    .send('remind', (send) => send.to('#_actor_mailer/main'))))
+  .state('sent');
+```
 
 ```js
 const { statechart } = require('@tinyactors/node');

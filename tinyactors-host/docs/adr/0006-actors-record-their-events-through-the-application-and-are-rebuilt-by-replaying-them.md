@@ -186,8 +186,14 @@ What the runtime guarantees:
    its Scope: expressions read only the data, the event and the host's
    time).
 2. **Nothing leaves an actor before it is published.**
-3. **Timers are rebuilt from event times:** none fires twice because of
-   the replay, and those still due fire after publish.
+3. **Timers are rebuilt from event times,** and those still due fire
+   after publish. A delayed send to the actor itself never fires twice
+   because of the replay: its firing is an event in the actor's own
+   journal. A delayed send to another target (another actor, an I/O
+   processor) is at least once: it may repeat once, when the sender is
+   rebuilt after it fired and before the sender took another event,
+   because its firing is not an event of the sender and sends are fire
+   and forget. (Corrected 2026-10-01; see the implementation notes.)
 4. **An event is recorded only after its macrostep ended,** with its
    effects handed to their I/O processors and invokers.
 5. **Repeats are recognizable:** a repeated event carries the same
@@ -321,3 +327,77 @@ with the implementation.
 - **napi ADR 0040**, in part: `send()` resolves when its message's
   macrostep ended, not once its batch committed; effects not held and no
   `until` stand.
+
+## Implementation notes
+
+### 2026-10-01: the recorder and event replay (PLAN.md phase K, commits 44 to 47)
+
+- **Kernel:** `tah_replay_event()` and `tah_replay_events_done()`
+  (`replay.h`), and the recorder (`recorder.h`, `src/recorder.c`): the
+  event of each delivery and of each invocation error report is kept from
+  the moment core takes it until its macrostep ends (`TAH_NOTE_ENDED`),
+  then joins the turn's records. `tah_recorder_texts()` renders a record's
+  `_event` fields, so every binding builds the same event.
+- **napi:** `setRecorder()`, `PreparedActor.replay(event, at)`, and a
+  loader's `{ replay: { spawn, at, binding, events } }`. The batch is
+  handed over before the turn's `send()` promises settle.
+- **`prepare()` needs `at`,** when the actor's life began: section 3's
+  example left it out. The bootstrap runs at that time, so the due times
+  of the timers it arms depend on it; the application journals it with
+  the actor (a loader's `{ replay }` takes it as `at`).
+- **Invocation error reports are recorded** as the event the chart takes,
+  `error.communication.invoke.<id>.<reason>` of type platform, and
+  `tah_replay_event()` reports them again, so core retires the invocation
+  as it did live. An invocation's own events (`invocationID` set) replay
+  as deliveries; one still open at publish is retired as lost.
+
+### 2026-10-01: delayed sends to other targets (the owner's decision)
+
+A delayed send to another actor or to an I/O processor fires without an
+event of its sender. Kernel ADR 0002's `fired` records were not brought
+back, and no stop time is journaled. Its repeat is accepted, and bounded:
+- **At most once per timer.** A rebuild after it fired and before the
+  sender takes another event publishes at the last event's time, before
+  the due time, so the held send fires again. Once the sender takes
+  another event, a rebuild's clock passes the due time and drops it.
+- **The wake moves when it fires.** Without it the repeat would be
+  unbounded: the stored wake would still name the fired send, `wakeAt()`
+  would reload the actor at that time after every restart, and the send
+  would repeat each time. The router and the I/O adapter call
+  `tah_recorder_fired()` for a due send they took or that failed for good,
+  so that turn's batch carries the sender's new wake (its next due time,
+  or null). Test: `test/recorder.js`, `delayedSendToAnother`.
+- **A delayed effect that must happen once** is a timeout to the actor
+  itself, with the send made in its handler: the timeout is in the
+  actor's journal, so a rebuild reproduces it exactly (napi README,
+  "Crashes and repeated messages").
+
+### 2026-10-01: section 2's open point, events core queues because of the outside world
+
+- **Invocation error reports:** recorded (above).
+- **A send the router refuses for good inside a macrostep**
+  (`error.communication` raised in the sender's own macrostep): not
+  recorded. A replay drops the send ("sent is what happened") and so
+  raises nothing: a chart that reacts to it is not rebuilt exactly.
+- **A delayed send that fails when it fires** (`error.communication`
+  queued outside a run): not recorded, and a replay drops the held send
+  as its clock passes the due time, so it raises nothing either.
+
+Both are accepted for now under fire and forget: a sender does not learn
+reliably whether its mail arrived, and an application that must act on a
+failed delivery acts on an acknowledgement or a timeout instead. Recording
+them would need a record that is not an event the actor took from the
+kernel, which this ADR set out to avoid. They stay open for the owner.
+
+### 2026-10-01: section 8, operator actions (left open)
+
+An operator's jump (core ADR 0082) is not recorded: its event was not
+taken by the chart's own transitions, and replaying the bare event would
+take another path. Releasing a runaway, abandoning a macrostep and
+withdrawing a pending send are not events either. So a rebuild from the
+journal does not reproduce an operator's action; an application that
+operates on a recorded actor exports its state afterwards and rebuilds
+from that. The proposed snapshot in the batch is not built: it needs a
+rebuild that starts from a state and then takes events, which napi's
+`prepare()` has only for the input log's checkpoints, removed with it.
+Test: `test/recorder.js`, `operatorJumpNotRecorded`.

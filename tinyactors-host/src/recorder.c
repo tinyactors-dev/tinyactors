@@ -221,7 +221,10 @@ static void tah_recorder_offering(tah_system *system, const tah_sched_note *note
     }
     uint64_t session = 0;
     ta_address *address = tah_recorder_address_of(system, note->actor, &session);
-    if (address == NULL || note->message == NULL) {
+    /* An operator's jump (core ADR 0082) is not an event the chart took by
+     * its own transitions: replaying its event would take another path, so
+     * it is not recorded (kernel ADR 0006 section 8, left open). */
+    if (address == NULL || note->message == NULL || note->message->has_jump) {
         return;
     }
     tah_recorded recorded = { .actor = note->actor, .address = address, .at = ta_system_time(system->core),
@@ -335,6 +338,23 @@ void tah_recorder_evicted(tah_system *system, ta_actor_id actor, bool has_wake, 
     if (address != NULL) {
         tah_recorder_touch_address(&system->recorder, address, true, has_wake, wake);
         tah_system_want_turn(system); /* the wake goes out with the next turn's batch */
+    }
+}
+
+void tah_recorder_fired(tah_system *system, const ta_actor_ref *sender) {
+    tah_recorder *recorder = &system->recorder;
+    if (!recorder->enabled) {
+        return;
+    }
+    ta_address *address = NULL;
+    if (sender->kind == TA_ACTOR_REF_NAMED) {
+        ta_actor_address view = ta_address_view(sender->as.named);
+        address = tah_recorder_family_listed(recorder, view.family.name) ? sender->as.named : NULL;
+    } else if (sender->kind == TA_ACTOR_REF_RUNTIME) {
+        address = tah_recorder_address_of(system, sender->as.runtime, NULL);
+    }
+    if (address != NULL) {
+        tah_recorder_touch_address(recorder, address, false, false, 0);
     }
 }
 

@@ -63,6 +63,12 @@ const tah_record_wake *tah_recorder_wakes(tah_system *system, uint32_t *count);
 /* Releases this turn's records and wakes, once the binding took them. */
 void tah_recorder_release(tah_system *system);
 
+/*
+ * A delayed send of `sender` left it (a timer fired, to any target): its
+ * address's wake is reported again this turn, so a stored wake never names
+ * a send that fired (kernel ADR 0006, implementation notes).
+ */
+void tah_recorder_fired(tah_system *system, const ta_actor_ref *sender);
 /* `actor`, a recorded actor about to be destroyed by an eviction, is to be woken at `wake` (or never). */
 void tah_recorder_evicted(tah_system *system, ta_actor_id actor, bool has_wake, ta_time wake);
 /* `actor`, a recorded actor about to be destroyed for good, needs no wake. */

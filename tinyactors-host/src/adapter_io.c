@@ -4,6 +4,7 @@
 
 
 #include "tinyactors_host/inputs.h"
+#include "tinyactors_host/recorder.h"
 #include "tinyactors_host/system.h"
 #include "inputs_private.h"
 #include "system_private.h"
@@ -57,6 +58,7 @@ static ta_op_status tah_io_send(void *self, const ta_send *send, ta_fault *fault
         return TA_OP_NOMEM;
     }
     if (system->dispatching_due) {
+        tah_recorder_fired(system, &send->source);
         tah_system_record_lateness(system, send->due, &send->trace); /* a timer to a processor fired */
     }
     return TA_OP_OK;

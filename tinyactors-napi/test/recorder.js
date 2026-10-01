@@ -200,6 +200,76 @@ async function loaderReplays() {
   live.system.close();
 }
 
+// A delayed send to another actor (kernel ADR 0006, notes of 2026-10-01):
+// its firing is not an event of the sender, but the batch updates the
+// sender's wake, so a stored wake never names a send that fired. A rebuild
+// before the sender takes another event repeats the send at most once; one
+// after another event repeats nothing.
+async function delayedSendToAnother() {
+  const j = journal();
+  const made = createSystem({ clock: 'manual' });
+  const relay = made.define(statechart({ family: 'relay', revision: 'v1' })
+    .state('idle', (s) => s.on('relay', (t) => t.target('waiting')
+      .send('hello', (send) => send.to('#_actor_sink/b').after(5000))))
+    .state('waiting', (s) => s.on('note', (t) => t.internal())));
+  const sinkDefinition = made.define(statechart({ family: 'sink', revision: 'v1' })
+    .data('hellos', 0)
+    .state('h', (s) => s.on('hello', (t) => t.assign('hellos', ({ data }) => data.hellos + 1))));
+  made.setRecorder(j.recorder, { families: ['relay'] });
+  const sink = made.spawn(sinkDefinition, { name: 'b' });
+  const r = made.spawn(relay, { name: 'p1' });
+  await made.flush();
+  await made.advanceTo(1000);
+  await made.send(r, 'relay');
+  assert.equal(j.wakes.get('relay/p1'), 6000);
+  await made.advanceTo(6000);
+  await made.flush();
+  assert.equal(sink.inspect().data.hellos, 1);
+  assert.equal(j.wakes.get('relay/p1'), null, 'the firing updated the sender\'s wake');
+  await made.advanceTo(7000);
+  made.evict(r);
+  await made.flush();
+  assert.equal(j.wakes.get('relay/p1'), null, 'the eviction stores no wake: nothing reloads it');
+
+  // A rebuild before relay takes another event repeats the send once.
+  const rebuild = async () => {
+    const prepared = made.prepare(relay, { address: { family: 'relay', name: 'p1' }, at: 0 });
+    for (const { event, at } of j.events('relay/p1')) prepared.replay(event, at);
+    const actor = made.publish(prepared);
+    await made.flush();
+    return actor;
+  };
+  await made.advanceTo(8000);
+  let rebuilt = await rebuild();
+  assert.equal(sink.inspect().data.hellos, 2, 'repeated once (at least once)');
+  // It takes another event: the next rebuild's clock passes the due time.
+  await made.send(rebuilt, 'note');
+  made.evict(rebuilt);
+  await made.flush();
+  rebuilt = await rebuild();
+  assert.equal(sink.inspect().data.hellos, 2, 'not repeated after another event');
+  assert.deepEqual(rebuilt.inspect().delayedSends, []);
+  made.close();
+}
+
+// Operator actions (kernel ADR 0006 section 8, open): a jump is not an
+// event the chart took by its own transitions, so it is not recorded, and a
+// rebuild from the journal does not reproduce it. An application that
+// operates on a recorded actor snapshots it afterwards.
+async function operatorJumpNotRecorded() {
+  const j = journal();
+  const made = createSystem({ clock: 'manual' });
+  const definition = made.define(counter());
+  made.setRecorder(j.recorder, { families: ['counter'] });
+  const c = made.spawn(definition, { name: 'c' });
+  await made.flush();
+  await made.send(c, 'add', { by: 1 }, { transition: { source: 'idle', targets: ['waiting'] } });
+  await made.flush();
+  assert.deepEqual(c.inspect().activeStates, ['waiting']);
+  assert.deepEqual(j.events('counter/c'), [], 'the jump is not in the journal');
+  made.close();
+}
+
 async function refusals() {
   const live = system();
   assert.throws(() => live.system.setRecorder('nope', { families: ['counter'] }), { code: 'invalid' });
@@ -213,6 +283,8 @@ async function main() {
   await wakesAndOrder();
   await invocations();
   await loaderReplays();
+  await delayedSendToAnother();
+  await operatorJumpNotRecorded();
   await refusals();
   console.log('recorder: ok');
 }
