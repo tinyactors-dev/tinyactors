@@ -228,13 +228,28 @@ macrostep is replayed in the same system as its receiver.
   way round. One publish switches the whole system to live at a single
   point in the input order.
 
+**Unloading inside a whole-system replay.** Unloading only bounds memory, and
+an image never outlives its process
+([unloading.md](unloading.md#unloading-bounds-memory-it-is-not-persistence)).
+So a whole-system replay always starts from an empty system, and every
+[`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) in the recording
+loads an image that an [`h2c.unload`](../protocol/generated/MESSAGES.md#h2cunload)
+earlier in the same recording produced. Replay runs that unload again and
+gets the same image back, given a deterministic data model. The recorded
+`h2c.load` holds a blob handle from the old process, which means nothing
+now. The replaying host gives core the image the matching unload just
+produced. No image is ever stored for replay.
+
+The unloads and loads must still be replayed at the same points. When a
+session is unloaded decides when mail for it waits, and so the order of
+macrosteps and how full the pool is.
+
 **Open:**
 
 - Whether effects of sessions that never crashed (inputs after the last
   fence the host acted on) should be released at publish instead of
   suppressed.
-- How it interacts with sessions that were loaded from images that were
-  written outside the recorded stream.
+
 
 ## Derived actors resync instead of replaying
 

@@ -54,7 +54,6 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_H2C_SPAWN_REPLAYING_FROM_CLOCK (1u << 0)
 #define TRP_H2C_PUBLISH 0x0104u
 #define TRP_H2C_LOAD 0x0105u
-#define TRP_H2C_LOAD_REPLAYING (1u << 0)
 #define TRP_H2C_LOAD_FAILED 0x0106u
 #define TRP_H2C_UNLOAD 0x0107u
 #define TRP_H2C_CHECKPOINT 0x0108u
@@ -111,8 +110,9 @@ typedef struct {
     trp_span revision;
     uint64_t data;
     uint64_t clock;
+    uint64_t state;
 } trp_h2c_spawn;
-_Static_assert(sizeof(trp_h2c_spawn) == 64, "h2c.spawn");
+_Static_assert(sizeof(trp_h2c_spawn) == 72, "h2c.spawn");
 
 /* h2c.publish: End a replay and put the session on the route. */
 typedef struct {

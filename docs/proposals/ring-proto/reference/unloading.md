@@ -7,6 +7,30 @@ to keep. Core only asks for it back. This document covers the five
 records that move a session out of memory and back in, and the one index
 the host keeps for unloaded sessions.
 
+## Unloading bounds memory; it is not persistence
+
+Unloading exists for one reason: **to bound RAM while the process runs.**
+One process can then hold, say, 100 million actors, as long as the actors
+that are active at the same time fit in memory. The rest are images,
+paged back in when mail or a timer needs them.
+
+- **An image is valid only in the process that wrote it** (core ADR 0074).
+  It ends with the process. Nothing may read it after a restart.
+- **Where the host keeps images is up to the host:** memory, a temporary
+  file, a table it empties at startup. The choice is about how much RAM to
+  save, not about surviving a crash.
+- **Surviving a restart is a different mechanism:** a recorded session's
+  [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) log, and its
+  checkpoints, [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate),
+  restored with [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn)
+  and its `state` field ([recording-and-replay.md](recording-and-replay.md)).
+  [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) never restores
+  anything across a restart.
+
+So after a crash there are no unloaded sessions. The host's index of them
+is empty, and every session a restarted system needs comes back through
+replay or a checkpoint.
+
 ## The records
 
 | Record | Direction | Meaning |
@@ -57,8 +81,8 @@ due.
 | Host | Index |
 |---|---|
 | napi | a `Map` from address to `{image, wake_at}`, plus a min-heap by `wake_at`, plus **one** timer for the earliest. The timer for resident sessions is set by [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake). The host may merge the two into one `setTimeout`. |
-| SQLite host | `CREATE TABLE unloaded(address TEXT PRIMARY KEY, image BLOB, wake_at INTEGER)` with an index on `wake_at`. The next wakeup is `SELECT min(wake_at)`. |
-| PostgreSQL host | the same table, read by a background worker |
+| SQLite host | a temporary table, `CREATE TEMP TABLE unloaded(address TEXT PRIMARY KEY, image BLOB, wake_at INTEGER)`, with an index on `wake_at`. The next wakeup is `SELECT min(wake_at)`. It is temporary because the images end with the connection's system. |
+| PostgreSQL host | the same, as an unlogged table that the host empties when it starts |
 | test host | an ordered list. The tests move time explicitly. |
 
 When a wakeup comes due, the host posts the image and then the time:

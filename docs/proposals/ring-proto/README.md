@@ -87,7 +87,7 @@ Reference documents, one for each building block:
 | The data model: a synchronous vtable and value references | [reference/data-model.md](reference/data-model.md) |
 | Recording and replay: `c2h.input`, checkpoints, replaying a whole system | [reference/recording-and-replay.md](reference/recording-and-replay.md) |
 | Telemetry: the lossy ring, OTLP | [reference/telemetry.md](reference/telemetry.md) |
-| Unloading and loading sessions | [reference/unloading.md](reference/unloading.md) |
+| Unloading and loading sessions, which only bounds RAM: images end with their process | [reference/unloading.md](reference/unloading.md) |
 | System parameters: defaults, bounds, what they drive | [BEHAVIORS.md](BEHAVIORS.md#parameters) |
 | What is deleted, which ADRs change, and open questions | [reference/migration.md](reference/migration.md) |
 

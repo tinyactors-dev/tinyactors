@@ -18,7 +18,7 @@ The pool is large enough for the brutal fanout. With the
 |---|---|---|---|
 | S06.1 | – | – | The log holds [`c2h.spawned`][c2h.spawned] and 6,001 [`c2h.input`][c2h.input] records: `send.requested` and 6,000 outcomes. The host's policy is to checkpoint every 5,000 inputs. |
 | S06.2 | h2c | [`h2c.checkpoint`][h2c.checkpoint] `0x0108` `{campaign/42}` | Core runs macrosteps to completion, so the session is between two macrosteps when core reads the request. |
-| S06.3 | c2h | [`c2h.state`][c2h.state] `0x020E` `{campaign/42, image: b9, input_seq: the c2h seq of the 6,001st input}` | Core writes the image through the host's byte sink (core ADR 0090), and the host gives it the blob ID `b9`. The image holds the configuration, history, active invocations, and **the delayed send `t`**, with its due time and data. The data model's root (`batch`, `pending`, `sent`, `idOf`, `counts`, …) is written through `value_write`, so the binding's codec encodes the JavaScript objects ([data model](../reference/data-model.md)). It is one artifact. |
+| S06.3 | c2h | [`c2h.state`][c2h.state] `0x020E` `{campaign/42, image: b9, input_seq: the c2h seq of the 6,001st input}` | Core writes the image through the host's byte sink (core ADR 0090), with `durable=true`, because unlike an unload image it is meant to outlive the process, and the host gives it the blob ID `b9`. The image holds the configuration, history, active invocations, and **the delayed send `t`**, with its due time and data. The data model's root (`batch`, `pending`, `sent`, `idOf`, `counts`, …) is written through `value_write`, so the binding's codec encodes the JavaScript objects ([data model](../reference/data-model.md)). It is one artifact. |
 | S06.4 | – | – | The host stores `b9` and then deletes the log entries up to `input_seq`, in that order. A crash between the two leaves a log that is too long, which is harmless. |
 
 ## Crash and restore
@@ -26,8 +26,8 @@ The pool is large enough for the brutal fanout. With the
 | Step | Ring | Record | What happens |
 |---|---|---|---|
 | S06.5 | – | – | 1,500 more outcomes are logged, and then the process crashes. |
-| S06.6 | h2c | [`h2c.load`][h2c.load] `0x0105` `{campaign/42, image: b9, flag replaying}` | The checkpoint is restored as a replaying session. `t` goes back into the pool, held under the session's clock. |
-| S06.7 | c2h | [`c2h.loaded`][c2h.loaded] `0x020C` `{flags: replaying, recorded}` | |
+| S06.6 | h2c | [`h2c.spawn`][h2c.spawn] `0x0103` `{campaign/42, revision, state: b9}` | The checkpoint is restored as a replaying session. `t` goes back into the pool, held under the session's clock. This is `h2c.spawn`, not [`h2c.load`][h2c.load]: loading only pages a session back in within one process, and nothing it loads survives a crash ([unloading](../reference/unloading.md)). |
+| S06.7 | c2h | [`c2h.spawned`][c2h.spawned] `0x0201` `{flags: replaying, recorded}` | |
 | S06.8 | h2c | 1,500 × [`h2c.event`][h2c.event] `{flag replaying}` | Only the tail is replayed. |
 | S06.9 | h2c | [`h2c.publish`][h2c.publish] `0x0104` `{campaign/42, at: the last input's time}` | |
 | S06.10 | c2h | [`c2h.published`][c2h.published] `{replayed: 1500, dropped_timers: 0}`, [`c2h.wake`][c2h.wake] | `t` is scheduled as in [S04.7](S04-crash-campaign-recorded.md#restart). |

@@ -49,7 +49,7 @@ lists the ADRs this reverses.)
 | Data model and value references | A vtable the binding implements | [reference/data-model.md](reference/data-model.md) |
 | Recording, replay, checkpoints | Core writes `c2h.input` and `c2h.state`; the application stores them | [reference/recording-and-replay.md](reference/recording-and-replay.md) |
 | Telemetry and OTLP | Core writes `tel`; a library encodes OTLP | [reference/telemetry.md](reference/telemetry.md) |
-| Unloading and loading | Core writes images and asks for loads; the host stores images and wakes | [reference/unloading.md](reference/unloading.md) |
+| Unloading and loading, **to bound RAM only; not persistence** | Core writes images and asks for loads; the host keeps images and wakes for the life of the process | [reference/unloading.md](reference/unloading.md) |
 | Parameters | `ta_system` creation | [BEHAVIORS.md](BEHAVIORS.md#parameters) |
 
 ## Two kinds of call

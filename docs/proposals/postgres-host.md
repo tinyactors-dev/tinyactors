@@ -4,6 +4,14 @@
 **Touches:** tinyactors-core (no changes expected), a new tinyactors-postgres
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
+> **Note (2026-10-01):** this sketch keeps session images in the database as
+> durable state. That conflicts with core ADR 0074 and the
+> [ring protocol](ring-proto/reference/unloading.md#unloading-bounds-memory-it-is-not-persistence):
+> an image bounds memory, is valid only in the process that wrote it, and is
+> not persistence. A database host would persist a session as a checkpoint
+> (`ta_actor_export_state`, core ADR 0091) plus its inputs, and treat images
+> as a cache for the life of the process.
+
 ## Goal
 
 The same model as the [SQLite host](sqlite-host.md), as a PostgreSQL

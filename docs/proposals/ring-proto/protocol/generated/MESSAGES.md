@@ -20,7 +20,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 |---|---|---|---|
 | `0x0101` | [`h2c.time`](#h2ctime) | Move the system clock | 32 |
 | `0x0102` | [`h2c.event`](#h2cevent) | An external event for a session | 88 |
-| `0x0103` | [`h2c.spawn`](#h2cspawn) | Create a session | 64 |
+| `0x0103` | [`h2c.spawn`](#h2cspawn) | Create a session | 72 |
 | `0x0104` | [`h2c.publish`](#h2cpublish) | End a replay and put the session on the route | 48 |
 | `0x0105` | [`h2c.load`](#h2cload) | Bring an unloaded session back | 48 |
 | `0x0106` | [`h2c.load_failed`](#h2cload_failed) | The session cannot be loaded | 48 |
@@ -89,9 +89,11 @@ Header `session` names a resident session, or is 0 and `target` gives an address
 
 ## h2c.spawn
 
-`0x0103` on `h2c`, 64 fixed bytes. Create a session.
+`0x0103` on `h2c`, 72 fixed bytes. Create a session.
 
 With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish.
+
+With `state`, the session is restored from a checkpoint (c2h.state, core ADR 0091) as a replaying session whose clock starts at the state's; the c2h.input records after the checkpoint follow. This is how a session survives a restart. h2c.load is not: it only pages a session back into memory within one process.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -99,6 +101,7 @@ With the replaying flag the session is prepared to replay (core ADR 0089): its c
 | 40 | `revision` | bytes | the definition's revision hash |
 | 48 | `data` | vref | the data model binding, or 0 |
 | 56 | `clock` | time | with replaying_from_clock: the replayed run’s start |
+| 64 | `state` | blob | a checkpoint c2h.state wrote, to restore; 0 for none |
 
 - flag bit 0 `replaying_from_clock`: the session replays; `clock` is where its run began
 - may be answered by: [`c2h.spawned`](#c2hspawned), [`c2h.bounced`](#c2hbounced)
@@ -124,14 +127,13 @@ An empty `address` publishes every replaying session at once: the end of a whole
 
 Usually the answer to c2h.load_needed. Its delayed sends rejoin the pool. Waiting envelopes for it become runnable.
 
-With replaying, the image is a checkpoint (c2h.state): the session replays the c2h.input records after it and is published with h2c.publish, as a spawned replaying session is.
+Loading only bounds memory; it is not persistence. The image is one c2h.unloaded wrote in this process, and it is valid only here (core ADR 0074). To restore a session after a restart, use h2c.spawn with `state` (reference/unloading.md).
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 32 | `address` | text |  |
-| 40 | `image` | blob | the bytes c2h.unloaded gave |
+| 40 | `image` | blob | the bytes c2h.unloaded gave, in this process |
 
-- flag bit 0 `replaying`: restore a checkpoint as a replaying session
 - may be answered by: [`c2h.loaded`](#c2hloaded), [`c2h.bounced`](#c2hbounced)
 
 ## h2c.load_failed
@@ -165,6 +167,7 @@ Every envelope waiting for the address is recycled: mail becomes error.communica
 | 32 | `address` | text |  |
 
 - may be answered by: [`c2h.state`](#c2hstate), [`c2h.bounced`](#c2hbounced)
+- see: [`h2c.spawn`](#h2cspawn)
 
 ## h2c.invoke_report
 
@@ -370,6 +373,8 @@ For a family whose first message creates the actor, h2c.spawn answers it.
 
 The image holds the session's state and its delayed sends. The host keeps it, and wake_at, in its own index of unloaded sessions, and posts h2c.load when wake_at comes.
 
+The image bounds memory; it is not a checkpoint. It is valid only in the process that wrote it and ends with it. c2h.state is the checkpoint.
+
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 32 | `address` | text |  |
@@ -383,6 +388,8 @@ The image holds the session's state and its delayed sends. The host keeps it, an
 `0x020E` on `c2h`, 56 fixed bytes. A recorded session's state at a point of its log.
 
 A checkpoint (core ADR 0091). Its delayed sends are inside the image, so it is one artifact. Replaying from it needs only the c2h.input records after input_seq.
+
+Unlike the image c2h.unloaded writes, it is meant to be stored: its values are written with value_write durable=true (core ADR 0090). It is restored with h2c.spawn `state`.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|

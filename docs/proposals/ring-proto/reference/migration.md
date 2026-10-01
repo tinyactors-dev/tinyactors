@@ -282,7 +282,14 @@ changes every binding in the same change.
   [postgres-host.md](../../postgres-host.md)) keep a `ta_mailbox` table
   and drain it into core. With the pool in core, the table holds only
   what the host has not yet posted to h2c. `ta_outbox` is the c2h records
-  after the fence, written in the same transaction as the image. Both
-  sketches get simpler. Neither has been tried.
-- **Whole-system replay**: the open points in
-  [recording-and-replay.md](recording-and-replay.md).
+  after the fence. Both sketches also keep session images as durable
+  state, which this proposal rules out: an image only bounds memory
+  ([unloading.md](unloading.md#unloading-bounds-memory-it-is-not-persistence)).
+  They would persist a session as [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate)
+  plus its [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) records,
+  written in the same transaction as `ta_outbox`. Both sketches carry a note
+  saying so. Neither has been tried.
+- **Whole-system replay**: the open point in
+  [recording-and-replay.md](recording-and-replay.md). How it treats
+  images is settled: images never outlive their process, so a replay
+  produces again every image it loads.
