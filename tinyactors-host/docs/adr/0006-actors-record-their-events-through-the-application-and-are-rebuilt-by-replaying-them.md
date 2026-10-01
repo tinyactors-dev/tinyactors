@@ -1,6 +1,6 @@
 # ADR 0006: Actors record their events through the application, and are rebuilt by replaying them
 
-**Status:** Accepted (2026-10-01); not implemented yet: `PLAN.md` phase K is to be rewritten as its implementation. Supersedes kernel ADRs 0002 (the kernel keeps the write-ahead log) and 0005 (an actor's log is an inbox with acknowledgements) as a whole, and with them what was left of kernel ADR 0004. Supersedes napi ADRs 0032, 0033 and 0034, and napi ADR 0040 in part (section 3 here). Changes how core ADRs 0089, 0090 and 0091 are used (section 7). Keeps kernel ADR 0003 (a full mailbox overflows instead of refusing mail between actors). Points marked "(open)" are not settled.
+**Status:** Accepted and implemented (2026-10-01); see the implementation notes (PLAN.md phase K). Supersedes kernel ADRs 0002 (the kernel keeps the write-ahead log) and 0005 (an actor's log is an inbox with acknowledgements) as a whole, and with them what was left of kernel ADR 0004. Supersedes napi ADRs 0032, 0033 and 0034, and napi ADR 0040 in part (section 3 here). Changes how core ADRs 0089, 0090 and 0091 are used (section 7). Keeps kernel ADR 0003 (a full mailbox overflows instead of refusing mail between actors). Points marked "(open)" are not settled.
 **Date:** 2026-10-01
 
 ## Context
@@ -401,3 +401,54 @@ from that. The proposed snapshot in the batch is not built: it needs a
 rebuild that starts from a state and then takes events, which napi's
 `prepare()` has only for the input log's checkpoints, removed with it.
 Test: `test/recorder.js`, `operatorJumpNotRecorded`.
+
+### 2026-10-01: the input log removed (PLAN.md phase K, commits 48 to 54)
+
+- **Test host:** hosted mode records and replays events (`hosted.record`,
+  `hosted.records`, `hosted.restore` and `hosted.load` over a journal); its
+  log, checkpoint and value-writer methods are gone. A scenario pins what
+  a crash costs: mail a receiver had not taken is in no journal, and a
+  rebuild of its sender does not send it again.
+- **napi:** `setInputLog()`, `readInputLog()`, the byte replay,
+  `checkpoint()`, the write-ahead hold and the durable value codec are
+  gone (about 4,400 lines); `send()` resolves when its macrostep ended,
+  without `until`.
+- **Kernel:** `inputs.c`, `wal.c`, the byte replay and the checkpoint
+  writer are gone (about 6,400 lines), and with them the scheduler's notes
+  only the log read and the kernel's only `--full` check.
+- **An empty journal** publishes after the bootstrap runs:
+  `tah_replay_events_done()` runs a bootstrap no event ran.
+- **Left in core:** the `durable` flag of a data model's value write and
+  read (core ADR 0090) has no caller now; napi's data model answers that
+  it has no durable form. Removing the flag changes core's data-model
+  contract and the test host's jq model, a core change of its own.
+
+**`bench-compare 5164e0f`** (the commit before the first code change), 2
+alternating runs each; the "logged" variants are the input log on the old
+build and the recorder on the new, whose recorder JSON.stringifies each
+record as an application would, where the old sink only counted bytes:
+
+| `test/bench/input_log.js`, 1,000 actors | Node (84c362297e3d) | Bun (bbe6bf531954) |
+|---|---|---|
+| logged, ns/event | 5,718 → 3,039 (−46.9%) | 4,537 → 1,916 (−57.8%) |
+| logged without data, ns/event | 2,839 → 3,075 (+8.3%) | 2,335 → 1,866 (−20.1%) |
+| logged, native B/actor | 1,129 → 787 (−30.3%) | 1,129 → 787 (−30.3%) |
+| logged, RSS B/actor | 7,553 → 3,932 (−47.9%) | 14,647 → 8,323 (−43.2%) |
+| logged, allocator calls/event | 2.10 → 0.01 | 2.10 → 0.01 |
+| logged, journal bytes/event | 184 → 67 | 184 → 67 |
+| unlogged, ns/event | 763 → 767 | 684 → 681 |
+
+- **Node, logged without data, +8.3%:** the recorder builds an
+  `ActorEvent` object per record and the bench serializes it, where the
+  old sink copied bytes core had written. With data, the recorder wins
+  by half, because it serializes nothing itself.
+- **RSS flags in the tracing bench on Bun (+5.5 to +10.4%) and in Node's
+  unlogged variant (+5.5%):** core, native and heap bytes per actor are
+  identical, and no recorder runs there; an A/A run of `bench-compare`
+  showed the working tree's side 3 to 4.6% higher in RSS on the same
+  variants (kernel ADR 0001's notes), so they are read as its bias.
+- **Send data and tracing throughput:** within ±3% on both runtimes.
+
+`test:full` passed for the kernel's removal (commit `89fbaf8`): 549 test
+host scenarios, `scale_test` flat to four million actors at 332 bytes
+each, napi's suites and `scale.js` on Node and Bun.

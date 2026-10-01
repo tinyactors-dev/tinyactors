@@ -7,6 +7,20 @@ the work is in the [README](README.md#layers-and-responsibilities).
 
 ## Done recently
 
+- **Actors record their events through the application (2026-10-01)**,
+  [`PLAN.md`](PLAN.md) phase K, kernel ADR 0006: the runtime records the
+  events an actor takes (`setRecorder()`, once per turn, as `ActorEvent`s
+  with their times, after their macrosteps end) and the application
+  journals them; `prepare({ at })`, `replay(event, at)` and `publish()`
+  rebuild an actor with nothing crossing until it is published. The input
+  log is gone from the kernel, napi and the test host (about 11,000
+  lines), with the write-ahead hold, checkpoints and `send()`'s `until`.
+  Delivery is at least once where someone retries; a delayed send to
+  another target may repeat once on a rebuild, and its firing moves the
+  sender's wake. `test:full` passed; `bench-compare 5164e0f`: a recorded
+  message costs 3,039 ns on Node and 1,916 on Bun against the input log's
+  5,718 and 4,537, with 30% less native memory per actor.
+
 - **A macrostep's first record commits with what it sent (2026-10-01)**,
   [`PLAN.md`](PLAN.md) phase J, kernel ADR 0004: `delivered`, `jump`,
   `released`, and `spawned` for a bootstrap, are held and written in the
@@ -104,29 +118,27 @@ the work is in the [README](README.md#layers-and-responsibilities).
 Gaps found while closing the ones above. None is a regression.
 
 - [ ] **Out of memory can still lose a send between actors:** a router
-  RETRY leaves it submitted in the sender, logged nowhere (kernel ADR
-  0003, section 3, accepted for now). Likewise a macrostep's first record
-  that waits for memory commits after what the macrostep sent, so a crash
-  meanwhile repeats those sends (kernel ADR 0004, section 2).
-- [ ] **Hold first records in less memory:** each open macrostep of a
-  logged actor keeps its record in a buffer of its own and an entry in a
-  list and a map, kept at their peak: +109 B per actor in the input-log
-  bench, where 1,000 macrosteps are open at once. The records could sit
-  back to back in one buffer, compacted each turn (kernel ADR 0004's
+  RETRY leaves it submitted in the sender, recorded nowhere (kernel ADR
+  0003, section 3, accepted for now).
+- [ ] **Events core queues because of the outside world are not
+  recorded:** an `error.communication` for a send the router refuses for
+  good inside a macrostep, or for a delayed send that fails when it
+  fires. Accepted for now under fire and forget (kernel ADR 0006's notes);
+  open for the owner.
+- [ ] **Operator actions are not in the journal** (a jump, release,
+  abandon, withdrawal): an application snapshots an actor it operated on.
+  The snapshot in the recorder's batch is not built (kernel ADR 0006,
+  section 8).
+- [ ] **Core's `durable` value flag has no caller:** remove it from core's
+  data-model contract and the test host's jq model (kernel ADR 0006's
   notes).
-- [ ] **A macrostep a publish starts has no first record:** a replayed
-  actor whose invocations are retired runs a macrostep at `publish()`
-  (`tah_hook_actor_published()`), which no record starts, so a replay
-  after a crash, or a later load, runs it and sends what it sends again.
-  Check whether that is by design (napi ADR 0032's retired invocations)
-  or needs a record.
+- [ ] **The recorder costs +8% on Node for messages without data**
+  against the old input log (an `ActorEvent` object per record); with
+  data it costs half (kernel ADR 0006's notes).
 - [ ] **Overflow has no cap,** and `maxWaiting` still dead-letters mail
   between actors for a loading address (`waiting-full`), and the SCXML
   invoker's forward to a child it started is still refused at the limits
   (kernel ADR 0003, sections 3 and 4).
-- [ ] **A partly failed redelivery can lose mail later:** the binding
-  destroys the published actor, and the messages already put back are
-  logged as `dropped`, so a later restore forgets them.
 - [ ] **Make napi's copy of sent data cheaper:** +11 to 14% for `{ by: 1 }`
   and +36 to 40% for nested containers (napi ADR 0039's notes).
 - [ ] **A chart that uses `toOrigin()` cannot be written out as SCXML:**
@@ -135,16 +147,6 @@ Gaps found while closing the ones above. None is a regression.
 - [ ] **The kernel's public headers still declare functions a binding
   cannot use** without the private layout (`tah_sched_init`,
   `tah_loads_find`, ...); move them to the private headers.
-- [ ] **Later, with production data: the kernel's peak for a large
-  value.** Logging and replaying a 4 MiB value holds two 8 MiB blocks,
-  about 17 MB of kernel memory: the batch buffer, which
-  `tah_inputs_release()` keeps in `spare` at full capacity, and the
-  replay's copy of the pushed log, which `tah_vec_reserve()` rounds up to
-  a power of two. Candidate fixes: free a large released buffer,
-  exact-size vector growth for a one-shot reserve, block-chained entries,
-  in-place replay reads. The trade-off: a system that gets one large
-  record is likely to get more, and freeing or trimming would churn
-  memory for it. Revisit once there is production data.
 
 ## Open
 
