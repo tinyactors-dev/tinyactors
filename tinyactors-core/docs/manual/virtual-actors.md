@@ -1,9 +1,15 @@
 # Virtual LLM conversation actors
 
 A named conversation actor may be resident only while it is processing a turn.
-Between turns, the host stores its session image and data-model binding locator,
+Between turns, the host keeps its session image and data-model binding locator,
 marks its directory entry unloaded, and releases all resident interpreter
 memory. The logical actor address remains claimed.
+
+> **Unloading bounds memory; it is not persistence. An image is valid only in
+> the process that wrote it.** Unloading lets one process hold millions of
+> conversations while only the active ones are resident. The transcript and
+> anything else that must survive a restart live in the application's own
+> storage ([persistence.md](persistence.md#surviving-a-restart)).
 
 ## Separation of state
 
@@ -23,7 +29,7 @@ typedef struct {
 The data-model adapter exposes expressions and locations over that binding. The
 binding may lazily read compact projections, but slow database operations should
 remain explicit asynchronous effects rather than blocking expression callbacks.
-The checkpoint stores only a stable binding locator such as the conversation ID
+The session image holds only a binding locator such as the conversation ID
 and committed version. It does not copy the transcript.
 
 ## Host adapters
@@ -46,9 +52,10 @@ A typical LLM host registers these boundaries:
   chunk events, normal completion, or unavailability and supports cancellation.
 - **Tool invokers** — own cancellable tool operations used by individual
   tool-call actors.
-- **Durability adapter** — encodes/decodes session images, resolves host values,
-  stores binding locators, and indexes non-resident deadlines. This is residency
-  infrastructure, not a statechart I/O processor and not part of core.
+- **Residency adapter** — keeps the session images and binding locators of
+  unloaded actors for the life of the process, and indexes their deadlines.
+  It bounds memory; it is not a durability layer, not a statechart I/O
+  processor and not part of core.
 
 ## One-time setup
 
@@ -133,8 +140,9 @@ waiting state.
 ## Unloading between turns
 
 The address lock below is a host operation shared by inbound routing and the
-directory backend. The checkpoint calls belong to the optional durability
-adapter, not Tinyactors core.
+directory backend. The `host_unloaded_*` calls belong to the residency
+adapter, not Tinyactors core. They keep the image in this process, in memory
+or on local disk; nothing they keep outlives it.
 
 ```c
 host_lock_actor(conversation_address);
@@ -150,12 +158,12 @@ bool has_deadline =
     ta_session_image_next_deadline(image, &next_deadline) == TA_OK;
 
 /*
- * Persist image structure, referenced host values, the binding locator, and
- * next_deadline. The transcript itself already lives in conversation_store.
+ * Keep the image, the binding locator and next_deadline for this process's
+ * lifetime. The transcript itself already lives in conversation_store.
  */
-host_checkpoint_stage(conversation_address, image,
-                      conversation_binding_locator,
-                      has_deadline, next_deadline);
+host_unloaded_stage(conversation_address, image,
+                    conversation_binding_locator,
+                    has_deadline, next_deadline);
 
 ta_result result = ta_actor_unload(system, &(ta_actor_unload_params){
     .actor = actor,
@@ -163,20 +171,19 @@ ta_result result = ta_actor_unload(system, &(ta_actor_unload_params){
 });
 
 if (result == TA_OK) {
-    host_checkpoint_commit(conversation_address);
+    host_unloaded_commit(conversation_address);
     /* actor is now invalid; the directory contains UNLOADED. */
 } else {
-    host_checkpoint_discard_staged(conversation_address);
+    host_unloaded_discard_staged(conversation_address);
 }
 
-ta_session_image_destroy(image);
 host_unlock_actor(conversation_address);
 ```
 
 If capture and unload are separated by an actor mutation,
 `ta_actor_unload()` returns `TA_ERR_STALE` and leaves the actor resident. The
-host retries from capture. The host must not destroy the image until its durable
-encoder has finished with all retained values.
+host retries from capture. The residency adapter owns the image from then on,
+and destroys it when the actor is loaded again or removed.
 
 Unloading cancels runtime invocation handles and removes the actor's delayed
 sends from the resident timer heap. Their logical records remain in the image.
@@ -201,8 +208,8 @@ ta_result result = ta_actor_find(system, &(ta_actor_find_params){
 });
 ```
 
-When it returns `TA_ERR_UNLOADED`, the host fences the address and restores the
-checkpoint:
+When it returns `TA_ERR_UNLOADED`, the host fences the address and loads the
+image the residency adapter kept:
 
 ```c
 host_lock_actor(conversation_address);
@@ -214,8 +221,9 @@ result = ta_actor_find(system, &(ta_actor_find_params){
 });
 
 if (result == TA_ERR_UNLOADED) {
-    ta_session_image *image =
-        host_checkpoint_decode(conversation_address, allocator);
+    /* Borrowed: the residency adapter still owns the image. */
+    const ta_session_image *image =
+        host_unloaded_image(conversation_address);
     ta_value binding =
         host_resolve_conversation_binding(conversation_binding_locator);
 
@@ -226,9 +234,8 @@ if (result == TA_ERR_UNLOADED) {
     });
 
     if (result == TA_OK)
-        host_checkpoint_mark_loaded(conversation_address);
+        host_unloaded_forget(conversation_address); /* destroys the image */
 
-    ta_session_image_destroy(image);
     ta_value_release(&binding);
 }
 
@@ -250,16 +257,16 @@ while the actor is unloaded, to its address, so the router pages it in like any
 send to `#_actor_<family>/<name>`. Host calls such as `ta_actor_deliver()`
 still take the current runtime ID: an old one stays stale.
 
-If the durable deadline index fires first, the host follows the same load path,
+If the residency adapter's deadline index fires first, the host follows the same load path,
 advances logical time, and calls `ta_system_dispatch_due()` instead of initially
 delivering a user event.
 
 ## Transaction boundary
 
-Core guarantees the in-process directory swap and resident-state transition;
-it does not make a database checkpoint and a distributed router atomic. A
-durability implementation should use a fenced address record with staged and
-committed checkpoint generations. After a crash it decides from that record
-whether the resident process, the committed checkpoint, or recovery replay is
-authoritative. Stable input and effect IDs prevent duplicate user messages,
-transcript appends, tool executions, and streamed terminal responses.
+Core guarantees the in-process directory swap and resident-state transition.
+Unloading is not a transaction with any database: after a crash there are no
+images, resident or unloaded. A new process rebuilds a conversation from the
+application's storage, by spawning it against its data or by replaying its
+recorded inputs from a checkpoint ([persistence.md](persistence.md#surviving-a-restart)).
+Stable input and effect IDs prevent duplicate user messages, transcript
+appends, tool executions, and streamed terminal responses.

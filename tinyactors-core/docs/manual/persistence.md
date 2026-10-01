@@ -2,6 +2,14 @@
 
 Tinyactors core separates **reconstruction** from **durability**.
 
+> **Unloading bounds memory; it is not persistence. An image is valid only in
+> the process that wrote it.** Session images, `ta_actor_offload()`,
+> `ta_actor_unload()` and `ta_actor_load()` exist so that one process can hold
+> far more named actors (say, 100 million) than fit in memory, as long as the
+> actors that are active at once do fit. Nothing written by them survives the
+> process (ADR 0074). Surviving a restart is a different mechanism:
+> [Surviving a restart](#surviving-a-restart).
+
 `ta_actor_capture()` creates an in-memory session image containing Tinyactors-owned interpreter state. `ta_actor_reconstruct()` recreates that session against the exact same immutable definition revision and a host-supplied data-model binding. The image does not serialize the host object graph.
 
 For a Python application, the binding may be an existing `Subscription` or `Conversation` object. A conversation containing hundreds of thousands of messages therefore remains where the application already keeps it; Tinyactors captures only its own interpreter state and any host references held directly by interpreter-owned events/timers/continuations.
@@ -12,24 +20,47 @@ succeeds, retires each such invocation, and queues
 compensate, or move to a failure state. Transitions listening to the broader
 `error.communication` or `error` prefixes also match this event.
 
-A process-independent checkpoint is a higher-level concern. A durability module can encode a session image, map host references to stable identities, store checkpoints, keep command/input journals, replay deterministic inputs, and assign stable IDs to external effects. Applications that do not need these guarantees do not pay for them in the core ABI.
-
-## Unloading named actors
+## Unloading named actors bounds memory
 
 For a named virtual actor, capture and reconstruction are wrapped by the public
 residency protocol:
 
 1. fence the logical address against concurrent routing;
-2. capture the resident actor;
-3. persist the image, binding locator, and earliest image deadline;
+2. capture the resident actor (or call `ta_actor_offload()`, which captures
+   and unloads in one step and writes the image as bytes in this process);
+3. keep the image, the binding locator and the image's earliest deadline
+   wherever the host likes, in memory or on local disk, for the life of the
+   process;
 4. call `ta_actor_unload()` with that fresh image;
-5. discard the in-memory image after the durable checkpoint is committed;
-6. on new input or a due deadline, decode the image and resolve the binding;
-7. call `ta_actor_load()` and then deliver or dispatch the triggering work.
+5. on new input or a due deadline, resolve the binding;
+6. call `ta_actor_load()` and then deliver or dispatch the triggering work.
 
-The directory address remains claimed as `UNLOADED` between steps 4 and 7. The
+The directory address remains claimed as `UNLOADED` between steps 4 and 6. The
 old runtime actor ID is invalid after unload; load returns a new one. See
 `virtual-actors.md` for the complete host call sequence.
+
+When the process ends, every image ends with it, and so does every unloaded
+actor that was not also made durable by the mechanisms below. Writing images
+out at exit is not durability either: it does not scale, and a crash skips it
+(ADR 0074, "Durability is not this ADR's job").
+
+## Surviving a restart
+
+What survives the process is the application's own storage, never an image:
+
+- **The actor's data lives where the application keeps it,** and the binding
+  locator names it. A new process spawns the actor again against that data.
+- **Its inputs can be recorded and replayed.** The host keeps an actor's inputs
+  in its own log, and rebuilds the actor by replaying them into an actor
+  prepared with `at` before publishing it (ADRs 0089, 0094).
+- **A checkpoint shortens the replay.** `ta_actor_export_state()` gives an idle
+  actor's state at a record of its log, as structure the host encodes and
+  stores; `ta_actor_prepare()` restores it (ADR 0091). A checkpoint in this
+  sense is a persistence format. An unload image is not.
+
+A durability module may add more above core: stable identities for host
+references, command journals and stable IDs for external effects. Applications
+that do not need these guarantees do not pay for them in the core ABI.
 
 ## External I/O and partial commits
 

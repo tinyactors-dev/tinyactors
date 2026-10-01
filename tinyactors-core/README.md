@@ -19,7 +19,7 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 - Session images capture/reconstruct Tinyactors-owned interpreter state against one exact immutable definition revision.
 - Host data-model object graphs are bindings, not serialized session-image contents. Python, Ruby, JavaScript, and native hosts keep ownership of their existing objects.
 - Host values are fat pointers with retain/release hooks; core does not require a universal serialization format.
-- Advanced durability—portable checkpoints, command sourcing, replay, effect deduplication, storage transactions—is a separate layer over core session images.
+- Unloading and session images bound memory within one process; an image is valid only in the process that wrote it. Durability—checkpoints of actor state, recorded inputs and replay, effect deduplication, storage transactions—is a separate layer, and does not use session images.
 - Data models, I/O processors, invokers, clocks, storage, and concurrency remain under embedder control.
 - The mandatory SCXML Event I/O Processor is built in; embedders provide its
   external-event scheduling/routing callback rather than reimplementing SCXML

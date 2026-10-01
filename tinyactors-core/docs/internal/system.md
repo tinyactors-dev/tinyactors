@@ -27,8 +27,9 @@ Non-responsibilities:
 The host installs `ta_actor_directory` operations for named address claim,
 resolution, replacement, and removal. It may use a hash/index structure,
 database, shard router, or other backing implementation. The core keeps only
-resident runtime state; hosts persist checkpoints and index deadlines for
-evicted actors.
+resident runtime state; hosts keep the images of evicted actors for the life of
+the process and index their deadlines. Eviction bounds memory; it is not
+persistence.
 
 Directory entries distinguish resident runtime IDs from unloaded logical
 actors. Replace/remove callbacks receive the expected current entry and must

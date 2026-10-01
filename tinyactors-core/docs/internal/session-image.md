@@ -5,7 +5,9 @@ A `ta_session_image` is an opaque, owned in-memory capture of Tinyactors-managed
 It exists for two reasons:
 
 - the runtime must be able to reconstruct the same interpreter state it can expose to operational inspection;
-- optional durability/debugging/process-migration layers need a stable structural boundary below their own encoding/storage policy.
+- unloading needs it: an idle named actor is captured and released so that one process can hold far more actors than fit in memory.
+
+**An image bounds memory; it is not persistence.** It is valid only in the process that wrote it (ADR 0074), and nothing about it survives that process. Durability uses recorded inputs, replay and checkpoints of actor state (ADRs 0089–0094), not images.
 
 ## Capture
 
@@ -29,8 +31,8 @@ freshness metadata, not portable identity. `ta_actor_unload()` rejects an image
 with `TA_ERR_STALE` if the source actor has changed since capture.
 
 `ta_session_image_next_deadline()` returns the earliest captured delayed-send
-deadline, or `TA_ERR_NOT_FOUND`. This is sufficient for a host durability layer
-to maintain a wake-up index for an unloaded actor without exposing the image's
+deadline, or `TA_ERR_NOT_FOUND`. This is sufficient for a host to maintain an
+in-process wake-up index for an unloaded actor without exposing the image's
 private structure. `ta_session_image_definition()` names the definition the
 image must be restored against, the same exact-revision lookup load and
 reconstruct use, so a host can build a binding with that definition's data
@@ -71,4 +73,4 @@ The host object graph is deliberately absent. A CPython binding can reconstruct 
 
 ## Durability
 
-A durability module may encode a session image plus stable identities for referenced host values and timers, and may keep external protocol state used to reconcile an invocation after the chart receives its reconstruction communication error. Such an encoding is a **checkpoint**. The core does not prescribe its file/database format, commit protocol, command journal, replay policy, or effect deduplication strategy.
+A session image is not a durability format and must not be stored beyond its process. What survives a restart is the application's own storage, recorded inputs and their replay, and **checkpoints** in the sense of ADR 0091: an idle actor's state, exported with `ta_actor_export_state()` as structure the host encodes. The core does not prescribe their file/database format, commit protocol, command journal, replay policy, or effect deduplication strategy.

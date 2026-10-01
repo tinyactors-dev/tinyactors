@@ -96,8 +96,9 @@ atomically replaces the directory route, and only then releases its effects.
 `ta_actor_find` resolves a named actor.
 
 If the directory entry is unloaded, `ta_actor_find` returns
-`TA_ERR_UNLOADED` and leaves its output unchanged. The host obtains the
-checkpoint and binding and calls `ta_actor_load` before retrying delivery.
+`TA_ERR_UNLOADED` and leaves its output unchanged. The host takes the image
+it kept at unload, and the binding, and calls `ta_actor_load` before retrying
+delivery.
 
 `ta_actor_deliver` begins delivery of one external event to an actor that is ready for a new macrostep. It does not imply an unbounded external mailbox. With an operator transition in its params (ADR 0082), the event is taken by that transition, built at run time from a source that is active and targets that can form a legal configuration, instead of by transition selection; a malformed one is `TA_ERR_INVALID` with nothing retained.
 
@@ -145,11 +146,11 @@ the directory remains unloaded and the caller retains the image.
 
 `ta_actor_remove_unloaded` terminates a non-resident logical actor by removing
 the expected unloaded directory entry. Core owns no resident resources at that
-point; after success the host deletes its checkpoint, binding record, and
-non-resident deadline entry.
+point; after success the host deletes the image it kept, its binding record,
+and its non-resident deadline entry.
 
 `ta_session_image_next_deadline` exposes the earliest actor-owned delayed-send
-deadline so a durability layer can index unloaded actors without depending on
+deadline so the host can index unloaded actors without depending on
 the image's private layout. `ta_session_image_definition` names the registered
 definition an image must be restored against (the exact revision; otherwise
 `TA_ERR_DEFINITION_MISMATCH` or `TA_ERR_NOT_FOUND`), so a host can build the
@@ -163,4 +164,4 @@ physical clock.
 
 ## Durability boundary
 
-Portable checkpoint encoding, storage transactions, command/input journals, replay, effect IDs/deduplication, and durable deadline indexes are intentionally not core APIs. A reusable durability component may build them over session images and the core named-actor protocol.
+Unloading and session images bound memory within one process; an image is valid only in the process that wrote it, so it is never a durability format. Storage transactions, command/input journals, effect IDs/deduplication and durable deadline indexes are intentionally not core APIs. A reusable durability component builds them over core's replay (`ta_actor_prepare` with `at`, `ta_actor_publish`) and checkpoints of actor state (`ta_actor_export_state`, ADR 0091), not over session images.

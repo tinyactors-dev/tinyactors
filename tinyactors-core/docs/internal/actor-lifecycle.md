@@ -44,7 +44,8 @@ Names remain reserved while an actor is unloaded. Destroy/removal releases the n
 ## Passivation protocol
 
 The host externally synchronizes routing for the logical address, captures the
-actor, persists or retains the image, and calls `ta_actor_unload()` with that
+actor, keeps the image for the life of the process (passivation bounds memory;
+it is not persistence), and calls `ta_actor_unload()` with that
 exact image. The call verifies the captured session epoch and atomically swaps
 the directory entry from `RESIDENT(old_id)` to `UNLOADED`. Only after the swap
 succeeds does core discard resident state. The image remains caller-owned.
@@ -62,5 +63,5 @@ lock.
 Termination also respects residency. `ta_actor_destroy()` removes a resident
 actor using an expected `RESIDENT(id)` directory entry.
 `ta_actor_remove_unloaded()` removes an expected `UNLOADED` entry; after it
-succeeds, the host deletes the checkpoint, binding record, and durable deadline
-index entry.
+succeeds, the host deletes the image it kept, the binding record, and the
+deadline index entry.

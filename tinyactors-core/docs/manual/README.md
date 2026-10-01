@@ -12,7 +12,10 @@ The smallest useful mental model is:
 - the host data-model object graph remains host-owned;
 - every resident actor can be inspected;
 - `ta_actor_capture()` / `ta_actor_reconstruct()` operate on Tinyactors interpreter session images, not serialized application objects;
-- portable durability is optional and layers on top of session images.
+- unloading and session images bound memory within one process; they are not
+  persistence, and an image is valid only in the process that wrote it;
+- durability is optional and separate: the application's storage, recorded
+  inputs and replay, and checkpoints of actor state (`persistence.md`).
 
 Read `concepts.md`, `embedding.md`, `inspection.md`, `persistence.md`, and
 `virtual-actors.md`. The ADRs contain the normative architectural rationale.

@@ -38,8 +38,9 @@ first unit, before any state is exited, so a stop always comes before
 the code it names (ADR 0086). `ta_actor_inspect()` says where the actor
 stands after each call (`inspection.md`).
 
-A named actor may instead resolve as `TA_ERR_UNLOADED`. The host retrieves its
-checkpoint and data-model binding, calls `ta_actor_load()`, and retries delivery
+A named actor may instead resolve as `TA_ERR_UNLOADED`. The host takes the
+image it kept when it unloaded the actor, and the data-model binding, calls
+`ta_actor_load()`, and retries delivery
 with the returned runtime actor ID. `virtual-actors.md` shows this path.
 
 Statechart-level failures are normally represented as internal `error.*` events, not as `ta_result` failures.

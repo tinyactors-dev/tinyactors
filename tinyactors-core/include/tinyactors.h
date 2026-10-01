@@ -2833,6 +2833,12 @@ typedef struct {
 } ta_actor_unload_params;
 typedef struct { TA_IN const ta_actor_address *address; } ta_actor_remove_unloaded_params;
 /*
+ * Unloading bounds memory; it is not persistence. An image is valid only in
+ * the process that wrote it: offload, unload and load let one process hold
+ * far more named actors than fit in memory, while only active ones are
+ * resident. Surviving a restart is replay and ta_actor_export_state()
+ * (ADRs 0089 to 0094), never an image.
+ *
  * Captures a stable named actor as bytes and unloads it in one step (ADR
  * 0074): the bytes go into `arena`, only this system can load them, and
  * their layout may change in any build. Values go through the actor's data
@@ -3123,8 +3129,9 @@ TA_API ta_result ta_actor_resume(ta_system *system, TA_IN const ta_actor_resume_
  */
 TA_API ta_result ta_actor_abandon(ta_system *system, ta_actor_id actor);
 /*
- * Evicts a named actor without terminating it. The image must be a fresh
- * capture of actor; TA_ERR_STALE means the actor changed after capture.
+ * Evicts a named actor without terminating it, to bound memory; the image is
+ * not persistence and is valid only in this process. The image must be a
+ * fresh capture of actor; TA_ERR_STALE means the actor changed after capture.
  */
 TA_API ta_result ta_actor_unload(ta_system *system, TA_IN const ta_actor_unload_params *params);
 /* Restores an unloaded named actor and atomically republishes its route. */
@@ -3141,7 +3148,7 @@ TA_API ta_result ta_actor_load(ta_system *system, TA_IN const ta_actor_load_para
 TA_API ta_result ta_actor_reconstruct(ta_system *system,
                                       TA_IN const ta_actor_reconstruct_params *params)
     TA_VALUE_MODEL(session_image, params.image);
-/* Releases the name of an unloaded actor; the host then deletes its checkpoint. */
+/* Releases the name of an unloaded actor; the host then deletes the image it kept. */
 TA_API ta_result ta_actor_remove_unloaded(ta_system *system,
                                           TA_IN const ta_actor_remove_unloaded_params *params);
 TA_API ta_result ta_actor_get_completion(ta_system *system,

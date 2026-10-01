@@ -65,4 +65,4 @@ all of them takes 1.6 s of CPU time.
 
 ## Residency
 
-Named durable actors may exist while not resident. The actor directory/name index is distinct from the resident execution cache. The exact directory representation is an implementation concern and may itself be store-backed for populations larger than RAM.
+Named actors may exist while not resident: unloading lets one process hold far more actors than fit in memory, and it is not persistence. The actor directory/name index is distinct from the resident execution cache. The exact directory representation is an implementation concern and may itself be store-backed for populations larger than RAM.

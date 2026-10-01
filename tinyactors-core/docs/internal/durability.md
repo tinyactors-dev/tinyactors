@@ -1,10 +1,12 @@
 # Optional durability layer
 
-Tinyactors core provides named actor/session identity, logical addressing, inspection, and reconstructible session images. It deliberately does not impose one durable-execution protocol on every embedder.
+Tinyactors core provides named actor/session identity, logical addressing, inspection, replay of recorded inputs, and checkpoints of actor state (ADRs 0089–0094). It deliberately does not impose one durable-execution protocol on every embedder.
+
+Session images and unloading are not part of durability. They bound memory within one process, and an image is valid only in the process that wrote it (ADR 0074).
 
 A reusable durability component may add:
 
-- portable session-image/checkpoint encoding;
+- an encoding of checkpoints of actor state (`ta_actor_export_state`);
 - stable resolution of host values referenced by events, timers, and continuations;
 - storage transactions and checkpoint publication;
 - durable input/command journals;
@@ -14,11 +16,10 @@ A reusable durability component may add:
 - crash recovery and reconciliation;
 - orchestration of actor-definition replacement/upgrades.
 
-For passivation, that layer writes the encoded image and binding locator before
-allowing `ta_actor_unload()` to publish the `UNLOADED` directory entry. It also
-stores the value returned by `ta_session_image_next_deadline()` in its durable
-deadline index. On wake-up it decodes the image, resolves the binding, and calls
-`ta_actor_load()`.
+Passivation, unloading an idle actor to save memory, is not this layer's job:
+the host keeps the image for the life of the process, and indexes
+`ta_session_image_next_deadline()` in memory. What this layer stores for an
+actor is its data, its recorded inputs, and checkpoints of its state.
 
 ## Huge data models
 

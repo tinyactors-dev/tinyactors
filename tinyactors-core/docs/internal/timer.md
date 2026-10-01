@@ -50,7 +50,7 @@ actor as it was.
 
 A session image captures the actor-owned delayed-send semantics needed to reconstruct the interpreter. Host `ta_value` target/payload objects are retained as references, not serialized by core.
 
-A portable durability layer decides how to encode/re-resolve those values and how to index deadlines for non-resident actors. Destroying an actor cancels its delayed sends; capturing/reconstructing the same session does not.
+The host indexes deadlines for non-resident actors for the life of the process; an image never outlives it (ADR 0074). Destroying an actor cancels its delayed sends; capturing/reconstructing the same session does not.
 
 Unloading removes the actor's unsubmitted sends from the resident index
 without cancelling their semantic records in the image; its submitted sends

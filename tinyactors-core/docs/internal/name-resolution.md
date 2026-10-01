@@ -20,7 +20,8 @@ load allocates a new actor ID while preserving the logical actor address.
 ## Directory residency
 
 A directory entry is `RESIDENT(actor_id)` or `UNLOADED`. `UNLOADED` reserves
-the address and tells routing infrastructure to retrieve a checkpoint rather
+the address and tells routing infrastructure to load the image the host kept
+in this process rather
 than deliver to a nonexistent runtime ID. Replacement and removal include the
 expected old entry and must be atomic compare-and-swap operations in the host
 directory implementation.

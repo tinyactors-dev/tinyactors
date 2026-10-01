@@ -1993,7 +1993,7 @@
     },
     "ta_actor_offload_params": {
       "kind": "struct",
-      "doc": "Captures a stable named actor as bytes and unloads it in one step (ADR 0074): the bytes go into `arena`, only this system can load them, and their layout may change in any build. Values go through the actor's data model (value_write, not durable). `root`, when given, is the data-model root to include, which ta_actor_load() hands back. TA_ERR_BUSY: the actor is inside a macrostep, has queued internal events, a pending completion or a parent. TA_ERR_UNSUPPORTED: its data model has no byte form for a value it holds. TA_ERR_INVALID: an anonymous actor. On any failure the actor is resident and unchanged.",
+      "doc": "Unloading bounds memory; it is not persistence. An image is valid only in the process that wrote it: offload, unload and load let one process hold far more named actors than fit in memory, while only active ones are resident. Surviving a restart is replay and ta_actor_export_state() (ADRs 0089 to 0094), never an image.\n\nCaptures a stable named actor as bytes and unloads it in one step (ADR 0074): the bytes go into `arena`, only this system can load them, and their layout may change in any build. Values go through the actor's data model (value_write, not durable). `root`, when given, is the data-model root to include, which ta_actor_load() hands back. TA_ERR_BUSY: the actor is inside a macrostep, has queued internal events, a pending completion or a parent. TA_ERR_UNSUPPORTED: its data model has no byte form for a value it holds. TA_ERR_INVALID: an anonymous actor. On any failure the actor is resident and unchanged.",
       "fields": [
         {
           "name": "actor",
@@ -20304,7 +20304,7 @@
     },
     {
       "name": "ta_actor_unload",
-      "doc": "Evicts a named actor without terminating it. The image must be a fresh capture of actor; TA_ERR_STALE means the actor changed after capture.",
+      "doc": "Evicts a named actor without terminating it, to bound memory; the image is not persistence and is valid only in this process. The image must be a fresh capture of actor; TA_ERR_STALE means the actor changed after capture.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20426,7 +20426,7 @@
     },
     {
       "name": "ta_actor_remove_unloaded",
-      "doc": "Releases the name of an unloaded actor; the host then deletes its checkpoint.",
+      "doc": "Releases the name of an unloaded actor; the host then deletes the image it kept.",
       "public": true,
       "static_inline": false,
       "implemented": true,
