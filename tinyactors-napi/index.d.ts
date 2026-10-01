@@ -1828,6 +1828,24 @@ export interface PreparedActor<Data extends object> extends Actor<Data> {
    * reads; and what core answers for a record it cannot apply.
    */
   replay(inputs: Iterable<Uint8Array> | AsyncIterable<Uint8Array>): Promise<ReplayReport>;
+  /**
+   * Replay one event this actor took, as its chart saw it, at the time it
+   * took it (kernel ADR 0006 section 3): the actor's clock moves to `at`,
+   * the event is delivered, and its macrostep runs to its end. A delayed
+   * send due by then counts as fired; one due later fires after publish().
+   * Nothing the actor does crosses the border until it is published: its
+   * mail to other actors is dropped, and no I/O processor or invoker is
+   * called. An event of type "platform" named
+   * error.communication.invoke.<invocationID>.<reason> is reported again as
+   * its invocation's error report. Events are replayed in the order the
+   * actor took them; publish() then defaults its `at` to the last event's
+   * time. Throws `invalid` for an actor not prepared with `at`, an event
+   * with no name, or an `at` earlier than the last event's or later than
+   * the system's time; `done` once the actor reached a final state;
+   * `runaway` when the macrostep ran into the microstep limit, as it did
+   * live.
+   */
+  replay(event: ActorEvent, at: number): SendResult;
 }
 
 /** What a replay did (napi ADR 0034 section 3). */

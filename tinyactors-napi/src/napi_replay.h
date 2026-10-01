@@ -36,3 +36,7 @@ napi_value tna_replay_redeliver_method(napi_env env, napi_callback_info info);
 napi_value tna_replay_close_method(napi_env env, napi_callback_info info);
 /* checkpoint(slot, generation, write): writes the actor's checkpoint through write(chunk). */
 napi_value tna_checkpoint_method(napi_env env, napi_callback_info info);
+/* replayEvent(slot, generation, event, at): an ActorEvent replayed (kernel ADR 0006). */
+napi_value tna_replay_event_method(napi_env env, napi_callback_info info);
+/* replayEventsDone(slot, generation): the replaying actor goes back to the scheduler. */
+napi_value tna_replay_events_done_method(napi_env env, napi_callback_info info);

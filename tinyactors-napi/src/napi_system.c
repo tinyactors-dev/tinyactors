@@ -2136,6 +2136,8 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "replayLastTime", NULL, tna_replay_last_time_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayRedeliver", NULL, tna_replay_redeliver_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "replayClose", NULL, tna_replay_close_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "replayEvent", NULL, tna_replay_event_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "replayEventsDone", NULL, tna_replay_events_done_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "checkpoint", NULL, tna_checkpoint_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "dispatchDue", NULL, tna_dispatch_due_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },

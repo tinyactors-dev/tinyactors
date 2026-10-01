@@ -26,6 +26,10 @@ const NO_STATE = 4294967295;
 const REPLAY = Symbol('replay');
 // A prepared actor's replay feed, the log bytes it has been handed (napi ADR 0034 section 3).
 const FEED = Symbol('feed');
+// PreparedActor.replay(event, at) reaches the system through this key (kernel ADR 0006 section 3).
+const REPLAY_EVENT = Symbol('replayEvent');
+// The time of the last event replayed into a prepared actor: publish()'s default `at`.
+const LAST_AT = Symbol('lastAt');
 
 // How many records a replay applies before it yields to the event loop.
 const REPLAY_WINDOW = 256;
@@ -2445,9 +2449,12 @@ class System {
     const feed = prepared[FEED];
     if (feed !== undefined) {
       this.#native.replayFinish(feed, prepared.slot, prepared.generation);
+    } else if (prepared.replaying) {
+      this.#native.replayEventsDone(prepared.slot, prepared.generation);
     }
-    // A replaying actor publishes at its log's last record's time unless told otherwise (napi ADR 0033).
-    const at = options.at ?? (feed !== undefined ? this.#native.replayLastTime(feed) : undefined);
+    // A replaying actor publishes at its log's last record's time, or its
+    // last replayed event's, unless told otherwise (napi ADR 0033, kernel ADR 0006).
+    const at = options.at ?? (feed !== undefined ? this.#native.replayLastTime(feed) : prepared[LAST_AT]);
     const actor = this.#publishCore(prepared, at);
     if (feed !== undefined) {
       prepared[FEED] = undefined;
@@ -2624,6 +2631,27 @@ class System {
       this.wakeAt(address, wake);
     }
     return now;
+  }
+
+  // Replays one event into the replaying actor `prepared` (kernel ADR 0006
+  // section 3): PreparedActor.replay(event, at).
+  [REPLAY_EVENT](prepared, event, at) {
+    if (!(prepared instanceof PreparedActor) || prepared.system !== this || !prepared.replaying) {
+      throw new TinyactorsError('replay(): expected a replaying actor of this system (prepare() with `at`)', 'invalid');
+    }
+    if (prepared[FEED] !== undefined) {
+      throw new TinyactorsError('replay(): this actor replays an input log; replay its bytes', 'invalid');
+    }
+    if (event === null || typeof event !== 'object' || typeof event.name !== 'string' || event.name === '') {
+      throw new TinyactorsError('replay(): expected an ActorEvent, with a name', 'invalid');
+    }
+    if (typeof at !== 'number' || !Number.isFinite(at) || at < 0) {
+      throw new TinyactorsError('replay(): `at` must be a non-negative number of milliseconds', 'invalid');
+    }
+    const time = Math.floor(at);
+    const { consumed, finished } = this.#native.replayEvent(prepared.slot, prepared.generation, event, time);
+    prepared[LAST_AT] = time;
+    return { actor: prepared, status: finished ? 'done' : 'stable', consumed };
   }
 
   // Replays `inputs`, the rest of one actor's input log as byte chunks,
@@ -2920,8 +2948,16 @@ class PreparedActor extends ActorID {
    * lastTime, finished }: the records applied, the events the current
    * revision took without a transition, the last record's time, and whether
    * the history ended in a final state.
+   *
+   * With `at`, `inputs` is one ActorEvent, as the chart saw it, taken again
+   * at `at` (kernel ADR 0006 section 3): its macrostep runs to its end, and
+   * nothing it does crosses the border until publish(). Returns the
+   * SendResult a delivered message gets: { actor, status, consumed }.
    */
-  async replay(inputs) {
+  replay(inputs, at) {
+    if (at !== undefined) {
+      return this.system[REPLAY_EVENT](this, inputs, at);
+    }
     return this.system[REPLAY](this, inputs);
   }
 }
