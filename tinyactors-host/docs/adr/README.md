@@ -11,7 +11,8 @@ are cited from here. Core decisions live in `tinyactors-core/docs/adr`.
 | ADR | Title |
 |---|---|
 | [0001](0001-the-host-kernel-holds-what-every-host-needs.md) | [The host kernel holds what every host needs](0001-the-host-kernel-holds-what-every-host-needs.md) |
-| [0002](0002-the-kernel-keeps-the-write-ahead-log.md) | [The kernel keeps the write-ahead log](0002-the-kernel-keeps-the-write-ahead-log.md) |
+| [0002](0002-the-kernel-keeps-the-write-ahead-log.md) | [The kernel keeps the write-ahead log](0002-the-kernel-keeps-the-write-ahead-log.md) (superseded by 0006) |
 | [0003](0003-a-full-mailbox-overflows-instead-of-refusing-mail-between-actors.md) | [A full mailbox overflows instead of refusing mail between actors](0003-a-full-mailbox-overflows-instead-of-refusing-mail-between-actors.md) |
-| [0004](0004-a-macrosteps-first-record-commits-with-what-it-sent.md) | [A macrostep's first record commits with what it sent](0004-a-macrosteps-first-record-commits-with-what-it-sent.md) (superseded by 0005) |
-| [0005](0005-an-actors-log-is-an-inbox-with-acknowledgements.md) | [An actor's log is an inbox with acknowledgements](0005-an-actors-log-is-an-inbox-with-acknowledgements.md) |
+| [0004](0004-a-macrosteps-first-record-commits-with-what-it-sent.md) | [A macrostep's first record commits with what it sent](0004-a-macrosteps-first-record-commits-with-what-it-sent.md) (superseded by 0005, then 0006) |
+| [0005](0005-an-actors-log-is-an-inbox-with-acknowledgements.md) | [An actor's log is an inbox with acknowledgements](0005-an-actors-log-is-an-inbox-with-acknowledgements.md) (superseded by 0006) |
+| [0006](0006-actors-record-their-events-through-the-application-and-are-rebuilt-by-replaying-them.md) | [Actors record their events through the application, and are rebuilt by replaying them](0006-actors-record-their-events-through-the-application-and-are-rebuilt-by-replaying-them.md) |

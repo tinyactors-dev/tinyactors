@@ -1,6 +1,6 @@
 # Plan: complete the ROADMAP (without the browser build)
 
-**Status: phases A to J complete, phase K planned (2026-10-01).** Every commit of phases A to J is on `main`; the
+**Status: phases A to J complete; phase K superseded by kernel ADR 0006 and to be rewritten as its implementation (2026-10-01).** Every commit of phases A to J is on `main`; the
 gaps found on the way are in `ROADMAP.md` under "Follow-ups". Commit 12's
 test landed with commit 13, and commit 31's cost was accepted (core ADR
 0097, napi ADR 0039).

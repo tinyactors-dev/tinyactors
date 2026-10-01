@@ -41,9 +41,9 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0029](0029-a-chart-calls-a-host-function-by-name.md) | [A chart calls a host function by name](0029-a-chart-calls-a-host-function-by-name.md) |
 | [0030](0030-a-javascript-value-is-one-host-expression-and-charts-call-named-functions.md) | [A JavaScript value is one host expression, and charts call named functions](0030-a-javascript-value-is-one-host-expression-and-charts-call-named-functions.md) |
 | [0031](0031-values-describe-themselves-and-data-models-print-them.md) | [Values describe themselves, and data models print them](0031-values-describe-themselves-and-data-models-print-them.md) |
-| [0032](0032-named-actors-persist-by-replaying-their-inputs.md) | [Named actors persist by replaying their inputs](0032-named-actors-persist-by-replaying-their-inputs.md) |
-| [0033](0033-the-input-log-is-a-write-ahead-log-the-application-stores-without-reading.md) | [The input log is a write-ahead log the application stores without reading](0033-the-input-log-is-a-write-ahead-log-the-application-stores-without-reading.md) |
-| [0034](0034-the-input-log-is-cores-records-as-bytes.md) | [The input log is core's records, as bytes](0034-the-input-log-is-cores-records-as-bytes.md) |
+| [0032](0032-named-actors-persist-by-replaying-their-inputs.md) | [Named actors persist by replaying their inputs](0032-named-actors-persist-by-replaying-their-inputs.md) (superseded by kernel ADR 0006) |
+| [0033](0033-the-input-log-is-a-write-ahead-log-the-application-stores-without-reading.md) | [The input log is a write-ahead log the application stores without reading](0033-the-input-log-is-a-write-ahead-log-the-application-stores-without-reading.md) (superseded by kernel ADR 0006) |
+| [0034](0034-the-input-log-is-cores-records-as-bytes.md) | [The input log is core's records, as bytes](0034-the-input-log-is-cores-records-as-bytes.md) (superseded by kernel ADR 0006) |
 | [0035](0035-a-system-is-created-with-its-parameters.md) | [A system is created with its parameters](0035-a-system-is-created-with-its-parameters.md) |
 | [0036](0036-parameters-hold-on-every-path.md) | [Parameters hold on every path](0036-parameters-hold-on-every-path.md) |
 | [0037](0037-napi-is-a-binding-over-the-host-kernel.md) | [napi is a binding over the host kernel](0037-napi-is-a-binding-over-the-host-kernel.md) |

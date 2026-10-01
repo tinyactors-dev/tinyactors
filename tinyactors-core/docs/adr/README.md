@@ -93,7 +93,7 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0087](0087-host-expressions-are-compared-by-handle.md) | [Host expressions are compared by handle](0087-host-expressions-are-compared-by-handle.md) |
 | [0088](0088-a-session-id-names-its-family.md) | [A session ID names its family](0088-a-session-id-names-its-family.md) |
 | [0089](0089-an-actor-is-rebuilt-by-replaying-its-inputs-before-it-is-published.md) | [An actor is rebuilt by replaying its inputs before it is published](0089-an-actor-is-rebuilt-by-replaying-its-inputs-before-it-is-published.md) |
-| [0090](0090-core-defines-the-input-log-its-byte-layout-and-its-replay.md) | [Core defines the input log, its byte layout and its replay](0090-core-defines-the-input-log-its-byte-layout-and-its-replay.md) |
+| [0090](0090-core-defines-the-input-log-its-byte-layout-and-its-replay.md) | [Core defines the input log, its byte layout and its replay](0090-core-defines-the-input-log-its-byte-layout-and-its-replay.md) (superseded by kernel ADR 0006) |
 | [0091](0091-a-checkpoint-is-an-actors-state-at-a-record-of-its-log.md) | [A checkpoint is an actor's state at a record of its log](0091-a-checkpoint-is-an-actors-state-at-a-record-of-its-log.md) |
 | [0092](0092-system-parameters-are-fixed-at-creation-and-bound-every-buffer.md) | [System parameters are fixed at creation and bound every buffer](0092-system-parameters-are-fixed-at-creation-and-bound-every-buffer.md) |
 | [0093](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) | [The event-block cache fills on demand up to its bound](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) |

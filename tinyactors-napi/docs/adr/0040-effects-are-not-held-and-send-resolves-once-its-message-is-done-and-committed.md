@@ -1,6 +1,6 @@
 # ADR 0040: Effects are not held, and send() resolves once its message is done and committed
 
-**Status:** Accepted (2026-10-01); implementation planned in [`PLAN.md`](../../../PLAN.md) phase K. Applies [kernel ADR 0005](../../../tinyactors-host/docs/adr/0005-an-actors-log-is-an-inbox-with-acknowledgements.md) (an actor's log is an inbox with acknowledgements) to napi's API. Supersedes in part ADR 0005 point 11 (`until`), ADR 0032 sections 6 and 8, ADR 0033 sections 1 and 7, and ADR 0034 section 5; see "Superseded decisions". Points marked "(open)" are not settled.
+**Status:** Superseded in part by [kernel ADR 0006](../../../tinyactors-host/docs/adr/0006-actors-record-their-events-through-the-application-and-are-rebuilt-by-replaying-them.md) (2026-10-01): `send()` resolves when its message's macrostep ended, not once committed; effects not held and no `until` stand. Accepted (2026-10-01); implementation planned in [`PLAN.md`](../../../PLAN.md) phase K. Applies [kernel ADR 0005](../../../tinyactors-host/docs/adr/0005-an-actors-log-is-an-inbox-with-acknowledgements.md) (an actor's log is an inbox with acknowledgements) to napi's API. Supersedes in part ADR 0005 point 11 (`until`), ADR 0032 sections 6 and 8, ADR 0033 sections 1 and 7, and ADR 0034 section 5; see "Superseded decisions". Points marked "(open)" are not settled.
 **Date:** 2026-10-01
 
 ## Context

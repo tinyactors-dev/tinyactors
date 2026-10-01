@@ -1,6 +1,6 @@
 # ADR 0005: An actor's log is an inbox with acknowledgements
 
-**Status:** Accepted (2026-10-01); implementation planned in [`PLAN.md`](../../../PLAN.md) phase K. Supersedes kernel ADR 0004 as a whole, and kernel ADR 0002 in part (sections 2, 5 and 6; see "Superseded decisions" below). napi ADR 0040 decides what napi's API does with it (`send()`, effects, operator calls). Points marked "(open)" are not settled; PLAN.md phase K says where each is settled.
+**Status:** Superseded by [kernel ADR 0006](0006-actors-record-their-events-through-the-application-and-are-rebuilt-by-replaying-them.md) (2026-10-01): the runtime records events and the application journals and replays them; this ADR was never implemented. Accepted (2026-10-01); implementation planned in [`PLAN.md`](../../../PLAN.md) phase K. Supersedes kernel ADR 0004 as a whole, and kernel ADR 0002 in part (sections 2, 5 and 6; see "Superseded decisions" below). napi ADR 0040 decides what napi's API does with it (`send()`, effects, operator calls). Points marked "(open)" are not settled; PLAN.md phase K says where each is settled.
 **Date:** 2026-10-01
 
 ## Context

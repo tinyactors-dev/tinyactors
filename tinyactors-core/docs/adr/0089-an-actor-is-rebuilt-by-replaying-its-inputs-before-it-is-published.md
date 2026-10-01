@@ -1,6 +1,6 @@
 # ADR 0089: An actor is rebuilt by replaying its inputs before it is published
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Depends on ADR 0088. Amends:
+**Status:** Changed by [kernel ADR 0006](../../../tinyactors-host/docs/adr/0006-actors-record-their-events-through-the-application-and-are-rebuilt-by-replaying-them.md) (2026-10-01): a replaying actor takes events the application hands it, not records from a log; "sent is what happened", timers dropped as the clock passes them and invocations retired at publish stay. Accepted and implemented (2026-09-29); see the implementation notes. Depends on ADR 0088. Amends:
 - ADR 0037: a prepared actor needs no incumbent, and core supports replay without owning a log or a replay mode;
 - ADR 0012: a replaying actor has its own clock;
 - ADR 0081: an invoker's error report waits for the macrostep to end;

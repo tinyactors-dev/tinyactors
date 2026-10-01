@@ -1,6 +1,6 @@
 # ADR 0090: Core defines the input log, its byte layout and its replay
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. ADR 0091 adds checkpoints: record kinds CHECKPOINT, CHECKPOINT_HISTORY, CHECKPOINT_SEND (with two value streams) and CHECKPOINT_INVOKE, and a replay that skips records at or below the last `seq` it applied. Amends: Sections 3 to 7 are superseded by ADR 0094 and removed from core (2026-09-30): the log, its layout and its replay now belong to the host kernel (kernel ADR 0002).
+**Status:** Superseded by [kernel ADR 0006](../../../tinyactors-host/docs/adr/0006-actors-record-their-events-through-the-application-and-are-rebuilt-by-replaying-them.md) (2026-10-01): the input log's byte layout is no longer written or read. Accepted and implemented (2026-09-29); see the implementation notes. ADR 0091 adds checkpoints: record kinds CHECKPOINT, CHECKPOINT_HISTORY, CHECKPOINT_SEND (with two value streams) and CHECKPOINT_INVOKE, and a replay that skips records at or below the last `seq` it applied. Amends: Sections 3 to 7 are superseded by ADR 0094 and removed from core (2026-09-30): the log, its layout and its replay now belong to the host kernel (kernel ADR 0002).
 - ADR 0037: core defines the format of a log and how it replays, and still stores nothing and requires nothing;
 - ADR 0074: the data model's value codec streams through a byte sink and a byte source, and says whether its bytes are durable;
 - ADR 0089: a host replays by handing core records, instead of calling the input functions itself.
