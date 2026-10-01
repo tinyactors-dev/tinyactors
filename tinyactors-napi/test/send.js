@@ -58,23 +58,17 @@ async function completion() {
   system.close();
 }
 
-// until: "accepted" resolves once queued; nothing has run yet.
-async function accepted() {
+// send() resolves once the macrostep its message started has ended: by
+// name, with the actor the name resolved to. `until` is gone (kernel ADR
+// 0006, napi ADR 0040): post() is the call that only queues.
+async function byName() {
   const system = createSystem();
-  const actor = system.spawn(system.define(chart()));
-  await system.flush();
-  const result = await actor.send('ping', undefined, { until: 'accepted' });
-  assert.deepEqual(result, { actor, status: 'accepted' });
-  assert.equal(actor.inspect().data.count, 0, 'accepted, not yet delivered');
-  await system.flush();
-  assert.equal(actor.inspect().data.count, 1);
   const named = system.spawn(system.define(plain('named')), { address: { family: 'named', name: 'n' } });
   await system.flush();
-  const byName = await system.send({ family: 'named', name: 'n' }, 'ping', undefined, { until: 'accepted' });
-  assert.equal(byName.status, 'accepted');
-  assert.equal(byName.actor, undefined, 'an address resolves later');
   const completed = await system.send({ family: 'named', name: 'n' }, 'ping');
   assert.ok(completed.actor.equals(named), 'the actor the name resolved to');
+  assert.equal(completed.status, 'stable');
+  assertThrows(() => system.send({ family: 'named', name: 'n' }, 'ping', undefined, { until: 'accepted' }), 'invalid');
   system.close();
 }
 
@@ -175,7 +169,7 @@ async function backpressure() {
   const actor = system.spawn(definition);
   await system.flush();
   actor.post('ping');
-  await actor.send('ping', undefined, { until: 'accepted' });
+  actor.post('ping');
   assertThrows(() => actor.post('ping'), 'queue-full');
   await assertRejects(actor.send('ping'), 'queue-full');
   await system.flush();
@@ -193,7 +187,7 @@ async function backpressure() {
   system.close();
 }
 
-// After warm-up, send() in either mode makes no allocator call in the addon.
+// After warm-up, send() and post() make no allocator call in the addon.
 async function steadyState() {
   const system = createSystem();
   const definition = system.define(plain());
@@ -205,17 +199,16 @@ async function steadyState() {
     }
     return calls;
   };
-  const round = (until) => Promise.all(actors.map((actor) => actor.send('ping', undefined, { until })));
+  const round = () => Promise.all(actors.map((actor) => actor.send('ping')));
+  const posts = () => { for (const actor of actors) actor.post('ping'); return system.flush(); };
   for (let warm = 0; warm < 3; warm += 1) {
-    await round('completed');
-    await round('accepted');
-    await system.flush();
+    await round();
+    await posts();
   }
   const before = addonCalls();
   for (let index = 0; index < 5; index += 1) {
-    await round('completed');
-    await round('accepted');
-    await system.flush();
+    await round();
+    await posts();
   }
   assert.equal(addonCalls(), before, 'no allocator call in the addon');
   system.close();
@@ -223,7 +216,7 @@ async function steadyState() {
 
 (async () => {
   await completion();
-  await accepted();
+  await byName();
   await rejections();
   await abort();
   await timeout();

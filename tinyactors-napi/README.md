@@ -167,8 +167,8 @@ main();
 ```
 
 `post()` queues a message and returns. `send()` returns a promise that
-resolves when the step the message started has ended (or, with `{ until:
-'accepted' }`, when it is queued), and rejects if the message is lost or
+resolves when the step the message started has ended (`post()` only
+queues), and rejects if the message is lost or
 the step fails; it takes a `timeout` and an `AbortSignal`. Messages to one
 actor arrive in the order they were sent.
 

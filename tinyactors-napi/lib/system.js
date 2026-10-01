@@ -1525,9 +1525,9 @@ class System {
   }
 
   /**
-   * Queue `event` for `target` and return a promise (ADR 0005 point 11).
-   * With `until: "completed"` (the default) it resolves with
-   * { actor, status: "stable" | "done", completion } once the macrostep this
+   * Queue `event` for `target` and return a promise (ADR 0005 point 11,
+   * kernel ADR 0006). It resolves with
+   * { actor, status: "stable" | "done", consumed, completion } once the macrostep this
    * message starts has ended: the actor is stable again, or it finished
    * (`completion` is its done data). It rejects when the message becomes a
    * dead letter (`not-found`, `done`, `unloaded`, `invalid`), when the
@@ -1535,14 +1535,13 @@ class System {
    * `options.signal` (`aborted`), after `options.timeout` milliseconds
    * (`timeout`), and on close() (`closed`). Aborting or timing out withdraws
    * the message if it is still queued; a message the actor already took is
-   * not undone. With `until: "accepted"` it resolves with
-   * { actor, status: "accepted" } as soon as the message is queued.
-   * A full queue rejects with `queue-full`; only misuse throws (ADR 0008).
+   * not undone. post() queues without waiting. The recorder has the
+   * message's record before the promise resolves; durability is the
+   * application's journal write. A full queue rejects with `queue-full`; only misuse throws (ADR 0008).
    */
   send(target, event, data, options = {}) {
-    const until = options.until ?? 'completed';
-    if (until !== 'completed' && until !== 'accepted') {
-      throw new TinyactorsError('send(): options.until must be "completed" or "accepted"', 'invalid');
+    if (options.until !== undefined) {
+      throw new TinyactorsError('send(): `until` is gone: send() resolves when its macrostep ended; post() only queues', 'invalid');
     }
     const timeout = options.timeout;
     if (timeout !== undefined && !(typeof timeout === 'number' && timeout >= 0 && Number.isFinite(timeout))) {
@@ -1557,15 +1556,12 @@ class System {
     }
     let promise;
     try {
-      promise = this.#accept(target, event, data, options, until === 'completed', 'send()');
+      promise = this.#accept(target, event, data, options, true, 'send()');
     } catch (error) {
       if (error instanceof TinyactorsError && (error.code === 'queue-full' || error.code === 'out-of-memory')) {
         return Promise.reject(error);
       }
       throw error;
-    }
-    if (until === 'accepted') {
-      return Promise.resolve({ actor: target instanceof ActorID ? target : undefined, status: 'accepted' });
     }
     if (signal === undefined && timeout === undefined) {
       return promise;

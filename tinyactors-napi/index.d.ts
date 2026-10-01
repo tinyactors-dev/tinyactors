@@ -699,10 +699,11 @@ export interface System {
   post(target: ActorTarget, event: EventName, data?: unknown, options?: PostOptions): void;
 
   /**
-   * Queue a message and return a promise (ADR 0005 point 11). With
-   * `until: "completed"` (the default) it resolves once the macrostep the
-   * message starts has ended, with the actor stable or done; with
-   * `until: "accepted"` once the message is queued. It rejects when the
+   * Queue a message and return a promise (ADR 0005 point 11, kernel ADR
+   * 0006): it resolves once the macrostep the message starts has ended,
+   * with the actor stable or done; a recorder has the message's record by
+   * then. Durability is the application's: await its journal's write
+   * after send(). post() queues without waiting. It rejects when the
    * message becomes a dead letter, when its macrostep faults, on `signal`
    * (`aborted`), after `timeout` (`timeout`), when the queue is full
    * (`queue-full`), and on close() (`closed`) while it is pending. Abort
@@ -910,8 +911,6 @@ export interface IOProcessorOptions {
 }
 
 export interface SendOptions extends PostOptions {
-  /** "completed" (default): the message's macrostep ended; "accepted": it is queued. */
-  until?: "completed" | "accepted";
   /**
    * Reject with `timeout`, and withdraw the message if still queued, after
    * this many milliseconds. The timer does not keep the process alive, and
@@ -921,9 +920,9 @@ export interface SendOptions extends PostOptions {
 }
 
 export interface SendResult {
-  /** The actor that ran the macrostep; for "accepted", the target when it was an ActorID. */
+  /** The actor that ran the macrostep. */
   readonly actor?: Actor;
-  readonly status: "accepted" | "stable" | "done";
+  readonly status: "stable" | "done";
   /**
    * "stable" and "done": false when the message enabled no transition, so
    * the chart ignored it (core ADR 0089 section 8, napi ADR 0032 section 4).
