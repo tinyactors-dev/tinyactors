@@ -675,9 +675,7 @@ ta_result tah_inputs_configure(tah_system *system, const ta_str *families, uint3
     /* A message queued before now has no ACCEPTED record. */
     tah_inputs_forget_mail(inputs);
     tah_sched_forget_logging(&system->sched);
-    system->sched.observer = inputs->enabled
-                                 ? (tah_sched_observer){ .self = system, .note = tah_inputs_note }
-                                 : (tah_sched_observer){ 0 };
+    tah_system_observe(system);
     return TA_OK;
 }
 

@@ -65,6 +65,7 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
                  TAH_LAYOUT(tah_quarantine_report));
     tah_host_metrics_init(&system->metrics);
     tah_inputs_init(&system->inputs, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
+    tah_recorder_init(&system->recorder, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
     ta_result result = tah_scratch_init(&system->scratch, &system->allocator);
     if (result != TA_OK) {
         tah_system_release_record(system);
@@ -124,6 +125,7 @@ void tah_system_close(tah_system *system) {
     /* Records hold values; the log goes while core is alive. */
     system->sched.observer = (tah_sched_observer){ 0 };
     tah_inputs_destroy(system);
+    tah_recorder_destroy(&system->recorder);
     if (system->tracing) {
         tah_otlp_destroy(&system->otlp);
         system->tracing = false;
@@ -655,4 +657,18 @@ ta_result tah_system_post(tah_system *system, const tah_message *message) {
         tah_system_want_turn(system);
     }
     return result;
+}
+
+/* The scheduler's one observer: the input log, whose answer counts, then the recorder. */
+static ta_result tah_system_note(void *self, const tah_sched_note *note) {
+    tah_system *system = self;
+    ta_result result = system->inputs.enabled ? tah_inputs_note(self, note) : TA_OK;
+    tah_recorder_note(system, note);
+    return result;
+}
+
+void tah_system_observe(tah_system *system) {
+    system->sched.observer = system->inputs.enabled || system->recorder.enabled
+                                 ? (tah_sched_observer){ .self = system, .note = tah_system_note }
+                                 : (tah_sched_observer){ 0 };
 }

@@ -15,6 +15,7 @@
 #include "loads_private.h"
 #include "offloads_private.h"
 #include "otlp_private.h"
+#include "recorder_private.h"
 #include "scheduler_private.h"
 #include "watch_private.h"
 
@@ -81,6 +82,11 @@ struct tah_system {
     bool dispatching_due;
     /* The input log (inputs.h, napi ADR 0032 section 6). */
     tah_inputs inputs;
+    /* The recorder (recorder.h, kernel ADR 0006 section 2). */
+    tah_recorder recorder;
     /* The kernel's parameters, fixed at creation (params.h, napi ADR 0035). */
     tah_params params;
 };
+
+/* Points the scheduler's observer at the input log and the recorder, while either is on. */
+void tah_system_observe(tah_system *system);

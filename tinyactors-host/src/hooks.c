@@ -1,4 +1,5 @@
 #include "tinyactors_host/hooks.h"
+#include "tinyactors_host/recorder.h"
 #include "system_private.h"
 
 ta_result tah_hook_actor_created(tah_system *system, ta_actor_id actor) {
@@ -33,6 +34,7 @@ ta_result tah_hook_actor_spawned(tah_system *system, ta_actor_id actor) {
 
 ta_result tah_hook_actor_removed(tah_system *system, ta_actor_id actor) {
     tah_inputs_removed(system, actor);
+    tah_recorder_removed(system, actor);
     tah_sched_remove(&system->sched, actor, TAH_DEAD_DESTROYED);
     tah_system_want_turn(system); /* its mail is reported as dead letters */
     return TA_OK;
