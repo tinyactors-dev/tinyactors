@@ -24,7 +24,7 @@ records, and what happens when something runs out. The rings are in
    ([data-model.md](data-model.md)).
 2. **Core storage is bounded by parameters and compiled requirements.** Every queue, ring and text
    buffer has a size set when the system is created: `poolEnvelopes`,
-   `nameAreaBytes`, `internalQueueEvents`, `macrostepSlots`, `h2cBytes`,
+   `nameAreaBytes`, `internalQueueEvents`, `maxConcurrentInputs`, `h2cBytes`,
    `c2hBytes`, `telBytes`, `maxRecordBytes` ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Compiler-sized
    mandatory internal storage is additional to the ordinary
    `internalQueueEvents` quota; its whole-execution bound is discussed below.
@@ -43,8 +43,8 @@ records, and what happens when something runs out. The rings are in
 ## Macrostep slots
 
 Core runs each session's macrosteps one at a time, to their end, but it
-does not make every other session wait for them. It has **`macrostepSlots`
-slots** ([BEHAVIORS.md](../BEHAVIORS.md#macrostepslots)). A slot holds one
+does not make every other session wait for them. It has **`maxConcurrentInputs`
+slots** ([BEHAVIORS.md](../BEHAVIORS.md#maxconcurrentinputs)). A slot holds one
 session's execution of one input, from take until `c2h.input_completed`:
 the continuation, the internal queue and its mandatory storage, the taken
 envelope, the outgoing mail list and the outstanding c2h reserve. A session
@@ -128,7 +128,7 @@ The number is fixed, so memory stays bounded and allocated outside
 macrosteps. Core already moves a paused run into a continuation (ADRs 0061
 and 0070); a slot is that continuation plus the per-run state that run to
 completion kept once per system. Slots are allocated on demand up to
-`macrostepSlots`, as the pool is: when core would fill a slot and all
+`maxConcurrentInputs`, as the pool is: when core would fill a slot and all
 existing ones are busy, it allocates one more, between macrosteps. If that
 allocation fails, the envelope waits for a slot to free. A slot is sized
 for the largest registered definition; registration allocates the larger
@@ -445,9 +445,13 @@ A quarantined slot is already at a legal boundary and runs nothing, so
 release and abandon need no debugger and no exclusive ownership. They are
 production controls, as `release()` is in napi today.
 
-**At most `macrostepSlots` − 1 slots are quarantined.** At least one slot
-always serves the rest of the system. When a session reaches the limit and
-no quarantine is left, core abandons its execution instead:
+**At most `maxQuarantined` slots are quarantined**
+([BEHAVIORS.md](../BEHAVIORS.md#maxquarantined)). It defaults to
+`maxConcurrentInputs` − 1 and can never be more, so at least one slot
+always serves the rest of the system. A host can set it lower, so that
+runaways waiting for an operator take only part of its concurrency, or 0,
+for a system nobody operates. When a session reaches the limit and no
+quarantine is left, core abandons its execution instead:
 `c2h.macrostep_ended` and `c2h.input_completed` say `runaway`, the slot is
 free, and the session takes its next input. With one slot, every runaway
 ends this way.

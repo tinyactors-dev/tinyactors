@@ -232,7 +232,7 @@ Crash cases: [S03](scenarios/S03-crash-unrecorded.md),
 
 | Fixed at system creation (or filled on demand up to its bound, outside macrosteps) | Per actor | Per definition |
 |---|---|---|
-| `h2c`, `c2h`, `tel`; the envelope pool; name area; `macrostepSlots` slots, each a continuation, scratch, an ordinary internal quota and compiler-sized mandatory workspace, filled on demand | its record (about 332 bytes today) and list heads, including its deferred list; invocation slots sized by the definition; a pool token per active local invocation | compiled chart, mandatory-event bounds and authored names, interned |
+| `h2c`, `c2h`, `tel`; the envelope pool; name area; `maxConcurrentInputs` slots, each a continuation, scratch, an ordinary internal quota and compiler-sized mandatory workspace, filled on demand | its record (about 332 bytes today) and list heads, including its deferred list; invocation slots sized by the definition; a pool token per active local invocation | compiled chart, mandatory-event bounds and authored names, interned |
 
 Nothing in the table grows during a macrostep. The data model's own memory
 belongs to the data model. Figures are in [BEHAVIORS.md](BEHAVIORS.md#parameters)

@@ -77,7 +77,7 @@ Put the queue in core, give it a fixed size, and those problems go away. See
    input. Ordinary actions can fail. Startup and control work can return
    for the host to drain c2h between macrosteps; a budget can pause execution.
 5. **One session never stops the others.** Each session runs one input at
-   a time, but up to `macrostepSlots` sessions run at once, taking turns
+   a time, but up to `maxConcurrentInputs` sessions run at once, taking turns
    between units of executable content. A runaway holds one slot, not the
    system ([reference/macrostep.md](reference/macrostep.md#macrostep-slots)).
 6. **Core decides meaning; the application decides policy.** Reliability is
@@ -170,14 +170,14 @@ The scenarios run this example through:
   token for completion or cancellation. Unload refuses both owners of active
   local invocations and active locally invoked children. Live service replies
   carry instance tokens; authored invocation IDs alone are insufficient.
-- **Accepted macrostep slots:** core runs up to `macrostepSlots` sessions'
+- **Accepted macrostep slots:** core runs up to `maxConcurrentInputs` sessions'
   inputs at once, in turn, `slotSlice` steps each; mail for an active
   session waits on its deferred list. `microstepLimit` counts one input's
   whole chain (microsteps, selection passes and startup passes) and cannot
   be turned off. At the limit, core quarantines the slot
   (`c2h.quarantined`), and the host answers `h2c.release` or `h2c.abandon`;
-  at most `macrostepSlots` − 1 are quarantined, and past that a runaway is
-  abandoned with status `runaway`. With one slot this is plain run to
+  at most `maxQuarantined` are quarantined (never every slot), and past
+  that a runaway is abandoned with status `runaway`. With one slot this is plain run to
   completion ([reference/macrostep.md](reference/macrostep.md#macrostep-slots)).
 - **Accepted input withdrawal:** commit is final, and records are never
   edited. A host takes back an admitted input that has not been taken with

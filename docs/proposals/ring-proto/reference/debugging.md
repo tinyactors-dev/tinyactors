@@ -65,7 +65,7 @@ Their exact signatures remain a sketch:
   internal transitions then run normally. Debugger stepping may pause that
   macrostep; detachment may return its continuation to the pump.
 
-Up to `macrostepSlots` macrosteps can be in progress, one per slot
+Up to `maxConcurrentInputs` macrosteps can be in progress, one per slot
 ([macrostep.md](macrostep.md#macrostep-slots)). The debugger can inspect
 and drive each of them. A transition on an actor that holds no slot needs
 a free one; if every slot is busy, the debugger must finish a macrostep, or

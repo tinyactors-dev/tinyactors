@@ -54,7 +54,7 @@ different sends before and after a crash ([S03.4](scenarios/S03-crash-unrecorded
 | **Pool** | `poolEnvelopes`, `admissionWatermark` | Core bounces capacity-blocked h2c events. A local send or delayed send fails as `error.execution.capacity.pool`. Local invocations hold lifetime tokens acquired before startup. | host/client and sending chart | [S02](scenarios/S02-full-pool.md) |
 | **Name area** | `nameAreaBytes` | Core bounces capacity-blocked h2c events. A computed name that does not fit fails as `error.execution.capacity.names`. | host/client and sending chart | [S10](scenarios/S10-run-time-names.md) |
 | **Internal queue** | ordinary `internalQueueEvents` quota plus compiler-sized mandatory storage | A chart raise exhausting its quota fails as `error.execution.capacity.internal`. Mandatory storage needs a whole-execution bound, not a single error slot. | the chart; implementation readiness depends on the bound | [macrostep](reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage) |
-| **Macrostep slots** | `macrostepSlots` | Runnable envelopes wait in the run queue, or on an active session's deferred list, until a slot frees. Nothing is refused. | nobody: it shapes latency | [macrostep](reference/macrostep.md#macrostep-slots) |
+| **Macrostep slots** | `maxConcurrentInputs` | Runnable envelopes wait in the run queue, or on an active session's deferred list, until a slot frees. Nothing is refused. | nobody: it shapes latency | [macrostep](reference/macrostep.md#macrostep-slots) |
 | **Data model** (the JavaScript heap) | the binding | An operation that fails reports `TA_OP_ERROR`, and core raises `error.execution`. It is the data model's own memory, never core's. | the chart | [data model](reference/data-model.md) |
 | **The host's own buffers** | the host's policy | The host drops something, and must accept that only a timeout will notice. | the waiting chart | [S09.6](scenarios/S09-edge-backpressure.md#filling-up) |
 
@@ -110,7 +110,8 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 | [`nameAreaBytes`](#nameareabytes) | 262,144 | `maxRecordBytes` | 1 GiB | the chart (`.names`); the client, through h2c |
 | [`admissionWatermark`](#admissionwatermark) | 50% | 1% | 99% | the client, through h2c |
 | [`fairnessRatio`](#fairnessratio) | 4 | 1 | 4,096 | nobody: it shapes latency |
-| [`macrostepSlots`](#macrostepslots) | 4 | 1 | 1,024 | nobody: inputs wait for a slot |
+| [`maxConcurrentInputs`](#maxconcurrentinputs) | 4 | 1 | 1,024 | nobody: inputs wait for a slot |
+| [`maxQuarantined`](#maxquarantined) | `maxConcurrentInputs` − 1 | 0 | `maxConcurrentInputs` − 1 | the operator: past it, runaways are abandoned |
 | [`slotSlice`](#slotslice) | 1,024 | 1 | 1,048,576 | nobody: it shapes latency |
 | [`internalQueueEvents`](#internalqueueevents) | 256 ordinary entries, plus compiler-sized mandatory storage | 0 ordinary entries | 65,536 ordinary entries | the chart (`.internal`) |
 | [`h2cBytes`](#h2cbytes) | 65,536 | `maxRecordBytes` | 2 GiB | the client (the host refuses) |
@@ -210,25 +211,42 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
   h2c record's `at` and its `c2h.input` or first effect. **Client:**
   slower answers.
 
-### `macrostepSlots`
+### `maxConcurrentInputs`
 
 - **What it bounds:** how many sessions may be inside an input's execution
   at once, each in its own slot ([macrostep.md](reference/macrostep.md#macrostep-slots)).
   Unit: slots, each `interpreterBytes` plus an internal queue and the
   mandatory storage of the largest registered definition.
 - **Default 4.** One long or looping macrostep holds one slot, and three
-  keep serving everyone else. At most 3 runaways can be quarantined.
+  keep serving everyone else.
 - **Minimum 1:** plain run to completion. A long macrostep holds the whole
   system until it ends, and every runaway is abandoned, never
-  quarantined. **Maximum 1,024:** each slot is tens of kilobytes; past a
+  quarantined, since `maxQuarantined` must then be 0. **Maximum 1,024:** each slot is tens of kilobytes; past a
   thousand, a host wants more systems, not more slots.
-- **What it drives:** isolation between sessions, and how many runaways
-  can be held for an operator (`macrostepSlots` − 1).
+- **What it drives:** isolation between sessions. How many of the slots
+  may hold runaways is [`maxQuarantined`](#maxquarantined).
 - **Filled on demand,** as the pool is: the first slot exists at creation,
   and core adds one, between macrosteps, when every existing slot is busy
   and an envelope could run. A failed allocation means the envelope waits.
 - **How it surfaces:** no error. **Host:** `c2h.quarantined`, and inputs
   that wait longer while slots are busy.
+
+### `maxQuarantined`
+
+- **What it bounds:** how many slots may hold a quarantined runaway for an
+  operator at once ([macrostep.md](reference/macrostep.md#runaways-the-chain-limit-and-quarantine)).
+  Unit: slots, out of `maxConcurrentInputs`.
+- **Default `maxConcurrentInputs` − 1,** 3 with the other defaults: as
+  many runaways as can be held while one slot still serves everyone else.
+- **Minimum 0:** no quarantine; every runaway is abandoned with status
+  `runaway` and the session takes its next input. **Maximum
+  `maxConcurrentInputs` − 1:** at least one slot is never held, so loops
+  can never stop the system.
+- **What it drives:** how much of the system's concurrency runaways may
+  take while they wait for an operator. A server with 16 slots that wants
+  loops to cost it at most two sets 2. A system nobody operates sets 0.
+- **How it surfaces:** **host:** `c2h.quarantined` while there is room;
+  past it, `c2h.input_completed` with status `runaway`.
 
 ### `slotSlice`
 
@@ -382,7 +400,8 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 - `maxRecordBytes` ≤ `h2cBytes`, `telBytes`, `nameAreaBytes`;
 - `telemetryValueBytes` ≤ `maxRecordBytes` − 256;
 - `admissionWatermark` from 1 to 99;
-- `microstepLimit` from 1, never 0 or none.
+- `microstepLimit` from 1, never 0 or none;
+- `maxQuarantined` ≤ `maxConcurrentInputs` − 1.
 
 ### Memory per system, with the defaults
 

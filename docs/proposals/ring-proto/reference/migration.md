@@ -235,9 +235,9 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
    Supersedes kernel ADRs 0001 to 0006.
 9. In `tinyactors-napi/docs/adr/`: **napi is a binding over core's
    rings.** Supersedes napi 0037 and the others above.
-10. **Macrostep slots.** Up to `macrostepSlots` sessions run inputs at
-    once, in turn; deferred lists; the chain limit; quarantine with
-    `h2c.release` and `h2c.abandon`. Refines 0055, 0061 and 0075. Records
+10. **Macrostep slots.** Up to `maxConcurrentInputs` sessions run inputs at
+    once, in turn; deferred lists; the chain limit; quarantine, up to
+    `maxQuarantined` slots, with `h2c.release` and `h2c.abandon`. Refines 0055, 0061 and 0075. Records
     the bytes per slot and per actor (+8 for the deferred list).
 
 ## A rough order of work
@@ -279,7 +279,7 @@ changes every binding in the same change.
   A debugger that holds one actor while others run is outside the initial
   design ([debugging.md](debugging.md)).
 - **Macrostep slots replace system-wide run to completion.** Up to
-  `macrostepSlots` sessions run inputs at once, taking turns between units
+  `maxConcurrentInputs` sessions run inputs at once, taking turns between units
   of executable content; each session still runs one input at a time. A
   long or looping macrostep holds one slot. The chain limit counts
   microsteps, selection passes and startup passes and cannot be turned
