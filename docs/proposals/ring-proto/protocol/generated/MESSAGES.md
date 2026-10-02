@@ -32,6 +32,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x010B` | [`h2c.definition_register`](#h2cdefinition_register) | Compile and register a complete definition | 56 |
 | `0x010C` | [`h2c.definition_release`](#h2cdefinition_release) | Release one registration hold | 40 |
 | `0x010D` | [`h2c.definition_retire`](#h2cdefinition_retire) | End a definition’s availability | 40 |
+| `0x010E` | [`h2c.withdraw`](#h2cwithdraw) | Take back an admitted input that has not been taken | 40 |
 | `0x0201` | [`c2h.spawned`](#c2hspawned) | A session exists | 64 |
 | `0x0202` | [`c2h.input`](#c2hinput) | A recorded session took an input | 128 |
 | `0x0203` | [`c2h.send`](#c2hsend) | A send for an I/O processor | 88 |
@@ -98,6 +99,7 @@ A live input runs at system time when taken; its header at does not advance that
 | 96 | `type` | event_type (u8) | almost always external |
 
 - may be answered by: [`c2h.input`](#c2hinput), [`c2h.bounced`](#c2hbounced), [`c2h.load_needed`](#c2hload_needed), [`c2h.input_refused`](#c2hinput_refused), [`c2h.input_completed`](#c2hinput_completed)
+- see: [`h2c.withdraw`](#h2cwithdraw)
 
 ## h2c.spawn
 
@@ -211,6 +213,7 @@ Done enters the external queue with invoke metadata for finalize; errors are pla
 | 65 | `ends` | bool | for error: retire the matching instance at take after validation and internal notification enqueue; false preserves it |
 
 - may be answered by: [`c2h.input`](#c2hinput), [`c2h.bounced`](#c2hbounced), [`c2h.input_refused`](#c2hinput_refused), [`c2h.input_completed`](#c2hinput_completed)
+- see: [`h2c.withdraw`](#h2cwithdraw)
 
 ## h2c.destroy
 
@@ -261,6 +264,20 @@ Core ADR 0043 semantics: existing actors keep running; new spawns cannot use it.
 | 32 | `definition` | u64 | the system-local definition ID |
 
 - may be answered by: [`c2h.definition_result`](#c2hdefinition_result)
+
+## h2c.withdraw
+
+`0x010E` on `h2c`, 40 fixed bytes. Take back an admitted input that has not been taken.
+
+Header session is 0. A control: it takes no envelope and is applied when read, also while core is not admitting. target_seq names an earlier h2c.event or h2c.invoke_report. If that input waits in the pool (runnable or on a waiting list), core unlinks and frees its envelope, releases its transferred values and name text, and writes c2h.input_refused with reason withdrawn. Core reserves that record before consuming the withdrawal (reference/envelope.md).
+
+If the input is no longer waiting, the withdrawal changes nothing and writes nothing: the input already has, or will get, its own single terminal record (c2h.bounced, c2h.input_refused or c2h.input_completed). A taken input, including one paused inside its macrostep, is never withdrawn; stopping it is an operator abandon (reference/debugging.md). A target_seq not lower than this record's own seq is bounced as invalid.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 32 | `target_seq` | seq | the h2c seq of the input to withdraw |
+
+- may be answered by: [`c2h.input_refused`](#c2hinput_refused), [`c2h.bounced`](#c2hbounced)
 
 ## c2h.spawned
 
@@ -551,7 +568,7 @@ A compile_error diagnostic owns copies of the code, path, subject, subject range
 
 `0x0213` on `c2h`, 48 fixed bytes. An admitted host input was not taken.
 
-Exactly one terminal refusal for an admitted h2c.event or invoke_report discarded by load failure, destruction, stale-instance validation or snapshot failure. No input observation or completion follows. Core releases its transferred values; host retry originals remain host-owned.
+Exactly one terminal refusal for an admitted h2c.event or invoke_report discarded by load failure, destruction, stale-instance validation, snapshot failure or an h2c.withdraw. No input observation or completion follows. Core releases its transferred values; host retry originals remain host-owned.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -679,6 +696,7 @@ Why an admitted host input was discarded before take.
 | 3 | `snapshot_failed` | copy_out could not produce the recording snapshot |
 | 4 | `stale_invocation` | the service instance is no longer active |
 | 5 | `invalid` | validation at take failed, for example a backwards replay clock |
+| 6 | `withdrawn` | h2c.withdraw named it before it was taken |
 
 ### `bounce_reason` (u8)
 

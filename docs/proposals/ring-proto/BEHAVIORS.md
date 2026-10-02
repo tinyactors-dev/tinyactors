@@ -30,6 +30,7 @@ can retry:
 | An external event waits for a session that cannot be loaded | core | `c2h.input_refused` with its h2c sequence, plus `DEAD_LETTER` telemetry | host or client | [S07.13](scenarios/S07-unloaded-tracker.md#the-load-fails) |
 | A recording snapshot cannot be made | core before input take | external input: `c2h.input_refused`; local mail: recycled `error.communication` | host/client or sending chart | [S11](scenarios/S11-semantic-boundaries.md#recording-and-ownership) |
 | An unload would split an active local invocation | core, without mutation | `c2h.bounced(active_local_invoke)` | host, after the invocation ends | [unloading](reference/unloading.md#unloading) |
+| The host withdraws an input that has not been taken (a client disconnected, an `AbortSignal` fired) | core, on [`h2c.withdraw`][h2c.withdraw] | `c2h.input_refused` with reason `withdrawn`; nothing if the input was already taken, bounced or refused | nobody: the host asked for it | [envelope](reference/envelope.md#withdrawing-an-admitted-input) |
 | An event nobody listens for | the chart: it enables nothing | [`tel.trace`][tel.trace] `IGNORED` | nobody | [S10.4](scenarios/S10-run-time-names.md#under-the-proposal) |
 | An h2c record core cannot run (no such address, too deep a name, …) | core | [`c2h.bounced`][c2h.bounced] with a reason | the host decides | [S10.8](scenarios/S10-run-time-names.md#when-the-names-come-faster-than-they-are-freed) |
 | Telemetry the host does not read fast enough | core | [`tel.dropped`][tel.dropped] with a count | nobody: telemetry never slows the system | [telemetry](reference/telemetry.md) |
@@ -393,6 +394,7 @@ kernel gone, napi's `parameterInfo()` lists two owners, `core` and `napi`.
 
 [h2c.event]: protocol/generated/MESSAGES.md#h2cevent
 [h2c.load_failed]: protocol/generated/MESSAGES.md#h2cload_failed
+[h2c.withdraw]: protocol/generated/MESSAGES.md#h2cwithdraw
 [c2h.bounced]: protocol/generated/MESSAGES.md#c2hbounced
 [tel.trace]: protocol/generated/MESSAGES.md#teltrace
 [tel.dropped]: protocol/generated/MESSAGES.md#teldropped

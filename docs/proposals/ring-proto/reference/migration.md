@@ -90,7 +90,7 @@ napi becomes a binding over core and its rings. What it keeps:
 | `src/napi_recorder.c` (167), `src/napi_replay.c` (165) | read `c2h.input`, post replay records. Most of the code goes. |
 | `src/napi_trace.c` (722) | drains `tel` |
 | `src/napi_children.c`, `src/import.c` | invoked children are local sessions. Their `done.invoke` is an envelope in core. |
-| `lib/system.js`, `lib/loader.js`, `lib/tracing.js`, `lib/params.js` | follow the native changes. `send()` settles from the correlated input disposition: bounced, refused, or input_completed after stabilization and invocation-startup follow-up, independently of recording. |
+| `lib/system.js`, `lib/loader.js`, `lib/tracing.js`, `lib/params.js` | follow the native changes. `send()` settles from the correlated input disposition: bounced, refused, or input_completed after stabilization and invocation-startup follow-up, independently of recording. `PostOptions.signal` aborting before the input is taken posts [`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw). |
 | `index.d.ts` | the API it declares mostly stays. Mark what changes meaning with `// status:` (AGENTS.md, "Desired API files"). `setRecorder`'s `families` become recording selectors. Dead letter reasons change. |
 
 Suites to rewrite: `route.js`, `loads.js`, `session-loads.js`,
@@ -274,6 +274,13 @@ changes every binding in the same change.
   Native data model and value ownership integration stays desired.
   Exact spec and diagnostic encodings remain sketches
   ([definitions.md](definitions.md)).
+- **A pending input is withdrawn by a new record, not by editing h2c.**
+  Committed records never change. [`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw)
+  names an admitted input by its h2c seq. If it has not been taken, core
+  frees its envelope and writes `c2h.input_refused` (`withdrawn`);
+  otherwise the input's own terminal record stands. A taken input is
+  stopped only by an operator abandon
+  ([envelope.md](envelope.md#withdrawing-an-admitted-input)).
 - **The data model stays a synchronous vtable.** Data model requests on the
   ring ("option (b)") are rejected: in-process data models gain nothing,
   and every action would have to become resumable in the middle

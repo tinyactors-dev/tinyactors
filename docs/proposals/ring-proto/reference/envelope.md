@@ -318,6 +318,63 @@ possible data-free `error.communication`, even when the original event name
 is shorter. Recycling uses that retained storage; it does not rely on the
 incorrect assumption that every error name is shorter than its source name.
 
+## Withdrawing an admitted input
+
+A host sometimes no longer wants an input it has committed. An HTTP client
+disconnects, or an `AbortSignal` fires, while the event still waits behind
+a busy pool. h2c records are not edited after commit: commit is where a
+`vref` moves to core, and an admitted event no longer lives in the ring.
+The host posts [`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw)
+instead, naming the input by its h2c seq.
+
+- **It is a control.** It takes no envelope and is applied when read, so it
+  works while core is not admitting, which is when it matters most. It is
+  read in h2c order, like every other record.
+- **A waiting input is withdrawn.** If the target is an envelope in state
+  runnable or waiting, core reserves a `c2h.input_refused`, unlinks the
+  envelope from its list, releases its `data` vref and its name text,
+  frees it, and writes the refusal with reason `withdrawn`. No `c2h.input`
+  is written, so a recorded session's journal never sees it.
+- **A taken input is not.** Once core has taken the envelope, execution has
+  begun, including a macrostep paused on its budget. Stopping it is an
+  operator abandon ([debugging.md](debugging.md)), not a withdrawal.
+- **Too late is not a separate answer.** If the input has been taken,
+  bounced or refused, the withdrawal writes nothing. The input's own single
+  terminal record (`c2h.bounced`, `c2h.input_refused` or
+  `c2h.input_completed`) has come or will come, and the host settles from
+  it. Every input still ends with exactly one terminal record, and a
+  withdrawn one ends with `input_refused`.
+- **Misuse is bounced.** A `target_seq` that is not lower than the
+  withdrawal's own seq is `c2h.bounced` (`invalid`).
+
+**The host's side.** A host that withdraws keeps its retry original until
+the input's terminal record arrives, as for any input. The race is inherent:
+fairness may take the input after its admission and before core reads the
+withdrawal behind it. A host that must know before posting more waits for
+the terminal record.
+
+**An input waiting for a load.** Withdrawing the last envelope on an
+address's waiting list leaves the outstanding `c2h.load_needed` in place.
+The host's answer is still valid; the load then has nothing to deliver.
+
+**Invocation reports.** An `h2c.invoke_report` can be withdrawn the same
+way. A withdrawn `done` or an `ends` error leaves the invocation active, so
+the chart learns of the service's end only from its own timeout. That is
+the host's choice to make.
+
+**Finding the envelope.** The envelope already carries `source_seq`. Core
+scans the pool's array for a runnable or waiting envelope with that seq,
+then unlinks it by walking the list it is on, which is singly linked. Both
+are bounded by `poolEnvelopes`, run between macrosteps and allocate
+nothing. The run queue's arrival order is unchanged for the envelopes that
+remain. At the default 4,096 envelopes this is a few microseconds per
+withdrawal.
+
+**Open:** whether a storm of withdrawals (many clients disconnecting at
+once) justifies a fixed `source_seq` index, allocated with the pool, so
+that each withdrawal costs O(1) rather than a scan. It would cost about 8
+bytes per envelope.
+
 ## The taken envelope stays put through input completion
 
 When a macrostep starts, its envelope moves to state **taken**. It stays in

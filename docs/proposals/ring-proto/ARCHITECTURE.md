@@ -145,7 +145,10 @@ command. Refusal requires an explicit retry or application decision.
    ([S07](scenarios/S07-unloaded-tracker.md))
    An input that cannot be admitted is consumed and answered with
    `c2h.bounced`, after reserving its result bytes; it leaves no envelope
-   or transferred value reference behind.
+   or transferred value reference behind. Until it is taken, the host can
+   withdraw an admitted input with [`h2c.withdraw`](protocol/generated/MESSAGES.md#h2cwithdraw),
+   which frees its envelope and answers `c2h.input_refused` (`withdrawn`).
+   Records are never edited after commit.
 3. **Take.** Core picks the next runnable envelope, mail before admission by
    `fairnessRatio`. If the session is recorded, core writes
    [`c2h.input`](protocol/generated/MESSAGES.md#c2hinput).

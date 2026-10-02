@@ -101,6 +101,7 @@ enum :input_refusal_reason, :u8, doc: 'Why an admitted host input was discarded 
   value :snapshot_failed, 3, 'copy_out could not produce the recording snapshot'
   value :stale_invocation, 4, 'the service instance is no longer active'
   value :invalid, 5, 'validation at take failed, for example a backwards replay clock'
+  value :withdrawn, 6, 'h2c.withdraw named it before it was taken'
 end
 
 enum :bounce_reason, :u8, doc: 'Why core handed an h2c record back unrun.' do
@@ -182,6 +183,7 @@ message 'h2c.event', code: 0x0102, summary: 'An external event for a session' do
   field :data, :vref, '_event.data'
   field :type, :event_type, 'almost always external'
   replies_with 'c2h.input', 'c2h.bounced', 'c2h.load_needed', 'c2h.input_refused', 'c2h.input_completed'
+  see 'h2c.withdraw'
 end
 
 message 'h2c.spawn', code: 0x0103, summary: 'Create a session' do
@@ -275,6 +277,7 @@ message 'h2c.invoke_report', code: 0x0109, summary: 'An invoked service finished
       'errors are platform/internal events without event invokeid. A stale ' \
       'live instance cannot change a later invocation with the same authored ID.'
   replies_with 'c2h.input', 'c2h.bounced', 'c2h.input_refused', 'c2h.input_completed'
+  see 'h2c.withdraw'
 end
 
 message 'h2c.destroy', code: 0x010A, summary: 'End a session now' do
@@ -309,6 +312,25 @@ message 'h2c.definition_retire', code: 0x010D, summary: 'End a definition’s av
       'for an issued ID, including after it was freed. Header session is 0.'
   field :definition, :u64, 'the system-local definition ID'
   replies_with 'c2h.definition_result'
+end
+
+message 'h2c.withdraw', code: 0x010E, summary: 'Take back an admitted input that has not been taken' do
+  doc 'Header session is 0. A control: it takes no envelope and is applied ' \
+      'when read, also while core is not admitting. target_seq names an ' \
+      'earlier h2c.event or h2c.invoke_report. If that input waits in the ' \
+      'pool (runnable or on a waiting list), core unlinks and frees its ' \
+      'envelope, releases its transferred values and name text, and writes ' \
+      'c2h.input_refused with reason withdrawn. Core reserves that record ' \
+      'before consuming the withdrawal (reference/envelope.md).'
+  doc 'If the input is no longer waiting, the withdrawal changes nothing ' \
+      'and writes nothing: the input already has, or will get, its own ' \
+      'single terminal record (c2h.bounced, c2h.input_refused or ' \
+      'c2h.input_completed). A taken input, including one paused inside ' \
+      'its macrostep, is never withdrawn; stopping it is an operator ' \
+      'abandon (reference/debugging.md). A target_seq not lower than this ' \
+      'record\'s own seq is bounced as invalid.'
+  field :target_seq, :seq, 'the h2c seq of the input to withdraw'
+  replies_with 'c2h.input_refused', 'c2h.bounced'
 end
 
 # ---------------------------------------------------------------- c2h
@@ -528,8 +550,8 @@ end
 
 message 'c2h.input_refused', code: 0x0213, summary: 'An admitted host input was not taken' do
   doc 'Exactly one terminal refusal for an admitted h2c.event or invoke_report ' \
-      'discarded by load failure, destruction, stale-instance validation or ' \
-      'snapshot failure. No input observation or completion follows. Core ' \
+      'discarded by load failure, destruction, stale-instance validation, ' \
+      'snapshot failure or an h2c.withdraw. No input observation or completion follows. Core ' \
       'releases its transferred values; host retry originals remain host-owned.'
   field :source_seq, :seq, 'the originating h2c input'
   field :reason, :input_refusal_reason

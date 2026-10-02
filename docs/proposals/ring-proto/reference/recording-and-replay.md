@@ -138,7 +138,8 @@ by its h2c sequence: `c2h.bounced` before admission,
 `c2h.input_completed` after processing finishes. The completion status is
 `stable`, `done`, `runaway` or `abandoned`. These reports exist for recorded,
 unrecorded and replaying sessions alike. A refusal includes load failure,
-destruction before take and snapshot failure; lossy dead-letter telemetry
+destruction before take, snapshot failure and withdrawal by the host
+([`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw)); lossy dead-letter telemetry
 does not replace it.
 
 `c2h.macrostep_ended` reports an individual macrostep. Input completion

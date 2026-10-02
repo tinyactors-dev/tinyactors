@@ -164,6 +164,11 @@ The scenarios run this example through:
   token for completion or cancellation. Unload refuses both owners of active
   local invocations and active locally invoked children. Live service replies
   carry instance tokens; authored invocation IDs alone are insufficient.
+- **Accepted input withdrawal:** commit is final, and records are never
+  edited. A host takes back an admitted input that has not been taken with
+  `h2c.withdraw`, which core answers with `c2h.input_refused` (`withdrawn`);
+  an input already taken keeps its own terminal record
+  ([reference/envelope.md](reference/envelope.md#withdrawing-an-admitted-input)).
 - **Error storage correction:** the compiler sizes mandatory error and
   completion storage, allocated outside macrosteps in addition to the chart's
   ordinary internal-event quota. A single reserved error slot is insufficient.

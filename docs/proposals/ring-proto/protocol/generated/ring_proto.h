@@ -39,6 +39,7 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_INPUT_REFUSAL_REASON_SNAPSHOT_FAILED 3u
 #define TRP_INPUT_REFUSAL_REASON_STALE_INVOCATION 4u
 #define TRP_INPUT_REFUSAL_REASON_INVALID 5u
+#define TRP_INPUT_REFUSAL_REASON_WITHDRAWN 6u
 #define TRP_BOUNCE_REASON_NO_SUCH_ADDRESS 1u
 #define TRP_BOUNCE_REASON_NO_SUCH_DEFINITION 2u
 #define TRP_BOUNCE_REASON_ADDRESS_TAKEN 3u
@@ -83,6 +84,7 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_H2C_DEFINITION_REGISTER 0x010bu
 #define TRP_H2C_DEFINITION_RELEASE 0x010cu
 #define TRP_H2C_DEFINITION_RETIRE 0x010du
+#define TRP_H2C_WITHDRAW 0x010eu
 #define TRP_C2H_SPAWNED 0x0201u
 #define TRP_C2H_INPUT 0x0202u
 #define TRP_C2H_SEND 0x0203u
@@ -229,6 +231,13 @@ typedef struct {
     uint64_t definition;
 } trp_h2c_definition_retire;
 _Static_assert(sizeof(trp_h2c_definition_retire) == 40, "h2c.definition_retire");
+
+/* h2c.withdraw: Take back an admitted input that has not been taken. */
+typedef struct {
+    trp_header header;
+    uint64_t target_seq;
+} trp_h2c_withdraw;
+_Static_assert(sizeof(trp_h2c_withdraw) == 40, "h2c.withdraw");
 
 /* c2h.spawned: A session exists. */
 typedef struct {
