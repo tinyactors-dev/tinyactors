@@ -19,7 +19,7 @@ This replaces several structures in core today:
 |---|---|
 | The host's mailboxes and router (kernel `scheduler.h`, `router.h`) | envelopes in the run queue |
 | `TA_ERR_BUSY` from `ta_actor_deliver` (core ADR 0055) | gone: a session is never busy when its envelope reaches the head of the queue ([macrostep.md](macrostep.md#run-to-completion)) |
-| An actor's event block and its cache (core ADRs 0069, 0093) | the taken envelope, which stays where it is until the fence |
+| An actor's event block and its cache (core ADRs 0069, 0093) | the taken envelope, which stays where it is until the macrostep end |
 | The internal queue lent to a running actor (core ADR 0064) | not the pool: one fixed internal queue per running interpreter, with a reserved slot ([below](#the-internal-queue-is-not-in-the-pool)) |
 | Delayed sends living with their owner (core ADR 0054) and the global deadline index | envelopes with a due time, in the pool's deadline index |
 | Waiting mail for unloaded actors (kernel `loads.h`) | envelopes on a waiting list per address |
@@ -57,7 +57,7 @@ an ID. So the envelope carries no process-local IDs except session IDs and
 - **It can fill on demand, but only outside macrosteps.** This is the shape
   ADR 0093 uses for the event-block cache: allocate on first use, up to the
   bound, and keep. Growth happens only at points where nothing is running:
-  when core admits h2c records, and after a fence. Core keeps a reserve of
+  when core admits h2c records, and after a macrostep end. Core keeps a reserve of
   free envelopes there (the most one macrostep may take before failing, see
   below). **A macrostep only takes envelopes that already exist.** A host
   that wants no allocation after start-up sets the pool to fill at creation.
@@ -86,7 +86,7 @@ needed, as with ADR 0093 today.
 | List | Holds | Order | One per |
 |---|---|---|---|
 | **Run queue** | runnable envelopes: admitted external events, mail, invocation reports, timers that became due | arrival | system |
-| **Outgoing list** | mail the running macrostep sent, until its fence | send order | running macrostep |
+| **Outgoing list** | mail the running macrostep sent, until its macrostep end | send order | running macrostep |
 | **Waiting list** | envelopes for an address that is not resident | arrival | address being loaded |
 | **Owner list** | a session's pending delayed sends | send order | session |
 | **Free list** | free envelopes | – | system |
@@ -162,22 +162,22 @@ system, `#_parent`, `#_<invokeid>`) doesn't go to c2h:
    data vref, and puts the text in the name area.
 3. It keeps the envelope on the running macrostep's **outgoing list**, in
    send order. The envelope is on no queue yet, so nothing can take it.
-4. At the macrostep's [`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence),
+4. At the macrostep's [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended),
    core moves the outgoing list, in order, to the end of the run queue. The
-   fence's `mail` field counts them. An envelope whose target address isn't
+   macrostep end's `mail` field counts them. An envelope whose target address isn't
    resident goes to that address's waiting list instead, and core writes
    [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed)
-   after the fence ([below](#envelopes-for-an-address-that-isnt-resident)).
+   after the macrostep end ([below](#envelopes-for-an-address-that-isnt-resident)).
 
 So local receivers run after the sender's macrostep ends. A macrostep
 an operator abandons (ADR 0082) frees its outgoing list. No mail
 crosses the host, so no JavaScript runs for it and no vref leaves core.
 
-**Why mail waits for the fence:**
+**Why mail waits for the macrostep end:**
 
 - **One running macrostep.** A local receiver cannot run while its sender
   is paused. The outgoing list keeps that scheduling boundary explicit.
-  Host effects on c2h may execute before the fence; they are independent
+  Host effects on c2h may execute before the macrostep end; they are independent
   of this local scheduling rule and cannot be rolled back by abandonment.
 - **Cause comes before effect in the log.** A recorded sender's
   [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) is on c2h
@@ -185,7 +185,7 @@ crosses the host, so no JavaScript runs for it and no vref leaves core.
   stream read in order shows the sender's input observation first. This
   is an observation order, not a durability guarantee.
 - **It costs nothing.** Under run to completion the receiver couldn't run
-  before the fence anyway. The outgoing list only decides *when* the mail
+  before the macrostep end anyway. The outgoing list only decides *when* the mail
   becomes visible, not how soon it runs.
 
 Mail to an address in another system or process isn't local. It is a
@@ -235,15 +235,15 @@ and the global index ordering owners. The per-owner list stays, as `owner_next`.
   Replaying a session rebuilds them, so the host needs no reducer over
   suppressed sends.
 
-### A due send to an I/O processor has no fence
+### A due send to an I/O processor has no macrostep end
 
 A timer for an I/O processor becomes due while core handles `h2c.time`, not
 inside a macrostep. Core writes its `c2h.send` with `macrostep` 0, and no
-[`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence) follows. The host
+[`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended) follows. The host
 may act on it at once.
 
-**Why there is no fence:** this record is not part of a running macrostep.
-A fence would report the end of a macrostep that doesn't exist. Like every
+**Why there is no macrostep end:** this record is not part of a running macrostep.
+A macrostep end would report the end of a macrostep that doesn't exist. Like every
 other c2h effect, the host may execute it on receipt. Journaling its owner's
 inputs does not establish whether the effect executed; replay seeds new
 state and suppresses external effects while doing so.
@@ -254,7 +254,7 @@ An envelope whose target is an unloaded address, or a family address with no
 resident session, can't run yet:
 
 1. Core puts it on that address's waiting list: an admitted h2c record at
-   admission, mail at its sender's fence (never before, so a macrostep that
+   admission, mail at its sender's macrostep end (never before, so a macrostep that
    doesn't commit asks for no load). The address bytes are its key, in the
    name area.
 2. The first time an address gets a waiting list, core writes
@@ -287,10 +287,10 @@ not have. So **the envelope is reused**:
 The text part shrinks to the error's name, which is shorter than any text the
 envelope already held. So recycling never needs name-area room either.
 
-## The taken envelope stays put until the fence
+## The taken envelope stays put until the macrostep end
 
 When a macrostep starts, its envelope moves to state **taken**. It stays in
-its slot while `_event` names it, and is freed at the fence. This is ADR
+its slot while `_event` names it, and is freed at the macrostep end. This is ADR
 0069's "taking an event does not move it", applied to the pool:
 
 - inspection (ADR 0083) reports the event from the envelope;
@@ -361,7 +361,7 @@ So the pool can fill to its last envelope.
 **Open point.** A microstep whose reserve can't be restored, because the
 macrostep's own internal events filled the internal queue, can't start. The
 proposed rule is to end the macrostep there, as a runaway does (ADR 0075),
-with [`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence) status
+with [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended) status
 `capacity` and a `tel.trace` that says why. It needs a test
 showing it can only happen to a chart that already raised
 `error.execution.capacity` in the same macrostep.

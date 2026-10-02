@@ -28,14 +28,14 @@ does the same job and never comes near the bound.
 | S02.5 | tel | [`tel.trace`][tel.trace] `0x0301` `{ACTION_FAILED}`, `{RAISED error.execution.capacity.pool}` | The send fails as `error.execution.capacity.pool`. The event takes the internal queue's reserved slot, so raising it cannot fail ([macrostep](../reference/macrostep.md)). SCXML abandons the rest of the block: iterations 8 to 10 do not run. `sent = {n1…n7}`. `t` is safe, because it was scheduled first. |
 | S02.6 | – | – | Same macrostep. `attempt`'s transition takes the error to `throttled`. `t` is untouched, because `throttled` is inside `attempt`. |
 | S02.7 | tel | [`tel.trace`][tel.trace] `{ACTION_FAILED}` | `throttled`'s `onentry` tries to schedule `r` (`throttle.resume`, 2s). The pool is still full, so a second capacity error is raised. `throttled`'s own targetless transition takes it. Without that transition, the error would re-enter `throttled` and loop until the microstep limit stopped it ([chart notes](../charts/README.md#campaignscxml)). |
-| S02.8 | c2h | [`c2h.fence`][c2h.fence] `0x0208` `{s1.m3, stable, effects: 7, mail: 7}`, [`c2h.wake`][c2h.wake] `0x0209` `{t0+30s}` | The `send.requested` envelope is freed. **pool 7/8.** |
+| S02.8 | c2h | [`c2h.macrostep_ended`][c2h.macrostep_ended] `0x0208` `{s1.m3, stable, effects: 7, mail: 7}`, [`c2h.wake`][c2h.wake] `0x0209` `{t0+30s}` | The `send.requested` envelope is freed. **pool 7/8.** |
 | S02.9 | – | – | The host releases n1 to n7 to the notify processor. |
 | S02.10 | – | – | **Admission pauses.** 7 is at or above the watermark of 4, so core reads nothing from h2c. It runs only the envelopes already in the pool ([envelope](../reference/envelope.md#admission-from-h2c-into-the-pool)). |
-| S02.11 | c2h | 4 × ([`c2h.send`][c2h.send] `{x-ws}`, [`c2h.fence`][c2h.fence] `{s2.m…}`) | The tracker takes 4 of its 6 `progress.sent`. **pool 3/8**, which is below the watermark again. |
+| S02.11 | c2h | 4 × ([`c2h.send`][c2h.send] `{x-ws}`, [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s2.m…}`) | The tracker takes 4 of its 6 `progress.sent`. **pool 3/8**, which is below the watermark again. |
 | S02.12 | h2c | – | Meanwhile h2c has filled: the processor's acknowledgements for n1 to n7, and clicks from other users of other campaigns. Posting to h2c fails, so the host answers new HTTP requests with `503 Retry-After: 1`. The browser is what holds the retry ([S09](S09-edge-backpressure.md)). The host keeps the processor's results in its own bounded buffer, which is its choice. |
 | S02.13 | – | – | Admission resumes. Core runs up to `fairnessRatio` envelopes from the pool for each record it admits from h2c, so the 2 remaining tracker envelopes run first ([fairness](../reference/envelope.md#fairness)). |
 | S02.14 | – | – | s1 takes `notify.ack` n1 (`s1.m4`): `pending` loses n1, `progress.acked` goes in the pool, and `outcome.received` is raised. |
-| S02.15 | c2h | 3 × [`c2h.send`][c2h.send] `{x-notify, n8, n9, n10}`, [`c2h.fence`][c2h.fence] `{s1.m4, effects: 3, mail: 4}` | Same macrostep, and its only fence. `outcome.received` takes `throttled` → `sending`. Its `onentry` computes `todo` = pending minus sent = `[n8, n9, n10]`, and the fanout finishes. **pool 6/8**, so it fits. |
+| S02.15 | c2h | 3 × [`c2h.send`][c2h.send] `{x-notify, n8, n9, n10}`, [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s1.m4, effects: 3, mail: 4}` | Same macrostep, and its only macrostep end. `outcome.received` takes `throttled` → `sending`. Its `onentry` computes `todo` = pending minus sent = `[n8, n9, n10]`, and the fanout finishes. **pool 6/8**, so it fits. |
 | S02.16 | – | – | The remaining acknowledgements arrive, `pending` empties, and `complete` replies to `http:req/b7` ([S01.24](S01-fanout.md#the-retry-and-the-reply)). |
 
 The capacity error cost a few milliseconds and no notification. The
@@ -46,8 +46,8 @@ fanout resumed as soon as the system had drained.
 | Step | Ring | Record | What happens |
 |---|---|---|---|
 | S02.17 | h2c | [`h2c.event`][h2c.event] `{campaign/42, send.requested, data: 10 notifications}` | **pool 1/8.** |
-| S02.18 | c2h | 4 × [`c2h.send`][c2h.send] `{x-notify, n1…n4}`, [`c2h.fence`][c2h.fence] `{s1.m3, effects: 4, mail: 2}` | `attempt`'s `onentry`: `t`, a window of 4 notifications, and one `progress.snapshot`. **pool 3/8** during the step, **2/8** after the fence. |
-| S02.19 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.fence`][c2h.fence] `{mail: 1}` | Each `notify.ack` raises `window.slot`, which sends one more notification and one snapshot. **pool ≤ 3/8** at every step. |
+| S02.18 | c2h | 4 × [`c2h.send`][c2h.send] `{x-notify, n1…n4}`, [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s1.m3, effects: 4, mail: 2}` | `attempt`'s `onentry`: `t`, a window of 4 notifications, and one `progress.snapshot`. **pool 3/8** during the step, **2/8** after the macrostep end. |
+| S02.19 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.macrostep_ended`][c2h.macrostep_ended] `{mail: 1}` | Each `notify.ack` raises `window.slot`, which sends one more notification and one snapshot. **pool ≤ 3/8** at every step. |
 | S02.20 | – | – | Admission never pauses, because the pool stays below 4. c2h receives at most 4 records per macrostep. With 10 million notifications both bounds are the same. |
 
 ## Who drops what, who retries how
@@ -76,7 +76,7 @@ fanout resumed as soon as the system had drained.
 [c2h.invoke_cancel]: ../protocol/generated/MESSAGES.md#c2hinvoke_cancel
 [c2h.invoke_forward]: ../protocol/generated/MESSAGES.md#c2hinvoke_forward
 [c2h.log]: ../protocol/generated/MESSAGES.md#c2hlog
-[c2h.fence]: ../protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
 [c2h.wake]: ../protocol/generated/MESSAGES.md#c2hwake
 [c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
 [c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed

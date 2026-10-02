@@ -11,7 +11,7 @@ Each scenario ends with a table of who drops what and who retries how.
 
 | Scenario | What it shows |
 |---|---|
-| [S01: Fanout](S01-fanout.md) | The happy path, plus one rejection and one communication error: effects executable on receipt, completion fences, tracker updates, the timeout retry and the HTTP reply. |
+| [S01: Fanout](S01-fanout.md) | The happy path, plus one rejection and one communication error: effects executable on receipt, macrostep end reports, tracker updates, the timeout retry and the HTTP reply. |
 | [S02: Full pool](S02-full-pool.md) | 10 notifications in a pool of 8: a capacity error abandons the fanout's block, admission pauses, the edge refuses HTTP. Then the windowed chart does the same job with no errors. |
 | [S03: Crash, nothing recorded](S03-crash-unrecorded.md) | Everything in the process is lost. A second click and the notify processor's own key finish the job. |
 | [S04: Crash, campaign recorded](S04-crash-campaign-recorded.md) | The campaign is replayed and published. Its timeout survives in the pool. The tracker shows zero until it resyncs. |
@@ -26,7 +26,7 @@ Each scenario ends with a table of who drops what and who retries how.
 
 - **Replay.** Replay seeds new execution. Illustrated configuration, values
   and pool occupancy are examples, not exact restoration guarantees. Live
-  effects may execute on receipt, independently of fences and journaling.
+  effects may execute on receipt, independently of macrostep ends and journaling.
 - **Sessions.** `s1` is `campaign/42`, `s2` is `progress/42`. Macrosteps
   are numbered per session: `s1.m3`.
 - **Values.** `v1`, `v2`, … are value references into the binding's value
@@ -36,7 +36,7 @@ Each scenario ends with a table of who drops what and who retries how.
 - **Rings.** `h2c` is host → core, `c2h` is core → host (lossless), `tel` is
   telemetry (lossy) ([ring](../reference/ring.md)).
 - **Occupancy.** `pool 6/8` counts envelopes: admitted inputs until their
-  macrostep's fence, mail, and delayed sends ([envelope](../reference/envelope.md)).
+  macrostep's macrostep end, mail, and delayed sends ([envelope](../reference/envelope.md)).
 - **Sendids.** `#_send.<n>` is a generated send ID, the sending session's
   counter (core ADR 0048).
 - **Times.** `t0` is the click. Durations come from the charts.

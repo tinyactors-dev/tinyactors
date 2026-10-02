@@ -34,8 +34,8 @@ lists the ADRs this reverses.)
             │                               └────────────────────────────────────────────┘  │
             │   name area: bytes of names made at run time        data model ◀── vtable ──▶ binding
             │                                                                                │
-            │  ──c2h──▶ host: c2h.input, c2h.send, c2h.invoke, c2h.fence, c2h.wake,            │
-            │           c2h.bounced, c2h.load_needed, c2h.unloaded, c2h.state, ...            │
+            │  ──c2h──▶ host: c2h.input, c2h.send, c2h.invoke, c2h.macrostep_ended,             │
+            │           c2h.wake, c2h.bounced, c2h.load_needed, c2h.unloaded, c2h.state, ...     │
             │  ──tel──▶ host: tel.trace, tel.dropped (lossy)                                  │
             └────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -45,7 +45,7 @@ lists the ADRs this reverses.)
 | Rings `h2c`, `c2h`, `tel` and their control block | Core allocates them at system creation, in memory the host can read | [reference/ring.md](reference/ring.md) |
 | Envelope pool, run queue, deadline index, admission, fairness | Core | [reference/envelope.md](reference/envelope.md) |
 | Name area; interning only at compile time; matching by lookup only | Core | [reference/names.md](reference/names.md) |
-| The macrostep: no allocation, the fence, the budget, capacity errors | Core | [reference/macrostep.md](reference/macrostep.md) |
+| The macrostep: no allocation, end reports, budgets, capacity errors | Core | [reference/macrostep.md](reference/macrostep.md) |
 | Data model and value references | A vtable the binding implements | [reference/data-model.md](reference/data-model.md) |
 | Complete definition submission, registration, release and retirement | Host requests; core compiles between macrosteps | [reference/definitions.md](reference/definitions.md) |
 | Debugger attachment, inspection, abandonment and transitions | Debugger temporarily owns the whole system; commands stay outside the rings | [reference/debugging.md](reference/debugging.md) |
@@ -58,7 +58,8 @@ lists the ADRs this reverses.)
 
 - **Host requests and results go through rings.** That covers inputs,
   complete declarative definitions, registration holds and retirement,
-  effects, fences, bounces, loads, unloads, checkpoints, wakes and telemetry.
+  effects, macrostep end reports, bounces, loads, unloads, checkpoints, wakes
+  and telemetry.
   Definition compilation has structured error results (ADR 0058); bindings
   need no separate native definition-management interface. The test host
   forwards requests after mapping process-local value and buffer handles.
@@ -97,7 +98,7 @@ loop:
     c2h.send          → I/O processor, immediately on receipt
     c2h.invoke / c2h.invoke_cancel / c2h.invoke_forward → invoker, on receipt
     c2h.log           → logger, on receipt
-    c2h.fence         → report macrostep completion; no effect hold
+    c2h.macrostep_ended → report how the macrostep ended
   c2h.wake            → (re)arm the one timer
   c2h.load_needed     → fetch the image → h2c.load, or h2c.load_failed
   c2h.unloaded        → store image and wake_at in the index of unloaded sessions
@@ -124,12 +125,12 @@ belongs to the middle of a macrostep.
 3. **Take.** Core picks the next runnable envelope, mail before admission by
    `fairnessRatio`. If the session is recorded, core writes
    [`c2h.input`](protocol/generated/MESSAGES.md#c2hinput).
-   The envelope stays where it is until the fence.
+   The envelope stays where it is until the macrostep end.
 4. **Macrostep.** Data model calls go through the vtable. Each effect is
    either a `c2h` record or a new envelope (mail, delayed send). Nothing
    allocates. A resource that is full fails the action as
    `error.execution.capacity`. ([S02](scenarios/S02-full-pool.md))
-5. **Fence.** Core writes [`c2h.fence`](protocol/generated/MESSAGES.md#c2hfence)
+5. **Macrostep end.** Core writes [`c2h.macrostep_ended`](protocol/generated/MESSAGES.md#c2hmacrostep_ended)
    and frees the envelope. The host may already have executed effects
    during a budget pause; recording and persistence follow application policy.
    ([S01](scenarios/S01-fanout.md))
@@ -138,8 +139,8 @@ belongs to the middle of a macrostep.
 
 | `<send>` to | Becomes | Delivered | Full | Reference |
 |---|---|---|---|---|
-| An I/O processor, no delay | [`c2h.send`](protocol/generated/MESSAGES.md#c2hsend) | on receipt, by the host, including before the fence | `c2h` has no room: `error.execution.capacity` | [ring](reference/ring.md) |
-| A local session (`#_scxml_…`, an actor URI) | an envelope on the run queue, at the fence | when core takes it | pool or name area is full: `error.execution.capacity` | [envelope](reference/envelope.md) |
+| An I/O processor, no delay | [`c2h.send`](protocol/generated/MESSAGES.md#c2hsend) | on receipt, by the host, including before the macrostep end | `c2h` has no room: `error.execution.capacity` | [ring](reference/ring.md) |
+| A local session (`#_scxml_…`, an actor URI) | an envelope on the run queue, at the macrostep end | when core takes it | pool or name area is full: `error.execution.capacity` | [envelope](reference/envelope.md) |
 | Anything, with a delay | an envelope in the deadline index | when `h2c.time` reaches its due time: mail is taken, an I/O send becomes `c2h.send` | as above | [envelope](reference/envelope.md) |
 | An unloaded session | an envelope that waits; `c2h.load_needed` | after `h2c.load` | as above; if the load fails, the envelope becomes `error.communication` for its sender | [unloading](reference/unloading.md) |
 | A session that doesn't exist | `error.communication` for the sender, in the same envelope | — | — | [envelope](reference/envelope.md) |

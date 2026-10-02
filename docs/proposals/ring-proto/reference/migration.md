@@ -25,7 +25,7 @@ below.
 |---|---|---|
 | `scheduler.h`, `scheduler.c` | 1,465 | Mailboxes, runnable actors, turn budgets, dead letters. Replaced by core's pool and its run queue ([envelope.md](envelope.md)), run to completion ([macrostep.md](macrostep.md)) and `ta_run`'s budget. |
 | `router.h`, `router.c` | 232 | `ta_external_event_router` for mail between sessions. Mail between local sessions is an envelope in core. Anything else is a [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend). |
-| `effects.h`, `effects.c` | 98 | The per-turn effect queue that kept effects until JavaScript could run. Replaced by c2h records executable on receipt, including before the fence. |
+| `effects.h`, `effects.c` | 98 | The per-turn effect queue that kept effects until JavaScript could run. Replaced by c2h records executable on receipt, including before the macrostep end. |
 | `adapter_io.h`, `adapter_io.c` | 260 | The I/O processor adapter that copied sends into effects. Replaced by `c2h.send`. |
 | `adapter_invoker.h`, `adapter_invoker.c` | 210 | The invoker adapter. Replaced by [`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke), [`c2h.invoke_cancel`](../protocol/generated/MESSAGES.md#c2hinvoke_cancel), [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward) and [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report). |
 | `adapter_log.h`, `adapter_log.c` | 34 | The buffered log sink. Replaced by [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog). |
@@ -77,7 +77,7 @@ napi becomes a binding over core and its rings. What it keeps:
 - the pump, reduced to a short loop:
   1. post h2c;
   2. call `ta_run`;
-  3. read each c2h record and hand it to I/O processors, invokers or the recorder on receipt; fences report completion;
+  3. read each c2h record and hand it to I/O processors, invokers or the recorder on receipt; macrostep ends report completion;
   4. drain `tel` into the OTLP encoder;
   5. set one timer from [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake).
 
@@ -90,7 +90,7 @@ napi becomes a binding over core and its rings. What it keeps:
 | `src/napi_recorder.c` (167), `src/napi_replay.c` (165) | read `c2h.input`, post replay records. Most of the code goes. |
 | `src/napi_trace.c` (722) | drains `tel` |
 | `src/napi_children.c`, `src/import.c` | invoked children are local sessions. Their `done.invoke` is an envelope in core. |
-| `lib/system.js`, `lib/loader.js`, `lib/tracing.js`, `lib/params.js` | follow the native changes. `send()` resolves at the fence of the macrostep that took the message (napi ADR 0040 section 2, refined). |
+| `lib/system.js`, `lib/loader.js`, `lib/tracing.js`, `lib/params.js` | follow the native changes. `send()` resolves at the macrostep end of the macrostep that took the message (napi ADR 0040 section 2, refined). |
 | `index.d.ts` | the API it declares mostly stays. Mark what changes meaning with `// status:` (AGENTS.md, "Desired API files"). `setRecorder`'s `families` become recording selectors. Dead letter reasons change. |
 
 Suites to rewrite: `route.js`, `loads.js`, `session-loads.js`,
@@ -106,7 +106,7 @@ from "after warm-up" to "always, in a macrostep".
 - `hosted.post` writes h2c;
 - `hosted.turn` calls `ta_run`;
 - `hosted.batches` returns available c2h records, including records before
-  a pending fence, decoded by
+  a pending macrostep end, decoded by
   the catalog's JSON form ([`protocol/generated/messages.json`](../protocol/generated/messages.json)).
 
 A scenario then reads as an h2c script, with expected c2h records. That
@@ -153,7 +153,7 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0007 Structured interned event names | every name interned into a trie that only grows | **refined**: authored names only; run-time names are bytes, matched by lookup |
 | 0011 The host owns external scheduling | the host chooses which actor receives which event | **superseded**: core schedules everything in its pool; the host chooses the order of h2c |
 | 0012 Logical time and engine-owned delayed sends | | **kept**; time enters only by `h2c.time` and each input's `at` |
-| 0015 Synchronous I/O callbacks | I/O processor called inside the macrostep | **superseded**: `c2h.send` is a record executable on receipt, including before the fence |
+| 0015 Synchronous I/O callbacks | I/O processor called inside the macrostep | **superseded**: `c2h.send` is a record executable on receipt, including before the macrostep end |
 | 0016 Invocation is a pluggable service boundary | invoker vtable | **refined**: the boundary is records |
 | 0026, 0054 Delayed sends: actor-owned, globally indexed | sparse state per owner; global index of owners | **refined**: delayed sends are envelopes; the index is over the pool; they still travel with their owner's image |
 | 0029 No per-actor external mailbox is required by core | no queue in core | **superseded**: core has a pool, with a list head per actor |
@@ -183,7 +183,7 @@ history, with a status line pointing at the ADR that removes the kernel.
 | 0001 The kernel holds what every host needs | a C kernel between core and bindings | core holds it, as rings and a pool |
 | 0002 The kernel keeps the write-ahead log | already superseded by 0006 | no WAL returns; `c2h.input` observes inputs |
 | 0003 A full mailbox overflows instead of refusing mail between actors | overflow | the opposite: a full pool **refuses**, as `error.execution.capacity` in the sender |
-| 0004 A macrostep's first record commits with what it sent | already superseded by 0006 | `c2h.fence` reports completion without committing storage or holding effects |
+| 0004 A macrostep's first record commits with what it sent | already superseded by 0006 | `c2h.macrostep_ended` reports completion without committing storage or holding effects |
 | 0005 An actor's log is an inbox with acknowledgements | already superseded by 0006 | no write-ahead hold or durability acknowledgement returns |
 | 0006 Actors record their events through the application | the recorder | the `recorded` bit + `c2h.input`; journaling remains the application's, and replay seeds new execution |
 
@@ -202,7 +202,7 @@ history, with a status line pointing at the ADR that removes the kernel.
 | 0032 to 0034 Persistence by replay; the input log | already superseded by kernel ADR 0006; input observations become `c2h.input` |
 | 0035, 0036 Parameters | refined: kernel parameters go |
 | 0037 napi is a binding over the host kernel | superseded: a binding over core's rings |
-| 0040 Effects are not held | kept: effects may execute on receipt for every live session, independently of fences and journaling |
+| 0040 Effects are not held | kept: effects may execute on receipt for every live session, independently of macrostep ends and journaling |
 
 ### ADRs to write
 

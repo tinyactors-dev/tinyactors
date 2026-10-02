@@ -33,7 +33,7 @@ them.
 
 **Lesson:** journal inputs useful for seeding primary actors, such as the
 campaign. Let derived actors start fresh and resync with the current source.
-Neither a fence nor replay establishes what executed before a crash.
+Neither a macrostep end nor replay establishes what executed before a crash.
 
 ## Whole-system replay
 
@@ -92,7 +92,7 @@ suppressed exactly as in S04, and the chart's retry covers it.
 [c2h.invoke_cancel]: ../protocol/generated/MESSAGES.md#c2hinvoke_cancel
 [c2h.invoke_forward]: ../protocol/generated/MESSAGES.md#c2hinvoke_forward
 [c2h.log]: ../protocol/generated/MESSAGES.md#c2hlog
-[c2h.fence]: ../protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
 [c2h.wake]: ../protocol/generated/MESSAGES.md#c2hwake
 [c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
 [c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed

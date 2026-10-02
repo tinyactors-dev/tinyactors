@@ -32,7 +32,7 @@ note 'Replay seeds new execution: supplied inputs derive configuration and ' \
      'data model values, which may differ from an earlier run. External ' \
      'effects are suppressed while seeding. In live execution the host may ' \
      'execute effects on receipt, independently of recording, persistence ' \
-     'or c2h.fence.'
+     'or c2h.macrostep_ended.'
 
 # ---------------------------------------------------------------- rings
 
@@ -48,10 +48,10 @@ ring :c2h,
      producer: :core, consumer: :host, loss: :none,
      when_full: 'A record an action would write does not fit: the action fails ' \
                 'as error.execution.capacity. Core starts a macrostep only when ' \
-                'c2h has room for its reserve (c2h.input, c2h.fence and one ' \
+                'c2h has room for its reserve (c2h.input, c2h.macrostep_ended and one ' \
                 'record of the largest size). A run never waits.',
      doc: 'Everything that leaves the process or must not be lost: effects for ' \
-          'I/O processors and invokers, fences, bounces, load requests, ' \
+          'I/O processors and invokers, macrostep end reports, bounces, load requests, ' \
           'images, and the inputs of recorded sessions.'
 
 ring :tel,
@@ -77,7 +77,7 @@ enum :input_source, :u8, doc: 'Where the envelope behind a c2h.input came from.'
   value :invoke_report, 4, 'an h2c.invoke_report'
 end
 
-enum :fence_status, :u8, doc: 'How a macrostep ended.' do
+enum :macrostep_status, :u8, doc: 'How a macrostep ended.' do
   value :stable, 0, 'the session waits for its next input'
   value :done, 1, 'the session reached a top-level final state; c2h.finished follows'
   value :runaway, 2, 'the microstep limit stopped it (core ADR 0075); the session is stable'
@@ -292,12 +292,12 @@ message 'c2h.send', code: 0x0203, summary: 'A send for an I/O processor' do
   doc 'Mail to a local session never appears here: it is an envelope ' \
       '(reference/envelope.md). A delayed send to an I/O processor waits ' \
       'in the pool and is written when due. The host may execute the send ' \
-      'on receipt, without waiting for c2h.fence or persistence.'
+      'on receipt, without waiting for c2h.macrostep_ended or persistence.'
   doc 'A delayed send that becomes due on h2c.time is written outside any ' \
-      'macrostep: its `macrostep` is 0, no fence follows, and the host may ' \
-      'act on it at once. A fence would report the end of a macrostep ' \
+      'macrostep: its `macrostep` is 0, no end report follows, and the host may ' \
+      'act on it at once. An end report would describe a macrostep ' \
       'that does not exist (reference/envelope.md, "A due send to an ' \
-      'I/O processor has no fence").'
+      'I/O processor has no macrostep end").'
   field :macrostep, :macrostep, '0 for a delayed send that became due'
   field :sendid, :text
   field :io_type, :text
@@ -305,7 +305,7 @@ message 'c2h.send', code: 0x0203, summary: 'A send for an I/O processor' do
   field :name, :text
   field :data, :vref, 'the namelist and params, aggregated by the data model'
   field :content, :vref, '<content>, or 0'
-  see 'c2h.fence'
+  see 'c2h.macrostep_ended'
 end
 
 message 'c2h.invoke', code: 0x0204, summary: 'Start an invocation' do
@@ -339,15 +339,16 @@ message 'c2h.log', code: 0x0207, summary: 'A <log>' do
   field :value, :vref
 end
 
-message 'c2h.fence', code: 0x0208, summary: 'A macrostep ended' do
-  doc 'Everything the macrostep wrote to c2h comes before its fence. The ' \
-      'host may already have executed effects on receipt. The fence ' \
-      'reports completion and status; it is neither an effect hold nor ' \
-      'a durability acknowledgement (reference/macrostep.md, "The fence").'
+message 'c2h.macrostep_ended', code: 0x0208, summary: 'A macrostep ended' do
+  doc 'Everything the macrostep wrote to c2h comes before this record. The ' \
+      'host may already have executed effects on receipt. This record ' \
+      'reports that execution ended and gives its status, including ' \
+      'abandonment or capacity termination; it is neither an effect hold nor ' \
+      'a durability acknowledgement (reference/macrostep.md, "The macrostep end").'
   field :macrostep, :macrostep
-  field :effects, :u32, 'records this macrostep wrote to c2h, the fence excluded'
+  field :effects, :u32, 'records this macrostep wrote to c2h, this end report excluded'
   field :mail, :u32, 'envelopes it put in the pool'
-  field :status, :fence_status
+  field :status, :macrostep_status
 end
 
 message 'c2h.wake', code: 0x0209, summary: 'Call core back at this time' do
@@ -426,7 +427,7 @@ end
 message 'c2h.definition_result', code: 0x0212, summary: 'A definition request completed' do
   doc 'Exactly one result per definition request. Header session is 0. ' \
       'Core reserves room for this fixed-size reply before consuming the ' \
-      'request or changing definition state. No macrostep fence follows.'
+      'request or changing definition state. No macrostep end report follows.'
   doc 'A compile_error diagnostic owns copies of the code, path, subject, ' \
       'subject range, related text and message of ta_compile_error (core ' \
       'ADR 0058); no borrowed pointers escape. The host owns the buffer ' \

@@ -26,11 +26,11 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_INPUT_SOURCE_TIMER 2u
 #define TRP_INPUT_SOURCE_PLATFORM 3u
 #define TRP_INPUT_SOURCE_INVOKE_REPORT 4u
-#define TRP_FENCE_STATUS_STABLE 0u
-#define TRP_FENCE_STATUS_DONE 1u
-#define TRP_FENCE_STATUS_RUNAWAY 2u
-#define TRP_FENCE_STATUS_ABANDONED 3u
-#define TRP_FENCE_STATUS_CAPACITY 4u
+#define TRP_MACROSTEP_STATUS_STABLE 0u
+#define TRP_MACROSTEP_STATUS_DONE 1u
+#define TRP_MACROSTEP_STATUS_RUNAWAY 2u
+#define TRP_MACROSTEP_STATUS_ABANDONED 3u
+#define TRP_MACROSTEP_STATUS_CAPACITY 4u
 #define TRP_BOUNCE_REASON_NO_SUCH_ADDRESS 1u
 #define TRP_BOUNCE_REASON_NO_SUCH_DEFINITION 2u
 #define TRP_BOUNCE_REASON_ADDRESS_TAKEN 3u
@@ -75,7 +75,7 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_C2H_INVOKE_CANCEL 0x0205u
 #define TRP_C2H_INVOKE_FORWARD 0x0206u
 #define TRP_C2H_LOG 0x0207u
-#define TRP_C2H_FENCE 0x0208u
+#define TRP_C2H_MACROSTEP_ENDED 0x0208u
 #define TRP_C2H_WAKE 0x0209u
 #define TRP_C2H_WAKE_NONE (1u << 0)
 #define TRP_C2H_BOUNCED 0x020au
@@ -288,7 +288,7 @@ typedef struct {
 } trp_c2h_log;
 _Static_assert(sizeof(trp_c2h_log) == 56, "c2h.log");
 
-/* c2h.fence: A macrostep ended. */
+/* c2h.macrostep_ended: A macrostep ended. */
 typedef struct {
     trp_header header;
     uint64_t macrostep;
@@ -296,8 +296,8 @@ typedef struct {
     uint32_t mail;
     uint8_t status;
     uint8_t pad_end[7];
-} trp_c2h_fence;
-_Static_assert(sizeof(trp_c2h_fence) == 56, "c2h.fence");
+} trp_c2h_macrostep_ended;
+_Static_assert(sizeof(trp_c2h_macrostep_ended) == 56, "c2h.macrostep_ended");
 
 /* c2h.wake: Call core back at this time. */
 typedef struct {

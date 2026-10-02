@@ -31,7 +31,7 @@ when that buffer is full.
 
 | Step | Ring | Record | What happens |
 |---|---|---|---|
-| S09.8 | c2h | many × ([`c2h.send`][c2h.send] `{x-ws}`, [`c2h.fence`][c2h.fence]) | campaign/7's tracker drains the pool below 192. Admission resumes, and core reads h2c again. |
+| S09.8 | c2h | many × ([`c2h.send`][c2h.send] `{x-ws}`, [`c2h.macrostep_ended`][c2h.macrostep_ended]) | campaign/7's tracker drains the pool below 192. Admission resumes, and core reads h2c again. |
 | S09.9 | h2c | [`h2c.event`][h2c.event] `{notify.ack n1, n3, n4, n5}` | Four of the five acknowledgements reach campaign/42. `pending = {n2}`. |
 | S09.10 | h2c | [`h2c.time`][h2c.time] `{t0+30s}` | `t` fires: `retrying` → attempt 2 → `sending`, with `todo = [n2]`. |
 | S09.11 | c2h | [`c2h.send`][c2h.send] `{x-notify, n2}` | |
@@ -74,7 +74,7 @@ when that buffer is full.
 [c2h.invoke_cancel]: ../protocol/generated/MESSAGES.md#c2hinvoke_cancel
 [c2h.invoke_forward]: ../protocol/generated/MESSAGES.md#c2hinvoke_forward
 [c2h.log]: ../protocol/generated/MESSAGES.md#c2hlog
-[c2h.fence]: ../protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
 [c2h.wake]: ../protocol/generated/MESSAGES.md#c2hwake
 [c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
 [c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed

@@ -4,7 +4,7 @@
     "The data model is not on a ring. Core calls ta_datamodel_vtable synchronously, as today (reference/data-model.md). Only its results cross the rings, as value references.",
     "Definition management uses request/result records. Native calls create and destroy the system, expose its rings, drive execution and install data model/value integrations. An attached debugger takes exclusive ownership of the whole system from the production pump. Inspection, abandonment and operator transitions use native primitives outside the production rings; no operator ring is added (reference/debugging.md).",
     "A vref in a c2h record is a reference core retained for the host. The host releases it when it has used the record. A vref in an h2c record is one the host retained for core; core releases it when the envelope holding it is freed.",
-    "Replay seeds new execution: supplied inputs derive configuration and data model values, which may differ from an earlier run. External effects are suppressed while seeding. In live execution the host may execute effects on receipt, independently of recording, persistence or c2h.fence."
+    "Replay seeds new execution: supplied inputs derive configuration and data model values, which may differ from an earlier run. External effects are suppressed while seeding. In live execution the host may execute effects on receipt, independently of recording, persistence or c2h.macrostep_ended."
   ],
   "header": [
     {
@@ -70,8 +70,8 @@
       "producer": "core",
       "consumer": "host",
       "loss": "none",
-      "when_full": "A record an action would write does not fit: the action fails as error.execution.capacity. Core starts a macrostep only when c2h has room for its reserve (c2h.input, c2h.fence and one record of the largest size). A run never waits.",
-      "doc": "Everything that leaves the process or must not be lost: effects for I/O processors and invokers, fences, bounces, load requests, images, and the inputs of recorded sessions."
+      "when_full": "A record an action would write does not fit: the action fails as error.execution.capacity. Core starts a macrostep only when c2h has room for its reserve (c2h.input, c2h.macrostep_ended and one record of the largest size). A run never waits.",
+      "doc": "Everything that leaves the process or must not be lost: effects for I/O processors and invokers, macrostep end reports, bounces, load requests, images, and the inputs of recorded sessions."
     },
     {
       "name": "tel",
@@ -138,7 +138,7 @@
       "doc": "Where the envelope behind a c2h.input came from."
     },
     {
-      "name": "fence_status",
+      "name": "macrostep_status",
       "base": "u8",
       "values": [
         {
@@ -917,7 +917,7 @@
       "code": 515,
       "ring": "c2h",
       "summary": "A send for an I/O processor",
-      "doc": "Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.fence or persistence.\n\nA delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no fence follows, and the host may act on it at once. A fence would report the end of a macrostep that does not exist (reference/envelope.md, \"A due send to an I/O processor has no fence\").",
+      "doc": "Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.macrostep_ended or persistence.\n\nA delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no end report follows, and the host may act on it at once. An end report would describe a macrostep that does not exist (reference/envelope.md, \"A due send to an I/O processor has no macrostep end\").",
       "fields": [
         {
           "name": "macrostep",
@@ -966,7 +966,7 @@
       "replies": [],
       "fixed_size": 88,
       "see": [
-        "c2h.fence"
+        "c2h.macrostep_ended"
       ]
     },
     {
@@ -1132,11 +1132,11 @@
       "see": []
     },
     {
-      "id": "c2h.fence",
+      "id": "c2h.macrostep_ended",
       "code": 520,
       "ring": "c2h",
       "summary": "A macrostep ended",
-      "doc": "Everything the macrostep wrote to c2h comes before its fence. The host may already have executed effects on receipt. The fence reports completion and status; it is neither an effect hold nor a durability acknowledgement (reference/macrostep.md, \"The fence\").",
+      "doc": "Everything the macrostep wrote to c2h comes before this record. The host may already have executed effects on receipt. This record reports that execution ended and gives its status, including abandonment or capacity termination; it is neither an effect hold nor a durability acknowledgement (reference/macrostep.md, \"The macrostep end\").",
       "fields": [
         {
           "name": "macrostep",
@@ -1147,7 +1147,7 @@
         {
           "name": "effects",
           "type": "u32",
-          "doc": "records this macrostep wrote to c2h, the fence excluded",
+          "doc": "records this macrostep wrote to c2h, this end report excluded",
           "offset": 40
         },
         {
@@ -1158,7 +1158,7 @@
         },
         {
           "name": "status",
-          "type": "fence_status",
+          "type": "macrostep_status",
           "doc": "",
           "offset": 48
         }
@@ -1440,7 +1440,7 @@
       "code": 530,
       "ring": "c2h",
       "summary": "A definition request completed",
-      "doc": "Exactly one result per definition request. Header session is 0. Core reserves room for this fixed-size reply before consuming the request or changing definition state. No macrostep fence follows.\n\nA compile_error diagnostic owns copies of the code, path, subject, subject range, related text and message of ta_compile_error (core ADR 0058); no borrowed pointers escape. The host owns the buffer before and after completion (reference/definitions.md).",
+      "doc": "Exactly one result per definition request. Header session is 0. Core reserves room for this fixed-size reply before consuming the request or changing definition state. No macrostep end report follows.\n\nA compile_error diagnostic owns copies of the code, path, subject, subject range, related text and message of ta_compile_error (core ADR 0058); no borrowed pointers escape. The host owns the buffer before and after completion (reference/definitions.md).",
       "fields": [
         {
           "name": "cause_seq",

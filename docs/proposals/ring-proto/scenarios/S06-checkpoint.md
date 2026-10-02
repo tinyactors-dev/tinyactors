@@ -70,7 +70,7 @@ together. Keeping timers in the pool keeps a checkpoint to one artifact.
 [c2h.invoke_cancel]: ../protocol/generated/MESSAGES.md#c2hinvoke_cancel
 [c2h.invoke_forward]: ../protocol/generated/MESSAGES.md#c2hinvoke_forward
 [c2h.log]: ../protocol/generated/MESSAGES.md#c2hlog
-[c2h.fence]: ../protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
 [c2h.wake]: ../protocol/generated/MESSAGES.md#c2hwake
 [c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
 [c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed

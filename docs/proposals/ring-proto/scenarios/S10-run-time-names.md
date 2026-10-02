@@ -35,7 +35,7 @@ them, so memory does not grow ([names](../reference/names.md)).
 | S10.2 | – | – | Admission. The 8 bytes are copied into the name area for the envelope. Nothing is looked up yet. **pool 1/64, names 8/4096 bytes.** |
 | S10.3 | – | – | s1 takes it. Core looks up each segment in the atom table without inserting it ([names](../reference/names.md)). Neither `zq81f` nor `x9` is an atom, because no chart's descriptor mentions them, so both resolve to `UNKNOWN`. The matcher runs over the resolved segments `[UNKNOWN, UNKNOWN]` and checks every descriptor of the active states: `notify.ack`, `send.requested`, `progress.sync`, `error.communication`, … `UNKNOWN` matches only `*`, and the campaign has no `*` transition. |
 | S10.4 | tel | [`tel.trace`][tel.trace] `0x0301` `{IGNORED, name: "zq81f.x9"}` | The event enables nothing. Telemetry carries the name as text. |
-| S10.5 | c2h | [`c2h.fence`][c2h.fence] `0x0208` `{s1.m…, effects: 0}` | The envelope is freed, and so are its 8 bytes. **pool 0/64, names 0/4096.** |
+| S10.5 | c2h | [`c2h.macrostep_ended`][c2h.macrostep_ended] `0x0208` `{s1.m…, effects: 0}` | The envelope is freed, and so are its 8 bytes. **pool 0/64, names 0/4096.** |
 | S10.6 | – | – | After a million such names, memory is the same as before the first one. |
 
 ## When the names come faster than they are freed
@@ -86,7 +86,7 @@ A chart may build a name, for example
 [c2h.invoke_cancel]: ../protocol/generated/MESSAGES.md#c2hinvoke_cancel
 [c2h.invoke_forward]: ../protocol/generated/MESSAGES.md#c2hinvoke_forward
 [c2h.log]: ../protocol/generated/MESSAGES.md#c2hlog
-[c2h.fence]: ../protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
 [c2h.wake]: ../protocol/generated/MESSAGES.md#c2hwake
 [c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
 [c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed

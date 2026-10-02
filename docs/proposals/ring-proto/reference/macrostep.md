@@ -1,4 +1,4 @@
-# The macrostep: invariants, the fence, and running out
+# The macrostep: invariants, end reports, and running out
 
 **Status:** Sketch (2026-10-01), part of [the ring protocol proposal](../README.md)
 
@@ -45,13 +45,13 @@ Core runs one macrostep at a time, to its end, in the order of the run queue
    queue, or first admits an h2c record ([envelope.md](envelope.md#fairness)).
 2. **Check the c2h reserve.** Unless c2h has room for a
    [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput), a
-   [`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence) and one record
+   [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended) and one record
    of `maxRecordBytes`, core takes nothing, and `ta_run` returns
    ([ring.md](ring.md#the-c2h-reserve)).
 3. **Take** the envelope. For a recorded session, write `c2h.input`.
 4. **Run** microsteps until the session is stable or final. Effects go to
    c2h, mail and timers to the pool, internal events to the internal queue.
-5. **Fence.** Write `c2h.fence`. The macrostep's mail becomes runnable, and
+5. **Macrostep end.** Write `c2h.macrostep_ended`. The macrostep's mail becomes runnable, and
    its taken envelope is freed.
 
 **No session is busy when its envelope comes up**, because nothing else is
@@ -118,7 +118,7 @@ such as a `<foreach>` over 10,000 items.
   action fail instead (below). An earlier iteration of this design paused on
   a full c2h. That made the host hold records it couldn't refuse.
 
-## The fence
+## The macrostep end
 
 A macrostep's records reach c2h in this order:
 
@@ -128,26 +128,27 @@ A macrostep's records reach c2h in this order:
    [`c2h.invoke_cancel`](../protocol/generated/MESSAGES.md#c2hinvoke_cancel),
    [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward),
    [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog);
-3. its `c2h.fence`.
+3. its `c2h.macrostep_ended`.
 
-**The fence reports that a macrostep ended. It does not gate effects or
+**`c2h.macrostep_ended` reports that execution ended and how it ended,
+including abandonment or capacity termination. It does not gate effects or
 commit storage.** The host may execute each effect as soon as it reads the
 record, for recorded and unrecorded sessions alike. It need not wait for
-the fence or for a journal write.
+the macrostep end or for a journal write.
 
 When `ta_run` returns on a budget pause, the host can drain c2h, execute
 sends, invocations and logs, release ring space, and post answers on h2c.
 The next `ta_run` resumes the macrostep. No collection of effects has to
-be held until the fence. An application may choose its own buffering or
+be held until the macrostep end. An application may choose its own buffering or
 durability policy, with its own memory bounds.
 
 A crash or operator abandonment can occur after some effects have already
-run. Neither the fence nor abandonment rolls them back. Charts and I/O
+run. Neither the macrostep end nor abandonment rolls them back. Charts and I/O
 processors use timeouts, retries and business-key idempotency for work that
 matters. Recording observes inputs independently of effect execution;
 [replay seeds a new execution](recording-and-replay.md).
 
-Local mail joins the run queue at the fence because core runs one macrostep
+Local mail joins the run queue at the macrostep end because core runs one macrostep
 at a time. Its outgoing list is scheduling state, not a host effect hold.
 An abandoned macrostep frees that list, while effects the host already
 executed remain executed.
@@ -259,10 +260,10 @@ needed its own care. ADR 0070 lists them. Here is where each one goes:
 
 **Starting a local child chart** (`<invoke type="scxml">`) creates a session,
 which allocates. SCXML starts invocations at the end of the macrostep, so
-core creates the child after the fence, outside the macrostep. Before the
-fence, core takes one envelope for each invocation it will start; if the pool
+core creates the child after the macrostep end, outside the macrostep. Before the
+macrostep end, core takes one envelope for each invocation it will start; if the pool
 has none, the `<invoke>` fails as `error.execution.capacity.pool`. After the
-fence, a child that can't be created turns its envelope into
+macrostep end, a child that can't be created turns its envelope into
 `error.communication.invoke.<id>.<reason>` for the parent; a child that
 starts frees it.
 

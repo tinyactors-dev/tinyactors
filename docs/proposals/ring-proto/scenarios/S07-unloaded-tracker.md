@@ -26,11 +26,11 @@ on `wake_at` ([unloading](../reference/unloading.md)).
 | Step | Ring | Record | What happens |
 |---|---|---|---|
 | S07.4 | h2c | [`h2c.event`][h2c.event] `{campaign/42, send.requested, 5 notifications}` | As in S01.7. |
-| S07.5 | c2h | 5 × [`c2h.send`][c2h.send] `{x-notify}`, [`c2h.fence`][c2h.fence] `{s1.m3, mail: 6}`, [`c2h.load_needed`][c2h.load_needed] `0x020B` `{progress/42, waiting: 5}` | During the macrostep, the five `progress.sent` envelopes sit on its outgoing list. At the fence they move to the waiting list. Their target address is not resident, so core writes `load_needed` **once**, after the fence ([envelope](../reference/envelope.md#mail-between-local-sessions)). The host may execute notification sends on receipt, independently of that local scheduling boundary. **pool 6/64:** `t` and five waiting envelopes. |
+| S07.5 | c2h | 5 × [`c2h.send`][c2h.send] `{x-notify}`, [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s1.m3, mail: 6}`, [`c2h.load_needed`][c2h.load_needed] `0x020B` `{progress/42, waiting: 5}` | During the macrostep, the five `progress.sent` envelopes sit on its outgoing list. At the macrostep end they move to the waiting list. Their target address is not resident, so core writes `load_needed` **once**, after the macrostep end ([envelope](../reference/envelope.md#mail-between-local-sessions)). The host may execute notification sends on receipt, independently of that local scheduling boundary. **pool 6/64:** `t` and five waiting envelopes. |
 | S07.6 | – | – | The host reads the row from SQLite. This takes a few milliseconds, and the system runs other envelopes meanwhile. |
 | S07.7 | h2c | [`h2c.load`][h2c.load] `0x0105` `{progress/42, image: b3'}` | |
 | S07.8 | c2h | [`c2h.loaded`][c2h.loaded] `0x020C` `{progress/42, cause_seq}` | The five waiting envelopes become runnable, in the order they were sent. |
-| S07.9 | c2h | 5 × ([`c2h.send`][c2h.send] `{x-ws}`, [`c2h.fence`][c2h.fence] `{s2…}`) | The tracker catches up. **pool 1/64.** |
+| S07.9 | c2h | 5 × ([`c2h.send`][c2h.send] `{x-ws}`, [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s2…}`) | The tracker catches up. **pool 1/64.** |
 
 Waiting envelopes count against the pool. A slow loader with many
 sessions waiting can push the pool past `admissionWatermark`, and then
@@ -46,7 +46,7 @@ anywhere.
 | S07.11 | h2c | [`h2c.load_failed`][h2c.load_failed] `0x0106` `{progress/42, reason: "sqlite: disk I/O error"}` | |
 | S07.12 | – | – | **Recycling.** Each of the five mail envelopes is rewritten in place as `error.communication` for its sender, s1, with the original `sendid`. Reporting the failure needs no new envelope and no name-area bytes beyond what the envelope already held ([envelope](../reference/envelope.md#recycling-an-envelope-that-cant-be-delivered-becomes-its-own-error)). **pool 7/64.** |
 | S07.13 | tel | [`tel.trace`][tel.trace] `0x0301` `{DEAD_LETTER, progress.resync, reason}` | The external event has no sender to tell, so it is dropped and reported in telemetry. The browser's websocket reconnect retries it. **pool 6/64.** |
-| S07.14 | c2h | 5 × [`c2h.fence`][c2h.fence] `{s1…}` | s1 takes five `error.communication`. Their sendids are not in `idOf`, so the bare transition ignores them: progress is optional ([chart notes](../charts/README.md#campaignscxml)). **pool 1/64.** |
+| S07.14 | c2h | 5 × [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s1…}` | s1 takes five `error.communication`. Their sendids are not in `idOf`, so the bare transition ignores them: progress is optional ([chart notes](../charts/README.md#campaignscxml)). **pool 1/64.** |
 | S07.15 | – | – | The notifications themselves are unaffected. |
 
 ## Who drops what, who retries how
@@ -73,7 +73,7 @@ anywhere.
 [c2h.invoke_cancel]: ../protocol/generated/MESSAGES.md#c2hinvoke_cancel
 [c2h.invoke_forward]: ../protocol/generated/MESSAGES.md#c2hinvoke_forward
 [c2h.log]: ../protocol/generated/MESSAGES.md#c2hlog
-[c2h.fence]: ../protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
 [c2h.wake]: ../protocol/generated/MESSAGES.md#c2hwake
 [c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
 [c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed

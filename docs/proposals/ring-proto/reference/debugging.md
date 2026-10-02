@@ -57,7 +57,7 @@ Their exact signatures remain a sketch:
   microstep. The macrostep's unpublished outgoing mail is freed, as
   [the envelope rules](envelope.md#mail-between-local-sessions) require.
   Data changes, history and effects already performed remain performed.
-  A begun macrostep ends with `c2h.fence(status=abandoned)`.
+  A begun macrostep ends with `c2h.macrostep_ended(status=abandoned)`.
 - **Transition:** on an actor available for delivery, supply an event,
   source and target states to the existing operator-transition semantics
   (core ADR 0082). Core validates the transition and takes it through its
@@ -79,7 +79,7 @@ Effects may execute on receipt, and c2h capacity failures retain their
 normal meaning. A debugger does not undo sends or bypass bounded memory.
 
 The host returns debugger command results over its debugger connection,
-without admission into h2c or a correlated debugger result on c2h. Fences
+without admission into h2c or a correlated debugger result on c2h. Macrostep ends
 and effects caused by debug execution still use c2h. Exact input-observation
 and replay representation for operator transitions remains an open question:
 an ordinary event log alone does not describe the forced transition. The
@@ -106,7 +106,7 @@ work. It is not the campaign stress-test chart, which already has timeouts.
 4. The debugger delivers an operator event identifying the incident, with
    source `waiting_for_receipt` and target `completed`. It drives that
    actor's macrostep through the normal engine and drains effects and its
-   completion fence. It does not run other actors or admit normal inputs.
+   macrostep end report. It does not run other actors or admit normal inputs.
 5. The host records the intervention and, if its recovery policy requires
    it, checkpoints the stable result. Detachment returns ownership to the
    pump, which resumes queued work and ordinary input admission.

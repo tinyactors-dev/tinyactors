@@ -60,7 +60,7 @@ Every record has the 32-byte common header from
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `kind` | u16 | the message code, such as `0x0208` for [`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence) |
+| 0 | `kind` | u16 | the message code, such as `0x0208` for [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended) |
 | 2 | `flags` | u16 | the message's flags (bits 0..7) and the common flags `replaying`, `recorded` (bits 8..15) |
 | 4 | `size` | u32 | the whole record, header and tail, a multiple of 8 |
 | 8 | `seq` | u64 | the record's sequence number in this ring |
@@ -103,8 +103,8 @@ The producer works on a private write position, then publishes it:
 A producer may commit after every record, or after several. Core commits
 c2h after every record, so a host whose `ta_run` returned on a budget pause
 can execute a long macrostep's effects and release their ring space before
-its fence. The fence reports completion; it does not hold effects
-([macrostep.md](macrostep.md#the-fence)).
+its macrostep end. The macrostep end reports completion; it does not hold effects
+([macrostep.md](macrostep.md#the-macrostep-end)).
 
 ### A record never splits across the end: the pad
 
@@ -173,17 +173,17 @@ are three:
 Some c2h records are not written by an action, so no chart could be told
 when they don't fit:
 [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) for a recorded
-session, and the [`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence)
+session, and the [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended)
 that ends every macrostep. So:
 
 > **Core starts a macrostep only when c2h has room for its `c2h.input`, its
-> `c2h.fence`, and one record of `maxRecordBytes`.**
+> `c2h.macrostep_ended`, and one record of `maxRecordBytes`.**
 
 The last part is for the action that finds c2h full: its failure becomes
 `error.execution.capacity.c2h` in the internal queue, and the macrostep still
-reaches its fence. Every action that writes to c2h first checks that the
-room left after its own record still holds the fence. So an action can
-fail, but the fence can't.
+reaches its macrostep end. Every action that writes to c2h first checks that the
+room left after its own record still holds the macrostep end. So an action can
+fail, but the macrostep end can't.
 
 When the reserve isn't there, core takes no envelope and `ta_run` returns.
 The host drains c2h and calls `ta_run` again. Records outside a macrostep
@@ -252,7 +252,7 @@ object never passes through it.
 | Ring | Direction | Guarantee | Carries |
 |---|---|---|---|
 | `h2c` | host → core | lossless, gap-free; full means the host refuses at its edge | every input: [`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent), [`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime), [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn), [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload), [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report), ... |
-| `c2h` | core → host | lossless, gap-free, ordered with fences; full means the action fails | effects, fences, bounces, load requests, images, and the inputs of recorded sessions |
+| `c2h` | core → host | lossless, gap-free, ordered with macrostep ends; full means the action fails | effects, macrostep ends, bounces, load requests, images, and the inputs of recorded sessions |
 | `tel` | core → host | lossy; full means drop and count | trace records for observability ([telemetry.md](telemetry.md)) |
 
 **There are exactly three because there are three delivery guarantees, not

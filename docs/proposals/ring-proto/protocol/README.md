@@ -21,10 +21,12 @@ anything. After editing the catalog, render again.
 
 ## Stable identifiers
 
-A message is named `<ring>.<name>` (`h2c.event`, `c2h.fence`, `tel.trace`) and
+A message is named `<ring>.<name>` (`h2c.event`, `c2h.macrostep_ended`, `tel.trace`) and
 has a 16-bit code. `0x01xx` codes are host to core, `0x02xx` core to host, and
 `0x03xx` telemetry. The scenarios cite messages by these names. Once a scenario
 cites a name, its meaning doesn't change, and a retired code is never reused.
+Clarifying a record's name preserves its code and meaning; all catalog and
+scenario references move to the new name together.
 
 ## Layout rules
 
@@ -49,12 +51,12 @@ integrations remain part of the binding.
 ## The DSL
 
 ```ruby
-message 'c2h.fence', code: 0x0208, summary: 'A macrostep ended' do
-  doc 'Everything the macrostep wrote to c2h comes before its fence. ...'
+message 'c2h.macrostep_ended', code: 0x0208, summary: 'A macrostep ended' do
+  doc 'Everything the macrostep wrote to c2h comes before this record. ...'
   field :macrostep, :macrostep
-  field :effects, :u32, 'records this macrostep wrote to c2h, the fence excluded'
+  field :effects, :u32, 'records this macrostep wrote to c2h, this end report excluded'
   field :mail, :u32, 'envelopes it put in the pool'
-  field :status, :fence_status
+  field :status, :macrostep_status
 end
 ```
 

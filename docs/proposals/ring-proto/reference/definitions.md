@@ -88,7 +88,7 @@ definitions before spawning actors, and waits for their success results.
 Core reserves space for the fixed `c2h.definition_result` before consuming
 the request, compiling or changing any definition state. If space is absent,
 `ta_run` returns for the host to drain c2h. Every consumed request completes
-with exactly one result; no macrostep fence follows. Failure is a reply the
+with exactly one result; no macrostep end report follows. Failure is a reply the
 host can act on, rather than an SCXML event for a nonexistent actor.
 
 ## Startup example

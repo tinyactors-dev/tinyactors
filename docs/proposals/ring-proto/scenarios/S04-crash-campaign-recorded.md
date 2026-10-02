@@ -16,7 +16,7 @@ zero until it resyncs, and its resync is what puts it right.
 Every record of a recorded session carries the common flag `recorded`.
 The host journals [`c2h.input`][c2h.input] `0x0202` observations on its
 own schedule. It executes effects on receipt without waiting for a journal
-write or [`c2h.fence`][c2h.fence]. In this example the entries below reached
+write or [`c2h.macrostep_ended`][c2h.macrostep_ended]. In this example the entries below reached
 storage before the crash. The binding's codec encodes `data`, because a
 vref means nothing outside the process.
 
@@ -46,8 +46,8 @@ configuration and data model values; that is accepted.
 | S04.6 | h2c | [`h2c.publish`][h2c.publish] `0x0104` `{campaign/42, at: t0+2s}` | `at` is the time of L8, the last thing the run did before the crash. |
 | S04.7 | c2h | [`c2h.published`][c2h.published] `0x020F` `{replayed: 7, dropped_timers: 0}`, [`c2h.wake`][c2h.wake] `0x0209` `{t0+30s}` | `t` was due after `at`, so it is scheduled. Had it been due by `at`, it would have fired before the crash, and that firing would be in the log as an input. The campaign is in `attempt`/`sending` with `pending = {n5}`, `sent = {n1…n4}`, attempt 1, and `replyTo` = the dead `http:req/9f`. |
 | S04.8 | h2c | [`h2c.spawn`][h2c.spawn] `{progress/42}` | The tracker is not recorded, so it starts fresh, after the publish so that its first mail has somewhere to go. |
-| S04.9 | c2h | [`c2h.fence`][c2h.fence] `{s2.m1, mail: 2}` | `syncing`: `progress.sync` to s1. Until the snapshot arrives, the browser sees **zero**. |
-| S04.10 | c2h | [`c2h.fence`][c2h.fence] `{s1.m…, mail: 1}` | s1 answers `progress.snapshot {sent 5, acked 3, rejected 1, failed 1, pending 1}`. |
+| S04.9 | c2h | [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s2.m1, mail: 2}` | `syncing`: `progress.sync` to s1. Until the snapshot arrives, the browser sees **zero**. |
+| S04.10 | c2h | [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s1.m…, mail: 1}` | s1 answers `progress.snapshot {sent 5, acked 3, rejected 1, failed 1, pending 1}`. |
 | S04.11 | c2h | [`c2h.send`][c2h.send] `{x-ws}` | The tracker is `live` and correct. |
 
 ## Then either of two things finishes the job
@@ -93,7 +93,7 @@ with each other. Derived actors resync ([S05](S05-crash-both-recorded.md)).
 [c2h.invoke_cancel]: ../protocol/generated/MESSAGES.md#c2hinvoke_cancel
 [c2h.invoke_forward]: ../protocol/generated/MESSAGES.md#c2hinvoke_forward
 [c2h.log]: ../protocol/generated/MESSAGES.md#c2hlog
-[c2h.fence]: ../protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
 [c2h.wake]: ../protocol/generated/MESSAGES.md#c2hwake
 [c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
 [c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed

@@ -36,7 +36,7 @@ Then **the process crashes.**
 | S03.1 | h2c, c2h | [`h2c.definition_register`](../protocol/generated/MESSAGES.md#h2cdefinition_register) `0x010B`, [`c2h.definition_result`](../protocol/generated/MESSAGES.md#c2hdefinition_result) `0x0212`, twice | The host creates the system and installs native integrations with API calls, then submits both complete specs and waits for successful registration results before spawning. |
 | S03.2 | h2c | [`h2c.spawn`][h2c.spawn] `0x0103` `{campaign/42}`, [`h2c.spawn`][h2c.spawn] `{progress/42}` | As in S01.1–S01.6. The tracker syncs and shows zero, which is true of the new campaign session. |
 | S03.3 | h2c | [`h2c.time`][h2c.time] `0x0101`, [`h2c.event`][h2c.event] `0x0102` `{campaign/42, send.requested, origin: http:req/a2, data: v1'}` | The user clicks again. The handler loads the same five notifications from the database. |
-| S03.4 | c2h | 5 × [`c2h.send`][c2h.send] `0x0203` `{x-notify, n1…n5, sendid: #_send.2 … #_send.10}`, [`c2h.fence`][c2h.fence] `0x0208` | A fresh run fans out all five. **The sendids are the same text as before the crash**, because the new session's counter starts again. A processor that used the sendid as its key would mistake this run for the old one, or a genuinely new run for this one. The key has to come from the content ([names](../reference/names.md), [BEHAVIORS](../BEHAVIORS.md)). |
+| S03.4 | c2h | 5 × [`c2h.send`][c2h.send] `0x0203` `{x-notify, n1…n5, sendid: #_send.2 … #_send.10}`, [`c2h.macrostep_ended`][c2h.macrostep_ended] `0x0208` | A fresh run fans out all five. **The sendids are the same text as before the crash**, because the new session's counter starts again. A processor that used the sendid as its key would mistake this run for the old one, or a genuinely new run for this one. The key has to come from the content ([names](../reference/names.md), [BEHAVIORS](../BEHAVIORS.md)). |
 | S03.5 | – | – | The processor computes `(recipient, n.id)`. It already has n1–n3, so it **acknowledges them without sending**, and the chart can't tell the difference. It refuses n4 again. It sends n5, whose relay is back. |
 | S03.6 | h2c | 4 × [`h2c.event`][h2c.event] `{notify.ack}`, 1 × `{notify.rejected}` | |
 | S03.7 | c2h | [`c2h.send`][c2h.send] `{x-http-reply, http:req/a2, ok}` | `complete` replies to the second click. |
@@ -76,7 +76,7 @@ and the chart's retry covers it.
 [c2h.invoke_cancel]: ../protocol/generated/MESSAGES.md#c2hinvoke_cancel
 [c2h.invoke_forward]: ../protocol/generated/MESSAGES.md#c2hinvoke_forward
 [c2h.log]: ../protocol/generated/MESSAGES.md#c2hlog
-[c2h.fence]: ../protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
 [c2h.wake]: ../protocol/generated/MESSAGES.md#c2hwake
 [c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
 [c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed

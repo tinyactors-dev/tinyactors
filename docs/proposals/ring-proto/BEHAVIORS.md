@@ -62,7 +62,7 @@ is due later.
 Replay uses selected journal entries to seed new configuration and data
 model values. The examples below show one outcome with the illustrated
 definitions and resource conditions, not a promise to restore the old run.
-The host may execute effects on receipt, before a fence or journal write;
+The host may execute effects on receipt, before a macrostep end or journal write;
 a crash can separate any of those observations and actions.
 
 | | **Tracker not recorded** | **Tracker recorded** |
@@ -250,11 +250,11 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 - **Default 262,144 (256 KiB).** A `c2h.send` is 88 fixed bytes plus
   sendid, type, target and name, about 150 bytes in all. That allows about
   1,700 sends between drains. During budget pauses the host may execute
-  effects and release ring space before the fence. A fanout of 1,000 fits
+  effects and release ring space before the macrostep end. A fanout of 1,000 fits
   as it is. Bigger fanouts
   should be clocked by acknowledgements
   ([windowed chart](charts/campaign-windowed.scxml)).
-- **Minimum 4 × `maxRecordBytes`,** so the c2h reserve (input, fence and
+- **Minimum 4 × `maxRecordBytes`,** so the c2h reserve (input, macrostep end and
   one record of the largest size) never takes more than half the ring.
   **Maximum 2 GiB,** for the same reason as h2c.
 - **What it drives:** how much one macrostep can say to the outside world
@@ -348,7 +348,7 @@ judged too much for quiet systems and test suites that create many. So:
 
 - **The pool and the name area fill on demand, up to their bounds**
   (ADR 0093's shape). They grow only between macrosteps: at admission and
-  after a fence. A send inside a macrostep only takes what is already free,
+  after a macrostep end. A send inside a macrostep only takes what is already free,
   so the macrostep invariant holds ([macrostep.md](reference/macrostep.md)).
   A quiet system pays for its peak, not for the bound.
 - **The rings are fixed at creation,** because the host holds positions in
@@ -359,7 +359,7 @@ judged too much for quiet systems and test suites that create many. So:
 
 | Parameter | What changes |
 |---|---|
-| `microstepLimit` | Nothing. A runaway macrostep ends with [`c2h.fence`][c2h.fence] status `runaway`. |
+| `microstepLimit` | Nothing. A runaway macrostep ends with [`c2h.macrostep_ended`][c2h.macrostep_ended] status `runaway`. |
 | `eventNameDepth` (default 64, at most 64) | It also sizes the scratch that resolves a run-time name's segments ([names.md](reference/names.md)). A deeper name is invalid: `c2h.bounced` (`invalid`) at admission, plain `error.execution` at a `<send>`. |
 | `interpreterBytes`, `interpreterNesting` | Reserved at creation rather than on first use, if nested interpreters can start inside a macrostep (cancelling an invocation). **To check:** that this is the only path. |
 | `renderBytes` | Smaller. Names and send IDs are written into ring tails or the name area, not rendered here. |
@@ -370,7 +370,7 @@ judged too much for quiet systems and test suites that create many. So:
 
 | Parameter | Owner today | Replaced by |
 |---|---|---|
-| `eventBlockCache` (ADR 0069/0093) | core | `poolEnvelopes`. The taken event stays in its envelope until the fence. |
+| `eventBlockCache` (ADR 0069/0093) | core | `poolEnvelopes`. The taken event stays in its envelope until the macrostep end. |
 | `valueBytes` (`TAH_PARAM_VALUE_BYTES`) | kernel | `telemetryValueBytes` |
 | `traceStagingBytes` | kernel | `telBytes`. The OTLP encoder's staging becomes a setting of that library ([telemetry.md](reference/telemetry.md)). |
 | `resumeBudget`, `actionBudget` | kernel | the budget arguments of `ta_run`, passed per call |
@@ -387,4 +387,4 @@ kernel gone, napi's `parameterInfo()` lists two owners, `core` and `napi`.
 [c2h.bounced]: protocol/generated/MESSAGES.md#c2hbounced
 [tel.trace]: protocol/generated/MESSAGES.md#teltrace
 [tel.dropped]: protocol/generated/MESSAGES.md#teldropped
-[c2h.fence]: protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: protocol/generated/MESSAGES.md#c2hmacrostep_ended

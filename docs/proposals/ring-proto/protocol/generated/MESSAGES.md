@@ -5,14 +5,14 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 - The data model is not on a ring. Core calls ta_datamodel_vtable synchronously, as today (reference/data-model.md). Only its results cross the rings, as value references.
 - Definition management uses request/result records. Native calls create and destroy the system, expose its rings, drive execution and install data model/value integrations. An attached debugger takes exclusive ownership of the whole system from the production pump. Inspection, abandonment and operator transitions use native primitives outside the production rings; no operator ring is added (reference/debugging.md).
 - A vref in a c2h record is a reference core retained for the host. The host releases it when it has used the record. A vref in an h2c record is one the host retained for core; core releases it when the envelope holding it is freed.
-- Replay seeds new execution: supplied inputs derive configuration and data model values, which may differ from an earlier run. External effects are suppressed while seeding. In live execution the host may execute effects on receipt, independently of recording, persistence or c2h.fence.
+- Replay seeds new execution: supplied inputs derive configuration and data model values, which may differ from an earlier run. External effects are suppressed while seeding. In live execution the host may execute effects on receipt, independently of recording, persistence or c2h.macrostep_ended.
 
 ## Rings
 
 | Ring | Producer → consumer | Loss | When full |
 |---|---|---|---|
 | `h2c` | host → core | none | The host cannot post. It refuses at its edge (for example HTTP 503) or keeps the input itself. Core never waits on h2c. |
-| `c2h` | core → host | none | A record an action would write does not fit: the action fails as error.execution.capacity. Core starts a macrostep only when c2h has room for its reserve (c2h.input, c2h.fence and one record of the largest size). A run never waits. |
+| `c2h` | core → host | none | A record an action would write does not fit: the action fails as error.execution.capacity. Core starts a macrostep only when c2h has room for its reserve (c2h.input, c2h.macrostep_ended and one record of the largest size). A run never waits. |
 | `tel` | core → host | drop | The record is dropped and counted. The next tel.dropped says how many. Telemetry never slows the system. |
 
 ## Index
@@ -39,7 +39,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x0205` | [`c2h.invoke_cancel`](#c2hinvoke_cancel) | Cancel an invocation | 48 |
 | `0x0206` | [`c2h.invoke_forward`](#c2hinvoke_forward) | Autoforward an event to an invocation | 88 |
 | `0x0207` | [`c2h.log`](#c2hlog) | A <log> | 56 |
-| `0x0208` | [`c2h.fence`](#c2hfence) | A macrostep ended | 56 |
+| `0x0208` | [`c2h.macrostep_ended`](#c2hmacrostep_ended) | A macrostep ended | 56 |
 | `0x0209` | [`c2h.wake`](#c2hwake) | Call core back at this time | 40 |
 | `0x020A` | [`c2h.bounced`](#c2hbounced) | An h2c record was not run | 56 |
 | `0x020B` | [`c2h.load_needed`](#c2hload_needed) | Envelopes wait for an unloaded address | 48 |
@@ -280,9 +280,9 @@ Not written for an input a replaying session takes: that input is already in the
 
 `0x0203` on `c2h`, 88 fixed bytes. A send for an I/O processor.
 
-Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.fence or persistence.
+Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.macrostep_ended or persistence.
 
-A delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no fence follows, and the host may act on it at once. A fence would report the end of a macrostep that does not exist (reference/envelope.md, "A due send to an I/O processor has no fence").
+A delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no end report follows, and the host may act on it at once. An end report would describe a macrostep that does not exist (reference/envelope.md, "A due send to an I/O processor has no macrostep end").
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -294,7 +294,7 @@ A delayed send that becomes due on h2c.time is written outside any macrostep: it
 | 72 | `data` | vref | the namelist and params, aggregated by the data model |
 | 80 | `content` | vref | <content>, or 0 |
 
-- see: [`c2h.fence`](#c2hfence)
+- see: [`c2h.macrostep_ended`](#c2hmacrostep_ended)
 
 ## c2h.invoke
 
@@ -347,18 +347,18 @@ A delayed send that becomes due on h2c.time is written outside any macrostep: it
 | 48 | `value` | vref |  |
 
 
-## c2h.fence
+## c2h.macrostep_ended
 
 `0x0208` on `c2h`, 56 fixed bytes. A macrostep ended.
 
-Everything the macrostep wrote to c2h comes before its fence. The host may already have executed effects on receipt. The fence reports completion and status; it is neither an effect hold nor a durability acknowledgement (reference/macrostep.md, "The fence").
+Everything the macrostep wrote to c2h comes before this record. The host may already have executed effects on receipt. This record reports that execution ended and gives its status, including abandonment or capacity termination; it is neither an effect hold nor a durability acknowledgement (reference/macrostep.md, "The macrostep end").
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 32 | `macrostep` | macrostep |  |
-| 40 | `effects` | u32 | records this macrostep wrote to c2h, the fence excluded |
+| 40 | `effects` | u32 | records this macrostep wrote to c2h, this end report excluded |
 | 44 | `mail` | u32 | envelopes it put in the pool |
-| 48 | `status` | fence_status (u8) |  |
+| 48 | `status` | macrostep_status (u8) |  |
 
 
 ## c2h.wake
@@ -483,7 +483,7 @@ Envelopes still waiting for it are recycled as for h2c.load_failed.
 
 `0x0212` on `c2h`, 56 fixed bytes. A definition request completed.
 
-Exactly one result per definition request. Header session is 0. Core reserves room for this fixed-size reply before consuming the request or changing definition state. No macrostep fence follows.
+Exactly one result per definition request. Header session is 0. Core reserves room for this fixed-size reply before consuming the request or changing definition state. No macrostep end report follows.
 
 A compile_error diagnostic owns copies of the code, path, subject, subject range, related text and message of ta_compile_error (core ADR 0058); no borrowed pointers escape. The host owns the buffer before and after completion (reference/definitions.md).
 
@@ -557,7 +557,7 @@ Where the envelope behind a c2h.input came from.
 | 3 | `platform` | core made it: error.communication for undeliverable mail, done.invoke, ... |
 | 4 | `invoke_report` | an h2c.invoke_report |
 
-### `fence_status` (u8)
+### `macrostep_status` (u8)
 
 How a macrostep ended.
 

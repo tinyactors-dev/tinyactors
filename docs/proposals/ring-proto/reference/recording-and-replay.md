@@ -97,7 +97,7 @@ see.
 A recorded session's `c2h.input` precedes the effects of the macrostep it
 starts. The host may execute each effect on receipt, including when
 `ta_run` returns during a budget pause. It need not wait for
-[`c2h.fence`](../protocol/generated/MESSAGES.md#c2hfence), the recorder or
+[`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended), the recorder or
 storage. The same rule applies to unrecorded sessions.
 
 The application chooses when to encode and persist input observations.
@@ -109,8 +109,8 @@ not an effect hold.
 A crash may leave an executed effect with no journaled input, or a
 journaled input whose effect never executed. A `c2h.input` is written when
 the input is taken, so it may also describe a macrostep that never reached
-its fence. The application may use completion reports to select seeds,
-but neither recording nor a fence is a durability acknowledgement.
+its macrostep end. The application may use completion reports to select seeds,
+but neither recording nor a macrostep end is a durability acknowledgement.
 Charts and I/O processors use their own retries, resync and business-key
 idempotency. The protocol introduces no write-ahead hold.
 

@@ -20,7 +20,7 @@ open.
 | S08.1 | h2c | [`h2c.event`][h2c.event] `0x0102` `{campaign/42, send.requested, origin: http:req/c4}` at t0+29.9s | The user clicks again. |
 | S08.2 | h2c | [`h2c.time`][h2c.time] `0x0101` `{t0+30s}` | The host's timer fires right after. |
 | S08.3 | – | – | Core reads h2c in order. It admits the click. **pool 2/64.** It runs s1's macrostep **to completion before it reads the next h2c record** ([macrostep](../reference/macrostep.md#run-to-completion)). |
-| S08.4 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.fence`][c2h.fence] `{s1.m…}`, [`c2h.wake`][c2h.wake] `0x0209` `{t0+59.9s}` | `send.requested` in `active` sets `replyTo` to `c4`, clears `sent` and re-enters `attempt`. Its `onexit` `<cancel sendid="t">` **removes the envelope**. Its `onentry` schedules a new `t`, due t0+59.9s. **pool 1/64.** |
+| S08.4 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s1.m…}`, [`c2h.wake`][c2h.wake] `0x0209` `{t0+59.9s}` | `send.requested` in `active` sets `replyTo` to `c4`, clears `sent` and re-enters `attempt`. Its `onexit` `<cancel sendid="t">` **removes the envelope**. Its `onentry` schedules a new `t`, due t0+59.9s. **pool 1/64.** |
 | S08.5 | – | – | Core reads `h2c.time t0+30s`. Nothing is due. The old `t` no longer exists. |
 
 ## Order B: the clock before the click
@@ -28,8 +28,8 @@ open.
 | Step | Ring | Record | What happens |
 |---|---|---|---|
 | S08.6 | h2c | [`h2c.time`][h2c.time] `{t0+30s}`, then [`h2c.event`][h2c.event] `{send.requested, c4}` | |
-| S08.7 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.fence`][c2h.fence], [`c2h.wake`][c2h.wake] `{t0+60s}` | `t` is due and runs first: `retrying` (attempt 2) → `attempt`, with a new `t` → n5 is sent again. |
-| S08.8 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.fence`][c2h.fence], [`c2h.wake`][c2h.wake] `{t0+60s+ε}` | Then the click re-enters `attempt`. It cancels attempt 2's `t` exactly and schedules another. n5 is sent a third time, and the processor removes the duplicate. |
+| S08.7 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.macrostep_ended`][c2h.macrostep_ended], [`c2h.wake`][c2h.wake] `{t0+60s}` | `t` is due and runs first: `retrying` (attempt 2) → `attempt`, with a new `t` → n5 is sent again. |
+| S08.8 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.macrostep_ended`][c2h.macrostep_ended], [`c2h.wake`][c2h.wake] `{t0+60s+ε}` | Then the click re-enters `attempt`. It cancels attempt 2's `t` exactly and schedules another. n5 is sent a third time, and the processor removes the duplicate. |
 
 In both orders the chart sees exactly one timeout or none, never a
 cancelled one. h2c fixes the input order, and core alone owns cancellation.
@@ -81,7 +81,7 @@ overwriting it. That is a change to the chart, not to the protocol.
 [c2h.invoke_cancel]: ../protocol/generated/MESSAGES.md#c2hinvoke_cancel
 [c2h.invoke_forward]: ../protocol/generated/MESSAGES.md#c2hinvoke_forward
 [c2h.log]: ../protocol/generated/MESSAGES.md#c2hlog
-[c2h.fence]: ../protocol/generated/MESSAGES.md#c2hfence
+[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
 [c2h.wake]: ../protocol/generated/MESSAGES.md#c2hwake
 [c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
 [c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed

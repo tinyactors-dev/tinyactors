@@ -25,7 +25,7 @@ Nobody keeps an overflow queue. The host kernel (`tinyactors-host`) is no
 longer needed. Its scheduler becomes the pool. Its recorder and replay
 become `c2h.input` observations and the replay core already has; its WAL was
 already removed by kernel ADR 0006. Its effects queue becomes `c2h`, which
-the host may execute as it reads. A fence reports
+the host may execute as it reads. A macrostep end reports
 macrostep completion and does not hold effects.
 
 **Replay is for seeding new execution.** Feeding inputs into a prepared
@@ -92,7 +92,7 @@ Reference documents, one for each building block:
 | A ring: framing, reserve and commit, lossless or lossy | [reference/ring.md](reference/ring.md) |
 | The envelope and the pool: admission, fairness, delayed sends, recycling | [reference/envelope.md](reference/envelope.md) |
 | Names: authored names are interned, run-time names are bytes | [reference/names.md](reference/names.md) |
-| The macrostep: invariants, the fence, two kinds of exhaustion | [reference/macrostep.md](reference/macrostep.md) |
+| The macrostep: invariants, the macrostep end, two kinds of exhaustion | [reference/macrostep.md](reference/macrostep.md) |
 | The data model: a synchronous vtable and value references | [reference/data-model.md](reference/data-model.md) |
 | Definitions: complete declarative requests and structured results | [reference/definitions.md](reference/definitions.md) |
 | Debugging: exclusive system ownership, inspection and transitions | [reference/debugging.md](reference/debugging.md) |
