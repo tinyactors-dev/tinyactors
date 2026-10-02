@@ -45,7 +45,7 @@ click and time 30s in one batch. Core admits the click, then may read the
 time update before the click is taken. The old timeout becomes runnable
 and leaves the deadline index. The click's later `<cancel>` cannot remove
 that already-dispatched timeout. This is permitted by SCXML's cancellation
-rule; run to completion does not make event admission an execution barrier.
+rule; admission is not an execution barrier, whatever the number of macrostep slots.
 The host uses the completion wait in order A when cancellation must win.
 
 A bounce or `c2h.input_refused` for `q` is not successful completion. The

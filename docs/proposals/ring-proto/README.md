@@ -1,6 +1,6 @@
 # The ring protocol: core and host talk through shared memory
 
-**Status:** Sketch with accepted semantic refinements (2026-10-02); the whole-execution mandatory-event bound remains open.
+**Status:** Sketch with accepted semantic refinements (2026-10-02); the chain limit makes the mandatory-event bound finite, but the arena's size remains open.
 **Touches:** tinyactors-core (gains the rings, the envelope pool and run-time names), tinyactors-host (deleted), tinyactors-napi and tinyactors-test (become ring drivers)
 **Not an implementation plan:** accepted refinements constrain this proposal; implementation is not scheduled. ADRs and roadmaps win.
 
@@ -76,7 +76,11 @@ Put the queue in core, give it a fixed size, and those problems go away. See
    observations, cancellations, forwarding and end reports before taking
    input. Ordinary actions can fail. Startup and control work can return
    for the host to drain c2h between macrosteps; a budget can pause execution.
-5. **Core decides meaning; the application decides policy.** Reliability is
+5. **One session never stops the others.** Each session runs one input at
+   a time, but up to `macrostepSlots` sessions run at once, taking turns
+   between units of executable content. A runaway holds one slot, not the
+   system ([reference/macrostep.md](reference/macrostep.md#macrostep-slots)).
+6. **Core decides meaning; the application decides policy.** Reliability is
    built into charts (timeouts, retries, resync) and I/O processors
    (idempotency keys), not into the protocol. SCXML sends stay fire and forget.
 
@@ -133,6 +137,8 @@ The scenarios run this example through:
 - **Core gains:**
   - three rings;
   - the envelope pool and its deadline index;
+  - macrostep slots, taken in turn, with the chain limit and quarantine
+    (napi's quarantine moves into core);
   - a name area for names made at run time;
   - capacity errors that charts can see.
 - **Core loses:**
@@ -164,6 +170,15 @@ The scenarios run this example through:
   token for completion or cancellation. Unload refuses both owners of active
   local invocations and active locally invoked children. Live service replies
   carry instance tokens; authored invocation IDs alone are insufficient.
+- **Accepted macrostep slots:** core runs up to `macrostepSlots` sessions'
+  inputs at once, in turn, `slotSlice` steps each; mail for an active
+  session waits on its deferred list. `microstepLimit` counts one input's
+  whole chain (microsteps, selection passes and startup passes) and cannot
+  be turned off. At the limit, core quarantines the slot
+  (`c2h.quarantined`), and the host answers `h2c.release` or `h2c.abandon`;
+  at most `macrostepSlots` − 1 are quarantined, and past that a runaway is
+  abandoned with status `runaway`. With one slot this is plain run to
+  completion ([reference/macrostep.md](reference/macrostep.md#macrostep-slots)).
 - **Accepted input withdrawal:** commit is final, and records are never
   edited. A host takes back an admitted input that has not been taken with
   `h2c.withdraw`, which core answers with `c2h.input_refused` (`withdrawn`);
@@ -172,8 +187,9 @@ The scenarios run this example through:
 - **Error storage correction:** the compiler sizes mandatory error and
   completion storage, allocated outside macrosteps in addition to the chart's
   ordinary internal-event quota. A single reserved error slot is insufficient.
-  The remaining whole-execution sizing requirement is described in
-  [macrostep.md](reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage).
+  The chain limit bounds it across a whole execution; the size of that
+  conservative arena is still open
+  ([macrostep.md](reference/macrostep.md#sizing-mandatory-storage)).
 - **Found on the way:** core interns every event name computed at run time
   into tables that only grow. Any long-running system that computes event
   names leaks memory. An HTTP endpoint that maps request fields to event names

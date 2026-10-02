@@ -27,8 +27,9 @@ lists the ADRs this reverses.)
             │                                                                                │
  host ──h2c──▶ admission ──▶ ┌─────────── envelope pool ───────────┐                           │
             │  (below the    │ one run queue, in arrival order     │                           │
-            │   watermark)   │ deadline index (delayed sends)      │──▶ run to completion ──┐  │
-            │                │ waiting lists for unloaded addresses│    (one macrostep)     │  │
+            │   watermark)   │ deadline index (delayed sends)      │──▶ macrostep slots ────┐  │
+            │                │ waiting lists for unloaded addresses│  (K, taken in turn)    │  │
+            │                │ deferred lists for active sessions  │                        │  │
             │                └──────────────▲──────────────────────┘                        │  │
             │                    mail, timers│ (loopback; never leaves core)               │  │
             │                               └────────────────────────────────────────────┘  │
@@ -45,7 +46,7 @@ lists the ADRs this reverses.)
 | Rings `h2c`, `c2h`, `tel` and their control block | Core allocates them at system creation, in memory the host can read | [reference/ring.md](reference/ring.md) |
 | Envelope pool, run queue, deadline index, admission, fairness | Core | [reference/envelope.md](reference/envelope.md) |
 | Name area; interning only at compile time; matching by lookup only | Core | [reference/names.md](reference/names.md) |
-| The macrostep: no allocation, end reports, budgets, capacity errors | Core | [reference/macrostep.md](reference/macrostep.md) |
+| The macrostep: no allocation, end reports, budgets, capacity errors; macrostep slots, the chain limit and quarantine | Core | [reference/macrostep.md](reference/macrostep.md) |
 | Data model and value references | A vtable the binding implements | [reference/data-model.md](reference/data-model.md) |
 | Complete definition submission, registration, release and retirement | Host requests; core compiles between macrosteps | [reference/definitions.md](reference/definitions.md) |
 | Debugger attachment, inspection, abandonment and transitions | Debugger temporarily owns the whole system; commands stay outside the rings | [reference/debugging.md](reference/debugging.md) |
@@ -103,6 +104,7 @@ loop:
     c2h.macrostep_ended → report how the macrostep ended
     c2h.input_completed → resolve source_seq; release the retained original
     c2h.input_refused   → reject source_seq; release or retry the retained original
+    c2h.quarantined     → fault hook; an operator answers h2c.release or h2c.abandon
   c2h.wake            → (re)arm the one timer
   c2h.load_needed     → fetch the image → h2c.load, or h2c.load_failed, echoing request_seq
   c2h.unloaded        → store image and wake_at in the index of unloaded sessions
@@ -125,10 +127,13 @@ without executing it, so control commands behind it can still progress.
 The host drains c2h after every yield and prioritizes load answers, load
 failures and clock updates over new ordinary inputs.
 
-Core reads h2c in order, and applies control commands between macrosteps.
-An admitted event is queued, not necessarily completed before the next h2c
-command is read. A budget-paused macrostep resumes before further commands
-are applied. If the host needs an input's effects to precede a control
+Core reads h2c in order, and applies control commands between steps, where
+no slot is inside a unit of executable content. An admitted event is
+queued, not necessarily completed before the next h2c command is read.
+A paused or quarantined slot does not hold commands back: a control that
+needs a session outside a macrostep (`h2c.unload`, `h2c.checkpoint`) is
+bounced while that session holds a slot, and `h2c.destroy` abandons the
+slot first. A slot keeps the system time it took its input at. If the host needs an input's effects to precede a control
 command, it waits for that input's `c2h.input_completed` before posting the
 command. Refusal requires an explicit retry or application decision.
 
@@ -149,8 +154,9 @@ command. Refusal requires an explicit retry or application decision.
    withdraw an admitted input with [`h2c.withdraw`](protocol/generated/MESSAGES.md#h2cwithdraw),
    which frees its envelope and answers `c2h.input_refused` (`withdrawn`).
    Records are never edited after commit.
-3. **Take.** Core picks the next runnable envelope, mail before admission by
-   `fairnessRatio`. If the session is recorded, core writes
+3. **Take.** When a macrostep slot is free, core picks the next runnable
+   envelope whose session isn't active, mail before admission by
+   `fairnessRatio`. Mail for an active session waits on its deferred list. If the session is recorded, core writes
    [`c2h.input`](protocol/generated/MESSAGES.md#c2hinput).
    The envelope stays owned through invocation startup and its internal follow-up.
 4. **Macrostep.** Data model calls go through the vtable. Each effect is
@@ -226,7 +232,7 @@ Crash cases: [S03](scenarios/S03-crash-unrecorded.md),
 
 | Fixed at system creation (or filled on demand up to its bound, outside macrosteps) | Per actor | Per definition |
 |---|---|---|
-| `h2c`, `c2h`, `tel`; the envelope pool; name area; scratch; one continuation; ordinary internal quota plus compiler-sized mandatory workspace | its record (about 332 bytes today) and list heads; invocation slots sized by the definition; a pool token per active local invocation | compiled chart, mandatory-event bounds and authored names, interned |
+| `h2c`, `c2h`, `tel`; the envelope pool; name area; `macrostepSlots` slots, each a continuation, scratch, an ordinary internal quota and compiler-sized mandatory workspace, filled on demand | its record (about 332 bytes today) and list heads, including its deferred list; invocation slots sized by the definition; a pool token per active local invocation | compiled chart, mandatory-event bounds and authored names, interned |
 
 Nothing in the table grows during a macrostep. The data model's own memory
 belongs to the data model. Figures are in [BEHAVIORS.md](BEHAVIORS.md#parameters)
@@ -235,7 +241,8 @@ and [reference/envelope.md](reference/envelope.md).
 ## Threads
 
 **A `ta_system` is not thread-safe.** Core and the host take turns on the
-system's own thread, and only that thread touches the rings. A host that
+system's own thread, and only that thread touches the rings. Macrostep
+slots are not threads: they take turns on that same thread. A host that
 works on other threads (an I/O thread pool, a Node worker) puts its own
 queue or channel in front of the system. Separate systems share nothing,
 so they may run on separate threads. The test host forwards records between

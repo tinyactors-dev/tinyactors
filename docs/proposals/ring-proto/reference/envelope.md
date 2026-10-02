@@ -19,7 +19,7 @@ This replaces several structures in core today:
 | Today | In the pool |
 |---|---|
 | The host's mailboxes and router (kernel `scheduler.h`, `router.h`) | envelopes in the run queue |
-| `TA_ERR_BUSY` from `ta_actor_deliver` (core ADR 0055) | gone: a session is never busy when its envelope reaches the head of the queue ([macrostep.md](macrostep.md#run-to-completion)) |
+| `TA_ERR_BUSY` from `ta_actor_deliver` (core ADR 0055) | gone as an answer to the host: mail for an active session waits on its deferred list in core ([below](#mail-for-an-active-session), [macrostep.md](macrostep.md#macrostep-slots)) |
 | An actor's event block and its cache (core ADRs 0069, 0093) | the taken envelope, retained through startup and internal follow-up until input completion |
 | The internal queue lent to a running actor (core ADR 0064) | not the pool: an ordinary quota and compiler-sized mandatory storage per interpreter ([below](#the-internal-queue-is-not-in-the-pool)) |
 | Delayed sends living with their owner (core ADR 0054) and the global deadline index | envelopes with a due time, in the pool's deadline index |
@@ -79,7 +79,7 @@ measurements:
 | Default pool, 4,096 envelopes | about 368 KiB |
 | Default name area | 256 KiB (`nameAreaBytes`, 262,144): one 64-byte chunk per envelope ([BEHAVIORS.md](../BEHAVIORS.md#nameareabytes)) |
 | Default ordinary internal quota, 256 entries of about 48 bytes | about 12 KiB (`internalQueueEvents`), plus compiler-sized mandatory storage |
-| Per actor | the head of its own pending delayed sends: +4 bytes on today's 332 (ADR 0092: "an actor stays at 332 bytes") |
+| Per actor | the head of its own pending delayed sends, and the head and tail of its deferred list: +12 bytes on today's 332 (ADR 0092: "an actor stays at 332 bytes") |
 | Today, for comparison | napi's event blocks prefilled at about 811 KB per system before ADR 0093, each queued event (`ta_queued_event`) 96 bytes, and the kernel's mailboxes on top |
 
 A quiet system that fills on demand pays only for the envelopes its peak
@@ -91,36 +91,66 @@ needed, as with ADR 0093 today.
 |---|---|---|---|
 | **Run queue** | runnable envelopes: admitted external events, mail, invocation reports, timers that became due | arrival | system |
 | **Invocation token** | one envelope held by each live local invocation, converted to completion mail or a child stop when needed | not queued until converted | local invocation |
-| **Outgoing list** | mail the running macrostep sent, until its macrostep end | send order | running macrostep |
+| **Outgoing list** | mail the running macrostep sent, until its macrostep end | send order | active slot |
+| **Deferred list** | runnable envelopes for a session that is active, met while filling a slot | arrival | active session |
 | **Waiting list** | envelopes for an address that is not resident | arrival | address being loaded |
 | **Owner list** | a session's pending delayed sends | send order | session |
 | **Free list** | free envelopes | – | system |
 | Deadline index | pending delayed sends, as a binary heap of envelope indexes ordered by (due, send order) | – | system |
 
-**There is one run queue in arrival order, not one queue per target.** Under
-run to completion, a session is never in the middle of a macrostep when its
-envelope reaches the head. Arrival order therefore keeps every
-sender-to-receiver pair in order, which is what SCXML asks of one sender's
-events. A queue per target would be needed only to skip a busy target, and
-nothing is busy.
+**There is one run queue in arrival order, not one queue per target.**
+Arrival order keeps every sender-to-receiver pair in order, which is what
+SCXML asks of one sender's events. A queue per target would need a
+scheduler to choose between targets; one queue in arrival order has no
+policy apart from `fairnessRatio`.
 
-The one case where envelopes must wait for a particular target is when that
-target isn't resident. They go on that address's waiting list (below).
+Two cases make envelopes wait for a particular target:
+
+- the target isn't resident: they go on that address's waiting list
+  ([below](#envelopes-for-an-address-that-isnt-resident));
+- the target is active in a slot: they go on its deferred list
+  ([below](#mail-for-an-active-session)).
 
 **Why one queue:**
 
-- **Run to completion makes queues per target pointless.** They exist to
-  hold mail for a busy target while others run. Here no target is ever busy
-  when core picks the next envelope.
 - **Queues per target need a scheduler to choose between them.** That
   scheduler is the policy the kernel held and this design deletes:
-  fairness between targets, round robin, starvation. One queue in arrival
-  order has no policy apart from `fairnessRatio`.
+  fairness between targets, round robin, starvation. The slots take turns,
+  but they choose nothing: each is filled from the one queue, in order.
 - **Arrival order is explicit.** Each execution orders its runnable
   envelopes by arrival. Replay uses the same scheduling rule to seed a new
   execution, whose order may differ as resource conditions change
   ([recording-and-replay.md](recording-and-replay.md#session-replay-and-whole-system-replay)).
-- **It costs one list head per system**, not one per actor.
+- **It costs one list head per system**, and a deferred list head per
+  actor, used only while the actor is active.
+
+### Mail for an active session
+
+A session holds a slot from the take of an input until its
+`c2h.input_completed` ([macrostep.md](macrostep.md#macrostep-slots)). Its
+next input must wait for that, but other sessions' envelopes behind it
+must not.
+
+- **When core fills a slot,** it walks the run queue from the head. An
+  envelope whose target is active moves to the end of that session's
+  **deferred list**. The walk takes the first envelope whose target is not
+  active. Each envelope is moved at most once per activity of its target,
+  so the walk costs at most the envelopes it moves, plus one.
+- **When the session's input completes,** core moves the first envelope of
+  its deferred list to the head of the run queue, and keeps the rest
+  deferred. The next fill takes it, the session is active again, and the
+  rest stay where they are. The session's mail therefore runs in arrival
+  order, one input at a time, without being walked again.
+- **Order is kept per pair.** Every envelope on a deferred list arrived
+  before any envelope for that session still in the run queue. Putting the
+  deferred one at the head may let it overtake envelopes for *other*
+  sessions that arrived earlier; SCXML orders only one sender's events to
+  one receiver, so that is allowed.
+- **A deferred envelope is still runnable.** It counts against the pool,
+  can be withdrawn ([below](#withdrawing-an-admitted-input)), and is
+  recycled like any other when its session is destroyed.
+
+With one slot, nothing is ever deferred.
 
 ## Admission: from h2c into the pool
 
@@ -194,8 +224,10 @@ crosses the host, so no JavaScript runs for it and no vref leaves core.
 
 **Why mail waits for the macrostep end:**
 
-- **One running macrostep.** A local receiver cannot run while its sender
-  is paused. The outgoing list keeps that scheduling boundary explicit.
+- **A receiver never sees mail from an unfinished macrostep.** With slots,
+  a receiver could run while its sender is paused in another slot. The
+  outgoing list holds the mail until the sender's macrostep ends, so an
+  abandoned macrostep can free mail nobody has seen.
   Host effects on c2h may execute before the macrostep end; they are independent
   of this local scheduling rule and cannot be rolled back by abandonment.
 - **Cause comes before effect in the log.** A recorded sender's
@@ -203,9 +235,9 @@ crosses the host, so no JavaScript runs for it and no vref leaves core.
   before the receiver can take the mail and write its own `c2h.input`. A
   stream read in order shows the sender's input observation first. This
   is an observation order, not a durability guarantee.
-- **It costs nothing.** Under run to completion the receiver couldn't run
-  before the macrostep end anyway. The outgoing list only decides *when* the mail
-  becomes visible, not how soon it runs.
+- **It costs little.** A receiver waits at most for the rest of its
+  sender's macrostep, which is SCXML's own unit of work. The outgoing list
+  only decides *when* the mail becomes visible.
 
 Mail to an address in another system or process isn't local. It is a
 [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend) for the host's SCXML
@@ -331,7 +363,7 @@ instead, naming the input by its h2c seq.
   works while core is not admitting, which is when it matters most. It is
   read in h2c order, like every other record.
 - **A waiting input is withdrawn.** If the target is an envelope in state
-  runnable or waiting, core reserves a `c2h.input_refused`, unlinks the
+  runnable (in the run queue or on a deferred list) or waiting, core reserves a `c2h.input_refused`, unlinks the
   envelope from its list, releases its `data` vref and its name text,
   frees it, and writes the refusal with reason `withdrawn`. No `c2h.input`
   is written, so a recorded session's journal never sees it.
@@ -443,10 +475,9 @@ ahead of ordinary events.
   `_event`'s other fields;
 - a taken entry stays at the head while it is `_event`, and is freed when the
   next one is taken, as ADR 0069 does today;
-- under run to completion only one top-level interpreter runs at a time, so
-  there is **one internal queue per system**, plus one per nested
-  interpreter (ADR 0060), not one lent to each actor (ADR 0064), and no cache
-  of queues;
+- each slot runs one top-level interpreter, so there is **one internal
+  queue per slot**, plus one per nested interpreter (ADR 0060), not one
+  lent to each actor (ADR 0064), and no cache of queues;
 - mandatory entries cover errors from distinct executable blocks, condition
   evaluation and data initialization, as well as platform completion events;
 - storage is allocated or enlarged outside macrosteps at registration, spawn

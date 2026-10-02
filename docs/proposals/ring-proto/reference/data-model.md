@@ -173,9 +173,11 @@ that core calls synchronously, inside the macrostep.
   means more state in the continuation, more code in every action, and the
   ADR 0047/0070 kind of reasoning about interrupted steps that this design
   removes ([macrostep.md](macrostep.md#what-this-replaces-the-out-of-memory-stop-adrs-0047-0070)).
-- **It would undo run to completion.** A slow answer would block the whole
-  system, unless core went back to interleaving sessions, with one
-  continuation for each.
+- **Slots would not help.** Macrostep slots interleave sessions only
+  between units of executable content
+  ([macrostep.md](macrostep.md#macrostep-slots)). A slow answer arrives in
+  the middle of an action, so it would still hold the thread unless every
+  action could stop in the middle, which the next point rules out.
 - **A data model in another process can still be served synchronously.**
   The binding's vtable may block on it. A system runs on one thread
   ([ring.md](ring.md#one-thread)), so blocking it is the binding's choice to

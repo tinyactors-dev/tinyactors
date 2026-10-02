@@ -204,8 +204,11 @@ error storage is sized at compilation as described in
 error slot is not a sufficient bound for several failing executable blocks.
 
 Core may return to the host between completed phases, retaining only its
-bounded continuation, to drain c2h before reserving the next phase. No
-other session runs in the middle of the current macrostep. Input completion
+slots' bounded continuations, to drain c2h before reserving the next phase.
+Each macrostep slot holds its own outstanding reservation while it is
+paused, so another slot that runs meanwhile cannot take the space a paused
+macrostep's mandatory records need. A slot whose reservation does not fit
+waits; the others go on ([macrostep.md](macrostep.md#macrostep-slots)). Input completion
 has its own fixed reservation after startup followups; a macrostep end
 alone does not settle the input.
 

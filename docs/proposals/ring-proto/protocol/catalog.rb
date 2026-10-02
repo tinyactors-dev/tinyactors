@@ -83,7 +83,7 @@ end
 enum :macrostep_status, :u8, doc: 'How a macrostep ended.' do
   value :stable, 0, 'stabilization ended; invocation startup and internal follow-up may still follow'
   value :done, 1, 'the session reached a top-level final state; c2h.finished follows'
-  value :runaway, 2, 'the microstep limit stopped it (core ADR 0075); the session is stable'
+  value :runaway, 2, 'the chain limit stopped it and no quarantine was left, so core abandoned it (reference/macrostep.md); the configuration after the last completed microstep stays'
   value :abandoned, 3, 'an operator abandoned it (core ADR 0082)'
   # Value 4 was the unapproved terminal-capacity sketch; reserved, not emitted.
 end
@@ -91,7 +91,7 @@ end
 enum :input_completion_status, :u8, doc: 'How an input and its invocation-startup follow-up settled.' do
   value :stable, 0, 'ready for another external input'
   value :done, 1, 'the session finished'
-  value :runaway, 2, 'execution stopped at its configured limit'
+  value :runaway, 2, 'the chain limit stopped it and no quarantine was left; core abandoned it'
   value :abandoned, 3, 'an operator abandoned execution'
 end
 
@@ -118,6 +118,8 @@ enum :bounce_reason, :u8, doc: 'Why core handed an h2c record back unrun.' do
   value :pending_inputs, 11, 'publish attempted before supplied replay inputs settled'
   value :stale_request, 12, 'a response does not match the outstanding load attempt'
   value :record, 13, 'mandatory output can never fit the configured record or ring bounds'
+  value :not_quarantined, 14, 'h2c.release or h2c.abandon for a session that is not quarantined'
+  value :active, 15, 'h2c.unload or h2c.checkpoint for a session that holds a macrostep slot'
 end
 
 enum :capacity_resource, :u8,
@@ -255,6 +257,8 @@ message 'h2c.unload', code: 0x0107, summary: 'Page a stable session out' do
   field :image, :blob, 'host-provided writable sink, pinned until unloaded or bounced'
   doc 'Refuses an owner of an active local invocation and an active locally ' \
       'invoked child. No lifetime envelope token moves into an image.'
+  doc 'Refuses a session that holds a macrostep slot, including a ' \
+      'quarantined one (bounce reason active).'
   replies_with 'c2h.unloaded', 'c2h.bounced'
 end
 
@@ -281,6 +285,10 @@ message 'h2c.invoke_report', code: 0x0109, summary: 'An invoked service finished
 end
 
 message 'h2c.destroy', code: 0x010A, summary: 'End a session now' do
+  doc 'A session that holds a macrostep slot, running, paused or ' \
+      'quarantined, has its execution abandoned first (core ADR 0082): ' \
+      'c2h.macrostep_ended and c2h.input_completed say abandoned, then the ' \
+      'session is destroyed.'
   field :address, :text
   replies_with 'c2h.destroyed', 'c2h.bounced'
 end
@@ -331,6 +339,25 @@ message 'h2c.withdraw', code: 0x010E, summary: 'Take back an admitted input that
       'record\'s own seq is bounced as invalid.'
   field :target_seq, :seq, 'the h2c seq of the input to withdraw'
   replies_with 'c2h.input_refused', 'c2h.bounced'
+end
+
+message 'h2c.release', code: 0x010F, summary: 'Let a quarantined session run again' do
+  doc 'Header session names a quarantined session. Its slot runs again where ' \
+      'it stopped, and its chain count restarts, so a second runaway is ' \
+      'quarantined and reported again. A control, applied when read; no ' \
+      'debugger or exclusive ownership is needed, because a quarantined ' \
+      'slot is at a legal boundary and runs nothing (reference/macrostep.md).'
+  field :unlimited, :bool, 'no chain limit for the rest of this input (core ADR 0075 no_microstep_limit)'
+  replies_with 'c2h.macrostep_ended', 'c2h.quarantined', 'c2h.input_completed', 'c2h.bounced'
+end
+
+message 'h2c.abandon', code: 0x0110, summary: "Abandon a quarantined session's input" do
+  doc 'Header session names a quarantined session. Core ADR 0082 at the ' \
+      'slot\'s boundary: the configuration after the last completed ' \
+      'microstep stays, the internal queue and the outgoing mail are freed, ' \
+      'and effects already written stay written. The slot is free and the ' \
+      'session takes its next input. A control, applied when read.'
+  replies_with 'c2h.macrostep_ended', 'c2h.input_completed', 'c2h.bounced'
 end
 
 # ---------------------------------------------------------------- c2h
@@ -575,6 +602,21 @@ message 'c2h.load_result', code: 0x0215, summary: 'A load-failure response finis
       'waiting list. A stale attempt receives bounced instead.'
   field :cause_seq, :seq, 'the h2c.load_failed'
   field :request_seq, :seq, 'the answered c2h.load_needed'
+end
+
+message 'c2h.quarantined', code: 0x0216, summary: 'A session reached the chain limit and is held' do
+  doc 'The input chain counted microstepLimit steps: microsteps, selection ' \
+      'passes and startup passes since take. Its slot stays where it ' \
+      'stopped and is not scheduled; its mail waits on its deferred list. ' \
+      'If the session is a local invoked child, its direct parent gets ' \
+      'error.communication.invoke.<id>.quarantined, without data. At most ' \
+      'macrostepSlots - 1 slots are quarantined; past that, core abandons ' \
+      'the input instead and reports status runaway.'
+  field :macrostep, :macrostep, 'the macrostep it stopped in'
+  field :source_seq, :seq, 'the originating h2c input, or 0 for local work'
+  field :steps, :u32, 'the chain count that reached the limit'
+  field :parent, :session, 'the parent told, or 0'
+  replies_with 'h2c.release', 'h2c.abandon', 'h2c.destroy'
 end
 
 # ---------------------------------------------------------------- tel

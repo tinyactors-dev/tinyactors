@@ -11,20 +11,21 @@ records, and what happens when something runs out. The rings are in
 
 1. **A macrostep never allocates in core.** Core allocates in three places
    only:
-   - when a system is created (rings, pool, scratch, the continuation);
+   - when a system is created (rings, pool, scratch, the first slot);
    - when a definition is registered (its compiled form, atoms and required
-     interpreter workspace, including mandatory internal-event storage);
+     interpreter workspace, including mandatory internal-event storage, for
+     every slot);
    - when a session is created or loaded (its fixed-size record, sized by its
      definition).
 
-   Growing the pool up to its bound happens between macrosteps
-   ([envelope.md](envelope.md#the-pool)). The data model allocates as it
+   Growing the pool and the slots up to their bounds happens between
+   macrosteps ([envelope.md](envelope.md#the-pool), [slots](#macrostep-slots)). The data model allocates as it
    likes: that is the data model's memory, not core's
    ([data-model.md](data-model.md)).
 2. **Core storage is bounded by parameters and compiled requirements.** Every queue, ring and text
    buffer has a size set when the system is created: `poolEnvelopes`,
-   `nameAreaBytes`, `internalQueueEvents`, `h2cBytes`, `c2hBytes`, `telBytes`,
-   `maxRecordBytes` ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Compiler-sized
+   `nameAreaBytes`, `internalQueueEvents`, `macrostepSlots`, `h2cBytes`,
+   `c2hBytes`, `telBytes`, `maxRecordBytes` ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Compiler-sized
    mandatory internal storage is additional to the ordinary
    `internalQueueEvents` quota; its whole-execution bound is discussed below.
 3. **Every overflow becomes a refusal to someone who can retry.** Nobody
@@ -39,13 +40,28 @@ records, and what happens when something runs out. The rings are in
    [BEHAVIORS.md](../BEHAVIORS.md) lists, case by case, who drops what and
    who retries.
 
-## Run to completion
+## Macrostep slots
 
-Core runs one macrostep at a time, to its end, in the order of the run queue
-([envelope.md](envelope.md#the-lists-an-envelope-can-be-on)):
+Core runs each session's macrosteps one at a time, to their end, but it
+does not make every other session wait for them. It has **`macrostepSlots`
+slots** ([BEHAVIORS.md](../BEHAVIORS.md#macrostepslots)). A slot holds one
+session's execution of one input, from take until `c2h.input_completed`:
+the continuation, the internal queue and its mandatory storage, the taken
+envelope, the outgoing mail list and the outstanding c2h reserve. A session
+that holds a slot is **active**. With one slot, this is plain run to
+completion.
 
-1. **Choose.** Following the fairness rule, core takes the head of the run
-   queue, or first admits an h2c record ([envelope.md](envelope.md#fairness)).
+Core works through its slots in turn. A slot runs until its input's chain
+settles, or until it has used `slotSlice` steps in this turn; then core
+moves to the next slot that can run. When a slot is free, core fills it in
+the order of the run queue
+([envelope.md](envelope.md#the-lists-an-envelope-can-be-on)), skipping
+envelopes whose target is active ([envelope.md](envelope.md#mail-for-an-active-session)).
+For one slot, the steps are:
+
+1. **Choose.** Following the fairness rule, core takes the first runnable
+   envelope whose session is not active, or first admits an h2c record
+   ([envelope.md](envelope.md#fairness)).
 2. **Check the mandatory c2h reserve.** It covers the recorded input
    observation, macrostep end, cancellation of
    every invocation currently active in the session, terminal session
@@ -82,30 +98,62 @@ exit/re-entry does not increase this bound. Local child stops run separately,
 with their own reserves, rather than recursively expanding the parent's
 reserve to its entire invocation subtree.
 
-**No session is busy when its envelope comes up**, because nothing else is
-in the middle of a macrostep. That removes `TA_ERR_BUSY` (core ADR 0055),
-the per-actor mailboxes, and the host's scheduler.
+**The host never sees a busy session.** Mail for an active session waits
+in core, on that session's deferred list, in arrival order. That removes
+`TA_ERR_BUSY` as an answer to the host (core ADR 0055), the host's
+mailboxes and the host's scheduler. The scheduling that remains is core's:
+a fixed number of slots, taken in turn.
 
-**Why not interleave other sessions while one is paused?** Earlier
-iterations of this design considered it. Interleaving does not prevent
-deadlock: that is done by refusing sends that don't fit, which works
-without it. And it would need one continuation for every paused session.
-Run to completion needs **one continuation per system**.
+### Why slots, and why a fixed number
 
-An attached debugger takes exclusive ownership of that same system instead
-of interleaving actors. It can inspect a budget pause, finish the current
-microstep without starting another, abandon at a legal boundary and drive
-an operator transition. Other actors remain stopped while it is attached
-([debugging.md](debugging.md)). These native debugging primitives are the
-exception to the production driver's single `ta_run` interface below.
+An earlier version of this design ran one macrostep at a time for the
+whole system, with one continuation. It rejected interleaving because
+interleaving does not prevent deadlock. That is true, and refusing sends
+that don't fit still prevents it. But interleaving was never for deadlock.
+It is for isolation: with one continuation, any long macrostep stops every
+other session until it ends.
+
+- **Long but correct macrosteps exist.** A chart that walks a list with a
+  guarded eventless transition, a parser driven by `<raise>` chains, a
+  `<foreach>` over 10,000 items. With one slot each of them holds every
+  other session, and every client waiting on one, until it finishes.
+- **A loop that never ends stops the whole system.** Core cannot tell a
+  loop from long work before its limit. With one slot, a loop has the
+  system until the limit; with several, it has one slot.
+- **A runaway can be held, not only ended.** A slot can keep a runaway
+  where it stopped while the rest of the system goes on, which is what
+  napi's quarantine does today ([below](#runaways-the-chain-limit-and-quarantine)).
+
+The number is fixed, so memory stays bounded and allocated outside
+macrosteps. Core already moves a paused run into a continuation (ADRs 0061
+and 0070); a slot is that continuation plus the per-run state that run to
+completion kept once per system. Slots are allocated on demand up to
+`macrostepSlots`, as the pool is: when core would fill a slot and all
+existing ones are busy, it allocates one more, between macrosteps. If that
+allocation fails, the envelope waits for a slot to free. A slot is sized
+for the largest registered definition; registration allocates the larger
+workspace for every slot, and a slot that is active swaps it in when it
+next becomes free.
+
+Slots interleave only between units of executable content, where ADR 0061
+already lets a run stop. They do not interleave inside a data model call:
+a synchronous call that never returns still holds the thread
+([data-model.md](data-model.md)).
+
+An attached debugger takes exclusive ownership of the system and every
+slot. It can inspect any active slot, finish a microstep without starting
+another, abandon at a legal boundary and drive an operator transition.
+Other actors remain stopped while it is attached ([debugging.md](debugging.md)).
+These native debugging primitives are the exception to the production
+driver's single `ta_run` interface below.
 
 ### A sketch of the call
 
 ```c
 typedef enum {
-    TA_RUN_IDLE,        /* nothing runnable and nothing to admit */
-    TA_RUN_MORE,        /* the budget ran out between macrosteps */
-    TA_RUN_PAUSED,      /* the budget ran out inside a macrostep */
+    TA_RUN_IDLE,        /* nothing runnable and nothing to admit; quarantined slots wait */
+    TA_RUN_MORE,        /* the budget ran out and no slot is inside a macrostep */
+    TA_RUN_PAUSED,      /* the budget ran out with at least one slot inside a macrostep */
     TA_RUN_C2H_FULL     /* the reserve is not there: drain c2h and call again */
 } ta_run_status;
 
@@ -127,21 +175,26 @@ This one call replaces `ta_actor_deliver`, `ta_actor_resume` and
 4. arm the timer from the last [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake);
 5. repeat.
 
-## The budget pause is the only pause
+## Pauses: the budget, the slice and quarantine
 
-A macrostep pauses only when `budget` or `action_budget` runs out (ADR 0061).
-The pause gives a host's event loop its turn back during a long macrostep,
-such as a `<foreach>` over 10,000 items.
+A macrostep stops in the middle for three reasons only:
 
-- The paused macrostep's position, sets and frames move into **the system's
-  continuation**. It is reserved when the system is created, so saving a
-  pause never fails (ADR 0070 section 2 already requires this). Nested
-  interpreters for invocations still have scratch of their own (ADR 0060).
-- **While it is paused, nothing else runs.** The host may post to h2c, drain
-  c2h and tel, and serve its own I/O. The next `ta_run` continues the same
-  macrostep.
-  During debugger attachment only the debugger drives core; the production
-  pump cannot resume the macrostep until ownership is returned.
+- **`ta_run`'s `budget` or `action_budget` runs out** (ADR 0061). The pause
+  gives the host's event loop its turn back. The host may post to h2c,
+  drain c2h and tel, and serve its own I/O. The next `ta_run` continues
+  every slot where it stood.
+- **A slot uses its `slotSlice`.** Core moves to the next slot that can
+  run, within the same `ta_run`. This is what keeps a long macrostep from
+  holding the others.
+- **A slot reaches the chain limit.** Core quarantines it
+  ([below](#runaways-the-chain-limit-and-quarantine)).
+
+In each case the macrostep's position, sets and frames stay in **its
+slot's continuation**, which exists before the slot is used, so saving a
+stop never fails (ADR 0070 section 2 already requires this). Nested
+interpreters for invocations still have scratch of their own (ADR 0060).
+During debugger attachment only the debugger drives core; the production
+pump cannot resume any slot until ownership is returned.
 - **A full ring never pauses executable content inside a macrostep.** An
   ordinary action whose record does not fit fails instead (below), while
   mandatory records use their preflight reservation. Core can return for a
@@ -158,6 +211,11 @@ A macrostep's records reach c2h in this order:
    [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward),
    [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog);
 3. its `c2h.macrostep_ended`.
+
+That order holds within one macrostep, not across them. With several
+slots, the records of macrosteps of different sessions interleave on c2h.
+A session runs one input at a time, so the header's `session` tells the
+host which macrostep each record belongs to.
 
 **`c2h.macrostep_ended` reports that execution ended and how it ended,
 including abandonment or runaway termination. It does not gate effects or
@@ -195,8 +253,11 @@ SCXML invocation errors are processed before the next external dequeue.
 Startup-generated errors therefore start an internal-only stabilization
 macrostep of the same session. Each such macrostep has its own ID and end
 record; all retain the original input's source correlation. Its c2h reserve
-is checked before it starts. A new startup phase may follow it. Other sessions
-and ordinary h2c commands cannot overtake this chain.
+is checked before it starts. A new startup phase may follow it. The
+session's own later inputs cannot overtake this chain, because the session
+stays active and its mail waits on its deferred list. Other sessions may
+run in other slots meanwhile, which SCXML permits: it orders one session's
+events, not different sessions'.
 
 Core reserves `c2h.input_completed` separately before consuming the terminal
 completion phase; if c2h is full it retains the source envelope and returns
@@ -215,8 +276,8 @@ Canceled children emit no done event. The lifetime token guarantees both
 paths without allocating an envelope during a macrostep
 ([envelope.md](envelope.md#local-invocation-tokens)).
 
-Local mail joins the run queue at the macrostep end because core runs one macrostep
-at a time. Its outgoing list is scheduling state, not a host effect hold.
+Local mail joins the run queue at the macrostep end, so a receiver never
+takes mail from a macrostep that has not ended, whichever slot it runs in. Its outgoing list is scheduling state, not a host effect hold.
 An abandoned macrostep frees that list, while effects the host already
 executed remain executed.
 
@@ -248,8 +309,8 @@ executable content:
   itself, send less (ack-clocked sending), or give up and report.
 
 Errors use compiler-sized mandatory internal storage, separate from the quota
-for ordinary raises. The remaining whole-execution sizing obligation is
-explicit below; a single reserved slot does not establish this guarantee.
+for ordinary raises. Its whole-execution bound comes from the chain limit
+(below); a single reserved slot does not establish this guarantee.
 
 **Why the resource is the last segment of the name,** and not only a field
 of `_event.data`:
@@ -283,10 +344,9 @@ events. A `<raise>` that exhausts the ordinary quota fails as
   pool would stop a chart from raising its own events, and a chart raising
   in a loop would starve every other session's mail. Separate memory keeps a
   fault inside the chart that causes it.
-- **Only one queue is live at a time.** Under run to completion, one
-  interpreter runs at the top level, so the system needs one queue, plus one
-  per nested interpreter, sized once. That replaces ADR 0064's queue lent to
-  each actor and its cache.
+- **One queue per slot.** Each slot runs one top-level interpreter, so the
+  system needs one queue per slot, plus one per nested interpreter, sized
+  once. That replaces ADR 0064's queue lent to each actor and its cache.
 - **The compiler counts independent failure sites.** SCXML 4.9 stops only
   the failed block. Two entry blocks can each fail in one microstep, and
   both errors must retain their queue order. A loop in one block stops at
@@ -316,24 +376,81 @@ if none have been dequeued; the ordinary quota is additional. Checked
 arithmetic and available-memory checks precede publication. Tighter
 occupancy bounds may reduce this conservative allocation.
 
-**Remaining proof obligation:** the existing `microstepLimit` bounds executed
-microsteps in one stabilization macrostep, not total `L` across an unrestricted
-startup/follow-up chain, nor `S`. Selection can raise errors without
-taking a transition. Two failing guards can repeatedly append more errors
-than an internal dequeue removes, without executing another microstep.
-Budget pauses do not bound the accumulated queue across resumes. Disabling
-the microstep limit also removes the bound on `L`.
+**The chain limit makes it finite.** `microstepLimit` used to bound only
+the microsteps of one macrostep. Selection could raise errors without
+taking a transition, so two failing guards could append errors faster than
+an internal dequeue removed them, with no microstep counted at all. A
+startup chain could also go on without end, each of its macrosteps short.
+The chain limit ([below](#runaways-the-chain-limit-and-quarantine)) counts
+every microstep, every selection pass and every startup pass of one
+input's chain, so `L`, `S` and `I` are each at most the limit, and the
+arena above is finite.
 
-No finite compiler-sized arena can cover an unrestricted error-generating
-loop solely from its definition's per-phase counts. The implementation needs
-either a proven finite occupancy bound for the admitted definition or a
-separately decided execution guard that also bounds selection and startup
-passes. For example, a finite guard that counts every selection pass, every
-microstep and every startup pass would make the arithmetic above finite.
-This proposal does not introduce that guard, alter `microstepLimit`, or
-terminate on internal capacity exhaustion by implication. Closing this
-whole-execution bound is required before claiming lossless mandatory events
-for unrestricted definitions.
+**Open:** the conservative arena is large: the limit (100,000 by default)
+times the per-phase maxima, per slot. An implementation needs a tighter
+occupancy bound, for example from the observation that a dequeue in each
+selection pass removes one entry, before the figure is acceptable. Until
+then, the chain limit for a definition with mandatory events may need to
+be lower than the system's.
+
+## Runaways: the chain limit and quarantine
+
+A macrostep that never ends is the case core ADR 0075 exists for. Under
+slots it holds one slot, not the system, but it still needs a limit: it
+takes a slice of every turn, its mail piles up on its deferred list, and
+nothing says what is wrong.
+
+**The limit counts the whole chain.** `microstepLimit` counts, for one
+input, from take until `c2h.input_completed`:
+
+- every microstep;
+- every selection pass, including one that enables nothing and only
+  consumes an internal event;
+- every invocation-startup pass.
+
+Today's limit counts only committed microsteps in one macrostep. It misses
+an eventless transition whose guard keeps throwing: each pass raises an
+error that is consumed and ignored, so no microstep commits. It also misses
+an `<invoke>` that fails and whose error re-enters its state: each
+macrostep of that chain is short. Both are caught by the chain count. The
+limit must be finite: 0 and `TA_MICROSTEP_LIMIT_NONE` are refused, for the
+system and for a definition.
+
+**At the limit, core quarantines the slot.** The check sits between steps,
+where nothing is open (ADR 0075). Core:
+
+1. leaves the slot as it stands, mid-chain, and stops scheduling it;
+2. writes [`c2h.quarantined`](../protocol/generated/MESSAGES.md#c2hquarantined)
+   with the session, the macrostep and the count;
+3. if the session is a local invoked child, raises
+   `error.communication.invoke.<id>.quarantined` in its direct parent
+   (napi ADR 0025). The event has no data; its name says the cause. Core
+   takes a free envelope for it between steps; if the pool has none, a flag
+   on the slot keeps the report until one frees. The parent may leave the
+   invoking state, which destroys the child, or wait.
+
+The session's mail keeps waiting on its deferred list. Its delayed sends
+stay in the deadline index and fall due as usual; those to the
+quarantined session itself wait with its other mail.
+
+**What the host can do with a quarantined slot:**
+
+| Record | Effect |
+|---|---|
+| [`h2c.release`](../protocol/generated/MESSAGES.md#h2crelease) | The slot runs again where it stopped. Its count restarts, so a second runaway is quarantined and reported again. With `unlimited`, the rest of this input's chain has no limit (ADR 0075's `no_microstep_limit`). |
+| [`h2c.abandon`](../protocol/generated/MESSAGES.md#h2cabandon) | Core ADR 0082's abandon at the slot's boundary: the configuration after the last completed microstep stays, the internal queue and outgoing mail are freed, `c2h.macrostep_ended` and `c2h.input_completed` say `abandoned`, and the slot is free. The session takes its next input. |
+| [`h2c.destroy`](../protocol/generated/MESSAGES.md#h2cdestroy) | Abandons the slot as above, then destroys the session. |
+
+A quarantined slot is already at a legal boundary and runs nothing, so
+release and abandon need no debugger and no exclusive ownership. They are
+production controls, as `release()` is in napi today.
+
+**At most `macrostepSlots` − 1 slots are quarantined.** At least one slot
+always serves the rest of the system. When a session reaches the limit and
+no quarantine is left, core abandons its execution instead:
+`c2h.macrostep_ended` and `c2h.input_completed` say `runaway`, the slot is
+free, and the session takes its next input. With one slot, every runaway
+ends this way.
 
 ### Consequence for chart authors: order inside a block matters
 

@@ -23,7 +23,7 @@ below.
 
 | Module | Lines (src) | What did it, what does it now |
 |---|---|---|
-| `scheduler.h`, `scheduler.c` | 1,465 | Mailboxes, runnable actors, turn budgets, dead letters. Replaced by core's pool and its run queue ([envelope.md](envelope.md)), run to completion ([macrostep.md](macrostep.md)) and `ta_run`'s budget. |
+| `scheduler.h`, `scheduler.c` | 1,465 | Mailboxes, runnable actors, turn budgets, quarantine, dead letters. Replaced by core's pool and its run queue ([envelope.md](envelope.md)), macrostep slots with deferred lists and quarantine ([macrostep.md](macrostep.md#macrostep-slots)) and `ta_run`'s budget. |
 | `router.h`, `router.c` | 232 | `ta_external_event_router` for mail between sessions. Mail between local sessions is an envelope in core. Anything else is a [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend). |
 | `effects.h`, `effects.c` | 98 | The per-turn effect queue that kept effects until JavaScript could run. Replaced by c2h records executable on receipt, including before the macrostep end. |
 | `adapter_io.h`, `adapter_io.c` | 260 | The I/O processor adapter that copied sends into effects. Replaced by `c2h.send`. |
@@ -161,11 +161,14 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0040 Built-in SCXML event processor, host-routed external events | core submits to the host's router | **superseded**: mail between local sessions stays in core |
 | 0045 Log records go to a host sink | log sink vtable | **refined**: `c2h.log` |
 | 0047 An interrupted macrostep is retryable | a macrostep interrupted by running out of memory can run again | **superseded**: core cannot run out of memory in a macrostep, and a data model or invoker that does answers `TA_OP_ERROR`, so nothing interrupts a macrostep for memory |
-| 0055 Deliver is the admission test | `TA_ERR_BUSY` | **superseded**: admission is moving from h2c into the pool |
-| 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: ordinary quota plus compiler-sized mandatory storage, allocated outside macrosteps; the whole-execution accumulation bound must be established |
+| 0055 Deliver is the admission test | `TA_ERR_BUSY` | **superseded**: admission is moving from h2c into the pool; mail for an active session waits on its deferred list in core, so the host never sees busy |
+| 0061 A run can pause between units of executable content | the paused state moves into a continuation the actor owns | **refined**: it moves into the session's macrostep slot, and slots take turns between units |
+| 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: one queue per macrostep slot, an ordinary quota plus compiler-sized mandatory storage, allocated outside macrosteps; the chain limit bounds its accumulation, and the arena's size is open |
 | 0067 Core traces to a host sink | sink vtable | **refined**: the `tel` ring |
 | 0069 An idle actor carries no event | event blocks | **refined**: the taken event stays in its envelope; no blocks |
 | 0070 A run that runs out of memory stops where it stands | stopping inside a macrostep | **superseded** for core's memory; capacity becomes `error.execution.capacity` |
+| 0075 A macrostep that runs too many microsteps stops as a runaway | counts committed microsteps in one macrostep; 0 means no limit; the host decides | **refined**: counts one input's whole chain (microsteps, selection passes, startup passes), must be finite; at the limit core quarantines the slot, or abandons the input when no quarantine is left |
+| 0082 Operator transitions and abandoning a macrostep | | **kept**; a quarantined slot is abandoned with `h2c.abandon`, without a debugger |
 | 0074 An unloaded actor is offloaded to bytes | | **kept**; `c2h.unloaded` carries them |
 | 0089, 0094 Replay before publish; every input carries its time | | **refined**: h2c inputs seed new execution before publish; exact restoration is not promised |
 | 0090 Core defines the input log's byte layout | already removed by kernel ADR 0006 | remains removed; `c2h.input` is an observation, not a durable journal format |
@@ -195,9 +198,11 @@ history, with a status line pointing at the ADR that removes the kernel.
 | 0005 Per-target mailboxes and a ready queue | superseded: core's pool |
 | 0006 The addon routes actor-to-actor events | superseded: core |
 | 0007 The event loop drives a bounded pump | refined: the pump loop above |
+| 0008 Faults are per actor | refined: quarantine moves into core as a held macrostep slot. `c2h.quarantined` feeds the `fault` hook, `release()` posts `h2c.release`, `abandon()` posts `h2c.abandon`. The other causes go: a refused delivery, a queue that could not grow and out-of-memory back-off no longer exist |
 | 0009, 0014 Native toolkit, memory pooled by lifetime | refined: smaller, back in napi |
 | 0015 to 0018 Tracing hook, OTLP, encoder | refined: drains `tel` |
 | 0020 Mail for an unloaded actor waits while a loader brings it back | refined: waits in core's pool; the loader answers `c2h.load_needed` |
+| 0025 A quarantined child tells its parent | kept, now raised by core. The event has no data: core cannot build the `{ code, message }` value, and the name says the cause |
 | 0022 Mail a chart sends nowhere raises error.communication | kept, now done by recycling the envelope |
 | 0032 to 0034 Persistence by replay; the input log | already superseded by kernel ADR 0006; input observations become `c2h.input` |
 | 0035, 0036 Parameters | refined: kernel parameters go |
@@ -230,6 +235,10 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
    Supersedes kernel ADRs 0001 to 0006.
 9. In `tinyactors-napi/docs/adr/`: **napi is a binding over core's
    rings.** Supersedes napi 0037 and the others above.
+10. **Macrostep slots.** Up to `macrostepSlots` sessions run inputs at
+    once, in turn; deferred lists; the chain limit; quarantine with
+    `h2c.release` and `h2c.abandon`. Refines 0055, 0061 and 0075. Records
+    the bytes per slot and per actor (+8 for the deferred list).
 
 ## A rough order of work
 
@@ -245,7 +254,8 @@ Each step builds and passes `mise run test`, and is committed on its own
    stream.
 4. **The pool and `ta_run`.** Mail between local sessions and delayed
    sends become envelopes. The kernel's scheduler and router are bypassed
-   for local mail.
+   for local mail. Start with one macrostep slot; then add slots, deferred
+   lists, the chain limit and quarantine as their own commit, before c2h.
 5. **c2h.** Sends, invocations and logs become records. The kernel's
    adapters and effects queue go.
 6. **h2c.** Inputs, complete definitions, spawn, time and load go through it. The kernel's
@@ -266,8 +276,15 @@ changes every binding in the same change.
   Debugger commands stay outside the rings; native primitives support
   inspection, abandonment at legal boundaries and operator transitions
   through the normal engine. Detachment returns ownership to the pump.
-  Actor-only holds and interleaved stepping are outside the initial design
-  ([debugging.md](debugging.md)).
+  A debugger that holds one actor while others run is outside the initial
+  design ([debugging.md](debugging.md)).
+- **Macrostep slots replace system-wide run to completion.** Up to
+  `macrostepSlots` sessions run inputs at once, taking turns between units
+  of executable content; each session still runs one input at a time. A
+  long or looping macrostep holds one slot. The chain limit counts
+  microsteps, selection passes and startup passes and cannot be turned
+  off. At the limit core quarantines the slot, which the host releases or
+  abandons with production controls ([macrostep.md](macrostep.md#macrostep-slots)).
 - **Definition management uses requests and results.** Hosts submit a
   complete declarative spec; core compiles and registers it between
   macrosteps. Structured compile errors travel through bounded buffers.

@@ -65,9 +65,13 @@ Their exact signatures remain a sketch:
   internal transitions then run normally. Debugger stepping may pause that
   macrostep; detachment may return its continuation to the pump.
 
-There is still only one active macrostep per system. If another actor owns
-it, the debugger must finish that macrostep, or explicitly abandon it at a
-legal boundary, before starting a transition on the selected actor. Reaching
+Up to `macrostepSlots` macrosteps can be in progress, one per slot
+([macrostep.md](macrostep.md#macrostep-slots)). The debugger can inspect
+and drive each of them. A transition on an actor that holds no slot needs
+a free one; if every slot is busy, the debugger must finish a macrostep, or
+explicitly abandon it at a legal boundary, first. An actor that holds a
+slot must have that macrostep finished or abandoned before its
+transition. Reaching
 a boundary does not guarantee termination: a synchronous action that never
 returns cannot be interrupted by these primitives.
 
@@ -117,9 +121,12 @@ No arbitrary memory writes, data edits, effect substitution or rewind is
 part of this design. Transition handlers supply the changes a recovery
 needs, and abandonment supplies a legal point from which to transition.
 
-Freezing the system preserves one continuation and one internal queue per
-system. A future actor-only hold between macrosteps would need scheduler
-exclusion and rules for pending inputs and timers. Pausing one actor inside
-a macrostep while others run would require separately saved execution state
-and reintroduce interleaving; neither extension is accepted here. Separate
+Freezing the system preserves every slot's continuation and internal
+queue. Holding one actor inside a macrostep while others run already
+exists in production, as quarantine, for a runaway
+([macrostep.md](macrostep.md#runaways-the-chain-limit-and-quarantine)).
+A debugger that holds one actor and lets the rest of the system run would
+build on it, but it is not part of this design: the initial debugger
+freezes everything. An actor-only hold between macrosteps would need rules
+for pending inputs and timers. Separate
 systems can already be debugged independently.
