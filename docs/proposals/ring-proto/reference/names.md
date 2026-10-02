@@ -55,7 +55,7 @@ This causes two problems.
 | The generated prefixes core itself names (`done.state`, `done.invoke`, `error.execution`, `error.communication`, `error.platform`, and the `invoke` segment of `error.communication.invoke`) | authored by core | atoms interned at system creation. Today's `TA_EVENT_NAME_*` cover all but `invoke`, which `ta_invoke_error_name` (`src/invoke.c`) interns at run time; it would join them. |
 | `<send event>`, `<raise event>`, a literal `<send id>`, `<invoke id>`, `<send type>` | authored | atoms, interned at registration |
 | The value of `eventexpr`, `typeexpr`, `targetexpr`, `idlocation` text, `sendidexpr` | run time | bytes in the name area |
-| Names and IDs in external input ([`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent): `name`, `sendid`, `origin`, `origin_type`) | run time | bytes in the name area |
+| Names and IDs in external input ([`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent): `name`, `sendid`, `origin`, `origin_type`, `invokeid`) | run time | bytes in the name area |
 | A generated send ID `#_send.<n>` | run time | a counter in `ta_send_id`, which was never text (ADR 0048) |
 | A generated invocation ID `<stateid>.<platformid>` | run time | a state ID and a counter, rendered to text on demand like `#_send.<n>` |
 | An invocation error's reason (ADR 0081) | run time | bytes |
@@ -156,10 +156,20 @@ holds its first chunk and the total length ([envelope.md](envelope.md)).
 
 **When it is full,** it behaves as a full pool does:
 
-- admission from h2c stops above `admissionWatermark`;
+- an h2c event whose text cannot fit is consumed and bounced with reason
+  `names`, after reserving its bounded response; its transferred values
+  are released and later control records can proceed;
 - a `<send>` whose text doesn't fit fails as `error.execution.capacity.names`.
 
 [envelope.md](envelope.md#running-out) covers both.
+
+Before reserving envelope text, core also checks the complete aligned
+`c2h.input` size with all event and source metadata. This applies even to
+unrecorded and replaying inputs. A fitting h2c record need not fit its
+larger observation. External oversize inputs are bounced as `invalid`;
+chart-produced ones fail as `error.execution.capacity.record` before
+committing a send. Definition registration checks representability of
+platform events, including generated-name bounds.
 
 **Text leaves through rings as spans,** and is copied into a record's tail
 when written: [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput),
@@ -198,7 +208,12 @@ process-local event-name IDs remain stable". No ID was persisted.
   resolves `done`, `invoke`, `error`, `communication` and authored IDs to
   atoms, and the rest to UNKNOWN.
 - **[`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report)**
-  names the invocation by its text. Core parses the generated form, or
+  carries both its SCXML invocation text and `invocation_seq`, the sequence
+  of the `c2h.invoke` that started this instance. Service events carry both
+  too. Core rejects a stale instance at take before applying a report or
+  selecting `<finalize>`; reusing an authored ID cannot make an old reply
+  belong to its replacement. The sequence is an integer, not interned text.
+  Core parses the generated form, or
   looks up an authored ID, and doesn't intern either. `ta_system_intern_invoke_id`
   and `ta_send_id_intern` are no longer needed: a replayed
   [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) record carries

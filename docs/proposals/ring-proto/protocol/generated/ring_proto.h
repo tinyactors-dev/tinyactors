@@ -30,13 +30,28 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_MACROSTEP_STATUS_DONE 1u
 #define TRP_MACROSTEP_STATUS_RUNAWAY 2u
 #define TRP_MACROSTEP_STATUS_ABANDONED 3u
-#define TRP_MACROSTEP_STATUS_CAPACITY 4u
+#define TRP_INPUT_COMPLETION_STATUS_STABLE 0u
+#define TRP_INPUT_COMPLETION_STATUS_DONE 1u
+#define TRP_INPUT_COMPLETION_STATUS_RUNAWAY 2u
+#define TRP_INPUT_COMPLETION_STATUS_ABANDONED 3u
+#define TRP_INPUT_REFUSAL_REASON_LOAD_FAILED 1u
+#define TRP_INPUT_REFUSAL_REASON_DESTROYED 2u
+#define TRP_INPUT_REFUSAL_REASON_SNAPSHOT_FAILED 3u
+#define TRP_INPUT_REFUSAL_REASON_STALE_INVOCATION 4u
+#define TRP_INPUT_REFUSAL_REASON_INVALID 5u
 #define TRP_BOUNCE_REASON_NO_SUCH_ADDRESS 1u
 #define TRP_BOUNCE_REASON_NO_SUCH_DEFINITION 2u
 #define TRP_BOUNCE_REASON_ADDRESS_TAKEN 3u
 #define TRP_BOUNCE_REASON_HAS_MAIL 4u
 #define TRP_BOUNCE_REASON_NOT_REPLAYING 5u
 #define TRP_BOUNCE_REASON_INVALID 6u
+#define TRP_BOUNCE_REASON_POOL 7u
+#define TRP_BOUNCE_REASON_NAMES 8u
+#define TRP_BOUNCE_REASON_ALLOCATION 9u
+#define TRP_BOUNCE_REASON_ACTIVE_LOCAL_INVOKE 10u
+#define TRP_BOUNCE_REASON_PENDING_INPUTS 11u
+#define TRP_BOUNCE_REASON_STALE_REQUEST 12u
+#define TRP_BOUNCE_REASON_RECORD 13u
 #define TRP_CAPACITY_RESOURCE_POOL 1u
 #define TRP_CAPACITY_RESOURCE_NAMES 2u
 #define TRP_CAPACITY_RESOURCE_C2H 3u
@@ -88,6 +103,9 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_C2H_FINISHED 0x0210u
 #define TRP_C2H_DESTROYED 0x0211u
 #define TRP_C2H_DEFINITION_RESULT 0x0212u
+#define TRP_C2H_INPUT_REFUSED 0x0213u
+#define TRP_C2H_INPUT_COMPLETED 0x0214u
+#define TRP_C2H_LOAD_RESULT 0x0215u
 #define TRP_TEL_TRACE 0x0301u
 #define TRP_TEL_TRACE_TRUNCATED (1u << 0)
 #define TRP_TEL_TRACE_SUPPRESSED (1u << 1)
@@ -107,11 +125,13 @@ typedef struct {
     trp_span sendid;
     trp_span origin;
     trp_span origin_type;
+    trp_span invokeid;
+    uint64_t invocation_seq;
     uint64_t data;
     uint8_t type;
     uint8_t pad_end[7];
 } trp_h2c_event;
-_Static_assert(sizeof(trp_h2c_event) == 88, "h2c.event");
+_Static_assert(sizeof(trp_h2c_event) == 104, "h2c.event");
 
 /* h2c.spawn: Create a session. */
 typedef struct {
@@ -121,8 +141,9 @@ typedef struct {
     uint64_t data;
     uint64_t clock;
     uint64_t state;
+    uint64_t request_seq;
 } trp_h2c_spawn;
-_Static_assert(sizeof(trp_h2c_spawn) == 72, "h2c.spawn");
+_Static_assert(sizeof(trp_h2c_spawn) == 80, "h2c.spawn");
 
 /* h2c.publish: End a replay and put the session on the route. */
 typedef struct {
@@ -137,41 +158,47 @@ typedef struct {
     trp_header header;
     trp_span address;
     uint64_t image;
+    uint64_t request_seq;
 } trp_h2c_load;
-_Static_assert(sizeof(trp_h2c_load) == 48, "h2c.load");
+_Static_assert(sizeof(trp_h2c_load) == 56, "h2c.load");
 
 /* h2c.load_failed: The session cannot be loaded. */
 typedef struct {
     trp_header header;
     trp_span address;
     trp_span reason;
+    uint64_t request_seq;
 } trp_h2c_load_failed;
-_Static_assert(sizeof(trp_h2c_load_failed) == 48, "h2c.load_failed");
+_Static_assert(sizeof(trp_h2c_load_failed) == 56, "h2c.load_failed");
 
 /* h2c.unload: Page a stable session out. */
 typedef struct {
     trp_header header;
     trp_span address;
+    uint64_t image;
 } trp_h2c_unload;
-_Static_assert(sizeof(trp_h2c_unload) == 40, "h2c.unload");
+_Static_assert(sizeof(trp_h2c_unload) == 48, "h2c.unload");
 
 /* h2c.checkpoint: Ask for a recorded session's state. */
 typedef struct {
     trp_header header;
     trp_span address;
+    uint64_t image;
 } trp_h2c_checkpoint;
-_Static_assert(sizeof(trp_h2c_checkpoint) == 40, "h2c.checkpoint");
+_Static_assert(sizeof(trp_h2c_checkpoint) == 48, "h2c.checkpoint");
 
 /* h2c.invoke_report: An invoked service finished or failed. */
 typedef struct {
     trp_header header;
     trp_span invokeid;
+    uint64_t invocation_seq;
     trp_span reason;
     uint64_t data;
     uint8_t kind;
-    uint8_t pad_end[7];
+    uint8_t ends;
+    uint8_t pad_end[6];
 } trp_h2c_invoke_report;
-_Static_assert(sizeof(trp_h2c_invoke_report) == 64, "h2c.invoke_report");
+_Static_assert(sizeof(trp_h2c_invoke_report) == 72, "h2c.invoke_report");
 
 /* h2c.destroy: End a session now. */
 typedef struct {
@@ -227,9 +254,14 @@ typedef struct {
     uint64_t data;
     uint8_t source;
     uint8_t type;
-    uint8_t pad_end[6];
+    uint8_t pad11[2];
+    trp_span report_invokeid;
+    trp_span report_reason;
+    uint8_t report_kind;
+    uint8_t report_ends;
+    uint8_t pad_end[2];
 } trp_c2h_input;
-_Static_assert(sizeof(trp_c2h_input) == 112, "c2h.input");
+_Static_assert(sizeof(trp_c2h_input) == 128, "c2h.input");
 
 /* c2h.send: A send for an I/O processor. */
 typedef struct {
@@ -252,32 +284,37 @@ typedef struct {
     trp_span type;
     trp_span src;
     uint64_t data;
+    uint64_t content;
     uint8_t autoforward;
     uint8_t pad_end[7];
 } trp_c2h_invoke;
-_Static_assert(sizeof(trp_c2h_invoke) == 80, "c2h.invoke");
+_Static_assert(sizeof(trp_c2h_invoke) == 88, "c2h.invoke");
 
 /* c2h.invoke_cancel: Cancel an invocation. */
 typedef struct {
     trp_header header;
     uint64_t macrostep;
     trp_span invokeid;
+    uint64_t invocation_seq;
 } trp_c2h_invoke_cancel;
-_Static_assert(sizeof(trp_c2h_invoke_cancel) == 48, "c2h.invoke_cancel");
+_Static_assert(sizeof(trp_c2h_invoke_cancel) == 56, "c2h.invoke_cancel");
 
 /* c2h.invoke_forward: Autoforward an event to an invocation. */
 typedef struct {
     trp_header header;
     uint64_t macrostep;
     trp_span invokeid;
+    uint64_t invocation_seq;
     trp_span name;
     trp_span sendid;
     trp_span origin;
+    trp_span origin_type;
+    trp_span event_invokeid;
     uint64_t data;
     uint8_t type;
     uint8_t pad_end[7];
 } trp_c2h_invoke_forward;
-_Static_assert(sizeof(trp_c2h_invoke_forward) == 88, "c2h.invoke_forward");
+_Static_assert(sizeof(trp_c2h_invoke_forward) == 112, "c2h.invoke_forward");
 
 /* c2h.log: A <log>. */
 typedef struct {
@@ -292,12 +329,15 @@ _Static_assert(sizeof(trp_c2h_log) == 56, "c2h.log");
 typedef struct {
     trp_header header;
     uint64_t macrostep;
+    uint8_t source;
+    uint8_t pad2[7];
+    uint64_t source_seq;
     uint32_t effects;
     uint32_t mail;
     uint8_t status;
     uint8_t pad_end[7];
 } trp_c2h_macrostep_ended;
-_Static_assert(sizeof(trp_c2h_macrostep_ended) == 56, "c2h.macrostep_ended");
+_Static_assert(sizeof(trp_c2h_macrostep_ended) == 72, "c2h.macrostep_ended");
 
 /* c2h.wake: Call core back at this time. */
 typedef struct {
@@ -337,30 +377,34 @@ _Static_assert(sizeof(trp_c2h_loaded) == 48, "c2h.loaded");
 typedef struct {
     trp_header header;
     trp_span address;
+    uint64_t cause_seq;
     uint64_t image;
+    uint64_t image_bytes;
     uint64_t wake_at;
 } trp_c2h_unloaded;
-_Static_assert(sizeof(trp_c2h_unloaded) == 56, "c2h.unloaded");
+_Static_assert(sizeof(trp_c2h_unloaded) == 72, "c2h.unloaded");
 
 /* c2h.state: A recorded session's state at a point of its log. */
 typedef struct {
     trp_header header;
     trp_span address;
+    uint64_t cause_seq;
     uint64_t image;
+    uint64_t image_bytes;
     uint64_t input_seq;
 } trp_c2h_state;
-_Static_assert(sizeof(trp_c2h_state) == 56, "c2h.state");
+_Static_assert(sizeof(trp_c2h_state) == 72, "c2h.state");
 
 /* c2h.published: A replayed session is live. */
 typedef struct {
     trp_header header;
     trp_span address;
-    uint32_t replayed;
-    uint32_t dropped_timers;
-    uint32_t retired_invokes;
-    uint8_t pad_end[4];
+    uint64_t cause_seq;
+    uint64_t replayed;
+    uint64_t dropped_timers;
+    uint64_t retired_invokes;
 } trp_c2h_published;
-_Static_assert(sizeof(trp_c2h_published) == 56, "c2h.published");
+_Static_assert(sizeof(trp_c2h_published) == 72, "c2h.published");
 
 /* c2h.finished: A session reached a top-level final state. */
 typedef struct {
@@ -374,10 +418,11 @@ _Static_assert(sizeof(trp_c2h_finished) == 48, "c2h.finished");
 typedef struct {
     trp_header header;
     trp_span address;
+    uint64_t cause_seq;
     uint8_t reason;
     uint8_t pad_end[7];
 } trp_c2h_destroyed;
-_Static_assert(sizeof(trp_c2h_destroyed) == 48, "c2h.destroyed");
+_Static_assert(sizeof(trp_c2h_destroyed) == 56, "c2h.destroyed");
 
 /* c2h.definition_result: A definition request completed. */
 typedef struct {
@@ -389,6 +434,33 @@ typedef struct {
     uint8_t pad_end[3];
 } trp_c2h_definition_result;
 _Static_assert(sizeof(trp_c2h_definition_result) == 56, "c2h.definition_result");
+
+/* c2h.input_refused: An admitted host input was not taken. */
+typedef struct {
+    trp_header header;
+    uint64_t source_seq;
+    uint8_t reason;
+    uint8_t pad_end[7];
+} trp_c2h_input_refused;
+_Static_assert(sizeof(trp_c2h_input_refused) == 48, "c2h.input_refused");
+
+/* c2h.input_completed: A host input and its startup follow-up settled. */
+typedef struct {
+    trp_header header;
+    uint64_t source_seq;
+    uint64_t macrostep;
+    uint8_t status;
+    uint8_t pad_end[7];
+} trp_c2h_input_completed;
+_Static_assert(sizeof(trp_c2h_input_completed) == 56, "c2h.input_completed");
+
+/* c2h.load_result: A load-failure response finished recycling waiting inputs. */
+typedef struct {
+    trp_header header;
+    uint64_t cause_seq;
+    uint64_t request_seq;
+} trp_c2h_load_result;
+_Static_assert(sizeof(trp_c2h_load_result) == 48, "c2h.load_result");
 
 /* tel.trace: One trace record (core ADR 0067). */
 typedef struct {

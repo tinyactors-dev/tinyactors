@@ -1,8 +1,8 @@
 # The ring protocol: core and host talk through shared memory
 
-**Status:** Sketch (2026-10-01)
+**Status:** Sketch with accepted semantic refinements (2026-10-02); the whole-execution mandatory-event bound remains open.
 **Touches:** tinyactors-core (gains the rings, the envelope pool and run-time names), tinyactors-host (deleted), tinyactors-napi and tinyactors-test (become ring drivers)
-**Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
+**Not an implementation plan:** accepted refinements constrain this proposal; implementation is not scheduled. ADRs and roadmaps win.
 
 ## The idea in one paragraph
 
@@ -21,7 +21,10 @@ A macrostep **allocates nothing**. When something is full, the result is a
 - the external client, at the host's edge;
 - or the sending chart, as an SCXML error event.
 
-Nobody keeps an overflow queue. The host kernel (`tinyactors-host`) is no
+Inputs that cannot be admitted are consumed and bounced, so they cannot
+block the load response or clock update needed to free capacity. The host
+owns scheduling boundaries and retains retry originals only in a bounded
+submission table. Nobody keeps an unbounded overflow queue. The host kernel (`tinyactors-host`) is no
 longer needed. Its scheduler becomes the pool. Its recorder and replay
 become `c2h.input` observations and the replay core already has; its WAL was
 already removed by kernel ADR 0006. Its effects queue becomes `c2h`, which
@@ -60,7 +63,7 @@ Put the queue in core, give it a fixed size, and those problems go away. See
    created, when a definition is registered, and when an actor is created or
    loaded. Nothing else allocates.
    ([reference/macrostep.md](reference/macrostep.md))
-2. **All memory is bounded by parameters.**
+2. **Core storage is bounded by parameters and compiled definition requirements.**
    ([BEHAVIORS.md](BEHAVIORS.md#parameters))
 3. **Every overflow is a refusal to someone who can retry:**
    - the external client (`h2c` is full, so the host refuses at its edge);
@@ -69,8 +72,10 @@ Put the queue in core, give it a fixed size, and those problems go away. See
      covers it.
 
    ([BEHAVIORS.md](BEHAVIORS.md))
-4. **A run never waits.** Core runs each macrostep to completion, in pool
-   order. The only pause is the budget.
+4. **A macrostep never waits for ring capacity.** Core reserves mandatory
+   observations, cancellations, forwarding and end reports before taking
+   input. Ordinary actions can fail. Startup and control work can return
+   for the host to drain c2h between macrosteps; a budget can pause execution.
 5. **Core decides meaning; the application decides policy.** Reliability is
    built into charts (timeouts, retries, resync) and I/O processors
    (idempotency keys), not into the protocol. SCXML sends stay fire and forget.
@@ -150,6 +155,20 @@ The scenarios run this example through:
   intervention uses transitions and abandonment at legal boundaries.
   Detaching returns ownership to the pump
   ([reference/debugging.md](reference/debugging.md)).
+- **Accepted execution boundaries:** input admission is not completion.
+  `c2h.input_completed` follows stabilization and invocation-startup follow-up,
+  independently of recording. The host awaits it when ordering input
+  execution before time changes or replay publication. Recorded inputs use
+  synchronous snapshots taken before chart execution.
+- **Accepted invocation lifetime:** a local invocation holds an envelope
+  token for completion or cancellation. Unload refuses both owners of active
+  local invocations and active locally invoked children. Live service replies
+  carry instance tokens; authored invocation IDs alone are insufficient.
+- **Error storage correction:** the compiler sizes mandatory error and
+  completion storage, allocated outside macrosteps in addition to the chart's
+  ordinary internal-event quota. A single reserved error slot is insufficient.
+  The remaining whole-execution sizing requirement is described in
+  [macrostep.md](reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage).
 - **Found on the way:** core interns every event name computed at run time
   into tables that only grow. Any long-running system that computes event
   names leaks memory. An HTTP endpoint that maps request fields to event names

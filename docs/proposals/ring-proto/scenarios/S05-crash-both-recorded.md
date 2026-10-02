@@ -49,9 +49,9 @@ budgets, ring draining or the exact point core stopped.
 | S05.8 | – | – | The persisted stream is S01.1–S01.17: both spawns, `h2c.time` t0, `send.requested`, and the processor's five results. It does not include S01.20, because the crash came first. |
 | S05.9 | – | – | The host chooses parameters and compatible definitions for the new execution; this example starts with the old settings. |
 | S05.10 | h2c | Every selected record, each with the common flag `replaying` | Core runs both sessions together. Mail they generate is delivered inside core. Effects leaving the process (`c2h.send`, `c2h.invoke`, …) are suppressed while seeding. |
-| S05.11 | – | – | The selected stream ends. The new execution has its own configuration, values, timers and pending mail. Which tracker deltas are still pending depends on this execution's scheduling and resource conditions; the old **pool 3/64** is not a recovery guarantee. |
+| S05.11 | – | – | The selected stream ends, and the host waits for every supplied input's `c2h.input_completed` before publishing. Generated mail need not drain. The new execution has its own configuration, values, timers and pending mail. Which tracker deltas are still pending depends on this execution's scheduling and resource conditions; the old **pool 3/64** is not a recovery guarantee. |
 | S05.12 | h2c | [`h2c.publish`][h2c.publish] `{address: "", at: t0+2s}` | An empty address publishes every replaying session at once. |
-| S05.13 | c2h | [`c2h.published`][c2h.published] × 2, then live effects | Both sessions begin live execution from the derived state. The host may execute effects on receipt. A tracker resync reads the campaign's current state; replay does not promise the old view or exactly two pending deltas. |
+| S05.13 | c2h | One aggregate [`c2h.published`][c2h.published] `{session: 0}`, then live effects | Both sessions begin live execution from the derived state. The host may execute effects on receipt. A tracker resync reads the campaign's current state; replay does not promise the old view or exactly two pending deltas. |
 
 What whole-system replay costs:
 

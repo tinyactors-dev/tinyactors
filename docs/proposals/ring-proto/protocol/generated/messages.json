@@ -3,7 +3,7 @@
   "notes": [
     "The data model is not on a ring. Core calls ta_datamodel_vtable synchronously, as today (reference/data-model.md). Only its results cross the rings, as value references.",
     "Definition management uses request/result records. Native calls create and destroy the system, expose its rings, drive execution and install data model/value integrations. An attached debugger takes exclusive ownership of the whole system from the production pump. Inspection, abandonment and operator transitions use native primitives outside the production rings; no operator ring is added (reference/debugging.md).",
-    "A vref in a c2h record is a reference core retained for the host. The host releases it when it has used the record. A vref in an h2c record is one the host retained for core; core releases it when the envelope holding it is freed.",
+    "A vref in a c2h record is a reference core retained for the host. The host releases it when it has used the record. A vref in an h2c record transfers one retained reference to core at commit. Core releases it on refusal, drop or completion; a bounce returns status, not ownership. Host retry originals belong in a bounded submission table.",
     "Replay seeds new execution: supplied inputs derive configuration and data model values, which may differ from an earlier run. External effects are suppressed while seeding. In live execution the host may execute effects on receipt, independently of recording, persistence or c2h.macrostep_ended."
   ],
   "header": [
@@ -63,14 +63,14 @@
       "consumer": "core",
       "loss": "none",
       "when_full": "The host cannot post. It refuses at its edge (for example HTTP 503) or keeps the input itself. Core never waits on h2c.",
-      "doc": "Host requests, in host order. Event admission uses the envelope pool below its watermark. Definition requests run between macrosteps without an envelope (reference/definitions.md)."
+      "doc": "Host requests, in host order. An event that cannot be admitted is consumed and bounced after its refusal output is reserved. Admission is not an execution barrier. Definition requests run between macrosteps without an envelope (reference/definitions.md)."
     },
     {
       "name": "c2h",
       "producer": "core",
       "consumer": "host",
       "loss": "none",
-      "when_full": "A record an action would write does not fit: the action fails as error.execution.capacity. Core starts a macrostep only when c2h has room for its reserve (c2h.input, c2h.macrostep_ended and one record of the largest size). A run never waits.",
+      "when_full": "A record an action would write does not fit: the action fails as error.execution.capacity. Core starts a macrostep only when c2h has room for all mandatory observations, cancellations, autoforwards, completion and end reports, including wrap padding. Startup and control phases can yield between macrosteps.",
       "doc": "Everything that leaves the process or must not be lost: effects for I/O processors and invokers, macrostep end reports, bounces, load requests, images, and the inputs of recorded sessions."
     },
     {
@@ -112,7 +112,7 @@
         {
           "name": "h2c",
           "value": 0,
-          "doc": "an h2c.event; source_seq is its h2c seq"
+          "doc": "a host input; source_seq is its h2c seq"
         },
         {
           "name": "mail",
@@ -144,7 +144,7 @@
         {
           "name": "stable",
           "value": 0,
-          "doc": "the session waits for its next input"
+          "doc": "stabilization ended; invocation startup and internal follow-up may still follow"
         },
         {
           "name": "done",
@@ -160,14 +160,68 @@
           "name": "abandoned",
           "value": 3,
           "doc": "an operator abandoned it (core ADR 0082)"
-        },
-        {
-          "name": "capacity",
-          "value": 4,
-          "doc": "a microstep's reserve could not be restored; the macrostep ended there (reference/envelope.md, \"Running out\"); a tel.trace says why"
         }
       ],
       "doc": "How a macrostep ended."
+    },
+    {
+      "name": "input_completion_status",
+      "base": "u8",
+      "values": [
+        {
+          "name": "stable",
+          "value": 0,
+          "doc": "ready for another external input"
+        },
+        {
+          "name": "done",
+          "value": 1,
+          "doc": "the session finished"
+        },
+        {
+          "name": "runaway",
+          "value": 2,
+          "doc": "execution stopped at its configured limit"
+        },
+        {
+          "name": "abandoned",
+          "value": 3,
+          "doc": "an operator abandoned execution"
+        }
+      ],
+      "doc": "How an input and its invocation-startup follow-up settled."
+    },
+    {
+      "name": "input_refusal_reason",
+      "base": "u8",
+      "values": [
+        {
+          "name": "load_failed",
+          "value": 1,
+          "doc": ""
+        },
+        {
+          "name": "destroyed",
+          "value": 2,
+          "doc": ""
+        },
+        {
+          "name": "snapshot_failed",
+          "value": 3,
+          "doc": "copy_out could not produce the recording snapshot"
+        },
+        {
+          "name": "stale_invocation",
+          "value": 4,
+          "doc": "the service instance is no longer active"
+        },
+        {
+          "name": "invalid",
+          "value": 5,
+          "doc": "validation at take failed, for example a backwards replay clock"
+        }
+      ],
+      "doc": "Why an admitted host input was discarded before take."
     },
     {
       "name": "bounce_reason",
@@ -202,6 +256,41 @@
           "name": "invalid",
           "value": 6,
           "doc": "the record breaks the protocol; detail says how"
+        },
+        {
+          "name": "pool",
+          "value": 7,
+          "doc": "admission watermark, envelope quota or load restoration capacity"
+        },
+        {
+          "name": "names",
+          "value": 8,
+          "doc": "admission watermark or insufficient name-area storage"
+        },
+        {
+          "name": "allocation",
+          "value": 9,
+          "doc": "allocation outside macrosteps failed without committing the operation"
+        },
+        {
+          "name": "active_local_invoke",
+          "value": 10,
+          "doc": "unload of a local invocation owner or active invoked child"
+        },
+        {
+          "name": "pending_inputs",
+          "value": 11,
+          "doc": "publish attempted before supplied replay inputs settled"
+        },
+        {
+          "name": "stale_request",
+          "value": 12,
+          "doc": "a response does not match the outstanding load attempt"
+        },
+        {
+          "name": "record",
+          "value": 13,
+          "doc": "mandatory output can never fit the configured record or ring bounds"
         }
       ],
       "doc": "Why core handed an h2c record back unrun."
@@ -413,7 +502,7 @@
       "code": 257,
       "ring": "h2c",
       "summary": "Move the system clock",
-      "doc": "The header `at` is the new time. It never moves back. Delayed sends due by then become runnable envelopes, in due order, then send order.",
+      "doc": "The header `at` is the new time. It never moves back. Delayed sends due by then become runnable envelopes, in due order, then send order. Applied between macrosteps. Admission of an earlier event does not ensure that event has finished; the host awaits input_completed before posting time when it requires that execution order.",
       "fields": [],
       "flags": [],
       "replies": [
@@ -427,7 +516,7 @@
       "code": 258,
       "ring": "h2c",
       "summary": "An external event for a session",
-      "doc": "Header `session` names a resident session, or is 0 and `target` gives an address. Admitted into the pool when the pool is below its watermark. An event for an unloaded address waits in the pool and core asks for the session with c2h.load_needed.",
+      "doc": "Header `session` names a resident session, or is 0 and `target` gives an address. Admitted into the pool when the pool is below its watermark. An event for an unloaded address waits in the pool and core asks for the session with c2h.load_needed. A capacity refusal consumes and bounces the record, allowing later controls to progress.\n\nA live input runs at system time when taken; its header at does not advance that clock. A replay input moves its prepared session clock at take. Complete event metadata must also fit the expanded c2h.input. Service events carry invocation_seq, checked again at take. Zero means ordinary input, or an application-supplied replay seed.",
       "fields": [
         {
           "name": "target",
@@ -460,25 +549,39 @@
           "offset": 64
         },
         {
+          "name": "invokeid",
+          "type": "text",
+          "doc": "_event.invokeid for an invoked service, or empty",
+          "offset": 72
+        },
+        {
+          "name": "invocation_seq",
+          "type": "seq",
+          "doc": "c2h.invoke seq for a live service instance; 0 for ordinary input or replay seeds",
+          "offset": 80
+        },
+        {
           "name": "data",
           "type": "vref",
           "doc": "_event.data",
-          "offset": 72
+          "offset": 88
         },
         {
           "name": "type",
           "type": "event_type",
           "doc": "almost always external",
-          "offset": 80
+          "offset": 96
         }
       ],
       "flags": [],
       "replies": [
         "c2h.input",
         "c2h.bounced",
-        "c2h.load_needed"
+        "c2h.load_needed",
+        "c2h.input_refused",
+        "c2h.input_completed"
       ],
-      "fixed_size": 88,
+      "fixed_size": 104,
       "see": []
     },
     {
@@ -517,6 +620,12 @@
           "type": "blob",
           "doc": "a checkpoint c2h.state wrote, to restore; 0 for none",
           "offset": 64
+        },
+        {
+          "name": "request_seq",
+          "type": "seq",
+          "doc": "c2h.load_needed seq when answering a virtual-family load; 0 for an unsolicited spawn",
+          "offset": 72
         }
       ],
       "flags": [
@@ -528,9 +637,10 @@
       ],
       "replies": [
         "c2h.spawned",
-        "c2h.bounced"
+        "c2h.bounced",
+        "c2h.input_completed"
       ],
-      "fixed_size": 72,
+      "fixed_size": 80,
       "see": []
     },
     {
@@ -538,7 +648,7 @@
       "code": 260,
       "ring": "h2c",
       "summary": "End a replay and put the session on the route",
-      "doc": "Held delayed sends due by `at` are dropped; the rest stay in the pool under their due times (core ADR 0094). Active invocations are retired with error.communication.invoke.<id>.unavailable.\n\nAn empty `address` publishes every replaying session at once: the end of a whole-system replay (reference/recording-and-replay.md).",
+      "doc": "Held delayed sends due by `at` are dropped; the rest stay in the pool under their due times (core ADR 0094). Active invocations are retired with error.communication.invoke.<id>.unavailable.\n\nAn empty `address` publishes every replaying session at once: the end of a whole-system replay (reference/recording-and-replay.md).\n\nRefuses without mutation while supplied seed inputs remain pending. Generated local mail need not drain: pending mail follows the selected publication cut into live execution. Publication does not execute effects suppressed during seeding.",
       "fields": [
         {
           "name": "address",
@@ -566,7 +676,7 @@
       "code": 261,
       "ring": "h2c",
       "summary": "Bring an unloaded session back",
-      "doc": "Usually the answer to c2h.load_needed. Its delayed sends rejoin the pool. Waiting envelopes for it become runnable.\n\nLoading only bounds memory; it is not persistence. The image is one c2h.unloaded wrote in this process, and it is valid only here (core ADR 0074). To restore a session after a restart, use h2c.spawn with `state` (reference/unloading.md).",
+      "doc": "Usually the answer to c2h.load_needed. Its delayed sends rejoin the pool. Waiting envelopes for it become runnable.\n\nLoading only bounds memory; it is not persistence. The image is one c2h.unloaded wrote in this process, and it is valid only here (core ADR 0074). To restore a session after a restart, use h2c.spawn with `state` (reference/unloading.md).\n\nStage the complete restore outside macrosteps. Capacity or decoding failure leaves residency, timers and waiting mail unchanged. The host pins image until c2h.loaded or c2h.bounced correlates this request. Zero request_seq is refused when an active load request exists for the address.",
       "fields": [
         {
           "name": "address",
@@ -579,6 +689,12 @@
           "type": "blob",
           "doc": "the bytes c2h.unloaded gave, in this process",
           "offset": 40
+        },
+        {
+          "name": "request_seq",
+          "type": "seq",
+          "doc": "c2h.load_needed seq; 0 for an unsolicited timer-driven load",
+          "offset": 48
         }
       ],
       "flags": [],
@@ -586,7 +702,7 @@
         "c2h.loaded",
         "c2h.bounced"
       ],
-      "fixed_size": 48,
+      "fixed_size": 56,
       "see": []
     },
     {
@@ -594,7 +710,7 @@
       "code": 262,
       "ring": "h2c",
       "summary": "The session cannot be loaded",
-      "doc": "Every envelope waiting for the address is recycled: mail becomes error.communication for its sender, in the same envelope (reference/envelope.md, \"Recycling\"); external events are dropped and reported as tel.trace with a new trace kind, DEAD_LETTER, naming the event and the reason.",
+      "doc": "Every envelope waiting for the address is recycled: mail becomes error.communication for its sender, in the same envelope (reference/envelope.md, \"Recycling\"); external inputs receive c2h.input_refused and DEAD_LETTER telemetry. Large waiting lists are processed incrementally between macrosteps as c2h space permits.",
       "fields": [
         {
           "name": "address",
@@ -607,11 +723,21 @@
           "type": "text",
           "doc": "",
           "offset": 40
+        },
+        {
+          "name": "request_seq",
+          "type": "seq",
+          "doc": "the outstanding c2h.load_needed seq; a stale attempt changes nothing",
+          "offset": 48
         }
       ],
       "flags": [],
-      "replies": [],
-      "fixed_size": 48,
+      "replies": [
+        "c2h.load_result",
+        "c2h.input_refused",
+        "c2h.bounced"
+      ],
+      "fixed_size": 56,
       "see": []
     },
     {
@@ -619,13 +745,19 @@
       "code": 263,
       "ring": "h2c",
       "summary": "Page a stable session out",
-      "doc": "",
+      "doc": "Refuses an owner of an active local invocation and an active locally invoked child. No lifetime envelope token moves into an image.",
       "fields": [
         {
           "name": "address",
           "type": "text",
           "doc": "",
           "offset": 32
+        },
+        {
+          "name": "image",
+          "type": "blob",
+          "doc": "host-provided writable sink, pinned until unloaded or bounced",
+          "offset": 40
         }
       ],
       "flags": [],
@@ -633,7 +765,7 @@
         "c2h.unloaded",
         "c2h.bounced"
       ],
-      "fixed_size": 40,
+      "fixed_size": 48,
       "see": []
     },
     {
@@ -648,6 +780,12 @@
           "type": "text",
           "doc": "",
           "offset": 32
+        },
+        {
+          "name": "image",
+          "type": "blob",
+          "doc": "host-provided writable sink, pinned until state or bounced",
+          "offset": 40
         }
       ],
       "flags": [],
@@ -655,7 +793,7 @@
         "c2h.state",
         "c2h.bounced"
       ],
-      "fixed_size": 40,
+      "fixed_size": 48,
       "see": [
         "h2c.spawn"
       ]
@@ -665,7 +803,7 @@
       "code": 265,
       "ring": "h2c",
       "summary": "An invoked service finished or failed",
-      "doc": "Header `session` is the invoking session.",
+      "doc": "Header `session` is the invoking session.\n\nDone enters the external queue with invoke metadata for finalize; errors are platform/internal events without event invokeid. A stale live instance cannot change a later invocation with the same authored ID.",
       "fields": [
         {
           "name": "invokeid",
@@ -674,29 +812,44 @@
           "offset": 32
         },
         {
+          "name": "invocation_seq",
+          "type": "seq",
+          "doc": "the c2h.invoke seq; checked at take, 0 only for replay seeds",
+          "offset": 40
+        },
+        {
           "name": "reason",
           "type": "text",
           "doc": "for error: the reason segment",
-          "offset": 40
+          "offset": 48
         },
         {
           "name": "data",
           "type": "vref",
           "doc": "done data or error data",
-          "offset": 48
+          "offset": 56
         },
         {
           "name": "kind",
           "type": "invoke_report_kind",
           "doc": "",
-          "offset": 56
+          "offset": 64
+        },
+        {
+          "name": "ends",
+          "type": "bool",
+          "doc": "for error: retire the matching instance at take after validation and internal notification enqueue; false preserves it",
+          "offset": 65
         }
       ],
       "flags": [],
       "replies": [
-        "c2h.input"
+        "c2h.input",
+        "c2h.bounced",
+        "c2h.input_refused",
+        "c2h.input_completed"
       ],
-      "fixed_size": 64,
+      "fixed_size": 72,
       "see": []
     },
     {
@@ -801,7 +954,7 @@
       "code": 513,
       "ring": "c2h",
       "summary": "A session exists",
-      "doc": "For a recorded session this is the first record of its log.",
+      "doc": "For a recorded session this is the first record of its log.\n\nCreation does not imply bootstrap and invocation startup have settled. c2h.input_completed correlates that completion with the originating spawn.",
       "fields": [
         {
           "name": "address",
@@ -838,7 +991,7 @@
       "code": 514,
       "ring": "c2h",
       "summary": "A recorded session took an input",
-      "doc": "Written when a recorded session takes an envelope, before any effect of the macrostep it starts. These observations, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), seed a new execution. Recording imposes no persistence-before-effects rule.\n\nNot written for an input a replaying session takes: that input is already in the log being replayed. A session restored from c2h.state and replayed starts writing c2h.input again after h2c.publish.",
+      "doc": "Written when a recorded session takes an envelope, before any effect of the macrostep it starts. These observations, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), seed a new execution. Recording imposes no persistence-before-effects rule.\n\nNot written for an input a replaying session takes: that input is already in the log being replayed. A session restored from c2h.state and replayed starts writing c2h.input again after h2c.publish.\n\nData is a copy_out snapshot created before binding or running the input, including finalize and autoforward. Later chart mutations cannot change it.",
       "fields": [
         {
           "name": "macrostep",
@@ -905,11 +1058,35 @@
           "type": "event_type",
           "doc": "",
           "offset": 105
+        },
+        {
+          "name": "report_invokeid",
+          "type": "text",
+          "doc": "source invoke_report: original report invocation ID, separate from event invokeid",
+          "offset": 108
+        },
+        {
+          "name": "report_reason",
+          "type": "text",
+          "doc": "source invoke_report/error: original reason token",
+          "offset": 116
+        },
+        {
+          "name": "report_kind",
+          "type": "invoke_report_kind",
+          "doc": "source invoke_report only; otherwise ignored",
+          "offset": 124
+        },
+        {
+          "name": "report_ends",
+          "type": "bool",
+          "doc": "source invoke_report/error: original retirement decision",
+          "offset": 125
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 112,
+      "fixed_size": 128,
       "see": []
     },
     {
@@ -974,12 +1151,12 @@
       "code": 516,
       "ring": "c2h",
       "summary": "Start an invocation",
-      "doc": "",
+      "doc": "Written in the post-macrostep startup phase. This record seq is the live service-instance token; authored invokeid remains the SCXML identity.",
       "fields": [
         {
           "name": "macrostep",
           "type": "macrostep",
-          "doc": "",
+          "doc": "the stabilization macrostep that enabled this startup",
           "offset": 32
         },
         {
@@ -1007,17 +1184,24 @@
           "offset": 64
         },
         {
+          "name": "content",
+          "type": "vref",
+          "doc": "evaluated content, or 0",
+          "offset": 72
+        },
+        {
           "name": "autoforward",
           "type": "bool",
           "doc": "",
-          "offset": 72
+          "offset": 80
         }
       ],
       "flags": [],
       "replies": [
-        "h2c.invoke_report"
+        "h2c.invoke_report",
+        "h2c.event"
       ],
-      "fixed_size": 80,
+      "fixed_size": 88,
       "see": []
     },
     {
@@ -1025,7 +1209,7 @@
       "code": 517,
       "ring": "c2h",
       "summary": "Cancel an invocation",
-      "doc": "",
+      "doc": "Mandatory state-exit output, reserved before execution. The host invalidates this instance and ignores its late callbacks.",
       "fields": [
         {
           "name": "macrostep",
@@ -1038,11 +1222,17 @@
           "type": "text",
           "doc": "",
           "offset": 40
+        },
+        {
+          "name": "invocation_seq",
+          "type": "seq",
+          "doc": "the canceled c2h.invoke instance",
+          "offset": 48
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 48,
+      "fixed_size": 56,
       "see": []
     },
     {
@@ -1050,7 +1240,7 @@
       "code": 518,
       "ring": "c2h",
       "summary": "Autoforward an event to an invocation",
-      "doc": "",
+      "doc": "Every event field is preserved at the autoforward point. Finalize runs first, as in the SCXML algorithm; each recipient then receives its own copy_out data before transition code runs. Record space is mandatory; a data-model copy failure remains error.execution.",
       "fields": [
         {
           "name": "macrostep",
@@ -1061,43 +1251,61 @@
         {
           "name": "invokeid",
           "type": "text",
-          "doc": "",
+          "doc": "destination invocation, not the forwarded event invokeid",
           "offset": 40
+        },
+        {
+          "name": "invocation_seq",
+          "type": "seq",
+          "doc": "destination c2h.invoke instance",
+          "offset": 48
         },
         {
           "name": "name",
           "type": "text",
           "doc": "",
-          "offset": 48
+          "offset": 56
         },
         {
           "name": "sendid",
           "type": "text",
           "doc": "",
-          "offset": 56
+          "offset": 64
         },
         {
           "name": "origin",
           "type": "text",
           "doc": "",
-          "offset": 64
+          "offset": 72
+        },
+        {
+          "name": "origin_type",
+          "type": "text",
+          "doc": "the original event origintype",
+          "offset": 80
+        },
+        {
+          "name": "event_invokeid",
+          "type": "text",
+          "doc": "the original event invokeid",
+          "offset": 88
         },
         {
           "name": "data",
           "type": "vref",
           "doc": "",
-          "offset": 72
+          "offset": 96
         },
         {
           "name": "type",
           "type": "event_type",
           "doc": "",
-          "offset": 80
+          "offset": 104
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 88,
+      "fixed_size": 112,
       "see": []
     },
     {
@@ -1136,7 +1344,7 @@
       "code": 520,
       "ring": "c2h",
       "summary": "A macrostep ended",
-      "doc": "Everything the macrostep wrote to c2h comes before this record. The host may already have executed effects on receipt. This record reports that execution ended and gives its status, including abandonment or capacity termination; it is neither an effect hold nor a durability acknowledgement (reference/macrostep.md, \"The macrostep end\").",
+      "doc": "Everything the macrostep wrote to c2h comes before this record. The host may already have executed effects on receipt. This record reports that execution ended and gives its status, including abandonment; invocation startup may follow. It is neither input completion nor a durability acknowledgement (reference/macrostep.md, \"The macrostep end\").",
       "fields": [
         {
           "name": "macrostep",
@@ -1145,27 +1353,39 @@
           "offset": 32
         },
         {
+          "name": "source",
+          "type": "input_source",
+          "doc": "",
+          "offset": 40
+        },
+        {
+          "name": "source_seq",
+          "type": "seq",
+          "doc": "originating h2c input, including internal startup follow-up; 0 for local work",
+          "offset": 48
+        },
+        {
           "name": "effects",
           "type": "u32",
           "doc": "records this macrostep wrote to c2h, this end report excluded",
-          "offset": 40
+          "offset": 56
         },
         {
           "name": "mail",
           "type": "u32",
           "doc": "envelopes it put in the pool",
-          "offset": 44
+          "offset": 60
         },
         {
           "name": "status",
           "type": "macrostep_status",
           "doc": "",
-          "offset": 48
+          "offset": 64
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 56,
+      "fixed_size": 72,
       "see": []
     },
     {
@@ -1200,7 +1420,7 @@
       "code": 522,
       "ring": "c2h",
       "summary": "An h2c record was not run",
-      "doc": "Core hands it back with a reason and keeps nothing of it. The host decides whether to post it again.",
+      "doc": "Core consumes the record, releases transferred values and keeps nothing of it. The host decides whether to retry using its own retained original. Reserve the bounded reply before consuming the request. This is terminal before admission; an admitted input instead ends in refused or completed.",
       "fields": [
         {
           "name": "source_seq",
@@ -1294,16 +1514,28 @@
           "offset": 32
         },
         {
+          "name": "cause_seq",
+          "type": "seq",
+          "doc": "the h2c.unload",
+          "offset": 40
+        },
+        {
           "name": "image",
           "type": "blob",
           "doc": "",
-          "offset": 40
+          "offset": 48
+        },
+        {
+          "name": "image_bytes",
+          "type": "u64",
+          "doc": "complete valid bytes written into the requested sink",
+          "offset": 56
         },
         {
           "name": "wake_at",
           "type": "time",
           "doc": "its earliest delayed send",
-          "offset": 48
+          "offset": 64
         }
       ],
       "flags": [
@@ -1314,7 +1546,7 @@
         }
       ],
       "replies": [],
-      "fixed_size": 56,
+      "fixed_size": 72,
       "see": []
     },
     {
@@ -1331,21 +1563,33 @@
           "offset": 32
         },
         {
+          "name": "cause_seq",
+          "type": "seq",
+          "doc": "the h2c.checkpoint",
+          "offset": 40
+        },
+        {
           "name": "image",
           "type": "blob",
           "doc": "",
-          "offset": 40
+          "offset": 48
+        },
+        {
+          "name": "image_bytes",
+          "type": "u64",
+          "doc": "complete valid bytes written into the requested sink",
+          "offset": 56
         },
         {
           "name": "input_seq",
           "type": "seq",
           "doc": "the last c2h.input it includes",
-          "offset": 48
+          "offset": 64
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 56,
+      "fixed_size": 72,
       "see": []
     },
     {
@@ -1353,7 +1597,7 @@
       "code": 527,
       "ring": "c2h",
       "summary": "A replayed session is live",
-      "doc": "",
+      "doc": "For an empty-address publication, one session-0 result summarizes the atomic mode change for all replaying sessions.",
       "fields": [
         {
           "name": "address",
@@ -1362,27 +1606,33 @@
           "offset": 32
         },
         {
-          "name": "replayed",
-          "type": "u32",
-          "doc": "inputs it replayed",
+          "name": "cause_seq",
+          "type": "seq",
+          "doc": "the h2c.publish",
           "offset": 40
         },
         {
+          "name": "replayed",
+          "type": "u64",
+          "doc": "inputs it replayed; total for all-session publication",
+          "offset": 48
+        },
+        {
           "name": "dropped_timers",
-          "type": "u32",
+          "type": "u64",
           "doc": "held delayed sends due by `at`",
-          "offset": 44
+          "offset": 56
         },
         {
           "name": "retired_invokes",
-          "type": "u32",
+          "type": "u64",
           "doc": "",
-          "offset": 48
+          "offset": 64
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 56,
+      "fixed_size": 72,
       "see": []
     },
     {
@@ -1424,15 +1674,21 @@
           "offset": 32
         },
         {
+          "name": "cause_seq",
+          "type": "seq",
+          "doc": "the h2c.destroy, or 0 for execution-driven destruction",
+          "offset": 40
+        },
+        {
           "name": "reason",
           "type": "destroy_reason",
           "doc": "",
-          "offset": 40
+          "offset": 48
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 48,
+      "fixed_size": 56,
       "see": []
     },
     {
@@ -1470,6 +1726,87 @@
       "flags": [],
       "replies": [],
       "fixed_size": 56,
+      "see": []
+    },
+    {
+      "id": "c2h.input_refused",
+      "code": 531,
+      "ring": "c2h",
+      "summary": "An admitted host input was not taken",
+      "doc": "Exactly one terminal refusal for an admitted h2c.event or invoke_report discarded by load failure, destruction, stale-instance validation or snapshot failure. No input observation or completion follows. Core releases its transferred values; host retry originals remain host-owned.",
+      "fields": [
+        {
+          "name": "source_seq",
+          "type": "seq",
+          "doc": "the originating h2c input",
+          "offset": 32
+        },
+        {
+          "name": "reason",
+          "type": "input_refusal_reason",
+          "doc": "",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 48,
+      "see": []
+    },
+    {
+      "id": "c2h.input_completed",
+      "code": 532,
+      "ring": "c2h",
+      "summary": "A host input and its startup follow-up settled",
+      "doc": "Exactly one terminal result for a taken host input, including spawn bootstrap. Emitted after stabilization and invocation-startup internal follow-up settle, regardless of recording or replaying flags. Earlier macrostep ends do not settle the host operation. This does not hold effects, await child-service completion or acknowledge persistence.",
+      "fields": [
+        {
+          "name": "source_seq",
+          "type": "seq",
+          "doc": "the originating h2c input",
+          "offset": 32
+        },
+        {
+          "name": "macrostep",
+          "type": "macrostep",
+          "doc": "the last macrostep in the input execution",
+          "offset": 40
+        },
+        {
+          "name": "status",
+          "type": "input_completion_status",
+          "doc": "",
+          "offset": 48
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 56,
+      "see": []
+    },
+    {
+      "id": "c2h.load_result",
+      "code": 533,
+      "ring": "c2h",
+      "summary": "A load-failure response finished recycling waiting inputs",
+      "doc": "Acknowledges h2c.load_failed after all waiting envelopes were recycled or refused. Each external input refusal precedes this result. Recycling may yield between macrosteps to drain c2h; its cursor uses the existing waiting list. A stale attempt receives bounced instead.",
+      "fields": [
+        {
+          "name": "cause_seq",
+          "type": "seq",
+          "doc": "the h2c.load_failed",
+          "offset": 32
+        },
+        {
+          "name": "request_seq",
+          "type": "seq",
+          "doc": "the answered c2h.load_needed",
+          "offset": 40
+        }
+      ],
+      "flags": [],
+      "replies": [],
+      "fixed_size": 48,
       "see": []
     },
     {

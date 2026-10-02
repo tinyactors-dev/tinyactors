@@ -88,8 +88,10 @@ All a binding does, in pseudo-code:
 on start:          create the system (parameters), install native integrations
                    post h2c.definition_register for each complete spec
                    drive the loop; await successful definition results before spawn
-on an edge input:  if h2c has room: post h2c.event / h2c.spawn; else refuse (503) or keep it (policy)
-on wake timer:     post h2c.time(now)
+on an edge input:  if admitting and h2c and the bounded submission table have room:
+                     retain the original request; post h2c.event
+                   else refuse (503) or keep it within an explicit bound (policy)
+on wake timer:     retain the latest time; post h2c.time(now) before new ordinary inputs
 loop:
   ta_run(budget)                         # admits from h2c, runs macrosteps to completion
   read each available c2h record:
@@ -99,10 +101,12 @@ loop:
     c2h.invoke / c2h.invoke_cancel / c2h.invoke_forward → invoker, on receipt
     c2h.log           → logger, on receipt
     c2h.macrostep_ended → report how the macrostep ended
+    c2h.input_completed → resolve source_seq; release the retained original
+    c2h.input_refused   → reject source_seq; release or retry the retained original
   c2h.wake            → (re)arm the one timer
-  c2h.load_needed     → fetch the image → h2c.load, or h2c.load_failed
+  c2h.load_needed     → fetch the image → h2c.load, or h2c.load_failed, echoing request_seq
   c2h.unloaded        → store image and wake_at in the index of unloaded sessions
-  c2h.bounced         → post again later, or drop                          (policy)
+  c2h.bounced         → reject source_seq; release or retry the retained original (policy)
   tel                 → OTLP encoder, when the exporter asks
   I/O results (acks, rejections, errors) → h2c.event / h2c.invoke_report
 ```
@@ -111,28 +115,53 @@ The host never routes mail between actors, never orders inputs for a busy
 actor, never keeps timers for resident actors, and never holds anything that
 belongs to the middle of a macrostep.
 
+The submission table has a host-configured bound. It retains the original
+metadata and its own data reference until a terminal result names the
+submission's `source_seq`; the reference transferred to h2c is separate.
+The host must not accept an input it cannot track within that bound.
+`admitting` is a hint, not a reservation: an earlier macrostep can consume
+capacity after an event is posted. Core consumes and bounces such an event
+without executing it, so control commands behind it can still progress.
+The host drains c2h after every yield and prioritizes load answers, load
+failures and clock updates over new ordinary inputs.
+
+Core reads h2c in order, and applies control commands between macrosteps.
+An admitted event is queued, not necessarily completed before the next h2c
+command is read. A budget-paused macrostep resumes before further commands
+are applied. If the host needs an input's effects to precede a control
+command, it waits for that input's `c2h.input_completed` before posting the
+command. Refusal requires an explicit retry or application decision.
+
 ## The life of an input
 
 1. **Edge.** The host posts [`h2c.event`](protocol/generated/MESSAGES.md#h2cevent).
    Its name is bytes and its data is a `vref`. If `h2c` is full, the host
    refuses here. ([S09](scenarios/S09-edge-backpressure.md))
 2. **Admission.** Core moves the record into an envelope while the pool is
-   below `admissionWatermark`. Its name bytes go to the name area. It is
+   below `admissionWatermark` and its complete text fits. Its name bytes go to the name area. It is
    appended to the run queue, whose arrival order keeps each sender's
    messages to a receiver in order. If the target isn't loaded, it waits on
    that address's list, and core writes [`c2h.load_needed`](protocol/generated/MESSAGES.md#c2hload_needed).
    ([S07](scenarios/S07-unloaded-tracker.md))
+   An input that cannot be admitted is consumed and answered with
+   `c2h.bounced`, after reserving its result bytes; it leaves no envelope
+   or transferred value reference behind.
 3. **Take.** Core picks the next runnable envelope, mail before admission by
    `fairnessRatio`. If the session is recorded, core writes
    [`c2h.input`](protocol/generated/MESSAGES.md#c2hinput).
-   The envelope stays where it is until the macrostep end.
+   The envelope stays owned through invocation startup and its internal follow-up.
 4. **Macrostep.** Data model calls go through the vtable. Each effect is
    either a `c2h` record or a new envelope (mail, delayed send). Nothing
    allocates. A resource that is full fails the action as
    `error.execution.capacity`. ([S02](scenarios/S02-full-pool.md))
-5. **Macrostep end.** Core writes [`c2h.macrostep_ended`](protocol/generated/MESSAGES.md#c2hmacrostep_ended)
-   and frees the envelope. The host may already have executed effects
+5. **Macrostep end and startup.** Core writes [`c2h.macrostep_ended`](protocol/generated/MESSAGES.md#c2hmacrostep_ended),
+   then starts surviving pending invocations. Resulting internal errors run
+   before another external input. Once the chain and notification flushing
+   settle, core writes `c2h.input_completed` and frees the envelope. The host may already have executed effects
    during a budget pause; recording and persistence follow application policy.
+   An h2c input also receives `c2h.input_completed` with its `source_seq`,
+   even for an unrecorded session. An admitted input refused before being
+   taken receives `c2h.input_refused` instead.
    ([S01](scenarios/S01-fanout.md))
 
 ## The life of a send
@@ -152,6 +181,13 @@ cancelled delayed send never arrives. ([S08](scenarios/S08-cancel-and-second-cli
 
 - The host owns the clock. It moves the clock by posting
   [`h2c.time`](protocol/generated/MESSAGES.md#h2ctime).
+- A live input uses the system clock when it is taken. That time is fixed
+  for its entire macrostep, including budget pauses. Its h2c header `at`
+  does not advance the live clock. The host posts a clock update before
+  an input when it wants the current time to apply to that input.
+- A replay input uses its supplied `at` when taken, advancing only its
+  replaying session's clock under the monotonic-time rules. Refused input
+  changes no clock.
 - Core owns the deadline index for resident sessions. It writes
   [`c2h.wake`](protocol/generated/MESSAGES.md#c2hwake) whenever the earliest
   due time changes.
@@ -167,7 +203,9 @@ cancelled delayed send never arrives. ([S08](scenarios/S08-cancel-and-second-cli
 - **Recording observes inputs; the application owns journaling.** Effects
   may execute on receipt, independently of recording or persistence.
 - To replay a session, post `h2c.spawn` with the replaying flag, then the
-  recorded inputs, then `h2c.publish`.
+  recorded inputs, await their `c2h.input_completed` results, then post
+  `h2c.publish`. A bounce or refusal requires retry or an explicit choice
+  to omit that seed input; admission alone does not establish completion.
 - **Replay seeds new execution:** it derives configuration and data model
   values before publish. It may produce different state as definitions,
   resource conditions, budgets and draining change.
@@ -185,7 +223,7 @@ Crash cases: [S03](scenarios/S03-crash-unrecorded.md),
 
 | Fixed at system creation (or filled on demand up to its bound, outside macrosteps) | Per actor | Per definition |
 |---|---|---|
-| `h2c`, `c2h`, `tel`; the envelope pool; the name area; scratch; one continuation; one internal queue | its record (about 332 bytes today) and its list heads; its invocation slots, sized by the definition | compiled chart; authored names, interned |
+| `h2c`, `c2h`, `tel`; the envelope pool; name area; scratch; one continuation; ordinary internal quota plus compiler-sized mandatory workspace | its record (about 332 bytes today) and list heads; invocation slots sized by the definition; a pool token per active local invocation | compiled chart, mandatory-event bounds and authored names, interned |
 
 Nothing in the table grows during a macrostep. The data model's own memory
 belongs to the data model. Figures are in [BEHAVIORS.md](BEHAVIORS.md#parameters)

@@ -12,7 +12,7 @@ Each scenario ends with a table of who drops what and who retries how.
 | Scenario | What it shows |
 |---|---|
 | [S01: Fanout](S01-fanout.md) | The happy path, plus one rejection and one communication error: effects executable on receipt, macrostep end reports, tracker updates, the timeout retry and the HTTP reply. |
-| [S02: Full pool](S02-full-pool.md) | 10 notifications in a pool of 8: a capacity error abandons the fanout's block, admission pauses, the edge refuses HTTP. Then the windowed chart does the same job with no errors. |
+| [S02: Full pool](S02-full-pool.md) | 10 notifications in a pool of 8: a capacity error abandons the fanout's block, ordinary admission is refused, the edge refuses HTTP. Then the windowed chart does the same job with no errors. |
 | [S03: Crash, nothing recorded](S03-crash-unrecorded.md) | Everything in the process is lost. A second click and the notify processor's own key finish the job. |
 | [S04: Crash, campaign recorded](S04-crash-campaign-recorded.md) | The campaign is replayed and published. Its timeout survives in the pool. The tracker shows zero until it resyncs. |
 | [S05: Crash, both recorded](S05-crash-both-recorded.md) | Per-session replay does not restore in-flight mail. Resync reads current state. Whole-system replay seeds the sessions together and generates new mail, without exact recovery. |
@@ -21,6 +21,7 @@ Each scenario ends with a table of who drops what and who retries how.
 | [S08: Cancel and a second click](S08-cancel-and-second-click.md) | Timers are envelopes, so `<cancel>` is exact in either order of a click and a timeout. |
 | [S09: Edge backpressure](S09-edge-backpressure.md) | h2c is full: the host refuses HTTP, and an acknowledgement the host drops is covered by the chart's timeout. |
 | [S10: Run-time names](S10-run-time-names.md) | A client posts random event names. They live in the name area, nothing is interned, and memory does not grow. |
+| [S11: Semantic boundaries](S11-semantic-boundaries.md) | Mandatory lifecycle output, compiler-sized errors, child completion, snapshots, input disposition, load atomicity and stale replies at capacity limits. |
 
 ## Conventions
 
@@ -35,6 +36,11 @@ Each scenario ends with a table of who drops what and who retries how.
   where they matter.
 - **Rings.** `h2c` is host → core, `c2h` is core → host (lossless), `tel` is
   telemetry (lossy) ([ring](../reference/ring.md)).
+- **Completion.** Tables omit routine `c2h.input_completed` records unless
+  their ordering matters. Every taken host input, including bootstrap, has
+  one such terminal result after invocation-startup follow-up. Dropped
+  admitted inputs have `c2h.input_refused`; unadmitted inputs have
+  `c2h.bounced`. A macrostep end alone does not settle a host request.
 - **Occupancy.** `pool 6/8` counts envelopes: admitted inputs until their
   macrostep's macrostep end, mail, and delayed sends ([envelope](../reference/envelope.md)).
 - **Sendids.** `#_send.<n>` is a generated send ID, the sending session's

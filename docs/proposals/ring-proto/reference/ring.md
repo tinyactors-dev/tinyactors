@@ -45,7 +45,7 @@ reads it; only the noted side writes each field.
 | `tel.dropped` | core | telemetry records dropped since creation |
 | `pool.envelopes`, `pool.free`, `pool.waiting`, `pool.high_water` | core | the envelope pool ([envelope.md](envelope.md)) |
 | `names.bytes`, `names.used` | core | the name area ([names.md](names.md)) |
-| `admitting` | core | whether core is moving h2c events into the pool now (pool below `admissionWatermark`); definition requests use no envelope |
+| `admitting` | core | whether a new event can currently be admitted (pool below `admissionWatermark`); core still consumes and bounces events it cannot admit, and controls use no envelope |
 
 The usage counters exist so a host can make decisions at its edge without
 asking core. For example, it can answer HTTP 503 while `admitting` is
@@ -80,10 +80,19 @@ tail. A record's size is rounded up to 8 bytes, so every record starts
   [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced)
   (`invalid`), and the host should never write one. On tel, a too-long
   `value_text` is cut and flagged `truncated`.
-- **A reader ignores a kind it does not know**, by skipping `size` bytes.
-  So a newer core can add a message to a ring without breaking an older
-  reader's framing. Whether the reader may ignore it is a protocol version
-  question, and `version` in the control block answers it.
+- **Every envelope must fit its complete input observation.** Admission
+  checks the aligned `c2h.input` size, including source metadata and every
+  event field, even for an unrecorded or replaying target. A fitting
+  `h2c.event` alone is insufficient. An oversized observation causes an
+  `invalid` bounce before admission; a chart-produced send fails as
+  `error.execution.capacity.record` before committing anything. Registration
+  checks that definition-derived platform event metadata can fit too.
+- **Skipping an unknown kind is safe only under a negotiated rule.**
+  Framing permits skipping `size` bytes, but an unknown record can own
+  vrefs or require a terminal response. The control block's `version` must
+  establish which kinds and ownership rules both sides understand. A
+  nonnegotiated kind is a protocol failure, not permission to leak its
+  references by blindly advancing the tail.
 
 ## Writing: reserve, fill, commit
 
@@ -128,6 +137,14 @@ Why a pad and not the other choices:
 
 The cost is at most `maxRecordBytes - 8` bytes left unused per wrap.
 
+If a pad and record cannot fit together even when the ring is empty, the
+producer may commit the pad alone and return for the consumer to release it.
+The next reservation starts at offset zero. This guarantees progress when
+`capacity = maxRecordBytes` and the empty ring's counters are at a nonzero
+offset. Pads never acquire values or consume a sequence number. Mandatory
+batch preflight includes padding or performs this empty-ring alignment
+before beginning the phase; no record is partially committed.
+
 ## Reading: look, use, release
 
 1. **Look.** Read `head`. Everything between the read position and `head`
@@ -165,25 +182,32 @@ are three:
 | Ring | Producer | When full | Who retries |
 |---|---|---|---|
 | `h2c` | host | The host cannot post. It refuses at its edge (HTTP 503, or it stops reading a socket), or keeps the input in its own memory. Core never waits on h2c. | The external client, or the host by its own policy |
-| `c2h` | core | An action whose record does not fit fails as `error.execution.capacity.c2h`, and the rest of its block is abandoned. A run never waits. | The sending chart |
+| `c2h` | core | An ordinary action whose record does not fit while preserving the mandatory reserve fails as `error.execution.capacity.c2h`. Control and startup work can return for a drain between macrosteps. | Sending chart or host driver |
 | `tel` | core | The record is dropped and counted. The next [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) reports it. | Nobody: telemetry is allowed to be incomplete |
 
 ### The c2h reserve
 
-Some c2h records are not written by an action, so no chart could be told
-when they don't fit:
-[`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) for a recorded
-session, and the [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended)
-that ends every macrostep. So:
+Before taking an input or starting a macrostep, core reserves all mandatory
+records for that phase: its input observation when recorded, required
+autoforwards, invocation cancellations, macrostep end and terminal
+`finished` notification. It uses the actual event metadata and the
+definition's bound on invocations that can be active. The calculation
+includes alignment and every wrap pad. A system/definition combination
+whose mandatory reservation cannot fit even an empty c2h ring is refused
+before execution; retrying an impossible reservation is not progress.
 
-> **Core starts a macrostep only when c2h has room for its `c2h.input`, its
-> `c2h.macrostep_ended`, and one record of `maxRecordBytes`.**
+Actions preserve that reservation when checking whether an optional effect
+fits. A refusible effect can fail as `error.execution.capacity.c2h`, but
+mandatory lifecycle records cannot disappear as a consequence. Internal
+error storage is sized at compilation as described in
+[envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool); one spare
+error slot is not a sufficient bound for several failing executable blocks.
 
-The last part is for the action that finds c2h full: its failure becomes
-`error.execution.capacity.c2h` in the internal queue, and the macrostep still
-reaches its macrostep end. Every action that writes to c2h first checks that the
-room left after its own record still holds the macrostep end. So an action can
-fail, but the macrostep end can't.
+Core may return to the host between completed phases, retaining only its
+bounded continuation, to drain c2h before reserving the next phase. No
+other session runs in the middle of the current macrostep. Input completion
+has its own fixed reservation after startup followups; a macrostep end
+alone does not settle the input.
 
 When the reserve isn't there, core takes no envelope and `ta_run` returns.
 The host drains c2h and calls `ta_run` again. Records outside a macrostep
@@ -191,6 +215,12 @@ work the same way: [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced)
 [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed),
 [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake). If c2h has no room
 for one, core doesn't consume the h2c record or event that would cause it.
+When an event cannot be admitted because the pool or name area is full,
+core reserves a bounded `c2h.bounced`, consumes the event and releases its
+transferred references. That refusal lets controls behind it make progress.
+An admitted input later discarded gets a reserved `c2h.input_refused`;
+one processed to completion gets `c2h.input_completed`. Both preserve the
+originating h2c sequence independently of recording.
 
 Definition requests follow this rule too: core reserves their fixed
 [`c2h.definition_result`](../protocol/generated/MESSAGES.md#c2hdefinition_result)
@@ -244,8 +274,49 @@ the binding crosses as a reference:
 | `vref` | a slot in the binding's value table: a JS object, a `jv`, an SQL row ([data-model.md](data-model.md)) | On **c2h**, core retained it for the host, and the host releases it when done with the record. On **h2c**, the host retained it for core, and core releases it when the envelope holding it is freed ([envelope.md](envelope.md)). **Never on tel:** a lossy ring would leak the references it drops, so tel carries `value_text`, cut at `telemetryValueBytes`. |
 | `blob` | a host-owned byte buffer, read or written through core's byte source and sink (core ADR 0090) | The host. Core writes images into a sink the host provides ([`c2h.unloaded`](../protocol/generated/MESSAGES.md#c2hunloaded), [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate)) and reads them from a source ([`h2c.load`](../protocol/generated/MESSAGES.md#h2cload)). The ring carries only the handle. |
 
-So a ring's bytes are always small and fixed. A 10 MB image or a large JS
-object never passes through it.
+A committed h2c vref transfers one retained reference to core; a committed
+c2h vref transfers one retained reference to the host. Before commit the
+producer releases provisional retains if construction fails. A bounce
+does not return ownership: core releases the transferred h2c references,
+and a host retry uses its own separately retained originals. Advancing a
+tail releases ring bytes, not separately retained values or blobs.
+
+Blob submission grants a borrow, not ownership. The host pins input
+sources and output sinks until the request's correlated result, including
+failure. `h2c.unload` and `h2c.checkpoint` provide bounded output sinks;
+their results carry `cause_seq` and the number of valid bytes. On failure,
+partial output is invalid and partial decoded adapter values are released.
+A successfully written image remains host-owned after releasing its c2h
+record. A 10 MB image or a large JavaScript object never passes through a
+ring's record bytes.
+
+Shutdown first stops submission and invalidates outstanding asynchronous
+callbacks. The host drains c2h and releases its transferred references
+while the binding remains alive. Native system destruction then releases
+unread valid h2c references and pool references without emitting new
+records. Finally the host releases its outstanding originals and pinned
+blobs and tears down the binding. Corrupt framing is a protocol failure;
+cleanup must not guess ownership from arbitrary record bytes.
+
+### Asynchronous reply correlation
+
+One thread prevents concurrent access, but not stale replies. Under
+batching an earlier queued event can cancel an invocation and create a new
+one with the same authored ID before an already-posted reply is taken.
+The sequence of `c2h.invoke` identifies the invocation instance. Service
+events and reports echo it as `invocation_seq`; core checks it at take
+before applying the report or selecting `<finalize>`. A mismatch discards
+the reply and releases its transferred data. The authored `invokeid`
+remains the SCXML identity, separate from this protocol correlation.
+Forwarding likewise distinguishes the destination invocation from the
+original event's `invokeid` and preserves all original event fields.
+
+Load responses echo `c2h.load_needed.seq` as `request_seq`. Core checks the
+address and active request before changing state. A stale response cannot
+answer a newer attempt; it receives a correlated refusal and ends its blob
+borrow. An unsolicited timer-driven load uses `request_seq = 0` and cannot
+supersede an active request. Host callbacks should also track attempt
+objects so an invalidated attempt releases its image instead of posting.
 
 ## The three rings
 

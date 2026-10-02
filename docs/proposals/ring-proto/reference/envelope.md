@@ -4,13 +4,14 @@
 
 An **envelope** is one input that a session has not finished with yet. That
 covers an external event admitted from h2c, mail from another local session,
-a delayed send that is not yet due, an internal event (`<raise>`,
-`done.state.*`, `error.*`), and the event a running macrostep took.
+a delayed send that is not yet due, a local invocation's completion or stop
+token, and the event whose execution has not yet completed. Internal events
+(`<raise>`, `done.state.*`, `error.*`) use separate interpreter storage.
 
 All envelopes come from one **pool** per system, with a fixed bound. The pool
 is the queue core gains in this design. Sending to a local session, delaying a
-send, raising an event and admitting external input all take an envelope from
-it. So one bound covers every queued input, and running out of envelopes is a
+send, starting a local invocation and admitting external input take an envelope
+from it. Raising an internal event does not. Running out of envelopes is a
 refusal the sender can see.
 
 This replaces several structures in core today:
@@ -19,8 +20,8 @@ This replaces several structures in core today:
 |---|---|
 | The host's mailboxes and router (kernel `scheduler.h`, `router.h`) | envelopes in the run queue |
 | `TA_ERR_BUSY` from `ta_actor_deliver` (core ADR 0055) | gone: a session is never busy when its envelope reaches the head of the queue ([macrostep.md](macrostep.md#run-to-completion)) |
-| An actor's event block and its cache (core ADRs 0069, 0093) | the taken envelope, which stays where it is until the macrostep end |
-| The internal queue lent to a running actor (core ADR 0064) | not the pool: one fixed internal queue per running interpreter, with a reserved slot ([below](#the-internal-queue-is-not-in-the-pool)) |
+| An actor's event block and its cache (core ADRs 0069, 0093) | the taken envelope, retained through startup and internal follow-up until input completion |
+| The internal queue lent to a running actor (core ADR 0064) | not the pool: an ordinary quota and compiler-sized mandatory storage per interpreter ([below](#the-internal-queue-is-not-in-the-pool)) |
 | Delayed sends living with their owner (core ADR 0054) and the global deadline index | envelopes with a due time, in the pool's deadline index |
 | Waiting mail for unloaded actors (kernel `loads.h`) | envelopes on a waiting list per address |
 
@@ -35,20 +36,23 @@ name, an origin URI, an unresolved address) are bytes in the name area
 | `next` | 4 | the next envelope on whatever list holds this one: the run queue, a macrostep's outgoing list, a waiting list, or the free list |
 | `owner_next` | 4 | the next pending delayed send of the same sender (for `<cancel>` and unloading) |
 | `heap_index` | 4 | where it sits in the deadline index, or none |
-| `state` | 1 | free, outgoing, runnable, waiting, taken, timer |
-| `type`, `source`, `flags` | 3 | `_event.type`; where it came from (`input_source` in the catalog); `recorded`, `replaying` |
+| `state` | 1 | free, outgoing, runnable, waiting, taken, timer, invocation token, child stop |
+| `type`, `source`, `flags` | 3 | `_event.type`; where it came from (`input_source` in the catalog); recorded/replaying flags and original invocation report kind/ends bits |
 | `target` | 8 | the target session, or 0 while the target is an address in the name area |
 | `from` | 8 | the sending session, or 0 for external input |
-| `due` | 8 | for a timer: when it fires |
+| `due` | 8 | timer deadline, or replay input header `at` to apply when taken |
 | `data` | 8 | `_event.data`, a vref the envelope holds a reference to |
-| `send_id` | 8 | `_event.sendid` as core's `ta_send_id` (a generated counter or an authored literal) |
+| `content` | 8 | a delayed I/O send's evaluated content, retained separately from its data, or 0 |
+| `invoke_instance` | 8 | the invocation-instance token for a child event, completion or stop, or 0 |
+| `send_id` | 8 | a local send's `ta_send_id` for owner-list cancellation; external send ID bytes are in `text` |
 | `source_seq` | 8 | the h2c seq it was admitted from, or 0 |
-| `text` | 8 | its text in the name area: the first chunk and the total length ([names.md](names.md#the-name-area)). The text is the name, then the origin, origintype, invokeid and target address, each prefixed by a `u16` length. |
-| | **72** | **estimate**, on a 64-bit host |
+| `text` | 8 | its text in the name area: the first chunk and total length ([names.md](names.md#the-name-area)). It holds the name, origin, origintype, invokeid, target address, I/O processor type and arbitrary external send ID, each prefixed by a `u16` length. Invocation reports also preserve their original report invokeid and reason. |
+| | **88** | **estimate**, on a 64-bit host |
 
 The name is resolved to atoms when the envelope is **taken**, not stored as
-an ID. So the envelope carries no process-local IDs except session IDs and
-`send_id`, both of which already survive images (core ADRs 0066, 0048).
+an ID. Session IDs and local `send_id` already survive images (core ADRs
+0066, 0048). The invocation-instance token is meaningful only in this system
+lifetime; active local invocation participants cannot be unloaded.
 
 ## The pool
 
@@ -71,10 +75,10 @@ measurements:
 
 | | Estimate |
 |---|---|
-| One envelope | 72 bytes, plus 4 for its slot in the deadline index |
-| Default pool, 4,096 envelopes | about 304 KiB |
+| One envelope | 88 bytes, plus 4 for its slot in the deadline index |
+| Default pool, 4,096 envelopes | about 368 KiB |
 | Default name area | 256 KiB (`nameAreaBytes`, 262,144): one 64-byte chunk per envelope ([BEHAVIORS.md](../BEHAVIORS.md#nameareabytes)) |
-| Default internal queue, 256 entries of about 48 bytes | about 12 KiB (`internalQueueEvents`) |
+| Default ordinary internal quota, 256 entries of about 48 bytes | about 12 KiB (`internalQueueEvents`), plus compiler-sized mandatory storage |
 | Per actor | the head of its own pending delayed sends: +4 bytes on today's 332 (ADR 0092: "an actor stays at 332 bytes") |
 | Today, for comparison | napi's event blocks prefilled at about 811 KB per system before ADR 0093, each queued event (`ta_queued_event`) 96 bytes, and the kernel's mailboxes on top |
 
@@ -86,6 +90,7 @@ needed, as with ADR 0093 today.
 | List | Holds | Order | One per |
 |---|---|---|---|
 | **Run queue** | runnable envelopes: admitted external events, mail, invocation reports, timers that became due | arrival | system |
+| **Invocation token** | one envelope held by each live local invocation, converted to completion mail or a child stop when needed | not queued until converted | local invocation |
 | **Outgoing list** | mail the running macrostep sent, until its macrostep end | send order | running macrostep |
 | **Waiting list** | envelopes for an address that is not resident | arrival | address being loaded |
 | **Owner list** | a session's pending delayed sends | send order | session |
@@ -119,7 +124,7 @@ target isn't resident. They go on that address's waiting list (below).
 
 ## Admission: from h2c into the pool
 
-Core moves h2c events into the pool only while the pool is below
+Core moves h2c events and invocation reports into the pool only while the pool is below
 `admissionWatermark` (a fraction of `poolEnvelopes` and of `nameAreaBytes`).
 The rest of the pool is kept free for what sessions send each other.
 
@@ -127,23 +132,29 @@ The rest of the pool is kept free for what sessions send each other.
   envelope, copies the record's text into the name area, takes over its
   vref, and appends the envelope to the run queue (or to a waiting list, see
   below). The h2c bytes are then released.
-- **At or above it,** core leaves an h2c event unread and sets `admitting` to false in
-  the control block. h2c fills, and the host refuses at its edge. Nothing is
-  lost, and nobody is told anything they can't act on: the external client
-  retries.
+- **At or above it,** core sets `admitting` to false. The host can refuse new
+  events at its edge. For an event already posted, core reserves a bounded
+  `c2h.bounced`, consumes the event and releases its transferred references.
+  The bounce preserves its source sequence and capacity reason so the host
+  can refuse the originating request. No pool envelope is needed. If the
+  bounce cannot fit, core returns for the host to drain c2h before consuming
+  the event. A full pool therefore cannot trap controls behind an unread
+  event indefinitely.
 - **Records that are not events** ([`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime),
   [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload),
   [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed),
   [`h2c.definition_register`](../protocol/generated/MESSAGES.md#h2cdefinition_register), ...)
-  are applied when read and take no envelope. They are still read in order,
-  so a `h2c.time` stuck behind events that can't be admitted waits for them.
-  That keeps the input order the same during replay ([recording-and-replay.md](recording-and-replay.md)).
+  are applied when read and take no envelope. They are still read in order;
+  earlier events are admitted or explicitly bounced before the control runs.
+  Record order is not an execution barrier. A host that needs an earlier
+  event to finish before advancing time or applying another control waits
+  for that event's `c2h.input_completed` first.
 
 ### Fairness
 
 When both the run queue and h2c have work, core alternates: it runs up to
-`fairnessRatio` envelopes from the run queue, then admits one h2c record if
-it is below the watermark. Internal work goes first, so work already started
+`fairnessRatio` envelopes from the run queue, then consumes one h2c record,
+admitting or bouncing an event according to capacity. Internal work goes first, so work already started
 finishes before new work comes in. The ratio keeps two sessions that mail
 each other forever from shutting out external input.
 
@@ -156,8 +167,8 @@ different ratio, including when seeded by replay
 A `<send>` to a local session (`#_scxml_<session>`, a family address of this
 system, `#_parent`, `#_<invokeid>`) doesn't go to c2h:
 
-1. Core takes a free envelope, unless taking it would eat into the reserve
-   ([Running out](#running-out)).
+1. Core takes a free envelope. Tokens already held by local invocations are
+   unavailable to ordinary sends ([Local invocation tokens](#local-invocation-tokens)).
 2. It fills the envelope from the evaluated send, takes a reference to its
    data vref, and puts the text in the name area.
 3. It keeps the envelope on the running macrostep's **outgoing list**, in
@@ -168,6 +179,14 @@ system, `#_parent`, `#_<invokeid>`) doesn't go to c2h:
    resident goes to that address's waiting list instead, and core writes
    [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed)
    after the macrostep end ([below](#envelopes-for-an-address-that-isnt-resident)).
+
+Post-macrostep routing and notifications are a bounded drain phase. Its cursor
+uses the existing outgoing/wait lists and retains the outstanding `load_needed`
+or latest `wake` notification until it can reserve and commit that record.
+Core can return for a c2h drain and resume this phase; the completed macrostep
+is not rolled back or executed again. No additional overflow queue is created.
+The current input completes only after its outgoing routing and mandatory
+notifications have been flushed.
 
 So local receivers run after the sender's macrostep ends. A macrostep
 an operator abandons (ADR 0082) frees its outgoing list. No mail
@@ -200,17 +219,24 @@ envelopes in the pool.**
 - **A delayed `<send>`** takes an envelope in state `timer`, with its `due`.
   The envelope goes into the deadline index and onto its sender's owner list.
   This happens whatever the target: a local session, or an I/O processor.
-- **`<cancel>` is exact.** Core finds the envelope on the sender's owner list
-  by `send_id`, takes it out of the index and frees it. A timer core has
+  It retains evaluated data and content separately, plus the I/O processor
+  type, target and all event metadata. Firing does not reevaluate expressions.
+- **`<cancel>` is exact.** Core removes and frees every pending envelope on
+  the sender's owner list whose `send_id` matches, including duplicate authored
+  IDs. A timer core has
   already turned into input can't be cancelled. SCXML says the same, and
   core is the only place this can happen, so there is no race with the host.
 - **[`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime) moves the
   clock.** Every timer due by then leaves the index in (due, send order):
   - a local target's timer becomes runnable at the end of the run queue;
   - an I/O processor's timer is written as a
-    [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend) and freed.
+    [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend) and freed only
+    after commit. If the record cannot fit, the due envelope retains all
+    its references and core returns for the host to drain c2h and resume.
 - **[`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake)** is written
-  whenever the head of the index changes. The host needs one timer.
+  after the head of the index changes. The bounded drain phase retains the
+  latest head while c2h is full and emits the current wake deadline before
+  completing the input or time operation. The host needs one timer.
 - **Timers to an I/O processor take an envelope too**, until they are due.
   So a fanout of 10,000 per-notification timeouts takes 10,000 envelopes, and
   the 10,001st `<send delay>` fails as `error.execution.capacity.pool`.
@@ -259,7 +285,10 @@ resident session, can't run yet:
    name area.
 2. The first time an address gets a waiting list, core writes
    [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed).
-   It writes it once until the host answers.
+  It writes it once until the host answers. Until that notification commits,
+  a flag and cursor on the existing waiting list retain the obligation;
+  c2h exhaustion returns to the host for a drain, without dropping mail or
+  attempting to undo its sender's completed macrostep.
 3. **[`h2c.load`](../protocol/generated/MESSAGES.md#h2cload)** loads the
    session. Its waiting envelopes join the run queue in their order. Its
    delayed sends, kept in its image, rejoin the deadline index.
@@ -280,32 +309,77 @@ not have. So **the envelope is reused**:
 
 | The envelope was | It becomes |
 |---|---|
-| mail or a timer from session S (target gone, load failed, destroyed with mail waiting) | `error.communication` for S. `_event.sendid` is the send's ID, `_event.data` is released and replaced by a short reason. The envelope joins the run queue with target S. |
-| an external event admitted from h2c | Freed. A `tel.trace` of the new trace kind `DEAD_LETTER` reports it. The host already gave the input away; core can't hand it back. |
+| mail or a timer from session S (target gone, load failed, destroyed with mail waiting) | A data-free `error.communication` for S. `_event.sendid` is the send's ID; the original data/content are released. The envelope joins the run queue with target S. Detailed reasons may appear in telemetry. |
+| an external event admitted from h2c | Freed after a reserved `c2h.input_refused` identifies its source sequence. `DEAD_LETTER` telemetry is additional; the host settles or retries using its separately retained original. |
 | a sender that is itself gone | Freed. |
 
-The text part shrinks to the error's name, which is shorter than any text the
-envelope already held. So recycling never needs name-area room either.
+Every admitted local-mail envelope reserves enough name storage for its
+possible data-free `error.communication`, even when the original event name
+is shorter. Recycling uses that retained storage; it does not rely on the
+incorrect assumption that every error name is shorter than its source name.
 
-## The taken envelope stays put until the macrostep end
+## The taken envelope stays put through input completion
 
 When a macrostep starts, its envelope moves to state **taken**. It stays in
-its slot while `_event` names it, and is freed at the macrostep end. This is ADR
+its slot while `_event` names it. If invocation startup generates internal
+follow-up work, the envelope and its source correlation remain owned until
+that work settles and `c2h.input_completed` is written, including for
+unrecorded sessions. Otherwise completion follows the macrostep end directly.
+This is ADR
 0069's "taking an event does not move it", applied to the pool:
 
 - inspection (ADR 0083) reports the event from the envelope;
 - [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) for a recorded
   session is written from the envelope;
-- if an operator abandons the macrostep (ADR 0082), the envelope is freed as
-  ADR 0082 says, and its outgoing list with it.
+- if an operator abandons the macrostep (ADR 0082), core reports the input's
+  terminal completion and frees the envelope and its outgoing list.
+
+### Local invocation tokens
+
+Before starting a local child, the post-macrostep startup phase acquires one
+pool envelope and the bounded name storage needed for its completion or stop,
+including `done.invoke.<invokeid>` and all completion metadata. Cancellation
+and completion can reuse this storage without acquiring more name chunks.
+Failure leaves the child unstarted and raises an invocation-start error in
+the parent's mandatory internal storage. A successful start retains the token
+for the invocation's lifetime; ordinary sends cannot consume it.
+
+When the child completes normally, its token becomes
+`done.invoke.<invokeid>` on the parent's **external** queue, with the child's
+completion data and invocation-instance correlation. This remains true when
+the child reaches final during bootstrap. Completion never becomes an internal
+event of the parent and cannot fail because ordinary mail filled the pool.
+The token is released after delivery completes, or discarded if the parent
+or invocation instance is gone.
+
+Completion data follows the existing `<donedata>` and parameter-evaluation
+rules, including their failure handling. Done data is retained rather than
+copied: the child terminates and cannot subsequently change it (ADR 0097).
+It uses the retained token and pre-sized metadata, never a second envelope.
+
+When the parent exits the invoking state, core retires that invocation
+immediately after its exit handlers and converts the token to a child-stop
+operation. The stop has priority over the child's ordinary inputs. The child's
+exit handlers execute in a separate cancellation phase with its own mandatory
+c2h reserve; descendants are stopped in the same way. This avoids running an
+entire cancellation subtree inside the parent's macrostep. A canceled child
+emits no `done.invoke`, and events from its retired instance are ignored.
+The token is released after stop cleanup. Pending invocations that never
+started need no cancellation.
+
+Unloading is refused while a session is either the child of an active local
+invocation or the parent of one. No image owns or duplicates a live token.
+Normal completion or cancellation cleanup releases these restrictions only
+after the live local relationship is retired.
 
 ### The internal queue is not in the pool
 
-Internal events (`<raise>`, `done.state.*`, `error.*`, and `done.invoke.*`
-for a child that ends inside the running macrostep) never leave the running
-session, so they don't take envelopes. They go on a **fixed internal queue**
-of `internalQueueEvents` entries ([BEHAVIORS.md](../BEHAVIORS.md#parameters)), allocated at
-creation:
+Internal events (`<raise>`, `done.state.*`, `error.*`) never leave the running
+session, so they don't take envelopes. They use one ordered internal queue
+with two storage quotas: `internalQueueEvents` ordinary entries for chart
+raises, and additional mandatory entries sized from the compiled definition.
+Both quotas preserve the same enqueue order; mandatory events do not jump
+ahead of ordinary events.
 
 - an entry is a fixed slot: the name (an authored ID, or a name-area chunk
   for a generated segment such as an invocation ID), the data vref, and
@@ -316,13 +390,16 @@ creation:
   there is **one internal queue per system**, plus one per nested
   interpreter (ADR 0060), not one lent to each actor (ADR 0064), and no cache
   of queues;
-- **one slot is always kept free** for `error.execution.capacity`
-  ([Running out](#running-out)).
+- mandatory entries cover errors from distinct executable blocks, condition
+  evaluation and data initialization, as well as platform completion events;
+- storage is allocated or enlarged outside macrosteps at registration, spawn
+  or load, before the definition or session becomes usable. A failed allocation
+  changes nothing; execution never grows the queue.
 
 A pool that is full therefore never stops a chart from raising its own
 events, and a full internal queue never stops mail. Why the queue is kept
 apart from the pool is in
-[macrostep.md](macrostep.md#the-internal-queue-fixed-with-one-reserved-slot).
+[macrostep.md](macrostep.md#the-internal-queue-compiler-sized-mandatory-storage).
 
 ## Running out
 
@@ -344,27 +421,20 @@ communication error, deliberately:
   `.record`), and `_event.data` names the action
   ([macrostep.md](macrostep.md#two-kinds-of-exhaustion)).
 
-**Enough of the internal queue is kept free so that the error itself can be
-raised:**
+**An ordinary raise cannot use mandatory storage.** When its ordinary quota
+is exhausted, the raise fails and its `error.execution.capacity.internal`
+uses mandatory storage. Failing one executable block does not suppress errors
+or execution in other blocks. The compiler must size mandatory storage for
+accumulated events across the execution, not just one microstep; the sizing
+argument and its remaining proof obligation are in
+[macrostep.md](macrostep.md#the-internal-queue-compiler-sized-mandatory-storage).
 
-- one slot for the `error.execution.capacity` event;
-- before each microstep, slots for the platform events the microstep may
-  generate (`done.state.*`, at most the definition's static bound, which the
-  compiler records).
-
-A chart's own `<raise>` is refused while taking a slot would eat into that
-reserve. So the chart's actions run out first, and SCXML's own events never
-do. The pool needs no reserve: the error goes on the internal queue, and
-recycling reuses the envelope it recycles ([Recycling](#recycling-an-envelope-that-cant-be-delivered-becomes-its-own-error)).
-So the pool can fill to its last envelope.
-
-**Open point.** A microstep whose reserve can't be restored, because the
-macrostep's own internal events filled the internal queue, can't start. The
-proposed rule is to end the macrostep there, as a runaway does (ADR 0075),
-with [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended) status
-`capacity` and a `tel.trace` that says why. It needs a test
-showing it can only happen to a chart that already raised
-`error.execution.capacity` in the same macrostep.
+Ordinary mail may fill every envelope not already held as an invocation token.
+Error reporting uses internal storage; undeliverable mail reuses its own
+envelope ([Recycling](#recycling-an-envelope-that-cant-be-delivered-becomes-its-own-error)).
+This proposal does not terminate a macrostep merely because a per-microstep
+mandatory reserve cannot be restored. The compiler's whole-execution bound
+must establish that the allocated mandatory storage suffices.
 
 ### The abandoned block, in a chart
 

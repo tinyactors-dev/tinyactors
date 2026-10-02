@@ -42,7 +42,7 @@ them, so memory does not grow ([names](../reference/names.md)).
 
 | Step | Ring | Record | What happens |
 |---|---|---|---|
-| S10.7 | h2c | many × [`h2c.event`][h2c.event] with 200-byte names | Admission stops when the name area passes its watermark, as for the pool ([envelope](../reference/envelope.md#admission-from-h2c-into-the-pool)). h2c fills, and the host answers HTTP 503 ([S09.5](S09-edge-backpressure.md#filling-up)). |
+| S10.7 | h2c | many × [`h2c.event`][h2c.event] with 200-byte names | The host gates events when the name area passes its watermark. An already submitted event that cannot be admitted is consumed and bounced with `names`, allowing later controls to progress ([envelope](../reference/envelope.md#admission-from-h2c-into-the-pool)). The host settles the bounded outstanding request and answers HTTP 503 ([S09.5](S09-edge-backpressure.md#filling-up)). |
 | S10.8 | c2h | [`c2h.bounced`][c2h.bounced] `0x020A` `{reason: invalid, detail: "name has 80 segments; eventNameDepth is 64"}` | A name deeper than `eventNameDepth` is handed back unrun. A name longer than fits in one record cannot be posted at all: `maxRecordBytes` bounds it at the host. |
 
 ## Names a chart computes

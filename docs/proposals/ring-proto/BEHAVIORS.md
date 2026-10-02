@@ -9,7 +9,7 @@ can retry:
 
 | Who retries | How they are told | What they do |
 |---|---|---|
-| **The external client** | the host refuses at its edge: h2c is full, so HTTP 503, or it stops reading the socket | retries, or the user clicks again |
+| **The external client** | the host refuses at its edge, or settles a correlated core admission refusal | retries, or the user clicks again |
 | **The sending chart** | its own action fails in its own macrostep: `error.execution.capacity.*`, or `error.communication` for mail that could not be delivered | throttles, retries on a timer, or gives up: its structure decides |
 | **Nobody** (an asynchronous reply) | it is dropped | the chart that waits for it has a timeout. That is what the timeout is for. |
 
@@ -22,12 +22,14 @@ can retry:
 | A send finds the pool full | core, in the sender's macrostep | `error.execution.capacity.pool`; the rest of the block is abandoned | the chart: `throttled` resumes on the next outcome | [S02.5](scenarios/S02-full-pool.md#the-brutal-chart), [S02.15](scenarios/S02-full-pool.md#the-brutal-chart) |
 | An action's record does not fit in c2h | core, in the sender's macrostep | `error.execution.capacity.c2h` (`.record` if it could never fit) | the chart | [ring](reference/ring.md#the-c2h-reserve) |
 | A computed name does not fit in the name area | core, in the sender's macrostep | `error.execution.capacity.names` | the chart | [S10](scenarios/S10-run-time-names.md#names-a-chart-computes) |
-| The pool or the name area is past its watermark | core stops reading h2c | nobody: h2c fills | – | [S02.10](scenarios/S02-full-pool.md#the-brutal-chart), [S10.7](scenarios/S10-run-time-names.md#when-the-names-come-faster-than-they-are-freed) |
+| The pool or name area is past its watermark, or an input cannot fit | core consumes and bounces the event after reserving its reply | `c2h.bounced` with `pool` or `names`; host retains its own original in a bounded table | host or external client | [S02.10](scenarios/S02-full-pool.md#the-brutal-chart), [S09](scenarios/S09-edge-backpressure.md) |
 | h2c is full and a client posts | the host, at its edge | HTTP 503 | the client | [S02.12](scenarios/S02-full-pool.md#the-brutal-chart), [S09.5](scenarios/S09-edge-backpressure.md#filling-up) |
 | h2c is full and a processor reports a result | the host's bounded buffer (its policy) | nobody | the waiting chart's timeout; the processor deduplicates | [S09.6](scenarios/S09-edge-backpressure.md#filling-up), [S09.10](scenarios/S09-edge-backpressure.md#draining) |
 | h2c is full and the wake timer fires | nothing is dropped: `h2c.time` is posted late | – | the host, when there is room | [S09.7](scenarios/S09-edge-backpressure.md#filling-up) |
 | Mail waits for a session that cannot be loaded | core, on [`h2c.load_failed`][h2c.load_failed] | `error.communication` to the sender, in the same envelope | the sending chart, if it cares | [S07.12](scenarios/S07-unloaded-tracker.md#the-load-fails) |
-| An external event waits for a session that cannot be loaded | core | [`tel.trace`][tel.trace] `DEAD_LETTER` | the client | [S07.13](scenarios/S07-unloaded-tracker.md#the-load-fails) |
+| An external event waits for a session that cannot be loaded | core | `c2h.input_refused` with its h2c sequence, plus `DEAD_LETTER` telemetry | host or client | [S07.13](scenarios/S07-unloaded-tracker.md#the-load-fails) |
+| A recording snapshot cannot be made | core before input take | external input: `c2h.input_refused`; local mail: recycled `error.communication` | host/client or sending chart | [S11](scenarios/S11-semantic-boundaries.md#recording-and-ownership) |
+| An unload would split an active local invocation | core, without mutation | `c2h.bounced(active_local_invoke)` | host, after the invocation ends | [unloading](reference/unloading.md#unloading) |
 | An event nobody listens for | the chart: it enables nothing | [`tel.trace`][tel.trace] `IGNORED` | nobody | [S10.4](scenarios/S10-run-time-names.md#under-the-proposal) |
 | An h2c record core cannot run (no such address, too deep a name, …) | core | [`c2h.bounced`][c2h.bounced] with a reason | the host decides | [S10.8](scenarios/S10-run-time-names.md#when-the-names-come-faster-than-they-are-freed) |
 | Telemetry the host does not read fast enough | core | [`tel.dropped`][tel.dropped] with a count | nobody: telemetry never slows the system | [telemetry](reference/telemetry.md) |
@@ -45,11 +47,11 @@ different sends before and after a crash ([S03.4](scenarios/S03-crash-unrecorded
 | Resource | Bounded by | When it is full | Who notices | Steps |
 |---|---|---|---|---|
 | **h2c** | `h2cBytes` | The host cannot post. It refuses at its edge or keeps the input in its own bounded buffer. Core never waits on h2c. | the external client | [S09.5](scenarios/S09-edge-backpressure.md#filling-up) |
-| **c2h** | `c2hBytes`, `maxRecordBytes` | An action whose record does not fit fails as `error.execution.capacity.c2h`. A macrostep starts only when c2h has room for its reserve. A run never waits. | the sending chart | [ring](reference/ring.md), [macrostep](reference/macrostep.md) |
+| **c2h** | `c2hBytes`, `maxRecordBytes` | Ordinary actions preserve the mandatory reserve or fail as `error.execution.capacity.c2h`. Outside macrosteps, core can return for a drain before consuming or mutating a control operation. | sending chart or host driver | [ring](reference/ring.md), [macrostep](reference/macrostep.md) |
 | **tel** | `telBytes` | The record is dropped and counted in [`tel.dropped`][tel.dropped]. | the operator | [telemetry](reference/telemetry.md) |
-| **Pool** | `poolEnvelopes`, `admissionWatermark` | Past the watermark, core stops reading h2c, which keeps headroom for mail. When the pool is full, a send fails as `error.execution.capacity.pool`. | the external client (h2c fills) and the sending chart | [S02](scenarios/S02-full-pool.md) |
-| **Name area** | `nameAreaBytes` | The same as the pool: admission stops at the watermark, and a computed name that does not fit fails as `error.execution.capacity.names`. | the external client and the sending chart | [S10](scenarios/S10-run-time-names.md) |
-| **Internal queue** | `internalQueueEvents`, one fixed queue per running interpreter, with one reserved slot | A `<raise>` that does not fit fails as `error.execution.capacity.internal`. The reserved slot always holds the error itself. | the chart | [macrostep](reference/macrostep.md) |
+| **Pool** | `poolEnvelopes`, `admissionWatermark` | Core bounces capacity-blocked h2c events. A local send or delayed send fails as `error.execution.capacity.pool`. Local invocations hold lifetime tokens acquired before startup. | host/client and sending chart | [S02](scenarios/S02-full-pool.md) |
+| **Name area** | `nameAreaBytes` | Core bounces capacity-blocked h2c events. A computed name that does not fit fails as `error.execution.capacity.names`. | host/client and sending chart | [S10](scenarios/S10-run-time-names.md) |
+| **Internal queue** | ordinary `internalQueueEvents` quota plus compiler-sized mandatory storage | A chart raise exhausting its quota fails as `error.execution.capacity.internal`. Mandatory storage needs a whole-execution bound, not a single error slot. | the chart; implementation readiness depends on the bound | [macrostep](reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage) |
 | **Data model** (the JavaScript heap) | the binding | An operation that fails reports `TA_OP_ERROR`, and core raises `error.execution`. It is the data model's own memory, never core's. | the chart | [data model](reference/data-model.md) |
 | **The host's own buffers** | the host's policy | The host drops something, and must accept that only a timeout will notice. | the waiting chart | [S09.6](scenarios/S09-edge-backpressure.md#filling-up) |
 
@@ -105,7 +107,7 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 | [`nameAreaBytes`](#nameareabytes) | 262,144 | `maxRecordBytes` | 1 GiB | the chart (`.names`); the client, through h2c |
 | [`admissionWatermark`](#admissionwatermark) | 50% | 1% | 99% | the client, through h2c |
 | [`fairnessRatio`](#fairnessratio) | 4 | 1 | 4,096 | nobody: it shapes latency |
-| [`internalQueueEvents`](#internalqueueevents) | 256 | 2 | 65,536 | the chart (`.internal`) |
+| [`internalQueueEvents`](#internalqueueevents) | 256 ordinary entries, plus compiler-sized mandatory storage | 0 ordinary entries | 65,536 ordinary entries | the chart (`.internal`) |
 | [`h2cBytes`](#h2cbytes) | 65,536 | `maxRecordBytes` | 2 GiB | the client (the host refuses) |
 | [`c2hBytes`](#c2hbytes) | 262,144 | 4 × `maxRecordBytes` | 2 GiB | the chart (`.c2h`); the host (`TA_RUN_C2H_FULL`) |
 | [`telBytes`](#telbytes) | 262,144 | `maxRecordBytes` | 2 GiB | the operator (`tel.dropped`) |
@@ -118,9 +120,9 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 - **What it bounds:** the envelopes in the pool. That covers admitted
   external input, mail between local sessions, delayed sends of resident
   sessions, and envelopes waiting for a load
-  ([envelope.md](reference/envelope.md)). Unit: envelopes, about 72 bytes
+  ([envelope.md](reference/envelope.md)). Unit: envelopes, about 88 bytes
   each plus 4 for the deadline index.
-- **Default 4,096, about 304 KiB.** napi resumes up to 1,024 actors per turn
+- **Default 4,096, about 368 KiB including the deadline index.** napi resumes up to 1,024 actors per turn
   today (`resumesPerTurn`, and `eventBlockCache` 1,024). Four times that
   lets each of them hold its input and have a few mail messages or timers
   pending. With the default watermark, 2,048 are for admitted input and
@@ -132,7 +134,7 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
   can serve. Split it into several systems.
 - **What it drives:** how much mail, how many timers and how much admitted
   input can be pending at once. Together with `admissionWatermark`, it sets
-  when admission stops.
+  when ordinary admission is refused.
 - **How it surfaces:**
   - **chart:** a `<send>` to a local session, a delayed `<send>`, or an
     `<invoke>` of a local child that finds no envelope fails as
@@ -205,21 +207,24 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 
 ### `internalQueueEvents`
 
-- **What it bounds:** the entries of the fixed internal queue: `<raise>`,
-  `done.state.*`, `error.*`. There is one queue for the top-level
-  interpreter and one per nested interpreter, up to `interpreterNesting`.
-  One entry is always kept free for `error.execution.capacity`
-  ([macrostep.md](reference/macrostep.md#the-internal-queue-fixed-with-one-reserved-slot)).
-  Unit: events, about 48 bytes each.
-- **Default 256, about 12 KiB per queue.** A macrostep rarely holds more
+- **What it bounds:** ordinary chart-generated internal events. Mandatory
+  errors and `done.state.*` events have additional compiler-sized storage,
+  allocated outside macrosteps. Queues preserve FIFO order across both
+  classes; this is a capacity distinction, not a priority distinction.
+  There is one top-level workspace and any required nested workspaces.
+  Unit: ordinary events, about 48 bytes each.
+- **Default 256 ordinary entries, about 12 KiB plus mandatory storage.** A macrostep rarely holds more
   than a handful of internal events at once. One that holds 255 is almost
   always a chart raising in a loop. The microstep limit would catch that
   much later.
-- **Minimum 2:** one usable entry plus the reserved one. **Maximum
+- **Minimum 0:** chart raises are refused, but mandatory errors still have
+  their compiler-sized storage. **Maximum
   65,536:** no chart needs more, and a bigger queue only delays the error
   that tells the author.
-- **What it drives:** how many internal events one macrostep may have
-  pending.
+- **What it drives:** how many ordinary internal events one macrostep may
+  have pending. It does not cap the compiler's mandatory reserve. The
+  whole-execution accumulation bound still needs proof
+  ([macrostep](reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage)).
 - **How it surfaces:**
   - **chart:** `<raise>` fails as `error.execution.capacity.internal`;
   - **host:** a `tel.trace` `ACTION_FAILED`.
@@ -228,7 +233,7 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 
 - **What it bounds:** the h2c ring ([ring.md](reference/ring.md)). Unit:
   bytes.
-- **Default 65,536 (64 KiB).** An `h2c.event` is 88 fixed bytes plus its
+- **Default 65,536 (64 KiB).** An `h2c.event` is 104 fixed bytes plus its
   name and origin, about 128 bytes in all, so about 500 inputs fit. Every
   `ta_run` moves h2c into the pool, so h2c only has to cover the inputs
   that arrive during one turn of the host's loop.
@@ -254,8 +259,10 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
   as it is. Bigger fanouts
   should be clocked by acknowledgements
   ([windowed chart](charts/campaign-windowed.scxml)).
-- **Minimum 4 × `maxRecordBytes`,** so the c2h reserve (input, macrostep end and
-  one record of the largest size) never takes more than half the ring.
+- **Minimum 4 × `maxRecordBytes`** for the base configuration. Definition
+  and session setup also check their actual mandatory batch: input
+  observation, cancellations, autoforwards, completion and end records,
+  including wrap padding. The factor of four alone is not a guarantee.
   **Maximum 2 GiB,** for the same reason as h2c.
 - **What it drives:** how much one macrostep can say to the outside world
   before the host drains.
@@ -282,7 +289,9 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 ### `maxRecordBytes`
 
 - **What it bounds:** the largest record on any ring, header and tail
-  included. It is part of the c2h reserve. Unit: bytes.
+  included. Every admitted or locally sent event must fit its expanded
+  `c2h.input` representation, even when its receiver is unrecorded. Mandatory
+  output batch sizes are checked separately. Unit: bytes.
 - **Default 4,096.** Event names, targets and origins in practice are well
   under 1 KiB. 4 KiB leaves room while keeping the reserve small.
 - **Minimum 256:** the largest fixed part (`tel.trace`, 120 bytes) plus a
@@ -337,11 +346,11 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 
 | Part | Bytes |
 |---|---|
-| pool: 4,096 envelopes × 72, plus 4 each for the deadline index | 311,296 |
+| pool: 4,096 envelopes × 88, plus 4 each for the deadline index | 376,832 |
 | name area: 4,096 chunks × 64 | 262,144 |
-| internal queue, top level: 256 × about 48 (nested interpreters add the same each, when they start) | 12,288 |
+| internal queue, top level: 256 ordinary entries × about 48, plus compiler-sized mandatory storage | 12,288 plus the compiled bound |
 | h2c + c2h + tel | 589,824 |
-| **total** | **about 1.1 MiB** |
+| **total before compiler-sized mandatory storage** | **about 1.2 MiB** |
 
 That is more than napi's roughly 1 MB per system today, which ADR 0093
 judged too much for quiet systems and test suites that create many. So:

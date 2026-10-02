@@ -57,8 +57,9 @@ replay needs:
 | header `at` | the session's clock when it took the input (core ADR 0094) |
 | `macrostep` | the order, and a check that nothing is missing |
 | `name`, `type`, `sendid`, `origin`, `origin_type`, `invokeid` | `_event`, exactly as the chart saw it |
-| `data` | `_event.data`, as a vref the recorder encodes |
+| `data` | a snapshot of `_event.data` before any processing of this input, as a vref the recorder encodes |
 | `source`, `source_seq`, `from_session` | where it came from: an h2c record, mail, a timer, a platform event, an invocation report |
+| `report_invokeid`, `report_reason`, `report_kind`, `report_ends` | for source `invoke_report`, the original report needed to reconstruct h2c.invoke_report; these are separate from `_event` fields |
 
 A recorded session's log is:
 
@@ -100,19 +101,57 @@ starts. The host may execute each effect on receipt, including when
 [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended), the recorder or
 storage. The same rule applies to unrecorded sessions.
 
-The application chooses when to encode and persist input observations.
-Retaining a vref keeps a value alive but does not freeze mutable data: the
-recorder must encode or copy any input data it wants to preserve before
-later chart execution can change it. This is a value-lifetime requirement,
-not an effect hold.
+Core snapshots recorded input data synchronously with the data model's
+`copy_out` before taking the input or running `<finalize>`, autoforwarding
+or chart code. The observation owns that snapshot, and chart processing
+uses the original input. Retaining an immutable value is sufficient; a
+mutable data model must isolate the snapshot from chart mutations. Thus
+the host can encode after `ta_run` returns, even when the chart changed
+its live `_event.data` during that call. See
+[data-model.md](data-model.md#recorded-input-snapshots).
+
+If the snapshot fails, no input is taken, no chart code runs and no input
+observation is committed. An external submission receives
+`c2h.input_refused`; local mail or a local delayed send is recycled into
+a data-free `error.communication` for its sender, or discarded if the
+sender is gone. Recording this error requires no data copy.
+The application chooses whether to retry a refused external submission.
+This failure is not an `error.execution` in a macrostep that never began.
+
+The application chooses when to encode and persist the stable observation.
+It releases the observation's vref when finished. Snapshots impose no
+persistence-before-effects condition.
 
 A crash may leave an executed effect with no journaled input, or a
 journaled input whose effect never executed. A `c2h.input` is written when
 the input is taken, so it may also describe a macrostep that never reached
 its macrostep end. The application may use completion reports to select seeds,
-but neither recording nor a macrostep end is a durability acknowledgement.
+but neither recording, a macrostep end nor input completion is a durability acknowledgement.
 Charts and I/O processors use their own retries, resync and business-key
 idempotency. The protocol introduces no write-ahead hold.
+
+### Completion does not depend on recording
+
+Every external submission has exactly one terminal disposition, correlated
+by its h2c sequence: `c2h.bounced` before admission,
+`c2h.input_refused` after admission but before take, or
+`c2h.input_completed` after processing finishes. The completion status is
+`stable`, `done`, `runaway` or `abandoned`. These reports exist for recorded,
+unrecorded and replaying sessions alike. A refusal includes load failure,
+destruction before take and snapshot failure; lossy dead-letter telemetry
+does not replace it.
+
+`c2h.macrostep_ended` reports an individual macrostep. Input completion
+follows any startup followups required to finish processing that input;
+it is the report a host uses to settle an individual `send()` request.
+`c2h.input` is the separate, optional observation of a taken input.
+Source h2c sequences survive admission, waiting and startup followups so
+none of these reports relies on the recording selector.
+
+The host keeps a bounded outstanding table keyed by h2c sequence, with
+separate original references if retry is desired. A terminal disposition
+settles and removes that entry. When the table is full, the host refuses
+at its edge rather than growing an overflow queue.
 
 ## Replay
 
@@ -133,6 +172,16 @@ h2c.publish {address, at: <time chosen for the seeded session>}
 - **Every input is fed as h2c, whatever its source.** Mail, timers and
   platform events are fed back as `h2c.event`, keeping their `type`,
   `sendid` and `origin`. The sessions that sent them are not involved.
+- **Invocation seeds use `invocation_seq = 0`.** The live token is a
+  process-local `c2h.invoke` sequence, not durable SCXML event metadata;
+  never feed an old execution's token into the new one. Synthetic replay
+  events keep their SCXML `invokeid`. Replay report processing resolves
+  `report_invokeid` against the seeded session's active invocation and
+  uses the recorded `report_reason`, `report_kind` and `report_ends`.
+  It never parses an invocation identity out of a dotted event name.
+  Error reports leave the event's `invokeid` empty, while their separate
+  report identity remains available for replay. The zero token
+  is permitted only for synthetic replay inputs, not live service replies.
 - **A replaying session crosses no border.** It writes no `c2h.send`,
   `c2h.invoke` or `c2h.log`. In a session replay it also puts no mail in the
   pool: its receivers are not being replayed. In a whole-system replay
@@ -145,6 +194,8 @@ h2c.publish {address, at: <time chosen for the seeded session>}
   determines what the new session processes during seeding.
 - [`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish) puts it
   on the route:
+  - every previously supplied seed input must have a terminal disposition;
+    core refuses publication while any supplied seed input is outstanding,
   - held delayed sends due by `at` are dropped (core ADR 0094 section 1),
     and the rest stay in the pool;
   - active invocations are retired with
@@ -224,9 +275,14 @@ mail may differ. Exact reconstruction is not the contract.
    run queue, as generated by the new execution.
 3. **Effects that would leave the process are suppressed:** no `c2h.send`,
    `c2h.invoke` or `c2h.log`. They go to `tel` with the `suppressed` flag.
-4. **One [`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish) with
+4. **Choose a finite input cut.** Stop supplying seed inputs and wait for
+   their terminal dispositions. Generated local mail need not be exhausted;
+   a self-sending chart need not reach system-wide quiescence.
+5. **One [`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish) with
    an empty address** ends the replay, and publishes every replaying
-   session at once.
+   session at once. Core refuses it while a supplied seed input remains
+   outstanding. Generated mail still pending at the cut continues in live
+   execution after publication.
 
 **Why it works this way:**
 
@@ -242,7 +298,8 @@ mail may differ. Exact reconstruction is not the contract.
 - **One publish for all.** Publishing sessions one by one would let a
   published session's mail reach a session still replaying, or the other
   way round. One publish switches the whole system to live at a single
-  point in the input order.
+  point after the selected supplied inputs have completed. It does not
+  require exhausting the generated mail queue.
 
 **Unloading inside a whole-system replay.** Unloading only bounds memory, and
 an image never outlives its process

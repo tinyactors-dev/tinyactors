@@ -51,15 +51,19 @@ vrefs:
 
 The rule follows the direction of the ring:
 
-- **h2c: the host retains, core releases.** A vref in an h2c record is a
-  reference the host retained for core. The envelope that holds the input
-  owns it ([envelope.md](envelope.md)). Core releases it when the
-  envelope is freed: after the macrostep that took it, or when the
-  envelope is recycled or dropped.
-- **c2h: core retains, the host releases.** A vref in a c2h record is a
-  reference core retained for the host. The host releases it when it has
-  used the record: after the I/O processor has the value, or after the
-  recorder has encoded it.
+- **h2c: commit transfers one retained reference to core.** Before commit,
+  the host owns the provisional retain and releases it if posting fails.
+  After commit, core releases the transferred reference exactly once,
+  including when it bounces the request, discards a stale invocation reply,
+  or frees, recycles or drops its envelope. A bounce returns status, not
+  the reference. The host may keep a separate original reference in its
+  bounded outstanding-request table if it wants to retry.
+- **c2h: commit transfers one retained reference to the host.** Core
+  releases provisional retains and copies if constructing a record fails.
+  After commit the host releases the transferred reference when it has
+  used the record: after the I/O processor has taken its own reference, or
+  after the recorder has encoded it. Advancing the ring tail only releases
+  record bytes; it does not release values.
 - **tel never carries vrefs.** A lossy ring cannot hand over ownership,
   because a dropped record would leak its reference. Telemetry carries
   `value_text` instead ([telemetry.md](telemetry.md)).
@@ -73,20 +77,45 @@ That copy is the data model's allocation, not core's.
 ### Mail between local sessions
 
 Mail between two sessions of the same system never crosses a ring
-([envelope.md](envelope.md)). Its data stays a `ta_value` in the
-envelope: the receiving session's `_event.data` is the same box,
-retained. No encoding happens and no JavaScript runs to move it.
+([envelope.md](envelope.md)). ADR 0097 still applies: a send to an external
+queue, including the sender's own queue, first calls `copy_out`. The
+envelope holds that result as a `ta_value`; the receiver retains the box.
+No encoding is required, but a mutable data model may execute its copier.
+Invocation parameters and each autoforwarded event are copied too.
+
+### Recorded input snapshots
+
+Before taking a recorded input, and before installing `_event` or running
+`<finalize>`, autoforwarding or chart code, core calls `copy_out` for its
+data. The observation owns the result; the live event keeps the original
+input. The snapshot must remain unchanged by chart execution. Immutable
+data models can retain; mutable data models must isolate the snapshot.
+Core allocates nothing for this operation; the adapter may allocate.
+
+If copying fails, core takes no input and runs no chart code. An external
+submission receives `c2h.input_refused`; local mail or a local delayed send
+is recycled into a data-free `error.communication` for its sender, or
+discarded if the sender no longer exists. The data-free error needs no
+recording copy, so a failed copier cannot cause an endless exchange of
+failed error snapshots. No partial `c2h.input` is committed. The host's
+refusal report is bounded and contains no failed snapshot. See
+[recording-and-replay.md](recording-and-replay.md#recording-and-effects-are-independent).
 
 ### The persistence boundary
 
 A vref means nothing outside the process. Where a value must outlive the
 process, the binding encodes it with its own codec:
 
-- the recorder encodes `c2h.input.data` before it persists the record
+- the recorder encodes the stable snapshot in `c2h.input.data` before it persists the record
   ([recording-and-replay.md](recording-and-replay.md));
 - replay decodes it and posts a fresh vref in `h2c.event.data`.
 
 Core plays no part in this. It never sees the encoded bytes.
+
+The codec must preserve the snapshot isolation needed by the observation.
+An adapter that shares mutable objects it cannot copy cannot promise a
+stable recorded value for those objects; it must refuse that snapshot
+rather than silently journal later mutations.
 
 ## Offload
 

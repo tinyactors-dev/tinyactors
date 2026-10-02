@@ -12,7 +12,8 @@ records, and what happens when something runs out. The rings are in
 1. **A macrostep never allocates in core.** Core allocates in three places
    only:
    - when a system is created (rings, pool, scratch, the continuation);
-   - when a definition is registered (its compiled form and its atoms);
+   - when a definition is registered (its compiled form, atoms and required
+     interpreter workspace, including mandatory internal-event storage);
    - when a session is created or loaded (its fixed-size record, sized by its
      definition).
 
@@ -20,10 +21,12 @@ records, and what happens when something runs out. The rings are in
    ([envelope.md](envelope.md#the-pool)). The data model allocates as it
    likes: that is the data model's memory, not core's
    ([data-model.md](data-model.md)).
-2. **All memory is bounded by parameters.** Every queue, ring and text
+2. **Core storage is bounded by parameters and compiled requirements.** Every queue, ring and text
    buffer has a size set when the system is created: `poolEnvelopes`,
    `nameAreaBytes`, `internalQueueEvents`, `h2cBytes`, `c2hBytes`, `telBytes`,
-   `maxRecordBytes` ([BEHAVIORS.md](../BEHAVIORS.md#parameters)).
+   `maxRecordBytes` ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Compiler-sized
+   mandatory internal storage is additional to the ordinary
+   `internalQueueEvents` quota; its whole-execution bound is discussed below.
 3. **Every overflow becomes a refusal to someone who can retry.** Nobody
    keeps a hidden queue that grows. There are three who can retry:
 
@@ -43,16 +46,41 @@ Core runs one macrostep at a time, to its end, in the order of the run queue
 
 1. **Choose.** Following the fairness rule, core takes the head of the run
    queue, or first admits an h2c record ([envelope.md](envelope.md#fairness)).
-2. **Check the c2h reserve.** Unless c2h has room for a
-   [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput), a
-   [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended) and one record
-   of `maxRecordBytes`, core takes nothing, and `ta_run` returns
+2. **Check the mandatory c2h reserve.** It covers the recorded input
+   observation, macrostep end, cancellation of
+   every invocation currently active in the session, terminal session
+   notification, and all autoforwards of the input. It includes actual aligned
+   record sizes and wrap padding. Unless the reserve fits, core takes nothing
+   and `ta_run` returns. A definition/session whose mandatory batch cannot fit
+   even an empty ring is refused before execution
    ([ring.md](ring.md#the-c2h-reserve)).
-3. **Take** the envelope. For a recorded session, write `c2h.input`.
+3. **Take** the envelope after its recording snapshot has been prepared
+   without changing the session. For a recorded session, write `c2h.input`.
+   Bind the event, apply the matching invocation's finalize handler, then
+   copy and autoforward at the SCXML algorithm's forwarding point before
+   transitions run. Each forward preserves the event's fields separately
+   from its destination invocation identity. A forwarding copy failure
+   raises an execution error and skips that recipient, as ADR 0097 specifies.
 4. **Run** microsteps until the session is stable or final. Effects go to
    c2h, mail and timers to the pool, internal events to the internal queue.
-5. **Macrostep end.** Write `c2h.macrostep_ended`. The macrostep's mail becomes runnable, and
-   its taken envelope is freed.
+5. **Macrostep end and routing.** Write `c2h.macrostep_ended`. A bounded drain
+   phase routes outgoing mail and commits required load and wake notifications.
+   Its cursor remains in the existing lists if c2h must be drained; the
+   completed macrostep is not repeated. Its taken envelope remains owned
+   through this phase and any startup follow-up.
+6. **Start pending invocations.** This is a separate phase after stabilization,
+   outside the macrostep. Process any resulting internal errors before taking
+   another external input or running another session. Repeat stabilization and
+   startup until settled, then write `c2h.input_completed` and release the
+   taken envelope. Completion is emitted for unrecorded inputs too.
+
+Ordinary c2h actions preserve the outstanding mandatory reserve. Invocation
+cancellation follows a state's exit content even when that content fails.
+No new service starts inside a stabilization macrostep, so each invocation
+active at its start needs at most one cancellation record. Repeated internal
+exit/re-entry does not increase this bound. Local child stops run separately,
+with their own reserves, rather than recursively expanding the parent's
+reserve to its entire invocation subtree.
 
 **No session is busy when its envelope comes up**, because nothing else is
 in the middle of a macrostep. That removes `TA_ERR_BUSY` (core ADR 0055),
@@ -114,9 +142,11 @@ such as a `<foreach>` over 10,000 items.
   macrostep.
   During debugger attachment only the debugger drives core; the production
   pump cannot resume the macrostep until ownership is returned.
-- **A full ring never pauses a run.** A record that doesn't fit makes its
-  action fail instead (below). An earlier iteration of this design paused on
-  a full c2h. That made the host hold records it couldn't refuse.
+- **A full ring never pauses executable content inside a macrostep.** An
+  ordinary action whose record does not fit fails instead (below), while
+  mandatory records use their preflight reservation. Core can return for a
+  drain before a macrostep starts or between post-macrostep phases, including
+  startup and terminal input completion.
 
 ## The macrostep end
 
@@ -124,14 +154,13 @@ A macrostep's records reach c2h in this order:
 
 1. its `c2h.input`, if the session is recorded;
 2. its effects: [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend),
-   [`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke),
    [`c2h.invoke_cancel`](../protocol/generated/MESSAGES.md#c2hinvoke_cancel),
    [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward),
    [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog);
 3. its `c2h.macrostep_ended`.
 
 **`c2h.macrostep_ended` reports that execution ended and how it ended,
-including abandonment or capacity termination. It does not gate effects or
+including abandonment or runaway termination. It does not gate effects or
 commit storage.** The host may execute each effect as soon as it reads the
 record, for recorded and unrecorded sessions alike. It need not wait for
 the macrostep end or for a journal write.
@@ -148,6 +177,44 @@ processors use timeouts, retries and business-key idempotency for work that
 matters. Recording observes inputs independently of effect execution;
 [replay seeds a new execution](recording-and-replay.md).
 
+### Invocation startup and input completion
+
+Entering a state marks its invokes as pending. Exiting that state before
+stabilization removes them. Only surviving pending invokes are evaluated and
+started, in state entry order and invocation document order, after the
+macrostep end (SCXML 3.13 and appendix D). Argument evaluation and local child
+creation do not happen in the state's entry block.
+
+Startup can allocate core memory and can return for the host to drain c2h
+before its next operation. This boundary is outside a macrostep. Starting a
+local child first acquires its lifetime envelope token; starting an external
+service writes `c2h.invoke`. An operation either starts the service completely
+or leaves it unstarted and queues its error using mandatory internal storage.
+
+SCXML invocation errors are processed before the next external dequeue.
+Startup-generated errors therefore start an internal-only stabilization
+macrostep of the same session. Each such macrostep has its own ID and end
+record; all retain the original input's source correlation. Its c2h reserve
+is checked before it starts. A new startup phase may follow it. Other sessions
+and ordinary h2c commands cannot overtake this chain.
+
+Core reserves `c2h.input_completed` separately before consuming the terminal
+completion phase; if c2h is full it retains the source envelope and returns
+for a drain. The record is written once after routing and mandatory load/wake
+notifications have been flushed and that chain settles, or ends through
+runaway, abandonment or another defined terminal result. It carries the
+source correlation even when recording is disabled. An individual
+`c2h.macrostep_ended` does not resolve the host's input promise while startup
+or internal follow-up remains pending. Completion is an execution result,
+not an acknowledgment that remote effects finished or were persisted.
+
+A normal local child completion is an external `done.invoke` input to its
+parent. Cancellation logically retires the instance after the parent's exit
+handlers and schedules child exit cleanup ahead of ordinary child events.
+Canceled children emit no done event. The lifetime token guarantees both
+paths without allocating an envelope during a macrostep
+([envelope.md](envelope.md#local-invocation-tokens)).
+
 Local mail joins the run queue at the macrostep end because core runs one macrostep
 at a time. Its outgoing list is scheduling state, not a host effect hold.
 An abandoned macrostep frees that list, while effects the host already
@@ -161,7 +228,7 @@ executed remain executed.
 | **Before a macrostep:** c2h lacks the reserve | the host, by draining | No macrostep starts, and `ta_run` answers `TA_RUN_C2H_FULL`. | no |
 | **h2c full** | core, by admitting | The host refuses at its edge | no; the external client does |
 | **The pool or name area** when an action needs an envelope or text | the receivers, by running | The action fails as `error.execution.capacity.pool` or `.names` | yes |
-| **Admission:** pool above `admissionWatermark` | the receivers, by running | Core admits nothing from h2c | no; the external client does |
+| **Admission:** pool above `admissionWatermark` | the receivers, by running | Core consumes the event and writes a reserved capacity bounce; following controls remain reachable | no; the external client does |
 | **tel full** | the host, by draining | The record is dropped and counted | no |
 
 So the chart sees exactly one thing: **`error.execution.capacity`, raised by
@@ -180,8 +247,9 @@ executable content:
 - **The chart decides what to do next:** retry later with a delayed send to
   itself, send less (ack-clocked sending), or give up and report.
 
-The error can always be raised, because a slot in the fixed internal queue
-is kept free for it ([envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool)).
+Errors use compiler-sized mandatory internal storage, separate from the quota
+for ordinary raises. The remaining whole-execution sizing obligation is
+explicit below; a single reserved slot does not establish this guarantee.
 
 **Why the resource is the last segment of the name,** and not only a field
 of `_event.data`:
@@ -197,13 +265,13 @@ of `_event.data`:
 - **The set is closed.** The catalog's enum lists the resources, so a chart
   author can see every name that can occur.
 
-## The internal queue: fixed, with one reserved slot
+## The internal queue: compiler-sized mandatory storage
 
-Internal events (`<raise>`, `done.state.*`, `error.*`) go on a fixed queue
-of `internalQueueEvents` entries, allocated when the system is created, not
-into the pool. One slot is always free for the `error.execution.capacity`
-the queue itself may need. A `<raise>` that finds no other free slot fails
-as `error.execution.capacity.internal`. The mechanics are in
+Internal events (`<raise>`, `done.state.*`, `error.*`) share an ordered queue,
+not the envelope pool. `internalQueueEvents` is the ordinary raise quota.
+Additional compiler-sized storage holds mandatory errors and completion
+events. A `<raise>` that exhausts the ordinary quota fails as
+`error.execution.capacity.internal` in mandatory storage. The mechanics are in
 [envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool).
 
 **Why not envelopes:**
@@ -219,9 +287,53 @@ as `error.execution.capacity.internal`. The mechanics are in
   interpreter runs at the top level, so the system needs one queue, plus one
   per nested interpreter, sized once. That replaces ADR 0064's queue lent to
   each actor and its cache.
-- **The reserved slot makes the error itself unable to fail.** Every other
-  capacity error is raised into this queue. Without a slot kept back,
-  reporting "no room" could find no room.
+- **The compiler counts independent failure sites.** SCXML 4.9 stops only
+  the failed block. Two entry blocks can each fail in one microstep, and
+  both errors must retain their queue order. A loop in one block stops at
+  its first error; it does not need one error slot per unexecuted iteration.
+
+### Sizing mandatory storage
+
+The compiler records conservative per-phase maxima: errors from independently
+executed blocks and data initialization, errors from a transition-selection
+pass, errors from an invocation-startup pass, and `done.state` events. Include
+bootstrap, final-state completion data evaluation and cancellation cleanup.
+Generated error names and diagnostic positions must also use pre-sized
+storage; reporting a failure must not require another fallible allocation.
+Registration, spawn and load size the system and any nested interpreter
+workspace before it becomes usable, and refuse atomically if sizing or
+allocation fails. Neither quota grows during execution.
+
+**A per-phase maximum is not yet a whole-macrostep maximum.** Earlier
+mandatory events can remain queued while later microsteps append more. If a
+definition has at most `L` executed microsteps, at most `S` selection passes
+and at most `I` startup passes in one input's stabilization/startup chain,
+and the compiler bounds these phases by `E`, `C` and `V` mandatory events
+respectively, a conservative extra arena has
+`B + L*E + S*C + I*V + F` entries. `B` and `F` bound bootstrap and final or
+stop cleanup. Reserving all generated mandatory events is sufficient even
+if none have been dequeued; the ordinary quota is additional. Checked
+arithmetic and available-memory checks precede publication. Tighter
+occupancy bounds may reduce this conservative allocation.
+
+**Remaining proof obligation:** the existing `microstepLimit` bounds executed
+microsteps in one stabilization macrostep, not total `L` across an unrestricted
+startup/follow-up chain, nor `S`. Selection can raise errors without
+taking a transition. Two failing guards can repeatedly append more errors
+than an internal dequeue removes, without executing another microstep.
+Budget pauses do not bound the accumulated queue across resumes. Disabling
+the microstep limit also removes the bound on `L`.
+
+No finite compiler-sized arena can cover an unrestricted error-generating
+loop solely from its definition's per-phase counts. The implementation needs
+either a proven finite occupancy bound for the admitted definition or a
+separately decided execution guard that also bounds selection and startup
+passes. For example, a finite guard that counts every selection pass, every
+microstep and every startup pass would make the arithmetic above finite.
+This proposal does not introduce that guard, alter `microstepLimit`, or
+terminate on internal capacity exhaustion by implication. Closing this
+whole-execution bound is required before claiming lossless mandatory events
+for unrestricted definitions.
 
 ### Consequence for chart authors: order inside a block matters
 
@@ -250,26 +362,26 @@ needed its own care. ADR 0070 lists them. Here is where each one goes:
 
 | Allocation that could fail mid-run (ADR 0070) | Under the ring protocol |
 |---|---|
-| a second `<raise>` or error in one microstep (the reservation held one event) | a slot in the fixed internal queue. A `<raise>` that finds none fails as `error.execution.capacity.internal`; core's own errors use reserved slots ([envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool)). |
+| a second `<raise>` or error in one microstep (the reservation held one event) | an ordinary internal entry for a raise, or compiler-sized mandatory storage for an error; distinct failing blocks keep distinct errors ([envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool)). |
 | a delayed `<send>` growing its owner's storage (ADR 0054) | an envelope with a due time ([envelope.md](envelope.md#delayed-sends-envelopes-with-a-due-time)) |
 | interning an `eventexpr`, `typeexpr` or target | looked up, never interned ([names.md](names.md)) |
 | scratch for `<param>`s | fixed scratch, sized at creation (ADR 0092) |
-| `done.state` events and a top-level final state's completion | internal queue slots reserved before each microstep, up to the definition's static bound |
+| `done.state` events and a top-level final state's completion | compiler-sized mandatory storage; local parent completion uses the invocation's lifetime envelope token |
 | recording an invocation | a slot in the session's record, sized by the definition's `<invoke>` count when the session is created |
 | holding a send or a `<log>` for an unpublished actor | a replaying session writes no effects. Its timers are envelopes ([recording-and-replay.md](recording-and-replay.md)). |
 
-**Starting a local child chart** (`<invoke type="scxml">`) creates a session,
-which allocates. SCXML starts invocations at the end of the macrostep, so
-core creates the child after the macrostep end, outside the macrostep. Before the
-macrostep end, core takes one envelope for each invocation it will start; if the pool
-has none, the `<invoke>` fails as `error.execution.capacity.pool`. After the
-macrostep end, a child that can't be created turns its envelope into
-`error.communication.invoke.<id>.<reason>` for the parent; a child that
-starts frees it.
+**Starting a local child chart** (`<invoke type="scxml">`) creates a session
+in the post-macrostep startup phase. Core acquires the lifetime token there,
+not while entering the invoking state. A successful child keeps it for
+completion or cancellation. Failure starts no child, releases any partially
+prepared resources and queues the corresponding invocation error before the
+next external input. Storage for all errors in that startup pass is sized
+before any invoke executes.
 
-So core no longer stops a run because it ran out of memory. `TA_ERR_NOMEM`
-from `ta_run` can come only from growing the pool between macrosteps. It
-changes nothing, and the host may call again later.
+Core no longer stops an executable block because core ran out of memory.
+`TA_ERR_NOMEM` can arise only outside macrosteps, while growing the pool or
+preparing a session and its workspace. A failed preparation changes nothing;
+an invocation-start failure follows the internal-error rules above.
 
 **A data model or invoker that runs out of its own memory** (a JavaScript
 heap, say) answers `TA_OP_ERROR`, and the chart sees `error.execution`, as

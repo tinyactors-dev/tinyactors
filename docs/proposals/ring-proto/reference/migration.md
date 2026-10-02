@@ -90,7 +90,7 @@ napi becomes a binding over core and its rings. What it keeps:
 | `src/napi_recorder.c` (167), `src/napi_replay.c` (165) | read `c2h.input`, post replay records. Most of the code goes. |
 | `src/napi_trace.c` (722) | drains `tel` |
 | `src/napi_children.c`, `src/import.c` | invoked children are local sessions. Their `done.invoke` is an envelope in core. |
-| `lib/system.js`, `lib/loader.js`, `lib/tracing.js`, `lib/params.js` | follow the native changes. `send()` resolves at the macrostep end of the macrostep that took the message (napi ADR 0040 section 2, refined). |
+| `lib/system.js`, `lib/loader.js`, `lib/tracing.js`, `lib/params.js` | follow the native changes. `send()` settles from the correlated input disposition: bounced, refused, or input_completed after stabilization and invocation-startup follow-up, independently of recording. |
 | `index.d.ts` | the API it declares mostly stays. Mark what changes meaning with `// status:` (AGENTS.md, "Desired API files"). `setRecorder`'s `families` become recording selectors. Dead letter reasons change. |
 
 Suites to rewrite: `route.js`, `loads.js`, `session-loads.js`,
@@ -122,7 +122,7 @@ changes automatically.
 | The envelope pool: one run queue, waiting lists per address, admission watermark, fairness, delayed sends as envelopes with a deadline index, recycling | [envelope.md](envelope.md) |
 | The name area, and matching of run-time names that looks names up and never inserts | [names.md](names.md) |
 | `ta_run(budget)`: one call that admits, runs to completion and writes records | [macrostep.md](macrostep.md) |
-| `error.execution.capacity` and the reserved slot in the internal queue | [macrostep.md](macrostep.md) |
+| `error.execution.capacity` and compiler-sized mandatory internal storage | [macrostep.md](macrostep.md) |
 | The `recorded` and `watched` per-actor bits, set by address selector | [recording-and-replay.md](recording-and-replay.md), [telemetry.md](telemetry.md) |
 
 What core loses:
@@ -162,7 +162,7 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0045 Log records go to a host sink | log sink vtable | **refined**: `c2h.log` |
 | 0047 An interrupted macrostep is retryable | a macrostep interrupted by running out of memory can run again | **superseded**: core cannot run out of memory in a macrostep, and a data model or invoker that does answers `TA_OP_ERROR`, so nothing interrupts a macrostep for memory |
 | 0055 Deliver is the admission test | `TA_ERR_BUSY` | **superseded**: admission is moving from h2c into the pool |
-| 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: one fixed internal queue per running interpreter, with a reserved slot |
+| 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: ordinary quota plus compiler-sized mandatory storage, allocated outside macrosteps; the whole-execution accumulation bound must be established |
 | 0067 Core traces to a host sink | sink vtable | **refined**: the `tel` ring |
 | 0069 An idle actor carries no event | event blocks | **refined**: the taken event stays in its envelope; no blocks |
 | 0070 A run that runs out of memory stops where it stands | stopping inside a macrostep | **superseded** for core's memory; capacity becomes `error.execution.capacity` |
