@@ -48,12 +48,13 @@ lists the ADRs this reverses.)
 | The macrostep: no allocation, the fence, the budget, capacity errors | Core | [reference/macrostep.md](reference/macrostep.md) |
 | Data model and value references | A vtable the binding implements | [reference/data-model.md](reference/data-model.md) |
 | Complete definition submission, registration, release and retirement | Host requests; core compiles between macrosteps | [reference/definitions.md](reference/definitions.md) |
+| Debugger attachment, inspection, abandonment and transitions | Debugger temporarily owns the whole system; commands stay outside the rings | [reference/debugging.md](reference/debugging.md) |
 | Recording, replay, checkpoints | Core writes `c2h.input` and `c2h.state`; the application stores them | [reference/recording-and-replay.md](reference/recording-and-replay.md) |
 | Telemetry and OTLP | Core writes `tel`; a library encodes OTLP | [reference/telemetry.md](reference/telemetry.md) |
 | Unloading and loading, **to bound RAM only; not persistence** | Core writes images and asks for loads; the host keeps images and wakes for the life of the process | [reference/unloading.md](reference/unloading.md) |
 | Parameters | `ta_system` creation | [BEHAVIORS.md](BEHAVIORS.md#parameters) |
 
-## Two kinds of call
+## Protocol, native integration and debugging
 
 - **Host requests and results go through rings.** That covers inputs,
   complete declarative definitions, registration holds and retirement,
@@ -66,9 +67,13 @@ lists the ADRs this reverses.)
   - `ta_run(budget)`;
   - installing and calling the synchronous data model vtable;
   - value ownership and byte source/sink integrations.
-- **Operator calls remain API calls pending a separate decision:** inspect,
-  abandon and operator transitions. Moving definition management does not
-  decide their interface or scheduling.
+- **Debugger commands stay outside the production protocol.** The host
+  suspends its pump and transfers exclusive ownership of the whole system
+  to a debugger at a point where core has yielded. Native primitives let
+  the debugger inspect, abandon at a legal boundary and drive an operator
+  transition through the normal transition engine. Detaching returns
+  ownership to the pump. There is no operator ring or operator command
+  admission ([reference/debugging.md](reference/debugging.md)).
 
 The accepted definition boundary and the remaining representation questions
 are in [reference/definitions.md](reference/definitions.md). The protocol

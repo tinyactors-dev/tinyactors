@@ -45,8 +45,9 @@ actors and nested references keep the definition alive until they finish.
 Both receive the same correlated result. These are host operations, rather
 than a second native definition-management interface. Further definition
 reads, export and enumeration should use request/result records too; their
-record shapes are not yet specified. Operator controls remain a separate,
-pending decision.
+record shapes are not yet specified. Debugger commands use native primitives
+under exclusive system ownership, outside the production protocol
+([debugging.md](debugging.md)).
 
 ## Buffers, bounds and errors
 

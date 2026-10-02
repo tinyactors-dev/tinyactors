@@ -19,6 +19,11 @@ Everything else is the application's: whether to record, where and when to
 store the records, when to truncate, and which inputs to use as a seed.
 Recording does not hold effects or require persistence before execution.
 
+Debugger interventions are outside the production input protocol. Their
+audit and replay limits, including the use of a stable post-intervention
+checkpoint, are described in [debugging.md](debugging.md). A log of ordinary
+events alone does not specify a forced operator transition.
+
 ## Which sessions are recorded
 
 A session is recorded when its address matches a **recording selector**

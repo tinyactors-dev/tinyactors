@@ -64,6 +64,13 @@ deadlock: that is done by refusing sends that don't fit, which works
 without it. And it would need one continuation for every paused session.
 Run to completion needs **one continuation per system**.
 
+An attached debugger takes exclusive ownership of that same system instead
+of interleaving actors. It can inspect a budget pause, finish the current
+microstep without starting another, abandon at a legal boundary and drive
+an operator transition. Other actors remain stopped while it is attached
+([debugging.md](debugging.md)). These native debugging primitives are the
+exception to the production driver's single `ta_run` interface below.
+
 ### A sketch of the call
 
 ```c
@@ -105,6 +112,8 @@ such as a `<foreach>` over 10,000 items.
 - **While it is paused, nothing else runs.** The host may post to h2c, drain
   c2h and tel, and serve its own I/O. The next `ta_run` continues the same
   macrostep.
+  During debugger attachment only the debugger drives core; the production
+  pump cannot resume the macrostep until ownership is returned.
 - **A full ring never pauses a run.** A record that doesn't fit makes its
   action fail instead (below). An earlier iteration of this design paused on
   a full c2h. That made the host hold records it couldn't refuse.

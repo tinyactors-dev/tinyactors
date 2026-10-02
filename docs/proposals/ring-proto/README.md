@@ -95,6 +95,7 @@ Reference documents, one for each building block:
 | The macrostep: invariants, the fence, two kinds of exhaustion | [reference/macrostep.md](reference/macrostep.md) |
 | The data model: a synchronous vtable and value references | [reference/data-model.md](reference/data-model.md) |
 | Definitions: complete declarative requests and structured results | [reference/definitions.md](reference/definitions.md) |
+| Debugging: exclusive system ownership, inspection and transitions | [reference/debugging.md](reference/debugging.md) |
 | Recording and replay: `c2h.input`, checkpoints, replaying a whole system | [reference/recording-and-replay.md](reference/recording-and-replay.md) |
 | Telemetry: the lossy ring, OTLP | [reference/telemetry.md](reference/telemetry.md) |
 | Unloading and loading sessions, which only bounds RAM: images end with their process | [reference/unloading.md](reference/unloading.md) |
@@ -144,6 +145,11 @@ The scenarios run this example through:
   definitions and receive success or structured compile-error results;
   registration holds and retirement also use requests. Exact spec encoding
   remains a sketch ([reference/definitions.md](reference/definitions.md)).
+- **Accepted debugger boundary:** an attached debugger suspends the production
+  pump and owns the whole system. Commands stay outside the three rings;
+  intervention uses transitions and abandonment at legal boundaries.
+  Detaching returns ownership to the pump
+  ([reference/debugging.md](reference/debugging.md)).
 - **Found on the way:** core interns every event name computed at run time
   into tables that only grow. Any long-running system that computes event
   names leaks memory. An HTTP endpoint that maps request fields to event names

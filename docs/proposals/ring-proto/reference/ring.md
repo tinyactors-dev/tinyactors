@@ -200,6 +200,11 @@ a bounded host-owned buffer ([definitions.md](definitions.md)).
 
 ## One thread
 
+An attached debugger temporarily replaces the production driver on this
+same thread. It owns the system and its rings exclusively until detachment;
+debugger commands use the host's debugger connection, not an operator ring
+([debugging.md](debugging.md)).
+
 **A `ta_system` is not thread-safe, and neither are its rings.** Core and
 the host take turns on the system's own thread. The host writes h2c, calls
 `ta_run(budget)`, and reads c2h and tel when it returns. Core calls the data

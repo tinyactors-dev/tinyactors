@@ -19,9 +19,11 @@ note 'The data model is not on a ring. Core calls ta_datamodel_vtable ' \
      'cross the rings, as value references.'
 note 'Definition management uses request/result records. Native calls create ' \
      'and destroy the system, expose its rings, drive execution and install ' \
-     'data model/value integrations. Operator calls (inspect, abandon, ' \
-     'operator transitions) remain API calls pending a separate decision ' \
-     '(ARCHITECTURE.md, "Two kinds of call").'
+     'data model/value integrations. An attached debugger takes exclusive ' \
+     'ownership of the whole system from the production pump. Inspection, ' \
+     'abandonment and operator transitions use native primitives outside ' \
+     'the production rings; no operator ring is added ' \
+     '(reference/debugging.md).'
 note 'A vref in a c2h record is a reference core retained for the host. ' \
      'The host releases it when it has used the record. A vref in an h2c ' \
      'record is one the host retained for core; core releases it when the ' \

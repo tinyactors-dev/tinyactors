@@ -261,6 +261,13 @@ changes every binding in the same change.
 
 ## Decided along the way
 
+- **Debugging temporarily replaces the production driver.** Attachment
+  suspends the pump and transfers exclusive ownership of the whole system.
+  Debugger commands stay outside the rings; native primitives support
+  inspection, abandonment at legal boundaries and operator transitions
+  through the normal engine. Detachment returns ownership to the pump.
+  Actor-only holds and interleaved stepping are outside the initial design
+  ([debugging.md](debugging.md)).
 - **Definition management uses requests and results.** Hosts submit a
   complete declarative spec; core compiles and registers it between
   macrosteps. Structured compile errors travel through bounded buffers.
