@@ -45,7 +45,7 @@ reads it; only the noted side writes each field.
 | `tel.dropped` | core | telemetry records dropped since creation |
 | `pool.envelopes`, `pool.free`, `pool.waiting`, `pool.high_water` | core | the envelope pool ([envelope.md](envelope.md)) |
 | `names.bytes`, `names.used` | core | the name area ([names.md](names.md)) |
-| `admitting` | core | whether core is moving h2c records into the pool now (pool below `admissionWatermark`) |
+| `admitting` | core | whether core is moving h2c events into the pool now (pool below `admissionWatermark`); definition requests use no envelope |
 
 The usage counters exist so a host can make decisions at its edge without
 asking core. For example, it can answer HTTP 503 while `admitting` is
@@ -191,6 +191,12 @@ work the same way: [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced)
 [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed),
 [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake). If c2h has no room
 for one, core doesn't consume the h2c record or event that would cause it.
+
+Definition requests follow this rule too: core reserves their fixed
+[`c2h.definition_result`](../protocol/generated/MESSAGES.md#c2hdefinition_result)
+before consuming the request, compiling or changing definition state.
+They run between macrosteps without an envelope; compile diagnostics use
+a bounded host-owned buffer ([definitions.md](definitions.md)).
 
 ## One thread
 

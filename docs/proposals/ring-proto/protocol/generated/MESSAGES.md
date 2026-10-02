@@ -3,7 +3,7 @@
 Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edit.
 
 - The data model is not on a ring. Core calls ta_datamodel_vtable synchronously, as today (reference/data-model.md). Only its results cross the rings, as value references.
-- Defining a chart, creating a system and the operator calls (inspect, abandon, operator transitions) stay ordinary API calls: they are control, not traffic (ARCHITECTURE.md, "Two kinds of call").
+- Definition management uses request/result records. Native calls create and destroy the system, expose its rings, drive execution and install data model/value integrations. Operator calls (inspect, abandon, operator transitions) remain API calls pending a separate decision (ARCHITECTURE.md, "Two kinds of call").
 - A vref in a c2h record is a reference core retained for the host. The host releases it when it has used the record. A vref in an h2c record is one the host retained for core; core releases it when the envelope holding it is freed.
 - Replay seeds new execution: supplied inputs derive configuration and data model values, which may differ from an earlier run. External effects are suppressed while seeding. In live execution the host may execute effects on receipt, independently of recording, persistence or c2h.fence.
 
@@ -29,6 +29,9 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x0108` | [`h2c.checkpoint`](#h2ccheckpoint) | Ask for a recorded session's state | 40 |
 | `0x0109` | [`h2c.invoke_report`](#h2cinvoke_report) | An invoked service finished or failed | 64 |
 | `0x010A` | [`h2c.destroy`](#h2cdestroy) | End a session now | 40 |
+| `0x010B` | [`h2c.definition_register`](#h2cdefinition_register) | Compile and register a complete definition | 56 |
+| `0x010C` | [`h2c.definition_release`](#h2cdefinition_release) | Release one registration hold | 40 |
+| `0x010D` | [`h2c.definition_retire`](#h2cdefinition_retire) | End a definition’s availability | 40 |
 | `0x0201` | [`c2h.spawned`](#c2hspawned) | A session exists | 64 |
 | `0x0202` | [`c2h.input`](#c2hinput) | A recorded session took an input | 112 |
 | `0x0203` | [`c2h.send`](#c2hsend) | A send for an I/O processor | 88 |
@@ -46,6 +49,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x020F` | [`c2h.published`](#c2hpublished) | A replayed session is live | 56 |
 | `0x0210` | [`c2h.finished`](#c2hfinished) | A session reached a top-level final state | 48 |
 | `0x0211` | [`c2h.destroyed`](#c2hdestroyed) | A session is gone | 48 |
+| `0x0212` | [`c2h.definition_result`](#c2hdefinition_result) | A definition request completed | 56 |
 | `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 120 |
 | `0x0302` | [`tel.dropped`](#teldropped) | Telemetry records were dropped | 48 |
 
@@ -194,6 +198,46 @@ Header `session` is the invoking session.
 | 32 | `address` | text |  |
 
 - may be answered by: [`c2h.destroyed`](#c2hdestroyed), [`c2h.bounced`](#c2hbounced)
+
+## h2c.definition_register
+
+`0x010B` on `h2c`, 56 fixed bytes. Compile and register a complete definition.
+
+Header session is 0. One atomic request, with no builder operations. Core validates a relocatable ta_scxml_spec, compiles it through the existing compiler and registers it between macrosteps. Native data model callbacks remain synchronous (reference/definitions.md).
+
+The host keeps spec readable and diagnostic writable until the correlated c2h.definition_result. Failure registers nothing and retains nothing from the submitted spec.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 32 | `spec` | blob | complete declarative spec; offsets and counts, not native pointers |
+| 40 | `datamodel` | u64 | process-local handle of a native-installed data model adapter |
+| 48 | `diagnostic` | blob | host-owned bounded output buffer for a structured compile error |
+
+- may be answered by: [`c2h.definition_result`](#c2hdefinition_result)
+
+## h2c.definition_release
+
+`0x010C` on `h2c`, 40 fixed bytes. Release one registration hold.
+
+Core ADR 0077 semantics: an unused definition is freed when its last hold, actor and nesting reference goes. Header session is 0.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 32 | `definition` | u64 | the system-local definition ID returned by registration |
+
+- may be answered by: [`c2h.definition_result`](#c2hdefinition_result)
+
+## h2c.definition_retire
+
+`0x010D` on `h2c`, 40 fixed bytes. End a definition’s availability.
+
+Core ADR 0043 semantics: existing actors keep running; new spawns cannot use it. Retirement drops registration holds and is idempotent for an issued ID, including after it was freed. Header session is 0.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 32 | `definition` | u64 | the system-local definition ID |
+
+- may be answered by: [`c2h.definition_result`](#c2hdefinition_result)
 
 ## c2h.spawned
 
@@ -435,6 +479,22 @@ Envelopes still waiting for it are recycled as for h2c.load_failed.
 | 40 | `reason` | destroy_reason (u8) |  |
 
 
+## c2h.definition_result
+
+`0x0212` on `c2h`, 56 fixed bytes. A definition request completed.
+
+Exactly one result per definition request. Header session is 0. Core reserves room for this fixed-size reply before consuming the request or changing definition state. No macrostep fence follows.
+
+A compile_error diagnostic owns copies of the code, path, subject, subject range, related text and message of ta_compile_error (core ADR 0058); no borrowed pointers escape. The host owns the buffer before and after completion (reference/definitions.md).
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 32 | `cause_seq` | seq | the definition request’s h2c seq |
+| 40 | `definition` | u64 | on successful register: the definition ID; otherwise 0 |
+| 48 | `diagnostic_bytes` | u32 | bytes written to the request’s diagnostic buffer; 0 without a compile error |
+| 52 | `status` | definition_status (u8) |  |
+
+
 ## tel.trace
 
 `0x0301` on `tel`, 120 fixed bytes. One trace record (core ADR 0067).
@@ -552,6 +612,19 @@ The last segment of error.execution.capacity.<resource>, the event an action rai
 | 0 | `finished` |  |
 | 1 | `operator` | h2c.destroy |
 | 2 | `parent_exited` | its invoking state exited |
+
+### `definition_status` (u8)
+
+The result of a definition request.
+
+| Value | Name | Meaning |
+|---|---|---|
+| 0 | `ok` |  |
+| 1 | `compile_error` | the complete spec was refused; diagnostic describes the first fault |
+| 2 | `capacity` | allocation, a configured bound or diagnostic buffer capacity was exhausted |
+| 3 | `mismatch` | an explicit identity names different content (core ADR 0077) |
+| 4 | `not_found` | an unknown or stale definition ID |
+| 5 | `invalid` | an invalid spec representation, adapter handle or release request |
 
 ## Scalar types
 

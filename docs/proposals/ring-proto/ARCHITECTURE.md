@@ -47,6 +47,7 @@ lists the ADRs this reverses.)
 | Name area; interning only at compile time; matching by lookup only | Core | [reference/names.md](reference/names.md) |
 | The macrostep: no allocation, the fence, the budget, capacity errors | Core | [reference/macrostep.md](reference/macrostep.md) |
 | Data model and value references | A vtable the binding implements | [reference/data-model.md](reference/data-model.md) |
+| Complete definition submission, registration, release and retirement | Host requests; core compiles between macrosteps | [reference/definitions.md](reference/definitions.md) |
 | Recording, replay, checkpoints | Core writes `c2h.input` and `c2h.state`; the application stores them | [reference/recording-and-replay.md](reference/recording-and-replay.md) |
 | Telemetry and OTLP | Core writes `tel`; a library encodes OTLP | [reference/telemetry.md](reference/telemetry.md) |
 | Unloading and loading, **to bound RAM only; not persistence** | Core writes images and asks for loads; the host keeps images and wakes for the life of the process | [reference/unloading.md](reference/unloading.md) |
@@ -54,28 +55,39 @@ lists the ADRs this reverses.)
 
 ## Two kinds of call
 
-- **Traffic goes through rings.** That covers inputs, effects, fences,
-  bounces, loads, unloads, checkpoints, wakes and telemetry. Rings are what
-  get batched and recorded, and what an out-of-process host (the test host)
-  would forward unchanged.
-- **Control stays ordinary API calls:**
-  - creating a system and registering a definition, whose compile errors need
-    a rich answer (ADR 0058);
+- **Host requests and results go through rings.** That covers inputs,
+  complete declarative definitions, registration holds and retirement,
+  effects, fences, bounces, loads, unloads, checkpoints, wakes and telemetry.
+  Definition compilation has structured error results (ADR 0058); bindings
+  need no separate native definition-management interface. The test host
+  forwards requests after mapping process-local value and buffer handles.
+- **Native integration stays ordinary API calls:**
+  - creating and destroying a system, accessing its rings;
   - `ta_run(budget)`;
-  - operator calls: inspect, abandon, operator transitions;
-  - the data model vtable, which runs inside a macrostep.
+  - installing and calling the synchronous data model vtable;
+  - value ownership and byte source/sink integrations.
+- **Operator calls remain API calls pending a separate decision:** inspect,
+  abandon and operator transitions. Moving definition management does not
+  decide their interface or scheduling.
+
+The accepted definition boundary and the remaining representation questions
+are in [reference/definitions.md](reference/definitions.md). The protocol
+does not mirror individual C builder operations.
 
 ## The host loop
 
 All a binding does, in pseudo-code:
 
 ```
-on start:          create the system (parameters), register definitions
+on start:          create the system (parameters), install native integrations
+                   post h2c.definition_register for each complete spec
+                   drive the loop; await successful definition results before spawn
 on an edge input:  if h2c has room: post h2c.event / h2c.spawn; else refuse (503) or keep it (policy)
 on wake timer:     post h2c.time(now)
 loop:
   ta_run(budget)                         # admits from h2c, runs macrosteps to completion
   read each available c2h record:
+    c2h.definition_result → resolve the request; reclaim its buffers; report compile errors
     c2h.input         → recorder; journal on the application's schedule
     c2h.send          → I/O processor, immediately on receipt
     c2h.invoke / c2h.invoke_cancel / c2h.invoke_forward → invoker, on receipt

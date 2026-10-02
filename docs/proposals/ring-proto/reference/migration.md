@@ -70,7 +70,9 @@ napi becomes a binding over core and its rings. What it keeps:
 - the JavaScript data model (`napi_datamodel.c`, about 2,400 lines), unchanged;
 - value boxes as vrefs (`values.c`, napi ADR 0011);
 - codecs;
-- the definitions API;
+- the public definitions API, implemented by complete-spec requests and
+  correlated results rather than a separate native management interface
+  ([definitions.md](definitions.md));
 - the loader and its timeouts, as JavaScript that answers [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed);
 - the pump, reduced to a short loop:
   1. post h2c;
@@ -246,7 +248,7 @@ Each step builds and passes `mise run test`, and is committed on its own
    for local mail.
 5. **c2h.** Sends, invocations and logs become records. The kernel's
    adapters and effects queue go.
-6. **h2c.** Inputs, spawn, time and load go through it. The kernel's
+6. **h2c.** Inputs, complete definitions, spawn, time and load go through it. The kernel's
    loads, offloads and directory go.
 7. **Recording and replay** on `c2h.input`. The kernel's recorder and
    replay go.
@@ -259,6 +261,12 @@ changes every binding in the same change.
 
 ## Decided along the way
 
+- **Definition management uses requests and results.** Hosts submit a
+  complete declarative spec; core compiles and registers it between
+  macrosteps. Structured compile errors travel through bounded buffers.
+  Native data model and value ownership integration stays desired.
+  Exact spec and diagnostic encodings remain sketches
+  ([definitions.md](definitions.md)).
 - **The data model stays a synchronous vtable.** Data model requests on the
   ring ("option (b)") are rejected: in-process data models gain nothing,
   and every action would have to become resumable in the middle

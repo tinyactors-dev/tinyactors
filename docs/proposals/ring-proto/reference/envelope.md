@@ -119,21 +119,22 @@ target isn't resident. They go on that address's waiting list (below).
 
 ## Admission: from h2c into the pool
 
-Core moves h2c records into the pool only while the pool is below
+Core moves h2c events into the pool only while the pool is below
 `admissionWatermark` (a fraction of `poolEnvelopes` and of `nameAreaBytes`).
 The rest of the pool is kept free for what sessions send each other.
 
-- **Below the watermark,** core takes the next h2c record, takes an
+- **Below the watermark,** core takes the next h2c event, takes an
   envelope, copies the record's text into the name area, takes over its
   vref, and appends the envelope to the run queue (or to a waiting list, see
   below). The h2c bytes are then released.
-- **At or above it,** core leaves h2c alone and sets `admitting` to false in
+- **At or above it,** core leaves an h2c event unread and sets `admitting` to false in
   the control block. h2c fills, and the host refuses at its edge. Nothing is
   lost, and nobody is told anything they can't act on: the external client
   retries.
 - **Records that are not events** ([`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime),
   [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload),
-  [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed), ...)
+  [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed),
+  [`h2c.definition_register`](../protocol/generated/MESSAGES.md#h2cdefinition_register), ...)
   are applied when read and take no envelope. They are still read in order,
   so a `h2c.time` stuck behind events that can't be admitted waits for them.
   That keeps the input order the same during replay ([recording-and-replay.md](recording-and-replay.md)).

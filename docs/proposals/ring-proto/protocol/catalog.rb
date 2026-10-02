@@ -17,9 +17,11 @@ title 'Ring protocol records'
 note 'The data model is not on a ring. Core calls ta_datamodel_vtable ' \
      'synchronously, as today (reference/data-model.md). Only its results ' \
      'cross the rings, as value references.'
-note 'Defining a chart, creating a system and the operator calls (inspect, ' \
-     'abandon, operator transitions) stay ordinary API calls: they are ' \
-     'control, not traffic (ARCHITECTURE.md, "Two kinds of call").'
+note 'Definition management uses request/result records. Native calls create ' \
+     'and destroy the system, expose its rings, drive execution and install ' \
+     'data model/value integrations. Operator calls (inspect, abandon, ' \
+     'operator transitions) remain API calls pending a separate decision ' \
+     '(ARCHITECTURE.md, "Two kinds of call").'
 note 'A vref in a c2h record is a reference core retained for the host. ' \
      'The host releases it when it has used the record. A vref in an h2c ' \
      'record is one the host retained for core; core releases it when the ' \
@@ -36,9 +38,9 @@ ring :h2c,
      producer: :host, consumer: :core, loss: :none,
      when_full: 'The host cannot post. It refuses at its edge (for example ' \
                 'HTTP 503) or keeps the input itself. Core never waits on h2c.',
-     doc: 'Admission. Every input the system will ever see enters here, in ' \
-          'the host order. Core moves a record into the envelope pool only ' \
-          'while the pool is below its admission watermark.'
+     doc: 'Host requests, in host order. Event admission uses the envelope ' \
+          'pool below its watermark. Definition requests run between ' \
+          'macrosteps without an envelope (reference/definitions.md).'
 
 ring :c2h,
      producer: :core, consumer: :host, loss: :none,
@@ -111,6 +113,15 @@ enum :destroy_reason, :u8 do
   value :finished, 0
   value :operator, 1, 'h2c.destroy'
   value :parent_exited, 2, 'its invoking state exited'
+end
+
+enum :definition_status, :u8, doc: 'The result of a definition request.' do
+  value :ok, 0
+  value :compile_error, 1, 'the complete spec was refused; diagnostic describes the first fault'
+  value :capacity, 2, 'allocation, a configured bound or diagnostic buffer capacity was exhausted'
+  value :mismatch, 3, 'an explicit identity names different content (core ADR 0077)'
+  value :not_found, 4, 'an unknown or stale definition ID'
+  value :invalid, 5, 'an invalid spec representation, adapter handle or release request'
 end
 
 # ---------------------------------------------------------------- h2c
@@ -212,6 +223,35 @@ end
 message 'h2c.destroy', code: 0x010A, summary: 'End a session now' do
   field :address, :text
   replies_with 'c2h.destroyed', 'c2h.bounced'
+end
+
+message 'h2c.definition_register', code: 0x010B, summary: 'Compile and register a complete definition' do
+  doc 'Header session is 0. One atomic request, with no builder operations. ' \
+      'Core validates a relocatable ta_scxml_spec, compiles it through the ' \
+      'existing compiler and registers it between macrosteps. Native data ' \
+      'model callbacks remain synchronous (reference/definitions.md).'
+  doc 'The host keeps spec readable and diagnostic writable until the ' \
+      'correlated c2h.definition_result. Failure registers nothing and ' \
+      'retains nothing from the submitted spec.'
+  field :spec, :blob, 'complete declarative spec; offsets and counts, not native pointers'
+  field :datamodel, :u64, 'process-local handle of a native-installed data model adapter'
+  field :diagnostic, :blob, 'host-owned bounded output buffer for a structured compile error'
+  replies_with 'c2h.definition_result'
+end
+
+message 'h2c.definition_release', code: 0x010C, summary: 'Release one registration hold' do
+  doc 'Core ADR 0077 semantics: an unused definition is freed when its last ' \
+      'hold, actor and nesting reference goes. Header session is 0.'
+  field :definition, :u64, 'the system-local definition ID returned by registration'
+  replies_with 'c2h.definition_result'
+end
+
+message 'h2c.definition_retire', code: 0x010D, summary: 'End a definition’s availability' do
+  doc 'Core ADR 0043 semantics: existing actors keep running; new spawns ' \
+      'cannot use it. Retirement drops registration holds and is idempotent ' \
+      'for an issued ID, including after it was freed. Header session is 0.'
+  field :definition, :u64, 'the system-local definition ID'
+  replies_with 'c2h.definition_result'
 end
 
 # ---------------------------------------------------------------- c2h
@@ -379,6 +419,20 @@ message 'c2h.destroyed', code: 0x0211, summary: 'A session is gone' do
   doc 'Envelopes still waiting for it are recycled as for h2c.load_failed.'
   field :address, :text
   field :reason, :destroy_reason
+end
+
+message 'c2h.definition_result', code: 0x0212, summary: 'A definition request completed' do
+  doc 'Exactly one result per definition request. Header session is 0. ' \
+      'Core reserves room for this fixed-size reply before consuming the ' \
+      'request or changing definition state. No macrostep fence follows.'
+  doc 'A compile_error diagnostic owns copies of the code, path, subject, ' \
+      'subject range, related text and message of ta_compile_error (core ' \
+      'ADR 0058); no borrowed pointers escape. The host owns the buffer ' \
+      'before and after completion (reference/definitions.md).'
+  field :cause_seq, :seq, 'the definition request’s h2c seq'
+  field :definition, :u64, 'on successful register: the definition ID; otherwise 0'
+  field :diagnostic_bytes, :u32, 'bytes written to the request’s diagnostic buffer; 0 without a compile error'
+  field :status, :definition_status
 end
 
 # ---------------------------------------------------------------- tel

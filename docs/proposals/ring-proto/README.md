@@ -94,6 +94,7 @@ Reference documents, one for each building block:
 | Names: authored names are interned, run-time names are bytes | [reference/names.md](reference/names.md) |
 | The macrostep: invariants, the fence, two kinds of exhaustion | [reference/macrostep.md](reference/macrostep.md) |
 | The data model: a synchronous vtable and value references | [reference/data-model.md](reference/data-model.md) |
+| Definitions: complete declarative requests and structured results | [reference/definitions.md](reference/definitions.md) |
 | Recording and replay: `c2h.input`, checkpoints, replaying a whole system | [reference/recording-and-replay.md](reference/recording-and-replay.md) |
 | Telemetry: the lossy ring, OTLP | [reference/telemetry.md](reference/telemetry.md) |
 | Unloading and loading sessions, which only bounds RAM: images end with their process | [reference/unloading.md](reference/unloading.md) |
@@ -136,8 +137,13 @@ The scenarios run this example through:
 - **Unchanged, by decision:**
   - the data model stays a synchronous vtable
     ([reference/data-model.md](reference/data-model.md#decided-the-data-model-stays-a-synchronous-vtable));
+  - native integrations own data model adapters and values.
   - a `ta_system` is not thread-safe. A host with other threads puts its
     own queue in front of it ([reference/ring.md](reference/ring.md#one-thread)).
+- **Accepted protocol boundary:** hosts submit complete declarative
+  definitions and receive success or structured compile-error results;
+  registration holds and retirement also use requests. Exact spec encoding
+  remains a sketch ([reference/definitions.md](reference/definitions.md)).
 - **Found on the way:** core interns every event name computed at run time
   into tables that only grow. Any long-running system that computes event
   names leaks memory. An HTTP endpoint that maps request fields to event names

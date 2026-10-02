@@ -47,6 +47,12 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_DESTROY_REASON_FINISHED 0u
 #define TRP_DESTROY_REASON_OPERATOR 1u
 #define TRP_DESTROY_REASON_PARENT_EXITED 2u
+#define TRP_DEFINITION_STATUS_OK 0u
+#define TRP_DEFINITION_STATUS_COMPILE_ERROR 1u
+#define TRP_DEFINITION_STATUS_CAPACITY 2u
+#define TRP_DEFINITION_STATUS_MISMATCH 3u
+#define TRP_DEFINITION_STATUS_NOT_FOUND 4u
+#define TRP_DEFINITION_STATUS_INVALID 5u
 
 #define TRP_H2C_TIME 0x0101u
 #define TRP_H2C_EVENT 0x0102u
@@ -59,6 +65,9 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_H2C_CHECKPOINT 0x0108u
 #define TRP_H2C_INVOKE_REPORT 0x0109u
 #define TRP_H2C_DESTROY 0x010au
+#define TRP_H2C_DEFINITION_REGISTER 0x010bu
+#define TRP_H2C_DEFINITION_RELEASE 0x010cu
+#define TRP_H2C_DEFINITION_RETIRE 0x010du
 #define TRP_C2H_SPAWNED 0x0201u
 #define TRP_C2H_INPUT 0x0202u
 #define TRP_C2H_SEND 0x0203u
@@ -78,6 +87,7 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_C2H_PUBLISHED 0x020fu
 #define TRP_C2H_FINISHED 0x0210u
 #define TRP_C2H_DESTROYED 0x0211u
+#define TRP_C2H_DEFINITION_RESULT 0x0212u
 #define TRP_TEL_TRACE 0x0301u
 #define TRP_TEL_TRACE_TRUNCATED (1u << 0)
 #define TRP_TEL_TRACE_SUPPRESSED (1u << 1)
@@ -169,6 +179,29 @@ typedef struct {
     trp_span address;
 } trp_h2c_destroy;
 _Static_assert(sizeof(trp_h2c_destroy) == 40, "h2c.destroy");
+
+/* h2c.definition_register: Compile and register a complete definition. */
+typedef struct {
+    trp_header header;
+    uint64_t spec;
+    uint64_t datamodel;
+    uint64_t diagnostic;
+} trp_h2c_definition_register;
+_Static_assert(sizeof(trp_h2c_definition_register) == 56, "h2c.definition_register");
+
+/* h2c.definition_release: Release one registration hold. */
+typedef struct {
+    trp_header header;
+    uint64_t definition;
+} trp_h2c_definition_release;
+_Static_assert(sizeof(trp_h2c_definition_release) == 40, "h2c.definition_release");
+
+/* h2c.definition_retire: End a definition’s availability. */
+typedef struct {
+    trp_header header;
+    uint64_t definition;
+} trp_h2c_definition_retire;
+_Static_assert(sizeof(trp_h2c_definition_retire) == 40, "h2c.definition_retire");
 
 /* c2h.spawned: A session exists. */
 typedef struct {
@@ -345,6 +378,17 @@ typedef struct {
     uint8_t pad_end[7];
 } trp_c2h_destroyed;
 _Static_assert(sizeof(trp_c2h_destroyed) == 48, "c2h.destroyed");
+
+/* c2h.definition_result: A definition request completed. */
+typedef struct {
+    trp_header header;
+    uint64_t cause_seq;
+    uint64_t definition;
+    uint32_t diagnostic_bytes;
+    uint8_t status;
+    uint8_t pad_end[3];
+} trp_c2h_definition_result;
+_Static_assert(sizeof(trp_c2h_definition_result) == 56, "c2h.definition_result");
 
 /* tel.trace: One trace record (core ADR 0067). */
 typedef struct {

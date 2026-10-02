@@ -40,6 +40,11 @@ cites a name, its meaning doesn't change, and a retired code is never reused.
   byte source or sink (core ADR 0090).
 
 How rings carry records is in [reference/ring.md](../reference/ring.md).
+Complete-spec requests and bounded structured compile diagnostics are in
+[reference/definitions.md](../reference/definitions.md). They use blobs so
+their size does not determine the size of a ring record. Exact spec and
+diagnostic encodings remain sketch questions; native data model and value
+integrations remain part of the binding.
 
 ## The DSL
 
