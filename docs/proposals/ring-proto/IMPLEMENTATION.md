@@ -42,6 +42,10 @@ by role here, not alphabetically. Line counts are today's (`.c` + `.h`).
 Block IDs refer to [building-blocks.md](reference/building-blocks.md), and
 `step` refers to the phases below.
 
+Every unit includes the public header itself and the units it uses. No
+catch-all header such as `types.h` remains: each unit is named after the
+one object it defines.
+
 Legend:
 
 - `+` new
@@ -57,20 +61,30 @@ tinyactors-core/
 │   │                                    (router, I/O, invoker, directory, trace, log), deliver/resume/
 │   │                                    dispatch_due, register_io/_invoker, origins and scopes, TA_OP_NOMEM,
 │   │                                    TA_ERR_BUSY, TA_DM_TEXT_IO_*, run-time intern entry points
-│   └── tinyactors_ring.h       +        generated from protocol/: record structs, kinds, enums, flags (C2, 2.9)
+│   └── tinyactors_ring.h       +        published by the amalgamation from src/generated/ring_records.h,
+│                                        as include/tinyactors.c is today (2.9)
 ├── protocol/                   +        moved from docs/proposals/ring-proto/protocol (2.9)
 │   ├── dsl.rb                  +        the DSL
 │   ├── catalog.rb              +        every record, defined once
-│   └── render.rb               +        MESSAGES.md, messages.json, tinyactors_ring.h, ring_codec.c
+│   └── render.rb               +        writes everything in src/generated/
 ├── mise/tasks/
-│   └── protocol                +        file task: render protocol/ into include/ and src/ (2.9)
+│   ├── protocol                +        file task: render protocol/ into src/generated/ (2.9)
+│   └── amalgamate              ~        also joins src/generated/*.c, and publishes tinyactors_ring.h
 └── src/
     │
     │   ── foundation: generic, no knowledge of SCXML ──────────────────────────────────────
-    ├── types.c / types.h       ~   282  keeps ta_vec, bitsets, ta_mem_*, the text writer; formatters move out
-    ├── text.c / text.h         +        D6 decimal, hex, percent-encoding; D3 writer targets (chunk chain, record tail)
+    ├── types.c / types.h       -   282  a catch-all; split into one unit per object (1.0):
+    ├── memory.c / memory.h     +        A1 helpers: ta_mem_alloc/_free/_copy/_zero, alignment, TA_ARRAY_COUNT
+    ├── str.c / str.h           +        ta_str equality and construction from a C string
+    ├── vec.c / vec.h           +        B6 ta_vec and TA_VEC_LAYOUT
+    ├── bitset.h                +        B5 ta_bits_*, inline
+    ├── span.h                  +        ta_span32: offset and length into an array or a record tail
+    │                                    (compiled definitions, record spans)
+    ├── text_writer.c / .h      +        D3 the bounded writer and render; D6 decimal, hex, percent-encoding;
+    │                                    targets for a chunk chain and a record tail
+    ├── version.c               +        ta_version
     ├── hash.h                  +        D5 FNV-1a and the 64-bit mixer, once (1.1)
-    ├── handle.h                +        E1 generation handles (1.2)
+    ├── handle.h                +        E1 generation handles, with ta_actor_key (1.2)
     ├── layout.c / layout.h     +        A2 layout builder with checked arithmetic (1.4)
     ├── arena.c / arena.h       =   199  A3; optional A4 mark/rewind
     ├── index_pool.c / .h       +        A5 fixed items in pages, safe-point refill, ceiling, trim (1.5)
@@ -84,7 +98,11 @@ tinyactors-core/
     ├── bytes.c / bytes.h       +        D1 byte sinks and sources: memory, arena, chunk chain (2.5)
     ├── serial.c / serial.h     +        D2 typed binary writer and reader, extracted from session_image (2.5)
     ├── ring.c / ring.h         +        C1 SPSC byte ring: reserve, pad, commit, release, lossy mode (2.8)
-    ├── ring_codec.c            +        C2 generated writers and validating readers (2.9)
+    ├── generated/              +        everything the protocol renderer writes; never edited by hand (2.9)
+    │   ├── ring_records.h      +        record structs, kinds, enums, flags, size asserts
+    │   ├── ring_codec.c        +        C2 writers and validating readers
+    │   ├── messages.json       +        the catalog as data, for the test host's decoder
+    │   └── MESSAGES.md         +        the catalog as a reference document
     ├── tree.c / tree.h         =   217  spec tree builder
     ├── ta_allocator_wasm.c     =   117  wasm allocator (platform file)
     │
@@ -162,6 +180,13 @@ suggestions.
 - **Delete what a step replaces, in that step.** The removal table in
   [building-blocks.md](reference/building-blocks.md#what-core-can-remove)
   is the checklist. A step is done when its rows are gone.
+- **One unit per object.** Each new block is its own unit (`vec.c` /
+  `vec.h`), named after the object it defines. Nothing is added to a
+  catch-all header, and `types.h` is split up in 1.0.
+- **Generated code lives only in `src/generated/`.** Files there are
+  rendered from `protocol/` and never edited by hand. Nothing outside
+  that directory is generated, except what the amalgamation publishes
+  in `include/`.
 - **Do not refactor code that a later phase deletes.** This covers
   `timer.c`, the event blocks, `io.c` / `io_origin.c` and the kernel's
   containers. Phase 1 leaves them alone.
@@ -212,6 +237,7 @@ gets its own test program in `tinyactors-core/tests/`.
 
 | Step | Block | Replaces | Notes |
 |---|---|---|---|
+| 1.0 | – | `types.c` / `types.h` | Split into `memory`, `str`, `vec`, `bitset.h`, `span.h`, `text_writer` and `version.c`. Move `ta_actor_key` to `handle.h` with 1.2. Every module includes what it uses instead of `types.h`. |
 | 1.1 | D5 hash functions, D6 formatters | The Murmur finalizer duplicated in `session.c:4` and `trace.c:34`; FNV-1a in 32-bit and 64-bit forms; three decimal formatters, four hex helpers, two `cstr` helpers | One header. Trace and span IDs must stay identical: `span_test` covers them. |
 | 1.2 | E1 generation handles | The hand-packed definition IDs (`system.c:456`), and `ta_actor_id_make` as the only shared helper | |
 | 1.3 | E2 failing, counting test allocator | Nine hand-rolled copies in core's tests | It lives with the tests and is never amalgamated into the library. |
@@ -242,7 +268,7 @@ exception to "remove what nothing uses".
 | 2.6 | D4 name resolver | Splits a name at the dots and looks each segment up with `ta_atom_find`; scratch holds `eventNameDepth` segments. |
 | 2.7 | B7 type registry | Built-in entries and their aliases, `declare`, `declared`. |
 | 2.8 | C1 SPSC byte ring, and the control block | Lossless and lossy modes, pads, seq. Tests cover a wrap on every offset, a ring of `maxRecordBytes`, and lossy drop counting. |
-| 2.9 | C2 record codec generator | Move `protocol/` (the DSL, the catalog, the renderer) from this proposal into `tinyactors-core/protocol/`. Add a mise file task that generates C writers and validating readers into `src/`, and keep generating `MESSAGES.md` and `messages.json`. The reader tests feed malformed records: a span outside the record, a wrong size, an unknown kind, a seq gap. |
+| 2.9 | C2 record codec generator | Move `protocol/` (the DSL, the catalog, the renderer) from this proposal into `tinyactors-core/protocol/`. Add a mise file task that renders into `src/generated/`: the record header, the C writers and validating readers, `MESSAGES.md` and `messages.json`. The amalgamation joins `src/generated/*.c` and publishes the records as `include/tinyactors_ring.h`. The reader tests feed malformed records: a span outside the record, a wrong size, an unknown kind, a seq gap. |
 | 2.10 | C4 claim set (optional) | Reserves across C3 quotas, all or nothing. |
 
 **Exit:** every new block has its own test program, and the core `test`
