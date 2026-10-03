@@ -162,6 +162,156 @@ tinyactors-core/
 Annotations welcome directly in the tree. Names marked `+` are
 suggestions.
 
+## Where the documentation goes
+
+The proposal's documents are good enough to be the reference for the
+implementation, so they move into the packages, one by one, as the code
+they describe lands. The proposal directory itself stays as history, with
+status *Adopted → links*, like the [replay persistence
+proposal](../replay-persistence.md).
+
+Each document goes to the place its readers already look:
+
+- **Core's internal reference** (`tinyactors-core/docs/internal/`) has one
+  document per module. Each `reference/` document becomes the document
+  for the module it describes, and replaces or merges into what is there
+  today.
+- **Core's manual** (`tinyactors-core/docs/manual/`) is for embedders. It
+  takes what a host author needs: the host loop, capacity and failure,
+  parameters, and the walkthroughs.
+- **The test host** proves behaviour (core's `docs/README.md`). The
+  scenarios become executable ring scripts there, and their charts become
+  its fixtures.
+- **ADRs** take every decision, and the **root `ROADMAP.md`** takes the
+  steps of this plan.
+
+### From the proposal
+
+Legend:
+
+- `→` moves to, rewritten as reference
+- `⇢` split between several homes
+- `▶` becomes code or tests, and the prose follows it
+- `◼` stays here as history
+
+```
+docs/proposals/ring-proto/
+├── README.md                   ◼        status → "Adopted → links"; the index of where everything went
+├── IMPLEMENTATION.md           ⇢        steps → root ROADMAP.md (Phase 0); rules → AGENTS.md where general;
+│                                        this file stays as history
+├── ARCHITECTURE.md             ⇢        layers → root README.md "Layers and responsibilities" (6.3);
+│                                        the host loop, the life of an input and of a send, time
+│                                        → core docs/manual/hosting.md (5.1)
+├── BEHAVIORS.md                ⇢        who drops what, full resources, what a chart must do
+│                                        → core docs/manual/capacity-and-failure.md (4.4);
+│                                        crashes → core docs/manual/persistence.md (5.5);
+│                                        parameters → core docs/manual/parameters.md (4.2, grows per step)
+├── charts/*.scxml              ▶        tinyactors-test/ruby/charts/ as fixtures (5.1)
+│   └── README.md               →        tinyactors-test/ruby/charts/README.md (5.1)
+├── scenarios/S01–S13           ▶        tinyactors-test/ruby/scenarios/ring_*.rb, one per scenario,
+│                                        test names carrying the step IDs (S04.3) (5.1, then per step)
+│   ├── S*.md                   →        core docs/manual/scenarios/S*.md: the walkthrough prose, each
+│   │                                    linking to its executable twin (with its scenario)
+│   └── README.md               →        core docs/manual/scenarios/README.md
+├── protocol/
+│   ├── dsl.rb, catalog.rb,     ▶        tinyactors-core/protocol/ (2.9)
+│   │   render.rb
+│   ├── README.md               →        tinyactors-core/protocol/README.md (2.9)
+│   └── generated/              ▶        tinyactors-core/src/generated/ (2.9)
+└── reference/
+    ├── building-blocks.md      ⇢        the catalog → core docs/internal/building-blocks.md (Phase 1);
+    │                                    each block's contract → the header comment of its unit;
+    │                                    the removal table and tree → this file, as history
+    ├── ring.md                 →        core docs/internal/ring.md (2.8, 5.1)
+    ├── envelope.md             ⇢        core docs/internal/envelope.md (4.2); delayed sends
+    │                                    → core docs/internal/deadline.md (4.3)
+    ├── names.md                ⇢        core docs/internal/names.md (3.1, 4.2); trie and atoms
+    │                                    → core docs/internal/trie.md, atom.md (1.6)
+    ├── macrostep.md            ⇢        core docs/internal/macrostep.md (4.4); slots, the chain limit
+    │                                    and parking → core docs/internal/slots.md, park.md (4.5)
+    ├── data-model.md           ⇢        merged into core docs/internal/datamodel-contract.md,
+    │                                    value.md and datamodel-system-variables.md (4.4, 5.2)
+    ├── definitions.md          ⇢        merged into core docs/internal/definition-lifecycle.md (5.4)
+    ├── debugging.md            →        core docs/internal/debugging.md (5.1)
+    ├── recording-and-replay.md ⇢        core docs/manual/persistence.md and
+    │                                    docs/internal/durability.md (5.5)
+    ├── telemetry.md            →        core docs/internal/telemetry.md (4.1)
+    ├── unloading.md            ⇢        core docs/manual/virtual-actors.md and
+    │                                    docs/internal/session-image.md (5.3)
+    └── migration.md            ◼        history; its ADR tables become ADRs (Phase 0)
+```
+
+### What changes where they land
+
+Legend as in the source tree: `+` new, `-` removed, `~` changes.
+
+```
+tinyactors-core/docs/
+├── README.md                   ~        a short "how core talks to its host" paragraph; links to hosting.md
+├── manual/
+│   ├── hosting.md              +        from ARCHITECTURE.md: the host loop, an input's life, a send's life, time
+│   ├── capacity-and-failure.md +        from BEHAVIORS.md
+│   ├── parameters.md           +        from BEHAVIORS.md "Parameters"
+│   ├── scenarios/              +        S01–S13 walkthroughs and their README
+│   ├── persistence.md          ~        replay seeds new execution; c2h.input; checkpoints; crashes
+│   ├── virtual-actors.md       ~        unloading bounds memory and is not persistence; load_needed
+│   ├── time-and-events.md      ~        h2c.time, c2h.wake, delayed sends as envelopes
+│   ├── embedding.md            ~        ta_run and the rings instead of deliver, resume and the vtables
+│   └── extensions.md           ~        I/O processors and invokers as declared types and records
+└── internal/
+    ├── building-blocks.md      +        the catalog of blocks and their lifetimes
+    ├── ring.md                 +
+    ├── envelope.md             +
+    ├── deadline.md             +        replaces timer.md and timer-lifecycle.md
+    ├── names.md                +        replaces name-resolution.md
+    ├── trie.md                 +        replaces event-name.md
+    ├── macrostep.md            +
+    ├── slots.md, park.md       +
+    ├── telemetry.md            +
+    ├── debugging.md            +
+    ├── timer.md                -
+    ├── timer-lifecycle.md      -
+    ├── event-name.md           -
+    ├── name-resolution.md      -
+    ├── io.md                   -        I/O processors are declared types and records (5.2)
+    ├── store.md                -        with store.c (1.8)
+    ├── types.md                -        replaced by the units' header comments (1.0)
+    ├── routing.md              ~        local mail is envelopes; the router boundary is gone
+    ├── event-ordering.md       ~        one run queue in arrival order; deferred lists
+    ├── interpreter.md,         ~        no allocation in a macrostep; startup after it; capacity errors
+    │   interpreter-semantics.md
+    ├── continuation.md         ~        written to the park area
+    ├── errors.md               ~        error.execution.capacity.<resource>
+    ├── memory-model.md         ~        the lifetimes table; per-actor and per-envelope figures
+    ├── invariants.md           ~        the proposal's invariants
+    ├── invoke.md               ~        lifetime tokens, invocation_seq, records instead of the vtable
+    ├── datamodel-*.md, value.md ~       no TA_OP_NOMEM; _ioprocessors from the binding; vrefs
+    ├── module-map.md           ~        follows the source tree above
+    └── README.md               ~        the new cross-cutting references
+
+tinyactors-test/docs/protocol.md ~       hosted.post, hosted.turn and hosted.batches as a ring driver (5.1)
+tinyactors-napi/docs/*.md        ~       design.md and tracing.md follow the rings (6.1)
+README.md (root)                 ~       "Layers and responsibilities": no kernel; core holds the queue (6.3)
+AGENTS.md (root)                 ~       the test table loses the kernel (6.3)
+tinyactors-host/                 -       with the package; its ADRs stay as history (6.3)
+```
+
+### Rules for moving a document
+
+- **A document moves in the commit that makes it true.** `envelope.md`
+  lands with 4.2, not before, so the reference never describes code that
+  does not exist. Until then the proposal's copy is the reference.
+- **It is rewritten as reference.** No "would", "Sketch" or "the
+  proposal"; status lines go. Open questions are answered, or become
+  roadmap items or ADRs. Estimates become measurements once they exist,
+  such as the bytes per envelope and per actor.
+- **Every link is updated.** The proposal's files then link to their new
+  homes, and the new homes link to ADRs, not to the proposal. Record IDs
+  (`h2c.event`) and step IDs (`S04.3`) stay stable, because tests and
+  documents cite them.
+- **Each scenario's prose and its test move together.** A walkthrough
+  that no test runs is not moved.
+
 ## Rules for every step
 
 - **Each commit builds and passes `mise run test`.** Run `mise run test:full`
