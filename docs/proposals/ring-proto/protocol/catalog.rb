@@ -572,6 +572,9 @@ message 'c2h.input_completed', code: 0x0214, summary: 'A host input and its star
   field :source_seq, :seq, 'the originating h2c input'
   field :macrostep, :macrostep, 'the last macrostep in the input execution'
   field :status, :input_completion_status
+  flag :ignored, 0, 'the input event enabled no transition, so the chart ignored it (core ADR 0089 ' \
+                    'section 8). A request/response I/O processor answers its client at once ' \
+                    'instead of waiting for a timeout (scenarios/S12-http-request.md)'
 end
 
 message 'c2h.load_result', code: 0x0215, summary: 'A load-failure response finished recycling waiting inputs' do

@@ -592,6 +592,7 @@ Exactly one terminal result for a taken host input, including spawn bootstrap. E
 | 40 | `macrostep` | macrostep | the last macrostep in the input execution |
 | 48 | `status` | input_completion_status (u8) |  |
 
+- flag bit 0 `ignored`: the input event enabled no transition, so the chart ignored it (core ADR 0089 section 8). A request/response I/O processor answers its client at once instead of waiting for a timeout (scenarios/S12-http-request.md)
 
 ## c2h.load_result
 

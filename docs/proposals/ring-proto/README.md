@@ -110,6 +110,7 @@ Reference documents, one for each building block:
 | Unloading and loading sessions, which only bounds RAM: images end with their process | [reference/unloading.md](reference/unloading.md) |
 | System parameters: defaults, bounds, what they drive | [BEHAVIORS.md](BEHAVIORS.md#parameters) |
 | What is deleted, which ADRs change, and open questions | [reference/migration.md](reference/migration.md) |
+| The building blocks it is assembled from: what core has, needs, and can drop | [reference/building-blocks.md](reference/building-blocks.md) |
 
 ## The worked example
 

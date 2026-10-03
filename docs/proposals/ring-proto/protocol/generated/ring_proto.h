@@ -68,6 +68,11 @@ typedef enum {
     TRP_C2H_UNLOADED_HAS_WAKE = 1 << 0,
 } trp_c2h_unloaded_flag;
 
+/* c2h.input_completed's own flags, bits 0..7 of the header's `flags`. */
+typedef enum {
+    TRP_C2H_INPUT_COMPLETED_IGNORED = 1 << 0,
+} trp_c2h_input_completed_flag;
+
 /* tel.trace's own flags, bits 0..7 of the header's `flags`. */
 typedef enum {
     TRP_TEL_TRACE_TRUNCATED = 1 << 0,

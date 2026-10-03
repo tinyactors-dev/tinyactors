@@ -1815,7 +1815,13 @@
           "offset": 48
         }
       ],
-      "flags": [],
+      "flags": [
+        {
+          "name": "ignored",
+          "bit": 0,
+          "doc": "the input event enabled no transition, so the chart ignored it (core ADR 0089 section 8). A request/response I/O processor answers its client at once instead of waiting for a timeout (scenarios/S12-http-request.md)"
+        }
+      ],
       "replies": [],
       "fixed_size": 56,
       "see": []

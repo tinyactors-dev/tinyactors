@@ -22,13 +22,15 @@ Each scenario ends with a table of who drops what and who retries how.
 | [S09: Edge backpressure](S09-edge-backpressure.md) | h2c is full: the host refuses HTTP, and an acknowledgement the host drops is covered by the chart's timeout. |
 | [S10: Run-time names](S10-run-time-names.md) | A client posts random event names. They live in the name area, nothing is interned, and memory does not grow. |
 | [S11: Semantic boundaries](S11-semantic-boundaries.md) | Mandatory lifecycle output, compiler-sized errors, child completion, snapshots, input disposition, load atomicity and stale replies at capacity limits. |
+| [S12: An HTTP request and its response](S12-http-request.md) | An I/O processor delivers a request and the chart replies through `_event.origin`. The origin is text the processor owns; core keeps only a set of I/O types. Disconnects, double replies, an ignored request and a typo in `type`. |
+| [S13: A chart gives out its own address](S13-webhook-callback.md) | `_ioprocessors.http.location` is rendered by the binding, as the inverse of its inbound route. The provider's callback reaches an unloaded session through its address. |
 
 ## Conventions
 
 - **Replay.** Replay seeds new execution. Illustrated configuration, values
   and pool occupancy are examples, not exact restoration guarantees. Live
   effects may execute on receipt, independently of macrostep ends and journaling.
-- **Sessions.** `s1` is `campaign/42`, `s2` is `progress/42`. Macrosteps
+- **Sessions.** `s1` is `campaign/42`, `s2` is `progress/42`, `s3` is `orders/42` (S12, S13). Macrosteps
   are numbered per session: `s1.m3`.
 - **Values.** `v1`, `v2`, … are value references into the binding's value
   table ([data model](../reference/data-model.md)). Data model calls go
