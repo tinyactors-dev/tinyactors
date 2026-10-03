@@ -299,7 +299,7 @@
         },
         {
           "name": "active",
-          "value": 15,
+          "value": 14,
           "doc": "h2c.unload or h2c.checkpoint for a session that holds a macrostep slot"
         }
       ],

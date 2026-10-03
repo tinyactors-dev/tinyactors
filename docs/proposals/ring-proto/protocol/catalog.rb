@@ -4,8 +4,9 @@
 # renderer reads. Evaluated by RingProto.load (dsl.rb).
 #
 # Identifiers are stable: `<ring>.<name>` and the 16-bit code never change
-# meaning once a scenario cites them. A retired message keeps its code
-# reserved.
+# meaning once a scenario cites them. While the protocol is a sketch, a
+# record or value nothing cites is deleted outright and leaves no
+# reservation; codes become permanent when the protocol is implemented.
 #
 # Codes: 0x01xx host to core (h2c), 0x02xx core to host (c2h),
 # 0x03xx telemetry (tel). Code 0x0000 is reserved for the pad record a
@@ -85,7 +86,6 @@ enum :macrostep_status, :u8, doc: 'How a macrostep ended.' do
   value :done, 1, 'the session reached a top-level final state; c2h.finished follows'
   value :runaway, 2, 'the chain limit stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays'
   value :abandoned, 3, 'an operator abandoned it (core ADR 0082)'
-  # Value 4 was the unapproved terminal-capacity sketch; reserved, not emitted.
 end
 
 enum :input_completion_status, :u8, doc: 'How an input and its invocation-startup follow-up settled.' do
@@ -118,8 +118,7 @@ enum :bounce_reason, :u8, doc: 'Why core handed an h2c record back unrun.' do
   value :pending_inputs, 11, 'publish attempted before supplied replay inputs settled'
   value :stale_request, 12, 'a response does not match the outstanding load attempt'
   value :record, 13, 'mandatory output can never fit the configured record or ring bounds'
-  # Value 14 was not_quarantined, for the withdrawn quarantine sketch; reserved, not emitted.
-  value :active, 15, 'h2c.unload or h2c.checkpoint for a session that holds a macrostep slot'
+  value :active, 14, 'h2c.unload or h2c.checkpoint for a session that holds a macrostep slot'
 end
 
 enum :capacity_resource, :u8,
@@ -339,9 +338,6 @@ message 'h2c.withdraw', code: 0x010E, summary: 'Take back an admitted input that
   field :target_seq, :seq, 'the h2c seq of the input to withdraw'
   replies_with 'c2h.input_refused', 'c2h.bounced'
 end
-
-# 0x010F (h2c.release) and 0x0110 (h2c.abandon) belonged to the withdrawn
-# quarantine sketch; reserved, not reused (reference/macrostep.md, "Runaways").
 
 # ---------------------------------------------------------------- c2h
 
@@ -586,9 +582,6 @@ message 'c2h.load_result', code: 0x0215, summary: 'A load-failure response finis
   field :cause_seq, :seq, 'the h2c.load_failed'
   field :request_seq, :seq, 'the answered c2h.load_needed'
 end
-
-# 0x0216 (c2h.quarantined) belonged to the withdrawn quarantine sketch;
-# reserved, not reused.
 
 # ---------------------------------------------------------------- tel
 

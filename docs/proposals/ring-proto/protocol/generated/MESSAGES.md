@@ -721,7 +721,7 @@ Why core handed an h2c record back unrun.
 | 11 | `pending_inputs` | publish attempted before supplied replay inputs settled |
 | 12 | `stale_request` | a response does not match the outstanding load attempt |
 | 13 | `record` | mandatory output can never fit the configured record or ring bounds |
-| 15 | `active` | h2c.unload or h2c.checkpoint for a session that holds a macrostep slot |
+| 14 | `active` | h2c.unload or h2c.checkpoint for a session that holds a macrostep slot |
 
 ### `capacity_resource` (u8)
 

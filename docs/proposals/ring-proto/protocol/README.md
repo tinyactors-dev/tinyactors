@@ -24,7 +24,10 @@ anything. After editing the catalog, render again.
 A message is named `<ring>.<name>` (`h2c.event`, `c2h.macrostep_ended`, `tel.trace`) and
 has a 16-bit code. `0x01xx` codes are host to core, `0x02xx` core to host, and
 `0x03xx` telemetry. The scenarios cite messages by these names. Once a scenario
-cites a name, its meaning doesn't change, and a retired code is never reused.
+cites a name, its meaning doesn't change. While the protocol is a sketch, a
+record or enum value that nothing cites is deleted outright, and its code may
+be used again; nothing outside this repository reads the codes. Codes become
+permanent, and retired ones reserved, when the protocol is implemented.
 Clarifying a record's name preserves its code and meaning; all catalog and
 scenario references move to the new name together.
 
