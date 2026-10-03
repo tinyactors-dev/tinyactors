@@ -301,6 +301,11 @@
           "name": "active",
           "value": 14,
           "doc": "h2c.unload or h2c.checkpoint for a session that holds a macrostep slot"
+        },
+        {
+          "name": "reserved_type",
+          "value": 15,
+          "doc": "h2c.type_declare for a name core owns, such as scxml or one of its aliases"
         }
       ],
       "doc": "Why core handed an h2c record back unrun."
@@ -412,6 +417,23 @@
         }
       ],
       "doc": "The result of a definition request."
+    },
+    {
+      "name": "type_registry",
+      "base": "u8",
+      "values": [
+        {
+          "name": "io",
+          "value": 1,
+          "doc": "I/O processor types: <send type>, _ioprocessors"
+        },
+        {
+          "name": "invoker",
+          "value": 2,
+          "doc": "invocation types: <invoke type>"
+        }
+      ],
+      "doc": "Which type registry a declared type belongs to (reference/building-blocks.md)."
     }
   ],
   "types": [
@@ -983,6 +1005,33 @@
         "c2h.bounced"
       ],
       "fixed_size": 40,
+      "see": []
+    },
+    {
+      "id": "h2c.type_declare",
+      "code": 271,
+      "ring": "h2c",
+      "summary": "Declare an I/O processor or invoker type",
+      "doc": "Header session is 0. A control: it takes no envelope and is applied when read. Every record after it sees the type declared, so replay sees the same declarations at the same points. Core keeps only the name: the implementation is the binding's, reached through c2h.send or c2h.invoke, c2h.invoke_cancel and c2h.invoke_forward.\n\nCore checks a <send type> against the io registry and an <invoke type> against the invoker registry when the action runs. An undeclared type is error.execution in the chart, which the host could not raise later from c2h. Declaring a declared type changes nothing and writes nothing. A name core owns (scxml and its URI aliases) is bounced as reserved_type; failing to store the name is bounced as allocation. A type cannot be withdrawn yet.",
+      "fields": [
+        {
+          "name": "registry",
+          "type": "type_registry",
+          "doc": "",
+          "offset": 32
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "doc": "the type name as bytes; interned as an atom when declared",
+          "offset": 36
+        }
+      ],
+      "flags": [],
+      "replies": [
+        "c2h.bounced"
+      ],
+      "fixed_size": 48,
       "see": []
     },
     {

@@ -22,6 +22,7 @@ typedef enum {
     TRP_H2C_DEFINITION_RELEASE = 0x010C,
     TRP_H2C_DEFINITION_RETIRE = 0x010D,
     TRP_H2C_WITHDRAW = 0x010E,
+    TRP_H2C_TYPE_DECLARE = 0x010F,
     TRP_C2H_SPAWNED = 0x0201,
     TRP_C2H_INPUT = 0x0202,
     TRP_C2H_SEND = 0x0203,
@@ -137,6 +138,7 @@ typedef enum {
     TRP_BOUNCE_REASON_STALE_REQUEST = 12,
     TRP_BOUNCE_REASON_RECORD = 13,
     TRP_BOUNCE_REASON_ACTIVE = 14,
+    TRP_BOUNCE_REASON_RESERVED_TYPE = 15,
 } trp_bounce_reason;
 
 /* The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (reference/macrostep.md, "Two kinds of exhaustion"). Stored as uint8_t. */
@@ -170,6 +172,12 @@ typedef enum {
     TRP_DEFINITION_STATUS_NOT_FOUND = 4,
     TRP_DEFINITION_STATUS_INVALID = 5,
 } trp_definition_status;
+
+/* Which type registry a declared type belongs to (reference/building-blocks.md). Stored as uint8_t. */
+typedef enum {
+    TRP_TYPE_REGISTRY_IO = 1,
+    TRP_TYPE_REGISTRY_INVOKER = 2,
+} trp_type_registry;
 
 typedef struct {
     uint16_t kind; /* trp_kind */
@@ -306,6 +314,16 @@ typedef struct {
     uint64_t target_seq;
 } trp_h2c_withdraw;
 _Static_assert(sizeof(trp_h2c_withdraw) == 40, "h2c.withdraw");
+
+/* h2c.type_declare: Declare an I/O processor or invoker type. */
+typedef struct {
+    trp_header header;
+    uint8_t registry; /* trp_type_registry */
+    uint8_t pad1[3];
+    trp_span type;
+    uint8_t pad_end[4];
+} trp_h2c_type_declare;
+_Static_assert(sizeof(trp_h2c_type_declare) == 48, "h2c.type_declare");
 
 /* c2h.spawned: A session exists. */
 typedef struct {

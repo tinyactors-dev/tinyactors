@@ -66,6 +66,7 @@ Verdicts:
 | B3 | **Hash table, grows only when told** | Open addressing, keys hashed by the caller, `u32` values, delete by backward shift (no tombstones). Two modes: **fixed** (capacity set once, so insert never allocates) and **growing**, where growth happens only in an explicit call at a safe point. | **Four** implementations: atoms and event names (chained, with near-identical rehash code: `atom.c:13` and `event_name.c:13`); addresses and sessions (paged linear hashing, near copies of each other). The kernel adds `tah_map` and `tah_id_set`. | atom lookup (`find`, no insert, inside macrosteps); **waiting lists keyed by address bytes** (fixed mode, bounded by `poolEnvelopes`); the open `source_seq` index for `h2c.withdraw`; resident session and address handles | **generalize**. One table can replace four. |
 | B4 | **Fixed-entry FIFO** | A circular array of fixed-size entries. Ordered `push` and `pop`, `peek` at the head (the taken entry stays at the head while it is `_event`), and `clear`. | The event block's queue array, whose growth code is written twice (`interpreter.c:755` and `interpreter.c:4445`) | the **internal queue**: one live queue in the running workspace and one per nested interpreter | **generalize**. Becomes fixed-size; quota accounting comes from C3. |
 | B5 | **Bitset** | Word-array bits. | `ta_bits_*` (`types.h:52`) | configuration, history and the interpreter's sets; parked as bytes | **have** |
+| B7 | **Type registry** | A set of declared type names (atoms) with built-in entries that core owns and their aliases (`scxml`, and SCXML's URI forms). `declare(name)` happens outside a macrostep and allocates; `declared(name)` is a lookup that never inserts. No behaviour is attached to an entry. Withdrawal is not supported yet; adding it later only refuses new uses. | Two registries, each with a vtable per entry: I/O processors (`system.c:690-752`, with registry indices) and invokers (`system.c:753-785`) | `<send type>` and `<invoke type>` checks, which raise `error.execution` in the chart; declared by [`h2c.type_declare`](../protocol/generated/MESSAGES.md#h2ctype_declare) | **generalize**: one block over B3, created twice (I/O processors and invokers) |
 | B6 | **Growable array** | Doubles, copies, holds indices rather than pointers. | `ta_vec` (`types.c:48`), plus about five hand-rolled parallel-array copies (invokes, timer lists, export blocks, arena sink) | compiler only. Nothing in a macrostep may use it. | **have**; fold the copies into it |
 
 ### C. Transport and accounting
@@ -135,7 +136,7 @@ reading the code, not exact counts.
 | Stopping where it stands on out-of-memory (ADRs 0047, 0070) | NOMEM branch in the run loop (`interpreter.c:4144`), the NOMEM parts of `ta_reserve_stop` / `ta_stop*` (`:3845-4013`), spare continuation and spare sparse state (`system.h:120`), `TA_OP_NOMEM` | 300 lines, plus public API | C3 + C4. **Keep** the resumable phases (`interpreter.c:3565-3845`) and `ta_continuation`: pause and parking still need them. |
 | Queue mark / truncate rollback | `interpreter.c:843` and nine call sites | 20 lines, plus the call sites | Not needed once a raise can no longer be half-applied for lack of memory. Check each call site. |
 | Delayed sends kept per owner | `timer.c` / `timer.h` (634 lines): owner lists, orphans, the heap's page directory, sparse state | 600 lines | B2 + B1 (owner list) over envelopes. `ta_send_id` stays. |
-| Vtable **calls** that become records | router `submit`, I/O `send`, invoker `start`/`cancel`/`forward`, directory, trace sink, log sink | 300 lines + header | C2 writers to c2h and tel. **A set of I/O types stays** (today the registry, `system.c:690-752`): an unsupported `<send type>` must raise `error.execution` in the sender's block. The I/O `text` callback and its templates go: see [I/O processors](#io-processors-the-registry-stays-the-callbacks-go). |
+| Vtables that become records | router, I/O processor (`ta_io_vtable`, `ta_io_text_params`), invoker, directory, trace sink, log sink; the registration APIs `ta_system_register_io`, `ta_system_find_io`, `ta_system_register_invoker`; the I/O registry index; `TA_DM_TEXT_IO_TYPE` and `TA_DM_TEXT_IO_LOCATION` | 400 lines + header | C2 writers to c2h and tel. The two registries become B7, filled by `h2c.type_declare`: an unsupported `<send type>` or `<invoke type>` still raises `error.execution` in the chart. The I/O `text` callback and its templates go: see [I/O processors](#io-processors-and-invokers-one-type-registry-twice). |
 | `io_origin` storage (ADR 0068) | `io_origin.c` / `io_origin.h` (262), `io.c` (206), public `ta_io_origin_make`, `ta_io_scope_open` / `_close` | 470 lines + API | Origin text in the envelope's name area. COMPUTED and SCOPED go: see [I/O origins](#io-origins-adr-0068-one-class-remains). |
 | Run-time interning | `interpreter.c:1819`, `:1838-1856`, `:1354-1370`; `invoke.c:57-80`, `:950-975`; `scxml_uri.c:145`, `:303`; public `ta_send_id_intern`, `ta_system_intern_invoke_id`, the run-time use of `ta_event_name_intern` | 150 lines + API | D3 + D4 |
 | Held effects for replay | `ta_activation_effects` (`actor.h:14-43`), `actor.c:124-200`, the replay-only send paths in `interpreter.c` | 300 lines | A replaying session writes no effects |
@@ -174,7 +175,7 @@ completes and the chart has not answered, the processor learns it from
 [`c2h.input_completed`](../protocol/generated/MESSAGES.md#c2hinput_completed)
 and its `ignored` flag.
 
-### I/O processors: the registry stays, the callbacks go
+### I/O processors and invokers: one type registry, twice
 
 The I/O vtable (`ta_io_vtable`) has two callbacks, and core calls both
 inside a macrostep:
@@ -216,8 +217,9 @@ atoms, with no vtable, no templates and no registry index.
 Registering napi's `console` processor:
 
 1. `system.registerIO('console', processor)` keeps `processor` in
-   JavaScript's `#io` map, as today. It also tells core that the type
-   `console` exists.
+   JavaScript's `#io` map, as today, and posts
+   [`h2c.type_declare`](../protocol/generated/MESSAGES.md#h2ctype_declare)
+   `{registry: io, type: "console"}`.
 2. A chart's `<send type="console">` checks the set (an unknown type is
    `error.execution`), then writes `c2h.send` with `io_type = "console"`.
 3. The pump reads the record and calls `#io.get(io_type).send(request,
@@ -225,14 +227,36 @@ Registering napi's `console` processor:
 4. The data model lists `console` in `_ioprocessors` with whatever
    location the binding renders.
 
-**Open:** whether declaring a type is a native call or an h2c control.
-It changes what a chart's sends mean, so an h2c control
-(`h2c.io_register`) would be ordered against inputs, like
-`h2c.definition_register`. A native call between `ta_run` calls is
-simpler, but where it falls relative to records already posted is less
-exact.
+**Declaring is an h2c control, not a native call.** Whether a
+`typeexpr` send succeeds or raises `error.execution` depends on which
+types were declared when the input was taken. An ordered control puts
+the declaration at a defined point among the inputs, so replay sees it at
+the same point. A native call between `ta_run` calls has no defined
+position relative to records already posted. Like
+`h2c.definition_register`, the control takes no envelope. Declaring a
+declared type does nothing, a name core owns is bounced as
+`reserved_type`, and a type cannot be withdrawn yet.
 
-This refines ADR 0068: the registry becomes a set of types, `text` and
+**Invokers get the same registry, not the same operations.** The two
+differ in everything except the type check:
+
+| | I/O processor | Invoker |
+|---|---|---|
+| Shape | one-off messages, no lifetime | a service instance that lives as long as its invoking state |
+| Core → host | `c2h.send` | `c2h.invoke`, `c2h.invoke_cancel`, `c2h.invoke_forward` |
+| Host → core | `h2c.event` with `origin` and `origin_type` | service events and `h2c.invoke_report`, correlated by `invocation_seq` |
+| State in core | none | an invocation slot, a pool token for a local child, an unload restriction |
+| Listed in `_ioprocessors` | yes | no |
+| Built-in type core owns | `scxml`: local mail | `scxml`: local child sessions |
+| Undeclared type | `error.execution` in the sender's block | `error.execution` when the invocation starts, before the next external input (as `invoke.c:602` does today) |
+
+Their operations already have their own records. What they share is the
+registry, so it is one block (B7), created twice and filled by one
+control with a `registry` field. Both vtables and both registration APIs
+leave core. napi's `registerIO` and `registerInvoker` keep their
+implementations in JavaScript and post the same record.
+
+This refines ADR 0068, and ADR 0016 the same way: each registry becomes a set of types, `text` and
 the COMPUTED class go, and MESSAGE becomes envelope text. SCOPED goes as
 well ([above](#io-origins-adr-0068-one-class-remains)).
 The log sink and the trace sink follow the same split. Their calls become

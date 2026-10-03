@@ -58,7 +58,7 @@ lists the ADRs this reverses.)
 ## Protocol, native integration and debugging
 
 - **Host requests and results go through rings.** That covers inputs,
-  complete declarative definitions, registration holds and retirement,
+  I/O processor and invoker type declarations, complete declarative definitions, registration holds and retirement,
   effects, macrostep end reports, bounces, loads, unloads, checkpoints, wakes
   and telemetry.
   Definition compilation has structured error results (ADR 0058); bindings
@@ -87,6 +87,7 @@ All a binding does, in pseudo-code:
 
 ```
 on start:          create the system (parameters), install native integrations
+                   post h2c.type_declare for each I/O processor and invoker type
                    post h2c.definition_register for each complete spec
                    drive the loop; await successful definition results before spawn
 on an edge input:  if admitting and h2c and the bounded submission table have room:

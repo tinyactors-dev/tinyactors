@@ -33,6 +33,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x010C` | [`h2c.definition_release`](#h2cdefinition_release) | Release one registration hold | 40 |
 | `0x010D` | [`h2c.definition_retire`](#h2cdefinition_retire) | End a definition’s availability | 40 |
 | `0x010E` | [`h2c.withdraw`](#h2cwithdraw) | Take back an admitted input that has not been taken | 40 |
+| `0x010F` | [`h2c.type_declare`](#h2ctype_declare) | Declare an I/O processor or invoker type | 48 |
 | `0x0201` | [`c2h.spawned`](#c2hspawned) | A session exists | 64 |
 | `0x0202` | [`c2h.input`](#c2hinput) | A recorded session took an input | 128 |
 | `0x0203` | [`c2h.send`](#c2hsend) | A send for an I/O processor | 88 |
@@ -282,6 +283,21 @@ If the input is no longer waiting, the withdrawal changes nothing and writes not
 | 32 | `target_seq` | seq | the h2c seq of the input to withdraw |
 
 - may be answered by: [`c2h.input_refused`](#c2hinput_refused), [`c2h.bounced`](#c2hbounced)
+
+## h2c.type_declare
+
+`0x010F` on `h2c`, 48 fixed bytes. Declare an I/O processor or invoker type.
+
+Header session is 0. A control: it takes no envelope and is applied when read. Every record after it sees the type declared, so replay sees the same declarations at the same points. Core keeps only the name: the implementation is the binding's, reached through c2h.send or c2h.invoke, c2h.invoke_cancel and c2h.invoke_forward.
+
+Core checks a <send type> against the io registry and an <invoke type> against the invoker registry when the action runs. An undeclared type is error.execution in the chart, which the host could not raise later from c2h. Declaring a declared type changes nothing and writes nothing. A name core owns (scxml and its URI aliases) is bounced as reserved_type; failing to store the name is bounced as allocation. A type cannot be withdrawn yet.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 32 | `registry` | type_registry (u8) |  |
+| 36 | `type` | text | the type name as bytes; interned as an atom when declared |
+
+- may be answered by: [`c2h.bounced`](#c2hbounced)
 
 ## c2h.spawned
 
@@ -723,6 +739,7 @@ Why core handed an h2c record back unrun.
 | 12 | `stale_request` | a response does not match the outstanding load attempt |
 | 13 | `record` | mandatory output can never fit the configured record or ring bounds |
 | 14 | `active` | h2c.unload or h2c.checkpoint for a session that holds a macrostep slot |
+| 15 | `reserved_type` | h2c.type_declare for a name core owns, such as scxml or one of its aliases |
 
 ### `capacity_resource` (u8)
 
@@ -767,6 +784,15 @@ The result of a definition request.
 | 3 | `mismatch` | an explicit identity names different content (core ADR 0077) |
 | 4 | `not_found` | an unknown or stale definition ID |
 | 5 | `invalid` | an invalid spec representation, adapter handle or release request |
+
+### `type_registry` (u8)
+
+Which type registry a declared type belongs to (reference/building-blocks.md).
+
+| Value | Name | Meaning |
+|---|---|---|
+| 1 | `io` | I/O processor types: <send type>, _ioprocessors |
+| 2 | `invoker` | invocation types: <invoke type> |
 
 ## Scalar types
 

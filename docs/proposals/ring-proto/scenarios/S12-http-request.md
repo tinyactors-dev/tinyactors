@@ -7,7 +7,7 @@ answers with a `<send>` to `_event.origin`. Core keeps no state for the
 reply target: the origin is text, and the processor alone decides whether
 it is still live. This is why core needs only a set of I/O type names,
 with no I/O callbacks, templates or origin scopes
-([building blocks](../reference/building-blocks.md#io-processors-the-registry-stays-the-callbacks-go)).
+([building blocks](../reference/building-blocks.md#io-processors-and-invokers-one-type-registry-twice)).
 
 **Sessions.** `s3` is `orders/42`, a resident session. Nothing is recorded.
 
@@ -30,7 +30,7 @@ const http = {
     res.end(request.content ?? JSON.stringify(request.data?.body ?? null));
   },
 };
-system.registerIO('http', http);  // core learns the type; JavaScript keeps the object
+system.registerIO('http', http);  // posts h2c.type_declare; JavaScript keeps the object
 
 server.on('request', async (req, res) => {
   if (!system.admitting) return reply(res, 503);
@@ -66,7 +66,7 @@ server.on('request', async (req, res) => {
 
 | Step | Ring | Record | What happens |
 |---|---|---|---|
-| S12.1 | – | – | `registerIO('http', http)` adds the atom `http` to core's set of I/O types, and nothing else. The processor object, its `send` and its `location` stay in JavaScript. Whether this is a native call or an h2c control is open ([building blocks](../reference/building-blocks.md#io-processors-the-registry-stays-the-callbacks-go)). |
+| S12.1 | h2c | [`h2c.type_declare`][h2c.type_declare] `{registry: io, type: "http"}` | `registerIO('http', http)` posts this. Core adds the atom `http` to its I/O type registry, and nothing else. The processor object, its `send` and its `location` stay in JavaScript ([building blocks](../reference/building-blocks.md#io-processors-and-invokers-one-type-registry-twice)). Every input after this record sees `http` declared. |
 
 ## The request
 
@@ -121,6 +121,7 @@ server.on('request', async (req, res) => {
 | A reply that did not fit c2h | the chart's action (S12.18) | `error.execution.capacity.c2h` | the chart, or the client after 504 |
 
 [h2c.event]: ../protocol/generated/MESSAGES.md#h2cevent
+[h2c.type_declare]: ../protocol/generated/MESSAGES.md#h2ctype_declare
 [h2c.withdraw]: ../protocol/generated/MESSAGES.md#h2cwithdraw
 [c2h.send]: ../protocol/generated/MESSAGES.md#c2hsend
 [c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended

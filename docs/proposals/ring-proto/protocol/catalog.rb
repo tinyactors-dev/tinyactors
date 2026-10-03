@@ -119,6 +119,7 @@ enum :bounce_reason, :u8, doc: 'Why core handed an h2c record back unrun.' do
   value :stale_request, 12, 'a response does not match the outstanding load attempt'
   value :record, 13, 'mandatory output can never fit the configured record or ring bounds'
   value :active, 14, 'h2c.unload or h2c.checkpoint for a session that holds a macrostep slot'
+  value :reserved_type, 15, 'h2c.type_declare for a name core owns, such as scxml or one of its aliases'
 end
 
 enum :capacity_resource, :u8,
@@ -150,6 +151,11 @@ enum :definition_status, :u8, doc: 'The result of a definition request.' do
   value :mismatch, 3, 'an explicit identity names different content (core ADR 0077)'
   value :not_found, 4, 'an unknown or stale definition ID'
   value :invalid, 5, 'an invalid spec representation, adapter handle or release request'
+end
+
+enum :type_registry, :u8, doc: 'Which type registry a declared type belongs to (reference/building-blocks.md).' do
+  value :io, 1, 'I/O processor types: <send type>, _ioprocessors'
+  value :invoker, 2, 'invocation types: <invoke type>'
 end
 
 # ---------------------------------------------------------------- h2c
@@ -337,6 +343,24 @@ message 'h2c.withdraw', code: 0x010E, summary: 'Take back an admitted input that
       'record\'s own seq is bounced as invalid.'
   field :target_seq, :seq, 'the h2c seq of the input to withdraw'
   replies_with 'c2h.input_refused', 'c2h.bounced'
+end
+
+message 'h2c.type_declare', code: 0x010F, summary: 'Declare an I/O processor or invoker type' do
+  doc 'Header session is 0. A control: it takes no envelope and is applied ' \
+      'when read. Every record after it sees the type declared, so replay ' \
+      'sees the same declarations at the same points. Core keeps only the ' \
+      'name: the implementation is the binding\'s, reached through c2h.send ' \
+      'or c2h.invoke, c2h.invoke_cancel and c2h.invoke_forward.'
+  doc 'Core checks a <send type> against the io registry and an <invoke ' \
+      'type> against the invoker registry when the action runs. An ' \
+      'undeclared type is error.execution in the chart, which the host ' \
+      'could not raise later from c2h. Declaring a declared type changes ' \
+      'nothing and writes nothing. A name core owns (scxml and its URI ' \
+      'aliases) is bounced as reserved_type; failing to store the name is ' \
+      'bounced as allocation. A type cannot be withdrawn yet.'
+  field :registry, :type_registry
+  field :type, :text, 'the type name as bytes; interned as an atom when declared'
+  replies_with 'c2h.bounced'
 end
 
 # ---------------------------------------------------------------- c2h
