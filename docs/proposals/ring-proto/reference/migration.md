@@ -246,33 +246,10 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
 
 ## A rough order of work
 
-Each step builds and passes `mise run test`, and is committed on its own
-(AGENTS.md).
-
-1. **Names first.** Intern authored names only, and match run-time names
-   by lookup ([names.md](names.md)). It stands alone, fixes memory that
-   grows today, and touches only core and the kernel's events cache.
-2. **The ring module in core**, with tests, used by nothing yet.
-3. **`tel`.** Move trace records onto it. The kernel's OTLP encoder reads
-   it. This is the smallest real user, and it is already shaped like a
-   stream.
-4. **The pool and `ta_run`.** Mail between local sessions and delayed
-   sends become envelopes. The kernel's scheduler and router are bypassed
-   for local mail. Start with one macrostep slot; then add slots, deferred
-   lists and the chain limit as their own commit, before c2h. The kernel's
-   quarantine goes with the kernel and is not rebuilt.
-5. **c2h.** Sends, invocations and logs become records. The kernel's
-   adapters and effects queue go.
-6. **h2c.** Inputs, complete definitions, spawn, time and load go through it. The kernel's
-   loads, offloads and directory go.
-7. **Recording and replay** on `c2h.input`. The kernel's recorder and
-   replay go.
-8. **Delete `tinyactors-host`.** Move what is left (OTLP, the allocator,
-   metrics) to its new homes.
-9. **The test host** as a ring driver. The scenarios become its tests.
-
-Steps 4 to 6 are the expensive ones. Each removes a vtable from core and
-changes every binding in the same change.
+Replaced by [IMPLEMENTATION.md](../IMPLEMENTATION.md). It keeps the code
+base and replaces core's plumbing with the building blocks in phases.
+Each commit passes `mise run test`. The test host becomes a ring driver
+when h2c and c2h arrive, not at the end.
 
 ## Decided along the way
 
