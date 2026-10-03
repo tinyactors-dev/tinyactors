@@ -154,7 +154,7 @@
         {
           "name": "runaway",
           "value": 2,
-          "doc": "the chain limit stopped it and no quarantine was left, so core abandoned it (reference/macrostep.md); the configuration after the last completed microstep stays"
+          "doc": "the chain limit stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays"
         },
         {
           "name": "abandoned",
@@ -181,7 +181,7 @@
         {
           "name": "runaway",
           "value": 2,
-          "doc": "the chain limit stopped it and no quarantine was left; core abandoned it"
+          "doc": "the chain limit stopped it; core abandoned the input and the session takes its next one"
         },
         {
           "name": "abandoned",
@@ -296,11 +296,6 @@
           "name": "record",
           "value": 13,
           "doc": "mandatory output can never fit the configured record or ring bounds"
-        },
-        {
-          "name": "not_quarantined",
-          "value": 14,
-          "doc": "h2c.release or h2c.abandon for a session that is not quarantined"
         },
         {
           "name": "active",
@@ -762,7 +757,7 @@
       "code": 263,
       "ring": "h2c",
       "summary": "Page a stable session out",
-      "doc": "Refuses an owner of an active local invocation and an active locally invoked child. No lifetime envelope token moves into an image.\n\nRefuses a session that holds a macrostep slot, including a quarantined one (bounce reason active).",
+      "doc": "Refuses an owner of an active local invocation and an active locally invoked child. No lifetime envelope token moves into an image.\n\nRefuses a session that holds a macrostep slot (bounce reason active).",
       "fields": [
         {
           "name": "address",
@@ -876,7 +871,7 @@
       "code": 266,
       "ring": "h2c",
       "summary": "End a session now",
-      "doc": "A session that holds a macrostep slot, running, paused or quarantined, has its execution abandoned first (core ADR 0082): c2h.macrostep_ended and c2h.input_completed say abandoned, then the session is destroyed.",
+      "doc": "A session that holds a macrostep slot, running or parked, has its execution abandoned first (core ADR 0082): c2h.macrostep_ended and c2h.input_completed say abandoned, then the session is destroyed.",
       "fields": [
         {
           "name": "address",
@@ -988,46 +983,6 @@
         "c2h.bounced"
       ],
       "fixed_size": 40,
-      "see": []
-    },
-    {
-      "id": "h2c.release",
-      "code": 271,
-      "ring": "h2c",
-      "summary": "Let a quarantined session run again",
-      "doc": "Header session names a quarantined session. Its slot runs again where it stopped, and its chain count restarts, so a second runaway is quarantined and reported again. A control, applied when read; no debugger or exclusive ownership is needed, because a quarantined slot is at a legal boundary and runs nothing (reference/macrostep.md).",
-      "fields": [
-        {
-          "name": "unlimited",
-          "type": "bool",
-          "doc": "no chain limit for the rest of this input (core ADR 0075 no_microstep_limit)",
-          "offset": 32
-        }
-      ],
-      "flags": [],
-      "replies": [
-        "c2h.macrostep_ended",
-        "c2h.quarantined",
-        "c2h.input_completed",
-        "c2h.bounced"
-      ],
-      "fixed_size": 40,
-      "see": []
-    },
-    {
-      "id": "h2c.abandon",
-      "code": 272,
-      "ring": "h2c",
-      "summary": "Abandon a quarantined session's input",
-      "doc": "Header session names a quarantined session. Core ADR 0082 at the slot's boundary: the configuration after the last completed microstep stays, the internal queue and the outgoing mail are freed, and effects already written stay written. The slot is free and the session takes its next input. A control, applied when read.",
-      "fields": [],
-      "flags": [],
-      "replies": [
-        "c2h.macrostep_ended",
-        "c2h.input_completed",
-        "c2h.bounced"
-      ],
-      "fixed_size": 32,
       "see": []
     },
     {
@@ -1888,47 +1843,6 @@
       "flags": [],
       "replies": [],
       "fixed_size": 48,
-      "see": []
-    },
-    {
-      "id": "c2h.quarantined",
-      "code": 534,
-      "ring": "c2h",
-      "summary": "A session reached the chain limit and is held",
-      "doc": "The input chain counted microstepLimit steps: microsteps, selection passes and startup passes since take. Its slot stays where it stopped and is not scheduled; its mail waits on its deferred list. If the session is a local invoked child, its direct parent gets error.communication.invoke.<id>.quarantined, without data. At most maxQuarantined slots are quarantined, never every slot; past that, or when the park area has no room for the slot, core abandons the input instead and reports status runaway.",
-      "fields": [
-        {
-          "name": "macrostep",
-          "type": "macrostep",
-          "doc": "the macrostep it stopped in",
-          "offset": 32
-        },
-        {
-          "name": "source_seq",
-          "type": "seq",
-          "doc": "the originating h2c input, or 0 for local work",
-          "offset": 40
-        },
-        {
-          "name": "steps",
-          "type": "u32",
-          "doc": "the chain count that reached the limit",
-          "offset": 48
-        },
-        {
-          "name": "parent",
-          "type": "session",
-          "doc": "the parent told, or 0",
-          "offset": 56
-        }
-      ],
-      "flags": [],
-      "replies": [
-        "h2c.release",
-        "h2c.abandon",
-        "h2c.destroy"
-      ],
-      "fixed_size": 64,
       "see": []
     },
     {

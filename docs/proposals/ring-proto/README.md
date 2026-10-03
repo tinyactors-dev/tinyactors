@@ -137,8 +137,8 @@ The scenarios run this example through:
 - **Core gains:**
   - three rings;
   - the envelope pool and its deadline index;
-  - macrostep slots, taken in turn, with the chain limit and quarantine
-    (napi's quarantine moves into core);
+  - macrostep slots, taken in turn, and a chain limit that ends a runaway
+    input;
   - a name area for names made at run time;
   - capacity errors that charts can see.
 - **Core loses:**
@@ -174,16 +174,20 @@ The scenarios run this example through:
   inputs at once, in turn, `slotSlice` steps each; mail for an active
   session waits on its deferred list. `microstepLimit` counts one input's
   whole chain (microsteps, selection passes and startup passes) and cannot
-  be turned off. At the limit, core quarantines the slot
-  (`c2h.quarantined`), and the host answers `h2c.release` or `h2c.abandon`;
-  at most `maxQuarantined` are quarantined (never every slot), and past
-  that a runaway is abandoned with status `runaway`. With one slot this is plain run to
-  completion ([reference/macrostep.md](reference/macrostep.md#macrostep-slots)).
+  be turned off. At the limit, core abandons the input with status
+  `runaway`; the session lives on and takes its next input. With one slot
+  this is plain run to completion ([reference/macrostep.md](reference/macrostep.md#macrostep-slots)).
   Only the running slot uses the system's one workspace; the others are
   parked in chained chunks of a park area, about 1 KiB each for a chart of
   100 states. The area fills on demand up to a ceiling core derives, so no
   host has to size it, and a slot that cannot park keeps the thread
   ([parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area)).
+- **Accepted removal of quarantine:** napi's quarantine existed so that
+  one bad actor could not take the loop's turns. Slots do that now, so the
+  implementation removes quarantine, `release()` and the parent's
+  `.quarantined` event; a runaway's input is abandoned and the host
+  decides what to do about an actor that keeps running away
+  ([reference/macrostep.md](reference/macrostep.md#runaways-the-chain-limit)).
 - **Accepted input withdrawal:** commit is final, and records are never
   edited. A host takes back an admitted input that has not been taken with
   `h2c.withdraw`, which core answers with `c2h.input_refused` (`withdrawn`);

@@ -46,7 +46,7 @@ lists the ADRs this reverses.)
 | Rings `h2c`, `c2h`, `tel` and their control block | Core allocates them at system creation, in memory the host can read | [reference/ring.md](reference/ring.md) |
 | Envelope pool, run queue, deadline index, admission, fairness | Core | [reference/envelope.md](reference/envelope.md) |
 | Name area; interning only at compile time; matching by lookup only | Core | [reference/names.md](reference/names.md) |
-| The macrostep: no allocation, end reports, budgets, capacity errors; macrostep slots, the chain limit and quarantine | Core | [reference/macrostep.md](reference/macrostep.md) |
+| The macrostep: no allocation, end reports, budgets, capacity errors; macrostep slots and the chain limit | Core | [reference/macrostep.md](reference/macrostep.md) |
 | Data model and value references | A vtable the binding implements | [reference/data-model.md](reference/data-model.md) |
 | Complete definition submission, registration, release and retirement | Host requests; core compiles between macrosteps | [reference/definitions.md](reference/definitions.md) |
 | Debugger attachment, inspection, abandonment and transitions | Debugger temporarily owns the whole system; commands stay outside the rings | [reference/debugging.md](reference/debugging.md) |
@@ -104,7 +104,6 @@ loop:
     c2h.macrostep_ended → report how the macrostep ended
     c2h.input_completed → resolve source_seq; release the retained original
     c2h.input_refused   → reject source_seq; release or retry the retained original
-    c2h.quarantined     → fault hook; an operator answers h2c.release or h2c.abandon
   c2h.wake            → (re)arm the one timer
   c2h.load_needed     → fetch the image → h2c.load, or h2c.load_failed, echoing request_seq
   c2h.unloaded        → store image and wake_at in the index of unloaded sessions
@@ -130,7 +129,7 @@ failures and clock updates over new ordinary inputs.
 Core reads h2c in order, and applies control commands between steps, where
 no slot is inside a unit of executable content. An admitted event is
 queued, not necessarily completed before the next h2c command is read.
-A paused or quarantined slot does not hold commands back: a control that
+A parked slot does not hold commands back: a control that
 needs a session outside a macrostep (`h2c.unload`, `h2c.checkpoint`) is
 bounced while that session holds a slot, and `h2c.destroy` abandons the
 slot first. A slot keeps the system time it took its input at. If the host needs an input's effects to precede a control

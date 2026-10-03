@@ -127,9 +127,11 @@ other session until it ends.
 - **A loop that never ends stops the whole system.** Core cannot tell a
   loop from long work before its limit. With one slot, a loop has the
   system until the limit; with several, it has one slot.
-- **A runaway can be held, not only ended.** A slot can keep a runaway
-  where it stopped while the rest of the system goes on, which is what
-  napi's quarantine does today ([below](#runaways-the-chain-limit-and-quarantine)).
+- **Quarantine has nothing left to do.** napi quarantines a runaway so
+  that it stops taking the loop's turns. With slots, a runaway only ever
+  holds one slot, and the chain limit ends its input
+  ([below](#runaways-the-chain-limit)). The implementation removes
+  quarantine.
 
 The number has a ceiling, so memory stays bounded and allocated outside
 macrosteps, but nothing is set aside for it. Core already moves a paused
@@ -156,7 +158,7 @@ driver's single `ta_run` interface below.
 
 ```c
 typedef enum {
-    TA_RUN_IDLE,        /* nothing runnable and nothing to admit; quarantined slots wait */
+    TA_RUN_IDLE,        /* nothing runnable and nothing to admit */
     TA_RUN_MORE,        /* the budget ran out and no slot is inside a macrostep */
     TA_RUN_PAUSED,      /* the budget ran out with at least one slot inside a macrostep */
     TA_RUN_C2H_FULL     /* the reserve is not there: drain c2h and call again */
@@ -180,9 +182,9 @@ This one call replaces `ta_actor_deliver`, `ta_actor_resume` and
 4. arm the timer from the last [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake);
 5. repeat.
 
-## Pauses: the budget, the slice and quarantine
+## Pauses: the budget and the slice
 
-A macrostep stops in the middle for three reasons only:
+A macrostep stops in the middle for two reasons only:
 
 - **`ta_run`'s `budget` or `action_budget` runs out** (ADR 0061). The pause
   gives the host's event loop its turn back. The host may post to h2c,
@@ -191,14 +193,14 @@ A macrostep stops in the middle for three reasons only:
 - **A slot uses its `slotSlice`.** Core moves to the next slot that can
   run, within the same `ta_run`. This is what keeps a long macrostep from
   holding the others.
-- **A slot reaches the chain limit.** Core quarantines it
-  ([below](#runaways-the-chain-limit-and-quarantine)).
+
+A slot that reaches the chain limit does not stop in the middle: its input
+ends ([below](#runaways-the-chain-limit)).
 
 When `ta_run`'s budget runs out, the running slot stays in the running
-workspace; nothing is copied. When a slot's slice ends or it is
-quarantined, core parks it, and parking can fail without harm: a slot
-that cannot park keeps the thread, and a runaway that cannot park is
-abandoned ([below](#parking-one-running-workspace-and-a-park-area)).
+workspace; nothing is copied. When a slot's slice ends, core parks it, and
+parking can fail without harm: a slot that cannot park keeps the thread
+([below](#parking-one-running-workspace-and-a-park-area)).
 Nested interpreters for invocations still have scratch of their own
 (ADR 0060). During debugger attachment only the debugger drives core; the
 production pump cannot resume any slot until ownership is returned.
@@ -249,12 +251,10 @@ the area's ceiling. If the allocator refuses, nothing changes but how much
 can be parked.
 
 **Parking can fail, and nothing breaks when it does.** Correctness never
-depends on it, only isolation:
-
-| Parking for | When there are not enough free chunks |
-|---|---|
-| the end of a slice | the slot does not rotate. It keeps the thread for another slice, and core tries again at its next slice end. That is run to completion for this macrostep. |
-| quarantine at the chain limit | the input is abandoned with status `runaway`, as when `maxQuarantined` is reached |
+depends on it, only isolation. A slot that finds too few free chunks at
+the end of its slice does not rotate. It keeps the thread for another
+slice, and core tries again at its next slice end. That is run to
+completion for this macrostep.
 
 **The ceiling is derived, not chosen.** A parked execution is at most the
 largest registered definition's continuation plus a full internal queue.
@@ -266,7 +266,7 @@ rounded up to whole chunks. Core computes this at registration, so the
 storage stays bounded by parameters and compiled requirements (invariant
 2) without a byte parameter anyone must set. `parkAreaBytes` is an
 optional lower cap ([BEHAVIORS.md](../BEHAVIORS.md#parkareabytes)); 0
-disables parking, which leaves plain run to completion and no quarantine.
+disables parking, which leaves plain run to completion.
 
 **It looks unlimited, with two limits.** Chunks taken during a burst of
 rotations come back only when those executions resume, and new chunks
@@ -473,7 +473,7 @@ the microsteps of one macrostep. Selection could raise errors without
 taking a transition, so two failing guards could append errors faster than
 an internal dequeue removed them, with no microstep counted at all. A
 startup chain could also go on without end, each of its macrosteps short.
-The chain limit ([below](#runaways-the-chain-limit-and-quarantine)) counts
+The chain limit ([below](#runaways-the-chain-limit)) counts
 every microstep, every selection pass and every startup pass of one
 input's chain, so `L`, `S` and `I` are each at most the limit, and the
 arena above is finite.
@@ -487,12 +487,17 @@ selection pass removes one entry, before the figure is acceptable. Until
 then, the chain limit for a definition with mandatory events may need to
 be lower than the system's.
 
-## Runaways: the chain limit and quarantine
+## Runaways: the chain limit
 
 A macrostep that never ends is the case core ADR 0075 exists for. Under
-slots it holds one slot, not the system, but it still needs a limit: it
-takes a slice of every turn, its mail piles up on its deferred list, and
-nothing says what is wrong.
+slots it holds one slot, not the system, but it still needs a limit:
+
+- **memory:** the chain limit is what bounds the mandatory-event arena
+  ([above](#sizing-mandatory-storage)); without it, a guard that keeps
+  failing grows the internal queue until it is exhausted;
+- **the thread:** a loop takes its turn in every rotation, for ever;
+- **visibility:** something has to say that the actor is broken, and its
+  mail must not pile up on its deferred list for ever.
 
 **The limit counts the whole chain.** `microstepLimit` counts, for one
 input, from take until `c2h.input_completed`:
@@ -502,6 +507,10 @@ input, from take until `c2h.input_completed`:
   consumes an internal event;
 - every invocation-startup pass.
 
+Units of executable content do not count. A `<foreach>` over 10,000 items
+is one microstep, however long it runs, and its array is a snapshot, so it
+always ends; it holds one slot and rotates with the others.
+
 Today's limit counts only committed microsteps in one macrostep. It misses
 an eventless transition whose guard keeps throwing: each pass raises an
 error that is consumed and ignored, so no microstep commits. It also misses
@@ -510,47 +519,45 @@ macrostep of that chain is short. Both are caught by the chain count. The
 limit must be finite: 0 and `TA_MICROSTEP_LIMIT_NONE` are refused, for the
 system and for a definition.
 
-**At the limit, core quarantines the slot.** The check sits between steps,
-where nothing is open (ADR 0075). Core:
+**At the limit, core ends the input, not the actor.** The check sits
+between steps, where nothing is open (ADR 0075). Core applies ADR 0082's
+abandon at that boundary:
 
-1. parks the slot as it stands, mid-chain, and stops scheduling it. If the
-   park area has no room, core abandons the input instead, as when no
-   quarantine is left (below);
-2. writes [`c2h.quarantined`](../protocol/generated/MESSAGES.md#c2hquarantined)
-   with the session, the macrostep and the count;
-3. if the session is a local invoked child, raises
-   `error.communication.invoke.<id>.quarantined` in its direct parent
-   (napi ADR 0025). The event has no data; its name says the cause. Core
-   takes a free envelope for it between steps; if the pool has none, a flag
-   on the slot keeps the report until one frees. The parent may leave the
-   invoking state, which destroys the child, or wait.
+- the configuration and data after the last completed microstep stay;
+- the internal queue and the local mail the macrostep sent are freed and
+  never delivered;
+- effects already written to c2h (external sends, logs, invocations) have
+  gone out and stay done;
+- `c2h.macrostep_ended` and `c2h.input_completed` say `runaway`, and core
+  writes the `TA_TRACE_RUNAWAY` telemetry record ADR 0075 defines, with the
+  configuration and the transitions of the looping microstep;
+- the slot is free, and the session takes the next input from its
+  deferred list.
 
-The session's mail keeps waiting on its deferred list. Its delayed sends
-stay in the deadline index and fall due as usual; those to the
-quarantined session itself wait with its other mail.
+It is like a `RecursionError` that only the event loop can catch: the
+handler stops, the process lives on, and nothing it already changed or
+sent is undone. The chart does not see it, as ADR 0075 decided: no
+`error.*` event is raised, because the macrostep it would belong to has
+just been stopped. The host sees it, and decides what to do about an actor
+that runs away on every input, for example destroying it after a number of
+runaways with `h2c.destroy`. That is application policy.
 
-**What the host can do with a quarantined slot:**
+A chart whose legitimate work takes more steps than the system's limit
+gets a higher `microstepLimit` for its definition, set ahead of time. With
+slots, its long chains cost the rest of the system nothing.
 
-| Record | Effect |
-|---|---|
-| [`h2c.release`](../protocol/generated/MESSAGES.md#h2crelease) | The slot runs again where it stopped. Its count restarts, so a second runaway is quarantined and reported again. With `unlimited`, the rest of this input's chain has no limit (ADR 0075's `no_microstep_limit`). |
-| [`h2c.abandon`](../protocol/generated/MESSAGES.md#h2cabandon) | Core ADR 0082's abandon at the slot's boundary: the configuration after the last completed microstep stays, the internal queue and outgoing mail are freed, `c2h.macrostep_ended` and `c2h.input_completed` say `abandoned`, and the slot is free. The session takes its next input. |
-| [`h2c.destroy`](../protocol/generated/MESSAGES.md#h2cdestroy) | Abandons the slot as above, then destroys the session. |
-
-A quarantined slot is already at a legal boundary and runs nothing, so
-release and abandon need no debugger and no exclusive ownership. They are
-production controls, as `release()` is in napi today.
-
-**At most `maxQuarantined` slots are quarantined**
-([BEHAVIORS.md](../BEHAVIORS.md#maxquarantined)). It defaults to
-`maxConcurrentInputs` − 1 and can never be more, so at least one slot
-always serves the rest of the system. A host can set it lower, so that
-runaways waiting for an operator take only part of its concurrency, or 0,
-for a system nobody operates. When a session reaches the limit and no
-quarantine is left, core abandons its execution instead:
-`c2h.macrostep_ended` and `c2h.input_completed` say `runaway`, the slot is
-free, and the session takes its next input. With one slot, every runaway
-ends this way.
+**Quarantine is removed.** napi quarantines a runaway today (napi ADRs
+0008 and 0025): it holds the actor where it stopped until an operator
+calls `release()`. That kept one bad actor from taking the loop's turns,
+which slots now do. Holding it would also let its mail fill the pool while
+nobody looks, leave the host's promise for its input pending, and stop a
+replay whose seed loops from ever being published. The implementation
+therefore removes quarantine, `release()`, and the parent's
+`error.communication.invoke.<id>.quarantined` event: a child whose input
+ran away is not stuck, and a parent waiting for its `done.invoke` relies
+on its own timeout, as for any child that does not finish. An operator who
+wants to look at a live actor attaches the debugger
+([debugging.md](debugging.md)).
 
 ### Consequence for chart authors: order inside a block matters
 

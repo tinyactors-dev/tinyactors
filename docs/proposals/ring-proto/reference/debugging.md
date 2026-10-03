@@ -122,11 +122,11 @@ part of this design. Transition handlers supply the changes a recovery
 needs, and abandonment supplies a legal point from which to transition.
 
 Freezing the system preserves every slot's continuation and internal
-queue. Holding one actor inside a macrostep while others run already
-exists in production, as quarantine, for a runaway
-([macrostep.md](macrostep.md#runaways-the-chain-limit-and-quarantine)).
+queue. Parking already keeps one actor's macrostep aside while others run
+([macrostep.md](macrostep.md#parking-one-running-workspace-and-a-park-area)).
 A debugger that holds one actor and lets the rest of the system run would
 build on it, but it is not part of this design: the initial debugger
-freezes everything. An actor-only hold between macrosteps would need rules
+freezes everything. It is also how an operator looks at a live actor now
+that quarantine is removed ([macrostep.md](macrostep.md#runaways-the-chain-limit)). An actor-only hold between macrosteps would need rules
 for pending inputs and timers. Separate
 systems can already be debugged independently.

@@ -33,8 +33,6 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x010C` | [`h2c.definition_release`](#h2cdefinition_release) | Release one registration hold | 40 |
 | `0x010D` | [`h2c.definition_retire`](#h2cdefinition_retire) | End a definition’s availability | 40 |
 | `0x010E` | [`h2c.withdraw`](#h2cwithdraw) | Take back an admitted input that has not been taken | 40 |
-| `0x010F` | [`h2c.release`](#h2crelease) | Let a quarantined session run again | 40 |
-| `0x0110` | [`h2c.abandon`](#h2cabandon) | Abandon a quarantined session's input | 32 |
 | `0x0201` | [`c2h.spawned`](#c2hspawned) | A session exists | 64 |
 | `0x0202` | [`c2h.input`](#c2hinput) | A recorded session took an input | 128 |
 | `0x0203` | [`c2h.send`](#c2hsend) | A send for an I/O processor | 88 |
@@ -56,7 +54,6 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x0213` | [`c2h.input_refused`](#c2hinput_refused) | An admitted host input was not taken | 48 |
 | `0x0214` | [`c2h.input_completed`](#c2hinput_completed) | A host input and its startup follow-up settled | 56 |
 | `0x0215` | [`c2h.load_result`](#c2hload_result) | A load-failure response finished recycling waiting inputs | 48 |
-| `0x0216` | [`c2h.quarantined`](#c2hquarantined) | A session reached the chain limit and is held | 64 |
 | `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 120 |
 | `0x0302` | [`tel.dropped`](#teldropped) | Telemetry records were dropped | 48 |
 
@@ -179,7 +176,7 @@ Every envelope waiting for the address is recycled: mail becomes error.communica
 
 Refuses an owner of an active local invocation and an active locally invoked child. No lifetime envelope token moves into an image.
 
-Refuses a session that holds a macrostep slot, including a quarantined one (bounce reason active).
+Refuses a session that holds a macrostep slot (bounce reason active).
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -224,7 +221,7 @@ Done enters the external queue with invoke metadata for finalize; errors are pla
 
 `0x010A` on `h2c`, 40 fixed bytes. End a session now.
 
-A session that holds a macrostep slot, running, paused or quarantined, has its execution abandoned first (core ADR 0082): c2h.macrostep_ended and c2h.input_completed say abandoned, then the session is destroyed.
+A session that holds a macrostep slot, running or parked, has its execution abandoned first (core ADR 0082): c2h.macrostep_ended and c2h.input_completed say abandoned, then the session is destroyed.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -285,26 +282,6 @@ If the input is no longer waiting, the withdrawal changes nothing and writes not
 | 32 | `target_seq` | seq | the h2c seq of the input to withdraw |
 
 - may be answered by: [`c2h.input_refused`](#c2hinput_refused), [`c2h.bounced`](#c2hbounced)
-
-## h2c.release
-
-`0x010F` on `h2c`, 40 fixed bytes. Let a quarantined session run again.
-
-Header session names a quarantined session. Its slot runs again where it stopped, and its chain count restarts, so a second runaway is quarantined and reported again. A control, applied when read; no debugger or exclusive ownership is needed, because a quarantined slot is at a legal boundary and runs nothing (reference/macrostep.md).
-
-| Offset | Field | Type | Meaning |
-|---|---|---|---|
-| 32 | `unlimited` | bool | no chain limit for the rest of this input (core ADR 0075 no_microstep_limit) |
-
-- may be answered by: [`c2h.macrostep_ended`](#c2hmacrostep_ended), [`c2h.quarantined`](#c2hquarantined), [`c2h.input_completed`](#c2hinput_completed), [`c2h.bounced`](#c2hbounced)
-
-## h2c.abandon
-
-`0x0110` on `h2c`, 32 fixed bytes. Abandon a quarantined session's input.
-
-Header session names a quarantined session. Core ADR 0082 at the slot's boundary: the configuration after the last completed microstep stays, the internal queue and the outgoing mail are freed, and effects already written stay written. The slot is free and the session takes its next input. A control, applied when read.
-
-- may be answered by: [`c2h.macrostep_ended`](#c2hmacrostep_ended), [`c2h.input_completed`](#c2hinput_completed), [`c2h.bounced`](#c2hbounced)
 
 ## c2h.spawned
 
@@ -628,21 +605,6 @@ Acknowledges h2c.load_failed after all waiting envelopes were recycled or refuse
 | 40 | `request_seq` | seq | the answered c2h.load_needed |
 
 
-## c2h.quarantined
-
-`0x0216` on `c2h`, 64 fixed bytes. A session reached the chain limit and is held.
-
-The input chain counted microstepLimit steps: microsteps, selection passes and startup passes since take. Its slot stays where it stopped and is not scheduled; its mail waits on its deferred list. If the session is a local invoked child, its direct parent gets error.communication.invoke.<id>.quarantined, without data. At most maxQuarantined slots are quarantined, never every slot; past that, or when the park area has no room for the slot, core abandons the input instead and reports status runaway.
-
-| Offset | Field | Type | Meaning |
-|---|---|---|---|
-| 32 | `macrostep` | macrostep | the macrostep it stopped in |
-| 40 | `source_seq` | seq | the originating h2c input, or 0 for local work |
-| 48 | `steps` | u32 | the chain count that reached the limit |
-| 56 | `parent` | session | the parent told, or 0 |
-
-- may be answered by: [`h2c.release`](#h2crelease), [`h2c.abandon`](#h2cabandon), [`h2c.destroy`](#h2cdestroy)
-
 ## tel.trace
 
 `0x0301` on `tel`, 120 fixed bytes. One trace record (core ADR 0067).
@@ -713,7 +675,7 @@ How a macrostep ended.
 |---|---|---|
 | 0 | `stable` | stabilization ended; invocation startup and internal follow-up may still follow |
 | 1 | `done` | the session reached a top-level final state; c2h.finished follows |
-| 2 | `runaway` | the chain limit stopped it and no quarantine was left, so core abandoned it (reference/macrostep.md); the configuration after the last completed microstep stays |
+| 2 | `runaway` | the chain limit stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays |
 | 3 | `abandoned` | an operator abandoned it (core ADR 0082) |
 
 ### `input_completion_status` (u8)
@@ -724,7 +686,7 @@ How an input and its invocation-startup follow-up settled.
 |---|---|---|
 | 0 | `stable` | ready for another external input |
 | 1 | `done` | the session finished |
-| 2 | `runaway` | the chain limit stopped it and no quarantine was left; core abandoned it |
+| 2 | `runaway` | the chain limit stopped it; core abandoned the input and the session takes its next one |
 | 3 | `abandoned` | an operator abandoned execution |
 
 ### `input_refusal_reason` (u8)
@@ -759,7 +721,6 @@ Why core handed an h2c record back unrun.
 | 11 | `pending_inputs` | publish attempted before supplied replay inputs settled |
 | 12 | `stale_request` | a response does not match the outstanding load attempt |
 | 13 | `record` | mandatory output can never fit the configured record or ring bounds |
-| 14 | `not_quarantined` | h2c.release or h2c.abandon for a session that is not quarantined |
 | 15 | `active` | h2c.unload or h2c.checkpoint for a session that holds a macrostep slot |
 
 ### `capacity_resource` (u8)

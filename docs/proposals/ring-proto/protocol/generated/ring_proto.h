@@ -53,7 +53,6 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_BOUNCE_REASON_PENDING_INPUTS 11u
 #define TRP_BOUNCE_REASON_STALE_REQUEST 12u
 #define TRP_BOUNCE_REASON_RECORD 13u
-#define TRP_BOUNCE_REASON_NOT_QUARANTINED 14u
 #define TRP_BOUNCE_REASON_ACTIVE 15u
 #define TRP_CAPACITY_RESOURCE_POOL 1u
 #define TRP_CAPACITY_RESOURCE_NAMES 2u
@@ -87,8 +86,6 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_H2C_DEFINITION_RELEASE 0x010cu
 #define TRP_H2C_DEFINITION_RETIRE 0x010du
 #define TRP_H2C_WITHDRAW 0x010eu
-#define TRP_H2C_RELEASE 0x010fu
-#define TRP_H2C_ABANDON 0x0110u
 #define TRP_C2H_SPAWNED 0x0201u
 #define TRP_C2H_INPUT 0x0202u
 #define TRP_C2H_SEND 0x0203u
@@ -112,7 +109,6 @@ _Static_assert(sizeof(trp_header) == 32, "header");
 #define TRP_C2H_INPUT_REFUSED 0x0213u
 #define TRP_C2H_INPUT_COMPLETED 0x0214u
 #define TRP_C2H_LOAD_RESULT 0x0215u
-#define TRP_C2H_QUARANTINED 0x0216u
 #define TRP_TEL_TRACE 0x0301u
 #define TRP_TEL_TRACE_TRUNCATED (1u << 0)
 #define TRP_TEL_TRACE_SUPPRESSED (1u << 1)
@@ -243,20 +239,6 @@ typedef struct {
     uint64_t target_seq;
 } trp_h2c_withdraw;
 _Static_assert(sizeof(trp_h2c_withdraw) == 40, "h2c.withdraw");
-
-/* h2c.release: Let a quarantined session run again. */
-typedef struct {
-    trp_header header;
-    uint8_t unlimited;
-    uint8_t pad_end[7];
-} trp_h2c_release;
-_Static_assert(sizeof(trp_h2c_release) == 40, "h2c.release");
-
-/* h2c.abandon: Abandon a quarantined session's input. */
-typedef struct {
-    trp_header header;
-} trp_h2c_abandon;
-_Static_assert(sizeof(trp_h2c_abandon) == 32, "h2c.abandon");
 
 /* c2h.spawned: A session exists. */
 typedef struct {
@@ -489,17 +471,6 @@ typedef struct {
     uint64_t request_seq;
 } trp_c2h_load_result;
 _Static_assert(sizeof(trp_c2h_load_result) == 48, "c2h.load_result");
-
-/* c2h.quarantined: A session reached the chain limit and is held. */
-typedef struct {
-    trp_header header;
-    uint64_t macrostep;
-    uint64_t source_seq;
-    uint32_t steps;
-    uint8_t pad3[4];
-    uint64_t parent;
-} trp_c2h_quarantined;
-_Static_assert(sizeof(trp_c2h_quarantined) == 64, "c2h.quarantined");
 
 /* tel.trace: One trace record (core ADR 0067). */
 typedef struct {

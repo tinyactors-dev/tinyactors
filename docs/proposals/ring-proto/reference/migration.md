@@ -23,7 +23,7 @@ below.
 
 | Module | Lines (src) | What did it, what does it now |
 |---|---|---|
-| `scheduler.h`, `scheduler.c` | 1,465 | Mailboxes, runnable actors, turn budgets, quarantine, dead letters. Replaced by core's pool and its run queue ([envelope.md](envelope.md)), macrostep slots with deferred lists and quarantine ([macrostep.md](macrostep.md#macrostep-slots)) and `ta_run`'s budget. |
+| `scheduler.h`, `scheduler.c` | 1,465 | Mailboxes, runnable actors, turn budgets, quarantine, dead letters. Replaced by core's pool and its run queue ([envelope.md](envelope.md)), macrostep slots with deferred lists ([macrostep.md](macrostep.md#macrostep-slots)) and `ta_run`'s budget. Quarantine is removed, not moved: the chain limit ends a runaway's input ([macrostep.md](macrostep.md#runaways-the-chain-limit)). |
 | `router.h`, `router.c` | 232 | `ta_external_event_router` for mail between sessions. Mail between local sessions is an envelope in core. Anything else is a [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend). |
 | `effects.h`, `effects.c` | 98 | The per-turn effect queue that kept effects until JavaScript could run. Replaced by c2h records executable on receipt, including before the macrostep end. |
 | `adapter_io.h`, `adapter_io.c` | 260 | The I/O processor adapter that copied sends into effects. Replaced by `c2h.send`. |
@@ -167,8 +167,8 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0067 Core traces to a host sink | sink vtable | **refined**: the `tel` ring |
 | 0069 An idle actor carries no event | event blocks | **refined**: the taken event stays in its envelope; no blocks |
 | 0070 A run that runs out of memory stops where it stands | stopping inside a macrostep | **superseded** for core's memory; capacity becomes `error.execution.capacity` |
-| 0075 A macrostep that runs too many microsteps stops as a runaway | counts committed microsteps in one macrostep; 0 means no limit; the host decides | **refined**: counts one input's whole chain (microsteps, selection passes, startup passes), must be finite; at the limit core quarantines the slot, or abandons the input when no quarantine is left |
-| 0082 Operator transitions and abandoning a macrostep | | **kept**; a quarantined slot is abandoned with `h2c.abandon`, without a debugger |
+| 0075 A macrostep that runs too many microsteps stops as a runaway | counts committed microsteps in one macrostep; 0 means no limit; the host decides | **refined**: counts one input's whole chain (microsteps, selection passes, startup passes), must be finite; at the limit core abandons the input with status `runaway`, and the session takes its next input. The host still decides what to do about a session that keeps running away |
+| 0082 Operator transitions and abandoning a macrostep | | **kept**; the chain limit applies its abandon to a runaway's input |
 | 0074 An unloaded actor is offloaded to bytes | | **kept**; `c2h.unloaded` carries them |
 | 0089, 0094 Replay before publish; every input carries its time | | **refined**: h2c inputs seed new execution before publish; exact restoration is not promised |
 | 0090 Core defines the input log's byte layout | already removed by kernel ADR 0006 | remains removed; `c2h.input` is an observation, not a durable journal format |
@@ -198,11 +198,11 @@ history, with a status line pointing at the ADR that removes the kernel.
 | 0005 Per-target mailboxes and a ready queue | superseded: core's pool |
 | 0006 The addon routes actor-to-actor events | superseded: core |
 | 0007 The event loop drives a bounded pump | refined: the pump loop above |
-| 0008 Faults are per actor | refined: quarantine moves into core as a held macrostep slot. `c2h.quarantined` feeds the `fault` hook, `release()` posts `h2c.release`, `abandon()` posts `h2c.abandon`. The other causes go: a refused delivery, a queue that could not grow and out-of-memory back-off no longer exist |
+| 0008 Faults are per actor | refined: point 1's quarantine is removed; points 2 to 4 (the pump never throws, only misuse throws, generated result codes) stay. Its causes are gone: a refused delivery, a queue that could not grow and out-of-memory back-off no longer exist, and a runaway's input is abandoned by core. The `fault` hook reports `c2h.input_completed` with status `runaway`. `release()` and the `"quarantined"` scheduling state go from `index.d.ts` |
 | 0009, 0014 Native toolkit, memory pooled by lifetime | refined: smaller, back in napi |
 | 0015 to 0018 Tracing hook, OTLP, encoder | refined: drains `tel` |
 | 0020 Mail for an unloaded actor waits while a loader brings it back | refined: waits in core's pool; the loader answers `c2h.load_needed` |
-| 0025 A quarantined child tells its parent | kept, now raised by core. The event has no data: core cannot build the `{ code, message }` value, and the name says the cause |
+| 0025 A quarantined child tells its parent | superseded: there is no quarantine to report. A child whose input ran away is not stuck; a parent waiting for its `done.invoke` relies on its own timeout |
 | 0022 Mail a chart sends nowhere raises error.communication | kept, now done by recycling the envelope |
 | 0032 to 0034 Persistence by replay; the input log | already superseded by kernel ADR 0006; input observations become `c2h.input` |
 | 0035, 0036 Parameters | refined: kernel parameters go |
@@ -236,9 +236,10 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
 9. In `tinyactors-napi/docs/adr/`: **napi is a binding over core's
    rings.** Supersedes napi 0037 and the others above.
 10. **Macrostep slots.** Up to `maxConcurrentInputs` sessions run inputs at
-    once, in turn; deferred lists; the chain limit; quarantine, up to
-    `maxQuarantined` slots, with `h2c.release` and `h2c.abandon`; one
-    running workspace and a park area of chunks with a derived ceiling.
+    once, in turn; deferred lists; the chain limit, which abandons a
+    runaway's input; one running workspace and a park area of chunks with
+    a derived ceiling. Records that quarantine is removed (napi ADRs 0008
+    and 0025).
     Refines 0055, 0061 and 0075. Records the bytes per slot record, per
     parked execution and per actor (+8 for the deferred list).
 
@@ -257,7 +258,8 @@ Each step builds and passes `mise run test`, and is committed on its own
 4. **The pool and `ta_run`.** Mail between local sessions and delayed
    sends become envelopes. The kernel's scheduler and router are bypassed
    for local mail. Start with one macrostep slot; then add slots, deferred
-   lists, the chain limit and quarantine as their own commit, before c2h.
+   lists and the chain limit as their own commit, before c2h. The kernel's
+   quarantine goes with the kernel and is not rebuilt.
 5. **c2h.** Sends, invocations and logs become records. The kernel's
    adapters and effects queue go.
 6. **h2c.** Inputs, complete definitions, spawn, time and load go through it. The kernel's
@@ -285,8 +287,15 @@ changes every binding in the same change.
   of executable content; each session still runs one input at a time. A
   long or looping macrostep holds one slot. The chain limit counts
   microsteps, selection passes and startup passes and cannot be turned
-  off. At the limit core quarantines the slot, which the host releases or
-  abandons with production controls ([macrostep.md](macrostep.md#macrostep-slots)).
+  off. At the limit core abandons the input with status `runaway`
+  ([macrostep.md](macrostep.md#macrostep-slots)).
+- **Quarantine is removed.** It kept one bad actor from taking the loop's
+  turns, which slots now do. Holding a runaway would let its mail fill the
+  pool, leave its input's promise pending and stop a looping replay seed
+  from being published. napi loses `release()`, the `"quarantined"`
+  scheduling state and the parent's `.quarantined` event; the debugger is
+  how an operator looks at a live actor
+  ([macrostep.md](macrostep.md#runaways-the-chain-limit)).
 - **Definition management uses requests and results.** Hosts submit a
   complete declarative spec; core compiles and registers it between
   macrosteps. Structured compile errors travel through bounded buffers.

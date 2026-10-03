@@ -31,7 +31,7 @@ can retry:
 | A recording snapshot cannot be made | core before input take | external input: `c2h.input_refused`; local mail: recycled `error.communication` | host/client or sending chart | [S11](scenarios/S11-semantic-boundaries.md#recording-and-ownership) |
 | An unload would split an active local invocation | core, without mutation | `c2h.bounced(active_local_invoke)` | host, after the invocation ends | [unloading](reference/unloading.md#unloading) |
 | The host withdraws an input that has not been taken (a client disconnected, an `AbortSignal` fired) | core, on [`h2c.withdraw`][h2c.withdraw] | `c2h.input_refused` with reason `withdrawn`; nothing if the input was already taken, bounced or refused | nobody: the host asked for it | [envelope](reference/envelope.md#withdrawing-an-admitted-input) |
-| A session's input reaches the chain limit (a runaway) | core, between steps | [`c2h.quarantined`][c2h.quarantined]; a local child's parent gets `error.communication.invoke.<id>.quarantined`. With no quarantine left: `c2h.input_completed` status `runaway` | the operator (`h2c.release`, `h2c.abandon`) or the parent chart | [macrostep](reference/macrostep.md#runaways-the-chain-limit-and-quarantine) |
+| A session's input reaches the chain limit (a runaway) | core, between steps: the input is abandoned, the session lives on | `c2h.input_completed` status `runaway`; `TA_TRACE_RUNAWAY` on `tel`. The chart is not told | nobody: the host may destroy a session that keeps running away | [macrostep](reference/macrostep.md#runaways-the-chain-limit) |
 | An event nobody listens for | the chart: it enables nothing | [`tel.trace`][tel.trace] `IGNORED` | nobody | [S10.4](scenarios/S10-run-time-names.md#under-the-proposal) |
 | An h2c record core cannot run (no such address, too deep a name, …) | core | [`c2h.bounced`][c2h.bounced] with a reason | the host decides | [S10.8](scenarios/S10-run-time-names.md#when-the-names-come-faster-than-they-are-freed) |
 | Telemetry the host does not read fast enough | core | [`tel.dropped`][tel.dropped] with a count | nobody: telemetry never slows the system | [telemetry](reference/telemetry.md) |
@@ -55,7 +55,7 @@ different sends before and after a crash ([S03.4](scenarios/S03-crash-unrecorded
 | **Name area** | `nameAreaBytes` | Core bounces capacity-blocked h2c events. A computed name that does not fit fails as `error.execution.capacity.names`. | host/client and sending chart | [S10](scenarios/S10-run-time-names.md) |
 | **Internal queue** | ordinary `internalQueueEvents` quota plus compiler-sized mandatory storage | A chart raise exhausting its quota fails as `error.execution.capacity.internal`. Mandatory storage needs a whole-execution bound, not a single error slot. | the chart; implementation readiness depends on the bound | [macrostep](reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage) |
 | **Macrostep slots** | `maxConcurrentInputs` | Runnable envelopes wait in the run queue, or on an active session's deferred list, until a slot frees. Nothing is refused. | nobody: it shapes latency | [macrostep](reference/macrostep.md#macrostep-slots) |
-| **Park area** | `parkAreaBytes` (derived by default) | A slot that cannot park at the end of its slice keeps the thread. A runaway that cannot park is abandoned with status `runaway`. | nobody, or the operator | [parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area) |
+| **Park area** | `parkAreaBytes` (derived by default) | A slot that cannot park at the end of its slice keeps the thread. | nobody: it shapes latency | [parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area) |
 | **Data model** (the JavaScript heap) | the binding | An operation that fails reports `TA_OP_ERROR`, and core raises `error.execution`. It is the data model's own memory, never core's. | the chart | [data model](reference/data-model.md) |
 | **The host's own buffers** | the host's policy | The host drops something, and must accept that only a timeout will notice. | the waiting chart | [S09.6](scenarios/S09-edge-backpressure.md#filling-up) |
 
@@ -112,7 +112,6 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 | [`admissionWatermark`](#admissionwatermark) | 50% | 1% | 99% | the client, through h2c |
 | [`fairnessRatio`](#fairnessratio) | 4 | 1 | 4,096 | nobody: it shapes latency |
 | [`maxConcurrentInputs`](#maxconcurrentinputs) | 64 | 1 | 65,536 | nobody: inputs wait for a slot |
-| [`maxQuarantined`](#maxquarantined) | `maxConcurrentInputs` − 1 | 0 | `maxConcurrentInputs` − 1 | the operator: past it, runaways are abandoned |
 | [`parkAreaBytes`](#parkareabytes) | derived: `maxConcurrentInputs` × the largest parked execution | 0 (no parking) | the derived ceiling | nobody: a slot that cannot park keeps the thread; a runaway that cannot park is abandoned |
 | [`slotSlice`](#slotslice) | 1,024 | 1 | 1,048,576 | nobody: it shapes latency |
 | [`internalQueueEvents`](#internalqueueevents) | 256 ordinary entries, plus compiler-sized mandatory storage | 0 ordinary entries | 65,536 ordinary entries | the chart (`.internal`) |
@@ -225,49 +224,29 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
   default is generous: one long or looping macrostep holds one slot out of
   64. Most hosts never set it.
 - **Minimum 1:** plain run to completion. A long macrostep holds the whole
-  system until it ends, and every runaway is abandoned, never
-  quarantined, since `maxQuarantined` must then be 0. **Maximum 65,536:**
+  system until it ends, and a loop holds it until the chain limit.
+  **Maximum 65,536:**
   past that, the rotation through parked slots gives each of them a turn
   too rarely to be called isolation; a host wants more systems.
-- **What it drives:** isolation between sessions. How many of the slots
-  may hold runaways is [`maxQuarantined`](#maxquarantined).
+- **What it drives:** isolation between sessions.
 - **Filled on demand,** as the pool is: core adds a slot record, between
   macrosteps, when every existing one is busy and an envelope could run.
   A failed allocation means the envelope waits.
-- **How it surfaces:** no error. **Host:** `c2h.quarantined`, and inputs
-  that wait longer while slots are busy.
-
-### `maxQuarantined`
-
-- **What it bounds:** how many slots may hold a quarantined runaway for an
-  operator at once ([macrostep.md](reference/macrostep.md#runaways-the-chain-limit-and-quarantine)).
-  Unit: slots, out of `maxConcurrentInputs`.
-- **Default `maxConcurrentInputs` − 1,** 63 with the other defaults: as
-  many runaways as can be held while one slot still serves everyone else.
-  Each quarantined runaway costs its parked execution and runs nothing.
-- **Minimum 0:** no quarantine; every runaway is abandoned with status
-  `runaway` and the session takes its next input. **Maximum
-  `maxConcurrentInputs` − 1:** at least one slot is never held, so loops
-  can never stop the system.
-- **What it drives:** how much of the system's concurrency runaways may
-  take while they wait for an operator. A server with 16 slots that wants
-  loops to cost it at most two sets 2. A system nobody operates sets 0.
-- **How it surfaces:** **host:** `c2h.quarantined` while there is room;
-  past it, `c2h.input_completed` with status `runaway`.
+- **How it surfaces:** no error. **Host:** inputs that wait longer while
+  slots are busy.
 
 ### `parkAreaBytes`
 
 - **What it bounds:** the bytes of parked executions: the continuations
-  and pending internal events of slots waiting for their turn or
-  quarantined ([macrostep.md](reference/macrostep.md#parking-one-running-workspace-and-a-park-area)).
+  and pending internal events of slots waiting for their turn
+  ([macrostep.md](reference/macrostep.md#parking-one-running-workspace-and-a-park-area)).
   Unit: bytes, in 256-byte chunks.
 - **Default: derived.** Core computes the most the area can ever need,
   `maxConcurrentInputs` × (the largest registered definition's
   continuation + a full internal queue), at registration, and uses that
   as the ceiling. Nobody has to choose a number, and storage stays bounded
   by parameters and compiled requirements.
-- **Minimum 0:** no parking. That is plain run to completion, and no
-  runaway can be quarantined. **Maximum: the derived ceiling;** a larger
+- **Minimum 0:** no parking. That is plain run to completion. **Maximum: the derived ceiling;** a larger
   value changes nothing.
 - **Filled on demand,** in chunks, between macrosteps only: after each
   macrostep end and at admission, core tops the free list up to one parked
@@ -278,14 +257,13 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
   that wants a hard memory figure sets a value below the ceiling.
 - **How it surfaces:** no error. A slot that finds no free chunk at the
   end of its slice keeps the thread, which is run to completion for that
-  macrostep. A runaway that finds none is abandoned with status
-  `runaway`.
+  macrostep.
 
 ### `slotSlice`
 
 - **What it bounds:** how many steps one slot runs before core moves to
   the next slot that can run, within one `ta_run`
-  ([macrostep.md](reference/macrostep.md#pauses-the-budget-the-slice-and-quarantine)).
+  ([macrostep.md](reference/macrostep.md#pauses-the-budget-and-the-slice)).
   Unit: steps: microsteps, selection passes and units of executable
   content, as ADR 0061 counts them.
 - **Default 1,024.** Short macrosteps finish inside one slice and never
@@ -434,8 +412,7 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 - `maxRecordBytes` ≤ `h2cBytes`, `telBytes`, `nameAreaBytes`;
 - `telemetryValueBytes` ≤ `maxRecordBytes` − 256;
 - `admissionWatermark` from 1 to 99;
-- `microstepLimit` from 1, never 0 or none;
-- `maxQuarantined` ≤ `maxConcurrentInputs` − 1.
+- `microstepLimit` from 1, never 0 or none.
 
 ### Memory per system, with the defaults
 
@@ -472,7 +449,7 @@ judged too much for quiet systems and test suites that create many. So:
 
 | Parameter | What changes |
 |---|---|
-| `microstepLimit` | It counts one input's whole chain: every microstep, every selection pass and every startup pass, from take until input completion. It must be finite: 0 and `TA_MICROSTEP_LIMIT_NONE` are refused, for the system and for a definition. At the limit the slot is quarantined ([`c2h.quarantined`][c2h.quarantined]), or, with no quarantine left, abandoned with status `runaway` ([macrostep](reference/macrostep.md#runaways-the-chain-limit-and-quarantine)). |
+| `microstepLimit` | It counts one input's whole chain: every microstep, every selection pass and every startup pass, from take until input completion. It must be finite: 0 and `TA_MICROSTEP_LIMIT_NONE` are refused, for the system and for a definition. At the limit core abandons the input with status `runaway`; the session lives on and takes its next input ([macrostep](reference/macrostep.md#runaways-the-chain-limit)). |
 | `eventNameDepth` (default 64, at most 64) | It also sizes the scratch that resolves a run-time name's segments ([names.md](reference/names.md)). A deeper name is invalid: `c2h.bounced` (`invalid`) at admission, plain `error.execution` at a `<send>`. |
 | `interpreterBytes`, `interpreterNesting` | Reserved at creation rather than on first use, if nested interpreters can start inside a macrostep (cancelling an invocation). **To check:** that this is the only path. |
 | `renderBytes` | Smaller. Names and send IDs are written into ring tails or the name area, not rendered here. |
@@ -498,7 +475,6 @@ kernel gone, napi's `parameterInfo()` lists two owners, `core` and `napi`.
 [h2c.event]: protocol/generated/MESSAGES.md#h2cevent
 [h2c.load_failed]: protocol/generated/MESSAGES.md#h2cload_failed
 [h2c.withdraw]: protocol/generated/MESSAGES.md#h2cwithdraw
-[c2h.quarantined]: protocol/generated/MESSAGES.md#c2hquarantined
 [c2h.bounced]: protocol/generated/MESSAGES.md#c2hbounced
 [tel.trace]: protocol/generated/MESSAGES.md#teltrace
 [tel.dropped]: protocol/generated/MESSAGES.md#teldropped
