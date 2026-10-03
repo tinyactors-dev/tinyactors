@@ -33,6 +33,121 @@ that change are replaced module by module, as building blocks. The reasons:
   `main`, each passing `mise run test`. Only an incremental replacement
   can keep the existing suites as the reference throughout.
 
+## Desired source tree
+
+This is `tinyactors-core` after Phase 7. `src/` stays flat, because the
+amalgamation joins `src/*.c` in the order `src/internal.h` lists them;
+`internal.h` changes with every row marked `+` or `-`. The tree is grouped
+by role here, not alphabetically. Line counts are today's (`.c` + `.h`).
+Block IDs refer to [building-blocks.md](reference/building-blocks.md), and
+`step` refers to the phases below.
+
+Legend:
+
+- `+` new
+- `-` removed
+- `~` changes
+- `=` unchanged, or only follows renames
+- `→` renamed or moved into
+
+```
+tinyactors-core/
+├── include/
+│   ├── tinyactors.h            ~  4060  ta_run, h2c/c2h/tel access and the control block; loses vtables
+│   │                                    (router, I/O, invoker, directory, trace, log), deliver/resume/
+│   │                                    dispatch_due, register_io/_invoker, origins and scopes, TA_OP_NOMEM,
+│   │                                    TA_ERR_BUSY, TA_DM_TEXT_IO_*, run-time intern entry points
+│   └── tinyactors_ring.h       +        generated from protocol/: record structs, kinds, enums, flags (C2, 2.9)
+├── protocol/                   +        moved from docs/proposals/ring-proto/protocol (2.9)
+│   ├── dsl.rb                  +        the DSL
+│   ├── catalog.rb              +        every record, defined once
+│   └── render.rb               +        MESSAGES.md, messages.json, tinyactors_ring.h, ring_codec.c
+├── mise/tasks/
+│   └── protocol                +        file task: render protocol/ into include/ and src/ (2.9)
+└── src/
+    │
+    │   ── foundation: generic, no knowledge of SCXML ──────────────────────────────────────
+    ├── types.c / types.h       ~   282  keeps ta_vec, bitsets, ta_mem_*, the text writer; formatters move out
+    ├── text.c / text.h         +        D6 decimal, hex, percent-encoding; D3 writer targets (chunk chain, record tail)
+    ├── hash.h                  +        D5 FNV-1a and the 64-bit mixer, once (1.1)
+    ├── handle.h                +        E1 generation handles (1.2)
+    ├── layout.c / layout.h     +        A2 layout builder with checked arithmetic (1.4)
+    ├── arena.c / arena.h       =   199  A3; optional A4 mark/rewind
+    ├── index_pool.c / .h       +        A5 fixed items in pages, safe-point refill, ceiling, trim (1.5)
+    ├── chunks.c / chunks.h     +        A6 chunk chains over an index pool (2.4)
+    ├── list.h                  +        B1 intrusive index lists, inline (2.1)
+    ├── heap.c / heap.h         +        B2 indexed min-heap (2.2)
+    ├── table.c / table.h       +        B3 hash table, fixed or growing on an explicit call (1.6)
+    ├── fifo.c / fifo.h         +        B4 fixed-entry FIFO (2.3)
+    ├── quota.h                 +        C3 quota with reservations, inline (2.3)
+    ├── claim.c / claim.h       +        C4 claim set, all or nothing (2.10, optional)
+    ├── bytes.c / bytes.h       +        D1 byte sinks and sources: memory, arena, chunk chain (2.5)
+    ├── serial.c / serial.h     +        D2 typed binary writer and reader, extracted from session_image (2.5)
+    ├── ring.c / ring.h         +        C1 SPSC byte ring: reserve, pad, commit, release, lossy mode (2.8)
+    ├── ring_codec.c            +        C2 generated writers and validating readers (2.9)
+    ├── tree.c / tree.h         =   217  spec tree builder
+    ├── ta_allocator_wasm.c     =   117  wasm allocator (platform file)
+    │
+    │   ── names and types ───────────────────────────────────────────────────────────────
+    ├── atom.c / atom.h         ~   157  on B3; interning only at registration and creation
+    ├── event_name.c / .h       →        trie.c / trie.h
+    ├── trie.c / trie.h         ~   263  D7 trie of atoms, on B3; event names are one user (1.6)
+    ├── names.c / names.h       +        D4 resolver (bytes → atoms, UNKNOWN); envelope text layout (2.6, 4.2)
+    ├── type_registry.c / .h    +        B7, created twice: I/O processor and invoker types (2.7, 5.2)
+    ├── address.c / address.h   ~   296  on A5 + B3; no run-time interning from targetexpr
+    ├── session.c / session.h   ~   270  on A5 + B3
+    ├── scxml_uri.c / .h        ~   414  parses and formats; looks up, never interns at run time
+    ├── routing.c / routing.h   ~    77  keeps the actor_ref helpers; the router comment and boundary go
+    │
+    │   ── the queue: inputs core has not run yet ───────────────────────────────────────
+    ├── envelope.c / .h         +        the pool (A5), its lists (B1), recycling, withdrawal (4.2)
+    ├── name_area.c / .h        +        an A5 + A6 instance with 64-byte chunks, plus its quota (4.2)
+    ├── admission.c / .h        +        reads h2c: admit, bounce, apply controls, fairness (4.2, 5.1)
+    ├── deadline.c / .h         +        delayed sends: B2 over envelopes, owner lists, exact <cancel> (4.3)
+    ├── timer.c / timer.h       -   634  replaced by deadline.c (4.3)
+    │
+    │   ── execution ──────────────────────────────────────────────────────────────────────
+    ├── run.c / run.h           +        ta_run: fill slots, take turns, drain phases, return status (4.2, 4.5)
+    ├── slots.c / slots.h       +        slot records (A5), deferred lists, slotSlice, the chain limit (4.5)
+    ├── park.c / park.h         +        the park area: A5 + A6 with 256-byte chunks, D2 continuations (4.5)
+    ├── interpreter.c / .h      ~  4858  the SCXML algorithm stays; loses event blocks, the out-of-memory stop,
+    │                                    queue mark/truncate, two-part reservations; the internal queue becomes
+    │                                    B4 plus ordinary and mandatory quotas; capacity errors (4.2–4.5)
+    ├── continuation.c / .h     ~   227  stays for pause; written to the park area through D2 (4.5)
+    ├── configuration.c / .h    =    56  only the WORDS kind remains (1.8)
+    ├── history.c / history.h   =    32
+    ├── invoke.c / invoke.h     ~  1294  startup after the macrostep, lifetime tokens, invocation_seq;
+    │                                    c2h.invoke/_cancel/_forward instead of the invoker vtable (4.4, 5.2)
+    ├── event.c / event.h       ~    42  name and origin as text, not an event-name ID or an io_origin
+    ├── fault.c / fault.h       ~    33  undefined declarations removed (1.8)
+    ├── clock.c / clock.h       =    11
+    │
+    │   ── the host boundary ──────────────────────────────────────────────────────────────
+    ├── c2h.c / c2h.h           +        c2h writer: mandatory reserves (C3) and every core → host record (5.1, 5.2)
+    ├── trace.c / trace.h       ~   464  writes tel.trace instead of calling a sink (4.1)
+    ├── io.c / io.h             -   232  processors live in the binding; origins are text (5.2)
+    ├── io_origin.c / .h        -   262  COMPUTED, SCOPED and MESSAGE storage (5.2)
+    ├── store.c / store.h       -    10  empty compatibility module (1.8)
+    │
+    │   ── sessions, definitions, the system ───────────────────────────────────────────────
+    ├── actor.c / actor.h       ~  2000  loses event-block types, held effects, deliver and BUSY; gains list heads,
+    │                                    the recorded bit and the deferred list (4.2–5.5)
+    ├── session_image.c / .h    ~  1600  on D1 and D2; no event blocks; pending timers from the owner list (4.3, 5.3)
+    ├── definition.c / .h       ~   960  descriptors as trie paths, mandatory-event bounds, per-definition
+    │                                    chain limit (4.4)
+    ├── builder.c / builder.h   ~  2746  sizes mandatory storage; checks platform events are representable (4.4)
+    ├── export.c / export.h     =   636
+    ├── codec.c / codec.h       =   531
+    ├── datamodel.c / .h        ~   249  _event text from envelopes; TA_DM_TEXT_IO_* go; no TA_OP_NOMEM (4.4, 5.2)
+    ├── null_datamodel.c / .h   ~   297  answers TA_OP_ERROR instead of TA_OP_NOMEM (4.4)
+    ├── system.c / system.h     ~  1140  creates rings, the control block, pool, name area, park area and workspace
+    │                                    through A2; loses the registries, sinks and the event-block cache
+    └── internal.h              ~    33  module order follows the groups above
+```
+
+Annotations welcome directly in the tree. Names marked `+` are
+suggestions.
+
 ## Rules for every step
 
 - **Each commit builds and passes `mise run test`.** Run `mise run test:full`
