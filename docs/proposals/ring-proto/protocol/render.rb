@@ -86,30 +86,53 @@ module RingProto
 
     def c_name(id) = id.tr('.', '_')
 
+    # One C enum per group of constants. The record structs keep fixed-width
+    # fields, because the size of a C enum is up to the compiler; a comment
+    # names the enum a field holds.
+    def c_enum(name, members, doc = nil)
+      out = +''
+      out << "/* #{doc} */\n" if doc && !doc.empty?
+      out << "typedef enum {\n"
+      members.each { |member, value| out << "    #{member} = #{value},\n" }
+      out << "} #{name};\n\n"
+    end
+
+    def c_field_comment(model, field)
+      model.enums.key?(field.type) ? " /* trp_#{field.type} */" : ''
+    end
+
     def c_header(model)
       out = +"/* Generated from catalog.rb by render.rb. Do not edit. A sketch of the\n"
       out << " * layout; the real header would be part of tinyactors.h. */\n"
       out << "#pragma once\n#include <stdint.h>\n\n"
       out << "typedef struct { uint32_t offset; uint32_t length; } trp_span;\n\n"
-      out << "typedef struct {\n"
-      HEADER.each { |f| out << "    #{c_type(model, f.type)} #{f.name};\n" }
-      out << "} trp_header;\n_Static_assert(sizeof(trp_header) == #{HEADER_SIZE}, \"header\");\n\n"
-      COMMON_FLAGS.each { |f| out << "#define TRP_FLAG_#{f.name.upcase} (1u << #{f.bit})\n" }
-      out << "\n"
-      model.enums.each_value do |e|
-        e.values.each { |v| out << "#define TRP_#{e.name.upcase}_#{v.name.upcase} #{v.value}u\n" }
-      end
-      out << "\n"
+      kinds = [['TRP_PAD', '0x0000']] + model.messages.map { |m| ["TRP_#{c_name(m.id).upcase}", hex(m.code)] }
+      out << c_enum('trp_kind', kinds, 'The header\'s `kind`: the message code. 0x0000 is the pad record.')
+      out << c_enum('trp_common_flag', COMMON_FLAGS.map { |f| ["TRP_FLAG_#{f.name.upcase}", "1 << #{f.bit}"] },
+                    'Common flags, bits 8..15 of the header\'s `flags`.')
       model.messages.each do |m|
-        out << "#define TRP_#{c_name(m.id).upcase} 0x#{m.code.to_s(16).rjust(4, '0')}u\n"
-        m.flags.each { |f| out << "#define TRP_#{c_name(m.id).upcase}_#{f.name.upcase} (1u << #{f.bit})\n" }
+        next if m.flags.empty?
+
+        prefix = "TRP_#{c_name(m.id).upcase}"
+        out << c_enum("trp_#{c_name(m.id)}_flag", m.flags.map { |f| ["#{prefix}_#{f.name.upcase}", "1 << #{f.bit}"] },
+                      "#{m.id}'s own flags, bits 0..7 of the header's `flags`.")
       end
+      model.enums.each_value do |e|
+        out << c_enum("trp_#{e.name}", e.values.map { |v| ["TRP_#{e.name.upcase}_#{v.name.upcase}", v.value] },
+                      "#{e.doc} Stored as #{C_TYPES.fetch(e.base)}.")
+      end
+      out << "typedef struct {\n"
+      HEADER.each do |f|
+        comment = f.name.to_s == 'kind' ? ' /* trp_kind */' : ''
+        out << "    #{c_type(model, f.type)} #{f.name};#{comment}\n"
+      end
+      out << "} trp_header;\n_Static_assert(sizeof(trp_header) == #{HEADER_SIZE}, \"header\");\n"
       model.messages.each do |m|
         out << "\n/* #{m.id}: #{m.summary}. */\ntypedef struct {\n    trp_header header;\n"
         offset = HEADER_SIZE
         m.fields.each_with_index do |f, i|
           out << "    uint8_t pad#{i}[#{f.offset - offset}];\n" if f.offset > offset
-          out << "    #{c_type(model, f.type)} #{f.name};\n"
+          out << "    #{c_type(model, f.type)} #{f.name};#{c_field_comment(model, f)}\n"
           offset = f.offset + model.size_of(f.type)
         end
         out << "    uint8_t pad_end[#{m.fixed_size - offset}];\n" if m.fixed_size > offset

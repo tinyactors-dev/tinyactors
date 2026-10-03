@@ -14,7 +14,10 @@ computed. [`render.rb`](render.rb) turns the model into other formats:
 The generated files are [`MESSAGES.md`](generated/MESSAGES.md), the reference
 every document links to; [`messages.json`](generated/messages.json), for tools
 such as a test host's decoder; and [`ring_proto.h`](generated/ring_proto.h),
-C structs with `_Static_assert`s on their sizes.
+C structs with `_Static_assert`s on their sizes, and one C enum per group of
+constants: message codes, common flags, each message's own flags and each
+catalog enum. Struct fields stay fixed-width integers, since the size of a C
+enum is up to the compiler; a comment names the enum a field holds.
 
 The generated files are committed so the proposal can be read without running
 anything. After editing the catalog, render again.
