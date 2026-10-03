@@ -55,6 +55,7 @@ different sends before and after a crash ([S03.4](scenarios/S03-crash-unrecorded
 | **Name area** | `nameAreaBytes` | Core bounces capacity-blocked h2c events. A computed name that does not fit fails as `error.execution.capacity.names`. | host/client and sending chart | [S10](scenarios/S10-run-time-names.md) |
 | **Internal queue** | ordinary `internalQueueEvents` quota plus compiler-sized mandatory storage | A chart raise exhausting its quota fails as `error.execution.capacity.internal`. Mandatory storage needs a whole-execution bound, not a single error slot. | the chart; implementation readiness depends on the bound | [macrostep](reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage) |
 | **Macrostep slots** | `maxConcurrentInputs` | Runnable envelopes wait in the run queue, or on an active session's deferred list, until a slot frees. Nothing is refused. | nobody: it shapes latency | [macrostep](reference/macrostep.md#macrostep-slots) |
+| **Park area** | `parkAreaBytes` (derived by default) | A slot that cannot park at the end of its slice keeps the thread. A runaway that cannot park is abandoned with status `runaway`. | nobody, or the operator | [parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area) |
 | **Data model** (the JavaScript heap) | the binding | An operation that fails reports `TA_OP_ERROR`, and core raises `error.execution`. It is the data model's own memory, never core's. | the chart | [data model](reference/data-model.md) |
 | **The host's own buffers** | the host's policy | The host drops something, and must accept that only a timeout will notice. | the waiting chart | [S09.6](scenarios/S09-edge-backpressure.md#filling-up) |
 
@@ -110,8 +111,9 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 | [`nameAreaBytes`](#nameareabytes) | 262,144 | `maxRecordBytes` | 1 GiB | the chart (`.names`); the client, through h2c |
 | [`admissionWatermark`](#admissionwatermark) | 50% | 1% | 99% | the client, through h2c |
 | [`fairnessRatio`](#fairnessratio) | 4 | 1 | 4,096 | nobody: it shapes latency |
-| [`maxConcurrentInputs`](#maxconcurrentinputs) | 4 | 1 | 1,024 | nobody: inputs wait for a slot |
+| [`maxConcurrentInputs`](#maxconcurrentinputs) | 64 | 1 | 65,536 | nobody: inputs wait for a slot |
 | [`maxQuarantined`](#maxquarantined) | `maxConcurrentInputs` − 1 | 0 | `maxConcurrentInputs` − 1 | the operator: past it, runaways are abandoned |
+| [`parkAreaBytes`](#parkareabytes) | derived: `maxConcurrentInputs` × the largest parked execution | 0 (no parking) | the derived ceiling | nobody: a slot that cannot park keeps the thread; a runaway that cannot park is abandoned |
 | [`slotSlice`](#slotslice) | 1,024 | 1 | 1,048,576 | nobody: it shapes latency |
 | [`internalQueueEvents`](#internalqueueevents) | 256 ordinary entries, plus compiler-sized mandatory storage | 0 ordinary entries | 65,536 ordinary entries | the chart (`.internal`) |
 | [`h2cBytes`](#h2cbytes) | 65,536 | `maxRecordBytes` | 2 GiB | the client (the host refuses) |
@@ -215,19 +217,23 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 
 - **What it bounds:** how many sessions may be inside an input's execution
   at once, each in its own slot ([macrostep.md](reference/macrostep.md#macrostep-slots)).
-  Unit: slots, each `interpreterBytes` plus an internal queue and the
-  mandatory storage of the largest registered definition.
-- **Default 4.** One long or looping macrostep holds one slot, and three
-  keep serving everyone else.
+  Unit: slots. A slot is a record of about 48 bytes, plus, while it is
+  parked, its continuation and pending internal events in the park area
+  (about 1 KiB for a chart of 100 states). Only the running slot uses the
+  one running workspace.
+- **Default 64.** Slots cost almost nothing until they park, so the
+  default is generous: one long or looping macrostep holds one slot out of
+  64. Most hosts never set it.
 - **Minimum 1:** plain run to completion. A long macrostep holds the whole
   system until it ends, and every runaway is abandoned, never
-  quarantined, since `maxQuarantined` must then be 0. **Maximum 1,024:** each slot is tens of kilobytes; past a
-  thousand, a host wants more systems, not more slots.
+  quarantined, since `maxQuarantined` must then be 0. **Maximum 65,536:**
+  past that, the rotation through parked slots gives each of them a turn
+  too rarely to be called isolation; a host wants more systems.
 - **What it drives:** isolation between sessions. How many of the slots
   may hold runaways is [`maxQuarantined`](#maxquarantined).
-- **Filled on demand,** as the pool is: the first slot exists at creation,
-  and core adds one, between macrosteps, when every existing slot is busy
-  and an envelope could run. A failed allocation means the envelope waits.
+- **Filled on demand,** as the pool is: core adds a slot record, between
+  macrosteps, when every existing one is busy and an envelope could run.
+  A failed allocation means the envelope waits.
 - **How it surfaces:** no error. **Host:** `c2h.quarantined`, and inputs
   that wait longer while slots are busy.
 
@@ -236,8 +242,9 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 - **What it bounds:** how many slots may hold a quarantined runaway for an
   operator at once ([macrostep.md](reference/macrostep.md#runaways-the-chain-limit-and-quarantine)).
   Unit: slots, out of `maxConcurrentInputs`.
-- **Default `maxConcurrentInputs` − 1,** 3 with the other defaults: as
+- **Default `maxConcurrentInputs` − 1,** 63 with the other defaults: as
   many runaways as can be held while one slot still serves everyone else.
+  Each quarantined runaway costs its parked execution and runs nothing.
 - **Minimum 0:** no quarantine; every runaway is abandoned with status
   `runaway` and the session takes its next input. **Maximum
   `maxConcurrentInputs` − 1:** at least one slot is never held, so loops
@@ -247,6 +254,32 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
   loops to cost it at most two sets 2. A system nobody operates sets 0.
 - **How it surfaces:** **host:** `c2h.quarantined` while there is room;
   past it, `c2h.input_completed` with status `runaway`.
+
+### `parkAreaBytes`
+
+- **What it bounds:** the bytes of parked executions: the continuations
+  and pending internal events of slots waiting for their turn or
+  quarantined ([macrostep.md](reference/macrostep.md#parking-one-running-workspace-and-a-park-area)).
+  Unit: bytes, in 256-byte chunks.
+- **Default: derived.** Core computes the most the area can ever need,
+  `maxConcurrentInputs` × (the largest registered definition's
+  continuation + a full internal queue), at registration, and uses that
+  as the ceiling. Nobody has to choose a number, and storage stays bounded
+  by parameters and compiled requirements.
+- **Minimum 0:** no parking. That is plain run to completion, and no
+  runaway can be quarantined. **Maximum: the derived ceiling;** a larger
+  value changes nothing.
+- **Filled on demand,** in chunks, between macrosteps only: after each
+  macrostep end and at admission, core tops the free list up to one parked
+  execution of the largest definition. Chunks come back to the free list
+  when an execution resumes; giving them back to the allocator needs a
+  trim call, which is **open**.
+- **What it drives:** how much isolation a host buys with memory. A host
+  that wants a hard memory figure sets a value below the ceiling.
+- **How it surfaces:** no error. A slot that finds no free chunk at the
+  end of its slice keeps the thread, which is run to completion for that
+  macrostep. A runaway that finds none is abandoned with status
+  `runaway`.
 
 ### `slotSlice`
 
@@ -269,8 +302,9 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
   errors and `done.state.*` events have additional compiler-sized storage,
   allocated outside macrosteps. Queues preserve FIFO order across both
   classes; this is a capacity distinction, not a priority distinction.
-  There is one top-level workspace per macrostep slot and any required
-  nested workspaces.
+  There is one top-level workspace, the running workspace, and any
+  required nested workspaces; a parked slot keeps only its pending entries,
+  in the park area.
   Unit: ordinary events, about 48 bytes each.
 - **Default 256 ordinary entries, about 12 KiB plus mandatory storage.** A macrostep rarely holds more
   than a handful of internal events at once. One that holds 255 is almost
@@ -409,14 +443,18 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 |---|---|
 | pool: 4,096 envelopes × 88, plus 4 each for the deadline index | 376,832 |
 | name area: 4,096 chunks × 64 | 262,144 |
-| macrostep slots: 4 × (`interpreterBytes` 65,536 + 256 ordinary internal entries × about 48), plus compiler-sized mandatory storage each | 311,296 plus 4 × the compiled bound |
+| running workspace: `interpreterBytes` 65,536 + 256 ordinary internal entries × about 48, plus compiler-sized mandatory storage, once | 77,824 plus the compiled bound |
+| slot records: up to 64 × about 48, on demand | at most 3,072 |
+| park area: a reserve of one parked execution, on demand; more only while slots are parked | about 1 KiB for a chart of 100 states |
 | h2c + c2h + tel | 589,824 |
-| **total before compiler-sized mandatory storage** | **about 1.5 MiB** |
+| **total before compiler-sized mandatory storage** | **about 1.25 MiB** |
 
-One slot (77,824 bytes) was already there as the system's single
+The running workspace was already there as run to completion's single
 continuation, scratch and internal queue; earlier versions of this table
-counted only its internal queue. The three more slots cost about 228 KiB,
-and only when a system has needed them, because slots fill on demand.
+counted only its internal queue. Concurrency adds the slot records and the
+park area, both on demand. With 64 slots all parked, a chart of 100 states
+costs about 64 KiB of continuations, plus whatever internal events they
+had pending; the derived ceiling bounds the worst case.
 
 That is more than napi's roughly 1 MB per system today, which ADR 0093
 judged too much for quiet systems and test suites that create many. So:

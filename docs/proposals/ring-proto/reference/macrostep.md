@@ -11,15 +11,16 @@ records, and what happens when something runs out. The rings are in
 
 1. **A macrostep never allocates in core.** Core allocates in three places
    only:
-   - when a system is created (rings, pool, scratch, the first slot);
+   - when a system is created (rings, pool, the running workspace);
    - when a definition is registered (its compiled form, atoms and required
-     interpreter workspace, including mandatory internal-event storage, for
-     every slot);
+     interpreter workspace, including mandatory internal-event storage, by
+     growing the one running workspace);
    - when a session is created or loaded (its fixed-size record, sized by its
      definition).
 
-   Growing the pool and the slots up to their bounds happens between
-   macrosteps ([envelope.md](envelope.md#the-pool), [slots](#macrostep-slots)). The data model allocates as it
+   Growing the pool, the slot records and the park area up to their bounds
+   happens between macrosteps ([envelope.md](envelope.md#the-pool),
+   [parking](#parking-one-running-workspace-and-a-park-area)). The data model allocates as it
    likes: that is the data model's memory, not core's
    ([data-model.md](data-model.md)).
 2. **Core storage is bounded by parameters and compiled requirements.** Every queue, ring and text
@@ -43,13 +44,19 @@ records, and what happens when something runs out. The rings are in
 ## Macrostep slots
 
 Core runs each session's macrosteps one at a time, to their end, but it
-does not make every other session wait for them. It has **`maxConcurrentInputs`
-slots** ([BEHAVIORS.md](../BEHAVIORS.md#maxconcurrentinputs)). A slot holds one
-session's execution of one input, from take until `c2h.input_completed`:
-the continuation, the internal queue and its mandatory storage, the taken
-envelope, the outgoing mail list and the outstanding c2h reserve. A session
-that holds a slot is **active**. With one slot, this is plain run to
-completion.
+does not make every other session wait for them. It has up to **`maxConcurrentInputs`
+slots** ([BEHAVIORS.md](../BEHAVIORS.md#maxconcurrentinputs)). A slot stands
+for one session's execution of one input, from take until
+`c2h.input_completed`: its taken envelope, its outgoing mail list, its
+outstanding c2h reserve and its chain count. A session that holds a slot is
+**active**. With one slot, this is plain run to completion.
+
+Only one slot runs at a time, on the system's one thread, so only the
+running slot needs an interpreter's workspace. The others are **parked**:
+their continuation and pending internal events are copied into the park
+area ([below](#parking-one-running-workspace-and-a-park-area)). A slot is
+therefore cheap: a small record while it waits for its turn, and about the
+size of its definition's continuation while it is parked.
 
 Core works through its slots in turn. A slot runs until its input's chain
 settles, or until it has used `slotSlice` steps in this turn; then core
@@ -124,16 +131,14 @@ other session until it ends.
   where it stopped while the rest of the system goes on, which is what
   napi's quarantine does today ([below](#runaways-the-chain-limit-and-quarantine)).
 
-The number is fixed, so memory stays bounded and allocated outside
-macrosteps. Core already moves a paused run into a continuation (ADRs 0061
-and 0070); a slot is that continuation plus the per-run state that run to
-completion kept once per system. Slots are allocated on demand up to
-`maxConcurrentInputs`, as the pool is: when core would fill a slot and all
-existing ones are busy, it allocates one more, between macrosteps. If that
-allocation fails, the envelope waits for a slot to free. A slot is sized
-for the largest registered definition; registration allocates the larger
-workspace for every slot, and a slot that is active swaps it in when it
-next becomes free.
+The number has a ceiling, so memory stays bounded and allocated outside
+macrosteps, but nothing is set aside for it. Core already moves a paused
+run into a continuation (ADRs 0061 and 0070); parking is that move, into
+chunks of the park area instead of a block per actor. Slot records are
+allocated on demand up to `maxConcurrentInputs`, as the pool is: when core
+would fill a slot and every existing record is busy, it allocates one
+more, between macrosteps. If that allocation fails, the envelope waits for
+a slot to free.
 
 Slots interleave only between units of executable content, where ADR 0061
 already lets a run stop. They do not interleave inside a data model call:
@@ -189,17 +194,102 @@ A macrostep stops in the middle for three reasons only:
 - **A slot reaches the chain limit.** Core quarantines it
   ([below](#runaways-the-chain-limit-and-quarantine)).
 
-In each case the macrostep's position, sets and frames stay in **its
-slot's continuation**, which exists before the slot is used, so saving a
-stop never fails (ADR 0070 section 2 already requires this). Nested
-interpreters for invocations still have scratch of their own (ADR 0060).
-During debugger attachment only the debugger drives core; the production
-pump cannot resume any slot until ownership is returned.
-- **A full ring never pauses executable content inside a macrostep.** An
-  ordinary action whose record does not fit fails instead (below), while
-  mandatory records use their preflight reservation. Core can return for a
-  drain before a macrostep starts or between post-macrostep phases, including
-  startup and terminal input completion.
+When `ta_run`'s budget runs out, the running slot stays in the running
+workspace; nothing is copied. When a slot's slice ends or it is
+quarantined, core parks it, and parking can fail without harm: a slot
+that cannot park keeps the thread, and a runaway that cannot park is
+abandoned ([below](#parking-one-running-workspace-and-a-park-area)).
+Nested interpreters for invocations still have scratch of their own
+(ADR 0060). During debugger attachment only the debugger drives core; the
+production pump cannot resume any slot until ownership is returned.
+
+**A full ring never pauses executable content inside a macrostep.** An
+ordinary action whose record does not fit fails instead (below), while
+mandatory records use their preflight reservation. Core can return for a
+drain before a macrostep starts or between post-macrostep phases, including
+startup and terminal input completion.
+
+### Parking: one running workspace and a park area
+
+**The running workspace** is the interpreter scratch (`interpreterBytes`),
+the internal queue with its ordinary quota and its compiler-sized
+mandatory storage, and the frame stack. There is one per system, as there
+was under run to completion, sized for the largest registered definition.
+The system allocates it at creation, and registration grows it when a
+larger definition arrives. Its mandatory storage, the large conservative
+arena ([below](#sizing-mandatory-storage)), is paid once per system, not
+once per slot.
+
+**A parked execution** is what a slot needs to continue later:
+
+- its continuation, at the size its own definition needs: the state sets,
+  history, enabled transitions and the frames actually open
+  (`ta_continuation_capacity()` in core bounds it today; about 1 KiB for a
+  chart of 100 states);
+- the internal events actually pending, about 48 bytes each, in order;
+- its counters: chain count, slice position, trace keys.
+
+Its taken envelope and outgoing mail are already in the pool, and its c2h
+reserve is a number, so none of them move.
+
+**The park area holds parked executions as chains of chunks.** A chunk is
+256 bytes, with a 4-byte link to the next. Parking writes the state in
+order into chunks from the area's free list; resuming reads it back in
+order into the running workspace and returns the chunks to the free list.
+A larger chart takes more chunks, not a larger block, so the area never
+fragments and no size has to be chosen in advance. The copy is a few
+hundred bytes to a few kilobytes, once per slice.
+
+**Growth happens between macrosteps only.** A rotation happens in the
+middle of a macrostep, which must not allocate, so parking takes only
+chunks already on the free list. After each macrostep end and at
+admission, core tops the free list up to a reserve, enough for one
+parked execution of the largest registered definition, allocating up to
+the area's ceiling. If the allocator refuses, nothing changes but how much
+can be parked.
+
+**Parking can fail, and nothing breaks when it does.** Correctness never
+depends on it, only isolation:
+
+| Parking for | When there are not enough free chunks |
+|---|---|
+| the end of a slice | the slot does not rotate. It keeps the thread for another slice, and core tries again at its next slice end. That is run to completion for this macrostep. |
+| quarantine at the chain limit | the input is abandoned with status `runaway`, as when `maxQuarantined` is reached |
+
+**The ceiling is derived, not chosen.** A parked execution is at most the
+largest registered definition's continuation plus a full internal queue.
+So the area can never need more than
+
+`maxConcurrentInputs × (largest continuation + full internal queue)`
+
+rounded up to whole chunks. Core computes this at registration, so the
+storage stays bounded by parameters and compiled requirements (invariant
+2) without a byte parameter anyone must set. `parkAreaBytes` is an
+optional lower cap ([BEHAVIORS.md](../BEHAVIORS.md#parkareabytes)); 0
+disables parking, which leaves plain run to completion and no quarantine.
+
+**It looks unlimited, with two limits.** Chunks taken during a burst of
+rotations come back only when those executions resume, and new chunks
+arrive only at the next macrostep end, so a burst can briefly cost
+isolation. And chunks return to the free list, not to the allocator, so
+after a burst the area stays at its high-water mark. **Open:** a trim
+call that returns free chunks of the park area and the pool, above their
+reserves, to the allocator.
+
+**What you don't pay for.** A system whose macrosteps all finish within
+one slice never parks and holds only the reserve, which is itself
+allocated at the first macrostep end that needs it. The one large fixed
+cost left is the running workspace's mandatory arena, which grows with the
+chain limit. A lower `microstepLimit` for a definition makes it smaller.
+**Possible:** the compiler could derive that limit itself for a chart
+whose internal transitions (eventless transitions, `<raise>`,
+`done.state`) form no cycle, since such a chart takes a bounded number of
+steps before it needs external input.
+
+**Parking happens only between top-level units.** A child's exit handlers,
+run in a nested interpreter while the parent cancels an invocation, finish
+inside the unit that started them and never park. They are finite, but a
+long one keeps the thread.
 
 ## The macrostep end
 
@@ -344,9 +434,11 @@ events. A `<raise>` that exhausts the ordinary quota fails as
   pool would stop a chart from raising its own events, and a chart raising
   in a loop would starve every other session's mail. Separate memory keeps a
   fault inside the chart that causes it.
-- **One queue per slot.** Each slot runs one top-level interpreter, so the
-  system needs one queue per slot, plus one per nested interpreter, sized
-  once. That replaces ADR 0064's queue lent to each actor and its cache.
+- **One live queue.** One top-level interpreter runs at a time, so the
+  system needs one live queue, in the running workspace, plus one per
+  nested interpreter, sized once. A parked slot's pending entries wait in
+  the park area. That replaces ADR 0064's queue lent to each actor and its
+  cache.
 - **The compiler counts independent failure sites.** SCXML 4.9 stops only
   the failed block. Two entry blocks can each fail in one microstep, and
   both errors must retain their queue order. A loop in one block stops at
@@ -387,7 +479,9 @@ input's chain, so `L`, `S` and `I` are each at most the limit, and the
 arena above is finite.
 
 **Open:** the conservative arena is large: the limit (100,000 by default)
-times the per-phase maxima, per slot. An implementation needs a tighter
+times the per-phase maxima. It is paid once per system, in the running
+workspace, not once per slot; a parked slot holds only the entries
+actually pending. An implementation needs a tighter
 occupancy bound, for example from the observation that a dequeue in each
 selection pass removes one entry, before the figure is acceptable. Until
 then, the chain limit for a definition with mandatory events may need to
@@ -419,7 +513,9 @@ system and for a definition.
 **At the limit, core quarantines the slot.** The check sits between steps,
 where nothing is open (ADR 0075). Core:
 
-1. leaves the slot as it stands, mid-chain, and stops scheduling it;
+1. parks the slot as it stands, mid-chain, and stops scheduling it. If the
+   park area has no room, core abandons the input instead, as when no
+   quarantine is left (below);
 2. writes [`c2h.quarantined`](../protocol/generated/MESSAGES.md#c2hquarantined)
    with the session, the macrostep and the count;
 3. if the session is a local invoked child, raises

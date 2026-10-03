@@ -475,9 +475,11 @@ ahead of ordinary events.
   `_event`'s other fields;
 - a taken entry stays at the head while it is `_event`, and is freed when the
   next one is taken, as ADR 0069 does today;
-- each slot runs one top-level interpreter, so there is **one internal
-  queue per slot**, plus one per nested interpreter (ADR 0060), not one
-  lent to each actor (ADR 0064), and no cache of queues;
+- one top-level interpreter runs at a time, so there is **one live
+  internal queue**, in the running workspace, plus one per nested
+  interpreter (ADR 0060), not one lent to each actor (ADR 0064), and no
+  cache of queues. A parked slot's pending entries are copied to the park
+  area and back ([macrostep.md](macrostep.md#parking-one-running-workspace-and-a-park-area));
 - mandatory entries cover errors from distinct executable blocks, condition
   evaluation and data initialization, as well as platform completion events;
 - storage is allocated or enlarged outside macrosteps at registration, spawn

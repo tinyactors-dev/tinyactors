@@ -163,7 +163,7 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0047 An interrupted macrostep is retryable | a macrostep interrupted by running out of memory can run again | **superseded**: core cannot run out of memory in a macrostep, and a data model or invoker that does answers `TA_OP_ERROR`, so nothing interrupts a macrostep for memory |
 | 0055 Deliver is the admission test | `TA_ERR_BUSY` | **superseded**: admission is moving from h2c into the pool; mail for an active session waits on its deferred list in core, so the host never sees busy |
 | 0061 A run can pause between units of executable content | the paused state moves into a continuation the actor owns | **refined**: it moves into the session's macrostep slot, and slots take turns between units |
-| 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: one queue per macrostep slot, an ordinary quota plus compiler-sized mandatory storage, allocated outside macrosteps; the chain limit bounds its accumulation, and the arena's size is open |
+| 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: one live queue in the running workspace, parked slots' entries in the park area, an ordinary quota plus compiler-sized mandatory storage, allocated outside macrosteps; the chain limit bounds its accumulation, and the arena's size is open |
 | 0067 Core traces to a host sink | sink vtable | **refined**: the `tel` ring |
 | 0069 An idle actor carries no event | event blocks | **refined**: the taken event stays in its envelope; no blocks |
 | 0070 A run that runs out of memory stops where it stands | stopping inside a macrostep | **superseded** for core's memory; capacity becomes `error.execution.capacity` |
@@ -237,8 +237,10 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
    rings.** Supersedes napi 0037 and the others above.
 10. **Macrostep slots.** Up to `maxConcurrentInputs` sessions run inputs at
     once, in turn; deferred lists; the chain limit; quarantine, up to
-    `maxQuarantined` slots, with `h2c.release` and `h2c.abandon`. Refines 0055, 0061 and 0075. Records
-    the bytes per slot and per actor (+8 for the deferred list).
+    `maxQuarantined` slots, with `h2c.release` and `h2c.abandon`; one
+    running workspace and a park area of chunks with a derived ceiling.
+    Refines 0055, 0061 and 0075. Records the bytes per slot record, per
+    parked execution and per actor (+8 for the deferred list).
 
 ## A rough order of work
 

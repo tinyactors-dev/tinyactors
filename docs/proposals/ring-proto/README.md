@@ -179,6 +179,11 @@ The scenarios run this example through:
   at most `maxQuarantined` are quarantined (never every slot), and past
   that a runaway is abandoned with status `runaway`. With one slot this is plain run to
   completion ([reference/macrostep.md](reference/macrostep.md#macrostep-slots)).
+  Only the running slot uses the system's one workspace; the others are
+  parked in chained chunks of a park area, about 1 KiB each for a chart of
+  100 states. The area fills on demand up to a ceiling core derives, so no
+  host has to size it, and a slot that cannot park keeps the thread
+  ([parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area)).
 - **Accepted input withdrawal:** commit is final, and records are never
   edited. A host takes back an admitted input that has not been taken with
   `h2c.withdraw`, which core answers with `c2h.input_refused` (`withdrawn`);

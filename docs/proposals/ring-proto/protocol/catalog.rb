@@ -611,7 +611,8 @@ message 'c2h.quarantined', code: 0x0216, summary: 'A session reached the chain l
       'If the session is a local invoked child, its direct parent gets ' \
       'error.communication.invoke.<id>.quarantined, without data. At most ' \
       'maxQuarantined slots are quarantined, never every slot; past that, ' \
-      'core abandons the input instead and reports status runaway.'
+      'or when the park area has no room for the slot, core abandons the ' \
+      'input instead and reports status runaway.'
   field :macrostep, :macrostep, 'the macrostep it stopped in'
   field :source_seq, :seq, 'the originating h2c input, or 0 for local work'
   field :steps, :u32, 'the chain count that reached the limit'

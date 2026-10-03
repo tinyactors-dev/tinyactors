@@ -632,7 +632,7 @@ Acknowledges h2c.load_failed after all waiting envelopes were recycled or refuse
 
 `0x0216` on `c2h`, 64 fixed bytes. A session reached the chain limit and is held.
 
-The input chain counted microstepLimit steps: microsteps, selection passes and startup passes since take. Its slot stays where it stopped and is not scheduled; its mail waits on its deferred list. If the session is a local invoked child, its direct parent gets error.communication.invoke.<id>.quarantined, without data. At most maxQuarantined slots are quarantined, never every slot; past that, core abandons the input instead and reports status runaway.
+The input chain counted microstepLimit steps: microsteps, selection passes and startup passes since take. Its slot stays where it stopped and is not scheduled; its mail waits on its deferred list. If the session is a local invoked child, its direct parent gets error.communication.invoke.<id>.quarantined, without data. At most maxQuarantined slots are quarantined, never every slot; past that, or when the park area has no room for the slot, core abandons the input instead and reports status runaway.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
