@@ -60,16 +60,12 @@ tinyactors-core/
 │   ├── tinyactors.h            ~  4060  ta_run, h2c/c2h/tel access and the control block; loses vtables
 │   │                                    (router, I/O, invoker, directory, trace, log), deliver/resume/
 │   │                                    dispatch_due, register_io/_invoker, origins and scopes, TA_OP_NOMEM,
-│   │                                    TA_ERR_BUSY, TA_DM_TEXT_IO_*, run-time intern entry points
-│   └── tinyactors_ring.h       +        published by the amalgamation from src/generated/ring_records.h,
-│                                        as include/tinyactors.c is today (2.9)
+│                                        TA_ERR_BUSY, TA_DM_TEXT_IO_*, run-time intern entry points;
+│                                        gains the ring records, so a host includes one header
 ├── protocol/                   +        moved from docs/proposals/ring-proto/protocol (2.9)
 │   ├── dsl.rb                  +        the DSL
 │   ├── catalog.rb              +        every record, defined once
 │   └── render.rb               +        writes everything in src/generated/
-├── mise/tasks/
-│   ├── protocol                +        file task: render protocol/ into src/generated/ (2.9)
-│   └── amalgamate              ~        also joins src/generated/*.c, and publishes tinyactors_ring.h
 └── src/
     │
     │   ── foundation: generic, no knowledge of SCXML ──────────────────────────────────────
@@ -184,9 +180,11 @@ suggestions.
   `vec.h`), named after the object it defines. Nothing is added to a
   catch-all header, and `types.h` is split up in 1.0.
 - **Generated code lives only in `src/generated/`.** Files there are
-  rendered from `protocol/` and never edited by hand. Nothing outside
-  that directory is generated, except what the amalgamation publishes
-  in `include/`.
+  rendered from `protocol/` and never edited by hand.
+- **The public API is organised by what a host uses, not by how it is
+  built.** A host includes `tinyactors.h` and gets everything, the ring
+  records included. No public file is named after a build step or a
+  generator.
 - **Do not refactor code that a later phase deletes.** This covers
   `timer.c`, the event blocks, `io.c` / `io_origin.c` and the kernel's
   containers. Phase 1 leaves them alone.
@@ -268,7 +266,7 @@ exception to "remove what nothing uses".
 | 2.6 | D4 name resolver | Splits a name at the dots and looks each segment up with `ta_atom_find`; scratch holds `eventNameDepth` segments. |
 | 2.7 | B7 type registry | Built-in entries and their aliases, `declare`, `declared`. |
 | 2.8 | C1 SPSC byte ring, and the control block | Lossless and lossy modes, pads, seq. Tests cover a wrap on every offset, a ring of `maxRecordBytes`, and lossy drop counting. |
-| 2.9 | C2 record codec generator | Move `protocol/` (the DSL, the catalog, the renderer) from this proposal into `tinyactors-core/protocol/`. Add a mise file task that renders into `src/generated/`: the record header, the C writers and validating readers, `MESSAGES.md` and `messages.json`. The amalgamation joins `src/generated/*.c` and publishes the records as `include/tinyactors_ring.h`. The reader tests feed malformed records: a span outside the record, a wrong size, an unknown kind, a seq gap. |
+| 2.9 | C2 record codec generator | Move `protocol/` (the DSL, the catalog, the renderer) from this proposal into `tinyactors-core/protocol/`. Add a mise file task that renders into `src/generated/`: the record header, the C writers and validating readers, `MESSAGES.md` and `messages.json`. The records reach hosts through `tinyactors.h`. How the build puts them there is described in `docs/build/`, not in the source tree. The reader tests feed malformed records: a span outside the record, a wrong size, an unknown kind, a seq gap. |
 | 2.10 | C4 claim set (optional) | Reserves across C3 quotas, all or nothing. |
 
 **Exit:** every new block has its own test program, and the core `test`
