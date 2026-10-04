@@ -35,7 +35,7 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
 # compile error and event pattern tests exercise pure functions.
 # test_allocator_test needs no runtime at all; it tests the allocator that
 # every one of these builds links (tests/test_allocator.c).
-STANDALONE = %w[layout_test handle_test actor_id_test session_id_test offload_test span_test hash_format_test test_allocator_test vec_test].freeze
+STANDALONE = %w[layout_test handle_test actor_id_test session_id_test offload_test span_test hash_format_test test_allocator_test vec_test pool_test].freeze
 
 # A binary is rebuilt only when one of its inputs is newer: its test, the
 # amalgamation or a header. Tests build and run in parallel, one per CPU.

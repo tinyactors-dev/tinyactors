@@ -6,6 +6,7 @@
 #include "format.h"
 #include "layout.h"
 #include "vec.h"
+#include "pool.h"
 #include "arena.h"
 #include "tree.h"
 #include "atom.h"
