@@ -14,7 +14,7 @@
 /* ** A parsed (package ...) manifest, surfaced to the hosted shell. name and
 ** version are the declared identity; extends is the base package name the
 ** manifest declares with extends: (empty when it declares none). The params:
-** map is not surfaced: tinyparse_apply_manifest binds each entry straight onto
+** map is not surfaced: tp_apply_manifest binds each entry straight onto
 ** the engine as a compile-time parameter, since that is all a consumer needs. ok
 ** is 1 when the bytes held a well-formed (package ...) form. This struct names
 ** only public types, so cli.c can mirror it without pulling in internal.h.
@@ -98,9 +98,9 @@ static tinyparse_result tp_manifest_bind_params(tinyparse_engine *engine,
 ** whose body is a flat sequence of keyword/value pairs: name:, version:,
 ** params:, provides:, extends:. Unknown keywords are ignored, so the manifest
 ** can carry fields this resolver does not yet read. */
-tinyparse_result tinyparse_apply_manifest(tinyparse_engine *engine,
-                                              tinyparse_source manifest,
-                                              tinyparse_manifest *out)
+tinyparse_result tp_apply_manifest(tinyparse_engine *engine,
+                                   tinyparse_source manifest,
+                                   tinyparse_manifest *out)
 {
     tp_read_result read;
     const tp_form *package = 0;
