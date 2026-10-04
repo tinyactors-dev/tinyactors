@@ -602,9 +602,10 @@ name, so it gets the runaway outcome. A pause cannot make room: only the
 session drains its own queue. c2h is different, because the host drains
 it. The rule is the same as for c2h: pause where the host can free space,
 fail where only the session can. The cost is the floor plus 256 entries of
-about 48 bytes, about 12 KiB per system, instead of about 14 MB for a
+about 48 bytes, about 12 KiB per system, instead of a
 whole-chain bound of `B + L·E + S·C + I·V + F` entries at the default
-chain limit. The price: a chart whose error storm would have ended with
+chain limit: about 14 MB for a chart with three failure sites per
+microstep (an illustration, not a measurement). The price: a chart whose error storm would have ended with
 more than about 256 pending events is abandoned instead of finishing.
 
 **Considered and rejected:**
