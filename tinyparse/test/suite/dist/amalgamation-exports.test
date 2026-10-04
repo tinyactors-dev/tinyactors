@@ -1,14 +1,16 @@
 # A shared library built from the amalgamation with -fvisibility=hidden exports
 # the public API, and every symbol it defines for export belongs to tinyparse
 # itself: the public tinyparse_* API or the library's own tp_* helpers. Nothing
-# foreign leaks into the dynamic symbol table.
+# foreign leaks into the dynamic symbol table. It is built for x86_64 Linux
+# (zig cc), so its dynamic symbol table reads the same from any host.
 <<<cmd
 set -e
-bash amalgamate.sh >/dev/null 2>&1
-a=dist/amalgamation
-cc -shared -fPIC -fvisibility=hidden -I"$a" "$a/tinyparse.c" -o "$a/libtinyparse.so"
-nm -D --defined-only "$a/libtinyparse.so" | grep -q ' tinyparse_open'
-foreign="$(nm -D --defined-only "$a/libtinyparse.so" | awk '$2 ~ /^[TDBRVW]$/ { print $3 }' | grep -vE '^(tinyparse_|tp_)' || true)"
+a="$TP_AMALGAMATION"
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
+"$TP_LINUX_CC" -shared -fPIC -fvisibility=hidden -I"$a" "$a/tinyparse.c" -o "$w/libtinyparse.so"
+"$TP_NM" -D --defined-only "$w/libtinyparse.so" | grep -q ' tinyparse_open'
+foreign="$("$TP_NM" -D --defined-only "$w/libtinyparse.so" | awk '$2 ~ /^[TDBRVW]$/ { print $3 }' | grep -vE '^(tinyparse_|tp_)' || true)"
 test -z "$foreign" || { echo "foreign exports: $foreign"; exit 1; }
 exit 0
 <<<assert

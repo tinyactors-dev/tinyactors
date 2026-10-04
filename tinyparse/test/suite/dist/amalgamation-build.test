@@ -1,10 +1,13 @@
+# The amalgamation (`mise run amalgamate`) builds the whole CLI from its two
+# sources with a plain C compiler, and the result parses.
 <<<cmd
 set -e
-bash amalgamate.sh >/dev/null 2>&1
-a=dist/amalgamation
-cc -std=c11 -O2 -I"$a" "$a/tinyparse.c" "$a/tinyparse_cli.c" -o "$a/tinyparse"
-"$a/tinyparse" version
-printf '(a (b c))' | "$a/tinyparse" run examples/sexpr/sexpr.scm --input - --dump-tree
+a="$TP_AMALGAMATION"
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
+"$TP_CC" -std=c11 -O2 -I"$a" "$a/tinyparse.c" "$a/tinyparse_cli.c" -o "$w/tinyparse"
+"$w/tinyparse" version
+printf '(a (b c))' | "$w/tinyparse" run examples/sexpr/sexpr.scm --input - --dump-tree
 <<<assert
 exit 0
 out-contains 0.1.0

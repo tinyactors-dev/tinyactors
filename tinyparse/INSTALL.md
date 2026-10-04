@@ -4,7 +4,8 @@ This tarball unpacks to a prefix-shaped tree:
 
     bin/tinyparse                 the command-line tool
     lib/libtinyparse.a            static library
-    lib/libtinyparse.{so,dylib}   shared library
+    lib/libtinyparse.so.0.1       shared library (Linux; libtinyparse.so links to it)
+    lib/libtinyparse.0.1.dylib    shared library (macOS)
     include/tinyparse.h           the public header
     share/man/man1/tinyparse.1    the manual page
 

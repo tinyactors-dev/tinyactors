@@ -1,0 +1,21 @@
+#!/usr/bin/env ruby
+#MISE description="Build the freestanding library for this machine: build/lib/libtinyparse.a"
+# vim:ft=ruby
+
+# Every src/*.c but the CLI, compiled with the pinned clang for this machine
+# (Toolchain::Target.host) as freestanding C11 under -Wall -Wextra -pedantic
+# -Werror, each object reused while its source and headers are unchanged
+# (mise/lib/cache.rb), and archived with llvm-ar. The CLI, the examples and
+# the tests link this archive; generated parsers (`tinyparse c --parser-lib`)
+# call its internal tp_* functions, so it keeps them global.
+
+require 'cache'
+require_relative '../lib/tinyparse'
+
+objects = Tinyparse.compile_all([*Tinyparse.host.compile_command, *Tinyparse::LIBRARY_FLAGS], Tinyparse.library_sources,
+                                Tinyparse::BUILD.join('objects/host'), 'lib')
+archive = Tinyparse.host_library
+outcome = Tinyparse.link('libtinyparse.a', archive, %w[archive], objects) do
+  Tinyparse.host.archive(objects, into: archive)
+end
+puts "lib: #{Tinyparse.relative(archive)} #{outcome == :reused ? 'up to date' : 'archived'}"

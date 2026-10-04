@@ -2,3 +2,4 @@
 examples/uri/run.sh ':// not a uri'
 <<<assert
 exit 1
+err-contains malformed URI

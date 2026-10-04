@@ -71,10 +71,10 @@ Tree shapes may shift (e.g. an assignment's LHS becomes the ternary-derived node
 rather than a dedicated `lhs` node). That is acceptable: tinyparse conformance is
 **accept-level**, not tree-equality (`docs/decisions.md`). The bar is:
 
-1. **Conformance unchanged:** `bash ci/tinyparse-metric.sh` stays 296/296 (or
+1. **Conformance unchanged:** `mise run test` stays 296/296 (or
    whatever the current count is). The corpus must still accept what it accepted and
    reject what it rejected.
-2. **Engines agree:** `bash ci/tinyparse-vm-diff.sh` green — the change is in the
+2. **Engines agree:** `mise run gate vm-diff` green — the change is in the
    grammar, so every engine sees it; they must still produce identical trees.
 3. **It actually helped:** measure with the memo OFF so you see the *grammar*
    effect, not the memo's. Pack and time a pathological input both ways:

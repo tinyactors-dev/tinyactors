@@ -1,8 +1,10 @@
+# install.sh installs a release tarball (`mise run release`) into a prefix,
+# offline, and the installed CLI runs.
 <<<cmd
 set -e
-bash release.sh tarballs >/dev/null 2>&1
 pfx=$(mktemp -d)
-bash install.sh --from-file dist/release/tinyparse-0.1.0-linux-x86_64.tar.gz --prefix "$pfx" >/dev/null 2>&1
+trap 'rm -rf "$pfx"' EXIT
+sh install.sh --from-file dist/release/tinyparse-0.1.0-x86_64-linux.tar.gz --prefix "$pfx" >/dev/null 2>&1
 test -x "$pfx/bin/tinyparse"
 test -f "$pfx/include/tinyparse.h"
 test -f "$pfx/lib/libtinyparse.a"

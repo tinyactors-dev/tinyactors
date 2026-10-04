@@ -1,9 +1,10 @@
+# The x86_64 Linux release tarball (`mise run release`) is a prefix tree.
 <<<cmd
 set -e
-bash release.sh tarballs >/dev/null 2>&1
 d=$(mktemp -d)
-tar xzf dist/release/tinyparse-0.1.0-linux-x86_64.tar.gz -C "$d"
-r="$d/tinyparse-0.1.0-linux-x86_64"
+trap 'rm -rf "$d"' EXIT
+tar xzf dist/release/tinyparse-0.1.0-x86_64-linux.tar.gz -C "$d"
+r="$d/tinyparse-0.1.0-x86_64-linux"
 test -x "$r/bin/tinyparse"
 test -f "$r/lib/libtinyparse.a"
 test -f "$r/lib/libtinyparse.so"

@@ -2,7 +2,7 @@
 # ci/tinyparse-perf-gate.sh -- standing performance regression guard for
 # tinyparse.
 #
-# Two gates. Correctness is the hard floor: ci/tinyparse-metric.sh must be
+# Two gates. Correctness is the hard floor: `mise run test` must be
 # GREEN (no optimization may break a corpus case). Speed is a ratchet: the
 # tinyparse parse median must not exceed the ceiling recorded in
 # tinyparse/test/perf-baseline.txt by more than a small noise margin.
@@ -18,7 +18,7 @@ BASELINE="$REPO/test/perf-baseline.txt"
 MARGIN="0.05"
 
 echo "== perf gate: correctness =="
-cm="$(bash ci/tinyparse-metric.sh 2>&1 | tail -1)"
+cm="$(mise run test 2>&1 | grep -E 'test: (GREEN|failed)' | tail -1)"
 echo "$cm"
 case "$cm" in *GREEN*) ;; *) echo "RESULT: correctness not GREEN -- abort"; exit 1;; esac
 

@@ -26,8 +26,9 @@
 # e.g.
 #   embed-lib.sh libembed.so host_parser:host.scm json_parser:std.json
 #
-# Honours TP_ROOT/TP_DIST/TP_INC/TP_CLI when set (as examples/build.sh sets them);
-# otherwise derives them from its own location and the host platform.
+# Honours TP_ROOT, TP_INC, TP_CLI (the CLI; build/bin/tinyparse after `mise run
+# cli`), TP_AMALGAMATION (dist/amalgamation after `mise run amalgamate`) and CC
+# when set; otherwise derives them from its own location and the host platform.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -43,10 +44,9 @@ PLAT="$(platform)"
 
 TP_ROOT="${TP_ROOT:-$(cd "$HERE/../.." && pwd)}"
 TP_INC="${TP_INC:-$TP_ROOT/include}"
-TP_DIST="${TP_DIST:-$TP_ROOT/dist/$PLAT}"
-TP_CLI="${TP_CLI:-$TP_DIST/tinyparse}"
+TP_CLI="${TP_CLI:-$TP_ROOT/build/bin/tinyparse}"
 SRC="$TP_ROOT/src"
-AMALG="$TP_ROOT/dist/amalgamation"
+AMALG="${TP_AMALGAMATION:-$TP_ROOT/dist/amalgamation}"
 # The generated parser-lib TU #includes tinyparse.h and src/internal.h.
 CC="${CC:-cc}"
 
@@ -59,10 +59,7 @@ OUT="$1"; shift
 # The amalgamation must exist. Build it on demand so the
 # recipe is self-contained.
 if [ ! -f "$AMALG/tinyparse.c" ]; then
-  ( cd "$TP_ROOT" && bash amalgamate.sh ) >/dev/null 2>&1 || true
-fi
-if [ ! -f "$AMALG/tinyparse.c" ]; then
-  echo "embed-lib: amalgamation $AMALG/tinyparse.c missing (run amalgamate.sh)" >&2
+  echo "embed-lib: amalgamation $AMALG/tinyparse.c missing (run mise run amalgamate)" >&2
   exit 1
 fi
 

@@ -1,0 +1,19 @@
+#!/usr/bin/env ruby
+#MISE description="Generate build/generated/*.h: the embedded manual page, standard grammars and library amalgamation"
+# vim:ft=ruby
+
+# The CLI embeds three things as C byte arrays, so one binary carries them:
+# the rendered manual page (tinyparse.1, for `tinyparse man`), the standard
+# grammar packages (grammars/std/*, for `tinyparse grammars` and a grammar
+# named std.json), and the library amalgamation (for `tinyparse init` and
+# `vendor`). A header is rewritten only when its bytes change, so the CLI
+# recompiles only then (mise/lib/cache.rb).
+
+require 'cache'
+require_relative '../lib/tinyparse'
+
+Cache.gate('generate', inputs: Tinyparse.generated_inputs,
+                       outputs: Tinyparse::GENERATED_HEADERS.keys.map { |file| Tinyparse::GENERATED.join(file) })
+
+changed = Tinyparse.generate!
+puts(changed.empty? ? 'generate: build/generated is current' : "generate: wrote #{changed.map { |path| path.basename }.join(', ')}")

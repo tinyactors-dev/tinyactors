@@ -1,4 +1,8 @@
+# The shared library for x86_64 Linux, named by its version, and the
+# development link beside it.
 <<<cmd
-test -f dist/linux-x86_64/libtinyparse.so
+set -e
+test -f dist/x86_64-linux/lib/libtinyparse.so.0.1
+test -f dist/x86_64-linux/lib/libtinyparse.so
 <<<assert
 exit 0

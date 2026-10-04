@@ -5,16 +5,18 @@
 # the actor runtime tinyparse was born in (an `ax_` prefix).
 <<<cmd
 set -e
-d=dist/linux-x86_64
-test -f "$d/libtinyparse.a"
-test ! -e "$d/libax.a"
+d=dist/x86_64-linux
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
+test -f "$d/lib/libtinyparse.a"
+test ! -e "$d/lib/libax.a"
 test ! -e "$d/.consumes-ax"
-nm -u "$d/libtinyparse.a" | awk 'NF == 2 { print $2 }' | sort -u > "$d/.undefined"
-nm --defined-only -g "$d/libtinyparse.a" | awk 'NF == 3 { print $3 }' | sort -u > "$d/.defined"
-extra="$(comm -23 "$d/.undefined" "$d/.defined" | grep -vxE 'memcpy|memset|memmove|memcmp' || true)"
-rm -f "$d/.undefined" "$d/.defined"
+"$TP_NM" -u "$d/lib/libtinyparse.a" | awk 'NF == 2 { print $2 }' | sort -u > "$w/undefined"
+"$TP_NM" --defined-only -g "$d/lib/libtinyparse.a" | awk 'NF == 3 { print $3 }' | sort -u > "$w/defined"
+extra="$(comm -23 "$w/undefined" "$w/defined" | grep -vxE 'memcpy|memset|memmove|memcmp' || true)"
 test -z "$extra" || { echo "unexpected undefined symbols: $extra"; exit 1; }
-nm "$d/libtinyparse.a" "$d/tinyparse" 2>/dev/null | grep -qE ' [A-Za-z] ax_' && exit 1
+"$TP_NM" "$d/bin/tinyparse" | grep -q ' tinyparse_open$'
+"$TP_NM" "$d/lib/libtinyparse.a" "$d/bin/tinyparse" 2>/dev/null | grep -qE ' [A-Za-z] ax_' && exit 1
 exit 0
 <<<assert
 exit 0

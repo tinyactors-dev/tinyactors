@@ -1,0 +1,17 @@
+# tinyparse's gate is wired into the monorepo's: tinyparse is one of the root
+# mise.toml's config_roots, so the root `mise run test` runs this suite, and
+# `test` is a file task that lists its sources (mise reruns it when one
+# changes). The release is a task too. (Until the move into the monorepo this
+# case checked a GitHub Actions workflow kept under tinyparse/.github/, where
+# GitHub never read it; see HISTORY.md.)
+<<<cmd
+set -e
+grep -qE '^config_roots = \[.*"tinyparse"' ../mise.toml
+grep -q "root.join('tinyparse')" ../mise/tasks/test/_default
+grep -q '^#MISE sources=' mise/tasks/test
+grep -q '^#MISE outputs={auto=true}' mise/tasks/test
+grep -q '"release"' mise/tasks/test
+test -x mise/tasks/release
+test ! -e .github/workflows/tinyparse.yml
+<<<assert
+exit 0

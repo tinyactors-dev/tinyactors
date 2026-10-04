@@ -1,0 +1,20 @@
+#!/usr/bin/env ruby
+#MISE description="Run a benchmark or corpus-coverage script in ci/ by name: mise run bench bench"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# The benchmarks and the corpus-coverage counts in ci/ compare tinyparse with
+# tree-sitter on the corpora of reference/ (cloned per reference/PINS.txt;
+# not in the repository) and need the network for the tree-sitter runtime.
+# They run one at a time, alone, since they measure time, with the CLI, the
+# library and the pinned toolchain named in their environment
+# (Tinyparse.test_environment). perf-gate runs `mise run test` and `bench`.
+
+require_relative '../lib/tinyparse'
+
+BENCHES = %w[bench bench5 react-bench tsc-bench js-coverage ts-coverage perf-gate].freeze
+
+abort "usage: mise run bench NAME (one of #{BENCHES.join(', ')})" unless ARGV.size == 1 && BENCHES.include?(ARGV.first)
+
+environment = Tinyparse.test_environment
+exec(environment, 'bash', Tinyparse.gate_script(ARGV.first).to_s, chdir: Tinyparse::ROOT.to_s)

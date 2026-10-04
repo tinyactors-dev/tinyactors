@@ -2,13 +2,15 @@
 # examples/uri/run.sh <url>
 #
 # Parse a URL with the generated tinyparse grammar and print its components.
-# Builds the driver if needed and regenerates uri.scm from the EBNF if it is
-# missing, so the example is self-contained. Works from any cwd: paths resolve
-# from the script's own location.
+# Regenerates uri.scm from the EBNF if it is missing. The driver is built by
+# `mise run examples` into build/examples/uri/ ($TP_EXAMPLES/uri when the test
+# suite runs it). Works from any cwd: paths resolve from the script's own
+# location.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 EBNF_DIR="$(cd "$HERE/../ebnf" && pwd)"
+BIN="${TP_EXAMPLES:-$HERE/../../build/examples}/uri/uri"
 
 if [ "$#" -lt 1 ]; then
   echo "usage: run.sh <url>" >&2
@@ -20,9 +22,9 @@ if [ ! -f "$HERE/uri.scm" ]; then
   bash "$EBNF_DIR/run.sh" "$EBNF_DIR/uri.ebnf" >/dev/null || exit 1
 fi
 
-# Build the driver if it is missing or out of date.
-if [ ! -x "$HERE/uri" ] || [ "$HERE/uri.c" -nt "$HERE/uri" ]; then
-  bash "$HERE/build.sh" || exit 1
+if [ ! -x "$BIN" ]; then
+  echo "run.sh: $BIN is not built; run: mise run examples" >&2
+  exit 1
 fi
 
-exec "$HERE/uri" "$1"
+URI_GRAMMAR="$HERE/uri.scm" exec "$BIN" "$1"

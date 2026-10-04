@@ -1,5 +1,4 @@
 <<<cmd
-bash release.sh tarballs >/dev/null 2>&1
-test -f dist/release/tinyparse-0.1.0-macos-arm64.tar.gz
+test -f dist/release/tinyparse-0.1.0-aarch64-macos.tar.gz
 <<<assert
 exit 0

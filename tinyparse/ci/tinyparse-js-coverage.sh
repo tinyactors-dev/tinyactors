@@ -15,22 +15,10 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TP_DIR="$REPO"
 CORPUS="$TP_DIR/reference/tree-sitter-javascript/test/corpus"
 
-platform() {
-  case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64) echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64) echo macos-arm64 ;;
-    *) echo linux-x86_64 ;;
-  esac
-}
-PLAT="$(platform)"
-TP="$TP_DIR/dist/$PLAT/tinyparse"
+TP="${TP_CLI:?run it with mise run bench js-coverage, which builds tinyparse and sets TP_CLI}"
 
-# Build the CLI if it is not already present, so the script is self-contained.
 if [ ! -x "$TP" ]; then
-  ( cd "$TP_DIR" && bash build.sh dist ) >/dev/null 2>&1
-fi
-if [ ! -x "$TP" ]; then
-  echo "FATAL: could not build/find tinyparse at $TP"
+  echo "FATAL: tinyparse is not built at $TP"
   echo "JS_COVERAGE=0/0"
   exit 1
 fi

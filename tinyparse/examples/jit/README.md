@@ -102,6 +102,4 @@ afterward.
 
 - `jit.scm` — the C-subset grammar.
 - `jit.c` — the JIT driver (parse → emit off the cursor → run).
-- `build.sh` — compiles `jit.c` against `$TP_DIST/libtinyparse.a`,
-  including `$TP_DIST/tinyparse.h`.
-- `run.sh` — build-if-needed, JIT, run.
+- `run.sh` — JIT and run, with the driver `mise run examples` built.
