@@ -490,13 +490,8 @@ Every fix came with a test that fails without it.
 
 ## What is not done
 
-- **TypeScript blow-up.** std.typescript and std.tsx in the VM grow
-  exponentially on a few dozen unclosed `(`: 20 take 0.33s, while 30
-  (TypeScript) or 40 (TSX) ran about 100s and were killed for memory (exit 137).
-  The adaptive memo does not contain it. std.javascript rejects the same input in
-  0.02s. The generated TSX parser on 200,000 `(` ends after 18s with "out of
-  memory". It was not compared with ax's build, and no gate covers time or
-  memory on pathological input; parser-nocrash uses `[` for TSX for that reason.
+- **TypeScript blow-up.** Fixed after the migration; see "After the migration"
+  below.
 - **Linux-only tests.** Several `dist/` cases run the x86_64 Linux CLI or read
   ELF symbol tables, and `cli/run-out-of-memory` relies on `ulimit -v`, which
   Linux enforces. The macOS artifacts are cross-built and symbol-checked, but
@@ -552,6 +547,58 @@ of `cc`, the restored and added assertions). It also found this file
 contradicting the acronym check (it spelled the allowed names out), and a
 current-state sentence in `docs/performance.md` that still had the benchmark
 link `libax.a`; both were fixed.
+
+## After the migration: the TypeScript blow-up
+
+The first gap left open was std.typescript and std.tsx taking exponential time
+on unclosed `(`. Measured on the branch as left by the final check: 18 took
+0.29s, 22 took 3.4s, 26 took 57s in the VM (TSX: 41s), and doubling held with
+the rule memo forced on (22: 9.0s) or off (22: 20s). The generated parsers,
+which carry no memo, took 4.3s (TypeScript) and 5.2s (TSX) on 22. std.javascript
+rejected the same input in 0.02s at every size. Two separate faults combined.
+
+**The grammar parsed every parenthesized expression twice.** std.typescript
+overrode `parenthesized_expression` as `"(" (choice (seq expression (optional
+type)) expression_sequence) ")"`. When the first arm failed, the second parsed
+the same expression again from the same offset, so each unclosed `(` doubled
+the work beneath it. The same rule had a second bug: the first arm commits on
+`(a`, its `)` then fails on a comma, and the choice is never retried, so
+`x = (a, b);` was a syntax error in TypeScript while JavaScript parsed it. The
+rule is now left-factored to `"(" expression_sequence (optional (field type:
+type_annotation)) ")"`. expression_sequence is hidden and collapses to a single
+child, so `(a)` and `(a: T)` keep their trees; the grammar now also admits
+`(a, b: T)`, which TypeScript rejects. This fix alone makes both grammars
+linear in the VM with the memo off and in the generated parsers: 200 unclosed
+`(` take 0.02s in the VM, and 26 take 8ms in the generated parsers.
+
+**The VM's rule memo stopped recording.** The memo is the VM's backstop against
+exactly this kind of grammar, yet forcing it on did not help. Its hash table is
+sized from the input length (`2n + 64` slots, rounded up to a power of two) and
+refused new keys past three-quarters full. But a key is a rule program, an
+offset, a lexical goal, a field and an alias, and std.typescript has about 1,400
+programs, so a short input filled the table almost at once. A gdb trace of 8
+unclosed `(` showed the same key (rule, offset, goal, field, alias) failing 32
+times, each time memoable and each time unrecorded. `tp_rule_memo_store` now
+doubles the table (`tp_rule_memo_grow`, `src/vm.c`) and re-inserts the live
+keys when it reaches three-quarters full; the old arrays stay in the parser
+arena, so the memo costs at most twice its final table, and when the arena
+cannot supply a larger table the old behaviour (stop recording) remains. With
+this fix alone, and the old grammar, 2,000 unclosed `(` took 0.29s.
+
+Three suite cases hold the fixes, and each was checked to fail without its fix:
+
+- `tsfamily/unclosed-parens-linear`: 3,000 unclosed `(` through both grammars,
+  with the memo off, adaptive and forced on, under a 20-second CPU limit; each
+  run must end in a syntax error. It fails on the old grammar.
+- `tsfamily/parenthesized-sequence`: `(a, b)`, `(a)` and `(document: any)` parse.
+  It fails on the old grammar.
+- `core/rule-memo-grows`: a nine-rule grammar that tries every rule twice per
+  `(` on 80 unclosed `(`, with the memo forced on, under a 20-second CPU limit.
+  It fails (killed at the limit) on the old VM.
+
+`gate:parser-nocrash --full` now feeds the generated TSX parser 200,000
+unclosed `(` instead of `[`; it had used `[` because `(` did not finish. The
+suite is 500/500.
 
 ## Next steps
 

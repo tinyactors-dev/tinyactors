@@ -235,10 +235,9 @@ mark, but 13.5 MiB of that is the one-time grammar compile; the parse arena is
 0.6 MiB. Tree-sitter, carrying pre-generated tables, peaks at 2.9 MiB.
 
 Deeply nested input that would make a naive PEG backtrack catastrophically stays
-bounded for the JSON, JavaScript and shell grammars. The TypeScript grammars do
-not yet: on a few dozen unclosed `(` the VM's work grows exponentially (30 of
-them ran out of memory after about 100 seconds), while `std.javascript` rejects
-the same input in 0.02 s. The full methodology, the
+bounded for every standard grammar: 3,000 unclosed `(` are rejected in a fraction
+of a second by the TypeScript grammars too, and the generated parsers end
+200,000 of them in a clean syntax error. The full methodology, the
 six-parser React comparison, and the profile are in
 [`docs/performance.md`](docs/performance.md); reproduction is in
 [`DEVELOPMENT.md`](DEVELOPMENT.md).
