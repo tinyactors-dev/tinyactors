@@ -74,9 +74,10 @@ Put the queue in core, give it a fixed size, and those problems go away. See
    ([BEHAVIORS.md](BEHAVIORS.md))
 4. **A macrostep never waits for ring capacity in a way that can
    deadlock.** Core reserves mandatory observations, cancellations,
-   forwarding and end reports before taking input. An ordinary action whose
-   record does not fit in c2h parks its slot before that action, and the
-   action runs again after the host drains c2h. The host drains c2h without
+   forwarding and end reports before taking input. An ordinary action that
+   may write c2h first checks for room for the largest record. Without it,
+   the slot parks before the action, which runs once after the host drains
+   c2h. The host drains c2h without
    any session making progress, so the wait always ends. Other slots go on.
    The pool and the name area fail the action instead: only sessions free
    them, so a wait there could deadlock. Startup and control work can return
@@ -192,8 +193,8 @@ The scenarios run this example through:
   host has to size it, and a slot that cannot park keeps the thread
   ([parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area)).
 - **Accepted c2h backpressure:** an ordinary action whose c2h record does
-  not fit pauses its slot, not its chart, and runs again after the host
-  drains. `error.execution.capacity.c2h` is gone; a full pool or name area
+  not fit pauses its slot, not its chart. Core checks for room before it
+  evaluates the action, so the action runs once, after the host drains. `error.execution.capacity.c2h` is gone; a full pool or name area
   still fails the action. So a ring's size is a throughput setting, not a
   correctness one. h2c and tel are 16 KiB each by default; c2h is
   derived from `maxConcurrentInputs` and `maxRecordBytes`, 776 KiB with the

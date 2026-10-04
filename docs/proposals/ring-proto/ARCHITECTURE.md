@@ -182,8 +182,8 @@ command. Refusal requires an explicit retry or application decision.
    either a `c2h` record or a new envelope (mail, delayed send). Nothing
    allocates. A full pool or name area fails the action as
    `error.execution.capacity` ([S02](scenarios/S02-full-pool.md)). A full
-   c2h parks the slot before the action until the host drains, and the
-   action runs again ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)).
+   c2h parks the slot before the action, which is checked before it
+   evaluates anything, until the host drains; the action then runs once ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)).
 5. **Macrostep end and startup.** Core writes [`c2h.macrostep_ended`](protocol/generated/MESSAGES.md#c2hmacrostep_ended),
    then starts surviving pending invocations. Resulting internal errors run
    before another external input. Once the chain and notification flushing

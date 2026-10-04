@@ -182,7 +182,7 @@ are three:
 | Ring | Producer | When full | Who retries |
 |---|---|---|---|
 | `h2c` | host | The host cannot post. It refuses at its edge (HTTP 503, or it stops reading a socket), or keeps the input in its own memory. Core never waits on h2c. | The external client, or the host by its own policy |
-| `c2h` | core | An ordinary action whose record does not fit while preserving the mandatory reserve parks its slot before the action, which runs again after a drain. Control and startup work can return for a drain between macrosteps. | The host, by draining; core runs the action again |
+| `c2h` | core | An ordinary action whose record does not fit while preserving the mandatory reserve parks its slot before the action, which is checked before it evaluates anything and runs once after a drain. Control and startup work can return for a drain between macrosteps. | The host, by draining; core then runs the action |
 | `tel` | core | The record is dropped and counted. The next [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) reports it. | Nobody: telemetry is allowed to be incomplete |
 
 ### The c2h reserve
@@ -216,8 +216,9 @@ hold reservations at once. That costs throughput, not correctness
 ([BEHAVIORS.md](../BEHAVIORS.md#c2hbytes)).
 
 Actions preserve that reservation when checking whether an optional effect
-fits. An optional effect that does not fit parks its slot before the
-action, and the action runs again from the start after the host drains
+fits. An action that may write an optional effect first checks for room
+for the largest record, before it evaluates anything. Without that room
+its slot parks before the action, which runs once, after the host drains
 ([macrostep.md](macrostep.md#a-full-c2h-pauses-the-slot)). Mandatory
 lifecycle records never wait for it. Internal
 error storage is sized at compilation as described in

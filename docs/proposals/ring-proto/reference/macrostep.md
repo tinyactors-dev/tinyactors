@@ -226,15 +226,22 @@ and a `<log>` writes [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog).
 When that record does not fit while preserving every slot's outstanding
 mandatory reserve, the action does not fail:
 
-- **The slot parks before the unit.** A unit is an action or a `<foreach>`
-  iteration (ADR 0061). Core sizes the record before the unit changes
-  anything: before a sendid is counted and before `idlocation` is assigned.
-  The record is never written, so nothing is half done. Provisional
-  retains are released.
-- **The unit runs again from the start** when the slot next has its turn
-  and the record fits. Its expressions are evaluated again. SCXML
-  expressions in a `<send>` or `<log>` are meant to be free of side
-  effects; one that is not runs twice when c2h is full.
+- **Core checks for room before it evaluates anything.** A unit is an
+  action or a `<foreach>` iteration (ADR 0061). Before a unit that may
+  write a c2h record, core checks that the outstanding reserves leave room
+  for the largest record it could write: `maxRecordBytes` plus its pad.
+  That is before any expression is evaluated, before a sendid is counted
+  and before `idlocation` is assigned. A unit may write c2h when it is a
+  `<log>`, or a `<send>` whose type or target is not a literal local
+  session. A `<send>` with `typeexpr` or `targetexpr` is checked, because
+  its destination is known only after evaluation.
+- **If there is no room, the slot parks before the unit.** Nothing of the
+  unit has run, so nothing runs twice: an expression with side effects
+  is evaluated once, when the unit finally runs. After the check the
+  record always fits, because no record is larger than `maxRecordBytes`.
+  The price is a wait when the real record would have fit in less room.
+  Sizing the record first and running the unit again was rejected: it
+  evaluated the unit's expressions twice when c2h was full.
 - **Other slots go on.** Core moves to the next slot that can run, as at
   the end of a slice. A waiting slot keeps its taken envelope, its
   outgoing mail, its deferred list and its outstanding reserve.
@@ -302,10 +309,6 @@ changed something.
   core would wait for the host and the host for core. A host that cannot
   post a result buffers or drops it by its own policy
   ([S09](../scenarios/S09-edge-backpressure.md)).
-
-**Open:** whether core should instead check for `maxRecordBytes` of room
-before evaluating the unit at all. Nothing would ever be evaluated twice,
-but a slot would wait while a smaller record would still fit.
 
 ### Parking: one running workspace and a park area
 
