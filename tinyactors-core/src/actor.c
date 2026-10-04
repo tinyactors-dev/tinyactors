@@ -1266,6 +1266,19 @@ static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor 
     return TA_OK;
 }
 
+ta_result ta_operator_jump_bytes(uint32_t count, uint32_t *bytes) {
+    ta_layout layout;
+    size_t total = 0;
+    ta_layout_init(&layout, offsetof(ta_operator_jump, targets));
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
+                                               .count = count });
+    if (ta_layout_finish(&layout, &total, NULL) != TA_OK || total > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *bytes = (uint32_t)total;
+    return TA_OK;
+}
+
 ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
     if (params == NULL || params->event == NULL) {
         return TA_ERR_INVALID;
@@ -1304,14 +1317,15 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
      * they change nothing when they do. */
     ta_operator_jump *jump = NULL;
     if (transition != NULL) {
-        size_t jump_bytes = ta_operator_jump_bytes(transition->target_count);
-        if (jump_bytes == 0) {
+        uint32_t jump_bytes = 0;
+        if (ta_operator_jump_bytes(transition->target_count, &jump_bytes) != TA_OK) {
             return TA_ERR_NOMEM; /* the count does not fit; nothing was allocated */
         }
         jump = ta_mem_alloc(system->allocator, jump_bytes, _Alignof(ta_operator_jump));
         if (jump == NULL) {
             return TA_ERR_NOMEM;
         }
+        jump->bytes = jump_bytes;
         jump->source = transition->source;
         jump->target_count = transition->target_count;
         ta_mem_copy(jump->targets, transition->targets, (size_t)transition->target_count * sizeof(ta_state_id));
@@ -1320,7 +1334,7 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     if (result != TA_OK) {
         if (jump != NULL) {
             ta_mem_free(system->allocator, jump,
-                        &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(jump->target_count),
+                        &(ta_allocator_free_params){ .size = jump->bytes,
                                                      .alignment = _Alignof(ta_operator_jump) });
         }
         return result;

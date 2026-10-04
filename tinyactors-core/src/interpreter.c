@@ -903,7 +903,7 @@ static void ta_unbind_event(ta_actor *actor) {
 static void ta_jump_free(ta_system *system, ta_event_slots *slots) {
     if (slots->jump != NULL) {
         ta_mem_free(system->allocator, slots->jump,
-                    &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(slots->jump->target_count),
+                    &(ta_allocator_free_params){ .size = slots->jump->bytes,
                                                  .alignment = _Alignof(ta_operator_jump) });
         slots->jump = NULL;
     }

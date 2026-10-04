@@ -239,9 +239,13 @@ static void test_golden_figures(void) {
     check_chart(system, (golden){ 700, 408, 408, 6144, 18988 });
     /* The default system's arena: one region (interpreterBytes and renderBytes) and the nested table. */
     CHECK(system->arena_bytes == 82048u);
-    CHECK(ta_operator_jump_bytes(3) == 20u);
-    CHECK(ta_operator_jump_bytes(0) == 8u);
-    CHECK(ta_operator_jump_bytes(UINT32_MAX) == (sizeof(size_t) > 4 ? 8u + (size_t)UINT32_MAX * 4u : 0u));
+    /* The header is 12 bytes since the jump stores its own size (it was 8). */
+    uint32_t jump = 77u;
+    CHECK(ta_operator_jump_bytes(3, &jump) == TA_OK && jump == 24u);
+    CHECK(ta_operator_jump_bytes(0, &jump) == TA_OK && jump == 12u);
+    /* A total above a uint32_t is refused on every host, and the output is left alone. */
+    jump = 77u;
+    CHECK(ta_operator_jump_bytes(UINT32_MAX, &jump) == TA_ERR_NOMEM && jump == 77u);
     ta_system_destroy(system);
 }
 

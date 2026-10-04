@@ -199,10 +199,8 @@ static size_t ta_image_measure(const ta_actor *actor) {
     if (actor->event_block != NULL) {
         total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
         if (actor->event_block->slots.jump != NULL) {
-            /* An estimate only: a jump that is in memory already passed the size check
-             * when it was allocated, and ta_image_fill refuses a size of 0. */
-            total += ta_operator_jump_bytes(actor->event_block->slots.jump->target_count) +
-                     _Alignof(ta_operator_jump);
+            /* An estimate only: the jump stored the size it was allocated with. */
+            total += actor->event_block->slots.jump->bytes + _Alignof(ta_operator_jump);
         }
     }
     if (sparse != NULL) {
@@ -245,10 +243,7 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
 
     /* An operator transition waiting with the external event (ADR 0082). */
     if (actor->event_block != NULL && actor->event_block->slots.jump != NULL) {
-        size_t bytes = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count);
-        if (bytes == 0) {
-            return TA_ERR_NOMEM;
-        }
+        size_t bytes = actor->event_block->slots.jump->bytes;
         image->slots.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
         if (image->slots.jump == NULL) {
             return TA_ERR_NOMEM;
@@ -709,14 +704,21 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         result = ta_image_localize_origin(system, &slots->kept_event);
     }
     if (result == TA_OK && slots != NULL && image->slots.jump != NULL) {
-        size_t bytes = ta_operator_jump_bytes(image->slots.jump->target_count);
-        /* A size that does not fit is a refused allocation: nothing is allocated,
-         * and the failure path after this block releases what the restore took. */
-        slots->jump = bytes == 0 ? NULL : ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
-        if (slots->jump == NULL) {
+        /* The size is computed here from the count, not trusted from the image's
+         * copy of the header. A size that does not fit is a refused allocation:
+         * nothing is allocated, and the failure path after this block releases
+         * what the restore took. */
+        uint32_t bytes = 0;
+        if (ta_operator_jump_bytes(image->slots.jump->target_count, &bytes) != TA_OK) {
             result = TA_ERR_NOMEM;
         } else {
-            ta_mem_copy(slots->jump, image->slots.jump, bytes);
+            slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
+            if (slots->jump == NULL) {
+                result = TA_ERR_NOMEM;
+            } else {
+                ta_mem_copy(slots->jump, image->slots.jump, bytes);
+                slots->jump->bytes = bytes;
+            }
         }
     }
     if (result == TA_OK && image->paused != NULL) {

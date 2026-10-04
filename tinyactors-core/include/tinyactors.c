@@ -2026,32 +2026,32 @@ typedef enum {
  * one allocation the event block owns until the macrostep takes the event.
  * Its targets are checked when it is delivered, against the configuration
  * it will run from: the event it came with is the first step taken.
+ *
+ * Lifetime: input. The jump lives in the event block until the macrostep
+ * takes the event (ta_jump_free), and an image keeps a copy in its arena.
+ * `bytes` is the size the allocation was made with, stored at that safe
+ * point (ta_operator_jump_bytes) so that every free reads it and nothing
+ * recomputes a size from `target_count` where a failure could not be
+ * reported.
  */
 typedef struct ta_operator_jump {
     ta_state_id source; /* TA_STATE_NONE: the root */
     uint32_t target_count;
+    uint32_t bytes; /* the allocation's size, set where it was made; every free reads it */
     ta_state_id targets[];
 } ta_operator_jump;
 
 /*
- * The bytes an operator transition with `count` targets takes: the header
- * and then `count` state IDs. It never allocates. It answers 0, which is
- * never a real size because the header is not empty, when the size does not
- * fit in a size_t.
- *
- * The jump has the lifetime of the event block that carries it (input, until
- * the macrostep takes the event). A site that allocates one must refuse 0
- * first; a site that frees one recomputes the size from the block's own
- * `target_count`, which does not change after allocation, so it gets the
- * size it was allocated with and the sized free matches.
+ * ta_operator_jump_bytes answers, in `*bytes`, the size of an operator
+ * transition with `count` targets: the header and then `count` state IDs.
+ * It answers TA_ERR_NOMEM and leaves `*bytes` untouched when the total does
+ * not fit in a size_t or in the header's 32-bit `bytes` (a jump of a billion
+ * targets is refused rather than stored truncated). It never allocates. It
+ * is called only where a jump is allocated (ta_actor_deliver, and the
+ * restore of an image), which is a safe point that can fail cleanly; the
+ * result is stored in `bytes` and read from there afterwards.
  */
-TA_PRIVATE inline size_t ta_operator_jump_bytes(uint32_t count) {
-    ta_layout layout;
-    ta_layout_init(&layout, offsetof(ta_operator_jump, targets));
-    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
-                                               .count = count });
-    return ta_layout_bytes(&layout);
-}
+TA_PRIVATE ta_result ta_operator_jump_bytes(uint32_t count, uint32_t *bytes);
 
 /*
  * An actor's events other than its queued internal ones (ADR 0069). Taking
@@ -13384,6 +13384,19 @@ static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor 
     return TA_OK;
 }
 
+TA_PRIVATE ta_result ta_operator_jump_bytes(uint32_t count, uint32_t *bytes) {
+    ta_layout layout;
+    size_t total = 0;
+    ta_layout_init(&layout, offsetof(ta_operator_jump, targets));
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
+                                               .count = count });
+    if (ta_layout_finish(&layout, &total, NULL) != TA_OK || total > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *bytes = (uint32_t)total;
+    return TA_OK;
+}
+
 TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
     if (params == NULL || params->event == NULL) {
         return TA_ERR_INVALID;
@@ -13422,14 +13435,15 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
      * they change nothing when they do. */
     ta_operator_jump *jump = NULL;
     if (transition != NULL) {
-        size_t jump_bytes = ta_operator_jump_bytes(transition->target_count);
-        if (jump_bytes == 0) {
+        uint32_t jump_bytes = 0;
+        if (ta_operator_jump_bytes(transition->target_count, &jump_bytes) != TA_OK) {
             return TA_ERR_NOMEM; /* the count does not fit; nothing was allocated */
         }
         jump = ta_mem_alloc(system->allocator, jump_bytes, _Alignof(ta_operator_jump));
         if (jump == NULL) {
             return TA_ERR_NOMEM;
         }
+        jump->bytes = jump_bytes;
         jump->source = transition->source;
         jump->target_count = transition->target_count;
         ta_mem_copy(jump->targets, transition->targets, (size_t)transition->target_count * sizeof(ta_state_id));
@@ -13438,7 +13452,7 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     if (result != TA_OK) {
         if (jump != NULL) {
             ta_mem_free(system->allocator, jump,
-                        &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(jump->target_count),
+                        &(ta_allocator_free_params){ .size = jump->bytes,
                                                      .alignment = _Alignof(ta_operator_jump) });
         }
         return result;
@@ -14022,10 +14036,8 @@ static size_t ta_image_measure(const ta_actor *actor) {
     if (actor->event_block != NULL) {
         total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
         if (actor->event_block->slots.jump != NULL) {
-            /* An estimate only: a jump that is in memory already passed the size check
-             * when it was allocated, and ta_image_fill refuses a size of 0. */
-            total += ta_operator_jump_bytes(actor->event_block->slots.jump->target_count) +
-                     _Alignof(ta_operator_jump);
+            /* An estimate only: the jump stored the size it was allocated with. */
+            total += actor->event_block->slots.jump->bytes + _Alignof(ta_operator_jump);
         }
     }
     if (sparse != NULL) {
@@ -14068,10 +14080,7 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
 
     /* An operator transition waiting with the external event (ADR 0082). */
     if (actor->event_block != NULL && actor->event_block->slots.jump != NULL) {
-        size_t bytes = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count);
-        if (bytes == 0) {
-            return TA_ERR_NOMEM;
-        }
+        size_t bytes = actor->event_block->slots.jump->bytes;
         image->slots.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
         if (image->slots.jump == NULL) {
             return TA_ERR_NOMEM;
@@ -14532,14 +14541,21 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         result = ta_image_localize_origin(system, &slots->kept_event);
     }
     if (result == TA_OK && slots != NULL && image->slots.jump != NULL) {
-        size_t bytes = ta_operator_jump_bytes(image->slots.jump->target_count);
-        /* A size that does not fit is a refused allocation: nothing is allocated,
-         * and the failure path after this block releases what the restore took. */
-        slots->jump = bytes == 0 ? NULL : ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
-        if (slots->jump == NULL) {
+        /* The size is computed here from the count, not trusted from the image's
+         * copy of the header. A size that does not fit is a refused allocation:
+         * nothing is allocated, and the failure path after this block releases
+         * what the restore took. */
+        uint32_t bytes = 0;
+        if (ta_operator_jump_bytes(image->slots.jump->target_count, &bytes) != TA_OK) {
             result = TA_ERR_NOMEM;
         } else {
-            ta_mem_copy(slots->jump, image->slots.jump, bytes);
+            slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
+            if (slots->jump == NULL) {
+                result = TA_ERR_NOMEM;
+            } else {
+                ta_mem_copy(slots->jump, image->slots.jump, bytes);
+                slots->jump->bytes = bytes;
+            }
         }
     }
     if (result == TA_OK && image->paused != NULL) {
@@ -17336,7 +17352,7 @@ static void ta_unbind_event(ta_actor *actor) {
 static void ta_jump_free(ta_system *system, ta_event_slots *slots) {
     if (slots->jump != NULL) {
         ta_mem_free(system->allocator, slots->jump,
-                    &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(slots->jump->target_count),
+                    &(ta_allocator_free_params){ .size = slots->jump->bytes,
                                                  .alignment = _Alignof(ta_operator_jump) });
         slots->jump = NULL;
     }

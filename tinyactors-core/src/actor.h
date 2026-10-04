@@ -63,32 +63,32 @@ typedef enum {
  * one allocation the event block owns until the macrostep takes the event.
  * Its targets are checked when it is delivered, against the configuration
  * it will run from: the event it came with is the first step taken.
+ *
+ * Lifetime: input. The jump lives in the event block until the macrostep
+ * takes the event (ta_jump_free), and an image keeps a copy in its arena.
+ * `bytes` is the size the allocation was made with, stored at that safe
+ * point (ta_operator_jump_bytes) so that every free reads it and nothing
+ * recomputes a size from `target_count` where a failure could not be
+ * reported.
  */
 typedef struct ta_operator_jump {
     ta_state_id source; /* TA_STATE_NONE: the root */
     uint32_t target_count;
+    uint32_t bytes; /* the allocation's size, set where it was made; every free reads it */
     ta_state_id targets[];
 } ta_operator_jump;
 
 /*
- * The bytes an operator transition with `count` targets takes: the header
- * and then `count` state IDs. It never allocates. It answers 0, which is
- * never a real size because the header is not empty, when the size does not
- * fit in a size_t.
- *
- * The jump has the lifetime of the event block that carries it (input, until
- * the macrostep takes the event). A site that allocates one must refuse 0
- * first; a site that frees one recomputes the size from the block's own
- * `target_count`, which does not change after allocation, so it gets the
- * size it was allocated with and the sized free matches.
+ * ta_operator_jump_bytes answers, in `*bytes`, the size of an operator
+ * transition with `count` targets: the header and then `count` state IDs.
+ * It answers TA_ERR_NOMEM and leaves `*bytes` untouched when the total does
+ * not fit in a size_t or in the header's 32-bit `bytes` (a jump of a billion
+ * targets is refused rather than stored truncated). It never allocates. It
+ * is called only where a jump is allocated (ta_actor_deliver, and the
+ * restore of an image), which is a safe point that can fail cleanly; the
+ * result is stored in `bytes` and read from there afterwards.
  */
-static inline size_t ta_operator_jump_bytes(uint32_t count) {
-    ta_layout layout;
-    ta_layout_init(&layout, offsetof(ta_operator_jump, targets));
-    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
-                                               .count = count });
-    return ta_layout_bytes(&layout);
-}
+ta_result ta_operator_jump_bytes(uint32_t count, uint32_t *bytes);
 
 /*
  * An actor's events other than its queued internal ones (ADR 0069). Taking
