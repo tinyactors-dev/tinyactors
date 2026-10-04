@@ -531,13 +531,19 @@ of `_event.data`:
 
 ## The internal queue: compiler-sized mandatory storage
 
-Internal events (`<raise>`, `done.state.*`, `error.*`) share an ordered queue,
-not the envelope pool. `internalQueueEvents` is the ordinary raise quota.
-Additional compiler-sized storage, the floor, holds mandatory errors and
-completion events. Mandatory events beyond the floor use free ordinary
-entries. A `<raise>` that exhausts the ordinary quota fails as
-`error.execution.capacity.internal`, and that error is a mandatory event.
-The mechanics are in
+Internal events (`<raise>`, `done.state.*`, `error.*`) share one ordered
+queue. It is not in the envelope pool. Its capacity has two parts:
+
+- **the ordinary quota,** `internalQueueEvents` entries (default 256), for
+  the chart's `<raise>`;
+- **the mandatory floor,** sized by the compiler, for the events the
+  interpreter must deliver: errors and `done.state` events.
+
+A `<raise>` that finds the ordinary quota full fails as
+`error.execution.capacity.internal`. That error is itself a mandatory
+event. Mandatory events beyond the floor take free ordinary entries, and
+one that fits in neither is a runaway
+([below](#sizing-mandatory-storage)). The mechanics are in
 [envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool).
 
 **Why not envelopes:**
@@ -554,82 +560,72 @@ The mechanics are in
   nested interpreter, sized once. A parked slot's pending entries wait in
   the park area. That replaces ADR 0064's queue lent to each actor and its
   cache.
-- **The compiler counts independent failure sites.** SCXML 4.9 stops only
-  the failed block. Two entry blocks can each fail in one microstep, and
-  both errors must retain their queue order. A loop in one block stops at
-  its first error; it does not need one error slot per unexecuted iteration.
 
 ### Sizing mandatory storage
 
-The compiler records conservative per-phase maxima: errors from independently
-executed blocks and data initialization, errors from a transition-selection
-pass, errors from an invocation-startup pass, and `done.state` events. Include
-bootstrap, final-state completion data evaluation and cancellation cleanup.
-Generated error names and diagnostic positions must also use pre-sized
-storage; reporting a failure must not require another fallible allocation.
-Registration, spawn and load size the system and any nested interpreter
-workspace before it becomes usable, and refuse atomically if sizing or
-allocation fails. Neither quota grows during execution.
+**The compiler counts independent failure sites.** SCXML 4.9 stops only
+the failed block. Two entry blocks can each fail in one microstep, and both
+errors keep their queue order. A loop in one block stops at its first
+error, so it needs one entry, not one per unexecuted iteration.
 
-**The floor is one round of every phase.** The compiler bounds bootstrap
-by `B`, one microstep's independently executed blocks and data
-initialization by `E`, one selection pass by `C`, one invocation-startup
-pass by `V`, and final or stop cleanup by `F`. Mandatory storage has
-`B + E + C + V + F` entries, with checked arithmetic. It is allocated
-outside macrosteps, at registration, spawn or load, once per system in the
-running workspace and once per nested interpreter workspace. A chart that
-reads its queue as it goes never exceeds it.
+**The floor is one round of every phase.** The compiler records a
+conservative maximum for each phase:
 
-**Accumulation uses the ordinary quota.** Mandatory events beyond the
-floor take free entries of the ordinary `internalQueueEvents` quota
-(default 256). There is no new parameter. Mandatory and ordinary entries
-keep one FIFO order; the distinction is capacity, not priority. A chart
-that raises a lot leaves less room for its own mandatory events. That is
-the same chart's fault. A `<raise>` still fails as
-`error.execution.capacity.internal` when the ordinary quota is exhausted;
-that error is a mandatory event, so it takes the floor or a free entry.
+| Bound | Phase |
+|---|---|
+| `B` | bootstrap |
+| `E` | one microstep's independently executed blocks and data initialization |
+| `C` | one transition-selection pass |
+| `V` | one invocation-startup pass |
+| `F` | final-state completion data and stop or cancellation cleanup |
+
+Mandatory storage has `B + E + C + V + F` entries, computed with checked
+arithmetic. Generated error names and diagnostic positions also have
+pre-sized storage, so reporting a failure never needs another fallible
+allocation.
+
+**It is allocated outside macrosteps.** Registration, spawn and load size
+the storage, once per system in the running workspace and once per nested
+interpreter workspace, before the system or workspace becomes usable. If
+sizing or allocation fails, the operation is refused as a whole. Neither
+the floor nor the ordinary quota grows during execution. A chart that reads
+its queue as it goes never exceeds the floor.
+
+**Beyond the floor, mandatory events use the ordinary quota.** They take
+free entries of `internalQueueEvents`. Mandatory and ordinary entries keep
+one FIFO order: the floor is reserved capacity, not priority. A chart that
+raises a lot leaves less room for its own mandatory events, and that is the
+same chart's fault.
 
 **Overflow is a runaway.** A mandatory event that fits neither the floor
-nor a free ordinary entry ends the input as the chain limit does
+nor a free ordinary entry abandons the input with the chain limit's rules
 ([below](#runaways-the-chain-limit)). The completion says `runaway`, and
 the `TA_TRACE_RUNAWAY` record's `runaway_cause` says `internal_queue`
 instead of `chain_limit`.
 
-**Why.** Under SCXML's ordering, eventless transitions run before the next
-internal event is taken. Mandatory events accumulate only while a chart
-keeps stepping without reading its queue. That is a runaway in all but
-name, so it gets the runaway outcome. A pause cannot make room: only the
-session drains its own queue. c2h is different, because the host drains
-it. The rule is the same as for c2h: pause where the host can free space,
-fail where only the session can. The cost is the floor plus 256 entries of
-about 48 bytes, about 12 KiB per system, instead of a
-whole-chain bound of `B + L·E + S·C + I·V + F` entries at the default
-chain limit: about 14 MB for a chart with three failure sites per
-microstep (an illustration, not a measurement). The price: a chart whose error storm would have ended with
-more than about 256 pending events is abandoned instead of finishing.
+**Why a runaway, and not a pause.** SCXML runs eventless transitions before
+it takes the next internal event. So mandatory events accumulate only while
+a chart keeps stepping without reading its queue. That is a runaway in all
+but name, and it gets the runaway outcome. A pause cannot make room, because
+only the session drains its own queue. c2h differs: the host drains it. The
+rule is the same for both: pause where the host can free space, fail where
+only the session can.
 
-**Considered and rejected:**
+**Cost and price.** The cost is the floor plus 256 entries of about 48
+bytes: about 12 KiB per system. A bound for the whole chain instead would
+be `B + L·E + S·C + I·V + F` entries, linear in the chain limit; at the
+default limit, a chart with three failure sites per microstep would need
+about 14 MB (an illustration, not a measurement). The price: a chart whose
+error storm would have ended with more pending mandatory events than the
+free ordinary entries hold is abandoned instead of finishing.
 
-- **A tighter whole-chain bound by compiler analysis.** It is still linear
-  in the chain limit for a cyclic chart. It stays possible later as an
-  optimisation, for example a larger exact floor for a chart whose
-  internal transitions form no cycle.
-- **A coalesced `error.execution.capacity.internal` marker in the chart.**
-  A lost `done.state` event would change control flow. Nobody else has
-  it, and a real loop still ends at the chain limit.
-- **Run-length compression by failure site.** It only helps identical
-  runs, and error data may differ.
-- **A limit on consecutive steps without a dequeue.** A pass that dequeues
-  one event and appends two never trips it.
-- **Spilling the queue to park-area chunks and pausing.** The pause only
-  helps by buying an allocation in the middle of an input, and with one
-  slot it falls back at once.
+**Why not a coalesced marker.** Replacing overflowing events with one
+`error.execution.capacity.internal` would lose a `done.state` event, and
+that changes control flow.
 
-**Prior art.** Apache Commons SCXML has no bound: its list grows until
-memory runs out. XState never queues errors; it throws them. Its opt-in
-`maxIterations` (default unlimited) abandons the event and stops the actor.
-The [rebuild-1](../../rebuild-1/README.md) and [rebuild-2](../../rebuild-2/README.md)
-proposals fault the actor or wait indefinitely.
+**Later optimisations.** For a chart whose internal transitions form no
+cycle, the compiler can derive a larger exact floor, and a lower
+`microstepLimit`. Neither changes the protocol.
 
 ## Runaways: the chain limit
 
