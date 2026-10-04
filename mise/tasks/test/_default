@@ -38,7 +38,7 @@ steps = [
   ['test host', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyactors-test')],
   # --full: scale.js on Bun too, and up to a million actors.
   ['napi', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyactors-napi')],
-  # Depends on nothing else here. --full: every gate in ci/, the differentials too.
+  # Depends on nothing else here. --full: each gate's exhaustive version (tinyparse/mise/tasks/gate/).
   ['tinyparse', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyparse')]
 ]
 
