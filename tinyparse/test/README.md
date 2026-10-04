@@ -2,7 +2,7 @@
 
 The finish line for `tinyparse` is this suite, interpreted by
 [`harness.c`](harness.c) and ratcheted against [`xfail.list`](xfail.list). See
-[`../docs/build-plan.md`](../docs/build-plan.md).
+[`../docs/archive/build-plan.md`](../docs/archive/build-plan.md).
 
 Every behaviour `tinyparse` must exhibit is a **data file** here, never a
 hand-written C test. A test is a `*.test` file under `suite/`; its name is its

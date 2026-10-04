@@ -20,10 +20,10 @@ moving the public API or breaking the 291/291 conformance oracle.
 The companion documents are [`bytecode-vm.md`](bytecode-vm.md), which designed
 the VM instruction set and first named the "coarse actor / tight loop" pattern;
 [`ax-execution.md`](ax-execution.md), the statechart design whose cost is the
-baseline to beat; [`performance.md`](performance.md), which measured today's
-residual; [`architecture.md`](architecture.md), which draws the layer
-boundaries; and the contracts [`../tinyparse-design.md`](../tinyparse-design.md)
-and [`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md). Untagged code
+baseline to beat; [`performance.md`](../performance.md), which measured today's
+residual; [`architecture.md`](../architecture.md), which draws the layer
+boundaries; and the contracts [`../tinyparse-design.md`](../../tinyparse-design.md)
+and ax's `src/ax/ax-design.md`. Untagged code
 blocks below are illustrative; `mdc` extracts nothing from this file.
 
 ## Abstract
@@ -58,9 +58,9 @@ actor boundary is drawn at the right grain. The trap the statechart design fell
 into was reading "genuinely on `ax`" as "let `ax` see every combinator step." A
 design that fires one transition per token, or worse per IR node, *is* on `ax`
 in the most literal sense and is also a betrayal of `ax`'s own warning against a
-stringy hot path ([`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md),
+stringy hot path (ax's `src/ax/ax-design.md`,
 *Events*: "compact event payloads, not dynamically formatted event names"). The
-profile in [`performance.md`](performance.md) is the proof: an internal `ax`
+profile in [`performance.md`](../performance.md) is the proof: an internal `ax`
 transition walks a transition array, prefix-matches an event name, and updates
 the active configuration, where a C `switch` arm does one indirect jump. Make
 that the per-token unit and the parse is 5–15× slower; the statechart design's
@@ -82,7 +82,7 @@ axforest runs 102,400 actors, one per grid cell, and stays fast precisely
 because idle cells send nothing: the `ax_step` ready queue tracks the fire
 *front*, not the grid. The cell's spread decision is "a pure function of the
 cell's own state and the event, so entropy lives in the cell" — local state in
-the actor's data block, not a round-trip. The runtime ([`src/axr`](../../../src/axr))
+the actor's data block, not a round-trip. The runtime (ax's `src/axr`)
 makes the same choice at service scale: the embedder owns the loop, `axr_step`
 is one bounded slice, and the world is reached only through ioprocessors whose
 frames cross *coarse* — minislack's star topology ships 1280-byte message packs
@@ -220,7 +220,7 @@ Grammar compilation is a staged dataflow: read `.scm` bytes → Scheme forms →
 validate and intern → IR → resolve ids and compute first-sets → emit bytecode.
 Each stage is an actor; a stage's output is the next stage's input, posted as one
 coarse message. This is the seven-step pipeline
-[`architecture.md`](architecture.md) already names, run as actors instead of as
+[`architecture.md`](../architecture.md) already names, run as actors instead of as
 a straight-line C call chain.
 
 ```
@@ -241,7 +241,7 @@ a straight-line C call chain.
   the finished program.
 - **Speed:** **irrelevant to parse throughput, and that is the point.**
   Compilation is one-time and excluded from the timed loop
-  ([`performance.md`](performance.md): "The one-time cost of loading the runtime
+  ([`performance.md`](../performance.md): "The one-time cost of loading the runtime
   and compiling the grammar is excluded"). The per-message cost — a handful of
   `ax_post`s across the whole compile — is negligible against the work each
   stage does. So this topology adds genuine `ax` structure at *zero* parse cost.
@@ -253,7 +253,7 @@ a straight-line C call chain.
   expresses. This is `ax` doing structural work that is *visible* and *honest*
   without slowing anything.
 - **Complexity:** low-to-moderate. The transforms already exist as functions
-  ([`grammar.c`](../src/grammar.c), [`pack.c`](../src/pack.c)); wrapping each in
+  ([`grammar.c`](../../src/grammar.c), [`pack.c`](../../src/pack.c)); wrapping each in
   a stage actor is mechanical.
 
 Is this worthwhile or just ceremony? It is the rare case where the answer is
@@ -310,7 +310,7 @@ This is not a whole-parse topology but a *decision rule* that overlays whichever
 parse topology is chosen: when is a nested parse a VM `CALL` within one actor,
 and when is it a spawned child actor? Three nested constructs force the question:
 lexical-goal re-entry, a nested grammar (templates / quasiquote), and the query
-engine ([`tp_query_run`](../src/internal.h)) over the linearized ENTER/LEAF/EXIT
+engine ([`tp_query_run`](../../src/internal.h)) over the linearized ENTER/LEAF/EXIT
 stream.
 
 ```
@@ -357,7 +357,7 @@ that makes the parse genuinely structured rather than one opaque loop.
 ### 6. Offload / worker topology
 
 `ax` has **no thread or worker-offload primitive.** The closest facility is
-`ax_evict` ([`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md)),
+`ax_evict` (ax's `src/ax/ax-design.md`),
 which pages a *settled* actor out of RAM and wakes it by replay — it is memory
 management, not parallelism, and the core has no main loop and no threads ("the
 host owns all scheduling and threading"). So an offload topology — heavy matchers
@@ -488,7 +488,7 @@ from this design, and the absence is principled, not an oversight:
   source of truth; rerunning it from the input bytes is cheaper than replaying a
   journal of those same bytes.
 - **The hot path must not pay write-ahead.** A durable actor never processes an
-  event that was not journaled first ([`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md),
+  event that was not journaled first (ax's `src/ax/ax-design.md`,
   *Durability*). Putting the parse under write-ahead would tax every
   `input.chunk` with a journal append for a result we discard.
 - **Replay would corrupt the backtracking model anyway.** The inner backtracking
@@ -601,16 +601,16 @@ The composition can be reached incrementally, behind the frozen public API, with
 the conformance suite as the differential oracle at every step. The public
 surface — `tinyparse_parser_new`, `tinyparse_push`, `tinyparse_finish`,
 the cursor API, the `tinyparse_class_fn` binding
-([`../include/tinyparse.h`](../include/tinyparse.h)) — **does not move.**
+([`../include/tinyparse.h`](../../include/tinyparse.h)) — **does not move.**
 
 1. **Keep `tp_execute` as the reference executor.** Today's recursive-descent
-   walk ([`parse.c`](../src/parse.c)) stays as the fallback and the debugging
+   walk ([`parse.c`](../../src/parse.c)) stays as the fallback and the debugging
    oracle. `tinyparse_finish` chooses which executor runs — a flag or a
    build-time switch — so the public behavior is unchanged while the VM is
    incomplete.
 
 2. **Land the compiler pipeline first, where it is safe.** Wrapping the existing
-   compile stages ([`grammar.c`](../src/grammar.c), [`pack.c`](../src/pack.c)) in
+   compile stages ([`grammar.c`](../../src/grammar.c), [`pack.c`](../../src/pack.c)) in
    stage actors changes no parse output and is off the timed loop. It proves the
    actor staging and the module plug without risking the hot path, and it makes
    the "compiler as actors" claim concrete early.
@@ -618,12 +618,12 @@ the cursor API, the `tinyparse_class_fn` binding
 3. **Lower a subset of opcodes; run the VM only for grammars that use that
    subset.** Fall back to `tp_execute` otherwise. Prove **byte-identical
    output** — the same CST, fields, and diagnostics — on every conformance case.
-   The 291/291 metric ([`ci/tinyparse-metric.sh`](../../../ci/tinyparse-metric.sh))
+   The 291/291 metric (ax's `ci/tinyparse-metric.sh`)
    is the oracle: the VM is correct exactly when it produces the byte-identical
    tree `tp_execute` produces.
 
 4. **Extend the opcode set until the VM covers the full IR**, the perf gate
-   ([`ci/tinyparse-perf-gate.sh`](../../../ci/tinyparse-perf-gate.sh))
+   (ax's `ci/tinyparse-perf-gate.sh`)
    confirming each step does not regress the median. Add the sub-parse child
    actors when the quasiquote/query cases land, with the same differential check.
 

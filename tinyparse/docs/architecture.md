@@ -3,7 +3,7 @@
 This document describes how `tinyparse` is built and how its pieces fit. The
 *what* and *why* of the public contract live in
 [`../tinyparse-design.md`](../tinyparse-design.md); this is the *how*. The
-build schedule is [`build-plan.md`](build-plan.md).
+build schedule is [`archive/build-plan.md`](archive/build-plan.md).
 
 ## Layers
 

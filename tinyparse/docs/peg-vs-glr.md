@@ -1197,7 +1197,7 @@ one function per program index — `tp_parser_p<N>` — that read structural ope
 `program->instructions[N]` at run time. It was "bytecode rendered as C": `rule_0`/
 `rule_N`, an opcode dispatched per node, the program array on the hot path.
 
-W17-2 re-grounds the emitter **on the IR, by name** (`docs/codegen-transform.md`, the
+W17-2 re-grounds the emitter **on the IR, by name** (`docs/archive/codegen-transform.md`, the
 owner-signed blueprint). The generator now walks the grammar's IR — `grammar->rules[i].body`
 and `grammar->tokens[i].pattern`, each a `tp_ir` tree — and emits the parser a person
 would write:

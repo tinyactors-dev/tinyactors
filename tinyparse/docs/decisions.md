@@ -102,7 +102,7 @@ re-litigated. Newest at the bottom of each section.
 
 ## Exploration: grammar shape, tsc/tsgo, PEG-vs-GLR, parser_free (DONE)
 
-Run before any GLR decision (docs/explore-plan.md, docs/peg-vs-glr.md). Hard
+Run before any GLR decision (docs/archive/explore-plan.md, docs/peg-vs-glr.md). Hard
 decisions that came out of it:
 
 - **The React blowup is grammar shape, fixable at the source.** Left-factoring the
@@ -1239,7 +1239,7 @@ parse machinery; the memo is VM-only).
   from the struct would touch the shared VM for no measured win (the VM still needs
   them), so they stay. Nothing else on the generated path is generic per-node
   bookkeeping a human would not type.
-- **The blueprint's framing was corrected.** docs/codegen-transform.md previously said
+- **The blueprint's framing was corrected.** docs/codegen-transform.md (now docs/archive/) previously said
   "the rule-memo backstop stays behind `if(memo_active)`" for the generated parser —
   now WRONG. Updated: the bake-vs-substrate table drops the memo from the substrate
   column, and a "Memo: VM-only" section states the generated parser carries none.

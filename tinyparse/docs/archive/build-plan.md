@@ -2,8 +2,8 @@
 
 This document is the **durable, resumable schedule** for building `tinyparse`.
 A fresh session (or a summarized context) resumes from here. The canonical
-design is [`../tinyparse-design.md`](../tinyparse-design.md); the
-architecture is [`architecture.md`](architecture.md).
+design is [`../tinyparse-design.md`](../../tinyparse-design.md); the
+architecture is [`architecture.md`](../architecture.md).
 
 All work lands **directly on `main`**, one commit per workstream, named by its
 workstream id (e.g. `tinyparse W4: .scm reader`). Every committed turn is
@@ -15,7 +15,7 @@ The finish line is a **data-driven, ratcheting test harness**:
 
 - Test cases are **data**, not code: `test/suite/**/*.test` files, each one a
   CLI invocation plus expected exit code / stdout / stderr. The format is in
-  [`test/README.md`](../test/README.md).
+  [`test/README.md`](../../test/README.md).
 - A small C runner, `test/harness.c`, interprets them.
 - `test/xfail.list` is the **ratchet ledger**: every test currently allowed to
   fail. We seed the suite with *every intended behaviour* up front, all listed
@@ -40,9 +40,9 @@ Arm the autonomous loop with a prompt containing `tinyparse-run`; stop it with
 ## Toolchain
 
 `tinyparse` builds with **Zig 0.15.1** (`zig cc` / `zig ar`), pinned in
-[`../mise.toml`](../mise.toml) — independent of the repo's 0.16 freestanding
+[`../mise.toml`](../../mise.toml) — independent of the repo's 0.16 freestanding
 toolchain. `scripts/tinyparse-setup.sh` (SessionStart) provisions it. The
-portable build engine is [`../build.sh`](../build.sh); the `mise` tasks wrap it.
+portable build engine is `../build.sh` (deleted when tinyparse moved to mise tasks); the `mise` tasks wrap it.
 
 `tinyparse` **consumes the release artifacts in `dist/`**: it links the
 prebuilt `dist/<platform>/libax.a` and `#include`s `dist/<platform>/ax.h`
@@ -89,7 +89,7 @@ tree-sitter (`ci/tinyparse-bench.sh`); the honest result is in the README's
 cost of pre-generated GLR tables versus runtime grammar execution. W39 (JSX)
 folded into W38, since tree-sitter-javascript carries JSX.
 
-The design is in [`../tinyparse-design.md`](../tinyparse-design.md) under
+The design is in [`../tinyparse-design.md`](../../tinyparse-design.md) under
 *Grammar packages*, *Grammar composition*, *Queries as parsers over linearized
 trees*, *Embedding without a runtime dependency*, and *Seeding a project*.
 
@@ -167,7 +167,7 @@ Tranche 2 (harder; complete):
 ### Phase 5 — distribution (release 0.1.0)
 
 Ship downloadable, installable artifacts; details in
-[`distribution.md`](distribution.md). Cross-built from Linux with Zig 0.15.1;
+[`distribution.md`](../distribution.md). Cross-built from Linux with Zig 0.15.1;
 released by pushing a `tinyparse-v*` tag.
 
 - ✅ **W17** `VERSION` (0.1.0) + `release.sh`: per-platform tarballs
@@ -274,7 +274,7 @@ expected S-expressions is the next bar after full acceptance.
   Gated behind `BENCH=1` so the loop stays fast. Done: the harness prints a
   reproducible table plus the hardware line.
 - **W43** the README section: generate `## Compared to tree-sitter` in
-  [`../README.md`](../README.md) from the harness output — the per-input table,
+  [`../README.md`](../../README.md) from the harness output — the per-input table,
   the hardware line, and an **honest** framing of the trade-off (tinyparse's
   edge is footprint, freestanding embedding, and runtime grammar compilation;
   tree-sitter's is raw throughput from its GLR tables and hand-tuned scanner).
@@ -292,7 +292,7 @@ extras memo, 3×) are done and the perf ceiling is ratcheted to 0.012s. W47
 profile shows the residual cost is the irreducible recursive-descent IR walk, so
 further gains are small and closing the rest would need a generated parse table.
 
-Execute the ranked proposal in [`performance.md`](performance.md). The fair
+Execute the ranked proposal in [`performance.md`](../performance.md). The fair
 benchmark put tinyparse ~39× behind tree-sitter, and the callgrind/gprof
 profile localized the cost: token matching (`tp_match_ir`, ~45%) and string
 interning on the hot path (`tp_intern_find`, a linear scan, ~32–44%), then
@@ -471,7 +471,7 @@ A real benchmark over a real codebase, and the optimization it motivated.
   tree; raw parse is **39×** slower (adaptive default) / **11.7×** (memo forced
   on). The ≤1.5× target was not reached — that needs generated parse tables,
   tree-sitter's design, not tinyparse's runtime-compiled one. See
-  [`docs/performance.md`](performance.md) and [`docs/decisions.md`](decisions.md).
+  [`docs/performance.md`](../performance.md) and [`docs/decisions.md`](../decisions.md).
 
 ## The loop (supervisor's turn)
 

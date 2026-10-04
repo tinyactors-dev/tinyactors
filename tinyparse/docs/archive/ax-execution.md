@@ -8,19 +8,19 @@ that decides whether the whole idea is sound — how PEG ordered-choice
 backtracking survives on a forward-only statechart. It ends with a verdict the
 next work item (W58) can act on.
 
-The companion documents are [`architecture.md`](architecture.md), which already
+The companion documents are [`architecture.md`](../architecture.md), which already
 claims this architecture as the intended one ("Grammar rules lower to `ax`
-machines"); [`performance.md`](performance.md), which measured the residual this
+machines"); [`performance.md`](../performance.md), which measured the residual this
 re-architecture must not wreck; [`bytecode-vm.md`](bytecode-vm.md), the prior
 analysis of a flat bytecode VM, which this document deliberately contrasts; and
-the two design contracts, [`../tinyparse-design.md`](../tinyparse-design.md)
-and [`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md). Untagged code
+the two design contracts, [`../tinyparse-design.md`](../../tinyparse-design.md)
+and ax's `src/ax/ax-design.md`. Untagged code
 blocks below are illustrative; `mdc` extracts nothing from this file.
 
 ## Abstract
 
 tinyparse parses today by walking an in-memory IR tree with a recursive C
-function ([`tp_parse`/`tp_execute`](../src/parse.c)) that touches `ax` only
+function ([`tp_parse`/`tp_execute`](../../src/parse.c)) that touches `ax` only
 through `ax_alloc`. The actor model the design promised never shipped. This
 document specifies how to make it real: each grammar rule lowers to an `ax_spec`
 whose states and transitions encode `seq`/`choice`/`repeat`/`optional`, the
@@ -28,7 +28,7 @@ parser runs as an actor spawned with `ax_spawn`, the lexer produces tokens that
 arrive as events driving transitions, `ax_step` is pumped to quiescence, and a
 genuinely separate sub-parse spawns a child actor whose `done.child` completion
 feeds recovery and tracing. The public API in
-[`../include/tinyparse.h`](../include/tinyparse.h) does not move. The crux is
+[`../include/tinyparse.h`](../../include/tinyparse.h) does not move. The crux is
 ordered-choice backtracking: `ax` statecharts only move forward on events, while
 PEG must try an alternative and roll back the input cursor and the half-built
 tree on failure. The mechanism specified here keeps an explicit backtrack stack
@@ -51,7 +51,7 @@ the architecture is honest. Honesty cuts both ways. A design that posts one
 event per byte and re-derives the parser's position from the statechart's active
 configuration would be "genuinely on `ax`" in the most literal sense and also a
 betrayal of `ax`'s own warning against a stringy hot path
-([`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md), *Events*:
+(ax's `src/ax/ax-design.md`, *Events*:
 "compact event payloads, not dynamically formatted event names"). So the
 question this document answers is not "can we touch `ax` more" but "what is the
 *coarsest* genuine use of `ax`'s machine model that still earns the name" — where
@@ -79,7 +79,7 @@ happens to be inside an actor."
 
 Each rule becomes one `ax_spec`. The rule's body — a tree of `tp_ir` nodes
 (`TP_OP_SEQ`, `TP_OP_CHOICE`, and the rest, defined in
-[`../src/internal.h`](../src/internal.h)) — lowers to a tree of `ax_state`s with
+[`../src/internal.h`](../../src/internal.h)) — lowers to a tree of `ax_state`s with
 transitions between them. The mapping is structural, combinator by combinator.
 
 **A sequence is a state chain.** `(seq A B C)` lowers to states `s0 → s1 → s2 →
@@ -114,7 +114,7 @@ body — an inline submachine, sharing the parser actor, its cursor, and its
 in the narrow cases that are genuinely a different parse (see
 [sub-parses](#sub-parses-as-child-actors)). Recursion is handled the way `ax`
 handles it: `ax` permits a spec to name itself as a child
-([`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md), *Children*:
+(ax's `src/ax/ax-design.md`, *Children*:
 "a spec may name itself"), so a left-recursive or mutually recursive rule that
 cannot be an inline submachine without unbounded state nesting falls back to a
 child actor at the recursion point.
@@ -184,7 +184,7 @@ const ax_spec list_spec = {
 };
 ```
 
-Read against [`tp_parse`](../src/parse.c): `enter = match_open_paren` is the
+Read against [`tp_parse`](../../src/parse.c): `enter = match_open_paren` is the
 `tp_consume_extras` + `tp_token_match_memo` the `TP_OP_LITERAL` case runs;
 `emit_open`/`emit_close` are the `tp_tree_builder_push` + field stamp;
 `push_backtrack_frame`/`rewrite_frame_cursor`/`pop_restore_frame` are the
@@ -209,7 +209,7 @@ next token and receives it as an event that drives a transition. The question is
 actor.** The reason is parser-directed scanning. tinyparse's lexer is not
 free-running;
 which token it produces at a given offset depends on the parser's active lexical
-goal (`tp_goal_redirect` in [`../src/parse.c`](../src/parse.c)) and on whether
+goal (`tp_goal_redirect` in [`../src/parse.c`](../../src/parse.c)) and on whether
 extras are suppressed in the current scope. A separate lexer actor would have to
 be told the current goal before every token — a message round-trip per token,
 the stringy hot path `ax` warns against — or would have to read the parser's
@@ -320,7 +320,7 @@ instead of pushing a fresh frame, so an `n`-element repeat costs one frame, not
 ### Why not record/replay speculation
 
 `ax` offers a tempting native affordance: record/replay
-([`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md), *Durability*).
+(ax's `src/ax/ax-design.md`, *Durability*).
 One could imagine speculating an alternative by recording the actor's events,
 and on failure "replaying" to an earlier state. This does not fit, for three
 concrete reasons. First, `ax`'s replay rebuilds an actor *from scratch* by
@@ -328,7 +328,7 @@ re-delivering its whole external journal from seq 0 — it is crash recovery, no
 checkpoint-and-rollback within a live run, and there is no "replay to seq N then
 stop and continue live" primitive. Second, replay deliberately *suppresses*
 sends, port emits, and child spawns
-([`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md), *Suppression
+(ax's `src/ax/ax-design.md`, *Suppression
 rules during replay*), so a sub-parse that spawned a child or emitted a
 diagnostic could not be faithfully re-run as speculation. Third, the cost is
 backwards: rolling back via replay re-derives all the work, where the
@@ -381,7 +381,7 @@ token) or the chunk is exhausted. Then the action returns and the actor settles.
 
 **`ax_step` is pumped to quiescence per push.** After posting, the host loop runs
 `while (ax_step(s) == AX_MORE) { }`, exactly the loop
-[`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md) (*The pump*)
+ax's `src/ax/ax-design.md` (*The pump*)
 prescribes. The internal `fail`/`matched` cascade and the automatic transitions
 run to quiescence within the macrostep `ax` already guarantees runs eventless and
 `done.*` chains to settle. The message rate the scheduler sees is one event per
@@ -432,7 +432,7 @@ Three cases qualify, each conceptually a *different parser*:
   actor at the recursion edge, using `ax`'s self-naming child spec. This bounds
   the state nesting at the cost of one spawn per recursion descent — coarse
   enough to amortize.
-- **The query engine.** [`tp_query_run`](../src/internal.h) is itself a parser
+- **The query engine.** [`tp_query_run`](../../src/internal.h) is itself a parser
   over the linearized ENTER/LEAF/EXIT stream. It is the same *kind* of need as a
   sub-parse and would spawn a child actor running a query-matcher spec; this is
   one case, not a second, exactly as [`bytecode-vm.md`](bytecode-vm.md) notes.
@@ -499,7 +499,7 @@ This phase buys architecture, not speed, and the regression is real. Here is
 where the cost goes and how large it is, in numbers of the right order.
 
 Today's residual, after W44–W46, is the irreducible recursive-descent walk: a C
-function call and a `switch` per IR node ([`performance.md`](performance.md)
+function call and a `switch` per IR node ([`performance.md`](../performance.md)
 measures the corpus at 12 ms, 4.6× tree-sitter, 0.36 B instructions). The new
 architecture replaces each combinator step — what is a `switch` arm and a
 recursive call today — with an `ax` transition: an event match (prefix-compared
