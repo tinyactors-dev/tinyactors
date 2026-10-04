@@ -320,6 +320,111 @@ static void test_no_allocation(void) {
     CHECK(heap.stats.live_blocks == 0);
 }
 
+static void test_reader(uint32_t chunk_size) {
+    ta_pool pool;
+    chunk_pool(&pool, chunk_size, 8, 0);
+    uint32_t payload = ta_chain_payload(&pool);
+    CHECK(ta_pool_refill(&pool, 32) == TA_OK);
+    uint32_t lengths[] = { 0, 1, payload, payload + 1, 3 * payload, 3 * payload + 5 };
+    for (size_t k = 0; k < sizeof(lengths) / sizeof(lengths[0]); k++) {
+        uint32_t bytes = lengths[k];
+        ta_chain chain = { 0 };
+        CHECK(write_pattern(&pool, &chain, 7, 0, bytes) == TA_OK);
+
+        /* Spans: non-empty, at most payload, in order, covering the chain once. */
+        ta_chain_reader reader;
+        ta_chain_span span;
+        ta_chain_reader_init(&reader, &pool, &chain);
+        CHECK(ta_chain_reader_remaining(&reader) == bytes);
+        uint32_t seen = 0;
+        uint32_t spans = 0;
+        while (ta_chain_reader_span(&reader, &span)) {
+            CHECK(span.length > 0 && span.length <= payload);
+            for (uint32_t i = 0; i < span.length; i++) {
+                CHECK(span.bytes[i] == pattern(7, seen + i));
+            }
+            seen += span.length;
+            spans += 1;
+            CHECK(ta_chain_reader_remaining(&reader) == bytes - seen);
+        }
+        CHECK(seen == bytes);
+        CHECK(spans == (bytes + payload - 1u) / payload);
+        CHECK(!ta_chain_reader_span(&reader, &span)); /* stays exhausted */
+
+        /* Copy in awkward pieces that straddle chunk boundaries. */
+        unsigned char out[MAX_BYTES];
+        ta_chain_reader_init(&reader, &pool, &chain);
+        uint32_t position = 0;
+        uint32_t step = 1;
+        while (position < bytes) {
+            uint32_t take = step < bytes - position ? step : bytes - position;
+            CHECK(ta_chain_reader_copy(&reader, out + position, take));
+            position += take;
+            step = step * 2u + 1u;
+            if (step > payload + 3u) {
+                step = 2;
+            }
+        }
+        for (uint32_t i = 0; i < bytes; i++) {
+            CHECK(out[i] == pattern(7, i));
+        }
+        /* Too few remaining: false, nothing copied, nothing consumed. */
+        CHECK(ta_chain_reader_remaining(&reader) == 0);
+        CHECK(!ta_chain_reader_copy(&reader, out, 1));
+        ta_chain_reader_init(&reader, &pool, &chain);
+        unsigned char guard[4] = { 0xaa, 0xaa, 0xaa, 0xaa };
+        if (bytes < UINT32_MAX) {
+            CHECK(!ta_chain_reader_copy(&reader, guard, bytes + 1u));
+            CHECK(ta_chain_reader_remaining(&reader) == bytes);
+            CHECK(guard[0] == 0xaa && guard[3] == 0xaa);
+        }
+        CHECK(ta_chain_reader_copy(&reader, guard, 0));
+        CHECK(ta_chain_reader_remaining(&reader) == bytes);
+        ta_chain_free(&pool, &chain);
+    }
+    ta_pool_destroy(&pool);
+    finish_clean();
+}
+
+#define INTERLEAVED 4u
+
+static void test_interleaved(uint32_t chunk_size) {
+    ta_pool pool;
+    chunk_pool(&pool, chunk_size, 8, 0);
+    uint32_t payload = ta_chain_payload(&pool);
+    CHECK(ta_pool_refill(&pool, 64) == TA_OK);
+    ta_chain chains[INTERLEAVED] = { { 0 } };
+    uint32_t lengths[INTERLEAVED] = { 0 };
+    /* Round-robin small pieces, so the chunks of the chains alternate in index order. */
+    for (uint32_t round = 0; round < 6; round++) {
+        for (uint32_t c = 0; c < INTERLEAVED; c++) {
+            uint32_t piece = payload / 2u + c + round;
+            CHECK(write_pattern(&pool, &chains[c], c + 1u, lengths[c], piece) == TA_OK);
+            lengths[c] += piece;
+        }
+    }
+    uint32_t chunks = 0;
+    for (uint32_t c = 0; c < INTERLEAVED; c++) {
+        chunks += verify_chain(&pool, &chains[c], c + 1u);
+    }
+    CHECK(counts_of(&pool).used == chunks);
+    /* Free in a different order than written; the others stay intact. */
+    uint32_t order[INTERLEAVED] = { 2, 0, 3, 1 };
+    for (uint32_t k = 0; k < INTERLEAVED; k++) {
+        uint32_t c = order[k];
+        uint32_t own = (lengths[c] + payload - 1u) / payload;
+        CHECK(ta_chain_free(&pool, &chains[c]) == own);
+        chunks -= own;
+        CHECK(counts_of(&pool).used == chunks);
+        for (uint32_t other = 0; other < INTERLEAVED; other++) {
+            verify_chain(&pool, &chains[other], other + 1u);
+        }
+    }
+    CHECK(counts_of(&pool).used == 0);
+    ta_pool_destroy(&pool);
+    finish_clean();
+}
+
 int main(void) {
     test_geometry();
     test_need_arithmetic();
@@ -330,6 +435,10 @@ int main(void) {
     test_all_or_nothing();
     test_length_limit();
     test_no_allocation();
+    test_reader(64);
+    test_reader(256);
+    test_interleaved(64);
+    test_interleaved(256);
     CHECK(heap.stats.bad_frees == 0);
     CHECK(ta_test_allocator_finish(&heap) == 0);
     if (failures != 0) {

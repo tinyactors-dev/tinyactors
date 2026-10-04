@@ -1649,6 +1649,20 @@ typedef struct ta_chain_pool_params {
     uint32_t max_chunks;  /* ceiling on the capacity; 0 means as many as A5 allows (A5 semantics) */
 } ta_chain_pool_params;
 
+/* ta_chain_span is a contiguous run of payload bytes inside one chunk (lifetime: call). */
+typedef struct ta_chain_span {
+    const unsigned char *bytes;
+    uint32_t length;
+} ta_chain_span;
+
+/* ta_chain_reader walks a chain from its first byte (lifetime: call). Its fields are for chain.c. */
+typedef struct ta_chain_reader {
+    const ta_pool *pool;
+    uint32_t chunk;     /* the chunk the next byte is in; 0 when finished */
+    uint32_t offset;    /* payload bytes of that chunk already read */
+    uint32_t remaining; /* bytes of the chain not yet read */
+} ta_chain_reader;
+
 /*
  * ta_chain_pool_init initialises *pool as a chunk pool: ta_pool_init with
  * item_size = chunk_size, item_alignment 4, link_offset 0 and no template
@@ -1692,6 +1706,36 @@ TA_PRIVATE uint32_t ta_chain_need(const ta_pool *pool, const ta_chain *chain, ui
  * write of 0 bytes succeeds and changes nothing. O(bytes).
  */
 TA_PRIVATE ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *data, uint32_t bytes);
+
+/*
+ * ta_chain_reader_init starts a read at the first byte of `chain`. The
+ * reader keeps a pointer to the pool and a copy of the chain's length, so
+ * the chain must not be written or freed, nor the pool trimmed, while it is
+ * read. It never allocates. O(1).
+ */
+TA_PRIVATE void ta_chain_reader_init(ta_chain_reader *reader, const ta_pool *pool, const ta_chain *chain);
+
+/* ta_chain_reader_remaining returns the bytes of the chain not yet read. O(1). */
+TA_PRIVATE uint32_t ta_chain_reader_remaining(const ta_chain_reader *reader);
+
+/*
+ * ta_chain_reader_span yields the next span into *out and advances past it,
+ * or answers false when the chain is exhausted. A span is never empty, is at
+ * most payload bytes, and ends at the chain's length, so the spans cover the
+ * chain exactly once and in order. The bytes belong to the chain (see the
+ * package comment for how long they stay valid): the caller does not write
+ * through them. It never allocates. O(1).
+ */
+TA_PRIVATE bool ta_chain_reader_span(ta_chain_reader *reader, ta_chain_span *out);
+
+/*
+ * ta_chain_reader_copy copies exactly `bytes` bytes to `out` and advances,
+ * across chunk boundaries (for fields, such as a u16-length-prefixed string,
+ * that may straddle two chunks). If fewer than `bytes` remain it answers
+ * false and neither copies nor advances. Copying 0 bytes succeeds. It never
+ * allocates. O(bytes).
+ */
+TA_PRIVATE bool ta_chain_reader_copy(ta_chain_reader *reader, void *out, uint32_t bytes);
 
 /*
  * ta_chain_free gives every chunk of the chain back to the pool and zeroes
@@ -6410,6 +6454,65 @@ TA_PRIVATE ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *
         chain->length += count;
     }
     return TA_OK;
+}
+
+TA_PRIVATE void ta_chain_reader_init(ta_chain_reader *reader, const ta_pool *pool, const ta_chain *chain) {
+    reader->pool = pool;
+    reader->chunk = chain->head;
+    reader->offset = 0;
+    reader->remaining = chain->length;
+}
+
+TA_PRIVATE uint32_t ta_chain_reader_remaining(const ta_chain_reader *reader) {
+    return reader->remaining;
+}
+
+/* reader_take yields the next span of at most `limit` bytes (limit > 0) and advances. */
+static bool reader_take(ta_chain_reader *reader, uint32_t limit, ta_chain_span *out) {
+    if (reader->remaining == 0) {
+        return false;
+    }
+    uint32_t payload = ta_chain_payload(reader->pool);
+    const unsigned char *chunk = ta_pool_at(reader->pool, reader->chunk);
+    uint32_t count = payload - reader->offset; /* what is left of this chunk's payload */
+    if (count > reader->remaining) {
+        count = reader->remaining;
+    }
+    if (count > limit) {
+        count = limit;
+    }
+    out->bytes = chunk + 4u + reader->offset;
+    out->length = count;
+    reader->offset += count;
+    reader->remaining -= count;
+    if (reader->remaining == 0) {
+        reader->chunk = 0;
+    } else if (reader->offset == payload) {
+        reader->chunk = next_get(chunk);
+        reader->offset = 0;
+    }
+    return true;
+}
+
+TA_PRIVATE bool ta_chain_reader_span(ta_chain_reader *reader, ta_chain_span *out) {
+    return reader_take(reader, UINT32_MAX, out);
+}
+
+TA_PRIVATE bool ta_chain_reader_copy(ta_chain_reader *reader, void *out, uint32_t bytes) {
+    if (bytes > reader->remaining) {
+        return false;
+    }
+    unsigned char *destination = out;
+    while (bytes != 0) {
+        ta_chain_span span;
+        if (!reader_take(reader, bytes, &span)) {
+            return false; /* not reached: bytes <= remaining */
+        }
+        ta_mem_copy(destination, span.bytes, span.length);
+        destination += span.length;
+        bytes -= span.length;
+    }
+    return true;
 }
 
 TA_PRIVATE uint32_t ta_chain_free(ta_pool *pool, ta_chain *chain) {

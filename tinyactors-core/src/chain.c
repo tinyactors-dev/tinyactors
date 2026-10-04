@@ -95,6 +95,65 @@ ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *data, uint3
     return TA_OK;
 }
 
+void ta_chain_reader_init(ta_chain_reader *reader, const ta_pool *pool, const ta_chain *chain) {
+    reader->pool = pool;
+    reader->chunk = chain->head;
+    reader->offset = 0;
+    reader->remaining = chain->length;
+}
+
+uint32_t ta_chain_reader_remaining(const ta_chain_reader *reader) {
+    return reader->remaining;
+}
+
+/* reader_take yields the next span of at most `limit` bytes (limit > 0) and advances. */
+static bool reader_take(ta_chain_reader *reader, uint32_t limit, ta_chain_span *out) {
+    if (reader->remaining == 0) {
+        return false;
+    }
+    uint32_t payload = ta_chain_payload(reader->pool);
+    const unsigned char *chunk = ta_pool_at(reader->pool, reader->chunk);
+    uint32_t count = payload - reader->offset; /* what is left of this chunk's payload */
+    if (count > reader->remaining) {
+        count = reader->remaining;
+    }
+    if (count > limit) {
+        count = limit;
+    }
+    out->bytes = chunk + 4u + reader->offset;
+    out->length = count;
+    reader->offset += count;
+    reader->remaining -= count;
+    if (reader->remaining == 0) {
+        reader->chunk = 0;
+    } else if (reader->offset == payload) {
+        reader->chunk = next_get(chunk);
+        reader->offset = 0;
+    }
+    return true;
+}
+
+bool ta_chain_reader_span(ta_chain_reader *reader, ta_chain_span *out) {
+    return reader_take(reader, UINT32_MAX, out);
+}
+
+bool ta_chain_reader_copy(ta_chain_reader *reader, void *out, uint32_t bytes) {
+    if (bytes > reader->remaining) {
+        return false;
+    }
+    unsigned char *destination = out;
+    while (bytes != 0) {
+        ta_chain_span span;
+        if (!reader_take(reader, bytes, &span)) {
+            return false; /* not reached: bytes <= remaining */
+        }
+        ta_mem_copy(destination, span.bytes, span.length);
+        destination += span.length;
+        bytes -= span.length;
+    }
+    return true;
+}
+
 uint32_t ta_chain_free(ta_pool *pool, ta_chain *chain) {
     uint32_t freed = 0;
     uint32_t index = chain->head;
