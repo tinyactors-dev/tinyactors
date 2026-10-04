@@ -34,7 +34,7 @@ ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator allocator) {
     ta_result result = ta_arena_init(&table->strings, allocator, 4096);
     if (result == TA_OK) {
         result = ta_table_init(&table->index, allocator,
-                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_ATOM_PAGE_SLOTS });
+                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_ATOM_PAGE_SLOTS, .grow_sixteenths = 6 });
     }
     /* Atom 0 is the empty text, which no family is, so a zeroed family
      * atom names none (ADR 0088). */

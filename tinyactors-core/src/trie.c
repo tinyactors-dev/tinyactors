@@ -44,7 +44,7 @@ ta_result ta_trie_init(ta_atom_trie *trie, ta_allocator allocator, uint32_t max_
     ta_result result = ta_vec_push(&trie->nodes, &root);
     if (result == TA_OK) {
         result = ta_table_init(&trie->index, allocator,
-                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_TRIE_PAGE_SLOTS });
+                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_TRIE_PAGE_SLOTS, .grow_sixteenths = 6 });
     }
     if (result != TA_OK) {
         ta_trie_destroy(trie);

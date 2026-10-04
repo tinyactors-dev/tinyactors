@@ -10,7 +10,10 @@
  * run that wraps the end of the page) with the no-gap invariant checked
  * after every delete, equal hashes with different values, random insert and
  * remove against a reference model, an allocation failure sweep over init
- * and grow, and the strict allocator's verdict on every free (size and
+ * and grow, prepare (a full page of equal hashes doubles instead of
+ * refusing, a refused prepare changes nothing, a split of an enlarged page,
+ * the two grow triggers, the walk over pages of different sizes), a zeroed
+ * table, and the strict allocator's verdict on every free (size and
  * alignment must be those of the allocation).
  *
  * Includes the amalgamation, because the unit is private to core.
@@ -72,8 +75,9 @@ static uint32_t candidates(const ta_table *table, uint32_t hash) {
 static bool no_gaps(const ta_table *table) {
     uint32_t pages = table->pages.count;
     for (uint32_t index = 0; index < pages; index += 1u) {
-        const ta_table_slot *slots = *(ta_table_slot **)ta_vec_at(&table->pages, index);
-        uint32_t count = table->page_slots;
+        const ta_table_page_entry *entry = ta_vec_at(&table->pages, index);
+        const ta_table_slot *slots = entry->slots;
+        uint32_t count = entry->count;
         for (uint32_t position = 0; position < count; position += 1u) {
             if (slots[position].value == TA_TABLE_NONE) {
                 continue;
@@ -91,12 +95,13 @@ static bool no_gaps(const ta_table *table) {
 static uint32_t max_page_fill_percent(const ta_table *table) {
     uint32_t worst = 0;
     for (uint32_t index = 0; index < table->pages.count; index += 1u) {
-        const ta_table_slot *slots = *(ta_table_slot **)ta_vec_at(&table->pages, index);
+        const ta_table_page_entry *entry = ta_vec_at(&table->pages, index);
         uint32_t used = 0;
-        for (uint32_t position = 0; position < table->page_slots; position += 1u) {
-            used += slots[position].value != TA_TABLE_NONE;
+        for (uint32_t position = 0; position < entry->count; position += 1u) {
+            used += entry->slots[position].value != TA_TABLE_NONE;
         }
-        uint32_t percent = used * 100u / table->page_slots;
+        CHECK(used == entry->used); /* the per-page count prepare relies on */
+        uint32_t percent = used * 100u / entry->count;
         worst = percent > worst ? percent : worst;
     }
     return worst;
@@ -126,14 +131,20 @@ static void test_fixed(void) {
     CHECK(no_gaps(&table));
     CHECK(ta_table_remove(&table, hashes[7], 7u));
     CHECK(ta_table_insert(&table, hashes[7], 7u) == TA_OK);
-    CHECK(ta_table_bytes(&table) == table.page_bytes + ta_vec_bytes(&table.pages));
+    CHECK(ta_table_bytes(&table) == 135u * sizeof(ta_table_slot) + ta_vec_bytes(&table.pages));
+    /* FIXED: prepare is a check of the bound, never an allocation. */
+    CHECK(ta_table_prepare(&table, 1u) == TA_ERR_NOMEM); /* 100 held */
+    for (uint32_t index = 0; index < 100u; index += 1u) {
+        CHECK(ta_table_remove(&table, hashes[index], index));
+    }
+    CHECK(ta_table_prepare(&table, 1u) == TA_OK && ta_table_insert(&table, 5u, 1u) == TA_OK);
     ta_table_destroy(&table);
     ta_table_destroy(&table); /* idempotent */
     CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
 
     CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
                         &(ta_table_params){ .mode = TA_TABLE_FIXED }) == TA_ERR_INVALID);
-    CHECK(table.pages.count == 0 && table.page_bytes == 0);
+    CHECK(table.pages.count == 0 && table.slots == 0);
     CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
                         &(ta_table_params){ .mode = TA_TABLE_FIXED, .max_entries = UINT32_MAX }) == TA_ERR_NOMEM);
     CHECK(ta_test_allocator_finish(&heap) == 0);
@@ -142,11 +153,14 @@ static void test_fixed(void) {
 static void test_reserved_and_params(void) {
     ta_table table;
     ta_allocator allocator = ta_test_allocator_get(&heap);
-    CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 8u }) == TA_ERR_INVALID);
+    CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 8u, .grow_sixteenths = 6 }) == TA_ERR_INVALID);
     CHECK(ta_table_init(&table, allocator,
-                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = (1u << 20) + 1u }) == TA_ERR_INVALID);
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = (1u << 20) + 1u, .grow_sixteenths = 6 }) == TA_ERR_INVALID);
     CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = (ta_table_mode)7 }) == TA_ERR_INVALID);
-    CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 16u }) == TA_OK);
+    CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 16u }) == TA_ERR_INVALID);
+    CHECK(ta_table_init(&table, allocator,
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 16u, .grow_sixteenths = 15u }) == TA_ERR_INVALID);
+    CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 16u, .grow_sixteenths = 6 }) == TA_OK);
     CHECK(ta_table_insert(&table, 5u, TA_TABLE_NONE) == TA_ERR_INVALID);
     CHECK(ta_table_count(&table) == 0);
     CHECK(!ta_table_remove(&table, 5u, TA_TABLE_NONE));
@@ -162,9 +176,8 @@ static void test_growing(void) {
     ta_test_allocator_reset_counts(&heap);
     ta_table table;
     CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
-                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = SLOTS }) == TA_OK);
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = SLOTS, .grow_sixteenths = 6 }) == TA_OK);
     size_t page_bytes = SLOTS * sizeof(ta_table_slot);
-    CHECK(table.page_bytes == page_bytes);
 
     /* The trigger: more than 3/8 of one 256 slot page is 97 entries. */
     for (uint32_t index = 0; index < 96u; index += 1u) {
@@ -226,7 +239,7 @@ static void test_production_pages(void) {
     ta_test_allocator_reset_counts(&heap);
     ta_table table;
     CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
-                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = SLOTS }) == TA_OK);
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = SLOTS, .grow_sixteenths = 6 }) == TA_OK);
     uint32_t worst = 0;
     for (uint32_t index = 0; index < KEYS; index += 1u) {
         if (ta_table_wants_grow(&table)) {
@@ -275,7 +288,7 @@ static void delete_in_order(uint32_t order_kind) {
     ta_test_allocator_reset_counts(&heap);
     ta_table table;
     CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
-                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = SLOTS }) == TA_OK);
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = SLOTS, .grow_sixteenths = 6 }) == TA_OK);
     /* Twelve consecutive home slots starting at 250: the run wraps the end of the page. */
     CHECK(clustered_hashes(hashes, KEYS, SLOTS, 250u) == KEYS);
     for (uint32_t index = 0; index < KEYS; index += 1u) {
@@ -314,7 +327,7 @@ static void test_equal_hashes(void) {
     ta_test_allocator_reset_counts(&heap);
     ta_table table;
     CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
-                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 64u }) == TA_OK);
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 64u, .grow_sixteenths = 6 }) == TA_OK);
     for (uint32_t value = 0; value < 10u; value += 1u) {
         CHECK(ta_table_insert(&table, 0xdeadbeefu, value) == TA_OK);
         CHECK(ta_table_insert(&table, 0xdeadbef0u, 100u + value) == TA_OK);
@@ -331,30 +344,148 @@ static void test_equal_hashes(void) {
     CHECK(ta_test_allocator_finish(&heap) == 0);
 }
 
-/* A page of identical hashes cannot be split apart: insert fails cleanly when it is full. */
+/*
+ * A page of identical hashes cannot be split apart: insert fails cleanly
+ * when it is full, and prepare doubles the page so that the next insert
+ * does not, however many entries share the hash.
+ */
 static void test_page_full(void) {
     ta_test_allocator_reset_counts(&heap);
     ta_table table;
     CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
-                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 16u }) == TA_OK);
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 16u, .grow_sixteenths = 6 }) == TA_OK);
     for (uint32_t value = 0; value < 16u; value += 1u) {
+        CHECK(ta_table_prepare(&table, 77u) == TA_OK);
         CHECK(ta_table_insert(&table, 77u, value) == TA_OK);
     }
+    /* The 16th entry found room: prepare did not double a page that had a free slot. */
+    CHECK(table.slots == 16u && ta_table_entry_at(&table, 0)->count == 16u);
     CHECK(ta_table_insert(&table, 77u, 16u) == TA_ERR_NOMEM);
     CHECK(ta_table_count(&table) == 16u);
     CHECK(candidates(&table, 77u) == 16u);
-    CHECK(ta_table_remove(&table, 77u, 3u));
-    CHECK(ta_table_insert(&table, 77u, 16u) == TA_OK);
-    /* Growing a table with a full page keeps all of its entries. */
+    uint64_t attempts = heap.stats.attempts;
+    CHECK(ta_table_prepare(&table, 77u) == TA_OK);
+    CHECK(heap.stats.attempts == attempts + 1u); /* exactly the doubled page */
+    CHECK(ta_table_entry_at(&table, 0)->count == 32u && table.slots == 32u && ta_table_entry_at(&table, 0)->used == 16u);
+    CHECK(candidates(&table, 77u) == 16u && no_gaps(&table));
+    CHECK(ta_table_prepare(&table, 77u) == TA_OK && heap.stats.attempts == attempts + 1u); /* room: no allocation */
+    for (uint32_t value = 16; value < 48u; value += 1u) { /* three times the page the table started with */
+        CHECK(ta_table_prepare(&table, 77u) == TA_OK);
+        CHECK(ta_table_insert(&table, 77u, value) == TA_OK);
+    }
+    CHECK(ta_table_entry_at(&table, 0)->count == 64u && candidates(&table, 77u) == 48u && no_gaps(&table));
+    CHECK(ta_table_bytes(&table) == 64u * sizeof(ta_table_slot) + ta_vec_bytes(&table.pages));
+    /* Splitting an enlarged page makes the new page as large, and the hash moves with its low bit. */
     CHECK(ta_table_grow(&table) == TA_OK);
-    CHECK(candidates(&table, 77u) == 16u);
-    CHECK(ta_table_remove(&table, 77u, 16u));
-    for (uint32_t value = 0; value < 16u; value += 1u) {
-        CHECK(ta_table_remove(&table, 77u, value) == (value != 3u));
+    CHECK(table.slots == 128u && ta_table_entry_at(&table, 1)->count == 64u && ta_table_entry_at(&table, 1)->used == 48u);
+    CHECK(ta_table_entry_at(&table, 0)->used == 0);
+    CHECK(candidates(&table, 77u) == 48u && no_gaps(&table));
+    CHECK(ta_table_bytes(&table) == 128u * sizeof(ta_table_slot) + ta_vec_bytes(&table.pages));
+    for (uint32_t value = 0; value < 48u; value += 1u) {
+        CHECK(ta_table_remove(&table, 77u, value));
     }
     CHECK(ta_table_count(&table) == 0);
     ta_table_destroy(&table);
-    CHECK(ta_test_allocator_finish(&heap) == 0);
+    CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
+}
+
+/* prepare refused: the table is exactly as it was, then the retry works; every free matches its allocation. */
+static void test_prepare_failure(void) {
+    ta_test_allocator_reset_counts(&heap);
+    ta_table table;
+    CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 16u, .grow_sixteenths = 6 }) == TA_OK);
+    for (uint32_t value = 0; value < 16u; value += 1u) {
+        CHECK(ta_table_insert(&table, 9u, value) == TA_OK);
+    }
+    size_t bytes = ta_table_bytes(&table);
+    ta_test_allocator_fail_nth(&heap, 1u);
+    CHECK(ta_table_prepare(&table, 9u) == TA_ERR_NOMEM);
+    ta_test_allocator_disarm(&heap);
+    CHECK(ta_table_bytes(&table) == bytes && table.slots == 16u && ta_table_count(&table) == 16u);
+    CHECK(candidates(&table, 9u) == 16u && no_gaps(&table));
+    CHECK(ta_table_insert(&table, 9u, 16u) == TA_ERR_NOMEM);
+    CHECK(ta_table_prepare(&table, 9u) == TA_OK && ta_table_insert(&table, 9u, 16u) == TA_OK);
+    ta_table_destroy(&table);
+    CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
+}
+
+/* A zeroed table is empty: the owner may defer init to its first insert. */
+static void test_zeroed_table(void) {
+    ta_table table = {0};
+    ta_table_probe probe;
+    ta_table_cursor cursor = {0};
+    uint32_t hash = 0;
+    uint32_t value = 0;
+    ta_table_probe_start(&table, 5u, &probe);
+    CHECK(!ta_table_probe_next(&probe, &value));
+    CHECK(!ta_table_remove(&table, 5u, 1u));
+    CHECK(!ta_table_next(&table, &cursor, &hash, &value));
+    CHECK(!ta_table_wants_grow(&table) && ta_table_count(&table) == 0 && ta_table_bytes(&table) == 0);
+    CHECK(ta_table_insert(&table, 5u, 1u) == TA_ERR_INVALID);
+    CHECK(ta_table_prepare(&table, 5u) == TA_ERR_INVALID);
+    ta_table_destroy(&table);
+}
+
+/* The two triggers: 3/8 and 7/16 of a 256 slot page are 96 and 112 entries; a prepare changes the slot total. */
+static void test_triggers_and_walk(void) {
+    ta_test_allocator_reset_counts(&heap);
+    static const uint32_t sixteenths[] = { 6u, 7u };
+    static const uint32_t last_quiet[] = { 96u, 112u };
+    for (uint32_t kind = 0; kind < 2u; kind += 1u) {
+        ta_table table;
+        CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
+                            &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 256u,
+                                                .grow_sixteenths = sixteenths[kind] }) == TA_OK);
+        for (uint32_t index = 0; index < last_quiet[kind]; index += 1u) {
+            CHECK(ta_table_insert(&table, random32(), index) == TA_OK);
+        }
+        CHECK(!ta_table_wants_grow(&table));
+        CHECK(ta_table_insert(&table, random32(), last_quiet[kind]) == TA_OK);
+        CHECK(ta_table_wants_grow(&table));
+        ta_table_destroy(&table);
+    }
+
+    /* 16 equal hashes fill a 16 slot page, which is over the 14/16 trigger; doubling it lifts the trigger. */
+    ta_table table;
+    CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 16u, .grow_sixteenths = 14u }) == TA_OK);
+    for (uint32_t value = 0; value < 16u; value += 1u) {
+        CHECK(ta_table_insert(&table, 3u, value) == TA_OK);
+    }
+    CHECK(ta_table_wants_grow(&table));
+    CHECK(ta_table_prepare(&table, 3u) == TA_OK);
+    CHECK(!ta_table_wants_grow(&table));
+    ta_table_destroy(&table);
+
+    /* Pages of different sizes: one enlarged, the rest not. A walk visits every entry exactly once. */
+    enum { KEYS = 3000 };
+    static uint32_t hashes[KEYS];
+    static uint8_t seen[KEYS];
+    CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 64u, .grow_sixteenths = 7u }) == TA_OK);
+    for (uint32_t index = 0; index < KEYS; index += 1u) {
+        hashes[index] = index % 3u == 0 ? 0x1234u : random32(); /* a third of the keys share one hash */
+        if (ta_table_wants_grow(&table)) {
+            CHECK(ta_table_grow(&table) == TA_OK);
+        }
+        CHECK(ta_table_prepare(&table, hashes[index]) == TA_OK);
+        CHECK(ta_table_insert(&table, hashes[index], index) == TA_OK);
+    }
+    CHECK(table.slots > (uint64_t)table.pages.count * 64u); /* some page was enlarged */
+    ta_table_cursor cursor = {0};
+    uint32_t hash = 0;
+    uint32_t value = 0;
+    uint32_t visited = 0;
+    while (ta_table_next(&table, &cursor, &hash, &value)) {
+        CHECK(value < KEYS && hashes[value] == hash && seen[value] == 0);
+        seen[value] = 1;
+        visited += 1u;
+    }
+    CHECK(visited == KEYS && ta_table_count(&table) == KEYS);
+    CHECK(max_page_fill_percent(&table) <= 100u && no_gaps(&table));
+    ta_table_destroy(&table);
+    CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
 }
 
 static void test_random(uint32_t operations) {
@@ -364,7 +495,7 @@ static void test_random(uint32_t operations) {
     ta_test_allocator_reset_counts(&heap);
     ta_table table;
     CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
-                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = SLOTS }) == TA_OK);
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = SLOTS, .grow_sixteenths = 6 }) == TA_OK);
     uint32_t reference = 0;
     uint32_t worst = 0;
     for (uint32_t value = 0; value < VALUES; value += 1u) {
@@ -406,7 +537,7 @@ static void test_random(uint32_t operations) {
 static void test_allocation_failures(void) {
     ta_test_allocator_reset_counts(&heap);
     ta_table table;
-    ta_table_params params = { .mode = TA_TABLE_GROWING, .page_slots = 64u };
+    ta_table_params params = { .mode = TA_TABLE_GROWING, .page_slots = 64u, .grow_sixteenths = 6 };
     CHECK(ta_table_init(&table, ta_test_allocator_get(&heap), &params) == TA_OK);
     uint64_t init_allocations = heap.stats.allocations;
     ta_table_destroy(&table);
@@ -415,7 +546,7 @@ static void test_allocation_failures(void) {
         ta_test_allocator_reset_counts(&heap);
         ta_test_allocator_fail_nth(&heap, nth);
         CHECK(ta_table_init(&table, ta_test_allocator_get(&heap), &params) == TA_ERR_NOMEM);
-        CHECK(table.pages.count == 0 && table.pages.items == NULL && table.page_bytes == 0);
+        CHECK(table.pages.count == 0 && table.pages.items == NULL && table.slots == 0);
         ta_table_destroy(&table);
         ta_test_allocator_disarm(&heap);
         CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
@@ -474,6 +605,9 @@ int main(void) {
     test_backward_shift();
     test_equal_hashes();
     test_page_full();
+    test_prepare_failure();
+    test_zeroed_table();
+    test_triggers_and_walk();
     test_random(300000u);
     test_allocation_failures();
     if (failures != 0) {
