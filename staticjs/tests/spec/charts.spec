@@ -9,7 +9,7 @@ export const without = (ids, id) => ids.difference(new Set([id]));
 export const unsent = (batch, pending, sent) => batch.filter(n => pending.has(n.id) && !sent.has(n.id));
 export const tracker = id => `#_actor_progress/${id}`;
 --- value
-{"take":<function>,"drop":<function>,"without":<function>,"unsent":<function>,"tracker":<function>}
+{"drop":<function>,"take":<function>,"tracker":<function>,"unsent":<function>,"without":<function>}
 
 === a guard on the event
 @global _event = {name: "notify.ack", data: {id: "n2"}}

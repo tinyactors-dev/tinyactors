@@ -8,9 +8,10 @@
  * All three must give the same answer, and the whole run the expected one.
  * After each case, every byte the case allocated must have been freed.
  *
- * With --full, each case that imports nothing is also run once for every
- * allocation it makes, with that allocation failing: each such run must end
- * with an out-of-memory error and free everything it took.
+ * With --full, each case is also run once for every allocation it makes,
+ * with that allocation failing: each such run must end with an out-of-memory
+ * error and free everything it took. The modules registered before the case
+ * are evaluated again first, with no allocation failing.
  *
  * A spec file:
  *
@@ -28,7 +29,8 @@
  *   source
  *   --- error unsupported words of the message
  *
- * Modules a file defines can be imported by the cases after them.
+ * Modules a file defines can be imported by the cases after them. A module
+ * registered under a name already taken replaces the earlier one.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <dirent.h>
@@ -76,7 +78,7 @@ static const sjs_allocator_vtable failing_vtable = { failing_alloc, failing_free
 
 #define MAX_TEXT 65536
 #define MAX_GLOBALS 8
-#define MAX_MODULES 16
+#define MAX_MODULES 128
 
 typedef struct {
     char name[256];
@@ -95,6 +97,7 @@ typedef struct {
 
 typedef struct {
     char name[64];
+    char *source;           /* kept to evaluate it again for --full */
     sjs_value exports;
 } module_entry;
 
@@ -102,6 +105,40 @@ typedef struct {
     module_entry entries[MAX_MODULES];
     int count;
 } registry;
+
+static module_entry *module_named(registry *r, const char *name) {
+    for (int i = 0; i < r->count; i++) {
+        if (strcmp(r->entries[i].name, name) == 0) return &r->entries[i];
+    }
+    return NULL;
+}
+
+/* Register exports under a name, replacing a module of the same name. Takes
+ * over the reference to the exports, and a copy of the source. */
+static int register_module(sjs_context *context, registry *r, const char *name, const char *source, sjs_value exports) {
+    module_entry *m = module_named(r, name);
+    if (m != NULL) {
+        sjs_release(context, m->exports);
+        free(m->source);
+    } else if (r->count < MAX_MODULES) {
+        m = &r->entries[r->count++];
+        snprintf(m->name, sizeof m->name, "%s", name);
+    } else {
+        sjs_release(context, exports);
+        return 0;
+    }
+    m->source = strdup(source);
+    m->exports = exports;
+    return 1;
+}
+
+static void release_modules(sjs_context *context, registry *r) {
+    for (int i = 0; i < r->count; i++) {
+        sjs_release(context, r->entries[i].exports);
+        free(r->entries[i].source);
+    }
+    r->count = 0;
+}
 
 static sjs_result find_module(void *self, sjs_str name, sjs_value *exports) {
     registry *r = self;
@@ -296,17 +333,38 @@ static int is_memory_failure(const char *text) {
            strncmp(text, "error result -2", 15) == 0;
 }
 
+/* Evaluate the modules registered so far again, in the order registered,
+ * into `into`. */
+static int load_modules(const environment *env, const registry *from, registry *into) {
+    for (int i = 0; i < from->count; i++) {
+        sjs_program *program;
+        sjs_error error = { 0 };
+        sjs_value exports;
+        if (compile(env, from->entries[i].source, SJS_GOAL_MODULE, 4096, &program, &error) != SJS_OK) return 0;
+        sjs_result r = evaluate(env, program, UINT64_MAX, &exports, &error);
+        sjs_program_release(program);
+        if (r != SJS_OK || !register_module(env->context, into, from->entries[i].name, from->entries[i].source, exports)) return 0;
+    }
+    return 1;
+}
+
 /* Run the case failing each allocation in turn, until one run needs no
- * failure; every run before it must fail cleanly. */
-static int sweep(const spec_case *c, const outcome *expected, const char *file) {
+ * failure; every run before it must fail cleanly. The modules it may import
+ * are evaluated first, with nothing failing, and stay for every run. */
+static int sweep(const spec_case *c, const outcome *expected, const char *file, const registry *modules) {
     static outcome got;
-    for (long fail_at = 1;; fail_at++) {
-        failing f = { 0, 1L << 62, 0 };
-        sjs_context *context;
-        sjs_context_config config = { { &f, &failing_vtable }, SJS_LIMITS_DEFAULT };
-        if (sjs_context_init(&context, &config) != SJS_OK) return 0;
-        registry none = { 0 };
-        environment env = { context, { &f, &failing_vtable }, &none, NULL, NULL, 0 };
+    failing f = { 0, 1L << 62, 0 };
+    sjs_context *context;
+    sjs_context_config config = { { &f, &failing_vtable }, SJS_LIMITS_DEFAULT };
+    if (sjs_context_init(&context, &config) != SJS_OK) return 0;
+    static registry loaded;
+    loaded.count = 0;
+    environment env = { context, { &f, &failing_vtable }, &loaded, NULL, NULL, 0 };
+    int result = load_modules(&env, modules, &loaded);
+    if (!result) fprintf(stderr, "%s:%d: %s: the modules before it do not evaluate again\n", file, c->line, c->name);
+    size_t base = sjs_context_live_bytes(context);
+    long base_blocks = f.live;
+    for (long fail_at = 1; result; fail_at++) {
         f.allocations = 0;
         f.fail_at = fail_at;
         sjs_str names[MAX_GLOBALS];
@@ -336,19 +394,26 @@ static int sweep(const spec_case *c, const outcome *expected, const char *file) 
                 done = 1;
             } else if (!is_memory_failure(got.text)) {
                 fprintf(stderr, "%s:%d: %s: with allocation %ld failing\n  got: %s\n", file, c->line, c->name, fail_at, got.text);
-                ok = -1;
+                result = 0;
             }
         }
+        f.fail_at = 1L << 62;
         for (int i = 0; i < bound; i++) sjs_release(context, values[i]);
         size_t live = sjs_context_live_bytes(context);
-        sjs_context_destroy(context);
-        if (live != 0 || f.live != 0) {
-            fprintf(stderr, "%s:%d: %s: allocation %ld failing leaks %zu bytes\n", file, c->line, c->name, fail_at, live);
-            return 0;
+        if (live != base || f.live != base_blocks) {
+            fprintf(stderr, "%s:%d: %s: allocation %ld failing leaks %zu bytes\n", file, c->line, c->name, fail_at, live - base);
+            result = 0;
         }
-        if (ok < 0) return 0;
-        if (done) return 1;
+        if (done) break;
     }
+    release_modules(context, &loaded);
+    size_t live = sjs_context_live_bytes(context);
+    sjs_context_destroy(context);
+    if (live != 0 || f.live != 0) {
+        fprintf(stderr, "%s:%d: %s: %zu bytes still live after the sweep\n", file, c->line, c->name, live);
+        result = 0;
+    }
+    return result;
 }
 
 /* The case is done: run it, compare, and register a module. */
@@ -393,22 +458,24 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
         ok = 0;
     }
     for (int i = 0; i < c->global_count; i++) sjs_release(env->context, values[i]);
-    if (ok && full && strstr(c->source, "import ") == NULL && !sweep(c, &whole, file)) ok = 0;
+    if (ok && full && !sweep(c, &whole, file, env->modules)) ok = 0;
     if (ok && c->is_module && strncmp(whole.text, "value ", 6) == 0) {
         /* Evaluate once more, and keep the exports for the cases after. */
         sjs_program *program;
         sjs_error error = { 0 };
         sjs_value exports;
-        if (env->modules->count < MAX_MODULES &&
-            compile(env, c->source, SJS_GOAL_MODULE, 4096, &program, &error) == SJS_OK &&
-            evaluate(env, program, UINT64_MAX, &exports, &error) == SJS_OK) {
+        if (compile(env, c->source, SJS_GOAL_MODULE, 4096, &program, &error) == SJS_OK) {
+            if (evaluate(env, program, UINT64_MAX, &exports, &error) == SJS_OK &&
+                register_module(env->context, env->modules, c->module_name, c->source, exports)) {
+                /* registered */
+            } else {
+                ok = 0;
+            }
             sjs_program_release(program);
-            module_entry *m = &env->modules->entries[env->modules->count++];
-            snprintf(m->name, sizeof m->name, "%s", c->module_name);
-            m->exports = exports;
         } else {
             ok = 0;
         }
+        if (!ok) fprintf(stderr, "%s:%d: %s: the module could not be registered\n", file, c->line, c->name);
     } else if (ok && sjs_context_live_bytes(env->context) != before) {
         fprintf(stderr, "%s:%d: %s: %zu bytes were not freed\n", file, c->line, c->name,
                 sjs_context_live_bytes(env->context) - before);
@@ -425,7 +492,8 @@ static void run_file(sjs_context *context, const char *path, tally *t) {
         t->failed++;
         return;
     }
-    registry modules = { 0 };
+    static registry modules;
+    modules.count = 0;
     environment env = { context, { NULL, &heap_vtable }, &modules, NULL, NULL, 0 };
     static spec_case c;
     static char line[MAX_TEXT];
@@ -495,7 +563,7 @@ static void run_file(sjs_context *context, const char *path, tally *t) {
         finish_case(&env, &c, path, t);
     }
     fclose(f);
-    for (int i = 0; i < modules.count; i++) sjs_release(context, modules.entries[i].exports);
+    release_modules(context, &modules);
 }
 
 static int compare_names(const void *a, const void *b) {

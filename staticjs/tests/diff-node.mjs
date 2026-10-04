@@ -3,6 +3,10 @@
 // refuses as a syntax error must be one JavaScript refuses as well; and every
 // case it refuses as unsupported must be valid JavaScript.
 //
+// A module's value is its namespace (module.namespace), whose keys
+// JavaScript sorts as staticjs does. A module registered under a name taken
+// before replaces the earlier one, as in spec_test.
+//
 //   node --experimental-vm-modules tests/diff-node.mjs tests/spec [numbers.txt]
 //
 // numbers.txt, if given, holds lines of "<hex bits> <text>" that staticjs
@@ -77,15 +81,6 @@ function parses(c) {
   }
 }
 
-// The exports of a module in the order they are declared, as staticjs
-// gives them.
-function exportsOf(module, source) {
-  const names = [...source.matchAll(/export\s+const\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]);
-  const all = Object.keys(module.namespace);
-  const order = [...names.filter((n) => all.includes(n)), ...all.filter((n) => !names.includes(n))];
-  return Object.fromEntries(order.map((n) => [n, module.namespace[n]]));
-}
-
 async function runFile(path) {
   const modules = new Map();
   for (const c of parseSpec(path)) {
@@ -114,7 +109,7 @@ async function runFile(path) {
         });
         await module.evaluate();
         modules.set(c.module, module);
-        value = exportsOf(module, c.source);
+        value = module.namespace;
       } else {
         const names = globals.map(([name]) => name);
         value = new Function(...names, `return (${c.source}\n);`)(...globals.map(([, v]) => v));

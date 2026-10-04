@@ -248,6 +248,90 @@ static void test_modules(void) {
     sjs_context_destroy(context);
 }
 
+static sjs_value object_of(sjs_context *context, const char *const *keys, int count) {
+    sjs_value o;
+    CHECK(sjs_object_new(context, 2, &o) == SJS_OK);
+    for (int i = 0; i < count; i++) {
+        sjs_property property = { { keys[i], (uint32_t)strlen(keys[i]) }, sjs_number(i + 1) };
+        CHECK(sjs_object_put(context, &o, &property) == SJS_OK);
+    }
+    return o;
+}
+
+/* An embedder's module object may be in any order: a namespace of it is
+ * sorted, as JavaScript sorts one. One with an array-index key cannot be. */
+static void test_embedder_namespaces(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char out[4096];
+    static const char *const unsorted[] = { "b", "a" };
+    one_module m = { object_of(context, unsorted, 2) };
+    env e = { context, NULL, NULL, 0, { &m, &find_vtable }, SJS_GOAL_MODULE };
+    CHECK(evaluate(&e, "import * as ns from \"lib\";\nexport const keys = Object.keys(ns);\n", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"keys\":[\"a\",\"b\"]}") == 0);
+    CHECK(evaluate(&e, "export * from \"lib\";\n", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"a\":2,\"b\":1}") == 0);
+    CHECK(evaluate(&e, "export * as ns from \"lib\";\n", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"ns\":{\"a\":2,\"b\":1}}") == 0);
+    sjs_release(context, m.exports);
+
+    static const char *const indexed[] = { "x", "0" };
+    m.exports = object_of(context, indexed, 2);
+    CHECK(evaluate(&e, "import * as ns from \"lib\";\n", out) == SJS_ERR_PROGRAM);
+    CHECK(strncmp(out, "error 2 ", 8) == 0 && strstr(out, "array index") != NULL);
+    CHECK(evaluate(&e, "export * from \"lib\";\n", out) == SJS_ERR_PROGRAM);
+    CHECK(strncmp(out, "error 2 ", 8) == 0);
+    CHECK(evaluate(&e, "import { x } from \"lib\";\nexport const y = x;\n", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"y\":1}") == 0);
+    sjs_release(context, m.exports);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* A sink sees every import and export form as its events say. */
+typedef struct {
+    char text[2048];
+} event_log;
+
+static sjs_result log_event(void *self, const sjs_event *event) {
+    event_log *log = self;
+    size_t used = strlen(log->text);
+    snprintf(log->text + used, sizeof log->text - used, "%d:%u:%.*s:%.*s:%.*s\n", (int)event->kind, event->count,
+             (int)event->text.length, event->text.ptr, (int)event->alias.length, event->alias.ptr,
+             (int)event->name.length, event->name.ptr);
+    return SJS_OK;
+}
+
+static const sjs_sink_vtable log_vtable = { log_event };
+
+static void test_module_events(void) {
+    counting c = { 0 };
+    static event_log log;
+    log.text[0] = '\0';
+    sjs_parser *parser;
+    sjs_parser_config config = { { &c, &test_vtable }, SJS_LIMITS_DEFAULT, SJS_GOAL_MODULE, { &log, &log_vtable } };
+    CHECK(sjs_parser_init(&parser, &config) == SJS_OK);
+    const char *source = "import a, * as b from \"m\"; export { c as d } from \"m\"; export * from \"m\";\n"
+                         "export default 1; export { e }; const e = 2; import \"m\";";
+    for (size_t i = 0; source[i] != '\0'; i++) {
+        CHECK(sjs_parser_push(parser, (sjs_bytes){ (const uint8_t *)source + i, 1 }) == SJS_OK);
+    }
+    CHECK(sjs_parser_finish(parser) == SJS_OK);
+    sjs_parser_destroy(parser);
+    char want[2048];
+    snprintf(want, sizeof want,
+             "%d:%d:m:default:a\n%d:%d:m::b\n%d:%d:m:c:d\n%d:%d:m::\n"
+             "%d:0:::\n%d:0:::\n%d:0::e:e\n"
+             "%d:0:::\n%d:0:::\n%d:0:e::\n%d:0:::\n%d:%d:m::\n%d:0:::\n",
+             SJS_EV_IMPORT, SJS_IMPORT_NAME, SJS_EV_IMPORT, SJS_IMPORT_NAMESPACE, SJS_EV_EXPORT_FROM, SJS_IMPORT_NAME,
+             SJS_EV_EXPORT_FROM, SJS_IMPORT_STAR, SJS_EV_NUMBER, SJS_EV_EXPORT_DEFAULT, SJS_EV_EXPORT_NAME,
+             SJS_EV_CONST_BEGIN, SJS_EV_NUMBER, SJS_EV_BIND, SJS_EV_CONST_END, SJS_EV_IMPORT, SJS_IMPORT_MODULE, SJS_EV_END);
+    if (strcmp(log.text, want) != 0) fprintf(stderr, "events:\n%s\nwanted:\n%s\n", log.text, want);
+    CHECK(strcmp(log.text, want) == 0);
+    CHECK(c.live == 0);
+}
+
 /* A sink of one's own: count the events, and see the tokens' positions. */
 typedef struct {
     int events;
@@ -432,6 +516,8 @@ int main(int argc, char **argv) {
     test_values();
     test_natives_and_globals();
     test_modules();
+    test_embedder_namespaces();
+    test_module_events();
     test_sink();
     test_writer_resumes();
     test_fuel_and_reset();
@@ -441,6 +527,11 @@ int main(int argc, char **argv) {
         test_out_of_memory("export const f = (xs) => xs.toSorted((a, b) => b - a).flatMap(x => [x, [x]]);\n"
                            "export const g = new Set(f([3, 1, 2]).flat()).union(new Set([9]));\n"
                            "export const h = Object.fromEntries(Object.entries({a: 1, b: 2}).map(([k, v]) => [k, `${v}`]));\n",
+                           SJS_GOAL_MODULE);
+        test_out_of_memory("export { a, b as c };\n"
+                           "const a = [1, 2].map(x => x * 2);\n"
+                           "const b = { a };\n"
+                           "export default b.a.length;\n",
                            SJS_GOAL_MODULE);
     }
     if (failures != 0) {

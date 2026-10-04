@@ -337,10 +337,26 @@ typedef enum {
     SJS_EV_CONST_BEGIN,
     SJS_EV_CONST_END,
     SJS_EV_EXPORT,           /* before CONST_BEGIN: its names are exported */
-    SJS_EV_IMPORT,           /* text: the module; alias: the name; name: as what */
+    SJS_EV_IMPORT,           /* text: the module; count: an sjs_import_kind */
+    SJS_EV_EXPORT_DEFAULT,   /* after the value of `export default` */
+    SJS_EV_EXPORT_NAME,      /* `export { alias as name }`; count: 1 when name was a string */
+    SJS_EV_EXPORT_FROM,      /* a re-export; text: the module; count: an sjs_import_kind */
     /* The end of the program. */
     SJS_EV_END
 } sjs_event_kind;
+
+/*
+ * What an SJS_EV_IMPORT or SJS_EV_EXPORT_FROM takes from its module. One
+ * import or re-export statement gives one event per specifier, in source
+ * order, when its module's name is read; a statement that binds nothing
+ * gives one SJS_IMPORT_MODULE event.
+ */
+typedef enum {
+    SJS_IMPORT_NAME = 0,   /* alias: one export ("default" for a default import) */
+    SJS_IMPORT_NAMESPACE,  /* `* as name`: the namespace object; alias is empty */
+    SJS_IMPORT_STAR,       /* `export * from`: every export but default (EXPORT_FROM only) */
+    SJS_IMPORT_MODULE      /* binds nothing; the module must exist */
+} sjs_import_kind;
 
 typedef enum {
     SJS_OP_ADD = 1, SJS_OP_SUBTRACT, SJS_OP_MULTIPLY, SJS_OP_DIVIDE, SJS_OP_REMAINDER,
@@ -355,8 +371,9 @@ typedef struct {
     uint32_t count;
     double number;
     sjs_str text;   /* valid during the call only */
-    sjs_str alias;  /* SJS_EV_IMPORT: the exported name; text is the module */
-    sjs_str name;   /* SJS_EV_IMPORT: the local name */
+    /* SJS_EV_IMPORT, SJS_EV_EXPORT_FROM, SJS_EV_EXPORT_NAME: */
+    sjs_str alias;  /* the name before `as` */
+    sjs_str name;   /* the name after `as`, or the same name */
     sjs_position at;
 } sjs_event;
 
@@ -377,7 +394,7 @@ typedef struct { void *self; const sjs_sink_vtable *v; } sjs_sink;
 typedef enum {
     /* One expression, read as JavaScript reads `(` source `)`. */
     SJS_GOAL_EXPRESSION = 0,
-    /* A module: imports, then const and export const declarations. */
+    /* A module: imports, const declarations and exports, in any order. */
     SJS_GOAL_MODULE
 } sjs_goal;
 
@@ -412,7 +429,8 @@ typedef struct sjs_program sjs_program;
  * an object from evaluating the module's program, borrowed for as long as the
  * compiler runs (the program retains what it imports). A module can only be
  * imported once it has been compiled and evaluated, so imports cannot form a
- * cycle.
+ * cycle. staticjs gives a module's exports as its namespace: keys sorted by
+ * UTF-16 code units; an embedder's object may be in any order.
  */
 typedef struct sjs_modules_vtable {
     sjs_result (*find)(void *self, sjs_str name, sjs_value *exports);

@@ -75,6 +75,14 @@ x => {}(1)
 this
 --- error unsupported does not have this
 
+=== a reserved word no expression starts with
+[default]
+--- error syntax expected an expression
+
+=== a word only strict code reserves
+[let]
+--- error unsupported does not have this
+
 === new of anything but Set
 new Map()
 --- error unsupported constructs only Set
@@ -166,11 +174,11 @@ nope + 1
 
 === a const that refers to itself
 (() => { const f = x => f(x); return f; })
---- error name not bound
+--- error unsupported used before
 
 === a const that refers to a later one through a closure
 (() => { const g = () => h(); const h = () => 1; return g(); })
---- error name not bound
+--- error unsupported used before
 
 === shadowing after use in the same block
 (a => { const b = a; const a2 = 1; return b + a2; })(1)
