@@ -49,10 +49,11 @@ scenario references move to the new name together.
 
 How rings carry records is in [reference/ring.md](../reference/ring.md).
 Complete-spec requests and bounded structured compile diagnostics are in
-[reference/definitions.md](../reference/definitions.md). They use blobs so
-their size does not determine the size of a ring record. Exact spec and
-diagnostic encodings remain sketch questions; native data model and value
-integrations remain part of the binding.
+[reference/definitions.md](../reference/definitions.md). A request carries
+a process-local handle to a native spec and host-owned memory for the
+native compile-error struct, so their size does not determine the size of
+a ring record. There is no byte layout of a spec; native spec building,
+data model and value integrations remain part of the binding.
 
 ## The DSL
 

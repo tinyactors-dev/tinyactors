@@ -234,15 +234,15 @@ A session that holds a macrostep slot, running or parked, has its execution aban
 
 `0x010B` on `h2c`, 56 fixed bytes. Compile and register a complete definition.
 
-Header session is 0. One atomic request, with no builder operations. Core validates a relocatable ta_scxml_spec, compiles it through the existing compiler and registers it between macrosteps. Native data model callbacks remain synchronous (reference/definitions.md).
+Header session is 0. One atomic request, with no builder operations. The binding builds a native ta_scxml_spec with core's spec builder; core compiles it through the existing compiler and registers it between macrosteps. There is no byte layout of a spec. Native data model callbacks remain synchronous (reference/definitions.md).
 
-The host keeps spec readable and diagnostic writable until the correlated c2h.definition_result. Failure registers nothing and retains nothing from the submitted spec.
+The host keeps spec valid and diagnostic writable until the correlated c2h.definition_result. Failure registers nothing and retains nothing from the submitted spec.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 32 | `spec` | blob | complete declarative spec; offsets and counts, not native pointers |
+| 32 | `spec` | u64 | process-local handle of a complete native ta_scxml_spec built by the binding |
 | 40 | `datamodel` | u64 | process-local handle of a native-installed data model adapter |
-| 48 | `diagnostic` | blob | host-owned bounded output buffer for a structured compile error |
+| 48 | `diagnostic` | blob | host-owned bounded memory core writes the native compile-error struct (core ADR 0058) into |
 
 - may be answered by: [`c2h.definition_result`](#c2hdefinition_result)
 
@@ -574,7 +574,7 @@ Envelopes still waiting for it are recycled as for h2c.load_failed.
 
 Exactly one result per definition request. Header session is 0. Core reserves room for this fixed-size reply before consuming the request or changing definition state. No macrostep end report follows.
 
-A compile_error diagnostic owns copies of the code, path, subject, subject range, related text and message of ta_compile_error (core ADR 0058); no borrowed pointers escape. The host owns the buffer before and after completion (reference/definitions.md).
+A compile_error diagnostic is the native ta_compile_error struct (core ADR 0058), written whole into the request's diagnostic memory with its code, path, subject, subject range, related text and message; no pointer into the spec or core escapes. If it does not fit, the status is capacity and nothing partial is written. The host owns the memory before and after completion (reference/definitions.md).
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -782,7 +782,7 @@ The result of a definition request.
 | 2 | `capacity` | allocation, a configured bound or diagnostic buffer capacity was exhausted |
 | 3 | `mismatch` | an explicit identity names different content (core ADR 0077) |
 | 4 | `not_found` | an unknown or stale definition ID |
-| 5 | `invalid` | an invalid spec representation, adapter handle or release request |
+| 5 | `invalid` | a malformed or unknown spec or adapter handle, or an invalid release request |
 
 ### `type_registry` (u8)
 

@@ -3,30 +3,30 @@
 **Status:** Sketch (2026-10-02), part of [the ring protocol proposal](../README.md)
 
 **Accepted boundary:** hosts submit complete declarative definitions through
-the protocol. Native integration for the synchronous data model and value
-ownership remains desired. The representation below is a sketch; its exact
-byte layout is still open.
+the protocol, as a handle to a native `ta_scxml_spec` the binding built.
+Building the spec, like installing the data model and value ownership, is
+native integration. There is no flat byte layout of a spec
+([below](#decided-a-native-spec-handle-not-a-byte-layout)).
 
 ## Submit a complete definition
 
 [`h2c.definition_register`](../protocol/generated/MESSAGES.md#h2cdefinition_register)
-contains one complete specification, a native data model adapter handle and
-a diagnostic output buffer. Core compiles and registers it, then writes
+contains a handle to one complete native spec, a native data model adapter
+handle and a diagnostic output buffer. Core compiles and registers it, then writes
 [`c2h.definition_result`](../protocol/generated/MESSAGES.md#c2hdefinition_result)
 with the request's `seq`. Success returns a system-local definition ID.
 There are no add-state, add-transition or finish-builder records, and no
 partly constructed definition for the host to manage.
 
 The existing declarative `ta_scxml_spec` and compiler remain the semantic
-implementation. SCXML and language-specific front ends produce that spec;
-parsers and codecs stay outside core. The proposed buffer representation
-uses offsets and counted lists for the spec tree, authored text, expressions,
-literal content and source spans. It carries the same information as the
-native spec, including optional explicit identity; omitted identity uses
-the existing fingerprinting rules. It contains no native pointers or
-compiled runtime identifiers. Core validates offsets, lengths, tree shape
-and bounds before compiling. Exact field layout, versioning and the
-representation of nested definitions still need specification.
+implementation. The binding builds the spec with core's existing spec
+builder (`tree.c`), in its own process, before it posts the request. SCXML
+and language-specific front ends produce that spec; parsers and codecs stay
+outside core. A host that has a chart as text uses a chart codec (ADR 0053,
+`ta_definition_import`) on its side and passes the resulting spec handle.
+The spec carries optional explicit identity; omitted identity uses the
+existing fingerprinting rules. Versioning and nested definitions are
+whatever `ta_scxml_spec` does. Builder steps stay off the rings.
 
 Host expressions can name process-local handles installed by the binding.
 The data model adapter handle also names a native-installed adapter; it
@@ -49,32 +49,47 @@ record shapes are not yet specified. Debugger commands use native primitives
 under exclusive system ownership, outside the production protocol
 ([debugging.md](debugging.md)).
 
-## Buffers, bounds and errors
+## Decided: a native spec handle, not a byte layout
 
-The host owns both buffers. `spec` names a readable `blob`; `diagnostic`
-names a writable `blob` whose capacity the byte sink reports. They remain
-valid until the correlated result is committed, even after core releases
-the h2c record. The host may reuse them after reading that result. If the
-system is destroyed first, destruction releases pending requests before
-returning, so the host may reclaim their buffers then. Blob access is the
-existing native byte source/sink integration; it does not add a chart codec
-to core. Rings contain only handles and bounded fixed fields, even for a
-large spec.
+`spec` is a process-local handle, like value references and the data model
+adapter handle. A flat byte layout of `ta_scxml_spec` (offsets, counted
+lists, versioning, nested definitions) is rejected:
 
-A compile diagnostic copies ADR 0058's code, path of member/index steps,
-subject, subject byte range, related text and message into the output
-buffer, using offsets and lengths rather than borrowed pointers. It reports
-the first fault in compile order. `diagnostic_bytes` tells the host how much
-was written. The exact diagnostic encoding is also still a sketch question.
-The writable buffer's capacity bounds diagnostic output; existing compile
+- **Every host builds specs natively.** napi and the test host do it in C.
+  A JavaScript host on wasm calls core's exported builder functions, as
+  napi does.
+- **The protocol is process-local.** A handle never leaves the process, so
+  nothing needs a portable encoding.
+- **A layout would duplicate `ta_scxml_spec`** field for field, and both
+  would have to change together.
+
+A malformed native spec is what a native caller gets today: a bad pointer
+is a crash, not `invalid`.
+
+## Handles, buffers, bounds and errors
+
+The host owns the spec and the diagnostic buffer. `spec` names a native
+spec; `diagnostic` names writable memory whose capacity the byte sink
+reports. Both remain valid until the correlated result is committed, even
+after core releases the h2c record. The host may free or reuse them after
+reading that result. If the system is destroyed first, destruction releases
+pending requests before returning, so the host may reclaim them then. Rings
+contain only handles and bounded fixed fields, even for a large spec.
+
+The diagnostic is ADR 0058's native compile-error struct: code, path of
+member/index steps, subject, subject byte range, related text and message.
+Core writes it into the memory the host provides. It reports the first
+fault in compile order. `diagnostic_bytes` tells the host how much was
+written. The writable buffer's capacity bounds diagnostic output; existing compile
 scratch and allocation bounds still apply. Message and formatted-text
 parameters do not bound the whole path or authored subject. If the output
 buffer cannot hold the complete diagnostic, core returns `capacity`
 with `diagnostic_bytes = 0`; it never publishes a partial diagnostic. The
 host can retry with a larger configured buffer. Allocation or
 definition-capacity exhaustion also returns `capacity`; no definition is
-registered on any failure. Malformed representations or adapter handles
-return `invalid`; an identity/content conflict returns `mismatch`.
+registered on any failure. A malformed or unknown spec or adapter handle
+returns `invalid`; a spec the compiler's own validation refuses returns
+`compile_error` with its diagnostic; an identity/content conflict returns `mismatch`.
 
 ## Scheduling and backpressure
 
@@ -95,12 +110,13 @@ host can act on, rather than an SCXML event for a nonexistent actor.
 
 1. Native calls create the system, expose its rings and install the binding's
    data model and value integrations.
-2. The host produces both chart specs and posts two
-   `h2c.definition_register` requests with distinct buffers.
+2. The host builds both chart specs with core's spec builder and posts two
+   `h2c.definition_register` requests with their spec handles and distinct
+   diagnostic buffers.
 3. The host drives `ta_run`, consumes each `c2h.definition_result` and
-   reclaims that request's buffers. It handles errors before posting spawns.
+   reclaims that request's spec and buffer. It handles errors before posting spawns.
 4. The host posts `h2c.spawn` using the successful definitions' identities.
 
-The protocol remains process-local: blobs, adapter handles, host-expression
+The protocol remains process-local: spec handles, blobs, adapter handles, host-expression
 handles and value references are resolved by the binding. A test host that
 forwards requests from a client maps these handles in its own process.

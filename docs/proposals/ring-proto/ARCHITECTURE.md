@@ -63,11 +63,12 @@ lists the ADRs this reverses.)
   and telemetry.
   Definition compilation has structured error results (ADR 0058); bindings
   need no separate native definition-management interface. The test host
-  forwards requests after mapping process-local value and buffer handles.
+  forwards requests after mapping process-local value, spec and buffer handles.
 - **Native integration stays ordinary API calls:**
   - creating and destroying a system, accessing its rings;
   - `ta_run(budget)`;
   - installing and calling the synchronous data model vtable;
+  - building definition specs with core's spec builder;
   - value ownership and byte source/sink integrations.
 - **Debugger commands stay outside the production protocol.** The host
   suspends its pump and transfers exclusive ownership of the whole system
@@ -77,9 +78,10 @@ lists the ADRs this reverses.)
   ownership to the pump. There is no operator ring or operator command
   admission ([reference/debugging.md](reference/debugging.md)).
 
-The accepted definition boundary and the remaining representation questions
-are in [reference/definitions.md](reference/definitions.md). The protocol
-does not mirror individual C builder operations.
+The accepted definition boundary is in
+[reference/definitions.md](reference/definitions.md). A request carries a
+handle to a native spec; the protocol does not mirror individual C builder
+operations, and there is no byte layout of a spec.
 
 ## The host loop
 
@@ -98,7 +100,7 @@ loop:
   ta_run(budget)                         # admits from h2c, runs macrosteps; returns on budget,
                                          # idle, or TA_RUN_C2H_FULL (drain c2h, then call again)
   read each available c2h record:
-    c2h.definition_result → resolve the request; reclaim its buffers; report compile errors
+    c2h.definition_result → resolve the request; reclaim its spec and buffer; report compile errors
     c2h.input         → recorder; journal on the application's schedule
     c2h.send          → I/O processor, immediately on receipt
     c2h.invoke / c2h.invoke_cancel / c2h.invoke_forward → invoker, on receipt
@@ -111,7 +113,9 @@ loop:
   c2h.unloaded        → store image and wake_at in the index of unloaded sessions
   c2h.bounced         → reject source_seq; release or retry the retained original (policy)
   tel                 → OTLP encoder, when the exporter asks
-  I/O results (acks, rejections, errors) → h2c.event / h2c.invoke_report
+  I/O results (acks, rejections, errors) → h2c.event / h2c.invoke_report if h2c has room,
+                      else the host's bounded result buffer, else drop (policy)
+  at the start of each loop turn: flush the result buffer into h2c while it has room
 ```
 
 The host never routes mail between actors, never orders inputs for a busy
@@ -127,6 +131,18 @@ capacity after an event is posted. Core consumes and bounces such an event
 without executing it, so control commands behind it can still progress.
 The host drains c2h after every yield and prioritizes load answers, load
 failures and clock updates over new ordinary inputs.
+
+**Draining c2h never waits for room in h2c.** If it did, core would wait
+for the host and the host for core
+([macrostep.md](reference/macrostep.md#a-full-c2h-pauses-the-slot)). The
+drain consumes every c2h record it reads: it decodes the record, takes
+ownership of its value references, calls the handler and releases the
+record's ring space. It never awaits a handler before releasing. A result a
+handler wants to post goes to h2c if there is room. Otherwise it goes into
+the host's own bounded buffer, which the host flushes at the start of the
+next loop turn. If that buffer is full, the host drops a result by its own
+policy; the chart's timeout covers it
+([S09.6](scenarios/S09-edge-backpressure.md)).
 
 Core reads h2c in order, and applies control commands between steps, where
 no slot is inside a unit of executable content. An admitted event is

@@ -151,7 +151,7 @@ enum :definition_status, :u8, doc: 'The result of a definition request.' do
   value :capacity, 2, 'allocation, a configured bound or diagnostic buffer capacity was exhausted'
   value :mismatch, 3, 'an explicit identity names different content (core ADR 0077)'
   value :not_found, 4, 'an unknown or stale definition ID'
-  value :invalid, 5, 'an invalid spec representation, adapter handle or release request'
+  value :invalid, 5, 'a malformed or unknown spec or adapter handle, or an invalid release request'
 end
 
 enum :type_registry, :u8, doc: 'Which type registry a declared type belongs to (reference/building-blocks.md).' do
@@ -300,15 +300,16 @@ end
 
 message 'h2c.definition_register', code: 0x010B, summary: 'Compile and register a complete definition' do
   doc 'Header session is 0. One atomic request, with no builder operations. ' \
-      'Core validates a relocatable ta_scxml_spec, compiles it through the ' \
-      'existing compiler and registers it between macrosteps. Native data ' \
+      'The binding builds a native ta_scxml_spec with core\'s spec builder; ' \
+      'core compiles it through the existing compiler and registers it ' \
+      'between macrosteps. There is no byte layout of a spec. Native data ' \
       'model callbacks remain synchronous (reference/definitions.md).'
-  doc 'The host keeps spec readable and diagnostic writable until the ' \
+  doc 'The host keeps spec valid and diagnostic writable until the ' \
       'correlated c2h.definition_result. Failure registers nothing and ' \
       'retains nothing from the submitted spec.'
-  field :spec, :blob, 'complete declarative spec; offsets and counts, not native pointers'
+  field :spec, :u64, 'process-local handle of a complete native ta_scxml_spec built by the binding'
   field :datamodel, :u64, 'process-local handle of a native-installed data model adapter'
-  field :diagnostic, :blob, 'host-owned bounded output buffer for a structured compile error'
+  field :diagnostic, :blob, 'host-owned bounded memory core writes the native compile-error struct (core ADR 0058) into'
   replies_with 'c2h.definition_result'
 end
 
@@ -569,10 +570,12 @@ message 'c2h.definition_result', code: 0x0212, summary: 'A definition request co
   doc 'Exactly one result per definition request. Header session is 0. ' \
       'Core reserves room for this fixed-size reply before consuming the ' \
       'request or changing definition state. No macrostep end report follows.'
-  doc 'A compile_error diagnostic owns copies of the code, path, subject, ' \
-      'subject range, related text and message of ta_compile_error (core ' \
-      'ADR 0058); no borrowed pointers escape. The host owns the buffer ' \
-      'before and after completion (reference/definitions.md).'
+  doc 'A compile_error diagnostic is the native ta_compile_error struct ' \
+      '(core ADR 0058), written whole into the request\'s diagnostic memory ' \
+      'with its code, path, subject, subject range, related text and ' \
+      'message; no pointer into the spec or core escapes. If it does not ' \
+      'fit, the status is capacity and nothing partial is written. The host ' \
+      'owns the memory before and after completion (reference/definitions.md).'
   field :cause_seq, :seq, 'the definition request’s h2c seq'
   field :definition, :u64, 'on successful register: the definition ID; otherwise 0'
   field :diagnostic_bytes, :u32, 'bytes written to the request’s diagnostic buffer; 0 without a compile error'

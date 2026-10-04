@@ -283,11 +283,13 @@ when h2c and c2h arrive, not at the end.
   how an operator looks at a live actor
   ([macrostep.md](macrostep.md#runaways-the-chain-limit)).
 - **Definition management uses requests and results.** Hosts submit a
-  complete declarative spec; core compiles and registers it between
-  macrosteps. Structured compile errors travel through bounded buffers.
-  Native data model and value ownership integration stays desired.
-  Exact spec and diagnostic encodings remain sketches
-  ([definitions.md](definitions.md)).
+  handle to a complete native `ta_scxml_spec`, built with core's spec
+  builder; core compiles and registers it between macrosteps. The
+  diagnostic is ADR 0058's native compile-error struct, written into
+  bounded host memory. A flat byte layout of the spec is rejected: every
+  host builds specs natively, the protocol is process-local, and a layout
+  would duplicate `ta_scxml_spec`. A host with a chart as text uses a chart
+  codec (ADR 0053) on its side ([definitions.md](definitions.md)).
 - **A pending input is withdrawn by a new record, not by editing h2c.**
   Committed records never change. [`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw)
   names an admitted input by its h2c seq. If it has not been taken, core

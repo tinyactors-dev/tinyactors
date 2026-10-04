@@ -162,8 +162,9 @@ The scenarios run this example through:
     own queue in front of it ([reference/ring.md](reference/ring.md#one-thread)).
 - **Accepted protocol boundary:** hosts submit complete declarative
   definitions and receive success or structured compile-error results;
-  registration holds and retirement also use requests. Exact spec encoding
-  remains a sketch ([reference/definitions.md](reference/definitions.md)).
+  registration holds and retirement also use requests. A request carries a
+  handle to a native `ta_scxml_spec` the binding built; there is no byte
+  layout of a spec ([reference/definitions.md](reference/definitions.md)).
 - **Accepted debugger boundary:** an attached debugger suspends the production
   pump and owns the whole system. Commands stay outside the three rings;
   intervention uses transitions and abandonment at legal boundaries.
