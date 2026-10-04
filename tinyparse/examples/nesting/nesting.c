@@ -219,6 +219,24 @@ static void nesting_dump(const tinyparse_tree *tree,
 ** (so the registered grammar is the one the generated parser's baked indices read)
 ** and register that grammar plus the generated run function under the language name
 ** the host grammar's inject form carries. Returns 0 on success. */
+/* ** How many regions each registered parser parsed. The driver registers these
+** counting wrappers rather than the generated run entries themselves and reports
+** the counts on stderr, so the gate can tell native nesting from the inject
+** runtime's fallback to the VM, which builds the same tree. */
+static unsigned json_regions, js_regions;
+
+static tinyparse_result count_json_run(tinyparse_parser *parser)
+{
+    json_regions++;
+    return json_lang_run(parser);
+}
+
+static tinyparse_result count_js_run(tinyparse_parser *parser)
+{
+    js_regions++;
+    return js_lang_run(parser);
+}
+
 static int register_language(tinyparse_engine *engine, const char *name,
                              tinyparse_result (*load)(tinyparse_engine *,
                                                         tinyparse_grammar **),
@@ -299,8 +317,8 @@ int main(int argc, char **argv)
         fputs("nesting: cannot load host grammar\n", stderr);
         return 2;
     }
-    if (register_language(engine, "std.json", json_lang_load, json_lang_run) ||
-        register_language(engine, "std.javascript", js_lang_load, js_lang_run))
+    if (register_language(engine, "std.json", json_lang_load, count_json_run) ||
+        register_language(engine, "std.javascript", js_lang_load, count_js_run))
         return 2;
 
     empty.pointer = NULL; empty.length = 0;
@@ -336,6 +354,8 @@ int main(int argc, char **argv)
         nesting_line_index_free(&index);
     }
 
+    fprintf(stderr, "nesting: generated parsers ran on std.json=%u std.javascript=%u regions\n",
+            json_regions, js_regions);
     tinyparse_tree_cursor_free(cursor);
     tinyparse_parser_free(parser);
     tinyparse_close(engine);

@@ -14,7 +14,9 @@
 # js_lang) with the nesting.c driver. This gate:
 #
 #   1. runs it on the sample: its composite tree must be the VM's (`tinyparse
-#      run std.fence --dump-tree`) and the committed expected.txt;
+#      run std.fence --dump-tree`) and the committed expected.txt, and the
+#      registered generated parsers must have parsed the regions (the driver
+#      counts them), not the inject runtime's fallback to the VM;
 #   2. reads the program's symbols: all three parsers' entries are there;
 #   3. builds a shared object of the three parsers with
 #      examples/embed/embed-lib.sh: it exports their entries and the public
@@ -29,9 +31,19 @@ Tinyparse::Gate.run('nesting', 'native-nesting gate') do |gate|
   next gate.fail("#{Tinyparse.relative(program)} is not built (mise run examples)") unless program.executable?
 
   sample = example.join('sample.md')
-  got = gate.execute([program, sample])
-  gate.compare('nesting: the generated parsers vs the VM', gate.vm_tree('std.fence', sample), got)
-  gate.compare('nesting: output vs expected.txt', example.join('expected.txt').binread, got)
+  got = gate.execute([program, sample], separate: true)
+  gate.compare('nesting: the generated parsers vs the VM', gate.vm_tree('std.fence', sample), got.out)
+  gate.compare('nesting: output vs expected.txt', example.join('expected.txt').binread, got.out)
+  gate.check(got.success?, "nesting exits #{got.code}:\n#{got.err}")
+  # The inject runtime falls back to the VM when no parser is registered for a
+  # language, and builds the same tree, so the tree alone cannot show that the
+  # generated embedded parsers ran: the driver counts their regions.
+  regions = got.err[/std\.json=(\d+) std\.javascript=(\d+)/]&.then { [$1.to_i, $2.to_i] }
+  if regions&.all?(&:positive?)
+    gate.ok("the generated std.json and std.javascript parsers ran on #{regions.join(' and ')} regions")
+  else
+    gate.fail("the generated embedded parsers did not both run (#{got.err.strip}): the regions fell back to the VM")
+  end
 
   parsers = { 'fence_host' => 'std.fence', 'json_lang' => 'std.json', 'js_lang' => 'std.javascript' }
   symbols = gate.defined_symbols(program)
