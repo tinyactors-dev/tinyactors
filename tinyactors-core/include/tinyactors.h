@@ -160,7 +160,9 @@ enum TA_CONSTANTS_OF(ta_result, "TA_") {
     TA_ERR_STALE = -10,
     TA_ERR_DONE = -11,
     /* The macrostep ran its microstep limit (ADR 0075); nothing changed. */
-    TA_ERR_RUNAWAY = -12
+    TA_ERR_RUNAWAY = -12,
+    /* A fixed capacity is used up (a heap, a queue, a ring); nothing changed. */
+    TA_ERR_FULL = -13
 };
 
 typedef struct { const char *ptr; uint32_t len; } ta_str TA_STRING;

@@ -33,9 +33,10 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
 # again, the ones about lifetimes run: actor lifetimes, and a compile that
 # runs out of memory at every allocation (span_test), and lists whose items
 # move between calls (list_test), and paged arrays whose directory moves
-# and whose pages are freed (paged_array_test). The codec, export, compile
+# and whose pages are freed (paged_array_test), and heaps over items
+# that move between calls (heap_test). The codec, export, compile
 # error and event pattern tests exercise pure functions.
-STANDALONE = %w[actor_id_test session_id_test offload_test span_test list_test paged_array_test].freeze
+STANDALONE = %w[actor_id_test session_id_test offload_test span_test list_test paged_array_test heap_test].freeze
 
 # A binary is rebuilt only when one of its inputs is newer: its test, the
 # amalgamation or a header. Tests build and run in parallel, one per CPU.

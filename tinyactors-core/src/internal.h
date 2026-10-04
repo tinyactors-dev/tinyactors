@@ -4,6 +4,7 @@
 #include "arena.h"
 #include "list.h"
 #include "paged_array.h"
+#include "heap.h"
 #include "tree.h"
 #include "atom.h"
 #include "address.h"

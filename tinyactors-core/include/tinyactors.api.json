@@ -13374,6 +13374,12 @@
           "value": -12,
           "symbol": "err_runaway",
           "doc": "The macrostep ran its microstep limit (ADR 0075); nothing changed."
+        },
+        {
+          "name": "TA_ERR_FULL",
+          "value": -13,
+          "symbol": "err_full",
+          "doc": "A fixed capacity is used up (a heap, a queue, a ring); nothing changed."
         }
       ],
       "doc": "======================================================================== Scalar handles, results, and plain data",

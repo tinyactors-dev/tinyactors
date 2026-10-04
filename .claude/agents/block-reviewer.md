@@ -46,7 +46,9 @@ Each item is a finding when it fails. Cite file and line.
    uses no memory of its own allocates nothing.
 5. **Failure.** Fallible functions return `ta_result`; the comment says a
    failed call changes nothing, and the code does not mutate before the
-   point of failure.
+   point of failure. A state that can arise at run time (full, empty, not
+   found, out of capacity) is checked and answered (`TA_ERR_FULL`,
+   `TA_ERR_NOT_FOUND`, ...), never left as an unchecked precondition.
 6. **Header documentation.** The header opens with `/** @file`. It names
    the object, contract and invariants, memory and lifetimes, complexity
    per operation, failure, and its users. Every function has a

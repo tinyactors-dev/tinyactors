@@ -131,7 +131,7 @@ needed, as with ADR 0093 today.
 | **Waiting list** | envelopes for an address that is not resident | arrival | address being loaded |
 | **Owner list** | a session's pending delayed sends | send order | session |
 | **Free list** | free envelopes | – | system |
-| Deadline index | pending delayed sends, as a binary heap of envelope indexes ordered by (due, send order), its positions in a paged array that grows and trims with the pool | – | system |
+| Deadline index | pending delayed sends, as a binary heap of envelope indexes ordered by (due, `send_id`), its positions in a paged array that grows and trims with the pool | – | system |
 
 **There is one run queue in arrival order, not one queue per target.**
 Arrival order keeps every sender-to-receiver pair in order, which is what
@@ -328,7 +328,10 @@ I/O processor.
   already turned into input can't be cancelled. SCXML says the same, and
   core is the only place this can happen, so there is no race with the host.
 - **[`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime) moves the
-  clock.** Every timer due by then leaves the index in (due, send order):
+  clock.** Every timer due by then leaves the index in (due, `send_id`).
+  `send_id` counts per sender, so one sender's timers due at the same time
+  leave in send order; timers of different senders with the same due time
+  have no order between them, as mail between sessions has none:
   - a local target's timer becomes runnable at the end of the run queue;
   - an I/O processor's timer is written as a
     [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend) and freed only

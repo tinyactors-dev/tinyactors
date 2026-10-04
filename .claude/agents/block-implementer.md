@@ -79,10 +79,14 @@ documentation and its test program, and nothing else.
   memory and until when. A block that "uses no memory of its own" (B1)
   allocates nothing at all.
 - **Failure:** return `ta_result` (`TA_OK`, `TA_ERR_NOMEM`,
-  `TA_ERR_INVALID`, ...). A failed call changes nothing. Programmer
-  errors that the contract forbids are documented preconditions, not
-  checked at run time on the hot path, unless the catalog asks for a
-  check.
+  `TA_ERR_INVALID`, `TA_ERR_FULL`, ...). A failed call changes nothing.
+  **A state that can arise at run time is an error to check and answer,
+  never a precondition:** a full heap, queue, ring, quota or pool answers
+  `TA_ERR_FULL`; an item that is not there answers `TA_ERR_NOT_FOUND`. A
+  comparison costs nothing next to the memory corruption it prevents.
+  Only programmer errors that no input or load can cause (an index of 0
+  where an item is required, an item already linked) stay documented,
+  unchecked preconditions.
 - **Complexity:** meet the catalog's stated bounds (O(1), O(log n), "walks
   the list"), and document them.
 - **When the design leaves a choice open** (for example how a generic
