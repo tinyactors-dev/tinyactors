@@ -81,11 +81,15 @@ const REVIEW = {
 // args.fix: the maintainer's corrections to a block already in the working
 // tree; the run starts with a fix round instead of implementing anew.
 const FIX = args && args.fix
+// args.notes: the maintainer's scope and decisions for this run, given to
+// the implementer and the reviewer alike (files beyond the usual scope,
+// what to leave for a later run).
+const NOTES = args && args.notes ? `\n\nThe maintainer's notes for this run, part of your task:\n${args.notes}` : ''
 phase('Implement')
 let impl = await run('implementer',
   FIX
     ? `Building block ${block} is already implemented in the working tree, uncommitted. Apply the maintainer's corrections below, rerun the commands and report as for an implementation. Change nothing else.\n${FIX}`
-    : `Implement building block ${block} of the ring protocol plan in tinyactors-core, with its header documentation and its own test program, as your instructions describe. Leave everything uncommitted.`,
+    : `Implement building block ${block} of the ring protocol plan in tinyactors-core, with its header documentation and its own test program, as your instructions describe. Leave everything uncommitted.${NOTES}`,
   { schema: IMPL, label: FIX ? `correct ${block}` : `implement ${block}` },
 )
 if (!impl) throw new Error(`the implementer for ${block} returned nothing`)
@@ -95,7 +99,7 @@ let review = null
 for (let round = 1; round <= MAX_ROUNDS; round++) {
   phase('Review')
   review = await run('reviewer',
-    `Spot-check building block ${block}. The implementer's report:\n${JSON.stringify(impl, null, 2)}`,
+    `Spot-check building block ${block}.${NOTES}\n\nThe implementer's report:\n${JSON.stringify(impl, null, 2)}`,
     { model: 'haiku', effort: 'low', schema: REVIEW, label: `review ${block} #${round}` },
   )
   if (!review) break
@@ -105,7 +109,7 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
 
   phase('Implement')
   const fixed = await run('implementer',
-    `Fix these review findings for building block ${block} in the working tree, then rerun the commands and report again. Dispute a finding in disputed_findings only with a reason.\n${JSON.stringify(review.findings, null, 2)}`,
+    `Fix these review findings for building block ${block} in the working tree, then rerun the commands and report again. Dispute a finding in disputed_findings only with a reason.${NOTES}\n${JSON.stringify(review.findings, null, 2)}`,
     { schema: IMPL, label: `fix ${block} #${round}` },
   )
   if (fixed) impl = fixed
