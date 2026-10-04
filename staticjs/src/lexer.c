@@ -467,7 +467,9 @@ static step end_string(sjs_lexer *lexer, uint8_t kind) {
     sjs_token token = { 0 };
     token.kind = kind;
     token.lone_surrogate = lexer->lone_surrogate ? 1u : 0u;
+    token.escaped = lexer->escaped ? 1u : 0u;
     lexer->lone_surrogate = false;
+    lexer->escaped = false;
     token.text = (sjs_str){ (const char *)lexer->text.ptr, lexer->text.length };
     return emit(lexer, &token);
 }
@@ -609,6 +611,7 @@ static step string_byte(sjs_lexer *lexer, uint8_t c) {
     }
     if (c == '\\') {
         lexer->substate = S_ESCAPE;
+        lexer->escaped = true;
         return TAKEN;
     }
     if (c == '\n' || c == '\r') return lex_fail(lexer, SJS_ERROR_SYNTAX, "a string cannot span lines");

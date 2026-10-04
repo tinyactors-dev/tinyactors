@@ -75,6 +75,130 @@ x => {}(1)
 [1][0] += 1
 --- error unsupported no assignment
 
+=== assignment to a number
+(1 = 2)
+--- error syntax cannot be assigned to
+
+=== assignment to a sum
+(a + b = 1)
+--- error syntax cannot be assigned to
+
+=== assignment to an optional member
+a?.b = 1
+--- error syntax cannot be assigned to
+
+=== assignment to a parenthesized array
+([a]) = 1
+--- error syntax cannot be assigned to
+
+=== compound assignment to an array
+[a] += 1
+--- error syntax cannot be assigned to
+
+=== logical assignment to a call
+f() ||= 1
+--- error syntax cannot be assigned to
+
+=== assignment to an array of a number
+[1] = []
+--- error syntax cannot be assigned to
+
+=== assignment to an array of a call
+[f()] = []
+--- error syntax cannot be assigned to
+
+=== assignment to an object of a number
+({a: 1} = {})
+--- error syntax cannot be assigned to
+
+=== assignment to an array with an element after its rest
+[...a, b] = []
+--- error syntax cannot be assigned to
+
+=== assignment to an array with a comma after its rest
+[...a,] = []
+--- error syntax cannot be assigned to
+
+=== assignment to an object whose rest is a pattern
+({...[a]} = {})
+--- error syntax cannot be assigned to
+
+=== assignment to an object with a property after its rest
+({...a, b} = {})
+--- error syntax cannot be assigned to
+
+=== assignment to an arrow function
+(() => 0) = 1
+--- error syntax cannot be assigned to
+
+=== assignment to a template
+`a` = 1
+--- error syntax cannot be assigned to
+
+=== assignment to a new set
+new Set() = 1
+--- error syntax cannot be assigned to
+
+=== assignment to an array of a conditional
+[a ? b : c] = []
+--- error syntax cannot be assigned to
+
+=== assignment after a unary operator
+typeof a = 1
+--- error syntax cannot be assigned to
+
+=== assignment to a parenthesized array element
+[([a])] = []
+--- error syntax cannot be assigned to
+
+=== assignment to a member
+a.b = 1
+--- error unsupported no assignment
+
+=== assignment to a parenthesized name
+(a) = 1
+--- error unsupported no assignment
+
+=== assignment to a call
+f() = 1
+--- error unsupported no assignment
+
+=== compound assignment to a call
+f() += 1
+--- error unsupported no assignment
+
+=== logical assignment to a name
+a ||= 1
+--- error unsupported no assignment
+
+=== assignment to an array with a rest pattern
+[a, ...[b]] = []
+--- error unsupported no assignment
+
+=== assignment to an object whose rest is a member
+({...a.b} = {})
+--- error unsupported no assignment
+
+=== assignment to an object of an array of a member
+({a: [b.c]} = {})
+--- error unsupported no assignment
+
+=== assignment in the else of a conditional
+a ? b : c = 1
+--- error unsupported no assignment
+
+=== assignment of an assignment
+[a] = [b] = []
+--- error unsupported no assignment
+
+=== assignment to a parenthesized member in an array
+[(a.b)] = []
+--- error unsupported no assignment
+
+=== assignment in an arrow function's body
+x => y = 1
+--- error unsupported no assignment
+
 === increment
 [1][0]++
 --- error unsupported no ++
@@ -271,16 +395,18 @@ String.raw`x`
 --- error syntax expected a statement
 
 === a default parameter
-((a = 1) => a)
---- error unsupported default
+((a = 1) => a)()
+--- value
+1
 
-=== an assignment in parentheses reads as a default
+=== an assignment in parentheses is not a default
 (a = 1)
---- error unsupported default
+--- error unsupported assignment
 
 === a rest parameter
-((...xs) => xs)
---- error unsupported rest
+((...xs) => xs)(1, 2)
+--- value
+[1,2]
 
 === a separator right after the point
 0._5

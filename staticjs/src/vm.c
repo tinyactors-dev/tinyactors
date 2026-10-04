@@ -569,6 +569,31 @@ typedef struct {
     uint32_t bottom;
 } call_site;
 
+/* A rest parameter: the arguments from site.bottom (the parameters before
+ * it) on become one array in its slot, the last parameter's. */
+static bool gather_rest(sjs_vm *vm, call_site site) {
+    uint32_t base = site.callee + 1u;
+    uint32_t fixed = site.bottom;
+    uint32_t n = site.argc > fixed ? site.argc - fixed : 0;
+    sjs_array *rest;
+    sjs_result r = sjs_array_make(vm->context, n, &rest);
+    if (r != SJS_OK) {
+        sjs_vm_fail(vm, r);
+        return false;
+    }
+    for (uint32_t i = 0; i < n; i++) rest->items[i] = vm->stack[base + fixed + i];
+    rest->length = n;
+    vm->sp -= n;
+    vm->fuel_used += n / 8u;
+    for (uint32_t i = site.argc; i < fixed; i++) {
+        if (!sjs_vm_push(vm, sjs_undefined())) {
+            sjs_release(vm->context, sjs_heap_value(SJS_ARRAY, &rest->h));
+            return false;
+        }
+    }
+    return sjs_vm_push(vm, sjs_heap_value(SJS_ARRAY, &rest->h));
+}
+
 static bool enter_closure(sjs_vm *vm, call_site site) {
     uint32_t callee = site.callee;
     uint32_t argc = site.argc;
@@ -588,6 +613,10 @@ static bool enter_closure(sjs_vm *vm, call_site site) {
         return false;
     }
     uint32_t base = callee + 1;
+    if ((fn->flags & SJS_FUNCTION_REST) != 0) {
+        if (!gather_rest(vm, (call_site){ callee, argc, fn->params - 1u })) return false;
+        argc = fn->params;
+    }
     if (argc > fn->params) cut(vm, base + fn->params);
     for (uint32_t i = argc; i < fn->params; i++) {
         if (!sjs_vm_push(vm, sjs_undefined())) return false;
@@ -693,6 +722,154 @@ static void finish_loop(sjs_vm *vm, vm_frame *f) {
     cut(vm, f->bottom);
     vm->frame_count--;
     sjs_vm_push(vm, result);
+}
+
+/* ------------------------------------------------------------------------
+ * Patterns
+ */
+
+/* A string as an array pattern sees it: by code point. The one at `index`,
+ * or undefined past the end. */
+static sjs_result string_point(sjs_vm *vm, char_ref ref, sjs_value *out) {
+    uint32_t index = (uint32_t)ref.index;
+    sjs_str text = sjs_string_view(ref.string);
+    uint32_t i = 0;
+    for (uint32_t n = 0; n < index && i < text.length; n++) sjs_utf8_next(text, &i);
+    vm->fuel_used += index / 8u;
+    *out = sjs_undefined();
+    if (i >= text.length) return SJS_OK;
+    uint32_t start = i;
+    sjs_utf8_next(text, &i);
+    sjs_string *c;
+    sjs_result r = sjs_string_make(vm->context, (sjs_str){ text.ptr + start, i - start }, &c);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    *out = sjs_heap_value(SJS_STRING, &c->h);
+    return SJS_OK;
+}
+
+/* `[a, ...rest]`: the elements of the source on top of the stack from
+ * `start` on, in a new array. */
+static sjs_result rest_elements(sjs_vm *vm, uint32_t start, sjs_value *out) {
+    sjs_value source = *stack_top(vm);
+    if (source.kind == SJS_STRING) {
+        sjs_str text = sjs_string_view(SJS_AS_STRING(source));
+        uint32_t i = 0;
+        for (uint32_t n = 0; n < start && i < text.length; n++) sjs_utf8_next(text, &i);
+        vm->fuel_used += start / 8u;
+        sjs_value rest;
+        sjs_result r = sjs_array_new(vm->context, 0, &rest);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        while (i < text.length) {
+            uint32_t from = i;
+            sjs_utf8_next(text, &i);
+            sjs_string *c;
+            r = sjs_string_make(vm->context, (sjs_str){ text.ptr + from, i - from }, &c);
+            if (r != SJS_OK) {
+                sjs_release(vm->context, rest);
+                return sjs_vm_fail(vm, r);
+            }
+            if (array_append(vm, &rest, sjs_heap_value(SJS_STRING, &c->h)) != SJS_OK) {
+                sjs_release(vm->context, rest);
+                return SJS_ERR_PROGRAM;
+            }
+        }
+        *out = rest;
+        return SJS_OK;
+    }
+    const sjs_array *a = SJS_AS_ARRAY(source);
+    uint32_t n = a->length > start ? a->length - start : 0;
+    sjs_array *rest;
+    sjs_result r = sjs_array_make(vm->context, n, &rest);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    for (uint32_t i = 0; i < n; i++) {
+        sjs_retain(a->items[start + i]);
+        rest->items[i] = a->items[start + i];
+    }
+    rest->length = n;
+    vm->fuel_used += n / 8u;
+    *out = sjs_heap_value(SJS_ARRAY, &rest->h);
+    return SJS_OK;
+}
+
+/* An object rest element's source, and the keys it leaves out: the
+ * pattern's static keys, an array constant, and its computed ones, strings
+ * on the stack. */
+typedef struct {
+    sjs_value source;
+    const sjs_array *named;  /* NULL when there are none */
+    const sjs_value *computed;
+    uint32_t computed_count;
+} excluded_keys;
+
+static bool excludes(const excluded_keys *x, const sjs_string *key) {
+    sjs_str k = sjs_string_view(key);
+    uint32_t named = x->named != NULL ? x->named->length : 0;
+    for (uint32_t i = 0; i < named; i++) {
+        if (sjs_str_equal(sjs_string_view(SJS_AS_STRING(x->named->items[i])), k)) return true;
+    }
+    for (uint32_t i = 0; i < x->computed_count; i++) {
+        if (sjs_str_equal(sjs_string_view(SJS_AS_STRING(x->computed[i])), k)) return true;
+    }
+    return false;
+}
+
+static bool excludes_index(const excluded_keys *x, uint32_t index) {
+    uint32_t named = x->named != NULL ? x->named->length : 0;
+    for (uint32_t i = 0; i < named + x->computed_count; i++) {
+        const sjs_string *k = SJS_AS_STRING(i < named ? x->named->items[i] : x->computed[i - named]);
+        if ((k->h.flags & SJS_STRING_INDEX) != 0 && k->index == index) return true;
+    }
+    return false;
+}
+
+/* `{a, ...rest}`: a new object of the source's own enumerable properties,
+ * in their order, but those the pattern named. */
+static sjs_result rest_properties(sjs_vm *vm, const excluded_keys *x, sjs_value *out) {
+    sjs_value source = x->source;
+    uint32_t keys = (x->named != NULL ? x->named->length : 0) + x->computed_count;
+    sjs_object *rest;
+    sjs_result r;
+    if (source.kind == SJS_STRING) return sjs_vm_fault(vm, "staticjs does not spread a string into an object");
+    if (source.kind == SJS_OBJECT) {
+        const sjs_object *o = SJS_AS_OBJECT(source);
+        r = sjs_object_make(vm->context, o->count, &rest);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        rest->count = 0;
+        for (uint32_t i = 0; i < o->count; i++) {
+            const sjs_entry *entry = &o->entries[i];
+            if (excludes(x, entry->key)) continue;
+            sjs_retain(sjs_heap_value(SJS_STRING, &entry->key->h));
+            sjs_retain(entry->value);
+            rest->entries[rest->count++] = *entry;
+        }
+        vm->fuel_used += (uint64_t)o->count * (keys + 1u) / 8u;
+    } else if (source.kind == SJS_ARRAY) {
+        const sjs_array *a = SJS_AS_ARRAY(source);
+        r = sjs_object_make(vm->context, a->length, &rest);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        rest->count = 0;
+        for (uint32_t i = 0; i < a->length; i++) {
+            if (excludes_index(x, i)) continue;
+            sjs_string *k;
+            r = sjs_string_from_number(vm->context, (double)i, &k);
+            if (r != SJS_OK) {
+                sjs_release(vm->context, sjs_heap_value(SJS_OBJECT, &rest->h));
+                return sjs_vm_fail(vm, r);
+            }
+            sjs_retain(a->items[i]);
+            rest->entries[rest->count].key = k;
+            rest->entries[rest->count++].value = a->items[i];
+        }
+        vm->fuel_used += (uint64_t)a->length * (keys + 1u) / 8u;
+    } else {
+        /* undefined and null fault before; numbers, booleans, sets and
+         * functions have no own enumerable properties. */
+        r = sjs_object_make(vm->context, 0, &rest);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        rest->count = 0;
+    }
+    *out = sjs_heap_value(SJS_OBJECT, &rest->h);
+    return SJS_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -990,8 +1167,8 @@ static void execute(sjs_vm *vm, vm_frame *f) {
     }
     case SJS_OP_PATTERN_ARRAY:
         f->pc = pc;
-        if (stack_top(vm)->kind != SJS_ARRAY && stack_top(vm)->kind != SJS_SET) {
-            sjs_vm_fault(vm, "only an array or a set can be destructured with [ ]");
+        if (stack_top(vm)->kind != SJS_ARRAY && stack_top(vm)->kind != SJS_SET && stack_top(vm)->kind != SJS_STRING) {
+            sjs_vm_fault(vm, "only an array, a set or a string can be destructured with [ ]");
         }
         return;
     case SJS_OP_PATTERN_OBJECT:
@@ -1003,6 +1180,11 @@ static void execute(sjs_vm *vm, vm_frame *f) {
     case SJS_OP_PATTERN_INDEX: {
         f->pc = pc + 4;
         uint32_t i = sjs_read32(code + pc);
+        if (stack_top(vm)->kind == SJS_STRING) {
+            if (string_point(vm, (char_ref){ SJS_AS_STRING(*stack_top(vm)), (double)i }, &result) != SJS_OK) return;
+            sjs_vm_push(vm, result);
+            return;
+        }
         const sjs_array *a = SJS_AS_ARRAY(*stack_top(vm));
         sjs_value v = i < a->length ? a->items[i] : sjs_undefined();
         sjs_retain(v);
@@ -1016,6 +1198,51 @@ static void execute(sjs_vm *vm, vm_frame *f) {
         sjs_vm_push(vm, result);
         return;
     }
+    case SJS_OP_PATTERN_COMPUTED: {
+        f->pc = pc + 2;
+        sjs_value key = sjs_vm_pop(vm);
+        sjs_string *k;
+        sjs_result r = key_of(vm, key, &k);
+        sjs_vm_release(vm, key);
+        if (r != SJS_OK) return;
+        sjs_value *slot = &vm->stack[f->base + sjs_read16(code + pc)];
+        sjs_vm_release(vm, *slot);
+        *slot = sjs_heap_value(SJS_STRING, &k->h);
+        if (sjs_property_get(vm, (sjs_member){ *stack_top(vm), k }, &result) != SJS_OK) return;
+        sjs_vm_push(vm, result);
+        return;
+    }
+    case SJS_OP_PATTERN_REST:
+        f->pc = pc + 4;
+        if (rest_elements(vm, sjs_read32(code + pc), &result) != SJS_OK) return;
+        sjs_vm_push(vm, result);
+        return;
+    case SJS_OP_PATTERN_REST_OBJECT: {
+        f->pc = pc + 6;
+        uint32_t named = sjs_read32(code + pc);
+        uint32_t n = sjs_read16(code + pc + 4);
+        excluded_keys x = { vm->stack[vm->sp - n - 1u], NULL, &vm->stack[vm->sp - n], n };
+        if (named != UINT32_MAX) x.named = SJS_AS_ARRAY(f->program->constants[named]);
+        if (rest_properties(vm, &x, &result) != SJS_OK) return;
+        cut(vm, vm->sp - n);
+        sjs_vm_push(vm, result);
+        return;
+    }
+    case SJS_OP_DEFAULT:
+        if (stack_top(vm)->kind != SJS_UNDEFINED) {
+            jump_to(f, code, pc);
+            return;
+        }
+        f->pc = pc + 4;
+        sjs_vm_release(vm, sjs_vm_pop(vm));
+        return;
+    case SJS_OP_DEFAULT_LOCAL:
+        if (vm->stack[f->base + sjs_read16(code + pc)].kind != SJS_UNDEFINED) {
+            jump_to(f, code, pc + 2);
+            return;
+        }
+        f->pc = pc + 6;
+        return;
     default:
         sjs_vm_fault(vm, "the program is damaged");
         return;

@@ -58,7 +58,8 @@ The rule has three consequences:
   `&& || ??`, `?:`, `in`, and optional chaining `?.`, `?.[]`, `?.()`.
 - Arrow functions, with an expression body or a block of `const`
   declarations ending in one `return`. Parameters and `const` take
-  identifiers and array and object patterns.
+  identifiers and array and object patterns, with default values and rest
+  elements; a function can take rest parameters.
 - Calls, with spread arguments. `new Set(...)`.
 - Modules: `const`, and the static module syntax around it: default,
   named and namespace imports (`import x, { a, b as c } from "name"`,

@@ -78,6 +78,19 @@ and spread arguments, with `?.`; arrow functions with an expression body,
 or a block of `const` declarations ending in one `return`; array and object
 patterns in parameters and `const`.
 
+Parameters and the targets of patterns take default values (`(a, b = a *
+2) => ...`, `const {limit = 10} = o`), taken when the value is `undefined`
+and evaluated only then, after the targets before them are bound. A
+function can take a rest parameter (`(...args) => ...`), and an array or
+object pattern a rest element (`[head, ...tail]`, `{a, ...others}`), last
+and without a default. Object patterns take names, strings, numbers
+(`{0: first}`) and computed keys (`{[key]: value}`) as keys; an object rest
+element copies the properties the pattern does not name, in their order.
+An array pattern destructures an array, a set (in insertion order) or a
+string (by code point). The parser reads an arrow function's parameter list
+ahead to tell it from a parenthesized expression, so the list, defaults
+included, must fit in `max_lookahead` tokens (256 by default).
+
 Modules: `const` declarations, `import x from "m"`, `import { a, b as c }
 from "m"`, `import * as ns from "m"`, `import x, { y }` and `import x, *
 as ns`, `import "m"`; `export const`, `export default` of an expression,
@@ -111,6 +124,9 @@ compare identities, or find something on a prototype.
 
 - `===` on two objects (identity); `+` of a string and an object; arithmetic
   or `<` on values that are not both numbers (or, for `<`, both strings).
+- An object rest element of a string (`const {...r} = "ab"`), as with
+  spreading a string into an object: JavaScript copies UTF-16 code units,
+  which can split a character.
 - A property JavaScript finds on `Object.prototype` (`toString`,
   `__proto__`); reading a method without calling it. A namespace
   (`import * as ns`) is an object too: `ns.toString` and `"valueOf" in ns`
@@ -132,7 +148,12 @@ import attributes (`with { type: "json" }`); two `export *` that give one
 name, unless an explicit export settles it, as staticjs cannot tell whether
 they are one binding, so even two that lead to the same binding are
 refused; and a name used before its import or declaration, even in an
-earlier function. In a script, which is sloppy, `eval`, `arguments` and the
+earlier function. A default value that reads a later parameter, its own
+parameter, or a name its function's body declares is refused too:
+JavaScript would throw, or would find another binding, as parameters have a
+scope of their own. Assigning is refused as unsupported where JavaScript
+can assign (`a.b = 1`, `[a] = xs`), and as a syntax error where it cannot
+(`1 = 2`, `a + b = 1`). In a script, which is sloppy, `eval`, `arguments` and the
 words only strict code reserves (`yield`, `let`, ...) are names, which
 staticjs does not bind; in a module they are syntax errors.
 

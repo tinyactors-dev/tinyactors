@@ -395,6 +395,68 @@ static void test_module_events(void) {
     CHECK(c.live == 0);
 }
 
+/* The events of `source`, pushed one byte at a time, as log_event writes them. */
+static void parse_events(const char *source, sjs_goal goal, event_log *log) {
+    counting c = { 0 };
+    log->text[0] = '\0';
+    sjs_parser *parser;
+    sjs_parser_config config = { { &c, &test_vtable }, SJS_LIMITS_DEFAULT, goal, { log, &log_vtable } };
+    CHECK(sjs_parser_init(&parser, &config) == SJS_OK);
+    for (size_t i = 0; source[i] != '\0'; i++) {
+        CHECK(sjs_parser_push(parser, (sjs_bytes){ (const uint8_t *)source + i, 1 }) == SJS_OK);
+    }
+    CHECK(sjs_parser_finish(parser) == SJS_OK);
+    sjs_parser_destroy(parser);
+    CHECK(c.live == 0);
+}
+
+/* Each kind and count in `want`, as log_event writes them with no text. */
+static void expect_events(const event_log *log, const int *want, int count, const char *const *texts) {
+    char text[2048];
+    size_t used = 0;
+    text[0] = '\0';
+    for (int i = 0; i < count; i++) {
+        used += (size_t)snprintf(text + used, sizeof text - used, "%d:%d:%s::\n", want[2 * i], want[2 * i + 1],
+                                 texts[i] != NULL ? texts[i] : "");
+    }
+    if (strcmp(log->text, text) != 0) fprintf(stderr, "events:\n%s\nwanted:\n%s\n", log->text, text);
+    CHECK(strcmp(log->text, text) == 0);
+}
+
+/* A default value's events come before its target's, and a parameter list
+ * says how many parameters it has. */
+static void test_pattern_events(void) {
+    static event_log log;
+    parse_events("(a, {b = 1} = {}, ...c) => a", SJS_GOAL_EXPRESSION, &log);
+    static const int params[] = {
+        SJS_EV_ARROW_BEGIN, 3, SJS_EV_PARAM, 0, SJS_EV_BIND, 0, SJS_EV_PARAM, 1, SJS_EV_DEFAULT, 0,
+        SJS_EV_OBJECT_BEGIN, 0, SJS_EV_OBJECT_END, 0, SJS_EV_DEFAULT_END, 0, SJS_EV_OBJECT_PATTERN_BEGIN, 0,
+        SJS_EV_PATTERN_KEY, 0, SJS_EV_DEFAULT, 0, SJS_EV_NUMBER, 0, SJS_EV_DEFAULT_END, 0, SJS_EV_BIND, 0,
+        SJS_EV_OBJECT_PATTERN_END, 0, SJS_EV_REST_PARAM, 2, SJS_EV_BIND, 0, SJS_EV_PARAMS_END, 0, SJS_EV_NAME, 0,
+        SJS_EV_ARROW_END, 0, SJS_EV_END, 0
+    };
+    static const char *const params_text[] = {
+        NULL, NULL, "a", NULL, NULL, NULL, NULL, NULL, NULL, "b", NULL, NULL, NULL, "b", NULL, NULL, "c", NULL, "a", NULL, NULL
+    };
+    expect_events(&log, params, (int)(sizeof params_text / sizeof params_text[0]), params_text);
+
+    /* Inside a const's held pattern, a default and the arrow function in it
+     * are reordered in place. */
+    parse_events("const {x = (y = 2) => y, [k]: z, ...r} = o;", SJS_GOAL_MODULE, &log);
+    static const int held[] = {
+        SJS_EV_CONST_BEGIN, 0, SJS_EV_NAME, 0, SJS_EV_OBJECT_PATTERN_BEGIN, 0, SJS_EV_PATTERN_KEY, 0,
+        SJS_EV_DEFAULT, 0, SJS_EV_ARROW_BEGIN, 1, SJS_EV_PARAM, 0, SJS_EV_DEFAULT, 0, SJS_EV_NUMBER, 0,
+        SJS_EV_DEFAULT_END, 0, SJS_EV_BIND, 0, SJS_EV_PARAMS_END, 0, SJS_EV_NAME, 0, SJS_EV_ARROW_END, 0,
+        SJS_EV_DEFAULT_END, 0, SJS_EV_BIND, 0, SJS_EV_NAME, 0, SJS_EV_PATTERN_COMPUTED_KEY, 0, SJS_EV_BIND, 0,
+        SJS_EV_PATTERN_REST, 0, SJS_EV_BIND, 0, SJS_EV_OBJECT_PATTERN_END, 0, SJS_EV_CONST_END, 0, SJS_EV_END, 0
+    };
+    static const char *const held_text[] = {
+        NULL, "o", NULL, "x", NULL, NULL, NULL, NULL, NULL, NULL, "y", NULL, "y", NULL, NULL, "x", "k", NULL, "z",
+        NULL, "r", NULL, NULL, NULL
+    };
+    expect_events(&log, held, (int)(sizeof held_text / sizeof held_text[0]), held_text);
+}
+
 /* A sink of one's own: count the events, and see the tokens' positions. */
 typedef struct {
     int events;
@@ -539,6 +601,21 @@ static void test_limits(void) {
     CHECK(strncmp(out, "fault 4", 7) == 0);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
+
+    /* A parameter list, defaults included, must fit in max_lookahead tokens;
+     * a parenthesized expression is told apart at its first token no pattern
+     * takes. */
+    limits = SJS_LIMITS_DEFAULT;
+    limits.max_lookahead = 16;
+    context = new_context(&c, limits);
+    e.context = context;
+    CHECK(evaluate(&e, "((a, b = 1) => a + b)(1)", out) == SJS_OK && strcmp(out, "2") == 0);
+    CHECK(evaluate(&e, "((a = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]) => a)()", out) == SJS_ERR_PROGRAM);
+    CHECK(strncmp(out, "error 4", 7) == 0);
+    CHECK(evaluate(&e, "([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]).length", out) == SJS_OK);
+    CHECK(strcmp(out, "40") == 0);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
 }
 
 /* Fail every allocation in turn: each run ends with an error, never a
@@ -582,6 +659,7 @@ int main(int argc, char **argv) {
     test_embedder_namespaces();
     test_compile_costs();
     test_module_events();
+    test_pattern_events();
     test_sink();
     test_writer_resumes();
     test_fuel_and_reset();
@@ -591,6 +669,11 @@ int main(int argc, char **argv) {
         test_out_of_memory("export const f = (xs) => xs.toSorted((a, b) => b - a).flatMap(x => [x, [x]]);\n"
                            "export const g = new Set(f([3, 1, 2]).flat()).union(new Set([9]));\n"
                            "export const h = Object.fromEntries(Object.entries({a: 1, b: 2}).map(([k, v]) => [k, `${v}`]));\n",
+                           SJS_GOAL_MODULE);
+        test_out_of_memory("(({a = [1], ...r}, ...xs) => [a, r, xs])({b: 2}, 3)", SJS_GOAL_EXPRESSION);
+        test_out_of_memory("export const [h = 0, ...t] = [undefined, \"\xc3\xa9" "x\", 2];\n"
+                           "export const {[`k${1}`]: k = h, ...rest} = {k1: undefined, z: [...t]};\n"
+                           "export default ((...[a, b = a]) => [a, b])(...\"ab\");\n",
                            SJS_GOAL_MODULE);
         test_out_of_memory("export { a, b as c };\n"
                            "const a = [1, 2].map(x => x * 2);\n"
