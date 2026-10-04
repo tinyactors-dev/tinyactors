@@ -27,15 +27,43 @@ host reads them with the same code.
 
 - [`tel.trace`](../protocol/generated/MESSAGES.md#teltrace) is one
   `ta_trace_record`. Its `trace_kind` field is the `ta_trace_kind`, and
-  only the fields that kind names are meaningful, as today. The state
-  arrays (`exited`, `entered`, `history`, `states`) are packed into the
-  `states` bytes in the tail.
+  only the fields that kind names are meaningful, as today. The records
+  mirror today's trace kinds one for one: lifecycle records,
+  MACROSTEP_BEGIN and MACROSTEP_END pairs, MICROSTEP, CONDITION, ASSIGN,
+  SENT, RAISED, IGNORED, ACTION_FAILED, RUNAWAY and the rest. They are
+  events, not spans. Spans are assembled after the ring, by the encoder
+  ([below](#otlp-tinyactors-otlp)).
 - [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) says how
   many records were dropped since the last one, and the sequence number
   the first of them would have had. Core writes it as soon as the ring
   has room again, before the next `tel.trace`. The ring's sequence
   numbers therefore have a gap exactly where a `tel.dropped` says there
   is one.
+
+### Records are self-contained
+
+A `tel.trace` record carries everything a reader needs, in its tail:
+
+- **names as text:** the session's address, the state, transition and
+  action at the record's position, the event name, the send and invoke
+  IDs. The kinds that open a run (SPAWNED, MACROSTEP_BEGIN, the
+  DEFINITION_* kinds) also carry the definition's document name and
+  source;
+- **the value** as text ([below](#values-are-text));
+- **the fault:** its code, its error event name and its message;
+- **the lists:** a microstep's transitions, and its exited, entered and
+  history states (or an operator transition's target states), each with
+  its compiled ID and its name.
+
+So a reader never calls back into core, and needs no live system. It can
+read `tel` after the system is destroyed, or in another process.
+
+Self-contained records are larger. A record must still fit
+`maxRecordBytes` ([BEHAVIORS.md](../BEHAVIORS.md#maxrecordbytes)). A
+microstep in a large chart can exit and enter more states than fit. Core
+then cuts the lists, last list first, and sets the `truncated` flag. The
+counts in the tail say how many entries are there, not how many there
+were.
 
 ### Values are text
 
@@ -55,12 +83,38 @@ Today the kernel's OTLP encoder renders the value as JSON, up to
 replaces that parameter, and the rendering moves from the encoder into
 core's write to `tel`.
 
+## The host clock
+
+A record read at drain time cannot say when it happened. Core has only
+logical time: the header's `at` is the system clock that
+[`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime) moves. Today the
+OTLP encoder fills the gap itself. It reads the host's wall clock at each
+span boundary (`config.host.now()`, `tinyactors-host/src/otlp.c`), while
+core calls the sink. After the ring that read happens too late.
+
+So the host installs a **clock function** at system creation. It is
+native integration, like the data model: a C function pointer that
+returns wall-clock nanoseconds since the Unix epoch. Core calls it once
+for every `tel` record it writes, and stamps the record's `wall_ns` with
+the result. `wall_ns` is separate from the header's logical `at`.
+
+- One clock call per record is cheaper than the sink call per record it
+  replaces.
+- napi installs a C function (`clock_gettime`). It never calls into
+  JavaScript.
+- The clock is **optional.** A host that installs none gets `wall_ns` 0.
+  Its spans have no real durations: the encoder falls back to logical
+  time. The test host can leave it out, or install a fake clock for
+  stable output.
+- Core calls the clock only for a record it writes. A kind that is off,
+  or a record that is dropped, costs no clock call.
+
 ## Masks and sampling, as today
 
 Nothing changes in what is traced:
 
-- the sink's `kinds`, `watched_kinds` and `unsampled_kinds` masks
-  (`TA_TRACE_BIT(kind)`) decide which kinds core writes;
+- the `kinds`, `watched_kinds` and `unsampled_kinds` masks
+  (`TA_TRACE_BIT(kind)`, today the sink's) decide which kinds core writes;
 - trace contexts and sampling are core's (ADR 0073);
 - metrics stay counters that core keeps (ADR 0072). They are read through
   the API, not through `tel`.
@@ -90,41 +144,94 @@ replay against the original run
 ([recording-and-replay.md](recording-and-replay.md), "Checking a replay
 for divergence").
 
-## OTLP stays a library
+## OTLP: `tinyactors-otlp`
 
-`tinyactors-host/src/otlp.c` (about 2,300 lines) turns trace records
-into OTLP protobuf spans and logs. It keeps spans that are still open
-between turns, and writes the ones that ended into memory the host
-provides (napi ADRs 0016 to 0018).
+`tinyactors-host/src/otlp.c` and its trace adapter (about 2,300 lines)
+turn trace records into OTLP protobuf spans and logs. They keep spans
+that are still open between turns, and write the ones that ended into
+memory the host provides (napi ADRs 0016 to 0018).
 
-In this design it becomes **a reader of `tel`**:
+They move into **`tinyactors-otlp`**, a small C library of its own. It
+is the reader of `tel` that encodes OTLP traces and logs. It does not
+belong in core, which has no use for protobuf. It does not belong in each
+binding, because encoding is free of any language's API (AGENTS.md).
+`tinyactors-host` is deleted ([migration.md](migration.md)). napi and the
+test host link `tinyactors-otlp`.
 
-- it takes `tel.trace` records instead of `ta_trace_record` callbacks;
-- a `tel.dropped` record closes or marks the spans it may have cut. How
-  exactly is **open**. The simplest answer is an attribute on the
-  enclosing span, plus a counter;
-- it moves out of `tinyactors-host`, which is deleted
-  ([migration.md](migration.md)). It does not belong in core, which has
-  no use for protobuf. Where it should live is **open**: a small C
-  library of its own (`tinyactors-otlp`), or a module in each binding.
-  Encoding is free of any language's API, so AGENTS.md argues for a
-  shared C library.
+Most of it is a move. What changes:
 
-`tah_otlp_traces_size`/`tah_otlp_put_traces` and
-`tah_otlp_logs_size`/`tah_otlp_put_logs` keep their shape. Only their
-input changes. napi's `tna_trace_dispatch` (`tinyactors-napi/src/napi_trace.c`)
-drains `tel` once per pump turn into the encoder, as it drains the
-staging buffer today. `TAH_PARAM_TRACE_STAGING_BYTES` becomes the
-encoder's own setting, because `telBytes` now bounds the ring.
+- **Its input.** It takes `tel.trace` records instead of
+  `ta_trace_record` callbacks. Span assembly stays where it is: the
+  encoder keeps an open macrostep span and microstep span per actor, as
+  today.
+- **No callbacks into core.** Names come from the record's tail
+  ([above](#records-are-self-contained)), not from
+  `ta_definition_inspect`, `ta_definition_span` and their kin.
+- **No clock reads.** Span start and end times are the records'
+  `wall_ns` ([above](#the-host-clock)).
+- **Its staging.** `TAH_PARAM_TRACE_STAGING_BYTES` becomes a setting of
+  `tinyactors-otlp`, because `telBytes` now bounds the ring.
+
+Its output API keeps its shape: a size call and a put call for traces
+(`tah_otlp_traces_size`/`tah_otlp_put_traces`) and the same pair for
+logs. The names may take the new library's prefix. napi's
+`tna_trace_dispatch` (`tinyactors-napi/src/napi_trace.c`) drains `tel`
+once per pump turn into the encoder, as it drains the staging buffer
+today.
+
+Why this split: the event records keep core's tracing as it is. The ring
+moves span assembly and protobuf encoding off the macrostep's hot path.
+It never slows the system, and the encoder cannot re-enter core.
+
+Rejected:
+
+- **core assembles complete spans** in a format of its own. That moves
+  open-span state and its memory into core;
+- **core writes OTLP protobuf** directly. Core has no use for protobuf;
+- **keep the trace sink vtable.** It runs the encoder inside the
+  macrostep, and lets a sink call back into core.
+
+**Open:** how a [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped)
+marks the spans it may have cut. Two answers:
+
+- an attribute on every span open at the drop, plus a counter;
+- close those spans with error status.
 
 ## What a host does with `tel`
 
 | Host | Reads `tel` | Does |
 |---|---|---|
-| napi | once per pump turn | OTLP encoder, then the JavaScript trace hook with `{traces, logs}` bytes |
+| napi | once per pump turn | `tinyactors-otlp`, then the JavaScript trace hook with `{traces, logs}` bytes |
 | test host | after each RPC call that runs core | `instrument.journal`, and assertions on records |
 | SQLite host (sketch) | at commit | an insert into a `trace` table, or nothing |
 | a host that does not trace | never | set the masks to zero; `telBytes` can be small |
 
 **Open:** whether `telBytes` may be 0, meaning the system has no `tel`
 ring at all. That would save the memory for hosts that never trace.
+
+## Possible extension: lossless telemetry
+
+Not in the first version. A creation parameter, such as
+`telemetryMode: lossy | lossless`, could make `tel` lossless.
+
+In lossless mode a full `tel` does not drop. It parks the slot at the
+next unit boundary, exactly as a full `c2h` does
+([macrostep.md](macrostep.md#a-full-c2h-pauses-the-slot)). This cannot
+deadlock: the host frees `tel` by draining it, and draining needs nothing
+from core.
+
+Some records are written in bursts, inside a unit or between phases:
+CONDITION for each guard, MICROSTEP, MACROSTEP_END, RUNAWAY. There is no
+boundary to park at between them. So a unit reserves room for them before
+it starts. The compiler can bound that reserve, as it bounds `c2h`'s
+mandatory batch. The same rule applies as for `c2h`: the reserves
+always leave room for one ordinary record
+([ring.md](ring.md#the-c2h-reserve)).
+
+Costs:
+
+- it reverses "telemetry never slows the system" for that mode;
+- lossless reaches only the host. To be complete end to end, the host
+  must stop draining `tel` while its own exporter is full;
+- masks and sampling still apply. Lossless means no drops of the records
+  core chose to write, not every record.

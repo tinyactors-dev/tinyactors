@@ -386,7 +386,7 @@ because a full one fails the chart's action.
 - **Default 4,096.** Event names, targets and origins in practice are well
   under 1 KiB. 4 KiB leaves room while keeping the reserve small. It is
   the most the default `c2hBytes` allows (16,384 / 4).
-- **Minimum 256:** the largest fixed part (`tel.trace`, 120 bytes) plus a
+- **Minimum 256:** the largest fixed part (`tel.trace`, 216 bytes) plus a
   short name. **Maximum `c2hBytes` / 4,** the reserve constraint.
 - **What it drives:** the longest name, target or origin one record can
   carry.

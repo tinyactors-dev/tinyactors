@@ -1900,110 +1900,194 @@
       "code": 769,
       "ring": "tel",
       "summary": "One trace record (core ADR 0067)",
-      "doc": "The fields of ta_trace_record that its kind names. Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring.",
+      "doc": "One ta_trace_record, kind for kind; only the fields its kind names are meaningful. The record is self-contained: names, values, the fault and the state and transition lists are text in its tail, so a reader needs no live system (reference/telemetry.md). Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `at` is logical time; wall_ns is when it happened.",
       "fields": [
+        {
+          "name": "wall_ns",
+          "type": "u64",
+          "doc": "the host clock when core wrote the record: wall-clock nanoseconds since the Unix epoch; 0 when the host installed no clock",
+          "offset": 32
+        },
         {
           "name": "macrostep",
           "type": "macrostep",
           "doc": "",
-          "offset": 32
+          "offset": 40
         },
         {
           "name": "trace_id_high",
           "type": "u64",
           "doc": "",
-          "offset": 40
+          "offset": 48
         },
         {
           "name": "trace_id_low",
           "type": "u64",
           "doc": "",
-          "offset": 48
+          "offset": 56
         },
         {
           "name": "cause_session",
           "type": "session",
           "doc": "",
-          "offset": 56
+          "offset": 64
         },
         {
           "name": "cause_macrostep",
           "type": "macrostep",
           "doc": "",
-          "offset": 64
+          "offset": 72
         },
         {
           "name": "microstep",
           "type": "u32",
           "doc": "",
-          "offset": 72
+          "offset": 80
         },
         {
           "name": "state",
           "type": "u32",
           "doc": "",
-          "offset": 76
+          "offset": 84
         },
         {
           "name": "transition",
           "type": "u32",
           "doc": "",
-          "offset": 80
+          "offset": 88
         },
         {
           "name": "action",
           "type": "u32",
           "doc": "",
-          "offset": 84
+          "offset": 92
         },
         {
           "name": "iteration",
           "type": "u32",
           "doc": "",
-          "offset": 88
+          "offset": 96
+        },
+        {
+          "name": "fault_code",
+          "type": "i32",
+          "doc": "the fault’s code, with fault_detail",
+          "offset": 100
         },
         {
           "name": "trace_kind",
           "type": "u16",
           "doc": "ta_trace_kind",
-          "offset": 92
+          "offset": 104
         },
         {
           "name": "position",
           "type": "u8",
           "doc": "ta_trace_at",
-          "offset": 94
+          "offset": 106
         },
         {
           "name": "result",
           "type": "bool",
           "doc": "",
-          "offset": 95
+          "offset": 107
+        },
+        {
+          "name": "trace_flags",
+          "type": "u8",
+          "doc": "the trace context’s flags (sampled)",
+          "offset": 108
+        },
+        {
+          "name": "trace_detail",
+          "type": "u8",
+          "doc": "the trace context’s detail (watched)",
+          "offset": 109
+        },
+        {
+          "name": "address",
+          "type": "text",
+          "doc": "the session’s family/name",
+          "offset": 112
+        },
+        {
+          "name": "definition",
+          "type": "text",
+          "doc": "the definition’s document name and source, on the kinds that open a run",
+          "offset": 120
+        },
+        {
+          "name": "state_name",
+          "type": "text",
+          "doc": "the name of `state`",
+          "offset": 128
+        },
+        {
+          "name": "transition_name",
+          "type": "text",
+          "doc": "the name of `transition`",
+          "offset": 136
+        },
+        {
+          "name": "action_name",
+          "type": "text",
+          "doc": "the name of `action`",
+          "offset": 144
         },
         {
           "name": "name",
           "type": "text",
-          "doc": "",
-          "offset": 96
+          "doc": "the event name, or the name the kind carries",
+          "offset": 152
+        },
+        {
+          "name": "send_id",
+          "type": "text",
+          "doc": "the send ID, for SENT and its kin",
+          "offset": 160
+        },
+        {
+          "name": "invoke_id",
+          "type": "text",
+          "doc": "the invoke ID, for INVOKED and its kin",
+          "offset": 168
         },
         {
           "name": "value_text",
           "type": "text",
           "doc": "",
-          "offset": 104
+          "offset": 176
+        },
+        {
+          "name": "fault_detail",
+          "type": "text",
+          "doc": "the fault’s error event name",
+          "offset": 184
+        },
+        {
+          "name": "fault_message",
+          "type": "text",
+          "doc": "",
+          "offset": 192
+        },
+        {
+          "name": "transitions",
+          "type": "bytes",
+          "doc": "the microstep’s transitions: a u32 count, then per transition its u32 ID, then its name as a u32 length and UTF-8 bytes",
+          "offset": 200
         },
         {
           "name": "states",
           "type": "bytes",
-          "doc": "u32 state IDs: exited, entered, history, counted in the tail",
-          "offset": 112
+          "doc": "exited, entered, history, states: per list a u32 count, then per state its u32 ID, then its name as a u32 length and UTF-8 bytes",
+          "offset": 208
         }
       ],
       "flags": [
         {
           "name": "truncated",
           "bit": 0,
-          "doc": "value_text was cut"
+          "doc": "value_text was cut, or a list in the tail was cut to fit maxRecordBytes"
         },
         {
           "name": "suppressed",
@@ -2012,7 +2096,7 @@
         }
       ],
       "replies": [],
-      "fixed_size": 120,
+      "fixed_size": 216,
       "see": []
     },
     {

@@ -559,6 +559,7 @@ _Static_assert(sizeof(trp_c2h_load_result) == 48, "c2h.load_result");
 /* tel.trace: One trace record (core ADR 0067). */
 typedef struct {
     trp_header header;
+    uint64_t wall_ns;
     uint64_t macrostep;
     uint64_t trace_id_high;
     uint64_t trace_id_low;
@@ -569,14 +570,28 @@ typedef struct {
     uint32_t transition;
     uint32_t action;
     uint32_t iteration;
+    int32_t fault_code;
     uint16_t trace_kind;
     uint8_t position;
     uint8_t result;
+    uint8_t trace_flags;
+    uint8_t trace_detail;
+    uint8_t pad17[2];
+    trp_span address;
+    trp_span definition;
+    trp_span state_name;
+    trp_span transition_name;
+    trp_span action_name;
     trp_span name;
+    trp_span send_id;
+    trp_span invoke_id;
     trp_span value_text;
+    trp_span fault_detail;
+    trp_span fault_message;
+    trp_span transitions;
     trp_span states;
 } trp_tel_trace;
-_Static_assert(sizeof(trp_tel_trace) == 120, "tel.trace");
+_Static_assert(sizeof(trp_tel_trace) == 216, "tel.trace");
 
 /* tel.dropped: Telemetry records were dropped. */
 typedef struct {

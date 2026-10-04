@@ -55,7 +55,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x0213` | [`c2h.input_refused`](#c2hinput_refused) | An admitted host input was not taken | 48 |
 | `0x0214` | [`c2h.input_completed`](#c2hinput_completed) | A host input and its startup follow-up settled | 56 |
 | `0x0215` | [`c2h.load_result`](#c2hload_result) | A load-failure response finished recycling waiting inputs | 48 |
-| `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 120 |
+| `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 216 |
 | `0x0302` | [`tel.dropped`](#teldropped) | Telemetry records were dropped | 48 |
 
 ## Common header (32 bytes)
@@ -624,30 +624,44 @@ Acknowledges h2c.load_failed after all waiting envelopes were recycled or refuse
 
 ## tel.trace
 
-`0x0301` on `tel`, 120 fixed bytes. One trace record (core ADR 0067).
+`0x0301` on `tel`, 216 fixed bytes. One trace record (core ADR 0067).
 
-The fields of ta_trace_record that its kind names. Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring.
+One ta_trace_record, kind for kind; only the fields its kind names are meaningful. The record is self-contained: names, values, the fault and the state and transition lists are text in its tail, so a reader needs no live system (reference/telemetry.md). Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `at` is logical time; wall_ns is when it happened.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 32 | `macrostep` | macrostep |  |
-| 40 | `trace_id_high` | u64 |  |
-| 48 | `trace_id_low` | u64 |  |
-| 56 | `cause_session` | session |  |
-| 64 | `cause_macrostep` | macrostep |  |
-| 72 | `microstep` | u32 |  |
-| 76 | `state` | u32 |  |
-| 80 | `transition` | u32 |  |
-| 84 | `action` | u32 |  |
-| 88 | `iteration` | u32 |  |
-| 92 | `trace_kind` | u16 | ta_trace_kind |
-| 94 | `position` | u8 | ta_trace_at |
-| 95 | `result` | bool |  |
-| 96 | `name` | text |  |
-| 104 | `value_text` | text |  |
-| 112 | `states` | bytes | u32 state IDs: exited, entered, history, counted in the tail |
+| 32 | `wall_ns` | u64 | the host clock when core wrote the record: wall-clock nanoseconds since the Unix epoch; 0 when the host installed no clock |
+| 40 | `macrostep` | macrostep |  |
+| 48 | `trace_id_high` | u64 |  |
+| 56 | `trace_id_low` | u64 |  |
+| 64 | `cause_session` | session |  |
+| 72 | `cause_macrostep` | macrostep |  |
+| 80 | `microstep` | u32 |  |
+| 84 | `state` | u32 |  |
+| 88 | `transition` | u32 |  |
+| 92 | `action` | u32 |  |
+| 96 | `iteration` | u32 |  |
+| 100 | `fault_code` | i32 | the fault’s code, with fault_detail |
+| 104 | `trace_kind` | u16 | ta_trace_kind |
+| 106 | `position` | u8 | ta_trace_at |
+| 107 | `result` | bool |  |
+| 108 | `trace_flags` | u8 | the trace context’s flags (sampled) |
+| 109 | `trace_detail` | u8 | the trace context’s detail (watched) |
+| 112 | `address` | text | the session’s family/name |
+| 120 | `definition` | text | the definition’s document name and source, on the kinds that open a run |
+| 128 | `state_name` | text | the name of `state` |
+| 136 | `transition_name` | text | the name of `transition` |
+| 144 | `action_name` | text | the name of `action` |
+| 152 | `name` | text | the event name, or the name the kind carries |
+| 160 | `send_id` | text | the send ID, for SENT and its kin |
+| 168 | `invoke_id` | text | the invoke ID, for INVOKED and its kin |
+| 176 | `value_text` | text |  |
+| 184 | `fault_detail` | text | the fault’s error event name |
+| 192 | `fault_message` | text |  |
+| 200 | `transitions` | bytes | the microstep’s transitions: a u32 count, then per transition its u32 ID, then its name as a u32 length and UTF-8 bytes |
+| 208 | `states` | bytes | exited, entered, history, states: per list a u32 count, then per state its u32 ID, then its name as a u32 length and UTF-8 bytes |
 
-- flag bit 0 `truncated`: value_text was cut
+- flag bit 0 `truncated`: value_text was cut, or a list in the tail was cut to fit maxRecordBytes
 - flag bit 1 `suppressed`: an effect a replaying session did not perform
 
 ## tel.dropped

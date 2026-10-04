@@ -10,8 +10,8 @@ details. Messages are cited by stable ID; all of them are in
 
 | Layer | Today | With the ring protocol |
 |---|---|---|
-| **Core** | Semantics. Calls vtables for the router, I/O, invokers, the data model, the directory and the trace sink. Holds delayed sends. No queues. | Semantics **and the inputs it has not run yet**: the envelope pool, the deadline index and the name area. It writes rings instead of calling most vtables. Only the data model stays a vtable. |
-| **Host kernel** (`tinyactors-host`) | Mailboxes, scheduler, router, effects queue, recorder, replay, loads, offloads, OTLP; the WAL was removed by kernel ADR 0006 | **Deleted.** OTLP encoding stays as a library function that reads `tel`. |
+| **Core** | Semantics. Calls vtables for the router, I/O, invokers, the data model, the directory and the trace sink. Holds delayed sends. No queues. | Semantics **and the inputs it has not run yet**: the envelope pool, the deadline index and the name area. It writes rings instead of calling most vtables. Only the data model stays a vtable; the host also installs a clock function. |
+| **Host kernel** (`tinyactors-host`) | Mailboxes, scheduler, router, effects queue, recorder, replay, loads, offloads, OTLP; the WAL was removed by kernel ADR 0006 | **Deleted.** OTLP encoding moves to `tinyactors-otlp`, a small C library that reads `tel`. |
 | **Binding** (napi, the test host) | Values, the data model, the pump, the public API, plus glue to the kernel | Values, the data model, and a loop that drives the rings ([below](#the-host-loop)) |
 | **Application** | Storage and policy | Storage and policy, unchanged: what to record, how to answer at the edge, I/O processors |
 
@@ -51,7 +51,7 @@ lists the ADRs this reverses.)
 | Complete definition submission, registration, release and retirement | Host requests; core compiles between macrosteps | [reference/definitions.md](reference/definitions.md) |
 | Debugger attachment, inspection, abandonment and transitions | Debugger temporarily owns the whole system; commands stay outside the rings | [reference/debugging.md](reference/debugging.md) |
 | Recording, replay, checkpoints | Core writes `c2h.input` and `c2h.state`; the application stores them | [reference/recording-and-replay.md](reference/recording-and-replay.md) |
-| Telemetry and OTLP | Core writes `tel`; a library encodes OTLP | [reference/telemetry.md](reference/telemetry.md) |
+| Telemetry and OTLP | Core writes `tel`, stamped by the host's clock; `tinyactors-otlp` encodes OTLP | [reference/telemetry.md](reference/telemetry.md) |
 | Unloading and loading, **to bound RAM only; not persistence** | Core writes images and asks for loads; the host keeps images and wakes for the life of the process | [reference/unloading.md](reference/unloading.md) |
 | Parameters | `ta_system` creation | [BEHAVIORS.md](BEHAVIORS.md#parameters) |
 
@@ -68,6 +68,8 @@ lists the ADRs this reverses.)
   - creating and destroying a system, accessing its rings;
   - `ta_run(budget)`;
   - installing and calling the synchronous data model vtable;
+  - installing the clock function core stamps `tel` records with
+    ([reference/telemetry.md](reference/telemetry.md#the-host-clock));
   - building definition specs with core's spec builder;
   - value ownership and byte source/sink integrations.
 - **Debugger commands stay outside the production protocol.** The host
@@ -112,7 +114,7 @@ loop:
   c2h.load_needed     → fetch the image → h2c.load, or h2c.load_failed, echoing request_seq
   c2h.unloaded        → store image and wake_at in the index of unloaded sessions
   c2h.bounced         → reject source_seq; release or retry the retained original (policy)
-  tel                 → OTLP encoder, when the exporter asks
+  tel                 → tinyactors-otlp, when the exporter asks
   I/O results (acks, rejections, errors) → h2c.event / h2c.invoke_report if h2c has room,
                       else the host's bounded result buffer, else drop (policy)
   at the start of each loop turn: flush the result buffer into h2c while it has room

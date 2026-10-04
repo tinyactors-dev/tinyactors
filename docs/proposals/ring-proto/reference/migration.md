@@ -45,7 +45,7 @@ below.
 
 | Module | Lines (src) | Goes to |
 |---|---|---|
-| `otlp.h`, `otlp.c`, `adapter_trace.h`, `adapter_trace.c` | 2,349 | A reader of `tel`, in its own small C library or in each binding (**open**, [telemetry.md](telemetry.md)). |
+| `otlp.h`, `otlp.c`, `adapter_trace.h`, `adapter_trace.c` | 2,349 | `tinyactors-otlp`, a small C library that reads `tel` and encodes OTLP traces and logs. napi and the test host link it ([telemetry.md](telemetry.md#otlp-tinyactors-otlp)). |
 | `watch.h`, `watch.c` | 321 | Mostly deleted. Watched sessions become a per-actor bit in core, set by address selector like the `recorded` bit. The operator-facing parts move to napi. |
 | `allocator.h`, `allocator.c`, `memory.c`, `memory.h`, `containers.h`, `containers.c`, `platform.h` | about 650 | Back to napi (napi ADRs 0009 and 0014: the counting allocator and containers). With the scheduler gone, napi needs far fewer containers. Delete whatever is left unused. |
 | `host_metrics.h`, `host_metrics.c`, `definitions.h`, `definitions.c`, `enumerate.h`, `enumerate.c` | 214 | napi: pump timings, how late timers fire, definition churn, cursor paging. All of it is binding work over core's API. |
@@ -78,7 +78,7 @@ napi becomes a binding over core and its rings. What it keeps:
   1. post h2c;
   2. call `ta_run`;
   3. read each c2h record and hand it to I/O processors, invokers or the recorder on receipt; macrostep ends report completion;
-  4. drain `tel` into the OTLP encoder;
+  4. drain `tel` into `tinyactors-otlp`;
   5. set one timer from [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake).
 
 | File | Change |
@@ -201,7 +201,7 @@ history, with a status line pointing at the ADR that removes the kernel.
 | 0007 The event loop drives a bounded pump | refined: the pump loop above |
 | 0008 Faults are per actor | refined: point 1's quarantine is removed; points 2 to 4 (the pump never throws, only misuse throws, generated result codes) stay. Its causes are gone: a refused delivery, a queue that could not grow and out-of-memory back-off no longer exist, and a runaway's input is abandoned by core. The `fault` hook reports `c2h.input_completed` with status `runaway`. `release()` and the `"quarantined"` scheduling state go from `index.d.ts` |
 | 0009, 0014 Native toolkit, memory pooled by lifetime | refined: smaller, back in napi |
-| 0015 to 0018 Tracing hook, OTLP, encoder | refined: drains `tel` |
+| 0015 to 0018 Tracing hook, OTLP, encoder | refined: `tinyactors-otlp` drains `tel` |
 | 0020 Mail for an unloaded actor waits while a loader brings it back | refined: waits in core's pool; the loader answers `c2h.load_needed` |
 | 0025 A quarantined child tells its parent | superseded: there is no quarantine to report. A child whose input ran away is not stuck; a parent waiting for its `done.invoke` relies on its own timeout |
 | 0022 Mail a chart sends nowhere raises error.communication | kept, now done by recycling the envelope |
@@ -233,7 +233,10 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
 6. **Recorded sessions expose input observations on c2h.** Journaling is
    application policy. Replay seeds new execution before publish; effects
    execute on receipt in live execution, without a write-ahead hold.
-7. **Telemetry is a lossy ring.** Values as text. Refines 0067.
+7. **Telemetry is a lossy ring.** Records mirror the trace kinds one for
+   one and are self-contained: names, values as text, faults and state
+   lists in the tail. Core stamps each with the clock the host installs.
+   Refines 0067.
 8. In `docs/adr/` (the repository's own): **remove `tinyactors-host`**.
    Supersedes kernel ADRs 0001 to 0006.
 9. In `tinyactors-napi/docs/adr/`: **napi is a binding over core's
@@ -318,7 +321,7 @@ when h2c and c2h arrive, not at the end.
   nothing implements the mapping, so deleting the kernel (Phase 6) breaks
   nothing. The MCP proposal is revised against the ring protocol after
   Phase 5, when its records exist. It then settles three things:
-  - its home. A small C library beside the OTLP reader is the likely
+  - its home. A small C library beside `tinyactors-otlp` is the likely
     answer: `send` becomes `h2c.event` and waits for its
     `c2h.input_completed`, and `load` becomes the load records;
   - `goto`. The MCP proposal queues an operator transition behind one

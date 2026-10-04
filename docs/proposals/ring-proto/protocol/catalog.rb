@@ -617,11 +617,17 @@ end
 # ---------------------------------------------------------------- tel
 
 message 'tel.trace', code: 0x0301, summary: 'One trace record (core ADR 0067)' do
-  doc 'The fields of ta_trace_record that its kind names. Values are ' \
+  doc 'One ta_trace_record, kind for kind; only the fields its kind names ' \
+      'are meaningful. The record is self-contained: names, values, the ' \
+      'fault and the state and transition lists are text in its tail, so ' \
+      'a reader needs no live system (reference/telemetry.md). Values are ' \
       'text the data model renders (value_text), cut at the parameter ' \
-      'telemetryValueBytes; vrefs never go on a lossy ring.'
-  flag :truncated, 0, 'value_text was cut'
+      'telemetryValueBytes; vrefs never go on a lossy ring. Header `at` ' \
+      'is logical time; wall_ns is when it happened.'
+  flag :truncated, 0, 'value_text was cut, or a list in the tail was cut to fit maxRecordBytes'
   flag :suppressed, 1, 'an effect a replaying session did not perform'
+  field :wall_ns, :u64, 'the host clock when core wrote the record: wall-clock ' \
+                        'nanoseconds since the Unix epoch; 0 when the host installed no clock'
   field :macrostep, :macrostep
   field :trace_id_high, :u64
   field :trace_id_low, :u64
@@ -632,12 +638,27 @@ message 'tel.trace', code: 0x0301, summary: 'One trace record (core ADR 0067)' d
   field :transition, :u32
   field :action, :u32
   field :iteration, :u32
+  field :fault_code, :i32, 'the fault’s code, with fault_detail'
   field :trace_kind, :u16, 'ta_trace_kind'
   field :position, :u8, 'ta_trace_at'
   field :result, :bool
-  field :name, :text
+  field :trace_flags, :u8, 'the trace context’s flags (sampled)'
+  field :trace_detail, :u8, 'the trace context’s detail (watched)'
+  field :address, :text, 'the session’s family/name'
+  field :definition, :text, 'the definition’s document name and source, on the kinds that open a run'
+  field :state_name, :text, 'the name of `state`'
+  field :transition_name, :text, 'the name of `transition`'
+  field :action_name, :text, 'the name of `action`'
+  field :name, :text, 'the event name, or the name the kind carries'
+  field :send_id, :text, 'the send ID, for SENT and its kin'
+  field :invoke_id, :text, 'the invoke ID, for INVOKED and its kin'
   field :value_text, :text
-  field :states, :bytes, 'u32 state IDs: exited, entered, history, counted in the tail'
+  field :fault_detail, :text, 'the fault’s error event name'
+  field :fault_message, :text
+  field :transitions, :bytes, 'the microstep’s transitions: a u32 count, then per ' \
+                              'transition its u32 ID, then its name as a u32 length and UTF-8 bytes'
+  field :states, :bytes, 'exited, entered, history, states: per list a u32 count, ' \
+                         'then per state its u32 ID, then its name as a u32 length and UTF-8 bytes'
 end
 
 message 'tel.dropped', code: 0x0302, summary: 'Telemetry records were dropped' do

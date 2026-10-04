@@ -292,7 +292,8 @@ tinyactors-core/docs/
 tinyactors-test/docs/protocol.md ~       hosted.post, hosted.turn and hosted.batches as a ring driver (5.1)
 tinyactors-napi/docs/*.md        ~       design.md and tracing.md follow the rings (6.1)
 README.md (root)                 ~       "Layers and responsibilities": no kernel; core holds the queue (6.3)
-AGENTS.md (root)                 ~       the test table loses the kernel (6.3)
+AGENTS.md (root)                 ~       the test table loses the kernel, gains tinyactors-otlp (6.2, 6.3)
+tinyactors-otlp/README.md        +       the `tel` reader and OTLP encoder, its input and settings (6.2)
 tinyactors-host/                 -       with the package; its ADRs stay as history (6.3)
 ```
 
@@ -445,7 +446,7 @@ ones; run `mise run test:full` before each commit.
 
 | Step | Change | Deletes | ADR |
 |---|---|---|---|
-| 4.1 | **`tel`.** Allocate the control block and the `tel` ring at system creation. Trace records become `tel.trace`, and the kernel's OTLP encoder drains `tel`. This is the smallest real user of a ring. | The trace sink vtable and `ta_null_trace_sink` | telemetry is a lossy ring |
+| 4.1 | **`tel`.** Allocate the control block and the `tel` ring at system creation. Trace records become self-contained `tel.trace` records, names and lists as text, and core stamps each with the clock the host installs at creation. The kernel's OTLP encoder drains `tel`; it stops calling back into core and reading the host's clock. This is the smallest real user of a ring. | The trace sink vtable and `ta_null_trace_sink` | telemetry is a lossy ring |
 | 4.2 | **The pool and `ta_run`, with one slot.** Envelopes (A5), the run queue and the outgoing list (B1), the name area (A5 + A6), the admission watermark and the macrostep reserve (C3). Local mail becomes envelopes. `ta_actor_deliver` becomes admission into the pool, changed in place. `ta_run` replaces `ta_actor_resume`. Run-time names become bytes in the name area, completing Phase 3. Recycling turns undeliverable mail into `error.communication`. | The router vtable, `TA_ERR_BUSY`, the event blocks and their cache (`TA_PARAM_EVENT_BLOCK_CACHE`), run-time interning (`ta_send_id_intern`, `ta_system_intern_invoke_id`, the `eventexpr` and `typeexpr` sites, `invoke.c`'s error names) | pool; only authored names interned |
 | 4.3 | **Delayed sends as envelopes.** The deadline index (B2) and the owner lists (B1). `ta_run` reports the next due time; that value becomes `c2h.wake` in 5.1. `<cancel>` walks the owner list. | `timer.c` / `timer.h` (634 lines), sparse state, `ta_system_dispatch_due` | delayed sends as envelopes |
 | 4.4 | **No allocation in a macrostep.** The internal queue becomes B4 with an ordinary and a mandatory quota (C3). The compiler sizes mandatory storage. Invocation startup moves after the macrostep, with the local child's lifetime token. Capacity failures become `error.execution.capacity.<resource>`. Data models answer `TA_OP_ERROR` instead of `TA_OP_NOMEM`, which changes the test host's jq and quickjs data models and napi's data model. A core test asserts that an allocator which refuses every request after a macrostep starts never sees a call. | The out-of-memory stop machinery: the NOMEM branch, `ta_reserve_stop` / `ta_stop*` where only out-of-memory uses them, the spare continuation and spare sparse state, queue mark/truncate, `TA_OP_NOMEM` | no allocation in a macrostep |
@@ -483,7 +484,7 @@ on its scenarios check the protocol directly.
 | Step | Change |
 |---|---|
 | 6.1 | napi drives core's rings directly: the pump loop in [ARCHITECTURE.md](ARCHITECTURE.md#the-host-loop). Its `index.d.ts` changes as [migration.md](reference/migration.md#napi) lists, with `// status:` markers where the implementation lags. Coordinate with the napi rewrite. |
-| 6.2 | Move OTLP into a small library that reads `tel`, or into each binding, as [telemetry.md](reference/telemetry.md) leaves open. Move the counting allocator, metrics and definitions helpers into napi. Delete what napi does not use. |
+| 6.2 | Move OTLP into `tinyactors-otlp`, a small C library that reads `tel` ([telemetry.md](reference/telemetry.md#otlp-tinyactors-otlp)). napi and the test host link it, and `TAH_PARAM_TRACE_STAGING_BYTES` becomes its own setting. Move the counting allocator, metrics and definitions helpers into napi. Delete what napi does not use. |
 | 6.3 | Delete `tinyactors-host`: its sources, tests, mise tasks, the root `mise.toml` entries, and the rows in AGENTS.md's test table. Mark kernel ADRs 0001 to 0006 superseded. |
 
 **Exit:** `mise run test --all` and `mise run test:full` pass with no
