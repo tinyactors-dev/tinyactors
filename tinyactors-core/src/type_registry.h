@@ -192,7 +192,7 @@ void ta_type_registry_destroy(ta_type_registry *registry);
  * own atom for a new type, the built-in for an alias); on failure it is
  * left alone. TA_ERR_INVALID for an empty name or a NULL pointer with a
  * length; TA_ERR_NOMEM when memory runs out or the entry count would reach
- * TA_ATOM_NONE. A failure leaves the registry unchanged (the name's atom may
+ * TA_TABLE_NONE. A failure leaves the registry unchanged (the name's atom may
  * remain in the atom table). A failed ta_table_grow is only a postponement
  * and does not fail the declare.
  */

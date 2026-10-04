@@ -2641,7 +2641,7 @@ TA_PRIVATE void ta_type_registry_destroy(ta_type_registry *registry);
  * own atom for a new type, the built-in for an alias); on failure it is
  * left alone. TA_ERR_INVALID for an empty name or a NULL pointer with a
  * length; TA_ERR_NOMEM when memory runs out or the entry count would reach
- * TA_ATOM_NONE. A failure leaves the registry unchanged (the name's atom may
+ * TA_TABLE_NONE. A failure leaves the registry unchanged (the name's atom may
  * remain in the atom table). A failed ta_table_grow is only a postponement
  * and does not fail the declare.
  */
@@ -7935,7 +7935,11 @@ static uint32_t ta_type_hash(ta_atom name) {
     return (uint32_t)ta_mix64(name);
 }
 
-/* The entry index of `name`; false when there is none. The hash may be shared by other atoms, so the entry's atom is compared. */
+/*
+ * ta_type_find returns the entry index of `name` in *out, or false when
+ * there is none. The hash may be shared by other atoms, so the entry's atom
+ * is compared. It never allocates.
+ */
 static bool ta_type_find(const ta_type_registry *registry, ta_atom name, uint32_t *out) {
     ta_table_probe probe;
     uint32_t index = 0;
@@ -7960,7 +7964,7 @@ static bool ta_type_find(const ta_type_registry *registry, ta_atom name, uint32_
  */
 static ta_result ta_type_add(ta_type_registry *registry, ta_atom name, ta_atom canonical) {
     uint32_t index = registry->entries.count;
-    if (index >= TA_TABLE_NONE - 1u) {
+    if (index >= TA_TABLE_NONE) {
         return TA_ERR_NOMEM;
     }
     ta_result result = ta_vec_reserve(&registry->entries, index + 1u);
@@ -7981,11 +7985,26 @@ static ta_result ta_type_add(ta_type_registry *registry, ta_atom name, ta_atom c
 }
 
 /*
- * ta_type_add_text interns `text` and declares it as an alias of `canonical`,
- * or as its own canonical when that is TA_ATOM_NONE. A name that is already
- * declared is left as it was and reported through *out. Safe points only.
+ * ta_type_text is the request of ta_type_add_text: the name to declare, the
+ * atom it aliases (TA_ATOM_NONE: it is its own canonical), and where the
+ * canonical atom is reported (may be NULL). It is a call-lifetime value.
  */
-static ta_result ta_type_add_text(ta_type_registry *registry, ta_str text, ta_atom canonical, ta_atom *out) {
+typedef struct {
+    ta_str text;
+    ta_atom canonical;
+    ta_atom *out;
+} ta_type_text;
+
+/*
+ * ta_type_add_text interns `request->text` and declares it as an alias of
+ * `request->canonical`, or as its own canonical when that is TA_ATOM_NONE. A
+ * name that is already declared is left as it was and reported through
+ * request->out. Safe points only.
+ */
+static ta_result ta_type_add_text(ta_type_registry *registry, const ta_type_text *request) {
+    ta_str text = request->text;
+    ta_atom canonical = request->canonical;
+    ta_atom *out = request->out;
     if (text.len == 0 || text.ptr == NULL) {
         return TA_ERR_INVALID;
     }
@@ -8025,9 +8044,9 @@ TA_PRIVATE ta_result ta_type_registry_init(ta_type_registry *registry, ta_alloca
             result = TA_ERR_INVALID;
             break;
         }
-        result = ta_type_add_text(registry, builtin->name, TA_ATOM_NONE, &canonical);
+        result = ta_type_add_text(registry, &(ta_type_text){ .text = builtin->name, .canonical = TA_ATOM_NONE, .out = &canonical });
         for (uint32_t j = 0; result == TA_OK && j < builtin->alias_count; j += 1) {
-            result = ta_type_add_text(registry, builtin->aliases[j], canonical, NULL);
+            result = ta_type_add_text(registry, &(ta_type_text){ .text = builtin->aliases[j], .canonical = canonical });
         }
     }
     if (result != TA_OK) {
@@ -8043,7 +8062,7 @@ TA_PRIVATE void ta_type_registry_destroy(ta_type_registry *registry) {
 }
 
 TA_PRIVATE ta_result ta_type_registry_declare(ta_type_registry *registry, ta_str name, ta_atom *out) {
-    return ta_type_add_text(registry, name, TA_ATOM_NONE, out);
+    return ta_type_add_text(registry, &(ta_type_text){ .text = name, .canonical = TA_ATOM_NONE, .out = out });
 }
 
 TA_PRIVATE bool ta_type_registry_declared_atom(const ta_type_registry *registry, ta_atom name, ta_atom *out) {
