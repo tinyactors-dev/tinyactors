@@ -9,6 +9,7 @@
 #include "fifo.h"
 #include "vec.h"
 #include "pool.h"
+#include "ilist.h"
 #include "arena.h"
 #include "tree.h"
 #include "table.h"
