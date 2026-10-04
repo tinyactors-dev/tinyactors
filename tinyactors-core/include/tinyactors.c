@@ -2439,7 +2439,7 @@ TA_PRIVATE bool ta_trie_under(const ta_atom_trie *trie, uint32_t node, uint32_t 
  * Example, a host that spawns and finds named actors:
  *
  *     ta_address *address;
- *     if (ta_address_intern(system, &(ta_actor_address){ .family = family, .name = name }, &address) != TA_OK) {
+ *     if (ta_address_table_intern(&system->addresses, &(ta_actor_address){ .family = family, .name = name }, &address) != TA_OK) {
  *         return TA_ERR_NOMEM;                  // nothing interned
  *     }
  *     ... use the pointer as the handle; equal addresses are equal pointers ...
@@ -2716,6 +2716,7 @@ TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry);
  *             &(ta_session_node_params){ .id = id }, &index) != TA_OK) {
  *         return TA_ERR_NOMEM;                            // nothing changed
  *     }
+ *     // `address` is the ta_address * the actor holds as its self (interned earlier)
  *     ta_session_park(&system->sessions, index, address); // parked at address
  */
 

@@ -105,7 +105,7 @@
  * Example, a host that spawns and finds named actors:
  *
  *     ta_address *address;
- *     if (ta_address_intern(system, &(ta_actor_address){ .family = family, .name = name }, &address) != TA_OK) {
+ *     if (ta_address_table_intern(&system->addresses, &(ta_actor_address){ .family = family, .name = name }, &address) != TA_OK) {
  *         return TA_ERR_NOMEM;                  // nothing interned
  *     }
  *     ... use the pointer as the handle; equal addresses are equal pointers ...

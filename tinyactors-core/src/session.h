@@ -112,6 +112,7 @@
  *             &(ta_session_node_params){ .id = id }, &index) != TA_OK) {
  *         return TA_ERR_NOMEM;                            // nothing changed
  *     }
+ *     // `address` is the ta_address * the actor holds as its self (interned earlier)
  *     ta_session_park(&system->sessions, index, address); // parked at address
  */
 
