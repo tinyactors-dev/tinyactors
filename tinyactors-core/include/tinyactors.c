@@ -5302,11 +5302,14 @@ static uint32_t ta_atom_hash(ta_str text) {
     return ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);
 }
 
-/* The atom whose text is `text` among those stored under `hash`; false when there is none. */
-static bool ta_atom_lookup(const ta_atom_table *table, ta_str text, uint32_t hash, ta_atom *out) {
+/* The atom whose text is `text`; false when there is none. The hash is
+ * computed here so the signature stays within three parameters; a miss in
+ * ta_atom_intern hashes the text a second time, which costs less than the
+ * allocation that follows it. */
+static bool ta_atom_lookup(const ta_atom_table *table, ta_str text, ta_atom *out) {
     ta_table_probe probe;
     uint32_t atom = 0;
-    ta_table_probe_start(&table->index, hash, &probe);
+    ta_table_probe_start(&table->index, ta_atom_hash(text), &probe);
     while (ta_table_probe_next(&probe, &atom)) {
         const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
         if (ta_str_equal(entry->text, text)) {
@@ -5347,8 +5350,7 @@ TA_PRIVATE ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_atom_hash(text);
-    if (ta_atom_lookup(table, text, hash, out)) {
+    if (ta_atom_lookup(table, text, out)) {
         return TA_OK;
     }
     if (table->entries.count >= TA_ATOM_NONE - 1u) {
@@ -5370,7 +5372,7 @@ TA_PRIVATE ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *
     if (ta_table_wants_grow(&table->index)) {
         (void)ta_table_grow(&table->index);
     }
-    result = ta_table_insert(&table->index, hash, atom);
+    result = ta_table_insert(&table->index, ta_atom_hash(text), atom);
     if (result != TA_OK) {
         return result;
     }
@@ -5395,7 +5397,7 @@ TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_at
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    return ta_atom_lookup(table, text, ta_atom_hash(text), out) ? TA_OK : TA_ERR_NOT_FOUND;
+    return ta_atom_lookup(table, text, out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
 
@@ -5411,11 +5413,16 @@ static uint32_t ta_trie_hash(uint32_t parent, ta_atom segment) {
     return ta_fnv1a32(TA_FNV1A32_BASIS ^ 0x9e3779b9u, key, sizeof(key));
 }
 
-/* The node below `parent` with `segment` among those stored under `hash`; false when there is none. */
-static bool ta_trie_lookup(const ta_atom_trie *trie, uint32_t parent, ta_atom segment, uint32_t hash, uint32_t *out) {
+/* The node named by `key` (below key->parent, with key->segment); false when
+ * there is none. The hash is computed here so the signature stays within
+ * three parameters; a miss in ta_trie_child hashes the key a second time,
+ * which costs less than the allocation that follows it. */
+static bool ta_trie_lookup(const ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out) {
     ta_table_probe probe;
     uint32_t node = 0;
-    ta_table_probe_start(&trie->index, hash, &probe);
+    uint32_t parent = key->parent;
+    ta_atom segment = key->segment;
+    ta_table_probe_start(&trie->index, ta_trie_hash(parent, segment), &probe);
     while (ta_table_probe_next(&probe, &node)) {
         const ta_trie_node *candidate = ta_trie_node_at(trie, node);
         if (candidate->parent == parent && candidate->segment == segment) {
@@ -5461,7 +5468,7 @@ TA_PRIVATE ta_result ta_trie_find(const ta_atom_trie *trie, const ta_trie_key *k
     if (!ta_trie_valid(trie, parent) || segment == TA_ATOM_NONE) {
         return TA_ERR_INVALID;
     }
-    return ta_trie_lookup(trie, parent, segment, ta_trie_hash(parent, segment), out) ? TA_OK : TA_ERR_NOT_FOUND;
+    return ta_trie_lookup(trie, key, out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
 TA_PRIVATE ta_result ta_trie_child(ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out) {
@@ -5474,8 +5481,7 @@ TA_PRIVATE ta_result ta_trie_child(ta_atom_trie *trie, const ta_trie_key *key, u
     if (depth > trie->max_depth) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_trie_hash(parent, segment);
-    if (ta_trie_lookup(trie, parent, segment, hash, out)) {
+    if (ta_trie_lookup(trie, key, out)) {
         return TA_OK;
     }
     uint32_t node = trie->nodes.count;
@@ -5490,7 +5496,7 @@ TA_PRIVATE ta_result ta_trie_child(ta_atom_trie *trie, const ta_trie_key *key, u
     if (ta_table_wants_grow(&trie->index)) {
         (void)ta_table_grow(&trie->index);
     }
-    result = ta_table_insert(&trie->index, hash, node);
+    result = ta_table_insert(&trie->index, ta_trie_hash(parent, segment), node);
     if (result != TA_OK) {
         return result;
     }
