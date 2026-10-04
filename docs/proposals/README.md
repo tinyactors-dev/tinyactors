@@ -32,6 +32,7 @@ Every proposal starts with a status line:
 
 | Proposal | Status | Touches |
 |---|---|---|
+| [staticjs: a pure, total subset of JavaScript as a data model](staticjs.md) | Proposed; the language is in `staticjs/` | a new staticjs, a new tinyactors-staticjs |
 | [The ring protocol](ring-proto/README.md) | Sketch | tinyactors-core, tinyactors-host (deleted), tinyactors-napi, tinyactors-test |
 | [SQLite host](sqlite-host.md) | Sketch | tinyactors-core, a new tinyactors-sqlite |
 | [PostgreSQL host](postgres-host.md) | Sketch | tinyactors-core, a new tinyactors-postgres |
