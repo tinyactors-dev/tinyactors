@@ -7,6 +7,7 @@
 #include "layout.h"
 #include "quota.h"
 #include "fifo.h"
+#include "ring.h"
 #include "vec.h"
 #include "pool.h"
 #include "ilist.h"
