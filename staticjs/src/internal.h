@@ -1,0 +1,417 @@
+/*
+ * What the modules of staticjs share. Private: the public API is
+ * ../include/staticjs.h.
+ */
+#pragma once
+
+#include "staticjs.h"
+
+#define SJS_UNUSED(x) ((void)(x))
+
+/* ========================================================================
+ * Memory
+ */
+
+void *sjs_mem_alloc(const sjs_allocator *allocator, size_t size);
+void sjs_mem_free(const sjs_allocator *allocator, void *ptr, size_t size);
+void sjs_copy(void *to, const void *from, size_t length);
+void sjs_zero(void *to, size_t length);
+bool sjs_str_equal(sjs_str a, sjs_str b);
+
+/*
+ * A growable array of bytes. It moves when it grows, so nothing keeps a
+ * pointer into one across a call that may append to it.
+ */
+typedef struct {
+    uint8_t *ptr;
+    uint32_t length;
+    uint32_t capacity;
+} sjs_buf;
+
+sjs_result sjs_buf_reserve(const sjs_allocator *allocator, sjs_buf *buf, uint32_t extra);
+sjs_result sjs_buf_append(const sjs_allocator *allocator, sjs_buf *buf, sjs_bytes bytes);
+void sjs_buf_free(const sjs_allocator *allocator, sjs_buf *buf);
+
+/* A buffer of fixed-size records. */
+#define SJS_BUF_AT(buf, type, index) (((type *)(void *)(buf).ptr)[index])
+#define SJS_BUF_COUNT(buf, type) ((buf).length / (uint32_t)sizeof(type))
+
+struct sjs_context {
+    sjs_allocator backing;
+    sjs_allocator counting;   /* what everything in the context allocates with */
+    sjs_limits limits;
+    size_t live;
+};
+
+/* ========================================================================
+ * Text
+ */
+
+/* The code point at `bytes[*index]`, advancing `*index`; -1 when the bytes
+ * there are not well-formed UTF-8. */
+int32_t sjs_utf8_next(sjs_str text, uint32_t *index);
+bool sjs_utf8_valid(sjs_str text);
+/* Bytes of the UTF-8 encoding of `point` written to `out` (room for 4). */
+uint32_t sjs_utf8_encode(uint32_t point, uint8_t *out);
+/* JavaScript's view: UTF-16 code units. */
+uint32_t sjs_utf16_length(sjs_str text);
+/* <0, 0, >0 as JavaScript compares the two strings: by UTF-16 code unit. */
+int32_t sjs_utf16_compare(sjs_str a, sjs_str b);
+
+/* ========================================================================
+ * Numbers
+ */
+
+/* Number::toString(10): at most 25 bytes, written to `out`. */
+uint32_t sjs_number_format(double value, char *out);
+/* JavaScript's % (truncating remainder, exact). */
+double sjs_number_remainder(double x, double y);
+double sjs_number_trunc(double x);
+double sjs_number_floor(double x);
+double sjs_number_ceil(double x);
+double sjs_number_round(double x);
+bool sjs_number_is_nan(double x);
+bool sjs_number_is_finite(double x);
+bool sjs_number_is_negative_zero(double x);
+bool sjs_number_is_integer(double x);
+/* The decimal digits `digits` (no sign, no point) times 10^exponent, when
+ * that is exact with one rounding (Clinger's fast path). */
+bool sjs_number_from_decimal(sjs_str digits, int32_t exponent, double *out);
+
+/* ========================================================================
+ * Values
+ */
+
+enum {
+    SJS_HEAP_STRING = 1,
+    SJS_HEAP_ARRAY,
+    SJS_HEAP_OBJECT,
+    SJS_HEAP_SET,
+    SJS_HEAP_CLOSURE,
+    SJS_HEAP_NATIVE,
+    SJS_HEAP_BUILTIN
+};
+
+/* refs of a value that is never freed: built-in functions. */
+#define SJS_IMMORTAL UINT32_MAX
+
+struct sjs_heap {
+    uint32_t refs;
+    uint8_t type;     /* SJS_HEAP_* */
+    uint8_t flags;
+    uint16_t reserved;
+    uint32_t size;    /* bytes allocated */
+    sjs_heap *link;   /* the release worklist */
+};
+
+/* String flags. */
+#define SJS_STRING_ASCII 1u
+#define SJS_STRING_INDEX 2u   /* a canonical array index; `index` holds it */
+
+typedef struct {
+    sjs_heap h;
+    uint32_t length;
+    uint32_t utf16_length;
+    uint32_t index;
+    char bytes[];
+} sjs_string;
+
+typedef struct {
+    sjs_heap h;
+    uint32_t length;
+    uint32_t capacity;
+    sjs_value items[];
+} sjs_array;   /* also a set: elements in insertion order */
+
+typedef struct {
+    sjs_string *key;
+    sjs_value value;
+} sjs_entry;
+
+typedef struct {
+    sjs_heap h;
+    uint32_t count;
+    uint32_t capacity;
+    sjs_entry entries[];
+} sjs_object;
+
+typedef struct {
+    sjs_heap h;
+    sjs_program *program;
+    uint32_t function;
+    uint32_t count;
+    sjs_value captures[];
+} sjs_closure;
+
+typedef struct {
+    sjs_heap h;
+    sjs_native native;
+} sjs_native_function;
+
+typedef struct {
+    sjs_heap h;
+    uint16_t id;      /* sjs_builtin_id */
+} sjs_builtin_function;
+
+/* `internal` tags of values that live only on the evaluator's stack. */
+enum {
+    SJS_INTERNAL_NONE = 0,
+    SJS_INTERNAL_SPREAD,   /* an argument to splice into a call */
+    SJS_INTERNAL_METHOD    /* a built-in method; boolean holds its id */
+};
+
+#define SJS_AS_STRING(v) ((sjs_string *)(void *)(v).as.heap)
+#define SJS_AS_ARRAY(v) ((sjs_array *)(void *)(v).as.heap)
+#define SJS_AS_OBJECT(v) ((sjs_object *)(void *)(v).as.heap)
+#define SJS_AS_CLOSURE(v) ((sjs_closure *)(void *)(v).as.heap)
+
+static inline sjs_str sjs_string_view(const sjs_string *s) {
+    return (sjs_str){ s->bytes, s->length };
+}
+
+static inline sjs_value sjs_heap_value(uint8_t kind, sjs_heap *heap) {
+    sjs_value v = { 0 };
+    v.kind = kind;
+    v.as.heap = heap;
+    return v;
+}
+
+static inline bool sjs_is_heap(sjs_value v) {
+    return v.kind >= SJS_STRING && v.internal == SJS_INTERNAL_NONE;
+}
+
+sjs_result sjs_string_make(sjs_context *context, sjs_str text, sjs_string **out);
+/* The string for an array index, a number's text or a boolean's. */
+sjs_result sjs_string_from_number(sjs_context *context, double value, sjs_string **out);
+sjs_result sjs_array_make(sjs_context *context, uint32_t capacity, sjs_array **out);
+sjs_result sjs_object_make(sjs_context *context, uint32_t capacity, sjs_object **out);
+/* Grow a container the caller holds alone, which may move it. */
+sjs_result sjs_array_grow(sjs_context *context, sjs_array **array, uint32_t extra);
+sjs_result sjs_object_grow(sjs_context *context, sjs_object **object, uint32_t extra);
+/* Put takes over the references to `key` and `value`. */
+typedef struct {
+    sjs_string *key;
+    sjs_value value;
+} sjs_put;
+sjs_result sjs_object_put_key(sjs_context *context, sjs_object **object, sjs_put put);
+/* The entry of `key`, or NULL. */
+const sjs_entry *sjs_object_find(const sjs_object *object, sjs_str key);
+/* Add to a set the caller holds alone; takes over the element's reference. */
+sjs_result sjs_set_insert(sjs_context *context, sjs_array **set, sjs_value element);
+bool sjs_set_contains(const sjs_array *set, sjs_value element);
+sjs_result sjs_closure_make(sjs_context *context, uint32_t count, sjs_closure **out);
+
+/* JavaScript's abstract operations. */
+bool sjs_truthy(sjs_value v);
+bool sjs_is_primitive(sjs_value v);
+/* SameValueZero for primitives; false for any heap object. */
+bool sjs_same_value_zero(sjs_value a, sjs_value b);
+/* Strict equality for primitives. */
+bool sjs_strict_equal_primitive(sjs_value a, sjs_value b);
+/* typeof, as a static string. */
+sjs_str sjs_typeof(sjs_value v);
+/* ToString for primitives; SJS_ERR_PROGRAM for objects. */
+sjs_result sjs_to_string(sjs_context *context, sjs_value v, sjs_string **out);
+/* ToPropertyKey for primitives. */
+sjs_result sjs_to_key(sjs_context *context, sjs_value v, sjs_string **out);
+/* Names JavaScript finds on Object.prototype, which staticjs objects lack. */
+bool sjs_is_prototype_name(sjs_str key);
+
+/* ========================================================================
+ * Built-ins
+ */
+
+typedef enum {
+    SJS_BUILTIN_NONE = 0,
+    /* Functions. */
+    SJS_BUILTIN_STRING,
+    SJS_BUILTIN_BOOLEAN,
+    SJS_BUILTIN_ARRAY_IS_ARRAY,
+    SJS_BUILTIN_OBJECT_KEYS,
+    SJS_BUILTIN_OBJECT_VALUES,
+    SJS_BUILTIN_OBJECT_ENTRIES,
+    SJS_BUILTIN_OBJECT_FROM_ENTRIES,
+    SJS_BUILTIN_NUMBER_IS_INTEGER,
+    SJS_BUILTIN_NUMBER_IS_SAFE_INTEGER,
+    SJS_BUILTIN_NUMBER_IS_FINITE,
+    SJS_BUILTIN_NUMBER_IS_NAN,
+    SJS_BUILTIN_MATH_ABS,
+    SJS_BUILTIN_MATH_MIN,
+    SJS_BUILTIN_MATH_MAX,
+    SJS_BUILTIN_MATH_FLOOR,
+    SJS_BUILTIN_MATH_CEIL,
+    SJS_BUILTIN_MATH_ROUND,
+    SJS_BUILTIN_MATH_TRUNC,
+    SJS_BUILTIN_MATH_SIGN,
+    SJS_BUILTIN_FUNCTION_COUNT,
+    /* Methods, called on a receiver. */
+    SJS_METHOD_FIRST = 64,
+    /* Arrays. */
+    SJS_METHOD_ARRAY_AT = SJS_METHOD_FIRST,
+    SJS_METHOD_ARRAY_CONCAT,
+    SJS_METHOD_ARRAY_EVERY,
+    SJS_METHOD_ARRAY_FILTER,
+    SJS_METHOD_ARRAY_FIND,
+    SJS_METHOD_ARRAY_FIND_INDEX,
+    SJS_METHOD_ARRAY_FIND_LAST,
+    SJS_METHOD_ARRAY_FLAT,
+    SJS_METHOD_ARRAY_FLAT_MAP,
+    SJS_METHOD_ARRAY_INCLUDES,
+    SJS_METHOD_ARRAY_INDEX_OF,
+    SJS_METHOD_ARRAY_JOIN,
+    SJS_METHOD_ARRAY_MAP,
+    SJS_METHOD_ARRAY_REDUCE,
+    SJS_METHOD_ARRAY_SLICE,
+    SJS_METHOD_ARRAY_SOME,
+    SJS_METHOD_ARRAY_TO_REVERSED,
+    SJS_METHOD_ARRAY_TO_SORTED,
+    SJS_METHOD_ARRAY_WITH,
+    /* Strings. */
+    SJS_METHOD_STRING_ENDS_WITH,
+    SJS_METHOD_STRING_INCLUDES,
+    SJS_METHOD_STRING_INDEX_OF,
+    SJS_METHOD_STRING_SLICE,
+    SJS_METHOD_STRING_SPLIT,
+    SJS_METHOD_STRING_STARTS_WITH,
+    SJS_METHOD_STRING_TO_LOWER_CASE,
+    SJS_METHOD_STRING_TO_UPPER_CASE,
+    SJS_METHOD_STRING_TRIM,
+    /* Sets. */
+    SJS_METHOD_SET_DIFFERENCE,
+    SJS_METHOD_SET_HAS,
+    SJS_METHOD_SET_INTERSECTION,
+    SJS_METHOD_SET_IS_SUBSET_OF,
+    SJS_METHOD_SET_SYMMETRIC_DIFFERENCE,
+    SJS_METHOD_SET_UNION
+} sjs_builtin_id;
+
+/* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */
+sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name);
+/* The method `name` of a receiver of kind `kind`; NONE if unknown. */
+sjs_builtin_id sjs_method_lookup(uint8_t kind, sjs_str name);
+/* The immortal function value of a built-in function. */
+sjs_value sjs_builtin_value(sjs_builtin_id id);
+bool sjs_builtin_loops(sjs_builtin_id id);
+
+/* ========================================================================
+ * Programs
+ */
+
+typedef enum {
+    SJS_OP_UNDEFINED_ = 1,
+    SJS_OP_NULL_,
+    SJS_OP_TRUE_,
+    SJS_OP_FALSE_,
+    SJS_OP_NUMBER_,        /* u32 number */
+    SJS_OP_CONSTANT,       /* u32 constant */
+    SJS_OP_LOCAL,          /* u16 slot */
+    SJS_OP_SET_LOCAL,      /* u16 slot: pop into it */
+    SJS_OP_CAPTURE,        /* u16 capture */
+    SJS_OP_GLOBAL,         /* u16 global */
+    SJS_OP_POP,
+    SJS_OP_GET_MEMBER,     /* u32 constant (string) */
+    SJS_OP_GET_INDEX,
+    SJS_OP_METHOD_MEMBER,  /* u32 constant: [receiver] -> [receiver, callee] */
+    SJS_OP_METHOD_INDEX,   /* [receiver, key] -> [receiver, callee] */
+    SJS_OP_CALL,           /* u16 argc, u8 flags */
+    SJS_OP_NEW_SET,        /* u16 argc, u8 flags */
+    SJS_OP_SPREAD,
+    SJS_OP_JUMP,           /* u32 target */
+    SJS_OP_JUMP_FALSY_KEEP,
+    SJS_OP_JUMP_TRUTHY_KEEP,
+    SJS_OP_JUMP_DEFINED_KEEP,
+    SJS_OP_JUMP_FALSY,
+    SJS_OP_JUMP_NULLISH,   /* replaces the value with undefined and jumps */
+    SJS_OP_UNARY_,         /* u8 sjs_operator */
+    SJS_OP_BINARY_,        /* u8 sjs_operator */
+    SJS_OP_CONCAT,         /* u16 count */
+    SJS_OP_ARRAY_NEW,
+    SJS_OP_ARRAY_PUSH,
+    SJS_OP_ARRAY_SPREAD,
+    SJS_OP_OBJECT_NEW,
+    SJS_OP_OBJECT_PUT,
+    SJS_OP_OBJECT_SPREAD,
+    SJS_OP_TO_KEY,
+    SJS_OP_CLOSURE,        /* u32 function */
+    SJS_OP_RETURN,
+    SJS_OP_PATTERN_ARRAY,  /* checks the value can be destructured as an array */
+    SJS_OP_PATTERN_OBJECT,
+    SJS_OP_PATTERN_INDEX,  /* u32 index: [source] -> [source, element] */
+    SJS_OP_PATTERN_KEY     /* u32 constant: [source] -> [source, property] */
+} sjs_opcode;
+
+/* SJS_OP_CALL flags. */
+#define SJS_CALL_METHOD 1u
+#define SJS_CALL_SPREAD 2u
+
+typedef struct {
+    uint32_t code;          /* offset of the first instruction */
+    uint32_t captures;      /* first entry in the capture table */
+    uint16_t params;
+    uint16_t locals;        /* slots, the parameters included */
+    uint16_t capture_count;
+    uint16_t reserved;
+} sjs_function_info;
+
+typedef struct {
+    uint16_t from_capture;  /* 0: the creator's local slot; 1: its capture */
+    uint16_t index;
+} sjs_capture_info;
+
+typedef struct {
+    uint32_t pc;
+    sjs_position at;
+} sjs_line;
+
+struct sjs_program {
+    uint32_t refs;
+    sjs_goal goal;
+    sjs_context *context;
+    size_t size;
+    const uint8_t *code;
+    uint32_t code_length;
+    const double *numbers;
+    uint32_t number_count;
+    sjs_value *constants;   /* strings, and values imported */
+    uint32_t constant_count;
+    const sjs_function_info *functions;
+    uint32_t function_count;
+    const sjs_capture_info *captures;
+    uint32_t capture_count;
+    const sjs_line *lines;
+    uint32_t line_count;
+    uint32_t global_count;
+};
+
+/* Where the instruction at `pc` came from. */
+sjs_position sjs_program_position(const sjs_program *program, uint32_t pc);
+
+static inline uint16_t sjs_read16(const uint8_t *p) {
+    return (uint16_t)(p[0] | (p[1] << 8));
+}
+
+static inline uint32_t sjs_read32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* ========================================================================
+ * Errors
+ */
+
+/* Room for an error's subject in the stage that reports it. */
+#define SJS_SUBJECT_CAPACITY 64u
+
+typedef struct {
+    sjs_error error;
+    char subject[SJS_SUBJECT_CAPACITY];
+} sjs_error_slot;
+
+/* What went wrong, before it is known where. */
+typedef struct {
+    sjs_error_code code;
+    const char *message;
+} sjs_problem;
+
+void sjs_error_set(sjs_error_slot *slot, sjs_position at, sjs_problem problem);
+void sjs_error_subject(sjs_error_slot *slot, sjs_str subject);
+sjs_str sjs_cstr(const char *text);

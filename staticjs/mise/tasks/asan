@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+#MISE description="Build staticjs's tests with AddressSanitizer and UndefinedBehaviorSanitizer and run them"
+#USAGE flag "--full" help="Run each test's exhaustive arguments too"
+# vim:ft=ruby
+
+require_relative '../staticjs'
+require 'fileutils'
+
+full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
+build = StaticJS::BUILD.join('asan')
+FileUtils.mkdir_p(build)
+cc = Toolchain::Target.host.compile_command
+flags = [*StaticJS::WARNINGS, *StaticJS::INCLUDES, '-g', '-O1', '-fno-omit-frame-pointer',
+         '-fsanitize=address,undefined', '-fno-sanitize-recover=all']
+sources = StaticJS.sources.map(&:to_s)
+failed = StaticJS::TESTS.reject do |test, arguments|
+  binary = build.join(test)
+  system(*cc, *flags, StaticJS::ROOT.join("tests/#{test}.c").to_s, *sources, '-o', binary.to_s,
+         chdir: StaticJS::ROOT.to_s) &&
+    system(binary.to_s, *arguments.fetch(full ? :full : :fast), chdir: StaticJS::ROOT.to_s, out: File::NULL)
+end.keys
+abort "asan: failed: #{failed.join(', ')}" unless failed.empty?
+puts "asan: #{StaticJS.tests.size} test(s) pass under AddressSanitizer and UBSan#{full ? ' (full)' : ''}"

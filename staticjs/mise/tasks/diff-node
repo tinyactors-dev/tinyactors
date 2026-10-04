@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+#MISE description="Check the spec against JavaScript itself: every expected value is Node's, every syntax error is one Node rejects, every unsupported case is valid JavaScript; and numbers format as String(x)"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# The rule of staticjs (docs/proposals/staticjs.md): a program it accepts
+# gives the same result as JavaScript, or a fault. tests/diff-node.mjs
+# evaluates every case of tests/spec in Node, and compares 100,000 doubles
+# that number_test formats with String(x).
+
+require_relative '../staticjs'
+require 'tempfile'
+
+numbers = Tempfile.new(['numbers', '.txt'])
+begin
+  printed = system(StaticJS::BUILD.join('number_test').to_s, '--print', '100000', out: numbers.path,
+                                                                                  chdir: StaticJS::ROOT.to_s)
+  abort 'diff-node: number_test --print failed' unless printed
+  StaticJS.run('node', '--no-warnings=ExperimentalWarning', '--experimental-vm-modules', 'tests/diff-node.mjs',
+               'tests/spec', numbers.path)
+ensure
+  numbers.close!
+end

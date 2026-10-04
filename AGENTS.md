@@ -62,6 +62,7 @@ Do it at release time, not between releases.
   | `tinyactors-core` (code, bindings, tests, tools) | core                  |
   | `tinyxml`                           | tinyxml                                  |
   | `tinyparse`                         | tinyparse                                |
+  | `staticjs`                          | staticjs                                 |
   | root `mise/lib`, `mise.toml`        | all of them                              |
   | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
 
@@ -131,8 +132,9 @@ in a task of its own, not in a parallel list.
 
 Every caller of every library in this repo is in this repo: the C layers
 of `tinyactors-core`, its bindings (`bindings/node`, `bindings/web`,
-`bindings/postgres`), its tools and examples, and `tinyxml`. Nothing is
-published, so no outside code depends on an API or ABI staying the same.
+`bindings/postgres`), its tools and examples, `tinyxml` and `staticjs`.
+Nothing is published, so no outside code depends on an API or ABI staying
+the same.
 
 - **Change an API in place, and migrate every caller in the same change.**
   When a function needs a new parameter, a params struct or different

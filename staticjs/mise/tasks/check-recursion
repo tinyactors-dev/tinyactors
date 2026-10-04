@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+#MISE description="Fail on any cycle in staticjs's direct call graph: no stage may recurse"
+# vim:ft=ruby
+
+# The sources are compiled together, as one translation unit that includes
+# each of them, to LLVM IR at -O0 for the check target, and the direct call
+# graph is read the way core's is (mise/lib/call_graph.rb). Calls through a
+# function pointer (the parser's sink, a native) are not edges.
+
+require_relative '../staticjs'
+require 'call_graph'
+require 'fileutils'
+require 'open3'
+
+unit = StaticJS::BUILD.join('check/staticjs_all.c')
+FileUtils.mkdir_p(unit.dirname)
+unit.write(StaticJS.sources.map { |source| "#include \"#{source}\"\n" }.join)
+command = Toolchain::Target.check.compile_command('-std=c11', '-O0', '-S', '-emit-llvm', *StaticJS::INCLUDES,
+                                                  '-o', '-', unit)
+ir, error, status = Open3.capture3(*command)
+unless status.success?
+  warn error
+  abort 'check-recursion: could not compile staticjs to LLVM IR'
+end
+calls = CallGraph.calls(ir)
+cycles = CallGraph.cycles(calls)
+cycles.each { |cycle| puts "check-recursion: CYCLE: #{cycle.join(' -> ')}" }
+abort "check-recursion: #{cycles.size} cycle(s) in staticjs's call graph" unless cycles.empty?
+puts "check-recursion: #{calls.size} functions, no recursion"
