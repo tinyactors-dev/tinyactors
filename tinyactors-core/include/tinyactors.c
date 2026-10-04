@@ -8280,12 +8280,9 @@ static ta_str ta_compiler_nearest(ta_compiler *compiler, ta_str id) {
  * Leaves
  */
 
+/* Folds bytes into the running content hash (D5); the visit order is part of the revision. */
 static void ta_compiler_hash(ta_compiler *compiler, const void *bytes, size_t size) {
-    const unsigned char *in = bytes;
-    for (size_t index = 0; index < size; index += 1) {
-        compiler->hash ^= in[index];
-        compiler->hash *= 1099511628211ull;
-    }
+    compiler->hash = ta_fnv1a64(compiler->hash, bytes, size);
 }
 
 static void ta_compiler_hash_str(ta_compiler *compiler, ta_str text) {
@@ -10180,7 +10177,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         .error = run->error,
         .error_arena = run->error_arena,
         .locate = run->locate,
-        .hash = 14695981039346656037ull,
+        .hash = TA_FNV1A64_BASIS,
     };
     const struct { ta_vec *vec; const ta_tree_list_layout *layout; } vecs[] = {
         { &compiler.states, TA_VEC_LAYOUT(ta_state_def) },
