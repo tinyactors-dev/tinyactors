@@ -45,7 +45,7 @@ below.
 
 | Module | Lines (src) | Goes to |
 |---|---|---|
-| `otlp.h`, `otlp.c`, `adapter_trace.h`, `adapter_trace.c` | 2,349 | `tinyactors-otlp`, a small C library that reads `tel` and encodes OTLP traces and logs. napi and the test host link it ([telemetry.md](telemetry.md#otlp-tinyactors-otlp)). |
+| `otlp.h`, `otlp.c`, `adapter_trace.h`, `adapter_trace.c` | 2,349 | `tinyactors-otlp`: a small C library that reads `tel` and encodes OTLP traces and logs. napi and the test host link it ([telemetry.md](telemetry.md#otlp-tinyactors-otlp)). |
 | `watch.h`, `watch.c` | 321 | Mostly deleted. Watched sessions become a per-actor bit in core, set by address selector like the `recorded` bit. The operator-facing parts move to napi. |
 | `allocator.h`, `allocator.c`, `memory.c`, `memory.h`, `containers.h`, `containers.c`, `platform.h` | about 650 | Back to napi (napi ADRs 0009 and 0014: the counting allocator and containers). With the scheduler gone, napi needs far fewer containers. Delete whatever is left unused. |
 | `host_metrics.h`, `host_metrics.c`, `definitions.h`, `definitions.c`, `enumerate.h`, `enumerate.c` | 214 | napi: pump timings, how late timers fire, definition churn, cursor paging. All of it is binding work over core's API. |
@@ -60,7 +60,7 @@ property now, tested in core, or a protocol property, tested on rings.
 |---|---|
 | scheduler, router, loads, directory tests | core tests over h2c and c2h: order between each sender and receiver, admission, recycling, load requests |
 | `event_replay_test.c`, replay tests | core tests: replay with `h2c.spawn` (replaying), then `h2c.publish` |
-| `replay_test` with `TAH_FULL=1` (the out-of-memory sweep over replay) | **no longer needed for macrosteps**, because a macrostep cannot fail to allocate. Keep a sweep over spawn, load and definition registration, which still allocate. |
+| `replay_test` with `TAH_FULL=1` (the out-of-memory sweep over replay) | **not needed for macrosteps**, because a macrostep cannot fail to allocate. Keep a sweep over spawn, load and definition registration, which still allocate. |
 | allocator, containers tests | napi, if the code stays there |
 
 ## napi
@@ -157,11 +157,11 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0016 Invocation is a pluggable service boundary | invoker vtable | **refined**: the boundary is records. The invoker registry becomes a set of declared types (`h2c.type_declare`, registry `invoker`), so an undeclared `<invoke type>` still raises `error.execution`; `ta_system_register_invoker` and the vtable go ([building blocks](building-blocks.md#io-processors-and-invokers-one-type-registry-twice)) |
 | 0026, 0054 Delayed sends: actor-owned, globally indexed | sparse state per owner; global index of owners | **refined**: delayed sends are envelopes; the index is over the pool; they still travel with their owner's image |
 | 0029 No per-actor external mailbox is required by core | no queue in core | **superseded**: core has a pool, with a list head per actor |
-| 0037 Core-owned actor protocol, host-backed directory | directory vtable | **refined**: resident sessions are core's; unloaded ones are the host's index. The directory vtable goes: an address that is not resident is asked for with `c2h.load_needed` ([unloading.md](unloading.md#no-directory-vtable-not-resident-means-ask)) |
+| 0037 Core-owned actor protocol, host-backed directory | directory vtable | **refined**: resident sessions are core's; unloaded ones are the host's index. The directory vtable is removed: an address that is not resident is asked for with `c2h.load_needed` ([unloading.md](unloading.md#no-directory-vtable-not-resident-means-ask)) |
 | 0040 Built-in SCXML event processor, host-routed external events | core submits to the host's router | **superseded**: mail between local sessions stays in core |
 | 0045 Log records go to a host sink | log sink vtable | **refined**: `c2h.log` |
 | 0047 An interrupted macrostep is retryable | a macrostep interrupted by running out of memory can run again | **superseded**: core cannot run out of memory in a macrostep, and a data model or invoker that does answers `TA_OP_ERROR`, so nothing interrupts a macrostep for memory |
-| 0055 Deliver is the admission test | `TA_ERR_BUSY` | **superseded**: admission is moving from h2c into the pool; mail for an active session waits on its deferred list in core, so the host never sees busy |
+| 0055 Deliver is the admission test | `TA_ERR_BUSY` | **superseded**: admission is the move from h2c into the pool; mail for an active session waits on its deferred list in core, so the host never sees busy |
 | 0061 A run can pause between units of executable content | the paused state moves into a continuation the actor owns | **refined**: it moves into the session's macrostep slot, and slots take turns between units |
 | 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: one live queue in the running workspace, parked slots' entries in the park area, an ordinary quota plus a compiler-sized mandatory floor of one round of every phase, allocated outside macrosteps; mandatory events beyond the floor use free ordinary entries, and an overflow is a runaway ([macrostep.md](macrostep.md#sizing-mandatory-storage)) |
 | 0067 Core traces to a host sink | sink vtable | **refined**: the `tel` ring |
@@ -215,141 +215,173 @@ history, with a status line pointing at the ADR that removes the kernel.
 Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
 
 1. **Core talks to its host through three rings.** h2c, c2h and tel, and
-   their record format. A full c2h pauses the slot whose action does not
-   fit, until the host drains; it never fails the action. The vtables for
-   routing, I/O, invocation, logs and traces go. The data model vtable
-   stays.
+   their record format. The vtables for routing, I/O, invocation, logs,
+   traces and the directory go; the data model vtable stays.
+   - **A full c2h parks the slot.** Before an action that may write c2h,
+     and before it evaluates anything, core checks for room for the
+     largest record beside every slot's reserve. Without it, the slot
+     parks and the action runs once, after the host drains; it never
+     fails the action ([macrostep.md](macrostep.md#a-full-c2h-pauses-the-slot)).
+     A full pool or name area fails the action in the chart, because only
+     sessions free them.
+   - **The c2h reserve.** Each record of an input's mandatory batch
+     reserves its aligned size plus one pad of up to
+     `maxRecordBytes - 8` bytes. Core takes an input only when 2 ×
+     `maxRecordBytes` of headroom stays unreserved. `c2hBytes` defaults
+     to `(3 × maxConcurrentInputs + 2) × maxRecordBytes`
+     ([ring.md](ring.md#the-c2h-reserve)).
+   - **A host never makes draining c2h wait for room in h2c**
+     ([macrostep.md](macrostep.md#a-full-c2h-pauses-the-slot)).
+   - **Type registries are declared through h2c.** I/O processor and
+     invoker types are atoms declared by `h2c.type_declare`; an undeclared
+     `<send type>` or `<invoke type>` still raises `error.execution`.
+     Refines 0016 and 0068.
+   - **Definitions are requests and results.** An h2c request carries a
+     handle to a complete native `ta_scxml_spec`, built with core's spec
+     builder; core compiles and registers it between macrosteps and
+     answers with `c2h.definition_result`, with ADR 0058's native
+     compile-error struct in bounded host memory. A spec has no byte
+     layout; a host with a chart as text uses a chart codec (ADR 0053)
+     ([definitions.md](definitions.md#a-native-spec-handle-not-a-byte-layout)).
+   - **No directory vtable.** An address that is not resident is asked
+     for with `c2h.load_needed`. Refines 0037
+     ([unloading.md](unloading.md#no-directory-vtable-not-resident-means-ask)).
 2. **A macrostep never allocates core memory.** Capacity becomes
    `error.execution.capacity`. Supersedes 0070 for core's memory. Records
-   the mandatory internal-event floor (one round of every phase), and that
-   an overflow beyond it and the ordinary quota is a runaway. Records the
-   figures: per-actor bytes before and after.
-3. **Pending inputs are envelopes in one pool per system.** One run
-   queue in arrival order, admission watermark, fairness, recycling. Supersedes 0011, 0029,
-   0040, 0055, 0064, 0069 and 0093. Records the bytes per envelope, the
-   pool's default and the ring defaults, measured in step 4.2.
+   the figures: per-actor bytes before and after.
+   - **Mandatory internal events** (errors, completion data) have a
+     floor the compiler sizes as one round of every phase, allocated
+     outside macrosteps. Beyond the floor they take free entries of the
+     ordinary quota, in one FIFO order with ordinary events. One that fits
+     in neither ends the input as a `runaway`, with `runaway_cause`
+     `internal_queue` ([macrostep.md](macrostep.md#sizing-mandatory-storage)).
+3. **Pending inputs are envelopes in one pool per system.** Supersedes
+   0011, 0029, 0040, 0055, 0064, 0069 and 0093. Records the bytes per
+   envelope, the pool's default and the ring defaults, measured in step
+   4.2.
+   - **One run queue in arrival order,** with an admission watermark and
+     recycling. `fairnessRatio` between mail and admitted input is the
+     only fairness policy. Mail that waited on a deferred list returns to
+     the run queue at the position its arrival gives it, not at the head.
+     Round robin across targets would be internal scheduling, with no
+     protocol change ([envelope.md](envelope.md#fairness)).
+   - **No cap per address.** The pool is the only bound on envelopes that
+     wait for a load; the host bounds how long they wait
+     ([unloading.md](unloading.md#waiting-envelopes-count-against-the-pool)).
+   - **Withdrawal is a new record.** Committed records never change.
+     [`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw) names
+     an admitted input by its h2c seq. If it has not been taken, core
+     frees its envelope and writes `c2h.input_refused` (`withdrawn`);
+     otherwise the input's own terminal record stands, and only an
+     operator abandon stops it
+     ([envelope.md](envelope.md#withdrawing-an-admitted-input)).
+   - **The host gives memory back.** `ta_system_trim` frees whole free
+     pages above each reserve in the pool, the name area and the park
+     area, between `ta_run` calls; core never trims on its own
+     ([macrostep.md](macrostep.md#parking-one-running-workspace-and-a-park-area)).
 4. **Delayed sends are envelopes.** Exact `<cancel>`, one wake, timers
    travel in images. Refines 0026 and 0054.
 5. **Only authored names are interned.** Run-time names are bytes,
-   matched by lookup. Refines 0007. Fixes the memory that grows today.
+   matched by lookup. Atoms are never freed and their IDs never reused;
+   growth is bounded by what operators register, not by traffic. Refines
+   0007. Fixes the memory that grows today
+   ([names.md](names.md#atoms-are-never-freed)).
 6. **Recorded sessions expose input observations on c2h.** Journaling is
-   application policy. Replay seeds new execution before publish; effects
-   execute on receipt in live execution, without a write-ahead hold.
-7. **Telemetry is a lossy ring.** Records mirror the trace kinds one for
-   one and are self-contained: names, values as text, faults and state
-   lists in the tail. Core stamps each with the clock the host installs.
-   Refines 0067.
+   application policy. Effects execute on receipt in live execution,
+   without a write-ahead hold. Replay seeds new execution before publish:
+   it derives configuration and data model values and may produce
+   different state. Whole-system replay uses images produced by the new
+   execution, with load failures handled by the host, and does not
+   restore the old system's in-flight mail
+   ([recording-and-replay.md](recording-and-replay.md)).
+7. **Telemetry is a lossy ring.** `tel.trace` records mirror core's trace
+   kinds one for one and are self-contained: names, values as text,
+   faults and state lists in the tail. Core stamps each with a clock the
+   host installs natively as a C function. `tinyactors-otlp` reads them
+   and builds OTLP spans; a `tel.dropped` ends every open span with error
+   status. `telBytes` 0 creates no `tel` ring. Refines 0067
+   ([telemetry.md](telemetry.md)).
 8. In `docs/adr/` (the repository's own): **remove `tinyactors-host`**.
    Supersedes kernel ADRs 0001 to 0006.
 9. In `tinyactors-napi/docs/adr/`: **napi is a binding over core's
    rings.** Supersedes napi 0037 and the others above.
 10. **Macrostep slots.** Up to `maxConcurrentInputs` sessions run inputs at
-    once, in turn; deferred lists; the chain limit, which abandons a
-    runaway's input; one running workspace and a park area of chunks with
-    a derived ceiling. Records that quarantine is removed (napi ADRs 0008
-    and 0025).
+    once, taking turns between units of executable content; each session
+    runs one input at a time, and a long or looping macrostep holds one
+    slot. Deferred lists; one running workspace and a park area of chunks
+    with a derived ceiling.
+    - **The chain limit** counts one input's microsteps, selection passes
+      and startup passes, and cannot be turned off. At the limit core
+      abandons the input with status `runaway`
+      ([macrostep.md](macrostep.md#runaways-the-chain-limit)).
+    - **Quarantine is removed** (napi ADRs 0008 and 0025). Slots keep one
+      bad actor from taking the loop's turns. Holding a runaway would let
+      its mail fill the pool, leave its input's promise pending and stop a
+      looping replay seed from being published. The debugger is how an
+      operator looks at a live actor.
+
     Refines 0055, 0061 and 0075. Records the bytes per slot record, per
-    parked execution and per actor (+8 for the deferred list).
+    parked execution and per actor (+12 bytes on today's 332: the head of
+    the owner list of delayed sends, and the head and tail of the
+    deferred list; [envelope.md](envelope.md#memory-as-estimates)).
 
-## A rough order of work
+### Settled boundaries
 
-Replaced by [IMPLEMENTATION.md](../IMPLEMENTATION.md). It keeps the code
-base and replaces core's plumbing with the building blocks in phases.
-Each commit passes `mise run test`. The test host becomes a ring driver
-when h2c and c2h arrive, not at the end.
+These hold with the proposal and need no ADR of their own:
 
-## Decided along the way
-
-- **Fairness is the ratio and arrival order.** One run queue in arrival
-  order, and `fairnessRatio` between mail and admitted input. Mail that
-  waited on a deferred list returns to the run queue at the place its
-  arrival gives it, not at the head. There is no round robin across
-  targets; it can come later as internal scheduling, with no protocol
-  change ([envelope.md](envelope.md#mail-for-an-active-session)).
 - **Debugging temporarily replaces the production driver.** Attachment
   suspends the pump and transfers exclusive ownership of the whole system.
   Debugger commands stay outside the rings; native primitives support
   inspection, abandonment at legal boundaries and operator transitions
-  through the normal engine. Detachment returns ownership to the pump.
-  A debugger that holds one actor while others run is outside the initial
-  design ([debugging.md](debugging.md)).
-- **Macrostep slots replace system-wide run to completion.** Up to
-  `maxConcurrentInputs` sessions run inputs at once, taking turns between units
-  of executable content; each session still runs one input at a time. A
-  long or looping macrostep holds one slot. The chain limit counts
-  microsteps, selection passes and startup passes and cannot be turned
-  off. At the limit core abandons the input with status `runaway`
-  ([macrostep.md](macrostep.md#macrostep-slots)).
-- **Quarantine is removed.** It kept one bad actor from taking the loop's
-  turns, which slots now do. Holding a runaway would let its mail fill the
-  pool, leave its input's promise pending and stop a looping replay seed
-  from being published. napi loses `release()`, the `"quarantined"`
-  scheduling state and the parent's `.quarantined` event; the debugger is
-  how an operator looks at a live actor
-  ([macrostep.md](macrostep.md#runaways-the-chain-limit)).
-- **Definition management uses requests and results.** Hosts submit a
-  handle to a complete native `ta_scxml_spec`, built with core's spec
-  builder; core compiles and registers it between macrosteps. The
-  diagnostic is ADR 0058's native compile-error struct, written into
-  bounded host memory. A flat byte layout of the spec is rejected: every
-  host builds specs natively, the protocol is process-local, and a layout
-  would duplicate `ta_scxml_spec`. A host with a chart as text uses a chart
-  codec (ADR 0053) on its side ([definitions.md](definitions.md)).
-- **A pending input is withdrawn by a new record, not by editing h2c.**
-  Committed records never change. [`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw)
-  names an admitted input by its h2c seq. If it has not been taken, core
-  frees its envelope and writes `c2h.input_refused` (`withdrawn`);
-  otherwise the input's own terminal record stands. A taken input is
-  stopped only by an operator abandon
-  ([envelope.md](envelope.md#withdrawing-an-admitted-input)).
-- **The data model stays a synchronous vtable.** Data model requests on the
-  ring ("option (b)") are rejected: in-process data models gain nothing,
-  and every action would have to become resumable in the middle
-  ([data-model.md](data-model.md#decided-the-data-model-stays-a-synchronous-vtable)).
+  through the normal engine (ADR 0082). Detachment returns ownership to
+  the pump. A debugger that holds one actor while others run is outside
+  the design ([debugging.md](debugging.md)).
+- **The data model stays a synchronous vtable.** In-process data models
+  gain nothing from requests on a ring, and every action would have to
+  become resumable in the middle ([data-model.md](data-model.md)).
 - **A `ta_system` is not thread-safe.** The rings are used on the system's
   own thread only. A host that works on other threads puts its own queue or
   channel in front of the system ([ring.md](ring.md#one-thread)), so core
-  needs no atomics. This is what core ADR 0017 already assumes.
+  needs no atomics. Core ADR 0017 already assumes this.
+
+## A rough order of work
+
+[IMPLEMENTATION.md](../IMPLEMENTATION.md) is the order of work. It keeps
+the code base and replaces core's plumbing with the building blocks in
+phases. Each commit passes `mise run test`. The test host becomes a ring
+driver when h2c and c2h arrive, not at the end.
 
 ## Open questions
 
-- **Default sizes.** The pool, the name area and the rings
-  ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Partly answered: a full c2h
-  pauses a slot, so ring size is a throughput setting. h2c and tel
-  default to 16 KiB each; c2h is derived from `maxConcurrentInputs` and
-  `maxRecordBytes` (776 KiB with the defaults). What remains is measuring
-  h2c and tel, and checking the derived c2h, in step 4.2.
+- **Default sizes.** h2c and tel default to 16 KiB each; c2h is derived
+  from `maxConcurrentInputs` and `maxRecordBytes` (776 KiB with the
+  defaults) ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Ring size is a
+  throughput setting, not a correctness one. Step 4.2 measures the h2c and
+  tel defaults and checks the derived c2h against napi's suites.
 - **The MCP server proposal** ([mcp-server.md](../../mcp-server.md))
-  places its mapping in the host kernel, "implemented once". With the
-  kernel gone, it needs a new home. **Not on this plan's critical path:**
-  nothing implements the mapping, so deleting the kernel (Phase 6) breaks
-  nothing. The MCP proposal is revised against the ring protocol after
-  Phase 5, when its records exist. It then settles three things:
-  - its home. A small C library beside `tinyactors-otlp` is the likely
-    answer: `send` becomes `h2c.event` and waits for its
-    `c2h.input_completed`, and `load` becomes the load records;
-  - `goto`. The MCP proposal queues an operator transition behind one
-    actor's mail while the system runs. This proposal allows operator
+  needs revising against the ring protocol, after Phase 5, when its
+  records exist. It is not on this plan's critical path: nothing
+  implements its mapping, so deleting the kernel (Phase 6) breaks
+  nothing. The revision settles three things:
+  - its home, with the kernel gone. A small C library beside
+    `tinyactors-otlp` is one candidate: `send` becomes `h2c.event` and
+    waits for its `c2h.input_completed`, and `load` becomes the load
+    records;
+  - `goto`. An operator transition queued behind one actor's mail while
+    the system runs conflicts with this proposal, which allows operator
     transitions only while a debugger owns the whole system
     ([debugging.md](debugging.md));
   - its I/O processor's origin scopes, which this proposal removes.
 - **The SQLite and PostgreSQL sketches** ([sqlite-host.md](../../sqlite-host.md),
-  [postgres-host.md](../../postgres-host.md)) keep a `ta_mailbox` table
-  and drain it into core. With the pool in core, the table holds only
-  what the host has not yet posted to h2c. `ta_outbox` is an application
-  policy for c2h effects, which the protocol permits on receipt. Both
-  sketches also keep session images as durable
-  state, which this proposal rules out: an image only bounds memory
-  ([unloading.md](unloading.md#unloading-bounds-memory-it-is-not-persistence)).
+  [postgres-host.md](../../postgres-host.md)) need updating to this
+  contract. They keep a `ta_mailbox` table and drain it into core; with
+  the pool in core, the table holds only what the host has not yet posted
+  to h2c. `ta_outbox` is an application policy for c2h effects, which the
+  protocol permits on receipt. Both sketches keep session images as
+  durable state, which this proposal rules out: an image only bounds
+  memory ([unloading.md](unloading.md#unloading-bounds-memory-it-is-not-persistence)).
   They would persist a session as [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate)
   plus its [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) records,
   journaled on the application's schedule. A shared transaction with
   `ta_outbox` is the application's choice, not a protocol requirement.
-  Their persistence notes would need updating to this contract. Neither
-  has been tried.
-- **Replay seeds new execution.** It derives configuration and data model
-  values and may produce different state. Recording adds no effect hold
-  or write-ahead rule. Whole-system replay uses images produced by the new
-  execution, with load failures handled by the host; it does not restore
-  the old system's exact in-flight mail
-  ([recording-and-replay.md](recording-and-replay.md)).
+  Neither sketch has been tried.
