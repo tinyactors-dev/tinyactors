@@ -102,7 +102,7 @@ gets its own test program in `tinyactors-core/tests/`.
 | 1.3 | E2 failing, counting test allocator | Nine hand-rolled copies in core's tests | It lives with the tests and is never amalgamated into the library. |
 | 1.4 | A2 layout builder | Six layout calculators | Checked arithmetic. Phase 4's workspace sizing depends on it. |
 | 1.5 | A5 index pool | The paged directories of the actor, address and session tables | Not the timer heap or `io_origin`: they are deleted later. A5 needs `refill(min_free)` and a ceiling from the start, even though only the pool uses the ceiling. |
-| 1.6 | B3 hash table, D7 trie of atoms | The atom table, the event-name trie, and the address and session tables | Two modes: fixed, and growing on an explicit call. The trie becomes a named block on B3. |
+| 1.6 | B3 hash table, D7 trie of atoms | The atom table, the event-name trie, and the address and session tables | Two modes: fixed, and growing on an explicit call. The trie becomes a named block on B3. **Done** for all four tables: atoms and the trie (1.6), then addresses and sessions on B3 and the A5 pool (1.6b), which also adds `ta_table_prepare` (an insert that finds its home page full grows the page at the safe point instead of answering `TA_ERR_NOMEM`, so crafted names cannot fail a spawn or a load) and drops `ta_actor.session_node` and the address record's hash copy to pay for the directory. |
 | 1.7 | B6 | Hand-rolled doubling arrays that survive: the invoke table and export blocks | Skip the timer lists and the event-block queue. |
 | 1.8 | – | Dead code: `fault.h`'s undefined declarations, unused `ta_configuration` kinds, stale comments (`interpreter.h:143`, `actor.h:287`) | |
 
