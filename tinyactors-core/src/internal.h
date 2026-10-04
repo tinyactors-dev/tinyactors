@@ -5,6 +5,7 @@
 #include "list.h"
 #include "paged_array.h"
 #include "heap.h"
+#include "fifo.h"
 #include "tree.h"
 #include "atom.h"
 #include "address.h"
