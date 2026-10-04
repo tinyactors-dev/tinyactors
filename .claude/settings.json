@@ -3,7 +3,8 @@
     "allow": [
       "Bash(git worktree remove *)",
       "Bash(git worktree prune)",
-      "Bash(git worktree prune *)"
+      "Bash(git worktree prune *)",
+      "Bash(mise run *)"
     ]
   },
   "autoMode": {

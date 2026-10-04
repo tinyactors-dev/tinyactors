@@ -407,7 +407,8 @@ const wantFull = results.some((r, i) => r && r.integration && r.integration.stat
   (UNITS[i].full_test || (r.plan && r.plan.full_test_needed)))
 const full = !wantFull ? 'not needed: no unit that touches allocation or per-actor costs landed' : await agent(`${CONTEXT.replace(/Do not run the repository-wide[^\n]*/, '')}
 
-Every unit of wave ${WAVE} has landed on ${BASE}. Nothing else runs now. In ${REPO}:
+Every unit of wave ${WAVE} has landed on ${BASE}. Nothing else runs now. In ${REPO}, and with one
+command per Bash call (compound commands get refused by the permission check):
 1. Remove the wave's leftover worktrees under .claude/worktrees/. The integrator rebases each unit and
    regenerates the amalgamation, so landed commits have new hashes and patch IDs: match by subject.
    For each worktree, every commit in git log ${BASE}..HEAD whose subject also appears in
