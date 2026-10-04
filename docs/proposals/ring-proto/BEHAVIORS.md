@@ -263,8 +263,8 @@ because a full one fails the chart's action.
 - **Filled on demand,** in chunks, between macrosteps only: after each
   macrostep end and at admission, core tops the free list up to one parked
   execution of the largest definition. Chunks come back to the free list
-  when an execution resumes; giving them back to the allocator needs a
-  trim call, which is **open**.
+  when an execution resumes. The host gives them back to the allocator
+  with `ta_system_trim` ([macrostep.md](reference/macrostep.md#parking-one-running-workspace-and-a-park-area)).
 - **What it drives:** how much isolation a host buys with memory. A host
   that wants a hard memory figure sets a value below the ceiling.
 - **How it surfaces:** no error. A slot that finds no free chunk at the

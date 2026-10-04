@@ -366,9 +366,19 @@ disables parking, which leaves plain run to completion.
 rotations come back only when those executions resume, and new chunks
 arrive only at the next macrostep end, so a burst can briefly cost
 isolation. And chunks return to the free list, not to the allocator, so
-after a burst the area stays at its high-water mark. **Open:** a trim
-call that returns free chunks of the park area and the pool, above their
-reserves, to the allocator.
+after a burst the area stays at its high-water mark until the host trims
+it.
+
+**The host trims; core does not.** `ta_system_trim(system, keep)` is a
+native call that the host makes between `ta_run` calls, when its own
+policy says so: when idle, on a timer, under memory pressure. It frees
+every whole page that is free and above its structure's reserve, or above
+`keep`, in the pool, the name area and the park area. It is written once,
+in the index pool (A5), so all three get it. Core never trims on its own:
+when to give memory back is policy, and a heuristic in core would free and
+refill in a loop. A page goes back only when every item on it is free.
+Items never move, because envelope indices must stay stable, so a burst
+can leave pages that are partly used and cannot be freed.
 
 **What you don't pay for.** A system whose macrosteps all finish within
 one slice never parks and holds only the reserve, which is itself
