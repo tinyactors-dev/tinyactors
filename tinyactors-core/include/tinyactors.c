@@ -5291,11 +5291,15 @@ TA_PRIVATE size_t ta_continuation_bytes(const ta_continuation *shape) {
 /*
  * The offsets of a continuation that exists. Its counts passed
  * ta_continuation_bytes when it was allocated (the one place that refuses an
- * overflowing shape), so this cannot fail.
+ * overflowing shape), so this cannot fail. If it ever did, zeroed offsets
+ * would make every accessor answer the header's own address and the caller
+ * would write over it, so it traps instead of answering.
  */
 static ta_continuation_layout ta_continuation_existing(const ta_continuation *continuation) {
     ta_continuation_layout offsets = { 0 };
-    (void)ta_continuation_offsets(continuation, &offsets);
+    if (ta_continuation_offsets(continuation, &offsets) != TA_OK) {
+        __builtin_trap();
+    }
     return offsets;
 }
 
