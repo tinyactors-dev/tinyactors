@@ -16,8 +16,9 @@ depends on the tree-sitter runtime.
 `mise run diff-node` checks it: every case in `tests/spec/` that expects a
 value is evaluated in Node and must give the same value; every case staticjs
 refuses as a syntax error must be one JavaScript refuses too; every case it
-refuses as unsupported must be valid JavaScript; and 100,000 doubles must
-format as `String(x)` does.
+refuses as unsupported must be valid JavaScript; every case it refuses for a
+name (bound nowhere, not exported, no such module) must throw in JavaScript
+too; and 100,000 doubles must format as `String(x)` does.
 
 ## What it guarantees
 
@@ -126,10 +127,23 @@ JavaScript staticjs leaves out is refused as `unsupported`, never given a
 different meaning. Among the module forms: `export let`, `export function`,
 `export class` and `export default function`; a string as an exported or
 imported name (`export { a as "x-y" }`), as an object cannot keep the order
-a namespace gives it; `import()` and `import.meta`; two `export *` that
-give one name from different modules, unless an explicit export settles it,
-as staticjs cannot tell whether they are one binding; and a name used
-before its import or declaration, even in an earlier function.
+a namespace gives it; `import()`, `import.meta`, top-level `await` and
+import attributes (`with { type: "json" }`); two `export *` that give one
+name, unless an explicit export settles it, as staticjs cannot tell whether
+they are one binding, so even two that lead to the same binding are
+refused; and a name used before its import or declaration, even in an
+earlier function. In a script, which is sloppy, `eval`, `arguments` and the
+words only strict code reserves (`yield`, `let`, ...) are names, which
+staticjs does not bind; in a module they are syntax errors.
+
+Errors come in the order JavaScript finds them only so far as a stage that
+streams can know it. The compiler stops at the first error it meets; what it
+can only decide at the end of a module (an `export { a }` the module never
+declares, a name bound nowhere, an ambiguous `export *`) comes after
+everything it met before, in the order syntax, then name, then unsupported.
+So a module that uses what staticjs leaves out and later exports a name it
+never declares is refused as unsupported, where JavaScript reports the
+export.
 
 ## Status
 

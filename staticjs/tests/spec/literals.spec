@@ -59,6 +59,12 @@
 --- value
 true
 
+=== a surrogate pair across a line continuation
+"\uD83D\
+\uDE00" === "😀"
+--- value
+true
+
 === an empty string
 ""
 --- value

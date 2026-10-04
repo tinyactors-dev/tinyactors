@@ -9,14 +9,15 @@
  *
  * Tokens wait in a queue only while the parser needs to see further ahead:
  * after a name, to tell `x => ...` from `x`; after `(`, to tell an arrow
- * function's parameters from a parenthesized expression; and after `import`,
- * to tell a declaration from import() and import.meta. That lookahead is
- * bounded by max_lookahead.
+ * function's parameters from a parenthesized expression; after `import`,
+ * to tell a declaration from import() and import.meta; and after the first
+ * token of a statement or a word staticjs refuses, to tell JavaScript it
+ * leaves out (unsupported) from what is not JavaScript (syntax). That
+ * lookahead is bounded by max_lookahead.
  *
  * A module's import and export statements hold their specifiers until the
- * module's name, or the statement's end, says what they are; then each one
- * is an event. A line break ends a statement where JavaScript would insert a
- * semicolon.
+ * statement's end says what they are; then each one is an event. A line
+ * break ends a statement where JavaScript would insert a semicolon.
  */
 #include "syntax.h"
 
@@ -25,6 +26,7 @@ typedef struct {
     uint8_t punctuator;
     uint8_t keyword;
     uint8_t newline_before;
+    uint8_t lone_surrogate;
     sjs_position at;
     double number;
     uint32_t text_offset;
@@ -77,12 +79,17 @@ enum {
     X_NAME = 0, X_AS, X_ALIAS, X_AFTER, X_CLOSE, X_STAR, X_STAR_NAME, X_FROM, X_SOURCE, X_END,
     /* F_DEFAULT */
     DF_FIRST = 0, DF_VALUE,
+    /* F_IMPORT, F_EXPORT: `with { key: "value" }` after the module's name */
+    WA_OPEN = 32, WA_KEY, WA_COLON, WA_VALUE, WA_AFTER, WA_END,
     /* F_NEW */
     N_NAME = 0, N_OPEN
 };
 
 /* How the current expression frame expects its next token. */
 enum { E_OPERAND = 0, E_OPERATOR, E_AFTER_BLOCK_ARROW };
+
+/* p->name_keyword of a string held where a name may be. */
+#define NAME_STRING 0xFFu
 
 /* What an import or export statement's specifiers held (frame.names). */
 #define SPEC_RESERVED_LOCAL 1u /* export { if }: only a re-export may name it */
@@ -155,6 +162,7 @@ struct sjs_parser {
     sjs_position name_at;
     uint8_t name_keyword;
     bool arrow_body_next;  /* the next token begins an arrow function's body */
+    bool default_exported; /* a module exported a name `default` */
 };
 
 typedef enum { H_TAKEN = 0, H_AGAIN, H_WAIT, H_STOP } handled;
@@ -403,10 +411,6 @@ static bool is_punctuator(const queued_token *t, uint8_t punctuator) {
     return t->kind == SJS_TOKEN_PUNCTUATOR && t->punctuator == punctuator;
 }
 
-static bool is_binding_name(const queued_token *t) {
-    return t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_NONE;
-}
-
 static handled hold_name(sjs_parser *p, const queued_token *t) {
     p->name.length = 0;
     p->name_at = t->at;
@@ -494,22 +498,222 @@ static bool is_word(const sjs_parser *p, const queued_token *t, sjs_str word) {
     return t->kind == SJS_TOKEN_NAME && sjs_str_equal(token_text(p, t), word);
 }
 
+/* Reserved words no expression, and no name, starts with. */
+static const char *const never_words[] = { "break", "case", "catch", "continue", "debugger", "default", "do",
+                                           "else", "enum", "extends", "finally", "for", "if", "instanceof",
+                                           "super", "switch", "throw", "try", "var", "while", "with" };
+/* Names in a script, reserved in a module, which is strict. */
+static const char *const strict_words[] = { "let", "static", "implements", "interface", "package",
+                                            "private", "protected", "public", "yield", "await" };
+
+static bool word_listed(sjs_str word, const char *const *list, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        if (sjs_str_equal(word, sjs_cstr(list[i]))) return true;
+    }
+    return false;
+}
+
+#define WORD_LIST(list) (list), (uint32_t)(sizeof(list) / sizeof((list)[0]))
+
+/* How a reserved word would be used as a name. */
+enum { USE_PARAM = 0, USE_CONST, USE_REFERENCE };
+
+/* Why a reserved word cannot be bound or read as a name: JavaScript refuses
+ * most; some are names JavaScript allows (async anywhere; eval and arguments,
+ * read; in a script, which is sloppy, the strict ones) and staticjs leaves out. */
+static sjs_problem word_problem(const sjs_parser *p, sjs_str word, uint8_t use) {
+    bool module = p->goal == SJS_GOAL_MODULE;
+    sjs_problem syntax = { SJS_ERROR_SYNTAX, use == USE_REFERENCE ? "expected an expression" : "this word cannot be bound" };
+    sjs_problem unsupported = { SJS_ERROR_UNSUPPORTED, use == USE_REFERENCE ? "staticjs does not have this" : "staticjs does not bind this name" };
+    if (sjs_str_equal(word, SJS_STR("async"))) return unsupported;
+    if (sjs_str_equal(word, SJS_STR("eval")) || sjs_str_equal(word, SJS_STR("arguments"))) {
+        return module && use != USE_REFERENCE ? syntax : unsupported;
+    }
+    if (module || !word_listed(word, WORD_LIST(strict_words))) return syntax;
+    /* `let` is never the name of a lexical declaration. */
+    if (use == USE_CONST && sjs_str_equal(word, SJS_STR("let"))) return syntax;
+    return unsupported;
+}
+
+/* Is the parser inside an arrow function, its parameters or its body? */
+static bool in_function(const sjs_parser *p) {
+    uint32_t frames = SJS_BUF_COUNT(p->frames, frame);
+    for (uint32_t i = 0; i < frames; i++) {
+        uint8_t type = SJS_BUF_AT(p->frames, frame, i).type;
+        if (type == F_BLOCK || type == F_PARAMS) return true;
+    }
+    uint32_t ops = SJS_BUF_COUNT(p->ops, pending_op);
+    for (uint32_t i = 0; i < ops; i++) {
+        if (SJS_BUF_AT(p->ops, pending_op, i).kind == OP_ARROW) return true;
+    }
+    return false;
+}
+
+/* Can an operand start with the name `t`? */
+static bool word_starts_operand(sjs_parser *p, const queued_token *t) {
+    switch (t->keyword) {
+    case SJS_K_CONST:
+    case SJS_K_RETURN:
+    case SJS_K_EXPORT:
+    case SJS_K_IN:
+        return false;
+    case SJS_K_RESERVED:
+        break;
+    default:
+        return true;
+    }
+    sjs_str word = token_text(p, t);
+    if (word_listed(word, WORD_LIST(never_words))) return false;
+    if (p->goal != SJS_GOAL_MODULE) return true;
+    if (sjs_str_equal(word, SJS_STR("await"))) return !in_function(p);
+    return !word_listed(word, WORD_LIST(strict_words));
+}
+
+/* Can an operand (a unary expression) start with `t`? */
+static bool starts_operand(sjs_parser *p, const queued_token *t) {
+    switch (t->kind) {
+    case SJS_TOKEN_NUMBER:
+    case SJS_TOKEN_STRING:
+    case SJS_TOKEN_TEMPLATE:
+    case SJS_TOKEN_TEMPLATE_HEAD:
+        return true;
+    case SJS_TOKEN_NAME:
+        return word_starts_operand(p, t);
+    case SJS_TOKEN_PUNCTUATOR:
+        break;
+    default:
+        return false;
+    }
+    switch (t->punctuator) {
+    case SJS_P_LPAREN:
+    case SJS_P_LBRACKET:
+    case SJS_P_LBRACE:
+    case SJS_P_BANG:
+    case SJS_P_TILDE:
+    case SJS_P_PLUS:
+    case SJS_P_MINUS:
+    case SJS_P_PLUS_PLUS:
+    case SJS_P_MINUS_MINUS:
+    case SJS_P_SLASH:
+        return true;
+    case SJS_P_ASSIGN_OPERATOR:
+        return sjs_str_equal(token_text(p, t), SJS_STR("/="));
+    default:
+        return false;
+    }
+}
+
+/* Can a statement start with `t`? A statement staticjs leaves out is
+ * unsupported; a token no statement starts with is a syntax error. */
+static bool starts_statement(sjs_parser *p, const queued_token *t) {
+    static const char *const statements[] = { "debugger", "do", "for", "if", "let", "switch", "throw", "try", "var", "while" };
+    if (starts_operand(p, t) || is_punctuator(t, SJS_P_SEMICOLON)) return true;
+    if (t->kind != SJS_TOKEN_NAME || t->keyword != SJS_K_RESERVED) return false;
+    sjs_str word = token_text(p, t);
+    if (word_listed(word, WORD_LIST(statements))) return true;
+    return p->goal != SJS_GOAL_MODULE && sjs_str_equal(word, SJS_STR("with"));
+}
+
+/* `await` in a module: reserved in its functions, which are never async; at
+ * the top level, an await expression, which staticjs leaves out. */
+static handled await_word(sjs_parser *p, const queued_token *t) {
+    if (in_function(p)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "await is reserved in a module" });
+    const queued_token *next = peek(p, 1);
+    if (next == NULL) return H_WAIT;
+    if (!starts_operand(p, next)) return parse_fail(p, next, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression after await" });
+    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no await" });
+}
+
+/* Can what `new` constructs start with `t`? A member expression: an operand,
+ * but not one a unary operator starts. */
+static bool starts_member(sjs_parser *p, const queued_token *t) {
+    if (!starts_operand(p, t)) return false;
+    if (t->kind == SJS_TOKEN_PUNCTUATOR) {
+        return t->punctuator == SJS_P_LPAREN || t->punctuator == SJS_P_LBRACKET || t->punctuator == SJS_P_LBRACE ||
+               t->punctuator == SJS_P_SLASH || t->punctuator == SJS_P_ASSIGN_OPERATOR;
+    }
+    return t->keyword != SJS_K_TYPEOF && !is_word(p, t, SJS_STR("void")) && !is_word(p, t, SJS_STR("delete")) &&
+           !(p->goal == SJS_GOAL_MODULE && is_word(p, t, SJS_STR("await")));
+}
+
+/* Does the statement `t` starts go on with `next`? Some tell by their next
+ * token: a unary operator, typeof, void and delete need an operand; new what
+ * it constructs, or .target; if (, try {, throw a value on its line, var a
+ * name or a pattern; in a module, let as var, and await an operand. */
+static bool statement_goes_on(sjs_parser *p, const queued_token *t, const queued_token *next) {
+    if (t->kind == SJS_TOKEN_PUNCTUATOR) {
+        switch (t->punctuator) {
+        case SJS_P_BANG:
+        case SJS_P_TILDE:
+        case SJS_P_PLUS:
+        case SJS_P_MINUS:
+        case SJS_P_PLUS_PLUS:
+        case SJS_P_MINUS_MINUS:
+            return starts_operand(p, next);
+        default:
+            return true;
+        }
+    }
+    if (t->kind != SJS_TOKEN_NAME) return true;
+    if (t->keyword == SJS_K_TYPEOF || is_word(p, t, SJS_STR("void")) || is_word(p, t, SJS_STR("delete"))) return starts_operand(p, next);
+    if (t->keyword == SJS_K_NEW) return starts_member(p, next) || (p->goal != SJS_GOAL_MODULE && is_punctuator(next, SJS_P_DOT));
+    static const char *const parenthesized[] = { "if", "while", "switch", "with" };
+    bool module = p->goal == SJS_GOAL_MODULE;
+    sjs_str word = token_text(p, t);
+    bool binds = next->kind == SJS_TOKEN_NAME || is_punctuator(next, SJS_P_LBRACKET) || is_punctuator(next, SJS_P_LBRACE);
+    if (word_listed(word, WORD_LIST(parenthesized))) return is_punctuator(next, SJS_P_LPAREN);
+    if (sjs_str_equal(word, SJS_STR("for"))) {
+        return is_punctuator(next, SJS_P_LPAREN) || (module && !in_function(p) && is_word(p, next, SJS_STR("await")));
+    }
+    if (sjs_str_equal(word, SJS_STR("try"))) return is_punctuator(next, SJS_P_LBRACE);
+    if (sjs_str_equal(word, SJS_STR("throw"))) return !next->newline_before && starts_operand(p, next);
+    if (sjs_str_equal(word, SJS_STR("var"))) return binds;
+    if (module && sjs_str_equal(word, SJS_STR("let"))) return binds;
+    if (module && sjs_str_equal(word, SJS_STR("await"))) return starts_operand(p, next);
+    return true;
+}
+
+/* A statement staticjs leaves out: unsupported, with `message`. A token no
+ * statement starts with is a syntax error. */
+static handled refuse_statement(sjs_parser *p, const queued_token *t, const char *message) {
+    if (!starts_statement(p, t)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a statement" });
+    if (t->kind == SJS_TOKEN_NAME || t->kind == SJS_TOKEN_PUNCTUATOR) {
+        const queued_token *next = peek(p, 1);
+        if (next == NULL) return H_WAIT;
+        if (!statement_goes_on(p, t, next)) return parse_fail(p, next, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a statement" });
+    }
+    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, message });
+}
+
 /* A reserved word where an operand belongs. JavaScript has expressions that
  * start with some (this, function, class, void, ...), and none that start
- * with these; nor, in a module, which is strict, with the strict ones. */
+ * with the others; nor, in a module, with the strict ones. Before `=>`, it
+ * is a parameter's name. */
 static handled unsupported_word(sjs_parser *p, const queued_token *t) {
-    static const char *const never[] = { "break", "case", "catch", "continue", "debugger", "default", "do",
-                                         "else", "enum", "extends", "finally", "for", "if", "instanceof",
-                                         "switch", "throw", "try", "var", "while", "with" };
-    static const char *const strict[] = { "let", "static", "implements", "interface", "package",
-                                          "private", "protected", "public", "yield" };
-    for (uint32_t i = 0; i < sizeof never / sizeof never[0]; i++) {
-        if (is_word(p, t, sjs_cstr(never[i]))) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
+    static const char *const starters[] = { "this", "function", "class", "void", "delete" };
+    sjs_str word = token_text(p, t);
+    if (word_listed(word, WORD_LIST(never_words))) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
+    const queued_token *next = peek(p, 1);
+    if (next == NULL) return H_WAIT;
+    if (is_punctuator(next, SJS_P_ARROW)) return parse_fail(p, t, word_problem(p, word, USE_PARAM));
+    if (p->goal == SJS_GOAL_MODULE && sjs_str_equal(word, SJS_STR("await"))) return await_word(p, t);
+    if (word_listed(word, WORD_LIST(starters))) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs does not have this" });
+    return parse_fail(p, t, word_problem(p, word, USE_REFERENCE));
+}
+
+/* The reserved word `word` where a name is bound. */
+static handled refuse_binding(sjs_parser *p, const queued_token *t, sjs_str word) {
+    uint8_t use = USE_CONST;
+    if (p->goal != SJS_GOAL_MODULE) {
+        /* A parameter's pattern, or a const's. */
+        uint32_t n = frame_depth(p);
+        while (n > 0 && (SJS_BUF_AT(p->frames, frame, n - 1).type == F_PATTERN_ARRAY ||
+                         SJS_BUF_AT(p->frames, frame, n - 1).type == F_PATTERN_OBJECT)) {
+            n--;
+        }
+        if (n > 0 && SJS_BUF_AT(p->frames, frame, n - 1).type == F_PARAMS) use = USE_PARAM;
     }
-    for (uint32_t i = 0; i < sizeof strict / sizeof strict[0] && p->goal == SJS_GOAL_MODULE; i++) {
-        if (is_word(p, t, sjs_cstr(strict[i]))) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
-    }
-    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs does not have this" });
+    return parse_fail(p, t, word_problem(p, word, use));
 }
 
 /* `import` where a declaration cannot be: import() and, in a module,
@@ -657,10 +861,8 @@ static handled operand(sjs_parser *p, const queued_token *t) {
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no ++ or --: values do not change" });
     case SJS_P_TILDE:
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no bitwise operators" });
-    case SJS_P_HASH:
-    case SJS_P_AT:
-        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs does not have this" });
     default:
+        /* `#name` and `@` too: outside a class, which staticjs has none of, and a decorator are not JavaScript. */
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
     }
 }
@@ -721,7 +923,6 @@ static handled member(sjs_parser *p, const queued_token *dot) {
     const queued_token *name = peek(p, 1);
     if (name == NULL) return H_WAIT;
     if (name->kind != SJS_TOKEN_NAME) {
-        if (is_punctuator(name, SJS_P_HASH)) return parse_fail(p, name, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no private names" });
         return parse_fail(p, name, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a property name after ." });
     }
     SJS_UNUSED(dot);
@@ -864,6 +1065,8 @@ static handled list_terminator(sjs_parser *p, const queued_token *t, uint8_t clo
     bool empty = p->expect == E_OPERAND;
     bool is_array = f->type == F_ARRAY;
     if (empty && f->spread) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "... needs a value" });
+    /* `[!]`: an operator waits for its operand. */
+    if (empty && top_op(p) != NULL) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
     if (is_punctuator(t, SJS_P_COMMA)) {
         if (empty) {
             if (is_array) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs arrays have no holes" });
@@ -915,7 +1118,7 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         break;
     }
     if (empty) {
-        if (f->type == F_RETURN && (is_punctuator(t, SJS_P_SEMICOLON) || is_punctuator(t, SJS_P_RBRACE))) {
+        if (f->type == F_RETURN && top_op(p) == NULL && (is_punctuator(t, SJS_P_SEMICOLON) || is_punctuator(t, SJS_P_RBRACE))) {
             /* `return;` returns undefined. */
             pop_frame(p);
             top_frame(p)->state = B_AFTER_RETURN;
@@ -1054,7 +1257,9 @@ static bool inserts_semicolon(sjs_parser *p, const queued_token *t) {
     case SJS_TOKEN_STRING:
         return true;
     case SJS_TOKEN_PUNCTUATOR:
-        return t->punctuator == SJS_P_LBRACE || t->punctuator == SJS_P_PLUS_PLUS || t->punctuator == SJS_P_MINUS_MINUS;
+        /* None of these continues an expression; ++ and -- do not after a line break. */
+        return t->punctuator == SJS_P_LBRACE || t->punctuator == SJS_P_PLUS_PLUS || t->punctuator == SJS_P_MINUS_MINUS ||
+               t->punctuator == SJS_P_BANG || t->punctuator == SJS_P_TILDE;
     default:
         return false;
     }
@@ -1120,7 +1325,7 @@ static void pattern_done(sjs_parser *p) {
 
 static handled pattern_start(sjs_parser *p, const queued_token *t) {
     if (t->kind == SJS_TOKEN_NAME) {
-        if (t->keyword != SJS_K_NONE) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "this word cannot be bound" });
+        if (t->keyword != SJS_K_NONE) return refuse_binding(p, t, token_text(p, t));
         if (send_event(p, texted(SJS_EV_BIND, token_text(p, t), t->at)) == H_STOP) return H_STOP;
         pattern_done(p);
         return H_TAKEN;
@@ -1172,7 +1377,7 @@ static handled pattern_object_token(sjs_parser *p, const queued_token *t) {
         if (is_punctuator(t, SJS_P_RBRACE)) return close_pattern(p, SJS_EV_OBJECT_PATTERN_END, t);
         if (t->kind == SJS_TOKEN_NAME || t->kind == SJS_TOKEN_STRING) {
             if (hold_name(p, t) == H_STOP) return H_STOP;
-            p->name_keyword = t->kind == SJS_TOKEN_STRING ? SJS_K_RESERVED : t->keyword;
+            if (t->kind == SJS_TOKEN_STRING) p->name_keyword = NAME_STRING;
             f->state = PO_KEY_NAME;
             return H_TAKEN;
         }
@@ -1187,7 +1392,8 @@ static handled pattern_object_token(sjs_parser *p, const queued_token *t) {
             return H_TAKEN;
         }
         if (is_punctuator(t, SJS_P_COMMA) || is_punctuator(t, SJS_P_RBRACE)) {
-            if (p->name_keyword != SJS_K_NONE) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "this word cannot be bound" });
+            if (p->name_keyword == NAME_STRING) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "this word cannot be bound" });
+            if (p->name_keyword != SJS_K_NONE) return refuse_binding(p, t, held_name(p));
             if (send_event(p, texted(SJS_EV_PATTERN_KEY, held_name(p), p->name_at)) == H_STOP) return H_STOP;
             if (send_event(p, texted(SJS_EV_BIND, held_name(p), p->name_at)) == H_STOP) return H_STOP;
             f->state = PO_AFTER;
@@ -1299,7 +1505,11 @@ static handled object_key_token(sjs_parser *p, const queued_token *t) {
             return H_TAKEN;
         }
         if (is_punctuator(t, SJS_P_COMMA) || is_punctuator(t, SJS_P_RBRACE)) {
-            if (p->name_keyword != SJS_K_NONE) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "this word cannot stand for a value" });
+            if (p->name_keyword != SJS_K_NONE) {
+                sjs_problem problem = word_problem(p, held_name(p), USE_REFERENCE);
+                if (problem.code == SJS_ERROR_SYNTAX) problem.message = "this word cannot stand for a value";
+                return parse_fail(p, t, problem);
+            }
             if (sjs_str_equal(held_name(p), SJS_STR("__proto__"))) {
                 return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs objects have no prototype" });
             }
@@ -1362,24 +1572,29 @@ static handled block_token(sjs_parser *p, const queued_token *t) {
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "export declares only at the top level of a module" });
     }
     if (f->state == B_AFTER_RETURN) {
-        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "in staticjs a block ends with its return" });
+        if (t->kind == SJS_TOKEN_NAME && (t->keyword == SJS_K_CONST || t->keyword == SJS_K_RETURN)) {
+            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "in staticjs a block ends with its return" });
+        }
+        return refuse_statement(p, t, "in staticjs a block ends with its return");
     }
     if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_CONST) return begin_const(p, t);
     if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_RETURN) {
         const queued_token *next = peek(p, 1);
         if (next == NULL) return H_WAIT;
         if (next->newline_before && !is_punctuator(next, SJS_P_SEMICOLON) && !is_punctuator(next, SJS_P_RBRACE)) {
+            /* JavaScript returns undefined, and the next line is a statement. */
+            if (!starts_statement(p, next)) return parse_fail(p, next, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a statement" });
             return parse_fail(p, next, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "put the value on the line of its return" });
         }
         if (push_frame(p, F_RETURN, t->at) == H_STOP) return H_STOP;
         p->expect = E_OPERAND;
         return H_TAKEN;
     }
-    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "an arrow function's block holds const declarations and one return" });
+    return refuse_statement(p, t, "an arrow function's block holds const declarations and one return");
 }
 
-/* An import or export statement. Its specifiers are held until the module's
- * name, or the statement's end, says what they are. */
+/* An import or export statement. Its specifiers are held until the
+ * statement's end says what they are. */
 static handled push_statement(sjs_parser *p, uint8_t type, sjs_position at) {
     if (push_frame(p, type, at) == H_STOP) return H_STOP;
     frame *f = top_frame(p);
@@ -1418,6 +1633,7 @@ static handled send_specifiers(sjs_parser *p, uint8_t kind, sjs_str module) {
         e.text = module;
         e.alias = (sjs_str){ (const char *)p->held_text.ptr + h.alias_offset, h.alias_length };
         e.name = (sjs_str){ (const char *)p->held_text.ptr + h.text_offset, h.text_length };
+        if (kind != SJS_EV_IMPORT && sjs_str_equal(e.name, SJS_STR("default"))) p->default_exported = true;
         if (send(p, &e) == H_STOP) return H_STOP;
     }
     p->held.length = f->held_base * (uint32_t)sizeof(held_event);
@@ -1425,17 +1641,81 @@ static handled send_specifiers(sjs_parser *p, uint8_t kind, sjs_str module) {
     return H_TAKEN;
 }
 
+static bool ends_statement(const queued_token *t) {
+    return is_punctuator(t, SJS_P_SEMICOLON) || t->kind == SJS_TOKEN_END || t->newline_before;
+}
+
 /* `;`, a line break or the end ends an import or export statement. */
 static handled statement_end(sjs_parser *p, const queued_token *t) {
-    if (is_punctuator(t, SJS_P_SEMICOLON)) {
-        pop_frame(p);
+    if (!ends_statement(t)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after an import or export" });
+    pop_frame(p);
+    return is_punctuator(t, SJS_P_SEMICOLON) ? H_TAKEN : H_AGAIN;
+}
+
+/* After the module's name (held): import attributes, or the statement's end,
+ * which sends the specifiers as events of `kind`. */
+static handled source_end(sjs_parser *p, const queued_token *t, uint8_t kind) {
+    frame *f = top_frame(p);
+    if (is_word(p, t, SJS_STR("with"))) {
+        /* Even after a line break: the statement cannot end before it. */
+        f->state = WA_OPEN;
+        f->count = SJS_BUF_COUNT(p->held, held_event);
         return H_TAKEN;
     }
-    if (t->kind == SJS_TOKEN_END || t->newline_before) {
-        pop_frame(p);
-        return H_AGAIN;
+    if (!ends_statement(t)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after an import or export" });
+    if (send_specifiers(p, kind, held_name(p)) == H_STOP) return H_STOP;
+    return statement_end(p, t);
+}
+
+/* `with { key: "value", ... }`: JavaScript staticjs leaves out, once it is
+ * read to its end. Its keys are held to find one given twice. */
+static handled attributes_token(sjs_parser *p, const queued_token *t) {
+    frame *f = top_frame(p);
+    switch (f->state) {
+    case WA_OPEN:
+        if (!is_punctuator(t, SJS_P_LBRACE)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected { after with" });
+        f->state = WA_KEY;
+        return H_TAKEN;
+    case WA_KEY: {
+        if (is_punctuator(t, SJS_P_RBRACE)) {
+            f->state = WA_END;
+            return H_TAKEN;
+        }
+        if (t->kind != SJS_TOKEN_NAME && t->kind != SJS_TOKEN_STRING) {
+            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an import attribute's key" });
+        }
+        sjs_str key = token_text(p, t);
+        uint32_t n = SJS_BUF_COUNT(p->held, held_event);
+        for (uint32_t i = f->count; i < n; i++) {
+            const held_event *h = &SJS_BUF_AT(p->held, held_event, i);
+            if (sjs_str_equal((sjs_str){ (const char *)p->held_text.ptr + h->text_offset, h->text_length }, key)) {
+                return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "an import attribute's key is given twice" });
+            }
+        }
+        if (hold_event(p, &(sjs_event){ .text = key, .at = t->at }) == H_STOP) return H_STOP;
+        f->state = WA_COLON;
+        return H_TAKEN;
     }
-    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after an import or export" });
+    case WA_COLON:
+        if (!is_punctuator(t, SJS_P_COLON)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected : after an import attribute's key" });
+        f->state = WA_VALUE;
+        return H_TAKEN;
+    case WA_VALUE:
+        if (t->kind != SJS_TOKEN_STRING) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "an import attribute's value is a string" });
+        f->state = WA_AFTER;
+        return H_TAKEN;
+    case WA_AFTER:
+        if (is_punctuator(t, SJS_P_COMMA)) {
+            f->state = WA_KEY;
+            return H_TAKEN;
+        }
+        if (!is_punctuator(t, SJS_P_RBRACE)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected , or }" });
+        f->state = WA_END;
+        return H_TAKEN;
+    default: /* WA_END */
+        if (!ends_statement(t)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after an import or export" });
+        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no import attributes" });
+    }
 }
 
 static handled expect_from(sjs_parser *p, const queued_token *t) {
@@ -1457,7 +1737,7 @@ static handled import_name_token(sjs_parser *p, const queued_token *t) {
         if (hold_name(p, t) == H_STOP) return H_STOP;
         if (t->kind == SJS_TOKEN_STRING) {
             /* `import { "a" as b }` needs its `as`. */
-            p->name_keyword = SJS_K_RESERVED;
+            p->name_keyword = NAME_STRING;
             f->names |= SPEC_STRING_LOCAL;
         }
         f->state = I_AS;
@@ -1469,12 +1749,14 @@ static handled import_name_token(sjs_parser *p, const queued_token *t) {
     }
     sjs_event spec = specifier(SJS_IMPORT_NAME, held_name(p), p->name_at);
     if (f->state == I_ALIAS) {
-        if (!is_binding_name(t)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a name to import as" });
+        if (t->kind != SJS_TOKEN_NAME) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a name to import as" });
+        if (t->keyword != SJS_K_NONE) return refuse_binding(p, t, token_text(p, t));
         if (hold_specifier(p, &spec, token_text(p, t)) == H_STOP) return H_STOP;
         f->state = I_AFTER;
         return H_TAKEN;
     }
-    if (p->name_keyword != SJS_K_NONE) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "this word cannot be bound" });
+    if (p->name_keyword == NAME_STRING) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "this word cannot be bound" });
+    if (p->name_keyword != SJS_K_NONE) return refuse_binding(p, t, held_name(p));
     if (hold_specifier(p, &spec, held_name(p)) == H_STOP) return H_STOP;
     f->state = I_AFTER;
     return H_AGAIN;
@@ -1500,11 +1782,12 @@ static handled import_token(sjs_parser *p, const queued_token *t) {
     case I_OPEN:
         if (t->kind == SJS_TOKEN_STRING) {
             /* import "m"; */
-            if (send_specifiers(p, SJS_EV_IMPORT, token_text(p, t)) == H_STOP) return H_STOP;
+            if (hold_name(p, t) == H_STOP) return H_STOP;
             f->state = I_END;
             return H_TAKEN;
         }
-        if (is_binding_name(t)) {
+        if (t->kind == SJS_TOKEN_NAME) {
+            if (t->keyword != SJS_K_NONE) return refuse_binding(p, t, token_text(p, t));
             sjs_event spec = specifier(SJS_IMPORT_NAME, SJS_STR("default"), t->at);
             if (hold_specifier(p, &spec, token_text(p, t)) == H_STOP) return H_STOP;
             f->state = I_DEFAULT_AFTER;
@@ -1524,7 +1807,8 @@ static handled import_token(sjs_parser *p, const queued_token *t) {
         f->state = I_STAR_NAME;
         return H_TAKEN;
     case I_STAR_NAME: {
-        if (!is_binding_name(t)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a name for the namespace" });
+        if (t->kind != SJS_TOKEN_NAME) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a name for the namespace" });
+        if (t->keyword != SJS_K_NONE) return refuse_binding(p, t, token_text(p, t));
         sjs_event spec = specifier(SJS_IMPORT_NAMESPACE, SJS_STR(""), t->at);
         if (hold_specifier(p, &spec, token_text(p, t)) == H_STOP) return H_STOP;
         f->state = I_FROM;
@@ -1551,11 +1835,13 @@ static handled import_token(sjs_parser *p, const queued_token *t) {
         if (f->names & SPEC_STRING_LOCAL) {
             return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs names exports with names, not strings" });
         }
-        if (send_specifiers(p, SJS_EV_IMPORT, token_text(p, t)) == H_STOP) return H_STOP;
+        if (hold_name(p, t) == H_STOP) return H_STOP;
         f->state = I_END;
         return H_TAKEN;
-    default: /* I_END */
-        return statement_end(p, t);
+    case I_END:
+        return source_end(p, t, SJS_EV_IMPORT);
+    default:
+        return attributes_token(p, t);
     }
 }
 
@@ -1661,12 +1947,13 @@ static handled export_token(sjs_parser *p, const queued_token *t) {
         if (f->names & (SPEC_STRING_LOCAL | SPEC_STRING_NAME)) {
             return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs names exports with names, not strings" });
         }
-        if (send_specifiers(p, SJS_EV_EXPORT_FROM, token_text(p, t)) == H_STOP) return H_STOP;
+        if (hold_name(p, t) == H_STOP) return H_STOP;
         f->state = X_END;
         return H_TAKEN;
     case X_END:
-        return statement_end(p, t);
+        return source_end(p, t, SJS_EV_EXPORT_FROM);
     default:
+        if (f->state >= WA_OPEN) return attributes_token(p, t);
         return export_name_token(p, t);
     }
 }
@@ -1681,6 +1968,10 @@ static handled export_start(sjs_parser *p, const queued_token *t) {
         return H_TAKEN;
     }
     if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_RESERVED && is_word(p, t, SJS_STR("default"))) {
+        /* Known before the value, which may hold what staticjs leaves out;
+         * the compiler finds every other name exported twice. */
+        if (p->default_exported) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "this name is exported twice" });
+        p->default_exported = true;
         if (push_frame(p, F_DEFAULT, t->at) == H_STOP) return H_STOP;
         p->expect = E_OPERAND;
         return H_TAKEN;
@@ -1730,13 +2021,40 @@ static handled module_token(sjs_parser *p, const queued_token *t) {
         return H_TAKEN;
     }
     if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_CONST) return begin_const(p, t);
-    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "a staticjs module holds imports, const declarations and exports" });
+    if (is_punctuator(t, SJS_P_HASH) && t->at.offset == 0) {
+        /* `#!` on the first line is a comment. */
+        const queued_token *next = peek(p, 1);
+        if (next == NULL) return H_WAIT;
+        if (is_punctuator(next, SJS_P_BANG) && next->at.offset == 1) {
+            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs reads no #! line" });
+        }
+    }
+    return refuse_statement(p, t, "a staticjs module holds imports, const declarations and exports");
 }
 
 static handled new_token(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     if (f->state == N_NAME) {
+        if (is_punctuator(t, SJS_P_DOT)) {
+            /* new.target: only in a function, and an arrow function has none
+             * of its own. A script's expression is a function's body. */
+            const queued_token *next = peek(p, 1);
+            if (next == NULL) return H_WAIT;
+            if (p->goal == SJS_GOAL_MODULE || !is_word(p, next, SJS_STR("target"))) {
+                return parse_fail(p, next, (sjs_problem){ SJS_ERROR_SYNTAX, "new. is only new.target, in a function" });
+            }
+            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no new.target" });
+        }
         if (t->kind != SJS_TOKEN_NAME || !sjs_str_equal(token_text(p, t), SJS_STR("Set"))) {
+            /* What new constructs is a member expression: no unary operator,
+             * and of import only import.meta. */
+            bool member = starts_member(p, t);
+            if (member && t->keyword == SJS_K_IMPORT) {
+                const queued_token *next = peek(p, 1);
+                if (next == NULL) return H_WAIT;
+                member = p->goal == SJS_GOAL_MODULE && is_punctuator(next, SJS_P_DOT);
+            }
+            if (!member) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected what new constructs" });
             return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set" });
         }
         f->state = N_OPEN;
@@ -1754,9 +2072,45 @@ static handled new_token(sjs_parser *p, const queued_token *t) {
  * Dispatch
  */
 
+/* Does the top frame read its next token as an operator? Then a string is an
+ * error, or, after a line break, the start of the next statement; it is
+ * not read as a string yet. */
+static bool expects_operator(const sjs_parser *p, const frame *f) {
+    if (p->expect == E_OPERAND || p->arrow_body_next) return false;
+    switch (f->type) {
+    case F_MODULE:
+    case F_BLOCK:
+    case F_IMPORT:
+    case F_EXPORT:
+    case F_NEW:
+    case F_PARAMS:
+    case F_PATTERN_ARRAY:
+    case F_PATTERN_OBJECT:
+        return false;
+    case F_CONST:
+        return f->state == C_INIT;
+    case F_OBJECT:
+        return f->state == O_VALUE;
+    default:
+        return true;
+    }
+}
+
+/* A string with a surrogate that has no partner. JavaScript requires a module
+ * export name to be well-formed Unicode; anywhere else, it is a string
+ * staticjs cannot hold. */
+static handled lone_surrogate_string(sjs_parser *p, const queued_token *t) {
+    const frame *f = top_frame(p);
+    bool export_name = (f->type == F_IMPORT && f->state == I_NAME) ||
+                       (f->type == F_EXPORT && (f->state == X_NAME || f->state == X_ALIAS || f->state == X_STAR_NAME));
+    if (export_name) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "a module export name cannot hold a lone surrogate" });
+    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs strings cannot hold a lone surrogate" });
+}
+
 static handled dispatch(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     if (f == NULL) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "unexpected token after the end" });
+    if (t->kind == SJS_TOKEN_STRING && t->lone_surrogate && !expects_operator(p, f)) return lone_surrogate_string(p, t);
     switch (f->type) {
     case F_MODULE:
         return module_token(p, t);
@@ -1824,6 +2178,7 @@ static sjs_result on_token(void *self, const sjs_token *token) {
     q.punctuator = token->punctuator;
     q.keyword = token->keyword;
     q.newline_before = token->newline_before;
+    q.lone_surrogate = token->lone_surrogate;
     q.at = token->at;
     q.number = token->number;
     q.text_offset = p->queue_text.length;

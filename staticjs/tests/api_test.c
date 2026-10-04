@@ -27,6 +27,8 @@ typedef struct {
     long allocations;
     long fail_at;     /* 0: never */
     long live;
+    size_t bytes;     /* live bytes, and the most there were */
+    size_t peak;
 } counting;
 
 static void *test_alloc(void *self, size_t size, size_t alignment) {
@@ -35,12 +37,15 @@ static void *test_alloc(void *self, size_t size, size_t alignment) {
     c->allocations++;
     if (c->fail_at != 0 && c->allocations >= c->fail_at) return NULL;
     c->live++;
+    c->bytes += size;
+    if (c->bytes > c->peak) c->peak = c->bytes;
     return malloc(size);
 }
 
 static void test_free(void *self, const sjs_allocator_free_params *params) {
     counting *c = self;
     c->live--;
+    c->bytes -= params->size;
     free(params->ptr);
 }
 
@@ -284,6 +289,64 @@ static void test_embedder_namespaces(void) {
     CHECK(evaluate(&e, "import { x } from \"lib\";\nexport const y = x;\n", out) == SJS_OK);
     CHECK(strcmp(out, "{\"y\":1}") == 0);
     sjs_release(context, m.exports);
+
+    /* By UTF-16 code units, U+1F600 (a surrogate pair, 0xD83D first) comes
+     * before U+FF61; by UTF-8 bytes or by code points it comes after. */
+    static const char *const wide[] = { "\xEF\xBD\xA1", "\xF0\x9F\x98\x80" };
+    m.exports = object_of(context, wide, 2);
+    CHECK(evaluate(&e, "import * as ns from \"lib\";\nexport const keys = Object.keys(ns);\n", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"keys\":[\"\xF0\x9F\x98\x80\",\"\xEF\xBD\xA1\"]}") == 0);
+    CHECK(evaluate(&e, "export * from \"lib\";\n", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"\xF0\x9F\x98\x80\":2,\"\xEF\xBD\xA1\":1}") == 0);
+    sjs_release(context, m.exports);
+
+    /* Keys that are no identifier pass through export *, as JavaScript's do;
+     * 4294967295 is not an array index. */
+    static const char *const odd[] = { "a-b", "4294967295", "" };
+    m.exports = object_of(context, odd, 3);
+    CHECK(evaluate(&e, "export * from \"lib\";\n", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"\":3,\"4294967295\":2,\"a-b\":1}") == 0);
+    CHECK(evaluate(&e, "import * as ns from \"lib\";\nexport const keys = Object.keys(ns);\n", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"keys\":[\"\",\"4294967295\",\"a-b\"]}") == 0);
+    sjs_release(context, m.exports);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* What compiling holds grows with the source, and with each module it
+ * imports from once: not with the source times the modules. */
+static void test_compile_costs(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    enum { KEYS = 400, STATEMENTS = 400 };
+    sjs_value o;
+    CHECK(sjs_object_new(context, KEYS, &o) == SJS_OK);
+    for (int i = KEYS; i-- > 0;) {
+        char key[16];
+        snprintf(key, sizeof key, "k%03d", i);
+        sjs_property property = { { key, (uint32_t)strlen(key) }, sjs_number(i) };
+        CHECK(sjs_object_put(context, &o, &property) == SJS_OK);
+    }
+    one_module m = { o };
+    sjs_compiler_config config = { context, SJS_GOAL_MODULE, NULL, 0, { &m, &find_vtable } };
+    static char source[STATEMENTS * 32];
+    const char *const forms[] = { "export * from \"lib\";\n", "import * as n%d from \"lib\";\n" };
+    for (int form = 0; form < 2; form++) {
+        size_t used = 0;
+        for (int i = 0; i < STATEMENTS; i++) used += (size_t)snprintf(source + used, sizeof source - used, forms[form], i);
+        size_t before = c.bytes;
+        c.peak = c.bytes;
+        sjs_program *program;
+        sjs_compile_params params = { config, { source, (uint32_t)used }, NULL };
+        CHECK(sjs_compile(&params, &program) == SJS_OK);
+        /* One module's keys, a few times over: not once per statement. */
+        size_t held = c.peak - before;
+        if (held > 512u * 1024u) fprintf(stderr, "compiling form %d held %zu bytes\n", form, held);
+        CHECK(held <= 512u * 1024u);
+        sjs_program_release(program);
+    }
+    sjs_release(context, o);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
     CHECK(c.live == 0);
@@ -517,6 +580,7 @@ int main(int argc, char **argv) {
     test_natives_and_globals();
     test_modules();
     test_embedder_namespaces();
+    test_compile_costs();
     test_module_events();
     test_sink();
     test_writer_resumes();

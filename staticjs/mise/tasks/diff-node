@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Check the spec against JavaScript itself: every expected value is Node's, every syntax error is one Node rejects, every unsupported case is valid JavaScript; and numbers format as String(x)"
+#MISE description="Check the spec against JavaScript itself: every expected value is Node's, every syntax error is one Node rejects, every unsupported case is valid JavaScript, every name error throws in Node; and numbers format as String(x)"
 #MISE depends=["build"]
 # vim:ft=ruby
 
