@@ -1,8 +1,8 @@
 # The ring protocol: core and host talk through shared memory
 
-**Status:** Sketch with accepted semantic refinements (2026-10-02); mandatory internal events have a compiler-sized floor of one round of every phase, and an overflow is a runaway.
+**Status:** Sketch (2026-10-04)
 **Touches:** tinyactors-core (gains the rings, the envelope pool and run-time names), tinyactors-host (deleted), tinyactors-napi and tinyactors-test (become ring drivers)
-**Not an implementation plan:** accepted refinements constrain this proposal; implementation is not scheduled. ADRs and roadmaps win.
+**Not an implementation plan:** implementation is not scheduled. ADRs and roadmaps win.
 
 ## The idea in one paragraph
 
@@ -24,8 +24,8 @@ A macrostep **allocates nothing**. When something is full, the result is a
 Inputs that cannot be admitted are consumed and bounced, so they cannot
 block the load response or clock update needed to free capacity. The host
 owns scheduling boundaries and retains retry originals only in a bounded
-submission table. Nobody keeps an unbounded overflow queue. The host kernel (`tinyactors-host`) is no
-longer needed. Its scheduler becomes the pool. Its recorder and replay
+submission table. Nobody keeps an unbounded overflow queue. The host kernel (`tinyactors-host`) is not
+needed. Its scheduler becomes the pool. Its recorder and replay
 become `c2h.input` observations and the replay core already has; its WAL was
 already removed by kernel ADR 0006. Its effects queue becomes `c2h`, which
 the host may execute as it reads. A macrostep end reports
@@ -142,88 +142,114 @@ The scenarios run this example through:
 ## What this changes, in short
 
 - **Deleted:** `tinyactors-host`, and napi's and the test host's code that
-  wraps it.
+  wraps it ([reference/migration.md](reference/migration.md)).
 - **Core gains:**
-  - three rings;
-  - the envelope pool and its deadline index;
+  - three rings: `h2c`, `c2h`, and an optional `tel` (`telBytes` may be 0)
+    ([reference/ring.md](reference/ring.md));
+  - the envelope pool and its deadline index, with one run queue in arrival
+    order and `fairnessRatio` as its only fairness policy
+    ([reference/envelope.md](reference/envelope.md#fairness));
   - macrostep slots, taken in turn, and a chain limit that ends a runaway
-    input;
-  - a name area for names made at run time;
+    input ([reference/macrostep.md](reference/macrostep.md#macrostep-slots));
+  - a park area for slots that are not running
+    ([parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area));
+  - compiler-sized storage for mandatory internal events
+    ([reference/macrostep.md](reference/macrostep.md#sizing-mandatory-storage));
+  - a name area for names made at run time
+    ([reference/names.md](reference/names.md#the-name-area));
   - capacity errors that charts can see.
 - **Core loses:**
   - the out-of-memory stop machinery that runs mid-step (ADR 0070);
   - per-actor event blocks and their cache (ADRs 0069, 0093);
   - the input log format (ADR 0090);
-  - interning at run time.
+  - interning at run time. Today core interns every event name computed at
+    run time into tables that only grow, so a long-running system that
+    computes event names leaks memory, and an HTTP endpoint that maps
+    request fields to event names lets a client exhaust memory on purpose.
+    Authored names are interned at registration, and atoms are never freed
+    ([reference/names.md](reference/names.md#atoms-are-never-freed));
+  - the directory vtable. Core keeps only resident sessions and asks for a
+    non-resident address with `c2h.load_needed`
+    ([reference/unloading.md](reference/unloading.md#no-directory-vtable-not-resident-means-ask)).
+- **napi loses** quarantine, `release()` and the parent's `.quarantined`
+  event. Quarantine existed so that one bad actor could not take the loop's
+  turns; slots do that, and a runaway's input is abandoned. The host decides
+  what to do about an actor that keeps running away
+  ([reference/macrostep.md](reference/macrostep.md#runaways-the-chain-limit)).
 - **Unchanged, by decision:**
   - the data model stays a synchronous vtable
-    ([reference/data-model.md](reference/data-model.md#decided-the-data-model-stays-a-synchronous-vtable));
-  - native integrations own data model adapters and values.
+    ([reference/data-model.md](reference/data-model.md#why-the-data-model-is-not-on-a-ring));
+  - native integrations own data model adapters and values;
   - a `ta_system` is not thread-safe. A host with other threads puts its
     own queue in front of it ([reference/ring.md](reference/ring.md#one-thread)).
-- **Accepted protocol boundary:** hosts submit complete declarative
-  definitions and receive success or structured compile-error results;
-  registration holds and retirement also use requests. A request carries a
-  handle to a native `ta_scxml_spec` the binding built; there is no byte
-  layout of a spec ([reference/definitions.md](reference/definitions.md)).
-- **Accepted debugger boundary:** an attached debugger suspends the production
-  pump and owns the whole system. Commands stay outside the three rings;
-  intervention uses transitions and abandonment at legal boundaries.
-  Detaching returns ownership to the pump
-  ([reference/debugging.md](reference/debugging.md)).
-- **Accepted execution boundaries:** input admission is not completion.
-  `c2h.input_completed` follows stabilization and invocation-startup follow-up,
-  independently of recording. The host awaits it when ordering input
-  execution before time changes or replay publication. Recorded inputs use
-  synchronous snapshots taken before chart execution.
-- **Accepted invocation lifetime:** a local invocation holds an envelope
-  token for completion or cancellation. Unload refuses both owners of active
-  local invocations and active locally invoked children. Live service replies
-  carry instance tokens; authored invocation IDs alone are insufficient.
-- **Accepted macrostep slots:** core runs up to `maxConcurrentInputs` sessions'
+
+**Boundaries:**
+
+- **Definitions.** Hosts submit complete declarative definitions and
+  receive success or structured compile-error results; registration holds
+  and retirement also use requests. A request carries a handle to a native
+  `ta_scxml_spec` the binding built, and diagnostics are ADR 0058's native
+  struct. A spec has no byte layout
+  ([reference/definitions.md](reference/definitions.md#a-native-spec-handle-not-a-byte-layout)).
+- **Debugging.** An attached debugger suspends the production pump and owns
+  the whole system. Commands stay outside the three rings; intervention
+  uses transitions and abandonment at legal boundaries. Detaching returns
+  ownership to the pump ([reference/debugging.md](reference/debugging.md)).
+- **Execution.** Input admission is not completion. `c2h.input_completed`
+  follows stabilization and invocation-startup follow-up, independently of
+  recording. The host awaits it when ordering input execution before time
+  changes or replay publication. Recorded inputs use synchronous snapshots
+  taken before chart execution
+  ([reference/macrostep.md](reference/macrostep.md#invocation-startup-and-input-completion)).
+- **Withdrawal.** Commit is final, and records are never edited. A host
+  takes back an admitted input that has not been taken with `h2c.withdraw`,
+  which core answers with `c2h.input_refused` (`withdrawn`); an input
+  already taken keeps its own terminal record
+  ([reference/envelope.md](reference/envelope.md#withdrawing-an-admitted-input)).
+- **Macrostep slots.** Core runs up to `maxConcurrentInputs` sessions'
   inputs at once, in turn, `slotSlice` steps each; mail for an active
   session waits on its deferred list. `microstepLimit` counts one input's
   whole chain (microsteps, selection passes and startup passes) and cannot
   be turned off. At the limit, core abandons the input with status
   `runaway`; the session lives on and takes its next input. With one slot
-  this is plain run to completion ([reference/macrostep.md](reference/macrostep.md#macrostep-slots)).
-  Only the running slot uses the system's one workspace; the others are
-  parked in chained chunks of a park area, about 1 KiB each for a chart of
-  100 states. The area fills on demand up to a ceiling core derives, so no
-  host has to size it, and a slot that cannot park keeps the thread
+  this is plain run to completion
+  ([reference/macrostep.md](reference/macrostep.md#macrostep-slots)). Only
+  the running slot uses the system's one workspace; the others are parked
+  in chained chunks of a park area, about 1 KiB each for a chart of 100
+  states. The area fills on demand up to a ceiling core derives, so no host
+  has to size it, and a slot that cannot park keeps the thread
   ([parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area)).
-- **Accepted c2h backpressure:** an ordinary action whose c2h record does
-  not fit pauses its slot, not its chart. Core checks for room before it
-  evaluates the action, so the action runs once, after the host drains. `error.execution.capacity.c2h` is gone; a full pool or name area
-  still fails the action. So a ring's size is a throughput setting, not a
-  correctness one. h2c and tel are 16 KiB each by default; c2h is
-  derived from `maxConcurrentInputs` and `maxRecordBytes`, 776 KiB with the
+  The host gives memory back with `ta_system_trim`; core never trims.
+- **Internal events.** The compiler sizes mandatory error and completion
+  storage for one round of every phase, allocated outside macrosteps in
+  addition to the chart's `internalQueueEvents` quota. Mandatory events
+  beyond the floor use free ordinary entries; one that fits in neither ends
+  the input as a runaway, with `runaway_cause` `internal_queue` on the `TA_TRACE_RUNAWAY`
+  telemetry record ([reference/macrostep.md](reference/macrostep.md#sizing-mandatory-storage)).
+- **c2h backpressure.** An ordinary action whose c2h record does not fit
+  pauses its slot, not its chart. Core checks for room before it evaluates
+  the action, so the action runs once, after the host drains. A full pool
+  or name area fails the action, because only sessions free them. So a
+  ring's size is a throughput setting, not a correctness one. h2c and tel
+  are 16 KiB each by default; c2h is derived as
+  (3 × `maxConcurrentInputs` + 2) × `maxRecordBytes`, 776 KiB with the
   defaults
   ([reference/macrostep.md](reference/macrostep.md#a-full-c2h-pauses-the-slot),
+  [reference/ring.md](reference/ring.md#the-c2h-reserve),
   [BEHAVIORS.md](BEHAVIORS.md#parameters)).
-- **Accepted removal of quarantine:** napi's quarantine existed so that
-  one bad actor could not take the loop's turns. Slots do that now, so the
-  implementation removes quarantine, `release()` and the parent's
-  `.quarantined` event; a runaway's input is abandoned and the host
-  decides what to do about an actor that keeps running away
-  ([reference/macrostep.md](reference/macrostep.md#runaways-the-chain-limit)).
-- **Accepted input withdrawal:** commit is final, and records are never
-  edited. A host takes back an admitted input that has not been taken with
-  `h2c.withdraw`, which core answers with `c2h.input_refused` (`withdrawn`);
-  an input already taken keeps its own terminal record
-  ([reference/envelope.md](reference/envelope.md#withdrawing-an-admitted-input)).
-- **Error storage correction:** the compiler sizes mandatory error and
-  completion storage for one round of every phase, allocated outside
-  macrosteps in addition to the chart's ordinary internal-event quota. A
-  single reserved error slot is insufficient. Mandatory events beyond the
-  floor use free ordinary entries; one that fits in neither ends the input
-  as a runaway
-  ([macrostep.md](reference/macrostep.md#sizing-mandatory-storage)).
-- **Found on the way:** core interns every event name computed at run time
-  into tables that only grow. Any long-running system that computes event
-  names leaks memory. An HTTP endpoint that maps request fields to event names
-  lets a client exhaust memory on purpose.
-  ([reference/names.md](reference/names.md))
+- **Invocation lifetime.** A local invocation holds an envelope token for
+  completion or cancellation. Unload refuses both owners of active local
+  invocations and active locally invoked children. Live service replies
+  carry instance tokens; authored invocation IDs alone are insufficient
+  ([reference/envelope.md](reference/envelope.md#local-invocation-tokens)).
+- **Telemetry.** `tel.trace` records mirror today's trace kinds, are
+  self-contained, and carry stamps from a host clock installed natively.
+  `tinyactors-otlp` encodes OTLP. A drop ends the open spans with error
+  status ([reference/telemetry.md](reference/telemetry.md)).
+- **MCP.** The MCP mapping is outside this proposal;
+  [mcp-server.md](../mcp-server.md) is revised after Phase 5.
 
 The details, and the ADRs this would supersede, are in
-[reference/migration.md](reference/migration.md).
+[reference/migration.md](reference/migration.md). The one open item is
+measuring the h2c and tel defaults and checking the derived c2h, in step 4.2
+of [IMPLEMENTATION.md](IMPLEMENTATION.md).
