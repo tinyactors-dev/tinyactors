@@ -78,10 +78,15 @@ const REVIEW = {
   required: ['verdict', 'findings', 'summary'],
 }
 
+// args.fix: the maintainer's corrections to a block already in the working
+// tree; the run starts with a fix round instead of implementing anew.
+const FIX = args && args.fix
 phase('Implement')
 let impl = await run('implementer',
-  `Implement building block ${block} of the ring protocol plan in tinyactors-core, with its header documentation and its own test program, as your instructions describe. Leave everything uncommitted.`,
-  { schema: IMPL, label: `implement ${block}` },
+  FIX
+    ? `Building block ${block} is already implemented in the working tree, uncommitted. Apply the maintainer's corrections below, rerun the commands and report as for an implementation. Change nothing else.\n${FIX}`
+    : `Implement building block ${block} of the ring protocol plan in tinyactors-core, with its header documentation and its own test program, as your instructions describe. Leave everything uncommitted.`,
+  { schema: IMPL, label: FIX ? `correct ${block}` : `implement ${block}` },
 )
 if (!impl) throw new Error(`the implementer for ${block} returned nothing`)
 

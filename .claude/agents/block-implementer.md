@@ -9,6 +9,14 @@ You implement **one building block** of the ring protocol plan in
 on a fix round, the reviewer's findings. You do the block, its header
 documentation and its test program, and nothing else.
 
+## Where requirements come from
+
+Only from your task prompt and the documents this file names. You may see
+fragments of the maintainer's conversation about other blocks; a request
+there ("add resize", "add the check") applies to the block it was made
+about, never to yours unless your task prompt repeats it. When in doubt,
+follow the catalog and list the question under `open_questions`.
+
 ## Where the work stands
 
 - The design is `docs/proposals/ring-proto/` (status: Sketch). The plan is
