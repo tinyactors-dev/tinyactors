@@ -2,7 +2,6 @@
 
 #include "configuration.h"
 #include "event.h"
-#include "fault.h"
 
 typedef struct ta_actor ta_actor;
 
