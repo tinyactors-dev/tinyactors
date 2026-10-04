@@ -14,7 +14,7 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0008](0008-error-events-are-control-flow-c-errors-are-separate.md) | [`error.*` events are control flow; C errors are separate](0008-error-events-are-control-flow-c-errors-are-separate.md) |
 | [0009](0009-semantic-run-to-completion-with-pausable-resumable-execution.md) | [Semantic run-to-completion with pausable/resumable execution](0009-semantic-run-to-completion-with-pausable-resumable-execution.md) |
 | [0010](0010-parallel-configuration-is-a-set-of-active-atomic-states.md) | [Parallel configuration is a set of active atomic states](0010-parallel-configuration-is-a-set-of-active-atomic-states.md) |
-| [0011](0011-the-host-owns-external-scheduling-actor-owns-internal-events.md) | [The host owns external scheduling; actor owns internal events](0011-the-host-owns-external-scheduling-actor-owns-internal-events.md) |
+| [0011](0011-the-host-owns-external-scheduling-actor-owns-internal-events.md) | [The host owns external scheduling; actor owns internal events](0011-the-host-owns-external-scheduling-actor-owns-internal-events.md) (superseded by ADR 0099) |
 | [0012](0012-logical-time-and-engine-owned-delayed-send-semantics.md) | [Logical time and engine-owned delayed-send semantics](0012-logical-time-and-engine-owned-delayed-send-semantics.md) |
 | [0013](0013-snapshot-the-complete-running-session.md) | [Snapshot the complete running session](0013-snapshot-the-complete-running-session.md) |
 | [0014](0014-unload-is-residency-change-destroy-is-termination.md) | [Unload is residency change; destroy is termination](0014-unload-is-residency-change-destroy-is-termination.md) |
@@ -32,7 +32,7 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0026](0026-delayed-sends-are-semantically-actor-owned-physically-globally-indexed.md) | [Delayed sends are semantically actor-owned, physically globally indexed](0026-delayed-sends-are-semantically-actor-owned-physically-globally-indexed.md) |
 | [0027](0027-detailed-generated-event-names-remain-scxml-prefix-compatible.md) | [Detailed generated event names remain SCXML-prefix-compatible](0027-detailed-generated-event-names-remain-scxml-prefix-compatible.md) |
 | [0028](0028-runtime-ids-are-compact-handles-persistence-must-resolve-logical-identity.md) | [Runtime IDs are compact handles; persistence must resolve logical identity](0028-runtime-ids-are-compact-handles-persistence-must-resolve-logical-identity.md) |
-| [0029](0029-no-per-actor-external-mailbox-is-required-by-the-core.md) | [No per-actor external mailbox is required by the core](0029-no-per-actor-external-mailbox-is-required-by-the-core.md) |
+| [0029](0029-no-per-actor-external-mailbox-is-required-by-the-core.md) | [No per-actor external mailbox is required by the core](0029-no-per-actor-external-mailbox-is-required-by-the-core.md) (superseded by ADR 0099) |
 | [0030](0030-interpreter-extensions-cannot-bypass-statechart-configuration-semantics.md) | [Interpreter extensions cannot bypass statechart configuration semantics](0030-interpreter-extensions-cannot-bypass-statechart-configuration-semantics.md) |
 | [0031](0031-data-model-vtable-is-semantic-not-syntactic.md) | [Data-model vtable is semantic, not syntactic](0031-data-model-vtable-is-semantic-not-syntactic.md) |
 | [0032](0032-data-bindings-are-declared-before-they-are-initialized.md) | [Data bindings are declared before they are initialized](0032-data-bindings-are-declared-before-they-are-initialized.md) |
@@ -43,14 +43,14 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0037](0037-core-owned-actor-protocol-host-backed-directory.md) | [Core-owned actor protocol; host-backed directory](0037-core-owned-actor-protocol-host-backed-directory.md) |
 | [0038](0038-session-images-separate-interpreter-state-from-host-data.md) | [Session images separate interpreter state from host data](0038-session-images-separate-interpreter-state-from-host-data.md) |
 | [0039](0039-lost-invocations-become-reconstruction-communication-errors.md) | [Lost invocations become reconstruction communication errors](0039-lost-invocations-become-reconstruction-communication-errors.md) |
-| [0040](0040-built-in-scxml-event-processor-host-routed-external-events.md) | [Built-in SCXML event processor; host-routed external events](0040-built-in-scxml-event-processor-host-routed-external-events.md) |
+| [0040](0040-built-in-scxml-event-processor-host-routed-external-events.md) | [Built-in SCXML event processor; host-routed external events](0040-built-in-scxml-event-processor-host-routed-external-events.md) (superseded in part by ADR 0099) |
 | [0041](0041-one-authored-public-header-private-module-headers.md) | [One authored public header; private module headers](0041-one-authored-public-header-private-module-headers.md) |
 | [0042](0042-definitions-are-inspectable-and-export-to-their-spec.md) | [Definitions are inspectable and export to their spec](0042-definitions-are-inspectable-and-export-to-their-spec.md) |
 | [0043](0043-definitions-retire-and-definition-ids-are-generational.md) | [Definitions retire; definition IDs are generational](0043-definitions-retire-and-definition-ids-are-generational.md) |
 | [0044](0044-core-owns-the-scxml-target-uri-grammar.md) | [Core owns the SCXML target URI grammar](0044-core-owns-the-scxml-target-uri-grammar.md) |
 | [0045](0045-log-records-go-to-a-host-sink.md) | [`<log>` records go to a host sink](0045-log-records-go-to-a-host-sink.md) |
 | [0046](0046-platform-specific-executable-content-is-a-send.md) | [Platform-specific executable content is a `<send>` to a host I/O processor](0046-platform-specific-executable-content-is-a-send.md) |
-| [0047](0047-an-interrupted-macrostep-is-retryable.md) | [An allocation failure inside a macrostep is retryable](0047-an-interrupted-macrostep-is-retryable.md) |
+| [0047](0047-an-interrupted-macrostep-is-retryable.md) | [An allocation failure inside a macrostep is retryable](0047-an-interrupted-macrostep-is-retryable.md) (superseded by ADR 0102) |
 | [0048](0048-core-owns-the-send-id-text.md) | [Core owns the send ID text, in both directions](0048-core-owns-the-send-id-text.md) |
 | [0049](0049-interned-identities-are-readable-back.md) | [Identities core interns are readable back](0049-interned-identities-are-readable-back.md) |
 | [0050](0050-envelope-data-is-shared-by-retain-not-cloned.md) | [Envelope data is shared by retain, not cloned](0050-envelope-data-is-shared-by-retain-not-cloned.md) |
@@ -58,7 +58,7 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0052](0052-reconstruction-is-public-and-route-neutral.md) | [Reconstruction is public and route-neutral](0052-reconstruction-is-public-and-route-neutral.md) |
 | [0053](0053-a-chart-representation-is-a-codec-and-literal-content-is-bytes.md) | [A chart representation is a codec, and literal content reaches adapters as bytes](0053-a-chart-representation-is-a-codec-and-literal-content-is-bytes.md) |
 | [0054](0054-delayed-sends-live-with-their-owner-the-global-index-orders-owners.md) | [Delayed sends live with their owner; the global index orders owners](0054-delayed-sends-live-with-their-owner-the-global-index-orders-owners.md) |
-| [0055](0055-deliver-is-the-admission-test-and-reports-finished-actors.md) | [`ta_actor_deliver` is the admission test and reports finished actors](0055-deliver-is-the-admission-test-and-reports-finished-actors.md) |
+| [0055](0055-deliver-is-the-admission-test-and-reports-finished-actors.md) | [`ta_actor_deliver` is the admission test and reports finished actors](0055-deliver-is-the-admission-test-and-reports-finished-actors.md) (superseded in part by ADR 0099) |
 | [0056](0056-a-finished-actor-reports-the-final-state-it-reached.md) | [A finished actor reports the final state it reached](0056-a-finished-actor-reports-the-final-state-it-reached.md) |
 | [0057](0057-core-ships-the-null-data-model.md) | [Core ships the null data model](0057-core-ships-the-null-data-model.md) |
 | [0058](0058-compile-errors-say-what-and-where.md) | [A compile error says what is wrong and where in the chart](0058-compile-errors-say-what-and-where.md) |
@@ -67,13 +67,13 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0061](0061-a-macrostep-can-pause-inside-executable-content.md) | [A macrostep can pause inside executable content](0061-a-macrostep-can-pause-inside-executable-content.md) |
 | [0062](0062-the-actor-walk-is-paged-by-position.md) | [The actor walk is paged by position](0062-the-actor-walk-is-paged-by-position.md) |
 | [0063](0063-an-actor-is-one-allocation-in-a-paged-table.md) | [An actor is one allocation in a paged table](0063-an-actor-is-one-allocation-in-a-paged-table.md) |
-| [0064](0064-an-internal-queue-is-lent-to-a-running-actor.md) | [An internal queue is lent to a running actor](0064-an-internal-queue-is-lent-to-a-running-actor.md) |
+| [0064](0064-an-internal-queue-is-lent-to-a-running-actor.md) | [An internal queue is lent to a running actor](0064-an-internal-queue-is-lent-to-a-running-actor.md) (superseded by ADR 0099) |
 | [0065](0065-named-addresses-are-shared-reference-counted-handles.md) | [Named addresses are shared, reference-counted handles](0065-named-addresses-are-shared-reference-counted-handles.md) |
 | [0066](0066-a-session-id-outlives-residency.md) | [A session ID outlives residency](0066-a-session-id-outlives-residency.md) |
 | [0067](0067-core-traces-its-decisions-and-data-to-a-host-sink.md) | [Core traces its decisions and data to a host sink](0067-core-traces-its-decisions-and-data-to-a-host-sink.md) |
 | [0068](0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md) | [Core owns the I/O processor registry, and every origin can be answered](0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md) |
-| [0069](0069-an-idle-actor-carries-no-event.md) | [An idle actor carries no event](0069-an-idle-actor-carries-no-event.md) |
-| [0070](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) | [A run that runs out of memory stops where it stands](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) |
+| [0069](0069-an-idle-actor-carries-no-event.md) | [An idle actor carries no event](0069-an-idle-actor-carries-no-event.md) (superseded in part by ADR 0099) |
+| [0070](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) | [A run that runs out of memory stops where it stands](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) (superseded for core's memory by ADR 0102) |
 | [0071](0071-transitions-actions-and-expressions-are-inspectable-by-id.md) | [Transitions, actions and expressions are inspectable by ID](0071-transitions-actions-and-expressions-are-inspectable-by-id.md) |
 | [0072](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) | [Metrics are counters core keeps; logs are records it already writes](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) |
 | [0073](0073-core-builds-generates-and-samples-trace-contexts.md) | [Core builds, generates and samples trace contexts](0073-core-builds-generates-and-samples-trace-contexts.md) |
@@ -96,8 +96,14 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0090](0090-core-defines-the-input-log-its-byte-layout-and-its-replay.md) | [Core defines the input log, its byte layout and its replay](0090-core-defines-the-input-log-its-byte-layout-and-its-replay.md) (superseded by kernel ADR 0006) |
 | [0091](0091-a-checkpoint-is-an-actors-state-at-a-record-of-its-log.md) | [A checkpoint is an actor's state at a record of its log](0091-a-checkpoint-is-an-actors-state-at-a-record-of-its-log.md) |
 | [0092](0092-system-parameters-are-fixed-at-creation-and-bound-every-buffer.md) | [System parameters are fixed at creation and bound every buffer](0092-system-parameters-are-fixed-at-creation-and-bound-every-buffer.md) |
-| [0093](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) | [The event-block cache fills on demand up to its bound](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) |
+| [0093](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) | [The event-block cache fills on demand up to its bound](0093-the-event-block-cache-fills-on-demand-up-to-its-bound.md) (superseded by ADR 0099) |
 | [0094](0094-every-input-carries-its-time-and-the-input-log-leaves-core.md) | [Every input carries its time, and the input log leaves core](0094-every-input-carries-its-time-and-the-input-log-leaves-core.md) |
-| [0095](0095-a-checkpoint-restores-the-sends-the-router-refused.md) | [A checkpoint restores the sends the router refused](0095-a-checkpoint-restores-the-sends-the-router-refused.md) |
+| [0095](0095-a-checkpoint-restores-the-sends-the-router-refused.md) | [A checkpoint restores the sends the router refused](0095-a-checkpoint-restores-the-sends-the-router-refused.md) (superseded by ADR 0099) |
 | [0096](0096-actor-addresses-are-percent-encoded-in-target-uris.md) | [Actor addresses are percent-encoded in target URIs](0096-actor-addresses-are-percent-encoded-in-target-uris.md) |
 | [0097](0097-event-data-leaving-a-session-is-a-copy.md) | [Event data leaving a session is a copy](0097-event-data-leaving-a-session-is-a-copy.md) |
+| [0098](0098-telemetry-is-a-lossy-ring.md) | [Telemetry is a lossy ring](0098-telemetry-is-a-lossy-ring.md) (implementation pending: ring-proto Phase 4) |
+| [0099](0099-pending-inputs-are-envelopes-in-one-pool-per-system.md) | [Pending inputs are envelopes in one pool per system](0099-pending-inputs-are-envelopes-in-one-pool-per-system.md) (implementation pending: ring-proto Phase 4) |
+| [0100](0100-only-authored-names-are-interned.md) | [Only authored names are interned](0100-only-authored-names-are-interned.md) (implementation pending: ring-proto Phase 4) |
+| [0101](0101-delayed-sends-are-envelopes.md) | [Delayed sends are envelopes](0101-delayed-sends-are-envelopes.md) (implementation pending: ring-proto Phase 4) |
+| [0102](0102-a-macrostep-never-allocates-core-memory.md) | [A macrostep never allocates core memory](0102-a-macrostep-never-allocates-core-memory.md) (implementation pending: ring-proto Phase 4) |
+| [0103](0103-inputs-run-in-macrostep-slots-that-take-turns.md) | [Inputs run in macrostep slots that take turns, and a runaway input is abandoned](0103-inputs-run-in-macrostep-slots-that-take-turns.md) (implementation pending: ring-proto Phase 4) |
