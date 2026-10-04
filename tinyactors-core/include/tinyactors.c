@@ -1621,7 +1621,7 @@ TA_PRIVATE uint32_t ta_ilist_next(const ta_ilink *link, uint32_t index);
  *	ta_chain text = { 0 };
  *	uint32_t chunks = ta_chain_need(&names, &text, size);
  *	// reserve `chunks` from the quota; at a safe point ta_pool_refill(&names, chunks)
- *	ta_chain_write(&names, &text, bytes, size);       // cannot fail now
+ *	ta_chain_write(&names, &text, (ta_chain_span){bytes, size});       // cannot fail now
  *	ta_chain_reader reader;
  *	ta_chain_span span;
  *	ta_chain_reader_init(&reader, &names, &text);
@@ -1649,7 +1649,11 @@ typedef struct ta_chain_pool_params {
     uint32_t max_chunks;  /* ceiling on the capacity; 0 means as many as A5 allows (A5 semantics) */
 } ta_chain_pool_params;
 
-/* ta_chain_span is a contiguous run of payload bytes inside one chunk (lifetime: call). */
+/*
+ * ta_chain_span is a contiguous run of bytes (lifetime: call). The reader
+ * yields one per chunk, pointing into the chunk; ta_chain_write takes one by
+ * value as its source, pointing at the caller's bytes, which it only reads.
+ */
 typedef struct ta_chain_span {
     const unsigned char *bytes;
     uint32_t length;
@@ -1685,7 +1689,7 @@ TA_PRIVATE uint32_t ta_chain_payload(const ta_pool *pool);
  * only the part that does not fit in the unused end of the tail chunk needs
  * new chunks. `chain` may be NULL or empty, meaning a new chain:
  * ceil(bytes / payload), and 0 for 0 bytes. It never allocates and cannot
- * overflow. It does not check that length + bytes fits a u32 (ta_chain_write
+ * overflow. It does not check that length + data.length fits a u32 (ta_chain_write
  * does). The owner reserves this many chunks from its quota before writing;
  * nothing may write the same chain between the need and the write.
  * O(1).
@@ -1693,19 +1697,19 @@ TA_PRIVATE uint32_t ta_chain_payload(const ta_pool *pool);
 TA_PRIVATE uint32_t ta_chain_need(const ta_pool *pool, const ta_chain *chain, uint32_t bytes);
 
 /*
- * ta_chain_write appends `bytes` bytes from `data` to the chain, first
+ * ta_chain_write appends the `data.length` bytes at `data.bytes` to the chain, first
  * filling the unused end of the tail chunk and then taking chunks from the
  * pool. It never allocates: the chunks come from the pool's free list or its
- * extent. It is all or nothing: it checks that length + bytes fits a u32 and
+ * extent. It is all or nothing: it checks that length + data.length fits a u32 and
  * that the pool has ta_chain_need chunks free (ta_pool_counts_get), and only
  * then takes and copies; on failure the chain, the pool's counters and free
  * list, and every chunk byte are as they were. It answers TA_ERR_NOMEM for
  * either failure (a caller that reserved with ta_chain_need and refilled
  * never sees the pool one, and sees the length one only past 4 GiB) and
- * TA_ERR_INVALID for a NULL pool or chain, or NULL data with bytes != 0. A
- * write of 0 bytes succeeds and changes nothing. O(bytes).
+ * TA_ERR_INVALID for a NULL pool or chain, or NULL data.bytes with data.length != 0. A
+ * write of 0 bytes succeeds and changes nothing. O(data.length).
  */
-TA_PRIVATE ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *data, uint32_t bytes);
+TA_PRIVATE ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, ta_chain_span data);
 
 /*
  * ta_chain_reader_init starts a read at the first byte of `chain`. The
@@ -6407,10 +6411,11 @@ static void next_set(unsigned char *chunk, uint32_t next) {
     ta_mem_copy(chunk, &next, sizeof(next));
 }
 
-TA_PRIVATE ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *data, uint32_t bytes) {
-    if (pool == NULL || chain == NULL || (data == NULL && bytes != 0)) {
+TA_PRIVATE ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, ta_chain_span data) {
+    if (pool == NULL || chain == NULL || (data.bytes == NULL && data.length != 0)) {
         return TA_ERR_INVALID;
     }
+    uint32_t bytes = data.length;
     if (bytes == 0) {
         return TA_OK;
     }
@@ -6425,7 +6430,7 @@ TA_PRIVATE ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *
     }
 
     uint32_t payload = ta_chain_payload(pool);
-    const unsigned char *source = data;
+    const unsigned char *source = data.bytes;
     uint32_t left = bytes;
     uint32_t fill = chain->length % payload; /* 0 for an empty chain or a full tail */
     if (fill != 0) {

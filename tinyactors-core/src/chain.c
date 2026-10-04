@@ -46,10 +46,11 @@ static void next_set(unsigned char *chunk, uint32_t next) {
     ta_mem_copy(chunk, &next, sizeof(next));
 }
 
-ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *data, uint32_t bytes) {
-    if (pool == NULL || chain == NULL || (data == NULL && bytes != 0)) {
+ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, ta_chain_span data) {
+    if (pool == NULL || chain == NULL || (data.bytes == NULL && data.length != 0)) {
         return TA_ERR_INVALID;
     }
+    uint32_t bytes = data.length;
     if (bytes == 0) {
         return TA_OK;
     }
@@ -64,7 +65,7 @@ ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *data, uint3
     }
 
     uint32_t payload = ta_chain_payload(pool);
-    const unsigned char *source = data;
+    const unsigned char *source = data.bytes;
     uint32_t left = bytes;
     uint32_t fill = chain->length % payload; /* 0 for an empty chain or a full tail */
     if (fill != 0) {

@@ -156,7 +156,7 @@ static void test_need_arithmetic(void) {
 static ta_result write_pattern(ta_pool *pool, ta_chain *chain, uint32_t seed, uint32_t first, uint32_t bytes) {
     unsigned char buffer[MAX_BYTES];
     fill_pattern(buffer, seed, first, bytes);
-    return ta_chain_write(pool, chain, buffer, bytes);
+    return ta_chain_write(pool, chain, (ta_chain_span){buffer, bytes});
 }
 
 static void test_lengths(uint32_t chunk_size) {
@@ -277,10 +277,10 @@ static void test_all_or_nothing(void) {
     CHECK(ta_chain_free(&pool, &chain) == 4);
 
     /* Argument errors. */
-    CHECK(ta_chain_write(&pool, &chain, NULL, 1) == TA_ERR_INVALID);
-    CHECK(ta_chain_write(&pool, NULL, "x", 1) == TA_ERR_INVALID);
-    CHECK(ta_chain_write(NULL, &chain, "x", 1) == TA_ERR_INVALID);
-    CHECK(ta_chain_write(&pool, &chain, NULL, 0) == TA_OK);
+    CHECK(ta_chain_write(&pool, &chain, (ta_chain_span){NULL, 1}) == TA_ERR_INVALID);
+    CHECK(ta_chain_write(&pool, NULL, (ta_chain_span){(const unsigned char *)"x", 1}) == TA_ERR_INVALID);
+    CHECK(ta_chain_write(NULL, &chain, (ta_chain_span){(const unsigned char *)"x", 1}) == TA_ERR_INVALID);
+    CHECK(ta_chain_write(&pool, &chain, (ta_chain_span){NULL, 0}) == TA_OK);
     ta_pool_destroy(&pool);
     finish_clean();
 }
@@ -472,7 +472,7 @@ static void test_model(uint32_t chunk_size, uint32_t seed) {
             bool fits = counts_of(&pool).free >= need;
             ta_chain before = chains[c];
             ta_pool_counts counts = counts_of(&pool);
-            ta_result result = ta_chain_write(&pool, &chains[c], data, bytes);
+            ta_result result = ta_chain_write(&pool, &chains[c], (ta_chain_span){data, bytes});
             CHECK(result == (fits ? TA_OK : TA_ERR_NOMEM));
             if (result == TA_OK) {
                 ta_mem_copy(model[c] + lengths[c], data, bytes);
