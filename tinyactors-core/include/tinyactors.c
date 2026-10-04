@@ -5651,6 +5651,24 @@ TA_PRIVATE uint32_t ta_ilist_next(const ta_ilink *link, uint32_t index) {
 }
 
 
+/*
+ * Implementation of block B2 (indexed min-heap). The contract, lifetime
+ * (system), allocation rules and usage are in index_heap.h; this comment
+ * records how the code meets them.
+ *
+ * The heap is a binary heap of u32 item indices in one array, positions
+ * 1-based so that 0 can mean "not in the heap" in an item's heap_index field.
+ * Keys and heap_index are read and written by byte offset through
+ * ta_pool_at, with ta_mem_copy so no alignment or aliasing is assumed beyond
+ * what init checked. Every heap-wide write of an item goes through
+ * ta_index_heap_place, which keeps the array and the item's heap_index in
+ * step. Sifting is iterative (no recursion, bounded stack). The array is the
+ * only allocation; it is made in ta_index_heap_reserve (allocate, copy, free
+ * the old array, commit: nothing after the allocation can fail) and freed in
+ * destroy with the size stored at allocation. insert, remove and pop never
+ * allocate.
+ */
+
 /* The first array holds this many entries and doubles from there. */
 #define TA_INDEX_HEAP_FIRST_CAPACITY 16u
 
@@ -5740,9 +5758,15 @@ static void ta_index_heap_sift_down(ta_index_heap *heap, uint32_t position) {
     ta_index_heap_place(heap, position, index);
 }
 
-/* ta_index_heap_overlap says whether the fields [a, a+a_size) and [b, b+b_size) share a byte. */
-static bool ta_index_heap_overlap(size_t a, size_t a_size, size_t b, size_t b_size) {
-    return a < b + b_size && b < a + a_size;
+/* ta_index_heap_span is a field of an item: `size` bytes at `offset`. */
+typedef struct ta_index_heap_span {
+    size_t offset;
+    size_t size;
+} ta_index_heap_span;
+
+/* ta_index_heap_overlap says whether two fields of an item share a byte. */
+static bool ta_index_heap_overlap(ta_index_heap_span a, ta_index_heap_span b) {
+    return a.offset < b.offset + b.size && b.offset < a.offset + a.size;
 }
 
 /* ta_index_heap_init: see index_heap.h. */
@@ -5751,11 +5775,15 @@ TA_PRIVATE ta_result ta_index_heap_init(ta_index_heap *heap, ta_allocator alloca
         return TA_ERR_INVALID;
     }
     ta_mem_zero(heap, sizeof *heap);
-    if (params == NULL || params->pool == NULL || params->due_offset % _Alignof(uint64_t) != 0 ||
+    if (params == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_index_heap_span due = { params->due_offset, sizeof(uint64_t) };
+    ta_index_heap_span order = { params->order_offset, sizeof(uint64_t) };
+    ta_index_heap_span back = { params->heap_index_offset, sizeof(uint32_t) };
+    if (params->pool == NULL || params->due_offset % _Alignof(uint64_t) != 0 ||
         params->order_offset % _Alignof(uint64_t) != 0 || params->heap_index_offset % _Alignof(uint32_t) != 0 ||
-        ta_index_heap_overlap(params->due_offset, sizeof(uint64_t), params->order_offset, sizeof(uint64_t)) ||
-        ta_index_heap_overlap(params->due_offset, sizeof(uint64_t), params->heap_index_offset, sizeof(uint32_t)) ||
-        ta_index_heap_overlap(params->order_offset, sizeof(uint64_t), params->heap_index_offset, sizeof(uint32_t))) {
+        ta_index_heap_overlap(due, order) || ta_index_heap_overlap(due, back) || ta_index_heap_overlap(order, back)) {
         return TA_ERR_INVALID;
     }
     heap->allocator = allocator;
