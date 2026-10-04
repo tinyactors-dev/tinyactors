@@ -79,7 +79,7 @@ log "corpus: $CASES React files, $CORPUS_BYTES bytes"
 # --- 1. pocketparse dist + CLI ----------------------------------------------
 log "building pocketparse dist ..."
 ( cd "$PP" && bash build.sh all ) >/dev/null 2>&1
-if [ ! -f "$DIST/libpocketparse.a" ] || [ ! -f ] || [ ! -x "$CLI" ]; then
+if [ ! -f "$DIST/libpocketparse.a" ] || [ ! -x "$CLI" ]; then
   log "FATAL: pocketparse dist did not build ($DIST)"
   exit 1
 fi

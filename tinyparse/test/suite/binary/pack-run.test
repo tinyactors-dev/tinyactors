@@ -1,7 +1,9 @@
 <<<cmd
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
 set -e
-"$PP" pack examples/sexpr/sexpr.scm --out /tmp/pp_sexpr.ppg
-printf '(a (b c))' | "$PP" run /tmp/pp_sexpr.ppg --input - --dump-tree
+"$PP" pack examples/sexpr/sexpr.scm --out "$w"/pp_sexpr.ppg
+printf '(a (b c))' | "$PP" run "$w"/pp_sexpr.ppg --input - --dump-tree
 <<<assert
 exit 0
 out-order Source ~ List ~ Atom

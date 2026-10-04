@@ -1,6 +1,8 @@
 <<<cmd
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
 set -e
-"$PP" pack examples/sexpr/sexpr.scm --out /tmp/pp_sexpr.ppg
-test -s /tmp/pp_sexpr.ppg
+"$PP" pack examples/sexpr/sexpr.scm --out "$w"/pp_sexpr.ppg
+test -s "$w"/pp_sexpr.ppg
 <<<assert
 exit 0

@@ -55,7 +55,7 @@ echo "== pocketparse diagnostics-parity differential (diag-diff) =="
 
 # 1. Build the CLI + the library archive (the generated parser links against it).
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ]; then
   echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"
   echo "RESULT=0/0"
   exit 1
