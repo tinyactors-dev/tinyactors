@@ -16557,7 +16557,7 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
     }
     definition->unregistered_previous = NULL;
     definition->unregistered_next = NULL;
-    definition->id = ((ta_definition_id)entry->generation << 32) | slot;
+    definition->id = ta_handle_make(slot, entry->generation);
     definition->registered = true;
     definition->holds = 1u;
     definition->registration_serial = system->next_definition_serial++;
@@ -16570,13 +16570,12 @@ TA_PRIVATE ta_definition *ta_system_definition(const ta_system *system, ta_defin
     if (system == NULL) {
         return NULL;
     }
-    uint32_t slot = (uint32_t)(id & 0xffffffffu);
-    uint32_t generation = (uint32_t)(id >> 32);
+    uint32_t slot = ta_handle_slot(id);
     if (slot >= system->definitions.count) {
         return NULL;
     }
     const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
-    return entry->generation == generation ? entry->definition : NULL;
+    return ta_handle_matches(id, entry->generation) ? entry->definition : NULL;
 }
 
 static bool ta_definition_unused(const ta_definition *definition) {
@@ -16621,12 +16620,12 @@ TA_PRIVATE void ta_system_settle_definition(ta_system *system, ta_definition *de
         ta_definition *freeing = doomed;
         doomed = freeing->free_next;
         ta_system_tell_definition(system, freeing, TA_DEFINITION_EVENT_FREED);
-        uint32_t slot = (uint32_t)(freeing->id & 0xffffffffu);
+        uint32_t slot = ta_handle_slot(freeing->id);
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
         /* The slot's next occupant gets a new generation, so this ID goes stale. */
         entry->definition = NULL;
         system->live_definitions -= 1u;
-        entry->generation += 1u;
+        entry->generation = ta_handle_next_generation(entry->generation);
         entry->next_free = system->free_definition_slot;
         system->free_definition_slot = slot;
         ta_definition_destroy(freeing);
@@ -16659,8 +16658,8 @@ TA_API ta_result ta_system_retire_definition(ta_system *system, ta_definition_id
          * A slot's generation advances only when its definition is freed, so
          * an older generation of an existing slot was retired and freed.
          */
-        uint32_t slot = (uint32_t)(id & 0xffffffffu);
-        uint32_t generation = (uint32_t)(id >> 32);
+        uint32_t slot = ta_handle_slot(id);
+        uint32_t generation = ta_handle_generation(id);
         bool freed = slot < system->definitions.count && generation != 0 &&
                      generation < ((const ta_definition_slot *)ta_vec_at(&system->definitions, slot))->generation;
         return freed ? TA_OK : TA_ERR_NOT_FOUND;

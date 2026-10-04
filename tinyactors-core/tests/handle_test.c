@@ -8,6 +8,8 @@
  */
 #include "../include/tinyactors.c"
 
+#include "test_allocator.h"
+
 #include <stdio.h>
 
 static int failures = 0;
@@ -92,6 +94,40 @@ static void test_stale_handle(void) {
     CHECK(first != second);
 }
 
+/*
+ * A definition slot whose generation is UINT32_MAX gets 1 when freed, as an
+ * actor slot does, so no definition ID ever has generation 0.
+ */
+static void test_definition_generation_wrap(void) {
+    static ta_test_allocator heap;
+    ta_allocator allocator = (ta_allocator)TA_TEST_ALLOCATOR_STATIC(&heap);
+    ta_system *system = NULL;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
+    ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = { .ptr = "idle", .len = 4 } }, {0} };
+    ta_definition_identity identity = { .family = { { .ptr = "wrap", .len = 4 } },
+                                        .revision = { .ptr = (const uint8_t *)"1", .len = 1 } };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(system,
+                                     &(ta_definition_compile_params){
+                                         .spec = &(ta_scxml_spec){ .identity = &identity, .states = states },
+                                         .datamodel = ta_null_datamodel(),
+                                         .allocator = allocator,
+                                         .out = &definition,
+                                     }) == TA_OK);
+    ta_definition_id id = 0;
+    CHECK(ta_system_register_definition(system, definition, &id) == TA_OK);
+    CHECK(ta_handle_valid(id));
+    ta_definition_slot *entry = ta_vec_at(&system->definitions, ta_handle_slot(id));
+    entry->generation = UINT32_MAX;
+    ta_definition_id last = ta_handle_make(ta_handle_slot(id), UINT32_MAX);
+    CHECK(ta_system_definition(system, last) == definition);
+    CHECK(ta_system_retire_definition(system, last) == TA_OK);
+    CHECK(entry->generation == 1u);
+    CHECK(ta_system_definition(system, last) == NULL);
+    ta_system_destroy(system);
+    CHECK(heap.stats.live_blocks == 0 && heap.stats.live_bytes == 0);
+}
+
 int main(void) {
     test_round_trip_and_public_agreement();
     test_literal_layout();
@@ -99,6 +135,7 @@ int main(void) {
     test_matches();
     test_next_generation();
     test_stale_handle();
+    test_definition_generation_wrap();
     if (failures != 0) {
         fprintf(stderr, "handle test: %d check(s) failed\n", failures);
         return 1;
