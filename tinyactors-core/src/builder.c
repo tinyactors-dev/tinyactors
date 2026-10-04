@@ -2337,7 +2337,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         if (definition->datamodel_instance_alignment == 0) {
             definition->datamodel_instance_alignment = 1;
         }
-        ta_actor_layout(definition);
+        result = ta_actor_layout(definition);
     }
     if (result != TA_OK) {
         ta_definition_destroy(definition);

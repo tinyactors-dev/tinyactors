@@ -30,20 +30,27 @@ void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator) {
     table->count = 0;
 }
 
-void ta_actor_layout(ta_definition *definition) {
-    size_t instance_alignment = definition->datamodel_instance_alignment;
-    size_t alignment = _Alignof(ta_actor);
-    if (alignment < _Alignof(uint64_t)) {
-        alignment = _Alignof(uint64_t);
+ta_result ta_actor_layout(ta_definition *definition) {
+    ta_layout layout;
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_actor), .alignment = _Alignof(ta_actor), .count = 1u });
+    size_t session = ta_layout_add(&layout, &(ta_layout_entry){ .size = ta_definition_session_bytes(definition),
+                                                                .alignment = _Alignof(uint64_t),
+                                                                .count = 1u });
+    size_t instance = ta_layout_add(&layout, &(ta_layout_entry){ .size = definition->datamodel_instance_size,
+                                                                 .alignment = definition->datamodel_instance_alignment,
+                                                                 .count = 1u });
+    size_t bytes;
+    size_t alignment;
+    ta_result result = ta_layout_finish(&layout, &bytes, &alignment);
+    if (result != TA_OK) {
+        return result; /* the definition keeps its old (zero) layout */
     }
-    if (alignment < instance_alignment) {
-        alignment = instance_alignment;
-    }
-    definition->actor_session_offset = ta_align_up(sizeof(ta_actor), _Alignof(uint64_t));
-    definition->actor_instance_offset =
-        ta_align_up(definition->actor_session_offset + ta_definition_session_bytes(definition), instance_alignment);
-    definition->actor_block_bytes = definition->actor_instance_offset + definition->datamodel_instance_size;
+    definition->actor_session_offset = session;
+    definition->actor_instance_offset = instance;
+    definition->actor_block_bytes = bytes;
     definition->actor_block_alignment = alignment;
+    return TA_OK;
 }
 
 /*

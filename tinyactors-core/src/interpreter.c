@@ -1,4 +1,5 @@
 #include "interpreter.h"
+#include "layout.h"
 
 /*
  * SCXML execution following the W3C algorithm (Appendix D). The actor's

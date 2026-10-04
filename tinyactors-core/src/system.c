@@ -1,5 +1,6 @@
 #include "system.h"
 #include "trace.h"
+#include "layout.h"
 #include "interpreter.h"
 
 #define TA_SCXML_IO_URI "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"

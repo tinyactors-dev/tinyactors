@@ -2189,9 +2189,13 @@ TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator alloc
 /*
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the
  * ta_actor record, then the session storage, then the data-model instance,
- * each at its alignment. Called once, when the definition is compiled.
+ * each at its alignment. Called once, when the definition is compiled, so
+ * the layout has the definition's lifetime and the sized free in
+ * ta_actor_destroy depends on it never changing. It never allocates. When a
+ * size does not fit in a size_t it answers TA_ERR_NOMEM and leaves the four
+ * layout fields as they were.
  */
-TA_PRIVATE void ta_actor_layout(ta_definition *definition);
+TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition);
 
 TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
 /* The family atom of the resident actor `id`, or 0 when there is none (ADR 0088). */
@@ -10533,7 +10537,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         if (definition->datamodel_instance_alignment == 0) {
             definition->datamodel_instance_alignment = 1;
         }
-        ta_actor_layout(definition);
+        result = ta_actor_layout(definition);
     }
     if (result != TA_OK) {
         ta_definition_destroy(definition);
@@ -12080,20 +12084,27 @@ TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator alloc
     table->count = 0;
 }
 
-TA_PRIVATE void ta_actor_layout(ta_definition *definition) {
-    size_t instance_alignment = definition->datamodel_instance_alignment;
-    size_t alignment = _Alignof(ta_actor);
-    if (alignment < _Alignof(uint64_t)) {
-        alignment = _Alignof(uint64_t);
+TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition) {
+    ta_layout layout;
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_actor), .alignment = _Alignof(ta_actor), .count = 1u });
+    size_t session = ta_layout_add(&layout, &(ta_layout_entry){ .size = ta_definition_session_bytes(definition),
+                                                                .alignment = _Alignof(uint64_t),
+                                                                .count = 1u });
+    size_t instance = ta_layout_add(&layout, &(ta_layout_entry){ .size = definition->datamodel_instance_size,
+                                                                 .alignment = definition->datamodel_instance_alignment,
+                                                                 .count = 1u });
+    size_t bytes;
+    size_t alignment;
+    ta_result result = ta_layout_finish(&layout, &bytes, &alignment);
+    if (result != TA_OK) {
+        return result; /* the definition keeps its old (zero) layout */
     }
-    if (alignment < instance_alignment) {
-        alignment = instance_alignment;
-    }
-    definition->actor_session_offset = ta_align_up(sizeof(ta_actor), _Alignof(uint64_t));
-    definition->actor_instance_offset =
-        ta_align_up(definition->actor_session_offset + ta_definition_session_bytes(definition), instance_alignment);
-    definition->actor_block_bytes = definition->actor_instance_offset + definition->datamodel_instance_size;
+    definition->actor_session_offset = session;
+    definition->actor_instance_offset = instance;
+    definition->actor_block_bytes = bytes;
     definition->actor_block_alignment = alignment;
+    return TA_OK;
 }
 
 /*

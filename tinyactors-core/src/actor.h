@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layout.h"
 #include "continuation.h"
 #include "definition.h"
 #include "invoke.h"
@@ -228,9 +229,13 @@ void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
 /*
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the
  * ta_actor record, then the session storage, then the data-model instance,
- * each at its alignment. Called once, when the definition is compiled.
+ * each at its alignment. Called once, when the definition is compiled, so
+ * the layout has the definition's lifetime and the sized free in
+ * ta_actor_destroy depends on it never changing. It never allocates. When a
+ * size does not fit in a size_t it answers TA_ERR_NOMEM and leaves the four
+ * layout fields as they were.
  */
-void ta_actor_layout(ta_definition *definition);
+ta_result ta_actor_layout(ta_definition *definition);
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
 /* The family atom of the resident actor `id`, or 0 when there is none (ADR 0088). */
