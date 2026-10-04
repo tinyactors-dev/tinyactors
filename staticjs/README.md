@@ -234,8 +234,42 @@ mise run check-recursion    # no cycle in the call graph
 mise run check-freestanding # builds for wasm32-freestanding with no C library
 mise run asan               # the tests under AddressSanitizer and UBSan
 mise run diff-node          # the spec against JavaScript
+mise run bench [filter] [--quick]                  # the benchmarks, optimized: throughput and memory
+mise run bench-compare <commit> [--runs=3] [--store] # this tree against another commit, side by side
 ```
 
 The tests are `tests/spec/*.spec` (read by `tests/spec_test.c`, which runs
 each case with the source pushed whole, a byte at a time and in chunks, on
 different amounts of fuel), `tests/api_test.c` and `tests/number_test.c`.
+`mise run test` also runs `bench --smoke` (below), which times nothing.
+
+## Benchmarks
+
+`bench/bench.c` measures each stage on the inputs a statechart gives it:
+
+- **compile**: a chart's modules (`bench/modules/power.js` and
+  `campaign.js`, from the spec), a module of 32 KiB, and guards, pushed
+  whole, 64 bytes or one byte at a time, and the parser alone; in MB/s.
+- **eval**: guards, an assign, a send's target, loading a module and
+  calling a function from it, in evaluations per second; and the built-ins
+  over arrays, objects and sets of growing size, in elements per second,
+  so a row shows whether the time per element is flat or grows with n.
+- **write**: rows, numbers and strings as text, with a large buffer and a
+  64-byte one, in MB/s.
+- **vm** and **values**: a fresh evaluator, a kept one, abandoning one,
+  running on little fuel at a time, and building values through the API.
+
+Each case gives its throughput (median of 15 samples, with the spread
+between the quartiles) and its memory: the bytes its inputs take, the
+op's peak, what its result holds, allocations per op, and bytes left
+behind, which must be none. `mise run bench` builds with the pinned clang at
+`-O2`, prints a table, and stores the records under
+`bench/results/<machine signature>/` (see its README). `mise run
+bench-compare <commit>` builds that commit's library beside this tree's,
+with the same bench program, and runs both alternately, flagging a
+throughput more than 5% slower and any memory increase; a case the older
+build cannot run is reported as such.
+
+**Reporting.** Give throughput and memory together, name the machine
+signature, and compare builds side by side with `bench-compare`, never
+against numbers from another day or another machine.

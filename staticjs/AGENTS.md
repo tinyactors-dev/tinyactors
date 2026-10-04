@@ -50,3 +50,20 @@ JavaScript does, or a fault. Never a different value.
 - `tests/number_test.c`: number formatting, remainder and rounding.
 - `mise run test --full` also fails every allocation of every spec case
   (`spec_test --full`), and of a larger program (`api_test --full`).
+
+## Benchmarks
+
+`mise run bench` and `mise run bench-compare <commit>` (README.md,
+"Benchmarks").
+
+- Before committing a change to `vm.c`, `value.c`, `builtins.c`,
+  `memory.c`, or the hot paths of the parser and the compiler, run
+  `mise run bench-compare <commit before it>` and quote its table, with
+  the machine hash, in the commit body.
+- A new case in `bench/bench.c` gets a name (`group.subject[.variant]`),
+  a unit, its sizes (L for linear work; Q for work that is quadratic today,
+  capped at 10,000, or smaller when it is worse) and the value it gives at
+  its smoke size, checked against Node.
+- A timing assertion never goes into `mise run test`: it runs only
+  `bench --smoke`, which checks each case's value and that it frees what it
+  allocates, so a leak there fails the tests.
