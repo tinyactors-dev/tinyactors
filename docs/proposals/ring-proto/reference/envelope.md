@@ -167,19 +167,13 @@ envelopes on every fill:
   can be withdrawn ([below](#withdrawing-an-admitted-input)), and is
   recycled like any other when its session is destroyed.
 
-**Why arrival order, and not the session's backlog first.** An earlier
-version moved the first deferred envelope to the head of the run queue.
-A session with a long backlog then ran its inputs back to back, ahead of
-mail that arrived before them. With several slots, a busy target holds one
-slot while the others go on; the rule also stops it from taking more than
-its share each time it finishes an input.
-
-**Round robin across targets is not used.** It was considered: a
-queue per target, taken in turn, so that one busy target cannot delay
-another's mail. It needs more structure, and it breaks the one run queue in
-arrival order that the scenarios and replay's scheduling rule rely on. It
-is internal scheduling with no protocol change, so it can come later if a
-test host scenario with one slot and a hot target shows the need.
+**Why arrival order, and not the session's backlog first.** A returned
+envelope competes with other sessions' mail by arrival. If it went to the
+head of the run queue instead, a session with a long backlog would run its
+inputs back to back, ahead of mail that arrived before them. With arrival
+order, a session with a backlog cannot take more than its share each time
+it finishes an input, and with several slots a busy target holds one slot
+while the others go on.
 
 With one slot, nothing is ever deferred.
 
@@ -221,8 +215,13 @@ each other forever from shutting out external input.
 
 The ratio is the only fairness policy. Between sessions, the run queue's
 arrival order decides, including for mail that waited on a deferred list
-([above](#mail-for-an-active-session)). There is no round robin across
-targets.
+([above](#mail-for-an-active-session)).
+
+**Why not round robin across targets.** A queue per target, taken in turn,
+would stop one busy target from delaying another's mail. It needs more
+structure, and the scenarios and replay's scheduling rule rely on one run
+queue in arrival order. It is internal scheduling, so it could be added
+without a protocol change.
 
 The ratio is part of the system's parameters. A new execution may choose a
 different ratio, including when seeded by replay
@@ -250,7 +249,7 @@ Post-macrostep routing and notifications are a bounded drain phase. Its cursor
 uses the existing outgoing/wait lists and retains the outstanding `load_needed`
 or latest `wake` notification until it can reserve and commit that record.
 Core can return for a c2h drain and resume this phase; the completed macrostep
-is not rolled back or executed again. No additional overflow queue is created.
+is not rolled back or executed again. The phase needs no overflow queue.
 The current input completes only after its outgoing routing and mandatory
 notifications have been flushed.
 
@@ -281,8 +280,7 @@ I/O processor.
 
 ## Delayed sends: envelopes with a due time
 
-This is option A from the design discussion: **core keeps the timers, as
-envelopes in the pool.**
+**Core keeps the timers, as envelopes in the pool.**
 
 - **A delayed `<send>`** takes an envelope in state `timer`, with its `due`.
   The envelope goes into the deadline index and onto its sender's owner list.
@@ -312,7 +310,7 @@ envelopes in the pool.**
 What it replaces: ADR 0054's per-owner storage, the sparse state it grows,
 and the global index ordering owners. The per-owner list stays, as `owner_next`.
 
-**Why core keeps the timers, and not the host (option B):**
+**Why core keeps the timers, and not the host:**
 
 - **`<cancel>` is exact.** Core fires a timer only when it reads
   `h2c.time`, with nothing queued in between. A cancelled timer never
@@ -383,8 +381,8 @@ not have. So **the envelope is reused**:
 
 Every admitted local-mail envelope reserves enough name storage for its
 possible data-free `error.communication`, even when the original event name
-is shorter. Recycling uses that retained storage; it does not rely on the
-incorrect assumption that every error name is shorter than its source name.
+is shorter. Recycling uses that retained storage, because an error name can be longer
+than its source name.
 
 ## Withdrawing an admitted input
 
@@ -562,9 +560,8 @@ beyond it uses free ordinary entries, and an overflow is a runaway
 Ordinary mail may fill every envelope not already held as an invocation token.
 Error reporting uses internal storage; undeliverable mail reuses its own
 envelope ([Recycling](#recycling-an-envelope-that-cant-be-delivered-becomes-its-own-error)).
-This proposal does not terminate a macrostep merely because a per-microstep
-mandatory reserve cannot be restored. It ends the input as a runaway only
-when a mandatory event fits neither the floor nor a free ordinary entry.
+A mandatory event that fits neither the floor nor a free ordinary entry is
+the only internal-storage shortage that ends an input, as a runaway.
 
 ### The abandoned block, in a chart
 
