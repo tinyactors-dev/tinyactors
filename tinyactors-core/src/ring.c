@@ -100,12 +100,22 @@ static bool refresh_peer_tail(ta_ring *ring) {
 }
 
 /*
- * refuse answers a reservation that does not fit. In a lossless ring it
- * changes nothing; the caller retries after a release.
+ * refuse answers a reservation that does not fit. A lossless ring changes
+ * nothing and the caller retries after a release. A lossy ring drops the
+ * record: it counts it and consumes its seq, so the consumer sees the jump
+ * and ta_ring_record.gap says how many records are missing. Both counters
+ * are stored at once, so the host never sees one without the other.
  */
 static ta_ring_status refuse(ta_ring *ring, uint32_t size, ta_ring_reservation *out) {
     *out = (ta_ring_reservation){ .bytes = NULL, .size = size, .seq = ring->next_seq };
-    return TA_RING_FULL;
+    if (ring->mode == TA_RING_LOSSLESS) {
+        return TA_RING_FULL;
+    }
+    ring->next_seq += 1;
+    ring->dropped += 1;
+    ring->shared->next_seq = ring->next_seq;
+    ring->shared->dropped = ring->dropped;
+    return TA_RING_DROPPED;
 }
 
 /* ta_ring_reserve: see ring.h. */

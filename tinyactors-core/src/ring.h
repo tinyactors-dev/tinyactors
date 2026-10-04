@@ -211,6 +211,7 @@ typedef struct ta_ring {
     uint64_t head;          /* producer-authoritative */
     uint64_t peer_tail;     /* producer: the last tail it validated from the shared cell */
     uint64_t next_seq;      /* producer-authoritative */
+    uint64_t dropped;       /* producer-authoritative: records dropped so far */
     uint64_t pending_seq;   /* open reservation: the seq it carries */
     uint64_t tail;          /* consumer-authoritative */
     uint64_t peer_head;     /* consumer: the last head it validated from the shared cell */

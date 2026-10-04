@@ -545,6 +545,109 @@ static void test_corrupt_framing(void) {
     fixture_down(&f);
 }
 
+/* ---- lossy mode ---- */
+
+static void test_lossy_drops(void) {
+    fixture f;
+    ta_rings_specs specs = specs_of(64, 32, TA_RING_LOSSY);
+    fixture_up(&f, &specs);
+    ta_ring *ring = &f.rings.ring[TA_RING_TEL];
+    ta_ring_reservation res;
+    for (uint32_t i = 1; i <= 2; i += 1) {
+        CHECK(ta_ring_reserve(ring, 32, &res) == TA_RING_OK && res.seq == i);
+        fill_record(res.bytes, 32, i);
+        ta_ring_commit(ring);
+    }
+    unsigned char data[64];
+    memcpy(data, ring->data, sizeof data);
+    uint64_t head = ring->shared->head;
+    for (uint32_t n = 1; n <= 5; n += 1) {
+        CHECK(ta_ring_reserve(ring, 16 + 8 * (n % 3), &res) == TA_RING_DROPPED && res.bytes == NULL && res.seq == 2 + n);
+        CHECK(ring->shared->dropped == n && ring->shared->next_seq == 3 + n);
+        CHECK(ring->shared->head == head && memcmp(data, ring->data, sizeof data) == 0);
+    }
+    /* A request that is too big is a caller error, not a drop: no seq, no count. */
+    CHECK(ta_ring_reserve(ring, 40, &res) == TA_RING_TOO_BIG && ring->shared->dropped == 5 && ring->shared->next_seq == 8);
+    ta_ring_record rec;
+    for (uint32_t i = 1; i <= 2; i += 1) {
+        CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK && rec.seq == i && rec.gap == 0);
+        ta_ring_release(ring);
+    }
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_EMPTY);
+    CHECK(ta_ring_reserve(ring, 24, &res) == TA_RING_OK && res.seq == 8); /* last committed (2) + dropped (5) + 1 */
+    fill_record(res.bytes, 24, 8);
+    ta_ring_commit(ring);
+    CHECK(ta_ring_reserve(ring, 24, &res) == TA_RING_OK && res.seq == 9);
+    fill_record(res.bytes, 24, 9);
+    ta_ring_commit(ring);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK && rec.seq == 8 && rec.gap == 5); /* reported once */
+    ta_ring_release(ring);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK && rec.seq == 9 && rec.gap == 0);
+    ta_ring_release(ring);
+    fixture_down(&f);
+}
+
+/* The lone pad on a lossy ring drops the record (its seq is consumed), then the retry fits. */
+static void test_lossy_lone_pad(void) {
+    fixture f;
+    ta_rings_specs specs = specs_of(32, 32, TA_RING_LOSSY);
+    fixture_up(&f, &specs);
+    ta_ring *ring = &f.rings.ring[TA_RING_TEL];
+    ring_at(ring, 8);
+    ta_ring_reservation res;
+    ta_ring_record rec;
+    CHECK(ta_ring_reserve(ring, 32, &res) == TA_RING_DROPPED && res.seq == 1 && ring->shared->dropped == 1);
+    CHECK(ring->shared->head == 32);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_EMPTY && ring->shared->tail == 32); /* the pad is released unseen */
+    CHECK(ta_ring_reserve(ring, 32, &res) == TA_RING_OK && res.seq == 2);
+    fill_record(res.bytes, 32, 2);
+    ta_ring_commit(ring);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK && rec.seq == 2 && rec.gap == 1);
+    fixture_down(&f);
+}
+
+/* A producer that outruns its consumer: every seq is either seen or counted, in order. */
+static void test_lossy_sum_identity(void) {
+    fixture f;
+    ta_rings_specs specs = specs_of(200, 56, TA_RING_LOSSY);
+    fixture_up(&f, &specs);
+    ta_ring *ring = &f.rings.ring[TA_RING_TEL];
+    uint64_t rng = 99, seen = 0, gaps = 0, last = 0, committed = 0, dropped = 0;
+    for (uint32_t step = 0; step < 20000; step += 1) {
+        rng = rng * 6364136223846793005ull + 1442695040888963407ull;
+        if ((rng >> 40) % 5 != 0) {
+            ta_ring_reservation res;
+            ta_ring_status status = ta_ring_reserve(ring, 16 + (uint32_t)((rng >> 20) % 41), &res);
+            if (status == TA_RING_OK) {
+                fill_record(res.bytes, res.size, (uint32_t)res.seq);
+                ta_ring_commit(ring);
+                committed += 1;
+            } else {
+                CHECK(status == TA_RING_DROPPED);
+                dropped += 1;
+            }
+        } else {
+            ta_ring_record rec;
+            if (ta_ring_peek(ring, &rec) == TA_RING_OK) {
+                CHECK(rec.seq == last + rec.gap + 1 && record_ok(rec.bytes, rec.size, (uint32_t)rec.seq));
+                last = rec.seq;
+                seen += 1;
+                gaps += rec.gap;
+                ta_ring_release(ring);
+            }
+        }
+    }
+    ta_ring_record rec;
+    while (ta_ring_peek(ring, &rec) == TA_RING_OK) {
+        last = rec.seq, seen += 1, gaps += rec.gap;
+        ta_ring_release(ring);
+    }
+    CHECK(dropped > 100 && committed > 100 && seen == committed);
+    CHECK(ring->shared->dropped == dropped && ring->shared->next_seq == committed + dropped + 1);
+    CHECK(gaps <= dropped && last + (dropped - gaps) == committed + dropped); /* trailing drops are not yet visible as a gap */
+    fixture_down(&f);
+}
+
 int main(void) {
     test_layout();
     test_init();
@@ -557,6 +660,9 @@ int main(void) {
     test_peek_release_basics();
     test_gap_free_across_wraps();
     test_corrupt_framing();
+    test_lossy_drops();
+    test_lossy_lone_pad();
+    test_lossy_sum_identity();
     if (failures != 0) {
         fprintf(stderr, "ring_test: %d check(s) failed\n", failures);
         return 1;
