@@ -44,6 +44,11 @@ Ir             tinyparse/docs/peg-vs-glr.md                              # callg
 # so `URI` would change the grammar. The READMEs quote the generated grammar.
 Uri            tinyparse/examples/{ebnf,uri}/README.md                   # generated rule name
 
+# Node kinds of tinyparse's std.fence grammar (grammars/std/fence/grammar.scm),
+# quoted from tree dumps. Renaming them changes the trees the grammar builds.
+JsonFence      tinyparse/{docs/how-to/host-services.md,examples/nesting/README.md}  # std.fence node kind
+JsFence        tinyparse/examples/nesting/README.md                      # std.fence node kind
+
 # A JSX test input of tinyparse's JavaScript grammar, copied in from
 # tree-sitter-javascript's corpus: other people's code, kept byte for byte.
 userId         tinyparse/test/suite/jsfamily/inputs/expressions__56.js   # tree-sitter-javascript corpus input
