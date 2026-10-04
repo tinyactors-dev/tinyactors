@@ -97,7 +97,9 @@
  * Invariants (between calls, per ring, for the private copies):
  *   I1. tail <= head <= tail + capacity, counters in bytes that only grow,
  *       pads included. Positions are counter % capacity. Arithmetic is on
- *       differences (head - tail), never on sums of counters.
+ *       differences (head - tail), never on sums of counters. Counters are
+ *       assumed never to wrap u64 (2^64 bytes is unreachable); capacity need
+ *       not be a power of two, so a wrap would break I2.
  *   I2. Every committed record and pad starts at a multiple of 8, a record
  *       is contiguous (offset + size <= capacity) and a pad ends exactly at
  *       the buffer's end.

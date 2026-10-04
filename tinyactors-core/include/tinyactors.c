@@ -947,7 +947,9 @@ TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo);
  * Invariants (between calls, per ring, for the private copies):
  *   I1. tail <= head <= tail + capacity, counters in bytes that only grow,
  *       pads included. Positions are counter % capacity. Arithmetic is on
- *       differences (head - tail), never on sums of counters.
+ *       differences (head - tail), never on sums of counters. Counters are
+ *       assumed never to wrap u64 (2^64 bytes is unreachable); capacity need
+ *       not be a power of two, so a wrap would break I2.
  *   I2. Every committed record and pad starts at a multiple of 8, a record
  *       is contiguous (offset + size <= capacity) and a pad ends exactly at
  *       the buffer's end.
@@ -6293,6 +6295,14 @@ TA_PRIVATE uint32_t ta_fifo_count(const ta_fifo *fifo) { return fifo->count; }
 TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo) { return fifo->capacity; }
 
 
+/*
+ * The implementation of package ring (see ring.h for the contract, the
+ * lifetimes and the invariants). Rings live in one caller-provided region
+ * laid out by ta_rings_layout; nothing here allocates or frees. Every
+ * function runs in O(1) except the pad skip in peek, which runs at most once
+ * per wrap. Failure paths change no counter and no byte a peer can see.
+ */
+
 /* A spec is valid when progress is possible: the largest record fits an empty ring, and every size is a multiple of 8. */
 static bool spec_valid(const ta_ring_spec *spec) {
     return spec->capacity % TA_RING_ALIGN == 0 && spec->max_record_bytes % TA_RING_ALIGN == 0 &&
@@ -6380,8 +6390,9 @@ static void pad_write(ta_ring *ring, uint64_t at, uint32_t bytes) {
  * refresh_peer_tail reads the consumer's tail from the control block. The
  * host writes it on c2h and tel, so it is untrusted: it must not go back
  * (counters only grow) and must not pass what has been committed. Only
- * differences are compared (I1), so a counter that wrapped u64 in theory
- * would still be judged by distance.
+ * differences are compared (I1). Counters are assumed never to wrap u64
+ * (2^64 bytes of traffic is unreachable): positions are counter % capacity
+ * and capacity is not a power of two, so a wrap would break I2.
  */
 static bool refresh_peer_tail(ta_ring *ring) {
     uint64_t tail = ring->shared->tail;
