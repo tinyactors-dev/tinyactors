@@ -2,8 +2,8 @@
 
 Generated from [`catalog.rb`](../../protocol/catalog.rb) by `mise run protocol` in tinyactors-core. Do not edit.
 
-- The data model is not on a ring. Core calls ta_datamodel_vtable synchronously, as today (reference/data-model.md). Only its results cross the rings, as value references.
-- Definition management uses request/result records. Native calls create and destroy the system, expose its rings, drive execution and install data model/value integrations. An attached debugger takes exclusive ownership of the whole system from the production pump. Inspection, abandonment and operator transitions use native primitives outside the production rings; no operator ring is added (reference/debugging.md).
+- The data model is not on a ring. Core calls ta_datamodel_vtable synchronously, as today (docs/proposals/ring-proto/reference/data-model.md). Only its results cross the rings, as value references.
+- Definition management uses request/result records. Native calls create and destroy the system, expose its rings, drive execution and install data model/value integrations. An attached debugger takes exclusive ownership of the whole system from the production pump. Inspection, abandonment and operator transitions use native primitives outside the production rings; no operator ring is added (docs/proposals/ring-proto/reference/debugging.md).
 - A vref in a c2h record is a reference core retained for the host. The host releases it when it has used the record. A vref in an h2c record transfers one retained reference to core at commit. Core releases it on refusal, drop or completion; a bounce returns status, not ownership. Host retry originals belong in a bounded submission table.
 - Replay seeds new execution: supplied inputs derive configuration and data model values, which may differ from an earlier run. External effects are suppressed while seeding. In live execution the host may execute effects on receipt, independently of recording, persistence or c2h.macrostep_ended.
 
@@ -69,7 +69,7 @@ Generated from [`catalog.rb`](../../protocol/catalog.rb) by `mise run protocol` 
 | 16 | `session` | session | the session the record is about, or 0 |
 | 24 | `at` | time | the system clock when it was written (h2c: the input's time) |
 
-Common flags: bit 8 `replaying` (part of a replay (reference/recording-and-replay.md). On c2h and tel: written by a replaying session. On h2c: an input of a replay; under a whole-system replay every h2c record carries it, sessions it spawns replay, mail between them is delivered as envelopes, and effects that would leave the process are suppressed until h2c.publish); bit 9 `recorded` (the session is recorded: its inputs appear as c2h.input).
+Common flags: bit 8 `replaying` (part of a replay (docs/proposals/ring-proto/reference/recording-and-replay.md). On c2h and tel: written by a replaying session. On h2c: an input of a replay; under a whole-system replay every h2c record carries it, sessions it spawns replay, mail between them is delivered as envelopes, and effects that would leave the process are suppressed until h2c.publish); bit 9 `recorded` (the session is recorded: its inputs appear as c2h.input).
 
 ## h2c.time
 
@@ -87,12 +87,12 @@ Header `session` names a resident session, or is 0 and `target` gives an address
 
 A live input runs at system time when taken; its header at does not advance that clock. A replay input moves its prepared session clock at take. Complete event metadata must also fit the expanded c2h.input. Service events carry invocation_seq, checked again at take. Zero means ordinary input, or an application-supplied replay seed.
 
-A trace parent travels with the event (core ADRs 0067, 0073). A host that receives a traceparent header parses it (core's native ta_traceparent_parse) and fills the trace fields. The macrostep that takes the event runs under that context, with the cause key {session 0, macrostep parent_span_id}. An all-zero trace ID means no context. The envelope keeps the trace parent until take (reference/envelope.md).
+A trace parent travels with the event (core ADRs 0067, 0073). A host that receives a traceparent header parses it (core's native ta_traceparent_parse) and fills the trace fields. The macrostep that takes the event runs under that context, with the cause key {session 0, macrostep parent_span_id}. An all-zero trace ID means no context. The envelope keeps the trace parent until take (docs/proposals/ring-proto/reference/envelope.md).
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 32 | `target` | text | the address (family/name), when session is 0 |
-| 40 | `name` | text | the dotted event name, as bytes (reference/names.md) |
+| 40 | `name` | text | the dotted event name, as bytes (docs/proposals/ring-proto/reference/names.md) |
 | 48 | `sendid` | text | _event.sendid, or empty |
 | 56 | `origin` | text | _event.origin, or empty |
 | 64 | `origin_type` | text | _event.origintype, or empty |
@@ -142,7 +142,7 @@ The trace fields are the trace parent the bootstrap macrostep runs under, as for
 
 Held delayed sends due by `at` are dropped; the rest stay in the pool under their due times (core ADR 0094). Active invocations are retired with error.communication.invoke.<id>.unavailable.
 
-An empty `address` publishes every replaying session at once: the end of a whole-system replay (reference/recording-and-replay.md).
+An empty `address` publishes every replaying session at once: the end of a whole-system replay (docs/proposals/ring-proto/reference/recording-and-replay.md).
 
 Refuses without mutation while supplied seed inputs remain pending. Generated local mail need not drain: pending mail follows the selected publication cut into live execution. Publication does not execute effects suppressed during seeding.
 
@@ -159,7 +159,7 @@ Refuses without mutation while supplied seed inputs remain pending. Generated lo
 
 Usually the answer to c2h.load_needed. Its delayed sends rejoin the pool. Waiting envelopes for it become runnable.
 
-Loading only bounds memory; it is not persistence. The image is one c2h.unloaded wrote in this process, and it is valid only here (core ADR 0074). To restore a session after a restart, use h2c.spawn with `state` (reference/unloading.md).
+Loading only bounds memory; it is not persistence. The image is one c2h.unloaded wrote in this process, and it is valid only here (core ADR 0074). To restore a session after a restart, use h2c.spawn with `state` (docs/proposals/ring-proto/reference/unloading.md).
 
 Stage the complete restore outside macrosteps. Capacity or decoding failure leaves residency, timers and waiting mail unchanged. The host pins image until c2h.loaded or c2h.bounced correlates this request. Zero request_seq is refused when an active load request exists for the address.
 
@@ -175,7 +175,7 @@ Stage the complete restore outside macrosteps. Capacity or decoding failure leav
 
 `0x0106` on `h2c`, 56 fixed bytes. The session cannot be loaded.
 
-Every envelope waiting for the address is recycled: mail becomes error.communication for its sender, in the same envelope (reference/envelope.md, "Recycling"); external inputs receive c2h.input_refused and DEAD_LETTER telemetry. Large waiting lists are processed incrementally between macrosteps as c2h space permits.
+Every envelope waiting for the address is recycled: mail becomes error.communication for its sender, in the same envelope (docs/proposals/ring-proto/reference/envelope.md, "Recycling"); external inputs receive c2h.input_refused and DEAD_LETTER telemetry. Large waiting lists are processed incrementally between macrosteps as c2h space permits.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -253,7 +253,7 @@ A session that holds a macrostep slot, running or parked, has its execution aban
 
 `0x010B` on `h2c`, 56 fixed bytes. Compile and register a complete definition.
 
-Header session is 0. One atomic request, with no builder operations. The binding builds a native ta_scxml_spec with core's spec builder; core compiles it through the existing compiler and registers it between macrosteps. There is no byte layout of a spec. Native data model callbacks remain synchronous (reference/definitions.md).
+Header session is 0. One atomic request, with no builder operations. The binding builds a native ta_scxml_spec with core's spec builder; core compiles it through the existing compiler and registers it between macrosteps. There is no byte layout of a spec. Native data model callbacks remain synchronous (docs/proposals/ring-proto/reference/definitions.md).
 
 The host keeps spec valid and diagnostic writable until the correlated c2h.definition_result. Failure registers nothing and retains nothing from the submitted spec.
 
@@ -293,9 +293,9 @@ Core ADR 0043 semantics: existing actors keep running; new spawns cannot use it.
 
 `0x010E` on `h2c`, 40 fixed bytes. Take back an admitted input that has not been taken.
 
-Header session is 0. A control: it takes no envelope and is applied when read, also while core is not admitting. target_seq names an earlier h2c.event or h2c.invoke_report. If that input waits in the pool (runnable or on a waiting list), core unlinks and frees its envelope, releases its transferred values and name text, and writes c2h.input_refused with reason withdrawn. Core reserves that record before consuming the withdrawal (reference/envelope.md).
+Header session is 0. A control: it takes no envelope and is applied when read, also while core is not admitting. target_seq names an earlier h2c.event or h2c.invoke_report. If that input waits in the pool (runnable or on a waiting list), core unlinks and frees its envelope, releases its transferred values and name text, and writes c2h.input_refused with reason withdrawn. Core reserves that record before consuming the withdrawal (docs/proposals/ring-proto/reference/envelope.md).
 
-If the input is no longer waiting, the withdrawal changes nothing and writes nothing: the input already has, or will get, its own single terminal record (c2h.bounced, c2h.input_refused or c2h.input_completed). A taken input, including one paused inside its macrostep, is never withdrawn; stopping it is an operator abandon (reference/debugging.md). A target_seq not lower than this record's own seq is bounced as invalid.
+If the input is no longer waiting, the withdrawal changes nothing and writes nothing: the input already has, or will get, its own single terminal record (c2h.bounced, c2h.input_refused or c2h.input_completed). A taken input, including one paused inside its macrostep, is never withdrawn; stopping it is an operator abandon (docs/proposals/ring-proto/reference/debugging.md). A target_seq not lower than this record's own seq is bounced as invalid.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -374,9 +374,9 @@ The trace fields are the trace parent the macrostep runs under, in h2c.event's f
 
 `0x0203` on `c2h`, 120 fixed bytes. A send for an I/O processor.
 
-Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.macrostep_ended or persistence.
+Mail to a local session never appears here: it is an envelope (docs/proposals/ring-proto/reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.macrostep_ended or persistence.
 
-A delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no end report follows, and the host may act on it at once. An end report would describe a macrostep that does not exist (reference/envelope.md, "A due send to an I/O processor has no macrostep end").
+A delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no end report follows, and the host may act on it at once. An end report would describe a macrostep that does not exist (docs/proposals/ring-proto/reference/envelope.md, "A due send to an I/O processor has no macrostep end").
 
 The trace fields are the sending step's trace context and span ID (core ADR 0067), so the processor writes a traceparent header (version 00, trace ID, span_id, trace_flags) without calling into core. A delayed send keeps them in its envelope and carries the step that sent it, not the h2c.time that made it due.
 
@@ -480,7 +480,7 @@ The trace fields are the context and span ID of the step that ran the <log> (cor
 
 `0x0208` on `c2h`, 72 fixed bytes. A macrostep ended.
 
-Everything the macrostep wrote to c2h comes before this record. The host may already have executed effects on receipt. This record reports that execution ended and gives its status, including abandonment; invocation startup may follow. It is neither input completion nor a durability acknowledgement (reference/macrostep.md, "The macrostep end").
+Everything the macrostep wrote to c2h comes before this record. The host may already have executed effects on receipt. This record reports that execution ended and gives its status, including abandonment; invocation startup may follow. It is neither input completion nor a durability acknowledgement (docs/proposals/ring-proto/reference/macrostep.md, "The macrostep end").
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -624,7 +624,7 @@ Envelopes still waiting for it are recycled as for h2c.load_failed.
 
 Exactly one result per definition request. Header session is 0. Core reserves room for this fixed-size reply before consuming the request or changing definition state. No macrostep end report follows.
 
-A compile_error diagnostic is the native ta_compile_error struct (core ADR 0058), written whole into the request's diagnostic memory with its code, path, subject, subject range, related text and message; no pointer into the spec or core escapes. If it does not fit, the status is capacity and nothing partial is written. The host owns the memory before and after completion (reference/definitions.md).
+A compile_error diagnostic is the native ta_compile_error struct (core ADR 0058), written whole into the request's diagnostic memory with its code, path, subject, subject range, related text and message; no pointer into the spec or core escapes. If it does not fit, the status is capacity and nothing partial is written. The host owns the memory before and after completion (docs/proposals/ring-proto/reference/definitions.md).
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -658,7 +658,7 @@ Exactly one terminal result for a taken host input, including spawn bootstrap. E
 | 40 | `macrostep` | macrostep | the last macrostep in the input execution |
 | 48 | `status` | input_completion_status (u8) |  |
 
-- flag bit 0 `ignored`: the input event enabled no transition, so the chart ignored it (core ADR 0089 section 8). A request/response I/O processor answers its client at once instead of waiting for a timeout (scenarios/S12-http-request.md)
+- flag bit 0 `ignored`: the input event enabled no transition, so the chart ignored it (core ADR 0089 section 8). A request/response I/O processor answers its client at once instead of waiting for a timeout (docs/proposals/ring-proto/scenarios/S12-http-request.md)
 
 ## c2h.load_result
 
@@ -676,7 +676,7 @@ Acknowledges h2c.load_failed after all waiting envelopes were recycled or refuse
 
 `0x0301` on `tel`, 224 fixed bytes. One trace record (core ADR 0067).
 
-One ta_trace_record, kind for kind; only the fields its kind names are meaningful. The record is self-contained: names, values and the fault are text in its tail, and the state and transition lists are bytes in its tail holding u32 IDs with their names, so a reader needs no live system (reference/telemetry.md). Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `at` is logical time; wall_ns is when it happened.
+One ta_trace_record, kind for kind; only the fields its kind names are meaningful. The record is self-contained: names, values and the fault are text in its tail, and the state and transition lists are bytes in its tail holding u32 IDs with their names, so a reader needs no live system (docs/proposals/ring-proto/reference/telemetry.md). Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `at` is logical time; wall_ns is when it happened.
 
 The step key is header `session`, `macrostep` and `microstep`. There is no span ID field: a span ID is a fixed 64-bit mix of the step key (core ADR 0067, ta_step_key_span_id), the same in every reader.
 
@@ -760,7 +760,7 @@ How a macrostep ended.
 |---|---|---|
 | 0 | `stable` | stabilization ended; invocation startup and internal follow-up may still follow |
 | 1 | `done` | the session reached a top-level final state; c2h.finished follows |
-| 2 | `runaway` | the chain limit or an internal-queue overflow stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays |
+| 2 | `runaway` | the chain limit or an internal-queue overflow stopped it and core abandoned the input (docs/proposals/ring-proto/reference/macrostep.md); the configuration after the last completed microstep stays |
 | 3 | `abandoned` | an operator abandoned it (core ADR 0082) |
 
 ### `input_completion_status` (u8)
@@ -776,7 +776,7 @@ How an input and its invocation-startup follow-up settled.
 
 ### `runaway_cause` (u8)
 
-What stopped a runaway input; tel.trace RUNAWAY carries it (reference/macrostep.md).
+What stopped a runaway input; tel.trace RUNAWAY carries it (docs/proposals/ring-proto/reference/macrostep.md).
 
 | Value | Name | Meaning |
 |---|---|---|
@@ -820,7 +820,7 @@ Why core handed an h2c record back unrun.
 
 ### `capacity_resource` (u8)
 
-The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (reference/macrostep.md, "Two kinds of exhaustion"). A full c2h is not one of them: the slot waits for the host to drain.
+The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (docs/proposals/ring-proto/reference/macrostep.md, "Two kinds of exhaustion"). A full c2h is not one of them: the slot waits for the host to drain.
 
 | Value | Name | Meaning |
 |---|---|---|
@@ -863,7 +863,7 @@ The result of a definition request.
 
 ### `type_registry` (u8)
 
-Which type registry a declared type belongs to (reference/building-blocks.md).
+Which type registry a declared type belongs to (docs/proposals/ring-proto/reference/building-blocks.md).
 
 | Value | Name | Meaning |
 |---|---|---|

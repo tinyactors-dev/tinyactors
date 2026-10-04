@@ -1665,6 +1665,2820 @@ TA_PRIVATE inline uint32_t ta_ring_available(const ta_ring *ring) {
     return ring->capacity - (uint32_t)(ring->write - ring->tail);
 }
 
+/**
+ * @file ring_records.h
+ *
+ * # The ring protocol's records
+ *
+ * Generated from `protocol/catalog.rb` by `mise run protocol` in
+ * tinyactors-core. Do not edit: change the catalog and render again.
+ * `mise run protocol --check`, which `mise run test` runs, fails when
+ * this file is not what the catalog renders.
+ *
+ * Every record that crosses the h2c, c2h and tel rings is a struct here,
+ * laid out exactly as it lies in a ring: `ta_<ring>_<name>` for the
+ * record `<ring>.<name>` (`ta_h2c_event` for `h2c.event`). Beside the
+ * structs are the record kinds (`ta_record_kind`, the 16-bit code in the
+ * header), the rings (`ta_record_ring`), the common flags
+ * (`ta_record_flag`, bits 8..15 of the header's `flags`), each record's
+ * own flags (`ta_<ring>_<name>_flag`, bits 0..7) and the catalog's enums
+ * (`ta_record_<enum>`). `src/generated/MESSAGES.md` says what every
+ * record and field means.
+ *
+ * ## Layout
+ *
+ * - Every record starts with `ta_record_header`, 32 bytes: `kind`,
+ *   `flags`, `size`, `seq`, `session`, `at`.
+ * - The fixed fields follow in the order the catalog declares them,
+ *   each at its natural alignment. Named `pad` arrays fill the gaps, so
+ *   a struct has no padding of the compiler's, and `{0}` zeroes every
+ *   byte of it.
+ * - Text and bytes are `ta_span32` spans: an offset from the record's
+ *   first byte and a length, into the tail that follows the fixed part.
+ * - A record's size is a multiple of 8, and so is its fixed part,
+ *   `sizeof` its struct.
+ * - Fields are fixed-width integers, because the size of a C enum is up
+ *   to the compiler; a comment names the enum a field holds.
+ * - `_Static_assert`s pin every struct's size and every field's offset
+ *   to the catalog's layout.
+ *
+ * Code 0x0000 is the pad `ta_ring` writes at the end of its buffer; it
+ * is no record.
+ *
+ * ## Memory
+ *
+ * Types and constants only: nothing here allocates or runs.
+ *
+ * ## Users
+ *
+ * The producers and consumers of h2c, c2h and tel, through the record
+ * codec (`ring_codec.h`), which writes and checks these records; the
+ * rings themselves are `ta_ring`s, which frame records by their `kind`,
+ * `size` and `seq`.
+ */
+
+
+/** The common header's size: every record starts with `ta_record_header`. */
+#define TA_RECORD_HEADER_BYTES 32u
+/** How many rings there are; `ta_record_ring` numbers them from 1. */
+#define TA_RECORD_RING_COUNT 3u
+
+/** The ring a record crosses. */
+typedef enum {
+    /** host to core, lossless */
+    TA_RECORD_RING_H2C = 1,
+    /** core to host, lossless */
+    TA_RECORD_RING_C2H = 2,
+    /** core to host, lossy */
+    TA_RECORD_RING_TEL = 3,
+} ta_record_ring;
+
+/** The header's `kind`: the message code. */
+typedef enum {
+    /** the pad at the end of a ring buffer; no record */
+    TA_RECORD_KIND_PAD = 0x0000,
+    /** `h2c.time`: Move the system clock */
+    TA_RECORD_KIND_H2C_TIME = 0x0101,
+    /** `h2c.event`: An external event for a session */
+    TA_RECORD_KIND_H2C_EVENT = 0x0102,
+    /** `h2c.spawn`: Create a session */
+    TA_RECORD_KIND_H2C_SPAWN = 0x0103,
+    /** `h2c.publish`: End a replay and put the session on the route */
+    TA_RECORD_KIND_H2C_PUBLISH = 0x0104,
+    /** `h2c.load`: Bring an unloaded session back */
+    TA_RECORD_KIND_H2C_LOAD = 0x0105,
+    /** `h2c.load_failed`: The session cannot be loaded */
+    TA_RECORD_KIND_H2C_LOAD_FAILED = 0x0106,
+    /** `h2c.unload`: Page a stable session out */
+    TA_RECORD_KIND_H2C_UNLOAD = 0x0107,
+    /** `h2c.checkpoint`: Ask for a recorded session's state */
+    TA_RECORD_KIND_H2C_CHECKPOINT = 0x0108,
+    /** `h2c.invoke_report`: An invoked service finished or failed */
+    TA_RECORD_KIND_H2C_INVOKE_REPORT = 0x0109,
+    /** `h2c.destroy`: End a session now */
+    TA_RECORD_KIND_H2C_DESTROY = 0x010A,
+    /** `h2c.definition_register`: Compile and register a complete definition */
+    TA_RECORD_KIND_H2C_DEFINITION_REGISTER = 0x010B,
+    /** `h2c.definition_release`: Release one registration hold */
+    TA_RECORD_KIND_H2C_DEFINITION_RELEASE = 0x010C,
+    /** `h2c.definition_retire`: End a definition’s availability */
+    TA_RECORD_KIND_H2C_DEFINITION_RETIRE = 0x010D,
+    /** `h2c.withdraw`: Take back an admitted input that has not been taken */
+    TA_RECORD_KIND_H2C_WITHDRAW = 0x010E,
+    /** `h2c.type_declare`: Declare an I/O processor or invoker type */
+    TA_RECORD_KIND_H2C_TYPE_DECLARE = 0x010F,
+    /** `c2h.spawned`: A session exists */
+    TA_RECORD_KIND_C2H_SPAWNED = 0x0201,
+    /** `c2h.input`: A recorded session took an input */
+    TA_RECORD_KIND_C2H_INPUT = 0x0202,
+    /** `c2h.send`: A send for an I/O processor */
+    TA_RECORD_KIND_C2H_SEND = 0x0203,
+    /** `c2h.invoke`: Start an invocation */
+    TA_RECORD_KIND_C2H_INVOKE = 0x0204,
+    /** `c2h.invoke_cancel`: Cancel an invocation */
+    TA_RECORD_KIND_C2H_INVOKE_CANCEL = 0x0205,
+    /** `c2h.invoke_forward`: Autoforward an event to an invocation */
+    TA_RECORD_KIND_C2H_INVOKE_FORWARD = 0x0206,
+    /** `c2h.log`: A <log> */
+    TA_RECORD_KIND_C2H_LOG = 0x0207,
+    /** `c2h.macrostep_ended`: A macrostep ended */
+    TA_RECORD_KIND_C2H_MACROSTEP_ENDED = 0x0208,
+    /** `c2h.wake`: Call core back at this time */
+    TA_RECORD_KIND_C2H_WAKE = 0x0209,
+    /** `c2h.bounced`: An h2c record was not run */
+    TA_RECORD_KIND_C2H_BOUNCED = 0x020A,
+    /** `c2h.load_needed`: Envelopes wait for an unloaded address */
+    TA_RECORD_KIND_C2H_LOAD_NEEDED = 0x020B,
+    /** `c2h.loaded`: A session is resident again */
+    TA_RECORD_KIND_C2H_LOADED = 0x020C,
+    /** `c2h.unloaded`: A session left memory */
+    TA_RECORD_KIND_C2H_UNLOADED = 0x020D,
+    /** `c2h.state`: A recorded session's state at a point of its log */
+    TA_RECORD_KIND_C2H_STATE = 0x020E,
+    /** `c2h.published`: A replayed session is live */
+    TA_RECORD_KIND_C2H_PUBLISHED = 0x020F,
+    /** `c2h.finished`: A session reached a top-level final state */
+    TA_RECORD_KIND_C2H_FINISHED = 0x0210,
+    /** `c2h.destroyed`: A session is gone */
+    TA_RECORD_KIND_C2H_DESTROYED = 0x0211,
+    /** `c2h.definition_result`: A definition request completed */
+    TA_RECORD_KIND_C2H_DEFINITION_RESULT = 0x0212,
+    /** `c2h.input_refused`: An admitted host input was not taken */
+    TA_RECORD_KIND_C2H_INPUT_REFUSED = 0x0213,
+    /** `c2h.input_completed`: A host input and its startup follow-up settled */
+    TA_RECORD_KIND_C2H_INPUT_COMPLETED = 0x0214,
+    /**
+     * `c2h.load_result`: A load-failure response finished recycling waiting
+     * inputs
+     */
+    TA_RECORD_KIND_C2H_LOAD_RESULT = 0x0215,
+    /** `tel.trace`: One trace record (core ADR 0067) */
+    TA_RECORD_KIND_TEL_TRACE = 0x0301,
+    /** `tel.dropped`: Telemetry records were dropped */
+    TA_RECORD_KIND_TEL_DROPPED = 0x0302,
+} ta_record_kind;
+
+/** Common flags, bits 8..15 of the header's `flags`. */
+typedef enum {
+    /**
+     * part of a replay. On c2h and tel: written by a replaying session. On h2c:
+     * an input of a replay; under a whole-system replay every h2c record
+     * carries it, sessions it spawns replay, mail between them is delivered as
+     * envelopes, and effects that would leave the process are suppressed until
+     * h2c.publish
+     */
+    TA_RECORD_FLAG_REPLAYING = 1 << 8,
+    /** the session is recorded: its inputs appear as c2h.input */
+    TA_RECORD_FLAG_RECORDED = 1 << 9,
+} ta_record_flag;
+
+/** `h2c.spawn`'s own flags, bits 0..7 of the header's `flags`. */
+typedef enum {
+    /** the session replays; `clock` is where its run began */
+    TA_H2C_SPAWN_FLAG_REPLAYING_FROM_CLOCK = 1 << 0,
+} ta_h2c_spawn_flag;
+
+/** `c2h.wake`'s own flags, bits 0..7 of the header's `flags`. */
+typedef enum {
+    /** nothing is due: cancel the timer */
+    TA_C2H_WAKE_FLAG_NONE = 1 << 0,
+} ta_c2h_wake_flag;
+
+/** `c2h.unloaded`'s own flags, bits 0..7 of the header's `flags`. */
+typedef enum {
+    /** wake_at is meaningful */
+    TA_C2H_UNLOADED_FLAG_HAS_WAKE = 1 << 0,
+} ta_c2h_unloaded_flag;
+
+/** `c2h.input_completed`'s own flags, bits 0..7 of the header's `flags`. */
+typedef enum {
+    /**
+     * the input event enabled no transition, so the chart ignored it (core ADR
+     * 0089 section 8). A request/response I/O processor answers its client at
+     * once instead of waiting for a timeout
+     */
+    TA_C2H_INPUT_COMPLETED_FLAG_IGNORED = 1 << 0,
+} ta_c2h_input_completed_flag;
+
+/** `tel.trace`'s own flags, bits 0..7 of the header's `flags`. */
+typedef enum {
+    /**
+     * value_text was cut, or a list in the tail was cut to fit maxRecordBytes
+     */
+    TA_TEL_TRACE_FLAG_TRUNCATED = 1 << 0,
+    /** an effect a replaying session did not perform */
+    TA_TEL_TRACE_FLAG_SUPPRESSED = 1 << 1,
+} ta_tel_trace_flag;
+
+/** What _event.type says (SCXML 5.10.1). Stored as uint8_t. */
+typedef enum {
+    TA_RECORD_EVENT_TYPE_PLATFORM = 0,
+    TA_RECORD_EVENT_TYPE_INTERNAL = 1,
+    TA_RECORD_EVENT_TYPE_EXTERNAL = 2,
+} ta_record_event_type;
+
+/** Where the envelope behind a c2h.input came from. Stored as uint8_t. */
+typedef enum {
+    /** a host input; source_seq is its h2c seq */
+    TA_RECORD_INPUT_SOURCE_H2C = 0,
+    /** a <send> from another local session; from_session names it */
+    TA_RECORD_INPUT_SOURCE_MAIL = 1,
+    /** a delayed send that became due; from_session sent it */
+    TA_RECORD_INPUT_SOURCE_TIMER = 2,
+    /**
+     * core made it: error.communication for undeliverable mail, done.invoke,
+     * ...
+     */
+    TA_RECORD_INPUT_SOURCE_PLATFORM = 3,
+    /** an h2c.invoke_report */
+    TA_RECORD_INPUT_SOURCE_INVOKE_REPORT = 4,
+} ta_record_input_source;
+
+/** How a macrostep ended. Stored as uint8_t. */
+typedef enum {
+    /**
+     * stabilization ended; invocation startup and internal follow-up may still
+     * follow
+     */
+    TA_RECORD_MACROSTEP_STATUS_STABLE = 0,
+    /** the session reached a top-level final state; c2h.finished follows */
+    TA_RECORD_MACROSTEP_STATUS_DONE = 1,
+    /**
+     * the chain limit or an internal-queue overflow stopped it and core
+     * abandoned the input; the configuration after the last completed microstep
+     * stays
+     */
+    TA_RECORD_MACROSTEP_STATUS_RUNAWAY = 2,
+    /** an operator abandoned it (core ADR 0082) */
+    TA_RECORD_MACROSTEP_STATUS_ABANDONED = 3,
+} ta_record_macrostep_status;
+
+/**
+ * How an input and its invocation-startup follow-up settled. Stored as uint8_t.
+ */
+typedef enum {
+    /** ready for another external input */
+    TA_RECORD_INPUT_COMPLETION_STATUS_STABLE = 0,
+    /** the session finished */
+    TA_RECORD_INPUT_COMPLETION_STATUS_DONE = 1,
+    /**
+     * the chain limit or an internal-queue overflow stopped it; core abandoned
+     * the input and the session takes its next one
+     */
+    TA_RECORD_INPUT_COMPLETION_STATUS_RUNAWAY = 2,
+    /** an operator abandoned execution */
+    TA_RECORD_INPUT_COMPLETION_STATUS_ABANDONED = 3,
+} ta_record_input_completion_status;
+
+/**
+ * What stopped a runaway input; tel.trace RUNAWAY carries it. Stored as
+ * uint8_t.
+ */
+typedef enum {
+    /** the input’s chain reached microstepLimit */
+    TA_RECORD_RUNAWAY_CAUSE_CHAIN_LIMIT = 1,
+    /**
+     * a mandatory internal event fit neither the floor nor a free ordinary
+     * entry
+     */
+    TA_RECORD_RUNAWAY_CAUSE_INTERNAL_QUEUE = 2,
+} ta_record_runaway_cause;
+
+/** Why an admitted host input was discarded before take. Stored as uint8_t. */
+typedef enum {
+    TA_RECORD_INPUT_REFUSAL_REASON_LOAD_FAILED = 1,
+    TA_RECORD_INPUT_REFUSAL_REASON_DESTROYED = 2,
+    /** copy_out could not produce the recording snapshot */
+    TA_RECORD_INPUT_REFUSAL_REASON_SNAPSHOT_FAILED = 3,
+    /** the service instance is no longer active */
+    TA_RECORD_INPUT_REFUSAL_REASON_STALE_INVOCATION = 4,
+    /** validation at take failed, for example a backwards replay clock */
+    TA_RECORD_INPUT_REFUSAL_REASON_INVALID = 5,
+    /** h2c.withdraw named it before it was taken */
+    TA_RECORD_INPUT_REFUSAL_REASON_WITHDRAWN = 6,
+} ta_record_input_refusal_reason;
+
+/** Why core handed an h2c record back unrun. Stored as uint8_t. */
+typedef enum {
+    /** no session has the address and its family has no loader */
+    TA_RECORD_BOUNCE_REASON_NO_SUCH_ADDRESS = 1,
+    /** the revision is not registered */
+    TA_RECORD_BOUNCE_REASON_NO_SUCH_DEFINITION = 2,
+    /** h2c.spawn for an address that is resident */
+    TA_RECORD_BOUNCE_REASON_ADDRESS_TAKEN = 3,
+    /** h2c.unload for a session with envelopes waiting */
+    TA_RECORD_BOUNCE_REASON_HAS_MAIL = 4,
+    /** h2c.publish for a session that is not replaying */
+    TA_RECORD_BOUNCE_REASON_NOT_REPLAYING = 5,
+    /** the record breaks the protocol; detail says how */
+    TA_RECORD_BOUNCE_REASON_INVALID = 6,
+    /** admission watermark, envelope quota or load restoration capacity */
+    TA_RECORD_BOUNCE_REASON_POOL = 7,
+    /** admission watermark or insufficient name-area storage */
+    TA_RECORD_BOUNCE_REASON_NAMES = 8,
+    /** allocation outside macrosteps failed without committing the operation */
+    TA_RECORD_BOUNCE_REASON_ALLOCATION = 9,
+    /** unload of a local invocation owner or active invoked child */
+    TA_RECORD_BOUNCE_REASON_ACTIVE_LOCAL_INVOKE = 10,
+    /** publish attempted before supplied replay inputs settled */
+    TA_RECORD_BOUNCE_REASON_PENDING_INPUTS = 11,
+    /** a response does not match the outstanding load attempt */
+    TA_RECORD_BOUNCE_REASON_STALE_REQUEST = 12,
+    /** mandatory output can never fit the configured record or ring bounds */
+    TA_RECORD_BOUNCE_REASON_RECORD = 13,
+    /**
+     * h2c.unload or h2c.checkpoint for a session that holds a macrostep slot
+     */
+    TA_RECORD_BOUNCE_REASON_ACTIVE = 14,
+    /**
+     * h2c.type_declare for a name core owns, such as scxml or one of its
+     * aliases
+     */
+    TA_RECORD_BOUNCE_REASON_RESERVED_TYPE = 15,
+} ta_record_bounce_reason;
+
+/**
+ * The last segment of error.execution.capacity.<resource>, the event an action
+ * raises when a bounded resource has no room for it. Its data names the action.
+ * A full c2h is not one of them: the slot waits for the host to drain. Stored
+ * as uint8_t.
+ */
+typedef enum {
+    /** no free envelope for mail or a delayed send (poolEnvelopes) */
+    TA_RECORD_CAPACITY_RESOURCE_POOL = 1,
+    /** no room in the name area for a run-time name (nameAreaBytes) */
+    TA_RECORD_CAPACITY_RESOURCE_NAMES = 2,
+    /** the internal queue is full; <raise> failed */
+    TA_RECORD_CAPACITY_RESOURCE_INTERNAL = 4,
+    /** the record would be larger than maxRecordBytes */
+    TA_RECORD_CAPACITY_RESOURCE_RECORD = 5,
+} ta_record_capacity_resource;
+
+/** Stored as uint8_t. */
+typedef enum {
+    /** the invoked service finished: done.invoke.<id> */
+    TA_RECORD_INVOKE_REPORT_KIND_DONE = 0,
+    /** it failed: error.communication.invoke.<id>.<reason> (core ADR 0081) */
+    TA_RECORD_INVOKE_REPORT_KIND_ERROR = 1,
+} ta_record_invoke_report_kind;
+
+/** Stored as uint8_t. */
+typedef enum {
+    TA_RECORD_DESTROY_REASON_FINISHED = 0,
+    /** h2c.destroy */
+    TA_RECORD_DESTROY_REASON_OPERATOR = 1,
+    /** its invoking state exited */
+    TA_RECORD_DESTROY_REASON_PARENT_EXITED = 2,
+} ta_record_destroy_reason;
+
+/** The result of a definition request. Stored as uint8_t. */
+typedef enum {
+    TA_RECORD_DEFINITION_STATUS_OK = 0,
+    /** the complete spec was refused; diagnostic describes the first fault */
+    TA_RECORD_DEFINITION_STATUS_COMPILE_ERROR = 1,
+    /**
+     * the diagnostic did not fit completely in its memory (nothing partial is
+     * written), or allocation or definition capacity ran out
+     */
+    TA_RECORD_DEFINITION_STATUS_CAPACITY = 2,
+    /** an explicit identity names different content (core ADR 0077) */
+    TA_RECORD_DEFINITION_STATUS_MISMATCH = 3,
+    /** an unknown or stale definition ID */
+    TA_RECORD_DEFINITION_STATUS_NOT_FOUND = 4,
+    /**
+     * a malformed or unknown spec or adapter handle, or an invalid release
+     * request
+     */
+    TA_RECORD_DEFINITION_STATUS_INVALID = 5,
+} ta_record_definition_status;
+
+/** Which type registry a declared type belongs to. Stored as uint8_t. */
+typedef enum {
+    /** I/O processor types: <send type>, _ioprocessors */
+    TA_RECORD_TYPE_REGISTRY_IO = 1,
+    /** invocation types: <invoke type> */
+    TA_RECORD_TYPE_REGISTRY_INVOKER = 2,
+} ta_record_type_registry;
+
+/** The common header every record starts with. */
+typedef struct {
+    /** the message's code */
+    uint16_t kind; /* ta_record_kind */
+    /** the message's flags (bits 0..7) and the common flags (bits 8..15) */
+    uint16_t flags;
+    /** the whole record in bytes, header and tail included, a multiple of 8 */
+    uint32_t size;
+    /**
+     * the sequence number in this ring, from 1, with no gaps on a lossless ring
+     */
+    uint64_t seq;
+    /** the session the record is about, or 0 */
+    uint64_t session;
+    /** the system clock when it was written (h2c: the input's time) */
+    uint64_t at;
+} ta_record_header;
+_Static_assert(sizeof(ta_record_header) == 32, "ta_record_header");
+_Static_assert(offsetof(ta_record_header, kind) == 0, "header kind");
+_Static_assert(offsetof(ta_record_header, flags) == 2, "header flags");
+_Static_assert(offsetof(ta_record_header, size) == 4, "header size");
+_Static_assert(offsetof(ta_record_header, seq) == 8, "header seq");
+_Static_assert(offsetof(ta_record_header, session) == 16, "header session");
+_Static_assert(offsetof(ta_record_header, at) == 24, "header at");
+
+/** `h2c.time` (0x0101, on h2c): Move the system clock. */
+typedef struct {
+    ta_record_header header;
+} ta_h2c_time;
+_Static_assert(sizeof(ta_h2c_time) == 32, "h2c.time");
+
+/** `h2c.event` (0x0102, on h2c): An external event for a session. */
+typedef struct {
+    ta_record_header header;
+    /** the address (family/name), when session is 0 */
+    ta_span32 target; /* text */
+    /** the dotted event name, as bytes */
+    ta_span32 name; /* text */
+    /** _event.sendid, or empty */
+    ta_span32 sendid; /* text */
+    /** _event.origin, or empty */
+    ta_span32 origin; /* text */
+    /** _event.origintype, or empty */
+    ta_span32 origin_type; /* text */
+    /** _event.invokeid for an invoked service, or empty */
+    ta_span32 invokeid; /* text */
+    /**
+     * c2h.invoke seq for a live service instance; 0 for ordinary input or
+     * replay seeds
+     */
+    uint64_t invocation_seq;
+    /** _event.data */
+    uint64_t data;
+    /**
+     * the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace
+     * context
+     */
+    uint64_t trace_id_high;
+    /** the W3C trace ID, low 64 bits */
+    uint64_t trace_id_low;
+    /** the W3C parent-id the macrostep runs under; 0 for none */
+    uint64_t parent_span_id;
+    /** almost always external */
+    uint8_t type; /* ta_record_event_type */
+    /** the W3C trace-flags (sampled, random) */
+    uint8_t trace_flags;
+    /** the local detail byte (watched); never W3C, never in a traceparent */
+    uint8_t trace_detail;
+    uint8_t pad_end[5];
+} ta_h2c_event;
+_Static_assert(sizeof(ta_h2c_event) == 128, "h2c.event");
+_Static_assert(offsetof(ta_h2c_event, target) == 32, "h2c.event target");
+_Static_assert(offsetof(ta_h2c_event, name) == 40, "h2c.event name");
+_Static_assert(offsetof(ta_h2c_event, sendid) == 48, "h2c.event sendid");
+_Static_assert(offsetof(ta_h2c_event, origin) == 56, "h2c.event origin");
+_Static_assert(offsetof(ta_h2c_event, origin_type) == 64, "h2c.event origin_type");
+_Static_assert(offsetof(ta_h2c_event, invokeid) == 72, "h2c.event invokeid");
+_Static_assert(offsetof(ta_h2c_event, invocation_seq) == 80, "h2c.event invocation_seq");
+_Static_assert(offsetof(ta_h2c_event, data) == 88, "h2c.event data");
+_Static_assert(offsetof(ta_h2c_event, trace_id_high) == 96, "h2c.event trace_id_high");
+_Static_assert(offsetof(ta_h2c_event, trace_id_low) == 104, "h2c.event trace_id_low");
+_Static_assert(offsetof(ta_h2c_event, parent_span_id) == 112, "h2c.event parent_span_id");
+_Static_assert(offsetof(ta_h2c_event, type) == 120, "h2c.event type");
+_Static_assert(offsetof(ta_h2c_event, trace_flags) == 121, "h2c.event trace_flags");
+_Static_assert(offsetof(ta_h2c_event, trace_detail) == 122, "h2c.event trace_detail");
+
+/** `h2c.spawn` (0x0103, on h2c): Create a session. */
+typedef struct {
+    ta_record_header header;
+    /** family/name */
+    ta_span32 address; /* text */
+    /** the definition's revision hash */
+    ta_span32 revision; /* bytes */
+    /** the data model binding, or 0 */
+    uint64_t data;
+    /** with replaying_from_clock: the replayed run’s start */
+    uint64_t clock;
+    /** a checkpoint c2h.state wrote, to restore; 0 for none */
+    uint64_t state;
+    /**
+     * c2h.load_needed seq when answering a virtual-family load; 0 for an
+     * unsolicited spawn
+     */
+    uint64_t request_seq;
+    /**
+     * the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace
+     * context
+     */
+    uint64_t trace_id_high;
+    /** the W3C trace ID, low 64 bits */
+    uint64_t trace_id_low;
+    /** the W3C parent-id the macrostep runs under; 0 for none */
+    uint64_t parent_span_id;
+    /** the W3C trace-flags (sampled, random) */
+    uint8_t trace_flags;
+    /** the local detail byte (watched); never W3C, never in a traceparent */
+    uint8_t trace_detail;
+    uint8_t pad_end[6];
+} ta_h2c_spawn;
+_Static_assert(sizeof(ta_h2c_spawn) == 112, "h2c.spawn");
+_Static_assert(offsetof(ta_h2c_spawn, address) == 32, "h2c.spawn address");
+_Static_assert(offsetof(ta_h2c_spawn, revision) == 40, "h2c.spawn revision");
+_Static_assert(offsetof(ta_h2c_spawn, data) == 48, "h2c.spawn data");
+_Static_assert(offsetof(ta_h2c_spawn, clock) == 56, "h2c.spawn clock");
+_Static_assert(offsetof(ta_h2c_spawn, state) == 64, "h2c.spawn state");
+_Static_assert(offsetof(ta_h2c_spawn, request_seq) == 72, "h2c.spawn request_seq");
+_Static_assert(offsetof(ta_h2c_spawn, trace_id_high) == 80, "h2c.spawn trace_id_high");
+_Static_assert(offsetof(ta_h2c_spawn, trace_id_low) == 88, "h2c.spawn trace_id_low");
+_Static_assert(offsetof(ta_h2c_spawn, parent_span_id) == 96, "h2c.spawn parent_span_id");
+_Static_assert(offsetof(ta_h2c_spawn, trace_flags) == 104, "h2c.spawn trace_flags");
+_Static_assert(offsetof(ta_h2c_spawn, trace_detail) == 105, "h2c.spawn trace_detail");
+
+/**
+ * `h2c.publish` (0x0104, on h2c): End a replay and put the session on the
+ * route.
+ */
+typedef struct {
+    ta_record_header header;
+    /** family/name, or empty for every replaying session */
+    ta_span32 address; /* text */
+    /** the time chosen for the seeded session */
+    uint64_t at;
+} ta_h2c_publish;
+_Static_assert(sizeof(ta_h2c_publish) == 48, "h2c.publish");
+_Static_assert(offsetof(ta_h2c_publish, address) == 32, "h2c.publish address");
+_Static_assert(offsetof(ta_h2c_publish, at) == 40, "h2c.publish at");
+
+/** `h2c.load` (0x0105, on h2c): Bring an unloaded session back. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    /** the bytes c2h.unloaded gave, in this process */
+    uint64_t image;
+    /** c2h.load_needed seq; 0 for an unsolicited timer-driven load */
+    uint64_t request_seq;
+} ta_h2c_load;
+_Static_assert(sizeof(ta_h2c_load) == 56, "h2c.load");
+_Static_assert(offsetof(ta_h2c_load, address) == 32, "h2c.load address");
+_Static_assert(offsetof(ta_h2c_load, image) == 40, "h2c.load image");
+_Static_assert(offsetof(ta_h2c_load, request_seq) == 48, "h2c.load request_seq");
+
+/** `h2c.load_failed` (0x0106, on h2c): The session cannot be loaded. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    ta_span32 reason; /* text */
+    /** the outstanding c2h.load_needed seq; a stale attempt changes nothing */
+    uint64_t request_seq;
+} ta_h2c_load_failed;
+_Static_assert(sizeof(ta_h2c_load_failed) == 56, "h2c.load_failed");
+_Static_assert(offsetof(ta_h2c_load_failed, address) == 32, "h2c.load_failed address");
+_Static_assert(offsetof(ta_h2c_load_failed, reason) == 40, "h2c.load_failed reason");
+_Static_assert(offsetof(ta_h2c_load_failed, request_seq) == 48, "h2c.load_failed request_seq");
+
+/** `h2c.unload` (0x0107, on h2c): Page a stable session out. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    /** host-provided writable sink, pinned until unloaded or bounced */
+    uint64_t image;
+} ta_h2c_unload;
+_Static_assert(sizeof(ta_h2c_unload) == 48, "h2c.unload");
+_Static_assert(offsetof(ta_h2c_unload, address) == 32, "h2c.unload address");
+_Static_assert(offsetof(ta_h2c_unload, image) == 40, "h2c.unload image");
+
+/** `h2c.checkpoint` (0x0108, on h2c): Ask for a recorded session's state. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    /** host-provided writable sink, pinned until state or bounced */
+    uint64_t image;
+} ta_h2c_checkpoint;
+_Static_assert(sizeof(ta_h2c_checkpoint) == 48, "h2c.checkpoint");
+_Static_assert(offsetof(ta_h2c_checkpoint, address) == 32, "h2c.checkpoint address");
+_Static_assert(offsetof(ta_h2c_checkpoint, image) == 40, "h2c.checkpoint image");
+
+/**
+ * `h2c.invoke_report` (0x0109, on h2c): An invoked service finished or failed.
+ */
+typedef struct {
+    ta_record_header header;
+    ta_span32 invokeid; /* text */
+    /** the c2h.invoke seq; checked at take, 0 only for replay seeds */
+    uint64_t invocation_seq;
+    /** for error: the reason segment */
+    ta_span32 reason; /* text */
+    /** done data or error data */
+    uint64_t data;
+    /**
+     * the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace
+     * context
+     */
+    uint64_t trace_id_high;
+    /** the W3C trace ID, low 64 bits */
+    uint64_t trace_id_low;
+    /** the W3C parent-id the macrostep runs under; 0 for none */
+    uint64_t parent_span_id;
+    uint8_t kind; /* ta_record_invoke_report_kind */
+    /**
+     * for error: retire the matching instance at take after validation and
+     * internal notification enqueue; false preserves it
+     */
+    uint8_t ends;
+    /** the W3C trace-flags (sampled, random) */
+    uint8_t trace_flags;
+    /** the local detail byte (watched); never W3C, never in a traceparent */
+    uint8_t trace_detail;
+    uint8_t pad_end[4];
+} ta_h2c_invoke_report;
+_Static_assert(sizeof(ta_h2c_invoke_report) == 96, "h2c.invoke_report");
+_Static_assert(offsetof(ta_h2c_invoke_report, invokeid) == 32, "h2c.invoke_report invokeid");
+_Static_assert(offsetof(ta_h2c_invoke_report, invocation_seq) == 40, "h2c.invoke_report invocation_seq");
+_Static_assert(offsetof(ta_h2c_invoke_report, reason) == 48, "h2c.invoke_report reason");
+_Static_assert(offsetof(ta_h2c_invoke_report, data) == 56, "h2c.invoke_report data");
+_Static_assert(offsetof(ta_h2c_invoke_report, trace_id_high) == 64, "h2c.invoke_report trace_id_high");
+_Static_assert(offsetof(ta_h2c_invoke_report, trace_id_low) == 72, "h2c.invoke_report trace_id_low");
+_Static_assert(offsetof(ta_h2c_invoke_report, parent_span_id) == 80, "h2c.invoke_report parent_span_id");
+_Static_assert(offsetof(ta_h2c_invoke_report, kind) == 88, "h2c.invoke_report kind");
+_Static_assert(offsetof(ta_h2c_invoke_report, ends) == 89, "h2c.invoke_report ends");
+_Static_assert(offsetof(ta_h2c_invoke_report, trace_flags) == 90, "h2c.invoke_report trace_flags");
+_Static_assert(offsetof(ta_h2c_invoke_report, trace_detail) == 91, "h2c.invoke_report trace_detail");
+
+/** `h2c.destroy` (0x010A, on h2c): End a session now. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+} ta_h2c_destroy;
+_Static_assert(sizeof(ta_h2c_destroy) == 40, "h2c.destroy");
+_Static_assert(offsetof(ta_h2c_destroy, address) == 32, "h2c.destroy address");
+
+/**
+ * `h2c.definition_register` (0x010B, on h2c): Compile and register a complete
+ * definition.
+ */
+typedef struct {
+    ta_record_header header;
+    /**
+     * process-local handle of a complete native ta_scxml_spec built by the
+     * binding
+     */
+    uint64_t spec;
+    /** process-local handle of a native-installed data model adapter */
+    uint64_t datamodel;
+    /**
+     * host memory, owned and bounded by the host, that core writes core ADR
+     * 0058's native compile-error struct (ta_compile_error) into
+     */
+    uint64_t diagnostic;
+} ta_h2c_definition_register;
+_Static_assert(sizeof(ta_h2c_definition_register) == 56, "h2c.definition_register");
+_Static_assert(offsetof(ta_h2c_definition_register, spec) == 32, "h2c.definition_register spec");
+_Static_assert(offsetof(ta_h2c_definition_register, datamodel) == 40, "h2c.definition_register datamodel");
+_Static_assert(offsetof(ta_h2c_definition_register, diagnostic) == 48, "h2c.definition_register diagnostic");
+
+/** `h2c.definition_release` (0x010C, on h2c): Release one registration hold. */
+typedef struct {
+    ta_record_header header;
+    /** the system-local definition ID returned by registration */
+    uint64_t definition;
+} ta_h2c_definition_release;
+_Static_assert(sizeof(ta_h2c_definition_release) == 40, "h2c.definition_release");
+_Static_assert(offsetof(ta_h2c_definition_release, definition) == 32, "h2c.definition_release definition");
+
+/**
+ * `h2c.definition_retire` (0x010D, on h2c): End a definition’s availability.
+ */
+typedef struct {
+    ta_record_header header;
+    /** the system-local definition ID */
+    uint64_t definition;
+} ta_h2c_definition_retire;
+_Static_assert(sizeof(ta_h2c_definition_retire) == 40, "h2c.definition_retire");
+_Static_assert(offsetof(ta_h2c_definition_retire, definition) == 32, "h2c.definition_retire definition");
+
+/**
+ * `h2c.withdraw` (0x010E, on h2c): Take back an admitted input that has not
+ * been taken.
+ */
+typedef struct {
+    ta_record_header header;
+    /** the h2c seq of the input to withdraw */
+    uint64_t target_seq;
+} ta_h2c_withdraw;
+_Static_assert(sizeof(ta_h2c_withdraw) == 40, "h2c.withdraw");
+_Static_assert(offsetof(ta_h2c_withdraw, target_seq) == 32, "h2c.withdraw target_seq");
+
+/**
+ * `h2c.type_declare` (0x010F, on h2c): Declare an I/O processor or invoker
+ * type.
+ */
+typedef struct {
+    ta_record_header header;
+    uint8_t registry; /* ta_record_type_registry */
+    uint8_t pad1[3];
+    /** the type name as bytes; interned as an atom when declared */
+    ta_span32 type; /* text */
+    uint8_t pad_end[4];
+} ta_h2c_type_declare;
+_Static_assert(sizeof(ta_h2c_type_declare) == 48, "h2c.type_declare");
+_Static_assert(offsetof(ta_h2c_type_declare, registry) == 32, "h2c.type_declare registry");
+_Static_assert(offsetof(ta_h2c_type_declare, type) == 36, "h2c.type_declare type");
+
+/** `c2h.spawned` (0x0201, on c2h): A session exists. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    ta_span32 revision; /* bytes */
+    /** the invoking session, or 0 */
+    uint64_t parent;
+    /** the h2c.spawn, or 0 for an <invoke> */
+    uint64_t cause_seq;
+} ta_c2h_spawned;
+_Static_assert(sizeof(ta_c2h_spawned) == 64, "c2h.spawned");
+_Static_assert(offsetof(ta_c2h_spawned, address) == 32, "c2h.spawned address");
+_Static_assert(offsetof(ta_c2h_spawned, revision) == 40, "c2h.spawned revision");
+_Static_assert(offsetof(ta_c2h_spawned, parent) == 48, "c2h.spawned parent");
+_Static_assert(offsetof(ta_c2h_spawned, cause_seq) == 56, "c2h.spawned cause_seq");
+
+/** `c2h.input` (0x0202, on c2h): A recorded session took an input. */
+typedef struct {
+    ta_record_header header;
+    uint64_t macrostep;
+    /** source h2c: the h2c seq */
+    uint64_t source_seq;
+    /** source mail or timer: the sender */
+    uint64_t from_session;
+    ta_span32 name; /* text */
+    ta_span32 sendid; /* text */
+    ta_span32 origin; /* text */
+    ta_span32 origin_type; /* text */
+    ta_span32 invokeid; /* text */
+    uint64_t data;
+    /**
+     * the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace
+     * context
+     */
+    uint64_t trace_id_high;
+    /** the W3C trace ID, low 64 bits */
+    uint64_t trace_id_low;
+    /**
+     * the span ID of the cause (ta_step_key_span_id): the host's parent-id, or
+     * the sending step of mail and timers; 0 for none
+     */
+    uint64_t parent_span_id;
+    uint8_t source; /* ta_record_input_source */
+    uint8_t type; /* ta_record_event_type */
+    /** the W3C trace-flags (sampled, random) */
+    uint8_t trace_flags;
+    /** the local detail byte (watched); never W3C, never in a traceparent */
+    uint8_t trace_detail;
+    /**
+     * source invoke_report: original report invocation ID, separate from event
+     * invokeid
+     */
+    ta_span32 report_invokeid; /* text */
+    /** source invoke_report/error: original reason token */
+    ta_span32 report_reason; /* text */
+    /** source invoke_report only; otherwise ignored */
+    uint8_t report_kind; /* ta_record_invoke_report_kind */
+    /** source invoke_report/error: original retirement decision */
+    uint8_t report_ends;
+    uint8_t pad_end[2];
+} ta_c2h_input;
+_Static_assert(sizeof(ta_c2h_input) == 152, "c2h.input");
+_Static_assert(offsetof(ta_c2h_input, macrostep) == 32, "c2h.input macrostep");
+_Static_assert(offsetof(ta_c2h_input, source_seq) == 40, "c2h.input source_seq");
+_Static_assert(offsetof(ta_c2h_input, from_session) == 48, "c2h.input from_session");
+_Static_assert(offsetof(ta_c2h_input, name) == 56, "c2h.input name");
+_Static_assert(offsetof(ta_c2h_input, sendid) == 64, "c2h.input sendid");
+_Static_assert(offsetof(ta_c2h_input, origin) == 72, "c2h.input origin");
+_Static_assert(offsetof(ta_c2h_input, origin_type) == 80, "c2h.input origin_type");
+_Static_assert(offsetof(ta_c2h_input, invokeid) == 88, "c2h.input invokeid");
+_Static_assert(offsetof(ta_c2h_input, data) == 96, "c2h.input data");
+_Static_assert(offsetof(ta_c2h_input, trace_id_high) == 104, "c2h.input trace_id_high");
+_Static_assert(offsetof(ta_c2h_input, trace_id_low) == 112, "c2h.input trace_id_low");
+_Static_assert(offsetof(ta_c2h_input, parent_span_id) == 120, "c2h.input parent_span_id");
+_Static_assert(offsetof(ta_c2h_input, source) == 128, "c2h.input source");
+_Static_assert(offsetof(ta_c2h_input, type) == 129, "c2h.input type");
+_Static_assert(offsetof(ta_c2h_input, trace_flags) == 130, "c2h.input trace_flags");
+_Static_assert(offsetof(ta_c2h_input, trace_detail) == 131, "c2h.input trace_detail");
+_Static_assert(offsetof(ta_c2h_input, report_invokeid) == 132, "c2h.input report_invokeid");
+_Static_assert(offsetof(ta_c2h_input, report_reason) == 140, "c2h.input report_reason");
+_Static_assert(offsetof(ta_c2h_input, report_kind) == 148, "c2h.input report_kind");
+_Static_assert(offsetof(ta_c2h_input, report_ends) == 149, "c2h.input report_ends");
+
+/** `c2h.send` (0x0203, on c2h): A send for an I/O processor. */
+typedef struct {
+    ta_record_header header;
+    /** 0 for a delayed send that became due */
+    uint64_t macrostep;
+    ta_span32 sendid; /* text */
+    ta_span32 io_type; /* text */
+    ta_span32 target; /* text */
+    ta_span32 name; /* text */
+    /** the namelist and params, aggregated by the data model */
+    uint64_t data;
+    /** <content>, or 0 */
+    uint64_t content;
+    /**
+     * the sending step’s W3C trace ID, high 64 bits; all zero with trace_id_low
+     * when it has no trace context
+     */
+    uint64_t trace_id_high;
+    /** the W3C trace ID, low 64 bits */
+    uint64_t trace_id_low;
+    /**
+     * the sending step’s span ID (ta_step_key_span_id), the parent-id of a
+     * traceparent header
+     */
+    uint64_t span_id;
+    /** the W3C trace-flags */
+    uint8_t trace_flags;
+    uint8_t pad_end[7];
+} ta_c2h_send;
+_Static_assert(sizeof(ta_c2h_send) == 120, "c2h.send");
+_Static_assert(offsetof(ta_c2h_send, macrostep) == 32, "c2h.send macrostep");
+_Static_assert(offsetof(ta_c2h_send, sendid) == 40, "c2h.send sendid");
+_Static_assert(offsetof(ta_c2h_send, io_type) == 48, "c2h.send io_type");
+_Static_assert(offsetof(ta_c2h_send, target) == 56, "c2h.send target");
+_Static_assert(offsetof(ta_c2h_send, name) == 64, "c2h.send name");
+_Static_assert(offsetof(ta_c2h_send, data) == 72, "c2h.send data");
+_Static_assert(offsetof(ta_c2h_send, content) == 80, "c2h.send content");
+_Static_assert(offsetof(ta_c2h_send, trace_id_high) == 88, "c2h.send trace_id_high");
+_Static_assert(offsetof(ta_c2h_send, trace_id_low) == 96, "c2h.send trace_id_low");
+_Static_assert(offsetof(ta_c2h_send, span_id) == 104, "c2h.send span_id");
+_Static_assert(offsetof(ta_c2h_send, trace_flags) == 112, "c2h.send trace_flags");
+
+/** `c2h.invoke` (0x0204, on c2h): Start an invocation. */
+typedef struct {
+    ta_record_header header;
+    /** the stabilization macrostep that enabled this startup */
+    uint64_t macrostep;
+    ta_span32 invokeid; /* text */
+    ta_span32 type; /* text */
+    ta_span32 src; /* text */
+    uint64_t data;
+    /** evaluated content, or 0 */
+    uint64_t content;
+    /**
+     * the sending step’s W3C trace ID, high 64 bits; all zero with trace_id_low
+     * when it has no trace context
+     */
+    uint64_t trace_id_high;
+    /** the W3C trace ID, low 64 bits */
+    uint64_t trace_id_low;
+    /**
+     * the sending step’s span ID (ta_step_key_span_id), the parent-id of a
+     * traceparent header
+     */
+    uint64_t span_id;
+    uint8_t autoforward;
+    /** the W3C trace-flags */
+    uint8_t trace_flags;
+    uint8_t pad_end[6];
+} ta_c2h_invoke;
+_Static_assert(sizeof(ta_c2h_invoke) == 112, "c2h.invoke");
+_Static_assert(offsetof(ta_c2h_invoke, macrostep) == 32, "c2h.invoke macrostep");
+_Static_assert(offsetof(ta_c2h_invoke, invokeid) == 40, "c2h.invoke invokeid");
+_Static_assert(offsetof(ta_c2h_invoke, type) == 48, "c2h.invoke type");
+_Static_assert(offsetof(ta_c2h_invoke, src) == 56, "c2h.invoke src");
+_Static_assert(offsetof(ta_c2h_invoke, data) == 64, "c2h.invoke data");
+_Static_assert(offsetof(ta_c2h_invoke, content) == 72, "c2h.invoke content");
+_Static_assert(offsetof(ta_c2h_invoke, trace_id_high) == 80, "c2h.invoke trace_id_high");
+_Static_assert(offsetof(ta_c2h_invoke, trace_id_low) == 88, "c2h.invoke trace_id_low");
+_Static_assert(offsetof(ta_c2h_invoke, span_id) == 96, "c2h.invoke span_id");
+_Static_assert(offsetof(ta_c2h_invoke, autoforward) == 104, "c2h.invoke autoforward");
+_Static_assert(offsetof(ta_c2h_invoke, trace_flags) == 105, "c2h.invoke trace_flags");
+
+/** `c2h.invoke_cancel` (0x0205, on c2h): Cancel an invocation. */
+typedef struct {
+    ta_record_header header;
+    uint64_t macrostep;
+    ta_span32 invokeid; /* text */
+    /** the canceled c2h.invoke instance */
+    uint64_t invocation_seq;
+} ta_c2h_invoke_cancel;
+_Static_assert(sizeof(ta_c2h_invoke_cancel) == 56, "c2h.invoke_cancel");
+_Static_assert(offsetof(ta_c2h_invoke_cancel, macrostep) == 32, "c2h.invoke_cancel macrostep");
+_Static_assert(offsetof(ta_c2h_invoke_cancel, invokeid) == 40, "c2h.invoke_cancel invokeid");
+_Static_assert(offsetof(ta_c2h_invoke_cancel, invocation_seq) == 48, "c2h.invoke_cancel invocation_seq");
+
+/**
+ * `c2h.invoke_forward` (0x0206, on c2h): Autoforward an event to an invocation.
+ */
+typedef struct {
+    ta_record_header header;
+    uint64_t macrostep;
+    /** destination invocation, not the forwarded event invokeid */
+    ta_span32 invokeid; /* text */
+    /** destination c2h.invoke instance */
+    uint64_t invocation_seq;
+    ta_span32 name; /* text */
+    ta_span32 sendid; /* text */
+    ta_span32 origin; /* text */
+    /** the original event origintype */
+    ta_span32 origin_type; /* text */
+    /** the original event invokeid */
+    ta_span32 event_invokeid; /* text */
+    uint64_t data;
+    /**
+     * the forwarding step’s W3C trace ID, high 64 bits; all zero with
+     * trace_id_low when it has no trace context
+     */
+    uint64_t trace_id_high;
+    /** the W3C trace ID, low 64 bits */
+    uint64_t trace_id_low;
+    /**
+     * the forwarding step’s span ID (ta_step_key_span_id), the parent-id of a
+     * traceparent header
+     */
+    uint64_t span_id;
+    uint8_t type; /* ta_record_event_type */
+    /** the W3C trace-flags */
+    uint8_t trace_flags;
+    uint8_t pad_end[6];
+} ta_c2h_invoke_forward;
+_Static_assert(sizeof(ta_c2h_invoke_forward) == 136, "c2h.invoke_forward");
+_Static_assert(offsetof(ta_c2h_invoke_forward, macrostep) == 32, "c2h.invoke_forward macrostep");
+_Static_assert(offsetof(ta_c2h_invoke_forward, invokeid) == 40, "c2h.invoke_forward invokeid");
+_Static_assert(offsetof(ta_c2h_invoke_forward, invocation_seq) == 48, "c2h.invoke_forward invocation_seq");
+_Static_assert(offsetof(ta_c2h_invoke_forward, name) == 56, "c2h.invoke_forward name");
+_Static_assert(offsetof(ta_c2h_invoke_forward, sendid) == 64, "c2h.invoke_forward sendid");
+_Static_assert(offsetof(ta_c2h_invoke_forward, origin) == 72, "c2h.invoke_forward origin");
+_Static_assert(offsetof(ta_c2h_invoke_forward, origin_type) == 80, "c2h.invoke_forward origin_type");
+_Static_assert(offsetof(ta_c2h_invoke_forward, event_invokeid) == 88, "c2h.invoke_forward event_invokeid");
+_Static_assert(offsetof(ta_c2h_invoke_forward, data) == 96, "c2h.invoke_forward data");
+_Static_assert(offsetof(ta_c2h_invoke_forward, trace_id_high) == 104, "c2h.invoke_forward trace_id_high");
+_Static_assert(offsetof(ta_c2h_invoke_forward, trace_id_low) == 112, "c2h.invoke_forward trace_id_low");
+_Static_assert(offsetof(ta_c2h_invoke_forward, span_id) == 120, "c2h.invoke_forward span_id");
+_Static_assert(offsetof(ta_c2h_invoke_forward, type) == 128, "c2h.invoke_forward type");
+_Static_assert(offsetof(ta_c2h_invoke_forward, trace_flags) == 129, "c2h.invoke_forward trace_flags");
+
+/** `c2h.log` (0x0207, on c2h): A <log>. */
+typedef struct {
+    ta_record_header header;
+    uint64_t macrostep;
+    ta_span32 label; /* text */
+    uint64_t value;
+    /**
+     * the logging step’s W3C trace ID, high 64 bits; all zero with trace_id_low
+     * when it has no trace context
+     */
+    uint64_t trace_id_high;
+    /** the W3C trace ID, low 64 bits */
+    uint64_t trace_id_low;
+    /**
+     * the logging step’s span ID (ta_step_key_span_id), the parent-id of a
+     * traceparent header
+     */
+    uint64_t span_id;
+    /** the W3C trace-flags */
+    uint8_t trace_flags;
+    uint8_t pad_end[7];
+} ta_c2h_log;
+_Static_assert(sizeof(ta_c2h_log) == 88, "c2h.log");
+_Static_assert(offsetof(ta_c2h_log, macrostep) == 32, "c2h.log macrostep");
+_Static_assert(offsetof(ta_c2h_log, label) == 40, "c2h.log label");
+_Static_assert(offsetof(ta_c2h_log, value) == 48, "c2h.log value");
+_Static_assert(offsetof(ta_c2h_log, trace_id_high) == 56, "c2h.log trace_id_high");
+_Static_assert(offsetof(ta_c2h_log, trace_id_low) == 64, "c2h.log trace_id_low");
+_Static_assert(offsetof(ta_c2h_log, span_id) == 72, "c2h.log span_id");
+_Static_assert(offsetof(ta_c2h_log, trace_flags) == 80, "c2h.log trace_flags");
+
+/** `c2h.macrostep_ended` (0x0208, on c2h): A macrostep ended. */
+typedef struct {
+    ta_record_header header;
+    uint64_t macrostep;
+    uint8_t source; /* ta_record_input_source */
+    uint8_t pad2[7];
+    /**
+     * originating h2c input, including internal startup follow-up; 0 for local
+     * work
+     */
+    uint64_t source_seq;
+    /** records this macrostep wrote to c2h, this end report excluded */
+    uint32_t effects;
+    /** envelopes it put in the pool */
+    uint32_t mail;
+    uint8_t status; /* ta_record_macrostep_status */
+    uint8_t pad_end[7];
+} ta_c2h_macrostep_ended;
+_Static_assert(sizeof(ta_c2h_macrostep_ended) == 72, "c2h.macrostep_ended");
+_Static_assert(offsetof(ta_c2h_macrostep_ended, macrostep) == 32, "c2h.macrostep_ended macrostep");
+_Static_assert(offsetof(ta_c2h_macrostep_ended, source) == 40, "c2h.macrostep_ended source");
+_Static_assert(offsetof(ta_c2h_macrostep_ended, source_seq) == 48, "c2h.macrostep_ended source_seq");
+_Static_assert(offsetof(ta_c2h_macrostep_ended, effects) == 56, "c2h.macrostep_ended effects");
+_Static_assert(offsetof(ta_c2h_macrostep_ended, mail) == 60, "c2h.macrostep_ended mail");
+_Static_assert(offsetof(ta_c2h_macrostep_ended, status) == 64, "c2h.macrostep_ended status");
+
+/** `c2h.wake` (0x0209, on c2h): Call core back at this time. */
+typedef struct {
+    ta_record_header header;
+    uint64_t due;
+} ta_c2h_wake;
+_Static_assert(sizeof(ta_c2h_wake) == 40, "c2h.wake");
+_Static_assert(offsetof(ta_c2h_wake, due) == 32, "c2h.wake due");
+
+/** `c2h.bounced` (0x020A, on c2h): An h2c record was not run. */
+typedef struct {
+    ta_record_header header;
+    uint64_t source_seq;
+    ta_span32 detail; /* text */
+    uint8_t reason; /* ta_record_bounce_reason */
+    uint8_t pad_end[7];
+} ta_c2h_bounced;
+_Static_assert(sizeof(ta_c2h_bounced) == 56, "c2h.bounced");
+_Static_assert(offsetof(ta_c2h_bounced, source_seq) == 32, "c2h.bounced source_seq");
+_Static_assert(offsetof(ta_c2h_bounced, detail) == 40, "c2h.bounced detail");
+_Static_assert(offsetof(ta_c2h_bounced, reason) == 48, "c2h.bounced reason");
+
+/**
+ * `c2h.load_needed` (0x020B, on c2h): Envelopes wait for an unloaded address.
+ */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    /** envelopes waiting for it */
+    uint32_t waiting;
+    uint8_t pad_end[4];
+} ta_c2h_load_needed;
+_Static_assert(sizeof(ta_c2h_load_needed) == 48, "c2h.load_needed");
+_Static_assert(offsetof(ta_c2h_load_needed, address) == 32, "c2h.load_needed address");
+_Static_assert(offsetof(ta_c2h_load_needed, waiting) == 40, "c2h.load_needed waiting");
+
+/** `c2h.loaded` (0x020C, on c2h): A session is resident again. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    /** the h2c.load */
+    uint64_t cause_seq;
+} ta_c2h_loaded;
+_Static_assert(sizeof(ta_c2h_loaded) == 48, "c2h.loaded");
+_Static_assert(offsetof(ta_c2h_loaded, address) == 32, "c2h.loaded address");
+_Static_assert(offsetof(ta_c2h_loaded, cause_seq) == 40, "c2h.loaded cause_seq");
+
+/** `c2h.unloaded` (0x020D, on c2h): A session left memory. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    /** the h2c.unload */
+    uint64_t cause_seq;
+    uint64_t image;
+    /** complete valid bytes written into the requested sink */
+    uint64_t image_bytes;
+    /** its earliest delayed send */
+    uint64_t wake_at;
+} ta_c2h_unloaded;
+_Static_assert(sizeof(ta_c2h_unloaded) == 72, "c2h.unloaded");
+_Static_assert(offsetof(ta_c2h_unloaded, address) == 32, "c2h.unloaded address");
+_Static_assert(offsetof(ta_c2h_unloaded, cause_seq) == 40, "c2h.unloaded cause_seq");
+_Static_assert(offsetof(ta_c2h_unloaded, image) == 48, "c2h.unloaded image");
+_Static_assert(offsetof(ta_c2h_unloaded, image_bytes) == 56, "c2h.unloaded image_bytes");
+_Static_assert(offsetof(ta_c2h_unloaded, wake_at) == 64, "c2h.unloaded wake_at");
+
+/**
+ * `c2h.state` (0x020E, on c2h): A recorded session's state at a point of its
+ * log.
+ */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    /** the h2c.checkpoint */
+    uint64_t cause_seq;
+    uint64_t image;
+    /** complete valid bytes written into the requested sink */
+    uint64_t image_bytes;
+    /** the last c2h.input it includes */
+    uint64_t input_seq;
+} ta_c2h_state;
+_Static_assert(sizeof(ta_c2h_state) == 72, "c2h.state");
+_Static_assert(offsetof(ta_c2h_state, address) == 32, "c2h.state address");
+_Static_assert(offsetof(ta_c2h_state, cause_seq) == 40, "c2h.state cause_seq");
+_Static_assert(offsetof(ta_c2h_state, image) == 48, "c2h.state image");
+_Static_assert(offsetof(ta_c2h_state, image_bytes) == 56, "c2h.state image_bytes");
+_Static_assert(offsetof(ta_c2h_state, input_seq) == 64, "c2h.state input_seq");
+
+/** `c2h.published` (0x020F, on c2h): A replayed session is live. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    /** the h2c.publish */
+    uint64_t cause_seq;
+    /** inputs it replayed; total for all-session publication */
+    uint64_t replayed;
+    /** held delayed sends due by `at` */
+    uint64_t dropped_timers;
+    uint64_t retired_invokes;
+} ta_c2h_published;
+_Static_assert(sizeof(ta_c2h_published) == 72, "c2h.published");
+_Static_assert(offsetof(ta_c2h_published, address) == 32, "c2h.published address");
+_Static_assert(offsetof(ta_c2h_published, cause_seq) == 40, "c2h.published cause_seq");
+_Static_assert(offsetof(ta_c2h_published, replayed) == 48, "c2h.published replayed");
+_Static_assert(offsetof(ta_c2h_published, dropped_timers) == 56, "c2h.published dropped_timers");
+_Static_assert(offsetof(ta_c2h_published, retired_invokes) == 64, "c2h.published retired_invokes");
+
+/**
+ * `c2h.finished` (0x0210, on c2h): A session reached a top-level final state.
+ */
+typedef struct {
+    ta_record_header header;
+    uint64_t macrostep;
+    uint64_t donedata;
+} ta_c2h_finished;
+_Static_assert(sizeof(ta_c2h_finished) == 48, "c2h.finished");
+_Static_assert(offsetof(ta_c2h_finished, macrostep) == 32, "c2h.finished macrostep");
+_Static_assert(offsetof(ta_c2h_finished, donedata) == 40, "c2h.finished donedata");
+
+/** `c2h.destroyed` (0x0211, on c2h): A session is gone. */
+typedef struct {
+    ta_record_header header;
+    ta_span32 address; /* text */
+    /** the h2c.destroy, or 0 for execution-driven destruction */
+    uint64_t cause_seq;
+    uint8_t reason; /* ta_record_destroy_reason */
+    uint8_t pad_end[7];
+} ta_c2h_destroyed;
+_Static_assert(sizeof(ta_c2h_destroyed) == 56, "c2h.destroyed");
+_Static_assert(offsetof(ta_c2h_destroyed, address) == 32, "c2h.destroyed address");
+_Static_assert(offsetof(ta_c2h_destroyed, cause_seq) == 40, "c2h.destroyed cause_seq");
+_Static_assert(offsetof(ta_c2h_destroyed, reason) == 48, "c2h.destroyed reason");
+
+/** `c2h.definition_result` (0x0212, on c2h): A definition request completed. */
+typedef struct {
+    ta_record_header header;
+    /** the definition request’s h2c seq */
+    uint64_t cause_seq;
+    /** on successful register: the definition ID; otherwise 0 */
+    uint64_t definition;
+    /**
+     * bytes written to the request’s diagnostic buffer; 0 without a compile
+     * error
+     */
+    uint32_t diagnostic_bytes;
+    uint8_t status; /* ta_record_definition_status */
+    uint8_t pad_end[3];
+} ta_c2h_definition_result;
+_Static_assert(sizeof(ta_c2h_definition_result) == 56, "c2h.definition_result");
+_Static_assert(offsetof(ta_c2h_definition_result, cause_seq) == 32, "c2h.definition_result cause_seq");
+_Static_assert(offsetof(ta_c2h_definition_result, definition) == 40, "c2h.definition_result definition");
+_Static_assert(offsetof(ta_c2h_definition_result, diagnostic_bytes) == 48, "c2h.definition_result diagnostic_bytes");
+_Static_assert(offsetof(ta_c2h_definition_result, status) == 52, "c2h.definition_result status");
+
+/**
+ * `c2h.input_refused` (0x0213, on c2h): An admitted host input was not taken.
+ */
+typedef struct {
+    ta_record_header header;
+    /** the originating h2c input */
+    uint64_t source_seq;
+    uint8_t reason; /* ta_record_input_refusal_reason */
+    uint8_t pad_end[7];
+} ta_c2h_input_refused;
+_Static_assert(sizeof(ta_c2h_input_refused) == 48, "c2h.input_refused");
+_Static_assert(offsetof(ta_c2h_input_refused, source_seq) == 32, "c2h.input_refused source_seq");
+_Static_assert(offsetof(ta_c2h_input_refused, reason) == 40, "c2h.input_refused reason");
+
+/**
+ * `c2h.input_completed` (0x0214, on c2h): A host input and its startup
+ * follow-up settled.
+ */
+typedef struct {
+    ta_record_header header;
+    /** the originating h2c input */
+    uint64_t source_seq;
+    /** the last macrostep in the input execution */
+    uint64_t macrostep;
+    uint8_t status; /* ta_record_input_completion_status */
+    uint8_t pad_end[7];
+} ta_c2h_input_completed;
+_Static_assert(sizeof(ta_c2h_input_completed) == 56, "c2h.input_completed");
+_Static_assert(offsetof(ta_c2h_input_completed, source_seq) == 32, "c2h.input_completed source_seq");
+_Static_assert(offsetof(ta_c2h_input_completed, macrostep) == 40, "c2h.input_completed macrostep");
+_Static_assert(offsetof(ta_c2h_input_completed, status) == 48, "c2h.input_completed status");
+
+/**
+ * `c2h.load_result` (0x0215, on c2h): A load-failure response finished
+ * recycling waiting inputs.
+ */
+typedef struct {
+    ta_record_header header;
+    /** the h2c.load_failed */
+    uint64_t cause_seq;
+    /** the answered c2h.load_needed */
+    uint64_t request_seq;
+} ta_c2h_load_result;
+_Static_assert(sizeof(ta_c2h_load_result) == 48, "c2h.load_result");
+_Static_assert(offsetof(ta_c2h_load_result, cause_seq) == 32, "c2h.load_result cause_seq");
+_Static_assert(offsetof(ta_c2h_load_result, request_seq) == 40, "c2h.load_result request_seq");
+
+/** `tel.trace` (0x0301, on tel): One trace record (core ADR 0067). */
+typedef struct {
+    ta_record_header header;
+    /**
+     * the host clock when core wrote the record: wall-clock nanoseconds since
+     * the Unix epoch; 0 when the host installed no clock
+     */
+    uint64_t wall_ns;
+    /**
+     * with header session and microstep, the step key; 0 outside a macrostep
+     */
+    uint64_t macrostep;
+    uint64_t trace_id_high;
+    uint64_t trace_id_low;
+    /**
+     * the session of the step that caused this one; 0 for a host-delivered
+     * cause
+     */
+    uint64_t cause_session;
+    /**
+     * the macrostep of the causing step; with cause_session 0, the host's
+     * parent span ID (W3C parent-id), or 0
+     */
+    uint64_t cause_macrostep;
+    /** from 1 per macrostep; 0 for the macrostep itself */
+    uint32_t microstep;
+    /**
+     * the microstep of the causing step; with cause_session and
+     * cause_macrostep, the cause's step key, whose span ID is the parent span
+     */
+    uint32_t cause_microstep;
+    uint32_t state;
+    uint32_t transition;
+    uint32_t action;
+    uint32_t iteration;
+    /** the fault’s code, with fault_detail */
+    int32_t fault_code;
+    /** ta_trace_kind */
+    uint16_t trace_kind;
+    /** ta_trace_at */
+    uint8_t position;
+    uint8_t result;
+    /** the trace context’s flags (sampled) */
+    uint8_t trace_flags;
+    /** the trace context’s detail (watched) */
+    uint8_t trace_detail;
+    /** RUNAWAY only: what stopped the input */
+    uint8_t runaway_cause; /* ta_record_runaway_cause */
+    uint8_t pad19[1];
+    /** the session’s family/name */
+    ta_span32 address; /* text */
+    /**
+     * the definition’s document name and source, on the kinds that open a run
+     */
+    ta_span32 definition; /* text */
+    /** the name of `state` */
+    ta_span32 state_name; /* text */
+    /** the name of `transition` */
+    ta_span32 transition_name; /* text */
+    /** the name of `action` */
+    ta_span32 action_name; /* text */
+    /** the event name, or the name the kind carries */
+    ta_span32 name; /* text */
+    /** the send ID, for SENT and its kin */
+    ta_span32 send_id; /* text */
+    /** the invoke ID, for INVOKED and its kin */
+    ta_span32 invoke_id; /* text */
+    ta_span32 value_text; /* text */
+    /** the fault’s error event name */
+    ta_span32 fault_detail; /* text */
+    ta_span32 fault_message; /* text */
+    /**
+     * the microstep’s transitions: a u32 count, then per transition its u32 ID,
+     * then its name as a u32 length and UTF-8 bytes
+     */
+    ta_span32 transitions; /* bytes */
+    /**
+     * exited, entered, history, states: per list a u32 count, then per state
+     * its u32 ID, then its name as a u32 length and UTF-8 bytes
+     */
+    ta_span32 states; /* bytes */
+    uint8_t pad_end[4];
+} ta_tel_trace;
+_Static_assert(sizeof(ta_tel_trace) == 224, "tel.trace");
+_Static_assert(offsetof(ta_tel_trace, wall_ns) == 32, "tel.trace wall_ns");
+_Static_assert(offsetof(ta_tel_trace, macrostep) == 40, "tel.trace macrostep");
+_Static_assert(offsetof(ta_tel_trace, trace_id_high) == 48, "tel.trace trace_id_high");
+_Static_assert(offsetof(ta_tel_trace, trace_id_low) == 56, "tel.trace trace_id_low");
+_Static_assert(offsetof(ta_tel_trace, cause_session) == 64, "tel.trace cause_session");
+_Static_assert(offsetof(ta_tel_trace, cause_macrostep) == 72, "tel.trace cause_macrostep");
+_Static_assert(offsetof(ta_tel_trace, microstep) == 80, "tel.trace microstep");
+_Static_assert(offsetof(ta_tel_trace, cause_microstep) == 84, "tel.trace cause_microstep");
+_Static_assert(offsetof(ta_tel_trace, state) == 88, "tel.trace state");
+_Static_assert(offsetof(ta_tel_trace, transition) == 92, "tel.trace transition");
+_Static_assert(offsetof(ta_tel_trace, action) == 96, "tel.trace action");
+_Static_assert(offsetof(ta_tel_trace, iteration) == 100, "tel.trace iteration");
+_Static_assert(offsetof(ta_tel_trace, fault_code) == 104, "tel.trace fault_code");
+_Static_assert(offsetof(ta_tel_trace, trace_kind) == 108, "tel.trace trace_kind");
+_Static_assert(offsetof(ta_tel_trace, position) == 110, "tel.trace position");
+_Static_assert(offsetof(ta_tel_trace, result) == 111, "tel.trace result");
+_Static_assert(offsetof(ta_tel_trace, trace_flags) == 112, "tel.trace trace_flags");
+_Static_assert(offsetof(ta_tel_trace, trace_detail) == 113, "tel.trace trace_detail");
+_Static_assert(offsetof(ta_tel_trace, runaway_cause) == 114, "tel.trace runaway_cause");
+_Static_assert(offsetof(ta_tel_trace, address) == 116, "tel.trace address");
+_Static_assert(offsetof(ta_tel_trace, definition) == 124, "tel.trace definition");
+_Static_assert(offsetof(ta_tel_trace, state_name) == 132, "tel.trace state_name");
+_Static_assert(offsetof(ta_tel_trace, transition_name) == 140, "tel.trace transition_name");
+_Static_assert(offsetof(ta_tel_trace, action_name) == 148, "tel.trace action_name");
+_Static_assert(offsetof(ta_tel_trace, name) == 156, "tel.trace name");
+_Static_assert(offsetof(ta_tel_trace, send_id) == 164, "tel.trace send_id");
+_Static_assert(offsetof(ta_tel_trace, invoke_id) == 172, "tel.trace invoke_id");
+_Static_assert(offsetof(ta_tel_trace, value_text) == 180, "tel.trace value_text");
+_Static_assert(offsetof(ta_tel_trace, fault_detail) == 188, "tel.trace fault_detail");
+_Static_assert(offsetof(ta_tel_trace, fault_message) == 196, "tel.trace fault_message");
+_Static_assert(offsetof(ta_tel_trace, transitions) == 204, "tel.trace transitions");
+_Static_assert(offsetof(ta_tel_trace, states) == 212, "tel.trace states");
+
+/** `tel.dropped` (0x0302, on tel): Telemetry records were dropped. */
+typedef struct {
+    ta_record_header header;
+    uint64_t count;
+    /** the seq the first dropped record would have had */
+    uint64_t first_seq;
+} ta_tel_dropped;
+_Static_assert(sizeof(ta_tel_dropped) == 48, "tel.dropped");
+_Static_assert(offsetof(ta_tel_dropped, count) == 32, "tel.dropped count");
+_Static_assert(offsetof(ta_tel_dropped, first_seq) == 40, "tel.dropped first_seq");
+
+/**
+ * @file ring_codec.h
+ *
+ * # The record codec
+ *
+ * Generated from `protocol/catalog.rb` by `mise run protocol` in
+ * tinyactors-core. Do not edit: change the catalog, or the renderer
+ * (`protocol/render.rb`), and render again.
+ *
+ * Writes the records of `ring_records.h` into bytes a producer reserved,
+ * and checks a record a consumer read before anything trusts it. h2c is
+ * where a host's bytes enter core, so the reader is where hostile or
+ * corrupt input meets core.
+ *
+ * ## Writing
+ *
+ * For every record `<ring>.<name>`:
+ *
+ * - `ta_<ring>_<name>_write(out, fixed, texts)` fills the record in place
+ *   in `out`, for example the bytes and size of a `ta_ring_reserve`
+ *   reservation. It copies the fixed part from `fixed`, every byte of it,
+ *   its pads included (build it with `{0}`); sets `kind` to the record's
+ *   code and `size` to `out.size`; keeps the `seq` already in `out`,
+ *   which the reservation stamped; lays the texts end to end in the
+ *   tail, in the order the catalog declares them, starting right after
+ *   the fixed part; points each span at its text, an empty one at where
+ *   it would start; and zeroes every byte after the last text up to
+ *   `out.size`. The `kind`, `size`, `seq` and span fields of `fixed` are
+ *   ignored. `fixed` may be `out.bytes` itself, so a producer can build
+ *   the fixed part in the reservation; the texts must not lie in `out`.
+ * - A record with text or bytes has `ta_<ring>_<name>_texts`: a `ta_str`
+ *   per text field and a `ta_bytes` per bytes field, named after it. Its
+ *   `ta_<ring>_<name>_size(texts, &size)` answers the bytes to reserve:
+ *   the fixed part plus the texts' lengths, rounded up to 8. A record
+ *   without them has no `texts` parameter, and its size is `sizeof` its
+ *   struct.
+ *
+ * ## Reading
+ *
+ * `ta_record_read` checks a record's bytes, for example those of a
+ * `ta_ring_peek` record, as a record of the ring they were read from:
+ *
+ * - the bytes hold at least the 32-byte header, and the kind is not the
+ *   pad;
+ * - the kind is one the catalog defines, and a kind of that ring;
+ * - its `size` is a multiple of 8, at least the kind's fixed part and at
+ *   most the bytes given;
+ * - every span lies in the tail: it starts at or after the fixed part
+ *   and ends at or before `size`, an empty one included.
+ *
+ * One generated descriptor per kind (its ring, its fixed size and the
+ * offsets of its spans) and one loop do these checks for every kind;
+ * `ta_record_describe` answers a kind's descriptor. The reader does not
+ * check `seq`: `ta_ring_peek` does, gap-free on a lossless ring and only
+ * growing on a lossy one. Nor does it check flag bits or enum values:
+ * whoever uses a field checks its value.
+ *
+ * After `TA_OK`, `ta_<ring>_<name>_from_view` answers the typed record,
+ * and `ta_record_view_text` and `ta_record_view_bytes` a span's bytes.
+ *
+ * ## Memory
+ *
+ * None. Every function borrows the caller's bytes for one call: a
+ * writer writes only `out.bytes[0, out.size)` and reads `fixed` and the
+ * texts; the reader reads only `bytes[0, size)` of its parameters. A
+ * view, a typed record and a text it answers point into the caller's
+ * bytes and stay valid as long as those do, for a ring record until it
+ * is released. A description points into constant tables. Nothing
+ * allocates, so every function may run inside a macrostep.
+ *
+ * ## Complexity
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | `ta_<ring>_<name>_write` | O(record size) |
+ * | `ta_<ring>_<name>_size` | O(spans of the kind) |
+ * | `ta_record_read` | O(1) to find the kind, plus O(spans of the kind) |
+ * | `ta_record_describe`, `ta_<ring>_<name>_from_view`, `ta_record_view_text`, `ta_record_view_bytes` | O(1) |
+ *
+ * ## Failure
+ *
+ * A function that can fail answers a `ta_result`, and when it fails it
+ * changes nothing: no byte of `out`, no `*out`.
+ *
+ * - A writer answers `TA_ERR_INVALID` when `out.bytes` is NULL or not
+ *   8-byte aligned, `out.size` is not a multiple of 8, `fixed` or
+ *   `texts` is NULL, a text has a length but no bytes, or the record
+ *   would exceed the largest size a `u32` holds; and `TA_ERR_FULL` when
+ *   `out.size` is smaller than the record.
+ * - A size function answers `TA_ERR_INVALID` for the same texts.
+ * - `ta_record_read` answers `TA_ERR_INVALID` when its bytes are NULL or
+ *   not 8-byte aligned, or its ring is not a `ta_record_ring`;
+ *   `TA_ERR_UNSUPPORTED` for a kind the catalog does not define; and
+ *   `TA_ERR_CORRUPT` for any other check above that fails.
+ * - `ta_record_describe` answers `TA_ERR_NOT_FOUND` for a kind the
+ *   catalog does not define, the pad included.
+ *
+ * ## Users
+ *
+ * Core reads h2c records and writes c2h and tel records; a host does
+ * the reverse; a test drives core by writing h2c records and checking
+ * the c2h records it reads back. Each side reserves and peeks through
+ * `ta_ring`.
+ */
+
+
+/** Where a writer puts a record: for example a ring reservation's bytes and size. */
+typedef struct {
+    /** The record's first byte, 8-byte aligned. */
+    unsigned char *bytes;
+    /** The bytes the record takes, a multiple of 8; its `size` becomes this. */
+    uint32_t size;
+} ta_record_buffer;
+
+/** What `ta_record_read` checks. */
+typedef struct {
+    /** The record's first byte, 8-byte aligned; borrowed for the call. */
+    const unsigned char *bytes;
+    /** The bytes readable from `bytes`; the record's `size` may not pass it. */
+    uint32_t size;
+    /** The ring the record was read from. */
+    ta_record_ring ring;
+} ta_record_read_params;
+
+/** A record `ta_record_read` checked. */
+typedef struct {
+    /** The record's first byte; borrowed from the caller. */
+    const unsigned char *bytes;
+    /** The record's `size`. */
+    uint32_t size;
+    /** The record's `kind`, a `ta_record_kind`. */
+    uint16_t kind;
+} ta_record_view;
+
+/** What the codec knows of a kind. */
+typedef struct {
+    /** The ring the kind crosses. */
+    ta_record_ring ring;
+    /** Its fixed part in bytes: `sizeof` its struct. */
+    uint32_t fixed_size;
+    /** How many span fields it has. */
+    uint32_t span_count;
+    /** The offset of each span field, in the order the catalog declares them; constant. */
+    const uint32_t *span_offsets;
+} ta_record_description;
+
+/**
+ * Checks the record at `params->bytes` as a record of `params->ring`
+ * (see the file comment) and answers it in `*out`. Borrows the bytes
+ * for the call; the view points into them. Never allocates; may run
+ * inside a macrostep. O(1) plus one step per span of the kind.
+ *
+ * Answers `TA_ERR_INVALID` for NULL or unaligned bytes or an unknown
+ * ring, `TA_ERR_UNSUPPORTED` for a kind the catalog does not define,
+ * and `TA_ERR_CORRUPT` for a record too short for the header, a pad, a
+ * kind of another ring, a wrong size or a span outside the tail;
+ * `*out` is then not written.
+ */
+TA_PRIVATE ta_result ta_record_read(const ta_record_read_params *params, ta_record_view *out);
+
+/**
+ * Answers in `*out` the ring, fixed size and span offsets of `kind`.
+ * Never allocates; may run inside a macrostep. O(1).
+ *
+ * Answers `TA_ERR_NOT_FOUND`, and does not write `*out`, for a kind
+ * the catalog does not define, the pad included.
+ */
+TA_PRIVATE ta_result ta_record_describe(uint16_t kind, ta_record_description *out);
+
+/**
+ * The text `span` names in the record `view` holds. `view` comes from
+ * `ta_record_read`, which checked the record's own spans; a span that
+ * does not lie inside the record answers empty text with a NULL
+ * pointer. Borrows the record's bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline ta_str ta_record_view_text(const ta_record_view *view, ta_span32 span) {
+    ta_str text = { NULL, 0u };
+    if (span.offset <= view->size && span.length <= view->size - span.offset) {
+        text.ptr = (const char *)view->bytes + span.offset;
+        text.len = span.length;
+    }
+    return text;
+}
+
+/**
+ * The bytes `span` names in the record `view` holds, as
+ * `ta_record_view_text` answers text. Never allocates. O(1).
+ */
+TA_PRIVATE inline ta_bytes ta_record_view_bytes(const ta_record_view *view, ta_span32 span) {
+    ta_bytes bytes = { NULL, 0u };
+    if (span.offset <= view->size && span.length <= view->size - span.offset) {
+        bytes.ptr = (const uint8_t *)view->bytes + span.offset;
+        bytes.len = span.length;
+    }
+    return bytes;
+}
+
+/* ---- h2c.time ---- */
+
+/**
+ * Writes an `h2c.time` record into `out` (see the file comment): the fixed part
+ * from `fixed`, kind 0x0101, size `out.size`, the seq already in `out`. Borrows
+ * `fixed` for the call. Never allocates; may run inside a macrostep. Answers
+ * `TA_ERR_INVALID` for a bad buffer or argument and `TA_ERR_FULL` when
+ * `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_time_write(ta_record_buffer out, const ta_h2c_time *fixed);
+
+/**
+ * The `h2c.time` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_time *ta_h2c_time_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_TIME ? (const ta_h2c_time *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.event ---- */
+
+/**
+ * The text and bytes of an `h2c.event` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    /** the address (family/name), when session is 0 */
+    ta_str target;
+    /** the dotted event name, as bytes */
+    ta_str name;
+    /** _event.sendid, or empty */
+    ta_str sendid;
+    /** _event.origin, or empty */
+    ta_str origin;
+    /** _event.origintype, or empty */
+    ta_str origin_type;
+    /** _event.invokeid for an invoked service, or empty */
+    ta_str invokeid;
+} ta_h2c_event_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.event` record with `texts` takes: its
+ * fixed part, 128 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_event_size(const ta_h2c_event_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.event` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x0102, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_event_write(ta_record_buffer out, const ta_h2c_event *fixed, const ta_h2c_event_texts *texts);
+
+/**
+ * The `h2c.event` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_event *ta_h2c_event_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_EVENT ? (const ta_h2c_event *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.spawn ---- */
+
+/**
+ * The text and bytes of an `h2c.spawn` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    /** family/name */
+    ta_str address;
+    /** the definition's revision hash */
+    ta_bytes revision;
+} ta_h2c_spawn_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.spawn` record with `texts` takes: its
+ * fixed part, 112 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_spawn_size(const ta_h2c_spawn_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.spawn` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x0103, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_spawn_write(ta_record_buffer out, const ta_h2c_spawn *fixed, const ta_h2c_spawn_texts *texts);
+
+/**
+ * The `h2c.spawn` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_spawn *ta_h2c_spawn_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_SPAWN ? (const ta_h2c_spawn *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.publish ---- */
+
+/**
+ * The text and bytes of an `h2c.publish` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    /** family/name, or empty for every replaying session */
+    ta_str address;
+} ta_h2c_publish_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.publish` record with `texts` takes: its
+ * fixed part, 48 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_publish_size(const ta_h2c_publish_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.publish` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x0104, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_publish_write(ta_record_buffer out, const ta_h2c_publish *fixed, const ta_h2c_publish_texts *texts);
+
+/**
+ * The `h2c.publish` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_publish *ta_h2c_publish_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_PUBLISH ? (const ta_h2c_publish *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.load ---- */
+
+/**
+ * The text and bytes of an `h2c.load` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_h2c_load_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.load` record with `texts` takes: its
+ * fixed part, 56 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_load_size(const ta_h2c_load_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.load` record into `out` (see the file comment): the fixed part
+ * from `fixed`, kind 0x0105, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_load_write(ta_record_buffer out, const ta_h2c_load *fixed, const ta_h2c_load_texts *texts);
+
+/**
+ * The `h2c.load` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_load *ta_h2c_load_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_LOAD ? (const ta_h2c_load *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.load_failed ---- */
+
+/**
+ * The text and bytes of an `h2c.load_failed` record, in the order they lie in
+ * its tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+    ta_str reason;
+} ta_h2c_load_failed_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.load_failed` record with `texts` takes:
+ * its fixed part, 56 bytes, plus their lengths, rounded up to 8. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not
+ * write `*out`, when `texts` is NULL, a text has a length but no bytes, or the
+ * record would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_load_failed_size(const ta_h2c_load_failed_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.load_failed` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x0106, size `out.size`, the seq already in
+ * `out` and `texts` in the tail. Borrows `fixed` and `texts` for the call.
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a
+ * bad buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and
+ * then writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_load_failed_write(ta_record_buffer out, const ta_h2c_load_failed *fixed, const ta_h2c_load_failed_texts *texts);
+
+/**
+ * The `h2c.load_failed` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_load_failed *ta_h2c_load_failed_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_LOAD_FAILED ? (const ta_h2c_load_failed *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.unload ---- */
+
+/**
+ * The text and bytes of an `h2c.unload` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_h2c_unload_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.unload` record with `texts` takes: its
+ * fixed part, 48 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_unload_size(const ta_h2c_unload_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.unload` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x0107, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_unload_write(ta_record_buffer out, const ta_h2c_unload *fixed, const ta_h2c_unload_texts *texts);
+
+/**
+ * The `h2c.unload` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_unload *ta_h2c_unload_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_UNLOAD ? (const ta_h2c_unload *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.checkpoint ---- */
+
+/**
+ * The text and bytes of an `h2c.checkpoint` record, in the order they lie in
+ * its tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_h2c_checkpoint_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.checkpoint` record with `texts` takes:
+ * its fixed part, 48 bytes, plus their lengths, rounded up to 8. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not
+ * write `*out`, when `texts` is NULL, a text has a length but no bytes, or the
+ * record would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_checkpoint_size(const ta_h2c_checkpoint_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.checkpoint` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x0108, size `out.size`, the seq already in
+ * `out` and `texts` in the tail. Borrows `fixed` and `texts` for the call.
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a
+ * bad buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and
+ * then writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_checkpoint_write(ta_record_buffer out, const ta_h2c_checkpoint *fixed, const ta_h2c_checkpoint_texts *texts);
+
+/**
+ * The `h2c.checkpoint` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_checkpoint *ta_h2c_checkpoint_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_CHECKPOINT ? (const ta_h2c_checkpoint *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.invoke_report ---- */
+
+/**
+ * The text and bytes of an `h2c.invoke_report` record, in the order they lie in
+ * its tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str invokeid;
+    /** for error: the reason segment */
+    ta_str reason;
+} ta_h2c_invoke_report_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.invoke_report` record with `texts` takes:
+ * its fixed part, 96 bytes, plus their lengths, rounded up to 8. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not
+ * write `*out`, when `texts` is NULL, a text has a length but no bytes, or the
+ * record would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_invoke_report_size(const ta_h2c_invoke_report_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.invoke_report` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x0109, size `out.size`, the seq already in
+ * `out` and `texts` in the tail. Borrows `fixed` and `texts` for the call.
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a
+ * bad buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and
+ * then writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_invoke_report_write(ta_record_buffer out, const ta_h2c_invoke_report *fixed, const ta_h2c_invoke_report_texts *texts);
+
+/**
+ * The `h2c.invoke_report` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_invoke_report *ta_h2c_invoke_report_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_INVOKE_REPORT ? (const ta_h2c_invoke_report *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.destroy ---- */
+
+/**
+ * The text and bytes of an `h2c.destroy` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_h2c_destroy_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.destroy` record with `texts` takes: its
+ * fixed part, 40 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_destroy_size(const ta_h2c_destroy_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.destroy` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x010A, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_destroy_write(ta_record_buffer out, const ta_h2c_destroy *fixed, const ta_h2c_destroy_texts *texts);
+
+/**
+ * The `h2c.destroy` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_destroy *ta_h2c_destroy_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_DESTROY ? (const ta_h2c_destroy *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.definition_register ---- */
+
+/**
+ * Writes an `h2c.definition_register` record into `out` (see the file comment):
+ * the fixed part from `fixed`, kind 0x010B, size `out.size`, the seq already in
+ * `out`. Borrows `fixed` for the call. Never allocates; may run inside a
+ * macrostep. Answers `TA_ERR_INVALID` for a bad buffer or argument and
+ * `TA_ERR_FULL` when `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_definition_register_write(ta_record_buffer out, const ta_h2c_definition_register *fixed);
+
+/**
+ * The `h2c.definition_register` record `view` holds, or NULL when it holds
+ * another kind. `view` comes from `ta_record_read`; the record is borrowed from
+ * its bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_definition_register *ta_h2c_definition_register_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_DEFINITION_REGISTER ? (const ta_h2c_definition_register *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.definition_release ---- */
+
+/**
+ * Writes an `h2c.definition_release` record into `out` (see the file comment):
+ * the fixed part from `fixed`, kind 0x010C, size `out.size`, the seq already in
+ * `out`. Borrows `fixed` for the call. Never allocates; may run inside a
+ * macrostep. Answers `TA_ERR_INVALID` for a bad buffer or argument and
+ * `TA_ERR_FULL` when `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_definition_release_write(ta_record_buffer out, const ta_h2c_definition_release *fixed);
+
+/**
+ * The `h2c.definition_release` record `view` holds, or NULL when it holds
+ * another kind. `view` comes from `ta_record_read`; the record is borrowed from
+ * its bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_definition_release *ta_h2c_definition_release_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_DEFINITION_RELEASE ? (const ta_h2c_definition_release *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.definition_retire ---- */
+
+/**
+ * Writes an `h2c.definition_retire` record into `out` (see the file comment):
+ * the fixed part from `fixed`, kind 0x010D, size `out.size`, the seq already in
+ * `out`. Borrows `fixed` for the call. Never allocates; may run inside a
+ * macrostep. Answers `TA_ERR_INVALID` for a bad buffer or argument and
+ * `TA_ERR_FULL` when `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_definition_retire_write(ta_record_buffer out, const ta_h2c_definition_retire *fixed);
+
+/**
+ * The `h2c.definition_retire` record `view` holds, or NULL when it holds
+ * another kind. `view` comes from `ta_record_read`; the record is borrowed from
+ * its bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_definition_retire *ta_h2c_definition_retire_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_DEFINITION_RETIRE ? (const ta_h2c_definition_retire *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.withdraw ---- */
+
+/**
+ * Writes an `h2c.withdraw` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x010E, size `out.size`, the seq already in `out`.
+ * Borrows `fixed` for the call. Never allocates; may run inside a macrostep.
+ * Answers `TA_ERR_INVALID` for a bad buffer or argument and `TA_ERR_FULL` when
+ * `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_withdraw_write(ta_record_buffer out, const ta_h2c_withdraw *fixed);
+
+/**
+ * The `h2c.withdraw` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_withdraw *ta_h2c_withdraw_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_WITHDRAW ? (const ta_h2c_withdraw *)(const void *)view->bytes : NULL;
+}
+
+/* ---- h2c.type_declare ---- */
+
+/**
+ * The text and bytes of an `h2c.type_declare` record, in the order they lie in
+ * its tail; a writer borrows them for one call.
+ */
+typedef struct {
+    /** the type name as bytes; interned as an atom when declared */
+    ta_str type;
+} ta_h2c_type_declare_texts;
+
+/**
+ * Answers in `*out` the bytes an `h2c.type_declare` record with `texts` takes:
+ * its fixed part, 48 bytes, plus their lengths, rounded up to 8. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not
+ * write `*out`, when `texts` is NULL, a text has a length but no bytes, or the
+ * record would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_h2c_type_declare_size(const ta_h2c_type_declare_texts *texts, uint32_t *out);
+
+/**
+ * Writes an `h2c.type_declare` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x010F, size `out.size`, the seq already in
+ * `out` and `texts` in the tail. Borrows `fixed` and `texts` for the call.
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a
+ * bad buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and
+ * then writes nothing.
+ */
+TA_PRIVATE ta_result ta_h2c_type_declare_write(ta_record_buffer out, const ta_h2c_type_declare *fixed, const ta_h2c_type_declare_texts *texts);
+
+/**
+ * The `h2c.type_declare` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_h2c_type_declare *ta_h2c_type_declare_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_H2C_TYPE_DECLARE ? (const ta_h2c_type_declare *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.spawned ---- */
+
+/**
+ * The text and bytes of a `c2h.spawned` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+    ta_bytes revision;
+} ta_c2h_spawned_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.spawned` record with `texts` takes: its
+ * fixed part, 64 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_spawned_size(const ta_c2h_spawned_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.spawned` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x0201, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_spawned_write(ta_record_buffer out, const ta_c2h_spawned *fixed, const ta_c2h_spawned_texts *texts);
+
+/**
+ * The `c2h.spawned` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_spawned *ta_c2h_spawned_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_SPAWNED ? (const ta_c2h_spawned *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.input ---- */
+
+/**
+ * The text and bytes of a `c2h.input` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str name;
+    ta_str sendid;
+    ta_str origin;
+    ta_str origin_type;
+    ta_str invokeid;
+    /**
+     * source invoke_report: original report invocation ID, separate from event
+     * invokeid
+     */
+    ta_str report_invokeid;
+    /** source invoke_report/error: original reason token */
+    ta_str report_reason;
+} ta_c2h_input_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.input` record with `texts` takes: its
+ * fixed part, 152 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_input_size(const ta_c2h_input_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.input` record into `out` (see the file comment): the fixed part
+ * from `fixed`, kind 0x0202, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_input_write(ta_record_buffer out, const ta_c2h_input *fixed, const ta_c2h_input_texts *texts);
+
+/**
+ * The `c2h.input` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_input *ta_c2h_input_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_INPUT ? (const ta_c2h_input *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.send ---- */
+
+/**
+ * The text and bytes of a `c2h.send` record, in the order they lie in its tail;
+ * a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str sendid;
+    ta_str io_type;
+    ta_str target;
+    ta_str name;
+} ta_c2h_send_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.send` record with `texts` takes: its fixed
+ * part, 120 bytes, plus their lengths, rounded up to 8. Never allocates; may
+ * run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write `*out`,
+ * when `texts` is NULL, a text has a length but no bytes, or the record would
+ * exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_send_size(const ta_c2h_send_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.send` record into `out` (see the file comment): the fixed part
+ * from `fixed`, kind 0x0203, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_send_write(ta_record_buffer out, const ta_c2h_send *fixed, const ta_c2h_send_texts *texts);
+
+/**
+ * The `c2h.send` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_send *ta_c2h_send_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_SEND ? (const ta_c2h_send *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.invoke ---- */
+
+/**
+ * The text and bytes of a `c2h.invoke` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str invokeid;
+    ta_str type;
+    ta_str src;
+} ta_c2h_invoke_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.invoke` record with `texts` takes: its
+ * fixed part, 112 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_invoke_size(const ta_c2h_invoke_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.invoke` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x0204, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_invoke_write(ta_record_buffer out, const ta_c2h_invoke *fixed, const ta_c2h_invoke_texts *texts);
+
+/**
+ * The `c2h.invoke` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_invoke *ta_c2h_invoke_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_INVOKE ? (const ta_c2h_invoke *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.invoke_cancel ---- */
+
+/**
+ * The text and bytes of a `c2h.invoke_cancel` record, in the order they lie in
+ * its tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str invokeid;
+} ta_c2h_invoke_cancel_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.invoke_cancel` record with `texts` takes:
+ * its fixed part, 56 bytes, plus their lengths, rounded up to 8. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not
+ * write `*out`, when `texts` is NULL, a text has a length but no bytes, or the
+ * record would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_invoke_cancel_size(const ta_c2h_invoke_cancel_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.invoke_cancel` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x0205, size `out.size`, the seq already in
+ * `out` and `texts` in the tail. Borrows `fixed` and `texts` for the call.
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a
+ * bad buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and
+ * then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_invoke_cancel_write(ta_record_buffer out, const ta_c2h_invoke_cancel *fixed, const ta_c2h_invoke_cancel_texts *texts);
+
+/**
+ * The `c2h.invoke_cancel` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_invoke_cancel *ta_c2h_invoke_cancel_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_INVOKE_CANCEL ? (const ta_c2h_invoke_cancel *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.invoke_forward ---- */
+
+/**
+ * The text and bytes of a `c2h.invoke_forward` record, in the order they lie in
+ * its tail; a writer borrows them for one call.
+ */
+typedef struct {
+    /** destination invocation, not the forwarded event invokeid */
+    ta_str invokeid;
+    ta_str name;
+    ta_str sendid;
+    ta_str origin;
+    /** the original event origintype */
+    ta_str origin_type;
+    /** the original event invokeid */
+    ta_str event_invokeid;
+} ta_c2h_invoke_forward_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.invoke_forward` record with `texts` takes:
+ * its fixed part, 136 bytes, plus their lengths, rounded up to 8. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not
+ * write `*out`, when `texts` is NULL, a text has a length but no bytes, or the
+ * record would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_invoke_forward_size(const ta_c2h_invoke_forward_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.invoke_forward` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x0206, size `out.size`, the seq already in
+ * `out` and `texts` in the tail. Borrows `fixed` and `texts` for the call.
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a
+ * bad buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and
+ * then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_invoke_forward_write(ta_record_buffer out, const ta_c2h_invoke_forward *fixed, const ta_c2h_invoke_forward_texts *texts);
+
+/**
+ * The `c2h.invoke_forward` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_invoke_forward *ta_c2h_invoke_forward_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_INVOKE_FORWARD ? (const ta_c2h_invoke_forward *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.log ---- */
+
+/**
+ * The text and bytes of a `c2h.log` record, in the order they lie in its tail;
+ * a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str label;
+} ta_c2h_log_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.log` record with `texts` takes: its fixed
+ * part, 88 bytes, plus their lengths, rounded up to 8. Never allocates; may run
+ * inside a macrostep. Answers `TA_ERR_INVALID`, and does not write `*out`, when
+ * `texts` is NULL, a text has a length but no bytes, or the record would exceed
+ * the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_log_size(const ta_c2h_log_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.log` record into `out` (see the file comment): the fixed part
+ * from `fixed`, kind 0x0207, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_log_write(ta_record_buffer out, const ta_c2h_log *fixed, const ta_c2h_log_texts *texts);
+
+/**
+ * The `c2h.log` record `view` holds, or NULL when it holds another kind. `view`
+ * comes from `ta_record_read`; the record is borrowed from its bytes. Never
+ * allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_log *ta_c2h_log_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_LOG ? (const ta_c2h_log *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.macrostep_ended ---- */
+
+/**
+ * Writes a `c2h.macrostep_ended` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x0208, size `out.size`, the seq already in
+ * `out`. Borrows `fixed` for the call. Never allocates; may run inside a
+ * macrostep. Answers `TA_ERR_INVALID` for a bad buffer or argument and
+ * `TA_ERR_FULL` when `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_macrostep_ended_write(ta_record_buffer out, const ta_c2h_macrostep_ended *fixed);
+
+/**
+ * The `c2h.macrostep_ended` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_macrostep_ended *ta_c2h_macrostep_ended_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_MACROSTEP_ENDED ? (const ta_c2h_macrostep_ended *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.wake ---- */
+
+/**
+ * Writes a `c2h.wake` record into `out` (see the file comment): the fixed part
+ * from `fixed`, kind 0x0209, size `out.size`, the seq already in `out`. Borrows
+ * `fixed` for the call. Never allocates; may run inside a macrostep. Answers
+ * `TA_ERR_INVALID` for a bad buffer or argument and `TA_ERR_FULL` when
+ * `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_wake_write(ta_record_buffer out, const ta_c2h_wake *fixed);
+
+/**
+ * The `c2h.wake` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_wake *ta_c2h_wake_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_WAKE ? (const ta_c2h_wake *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.bounced ---- */
+
+/**
+ * The text and bytes of a `c2h.bounced` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str detail;
+} ta_c2h_bounced_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.bounced` record with `texts` takes: its
+ * fixed part, 56 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_bounced_size(const ta_c2h_bounced_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.bounced` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x020A, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_bounced_write(ta_record_buffer out, const ta_c2h_bounced *fixed, const ta_c2h_bounced_texts *texts);
+
+/**
+ * The `c2h.bounced` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_bounced *ta_c2h_bounced_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_BOUNCED ? (const ta_c2h_bounced *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.load_needed ---- */
+
+/**
+ * The text and bytes of a `c2h.load_needed` record, in the order they lie in
+ * its tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_c2h_load_needed_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.load_needed` record with `texts` takes:
+ * its fixed part, 48 bytes, plus their lengths, rounded up to 8. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not
+ * write `*out`, when `texts` is NULL, a text has a length but no bytes, or the
+ * record would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_load_needed_size(const ta_c2h_load_needed_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.load_needed` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x020B, size `out.size`, the seq already in
+ * `out` and `texts` in the tail. Borrows `fixed` and `texts` for the call.
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a
+ * bad buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and
+ * then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_load_needed_write(ta_record_buffer out, const ta_c2h_load_needed *fixed, const ta_c2h_load_needed_texts *texts);
+
+/**
+ * The `c2h.load_needed` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_load_needed *ta_c2h_load_needed_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_LOAD_NEEDED ? (const ta_c2h_load_needed *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.loaded ---- */
+
+/**
+ * The text and bytes of a `c2h.loaded` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_c2h_loaded_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.loaded` record with `texts` takes: its
+ * fixed part, 48 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_loaded_size(const ta_c2h_loaded_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.loaded` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x020C, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_loaded_write(ta_record_buffer out, const ta_c2h_loaded *fixed, const ta_c2h_loaded_texts *texts);
+
+/**
+ * The `c2h.loaded` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_loaded *ta_c2h_loaded_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_LOADED ? (const ta_c2h_loaded *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.unloaded ---- */
+
+/**
+ * The text and bytes of a `c2h.unloaded` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_c2h_unloaded_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.unloaded` record with `texts` takes: its
+ * fixed part, 72 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_unloaded_size(const ta_c2h_unloaded_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.unloaded` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x020D, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_unloaded_write(ta_record_buffer out, const ta_c2h_unloaded *fixed, const ta_c2h_unloaded_texts *texts);
+
+/**
+ * The `c2h.unloaded` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_unloaded *ta_c2h_unloaded_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_UNLOADED ? (const ta_c2h_unloaded *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.state ---- */
+
+/**
+ * The text and bytes of a `c2h.state` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_c2h_state_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.state` record with `texts` takes: its
+ * fixed part, 72 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_state_size(const ta_c2h_state_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.state` record into `out` (see the file comment): the fixed part
+ * from `fixed`, kind 0x020E, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_state_write(ta_record_buffer out, const ta_c2h_state *fixed, const ta_c2h_state_texts *texts);
+
+/**
+ * The `c2h.state` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_state *ta_c2h_state_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_STATE ? (const ta_c2h_state *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.published ---- */
+
+/**
+ * The text and bytes of a `c2h.published` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_c2h_published_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.published` record with `texts` takes: its
+ * fixed part, 72 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_published_size(const ta_c2h_published_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.published` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x020F, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_published_write(ta_record_buffer out, const ta_c2h_published *fixed, const ta_c2h_published_texts *texts);
+
+/**
+ * The `c2h.published` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_published *ta_c2h_published_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_PUBLISHED ? (const ta_c2h_published *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.finished ---- */
+
+/**
+ * Writes a `c2h.finished` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x0210, size `out.size`, the seq already in `out`.
+ * Borrows `fixed` for the call. Never allocates; may run inside a macrostep.
+ * Answers `TA_ERR_INVALID` for a bad buffer or argument and `TA_ERR_FULL` when
+ * `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_finished_write(ta_record_buffer out, const ta_c2h_finished *fixed);
+
+/**
+ * The `c2h.finished` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_finished *ta_c2h_finished_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_FINISHED ? (const ta_c2h_finished *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.destroyed ---- */
+
+/**
+ * The text and bytes of a `c2h.destroyed` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    ta_str address;
+} ta_c2h_destroyed_texts;
+
+/**
+ * Answers in `*out` the bytes a `c2h.destroyed` record with `texts` takes: its
+ * fixed part, 56 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_c2h_destroyed_size(const ta_c2h_destroyed_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `c2h.destroyed` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x0211, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_destroyed_write(ta_record_buffer out, const ta_c2h_destroyed *fixed, const ta_c2h_destroyed_texts *texts);
+
+/**
+ * The `c2h.destroyed` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_destroyed *ta_c2h_destroyed_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_DESTROYED ? (const ta_c2h_destroyed *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.definition_result ---- */
+
+/**
+ * Writes a `c2h.definition_result` record into `out` (see the file comment):
+ * the fixed part from `fixed`, kind 0x0212, size `out.size`, the seq already in
+ * `out`. Borrows `fixed` for the call. Never allocates; may run inside a
+ * macrostep. Answers `TA_ERR_INVALID` for a bad buffer or argument and
+ * `TA_ERR_FULL` when `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_definition_result_write(ta_record_buffer out, const ta_c2h_definition_result *fixed);
+
+/**
+ * The `c2h.definition_result` record `view` holds, or NULL when it holds
+ * another kind. `view` comes from `ta_record_read`; the record is borrowed from
+ * its bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_definition_result *ta_c2h_definition_result_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_DEFINITION_RESULT ? (const ta_c2h_definition_result *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.input_refused ---- */
+
+/**
+ * Writes a `c2h.input_refused` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x0213, size `out.size`, the seq already in
+ * `out`. Borrows `fixed` for the call. Never allocates; may run inside a
+ * macrostep. Answers `TA_ERR_INVALID` for a bad buffer or argument and
+ * `TA_ERR_FULL` when `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_input_refused_write(ta_record_buffer out, const ta_c2h_input_refused *fixed);
+
+/**
+ * The `c2h.input_refused` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_input_refused *ta_c2h_input_refused_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_INPUT_REFUSED ? (const ta_c2h_input_refused *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.input_completed ---- */
+
+/**
+ * Writes a `c2h.input_completed` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x0214, size `out.size`, the seq already in
+ * `out`. Borrows `fixed` for the call. Never allocates; may run inside a
+ * macrostep. Answers `TA_ERR_INVALID` for a bad buffer or argument and
+ * `TA_ERR_FULL` when `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_input_completed_write(ta_record_buffer out, const ta_c2h_input_completed *fixed);
+
+/**
+ * The `c2h.input_completed` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_input_completed *ta_c2h_input_completed_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_INPUT_COMPLETED ? (const ta_c2h_input_completed *)(const void *)view->bytes : NULL;
+}
+
+/* ---- c2h.load_result ---- */
+
+/**
+ * Writes a `c2h.load_result` record into `out` (see the file comment): the
+ * fixed part from `fixed`, kind 0x0215, size `out.size`, the seq already in
+ * `out`. Borrows `fixed` for the call. Never allocates; may run inside a
+ * macrostep. Answers `TA_ERR_INVALID` for a bad buffer or argument and
+ * `TA_ERR_FULL` when `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_c2h_load_result_write(ta_record_buffer out, const ta_c2h_load_result *fixed);
+
+/**
+ * The `c2h.load_result` record `view` holds, or NULL when it holds another
+ * kind. `view` comes from `ta_record_read`; the record is borrowed from its
+ * bytes. Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_c2h_load_result *ta_c2h_load_result_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_C2H_LOAD_RESULT ? (const ta_c2h_load_result *)(const void *)view->bytes : NULL;
+}
+
+/* ---- tel.trace ---- */
+
+/**
+ * The text and bytes of a `tel.trace` record, in the order they lie in its
+ * tail; a writer borrows them for one call.
+ */
+typedef struct {
+    /** the session’s family/name */
+    ta_str address;
+    /**
+     * the definition’s document name and source, on the kinds that open a run
+     */
+    ta_str definition;
+    /** the name of `state` */
+    ta_str state_name;
+    /** the name of `transition` */
+    ta_str transition_name;
+    /** the name of `action` */
+    ta_str action_name;
+    /** the event name, or the name the kind carries */
+    ta_str name;
+    /** the send ID, for SENT and its kin */
+    ta_str send_id;
+    /** the invoke ID, for INVOKED and its kin */
+    ta_str invoke_id;
+    ta_str value_text;
+    /** the fault’s error event name */
+    ta_str fault_detail;
+    ta_str fault_message;
+    /**
+     * the microstep’s transitions: a u32 count, then per transition its u32 ID,
+     * then its name as a u32 length and UTF-8 bytes
+     */
+    ta_bytes transitions;
+    /**
+     * exited, entered, history, states: per list a u32 count, then per state
+     * its u32 ID, then its name as a u32 length and UTF-8 bytes
+     */
+    ta_bytes states;
+} ta_tel_trace_texts;
+
+/**
+ * Answers in `*out` the bytes a `tel.trace` record with `texts` takes: its
+ * fixed part, 224 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
+ * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
+ * would exceed the largest size a `u32` holds.
+ */
+TA_PRIVATE ta_result ta_tel_trace_size(const ta_tel_trace_texts *texts, uint32_t *out);
+
+/**
+ * Writes a `tel.trace` record into `out` (see the file comment): the fixed part
+ * from `fixed`, kind 0x0301, size `out.size`, the seq already in `out` and
+ * `texts` in the tail. Borrows `fixed` and `texts` for the call. Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_INVALID` for a bad
+ * buffer or argument and `TA_ERR_FULL` when `out.size` is too small, and then
+ * writes nothing.
+ */
+TA_PRIVATE ta_result ta_tel_trace_write(ta_record_buffer out, const ta_tel_trace *fixed, const ta_tel_trace_texts *texts);
+
+/**
+ * The `tel.trace` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_tel_trace *ta_tel_trace_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_TEL_TRACE ? (const ta_tel_trace *)(const void *)view->bytes : NULL;
+}
+
+/* ---- tel.dropped ---- */
+
+/**
+ * Writes a `tel.dropped` record into `out` (see the file comment): the fixed
+ * part from `fixed`, kind 0x0302, size `out.size`, the seq already in `out`.
+ * Borrows `fixed` for the call. Never allocates; may run inside a macrostep.
+ * Answers `TA_ERR_INVALID` for a bad buffer or argument and `TA_ERR_FULL` when
+ * `out.size` is too small, and then writes nothing.
+ */
+TA_PRIVATE ta_result ta_tel_dropped_write(ta_record_buffer out, const ta_tel_dropped *fixed);
+
+/**
+ * The `tel.dropped` record `view` holds, or NULL when it holds another kind.
+ * `view` comes from `ta_record_read`; the record is borrowed from its bytes.
+ * Never allocates. O(1).
+ */
+TA_PRIVATE inline const ta_tel_dropped *ta_tel_dropped_from_view(const ta_record_view *view) {
+    return view->kind == TA_RECORD_KIND_TEL_DROPPED ? (const ta_tel_dropped *)(const void *)view->bytes : NULL;
+}
+
 
 
 /*
@@ -4724,6 +7538,1125 @@ TA_PRIVATE ta_result ta_ring_take_drops(ta_ring *ring, ta_ring_drops *out) {
     *out = ring->unreported;
     ring->unreported = (ta_ring_drops){ 0 };
     return TA_OK;
+}
+
+/* The record codec: see ring_codec.h. Generated from protocol/catalog.rb
+ * by `mise run protocol` in tinyactors-core. Do not edit. */
+
+/* One kind as the reader and the writers check it. */
+typedef struct {
+    uint16_t kind;
+    uint8_t ring;
+    uint8_t span_count;
+    uint32_t fixed_size;
+    /* Its first span offset in ta_record_span_offsets. */
+    uint32_t span_first;
+} ta_record_descriptor;
+
+/* Every kind's span offsets, a run per kind, in catalog order. */
+static const uint32_t ta_record_span_offsets[] = {
+    /* h2c.event */
+    (uint32_t)offsetof(ta_h2c_event, target),
+    (uint32_t)offsetof(ta_h2c_event, name),
+    (uint32_t)offsetof(ta_h2c_event, sendid),
+    (uint32_t)offsetof(ta_h2c_event, origin),
+    (uint32_t)offsetof(ta_h2c_event, origin_type),
+    (uint32_t)offsetof(ta_h2c_event, invokeid),
+    /* h2c.spawn */
+    (uint32_t)offsetof(ta_h2c_spawn, address),
+    (uint32_t)offsetof(ta_h2c_spawn, revision),
+    /* h2c.publish */
+    (uint32_t)offsetof(ta_h2c_publish, address),
+    /* h2c.load */
+    (uint32_t)offsetof(ta_h2c_load, address),
+    /* h2c.load_failed */
+    (uint32_t)offsetof(ta_h2c_load_failed, address),
+    (uint32_t)offsetof(ta_h2c_load_failed, reason),
+    /* h2c.unload */
+    (uint32_t)offsetof(ta_h2c_unload, address),
+    /* h2c.checkpoint */
+    (uint32_t)offsetof(ta_h2c_checkpoint, address),
+    /* h2c.invoke_report */
+    (uint32_t)offsetof(ta_h2c_invoke_report, invokeid),
+    (uint32_t)offsetof(ta_h2c_invoke_report, reason),
+    /* h2c.destroy */
+    (uint32_t)offsetof(ta_h2c_destroy, address),
+    /* h2c.type_declare */
+    (uint32_t)offsetof(ta_h2c_type_declare, type),
+    /* c2h.spawned */
+    (uint32_t)offsetof(ta_c2h_spawned, address),
+    (uint32_t)offsetof(ta_c2h_spawned, revision),
+    /* c2h.input */
+    (uint32_t)offsetof(ta_c2h_input, name),
+    (uint32_t)offsetof(ta_c2h_input, sendid),
+    (uint32_t)offsetof(ta_c2h_input, origin),
+    (uint32_t)offsetof(ta_c2h_input, origin_type),
+    (uint32_t)offsetof(ta_c2h_input, invokeid),
+    (uint32_t)offsetof(ta_c2h_input, report_invokeid),
+    (uint32_t)offsetof(ta_c2h_input, report_reason),
+    /* c2h.send */
+    (uint32_t)offsetof(ta_c2h_send, sendid),
+    (uint32_t)offsetof(ta_c2h_send, io_type),
+    (uint32_t)offsetof(ta_c2h_send, target),
+    (uint32_t)offsetof(ta_c2h_send, name),
+    /* c2h.invoke */
+    (uint32_t)offsetof(ta_c2h_invoke, invokeid),
+    (uint32_t)offsetof(ta_c2h_invoke, type),
+    (uint32_t)offsetof(ta_c2h_invoke, src),
+    /* c2h.invoke_cancel */
+    (uint32_t)offsetof(ta_c2h_invoke_cancel, invokeid),
+    /* c2h.invoke_forward */
+    (uint32_t)offsetof(ta_c2h_invoke_forward, invokeid),
+    (uint32_t)offsetof(ta_c2h_invoke_forward, name),
+    (uint32_t)offsetof(ta_c2h_invoke_forward, sendid),
+    (uint32_t)offsetof(ta_c2h_invoke_forward, origin),
+    (uint32_t)offsetof(ta_c2h_invoke_forward, origin_type),
+    (uint32_t)offsetof(ta_c2h_invoke_forward, event_invokeid),
+    /* c2h.log */
+    (uint32_t)offsetof(ta_c2h_log, label),
+    /* c2h.bounced */
+    (uint32_t)offsetof(ta_c2h_bounced, detail),
+    /* c2h.load_needed */
+    (uint32_t)offsetof(ta_c2h_load_needed, address),
+    /* c2h.loaded */
+    (uint32_t)offsetof(ta_c2h_loaded, address),
+    /* c2h.unloaded */
+    (uint32_t)offsetof(ta_c2h_unloaded, address),
+    /* c2h.state */
+    (uint32_t)offsetof(ta_c2h_state, address),
+    /* c2h.published */
+    (uint32_t)offsetof(ta_c2h_published, address),
+    /* c2h.destroyed */
+    (uint32_t)offsetof(ta_c2h_destroyed, address),
+    /* tel.trace */
+    (uint32_t)offsetof(ta_tel_trace, address),
+    (uint32_t)offsetof(ta_tel_trace, definition),
+    (uint32_t)offsetof(ta_tel_trace, state_name),
+    (uint32_t)offsetof(ta_tel_trace, transition_name),
+    (uint32_t)offsetof(ta_tel_trace, action_name),
+    (uint32_t)offsetof(ta_tel_trace, name),
+    (uint32_t)offsetof(ta_tel_trace, send_id),
+    (uint32_t)offsetof(ta_tel_trace, invoke_id),
+    (uint32_t)offsetof(ta_tel_trace, value_text),
+    (uint32_t)offsetof(ta_tel_trace, fault_detail),
+    (uint32_t)offsetof(ta_tel_trace, fault_message),
+    (uint32_t)offsetof(ta_tel_trace, transitions),
+    (uint32_t)offsetof(ta_tel_trace, states),
+};
+
+/* One descriptor per kind, in catalog order. */
+static const ta_record_descriptor ta_record_descriptors[] = {
+    { TA_RECORD_KIND_H2C_TIME, TA_RECORD_RING_H2C, 0u, (uint32_t)sizeof(ta_h2c_time), 0u },
+    { TA_RECORD_KIND_H2C_EVENT, TA_RECORD_RING_H2C, 6u, (uint32_t)sizeof(ta_h2c_event), 0u },
+    { TA_RECORD_KIND_H2C_SPAWN, TA_RECORD_RING_H2C, 2u, (uint32_t)sizeof(ta_h2c_spawn), 6u },
+    { TA_RECORD_KIND_H2C_PUBLISH, TA_RECORD_RING_H2C, 1u, (uint32_t)sizeof(ta_h2c_publish), 8u },
+    { TA_RECORD_KIND_H2C_LOAD, TA_RECORD_RING_H2C, 1u, (uint32_t)sizeof(ta_h2c_load), 9u },
+    { TA_RECORD_KIND_H2C_LOAD_FAILED, TA_RECORD_RING_H2C, 2u, (uint32_t)sizeof(ta_h2c_load_failed), 10u },
+    { TA_RECORD_KIND_H2C_UNLOAD, TA_RECORD_RING_H2C, 1u, (uint32_t)sizeof(ta_h2c_unload), 12u },
+    { TA_RECORD_KIND_H2C_CHECKPOINT, TA_RECORD_RING_H2C, 1u, (uint32_t)sizeof(ta_h2c_checkpoint), 13u },
+    { TA_RECORD_KIND_H2C_INVOKE_REPORT, TA_RECORD_RING_H2C, 2u, (uint32_t)sizeof(ta_h2c_invoke_report), 14u },
+    { TA_RECORD_KIND_H2C_DESTROY, TA_RECORD_RING_H2C, 1u, (uint32_t)sizeof(ta_h2c_destroy), 16u },
+    { TA_RECORD_KIND_H2C_DEFINITION_REGISTER, TA_RECORD_RING_H2C, 0u, (uint32_t)sizeof(ta_h2c_definition_register), 17u },
+    { TA_RECORD_KIND_H2C_DEFINITION_RELEASE, TA_RECORD_RING_H2C, 0u, (uint32_t)sizeof(ta_h2c_definition_release), 17u },
+    { TA_RECORD_KIND_H2C_DEFINITION_RETIRE, TA_RECORD_RING_H2C, 0u, (uint32_t)sizeof(ta_h2c_definition_retire), 17u },
+    { TA_RECORD_KIND_H2C_WITHDRAW, TA_RECORD_RING_H2C, 0u, (uint32_t)sizeof(ta_h2c_withdraw), 17u },
+    { TA_RECORD_KIND_H2C_TYPE_DECLARE, TA_RECORD_RING_H2C, 1u, (uint32_t)sizeof(ta_h2c_type_declare), 17u },
+    { TA_RECORD_KIND_C2H_SPAWNED, TA_RECORD_RING_C2H, 2u, (uint32_t)sizeof(ta_c2h_spawned), 18u },
+    { TA_RECORD_KIND_C2H_INPUT, TA_RECORD_RING_C2H, 7u, (uint32_t)sizeof(ta_c2h_input), 20u },
+    { TA_RECORD_KIND_C2H_SEND, TA_RECORD_RING_C2H, 4u, (uint32_t)sizeof(ta_c2h_send), 27u },
+    { TA_RECORD_KIND_C2H_INVOKE, TA_RECORD_RING_C2H, 3u, (uint32_t)sizeof(ta_c2h_invoke), 31u },
+    { TA_RECORD_KIND_C2H_INVOKE_CANCEL, TA_RECORD_RING_C2H, 1u, (uint32_t)sizeof(ta_c2h_invoke_cancel), 34u },
+    { TA_RECORD_KIND_C2H_INVOKE_FORWARD, TA_RECORD_RING_C2H, 6u, (uint32_t)sizeof(ta_c2h_invoke_forward), 35u },
+    { TA_RECORD_KIND_C2H_LOG, TA_RECORD_RING_C2H, 1u, (uint32_t)sizeof(ta_c2h_log), 41u },
+    { TA_RECORD_KIND_C2H_MACROSTEP_ENDED, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_macrostep_ended), 42u },
+    { TA_RECORD_KIND_C2H_WAKE, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_wake), 42u },
+    { TA_RECORD_KIND_C2H_BOUNCED, TA_RECORD_RING_C2H, 1u, (uint32_t)sizeof(ta_c2h_bounced), 42u },
+    { TA_RECORD_KIND_C2H_LOAD_NEEDED, TA_RECORD_RING_C2H, 1u, (uint32_t)sizeof(ta_c2h_load_needed), 43u },
+    { TA_RECORD_KIND_C2H_LOADED, TA_RECORD_RING_C2H, 1u, (uint32_t)sizeof(ta_c2h_loaded), 44u },
+    { TA_RECORD_KIND_C2H_UNLOADED, TA_RECORD_RING_C2H, 1u, (uint32_t)sizeof(ta_c2h_unloaded), 45u },
+    { TA_RECORD_KIND_C2H_STATE, TA_RECORD_RING_C2H, 1u, (uint32_t)sizeof(ta_c2h_state), 46u },
+    { TA_RECORD_KIND_C2H_PUBLISHED, TA_RECORD_RING_C2H, 1u, (uint32_t)sizeof(ta_c2h_published), 47u },
+    { TA_RECORD_KIND_C2H_FINISHED, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_finished), 48u },
+    { TA_RECORD_KIND_C2H_DESTROYED, TA_RECORD_RING_C2H, 1u, (uint32_t)sizeof(ta_c2h_destroyed), 48u },
+    { TA_RECORD_KIND_C2H_DEFINITION_RESULT, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_definition_result), 49u },
+    { TA_RECORD_KIND_C2H_INPUT_REFUSED, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_input_refused), 49u },
+    { TA_RECORD_KIND_C2H_INPUT_COMPLETED, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_input_completed), 49u },
+    { TA_RECORD_KIND_C2H_LOAD_RESULT, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_load_result), 49u },
+    { TA_RECORD_KIND_TEL_TRACE, TA_RECORD_RING_TEL, 13u, (uint32_t)sizeof(ta_tel_trace), 49u },
+    { TA_RECORD_KIND_TEL_DROPPED, TA_RECORD_RING_TEL, 0u, (uint32_t)sizeof(ta_tel_dropped), 62u },
+};
+
+/* The index of `kind` in ta_record_descriptors, or their count when no
+ * record has that kind. */
+static uint32_t ta_record_descriptor_index(uint16_t kind) {
+    switch (kind) {
+    case TA_RECORD_KIND_H2C_TIME:
+        return 0u;
+    case TA_RECORD_KIND_H2C_EVENT:
+        return 1u;
+    case TA_RECORD_KIND_H2C_SPAWN:
+        return 2u;
+    case TA_RECORD_KIND_H2C_PUBLISH:
+        return 3u;
+    case TA_RECORD_KIND_H2C_LOAD:
+        return 4u;
+    case TA_RECORD_KIND_H2C_LOAD_FAILED:
+        return 5u;
+    case TA_RECORD_KIND_H2C_UNLOAD:
+        return 6u;
+    case TA_RECORD_KIND_H2C_CHECKPOINT:
+        return 7u;
+    case TA_RECORD_KIND_H2C_INVOKE_REPORT:
+        return 8u;
+    case TA_RECORD_KIND_H2C_DESTROY:
+        return 9u;
+    case TA_RECORD_KIND_H2C_DEFINITION_REGISTER:
+        return 10u;
+    case TA_RECORD_KIND_H2C_DEFINITION_RELEASE:
+        return 11u;
+    case TA_RECORD_KIND_H2C_DEFINITION_RETIRE:
+        return 12u;
+    case TA_RECORD_KIND_H2C_WITHDRAW:
+        return 13u;
+    case TA_RECORD_KIND_H2C_TYPE_DECLARE:
+        return 14u;
+    case TA_RECORD_KIND_C2H_SPAWNED:
+        return 15u;
+    case TA_RECORD_KIND_C2H_INPUT:
+        return 16u;
+    case TA_RECORD_KIND_C2H_SEND:
+        return 17u;
+    case TA_RECORD_KIND_C2H_INVOKE:
+        return 18u;
+    case TA_RECORD_KIND_C2H_INVOKE_CANCEL:
+        return 19u;
+    case TA_RECORD_KIND_C2H_INVOKE_FORWARD:
+        return 20u;
+    case TA_RECORD_KIND_C2H_LOG:
+        return 21u;
+    case TA_RECORD_KIND_C2H_MACROSTEP_ENDED:
+        return 22u;
+    case TA_RECORD_KIND_C2H_WAKE:
+        return 23u;
+    case TA_RECORD_KIND_C2H_BOUNCED:
+        return 24u;
+    case TA_RECORD_KIND_C2H_LOAD_NEEDED:
+        return 25u;
+    case TA_RECORD_KIND_C2H_LOADED:
+        return 26u;
+    case TA_RECORD_KIND_C2H_UNLOADED:
+        return 27u;
+    case TA_RECORD_KIND_C2H_STATE:
+        return 28u;
+    case TA_RECORD_KIND_C2H_PUBLISHED:
+        return 29u;
+    case TA_RECORD_KIND_C2H_FINISHED:
+        return 30u;
+    case TA_RECORD_KIND_C2H_DESTROYED:
+        return 31u;
+    case TA_RECORD_KIND_C2H_DEFINITION_RESULT:
+        return 32u;
+    case TA_RECORD_KIND_C2H_INPUT_REFUSED:
+        return 33u;
+    case TA_RECORD_KIND_C2H_INPUT_COMPLETED:
+        return 34u;
+    case TA_RECORD_KIND_C2H_LOAD_RESULT:
+        return 35u;
+    case TA_RECORD_KIND_TEL_TRACE:
+        return 36u;
+    case TA_RECORD_KIND_TEL_DROPPED:
+        return 37u;
+    default:
+        return TA_ARRAY_COUNT(ta_record_descriptors);
+    }
+}
+
+/* A writer's texts as one array of tails. */
+typedef struct {
+    uint16_t kind;
+    uint32_t count;
+    const ta_bytes *tails;
+} ta_record_shape;
+
+#define TA_RECORD_TAIL(text) { (const uint8_t *)(const void *)(text).ptr, (text).len }
+
+/* The record's size: the fixed part plus the tails, rounded up to 8. */
+static ta_result ta_record_measure(const ta_record_shape *shape, uint32_t *out) {
+    uint32_t index = ta_record_descriptor_index(shape->kind);
+    if (index == TA_ARRAY_COUNT(ta_record_descriptors)) {
+        return TA_ERR_INVALID;
+    }
+    uint64_t size = ta_record_descriptors[index].fixed_size;
+    for (uint32_t tail = 0; tail < shape->count; tail += 1u) {
+        if (shape->tails[tail].ptr == NULL && shape->tails[tail].len != 0u) {
+            return TA_ERR_INVALID;
+        }
+        size += shape->tails[tail].len;
+    }
+    size = (size + 7u) & ~(uint64_t)7u;
+    if (size > UINT32_MAX) {
+        return TA_ERR_INVALID;
+    }
+    *out = (uint32_t)size;
+    return TA_OK;
+}
+
+/* Checks everything, then fills the record; see ring_codec.h. */
+static ta_result ta_record_write(ta_record_buffer out, const void *fixed, const ta_record_shape *shape) {
+    if (out.bytes == NULL || ((uintptr_t)(void *)out.bytes & 7u) != 0u || (out.size & 7u) != 0u ||
+        fixed == NULL) {
+        return TA_ERR_INVALID;
+    }
+    uint32_t needed = 0u;
+    ta_result result = ta_record_measure(shape, &needed);
+    if (result != TA_OK) {
+        return result;
+    }
+    if (out.size < needed) {
+        return TA_ERR_FULL;
+    }
+    const ta_record_descriptor *descriptor = &ta_record_descriptors[ta_record_descriptor_index(shape->kind)];
+    uint64_t seq = 0u;
+    ta_mem_copy(&seq, out.bytes + offsetof(ta_record_header, seq), sizeof(seq));
+    if (fixed != (const void *)out.bytes) {
+        ta_mem_copy(out.bytes, fixed, descriptor->fixed_size);
+    }
+    ta_mem_zero(out.bytes + descriptor->fixed_size, out.size - descriptor->fixed_size);
+    uint16_t kind = shape->kind;
+    ta_mem_copy(out.bytes + offsetof(ta_record_header, kind), &kind, sizeof(kind));
+    ta_mem_copy(out.bytes + offsetof(ta_record_header, size), &out.size, sizeof(out.size));
+    ta_mem_copy(out.bytes + offsetof(ta_record_header, seq), &seq, sizeof(seq));
+    uint32_t cursor = descriptor->fixed_size;
+    for (uint32_t tail = 0; tail < shape->count; tail += 1u) {
+        ta_span32 span = { cursor, shape->tails[tail].len };
+        ta_mem_copy(out.bytes + ta_record_span_offsets[descriptor->span_first + tail], &span, sizeof(span));
+        if (span.length != 0u) {
+            ta_mem_copy(out.bytes + cursor, shape->tails[tail].ptr, span.length);
+        }
+        cursor += span.length;
+    }
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_record_read(const ta_record_read_params *params, ta_record_view *out) {
+    if (params == NULL || out == NULL || params->bytes == NULL ||
+        ((uintptr_t)(const void *)params->bytes & 7u) != 0u) {
+        return TA_ERR_INVALID;
+    }
+    if ((uint32_t)params->ring == 0u || (uint32_t)params->ring > TA_RECORD_RING_COUNT) {
+        return TA_ERR_INVALID;
+    }
+    if (params->size < TA_RECORD_HEADER_BYTES) {
+        return TA_ERR_CORRUPT;
+    }
+    uint16_t kind = 0u;
+    uint32_t size = 0u;
+    ta_mem_copy(&kind, params->bytes + offsetof(ta_record_header, kind), sizeof(kind));
+    ta_mem_copy(&size, params->bytes + offsetof(ta_record_header, size), sizeof(size));
+    if (kind == TA_RECORD_KIND_PAD) {
+        return TA_ERR_CORRUPT;
+    }
+    uint32_t index = ta_record_descriptor_index(kind);
+    if (index == TA_ARRAY_COUNT(ta_record_descriptors)) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    const ta_record_descriptor *descriptor = &ta_record_descriptors[index];
+    if ((uint32_t)descriptor->ring != (uint32_t)params->ring) {
+        return TA_ERR_CORRUPT;
+    }
+    if ((size & 7u) != 0u || size > params->size || size < descriptor->fixed_size) {
+        return TA_ERR_CORRUPT;
+    }
+    for (uint32_t index_in_kind = 0; index_in_kind < descriptor->span_count; index_in_kind += 1u) {
+        ta_span32 span = { 0u, 0u };
+        ta_mem_copy(&span, params->bytes + ta_record_span_offsets[descriptor->span_first + index_in_kind],
+                    sizeof(span));
+        if (span.offset < descriptor->fixed_size || span.offset > size || span.length > size - span.offset) {
+            return TA_ERR_CORRUPT;
+        }
+    }
+    out->bytes = params->bytes;
+    out->size = size;
+    out->kind = kind;
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_record_describe(uint16_t kind, ta_record_description *out) {
+    uint32_t index = ta_record_descriptor_index(kind);
+    if (index == TA_ARRAY_COUNT(ta_record_descriptors) || out == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    const ta_record_descriptor *descriptor = &ta_record_descriptors[index];
+    out->ring = (ta_record_ring)descriptor->ring;
+    out->fixed_size = descriptor->fixed_size;
+    out->span_count = descriptor->span_count;
+    out->span_offsets = &ta_record_span_offsets[descriptor->span_first];
+    return TA_OK;
+}
+
+/* ---- h2c.time ---- */
+
+TA_PRIVATE ta_result ta_h2c_time_write(ta_record_buffer out, const ta_h2c_time *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_TIME, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.event ---- */
+
+TA_PRIVATE ta_result ta_h2c_event_size(const ta_h2c_event_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[6] = {
+        TA_RECORD_TAIL(texts->target),
+        TA_RECORD_TAIL(texts->name),
+        TA_RECORD_TAIL(texts->sendid),
+        TA_RECORD_TAIL(texts->origin),
+        TA_RECORD_TAIL(texts->origin_type),
+        TA_RECORD_TAIL(texts->invokeid),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_EVENT, 6u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_event_write(ta_record_buffer out, const ta_h2c_event *fixed, const ta_h2c_event_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[6] = {
+        TA_RECORD_TAIL(texts->target),
+        TA_RECORD_TAIL(texts->name),
+        TA_RECORD_TAIL(texts->sendid),
+        TA_RECORD_TAIL(texts->origin),
+        TA_RECORD_TAIL(texts->origin_type),
+        TA_RECORD_TAIL(texts->invokeid),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_EVENT, 6u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.spawn ---- */
+
+TA_PRIVATE ta_result ta_h2c_spawn_size(const ta_h2c_spawn_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[2] = {
+        TA_RECORD_TAIL(texts->address),
+        TA_RECORD_TAIL(texts->revision),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_SPAWN, 2u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_spawn_write(ta_record_buffer out, const ta_h2c_spawn *fixed, const ta_h2c_spawn_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[2] = {
+        TA_RECORD_TAIL(texts->address),
+        TA_RECORD_TAIL(texts->revision),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_SPAWN, 2u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.publish ---- */
+
+TA_PRIVATE ta_result ta_h2c_publish_size(const ta_h2c_publish_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_PUBLISH, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_publish_write(ta_record_buffer out, const ta_h2c_publish *fixed, const ta_h2c_publish_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_PUBLISH, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.load ---- */
+
+TA_PRIVATE ta_result ta_h2c_load_size(const ta_h2c_load_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_LOAD, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_load_write(ta_record_buffer out, const ta_h2c_load *fixed, const ta_h2c_load_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_LOAD, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.load_failed ---- */
+
+TA_PRIVATE ta_result ta_h2c_load_failed_size(const ta_h2c_load_failed_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[2] = {
+        TA_RECORD_TAIL(texts->address),
+        TA_RECORD_TAIL(texts->reason),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_LOAD_FAILED, 2u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_load_failed_write(ta_record_buffer out, const ta_h2c_load_failed *fixed, const ta_h2c_load_failed_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[2] = {
+        TA_RECORD_TAIL(texts->address),
+        TA_RECORD_TAIL(texts->reason),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_LOAD_FAILED, 2u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.unload ---- */
+
+TA_PRIVATE ta_result ta_h2c_unload_size(const ta_h2c_unload_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_UNLOAD, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_unload_write(ta_record_buffer out, const ta_h2c_unload *fixed, const ta_h2c_unload_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_UNLOAD, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.checkpoint ---- */
+
+TA_PRIVATE ta_result ta_h2c_checkpoint_size(const ta_h2c_checkpoint_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_CHECKPOINT, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_checkpoint_write(ta_record_buffer out, const ta_h2c_checkpoint *fixed, const ta_h2c_checkpoint_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_CHECKPOINT, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.invoke_report ---- */
+
+TA_PRIVATE ta_result ta_h2c_invoke_report_size(const ta_h2c_invoke_report_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[2] = {
+        TA_RECORD_TAIL(texts->invokeid),
+        TA_RECORD_TAIL(texts->reason),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_INVOKE_REPORT, 2u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_invoke_report_write(ta_record_buffer out, const ta_h2c_invoke_report *fixed, const ta_h2c_invoke_report_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[2] = {
+        TA_RECORD_TAIL(texts->invokeid),
+        TA_RECORD_TAIL(texts->reason),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_INVOKE_REPORT, 2u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.destroy ---- */
+
+TA_PRIVATE ta_result ta_h2c_destroy_size(const ta_h2c_destroy_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DESTROY, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_destroy_write(ta_record_buffer out, const ta_h2c_destroy *fixed, const ta_h2c_destroy_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DESTROY, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.definition_register ---- */
+
+TA_PRIVATE ta_result ta_h2c_definition_register_write(ta_record_buffer out, const ta_h2c_definition_register *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DEFINITION_REGISTER, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.definition_release ---- */
+
+TA_PRIVATE ta_result ta_h2c_definition_release_write(ta_record_buffer out, const ta_h2c_definition_release *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DEFINITION_RELEASE, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.definition_retire ---- */
+
+TA_PRIVATE ta_result ta_h2c_definition_retire_write(ta_record_buffer out, const ta_h2c_definition_retire *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DEFINITION_RETIRE, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.withdraw ---- */
+
+TA_PRIVATE ta_result ta_h2c_withdraw_write(ta_record_buffer out, const ta_h2c_withdraw *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_WITHDRAW, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- h2c.type_declare ---- */
+
+TA_PRIVATE ta_result ta_h2c_type_declare_size(const ta_h2c_type_declare_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->type),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_TYPE_DECLARE, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_h2c_type_declare_write(ta_record_buffer out, const ta_h2c_type_declare *fixed, const ta_h2c_type_declare_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->type),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_H2C_TYPE_DECLARE, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.spawned ---- */
+
+TA_PRIVATE ta_result ta_c2h_spawned_size(const ta_c2h_spawned_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[2] = {
+        TA_RECORD_TAIL(texts->address),
+        TA_RECORD_TAIL(texts->revision),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_SPAWNED, 2u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_spawned_write(ta_record_buffer out, const ta_c2h_spawned *fixed, const ta_c2h_spawned_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[2] = {
+        TA_RECORD_TAIL(texts->address),
+        TA_RECORD_TAIL(texts->revision),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_SPAWNED, 2u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.input ---- */
+
+TA_PRIVATE ta_result ta_c2h_input_size(const ta_c2h_input_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[7] = {
+        TA_RECORD_TAIL(texts->name),
+        TA_RECORD_TAIL(texts->sendid),
+        TA_RECORD_TAIL(texts->origin),
+        TA_RECORD_TAIL(texts->origin_type),
+        TA_RECORD_TAIL(texts->invokeid),
+        TA_RECORD_TAIL(texts->report_invokeid),
+        TA_RECORD_TAIL(texts->report_reason),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INPUT, 7u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_input_write(ta_record_buffer out, const ta_c2h_input *fixed, const ta_c2h_input_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[7] = {
+        TA_RECORD_TAIL(texts->name),
+        TA_RECORD_TAIL(texts->sendid),
+        TA_RECORD_TAIL(texts->origin),
+        TA_RECORD_TAIL(texts->origin_type),
+        TA_RECORD_TAIL(texts->invokeid),
+        TA_RECORD_TAIL(texts->report_invokeid),
+        TA_RECORD_TAIL(texts->report_reason),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INPUT, 7u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.send ---- */
+
+TA_PRIVATE ta_result ta_c2h_send_size(const ta_c2h_send_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[4] = {
+        TA_RECORD_TAIL(texts->sendid),
+        TA_RECORD_TAIL(texts->io_type),
+        TA_RECORD_TAIL(texts->target),
+        TA_RECORD_TAIL(texts->name),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_SEND, 4u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_send_write(ta_record_buffer out, const ta_c2h_send *fixed, const ta_c2h_send_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[4] = {
+        TA_RECORD_TAIL(texts->sendid),
+        TA_RECORD_TAIL(texts->io_type),
+        TA_RECORD_TAIL(texts->target),
+        TA_RECORD_TAIL(texts->name),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_SEND, 4u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.invoke ---- */
+
+TA_PRIVATE ta_result ta_c2h_invoke_size(const ta_c2h_invoke_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[3] = {
+        TA_RECORD_TAIL(texts->invokeid),
+        TA_RECORD_TAIL(texts->type),
+        TA_RECORD_TAIL(texts->src),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE, 3u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_invoke_write(ta_record_buffer out, const ta_c2h_invoke *fixed, const ta_c2h_invoke_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[3] = {
+        TA_RECORD_TAIL(texts->invokeid),
+        TA_RECORD_TAIL(texts->type),
+        TA_RECORD_TAIL(texts->src),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE, 3u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.invoke_cancel ---- */
+
+TA_PRIVATE ta_result ta_c2h_invoke_cancel_size(const ta_c2h_invoke_cancel_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->invokeid),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE_CANCEL, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_invoke_cancel_write(ta_record_buffer out, const ta_c2h_invoke_cancel *fixed, const ta_c2h_invoke_cancel_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->invokeid),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE_CANCEL, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.invoke_forward ---- */
+
+TA_PRIVATE ta_result ta_c2h_invoke_forward_size(const ta_c2h_invoke_forward_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[6] = {
+        TA_RECORD_TAIL(texts->invokeid),
+        TA_RECORD_TAIL(texts->name),
+        TA_RECORD_TAIL(texts->sendid),
+        TA_RECORD_TAIL(texts->origin),
+        TA_RECORD_TAIL(texts->origin_type),
+        TA_RECORD_TAIL(texts->event_invokeid),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE_FORWARD, 6u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_invoke_forward_write(ta_record_buffer out, const ta_c2h_invoke_forward *fixed, const ta_c2h_invoke_forward_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[6] = {
+        TA_RECORD_TAIL(texts->invokeid),
+        TA_RECORD_TAIL(texts->name),
+        TA_RECORD_TAIL(texts->sendid),
+        TA_RECORD_TAIL(texts->origin),
+        TA_RECORD_TAIL(texts->origin_type),
+        TA_RECORD_TAIL(texts->event_invokeid),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE_FORWARD, 6u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.log ---- */
+
+TA_PRIVATE ta_result ta_c2h_log_size(const ta_c2h_log_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->label),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOG, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_log_write(ta_record_buffer out, const ta_c2h_log *fixed, const ta_c2h_log_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->label),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOG, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.macrostep_ended ---- */
+
+TA_PRIVATE ta_result ta_c2h_macrostep_ended_write(ta_record_buffer out, const ta_c2h_macrostep_ended *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_MACROSTEP_ENDED, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.wake ---- */
+
+TA_PRIVATE ta_result ta_c2h_wake_write(ta_record_buffer out, const ta_c2h_wake *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_WAKE, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.bounced ---- */
+
+TA_PRIVATE ta_result ta_c2h_bounced_size(const ta_c2h_bounced_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->detail),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_BOUNCED, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_bounced_write(ta_record_buffer out, const ta_c2h_bounced *fixed, const ta_c2h_bounced_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->detail),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_BOUNCED, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.load_needed ---- */
+
+TA_PRIVATE ta_result ta_c2h_load_needed_size(const ta_c2h_load_needed_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOAD_NEEDED, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_load_needed_write(ta_record_buffer out, const ta_c2h_load_needed *fixed, const ta_c2h_load_needed_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOAD_NEEDED, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.loaded ---- */
+
+TA_PRIVATE ta_result ta_c2h_loaded_size(const ta_c2h_loaded_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOADED, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_loaded_write(ta_record_buffer out, const ta_c2h_loaded *fixed, const ta_c2h_loaded_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOADED, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.unloaded ---- */
+
+TA_PRIVATE ta_result ta_c2h_unloaded_size(const ta_c2h_unloaded_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_UNLOADED, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_unloaded_write(ta_record_buffer out, const ta_c2h_unloaded *fixed, const ta_c2h_unloaded_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_UNLOADED, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.state ---- */
+
+TA_PRIVATE ta_result ta_c2h_state_size(const ta_c2h_state_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_STATE, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_state_write(ta_record_buffer out, const ta_c2h_state *fixed, const ta_c2h_state_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_STATE, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.published ---- */
+
+TA_PRIVATE ta_result ta_c2h_published_size(const ta_c2h_published_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_PUBLISHED, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_published_write(ta_record_buffer out, const ta_c2h_published *fixed, const ta_c2h_published_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_PUBLISHED, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.finished ---- */
+
+TA_PRIVATE ta_result ta_c2h_finished_write(ta_record_buffer out, const ta_c2h_finished *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_FINISHED, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.destroyed ---- */
+
+TA_PRIVATE ta_result ta_c2h_destroyed_size(const ta_c2h_destroyed_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_DESTROYED, 1u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_c2h_destroyed_write(ta_record_buffer out, const ta_c2h_destroyed *fixed, const ta_c2h_destroyed_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[1] = {
+        TA_RECORD_TAIL(texts->address),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_DESTROYED, 1u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.definition_result ---- */
+
+TA_PRIVATE ta_result ta_c2h_definition_result_write(ta_record_buffer out, const ta_c2h_definition_result *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_DEFINITION_RESULT, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.input_refused ---- */
+
+TA_PRIVATE ta_result ta_c2h_input_refused_write(ta_record_buffer out, const ta_c2h_input_refused *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INPUT_REFUSED, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.input_completed ---- */
+
+TA_PRIVATE ta_result ta_c2h_input_completed_write(ta_record_buffer out, const ta_c2h_input_completed *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INPUT_COMPLETED, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- c2h.load_result ---- */
+
+TA_PRIVATE ta_result ta_c2h_load_result_write(ta_record_buffer out, const ta_c2h_load_result *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOAD_RESULT, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- tel.trace ---- */
+
+TA_PRIVATE ta_result ta_tel_trace_size(const ta_tel_trace_texts *texts, uint32_t *out) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[13] = {
+        TA_RECORD_TAIL(texts->address),
+        TA_RECORD_TAIL(texts->definition),
+        TA_RECORD_TAIL(texts->state_name),
+        TA_RECORD_TAIL(texts->transition_name),
+        TA_RECORD_TAIL(texts->action_name),
+        TA_RECORD_TAIL(texts->name),
+        TA_RECORD_TAIL(texts->send_id),
+        TA_RECORD_TAIL(texts->invoke_id),
+        TA_RECORD_TAIL(texts->value_text),
+        TA_RECORD_TAIL(texts->fault_detail),
+        TA_RECORD_TAIL(texts->fault_message),
+        TA_RECORD_TAIL(texts->transitions),
+        TA_RECORD_TAIL(texts->states),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_TEL_TRACE, 13u, tails };
+    return ta_record_measure(&shape, out);
+}
+
+TA_PRIVATE ta_result ta_tel_trace_write(ta_record_buffer out, const ta_tel_trace *fixed, const ta_tel_trace_texts *texts) {
+    if (texts == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_bytes tails[13] = {
+        TA_RECORD_TAIL(texts->address),
+        TA_RECORD_TAIL(texts->definition),
+        TA_RECORD_TAIL(texts->state_name),
+        TA_RECORD_TAIL(texts->transition_name),
+        TA_RECORD_TAIL(texts->action_name),
+        TA_RECORD_TAIL(texts->name),
+        TA_RECORD_TAIL(texts->send_id),
+        TA_RECORD_TAIL(texts->invoke_id),
+        TA_RECORD_TAIL(texts->value_text),
+        TA_RECORD_TAIL(texts->fault_detail),
+        TA_RECORD_TAIL(texts->fault_message),
+        TA_RECORD_TAIL(texts->transitions),
+        TA_RECORD_TAIL(texts->states),
+    };
+    const ta_record_shape shape = { TA_RECORD_KIND_TEL_TRACE, 13u, tails };
+    return ta_record_write(out, fixed, &shape);
+}
+
+/* ---- tel.dropped ---- */
+
+TA_PRIVATE ta_result ta_tel_dropped_write(ta_record_buffer out, const ta_tel_dropped *fixed) {
+    const ta_record_shape shape = { TA_RECORD_KIND_TEL_DROPPED, 0u, NULL };
+    return ta_record_write(out, fixed, &shape);
 }
 
 

@@ -4,8 +4,8 @@
 #
 # Evaluating a catalog (catalog.rb) builds a RingProto::Model: the scalar
 # types, enums, flags, rings and messages, with every message's byte layout
-# computed. Renderers (render.rb) turn the model into Markdown, JSON or a C
-# header, so the catalog is the only place a record is defined.
+# computed. Renderers (render.rb) turn the model into Markdown, JSON and C,
+# so the catalog is the only place a record is defined.
 #
 # Layout rules (README.md, "Layout rules"):
 # - every record starts with the common header (RingProto::HEADER);
@@ -53,7 +53,7 @@ module RingProto
 
   # Flags any record may carry (bits 8..15).
   COMMON_FLAGS = [
-    Flag.new(:replaying, 8, 'part of a replay (reference/recording-and-replay.md). On c2h and tel: ' \
+    Flag.new(:replaying, 8, 'part of a replay (docs/proposals/ring-proto/reference/recording-and-replay.md). On c2h and tel: ' \
                             'written by a replaying session. On h2c: an input of a replay; under a ' \
                             'whole-system replay every h2c record carries it, sessions it spawns ' \
                             'replay, mail between them is delivered as envelopes, and effects that ' \

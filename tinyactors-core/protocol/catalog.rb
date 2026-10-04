@@ -4,19 +4,18 @@
 # renderer reads. Evaluated by RingProto.load (dsl.rb).
 #
 # Identifiers are stable: `<ring>.<name>` and the 16-bit code never change
-# meaning once a scenario cites them. While the protocol is a sketch, a
-# record or value nothing cites is deleted outright and leaves no
-# reservation; codes become permanent when the protocol is implemented.
+# meaning. A code is permanent once assigned; a retired code stays
+# reserved and is never given to another record.
 #
 # Codes: 0x01xx host to core (h2c), 0x02xx core to host (c2h),
 # 0x03xx telemetry (tel). Code 0x0000 is reserved for the pad record a
 # producer writes when a record would not fit before the wrap
-# (reference/ring.md, "The wrap").
+# (docs/proposals/ring-proto/reference/ring.md, "The wrap").
 
 title 'Ring protocol records'
 
 note 'The data model is not on a ring. Core calls ta_datamodel_vtable ' \
-     'synchronously, as today (reference/data-model.md). Only its results ' \
+     'synchronously, as today (docs/proposals/ring-proto/reference/data-model.md). Only its results ' \
      'cross the rings, as value references.'
 note 'Definition management uses request/result records. Native calls create ' \
      'and destroy the system, expose its rings, drive execution and install ' \
@@ -24,7 +23,7 @@ note 'Definition management uses request/result records. Native calls create ' \
      'ownership of the whole system from the production pump. Inspection, ' \
      'abandonment and operator transitions use native primitives outside ' \
      'the production rings; no operator ring is added ' \
-     '(reference/debugging.md).'
+     '(docs/proposals/ring-proto/reference/debugging.md).'
 note 'A vref in a c2h record is a reference core retained for the host. ' \
      'The host releases it when it has used the record. A vref in an h2c ' \
      'record transfers one retained reference to core at commit. Core ' \
@@ -45,7 +44,7 @@ ring :h2c,
      doc: 'Host requests, in host order. An event that cannot be admitted ' \
           'is consumed and bounced after its refusal output is reserved. ' \
           'Admission is not an execution barrier. Definition requests run between ' \
-          'macrosteps without an envelope (reference/definitions.md).'
+          'macrosteps without an envelope (docs/proposals/ring-proto/reference/definitions.md).'
 
 ring :c2h,
      producer: :core, consumer: :host, loss: :none,
@@ -86,7 +85,7 @@ end
 enum :macrostep_status, :u8, doc: 'How a macrostep ended.' do
   value :stable, 0, 'stabilization ended; invocation startup and internal follow-up may still follow'
   value :done, 1, 'the session reached a top-level final state; c2h.finished follows'
-  value :runaway, 2, 'the chain limit or an internal-queue overflow stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays'
+  value :runaway, 2, 'the chain limit or an internal-queue overflow stopped it and core abandoned the input (docs/proposals/ring-proto/reference/macrostep.md); the configuration after the last completed microstep stays'
   value :abandoned, 3, 'an operator abandoned it (core ADR 0082)'
 end
 
@@ -97,7 +96,7 @@ enum :input_completion_status, :u8, doc: 'How an input and its invocation-startu
   value :abandoned, 3, 'an operator abandoned execution'
 end
 
-enum :runaway_cause, :u8, doc: 'What stopped a runaway input; tel.trace RUNAWAY carries it (reference/macrostep.md).' do
+enum :runaway_cause, :u8, doc: 'What stopped a runaway input; tel.trace RUNAWAY carries it (docs/proposals/ring-proto/reference/macrostep.md).' do
   value :chain_limit, 1, 'the input’s chain reached microstepLimit'
   value :internal_queue, 2, 'a mandatory internal event fit neither the floor nor a free ordinary entry'
 end
@@ -132,7 +131,7 @@ end
 enum :capacity_resource, :u8,
      doc: 'The last segment of error.execution.capacity.<resource>, the event an ' \
           'action raises when a bounded resource has no room for it. Its data names ' \
-          'the action (reference/macrostep.md, "Two kinds of exhaustion"). A full ' \
+          'the action (docs/proposals/ring-proto/reference/macrostep.md, "Two kinds of exhaustion"). A full ' \
           'c2h is not one of them: the slot waits for the host to drain.' do
   value :pool, 1, 'no free envelope for mail or a delayed send (poolEnvelopes)'
   value :names, 2, 'no room in the name area for a run-time name (nameAreaBytes)'
@@ -160,7 +159,7 @@ enum :definition_status, :u8, doc: 'The result of a definition request.' do
   value :invalid, 5, 'a malformed or unknown spec or adapter handle, or an invalid release request'
 end
 
-enum :type_registry, :u8, doc: 'Which type registry a declared type belongs to (reference/building-blocks.md).' do
+enum :type_registry, :u8, doc: 'Which type registry a declared type belongs to (docs/proposals/ring-proto/reference/building-blocks.md).' do
   value :io, 1, 'I/O processor types: <send type>, _ioprocessors'
   value :invoker, 2, 'invocation types: <invoke type>'
 end
@@ -193,9 +192,9 @@ message 'h2c.event', code: 0x0102, summary: 'An external event for a session' do
       'that takes the event runs under that context, with the cause key ' \
       '{session 0, macrostep parent_span_id}. An all-zero trace ID means ' \
       'no context. The envelope keeps the trace parent until take ' \
-      '(reference/envelope.md).'
+      '(docs/proposals/ring-proto/reference/envelope.md).'
   field :target, :text, 'the address (family/name), when session is 0'
-  field :name, :text, 'the dotted event name, as bytes (reference/names.md)'
+  field :name, :text, 'the dotted event name, as bytes (docs/proposals/ring-proto/reference/names.md)'
   field :sendid, :text, '_event.sendid, or empty'
   field :origin, :text, '_event.origin, or empty'
   field :origin_type, :text, '_event.origintype, or empty'
@@ -246,7 +245,7 @@ message 'h2c.publish', code: 0x0104, summary: 'End a replay and put the session 
       'pool under their due times (core ADR 0094). Active invocations are ' \
       'retired with error.communication.invoke.<id>.unavailable.'
   doc 'An empty `address` publishes every replaying session at once: the ' \
-      'end of a whole-system replay (reference/recording-and-replay.md).'
+      'end of a whole-system replay (docs/proposals/ring-proto/reference/recording-and-replay.md).'
   doc 'Refuses without mutation while supplied seed inputs remain pending. ' \
       'Generated local mail need not drain: pending mail follows the selected ' \
       'publication cut into live execution. Publication does not execute effects ' \
@@ -262,7 +261,7 @@ message 'h2c.load', code: 0x0105, summary: 'Bring an unloaded session back' do
   doc 'Loading only bounds memory; it is not persistence. The image is one ' \
       'c2h.unloaded wrote in this process, and it is valid only here ' \
       '(core ADR 0074). To restore a session after a restart, use ' \
-      'h2c.spawn with `state` (reference/unloading.md).'
+      'h2c.spawn with `state` (docs/proposals/ring-proto/reference/unloading.md).'
   field :address, :text
   field :image, :blob, 'the bytes c2h.unloaded gave, in this process'
   field :request_seq, :seq, 'c2h.load_needed seq; 0 for an unsolicited timer-driven load'
@@ -276,7 +275,7 @@ end
 message 'h2c.load_failed', code: 0x0106, summary: 'The session cannot be loaded' do
   doc 'Every envelope waiting for the address is recycled: mail becomes ' \
       'error.communication for its sender, in the same envelope ' \
-      '(reference/envelope.md, "Recycling"); external inputs receive ' \
+      '(docs/proposals/ring-proto/reference/envelope.md, "Recycling"); external inputs receive ' \
       'c2h.input_refused and DEAD_LETTER telemetry. Large waiting lists ' \
       'are processed incrementally between macrosteps as c2h space permits.'
   field :address, :text
@@ -337,7 +336,7 @@ message 'h2c.definition_register', code: 0x010B, summary: 'Compile and register 
       'The binding builds a native ta_scxml_spec with core\'s spec builder; ' \
       'core compiles it through the existing compiler and registers it ' \
       'between macrosteps. There is no byte layout of a spec. Native data ' \
-      'model callbacks remain synchronous (reference/definitions.md).'
+      'model callbacks remain synchronous (docs/proposals/ring-proto/reference/definitions.md).'
   doc 'The host keeps spec valid and diagnostic writable until the ' \
       'correlated c2h.definition_result. Failure registers nothing and ' \
       'retains nothing from the submitted spec.'
@@ -369,13 +368,13 @@ message 'h2c.withdraw', code: 0x010E, summary: 'Take back an admitted input that
       'pool (runnable or on a waiting list), core unlinks and frees its ' \
       'envelope, releases its transferred values and name text, and writes ' \
       'c2h.input_refused with reason withdrawn. Core reserves that record ' \
-      'before consuming the withdrawal (reference/envelope.md).'
+      'before consuming the withdrawal (docs/proposals/ring-proto/reference/envelope.md).'
   doc 'If the input is no longer waiting, the withdrawal changes nothing ' \
       'and writes nothing: the input already has, or will get, its own ' \
       'single terminal record (c2h.bounced, c2h.input_refused or ' \
       'c2h.input_completed). A taken input, including one paused inside ' \
       'its macrostep, is never withdrawn; stopping it is an operator ' \
-      'abandon (reference/debugging.md). A target_seq not lower than this ' \
+      'abandon (docs/proposals/ring-proto/reference/debugging.md). A target_seq not lower than this ' \
       'record\'s own seq is bounced as invalid.'
   field :target_seq, :seq, 'the h2c seq of the input to withdraw'
   replies_with 'c2h.input_refused', 'c2h.bounced'
@@ -451,13 +450,13 @@ end
 
 message 'c2h.send', code: 0x0203, summary: 'A send for an I/O processor' do
   doc 'Mail to a local session never appears here: it is an envelope ' \
-      '(reference/envelope.md). A delayed send to an I/O processor waits ' \
+      '(docs/proposals/ring-proto/reference/envelope.md). A delayed send to an I/O processor waits ' \
       'in the pool and is written when due. The host may execute the send ' \
       'on receipt, without waiting for c2h.macrostep_ended or persistence.'
   doc 'A delayed send that becomes due on h2c.time is written outside any ' \
       'macrostep: its `macrostep` is 0, no end report follows, and the host may ' \
       'act on it at once. An end report would describe a macrostep ' \
-      'that does not exist (reference/envelope.md, "A due send to an ' \
+      'that does not exist (docs/proposals/ring-proto/reference/envelope.md, "A due send to an ' \
       'I/O processor has no macrostep end").'
   doc 'The trace fields are the sending step\'s trace context and span ID ' \
       '(core ADR 0067), so the processor writes a traceparent header ' \
@@ -547,7 +546,7 @@ message 'c2h.macrostep_ended', code: 0x0208, summary: 'A macrostep ended' do
       'host may already have executed effects on receipt. This record ' \
       'reports that execution ended and gives its status, including ' \
       'abandonment; invocation startup may follow. It is neither input completion nor ' \
-      'a durability acknowledgement (reference/macrostep.md, "The macrostep end").'
+      'a durability acknowledgement (docs/proposals/ring-proto/reference/macrostep.md, "The macrostep end").'
   field :macrostep, :macrostep
   field :source, :input_source
   field :source_seq, :seq, 'originating h2c input, including internal startup follow-up; 0 for local work'
@@ -648,7 +647,7 @@ message 'c2h.definition_result', code: 0x0212, summary: 'A definition request co
       'with its code, path, subject, subject range, related text and ' \
       'message; no pointer into the spec or core escapes. If it does not ' \
       'fit, the status is capacity and nothing partial is written. The host ' \
-      'owns the memory before and after completion (reference/definitions.md).'
+      'owns the memory before and after completion (docs/proposals/ring-proto/reference/definitions.md).'
   field :cause_seq, :seq, 'the definition request’s h2c seq'
   field :definition, :u64, 'on successful register: the definition ID; otherwise 0'
   field :diagnostic_bytes, :u32, 'bytes written to the request’s diagnostic buffer; 0 without a compile error'
@@ -675,7 +674,7 @@ message 'c2h.input_completed', code: 0x0214, summary: 'A host input and its star
   field :status, :input_completion_status
   flag :ignored, 0, 'the input event enabled no transition, so the chart ignored it (core ADR 0089 ' \
                     'section 8). A request/response I/O processor answers its client at once ' \
-                    'instead of waiting for a timeout (scenarios/S12-http-request.md)'
+                    'instead of waiting for a timeout (docs/proposals/ring-proto/scenarios/S12-http-request.md)'
 end
 
 message 'c2h.load_result', code: 0x0215, summary: 'A load-failure response finished recycling waiting inputs' do
@@ -694,7 +693,7 @@ message 'tel.trace', code: 0x0301, summary: 'One trace record (core ADR 0067)' d
       'are meaningful. The record is self-contained: names, values and the ' \
       'fault are text in its tail, and the state and transition lists are ' \
       'bytes in its tail holding u32 IDs with their names, so a reader ' \
-      'needs no live system (reference/telemetry.md). Values are ' \
+      'needs no live system (docs/proposals/ring-proto/reference/telemetry.md). Values are ' \
       'text the data model renders (value_text), cut at the parameter ' \
       'telemetryValueBytes; vrefs never go on a lossy ring. Header `at` ' \
       'is logical time; wall_ns is when it happened.'

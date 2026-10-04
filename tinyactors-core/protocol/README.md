@@ -20,13 +20,26 @@ was not rendered, or a hand edit of a generated file, fails the tests.
 
 The generated files are [`MESSAGES.md`](../src/generated/MESSAGES.md), the
 reference every document links to; [`messages.json`](../src/generated/messages.json),
-for tools such as a test host's decoder; and
-[`ring_records.h`](../src/generated/ring_records.h), C structs with
-`_Static_assert`s on their sizes, and one C enum per group of constants:
-message codes, common flags, each message's own flags and each catalog enum.
-Struct fields stay fixed-width integers, since the size of a C enum is up to
-the compiler; a comment names the enum a field holds. None of them is part of
-the amalgamation or of `include/tinyactors.h`.
+for tools such as a test host's decoder; and three C files, private units of
+core's amalgamation (`src/internal.h` lists the headers), not part of
+`include/tinyactors.h`:
+
+- [`ring_records.h`](../src/generated/ring_records.h): a struct per record
+  (`ta_h2c_event` for `h2c.event`), with `_Static_assert`s on every size and
+  offset, and one C enum per group of constants: record kinds
+  (`TA_RECORD_KIND_H2C_EVENT`), rings, common flags, each message's own flags
+  (`TA_H2C_SPAWN_FLAG_...`) and each catalog enum (`ta_record_<enum>`). Struct
+  fields stay fixed-width integers, since the size of a C enum is up to the
+  compiler; a comment names the enum a field holds.
+- [`ring_codec.h`](../src/generated/ring_codec.h) and
+  [`ring_codec.c`](../src/generated/ring_codec.c): per record a writer that
+  fills a reservation in place and, for a record with text or bytes, a size
+  function; and one validating reader, driven by a generated descriptor per
+  kind (its ring, fixed size and span offsets). The header's file comment is
+  the codec's contract.
+
+The renderer fails when two generated C names would collide. C comments carry
+the catalog's prose without its citations of design documents.
 
 The generated files are committed, so they can be read without running
 anything. After editing the catalog, render again; after a rebase that
@@ -36,12 +49,9 @@ touches the catalog, render again rather than merging the generated files.
 
 A message is named `<ring>.<name>` (`h2c.event`, `c2h.macrostep_ended`, `tel.trace`) and
 has a 16-bit code. `0x01xx` codes are host to core, `0x02xx` core to host, and
-`0x03xx` telemetry. The scenarios cite messages by these names. Once a scenario
-cites a name, its meaning doesn't change. While the protocol is a sketch, a
-record or enum value that nothing cites is deleted outright, and its code may
-be used again; nothing outside this repository reads the codes. Codes become
-permanent, and retired ones reserved, when the protocol is implemented.
-Clarifying a record's name preserves its code and meaning; all catalog and
+`0x03xx` telemetry. The scenarios cite messages by these names, and a name's
+meaning doesn't change. A code is permanent once assigned; a retired code
+stays reserved and is never given to another record. Clarifying a record's name preserves its code and meaning; all catalog and
 scenario references move to the new name together.
 
 ## Layout rules

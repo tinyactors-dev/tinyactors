@@ -3,10 +3,12 @@
 # vim:ft=ruby
 
 # include/tinyactors.h is the authored public API. src/*.h are private module
-# headers; src/internal.h lists them in dependency order. The amalgamation
-# inlines the private headers and all module sources after the public header,
-# marks definitions of public functions TA_API and gives every other defined
-# function internal linkage through TA_PRIVATE (static by default).
+# headers, and so are those in src/generated/, which `mise run protocol`
+# renders from protocol/catalog.rb; src/internal.h lists them in dependency
+# order. The amalgamation inlines the private headers and all module sources
+# after the public header, marks definitions of public functions TA_API and
+# gives every other defined function internal linkage through TA_PRIVATE
+# (static by default).
 #
 # Platform files (root ADR 0001, docs/adr/0001-packaging-and-releases.md,
 # decision 9), src/*_<suffix>.c, are not modules: internal.h does not list
@@ -30,7 +32,7 @@ require 'platform_files'
 PLATFORM_OUTPUTS = PlatformFiles::SUFFIXES.select { |suffix| !Dir[Cache::ROOT.join("src/*_#{suffix}.c").to_s].empty? }
                                           .to_h { |suffix| [suffix, Cache::ROOT.join("include/tinyactors_#{suffix}.c")] }
 Cache.gate('amalgamate',
-           inputs: Cache.files('src/*.c', 'src/*.h', 'include/tinyactors.h', 'mise/lib/c_api.rb', 'mise/tasks/amalgamate',
+           inputs: Cache.files('src/*.c', 'src/*.h', 'src/generated/*.c', 'src/generated/*.h', 'include/tinyactors.h', 'mise/lib/c_api.rb', 'mise/tasks/amalgamate',
                                '../mise/lib/platform_files.rb'),
            outputs: [Cache::ROOT.join('include/tinyactors.c'), *PLATFORM_OUTPUTS.values])
 

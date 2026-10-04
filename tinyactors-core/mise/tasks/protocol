@@ -5,9 +5,11 @@
 
 # protocol/catalog.rb defines every record that crosses a ring, once.
 # protocol/render.rb turns it into the files of src/generated/: MESSAGES.md
-# (the reference), messages.json (the catalog as data) and ring_records.h
-# (the record structs, kinds, flags and enums, with size asserts). Those
-# files are never edited by hand: edit the catalog and render again.
+# (the reference), messages.json (the catalog as data), ring_records.h (the
+# record structs, kinds, flags and enums, with size and offset asserts), and
+# ring_codec.h and ring_codec.c (the writers and the validating reader),
+# which core's amalgamation includes. Those files are never edited by hand:
+# edit the catalog and render again, then `mise run amalgamate`.
 #
 #   mise run protocol           write every generated file
 #   mise run protocol --check   exit 1, naming each generated file that is

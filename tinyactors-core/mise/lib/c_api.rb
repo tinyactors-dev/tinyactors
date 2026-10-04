@@ -11,10 +11,12 @@ module CAPI
 
   module_function
 
-  # Modules in dependency order, as listed by src/internal.h.
+  # Modules in dependency order, as listed by src/internal.h, as paths
+  # under src/ without the extension: `ring`, or `generated/ring_codec` for
+  # a unit the protocol renderer writes.
   def modules(root)
     umbrella = root.join('src/internal.h')
-    umbrella.read.scan(/^#include "(\w+)\.h"$/).flatten
+    umbrella.read.scan(%r{^#include "((?:generated/)?\w+)\.h"$}).flatten
   end
 
   def public_functions(header_text)

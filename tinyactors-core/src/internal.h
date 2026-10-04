@@ -8,6 +8,8 @@
 #include "fifo.h"
 #include "quota.h"
 #include "ring.h"
+#include "generated/ring_records.h"
+#include "generated/ring_codec.h"
 #include "tree.h"
 #include "atom.h"
 #include "address.h"
