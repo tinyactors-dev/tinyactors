@@ -16,18 +16,12 @@
 ** resolver (grammar.c) so the parse path never reads the filesystem -- and
 ** splices the embedded tree under an `injection' node.
 **
-** The child runs as an INLINE sub-VM: a synchronous recursive-descent parse over
-** the span via a throwaway sub-parser, not a spawned ax child actor. The
-** ax-topologies design names the child-VM-actor shape as the ideal, but also
-** sanctions the inline sub-parse for this pass -- "if suspending/resuming the
-** parent VM across ax steps proves too large for this pass, run the child as an
-** inline sub-VM ... that still produces the composite tree." Suspending the
-** host VM mid-dispatch to await a done.child outcome would mean checkpointing the
-** whole control stack across ax_step boundaries; the inline sub-VM gives the same
-** composite, offset-mapped, language-tagged tree without that surgery, and the
-** child still gets full isolation (its own arena, lexical goals, and backtrack
-** stack) because it is a wholly separate sub-parser. Promoting it to a spawned
-** actor later changes only this file.
+** The child runs as an INLINE sub-parse: a synchronous parse over the span via a
+** throwaway sub-parser that goes through the same lifecycle transition as any
+** parser (pp_parser_run). Nothing suspends: the host VM simply calls into the
+** child and continues with its tree. The child still gets full isolation (its own
+** builder, diagnostics, lexical goals, and backtrack stack) because it is a wholly
+** separate sub-parser.
 **
 ** Three pieces of plumbing make the splice sound:
 **   - OFFSET MAPPING: the child parses the span as if it began at byte 0, so every
@@ -112,7 +106,7 @@ static uint32_t pp_inject_copy_node(pp_tree_builder *builder,
 ** 0 on allocation failure. A failed embedded parse is NOT a host-parse failure:
 ** the embedded tree (with its own ERROR/diagnostics) is spliced regardless, so a
 ** malformed embedded region is contained under the injection node rather than
-** derailing the host parse -- the isolation the actor topology promises.
+** derailing the host parse.
 **
 ** `append' is the host's "push a node index into the active child sink" callback,
 ** so this function serves both executors (parse.c's pp_sink and vm.c's pp_vm_sink)
@@ -181,12 +175,11 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
         return append(sink_user, injection_node);
     }
 
-    /* Build a throwaway sub-parser over the span bytes and run the reference
-    ** recursive-descent executor on it. The sub-parser shares the host arena (so
+    /* Build a throwaway sub-parser over the span bytes and run an executor on
+    ** it (below). The sub-parser shares the host arena (so
     ** its nodes outlive this call for the splice) and the host engine (so embedded
     ** (class NAME) bindings and module wiring resolve), but it has its OWN builder,
-    ** diagnostics, input buffer, and grammar -- full isolation, exactly the child's
-    ** independent context the topology calls for. */
+    ** diagnostics, input buffer, and grammar -- full isolation. */
     sub.engine         = host->engine;
     sub.grammar        = embedded;
     sub.start_symbol   = embedded->start_symbol;
@@ -194,7 +187,7 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     sub.input          = host->input + span_start;
     sub.input_length   = span_end - span_start;
     sub.input_capacity = span_end - span_start;
-    sub.finished       = 1;
+    sub.state          = PP_PARSER_ACCEPTING;
     sub.builder.arena  = host->arena;
     sub.builder.nodes  = 0;
     sub.builder.count  = 0;
@@ -204,9 +197,6 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     sub.diagnostics.count = 0;
     sub.diagnostics.capacity = 0;
     sub.tree         = 0;
-    sub.actor_pid    = (ax_pid){ 0, 0 };
-    sub.actor_result = POCKETPARSE_OK;
-    sub.actor_ran    = 0;
     sub.push_failed  = POCKETPARSE_OK;
     sub.slot_save_stack    = 0;
     sub.slot_save_count    = 0;
@@ -223,7 +213,7 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     if (!pp_param_stacks_alloc(host->arena, embedded, &sub.param_stacks))
         sub.param_stacks = 0;
 
-    /* Run the embedded parse over the span. Two modes, ax's choice (W17-3):
+    /* Run the embedded parse over the span. Two modes (W17-3):
     **   - NATIVE NESTING: when the host registered a generated parser for this
     **     language, drive its run function (registered_parse) over the sub-parser.
     **     The generated parser builds the SAME arena CST the VM would (vm-diff /
@@ -239,12 +229,10 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     ** Injection depth is bounded by injection nesting (a generated host parser runs
     ** registered_parse synchronously over the fully-known span, with no suspension),
     ** not by input depth. */
-    if (registered_parse != 0) {
-        sub.finished = 1;
-        sub_result   = registered_parse(&sub);
-    } else {
-        sub_result = pp_execute_vm(&sub);
-    }
+    if (registered_parse != 0)
+        sub_result = registered_parse(&sub);
+    else
+        sub_result = pp_parser_run(&sub, pp_execute_vm);
     (void)sub_result;
 
     /* Splice the embedded tree's root subtree under the injection node, mapping

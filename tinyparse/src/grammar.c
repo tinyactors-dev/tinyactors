@@ -22,7 +22,7 @@
 ** that arena so symbol names outlive compilation. */
 static pocketparse_grammar *pp_grammar_new(pocketparse_engine *engine)
 {
-    pocketparse_grammar *grammar = (pocketparse_grammar *)ax_alloc(
+    pocketparse_grammar *grammar = (pocketparse_grammar *)pp_alloc(
         engine->arena, sizeof *grammar);
     if (grammar == 0)
         return 0;
@@ -98,7 +98,7 @@ static int pp_builder_mark_base(pp_grammar_builder *builder, uint32_t symbol)
     if (builder->base_symbol_count == builder->base_symbol_capacity) {
         uint32_t  new_cap = builder->base_symbol_capacity == 0
                                 ? 16 : builder->base_symbol_capacity * 2;
-        uint32_t *grown = (uint32_t *)ax_alloc(
+        uint32_t *grown = (uint32_t *)pp_alloc(
             builder->grammar->arena, new_cap * sizeof *grown);
         uint32_t  i;
         if (grown == 0)
@@ -164,7 +164,7 @@ static int pp_builder_add_token(pp_grammar_builder *builder, uint32_t symbol,
     if (grammar->token_count == builder->token_capacity) {
         uint32_t new_cap = builder->token_capacity == 0
                                ? 8 : builder->token_capacity * 2;
-        pp_token_def *grown = (pp_token_def *)ax_alloc(
+        pp_token_def *grown = (pp_token_def *)pp_alloc(
             grammar->arena, new_cap * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -189,7 +189,7 @@ static int pp_builder_add_rule(pp_grammar_builder *builder, uint32_t symbol,
     if (grammar->rule_count == builder->rule_capacity) {
         uint32_t new_cap = builder->rule_capacity == 0
                                ? 8 : builder->rule_capacity * 2;
-        pp_rule_def *grown = (pp_rule_def *)ax_alloc(
+        pp_rule_def *grown = (pp_rule_def *)pp_alloc(
             grammar->arena, new_cap * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -217,7 +217,7 @@ static int pp_builder_add_extra(pp_grammar_builder *builder,
     if (grammar->extra_count == builder->extra_capacity) {
         uint32_t new_cap = builder->extra_capacity == 0
                                ? 8 : builder->extra_capacity * 2;
-        pp_extra *grown = (pp_extra *)ax_alloc(
+        pp_extra *grown = (pp_extra *)pp_alloc(
             grammar->arena, new_cap * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -310,7 +310,7 @@ static int pp_builder_add_lex_goal_entry(pp_grammar_builder *builder,
     if (grammar->lex_goal_count == builder->lex_goal_capacity) {
         uint32_t new_cap = builder->lex_goal_capacity == 0
                                ? 8 : builder->lex_goal_capacity * 2;
-        pp_lex_goal *grown = (pp_lex_goal *)ax_alloc(
+        pp_lex_goal *grown = (pp_lex_goal *)pp_alloc(
             grammar->arena, new_cap * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -547,9 +547,9 @@ static int pp_compile_lex_goal(pp_grammar_builder *builder,
 ** token-engine's own pp_ir_new is static to token.c, so grammar.c mints the few
 ** IR nodes it needs (the recover node, the empty-class placeholder) through this
 ** shared zeroing path. Returns NULL on allocation failure. */
-static pp_ir *pp_grammar_ir_new(ax_arena *arena, pp_op op)
+static pp_ir *pp_grammar_ir_new(pp_arena *arena, pp_op op)
 {
-    pp_ir   *ir = (pp_ir *)ax_alloc(arena, sizeof *ir);
+    pp_ir   *ir = (pp_ir *)pp_alloc(arena, sizeof *ir);
     uint32_t i;
     if (ir == 0)
         return 0;
@@ -574,9 +574,9 @@ static pp_ir *pp_grammar_ir_new(ax_arena *arena, pp_op op)
 ** engine's own pp_ir_new is static to token.c, so the recover node -- the only
 ** IR node grammar.c mints directly -- is built and zeroed here. The recover_*
 ** slices start empty and are filled from the (on eof ...) clause. */
-static pp_ir *pp_recover_new(ax_arena *arena)
+static pp_ir *pp_recover_new(pp_arena *arena)
 {
-    pp_ir *ir = (pp_ir *)ax_alloc(arena, sizeof *ir);
+    pp_ir *ir = (pp_ir *)pp_alloc(arena, sizeof *ir);
     uint32_t i;
     if (ir == 0)
         return 0;
@@ -602,7 +602,7 @@ static pp_ir *pp_recover_new(ax_arena *arena)
 ** BODY. The (on eof ...) clause is a flat run of keyword/value pairs, save for
 ** (label NAME: "text") which is a nested list. Unknown keys are rejected. */
 static pp_ir *pp_compile_recover(const pocketparse_engine *engine,
-                                 ax_arena *arena, pp_interner *interner,
+                                 pp_arena *arena, pp_interner *interner,
                                  const pp_form *form, const char **error,
                                  uint32_t *error_byte)
 {
@@ -636,7 +636,7 @@ static pp_ir *pp_compile_recover(const pocketparse_engine *engine,
 
     ir = pp_recover_new(arena);
     if (ir == 0) { *error = "out of memory"; return 0; }
-    ir->children = (pp_ir **)ax_alloc(arena, sizeof(pp_ir *));
+    ir->children = (pp_ir **)pp_alloc(arena, sizeof(pp_ir *));
     if (ir->children == 0) { *error = "out of memory"; return 0; }
     ir->children[0]  = body;
     ir->child_count  = 1;
@@ -695,7 +695,7 @@ static pp_ir *pp_compile_recover(const pocketparse_engine *engine,
 ** shape -- including (goal ...), which the shared pattern compiler handles so it
 ** may also nest inside seq/choice/repeat -- to pp_compile_pattern. */
 static pp_ir *pp_compile_rule_body(const pocketparse_engine *engine,
-                                   ax_arena *arena, pp_interner *interner,
+                                   pp_arena *arena, pp_interner *interner,
                                    const pp_form *form, const char **error,
                                    uint32_t *error_byte)
 {
@@ -802,7 +802,7 @@ static int pp_compile_token_form(pp_grammar_builder *builder,
                                  const pp_form *item, int is_override,
                                  const char **error)
 {
-    ax_arena    *arena    = builder->grammar->arena;
+    pp_arena    *arena    = builder->grammar->arena;
     pp_interner *interner = &builder->grammar->interner;
     pp_ir       *pattern;
     uint32_t     symbol;
@@ -845,7 +845,7 @@ static int pp_compile_token_form(pp_grammar_builder *builder,
     } else {
         pp_ir   *seq;
         uint32_t k, child_count = item->count - 2;
-        pp_ir **kids = (pp_ir **)ax_alloc(arena, child_count * sizeof *kids);
+        pp_ir **kids = (pp_ir **)pp_alloc(arena, child_count * sizeof *kids);
         if (kids == 0) { *error = "out of memory"; return 0; }
         for (k = 0; k < child_count; k++) {
             kids[k] = pp_compile_pattern(builder->engine, arena, interner,
@@ -853,7 +853,7 @@ static int pp_compile_token_form(pp_grammar_builder *builder,
             if (kids[k] == 0)
                 return 0;
         }
-        seq = (pp_ir *)ax_alloc(arena, sizeof *seq);
+        seq = (pp_ir *)pp_alloc(arena, sizeof *seq);
         if (seq == 0) { *error = "out of memory"; return 0; }
         seq->op = PP_OP_SEQ;
         seq->text = pp_text("");
@@ -935,7 +935,7 @@ static int pp_compile_rule_form(pp_grammar_builder *builder,
         return 0;
     }
     if (no_extras) {
-        pp_ir *wrap = (pp_ir *)ax_alloc(grammar->arena, sizeof *wrap);
+        pp_ir *wrap = (pp_ir *)pp_alloc(grammar->arena, sizeof *wrap);
         uint32_t z;
         if (wrap == 0) { *error = "out of memory"; return 0; }
         wrap->op = PP_OP_NO_EXTRAS;
@@ -946,7 +946,7 @@ static int pp_compile_rule_form(pp_grammar_builder *builder,
         wrap->max = 0;
         wrap->cls.negated = 0;
         for (z = 0; z < 32; z++) wrap->cls.bits[z] = 0;
-        wrap->children = (pp_ir **)ax_alloc(grammar->arena, sizeof(pp_ir *));
+        wrap->children = (pp_ir **)pp_alloc(grammar->arena, sizeof(pp_ir *));
         if (wrap->children == 0) { *error = "out of memory"; return 0; }
         wrap->children[0] = body;
         wrap->child_count = 1;
@@ -1087,7 +1087,7 @@ static int pp_compile_import_form(pp_grammar_builder *builder,
     if (builder->visited_count == builder->visited_capacity) {
         uint32_t new_cap = builder->visited_capacity == 0
                                ? 8 : builder->visited_capacity * 2;
-        pocketparse_string *grown = (pocketparse_string *)ax_alloc(
+        pocketparse_string *grown = (pocketparse_string *)pp_alloc(
             engine->arena, new_cap * sizeof *grown);
         uint32_t i;
         if (grown == 0) { *error = "out of memory"; return 0; }
@@ -1154,7 +1154,7 @@ static int pp_compile_extends_form(pp_grammar_builder *builder,
     if (builder->visited_count == builder->visited_capacity) {
         uint32_t new_cap = builder->visited_capacity == 0
                                ? 8 : builder->visited_capacity * 2;
-        pocketparse_string *grown = (pocketparse_string *)ax_alloc(
+        pocketparse_string *grown = (pocketparse_string *)pp_alloc(
             engine->arena, new_cap * sizeof *grown);
         uint32_t i;
         if (grown == 0) { *error = "out of memory"; return 0; }

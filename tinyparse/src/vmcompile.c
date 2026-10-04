@@ -43,7 +43,7 @@ typedef struct pp_lower {
 } pp_lower;
 
 /* ** Append one instruction to the program, returning its index (the program that
-** begins at it), or PP_NO_INDEX on allocation failure. Grows geometrically; ax
+** begins at it), or PP_NO_INDEX on allocation failure. Grows geometrically;
 ** arenas never realloc, so growth copies into a fresh, larger block. */
 static uint32_t pp_emit(pp_lower *lower, pp_vm_op op)
 {
@@ -53,7 +53,7 @@ static uint32_t pp_emit(pp_lower *lower, pp_vm_op op)
     if (program->instruction_count == program->instruction_capacity) {
         uint32_t nc = program->instruction_capacity == 0
                           ? 64 : program->instruction_capacity * 2;
-        pp_instruction *grown = (pp_instruction *)ax_alloc(
+        pp_instruction *grown = (pp_instruction *)pp_alloc(
             program->arena, nc * sizeof *grown);
         uint32_t i;
         if (grown == 0) { lower->ok = 0; return PP_NO_INDEX; }
@@ -93,7 +93,7 @@ static uint32_t pp_reserve_children(pp_lower *lower, uint32_t count)
         uint32_t i;
         while (program->child_count + count > nc)
             nc *= 2;
-        grown = (uint32_t *)ax_alloc(program->arena, nc * sizeof *grown);
+        grown = (uint32_t *)pp_alloc(program->arena, nc * sizeof *grown);
         if (grown == 0) { lower->ok = 0; return PP_NO_INDEX; }
         for (i = 0; i < program->child_count; i++)
             grown[i] = program->children[i];
@@ -207,7 +207,7 @@ static uint32_t pp_lower_rule(pp_lower *lower, uint32_t symbol)
 
     if (lower->rule_count == lower->rule_capacity) {
         uint32_t nc = lower->rule_capacity == 0 ? 16 : lower->rule_capacity * 2;
-        pp_rule_program *grown = (pp_rule_program *)ax_alloc(
+        pp_rule_program *grown = (pp_rule_program *)pp_alloc(
             lower->program->arena, nc * sizeof *grown);
         uint32_t i;
         if (grown == 0) { lower->ok = 0; return PP_NO_INDEX; }
@@ -701,7 +701,7 @@ void pp_grammar_tail_call_counts(const pocketparse_grammar *grammar,
 ** pushes the Source node itself and parses start->body into the root's children),
 ** so the entry point is the lowered body, followed by a HALT sentinel the
 ** dispatch loop stops on. Returns NULL on allocation failure. */
-pp_program *pp_compile_program(ax_arena *arena,
+pp_program *pp_compile_program(pp_arena *arena,
                                const pocketparse_grammar *grammar,
                                uint32_t start_symbol)
 {
@@ -711,7 +711,7 @@ pp_program *pp_compile_program(ax_arena *arena,
     uint32_t    body_program;
     uint32_t    halt;
 
-    program = (pp_program *)ax_alloc(arena, sizeof *program);
+    program = (pp_program *)pp_alloc(arena, sizeof *program);
     if (program == 0)
         return 0;
     program->arena                = arena;

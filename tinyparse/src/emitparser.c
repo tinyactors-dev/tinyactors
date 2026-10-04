@@ -79,7 +79,7 @@
 **
 ** Like emit.c (and all of src/ except cli.c) this file is freestanding: it builds
 ** the C text into the engine arena in two passes (measure with a NULL buffer, then
-** fill a block of that exact size, because ax arenas never realloc) and does no IO.
+** fill a block of that exact size, because arenas never realloc) and does no IO.
 ** The hosted cli.c writes the bytes. It holds no static mutable state. The emitted
 ** C is macro-free: it is generated, so the per-rule control flow is expanded once
 ** at generation time. The W16-3 symbol prefix (--name) renames every emitted
@@ -341,7 +341,7 @@ static uint32_t pp_parser_register_inject(pp_parser_emit *ctx, const pp_ir *ir)
         return existing;
     if (ctx->inject_count == ctx->inject_capacity) {
         uint32_t nc = ctx->inject_capacity == 0 ? 8 : ctx->inject_capacity * 2;
-        const pp_ir **grown = (const pp_ir **)ax_alloc(
+        const pp_ir **grown = (const pp_ir **)pp_alloc(
             ctx->grammar->arena, nc * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -391,7 +391,7 @@ static uint32_t pp_parser_register_literal(pp_parser_emit *ctx, const pp_ir *ir)
         return existing;
     if (ctx->literal_count == ctx->literal_capacity) {
         uint32_t nc = ctx->literal_capacity == 0 ? 16 : ctx->literal_capacity * 2;
-        const pp_ir **grown = (const pp_ir **)ax_alloc(
+        const pp_ir **grown = (const pp_ir **)pp_alloc(
             ctx->grammar->arena, nc * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -1261,8 +1261,8 @@ static void pp_parser_emit_ir(pp_parser_emit *ctx, const char *node,
         ** that span under an injection node. The inject runtime (pp_vm_do_inject ->
         ** pp_inject_run) is the shared primitive; the region is matched by this inject
         ** node's region function (registered in the pre-pass). The inject IR node
-        ** (`node') carries the embedded grammar + language tag, read in place. ax
-        ** resolves/runs/splices, exactly as the VM's PP_VM_INJECT does. */
+        ** (`node') carries the embedded grammar + language tag, read in place. The
+        ** shared primitive resolves/runs/splices, exactly as the VM's PP_VM_INJECT does. */
         uint32_t which = pp_parser_inject_lookup(ctx, ir);
         pp_parser_indent(ctx, indent);
         pp_parser_text(c, "sig = pp_vm_do_inject(state, ");
@@ -1350,7 +1350,7 @@ static void pp_parser_emit_ir(pp_parser_emit *ctx, const char *node,
         pp_parser_text(c, ";\n");
         pp_parser_indent(ctx, indent);
         pp_parser_text(c, "            df_copy_"); pp_parser_u32(c, my);
-        pp_parser_text(c, " = (uint8_t *)ax_alloc(state->parser->arena, df_len_");
+        pp_parser_text(c, " = (uint8_t *)pp_alloc(state->parser->arena, df_len_");
         pp_parser_u32(c, my); pp_parser_text(c, ");\n");
         pp_parser_indent(ctx, indent);
         pp_parser_text(c, "            if (df_copy_"); pp_parser_u32(c, my);
@@ -2413,10 +2413,10 @@ static void pp_parser_emit_body(pp_parser_emit *ctx, uint32_t start_symbol,
     pp_parser_reach reach;
     uint32_t cap = grammar->rule_count + grammar->token_count + 1;
     uint32_t i;
-    ax_arena *arena = grammar->arena;
+    pp_arena *arena = grammar->arena;
 
-    reach.rule_symbols  = (uint32_t *)ax_alloc(arena, (cap == 0 ? 1 : cap) * sizeof(uint32_t));
-    reach.token_symbols = (uint32_t *)ax_alloc(arena, (cap == 0 ? 1 : cap) * sizeof(uint32_t));
+    reach.rule_symbols  = (uint32_t *)pp_alloc(arena, (cap == 0 ? 1 : cap) * sizeof(uint32_t));
+    reach.token_symbols = (uint32_t *)pp_alloc(arena, (cap == 0 ? 1 : cap) * sizeof(uint32_t));
     reach.rule_count    = 0;
     reach.token_count   = 0;
     reach.grammar       = grammar;
@@ -2831,9 +2831,10 @@ static void pp_parser_emit_lib_entries(pp_parser_cursor *cursor, const char *pre
 
     pp_parser_text(cursor,
         "/* Run the compiled parser over a parser whose input has already been pushed.\n"
-        "** Marks it finished and runs the generated recursive descent directly. A push\n"
-        "** that failed (a dropped chunk) is surfaced here rather than letting the run\n"
-        "** produce a successful-looking tree over a truncated buffer. */\n"
+        "** Takes the parser lifecycle's finishing transition (pp_parser_run) with the\n"
+        "** generated recursive descent as the executor. A push that failed (a dropped\n"
+        "** chunk) is surfaced here rather than letting the run produce a successful-\n"
+        "** looking tree over a truncated buffer. */\n"
         "pocketparse_result ");
     pp_parser_name(cursor, prefix, "pp_compiled_parser_run", "run");
     pp_parser_text(cursor,
@@ -2841,14 +2842,9 @@ static void pp_parser_emit_lib_entries(pp_parser_cursor *cursor, const char *pre
         "{\n"
         "    if (parser == 0)\n"
         "        return POCKETPARSE_INVALID;\n"
-        "    if (parser->push_failed != POCKETPARSE_OK) {\n"
-        "        parser->finished = 1;\n"
-        "        return parser->push_failed;\n"
-        "    }\n"
-        "    parser->finished = 1;\n"
-        "    return ");
+        "    return pp_parser_run(parser, ");
     pp_parser_name(cursor, prefix, "pp_execute_parser", "execute");
-    pp_parser_text(cursor, "(parser);\n"
+    pp_parser_text(cursor, ");\n"
         "}\n");
 
     if (has_chunk) {
@@ -2929,7 +2925,7 @@ static void pp_parser_emit_all(pp_parser_cursor *cursor, const char *prefix,
         "**\n");
     if (lib) {
         pp_parser_text(cursor,
-        "**   cc -std=c11 -O2 -c this.c   (then link with libpocketparse + libax)\n"
+        "**   cc -std=c11 -O2 -c this.c   (then link with libpocketparse)\n"
         "**\n"
         "** This is the LIBRARY shape: no main(), no stdin/dump. It exposes two\n"
         "** entries -- ");
@@ -3175,10 +3171,9 @@ static void pp_parser_emit_all(pp_parser_cursor *cursor, const char *prefix,
         "        bytes.pointer = input; bytes.length = (uint32_t)length;\n"
         "        pocketparse_push(parser, bytes);\n"
         "    }\n"
-        "    parser->finished = 1;\n"
-        "    result = ");
+        "    result = pp_parser_run(parser, ");
     pp_parser_name(cursor, prefix, "pp_execute_parser", "execute");
-    pp_parser_text(cursor, "(parser);\n"
+    pp_parser_text(cursor, ");\n"
         "    if (result == POCKETPARSE_OUT_OF_MEMORY) {\n"
         "        fprintf(stderr, \"error: out of memory\\n\");\n"
         "        free(input);\n"
@@ -3243,7 +3238,7 @@ static const char *pp_parser_default_prefix(const pocketparse_grammar *grammar)
     /* A leading digit needs one extra `s' byte; size the buffer for that plus the
     ** terminating NUL. */
     extra  = (name.pointer[0] >= '0' && name.pointer[0] <= '9') ? 1u : 0u;
-    buffer = (char *)ax_alloc(grammar->arena, name.length + extra + 1u);
+    buffer = (char *)pp_alloc(grammar->arena, name.length + extra + 1u);
     if (buffer == 0)
         return 0;
 
@@ -3305,7 +3300,7 @@ pocketparse_result pp_emit_parser(pocketparse_engine *engine,
     pp_parser_emit_all(&measure, prefix, grammar, source_name, start_name, packed,
                        grammar->start_symbol, lib);
 
-    buffer = (char *)ax_alloc(grammar->arena, measure.length);
+    buffer = (char *)pp_alloc(grammar->arena, measure.length);
     if (buffer == 0)
         return POCKETPARSE_OUT_OF_MEMORY;
 

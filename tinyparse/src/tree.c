@@ -73,7 +73,7 @@ pocketparse_result pocketparse_tree_cursor_new(
         *out_cursor = 0;
     if (tree == 0 || out_cursor == 0)
         return POCKETPARSE_INVALID;
-    cursor = (pocketparse_tree_cursor *)ax_alloc(tree->arena, sizeof *cursor);
+    cursor = (pocketparse_tree_cursor *)pp_alloc(tree->arena, sizeof *cursor);
     if (cursor == 0)
         return POCKETPARSE_OUT_OF_MEMORY;
     pocketparse_tree_cursor_init(&cursor->storage, tree);
@@ -394,7 +394,7 @@ pocketparse_result pocketparse_tree_cursor_clone(
         *out_cursor = 0;
     if (source == 0 || out_cursor == 0 || source->storage.tree == 0)
         return POCKETPARSE_INVALID;
-    cursor = (pocketparse_tree_cursor *)ax_alloc(
+    cursor = (pocketparse_tree_cursor *)pp_alloc(
         source->storage.tree->arena, sizeof *cursor);
     if (cursor == 0)
         return POCKETPARSE_OUT_OF_MEMORY;

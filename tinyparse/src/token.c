@@ -12,9 +12,9 @@
 #include "internal.h"
 
 /* ** Allocate and zero-initialise an IR node of the given opcode. */
-static pp_ir *pp_ir_new(ax_arena *arena, pp_op op)
+static pp_ir *pp_ir_new(pp_arena *arena, pp_op op)
 {
-    pp_ir *ir = (pp_ir *)ax_alloc(arena, sizeof *ir);
+    pp_ir *ir = (pp_ir *)pp_alloc(arena, sizeof *ir);
     if (ir == 0)
         return 0;
     ir->op          = op;
@@ -130,7 +130,7 @@ static int pp_regex_class(const uint8_t *p, uint32_t length, uint32_t *pos,
 
 /* ** Parse a regex-subset pattern into an IR sequence of atoms. Each atom is a
 ** class, a literal byte, or `.' (any), optionally followed by `+' or `*'. */
-pp_ir *pp_compile_regex(ax_arena *arena, pocketparse_string pattern,
+pp_ir *pp_compile_regex(pp_arena *arena, pocketparse_string pattern,
                         const char **error)
 {
     const uint8_t *p = pattern.pointer;
@@ -170,7 +170,7 @@ pp_ir *pp_compile_regex(ax_arena *arena, pocketparse_string pattern,
             if (repeat == 0) { *error = "out of memory"; return 0; }
             repeat->min = (p[pos] == '+') ? 1 : 0;
             repeat->max = 0; /* unbounded */
-            repeat->children = (pp_ir **)ax_alloc(arena, sizeof(pp_ir *));
+            repeat->children = (pp_ir **)pp_alloc(arena, sizeof(pp_ir *));
             if (repeat->children == 0) { *error = "out of memory"; return 0; }
             repeat->children[0] = atom;
             repeat->child_count = 1;
@@ -180,7 +180,7 @@ pp_ir *pp_compile_regex(ax_arena *arena, pocketparse_string pattern,
 
         if (count == capacity) {
             uint32_t nc = capacity == 0 ? 8 : capacity * 2;
-            pp_ir **grown = (pp_ir **)ax_alloc(arena, nc * sizeof *grown);
+            pp_ir **grown = (pp_ir **)pp_alloc(arena, nc * sizeof *grown);
             uint32_t i;
             if (grown == 0) { *error = "out of memory"; return 0; }
             for (i = 0; i < count; i++)
@@ -206,7 +206,7 @@ static int pp_ir_is_vanished(const pp_ir *ir)
 }
 
 /* ** Build a 1-child IR node from a single sub-form. */
-static pp_ir *pp_compile_unary(const pocketparse_engine *engine, ax_arena *arena,
+static pp_ir *pp_compile_unary(const pocketparse_engine *engine, pp_arena *arena,
                                pp_interner *interner, pp_op op,
                                const pp_form *child, const char **error,
                                uint32_t *error_byte)
@@ -217,7 +217,7 @@ static pp_ir *pp_compile_unary(const pocketparse_engine *engine, ax_arena *arena
     sub = pp_compile_pattern(engine, arena, interner, child, error, error_byte);
     if (sub == 0)
         return 0;
-    ir->children = (pp_ir **)ax_alloc(arena, sizeof(pp_ir *));
+    ir->children = (pp_ir **)pp_alloc(arena, sizeof(pp_ir *));
     if (ir->children == 0) { *error = "out of memory"; return 0; }
     ir->children[0] = sub;
     ir->child_count = 1;
@@ -229,7 +229,7 @@ static pp_ir *pp_compile_unary(const pocketparse_engine *engine, ax_arena *arena
 ** truly leaves no element in the surrounding seq/choice/not, exactly as the design
 ** requires ("it vanishes from the sequence/choice"). */
 static pp_ir **pp_compile_children(const pocketparse_engine *engine,
-                                   ax_arena *arena, pp_interner *interner,
+                                   pp_arena *arena, pp_interner *interner,
                                    pp_form *const *forms, uint32_t from,
                                    uint32_t count, uint32_t *out_count,
                                    const char **error, uint32_t *error_byte)
@@ -238,7 +238,7 @@ static pp_ir **pp_compile_children(const pocketparse_engine *engine,
     pp_ir  **out;
     uint32_t i;
     uint32_t kept = 0;
-    out = (pp_ir **)ax_alloc(arena, (n == 0 ? 1 : n) * sizeof *out);
+    out = (pp_ir **)pp_alloc(arena, (n == 0 ? 1 : n) * sizeof *out);
     if (out == 0) { *error = "out of memory"; *error_byte = 0; return 0; }
     for (i = 0; i < n; i++) {
         pp_ir *child = pp_compile_pattern(engine, arena, interner,
@@ -292,7 +292,7 @@ static int pp_read_repeat_bounds(const pp_form *list, uint32_t child_index,
 /* ** Compile a pattern form into IR. A string or bytes form is a literal; a
 ** symbol is a reference (or the special EOF/any); a list is a combinator head
 ** plus operands. Shared by token bodies and rule bodies. */
-pp_ir *pp_compile_pattern(const pocketparse_engine *engine, ax_arena *arena,
+pp_ir *pp_compile_pattern(const pocketparse_engine *engine, pp_arena *arena,
                           pp_interner *interner, const pp_form *form,
                           const char **error, uint32_t *error_byte)
 {
@@ -415,7 +415,7 @@ pp_ir *pp_compile_pattern(const pocketparse_engine *engine, ax_arena *arena,
                                        error, error_byte);
             if (child == 0)
                 return 0;
-            ir->children = (pp_ir **)ax_alloc(arena, sizeof(pp_ir *));
+            ir->children = (pp_ir **)pp_alloc(arena, sizeof(pp_ir *));
             if (ir->children == 0) { *error = "out of memory"; return 0; }
             ir->children[0] = child;
             ir->child_count = 1;
@@ -447,7 +447,7 @@ pp_ir *pp_compile_pattern(const pocketparse_engine *engine, ax_arena *arena,
             if (child == 0)
                 return 0;
             ir->symbol = pp_intern(interner, form->items[1]->text);
-            ir->children = (pp_ir **)ax_alloc(arena, sizeof(pp_ir *));
+            ir->children = (pp_ir **)pp_alloc(arena, sizeof(pp_ir *));
             if (ir->children == 0) { *error = "out of memory"; return 0; }
             ir->children[0] = child;
             ir->child_count = 1;
@@ -499,7 +499,7 @@ pp_ir *pp_compile_pattern(const pocketparse_engine *engine, ax_arena *arena,
                                        error, error_byte);
             if (inner == 0)
                 return 0;
-            kids = (pp_ir **)ax_alloc(arena, (words + 1) * sizeof *kids);
+            kids = (pp_ir **)pp_alloc(arena, (words + 1) * sizeof *kids);
             if (kids == 0) { *error = "out of memory"; return 0; }
             kids[0] = inner;
             for (k = 0; k < words; k++) {
@@ -572,7 +572,7 @@ pp_ir *pp_compile_pattern(const pocketparse_engine *engine, ax_arena *arena,
                 return 0;
             ir = pp_ir_new(arena, PP_OP_INJECT);
             if (ir == 0) { *error = "out of memory"; return 0; }
-            ir->children = (pp_ir **)ax_alloc(arena, sizeof(pp_ir *));
+            ir->children = (pp_ir **)pp_alloc(arena, sizeof(pp_ir *));
             if (ir->children == 0) { *error = "out of memory"; return 0; }
             ir->children[0]      = region;
             ir->child_count      = 1;
@@ -653,7 +653,7 @@ pp_ir *pp_compile_pattern(const pocketparse_engine *engine, ax_arena *arena,
             if (child == 0)
                 return 0;
             ir->symbol = pp_intern(interner, form->items[1]->text);
-            ir->children = (pp_ir **)ax_alloc(arena, sizeof(pp_ir *));
+            ir->children = (pp_ir **)pp_alloc(arena, sizeof(pp_ir *));
             if (ir->children == 0) { *error = "out of memory"; return 0; }
             ir->children[0] = child;
             ir->child_count = 1;
@@ -703,7 +703,7 @@ pp_ir *pp_compile_pattern(const pocketparse_engine *engine, ax_arena *arena,
 ** PP_NO_SYMBOL -- the emitted leaf KIND comes from the goal trigger at the redirect
 ** site, not from this literal. Returns 0 on any allocation failure (the caller
 ** degrades to no-pattern -> no-match). See pp_param_instantiate. */
-static pp_ir *pp_param_copy(ax_arena *arena, const pp_ir *node,
+static pp_ir *pp_param_copy(pp_arena *arena, const pp_ir *node,
                             const uint8_t *text, uint32_t text_len)
 {
     pp_ir   *copy;
@@ -721,7 +721,7 @@ static pp_ir *pp_param_copy(ax_arena *arena, const pp_ir *node,
         uint8_t *bytes;
         if (lit == 0)
             return 0;
-        bytes = (uint8_t *)ax_alloc(arena, text_len == 0 ? 1 : text_len);
+        bytes = (uint8_t *)pp_alloc(arena, text_len == 0 ? 1 : text_len);
         if (bytes == 0)
             return 0;
         for (i = 0; i < text_len; i++)
@@ -745,7 +745,7 @@ static pp_ir *pp_param_copy(ax_arena *arena, const pp_ir *node,
     copy->min    = node->min;
     copy->max    = node->max;
     if (node->child_count > 0) {
-        copy->children = (pp_ir **)ax_alloc(
+        copy->children = (pp_ir **)pp_alloc(
             arena, node->child_count * sizeof *copy->children);
         if (copy->children == 0)
             return 0;
@@ -768,7 +768,7 @@ static pp_ir *pp_param_copy(ax_arena *arena, const pp_ir *node,
 ** (token_program lowers into it lazily). Returns 0 on a bad index or any allocation
 ** failure -- callers degrade to no-pattern -> no-match (lex-goal-implementation,
 ** "Pattern instantiation"). */
-const pp_ir *pp_param_instantiate(ax_arena *arena, const pocketparse_grammar *grammar,
+const pp_ir *pp_param_instantiate(pp_arena *arena, const pocketparse_grammar *grammar,
                                   uint32_t rule_index, const uint8_t *text,
                                   uint32_t text_len)
 {
@@ -1045,7 +1045,7 @@ static int pp_first_set_ref(const pocketparse_grammar *grammar, uint32_t symbol,
         ** deep grammar. The chain is bounded by the rule count (a symbol repeats
         ** only on a cycle, which returns above), so the allocation is bounded; the
         ** block is reclaimed with the arena. */
-        stack = (uint32_t *)ax_alloc(grammar->arena,
+        stack = (uint32_t *)pp_alloc(grammar->arena,
                                      (visiting_count + 1) * sizeof *stack);
         if (stack == 0)
             return 1; /* arena exhausted: stay open, which is always sound */
@@ -1368,9 +1368,9 @@ static int pp_match_ir(const pocketparse_engine *engine, const pp_ir *ir,
 /* ======================================================================== */
 
 /* ** Append one instruction to a token program under construction, returning its
-** pc, or PP_NO_INDEX on allocation failure. Grows geometrically; ax arenas never
+** pc, or PP_NO_INDEX on allocation failure. Grows geometrically; arenas never
 ** realloc, so growth copies into a fresh, larger block. */
-static uint32_t pp_token_emit(ax_arena *arena, pp_token_program *program,
+static uint32_t pp_token_emit(pp_arena *arena, pp_token_program *program,
                               pp_token_op op)
 {
     pp_token_instruction *slot;
@@ -1378,7 +1378,7 @@ static uint32_t pp_token_emit(ax_arena *arena, pp_token_program *program,
     if (program->instruction_count == program->instruction_capacity) {
         uint32_t nc = program->instruction_capacity == 0
                           ? 16 : program->instruction_capacity * 2;
-        pp_token_instruction *grown = (pp_token_instruction *)ax_alloc(
+        pp_token_instruction *grown = (pp_token_instruction *)pp_alloc(
             arena, nc * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -1422,7 +1422,7 @@ static int pp_token_leaf_op(const pp_ir *ir)
 ** leaf is one STAR op, a general REPEAT/OPTIONAL is a SAVE/body/COMMIT loop. A
 ** `not' guard declines (returns 0) -- it appears only in comment/string/regex
 ** tokens, which then keep using pp_match_ir; the common tokens are all covered. */
-static int pp_token_lower(ax_arena *arena, pp_token_program *program,
+static int pp_token_lower(pp_arena *arena, pp_token_program *program,
                           const pp_ir *ir)
 {
     switch (ir->op) {
@@ -1712,7 +1712,7 @@ static pp_token_program *pp_token_program_get(const pocketparse_engine *engine,
                                               pp_ir *ir)
 {
     pp_token_program *program;
-    ax_arena *arena;
+    pp_arena *arena;
     if (ir->token_program != 0)
         return ir->token_program->ok ? ir->token_program : 0;
     if (ir->token_program_tried)
@@ -1721,7 +1721,7 @@ static pp_token_program *pp_token_program_get(const pocketparse_engine *engine,
     if (engine == 0)
         return 0;
     arena = engine->arena;
-    program = (pp_token_program *)ax_alloc(arena, sizeof *program);
+    program = (pp_token_program *)pp_alloc(arena, sizeof *program);
     if (program == 0)
         return 0;
     program->instructions         = 0;
@@ -1987,7 +1987,7 @@ static uint32_t pp_match_hash(const pp_ir *pattern, uint32_t offset,
 /* ** Initialise an empty memo sized for `input_length' bytes (see internal.h).
 ** Capacity scales with the input so the table stays sparse -- many tokens are
 ** probed per offset -- while remaining O(input). */
-void pp_match_memo_init(pp_match_memo *memo, ax_arena *arena,
+void pp_match_memo_init(pp_match_memo *memo, pp_arena *arena,
                         uint32_t input_length)
 {
     uint32_t cap = pp_round_pow2(input_length * 4u + 64u);
@@ -1998,8 +1998,8 @@ void pp_match_memo_init(pp_match_memo *memo, ax_arena *arena,
     ** immediately overwrites (W15-1 -- it was the largest cost in the profile).
     ** Only the one-byte-per-slot `live' column is zeroed, which is what marks
     ** every slot empty at the start of the parse. */
-    memo->slots    = (pp_match_slot *)ax_alloc_raw(arena, cap * sizeof *memo->slots);
-    memo->live     = (uint8_t *)ax_alloc(arena, cap * sizeof *memo->live);
+    memo->slots    = (pp_match_slot *)pp_alloc_raw(arena, cap * sizeof *memo->slots);
+    memo->live     = (uint8_t *)pp_alloc(arena, cap * sizeof *memo->live);
     if (memo->slots == 0 || memo->live == 0) {
         memo->slots    = 0;
         memo->live     = 0;
@@ -2014,7 +2014,7 @@ void pp_match_memo_init(pp_match_memo *memo, ax_arena *arena,
 /* ** Initialise an extras memo sized for `input_length' bytes (see internal.h).
 ** One byte per offset plus the end sentinel; all start "unknown" (zero). On
 ** allocation failure the array is left NULL, which disables the memo. */
-void pp_extras_memo_init(pp_extras_memo *memo, ax_arena *arena,
+void pp_extras_memo_init(pp_extras_memo *memo, pp_arena *arena,
                          uint32_t input_length)
 {
     /* Prepare only: record the arena and the size the marks want, leave marks NULL
@@ -2032,12 +2032,12 @@ void pp_extras_memo_ensure(pp_extras_memo *memo)
     if (memo->marks != 0)
         return; /* already allocated */
     entries = memo->pending_length + 1u;
-    memo->marks = (uint8_t *)ax_alloc(memo->arena, entries);
+    memo->marks = (uint8_t *)pp_alloc(memo->arena, entries);
     if (memo->marks == 0) {
         memo->length = 0;
         return; /* allocation failed: memo disabled, scanner still correct */
     }
-    /* ax_alloc zeroes the block, which is exactly the "all offsets unknown"
+    /* pp_alloc zeroes the block, which is exactly the "all offsets unknown"
     ** start state -- no init loop needed (W15-1 removed the redundant clear). */
     memo->length = entries;
 }

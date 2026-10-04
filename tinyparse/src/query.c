@@ -28,9 +28,9 @@ static int pp_node_is_leaf(const pp_node *node)
 
 /* ** Recursively append a node and its subtree to the linearized stream in
 ** pre-order. Returns 1 on success, 0 if the array could not grow. The token
-** array is grown geometrically from the arena (no realloc: ax arenas only
+** array is grown geometrically from the arena (no realloc: arenas only
 ** append, so a grow copies). */
-static int pp_lin_walk(ax_arena *arena, const pocketparse_tree *tree,
+static int pp_lin_walk(pp_arena *arena, const pocketparse_tree *tree,
                        uint32_t index, pp_lin_token **tokens, uint32_t *count,
                        uint32_t *capacity)
 {
@@ -42,7 +42,7 @@ static int pp_lin_walk(ax_arena *arena, const pocketparse_tree *tree,
     ** fit. Reserving two keeps the leaf and internal cases from re-checking. */
     if (*count + 2 > *capacity) {
         uint32_t new_capacity = *capacity == 0 ? 32 : *capacity * 2;
-        pp_lin_token *grown = (pp_lin_token *)ax_alloc(
+        pp_lin_token *grown = (pp_lin_token *)pp_alloc(
             arena, new_capacity * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -82,7 +82,7 @@ static int pp_lin_walk(ax_arena *arena, const pocketparse_tree *tree,
     ** children consumed it); ensure room before writing it. */
     if (*count + 1 > *capacity) {
         uint32_t new_capacity = *capacity * 2;
-        pp_lin_token *grown = (pp_lin_token *)ax_alloc(
+        pp_lin_token *grown = (pp_lin_token *)pp_alloc(
             arena, new_capacity * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -106,7 +106,7 @@ static int pp_lin_walk(ax_arena *arena, const pocketparse_tree *tree,
 int pp_linearize(pocketparse_engine *engine, const pocketparse_tree *tree,
                  pp_linearization *out)
 {
-    ax_arena     *arena = engine->arena;
+    pp_arena     *arena = engine->arena;
     pp_lin_token *tokens = 0;
     uint32_t      count = 0, capacity = 0;
 
@@ -166,7 +166,7 @@ typedef struct pp_query_binding {
 /* ** The mutable state threaded through a trial match: the compiler's arena, the
 ** linearized stream being parsed, and the growing capture buffer. */
 typedef struct pp_query_state {
-    ax_arena             *arena;
+    pp_arena             *arena;
     const pp_linearization *lin;
     pp_query_binding     *bindings;
     uint32_t              binding_count;
@@ -182,7 +182,7 @@ static int pp_query_bind(pp_query_state *state, pocketparse_string name,
     if (state->binding_count == state->binding_capacity) {
         uint32_t new_capacity =
             state->binding_capacity == 0 ? 8 : state->binding_capacity * 2;
-        pp_query_binding *grown = (pp_query_binding *)ax_alloc(
+        pp_query_binding *grown = (pp_query_binding *)pp_alloc(
             state->arena, new_capacity * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -383,7 +383,7 @@ static int pp_query_resolve_kind(const pp_interner *interner,
 ** which may be preceded by a `field:' keyword, followed by an optional
 ** `@capture', and separated by an optional `.' anchor. On failure returns NULL
 ** and writes *error. */
-static pp_query_pat *pp_query_compile_pattern(ax_arena *arena,
+static pp_query_pat *pp_query_compile_pattern(pp_arena *arena,
                                               const pp_interner *interner,
                                               const pp_form *form,
                                               const char **error)
@@ -398,7 +398,7 @@ static pp_query_pat *pp_query_compile_pattern(ax_arena *arena,
         return 0;
     }
 
-    pat = (pp_query_pat *)ax_alloc(arena, sizeof *pat);
+    pat = (pp_query_pat *)pp_alloc(arena, sizeof *pat);
     if (pat == 0) {
         *error = "query: out of memory";
         return 0;
@@ -435,9 +435,9 @@ static pp_query_pat *pp_query_compile_pattern(ax_arena *arena,
 
     /* Reserve room for the children (at most the remaining items). */
     if (form->count > i) {
-        pat->children = (pp_query_pat **)ax_alloc(
+        pat->children = (pp_query_pat **)pp_alloc(
             arena, (form->count - i) * sizeof *pat->children);
-        pat->anchored = (uint8_t *)ax_alloc(arena, (form->count - i));
+        pat->anchored = (uint8_t *)pp_alloc(arena, (form->count - i));
         if (pat->children == 0 || pat->anchored == 0) {
             *error = "query: out of memory";
             return 0;
@@ -483,7 +483,7 @@ static pp_query_pat *pp_query_compile_pattern(ax_arena *arena,
         }
         if (pp_query_is_wildcard(item)) {
             /* A bare `_' child: a wildcard node with no children. */
-            child = (pp_query_pat *)ax_alloc(arena, sizeof *child);
+            child = (pp_query_pat *)pp_alloc(arena, sizeof *child);
             if (child == 0) {
                 *error = "query: out of memory";
                 return 0;
@@ -540,7 +540,7 @@ static int pp_query_compile_predicate(const pp_form *form, pp_query_pred *out,
 ** that pairs a pattern with one or more predicate clauses. Returns 1 on success.
 ** A wrapping list is recognised when its first item is itself a pattern list and
 ** later items are predicates. */
-static int pp_query_compile(ax_arena *arena, const pp_interner *interner,
+static int pp_query_compile(pp_arena *arena, const pp_interner *interner,
                             const pp_form *form, pp_query *out,
                             const char **error)
 {
@@ -558,7 +558,7 @@ static int pp_query_compile(ax_arena *arena, const pp_interner *interner,
         if (out->pattern == 0)
             return 0;
         if (form->count > 1) {
-            out->predicates = (pp_query_pred *)ax_alloc(
+            out->predicates = (pp_query_pred *)pp_alloc(
                 arena, (form->count - 1) * sizeof *out->predicates);
             if (out->predicates == 0) {
                 *error = "query: out of memory";
@@ -602,7 +602,7 @@ static pocketparse_string pp_query_slice(pocketparse_string input,
 ** text is sliced from the input; #eq? compares it to the literal, #match?
 ** searches it for the regex. A predicate over an unbound capture fails the
 ** match. Returns 1 when the predicate holds. */
-static int pp_query_eval_predicate(pocketparse_engine *engine, ax_arena *arena,
+static int pp_query_eval_predicate(pocketparse_engine *engine, pp_arena *arena,
                                    const pp_query_pred *pred,
                                    const pp_query_state *state,
                                    pocketparse_string input)
@@ -657,7 +657,7 @@ static void pp_query_report(const pp_query_state *state,
 ** p starts a trial; on success the predicates are checked, and if they all hold
 ** the captures are reported. Each trial uses a fresh capture buffer, so a failed
 ** match (or a failed predicate) reports nothing. */
-static int pp_query_run_one(pocketparse_engine *engine, ax_arena *arena,
+static int pp_query_run_one(pocketparse_engine *engine, pp_arena *arena,
                             const pp_linearization *lin, const pp_query *query,
                             pocketparse_string input, const pp_query_sink *sink)
 {
@@ -698,7 +698,7 @@ pocketparse_result pp_query_run(pocketparse_engine *engine,
                                 const pp_query_sink *sink,
                                 const char **error)
 {
-    ax_arena        *arena = engine->arena;
+    pp_arena        *arena = engine->arena;
     pp_read_result   read;
     pp_linearization lin;
     uint32_t         i;

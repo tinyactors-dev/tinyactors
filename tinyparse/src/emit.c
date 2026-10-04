@@ -7,7 +7,7 @@
 ** file that embeds those packed bytes as a `static const unsigned char[]`. No
 ** IO happens here -- cli.c, the one hosted file, writes the returned bytes to
 ** disk. Like the rest of src/ except cli.c, this file is freestanding: it
-** depends only on internal.h (and through it pocketparse.h and ax.h), never on
+** depends only on internal.h (and through it pocketparse.h), never on
 ** libc, and every byte it produces is carved from the engine arena.
 **
 ** Two shapes come out, selected by a flag:
@@ -21,12 +21,12 @@
 **     A self-contained program: the same embedded bytes plus a main() that opens
 **     an engine over a static memory grant, loads the binary grammar, reads all
 **     of stdin, pushes/finishes, and prints a pre-order dump of the CST using
-**     only the public cursor API. Linked with libpocketparse + libax it is a
+**     only the public cursor API. Linked with libpocketparse it is a
 **     working standalone parser for that grammar.
 **
 ** The text is assembled in two passes, exactly like pack.c's serializer: a
 ** measuring pass with a NULL buffer counts the bytes, then a single arena block
-** of that size is filled. ax arenas never realloc, so a growable buffer is not
+** of that size is filled. arenas never realloc, so a growable buffer is not
 ** an option; two passes over identical code paths keep the lengths in step.
 */
 #include "internal.h"
@@ -304,7 +304,7 @@ static void pp_emit_bundle_main(pp_emit_cursor *cursor)
 
 /* ** Emit C source for a compiled grammar into the engine arena. The whole text
 ** is built in two passes -- measure with a NULL buffer, then fill a single
-** arena block of that exact size -- because ax arenas never realloc. The packed
+** arena block of that exact size -- because arenas never realloc. The packed
 ** grammar is serialized once up front and embedded by both passes. With the
 ** POCKETPARSE_EMIT_BUNDLE flag the output is a standalone program; without it a
 ** reusable module. The bytes are written into the engine arena and returned
@@ -360,7 +360,7 @@ pocketparse_result pocketparse_emit_c(
     if (bundle)
         pp_emit_bundle_main(&measure);
 
-    buffer = (char *)ax_alloc(grammar->arena, measure.length);
+    buffer = (char *)pp_alloc(grammar->arena, measure.length);
     if (buffer == 0)
         return POCKETPARSE_OUT_OF_MEMORY;
 

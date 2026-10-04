@@ -15,7 +15,7 @@
 ** rule/token IR through internal.h alone, never libc, and every byte it emits is
 ** carved from the engine arena. The text is assembled in two passes -- a
 ** measuring pass with a NULL buffer counts the bytes, then a single arena block
-** of that size is filled -- exactly as emit.c and pack.c do, because ax arenas
+** of that size is filled -- exactly as emit.c and pack.c do, because arenas
 ** never realloc and so a growable buffer is not an option. The two passes walk
 ** identical code paths, which keeps the measured and emitted lengths in step.
 */
@@ -123,13 +123,13 @@ static void pp_json_type_ref(pp_json_cursor *cursor,
 ** any number of alternatives, a rule any number of loose children, and a grammar
 ** any number of distinct node kinds and fields -- so the collection grows
 ** geometrically rather than stopping at a fixed cap that would silently truncate
-** a large grammar. ax arenas never realloc, so "grow" means allocate a block of
+** a large grammar. arenas never realloc, so "grow" means allocate a block of
 ** twice the capacity and copy the live entries across; the abandoned block is
 ** reclaimed when the arena is. The growth is exercised in the measuring and
 ** emitting passes alike, so both walk an identical document and their byte counts
 ** agree. */
 typedef struct pp_symbol_list {
-    ax_arena *arena;
+    pp_arena *arena;
     uint32_t *items;
     uint32_t  count;
     uint32_t  capacity;
@@ -137,7 +137,7 @@ typedef struct pp_symbol_list {
 
 /* ** Initialise an empty symbol list bound to an arena. The first append
 ** allocates; an empty list owns no block. */
-static void pp_symbol_list_init(pp_symbol_list *list, ax_arena *arena)
+static void pp_symbol_list_init(pp_symbol_list *list, pp_arena *arena)
 {
     list->arena    = arena;
     list->items    = 0;
@@ -153,7 +153,7 @@ static int pp_symbol_list_push(pp_symbol_list *list, uint32_t symbol)
     if (list->count == list->capacity) {
         uint32_t  new_capacity = (list->capacity == 0) ? 8u : list->capacity * 2u;
         uint32_t *grown =
-            (uint32_t *)ax_alloc(list->arena, new_capacity * sizeof *grown);
+            (uint32_t *)pp_alloc(list->arena, new_capacity * sizeof *grown);
         uint32_t  i;
         if (grown == 0)
             return 0;
@@ -206,14 +206,14 @@ typedef struct pp_field_entry {
 ** with many distinct fields -- or a grammar with many node kinds -- is never
 ** truncated. Grows geometrically exactly like pp_symbol_list. */
 typedef struct pp_field_list {
-    ax_arena       *arena;
+    pp_arena       *arena;
     pp_field_entry *items;
     uint32_t        count;
     uint32_t        capacity;
 } pp_field_list;
 
 /* ** Initialise an empty field list bound to an arena. */
-static void pp_field_list_init(pp_field_list *list, ax_arena *arena)
+static void pp_field_list_init(pp_field_list *list, pp_arena *arena)
 {
     list->arena    = arena;
     list->items    = 0;
@@ -230,7 +230,7 @@ static pp_field_entry *pp_field_list_push(pp_field_list *list, uint32_t name_sym
     if (list->count == list->capacity) {
         uint32_t        new_capacity = (list->capacity == 0) ? 8u : list->capacity * 2u;
         pp_field_entry *grown =
-            (pp_field_entry *)ax_alloc(list->arena, new_capacity * sizeof *grown);
+            (pp_field_entry *)pp_alloc(list->arena, new_capacity * sizeof *grown);
         uint32_t        i;
         if (grown == 0)
             return NULL;
@@ -427,7 +427,7 @@ static void pp_emit_node_types_document(pp_json_cursor *cursor,
 
 /* ** Emit the node-types schema for a compiled grammar as JSON, into the engine
 ** arena, returned through out_json. Two passes -- measure with a NULL buffer,
-** then fill a single arena block of that exact size -- because ax arenas never
+** then fill a single arena block of that exact size -- because arenas never
 ** realloc; both passes walk the identical document builder so the lengths agree.
 ** The host owns nothing it must free and does the file IO. */
 pocketparse_result pocketparse_emit_node_types(
@@ -451,7 +451,7 @@ pocketparse_result pocketparse_emit_node_types(
     measure.length = 0;
     pp_emit_node_types_document(&measure, grammar);
 
-    buffer = (char *)ax_alloc(grammar->arena, measure.length);
+    buffer = (char *)pp_alloc(grammar->arena, measure.length);
     if (buffer == 0)
         return POCKETPARSE_OUT_OF_MEMORY;
 

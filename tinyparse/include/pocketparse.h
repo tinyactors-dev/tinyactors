@@ -5,8 +5,7 @@
 ** core library is freestanding C: it depends on nothing but <stddef.h> and
 ** <stdint.h>, never allocates outside a host-granted memory pool, and never
 ** touches libc, IO, the filesystem, threads, a clock, or global mutable
-** state. Internally it is powered by the ax actor system; that never leaks
-** into this header.
+** state.
 **
 ** This header is the frozen public surface, translated from the design
 ** document's "Public shape" into regular C99. No symbol here takes a
@@ -35,7 +34,7 @@ typedef struct pocketparse_string {
 ** block and never allocates outside it. grow may be NULL for a fixed budget;
 ** when present it returns a fresh block (never a realloc) so existing
 ** allocations keep their addresses. The grant is handed straight to the
-** consumed ax arena, so grow has ax's grow shape: it is asked for at least
+** library's arena allocator: grow is asked for at least
 ** `need' bytes and writes the block's true usable size back through `got' (a
 ** host that hands back exactly `need' simply leaves *got = need). chunk_minimum
 ** is the floor on the chunk an arena pulls; zero selects the built-in default. */
@@ -66,8 +65,7 @@ typedef enum pocketparse_result {
     POCKETPARSE_ERROR
 } pocketparse_result;
 
-/* ** The opaque public handles. ax powers them, but its types never appear
-** here; callers see only ordinary C pointers. */
+/* ** The opaque public handles; callers see only ordinary C pointers. */
 typedef struct pocketparse_engine  pocketparse_engine;
 typedef struct pocketparse_grammar pocketparse_grammar;
 typedef struct pocketparse_parser  pocketparse_parser;
@@ -474,8 +472,9 @@ void pocketparse_tree_cursor_init(
     const pocketparse_tree          *tree
 );
 
-/* ** Extension mechanisms. Plugs are message-style host boundaries backed by
-** ax ports; bindings are direct named host functions. */
+/* ** Extension mechanisms. Plugs are message-style host boundaries (the engine
+** calls the plug's emit with a message); bindings are direct named host
+** functions. */
 typedef enum pocketparse_binding_kind {
     POCKETPARSE_BIND_CLASS,
     POCKETPARSE_BIND_PREDICATE,

@@ -32,25 +32,15 @@ typedef struct pocketparse_manifest {
     int                ok;
 } pocketparse_manifest;
 
-/* ** Library-private W59 hook (defined in engine.c, NOT in the public header):
-** select the bytecode VM or the reference executor for parses on this engine.
-** Declared here the way pocketparse_apply_manifest is, so the public API stays
-** frozen while the CLI can flip the engine for POCKETPARSE_ENGINE=vm. */
-void pp_engine_select_vm(pocketparse_engine *engine, int use_vm);
-
-/* ** Select the actor-hosted bytecode VM for parses on this engine (W60). Declared
-** here the same way, so the public API stays frozen while the CLI can flip the
-** engine for POCKETPARSE_ENGINE=vm-ax. Defined in engine.c. */
-void pp_engine_select_vm_actor(pocketparse_engine *engine, int use_vm_actor);
-
 /* ** Force the rule memo on/off for parses on this engine (W67). Declared here
 ** the same way; the CLI maps POCKETPARSE_RULEMEMO to it. Defined in engine.c. */
 void pp_engine_force_rule_memo(pocketparse_engine *engine, int mode);
 
-/* ** Report whether the actor-hosted VM action ran for a parser (W60). Declared
-** here so `run` can print the structural proof that the parse executed inside an
-** ax actor when POCKETPARSE_TRACE_ACTOR is set. Defined in vmactor.c. */
-int pp_parser_actor_ran(const pocketparse_parser *parser);
+/* ** The name of a parser's lifecycle state (accepting, dropped, finished,
+** failed). Declared here the same way, so `run` can report where the parser's
+** state machine ended when POCKETPARSE_TRACE_LIFECYCLE is set. Defined in
+** parse.c. */
+const char *pp_parser_state_name(const pocketparse_parser *parser);
 
 /* ** Parse a package.scm manifest (defined in package.c) and bind its params:
 ** onto the engine as compile-time parameters before any --param override. */
@@ -686,33 +676,13 @@ static pocketparse_engine *open_engine(void)
     configuration.flags                = 0;
     {
         pocketparse_engine *engine = pocketparse_open(configuration);
-        /* The actor-hosted bytecode VM is the DEFAULT engine, set in
-        ** pocketparse_open itself (W64), so a parse genuinely runs on ax for
-        ** everyone -- the CLI, the benchmark harness, any embedder -- with no flag
-        ** set. POCKETPARSE_ENGINE names an explicit alternative:
-        **   unset / "vm-ax"  -> the bytecode VM inside an ax actor (the default; W60)
-        **   "vm"             -> the SAME VM in process, no actor (W59)
-        ** W14-5 retired the recursive-descent IR interpreter, so the bytecode VM is
-        ** the only engine. The former "recursive" selector now maps to the in-process VM
-        ** (the closest non-actor engine) rather than naming a deleted executor; any
-        ** other unrecognised value leaves the library's actor default in place. This
-        ** is the only place the env var is read; the library itself never touches the
-        ** environment. The vm-ax grant-too-small fallback to the in-process VM still
-        ** applies underneath, so the default never breaks a parse on a constrained
-        ** grant. */
+        /* The bytecode VM is the only engine, driven by the parser lifecycle in
+        ** parse.c. POCKETPARSE_ENGINE once chose between that VM hosted in an
+        ** actor (the old default) and the same VM in process ("vm", and the
+        ** retired "recursive"); with the actor gone every value names the same VM,
+        ** so the variable is accepted and ignored and scripts that set it keep
+        ** working. */
         if (engine != NULL) {
-            const char *which = getenv("POCKETPARSE_ENGINE");
-            if (which != NULL &&
-                (strcmp(which, "vm") == 0 || strcmp(which, "recursive") == 0)) {
-                /* The in-process VM: clear the actor default, set the plain VM.
-                ** "recursive" is accepted as a deprecated alias (its recursive
-                ** executor is gone) so old invocations still pick a real engine. */
-                pp_engine_select_vm_actor(engine, 0);
-                pp_engine_select_vm(engine, 1);
-            } else {
-                /* The default actor path, already set by pocketparse_open. */
-                pp_engine_select_vm_actor(engine, 1);
-            }
             /* POCKETPARSE_RULEMEMO=always/off forces the rule memo on or off, so
             ** the differential can exercise its replay path on the test corpus
             ** (which is too small to wake the adaptive default). */
@@ -1149,8 +1119,8 @@ static int command_emit(int argc, char **argv)
     int    i;
     /* Library-private W16-3 hook (defined in engine.c, NOT in the public header):
     ** set the compiled-parser symbol prefix for the next emit. Declared here the
-    ** way pp_engine_select_vm is, so the public API stays frozen while the CLI can
-    ** pass `--name'. */
+    ** way pp_engine_force_rule_memo is, so the public API stays frozen while the
+    ** CLI can pass `--name'. */
     extern void pp_engine_set_parser_prefix(pocketparse_engine *engine,
                                             const char *prefix);
 
@@ -1564,15 +1534,14 @@ static int command_run(int argc, char **argv)
 
     result = pocketparse_finish(parser);
 
-    /* W60 structural proof: when asked, report whether the parse genuinely ran
-    ** inside the ax actor (the parser actor's input.end action set this flag after
-    ** running the dispatch loop). This is the inverse of the Phase 11 gap -- ax
-    ** used only as an arena. It costs nothing unless POCKETPARSE_TRACE_ACTOR is set. */
+    /* When asked, report the state the parser's lifecycle ended in: "finished"
+    ** proves the executor ran over the buffered input, "failed" that a dropped
+    ** chunk stopped it. It costs nothing unless POCKETPARSE_TRACE_LIFECYCLE is
+    ** set. */
     {
-        const char *trace_actor = getenv("POCKETPARSE_TRACE_ACTOR");
-        if (trace_actor != NULL && trace_actor[0] != '\0')
-            fprintf(stderr, "actor: parse ran on ax = %d\n",
-                    pp_parser_actor_ran(parser));
+        const char *trace = getenv("POCKETPARSE_TRACE_LIFECYCLE");
+        if (trace != NULL && trace[0] != '\0')
+            fprintf(stderr, "lifecycle: %s\n", pp_parser_state_name(parser));
     }
 
     /* A hard syntax error yields no usable tree: report the diagnostics and
@@ -1925,8 +1894,8 @@ static const char pocketparse_starter_main[] =
     " *\n"
     " * It opens an engine, compiles the sibling grammar.scm at runtime, parses\n"
     " * standard input against it, and prints the concrete syntax tree. The whole\n"
-    " * engine is in pocketparse.c (the ax actor system is folded in and hidden),\n"
-    " * so a single C compiler builds the project with no other dependency:\n"
+    " * engine is in pocketparse.c, so a single C compiler builds the project\n"
+    " * with no other dependency:\n"
     " *\n"
     " *     cc main.c pocketparse.c -o app\n"
     " *     echo 'hello world' | ./app\n"

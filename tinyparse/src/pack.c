@@ -10,9 +10,9 @@
 **
 ** Freestanding, like the rest of src/ except cli.c: no libc, no IO. The host
 ** supplies the bytes (load) and is handed the bytes (serialize); every
-** allocation comes from the engine arena via ax_alloc. The serializer runs in
+** allocation comes from the engine arena via pp_alloc. The serializer runs in
 ** two passes -- measure, then emit -- so it needs a single arena block of the
-** exact size rather than a growable buffer (ax arenas never realloc).
+** exact size rather than a growable buffer (arenas never realloc).
 **
 ** Image layout (all integers little-endian, 32-bit unless noted):
 **
@@ -145,7 +145,7 @@ static uint32_t pp_get_u32(pp_pack_cursor *cursor)
 
 /* ** Read a length-prefixed name into the arena; defined below, declared here so
 ** pp_read_ir can read a recover node's payload before the definition appears. */
-static int pp_read_name(ax_arena *arena, pp_pack_cursor *cursor,
+static int pp_read_name(pp_arena *arena, pp_pack_cursor *cursor,
                         pocketparse_string *out_name);
 
 /* ** Serialize one IR node depth-first into the cursor. */
@@ -358,7 +358,7 @@ pocketparse_result pocketparse_grammar_serialize(
     measure.error = 0;
     pp_write_grammar(&measure, grammar);
 
-    buffer = (uint8_t *)ax_alloc(grammar->arena, measure.length);
+    buffer = (uint8_t *)pp_alloc(grammar->arena, measure.length);
     if (buffer == 0)
         return POCKETPARSE_OUT_OF_MEMORY;
 
@@ -387,7 +387,7 @@ static pocketparse_result pp_pack_fail(pocketparse_engine *engine,
 /* ** Rebuild one IR node depth-first from the cursor, allocating from the arena.
 ** Returns NULL on allocation failure or a malformed image (cursor->error set,
 ** or a child count so large the read overruns -- caught on the next read). */
-static pp_ir *pp_read_ir(ax_arena *arena, pp_pack_cursor *cursor)
+static pp_ir *pp_read_ir(pp_arena *arena, pp_pack_cursor *cursor)
 {
     pp_ir   *ir;
     uint32_t i;
@@ -396,7 +396,7 @@ static pp_ir *pp_read_ir(ax_arena *arena, pp_pack_cursor *cursor)
     if (cursor->error)
         return 0;
 
-    ir = (pp_ir *)ax_alloc(arena, sizeof *ir);
+    ir = (pp_ir *)pp_alloc(arena, sizeof *ir);
     if (ir == 0)
         return 0;
 
@@ -411,7 +411,7 @@ static pp_ir *pp_read_ir(ax_arena *arena, pp_pack_cursor *cursor)
         ir->text.pointer = (const uint8_t *)"";
         ir->text.length  = 0;
     } else {
-        uint8_t *text = (uint8_t *)ax_alloc(arena, text_length);
+        uint8_t *text = (uint8_t *)pp_alloc(arena, text_length);
         if (text == 0)
             return 0;
         for (i = 0; i < text_length; i++)
@@ -447,7 +447,7 @@ static pp_ir *pp_read_ir(ax_arena *arena, pp_pack_cursor *cursor)
             cursor->error = 1;
             return 0;
         }
-        ir->children = (pp_ir **)ax_alloc(
+        ir->children = (pp_ir **)pp_alloc(
             arena, ir->child_count * sizeof *ir->children);
         if (ir->children == 0)
             return 0;
@@ -479,7 +479,7 @@ static pp_ir *pp_read_ir(ax_arena *arena, pp_pack_cursor *cursor)
 
 /* ** Read a length-prefixed name straight out of the image into the arena.
 ** Returns 0 on overrun or allocation failure (caller checks cursor->error). */
-static int pp_read_name(ax_arena *arena, pp_pack_cursor *cursor,
+static int pp_read_name(pp_arena *arena, pp_pack_cursor *cursor,
                         pocketparse_string *out_name)
 {
     uint32_t length = pp_get_u32(cursor);
@@ -495,7 +495,7 @@ static int pp_read_name(ax_arena *arena, pp_pack_cursor *cursor,
         out_name->length  = 0;
         return 1;
     }
-    name = (uint8_t *)ax_alloc(arena, length);
+    name = (uint8_t *)pp_alloc(arena, length);
     if (name == 0)
         return 0;
     for (i = 0; i < length; i++)
@@ -556,7 +556,7 @@ static pocketparse_result pp_load_image(
     if (pp_get_u32(&cursor) != PP_PACK_ABI)
         return pp_pack_fail(engine, "packed grammar ABI mismatch");
 
-    grammar = (pocketparse_grammar *)ax_alloc(engine->arena, sizeof *grammar);
+    grammar = (pocketparse_grammar *)pp_alloc(engine->arena, sizeof *grammar);
     if (grammar == 0)
         return pp_pack_fail(engine, "out of memory loading grammar");
     grammar->arena             = engine->arena;
@@ -590,7 +590,7 @@ static pocketparse_result pp_load_image(
     if (count > cursor.limit)
         return pp_pack_fail(engine, "corrupt packed grammar (name count)");
     if (count > 0) {
-        grammar->interner.names = (pocketparse_string *)ax_alloc(
+        grammar->interner.names = (pocketparse_string *)pp_alloc(
             engine->arena, count * sizeof *grammar->interner.names);
         if (grammar->interner.names == 0)
             return pp_pack_fail(engine, "out of memory loading grammar");
@@ -609,7 +609,7 @@ static pocketparse_result pp_load_image(
     if (cursor.error || count > cursor.limit)
         return pp_pack_fail(engine, "corrupt packed grammar (tokens)");
     grammar->token_count = count;
-    grammar->tokens = (pp_token_def *)ax_alloc(
+    grammar->tokens = (pp_token_def *)pp_alloc(
         engine->arena, (count == 0 ? 1 : count) * sizeof *grammar->tokens);
     if (grammar->tokens == 0)
         return pp_pack_fail(engine, "out of memory loading grammar");
@@ -625,7 +625,7 @@ static pocketparse_result pp_load_image(
     if (cursor.error || count > cursor.limit)
         return pp_pack_fail(engine, "corrupt packed grammar (rules)");
     grammar->rule_count = count;
-    grammar->rules = (pp_rule_def *)ax_alloc(
+    grammar->rules = (pp_rule_def *)pp_alloc(
         engine->arena, (count == 0 ? 1 : count) * sizeof *grammar->rules);
     if (grammar->rules == 0)
         return pp_pack_fail(engine, "out of memory loading grammar");
@@ -645,7 +645,7 @@ static pocketparse_result pp_load_image(
     if (cursor.error || count > cursor.limit)
         return pp_pack_fail(engine, "corrupt packed grammar (extras)");
     grammar->extra_count = count;
-    grammar->extras = (pp_extra *)ax_alloc(
+    grammar->extras = (pp_extra *)pp_alloc(
         engine->arena, (count == 0 ? 1 : count) * sizeof *grammar->extras);
     if (grammar->extras == 0)
         return pp_pack_fail(engine, "out of memory loading grammar");
@@ -666,7 +666,7 @@ static pocketparse_result pp_load_image(
     if (cursor.error || count > cursor.limit)
         return pp_pack_fail(engine, "corrupt packed grammar (lex-goals)");
     grammar->lex_goal_count = count;
-    grammar->lex_goals = (pp_lex_goal *)ax_alloc(
+    grammar->lex_goals = (pp_lex_goal *)pp_alloc(
         engine->arena, (count == 0 ? 1 : count) * sizeof *grammar->lex_goals);
     if (grammar->lex_goals == 0)
         return pp_pack_fail(engine, "out of memory loading grammar");

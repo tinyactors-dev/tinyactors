@@ -4,7 +4,7 @@
 ** String comparison, the arena-backed string interner, the CST node builder,
 ** and the diagnostic collector live here because the reader, grammar compiler,
 ** lexer, parser, tree, and diagnostics modules all lean on them. No libc: every
-** byte of storage comes from an ax arena.
+** byte of storage comes from an arena.
 */
 #include "internal.h"
 
@@ -83,7 +83,7 @@ uint32_t pp_intern(pp_interner *interner, pocketparse_string name)
     if (interner->count == interner->capacity) {
         uint32_t new_capacity = interner->capacity == 0
                                     ? 16 : interner->capacity * 2;
-        pocketparse_string *grown = (pocketparse_string *)ax_alloc(
+        pocketparse_string *grown = (pocketparse_string *)pp_alloc(
             interner->arena, new_capacity * sizeof *grown);
         if (grown == 0)
             return interner->count; /* arena exhausted */
@@ -93,7 +93,7 @@ uint32_t pp_intern(pp_interner *interner, pocketparse_string name)
         interner->capacity = new_capacity;
     }
 
-    copy = (uint8_t *)ax_alloc(interner->arena, name.length == 0 ? 1 : name.length);
+    copy = (uint8_t *)pp_alloc(interner->arena, name.length == 0 ? 1 : name.length);
     if (copy == 0)
         return interner->count;
     for (i = 0; i < name.length; i++)
@@ -136,7 +136,7 @@ uint32_t pp_tree_builder_push(pp_tree_builder *builder, uint32_t kind,
         /* RAW: the live prefix [0,count) is copied in below; every later node is
         ** fully written by the pp_tree_builder_push that claims it before any read,
         ** so zeroing the (geometrically large) tail block would be wasted (W16-1). */
-        pp_node *grown = (pp_node *)ax_alloc_raw(builder->arena,
+        pp_node *grown = (pp_node *)pp_alloc_raw(builder->arena,
                                                  new_capacity * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -175,7 +175,7 @@ int pp_diag_error(pp_diag_list *list, const char *code, const char *message,
 
     if (list->count == list->capacity) {
         uint32_t new_capacity = list->capacity == 0 ? 4 : list->capacity * 2;
-        pocketparse_diagnostic *grown = (pocketparse_diagnostic *)ax_alloc(
+        pocketparse_diagnostic *grown = (pocketparse_diagnostic *)pp_alloc(
             list->arena, new_capacity * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -186,7 +186,7 @@ int pp_diag_error(pp_diag_list *list, const char *code, const char *message,
         list->capacity = new_capacity;
     }
 
-    label = (pocketparse_label *)ax_alloc(list->arena, sizeof *label);
+    label = (pocketparse_label *)pp_alloc(list->arena, sizeof *label);
     if (label == 0)
         return 0;
     label->start_byte = start_byte;
