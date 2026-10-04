@@ -652,7 +652,6 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         }
         ta_session_insert(&system->sessions, node);
         actor->session_id = image->session_id;
-        actor->session_node = node;
     }
 
     /* The interpreter state the image describes, restored before anything

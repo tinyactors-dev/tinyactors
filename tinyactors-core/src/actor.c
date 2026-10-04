@@ -250,8 +250,9 @@ void ta_actor_free(ta_system *system, ta_actor *actor) {
     /* A named actor holds a reference to its address; a runtime ref holds nothing. */
     ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
-    if (actor->session_node != 0) {
-        ta_session_drop(&system->sessions, actor->session_node);
+    /* A reloaded session has a table entry; a session named by its runtime ID has none. */
+    if (actor->session_id != actor->record.id) {
+        ta_session_drop_resident(&system->sessions, actor->session_id, actor);
     }
     /* The record, the session storage and the instance are one block (ADR 0063). */
     ta_mem_free(system->allocator, actor,

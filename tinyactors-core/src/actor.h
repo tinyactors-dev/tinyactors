@@ -192,11 +192,10 @@ struct ta_actor {
     /* Its event block (ADR 0064), or null. */
     ta_event_block *event_block;
     ta_actor_id replacement_of;
-    /* The session this actor holds (ADR 0066), and its entry in the session
-     * table (a pool index, 0 for none) when that ID is not this actor's
-     * runtime ID. */
+    /* The session this actor holds (ADR 0066). When that ID is not this
+     * actor's runtime ID, the session table has an entry for it, which
+     * ta_actor_free finds by (session_id, actor). */
     uint64_t session_id;
-    uint32_t session_node;
     uint64_t session_epoch;
     bool published;
     /* Lifecycle records written for this session, from 1 (ADR 0067; napi

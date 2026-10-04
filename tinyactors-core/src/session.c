@@ -107,6 +107,20 @@ void ta_session_drop(ta_session_table *table, uint32_t index) {
     ta_session_node_free(table, index);
 }
 
+void ta_session_drop_resident(ta_session_table *table, uint64_t id, const struct ta_actor *actor) {
+    ta_table_probe probe;
+    uint32_t index = 0;
+    uint32_t found = 0;
+    ta_table_probe_start(&table->index, ta_session_hash(id), &probe);
+    while (found == 0 && ta_table_probe_next(&probe, &index)) {
+        const ta_session_node *node = ta_session_node_at(table, index);
+        found = node->id == id && node->actor == actor ? index : 0u;
+    }
+    if (found != 0) { /* the probe is dead once the index changes */
+        ta_session_drop(table, found);
+    }
+}
+
 void ta_session_drop_unloaded(ta_session_table *table, ta_address *address) {
     if (address->unloaded != 0) {
         ta_session_drop(table, address->unloaded);

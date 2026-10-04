@@ -45,10 +45,11 @@
  *     is session lifetime: from the load to the unload or to the actor's
  *     free. While it holds an unloaded session it is parked: from the unload
  *     to the next load at its address, the removal of the name, the
- *     replacement by another unload, or destroy. The holder of a node's index
- *     is the actor (ta_actor.session_node, until the actor is freed) or the
- *     address (ta_address.unloaded, until the node is dropped). Nobody else
- *     may keep an index.
+ *     replacement by another unload, or destroy. The holder of a parked node's
+ *     index is the address (ta_address.unloaded, until the node is dropped);
+ *     a resident node's index is held by nobody, since the actor finds its
+ *     node by (session ID, actor) when it is freed, which costs nothing per
+ *     actor. Nobody else may keep an index.
  *   - A pointer returned by ta_session_find or ta_session_node_at is
  *     call lifetime: valid until the node is dropped. Nodes do not move.
  *
@@ -99,9 +100,8 @@
  *         return TA_ERR_NOMEM;                            // nothing changed
  *     }
  *     ta_session_insert(&system->sessions, index);        // resident
- *     actor->session_node = index;
  *     ...
- *     ta_session_drop(&system->sessions, actor->session_node);   // actor freed
+ *     ta_session_drop_resident(&system->sessions, id, actor);    // actor freed
  */
 
 typedef struct ta_session_node {
@@ -169,6 +169,16 @@ void ta_session_insert(ta_session_table *table, uint32_t index);
  * inserts it. Never allocates.
  */
 void ta_session_park(ta_session_table *table, uint32_t index, ta_address *address);
+
+/*
+ * ta_session_drop_resident drops the node of the reloaded session `id` that
+ * `actor` holds, found by probing the hash of `id` for the node whose actor
+ * it is; nothing if there is none. It is how an actor leaves the table, so
+ * the actor does not carry the node's index (8 bytes of every actor, named
+ * or not, and only a reloaded session has a node). Never allocates. O(1)
+ * expected, linear in the sessions that share the 32-bit hash.
+ */
+void ta_session_drop_resident(ta_session_table *table, uint64_t id, const struct ta_actor *actor);
 
 /*
  * ta_session_drop removes a node that is in the index and frees it: it

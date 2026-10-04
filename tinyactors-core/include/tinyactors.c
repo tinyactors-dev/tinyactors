@@ -2649,10 +2649,11 @@ TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry);
  *     is session lifetime: from the load to the unload or to the actor's
  *     free. While it holds an unloaded session it is parked: from the unload
  *     to the next load at its address, the removal of the name, the
- *     replacement by another unload, or destroy. The holder of a node's index
- *     is the actor (ta_actor.session_node, until the actor is freed) or the
- *     address (ta_address.unloaded, until the node is dropped). Nobody else
- *     may keep an index.
+ *     replacement by another unload, or destroy. The holder of a parked node's
+ *     index is the address (ta_address.unloaded, until the node is dropped);
+ *     a resident node's index is held by nobody, since the actor finds its
+ *     node by (session ID, actor) when it is freed, which costs nothing per
+ *     actor. Nobody else may keep an index.
  *   - A pointer returned by ta_session_find or ta_session_node_at is
  *     call lifetime: valid until the node is dropped. Nodes do not move.
  *
@@ -2703,9 +2704,8 @@ TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry);
  *         return TA_ERR_NOMEM;                            // nothing changed
  *     }
  *     ta_session_insert(&system->sessions, index);        // resident
- *     actor->session_node = index;
  *     ...
- *     ta_session_drop(&system->sessions, actor->session_node);   // actor freed
+ *     ta_session_drop_resident(&system->sessions, id, actor);    // actor freed
  */
 
 typedef struct ta_session_node {
@@ -2773,6 +2773,16 @@ TA_PRIVATE void ta_session_insert(ta_session_table *table, uint32_t index);
  * inserts it. Never allocates.
  */
 TA_PRIVATE void ta_session_park(ta_session_table *table, uint32_t index, ta_address *address);
+
+/*
+ * ta_session_drop_resident drops the node of the reloaded session `id` that
+ * `actor` holds, found by probing the hash of `id` for the node whose actor
+ * it is; nothing if there is none. It is how an actor leaves the table, so
+ * the actor does not carry the node's index (8 bytes of every actor, named
+ * or not, and only a reloaded session has a node). Never allocates. O(1)
+ * expected, linear in the sessions that share the 32-bit hash.
+ */
+TA_PRIVATE void ta_session_drop_resident(ta_session_table *table, uint64_t id, const struct ta_actor *actor);
 
 /*
  * ta_session_drop removes a node that is in the index and frees it: it
@@ -4311,11 +4321,10 @@ struct ta_actor {
     /* Its event block (ADR 0064), or null. */
     ta_event_block *event_block;
     ta_actor_id replacement_of;
-    /* The session this actor holds (ADR 0066), and its entry in the session
-     * table (a pool index, 0 for none) when that ID is not this actor's
-     * runtime ID. */
+    /* The session this actor holds (ADR 0066). When that ID is not this
+     * actor's runtime ID, the session table has an entry for it, which
+     * ta_actor_free finds by (session_id, actor). */
     uint64_t session_id;
-    uint32_t session_node;
     uint64_t session_epoch;
     bool published;
     /* Lifecycle records written for this session, from 1 (ADR 0067; napi
@@ -7804,6 +7813,20 @@ TA_PRIVATE void ta_session_node_free(ta_session_table *table, uint32_t index) {
 TA_PRIVATE void ta_session_drop(ta_session_table *table, uint32_t index) {
     (void)ta_table_remove(&table->index, ta_session_hash(ta_session_node_at(table, index)->id), index);
     ta_session_node_free(table, index);
+}
+
+TA_PRIVATE void ta_session_drop_resident(ta_session_table *table, uint64_t id, const struct ta_actor *actor) {
+    ta_table_probe probe;
+    uint32_t index = 0;
+    uint32_t found = 0;
+    ta_table_probe_start(&table->index, ta_session_hash(id), &probe);
+    while (found == 0 && ta_table_probe_next(&probe, &index)) {
+        const ta_session_node *node = ta_session_node_at(table, index);
+        found = node->id == id && node->actor == actor ? index : 0u;
+    }
+    if (found != 0) { /* the probe is dead once the index changes */
+        ta_session_drop(table, found);
+    }
 }
 
 TA_PRIVATE void ta_session_drop_unloaded(ta_session_table *table, ta_address *address) {
@@ -15966,8 +15989,9 @@ TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
     /* A named actor holds a reference to its address; a runtime ref holds nothing. */
     ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
-    if (actor->session_node != 0) {
-        ta_session_drop(&system->sessions, actor->session_node);
+    /* A reloaded session has a table entry; a session named by its runtime ID has none. */
+    if (actor->session_id != actor->record.id) {
+        ta_session_drop_resident(&system->sessions, actor->session_id, actor);
     }
     /* The record, the session storage and the instance are one block (ADR 0063). */
     ta_mem_free(system->allocator, actor,
@@ -18063,7 +18087,6 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         }
         ta_session_insert(&system->sessions, node);
         actor->session_id = image->session_id;
-        actor->session_node = node;
     }
 
     /* The interpreter state the image describes, restored before anything
