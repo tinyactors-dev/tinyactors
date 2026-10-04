@@ -246,6 +246,7 @@ static void test_golden_figures(void) {
     CHECK(system->arena_bytes == 82048u);
     /* The header is 12 bytes since the jump stores its own size (it was 8). */
     uint32_t jump = 77u;
+    CHECK(sizeof(ta_operator_jump) == 12u);
     CHECK(ta_operator_jump_bytes(3, &jump) == TA_OK && jump == 24u);
     CHECK(ta_operator_jump_bytes(0, &jump) == TA_OK && jump == 12u);
     /* A total above a uint32_t is refused on every host, and the output is left alone. */
