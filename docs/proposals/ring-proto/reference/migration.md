@@ -300,8 +300,12 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
    faults and state lists in the tail. Core stamps each with a clock the
    host installs natively as a C function. `tinyactors-otlp` reads them
    and builds OTLP spans; a `tel.dropped` ends every open span with error
-   status. `telBytes` 0 creates no `tel` ring. Refines 0067
-   ([telemetry.md](telemetry.md)).
+   status. `telBytes` 0 creates no `tel` ring. Trace context travels on
+   records as it travels on calls today: `h2c.event`, `h2c.spawn` and
+   `h2c.invoke_report` carry a trace parent in; `c2h.send`, `c2h.invoke`,
+   `c2h.invoke_forward` and `c2h.log` carry the step's span ID out; local
+   mail keeps it in the envelope's text. Refines 0067 and 0073
+   ([telemetry.md](telemetry.md#trace-context-across-the-rings)).
 8. In `docs/adr/` (the repository's own): **remove `tinyactors-host`**.
    Supersedes kernel ADRs 0001 to 0006.
 9. In `tinyactors-napi/docs/adr/`: **napi is a binding over core's
@@ -318,8 +322,9 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
     - **Quarantine is removed** (napi ADRs 0008 and 0025). Slots keep one
       bad actor from taking the loop's turns. Holding a runaway would let
       its mail fill the pool, leave its input's promise pending and stop a
-      looping replay seed from being published. The debugger is how an
-      operator looks at a live actor.
+      looping replay seed from being published. An operator reads a live
+      actor with `ta_actor_inspect` and intervenes by attaching the
+      debugger.
 
     Refines 0055, 0061 and 0075. Records the bytes per slot record, per
     parked execution and per actor (+12 bytes on today's 332: the head of
@@ -335,7 +340,9 @@ These hold with the proposal and need no ADR of their own:
   Debugger commands stay outside the rings; native primitives support
   inspection, abandonment at legal boundaries and operator transitions
   through the normal engine (ADR 0082). Detachment returns ownership to
-  the pump. A debugger that holds one actor while others run is outside
+  the pump. Reading needs no attachment: `ta_actor_inspect` stays a
+  native call between `ta_run` calls and marks a session stable or active
+  ([debugging.md](debugging.md#inspection-without-attaching)). A debugger that holds one actor while others run is outside
   the design ([debugging.md](debugging.md)).
 - **The data model stays a synchronous vtable.** In-process data models
   gain nothing from requests on a ring, and every action would have to
