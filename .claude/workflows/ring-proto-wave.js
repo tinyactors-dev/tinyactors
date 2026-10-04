@@ -408,9 +408,11 @@ const wantFull = results.some((r, i) => r && r.integration && r.integration.stat
 const full = !wantFull ? 'not needed: no unit that touches allocation or per-actor costs landed' : await agent(`${CONTEXT.replace(/Do not run the repository-wide[^\n]*/, '')}
 
 Every unit of wave ${WAVE} has landed on ${BASE}. Nothing else runs now. In ${REPO}:
-1. Remove the wave's leftover worktrees: for each entry of git worktree list under .claude/worktrees/
-   whose HEAD is an ancestor of ${BASE} (git merge-base --is-ancestor), git worktree remove --force it.
-   List any you kept, and why.
+1. Remove the wave's leftover worktrees under .claude/worktrees/. The integrator rebases each unit and
+   regenerates the amalgamation, so landed commits have new hashes and patch IDs: match by subject.
+   For each worktree, every commit in git log ${BASE}..HEAD whose subject also appears in
+   git log --format=%s ${BASE} is landed. Remove (git worktree remove --force) a worktree whose commits
+   are all landed; list any other with the subjects that are not, and keep it.
 2. Run mise run test:full on ${BASE} (it can exceed 30 minutes; run it in the foreground with a long
    timeout, or in pieces per project, but never in the background where it can be killed).
 3. If it fails only on a timing-ratio assertion in tinyactors-napi/test/scale.js, classify it: run
