@@ -229,7 +229,7 @@ The approved plan:
 ${JSON.stringify(plan, null, 2)}
 
 Implement it in this worktree:
-1. git checkout -b ${wip(u)}
+1. git checkout -B ${wip(u)} ${BASE}   (start from the current tip of ${BASE}, whatever this worktree was created at)
 2. Record core's size first: cat tinyactors-core/src/*.c tinyactors-core/src/*.h | wc -l
 3. Work through the plan's steps in order. After each, build and run the narrowest test that covers it.
    Commit each working step separately; keep history linear. Commit subjects are scoped
@@ -262,7 +262,8 @@ ${JSON.stringify(plan, null, 2)}
 ${lens.prompt}
 
 Report each finding with file and line at ${wip(u)}, what is wrong, and the fix. Report only what you
-have checked against the code. An empty list is a fine answer.`,
+have checked against the code. An empty list is a fine answer. Commit trailers (Co-Authored-By,
+Claude-Session) are set by the maintainer: they are never a finding.`,
     { label: `review:${lens.key}:${u.id}#${round}`, phase: 'Review', schema: FINDINGS, model: lens.model })
     .then(r => r && r.findings.map(f => ({ ...f, lens: lens.key })))))
     .then(rs => rs.filter(Boolean).flat())
@@ -276,13 +277,16 @@ ${unitHeader(u)}
 Reviewers found the following in round ${round}:
 ${JSON.stringify(findings, null, 2)}
 
-In this worktree: git checkout ${wip(u)}. Verify each finding against the code first. Fix every
+In this worktree: git checkout ${wip(u)}, and before every commit confirm that
+git rev-parse --abbrev-ref HEAD prints ${wip(u)}: a commit on a detached HEAD is lost when the branch
+is integrated (this happened in wave 1a-fix). Verify each finding against the code first. Fix every
 blocking finding that is real, and every nit that is plainly right. Decline the rest with the reason.
 Build, run the narrowest covering tests, run mise run amalgamate if core changed, and commit in small
 scoped commits with the same two trailer lines as before:
   Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01WbAzYQ22M3bPB3TrDc1XzX
-Leave the worktree clean and finish with: git checkout --detach. Do not push.`,
+Before detaching, check that git log -1 --format=%h ${wip(u)} is your last commit, and list your
+commits' hashes in the answer. Leave the worktree clean and finish with: git checkout --detach. Do not push.`,
     { label: `fix:${u.id}#${round}`, phase: 'Fix', schema: FIX, model: 'sonnet', isolation: 'worktree' })
 }
 
