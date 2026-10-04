@@ -126,6 +126,54 @@ static void tp_parser_u32(tp_parser_cursor *cursor, uint32_t value)
         tp_parser_byte(cursor, digits[--count]);
 }
 
+/* ** A child sink is a C expression naming a node list: a pointer that may
+** be NULL (a caller's sink), or the address of a local list (`&children'),
+** which never is. The address of a local needs no NULL test, and testing it
+** draws a warning (-Wpointer-bool-conversion), so these emit the test only
+** for a sink that can be NULL. */
+static int tp_parser_sink_nullable(const char *sink)
+{
+    return sink[0] != '&';
+}
+
+/* ** Append the sink's count: `(sink)->count', or `(sink) ? (sink)->count :
+** 0' when the sink can be NULL. */
+static void tp_parser_sink_count(tp_parser_cursor *cursor, const char *sink)
+{
+    if (tp_parser_sink_nullable(sink)) {
+        tp_parser_text(cursor, "(");
+        tp_parser_text(cursor, sink);
+        tp_parser_text(cursor, ") ? ");
+    }
+    tp_parser_text(cursor, "(");
+    tp_parser_text(cursor, sink);
+    tp_parser_text(cursor, ")->count");
+    if (tp_parser_sink_nullable(sink))
+        tp_parser_text(cursor, " : 0");
+}
+
+/* ** Append `if (sink) ' before a statement that writes through the sink,
+** when the sink can be NULL. */
+static void tp_parser_sink_guard(tp_parser_cursor *cursor, const char *sink)
+{
+    if (!tp_parser_sink_nullable(sink))
+        return;
+    tp_parser_text(cursor, "if (");
+    tp_parser_text(cursor, sink);
+    tp_parser_text(cursor, ") ");
+}
+
+/* ** Append `(sink) != 0 && ' before a condition that reads through the
+** sink, when the sink can be NULL. */
+static void tp_parser_sink_guard_and(tp_parser_cursor *cursor, const char *sink)
+{
+    if (!tp_parser_sink_nullable(sink))
+        return;
+    tp_parser_text(cursor, "(");
+    tp_parser_text(cursor, sink);
+    tp_parser_text(cursor, ") != 0 && ");
+}
+
 /* ** Append a slice verbatim, folding newlines to spaces so it stays inside a C
 ** line comment (used only for the banner's grammar name). */
 static void tp_parser_slice(tp_parser_cursor *cursor, tinyparse_string slice)
@@ -702,9 +750,9 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
         tp_parser_text(c, " = state->position;\n");
         tp_parser_indent(ctx, indent);
         tp_parser_text(c, "    uint32_t ch_sink_"); tp_parser_u32(c, my);
-        tp_parser_text(c, " = ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ") ? ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ")->count : 0;\n");
+        tp_parser_text(c, " = ");
+        tp_parser_sink_count(c, sink);
+        tp_parser_text(c, ";\n");
         /* Held `attach: leading' trivia high-water mark, captured before the shared
         ** leading-extras consume below; restored on each alternative's failure so a
         ** flush an abandoned alternative drained is re-exposed for the next (mirrors
@@ -788,8 +836,10 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
             tp_parser_text(c, "        state->position = ch_pos_");
             tp_parser_u32(c, my); tp_parser_text(c, ";\n");
             tp_parser_indent(ctx, indent);
-            tp_parser_text(c, "        if ("); tp_parser_text(c, sink);
-            tp_parser_text(c, ") ("); tp_parser_text(c, sink);
+            tp_parser_text(c, "        ");
+            tp_parser_sink_guard(c, sink);
+            tp_parser_text(c, "(");
+            tp_parser_text(c, sink);
             tp_parser_text(c, ")->count = ch_sink_"); tp_parser_u32(c, my);
             tp_parser_text(c, ";\n");
             tp_parser_indent(ctx, indent);
@@ -864,9 +914,9 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
         tp_parser_text(c, " = state->position;\n");
         tp_parser_indent(ctx, indent);
         tp_parser_text(c, "        rp_sink_"); tp_parser_u32(c, my);
-        tp_parser_text(c, " = ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ") ? ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ")->count : 0;\n");
+        tp_parser_text(c, " = ");
+        tp_parser_sink_count(c, sink);
+        tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
         tp_parser_text(c, "        rp_held_"); tp_parser_u32(c, my);
         tp_parser_text(c, " = state->held_count;\n");
@@ -910,8 +960,10 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
         tp_parser_text(c, "            state->position = rp_pos_");
         tp_parser_u32(c, my); tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
-        tp_parser_text(c, "            if ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ") ("); tp_parser_text(c, sink);
+        tp_parser_text(c, "            ");
+        tp_parser_sink_guard(c, sink);
+        tp_parser_text(c, "(");
+        tp_parser_text(c, sink);
         tp_parser_text(c, ")->count = rp_sink_"); tp_parser_u32(c, my);
         tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
@@ -966,9 +1018,9 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
         tp_parser_text(c, " = state->position;\n");
         tp_parser_indent(ctx, indent);
         tp_parser_text(c, "    uint32_t op_sink_"); tp_parser_u32(c, my);
-        tp_parser_text(c, " = ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ") ? ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ")->count : 0;\n");
+        tp_parser_text(c, " = ");
+        tp_parser_sink_count(c, sink);
+        tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
         tp_parser_text(c, "    uint32_t op_held_"); tp_parser_u32(c, my);
         tp_parser_text(c, " = state->held_count;\n");
@@ -1014,8 +1066,10 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
         tp_parser_text(c, "        state->position = op_pos_");
         tp_parser_u32(c, my); tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
-        tp_parser_text(c, "        if ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ") ("); tp_parser_text(c, sink);
+        tp_parser_text(c, "        ");
+        tp_parser_sink_guard(c, sink);
+        tp_parser_text(c, "(");
+        tp_parser_text(c, sink);
         tp_parser_text(c, ")->count = op_sink_"); tp_parser_u32(c, my);
         tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
@@ -1177,9 +1231,9 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
         tp_parser_text(c, " = state->position;\n");
         tp_parser_indent(ctx, indent);
         tp_parser_text(c, "    uint32_t rc_sink_"); tp_parser_u32(c, my);
-        tp_parser_text(c, " = ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ") ? ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ")->count : 0;\n");
+        tp_parser_text(c, " = ");
+        tp_parser_sink_count(c, sink);
+        tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
         tp_parser_text(c, "    uint32_t rc_held_"); tp_parser_u32(c, my);
         tp_parser_text(c, " = state->held_count;\n");
@@ -1214,8 +1268,10 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
         tp_parser_text(c, "    state->position = rc_pos_");
         tp_parser_u32(c, my); tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
-        tp_parser_text(c, "    if ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ") ("); tp_parser_text(c, sink);
+        tp_parser_text(c, "    ");
+        tp_parser_sink_guard(c, sink);
+        tp_parser_text(c, "(");
+        tp_parser_text(c, sink);
         tp_parser_text(c, ")->count = rc_sink_"); tp_parser_u32(c, my);
         tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
@@ -1314,9 +1370,9 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
         tp_parser_text(c, " = state->position;\n");
         tp_parser_indent(ctx, indent);
         tp_parser_text(c, "    uint32_t df_look_"); tp_parser_u32(c, my);
-        tp_parser_text(c, " = ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ") ? ("); tp_parser_text(c, sink);
-        tp_parser_text(c, ")->count : 0;\n");
+        tp_parser_text(c, " = ");
+        tp_parser_sink_count(c, sink);
+        tp_parser_text(c, ";\n");
         if (child == 0) {
             tp_parser_indent(ctx, indent);
             tp_parser_text(c, "    sig = TP_VM_FAIL;\n");
@@ -1379,8 +1435,9 @@ static void tp_parser_emit_ir(tp_parser_emit *ctx, const char *node,
         tp_parser_text(c, ";\n");
         tp_parser_indent(ctx, indent);
         tp_parser_text(c, "        df_item_"); tp_parser_u32(c, my);
-        tp_parser_text(c, ".node_index = (("); tp_parser_text(c, sink);
-        tp_parser_text(c, ") != 0 && ("); tp_parser_text(c, sink);
+        tp_parser_text(c, ".node_index = (");
+        tp_parser_sink_guard_and(c, sink);
+        tp_parser_text(c, "("); tp_parser_text(c, sink);
         tp_parser_text(c, ")->count > df_look_"); tp_parser_u32(c, my);
         tp_parser_text(c, ")\n");
         tp_parser_indent(ctx, indent);
@@ -3076,7 +3133,9 @@ static void tp_parser_emit_all(tp_parser_cursor *cursor, const char *prefix,
         "        printf(\" [%u-%u] [%u,%u]-[%u,%u]\", sb, eb, sl, sc, el, ec);\n"
         "    }\n"
         "    printf(\"\\n\");\n"
-        "}\n\n"
+        "}\n\n");
+    /* Two calls, not one: ISO C caps a string literal at 4095 bytes. */
+    tp_parser_text(cursor,
         "/* Pre-order dump of the subtree under `cursor', ITERATIVELY (cursor-driven,\n"
         "** no C recursion) so a pathologically deep tree cannot overflow the C stack\n"
         "** here either. Output byte-identical to the CLI's recursive dump. */\n"
