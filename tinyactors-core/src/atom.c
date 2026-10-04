@@ -1,8 +1,10 @@
 #include "atom.h"
 #include "hash.h"
 
-/* Slots per index page: 2 KiB, so the atom index grows in small, flat steps. */
-#define TA_ATOM_PAGE_SLOTS 256u
+/* The package comment is in atom.h. */
+
+/* Slots per index page: 8 KiB, so the atom index grows in small, flat steps. */
+#define TA_ATOM_PAGE_SLOTS 1024u
 
 static uint32_t ta_atom_hash(ta_str text) {
     return ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);

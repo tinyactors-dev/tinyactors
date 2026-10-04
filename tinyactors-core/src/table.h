@@ -52,9 +52,15 @@
  * its slots (on average; a page that has not been split yet can be up to
  * twice as full as the average). An owner that cannot grow right now, or
  * whose grow failed, carries on: the pages simply fill, and insert answers
- * TA_ERR_NOMEM only when the page a hash belongs to has no empty slot, which
- * at the 3/8 mark takes a page more than eight standard deviations above
- * the average. The exception is a crafted set of keys that collide in all
+ * TA_ERR_NOMEM only when the page a hash belongs to has no empty slot. With
+ * the grow trigger honoured, an unsplit page holds on average twice the
+ * table's average load, that is up to 3/4 of its slots just before a round
+ * of splits ends. For the 1024 slot pages that atoms and the trie use that
+ * is 768 entries with a standard deviation of about 28, so a full page is
+ * more than nine standard deviations away (a probability below 1e-15 per
+ * page). Small pages are weaker: at 256 slots the same bound is only 4.6
+ * standard deviations (about 6e-6 per unsplit page), so an owner of a
+ * growing table uses pages of 1024 slots or more. The exception is a crafted set of keys that collide in all
  * 32 bits of the hash: no number of splits separates identical hashes, so
  * enough of them fill one page and insert fails, where a chained table would
  * only slow down. Nothing in core hashes attacker-chosen text to a table

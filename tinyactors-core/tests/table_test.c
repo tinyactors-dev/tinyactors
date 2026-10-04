@@ -4,7 +4,8 @@
  * Checks, in order: FIXED mode (full, then refuses; never allocates after
  * init), the reserved value, GROWING mode (the grow trigger, one page per
  * grow, every key still found after every grow, no block larger than a page
- * or the directory), backward-shift deletion on clustered keys (including a
+ * or the directory), the production page size past a full round of splits
+ * (fullest page reported), backward-shift deletion on clustered keys (including a
  * run that wraps the end of the page) with the no-gap invariant checked
  * after every delete, equal hashes with different values, random insert and
  * remove against a reference model, an allocation failure sweep over init
@@ -208,6 +209,40 @@ static void test_growing(void) {
     /* Nothing larger than a page or the directory was ever asked for. */
     largest = heap.stats.largest_block;
     CHECK(largest <= (page_bytes > ta_vec_bytes(&table.pages) ? page_bytes : ta_vec_bytes(&table.pages)));
+    ta_table_destroy(&table);
+    CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
+}
+
+/*
+ * The page size atoms and the trie use (TA_ATOM_PAGE_SLOTS, TA_TRIE_PAGE_SLOTS)
+ * with the grow trigger honoured, past one full round of splits: no insert may
+ * fail, and the fullest page (an unsplit one, at about twice the average load)
+ * stays well below full. The figure is printed so a change of trigger or page
+ * size is visible.
+ */
+static void test_production_pages(void) {
+    enum { SLOTS = 1024, KEYS = 400000 };
+    ta_test_allocator_reset_counts(&heap);
+    ta_table table;
+    CHECK(ta_table_init(&table, ta_test_allocator_get(&heap),
+                        &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = SLOTS }) == TA_OK);
+    uint32_t worst = 0;
+    for (uint32_t index = 0; index < KEYS; index += 1u) {
+        if (ta_table_wants_grow(&table)) {
+            CHECK(ta_table_grow(&table) == TA_OK);
+        }
+        if (ta_table_insert(&table, random32(), index) != TA_OK) {
+            CHECK(!"insert failed with the grow trigger honoured");
+            break;
+        }
+        if (index % 997u == 0u) {
+            uint32_t fill = max_page_fill_percent(&table);
+            worst = fill > worst ? fill : worst;
+        }
+    }
+    printf("table_test: %u pages of %d slots, fullest page %u%%\n", table.pages.count, SLOTS, worst);
+    CHECK(table.pages.count > 2u * 256u);
+    CHECK(worst < 90u);
     ta_table_destroy(&table);
     CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
 }
@@ -434,6 +469,7 @@ int main(void) {
     test_fixed();
     test_reserved_and_params();
     test_growing();
+    test_production_pages();
     test_backward_shift();
     test_equal_hashes();
     test_page_full();

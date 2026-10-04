@@ -1156,9 +1156,15 @@ typedef struct {
  * its slots (on average; a page that has not been split yet can be up to
  * twice as full as the average). An owner that cannot grow right now, or
  * whose grow failed, carries on: the pages simply fill, and insert answers
- * TA_ERR_NOMEM only when the page a hash belongs to has no empty slot, which
- * at the 3/8 mark takes a page more than eight standard deviations above
- * the average. The exception is a crafted set of keys that collide in all
+ * TA_ERR_NOMEM only when the page a hash belongs to has no empty slot. With
+ * the grow trigger honoured, an unsplit page holds on average twice the
+ * table's average load, that is up to 3/4 of its slots just before a round
+ * of splits ends. For the 1024 slot pages that atoms and the trie use that
+ * is 768 entries with a standard deviation of about 28, so a full page is
+ * more than nine standard deviations away (a probability below 1e-15 per
+ * page). Small pages are weaker: at 256 slots the same bound is only 4.6
+ * standard deviations (about 6e-6 per unsplit page), so an owner of a
+ * growing table uses pages of 1024 slots or more. The exception is a crafted set of keys that collide in all
  * 32 bits of the hash: no number of splits separates identical hashes, so
  * enough of them fill one page and insert fails, where a chained table would
  * only slow down. Nothing in core hashes attacker-chosen text to a table
@@ -1503,8 +1509,8 @@ TA_PRIVATE bool ta_atom_valid(const ta_atom_table *table, ta_atom atom);
  *     ta_atom_trie trie;
  *     ta_trie_init(&trie, allocator, 16);
  *     uint32_t done, invoke;                         // atoms made by the owner
- *     ta_trie_child(&trie, TA_TRIE_ROOT, done_atom, &done);
- *     ta_trie_child(&trie, done, invoke_atom, &invoke);
+ *     ta_trie_child(&trie, &(ta_trie_key){ TA_TRIE_ROOT, done_atom }, &done);
+ *     ta_trie_child(&trie, &(ta_trie_key){ done, invoke_atom }, &invoke);
  *     ta_trie_under(&trie, invoke, done);            // true: done.invoke is under done
  */
 
@@ -1512,8 +1518,8 @@ TA_PRIVATE bool ta_atom_valid(const ta_atom_table *table, ta_atom atom);
 #define TA_TRIE_ROOT 0u
 /* TA_TRIE_MAX_DEPTH is the ceiling of max_depth; it sizes the arrays callers pass to ta_trie_segments. */
 #define TA_TRIE_MAX_DEPTH 64u
-/* Slots per index page: 2 KiB, so the index grows in small, flat steps. */
-#define TA_TRIE_PAGE_SLOTS 256u
+/* Slots per index page: 8 KiB, so the index grows in small, flat steps. */
+#define TA_TRIE_PAGE_SLOTS 1024u
 
 typedef struct ta_trie_node {
     uint32_t parent;
@@ -1537,15 +1543,21 @@ TA_PRIVATE ta_result ta_trie_init(ta_atom_trie *trie, ta_allocator allocator, ui
 /* ta_trie_destroy frees the nodes and the index; every node ID is dead. */
 TA_PRIVATE void ta_trie_destroy(ta_atom_trie *trie);
 
+/* ta_trie_key names a child: the node it hangs from and its segment atom. A call-lifetime value, copied by the callee. */
+typedef struct ta_trie_key {
+    uint32_t parent;
+    ta_atom segment;
+} ta_trie_key;
+
 /*
- * ta_trie_child stores in *out the node of `segment` below `parent`, making
+ * ta_trie_child stores in *out the node of key->segment below key->parent, making
  * it if it is new. Allocates only for a new node (see the package comment).
  * TA_ERR_INVALID for an unknown parent, TA_ATOM_NONE or a path longer than
  * max_depth; TA_ERR_NOMEM when memory is out. Failure leaves no node.
  */
-TA_PRIVATE ta_result ta_trie_child(ta_atom_trie *trie, uint32_t parent, ta_atom segment, uint32_t *out);
+TA_PRIVATE ta_result ta_trie_child(ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out);
 /* ta_trie_find is ta_trie_child without the making: TA_ERR_NOT_FOUND when the node does not exist. Never allocates. */
-TA_PRIVATE ta_result ta_trie_find(const ta_atom_trie *trie, uint32_t parent, ta_atom segment, uint32_t *out);
+TA_PRIVATE ta_result ta_trie_find(const ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out);
 /* ta_trie_valid says whether `node` is a node of this trie (the root is). */
 TA_PRIVATE bool ta_trie_valid(const ta_atom_trie *trie, uint32_t node);
 /*
@@ -5281,8 +5293,10 @@ TA_PRIVATE size_t ta_table_bytes(const ta_table *table) {
 }
 
 
-/* Slots per index page: 2 KiB, so the atom index grows in small, flat steps. */
-#define TA_ATOM_PAGE_SLOTS 256u
+/* The package comment is in atom.h. */
+
+/* Slots per index page: 8 KiB, so the atom index grows in small, flat steps. */
+#define TA_ATOM_PAGE_SLOTS 1024u
 
 static uint32_t ta_atom_hash(ta_str text) {
     return ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);
@@ -5441,14 +5455,18 @@ TA_PRIVATE bool ta_trie_valid(const ta_atom_trie *trie, uint32_t node) {
     return node < trie->nodes.count;
 }
 
-TA_PRIVATE ta_result ta_trie_find(const ta_atom_trie *trie, uint32_t parent, ta_atom segment, uint32_t *out) {
+TA_PRIVATE ta_result ta_trie_find(const ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out) {
+    uint32_t parent = key->parent;
+    ta_atom segment = key->segment;
     if (!ta_trie_valid(trie, parent) || segment == TA_ATOM_NONE) {
         return TA_ERR_INVALID;
     }
     return ta_trie_lookup(trie, parent, segment, ta_trie_hash(parent, segment), out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
-TA_PRIVATE ta_result ta_trie_child(ta_atom_trie *trie, uint32_t parent, ta_atom segment, uint32_t *out) {
+TA_PRIVATE ta_result ta_trie_child(ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out) {
+    uint32_t parent = key->parent;
+    ta_atom segment = key->segment;
     if (!ta_trie_valid(trie, parent) || segment == TA_ATOM_NONE) {
         return TA_ERR_INVALID;
     }
@@ -6142,7 +6160,7 @@ TA_PRIVATE ta_result ta_event_name_child(ta_event_name_table *table,
     if (!ta_atom_valid(table->atoms, segment)) {
         return TA_ERR_INVALID;
     }
-    return ta_trie_child(&table->trie, parent, segment, out);
+    return ta_trie_child(&table->trie, &(ta_trie_key){ parent, segment }, out);
 }
 
 static ta_result ta_event_name_builtin(ta_event_name_table *table, const char *parent_and_segment) {
