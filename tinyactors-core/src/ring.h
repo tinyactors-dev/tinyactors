@@ -184,7 +184,7 @@ typedef struct ta_ring_control {
 typedef struct ta_ring_spec {
     uint32_t capacity;         /* bytes; a multiple of 8; at least max_record_bytes */
     uint32_t max_record_bytes; /* TA_RING_MIN_RECORD..capacity, a multiple of 8 */
-    ta_ring_mode mode;
+    ta_ring_mode mode;         /* TA_RING_LOSSLESS or TA_RING_LOSSY */
 } ta_ring_spec;
 
 typedef struct ta_rings_specs {
@@ -220,8 +220,8 @@ typedef struct ta_ring {
     uint32_t pending_size;  /* open reservation: rounded size; 0 = none open */
     uint32_t pending_pad;   /* open reservation: pad bytes to write at commit; 0 = none */
     uint32_t peeked_size;   /* 0 = nothing peeked */
-    uint32_t max_record_bytes;
-    ta_ring_mode mode;
+    uint32_t max_record_bytes; /* private copy: the shared cell is not trusted after init */
+    ta_ring_mode mode;         /* private copy, for the same reason */
 } ta_ring;
 
 /* The three handles over one region. Owns nothing; system lifetime. */
@@ -233,7 +233,7 @@ typedef struct ta_rings {
 typedef struct ta_rings_init_params {
     void *memory;        /* plan.bytes bytes aligned to plan.alignment, zero or not; outlives the rings */
     size_t memory_bytes; /* checked against the recomputed plan */
-    ta_rings_specs specs;
+    ta_rings_specs specs; /* what each of the three rings is to be */
 } ta_rings_init_params;
 
 typedef enum ta_ring_status {
