@@ -10,7 +10,7 @@
 ** descent, but it still read "bytecode rendered as C": rule_0/rule_N, an opcode
 ** dispatched per IR node, the program array consulted on the hot path.
 **
-** W17-2 RE-GROUNDS the emitter ON THE IR, BY NAME (docs/codegen-transform.md, the
+** W17-2 RE-GROUNDS the emitter ON THE IR, BY NAME (docs/archive/codegen-transform.md, the
 ** owner-signed blueprint). The generator now walks the IR -- the compiled grammar
 ** as NAMED rules and tokens (grammar->rules[i].body, grammar->tokens[i].pattern,
 ** each a tp_ir tree) -- and emits the parser a person would write from that

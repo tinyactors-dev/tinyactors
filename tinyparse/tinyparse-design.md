@@ -1039,7 +1039,7 @@ It is lowered to a flat array of bytecode instructions — sequence, choice,
 repeat, call, emit, and the rest — that a small virtual machine executes.
 The bytecode is compact and cache-friendly, which is what makes the parse
 fast; the design of the instruction set is in
-[`docs/bytecode-vm.md`](docs/bytecode-vm.md).
+[`docs/bytecode-vm.md`](docs/archive/bytecode-vm.md).
 
 **Parsing** runs that bytecode over the buffered input:
 
@@ -1086,7 +1086,7 @@ experiment and measured at 5–15x slower than a plain loop: firing one transiti
 per token asks `ax` to schedule the parser's innermost step, which is exactly the
 speculative, backtracking work `ax` is least suited to host. The full survey of
 topologies and why this one lost is in
-[`docs/ax-topologies.md`](docs/ax-topologies.md); what follows is the shape that
+[`docs/ax-topologies.md`](docs/archive/ax-topologies.md); what follows is the shape that
 won and is now in the engine.
 
 **Parsing is a VM managed by one actor.** A grammar compiles to flat bytecode
@@ -1118,7 +1118,7 @@ contiguous tree arrays as it reduces.
 **Sub-parses and injection use child parsers.** A genuinely separate parse — the
 linearized-tree query engine, or a span re-parsed by an embedded grammar (see
 [Language injection](#language-injection) below) — is isolated work with its own
-arena, lexical goals, and backtrack stack. The [`ax-topologies.md`](docs/ax-topologies.md)
+arena, lexical goals, and backtrack stack. The [`ax-topologies.md`](docs/archive/ax-topologies.md)
 design names a spawned `ax` **child actor** (reporting completion through
 `done.child` / `ax_outcome`) as the ideal shape for these, and the recursive
 quasiquote/query paths follow it; the W62 injection path runs the child as an
@@ -1159,7 +1159,7 @@ tag is internal CST metadata, not a public accessor — the public API is
 unchanged. The result is a single composite, language-tagged tree (a JavaScript
 subtree under a `js` fence, JSON under a `json` fence); `std.fence` is the
 demonstrator grammar. The full design, including the eventual child-actor shape,
-is in [`docs/ax-topologies.md`](docs/ax-topologies.md).
+is in [`docs/ax-topologies.md`](docs/archive/ax-topologies.md).
 
 ## Plugs and bindings
 

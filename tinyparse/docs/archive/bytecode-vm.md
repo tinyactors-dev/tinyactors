@@ -9,18 +9,18 @@ bytecode VM something `ax` should offer in general, or is it specific to
 parsing? The hard constraint throughout is that the VM runs **on** the `ax`
 actor engine — it does not bypass or replace it.
 
-The companion documents are [`performance.md`](performance.md), which measured
-the residual this proposal targets, [`architecture.md`](architecture.md), which
+The companion documents are [`performance.md`](../performance.md), which measured
+the residual this proposal targets, [`architecture.md`](../architecture.md), which
 draws the layer boundaries, and the two design contracts,
-[`../tinyparse-design.md`](../tinyparse-design.md) and
-[`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md). Untagged code
+[`../tinyparse-design.md`](../../tinyparse-design.md) and
+ax's `src/ax/ax-design.md`. Untagged code
 blocks below are illustrative; `mdc` extracts nothing from this file.
 
 ## Abstract
 
 tinyparse parses by walking an in-memory IR tree with a recursive C executor
-(`tp_parse` in [`../src/parse.c`](../src/parse.c), `tp_match_ir` in
-[`../src/token.c`](../src/token.c)). After the W44–W46 optimizations took the
+(`tp_parse` in [`../src/parse.c`](../../src/parse.c), `tp_match_ir` in
+[`../src/token.c`](../../src/token.c)). After the W44–W46 optimizations took the
 gap to tree-sitter from ~45× to ~4.6×, the profile attributes what remains to
 the *shape* of that executor: a function call and a pointer dereference per IR
 node, a `switch` on an opcode reached through two levels of indirection, and a
@@ -51,7 +51,7 @@ of them algorithmic:
   (`saved_count`, `saved_pos`, `saved_sink`), and its return.
 - **Pointer chasing with no locality.** An IR node holds `children` as a
   separate arena allocation of `tp_ir *` pointers (`tp_ir` in
-  [`../src/internal.h`](../src/internal.h)); each child is itself a scattered
+  [`../src/internal.h`](../../src/internal.h)); each child is itself a scattered
   arena node. Walking a rule body is a tour of the heap, and the working set is
   the whole reachable IR, not a window over it.
 - **Unpredictable dispatch.** The `switch (ir->op)` is reached from a single
@@ -137,7 +137,7 @@ The W46 first-set predictor folds directly into `CHOICE`. Either the compiler
 threads a per-alternative first-set table that `CHOICE` consults to skip a
 provably-impossible branch before pushing its backtrack entry, or it emits an
 explicit `PREDICT set, L_skip` ahead of each alternative. The table is the same
-`choice_first_set` already computed in [`../src/token.c`](../src/token.c),
+`choice_first_set` already computed in [`../src/token.c`](../../src/token.c),
 attached to the program instead of to the IR node.
 
 ### Rules
@@ -303,7 +303,7 @@ inside the folded extras step. Nothing about memoization is re-invented; the VM
 changes how instructions are *dispatched*, not what the lexer and the caches
 compute.
 
-A note on the packrat memo that [`performance.md`](performance.md) lists as
+A note on the packrat memo that [`performance.md`](../performance.md) lists as
 unspent: a whole-rule memo keyed on `(rule, offset)` maps cleanly onto
 `CALL` — consult it on entry, and on a hit replay the cached node span instead
 of running the body. The VM does not require it, but it leaves a natural seam
@@ -314,9 +314,9 @@ cache through every recursive frame).
 
 This is the crux, and it has a wrinkle the profile names plainly: **today's
 `tp_execute` is not running on `ax` at all.** The profile in
-[`performance.md`](performance.md) reports "ax actor dispatch: absent — no
+[`performance.md`](../performance.md) reports "ax actor dispatch: absent — no
 `ax_*` function except `ax_alloc` appears anywhere on the hot path." The design
-([`../tinyparse-design.md`](../tinyparse-design.md), *Actor model*) intends
+([`../tinyparse-design.md`](../../tinyparse-design.md), *Actor model*) intends
 rules to lower to `ax` machines, but the shipped executor is a plain recursive
 C function over the IR. So "the VM must run on `ax`" is a constraint on the
 *architecture the design commits to*, not a description of the current hot path.
@@ -327,7 +327,7 @@ formatted event names").
 
 The resolution is the same one every fast VM-on-a-scheduler uses: **the actor
 boundary is coarse; the dispatch loop is fine.** Concretely, drawing on
-`ax`'s actual model ([`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md)):
+`ax`'s actual model (ax's `src/ax/ax-design.md`):
 
 - **The parser is an `ax` actor.** Its `ax_data` (the per-instance state block
   the spec reserves) holds the VM state — `pc`, `cursor`, the three stacks —
@@ -534,7 +534,7 @@ on every corpus case. The incremental path:
 
 Honestly: **not urgently.** tinyparse at ~4.6× tree-sitter while staying
 freestanding and runtime-compiled is a defensible place to stop, and
-[`performance.md`](performance.md) lists cheaper unspent wins (the packrat memo,
+[`performance.md`](../performance.md) lists cheaper unspent wins (the packrat memo,
 `parser_reset`) that do not require a second executor. The VM is the right move
 *if and when* raw parse throughput becomes the binding constraint — a host
 parsing large corpora in a tight loop, where a 2–3× constant-factor win pays for

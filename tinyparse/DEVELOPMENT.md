@@ -34,7 +34,7 @@ manual page, the standard grammars, the library amalgamation) are written to
 
 Progress is a data-driven, ratcheting suite under [test/](test/), interpreted by
 `test/harness.c` against `test/xfail.list`: done means every case passes and the
-xfail ledger is empty. The plan is in [docs/build-plan.md](docs/build-plan.md).
+xfail ledger is empty. The plan is in [docs/archive/build-plan.md](docs/archive/build-plan.md).
 Each example under [examples/](examples/) is pinned by a case under `test/suite/`
 so its lesson — including the nested one, where the lesson is recursion — stays
 green.
