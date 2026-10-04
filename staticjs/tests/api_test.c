@@ -457,6 +457,86 @@ static void test_pattern_events(void) {
     expect_events(&log, held, (int)(sizeof held_text / sizeof held_text[0]), held_text);
 }
 
+/* Statements: an else-if chain is one IF_END; a block statement has its
+ * own events; inside a held pattern, the statements are reordered with it. */
+static void test_statement_events(void) {
+    static event_log log;
+    parse_events("x => { if (x) return 1; else if (!x) { const y = 2; return y; } else ; }", SJS_GOAL_EXPRESSION, &log);
+    static const int chain[] = {
+        SJS_EV_ARROW_BEGIN, 1, SJS_EV_PARAM, 0, SJS_EV_BIND, 0, SJS_EV_PARAMS_END, 0, SJS_EV_BLOCK_BEGIN, 0,
+        SJS_EV_NAME, 0, SJS_EV_IF, 0, SJS_EV_NUMBER, 0, SJS_EV_RETURN, 1, SJS_EV_ELSE, 1,
+        SJS_EV_NAME, 0, SJS_EV_UNARY, SJS_OP_NOT, SJS_EV_IF, 0, SJS_EV_BLOCK_STATEMENT_BEGIN, 0,
+        SJS_EV_CONST_BEGIN, 0, SJS_EV_NUMBER, 0, SJS_EV_BIND, 0, SJS_EV_CONST_END, 0, SJS_EV_NAME, 0, SJS_EV_RETURN, 1,
+        SJS_EV_BLOCK_STATEMENT_END, 0, SJS_EV_ELSE, 0, SJS_EV_IF_END, 0, SJS_EV_BLOCK_END, 0, SJS_EV_ARROW_END, 0,
+        SJS_EV_END, 0
+    };
+    static const char *const chain_text[] = {
+        NULL, NULL, "x", NULL, NULL, "x", NULL, NULL, NULL, NULL, "x", NULL, NULL, NULL,
+        NULL, NULL, "y", NULL, "y", NULL, NULL, NULL, NULL, NULL, NULL, NULL
+    };
+    expect_events(&log, chain, (int)(sizeof chain_text / sizeof chain_text[0]), chain_text);
+
+    parse_events("const {f = x => { if (x) return 1; }} = o;", SJS_GOAL_MODULE, &log);
+    static const int held[] = {
+        SJS_EV_CONST_BEGIN, 0, SJS_EV_NAME, 0, SJS_EV_OBJECT_PATTERN_BEGIN, 0, SJS_EV_PATTERN_KEY, 0, SJS_EV_DEFAULT, 0,
+        SJS_EV_ARROW_BEGIN, 1, SJS_EV_PARAM, 0, SJS_EV_BIND, 0, SJS_EV_PARAMS_END, 0, SJS_EV_BLOCK_BEGIN, 0,
+        SJS_EV_NAME, 0, SJS_EV_IF, 0, SJS_EV_NUMBER, 0, SJS_EV_RETURN, 1, SJS_EV_IF_END, 0, SJS_EV_BLOCK_END, 0,
+        SJS_EV_ARROW_END, 0, SJS_EV_DEFAULT_END, 0, SJS_EV_BIND, 0, SJS_EV_OBJECT_PATTERN_END, 0, SJS_EV_CONST_END, 0,
+        SJS_EV_END, 0
+    };
+    static const char *const held_text[] = {
+        NULL, "o", NULL, "f", NULL, NULL, NULL, "x", NULL, NULL, "x", NULL, NULL, NULL, NULL, NULL, NULL, NULL, "f",
+        NULL, NULL, NULL
+    };
+    expect_events(&log, held, (int)(sizeof held_text / sizeof held_text[0]), held_text);
+}
+
+/* Events in an order no parser sends are refused, not compiled. */
+static void compile_events(const sjs_event *events, int count, const char *want) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    sjs_compiler *compiler;
+    sjs_compiler_config config = { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL } };
+    CHECK(sjs_compiler_init(&compiler, &config) == SJS_OK);
+    sjs_sink sink = sjs_compiler_sink(compiler);
+    sjs_result r = SJS_OK;
+    for (int i = 0; i < count && r == SJS_OK; i++) r = sink.v->event(sink.self, &events[i]);
+    CHECK(r == SJS_ERR_PROGRAM);
+    sjs_error error;
+    CHECK(sjs_compiler_error(compiler, &error) == SJS_OK);
+    CHECK(error.message.length == strlen(want) && memcmp(error.message.ptr, want, error.message.length) == 0);
+    sjs_compiler_destroy(compiler);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+}
+
+static void test_statement_order(void) {
+    static const char *const out_of_order = "the events are out of order";
+    const sjs_event body[] = { { .kind = SJS_EV_ARROW_BEGIN }, { .kind = SJS_EV_PARAMS_END }, { .kind = SJS_EV_BLOCK_BEGIN } };
+    /* IF_END with no IF. */
+    const sjs_event no_if[] = { body[0], body[1], body[2], { .kind = SJS_EV_IF_END } };
+    compile_events(no_if, 4, out_of_order);
+    /* RETURN outside a function. */
+    const sjs_event top_return[] = { { .kind = SJS_EV_TRUE }, { .kind = SJS_EV_RETURN, .count = 1 } };
+    compile_events(top_return, 2, out_of_order);
+    /* RETURN in an expression body. */
+    const sjs_event expression_return[] = { body[0], body[1], { .kind = SJS_EV_TRUE }, { .kind = SJS_EV_RETURN, .count = 1 } };
+    compile_events(expression_return, 4, out_of_order);
+    /* ELSE(1) waits for the next test and its IF, not a statement. */
+    const sjs_event else_if[] = { body[0], body[1], body[2], { .kind = SJS_EV_TRUE }, { .kind = SJS_EV_IF },
+                                  { .kind = SJS_EV_ELSE, .count = 1 }, { .kind = SJS_EV_RETURN } };
+    compile_events(else_if, 7, out_of_order);
+    /* The body ends while an if is open. */
+    const sjs_event open_if[] = { body[0], body[1], body[2], { .kind = SJS_EV_TRUE }, { .kind = SJS_EV_IF },
+                                  { .kind = SJS_EV_BLOCK_END } };
+    compile_events(open_if, 6, out_of_order);
+    /* A block statement ends that never began, and one that is not a statement. */
+    const sjs_event no_block[] = { body[0], body[1], body[2], { .kind = SJS_EV_BLOCK_STATEMENT_END } };
+    compile_events(no_block, 4, out_of_order);
+    const sjs_event block_in_expression[] = { { .kind = SJS_EV_BLOCK_STATEMENT_BEGIN } };
+    compile_events(block_in_expression, 1, out_of_order);
+}
+
 /* A sink of one's own: count the events, and see the tokens' positions. */
 typedef struct {
     int events;
@@ -649,6 +729,19 @@ static void test_limits(void) {
     e.context = context;
     CHECK(evaluate(&e, "(([[[[[[[[[a]]]]]]]]]) => a)", out) == SJS_ERR_PROGRAM);
     CHECK(strcmp(out, "error 4 the program nests deeper than max_nesting") == 0);
+    /* Each if and block nests, but an else-if chain of any length nests once. */
+    CHECK(evaluate(&e, "(a => { if (a) if (a) if (a) if (a) if (a) if (a) if (a) if (a) if (a) return 1; })", out) == SJS_ERR_PROGRAM);
+    CHECK(strcmp(out, "error 4 the program nests deeper than max_nesting") == 0);
+    CHECK(evaluate(&e, "(a => { { { { { { { { { return 1; } } } } } } } } })", out) == SJS_ERR_PROGRAM);
+    CHECK(strcmp(out, "error 4 the program nests deeper than max_nesting") == 0);
+    {
+        static char chain[64 * 1024];
+        char *end = chain;
+        end += sprintf(end, "(x => { if (x === 0) return 0;");
+        for (int i = 1; i < 1000; i++) end += sprintf(end, " else if (x === %d) { const y = %d; return y; }", i, i);
+        sprintf(end, " return -1; })(999)");
+        CHECK(evaluate(&e, chain, out) == SJS_OK && strcmp(out, "999") == 0);
+    }
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
 
@@ -708,6 +801,8 @@ int main(int argc, char **argv) {
     test_compile_costs();
     test_module_events();
     test_pattern_events();
+    test_statement_events();
+    test_statement_order();
     test_sink();
     test_writer_resumes();
     test_fuel_and_reset();
@@ -723,6 +818,10 @@ int main(int argc, char **argv) {
                            "export const {[`k${1}`]: k = h, ...rest} = {k1: undefined, z: [...t]};\n"
                            "export default ((...[a, b = a]) => [a, b])(...\"ab\");\n",
                            SJS_GOAL_MODULE);
+        test_out_of_memory("(x => { if (x > 1) { const {a, ...r} = {a: [x], b: 2}; if (a) return [a, r]; }\n"
+                           "  else if (x) return `${x}`;\n"
+                           "  { const f = y => { if (y) { const z = [y]; return z; } }; return f(x); } })(2)",
+                           SJS_GOAL_EXPRESSION);
         test_out_of_memory("export { a, b as c };\n"
                            "const a = [1, 2].map(x => x * 2);\n"
                            "const b = { a };\n"

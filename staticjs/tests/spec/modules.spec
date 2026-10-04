@@ -844,7 +844,7 @@ export const a = 1;
 === return at the top level of a module
 @module e
 return 1;
---- error syntax expected a statement
+--- error syntax return is only in a function
 
 === break at the top level of a module
 @module e
@@ -874,7 +874,7 @@ await;
 === if with no condition
 @module e
 if;
---- error syntax expected a statement
+--- error syntax expected ( after if
 
 === throw with its value on the next line
 @module e

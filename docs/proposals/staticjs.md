@@ -56,8 +56,8 @@ The rule has three consequences:
   arrays, objects (with shorthand, computed keys and spread).
 - Operators: `+ - * / %`, unary `- + !`, `typeof`, `< <= > >=`, `=== !==`,
   `&& || ??`, `?:`, `in`, and optional chaining `?.`, `?.[]`, `?.()`.
-- Arrow functions, with an expression body or a block of `const`
-  declarations ending in one `return`. Parameters and `const` take
+- Arrow functions, with an expression body or a block of statements:
+  `const`, `if`/`else`, blocks and `return`. Parameters and `const` take
   identifiers and array and object patterns, with default values and rest
   elements; a function can take rest parameters.
 - Calls, with spread arguments. `new Set(...)`.
@@ -79,7 +79,8 @@ The rule has three consequences:
 | `let`, `var`, assignment, `++`, `delete` | no side effects |
 | `export let`, `export function`, `export class` | no side effects |
 | `push`, `sort`, `splice`, `Set.prototype.add` and every other mutating method | no side effects |
-| statements other than `const` and `return`: `if`, `for`, `while`, `try`, `throw` | every evaluation ends |
+| `for`, `while`, `do` | every evaluation ends |
+| `switch`, `try`, `throw`, labels, `break`, `continue`, expression statements | a small language: `if` and `?:` choose, a fault stops |
 | a function that refers to itself, or to a `const` declared after it | every evaluation ends |
 | `this`, `class`, `function`, getters, `new` other than `new Set` | a small, closed set of values |
 | `async`, `await`, generators, `import()`, `eval` | evaluation is a step function |
@@ -108,13 +109,13 @@ The rule has three consequences:
 ### Every evaluation ends
 
 There is no loop statement, and the built-ins that loop do so over a
-collection that already exists. A function cannot call itself by name: a
-`const` cannot refer to itself or to a later `const`, and modules cannot
-import each other in a cycle. A function could still reach itself through
-a parameter (`(g => g(g))(g => g(g))`), so the evaluator refuses to enter
-a function that is already running, as Starlark does. Call depth is
-therefore bounded by the number of functions in the program, and every
-evaluation ends.
+collection that already exists; `if` and `?:` only jump forward. A function
+cannot call itself by name: a `const` cannot refer to itself or to a later
+`const`, and modules cannot import each other in a cycle. A function could
+still reach itself through a parameter (`(g => g(g))(g => g(g))`), so the
+evaluator refuses to enter a function that is already running, as Starlark
+does. Call depth is therefore bounded by the number of functions in the
+program, and every evaluation ends.
 
 Each evaluation also runs on **fuel** that the caller gives it: one unit
 per instruction, and per element for the built-ins that loop. An
