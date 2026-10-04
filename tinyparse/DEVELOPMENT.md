@@ -32,12 +32,23 @@ manual page, the standard grammars, the library amalgamation) are written to
 
 ## The test suite
 
-Progress is a data-driven, ratcheting suite under [test/](test/), interpreted by
-`test/harness.c` against `test/xfail.list`: done means every case passes and the
-xfail ledger is empty. The plan is in [docs/archive/build-plan.md](docs/archive/build-plan.md).
+The suite is data under [test/](test/): 497 `*.test` cases, interpreted by
+`test/harness.c` against the ratchet ledger `test/xfail.list`, which is empty.
+`mise run test` prints `PROGRESS=497/497` and goes green only when every case
+passes and the ledger is empty. A case runs shell commands against the tools the
+test task puts in its environment (`$TP` is the CLI, `$TP_LIB` the archive,
+`$TP_CC` the pinned clang, and so on; see `Tinyparse.test_environment` in
+[mise/lib/tinyparse.rb](mise/lib/tinyparse.rb)), never a compiler or `nm` from
+`PATH`. The format is in [test/README.md](test/README.md).
+
 Each example under [examples/](examples/) is pinned by a case under `test/suite/`
-so its lesson — including the nested one, where the lesson is recursion — stays
+so its lesson, including the nested one where the lesson is recursion, stays
 green.
+
+Some cases assume a Linux x86_64 host: the `dist/` cases that run the Linux CLI
+or read ELF symbol tables, and `cli/run-out-of-memory`, which relies on
+`ulimit -v`. The macOS release artifacts are cross-built and symbol-checked, but
+nothing runs them.
 
 ## Correctness gates
 

@@ -1,4 +1,4 @@
-# `tinyparse`: actor-shaped parser generation for freestanding C
+# `tinyparse`: runtime parser generation for freestanding C
 
 ## Core value proposition
 
@@ -13,7 +13,7 @@ The core promise:
 `tinyparse` sits at Tree-sitter's level of abstraction but centers itself elsewhere:
 
 - Tree-sitter: ahead-of-time language modules plus a compact parser runtime.
-- `tinyparse`: runtime grammar compilation and execution, actor-shaped internally, ordinary C externally.
+- `tinyparse`: runtime grammar compilation and execution, in ordinary freestanding C.
 
 ## Design mantra
 
@@ -21,7 +21,7 @@ The core promise:
 
 It is:
 
-> a freestanding C runtime for creating and running actor-shaped parsers from grammar data.
+> a freestanding C runtime for creating and running parsers from grammar data.
 
 Generated C is an optimization. Runtime grammar execution is the default.
 
@@ -151,8 +151,10 @@ typedef struct tinyparse_memory {
 
 `grow` may be `NULL`. When present it is asked for at least `need` bytes and
 writes the block's true usable size back through `got`; a host that returns
-exactly `need` simply sets `*got = need`. The grant is handed straight to the
-consumed ax arena, so this is ax's own `grow` shape.
+exactly `need` simply sets `*got = need`. The grant goes straight to the
+library's arena allocator (`src/arena.c`), which asks `grow` for a fresh block
+when the current one is spent. It never asks for a `realloc`, so no address the
+engine handed out ever moves.
 
 `tinyparse` never silently allocates outside this grant.
 
@@ -170,14 +172,13 @@ system arena
   engine state
   intern tables
   compiled grammar registry
-  ax system
 
 grammar arena
   grammar intermediate representation
   symbol table
   token tables
   rule tables
-  compiled machine specs
+  bytecode
 
 parser arena
   parser instance
@@ -892,7 +893,7 @@ Prefer:
     "\""))
 ```
 
-The scanner is not just a regex matcher. It is allowed to be actor-shaped too.
+The scanner is not just a regex matcher. It runs lexical machines the grammar defines.
 
 Useful lexical primitives:
 
@@ -1015,12 +1016,12 @@ A shell grammar uses them like this (the full example is `examples/heredoc`):
 
 Each `deferred-slot` is a fresh instance, so a `$(cat <<INNER … INNER)` nested
 inside a heredoc body gets its own queue and never interferes with the outer
-one. This keeps hard lexical structure declarative and actor-friendly.
+one. This keeps hard lexical structure declarative, in the grammar rather than in a hand-written C scanner.
 
 ## Operational model
 
 A grammar is compiled once, then run over input many times. The two phases
-have very different shapes, and `tinyparse` uses `ax` differently in each.
+have very different shapes.
 
 **Compilation** turns `.scm` source into a runnable program:
 
@@ -1034,18 +1035,18 @@ have very different shapes, and `tinyparse` uses `ax` differently in each.
 7. return tinyparse_grammar
 ```
 
-Step 6 is the load-bearing one: a rule does not become a long-lived actor.
-It is lowered to a flat array of bytecode instructions — sequence, choice,
+Step 6 is the load-bearing one: a rule does not become a state machine or a
+long-lived object. It is lowered to a flat array of bytecode instructions — sequence, choice,
 repeat, call, emit, and the rest — that a small virtual machine executes.
 The bytecode is compact and cache-friendly, which is what makes the parse
-fast; the design of the instruction set is in
-[`docs/bytecode-vm.md`](docs/archive/bytecode-vm.md).
+fast. The analysis that chose the instruction set is archived in
+[`docs/archive/bytecode-vm.md`](docs/archive/bytecode-vm.md).
 
 **Parsing** runs that bytecode over the buffered input:
 
 ```text
 1. host calls tinyparse_push(parser, bytes)
-2. bytes are buffered (or posted to the parser actor as an input.chunk event)
+2. the bytes are appended to the parser's input buffer, in its arena
 3. host calls tinyparse_finish(parser)
 4. the bytecode VM runs its dispatch loop over the whole buffer
 5. the VM scans tokens, backtracks, and appends node records to the
@@ -1053,24 +1054,22 @@ fast; the design of the instruction set is in
 6. parser returns TINYPARSE_OK / TINYPARSE_DONE / TINYPARSE_SYNTAX_ERROR
 ```
 
-The dispatch loop is the engine. It is reached two ways, both building a
-byte-identical tree (the differential oracle `ci/tinyparse-vm-diff.sh`
-proves it across the shared corpus): the VM in process (`tp_execute_vm`) and
-that same VM hosted inside an `ax` actor (`tp_execute_vm_actor`). The
-actor-hosted VM is the default — see the [Actor model](#actor-model) below —
-and `TINYPARSE_ENGINE=vm` selects the in-process VM instead. An earlier
-recursive-descent executor (`tp_execute`) served as the reference oracle
-during bring-up and was retired once the VM matched it byte-for-byte;
-`TINYPARSE_ENGINE=recursive` survives only as a deprecated alias that now
-selects the in-process VM.
+The dispatch loop is the engine. It runs on an arena-backed frame stack rather
+than C recursion, so deeply nested input fails with a diagnostic or runs out of
+its memory grant instead of overflowing the C stack (`gate:vm-nocrash` parses
+200,000 nested `[` under a 512 KiB stack). An adaptive rule memo stays dormant
+until a parse goes super-linear, then caches rule results by rule, offset and
+lexical goal; `TINYPARSE_RULEMEMO=always` or `off` forces it, and
+`gate:vm-diff` holds all three settings to the same tree. An earlier
+recursive-descent executor served as the reference oracle during bring-up and
+was retired once the VM matched it byte for byte.
 
 The host owns the outside world throughout. The engine never blocks, reads,
 writes, sleeps, or allocates outside its memory grant.
 
-## Actor model
+## Parser lifecycle
 
-`tinyparse` always uses `ax` internally, but `ax` is not part of the public
-API: the public surface is ordinary C handles —
+The public surface is four opaque handles:
 
 ```c
 tinyparse_engine
@@ -1079,60 +1078,52 @@ tinyparse_parser
 tinyparse_tree
 ```
 
-— and how those handles run on `ax` is free to change underneath them. It has.
-An earlier design imagined one actor per grammar rule, with token events driving
-transitions and child actors modelling nested rules. That shape was built as an
-experiment and measured at 5–15x slower than a plain loop: firing one transition
-per token asks `ax` to schedule the parser's innermost step, which is exactly the
-speculative, backtracking work `ax` is least suited to host. The full survey of
-topologies and why this one lost is in
-[`docs/ax-topologies.md`](docs/archive/ax-topologies.md); what follows is the shape that
-won and is now in the engine.
+A parser moves through four states, declared as `tp_parser_state` in
+`src/internal.h` and driven by `src/parse.c`:
 
-**Parsing is a VM managed by one actor.** A grammar compiles to flat bytecode
-(see the [Operational model](#operational-model)), and the parse runs that
-bytecode's dispatch loop. On the default path the loop runs inside a single `ax`
-transition action: the engine opens an `ax` system over a slice of the host
-grant, `tinyparse_parser_new` spawns one **parser actor**, `tinyparse_push`
-posts the bytes as a coarse `input.chunk` event, and `tinyparse_finish` posts
-`input.end` — whose action runs the whole VM to completion and transitions the
-actor to its final state. `ax` sees two events per parse, never a token or an
-opcode; the tight loop stays in the action, allocating its backtrack and
-tree-builder stacks from the actor's `ax_heap`. This is genuinely on `ax` — `ax`
-owns the actor's lifetime, mailbox, and scheduling — without paying for it on the
-hot path, and the tree it builds is byte-for-byte the tree the in-process VM
-builds.
+```text
+               push ok                     push fails
+(parser_new) ACCEPTING --------> ACCEPTING ----------> DROPPED
+                  |                                      |
+                  | finish / run                         | finish / run
+                  v                                      v
+              FINISHED                                FAILED
+  (the executor ran over the buffer;       (the executor never ran; finish
+   the tree and diagnostics are built)      returns the push's failure)
+```
 
-The conceptual lowering is therefore not "a rule becomes an actor" but "a rule
-becomes bytecode the parser actor runs":
+`ACCEPTING` buffers each pushed chunk. A push that cannot buffer its bytes moves
+the parser to `DROPPED` and records the result; later pushes still buffer, but
+the input is known incomplete, so finishing never parses it. `FINISHED` and
+`FAILED` are final: a push there returns `TINYPARSE_INVALID`, and a second
+finish reports whether a tree was built.
+
+One function, `tp_parser_run(parser, executor)`, makes the finishing transition,
+and three callers share it with different executors: `tinyparse_finish` runs the
+bytecode VM, a generated parser's `<prefix>_run` runs its generated code, and an
+injected sub-parse runs whichever of the two is registered for its language. So
+every way of parsing refuses a truncated input the same way.
+
+The conceptual lowering is "a rule becomes bytecode the VM runs":
 
 ```scheme
 (rule List
   (seq "(" (repeat Form) ")"))
 ```
 
-compiles to a bytecode fragment — match `"("`, loop matching `Form`, match `")"`,
-emit a `List` node — that the VM executes inline, appending records to the
+compiles to a bytecode fragment (match `"("`, loop matching `Form`, match `")"`,
+emit a `List` node) that the VM executes inline, appending records to the
 contiguous tree arrays as it reduces.
 
-**Sub-parses and injection use child parsers.** A genuinely separate parse — the
-linearized-tree query engine, or a span re-parsed by an embedded grammar (see
-[Language injection](#language-injection) below) — is isolated work with its own
-arena, lexical goals, and backtrack stack. The [`ax-topologies.md`](docs/archive/ax-topologies.md)
-design names a spawned `ax` **child actor** (reporting completion through
-`done.child` / `ax_outcome`) as the ideal shape for these, and the recursive
-quasiquote/query paths follow it; the W62 injection path runs the child as an
-inline sub-VM for now (suspending the host VM mid-dispatch across `ax_step`
-boundaries is deferred), producing the same composite tree. Promoting it to a
-spawned child actor is a local change.
-
-**Where `ax` is deliberately absent.** Journal and replay go unused on the parse
-path: a parse is ephemeral, there is nothing to recover, and the inner
-backtracking is precisely the speculative work `ax`'s replay is built to
-suppress. Host I/O — tracing, diagnostics, module loading during compile — stays
-on plugs. The grant constraint is honest too: on a grant too small to carve an
-`ax` system, no actor is spawned and the parse falls back to the in-process VM,
-so the default never breaks a parse on a constrained host.
+This shape replaced an actor. In the `ax` repository, where tinyparse began as
+pocketparse, the parse ran inside one `ax` actor: `tinyparse_push` posted an
+`input.chunk` event and `tinyparse_finish` posted `input.end`, whose action ran
+the whole VM. An earlier experiment with one actor per grammar rule had measured
+5 to 15 times slower than a plain loop. The one-actor design cost about 1%, but
+it tied the library to `ax`. The four-state machine keeps every behaviour the
+actor had and needs no runtime; [`HISTORY.md`](HISTORY.md) records the change,
+and [`docs/archive/ax-topologies.md`](docs/archive/ax-topologies.md) the
+topologies that were weighed.
 
 ### Language injection
 
@@ -1158,21 +1149,22 @@ the embedded grammar, which `--dump-tree` surfaces as a `[lang]` annotation. The
 tag is internal CST metadata, not a public accessor — the public API is
 unchanged. The result is a single composite, language-tagged tree (a JavaScript
 subtree under a `js` fence, JSON under a `json` fence); `std.fence` is the
-demonstrator grammar. The full design, including the eventual child-actor shape,
-is in [`docs/ax-topologies.md`](docs/archive/ax-topologies.md).
+demonstrator grammar.
+
+The embedded parse runs inline, as a synchronous sub-parse over the span. It
+uses a throwaway sub-parser that goes through the same lifecycle as any other
+(`tp_parser_run`). When the host registered a generated parser for the embedded
+language, that parser runs; otherwise the VM does, and both build the same
+tree. `gate:nesting` checks that the registered parsers did run, since a
+fallback to the VM would build an identical tree and pass unnoticed.
 
 ## Plugs and bindings
-
-`ax`'s plug/port system should be reused internally, but not exposed as raw `ax` API.
-
-`tinyparse` should expose its own plug mechanism.
 
 Two extension mechanisms cover the host boundary:
 
 ```text
 plugs
-  message-style host boundaries
-  internally backed by ax ports
+  message-style host boundaries: the engine calls a named plug's emit
   useful for module loading, tracing, diagnostics, package registries
 
 bindings
@@ -1219,7 +1211,6 @@ Do not use plugs for:
 - ordinary rule transitions
 - ordinary concrete syntax tree construction
 - hot scanner loops
-- internal parser actor communication
 
 Use direct bindings for host-provided primitives:
 
@@ -1291,8 +1282,8 @@ The binary grammar format contains:
 - symbol table
 - token tables
 - rule intermediate representation
-- lexical machines
-- actor machine definitions
+- extras and their policies
+- lexical goals
 - node metadata
 
 Still no IO. The host supplies the bytes.
@@ -1340,7 +1331,7 @@ A package has a fixed layout:
 | `grammar.scm` | the grammar source |
 | `node-types.json` | generated node schema, the typed surface tools read |
 | `queries/*.scm` | bundled queries (highlights, locals, and so on) |
-| `corpus/*.txt` | input-to-expected-tree cases, the conformance metric |
+| `corpus/*.txt` | input-to-expected-tree cases, the conformance suite |
 
 A package holds our own work and nothing else. `grammars/std` is for the
 grammars we author and own; a third-party grammar we port from is a build-time
@@ -1538,34 +1529,40 @@ as a debugging view.
 
 ## Embedding without a runtime dependency
 
-> A grammar package compiles to a self-contained C translation unit. A consumer
-> who has run that one generation step depends on no tinyparse tooling to
-> build, link, or ship.
+> A grammar compiles to C that, together with the amalgamation, is a
+> self-contained set of translation units. A consumer who has run that one
+> generation step depends on no tinyparse tooling to build, link, or ship.
 
-The path reuses the C emitter and the amalgamation. `tinyparse c` emits a
-package as C in two shapes:
+Two generation steps combine. The amalgamation (`tinyparse vendor`, `tinyparse
+init`, or `mise run amalgamate`) is the whole library as `tinyparse.c` and
+`tinyparse.h`. `tinyparse c` emits the grammar as C in one of four modes:
 
 ```text
-bundle mode
-  one .c with the grammar tables and the folded engine
-  ax hidden behind pushed visibility, plain cc compiles it
-  no libtinyparse, no .scm reader, no CLI at the consumer's build
-
 module mode
-  the grammar tables alone, linked against a vendored libtinyparse
+  the packed grammar as a byte array, loaded with tinyparse_load_binary_grammar
+  and run by the VM
+
+bundle mode
+  module mode plus a main() that parses stdin and dumps the tree
+
+--parser / --parser-lib
+  a recursive-descent parser generated from the grammar, with or without main()
 ```
 
-So the supported shipping shapes are:
+Each links against `libtinyparse` or `tinyparse.c`; none needs the `.scm`
+reader at run time, and none needs the CLI. So the supported shipping shapes
+are:
 
-- **static binary** — compile the bundle `.c` into the executable.
-- **napi addon** — compile the bundle `.c` into the addon `.node`; the only
+- **static binary**: compile the generated `.c` and `tinyparse.c` into the
+  executable.
+- **napi addon**: compile the same two files into the addon `.node`; the only
   build dependency is the node-api headers.
-- **amalgamation drop-in** — add the bundle to an existing C or C++ tree.
+- **amalgamation drop-in**: add both files to an existing C or C++ tree.
 
 Generation is the single moment tinyparse tooling is required. After it, the
 artifact is ordinary C. Queries pack the same way, since a packed query is data
 plus predicates already inside the engine, so a tool that ships a grammar and a
-set of highlight queries still ships as one C unit.
+set of highlight queries still ships as C units.
 
 ## CLI
 
@@ -1583,7 +1580,7 @@ tinyparse query grammar.scm query.scm --input sample.txt
 tinyparse linearize grammar.scm --input sample.txt
 tinyparse pack grammar.scm --out grammar.tpg
 tinyparse c grammar.scm --out grammar.c
-tinyparse vendor
+tinyparse vendor my-parser
 ```
 
 The importers are [next steps](#next-steps), not yet built:
@@ -1611,12 +1608,11 @@ Amalgamation mode is the self-contained drop:
 ```text
 tinyparse init my-parser
 my-parser/
-  tinyparse.c     the whole engine, ax folded in and hidden
+  tinyparse.c     the whole engine
   tinyparse.h     the only header
-  grammar.scm       a starter grammar
-  main.c            opens the engine, compiles grammar.scm, parses stdin, dumps the tree
-  build.sh          cc main.c tinyparse.c -o my-parser
-  README.md
+  grammar.scm     a starter grammar
+  main.c          opens the engine, compiles grammar.scm, parses stdin, dumps the tree
+  build.sh        cc main.c tinyparse.c -o app
 ```
 
 Lib mode wires against an installed `libtinyparse` instead of copying source:
@@ -1625,9 +1621,8 @@ Lib mode wires against an installed `libtinyparse` instead of copying source:
 tinyparse init my-parser --lib
 my-parser/
   grammar.scm
-  main.c            #include <tinyparse.h>
-  build.sh          cc main.c -ltinyparse        (or link libtinyparse.a)
-  README.md
+  main.c          #include <tinyparse.h>
+  build.sh        cc main.c -ltinyparse -o app
 ```
 
 The CLI carries the amalgamation as an embedded asset: `tinyparse.c` and
@@ -1649,7 +1644,7 @@ amalgamation or lib headers, without writing a scaffold.
 Everything above this section is built and shipping: the freestanding
 `libtinyparse`, the `.scm` reader, runtime compilation, the streaming
 `push`/`finish` API, the contiguous cursor-navigated tree, structured
-diagnostics, ax-backed actor execution, plugs and class bindings, grammar
+diagnostics, the parser lifecycle, plugs and class bindings, grammar
 composition, lexical goals, deferred bodies, language injection, packed
 grammars, the C emitter, and the query engine. What follows is the surface the
 design anticipates but has not yet implemented, grouped so each item stands on
@@ -1782,12 +1777,13 @@ identifier classification behind the `xid-start`/`xid-continue` host bindings;
 the coarse `\xHH` byte-class rule covers the standard grammars' Unicode needs
 until then.
 
-### Actor-shape refinements
+### Injection that streams
 
-Language injection runs the embedded grammar as an inline sub-VM rather than a
-spawned `ax` child actor. The two build the identical composite tree, and
-promoting to a child actor touches only `inject.c`. Grammar compilation stays
-plain C rather than running on `ax`. Neither is visible through the public API.
+Language injection runs the embedded grammar as an inline sub-parse over a span
+the host parser has already matched. An embedded region that arrives across
+several pushes is parsed at finish, like the rest of the input. Parsing it as it
+arrives would need a sub-parser the host VM can suspend and resume mid-dispatch,
+which the VM does not have.
 
 ### Also deferred
 
@@ -1806,14 +1802,14 @@ It differs in several core ways:
 1. Runtime generation is primary.
    The host can compile grammar bytes into a parser at runtime.
 
-2. The execution model is actor-shaped.
-   Parser states, nested rules, continuations, and recovery fit naturally into actors.
+2. The parse is a bytecode VM with an explicit lifecycle.
+   Rule calls run on an arena-backed frame stack, so nesting depth is bounded by memory, not by the C stack.
 
 3. The core is freestanding.
    No libc, no malloc, no IO, no OS assumptions.
 
 4. The public API is ordinary C.
-   `ax` powers the runtime but does not leak into the API.
+   One header, length-prefixed strings, opaque handles; the library depends on no other code.
 
 5. Grammar data is embeddable.
    `.scm` and binary grammar blobs can live in ROM, firmware, application resources, or memory buffers.
@@ -1832,13 +1828,13 @@ It differs in several core ways:
 
 ## One-sentence pitch
 
-`tinyparse` is a freestanding C library that compiles grammar data into actor-shaped streaming parsers at runtime, producing contiguous-array concrete syntax trees with cursor-only navigation and structured diagnostics without libc, malloc, IO, or a generator step.
+`tinyparse` is a freestanding C library that compiles grammar data into streaming parsers at runtime, producing contiguous-array concrete syntax trees with cursor-only navigation and structured diagnostics without libc, malloc, IO, or a generator step.
 
 ## Short README pitch
 
 `tinyparse` is a pocket-knife parser runtime for C.
 
-It compiles `.scm` grammar data into running parsers at runtime. The parser execution model is actor-shaped internally and powered by `ax`, but the public API is plain C. The core is freestanding: no libc, no malloc, no filesystem, no threads, no clock, and no IO. The host provides memory and input bytes; `tinyparse` provides a streaming parser, a contiguous-array concrete syntax tree with cursor-only navigation, and structured diagnostics.
+It compiles `.scm` grammar data into running parsers at runtime, behind a plain C API. The core is freestanding: no libc, no malloc, no filesystem, no threads, no clock, and no IO. The host provides memory and input bytes; `tinyparse` provides a streaming parser, a contiguous-array concrete syntax tree with cursor-only navigation, and structured diagnostics.
 
 Generated C is available as a deployment optimization. Runtime grammar execution is the main feature.
 

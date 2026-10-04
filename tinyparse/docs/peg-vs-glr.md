@@ -15,6 +15,21 @@ warm, median of several iterations, on an Intel Xeon @ 2.80GHz (4 cores), Linux
 6.18.5. Reproduce with `ci/tinyparse-tsc-bench.sh` and
 `ci/tinyparse-react-bench.sh` (both `BENCH=1`).
 
+> **Reading this record after the migration.** This note was
+> written while tinyparse was pocketparse inside the `ax` repository, and it is
+> left as written. The names in it map to today's as follows; the change
+> is told in [`../HISTORY.md`](../HISTORY.md).
+>
+> | Then | Now |
+> |------|-----|
+> | `ci/tinyparse-metric.sh`, "the metric" | `mise run test` |
+> | `ci/tinyparse-<gate>.sh` (vm-diff, cc-diff, nocrash, reclaim, ...) | `mise run gate:<gate>` |
+> | `ci/tinyparse-hide-ax.sh` | `mise run gate:exports` |
+> | `ci/tinyparse-bench.sh`, `-bench5.sh`, `-react-bench.sh`, `-tsc-bench.sh` | `mise run bench:javascript`, `bench:parsers`, `bench:react`, `bench:tsc` |
+> | `build.sh`, `amalgamate.sh`, `release.sh` | `mise run build`, `amalgamate`, `release` |
+> | `ax_alloc`, `ax_alloc_raw`, the ax arena | `tp_alloc`, `tp_alloc_raw`, `src/arena.c` |
+> | the parser actor, `TINYPARSE_ENGINE=vm-ax` | the parser lifecycle in `src/parse.c`; the variable is ignored |
+
 ## The numbers
 
 | parser | algorithm | median parse | throughput |

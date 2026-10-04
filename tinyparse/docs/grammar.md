@@ -1,9 +1,9 @@
 # tinyparse grammar reference (`.scm`)
 
 The native grammar surface is `.scm`: Scheme-shaped *data*, not executable
-Scheme. This documents the subset the V1 engine implements (see
-[`../tinyparse-design.md`](../tinyparse-design.md) for the full intended
-surface and the Phase 4 roadmap). Every form here is exercised by a grammar
+Scheme. This page documents the core forms; the rest of the surface is in
+[`../tinyparse-design.md`](../tinyparse-design.md), listed at the
+[end of this page](#forms-documented-in-the-design). Every form here is exercised by a grammar
 under [`../examples/`](../examples/); [`../examples/sexpr/sexpr.scm`](../examples/sexpr/sexpr.scm)
 is the smallest complete example.
 
@@ -153,9 +153,21 @@ comment at end of input is still emitted. The mechanism — a held-trivia buffer
 the `content_end` extent mark — lives in `tp_vm_consume_extras`, `tp_vm_flush_held`,
 and the node lifecycle in `src/vm.c`.
 
-## Deferred to Phase 4
+## Forms documented in the design
 
-Parser-directed lexical goals, the `recover` DSL, `balanced`/`delimited`/
-`until` lexical primitives, host `class`/`predicate` bindings, module
-`import`, and binary-mode grammars are described in the design doc and are not
-yet in the V1 engine.
+The engine implements more than this page covers. Each of these forms has a
+section in the design document and an example that runs it:
+
+| Form | Design section | Example |
+|------|----------------|---------|
+| `(error …)` extras, `(recover …)` | [Error extras](../tinyparse-design.md#error-extras), [Recovery](../tinyparse-design.md#recovery) | [`recover`](../examples/recover/) |
+| lexical goals | [Lexical goals](../tinyparse-design.md#lexical-goals) | [`lexgoal`](../examples/lexgoal/) |
+| `(deferred-slot …)`, `(defer …)`, `(parse-deferred …)` | [Heredocs and deferred bodies](../tinyparse-design.md#heredocs-and-deferred-bodies) | [`heredoc`](../examples/heredoc/) |
+| `class` and `predicate` host bindings | [Host bindings](../tinyparse-design.md#host-bindings) | [`bindings`](../examples/bindings/) |
+| `(import …)` | [Module loading](../tinyparse-design.md#module-loading) | [`import`](../examples/import/) |
+| `(extends …)`, `(override …)`, `(when …)` | [Grammar composition](../tinyparse-design.md#grammar-composition) | `grammars/std/`: std.jsonc extends std.json; std.tsx turns on std.typescript's `(when jsx: …)` |
+| `(inject …)` | [Language injection](../tinyparse-design.md#language-injection) | [`nesting`](../examples/nesting/), `std.fence` |
+
+Binary-mode grammars (parsing bytes rather than text) are not implemented; the
+design's [Binary parsing](../tinyparse-design.md#binary-parsing) section
+sketches them.

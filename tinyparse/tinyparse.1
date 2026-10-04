@@ -1,4 +1,4 @@
-.Dd June 20, 2026
+.Dd October 4, 2026
 .Dt TINYPARSE 1
 .Os tinyactors
 .Sh NAME
@@ -15,6 +15,30 @@
 .Ar FILE
 .Oo
 .Fl \-dump-tree
+.Oc
+.Oo
+.Fl \-chunk
+.Ar N
+.Oc
+.Oo
+.Fl \-trace
+.Oc
+.Nm
+.Cm pack
+.Ar GRAMMAR
+.Fl \-out
+.Ar FILE
+.Nm
+.Cm c
+.Ar GRAMMAR
+.Fl \-out
+.Ar FILE
+.Oo
+.Fl \-bundle|--parser|--parser-lib
+.Oc
+.Oo
+.Fl \-name
+.Ar PREFIX
 .Oc
 .Nm
 .Cm linearize
@@ -84,13 +108,18 @@ Read and validate a grammar without parsing any input.
 Report malformed
 grammar as a diagnostic on standard error and exit non\-zero; a valid
 grammar exits zero.
-.It Cm run Ar GRAMMAR Fl \-input Ar FILE Oo Fl \-dump-tree Oc Oo Fl \-param Cm NAME[=VALUE Oc Oc
+.It Cm run Ar GRAMMAR Fl \-input Ar FILE Oo Fl \-dump-tree Oc Oo Fl \-chunk Ar N Oc Oo Fl \-trace Oc Oo Fl \-param Cm NAME[=VALUE Oc Oc
 Compile a grammar, parse the bytes of the input file against it, and,
 with \-\-dump\-tree, print the resulting concrete syntax tree to standard
 output \-\- one node per line, indented by depth, each line ending with the
 node's span as a byte range and a 0\-based [line, column] range, tree\-sitter
 style.
 Diagnostics are rendered to standard error.
+FILE \- reads standard input.
+\-\-chunk N feeds the input to the parser N bytes at a time; the tree
+does not depend on how the input was split.
+\-\-trace prints the parser's trace events to standard error.
+GRAMMAR may also be a packed grammar written by pack.
 \-\-param sets a compile\-time grammar parameter, the value the (when NAME:
 X) combinator gates a production on: a bare \-\-param NAME sets it truthy,
 \-\-param NAME=0 clears it.
@@ -117,6 +146,25 @@ base named by (extends NAME) or a module named by (import NAME): the
 resolver tries the filesystem first and, failing that, looks the name up in
 the embedded registry, so an embedded package such as std.jsonc resolves
 its (extends std.json) base with no files at all.
+.It Cm pack Ar GRAMMAR Fl \-out Ar FILE Oo Fl \-param Cm NAME[=VALUE Oc Oc
+Compile a grammar, with its imports and base resolved, and write it to FILE
+as a packed binary grammar (conventionally \fB.tpg\fR).
+A host loads it with
+tinyparse_load_binary_grammar, and run accepts it in place of a \fB.scm\fR
+grammar, without reading grammar source.
+.It Cm c Ar GRAMMAR Fl \-out Ar FILE Oo Fl \-bundle|--parser|--parser-lib Oc Oo Fl \-name Ar PREFIX Oc
+Emit the grammar as C source.
+With no mode flag the file holds the packed
+grammar as a byte array and an accessor, to be loaded and run by the
+library.
+\-\-bundle adds a main that parses standard input and dumps the tree.
+\-\-parser emits a recursive\-descent parser generated from the grammar, with a
+main; \-\-parser\-lib emits the same parser as a library, with PREFIX_load, PREFIX_run and
+PREFIX_run_chunk entry points.
+\-\-name PREFIX prefixes every emitted symbol, so two
+generated parsers link into one program.
+Every mode links against
+libtinyparse or the amalgamation.
 .It Cm linearize Ar GRAMMAR Fl \-input Ar FILE Oo Fl \-param Cm NAME[=VALUE Oc Oc
 Compile a grammar, parse the input file against it, and print the parse
 tree's linearization to standard output: one ENTER/LEAF/EXIT token per line.
@@ -202,8 +250,10 @@ Running tinyparse with no
 arguments prints the same usage summary.
 .El
 .Sh EXIT STATUS
-tinyparse exits 0 on success, and non\-zero when a grammar fails to
-validate, an input fails to parse, or the command line is malformed.
+tinyparse exits 0 on success.
+It exits 1 when a grammar fails to validate,
+an input fails to parse, a file cannot be read, a required option is missing,
+or a parse runs out of memory, and 2 on an unknown command.
 .Sh EXAMPLES
 Validate a grammar:
 .Bd -literal -offset indent

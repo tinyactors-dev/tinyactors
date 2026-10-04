@@ -234,7 +234,7 @@ typedef struct tp_slot_frame {
 } tp_slot_frame;
 ```
 
-Because ax arenas are append-only (no `realloc`), "grows by doubling" means:
+Because tinyparse arenas are append-only (no `realloc`), "grows by doubling" means:
 allocate a new block of doubled capacity from the arena, copy the existing
 items into it, update `items` to point at the new block, update `capacity`.
 The old block is abandoned in the arena (it cannot be freed). On first push
@@ -682,8 +682,8 @@ verification step; do not proceed to the next until the step is green.
 9. **Emitter: generated C support for new opcodes.**
    Add the generated-code shapes from the table above. Run:
    ```sh
-   bash ci/tinyparse-vm-diff.sh
-   bash ci/tinyparse-cc-diff.sh
+   mise run gate:vm-diff --full
+   mise run gate:cc-diff --full
    ```
    Both MUST be green for any grammar that uses the new forms.
 

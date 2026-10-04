@@ -1,7 +1,9 @@
 # tinyparse test suite — data, not code
 
 The finish line for `tinyparse` is this suite, interpreted by
-[`harness.c`](harness.c) and ratcheted against [`xfail.list`](xfail.list). See
+[`harness.c`](harness.c) and ratcheted against [`xfail.list`](xfail.list).
+`mise run test` runs it after the correctness gates; the plan it was first
+built against is archived in
 [`../docs/archive/build-plan.md`](../docs/archive/build-plan.md).
 
 Every behaviour `tinyparse` must exhibit is a **data file** here, never a
@@ -97,8 +99,8 @@ out-absent ERROR
 `xfail.list` lists every test currently allowed to fail (one name per line,
 `#` comments allowed). The harness reports **PASS** (passed, not listed),
 **xfail** (failed, listed — pending), **XPASS** (passed but still listed →
-remove it), and **FAIL** (failed, not listed → a regression; metric goes red).
+remove it), and **FAIL** (failed, not listed → a regression; `mise run test` goes red).
 
-`PROGRESS=k/n` is `passing/total` and only rises. The metric exits `0` only
+`PROGRESS=k/n` is `passing/total` and only rises. The test task exits `0` only
 when `k == n` **and** `xfail.list` is empty. Landing a workstream means making
 its tests pass and deleting their lines from `xfail.list`.

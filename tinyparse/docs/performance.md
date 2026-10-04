@@ -9,11 +9,20 @@ the deeper round-by-round history lives in [`decisions.md`](decisions.md) and
 [`peg-vs-glr.md`](peg-vs-glr.md).
 
 All numbers below were re-measured on **2026-06-27** on one host: Intel(R)
-Xeon(R) @ 2.80GHz (4 cores), 15.7 GiB RAM, Linux 6.18.5 x86_64. The orchestrators
-are [`ci/tinyparse-bench.sh`](../../../ci/tinyparse-bench.sh) (the JavaScript
-corpus) and [`ci/tinyparse-bench5.sh`](../../../ci/tinyparse-bench5.sh) (the
-React workload), both gated behind `BENCH=1`. The harness sources are under
-[`tools/tinyparse/bench/`](../bench/).
+Xeon(R) @ 2.80GHz (4 cores), 15.7 GiB RAM, Linux 6.18.5 x86_64, while tinyparse
+was still pocketparse inside the `ax` repository. The orchestrators are now
+`mise run bench:javascript` ([`bench/javascript.sh`](../bench/javascript.sh), the
+JavaScript corpus) and `mise run bench:parsers`
+([`bench/parsers.sh`](../bench/parsers.sh), the React workload). The harness
+sources are under [`bench/`](../bench/).
+
+The move out of ax did not change these numbers. On one machine, in one
+session, the CLI built before and after the migration parsed 464 KB of
+JavaScript and 503 KB of TypeScript with best-of-10 times within 0.5% of each
+other, at the same peak RSS (106,472 KB before, 106,524 KB after). A
+`mise run bench:javascript` after the move, on an Intel Xeon 2.10GHz with 4
+cores, measured a 3.774 ms median parse against tree-sitter's 2.784 ms (1.36x)
+and a walk of 19.19 against 154.16 ns per node.
 
 ## The headline
 
@@ -110,7 +119,7 @@ set.
 ### Parse: six parsers, one corpus
 
 Parse-only, warm, median of 30 (in-process arms) / 15 (tsc, meriyah). The two
-tinyparse C arms parse the identical bytes — `ci/tinyparse-cc-diff.sh` proves
+tinyparse C arms parse the identical bytes — `gate:cc-diff` proves
 the generated parser and the VM build byte-identical trees — and differ only in
 whether the engine and grammar are reused across files (persistent) or reopened
 per file to bound peak memory (fresh).
@@ -231,7 +240,7 @@ instructions in the steady state) puts the cost here:
 | 7.9%  | `tp_vm_consume_extras` | skipping whitespace and comments between tokens |
 | 5.3%  | `tp_vm_call_enter` | the per-rule CALL prologue (node open) |
 | 3.2%  | `tp_tree_builder_push` | appending a packed node to the CST array |
-| 3.0%  | `ax_alloc_raw` | bumping the arena pointer |
+| 3.0%  | `ax_alloc_raw` | bumping the arena pointer (now `tp_alloc_raw`) |
 | 2.5%  | `tp_intern` | symbol interning |
 
 Two things stand out against the engine's history. **Interning is no longer the
@@ -281,49 +290,51 @@ to a profiled cost and gated against regression, is recorded in full in
 - **A token-match memo with first-byte dispatch** stopped the token interpreter
   re-matching the same bytes on every ordered-choice retry.
 - **First-set prediction** skips the alternatives the next byte cannot begin.
-- **Lowering the grammar to a bytecode VM hosted in an `ax` actor** replaced the
-  original recursive-descent executor; the actor wrapper costs about 1% over the
-  bare loop, and the executor remains reachable as the differential oracle and an
-  opt-out (`TINYPARSE_ENGINE=recursive`).
+- **Lowering the grammar to a bytecode VM** replaced the original
+  recursive-descent executor. At the time the VM ran inside an `ax` actor, which
+  cost about 1% over the bare loop; the executor was later retired, and the
+  migration out of ax replaced the actor with a plain lifecycle in
+  `src/parse.c`.
 - **The generated C emitter** then took the settled grammars to native recursive
   descent — per-token baked lexers, compile-time FIRST tests, a native call graph
   with locals instead of an operand-reading loop — which is the arm that now
   passes tree-sitter.
 
 Every step held the tree byte-identical across the differential and golden gates;
-the conformance metric (`ci/tinyparse-metric.sh`) stays green throughout.
+the conformance suite (now `mise run test`) stayed green throughout.
 
 ## Appendix: reproduce
 
-Run everything from the repository root. The benchmarks need the pinned
-references under `tools/tinyparse/reference/` (see
-[`reference/PINS.txt`](../reference/PINS.txt)); the tree-sitter runtime is cloned
-on first run.
+Run everything from `tinyparse/`. The benchmarks need the pinned references
+listed in [`reference/PINS.txt`](../reference/PINS.txt);
+`mise run bench:fetch` downloads each as a tarball at its pinned commit. The
+tree-sitter runtime is cloned on first run. Benchmarks measure time, so run them
+alone, never beside `mise run test`.
 
-The JavaScript corpus benchmark (builds the dist, extracts the corpus, runs
-idiomatic + symmetric + traversal + the footprint accounting):
+The JavaScript corpus benchmark (extracts the corpus, runs idiomatic +
+symmetric + traversal + the footprint accounting):
 
-    BENCH=1 bash ci/tinyparse-bench.sh
-    # override the iteration count with ITERS=, e.g. ITERS=200
+    mise run bench:javascript
+    # override the iteration count with ITERS=, e.g. ITERS=200 mise run bench:javascript
 
-The React six-parser parse-only benchmark (needs the pinned React clone and
+The React six-parser parse-only benchmark (needs the pinned React source and
 `tree-sitter-typescript`; installs typescript and meriyah into a gitignored
-scratch dir; the corpus manifest is built by the React workload bench below):
+scratch directory; the corpus manifest is built by the React workload bench):
 
-    REGEN=1 BENCH=1 bash ci/tinyparse-react-bench.sh   # builds the manifest + parse/collect table
-    BENCH=1 bash ci/tinyparse-bench5.sh                # the six-parser parse-only table
+    REGEN=1 mise run bench:react    # builds the manifest + parse/collect table
+    mise run bench:parsers          # the six-parser parse-only table
 
-The conformance metric must stay green:
+The suite and the gates must stay green:
 
-    bash ci/tinyparse-metric.sh
+    mise run test --full
 
 Profile the VM with callgrind over the JavaScript corpus (the harness binary
 carries function symbols, so no special build is needed):
 
-    G=tools/tinyparse/grammars/std/javascript/grammar.scm
-    M=tools/tinyparse/bench/corpus/MANIFEST.txt    # produced by the bench run
+    G=grammars/std/javascript/grammar.scm
+    M=bench/corpus/MANIFEST.txt     # produced by bench:javascript
     valgrind --tool=callgrind --callgrind-out-file=callgrind.out \
-      tools/tinyparse/bench/bench_tinyparse "$M" 2 "$G"
+      bench/bench_tinyparse "$M" 2 "$G"
     callgrind_annotate --threshold=92 callgrind.out
 
-Everything the profiling build produces is gitignored scratch.
+Everything the benchmarks and the profile produce is gitignored scratch.

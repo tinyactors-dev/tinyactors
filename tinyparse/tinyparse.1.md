@@ -1,5 +1,5 @@
 ---
-date: 2026-06-20
+date: 2026-10-04
 os: tinyactors
 ---
 
@@ -10,7 +10,9 @@ tinyparse - compile grammar data into running parsers at runtime
 # SYNOPSIS
 
 - tinyparse check GRAMMAR
-- tinyparse run GRAMMAR --input FILE [--dump-tree]
+- tinyparse run GRAMMAR --input FILE [--dump-tree] [--chunk N] [--trace]
+- tinyparse pack GRAMMAR --out FILE
+- tinyparse c GRAMMAR --out FILE [--bundle|--parser|--parser-lib] [--name PREFIX]
 - tinyparse linearize GRAMMAR --input FILE
 - tinyparse query GRAMMAR QUERY --input FILE
 - tinyparse node-types GRAMMAR
@@ -48,12 +50,16 @@ check GRAMMAR [--param NAME[=VALUE]]
   grammar as a diagnostic on standard error and exit non-zero; a valid
   grammar exits zero.
 
-run GRAMMAR --input FILE [--dump-tree] [--param NAME[=VALUE]]
+run GRAMMAR --input FILE [--dump-tree] [--chunk N] [--trace] [--param NAME[=VALUE]]
 : Compile a grammar, parse the bytes of the input file against it, and,
   with --dump-tree, print the resulting concrete syntax tree to standard
   output -- one node per line, indented by depth, each line ending with the
   node's span as a byte range and a 0-based [line, column] range, tree-sitter
-  style. Diagnostics are rendered to standard error.
+  style. Diagnostics are rendered to standard error. FILE - reads standard
+  input. --chunk N feeds the input to the parser N bytes at a time; the tree
+  does not depend on how the input was split. --trace prints the parser's
+  trace events to standard error. GRAMMAR may also be a packed grammar written
+  by pack.
 
   --param sets a compile-time grammar parameter, the value the (when NAME:
   X) combinator gates a production on: a bare --param NAME sets it truthy,
@@ -77,6 +83,22 @@ run GRAMMAR --input FILE [--dump-tree] [--param NAME[=VALUE]]
   resolver tries the filesystem first and, failing that, looks the name up in
   the embedded registry, so an embedded package such as std.jsonc resolves
   its (extends std.json) base with no files at all.
+
+pack GRAMMAR --out FILE [--param NAME[=VALUE]]
+: Compile a grammar, with its imports and base resolved, and write it to FILE
+  as a packed binary grammar (conventionally `.tpg`). A host loads it with
+  tinyparse_load_binary_grammar, and run accepts it in place of a `.scm`
+  grammar, without reading grammar source.
+
+c GRAMMAR --out FILE [--bundle|--parser|--parser-lib] [--name PREFIX]
+: Emit the grammar as C source. With no mode flag the file holds the packed
+  grammar as a byte array and an accessor, to be loaded and run by the
+  library. --bundle adds a main that parses standard input and dumps the tree.
+  --parser emits a recursive-descent parser generated from the grammar, with a
+  main; --parser-lib emits the same parser as a library, with PREFIX_load,
+  PREFIX_run and PREFIX_run_chunk entry points. --name PREFIX prefixes every
+  emitted symbol, so two generated parsers link into one program. Every mode
+  links against libtinyparse or the amalgamation.
 
 linearize GRAMMAR --input FILE [--param NAME[=VALUE]]
 : Compile a grammar, parse the input file against it, and print the parse
@@ -152,8 +174,9 @@ version
 
 # EXIT STATUS
 
-tinyparse exits 0 on success, and non-zero when a grammar fails to
-validate, an input fails to parse, or the command line is malformed.
+tinyparse exits 0 on success. It exits 1 when a grammar fails to validate,
+an input fails to parse, a file cannot be read, a required option is missing,
+or a parse runs out of memory, and 2 on an unknown command.
 
 # EXAMPLES
 

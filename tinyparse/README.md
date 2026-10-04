@@ -8,12 +8,12 @@ libc, no `malloc`, no filesystem, no threads, no clock, no IO), so it runs
 inside whatever memory you grant it.
 
 It is a pocket knife for programs that need to parse something without dragging
-in a generator toolchain, a scripting runtime, or a hosted C environment. The
-execution model is actor-shaped internally and powered by [`ax`](../../src/ax/),
-but the public surface is ordinary C: include one header, link one library.
+in a generator toolchain, a scripting runtime, or a hosted C environment. Include
+one header, link one library. It depends on nothing else: not on the tinyactors
+runtime beside it in this repository, and not on any actor system.
 
 tinyparse was called pocketparse until it moved out of the ax repository into
-the tinyactors monorepo; HISTORY.md tells how it moved.
+the tinyactors monorepo; [HISTORY.md](HISTORY.md) tells how it moved.
 
 ## Quickstart
 
@@ -49,7 +49,15 @@ recursion in the language:
 ```
 
 Validate a grammar without parsing anything with `tinyparse check <grammar>`,
-and read the full manual with `tinyparse man`.
+and read the full manual with `tinyparse man`. Eight standard grammars are built
+into the CLI and resolve by name (`tinyparse grammars` lists them):
+
+```sh
+printf '{"a": [1, 2]}' | tinyparse run std.json --input - --dump-tree
+```
+
+The CLI reference is [docs/cli.md](docs/cli.md), and the grammar format is
+[docs/grammar.md](docs/grammar.md).
 
 ## Embedding it
 
@@ -87,6 +95,13 @@ if (tinyparse_tree_cursor_goto_first_child(cursor)) {
 public API takes length-prefixed slices rather than null-terminated strings, so
 nothing in it assumes a C standard library underneath.
 
+A parser moves through four states. It accepts pushes until `tinyparse_finish`,
+which runs the VM over the buffered bytes and leaves it finished. If a push
+cannot buffer its bytes (the grant ran out), the parser is marked dropped, and
+`finish` returns that push's failure without parsing a truncated buffer. The
+design document's [Parser lifecycle](tinyparse-design.md#parser-lifecycle)
+has the details.
+
 ## Generating a C parser
 
 Runtime compilation is the default and the point. But once a grammar is settled
@@ -120,8 +135,10 @@ tinyparse init my-parser --amalgamation   # drops tinyparse.c + tinyparse.h
 cc main.c tinyparse.c -o my-parser         # one cc, no library, no .scm reader, no CLI
 ```
 
-The amalgamation folds the engine and `ax` into a single `tinyparse.c`. After
-that one generation step, the artifact is ordinary C.
+The amalgamation is the whole library in a single `tinyparse.c`, plus
+`tinyparse.h`; it needs a C11 compiler and nothing else. After that one
+generation step, the artifact is ordinary C. `mise run amalgamate` writes the
+same files to `dist/amalgamation/`, with the CLI as `tinyparse_cli.c`.
 
 ## When to use tinyparse, and when not to
 
@@ -157,15 +174,18 @@ is the whole decision, so here is the honest version of it.
   the edited region of a huge file on every keystroke — is tree-sitter's reason
   to exist. `tinyparse` parses a document from scratch.
 - **You want an existing language off the shelf.** Tree-sitter has a large
-  ecosystem of mature, battle-tested grammars. `tinyparse` ships a handful
-  (`std.javascript`, `std.tsx`, `std.json`) and expects you to bring or write
-  your own.
+  ecosystem of mature, battle-tested grammars. `tinyparse` ships eight
+  (`std.json`, `std.jsonc`, `std.json5`, `std.javascript`, `std.typescript`,
+  `std.tsx`, `std.shell`, `std.fence`) and expects you to bring or write your
+  own.
 
 ## Performance, honestly
 
-We measured rather than guessed, and report what the meter said. Against the
-[tree-sitter JavaScript test corpus](reference/tree-sitter-javascript/) (116
-documents, both runtimes in-process, median over 200 iterations):
+We measured rather than guessed, and report what the meter said. The numbers
+in this section were measured on 2026-06-27, while tinyparse was still part of
+ax, on the machine [`docs/performance.md`](docs/performance.md) names. Against
+the tree-sitter JavaScript test corpus (116 documents, both runtimes
+in-process, median over 200 iterations; `mise run bench:fetch` downloads it):
 
 | What            | tinyparse  | tree-sitter  | gap             |
 | --------------- | ------------ | ------------ | --------------- |
@@ -181,6 +201,12 @@ On traversal `tinyparse` wins, and that is the contiguous CST earning its
 keep. It builds its whole tree eagerly at `finish` and freezes it into one
 array, so a cursor walk is a linear sweep the prefetcher loves; tree-sitter's
 pointer-linked tree costs more per node to navigate.
+
+After the move out of ax, `mise run bench:javascript` on a different machine
+(Intel Xeon 2.10GHz, 4 cores) measured a 3.77 ms parse against tree-sitter's
+2.78 ms (1.36x) and a 19 ns walk per node against 154 ns. The same session
+compared the CLI before and after the migration on one machine: the best of 10
+runs was within 0.5% on 464 KB of JavaScript and 503 KB of TypeScript.
 
 Those numbers are the runtime VM. On a real codebase — the ReactJS source tree,
 1070 TypeScript/JSX files, 9.5 MB — the **generated C parser** changes the parse
@@ -209,7 +235,10 @@ mark, but 13.5 MiB of that is the one-time grammar compile; the parse arena is
 0.6 MiB. Tree-sitter, carrying pre-generated tables, peaks at 2.9 MiB.
 
 Deeply nested input that would make a naive PEG backtrack catastrophically stays
-bounded, so parses do not blow up in time or memory. The full methodology, the
+bounded for the JSON, JavaScript and shell grammars. The TypeScript grammars do
+not yet: on a few dozen unclosed `(` the VM's work grows exponentially (30 of
+them ran out of memory after about 100 seconds), while `std.javascript` rejects
+the same input in 0.02 s. The full methodology, the
 six-parser React comparison, and the profile are in
 [`docs/performance.md`](docs/performance.md); reproduction is in
 [`DEVELOPMENT.md`](DEVELOPMENT.md).
@@ -219,10 +248,13 @@ six-parser React comparison, and the profile are in
 Install a release tarball and link against it as shown in
 [`INSTALL.md`](INSTALL.md), or build it from source: plain C11, built by
 the monorepo's pinned toolchain (clang 22 for this machine, zig cc for the
-release targets):
+release targets). From `tinyparse/`:
 
 ```sh
-mise install && mise run build    # libtinyparse + the CLI + the harness + examples
+mise install          # once: clang, llvm-tools, zig, ruby, ast-grep
+mise run build        # build/: libtinyparse.a, the CLI, the harness, the examples
+build/bin/tinyparse --help
+mise run test         # the suite and every correctness gate
 ```
 
 The test suite, the correctness gates, and the benchmarks are in
@@ -230,10 +262,17 @@ The test suite, the correctness gates, and the benchmarks are in
 
 ## Deliverables
 
-- `dist/<platform>/libtinyparse.{a,so|dylib}` plus the `tinyparse` CLI for
-  `linux-x86_64` and `macos-arm64`.
-- A single-file amalgamation, `tinyparse.c` plus the header.
-- An embedded manpage: `tinyparse man`.
+`mise run release` packs three tarballs into `dist/release/`:
+
+- `tinyparse-0.1.0-x86_64-linux.tar.gz` and
+  `tinyparse-0.1.0-aarch64-macos.tar.gz`: the CLI, `libtinyparse.a`, the
+  shared library (`libtinyparse.so.0.1`, `libtinyparse.0.1.dylib`), the header
+  and the manual page, cross-built with zig cc from any host.
+- `tinyparse-0.1.0-amalgamation.tar.gz`: `tinyparse.c`, `tinyparse.h` and
+  `tinyparse_cli.c`.
+
+The CLI also embeds its manual page (`tinyparse man`). How they are built and
+checked is in [`docs/distribution.md`](docs/distribution.md).
 
 ## Examples
 
@@ -259,11 +298,14 @@ The full index, with the rest of the examples, is in
 
 | File | Contents |
 |------|----------|
-| [`tinyparse-design.md`](tinyparse-design.md) | canonical design: API, memory model, tree storage, the actor topology |
+| [`tinyparse-design.md`](tinyparse-design.md) | canonical design: API, memory model, tree storage, the parser lifecycle |
 | [`include/tinyparse.h`](include/tinyparse.h) | the public header, the only file you include |
 | [`INSTALL.md`](INSTALL.md) | installing a release tarball and linking against it |
 | [`DEVELOPMENT.md`](DEVELOPMENT.md) | building from source, the test suite, the gates, and the benchmarks |
-| [`docs/`](docs/) | architecture, the bytecode VM, the grammar reference, the PEG-vs-GLR rationale, and the performance write-up |
+| [`AGENTS.md`](AGENTS.md) | the hard constraints a change must keep |
+| [`docs/`](docs/) | architecture, the CLI and grammar references, distribution, the decision log, the PEG-vs-GLR rationale, and the performance write-up |
+| [`docs/archive/`](docs/archive/) | the design notes from before the move out of ax, kept as a record |
+| [`HISTORY.md`](HISTORY.md) | how pocketparse left ax and became tinyparse |
 
 This is V1, pinned at version `0.1.0`. It parses real languages correctly and
 honestly; the design notes mark what is in scope and what is deferred.
