@@ -1,4 +1,5 @@
 #include "event_name.h"
+#include "hash.h"
 
 static const ta_event_name_node *ta_event_name_node_at(const ta_event_name_table *table,
                                                        ta_event_name_id name) {
@@ -7,7 +8,8 @@ static const ta_event_name_node *ta_event_name_node_at(const ta_event_name_table
 
 static uint32_t ta_event_name_hash(ta_event_name_id parent, ta_atom segment) {
     uint32_t key[2] = { parent, segment };
-    return ta_hash_bytes(0x9e3779b9u, key, sizeof(key));
+    /* Offsetting the basis keeps these hashes apart from the atom table's. */
+    return ta_fnv1a32(TA_FNV1A32_BASIS ^ 0x9e3779b9u, key, sizeof(key));
 }
 
 static ta_result ta_event_name_rehash(ta_event_name_table *table, uint32_t bucket_count) {

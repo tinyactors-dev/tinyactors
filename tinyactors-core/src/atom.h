@@ -26,4 +26,3 @@ ta_str ta_atom_text(const ta_atom_table *table, ta_atom atom);
 /* Looks text up without interning it; TA_ERR_NOT_FOUND when it is not an atom. */
 ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_atom *out);
 bool ta_atom_valid(const ta_atom_table *table, ta_atom atom);
-uint32_t ta_hash_bytes(uint32_t seed, const void *bytes, size_t size);

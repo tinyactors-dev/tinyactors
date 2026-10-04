@@ -1,11 +1,14 @@
 #include "address.h"
+#include "hash.h"
 #include "system.h"
 
+/* The hash chains family, a NUL separator and name through one running FNV-1a
+ * state, so ("a", "bc") and ("ab", "c") differ. */
 static uint32_t ta_address_hash(const ta_actor_address *address) {
-    uint32_t hash = ta_hash_bytes(0, address->family.name.ptr, address->family.name.len);
     const char separator = 0;
-    hash = ta_hash_bytes(hash, &separator, 1);
-    return ta_hash_bytes(hash, address->name.ptr, address->name.len);
+    uint32_t hash = ta_fnv1a32(TA_FNV1A32_BASIS, address->family.name.ptr, address->family.name.len);
+    hash = ta_fnv1a32(hash, &separator, 1);
+    return ta_fnv1a32(hash, address->name.ptr, address->name.len);
 }
 
 static uint32_t ta_address_bucket_count(const ta_address_table *table) {

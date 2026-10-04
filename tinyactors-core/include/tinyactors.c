@@ -398,7 +398,6 @@ TA_PRIVATE ta_str ta_atom_text(const ta_atom_table *table, ta_atom atom);
 /* Looks text up without interning it; TA_ERR_NOT_FOUND when it is not an atom. */
 TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_atom *out);
 TA_PRIVATE bool ta_atom_valid(const ta_atom_table *table, ta_atom atom);
-TA_PRIVATE uint32_t ta_hash_bytes(uint32_t seed, const void *bytes, size_t size);
 
 
 
@@ -3138,16 +3137,6 @@ TA_API const void *ta_tree_close(ta_tree_list *list) {
 }
 
 
-TA_PRIVATE uint32_t ta_hash_bytes(uint32_t seed, const void *bytes, size_t size) {
-    const unsigned char *in = bytes;
-    uint32_t hash = seed ^ 2166136261u;
-    for (size_t index = 0; index < size; index += 1) {
-        hash ^= in[index];
-        hash *= 16777619u;
-    }
-    return hash;
-}
-
 static ta_result ta_atom_rehash(ta_atom_table *table, uint32_t bucket_count) {
     uint32_t *buckets = ta_mem_alloc(table->allocator, bucket_count * sizeof(uint32_t),
                                      _Alignof(uint32_t));
@@ -3204,7 +3193,7 @@ TA_PRIVATE ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_hash_bytes(0, text.ptr, text.len);
+    uint32_t hash = ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);
     for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
         const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
         if (entry->hash == hash && ta_str_equal(entry->text, text)) {
@@ -3253,7 +3242,7 @@ TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_at
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_hash_bytes(0, text.ptr, text.len);
+    uint32_t hash = ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);
     for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
         const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
         if (entry->hash == hash && ta_str_equal(entry->text, text)) {
@@ -3266,11 +3255,13 @@ TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_at
 }
 
 
+/* The hash chains family, a NUL separator and name through one running FNV-1a
+ * state, so ("a", "bc") and ("ab", "c") differ. */
 static uint32_t ta_address_hash(const ta_actor_address *address) {
-    uint32_t hash = ta_hash_bytes(0, address->family.name.ptr, address->family.name.len);
     const char separator = 0;
-    hash = ta_hash_bytes(hash, &separator, 1);
-    return ta_hash_bytes(hash, address->name.ptr, address->name.len);
+    uint32_t hash = ta_fnv1a32(TA_FNV1A32_BASIS, address->family.name.ptr, address->family.name.len);
+    hash = ta_fnv1a32(hash, &separator, 1);
+    return ta_fnv1a32(hash, address->name.ptr, address->name.len);
 }
 
 static uint32_t ta_address_bucket_count(const ta_address_table *table) {
@@ -3897,7 +3888,8 @@ static const ta_event_name_node *ta_event_name_node_at(const ta_event_name_table
 
 static uint32_t ta_event_name_hash(ta_event_name_id parent, ta_atom segment) {
     uint32_t key[2] = { parent, segment };
-    return ta_hash_bytes(0x9e3779b9u, key, sizeof(key));
+    /* Offsetting the basis keeps these hashes apart from the atom table's. */
+    return ta_fnv1a32(TA_FNV1A32_BASIS ^ 0x9e3779b9u, key, sizeof(key));
 }
 
 static ta_result ta_event_name_rehash(ta_event_name_table *table, uint32_t bucket_count) {
