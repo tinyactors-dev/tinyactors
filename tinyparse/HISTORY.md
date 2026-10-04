@@ -512,16 +512,9 @@ Every fix came with a test that fails without it.
   parsers without warning flags for that reason.
 - **Benchmarks not run here:** `bench:react`, `bench:parsers`, `bench:tsc` and
   `bench:perf-gate`; they need the React source, npm packages and a Go build.
-- **The root `mise run test`** stops at the host kernel's sanitizer task
-  (UBSan: a NULL pointer passed to `memcpy` in
-  `tinyactors-host/tests/recorder_test.c:158`). The branch changes nothing under
-  `tinyactors-host`, so this fails on `main` too. The other projects, tinyparse
-  included, pass when run one by one. The core's amalgamate step and the shared
-  `mise/lib/cache.rb` also need a UTF-8 locale (`LANG=C.UTF-8`); tinyparse's own
-  build no longer does. So does the root `mise/tasks/test/_default`: under the
-  POSIX locale it raises `invalid byte sequence in US-ASCII` reading a step's
-  output when that output is not ASCII (check-acronyms prints `→` when it
-  finds something), instead of reporting the failed step.
+- **The root `mise run test`** stopped at the host kernel's sanitizer task and
+  crashed under the POSIX locale. Both are fixed after the migration; see "After
+  the migration" below.
 
 ## The final check
 
@@ -599,6 +592,30 @@ Three suite cases hold the fixes, and each was checked to fail without its fix:
 `gate:parser-nocrash --full` now feeds the generated TSX parser 200,000
 unclosed `(` instead of `[`; it had used `[` because `(` did not finish. The
 suite is 500/500.
+
+## After the migration: the two crashes
+
+The root `mise run test` had two faults that also failed on `main`, so both were
+fixed on `main` and cherry-picked here rather than fixed on this branch.
+
+- **The host kernel's sanitizer task.** A test helper,
+  `tinyactors-host/tests/recorder_test.c`'s `text_into`, copied an empty
+  `ta_str` with `memcpy(buffer, NULL, 0)`. memcpy's source must not be null even
+  for zero bytes, so UBSan failed the run at line 158. The copy now runs only
+  when there is something to copy (`e0108f7` on main, `75ba04e` here).
+- **The POSIX locale.** Under it Ruby reads with US-ASCII as the external
+  encoding, so the root test task died with `invalid byte sequence in US-ASCII`
+  the moment a step printed a non-ASCII byte, such as the arrow in a
+  check-acronyms finding. The root `mise.toml` now sets `RUBYOPT=-EUTF-8` for
+  every task, which also covers the shared `mise/lib` code that needed
+  `LANG=C.UTF-8`, and the test task matches each step's output as bytes. A
+  deliberate acronym violation under `LC_ALL=C` reproduced the crash before the
+  fix and is reported as an ordinary failure after it (`bd7b30c` on main,
+  `e2b9ff1` here).
+
+With both, `LC_ALL=C mise run test` at the root passes end to end on this
+branch, tinyparse included (`PROGRESS=500/500`), in 577s, most of it the host
+kernel's sanitizer pass (478s).
 
 ## Next steps
 
