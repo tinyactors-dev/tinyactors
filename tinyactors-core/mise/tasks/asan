@@ -36,9 +36,10 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
 # and whose pages are freed (paged_array_test), and heaps over items
 # that move between calls (heap_test), and queues whose array moves
 # when reserved larger (fifo_test), and quota counters checked at
-# their bounds (quota_test). The codec, export, compile
+# their bounds (quota_test), and byte rings read at every
+# offset and wrap (ring_test). The codec, export, compile
 # error and event pattern tests exercise pure functions.
-STANDALONE = %w[actor_id_test session_id_test offload_test span_test list_test paged_array_test heap_test fifo_test quota_test].freeze
+STANDALONE = %w[actor_id_test session_id_test offload_test span_test list_test paged_array_test heap_test fifo_test quota_test ring_test].freeze
 
 # A binary is rebuilt only when one of its inputs is newer: its test, the
 # amalgamation or a header. Tests build and run in parallel, one per CPU.

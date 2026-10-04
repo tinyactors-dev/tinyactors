@@ -7,6 +7,7 @@
 #include "heap.h"
 #include "fifo.h"
 #include "quota.h"
+#include "ring.h"
 #include "tree.h"
 #include "atom.h"
 #include "address.h"
