@@ -73,11 +73,12 @@ For one slot, the steps are:
    observation, macrostep end, cancellation of
    every invocation currently active in the session, terminal session
    notification, and all autoforwards of the input. It includes actual aligned
-   record sizes and wrap padding. The outstanding reserves of all slots,
-   this one included, must leave room for one record of `maxRecordBytes`.
+   record sizes and one pad of up to `maxRecordBytes` − 8 per record. The
+   outstanding reserves of all slots, this one included, must leave room
+   for one ordinary record plus its pad: 2 × `maxRecordBytes`.
    Unless they do, core takes nothing; when no slot can run either, `ta_run`
-   returns. A definition/session whose mandatory batch and one record of
-   `maxRecordBytes` cannot fit even an empty ring is refused before
+   returns. A definition/session whose mandatory batch and that headroom
+   cannot fit even an empty ring is refused before
    execution ([ring.md](ring.md#the-c2h-reserve)).
 3. **Take** the envelope after its recording snapshot has been prepared
    without changing the session. For a recorded session, write `c2h.input`.
@@ -255,8 +256,9 @@ outside a macrostep. Startup already returns for a drain before an
 operation it cannot write.
 
 **The wait always ends.** A slot needs room for one record of at most
-`maxRecordBytes`. Core takes an input only when the outstanding reserves,
-its own included, leave room for that much on an empty ring
+`maxRecordBytes`, plus a pad at the wrap. Core takes an input only when the
+outstanding reserves, its own included, leave 2 × `maxRecordBytes` on an
+empty ring
 ([ring.md](ring.md#the-c2h-reserve)). So once the host has drained, at
 least one waiting slot's record fits.
 

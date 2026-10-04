@@ -128,9 +128,9 @@ because a full one fails the chart's action.
 | [`slotSlice`](#slotslice) | 1,024 | 1 | 1,048,576 | nobody: it shapes latency |
 | [`internalQueueEvents`](#internalqueueevents) | 256 ordinary entries, plus compiler-sized mandatory storage | 0 ordinary entries | 65,536 ordinary entries | the chart (`.internal`) |
 | [`h2cBytes`](#h2cbytes) | 16,384 | `maxRecordBytes` | 2 GiB | the client (the host refuses) |
-| [`c2hBytes`](#c2hbytes) | 16,384 | 4 × `maxRecordBytes` | 2 GiB | nobody: the slot waits; the host (`TA_RUN_C2H_FULL`) |
+| [`c2hBytes`](#c2hbytes) | derived: (3 × `maxConcurrentInputs` + 2) × `maxRecordBytes`; 794,624 with the defaults | 5 × `maxRecordBytes` | 2 GiB | nobody: the slot waits; the host (`TA_RUN_C2H_FULL`) |
 | [`telBytes`](#telbytes) | 16,384 | 0, or else `maxRecordBytes` | 2 GiB | the operator (`tel.dropped`) |
-| [`maxRecordBytes`](#maxrecordbytes) | 4,096 | 256 | `c2hBytes` / 4 | the chart (`.record`); the host (`c2h.bounced`) |
+| [`maxRecordBytes`](#maxrecordbytes) | 4,096 | 256 | `c2hBytes` / 5 | the chart (`.record`); the host (`c2h.bounced`) |
 | [`telemetryValueBytes`](#telemetryvaluebytes) | 1,024 | 0 | `maxRecordBytes` − 256 | the operator (`truncated`) |
 | [`maxPendingSends`](#maxpendingsends) (changed) | no quota | 0 | `poolEnvelopes` | the chart (`.pool`) |
 
@@ -336,26 +336,39 @@ because a full one fails the chart's action.
 ### `c2hBytes`
 
 - **What it bounds:** the c2h ring. Unit: bytes.
-- **Default 16,384 (16 KiB).** A `c2h.send` is 88 fixed bytes plus
-  sendid, type, target and name, about 150 bytes in all. That allows about
-  100 sends between drains. A fanout bigger than that does not fail: its
-  slot waits while the host drains, and other slots go on
-  ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)). During
-  budget pauses the host may execute effects and release ring space before
-  the macrostep end. A bigger ring means fewer waits and fewer returns from
-  `ta_run`, not fewer errors.
-- **Minimum 4 × `maxRecordBytes`** for the base configuration. Definition
-  and session setup also check their actual mandatory batch: input
-  observation, cancellations, autoforwards, completion and end records,
-  including wrap padding, plus room for one ordinary record of
-  `maxRecordBytes` ([ring](reference/ring.md#the-c2h-reserve)). The factor
-  of four alone is not a guarantee. **Maximum 2 GiB,** for the same reason
-  as h2c.
+- **Default: derived.** Core computes `(3 × maxConcurrentInputs + 2) ×
+  maxRecordBytes` at creation. Each slot's smallest mandatory batch (input
+  observation, `c2h.macrostep_ended`, `c2h.input_completed`) costs at most
+  3 × `maxRecordBytes` with one pad per record
+  ([ring](reference/ring.md#the-c2h-reserve)). The headroom, one ordinary
+  record plus its pad, costs 2 ×. So every slot can hold its reservation
+  at once. The ring is fixed at creation, before any definition exists,
+  so the formula uses parameters only. With the defaults it is 794,624
+  bytes (776 KiB). With 1 KiB records it is 194 KiB. A test suite that
+  sets `maxConcurrentInputs` 1 gets 20 KiB without choosing a number,
+  which answers ADR 0093's concern about many small systems.
+- **An explicit value wins.** A value below the derived one means fewer
+  slots hold reservations at once. A definition whose batch is larger
+  (cancellations for active invocations, autoforwards) reserves more, with
+  the same effect. Both cost throughput, not correctness.
+- **A full ring does not fail.** A `c2h.send` is 88 fixed bytes plus
+  sendid, type, target and name, about 150 bytes in all. A fanout bigger
+  than the ring's free space waits while the host drains, and other slots
+  go on ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)).
+  During budget pauses the host may execute effects and release ring
+  space before the macrostep end. A bigger ring means fewer waits and
+  fewer returns from `ta_run`, not fewer errors.
+- **Minimum 5 × `maxRecordBytes`:** one slot's smallest batch plus the
+  headroom. Definition and session setup also check their actual
+  mandatory batch: input observation, cancellations, autoforwards,
+  completion and end records, each with its pad, plus the headroom of
+  2 × `maxRecordBytes` ([ring](reference/ring.md#the-c2h-reserve)). A
+  batch that cannot fit an empty ring is refused; the factor of five alone
+  is not a guarantee. **Maximum 2 GiB,** for the same reason as h2c.
 - **What it drives:** how much one macrostep can say to the outside world
   before the host drains, and how many slots can hold their mandatory
-  reserve at once. With the defaults, at most 12 KiB is reserved; an
-  input whose reserve does not fit waits in the run queue. Step 4.2
-  measures whether 16 KiB costs throughput.
+  reserve at once. An input whose reserve does not fit waits in the run
+  queue. Step 4.2 checks the derived size against napi's suites.
 - **How it surfaces:**
   - **chart:** nothing. A slot that waits for c2h holds its input longer;
   - **host:** `ta_run` returns `TA_RUN_C2H_FULL` when nothing can go on
@@ -387,10 +400,10 @@ because a full one fails the chart's action.
   `c2h.input` representation, even when its receiver is unrecorded. Mandatory
   output batch sizes are checked separately. Unit: bytes.
 - **Default 4,096.** Event names, targets and origins in practice are well
-  under 1 KiB. 4 KiB leaves room while keeping the reserve small. It is
-  the most the default `c2hBytes` allows (16,384 / 4).
+  under 1 KiB. 4 KiB leaves room while keeping the reserve small. The
+  derived `c2hBytes` scales with it, so it is never the limit.
 - **Minimum 256:** the largest fixed part (`tel.trace`, 216 bytes) plus a
-  short name. **Maximum `c2hBytes` / 4,** the reserve constraint.
+  short name. **Maximum `c2hBytes` / 5,** the reserve constraint.
 - **What it drives:** the longest name, target or origin one record can
   carry.
 - **How it surfaces:**
@@ -432,7 +445,7 @@ An existing core parameter whose meaning changes.
 Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 (ADR 0092):
 
-- `maxRecordBytes` ≤ `c2hBytes` / 4;
+- `maxRecordBytes` ≤ `c2hBytes` / 5;
 - `maxRecordBytes` ≤ `h2cBytes`, `nameAreaBytes`, and `telBytes` unless it is 0;
 - `telBytes` 0 requires every trace kind mask to be zero;
 - `telemetryValueBytes` ≤ `maxRecordBytes` − 256;
@@ -448,8 +461,9 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 | running workspace: `interpreterBytes` 65,536 + 256 ordinary internal entries × about 48, plus compiler-sized mandatory storage, once | 77,824 plus the compiled bound |
 | slot records: up to 64 × about 48, on demand | at most 3,072 |
 | park area: a reserve of one parked execution, on demand; more only while slots are parked | about 1 KiB for a chart of 100 states |
-| h2c + c2h + tel: 3 × 16,384 | 49,152 |
-| **total before compiler-sized mandatory storage** | **about 752 KiB** |
+| h2c + tel: 2 × 16,384 | 32,768 |
+| c2h: (3 × 64 + 2) × 4,096 | 794,624 |
+| **total before compiler-sized mandatory storage** | **about 1,512 KiB** |
 
 The running workspace was already there as run to completion's single
 continuation, scratch and internal queue; earlier versions of this table
@@ -458,7 +472,7 @@ park area, both on demand. With 64 slots all parked, a chart of 100 states
 costs about 64 KiB of continuations, plus whatever internal events they
 had pending; the derived ceiling bounds the worst case.
 
-Most of that is the pool and the name area at their bounds. napi uses
+Most of that is c2h, and the pool and the name area at their bounds. napi uses
 roughly 1 MB per system today, which ADR 0093 judged too much for quiet
 systems and test suites that create many. So:
 
@@ -468,8 +482,11 @@ systems and test suites that create many. So:
   so the macrostep invariant holds ([macrostep.md](reference/macrostep.md)).
   A quiet system pays for its peak, not for the bound.
 - **The rings are fixed at creation,** because the host holds positions in
-  them. They are small by default, 48 KiB for all three, because their size
-  is a throughput setting. A busy server raises them.
+  them. h2c and tel are 16 KiB each by default, because their size is a
+  throughput setting. c2h is derived from `maxConcurrentInputs` and
+  `maxRecordBytes`, so every slot can hold its reserve: 776 KiB with the
+  defaults, about 20 KiB with one slot. A busy server raises h2c and tel;
+  a quiet one lowers `maxConcurrentInputs`.
 
 ### Changed parameters
 

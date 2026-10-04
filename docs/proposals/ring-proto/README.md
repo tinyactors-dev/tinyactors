@@ -195,7 +195,9 @@ The scenarios run this example through:
   not fit pauses its slot, not its chart, and runs again after the host
   drains. `error.execution.capacity.c2h` is gone; a full pool or name area
   still fails the action. So a ring's size is a throughput setting, not a
-  correctness one, and the rings are 16 KiB each by default
+  correctness one. h2c and tel are 16 KiB each by default; c2h is
+  derived from `maxConcurrentInputs` and `maxRecordBytes`, 776 KiB with the
+  defaults
   ([reference/macrostep.md](reference/macrostep.md#a-full-c2h-pauses-the-slot),
   [BEHAVIORS.md](BEHAVIORS.md#parameters)).
 - **Accepted removal of quarantine:** napi's quarantine existed so that

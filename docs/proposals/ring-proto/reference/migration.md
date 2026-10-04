@@ -313,8 +313,10 @@ when h2c and c2h arrive, not at the end.
 
 - **Default sizes.** The pool, the name area and the rings
   ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Partly answered: a full c2h
-  pauses a slot, so ring size is a throughput setting, and the rings
-  default to 16 KiB each. What remains is measuring them in step 4.2.
+  pauses a slot, so ring size is a throughput setting. h2c and tel
+  default to 16 KiB each; c2h is derived from `maxConcurrentInputs` and
+  `maxRecordBytes` (776 KiB with the defaults). What remains is measuring
+  h2c and tel, and checking the derived c2h, in step 4.2.
 - **The MCP server proposal** ([mcp-server.md](../../mcp-server.md))
   places its mapping in the host kernel, "implemented once". With the
   kernel gone, it needs a new home. **Not on this plan's critical path:**

@@ -292,10 +292,13 @@ sampling) stays as data in core.
   mean `realloc`, which moves envelopes. Pages are recommended.
 - **Does B2 need pages too?** Its storage needs one `u32` per envelope, so
   it can grow in the same refill as the pool.
-- **The c2h reservation with pads.** Before C3 can say a reservation in
-  bytes is enough, it needs a worst-case pad term, such as one pad per
-  record of up to `maxRecordBytes - 8` bytes. Whether a tighter bound is
-  possible depends on C1's position at the time of the reservation.
+- **The c2h reservation with pads. Decided:** one pad per reserved
+  record. Each record of a slot's mandatory batch, and the headroom
+  record, reserves its size plus a pad of up to `maxRecordBytes - 8`
+  bytes. It is sound however several slots' records interleave. One
+  shared pad per ring needs an argument that at most one wrap occurs
+  before a drain; an exact pad from C1's write position is unsound with
+  several slots ([ring.md](ring.md#the-c2h-reserve)).
 - **A `trim` for A5. Decided:** the host calls `ta_system_trim`, which
   returns whole free pages above each reserve to the allocator. It is
   written once in A5 and covers the pool, the name area and the park area

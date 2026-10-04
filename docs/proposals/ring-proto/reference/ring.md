@@ -191,10 +191,29 @@ Before taking an input or starting a macrostep, core reserves all mandatory
 records for that phase: its input observation when recorded, required
 autoforwards, invocation cancellations, macrostep end and terminal
 `finished` notification. It uses the actual event metadata and the
-definition's bound on invocations that can be active. The calculation
-includes alignment and every wrap pad. A system/definition combination
-whose mandatory reservation cannot fit even an empty c2h ring is refused
+definition's bound on invocations that can be active.
+
+**One pad per reserved record.** Each reserved record counts its aligned
+size plus one pad of up to `maxRecordBytes - 8` bytes. The bound holds
+however the records of several slots interleave, and needs no argument
+about how many wraps occur before a drain. Two other bounds were
+considered. One shared pad per ring is sound only by such an argument.
+An exact pad from the write position is unsound once several slots
+reserve.
+
+**Headroom.** Core takes an input only if the outstanding reserves of all
+slots, its own included, leave room for one ordinary record plus its pad:
+2 × `maxRecordBytes`. A system/definition combination whose mandatory
+batch plus that headroom cannot fit even an empty c2h ring is refused
 before execution; retrying an impossible reservation is not progress.
+
+**Sizing.** `c2hBytes` defaults to `(3 × maxConcurrentInputs + 2) ×
+maxRecordBytes`. A slot's smallest batch (input observation,
+`c2h.macrostep_ended`, `c2h.input_completed`) costs at most
+3 × `maxRecordBytes` with pads, and the headroom 2 ×. So every slot can
+hold a reservation at once. A larger batch reserves more, and fewer slots
+hold reservations at once. That costs throughput, not correctness
+([BEHAVIORS.md](../BEHAVIORS.md#c2hbytes)).
 
 Actions preserve that reservation when checking whether an optional effect
 fits. An optional effect that does not fit parks its slot before the
