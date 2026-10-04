@@ -179,7 +179,7 @@ Key structural decisions to make before writing rules:
 - **Expression precedence ladder.** Write from lowest to highest: `or > and > not
   > comparison > additive > multiplicative > unary > postfix > primary`. Each level
   is `(rule level_n (seq level_n+1 (optional (seq op level_n+1))))` (left-factored
-  from the start). See `docs/grammar.md` §Hidden rules for the `(hidden …)` wrapper.
+  from the start). See `docs/reference/grammar.md` §Hidden rules for the `(hidden …)` wrapper.
 - **Reserved words.** Any keyword that must not appear as a bare identifier needs
   `(reserved KEYWORD_TOKEN)` to suppress it from the identifier rule. List them
   exhaustively — a missed keyword becomes a parse ambiguity.

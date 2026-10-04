@@ -20,9 +20,9 @@ moving the public API or breaking the 291/291 conformance oracle.
 The companion documents are [`bytecode-vm.md`](bytecode-vm.md), which designed
 the VM instruction set and first named the "coarse actor / tight loop" pattern;
 [`ax-execution.md`](ax-execution.md), the statechart design whose cost is the
-baseline to beat; [`performance.md`](../performance.md), which measured today's
-residual; [`architecture.md`](../architecture.md), which draws the layer
-boundaries; and the contracts [`../tinyparse-design.md`](../../tinyparse-design.md)
+baseline to beat; [`performance.md`](../explanation/performance.md), which measured today's
+residual; [`architecture.md`](../explanation/architecture.md), which draws the layer
+boundaries; and the contracts [`../tinyparse-design.md`](tinyparse-design.md)
 and ax's `src/ax/ax-design.md`. Untagged code
 blocks below are illustrative; `mdc` extracts nothing from this file.
 
@@ -60,7 +60,7 @@ design that fires one transition per token, or worse per IR node, *is* on `ax`
 in the most literal sense and is also a betrayal of `ax`'s own warning against a
 stringy hot path (ax's `src/ax/ax-design.md`,
 *Events*: "compact event payloads, not dynamically formatted event names"). The
-profile in [`performance.md`](../performance.md) is the proof: an internal `ax`
+profile in [`performance.md`](../explanation/performance.md) is the proof: an internal `ax`
 transition walks a transition array, prefix-matches an event name, and updates
 the active configuration, where a C `switch` arm does one indirect jump. Make
 that the per-token unit and the parse is 5–15× slower; the statechart design's
@@ -220,7 +220,7 @@ Grammar compilation is a staged dataflow: read `.scm` bytes → Scheme forms →
 validate and intern → IR → resolve ids and compute first-sets → emit bytecode.
 Each stage is an actor; a stage's output is the next stage's input, posted as one
 coarse message. This is the seven-step pipeline
-[`architecture.md`](../architecture.md) already names, run as actors instead of as
+[`architecture.md`](../explanation/architecture.md) already names, run as actors instead of as
 a straight-line C call chain.
 
 ```
@@ -241,7 +241,7 @@ a straight-line C call chain.
   the finished program.
 - **Speed:** **irrelevant to parse throughput, and that is the point.**
   Compilation is one-time and excluded from the timed loop
-  ([`performance.md`](../performance.md): "The one-time cost of loading the runtime
+  ([`performance.md`](../explanation/performance.md): "The one-time cost of loading the runtime
   and compiling the grammar is excluded"). The per-message cost — a handful of
   `ax_post`s across the whole compile — is negligible against the work each
   stage does. So this topology adds genuine `ax` structure at *zero* parse cost.

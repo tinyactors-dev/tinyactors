@@ -12,7 +12,7 @@
 ;
 ; What it deliberately does NOT parse — bash-only extensions that are out of
 ; POSIX scope, and a few known std.shell limitations — is recorded with rationale
-; in tools/tinyparse/docs/shell-corpus-scope.md. The conformance corpus under
+; in docs/reference/std-grammars.md. The conformance corpus under
 ; test/suite/shellfamily/ imports only the POSIX-parseable sections of the
 ; build-time tree-sitter-bash reference; the excluded sections are listed there.
 

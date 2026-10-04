@@ -9,10 +9,10 @@ bytecode VM something `ax` should offer in general, or is it specific to
 parsing? The hard constraint throughout is that the VM runs **on** the `ax`
 actor engine — it does not bypass or replace it.
 
-The companion documents are [`performance.md`](../performance.md), which measured
-the residual this proposal targets, [`architecture.md`](../architecture.md), which
+The companion documents are [`performance.md`](../explanation/performance.md), which measured
+the residual this proposal targets, [`architecture.md`](../explanation/architecture.md), which
 draws the layer boundaries, and the two design contracts,
-[`../tinyparse-design.md`](../../tinyparse-design.md) and
+[`../tinyparse-design.md`](tinyparse-design.md) and
 ax's `src/ax/ax-design.md`. Untagged code
 blocks below are illustrative; `mdc` extracts nothing from this file.
 
@@ -303,7 +303,7 @@ inside the folded extras step. Nothing about memoization is re-invented; the VM
 changes how instructions are *dispatched*, not what the lexer and the caches
 compute.
 
-A note on the packrat memo that [`performance.md`](../performance.md) lists as
+A note on the packrat memo that [`performance.md`](../explanation/performance.md) lists as
 unspent: a whole-rule memo keyed on `(rule, offset)` maps cleanly onto
 `CALL` — consult it on entry, and on a hit replay the cached node span instead
 of running the body. The VM does not require it, but it leaves a natural seam
@@ -314,9 +314,9 @@ cache through every recursive frame).
 
 This is the crux, and it has a wrinkle the profile names plainly: **today's
 `tp_execute` is not running on `ax` at all.** The profile in
-[`performance.md`](../performance.md) reports "ax actor dispatch: absent — no
+[`performance.md`](../explanation/performance.md) reports "ax actor dispatch: absent — no
 `ax_*` function except `ax_alloc` appears anywhere on the hot path." The design
-([`../tinyparse-design.md`](../../tinyparse-design.md), *Actor model*) intends
+([`../tinyparse-design.md`](tinyparse-design.md), *Actor model*) intends
 rules to lower to `ax` machines, but the shipped executor is a plain recursive
 C function over the IR. So "the VM must run on `ax`" is a constraint on the
 *architecture the design commits to*, not a description of the current hot path.
@@ -534,7 +534,7 @@ on every corpus case. The incremental path:
 
 Honestly: **not urgently.** tinyparse at ~4.6× tree-sitter while staying
 freestanding and runtime-compiled is a defensible place to stop, and
-[`performance.md`](../performance.md) lists cheaper unspent wins (the packrat memo,
+[`performance.md`](../explanation/performance.md) lists cheaper unspent wins (the packrat memo,
 `parser_reset`) that do not require a second executor. The VM is the right move
 *if and when* raw parse throughput becomes the binding constraint — a host
 parsing large corpora in a tight loop, where a 2–3× constant-factor win pays for

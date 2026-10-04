@@ -18,8 +18,8 @@ behaviour directly.
 
 - **"Where does the time go?"** — `callgrind` (deterministic instruction counts,
   great for a small corpus) or `gprof`/`perf` (sampled wall time). The tinyparse
-  profiling scaffold is already wired: see the *Appendix: reproduce* in
-  `docs/performance.md` (callgrind_annotate, gprof). The old `bench/prof/`
+  profiling scaffold is already wired: see the profiling steps under "Run the benchmarks" in
+  `DEVELOPMENT.md` (callgrind_annotate). The old `bench/prof/`
   driver is gone; `bench/bench_tinyparse`, which `mise run bench:javascript`
   builds, carries function symbols, so run it straight under callgrind (or
   rebuild it with `-O2 -g -fno-omit-frame-pointer`) over a few corpus passes and
