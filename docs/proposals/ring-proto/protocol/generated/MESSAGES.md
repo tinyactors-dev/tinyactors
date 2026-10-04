@@ -647,6 +647,7 @@ One ta_trace_record, kind for kind; only the fields its kind names are meaningfu
 | 107 | `result` | bool |  |
 | 108 | `trace_flags` | u8 | the trace context’s flags (sampled) |
 | 109 | `trace_detail` | u8 | the trace context’s detail (watched) |
+| 110 | `runaway_cause` | runaway_cause (u8) | RUNAWAY only: what stopped the input |
 | 112 | `address` | text | the session’s family/name |
 | 120 | `definition` | text | the definition’s document name and source, on the kinds that open a run |
 | 128 | `state_name` | text | the name of `state` |
@@ -706,7 +707,7 @@ How a macrostep ended.
 |---|---|---|
 | 0 | `stable` | stabilization ended; invocation startup and internal follow-up may still follow |
 | 1 | `done` | the session reached a top-level final state; c2h.finished follows |
-| 2 | `runaway` | the chain limit stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays |
+| 2 | `runaway` | the chain limit or an internal-queue overflow stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays |
 | 3 | `abandoned` | an operator abandoned it (core ADR 0082) |
 
 ### `input_completion_status` (u8)
@@ -717,8 +718,17 @@ How an input and its invocation-startup follow-up settled.
 |---|---|---|
 | 0 | `stable` | ready for another external input |
 | 1 | `done` | the session finished |
-| 2 | `runaway` | the chain limit stopped it; core abandoned the input and the session takes its next one |
+| 2 | `runaway` | the chain limit or an internal-queue overflow stopped it; core abandoned the input and the session takes its next one |
 | 3 | `abandoned` | an operator abandoned execution |
+
+### `runaway_cause` (u8)
+
+What stopped a runaway input; tel.trace RUNAWAY carries it (reference/macrostep.md).
+
+| Value | Name | Meaning |
+|---|---|---|
+| 1 | `chain_limit` | the input’s chain reached microstepLimit |
+| 2 | `internal_queue` | a mandatory internal event fit neither the floor nor a free ordinary entry |
 
 ### `input_refusal_reason` (u8)
 

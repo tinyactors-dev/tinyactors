@@ -163,7 +163,7 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0047 An interrupted macrostep is retryable | a macrostep interrupted by running out of memory can run again | **superseded**: core cannot run out of memory in a macrostep, and a data model or invoker that does answers `TA_OP_ERROR`, so nothing interrupts a macrostep for memory |
 | 0055 Deliver is the admission test | `TA_ERR_BUSY` | **superseded**: admission is moving from h2c into the pool; mail for an active session waits on its deferred list in core, so the host never sees busy |
 | 0061 A run can pause between units of executable content | the paused state moves into a continuation the actor owns | **refined**: it moves into the session's macrostep slot, and slots take turns between units |
-| 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: one live queue in the running workspace, parked slots' entries in the park area, an ordinary quota plus compiler-sized mandatory storage, allocated outside macrosteps; the chain limit bounds its accumulation, and the arena's size is open |
+| 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: one live queue in the running workspace, parked slots' entries in the park area, an ordinary quota plus a compiler-sized mandatory floor of one round of every phase, allocated outside macrosteps; mandatory events beyond the floor use free ordinary entries, and an overflow is a runaway ([macrostep.md](macrostep.md#sizing-mandatory-storage)) |
 | 0067 Core traces to a host sink | sink vtable | **refined**: the `tel` ring |
 | 0068 Core owns the I/O processor registry; every origin can be answered | a registry of (type, adapter) with a `text` callback; COMPUTED, SCOPED and MESSAGE origins | **refined**: the registry becomes a set of type atoms, declared by `h2c.type_declare` (registry `io`), so an unsupported `<send type>` still raises `error.execution` in the sender's block. `send` becomes `c2h.send`. The binding renders `_ioprocessors.<type>.location`, so `text` and its templates go. Origins are text in `h2c.event`; COMPUTED and SCOPED go, and the processor decides which reply targets are live ([S12](../scenarios/S12-http-request.md), [S13](../scenarios/S13-webhook-callback.md), [building blocks](building-blocks.md#io-origins-adr-0068-one-class-remains)) |
 | 0069 An idle actor carries no event | event blocks | **refined**: the taken event stays in its envelope; no blocks |
@@ -221,7 +221,9 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
    stays.
 2. **A macrostep never allocates core memory.** Capacity becomes
    `error.execution.capacity`. Supersedes 0070 for core's memory. Records
-   the figures: per-actor bytes before and after.
+   the mandatory internal-event floor (one round of every phase), and that
+   an overflow beyond it and the ordinary quota is a runaway. Records the
+   figures: per-actor bytes before and after.
 3. **Pending inputs are envelopes in one pool per system.** One run
    queue in arrival order, admission watermark, fairness, recycling. Supersedes 0011, 0029,
    0040, 0055, 0064, 0069 and 0093. Records the bytes per envelope, the

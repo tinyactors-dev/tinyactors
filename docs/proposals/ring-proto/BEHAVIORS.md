@@ -33,6 +33,7 @@ can retry:
 | An unload would split an active local invocation | core, without mutation | `c2h.bounced(active_local_invoke)` | host, after the invocation ends | [unloading](reference/unloading.md#unloading) |
 | The host withdraws an input that has not been taken (a client disconnected, an `AbortSignal` fired) | core, on [`h2c.withdraw`][h2c.withdraw] | `c2h.input_refused` with reason `withdrawn`; nothing if the input was already taken, bounced or refused | nobody: the host asked for it | [envelope](reference/envelope.md#withdrawing-an-admitted-input) |
 | A session's input reaches the chain limit (a runaway) | core, between steps: the input is abandoned, the session lives on | `c2h.input_completed` status `runaway`; `TA_TRACE_RUNAWAY` on `tel`. The chart is not told | nobody: the host may destroy a session that keeps running away | [macrostep](reference/macrostep.md#runaways-the-chain-limit) |
+| A mandatory internal event fits neither the floor nor a free ordinary entry | core, as at the chain limit: the input is abandoned, the session lives on | `c2h.input_completed` status `runaway`; `TA_TRACE_RUNAWAY` with `runaway_cause` `internal_queue`. The chart is not told | nobody: as for a runaway | [macrostep](reference/macrostep.md#sizing-mandatory-storage) |
 | An event nobody listens for | the chart: it enables nothing | [`tel.trace`][tel.trace] `IGNORED` | nobody | [S10.4](scenarios/S10-run-time-names.md#under-the-proposal) |
 | An h2c record core cannot run (a malformed address, too deep a name, …) | core | [`c2h.bounced`][c2h.bounced] with a reason | the host decides | [S10.8](scenarios/S10-run-time-names.md#when-the-names-come-faster-than-they-are-freed) |
 | Telemetry the host does not read fast enough | core | [`tel.dropped`][tel.dropped] with a count | nobody: telemetry never slows the system | [telemetry](reference/telemetry.md) |
@@ -54,7 +55,7 @@ different sends before and after a crash ([S03.4](scenarios/S03-crash-unrecorded
 | **tel** | `telBytes` | The record is dropped and counted in [`tel.dropped`][tel.dropped]. | the operator | [telemetry](reference/telemetry.md) |
 | **Pool** | `poolEnvelopes`, `admissionWatermark` | Core bounces capacity-blocked h2c events. A local send or delayed send fails as `error.execution.capacity.pool`. Local invocations hold lifetime tokens acquired before startup. | host/client and sending chart | [S02](scenarios/S02-full-pool.md) |
 | **Name area** | `nameAreaBytes` | Core bounces capacity-blocked h2c events. A computed name that does not fit fails as `error.execution.capacity.names`. | host/client and sending chart | [S10](scenarios/S10-run-time-names.md) |
-| **Internal queue** | ordinary `internalQueueEvents` quota plus compiler-sized mandatory storage | A chart raise exhausting its quota fails as `error.execution.capacity.internal`. Mandatory storage needs a whole-execution bound, not a single error slot. | the chart; implementation readiness depends on the bound | [macrostep](reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage) |
+| **Internal queue** | ordinary `internalQueueEvents` quota plus a compiler-sized mandatory floor | A chart raise exhausting its quota fails as `error.execution.capacity.internal`. Mandatory events beyond the floor take free ordinary entries; one that fits in neither ends the input as a runaway. | the chart for a raise; the host for a runaway (`c2h.input_completed` `runaway`) | [macrostep](reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage) |
 | **Macrostep slots** | `maxConcurrentInputs` | Runnable envelopes wait in the run queue, or on an active session's deferred list, until a slot frees. Nothing is refused. | nobody: it shapes latency | [macrostep](reference/macrostep.md#macrostep-slots) |
 | **Park area** | `parkAreaBytes` (derived by default) | A slot that cannot park at the end of its slice keeps the thread. | nobody: it shapes latency | [parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area) |
 | **Data model** (the JavaScript heap) | the binding | An operation that fails reports `TA_OP_ERROR`, and core raises `error.execution`. It is the data model's own memory, never core's. | the chart | [data model](reference/data-model.md) |
@@ -126,7 +127,7 @@ because a full one fails the chart's action.
 | [`maxConcurrentInputs`](#maxconcurrentinputs) | 64 | 1 | 65,536 | nobody: inputs wait for a slot |
 | [`parkAreaBytes`](#parkareabytes) | derived: `maxConcurrentInputs` × the largest parked execution | 0 (no parking) | the derived ceiling | nobody: a slot that cannot park keeps the thread; a runaway that cannot park is abandoned |
 | [`slotSlice`](#slotslice) | 1,024 | 1 | 1,048,576 | nobody: it shapes latency |
-| [`internalQueueEvents`](#internalqueueevents) | 256 ordinary entries, plus compiler-sized mandatory storage | 0 ordinary entries | 65,536 ordinary entries | the chart (`.internal`) |
+| [`internalQueueEvents`](#internalqueueevents) | 256 ordinary entries, plus a compiler-sized mandatory floor | 0 ordinary entries | 65,536 ordinary entries | the chart (`.internal`) |
 | [`h2cBytes`](#h2cbytes) | 16,384 | `maxRecordBytes` | 2 GiB | the client (the host refuses) |
 | [`c2hBytes`](#c2hbytes) | derived: (3 × `maxConcurrentInputs` + 2) × `maxRecordBytes`; 794,624 with the defaults | 5 × `maxRecordBytes` | 2 GiB | nobody: the slot waits; the host (`TA_RUN_C2H_FULL`) |
 | [`telBytes`](#telbytes) | 16,384 | 0, or else `maxRecordBytes` | 2 GiB | the operator (`tel.dropped`) |
@@ -288,29 +289,33 @@ because a full one fails the chart's action.
 
 ### `internalQueueEvents`
 
-- **What it bounds:** ordinary chart-generated internal events. Mandatory
-  errors and `done.state.*` events have additional compiler-sized storage,
-  allocated outside macrosteps. Queues preserve FIFO order across both
+- **What it bounds:** ordinary chart-generated internal events, and
+  mandatory errors and `done.state.*` events beyond their floor. The floor
+  is compiler-sized storage for one round of every phase, allocated outside
+  macrosteps. A mandatory event that fits neither the floor nor a free
+  ordinary entry ends the input as a runaway. Queues preserve FIFO order across both
   classes; this is a capacity distinction, not a priority distinction.
   There is one top-level workspace, the running workspace, and any
   required nested workspaces; a parked slot keeps only its pending entries,
   in the park area.
   Unit: ordinary events, about 48 bytes each.
-- **Default 256 ordinary entries, about 12 KiB plus mandatory storage.** A macrostep rarely holds more
+- **Default 256 ordinary entries, about 12 KiB plus the mandatory floor.** A macrostep rarely holds more
   than a handful of internal events at once. One that holds 255 is almost
   always a chart raising in a loop. The microstep limit would catch that
   much later.
 - **Minimum 0:** chart raises are refused, but mandatory errors still have
-  their compiler-sized storage. **Maximum
+  their floor, and an overflow beyond it is a runaway. **Maximum
   65,536:** no chart needs more, and a bigger queue only delays the error
   that tells the author.
-- **What it drives:** how many ordinary internal events one macrostep may
-  have pending. It does not cap the compiler's mandatory reserve, whose
-  whole-execution bound comes from the chain limit; its size is still open
+- **What it drives:** how many internal events one input may have pending
+  beyond the mandatory floor. A chart that raises a lot leaves less room
+  for its own mandatory events
   ([macrostep](reference/macrostep.md#sizing-mandatory-storage)).
 - **How it surfaces:**
   - **chart:** `<raise>` fails as `error.execution.capacity.internal`;
-  - **host:** a `tel.trace` `ACTION_FAILED`.
+  - **host:** a `tel.trace` `ACTION_FAILED`; a mandatory overflow is
+    `c2h.input_completed` `runaway`, with `TA_TRACE_RUNAWAY`
+    `runaway_cause` `internal_queue`.
 
 ### `h2cBytes`
 
@@ -458,12 +463,12 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 |---|---|
 | pool: 4,096 envelopes × 88, plus 4 each for the deadline index | 376,832 |
 | name area: 4,096 chunks × 64 | 262,144 |
-| running workspace: `interpreterBytes` 65,536 + 256 ordinary internal entries × about 48, plus compiler-sized mandatory storage, once | 77,824 plus the compiled bound |
+| running workspace: `interpreterBytes` 65,536 + 256 ordinary internal entries × about 48, plus the compiler-sized mandatory floor (one round of every phase), once | 77,824 plus the floor |
 | slot records: up to 64 × about 48, on demand | at most 3,072 |
 | park area: a reserve of one parked execution, on demand; more only while slots are parked | about 1 KiB for a chart of 100 states |
 | h2c + tel: 2 × 16,384 | 32,768 |
 | c2h: (3 × 64 + 2) × 4,096 | 794,624 |
-| **total before compiler-sized mandatory storage** | **about 1,512 KiB** |
+| **total before the mandatory floor** | **about 1,512 KiB** |
 
 The running workspace was already there as run to completion's single
 continuation, scratch and internal queue; earlier versions of this table

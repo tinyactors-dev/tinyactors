@@ -21,7 +21,7 @@ This replaces several structures in core today:
 | The host's mailboxes and router (kernel `scheduler.h`, `router.h`) | envelopes in the run queue |
 | `TA_ERR_BUSY` from `ta_actor_deliver` (core ADR 0055) | gone as an answer to the host: mail for an active session waits on its deferred list in core ([below](#mail-for-an-active-session), [macrostep.md](macrostep.md#macrostep-slots)) |
 | An actor's event block and its cache (core ADRs 0069, 0093) | the taken envelope, retained through startup and internal follow-up until input completion |
-| The internal queue lent to a running actor (core ADR 0064) | not the pool: an ordinary quota and compiler-sized mandatory storage per interpreter ([below](#the-internal-queue-is-not-in-the-pool)) |
+| The internal queue lent to a running actor (core ADR 0064) | not the pool: an ordinary quota and a compiler-sized mandatory floor per interpreter ([below](#the-internal-queue-is-not-in-the-pool)) |
 | Delayed sends living with their owner (core ADR 0054) and the global deadline index | envelopes with a due time, in the pool's deadline index |
 | Waiting mail for unloaded actors (kernel `loads.h`) | envelopes on a waiting list per address |
 
@@ -78,7 +78,7 @@ measurements:
 | One envelope | 88 bytes, plus 4 for its slot in the deadline index |
 | Default pool, 4,096 envelopes | about 368 KiB |
 | Default name area | 256 KiB (`nameAreaBytes`, 262,144): one 64-byte chunk per envelope ([BEHAVIORS.md](../BEHAVIORS.md#nameareabytes)) |
-| Default ordinary internal quota, 256 entries of about 48 bytes | about 12 KiB (`internalQueueEvents`), plus compiler-sized mandatory storage |
+| Default ordinary internal quota, 256 entries of about 48 bytes | about 12 KiB (`internalQueueEvents`), plus the compiler-sized mandatory floor |
 | Per actor | the head of its own pending delayed sends, and the head and tail of its deferred list: +12 bytes on today's 332 (ADR 0092: "an actor stays at 332 bytes") |
 | Today, for comparison | napi's event blocks prefilled at about 811 KB per system before ADR 0093, each queued event (`ta_queued_event`) 96 bytes, and the kernel's mailboxes on top |
 
@@ -502,9 +502,10 @@ after the live local relationship is retired.
 Internal events (`<raise>`, `done.state.*`, `error.*`) never leave the running
 session, so they don't take envelopes. They use one ordered internal queue
 with two storage quotas: `internalQueueEvents` ordinary entries for chart
-raises, and additional mandatory entries sized from the compiled definition.
-Both quotas preserve the same enqueue order; mandatory events do not jump
-ahead of ordinary events.
+raises, and a mandatory floor sized from the compiled definition for one
+round of every phase. Mandatory events beyond the floor take free ordinary
+entries. Both quotas preserve the same enqueue order; mandatory events do
+not jump ahead of ordinary events.
 
 - an entry is a fixed slot: the name (an authored ID, or a name-area chunk
   for a generated segment such as an invocation ID), the data vref, and
@@ -518,6 +519,9 @@ ahead of ordinary events.
   area and back ([macrostep.md](macrostep.md#parking-one-running-workspace-and-a-park-area));
 - mandatory entries cover errors from distinct executable blocks, condition
   evaluation and data initialization, as well as platform completion events;
+- a mandatory event that fits neither the floor nor a free ordinary entry
+  ends the input as a runaway, as the chain limit does
+  ([macrostep.md](macrostep.md#sizing-mandatory-storage));
 - storage is allocated or enlarged outside macrosteps at registration, spawn
   or load, before the definition or session becomes usable. A failed allocation
   changes nothing; execution never grows the queue.
@@ -547,20 +551,20 @@ communication error, deliberately:
   `.record`), and `_event.data` names the action
   ([macrostep.md](macrostep.md#two-kinds-of-exhaustion)).
 
-**An ordinary raise cannot use mandatory storage.** When its ordinary quota
-is exhausted, the raise fails and its `error.execution.capacity.internal`
-uses mandatory storage. Failing one executable block does not suppress errors
-or execution in other blocks. The compiler must size mandatory storage for
-accumulated events across the execution, not just one microstep; the sizing
-argument and its remaining proof obligation are in
-[macrostep.md](macrostep.md#the-internal-queue-compiler-sized-mandatory-storage).
+**An ordinary raise cannot use the mandatory floor.** When its ordinary
+quota is exhausted, the raise fails and its
+`error.execution.capacity.internal` is a mandatory event: it uses the
+floor. Failing one executable block does not suppress errors or execution
+in other blocks. The floor covers one round of every phase; accumulation
+beyond it uses free ordinary entries, and an overflow is a runaway
+([macrostep.md](macrostep.md#sizing-mandatory-storage)).
 
 Ordinary mail may fill every envelope not already held as an invocation token.
 Error reporting uses internal storage; undeliverable mail reuses its own
 envelope ([Recycling](#recycling-an-envelope-that-cant-be-delivered-becomes-its-own-error)).
 This proposal does not terminate a macrostep merely because a per-microstep
-mandatory reserve cannot be restored. The compiler's whole-execution bound
-must establish that the allocated mandatory storage suffices.
+mandatory reserve cannot be restored. It ends the input as a runaway only
+when a mandatory event fits neither the floor nor a free ordinary entry.
 
 ### The abandoned block, in a chart
 

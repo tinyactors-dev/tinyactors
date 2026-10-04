@@ -154,7 +154,7 @@
         {
           "name": "runaway",
           "value": 2,
-          "doc": "the chain limit stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays"
+          "doc": "the chain limit or an internal-queue overflow stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays"
         },
         {
           "name": "abandoned",
@@ -181,7 +181,7 @@
         {
           "name": "runaway",
           "value": 2,
-          "doc": "the chain limit stopped it; core abandoned the input and the session takes its next one"
+          "doc": "the chain limit or an internal-queue overflow stopped it; core abandoned the input and the session takes its next one"
         },
         {
           "name": "abandoned",
@@ -190,6 +190,23 @@
         }
       ],
       "doc": "How an input and its invocation-startup follow-up settled."
+    },
+    {
+      "name": "runaway_cause",
+      "base": "u8",
+      "values": [
+        {
+          "name": "chain_limit",
+          "value": 1,
+          "doc": "the input’s chain reached microstepLimit"
+        },
+        {
+          "name": "internal_queue",
+          "value": 2,
+          "doc": "a mandatory internal event fit neither the floor nor a free ordinary entry"
+        }
+      ],
+      "doc": "What stopped a runaway input; tel.trace RUNAWAY carries it (reference/macrostep.md)."
     },
     {
       "name": "input_refusal_reason",
@@ -2003,6 +2020,12 @@
           "type": "u8",
           "doc": "the trace context’s detail (watched)",
           "offset": 109
+        },
+        {
+          "name": "runaway_cause",
+          "type": "runaway_cause",
+          "doc": "RUNAWAY only: what stopped the input",
+          "offset": 110
         },
         {
           "name": "address",

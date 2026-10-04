@@ -85,15 +85,20 @@ end
 enum :macrostep_status, :u8, doc: 'How a macrostep ended.' do
   value :stable, 0, 'stabilization ended; invocation startup and internal follow-up may still follow'
   value :done, 1, 'the session reached a top-level final state; c2h.finished follows'
-  value :runaway, 2, 'the chain limit stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays'
+  value :runaway, 2, 'the chain limit or an internal-queue overflow stopped it and core abandoned the input (reference/macrostep.md); the configuration after the last completed microstep stays'
   value :abandoned, 3, 'an operator abandoned it (core ADR 0082)'
 end
 
 enum :input_completion_status, :u8, doc: 'How an input and its invocation-startup follow-up settled.' do
   value :stable, 0, 'ready for another external input'
   value :done, 1, 'the session finished'
-  value :runaway, 2, 'the chain limit stopped it; core abandoned the input and the session takes its next one'
+  value :runaway, 2, 'the chain limit or an internal-queue overflow stopped it; core abandoned the input and the session takes its next one'
   value :abandoned, 3, 'an operator abandoned execution'
+end
+
+enum :runaway_cause, :u8, doc: 'What stopped a runaway input; tel.trace RUNAWAY carries it (reference/macrostep.md).' do
+  value :chain_limit, 1, 'the input’s chain reached microstepLimit'
+  value :internal_queue, 2, 'a mandatory internal event fit neither the floor nor a free ordinary entry'
 end
 
 enum :input_refusal_reason, :u8, doc: 'Why an admitted host input was discarded before take.' do
@@ -644,6 +649,7 @@ message 'tel.trace', code: 0x0301, summary: 'One trace record (core ADR 0067)' d
   field :result, :bool
   field :trace_flags, :u8, 'the trace context’s flags (sampled)'
   field :trace_detail, :u8, 'the trace context’s detail (watched)'
+  field :runaway_cause, :runaway_cause, 'RUNAWAY only: what stopped the input'
   field :address, :text, 'the session’s family/name'
   field :definition, :text, 'the definition’s document name and source, on the kinds that open a run'
   field :state_name, :text, 'the name of `state`'

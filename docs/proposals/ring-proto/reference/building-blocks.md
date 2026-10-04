@@ -113,7 +113,7 @@ composition of them, plus the policy that belongs to it alone.
 | Deadline index | B2 over envelope indices | `c2h.wake` when the head changes; due I/O sends become `c2h.send` |
 | Name area | A5 (64-byte chunks) + A6 + C3 | the field layout inside an envelope's chain (each field prefixed by a `u16` length); reserving room for a later `error.communication` |
 | Event matching | D4 + the existing matcher | none |
-| Internal queue | B4 + C3 × 2 (ordinary and mandatory quotas) | compiler sizing of the mandatory quota (still open) |
+| Internal queue | B4 + C3 × 2 (ordinary quota and mandatory floor) | the compiler sizes the floor for one round of every phase; a mandatory event takes the floor first, then a free ordinary entry, and an overflow is a runaway |
 | Macrostep slots | A5 (slot records) + C3 (per-slot c2h claim) | turn-taking by `slotSlice`; a slot that waits for c2h; the chain limit |
 | Park area | A5 (256-byte chunks) + A6 + D1 (chunk-chain sink) + D2 | "a slot that cannot park keeps the thread"; the derived ceiling |
 | Running workspace | A2 + A3 (fixed) + B4 | grows at registration for the largest definition |

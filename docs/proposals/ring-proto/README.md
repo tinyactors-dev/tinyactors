@@ -1,6 +1,6 @@
 # The ring protocol: core and host talk through shared memory
 
-**Status:** Sketch with accepted semantic refinements (2026-10-02); the chain limit makes the mandatory-event bound finite, but the arena's size remains open.
+**Status:** Sketch with accepted semantic refinements (2026-10-02); mandatory internal events have a compiler-sized floor of one round of every phase, and an overflow is a runaway.
 **Touches:** tinyactors-core (gains the rings, the envelope pool and run-time names), tinyactors-host (deleted), tinyactors-napi and tinyactors-test (become ring drivers)
 **Not an implementation plan:** accepted refinements constrain this proposal; implementation is not scheduled. ADRs and roadmaps win.
 
@@ -213,10 +213,11 @@ The scenarios run this example through:
   an input already taken keeps its own terminal record
   ([reference/envelope.md](reference/envelope.md#withdrawing-an-admitted-input)).
 - **Error storage correction:** the compiler sizes mandatory error and
-  completion storage, allocated outside macrosteps in addition to the chart's
-  ordinary internal-event quota. A single reserved error slot is insufficient.
-  The chain limit bounds it across a whole execution; the size of that
-  conservative arena is still open
+  completion storage for one round of every phase, allocated outside
+  macrosteps in addition to the chart's ordinary internal-event quota. A
+  single reserved error slot is insufficient. Mandatory events beyond the
+  floor use free ordinary entries; one that fits in neither ends the input
+  as a runaway
   ([macrostep.md](reference/macrostep.md#sizing-mandatory-storage)).
 - **Found on the way:** core interns every event name computed at run time
   into tables that only grow. Any long-running system that computes event

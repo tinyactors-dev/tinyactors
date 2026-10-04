@@ -27,8 +27,10 @@ records, and what happens when something runs out. The rings are in
    buffer has a size set when the system is created: `poolEnvelopes`,
    `nameAreaBytes`, `internalQueueEvents`, `maxConcurrentInputs`, `h2cBytes`,
    `c2hBytes`, `telBytes`, `maxRecordBytes` ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Compiler-sized
-   mandatory internal storage is additional to the ordinary
-   `internalQueueEvents` quota; its whole-execution bound is discussed below.
+   mandatory internal storage, one round of every phase, is additional to
+   the ordinary `internalQueueEvents` quota. Beyond it, mandatory events use
+   free ordinary entries, and an overflow is a runaway
+   ([below](#sizing-mandatory-storage)).
 3. **Every overflow becomes a refusal to someone who can retry.** Nobody
    keeps a hidden queue that grows. There are three who can retry:
 
@@ -317,9 +319,9 @@ the internal queue with its ordinary quota and its compiler-sized
 mandatory storage, and the frame stack. There is one per system, as there
 was under run to completion, sized for the largest registered definition.
 The system allocates it at creation, and registration grows it when a
-larger definition arrives. Its mandatory storage, the large conservative
-arena ([below](#sizing-mandatory-storage)), is paid once per system, not
-once per slot.
+larger definition arrives. Its mandatory storage, a floor of one round
+of every phase ([below](#sizing-mandatory-storage)), is paid once per
+system, not once per slot.
 
 **A parked execution** is what a slot needs to continue later:
 
@@ -387,13 +389,14 @@ can leave pages that are partly used and cannot be freed.
 
 **What you don't pay for.** A system whose macrosteps all finish within
 one slice never parks and holds only the reserve, which is itself
-allocated at the first macrostep end that needs it. The one large fixed
-cost left is the running workspace's mandatory arena, which grows with the
-chain limit. A lower `microstepLimit` for a definition makes it smaller.
-**Possible:** the compiler could derive that limit itself for a chart
-whose internal transitions (eventless transitions, `<raise>`,
+allocated at the first macrostep end that needs it. The running
+workspace's mandatory floor is one round of every phase. It does not grow
+with the chain limit.
+**Possible:** the compiler could derive a lower `microstepLimit` for a
+chart whose internal transitions (eventless transitions, `<raise>`,
 `done.state`) form no cycle, since such a chart takes a bounded number of
-steps before it needs external input.
+steps before it needs external input. It could also give such a chart an
+exact floor for its whole chain, so that the chart never overflows.
 
 **Parking happens only between top-level units.** A child's exit handlers,
 run in a nested interpreter while the parent cancels an invocation, finish
@@ -509,8 +512,8 @@ executable content:
   itself, send less (ack-clocked sending), or give up and report.
 
 Errors use compiler-sized mandatory internal storage, separate from the quota
-for ordinary raises. Its whole-execution bound comes from the chain limit
-(below); a single reserved slot does not establish this guarantee.
+for ordinary raises. Beyond that floor they use free ordinary entries; an
+error that fits in neither is a runaway (below).
 
 **Why the resource is the last segment of the name,** and not only a field
 of `_event.data`:
@@ -530,9 +533,11 @@ of `_event.data`:
 
 Internal events (`<raise>`, `done.state.*`, `error.*`) share an ordered queue,
 not the envelope pool. `internalQueueEvents` is the ordinary raise quota.
-Additional compiler-sized storage holds mandatory errors and completion
-events. A `<raise>` that exhausts the ordinary quota fails as
-`error.execution.capacity.internal` in mandatory storage. The mechanics are in
+Additional compiler-sized storage, the floor, holds mandatory errors and
+completion events. Mandatory events beyond the floor use free ordinary
+entries. A `<raise>` that exhausts the ordinary quota fails as
+`error.execution.capacity.internal`, and that error is a mandatory event.
+The mechanics are in
 [envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool).
 
 **Why not envelopes:**
@@ -566,45 +571,73 @@ Registration, spawn and load size the system and any nested interpreter
 workspace before it becomes usable, and refuse atomically if sizing or
 allocation fails. Neither quota grows during execution.
 
-**A per-phase maximum is not yet a whole-macrostep maximum.** Earlier
-mandatory events can remain queued while later microsteps append more. If a
-definition has at most `L` executed microsteps, at most `S` selection passes
-and at most `I` startup passes in one input's stabilization/startup chain,
-and the compiler bounds these phases by `E`, `C` and `V` mandatory events
-respectively, a conservative extra arena has
-`B + L*E + S*C + I*V + F` entries. `B` and `F` bound bootstrap and final or
-stop cleanup. Reserving all generated mandatory events is sufficient even
-if none have been dequeued; the ordinary quota is additional. Checked
-arithmetic and available-memory checks precede publication. Tighter
-occupancy bounds may reduce this conservative allocation.
+**The floor is one round of every phase.** The compiler bounds bootstrap
+by `B`, one microstep's independently executed blocks and data
+initialization by `E`, one selection pass by `C`, one invocation-startup
+pass by `V`, and final or stop cleanup by `F`. Mandatory storage has
+`B + E + C + V + F` entries, with checked arithmetic. It is allocated
+outside macrosteps, at registration, spawn or load, once per system in the
+running workspace and once per nested interpreter workspace. A chart that
+reads its queue as it goes never exceeds it.
 
-**The chain limit makes it finite.** `microstepLimit` used to bound only
-the microsteps of one macrostep. Selection could raise errors without
-taking a transition, so two failing guards could append errors faster than
-an internal dequeue removed them, with no microstep counted at all. A
-startup chain could also go on without end, each of its macrosteps short.
-The chain limit ([below](#runaways-the-chain-limit)) counts
-every microstep, every selection pass and every startup pass of one
-input's chain, so `L`, `S` and `I` are each at most the limit, and the
-arena above is finite.
+**Accumulation uses the ordinary quota.** Mandatory events beyond the
+floor take free entries of the ordinary `internalQueueEvents` quota
+(default 256). There is no new parameter. Mandatory and ordinary entries
+keep one FIFO order; the distinction is capacity, not priority. A chart
+that raises a lot leaves less room for its own mandatory events. That is
+the same chart's fault. A `<raise>` still fails as
+`error.execution.capacity.internal` when the ordinary quota is exhausted;
+that error is a mandatory event, so it takes the floor or a free entry.
 
-**Open:** the conservative arena is large: the limit (100,000 by default)
-times the per-phase maxima. It is paid once per system, in the running
-workspace, not once per slot; a parked slot holds only the entries
-actually pending. An implementation needs a tighter
-occupancy bound, for example from the observation that a dequeue in each
-selection pass removes one entry, before the figure is acceptable. Until
-then, the chain limit for a definition with mandatory events may need to
-be lower than the system's.
+**Overflow is a runaway.** A mandatory event that fits neither the floor
+nor a free ordinary entry ends the input as the chain limit does
+([below](#runaways-the-chain-limit)). The completion says `runaway`, and
+the `TA_TRACE_RUNAWAY` record's `runaway_cause` says `internal_queue`
+instead of `chain_limit`.
+
+**Why.** Under SCXML's ordering, eventless transitions run before the next
+internal event is taken. Mandatory events accumulate only while a chart
+keeps stepping without reading its queue. That is a runaway in all but
+name, so it gets the runaway outcome. A pause cannot make room: only the
+session drains its own queue. c2h is different, because the host drains
+it. The rule is the same as for c2h: pause where the host can free space,
+fail where only the session can. The cost is the floor plus 256 entries of
+about 48 bytes, about 12 KiB per system, instead of about 14 MB for a
+whole-chain bound of `B + L·E + S·C + I·V + F` entries at the default
+chain limit. The price: a chart whose error storm would have ended with
+more than about 256 pending events is abandoned instead of finishing.
+
+**Considered and rejected:**
+
+- **A tighter whole-chain bound by compiler analysis.** It is still linear
+  in the chain limit for a cyclic chart. It stays possible later as an
+  optimisation, for example a larger exact floor for a chart whose
+  internal transitions form no cycle.
+- **A coalesced `error.execution.capacity.internal` marker in the chart.**
+  A lost `done.state` event would change control flow. Nobody else has
+  it, and a real loop still ends at the chain limit.
+- **Run-length compression by failure site.** It only helps identical
+  runs, and error data may differ.
+- **A limit on consecutive steps without a dequeue.** A pass that dequeues
+  one event and appends two never trips it.
+- **Spilling the queue to park-area chunks and pausing.** The pause only
+  helps by buying an allocation in the middle of an input, and with one
+  slot it falls back at once.
+
+**Prior art.** Apache Commons SCXML has no bound: its list grows until
+memory runs out. XState never queues errors; it throws them. Its opt-in
+`maxIterations` (default unlimited) abandons the event and stops the actor.
+The [rebuild-1](../../rebuild-1/README.md) and [rebuild-2](../../rebuild-2/README.md)
+proposals fault the actor or wait indefinitely.
 
 ## Runaways: the chain limit
 
 A macrostep that never ends is the case core ADR 0075 exists for. Under
 slots it holds one slot, not the system, but it still needs a limit:
 
-- **memory:** the chain limit is what bounds the mandatory-event arena
-  ([above](#sizing-mandatory-storage)); without it, a guard that keeps
-  failing grows the internal queue until it is exhausted;
+- **memory:** without it, a guard that keeps failing would fill the
+  internal queue; an overflow of mandatory events is itself a runaway
+  ([above](#sizing-mandatory-storage));
 - **the thread:** a loop takes its turn in every rotation, for ever;
 - **visibility:** something has to say that the actor is broken, and its
   mail must not pile up on its deferred list for ever.
@@ -640,7 +673,9 @@ abandon at that boundary:
   gone out and stay done;
 - `c2h.macrostep_ended` and `c2h.input_completed` say `runaway`, and core
   writes the `TA_TRACE_RUNAWAY` telemetry record ADR 0075 defines, with the
-  configuration and the transitions of the looping microstep;
+  configuration and the transitions of the looping microstep, and its
+  `runaway_cause` (`chain_limit`, or `internal_queue` for a mandatory
+  overflow);
 - the slot is free, and the first envelope of the session's deferred list
   returns to the run queue at the position its arrival gives it
   ([envelope.md](envelope.md#mail-for-an-active-session)).

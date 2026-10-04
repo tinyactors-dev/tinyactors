@@ -6,9 +6,10 @@ scenarios, not a claim that the current runtime implements the protocol.
 
 The host owns scheduling, and core and host take turns on one thread. Each
 case fixes the host's posting and draining boundaries. Unless noted otherwise,
-the definition's compiler-sized mandatory storage and mandatory c2h batch
-fit the configured system. The remaining whole-execution error-storage bound
-is explicit in [macrostep.md](../reference/macrostep.md#the-internal-queue-compiler-sized-mandatory-storage).
+the definition's compiler-sized mandatory floor and mandatory c2h batch
+fit the configured system. Mandatory events beyond the floor use free
+ordinary entries, and an overflow is a runaway
+([macrostep.md](../reference/macrostep.md#sizing-mandatory-storage)).
 
 ## Lifecycle and executable blocks
 

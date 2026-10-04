@@ -112,6 +112,12 @@ typedef enum {
     TRP_INPUT_COMPLETION_STATUS_ABANDONED = 3,
 } trp_input_completion_status;
 
+/* What stopped a runaway input; tel.trace RUNAWAY carries it (reference/macrostep.md). Stored as uint8_t. */
+typedef enum {
+    TRP_RUNAWAY_CAUSE_CHAIN_LIMIT = 1,
+    TRP_RUNAWAY_CAUSE_INTERNAL_QUEUE = 2,
+} trp_runaway_cause;
+
 /* Why an admitted host input was discarded before take. Stored as uint8_t. */
 typedef enum {
     TRP_INPUT_REFUSAL_REASON_LOAD_FAILED = 1,
@@ -576,7 +582,8 @@ typedef struct {
     uint8_t result;
     uint8_t trace_flags;
     uint8_t trace_detail;
-    uint8_t pad17[2];
+    uint8_t runaway_cause; /* trp_runaway_cause */
+    uint8_t pad18[1];
     trp_span address;
     trp_span definition;
     trp_span state_name;
