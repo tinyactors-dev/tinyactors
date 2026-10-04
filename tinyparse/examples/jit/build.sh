@@ -24,4 +24,4 @@ CC="${CC:-cc}"
   -I "$PP_DIST" \
   -o "$HERE/jit" \
   "$HERE/jit.c" \
-  "$PP_DIST/libpocketparse.a" "$PP_DIST/libax.a"
+  "$PP_DIST/libpocketparse.a"

@@ -62,7 +62,7 @@ through untouched, so the codemod is conservative by construction.
 
 ## Build and run
 
-From `tools/pocketparse` (after `bash build.sh dist`):
+From `tinyparse/` (after `bash build.sh dist`):
 
 ```sh
 examples/rewriter/run.sh examples/rewriter/sample.c
@@ -70,7 +70,7 @@ examples/rewriter/run.sh examples/rewriter/sample.c
 
 `run.sh` builds the program on first use (or when its sources change), then
 runs it on the given file and prints the rewritten source to stdout. The
-build links the host dist archives — `libpocketparse.a` and `libax.a` — and
+build links the host dist archive `libpocketparse.a` and
 includes `pocketparse.h` from the dist directory.
 
 You can also build directly:

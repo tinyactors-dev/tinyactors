@@ -1,6 +1,6 @@
 ---
 date: 2026-06-20
-os: ax
+os: tinyactors
 ---
 
 # NAME
@@ -31,8 +31,8 @@ runtime, libc, malloc, a filesystem, or OS assumptions.
 The core promise is simple: give pocketparse grammar bytes and input
 bytes, and it gives back a streaming parser, a concrete syntax tree, and
 structured diagnostics. The library itself is freestanding — no libc, no
-IO, no allocation outside a host-granted memory pool — and is powered
-internally by the ax actor system. This program is the hosted command-line
+IO, no allocation outside a host-granted memory pool. This program is the
+hosted command-line
 shell around that library: it reads files, renders diagnostics, and prints.
 
 The native grammar surface is Scheme-shaped data, the `.scm` format. It is
@@ -113,8 +113,8 @@ node-types GRAMMAR [--param NAME[=VALUE]]
 
 init DIR [--amalgamation|--lib] [--grammar NAME]
 : Seed a new project in DIR. In --amalgamation mode, the default, it drops
-  the whole engine as two files — pocketparse.c, with the ax actor system
-  folded in and hidden, and pocketparse.h — alongside a starter grammar.scm,
+  the whole engine as two files — pocketparse.c and pocketparse.h —
+  alongside a starter grammar.scm,
   a main.c that compiles that grammar at runtime and dumps the parse of
   standard input, and a one-line build.sh. The seeded project then builds
   with a single `cc main.c pocketparse.c -o app` and needs no pocketparse
@@ -177,8 +177,8 @@ pocketparse man | mandoc
 
 # SEE ALSO
 
-cc(1), mandoc(1), mdc(1)
+cc(1), mandoc(1)
 
 # AUTHORS
 
-The ax project
+The tinyactors project

@@ -6,7 +6,7 @@ the cursor API. There is no intermediate AST: the one tree walk is also the code
 emitter. The bytes land in a W^X page, and the page is called.
 
 ```sh
-# from tools/pocketparse
+# from tinyparse/
 examples/jit/run.sh 'int f(int x){return x*x+1;}' f 7      # -> 50
 examples/jit/run.sh 'int fib(int n){return n<2?n:fib(n-1)+fib(n-2);}' fib 10   # -> 55
 ```
@@ -102,6 +102,6 @@ afterward.
 
 - `jit.scm` — the C-subset grammar.
 - `jit.c` — the JIT driver (parse → emit off the cursor → run).
-- `build.sh` — compiles `jit.c` against `$PP_DIST/libpocketparse.a` and
-  `$PP_DIST/libax.a`, including `$PP_DIST/pocketparse.h`.
+- `build.sh` — compiles `jit.c` against `$PP_DIST/libpocketparse.a`,
+  including `$PP_DIST/pocketparse.h`.
 - `run.sh` — build-if-needed, JIT, run.

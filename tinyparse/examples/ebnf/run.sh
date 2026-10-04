@@ -5,7 +5,7 @@
 # stdout AND writes a copy to examples/uri/uri.scm, so the URI example downstream
 # consumes a freshly generated grammar.
 #
-# Works whether cwd is tools/pocketparse (as the data tests run it) or this
+# Works whether cwd is tinyparse/ (as the data tests run it) or this
 # directory: paths are resolved from the script's own location.
 set -uo pipefail
 

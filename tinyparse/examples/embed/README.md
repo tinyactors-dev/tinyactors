@@ -37,8 +37,8 @@ pocketparse c std.json  --parser-lib --name json_parser --out json_parser.c
 
 so their entries become `host_parser_load` / `host_parser_run` and
 `json_parser_load` / `json_parser_run`, and the two units link cleanly. The
-shared runtime (`libpocketparse` + `libax`, which the leaf helpers, the CALL
-prologue, and the tree builder live in) is one archive set, linked once, so it is
+shared runtime (`libpocketparse`, which the leaf helpers, the CALL prologue, and
+the tree builder live in) is one archive, linked once, so it is
 shared — not duplicated — between the two parsers.
 
 ## How the host program embeds
@@ -65,7 +65,7 @@ artifacts (gitignored); `build.sh` regenerates them.
 ## Use
 
 ```sh
-# from tools/pocketparse
+# from tinyparse/
 bash examples/embed/build.sh
 examples/embed/embed examples/embed/sample.md
 ```
@@ -93,33 +93,30 @@ Document
 `ci/pocketparse-multiparser.sh` builds this example and asserts the output equals
 `expected.txt`, and that the linked binary carries both parsers' distinct entries.
 
-## Hiding ax in the embeddable artifact (W16-4)
+## Exporting only the parser API from the embeddable artifact (W16-4)
 
-The generated parser uses the ax actor engine internally, but a host that links the
-parser into its own application should not inherit ax: the embeddable object or
-library must export ONLY the parser's own entries (`<prefix>_load` / `<prefix>_run`)
-plus the public `pocketparse_*` API the host calls — no `ax_*`, and no
-pocketparse-internal `pp_*`.
+A host that links the parser into its own application should not inherit the
+library's internals: the embeddable object or library must export ONLY the
+parser's own entries (`<prefix>_load` / `<prefix>_run`) plus the public
+`pocketparse_*` API the host calls — no pocketparse-internal `pp_*`.
 
-`hide-ax.sh` is the recipe. It compiles the pocketparse **amalgamation**
-(`dist/amalgamation/pocketparse.c`, which folds ax in under hidden visibility) plus
-each generated parser-lib unit, and links behind a linker version script generated
+`embed-lib.sh` is the recipe. It compiles the pocketparse **amalgamation**
+(`dist/amalgamation/pocketparse.c`) plus each generated parser-lib unit, and links behind a linker version script generated
 from the `--name` prefixes that exports exactly the parser entries and
 `pocketparse_*` and localizes everything else:
 
 ```sh
-# from tools/pocketparse
-bash examples/embed/hide-ax.sh libembed.so host_parser:host.scm json_parser:std.json
-nm -D --defined-only libembed.so | grep -c ' ax_'   # -> 0
+# from the pocketparse project root
+bash examples/embed/embed-lib.sh libembed.so host_parser:host.scm json_parser:std.json
 nm -D --defined-only libembed.so | grep -cE ' pp_'  # -> 0
 nm -D --defined-only libembed.so | grep -E ' (host_parser|json_parser)_'
 #   T host_parser_load / _run, T json_parser_load / _run
 ```
 
 The emitter is unchanged — this is a link-time recipe — so the generated C is
-byte-for-byte what `--name` already produces. `ci/pocketparse-hide-ax.sh` is the
+byte-for-byte what `--name` already produces. `ci/pocketparse-exports.sh` is the
 gate: it builds the artifact (single parser and the two-parser case), asserts with
-`nm` that no `ax_*` (or internal `pp_*`) escapes while the parser API survives, and
+`nm` that the exported table is exactly the parser API plus `pocketparse_*`, and
 checks that a hardened executable still parses the sample to the golden tree.
 
 ## Scope

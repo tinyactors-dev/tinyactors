@@ -8,7 +8,7 @@
 #
 #   --prefix DIR      install root (default: $HOME/.local)
 #   --version VER     release version (default: latest GitHub release)
-#   --repo OWNER/REPO GitHub repository (default: dhamidi/ax)
+#   --repo OWNER/REPO GitHub repository (default: dhamidi/tinyactors)
 #   --from-file FILE  install from a local tarball; skips all network access
 #
 # The result is a prefix-shaped tree:
@@ -19,7 +19,7 @@
 set -eu
 
 PREFIX="${HOME:-}/.local"
-REPO="dhamidi/ax"
+REPO="dhamidi/tinyactors"
 VERSION=""
 FROM_FILE=""
 

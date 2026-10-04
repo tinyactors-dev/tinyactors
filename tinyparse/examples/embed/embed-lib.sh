@@ -1,35 +1,30 @@
 #!/usr/bin/env bash
-# examples/embed/hide-ax.sh -- build an ax-HIDDEN embeddable artifact (W16-4).
+# examples/embed/embed-lib.sh -- build an embeddable artifact that exports only
+# its intended API (W16-4).
 #
-# The generated C parser uses the ax actor engine internally -- ax is the
-# freestanding runtime the compiled parser links against -- but a host that drops
-# the parser into its own app must NOT see ax leak out: the embeddable object or
-# shared library should export ONLY the parser's own public entries (its
-# <prefix>_load / <prefix>_run) plus the public pocketparse_* API the host calls.
-# No ax_* symbol, and no pocketparse-internal pp_* symbol, belongs in the exported
-# table.
+# A host that drops generated parsers into its own app should see exactly the
+# parsers' public entries (each <prefix>_load / <prefix>_run) plus the public
+# pocketparse_* API it calls -- and none of the library's internals: no
+# pocketparse-internal pp_* symbol belongs in the exported table.
 #
 # This is the recipe that delivers that. It compiles, in ONE artifact:
-#   - the pocketparse LIBRARY AMALGAMATION (dist/amalgamation/pocketparse.c), which
-#     already folds the ax engine in under hidden visibility -- so ax_* never has
-#     default visibility to begin with;
+#   - the pocketparse LIBRARY AMALGAMATION (dist/amalgamation/pocketparse.c);
 #   - one or more generated parser-lib translation units (each `pocketparse c
 #     <grammar> --parser-lib --name <prefix>'), whose own per-rule functions are
 #     `static' already (the no-statics gate proves it), leaving only the two
 #     <prefix>_load / <prefix>_run entries external;
 # and links them behind a LINKER VERSION SCRIPT generated from the prefixes, which
 # exports exactly { <prefix>_load, <prefix>_run, ..., pocketparse_* } and localizes
-# everything else. The version script is what also hides the pocketparse-internal
-# pp_* symbols the amalgamation leaves at default visibility (it keeps them default
-# so the normal shared library exports its public API; the embedding build wants a
+# everything else. The version script is what hides the pocketparse-internal pp_*
+# symbols the amalgamation leaves at default visibility (it keeps them default so
+# the normal shared library exports its public API; the embedding build wants a
 # tighter surface, so it localizes them here). The result: `nm -D' on the shared
-# object shows the parser API and the public pocketparse_* API and NOTHING else --
-# in particular zero ax_*.
+# object shows the parser API and the public pocketparse_* API and NOTHING else.
 #
 # Usage:
-#   hide-ax.sh OUT.so PREFIX1:GRAMMAR1 [PREFIX2:GRAMMAR2 ...]
+#   embed-lib.sh OUT.so PREFIX1:GRAMMAR1 [PREFIX2:GRAMMAR2 ...]
 # e.g.
-#   hide-ax.sh libembed.so host_parser:host.scm json_parser:std.json
+#   embed-lib.sh libembed.so host_parser:host.scm json_parser:std.json
 #
 # Honours PP_ROOT/PP_DIST/PP_INC/PP_CLI when set (as examples/build.sh sets them);
 # otherwise derives them from its own location and the host platform.
@@ -52,9 +47,7 @@ PP_DIST="${PP_DIST:-$PP_ROOT/dist/$PLAT}"
 PP_CLI="${PP_CLI:-$PP_DIST/pocketparse}"
 SRC="$PP_ROOT/src"
 AMALG="$PP_ROOT/dist/amalgamation"
-# The generated parser-lib TU #includes internal.h, which #includes ax.h; ax.h
-# ships in the repo's dist/<plat>.
-AXDIR="$(cd "$PP_ROOT/../.." && pwd)/dist/$PLAT"
+# The generated parser-lib TU #includes pocketparse.h and src/internal.h.
 CC="${CC:-cc}"
 
 if [ "$#" -lt 2 ]; then
@@ -63,20 +56,20 @@ if [ "$#" -lt 2 ]; then
 fi
 OUT="$1"; shift
 
-# The amalgamation must exist (it folds ax in, hidden). Build it on demand so the
+# The amalgamation must exist. Build it on demand so the
 # recipe is self-contained.
 if [ ! -f "$AMALG/pocketparse.c" ]; then
   ( cd "$PP_ROOT" && bash amalgamate.sh ) >/dev/null 2>&1 || true
 fi
 if [ ! -f "$AMALG/pocketparse.c" ]; then
-  echo "hide-ax: amalgamation $AMALG/pocketparse.c missing (run amalgamate.sh)" >&2
+  echo "embed-lib: amalgamation $AMALG/pocketparse.c missing (run amalgamate.sh)" >&2
   exit 1
 fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# 1. Compile the amalgamated runtime (ax folded in, hidden) once.
+# 1. Compile the amalgamated runtime once.
 "$CC" -std=c11 -O2 -fPIC -c "$AMALG/pocketparse.c" -I"$AMALG" \
   -o "$WORK/pocketparse.o" || exit 1
 
@@ -88,7 +81,7 @@ for spec in "$@"; do
   prefix="${spec%%:*}"
   grammar="${spec#*:}"
   if [ -z "$prefix" ] || [ "$prefix" = "$spec" ]; then
-    echo "hide-ax: bad spec '$spec' (want PREFIX:GRAMMAR)" >&2
+    echo "embed-lib: bad spec '$spec' (want PREFIX:GRAMMAR)" >&2
     exit 2
   fi
   # A grammar argument may be a path or an embedded package name; pass it through
@@ -100,13 +93,13 @@ for spec in "$@"; do
   # The generated TU is machine output; compile it like ci/pocketparse-cc-diff.sh
   # does (no -Wall -Wextra), at -O2 -fPIC.
   "$CC" -std=c11 -O2 -fPIC -c "$WORK/$prefix.c" \
-    -I"$PP_INC" -I"$SRC" -I"$AXDIR" -o "$WORK/$prefix.o" || exit 1
+    -I"$PP_INC" -I"$SRC" -o "$WORK/$prefix.o" || exit 1
   OBJS="$OBJS $WORK/$prefix.o"
   ENTRIES="$ENTRIES ${prefix}_load; ${prefix}_run;"
 done
 
 # 3. The exported-symbol list: export each parser's two entries plus the public
-#    pocketparse_* API; localize EVERYTHING else (ax_* and pp_* internals). GNU ld
+#    pocketparse_* API; localize EVERYTHING else (the pp_* internals). GNU ld
 #    spells this a version script; the macOS linker an -exported_symbols_list.
 case "$PLAT" in
   macos-*)
@@ -130,8 +123,8 @@ case "$PLAT" in
     ;;
 esac
 
-# 4. Link the ax-hidden embeddable shared object.
+# 4. Link the embeddable shared object.
 # shellcheck disable=SC2086
 "$CC" -shared -fPIC $LINKFLAGS -o "$OUT" $OBJS || exit 1
 
-echo "hide-ax: wrote $OUT (parser entries +$(echo "$ENTRIES" | wc -w | tr -d ' ')/2 +pocketparse_*; ax hidden)"
+echo "embed-lib: wrote $OUT (parser entries +$(echo "$ENTRIES" | wc -w | tr -d ' ')/2 +pocketparse_*; internals hidden)"

@@ -5,8 +5,8 @@
 ** via the NEED_MORE_INPUT (POCKETPARSE_MORE) signal, and the tree it builds that
 ** way is byte-identical to parsing the whole input at once -- and to the VM.
 **
-** Native recursion cannot suspend mid-stack and ax has no stackful fiber (its
-** continuation is the journal), so the generated parser suspends ONLY at the
+** Native recursion cannot suspend mid-stack and there is no stackful fiber to
+** park it on, so the generated parser suspends ONLY at the
 ** SHALLOW top-level-item boundary -- the start rule's repeat of top-level forms,
 ** where the C stack is empty. Within a form it runs at full native speed. The
 ** generated <prefix>_run_chunk parses every form that completes within the buffer,
@@ -14,8 +14,8 @@
 ** again, and the parse resumes at the next form. On the final chunk (input_complete
 ** set) it finalises into the same tree a single whole run produces.
 **
-** The explicit-stack VM/actor stays the engine for arbitrary-granularity async
-** push (chunks arriving mid-form); ax picks the generated native parser for this
+** The explicit-stack VM stays the engine for arbitrary-granularity async push
+** (chunks arriving mid-form); the generated native parser serves this
 ** buffer/pull + per-item streaming. This driver exercises the native path.
 **
 ** The grammar is examples/sexpr -- start rule `Source = (seq (repeat Form) EOF)',

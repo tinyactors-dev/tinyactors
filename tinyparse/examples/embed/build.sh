@@ -25,8 +25,8 @@ if [ -z "${PP_DIST:-}" ]; then
   PP_CLI="$PP_DIST/pocketparse"
 fi
 
-# PP_ROOT is tools/pocketparse; the engine generated parser-lib TUs #include
-# "internal.h" (in src/) which #includes "ax.h" (in the repo's dist/<plat>).
+# PP_ROOT is the pocketparse project root; the generated parser-lib TUs
+# #include "internal.h" (in src/).
 PP_ROOT="${PP_ROOT:-$(cd "$HERE/../.." && pwd)}"
 SRC="$PP_ROOT/src"
 case "$(uname -s)/$(uname -m)" in
@@ -34,7 +34,6 @@ case "$(uname -s)/$(uname -m)" in
   Darwin/arm64|Darwin/aarch64) PLAT=macos-arm64 ;;
   *) PLAT=linux-x86_64 ;;
 esac
-AXDIR="$(cd "$PP_ROOT/../.." && pwd)/dist/$PLAT"
 
 CC="${CC:-cc}"
 
@@ -47,7 +46,7 @@ CC="${CC:-cc}"
   --out "$HERE/json_parser.c" || exit 1
 
 # 2. Compile and link the driver with BOTH generated parsers and the shared
-#    runtime (libpocketparse + libax is ONE shared TU set, linked once). Two
+#    runtime (libpocketparse is ONE shared archive, linked once). Two
 #    parser TUs + the shared library link cleanly with no duplicate-definition.
 #    The generated parser TUs are machine output (and #include the engine's
 #    internal.h), so they are compiled at -O2 without -Wall -Wextra, exactly as
@@ -57,5 +56,5 @@ CC="${CC:-cc}"
   "$HERE/embed.c" -I"$PP_INC" || exit 1
 "$CC" -std=c11 -O2 -o "$HERE/embed" \
   "$HERE/embed.o" "$HERE/host_parser.c" "$HERE/json_parser.c" \
-  -I"$PP_INC" -I"$SRC" -I"$AXDIR" \
-  "$PP_DIST/libpocketparse.a" "$AXDIR/libax.a"
+  -I"$PP_INC" -I"$SRC" \
+  "$PP_DIST/libpocketparse.a"
