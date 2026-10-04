@@ -2498,14 +2498,9 @@ static void ta_text_append(ta_text_builder *text, ta_str piece) {
 }
 
 static void ta_text_append_u32(ta_text_builder *text, uint32_t value) {
-    char digits[10];
-    uint32_t count = 0;
-    do {
-        digits[sizeof(digits) - 1u - count] = (char)('0' + value % 10u);
-        value /= 10u;
-        count += 1u;
-    } while (value != 0);
-    ta_text_append(text, (ta_str){ .ptr = digits + sizeof(digits) - count, .len = count });
+    char digits[TA_DEC_U64_DIGITS];
+    uint32_t count = ta_dec_write(digits, value);
+    ta_text_append(text, (ta_str){ .ptr = digits, .len = count });
 }
 
 /*

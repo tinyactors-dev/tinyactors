@@ -2671,17 +2671,9 @@ TA_PRIVATE void ta_text_put(ta_text_writer *writer, ta_str text) {
 }
 
 TA_PRIVATE void ta_text_put_u64(ta_text_writer *writer, uint64_t value) {
-    char digits[20];
-    uint32_t count = 0;
-    do {
-        digits[count++] = (char)('0' + value % 10u);
-        value /= 10u;
-    } while (value != 0);
-    char ordered[20];
-    for (uint32_t index = 0; index < count; index += 1) {
-        ordered[index] = digits[count - 1u - index];
-    }
-    ta_text_put(writer, (ta_str){ .ptr = ordered, .len = count });
+    char digits[TA_DEC_U64_DIGITS];
+    uint32_t count = ta_dec_write(digits, value);
+    ta_text_put(writer, (ta_str){ .ptr = digits, .len = count });
 }
 
 TA_PRIVATE ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed) {
@@ -6573,22 +6565,22 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
         return TA_OK;
     }
     ta_str state = ta_atom_text(&system->atoms, it->definition->states[decl->owner].name);
-    char digits[20];
-    uint32_t digit_count = 0;
-    for (uint64_t serial = it->actor->next_send_id + 1u; serial != 0 || digit_count == 0; serial /= 10u) {
-        digits[digit_count++] = (char)('0' + serial % 10u);
+    /* Measure, reserve exactly, then fill (D6): the render arena holds the text until its next reset. */
+    uint64_t serial = it->actor->next_send_id + 1u;
+    uint32_t digit_count = ta_dec_len(serial);
+    char *text = NULL;
+    uint32_t length = 0;
+    if (state.len <= UINT32_MAX - 1u - digit_count) {
+        length = state.len + 1u + digit_count;
+        text = ta_arena_alloc(&system->render, length, 1);
     }
-    uint32_t length = state.len + 1u + digit_count;
-    char *text = ta_arena_alloc(&system->render, length, 1);
     if (text == NULL) {
         ta_interpreter_render_fault(&values->fault);
         return TA_INVOKE_FAILED;
     }
     ta_mem_copy(text, state.ptr, state.len);
     text[state.len] = '.';
-    for (uint32_t index = 0; index < digit_count; index += 1) {
-        text[state.len + 1u + index] = digits[digit_count - 1u - index];
-    }
+    ta_dec_write(text + state.len + 1u, serial);
     ta_str id = { .ptr = text, .len = length };
     ta_result result = ta_invoke_core(ta_invoke_id_from_text(system, id, out));
     if (result != TA_OK || decl->id.kind != TA_ID_SOURCE_LOCATION) {
@@ -10429,14 +10421,9 @@ static void ta_text_append(ta_text_builder *text, ta_str piece) {
 }
 
 static void ta_text_append_u32(ta_text_builder *text, uint32_t value) {
-    char digits[10];
-    uint32_t count = 0;
-    do {
-        digits[sizeof(digits) - 1u - count] = (char)('0' + value % 10u);
-        value /= 10u;
-        count += 1u;
-    } while (value != 0);
-    ta_text_append(text, (ta_str){ .ptr = digits + sizeof(digits) - count, .len = count });
+    char digits[TA_DEC_U64_DIGITS];
+    uint32_t count = ta_dec_write(digits, value);
+    ta_text_append(text, (ta_str){ .ptr = digits, .len = count });
 }
 
 /*

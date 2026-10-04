@@ -1,4 +1,5 @@
 #include "types.h"
+#include "format.h"
 
 uint32_t ta_version(void) {
     return TA_VERSION;
@@ -139,17 +140,9 @@ void ta_text_put(ta_text_writer *writer, ta_str text) {
 }
 
 void ta_text_put_u64(ta_text_writer *writer, uint64_t value) {
-    char digits[20];
-    uint32_t count = 0;
-    do {
-        digits[count++] = (char)('0' + value % 10u);
-        value /= 10u;
-    } while (value != 0);
-    char ordered[20];
-    for (uint32_t index = 0; index < count; index += 1) {
-        ordered[index] = digits[count - 1u - index];
-    }
-    ta_text_put(writer, (ta_str){ .ptr = ordered, .len = count });
+    char digits[TA_DEC_U64_DIGITS];
+    uint32_t count = ta_dec_write(digits, value);
+    ta_text_put(writer, (ta_str){ .ptr = digits, .len = count });
 }
 
 ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed) {

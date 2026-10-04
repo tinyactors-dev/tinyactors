@@ -1,4 +1,5 @@
 #include "invoke.h"
+#include "format.h"
 #include "interpreter.h"
 
 /*
@@ -332,22 +333,22 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
         return TA_OK;
     }
     ta_str state = ta_atom_text(&system->atoms, it->definition->states[decl->owner].name);
-    char digits[20];
-    uint32_t digit_count = 0;
-    for (uint64_t serial = it->actor->next_send_id + 1u; serial != 0 || digit_count == 0; serial /= 10u) {
-        digits[digit_count++] = (char)('0' + serial % 10u);
+    /* Measure, reserve exactly, then fill (D6): the render arena holds the text until its next reset. */
+    uint64_t serial = it->actor->next_send_id + 1u;
+    uint32_t digit_count = ta_dec_len(serial);
+    char *text = NULL;
+    uint32_t length = 0;
+    if (state.len <= UINT32_MAX - 1u - digit_count) {
+        length = state.len + 1u + digit_count;
+        text = ta_arena_alloc(&system->render, length, 1);
     }
-    uint32_t length = state.len + 1u + digit_count;
-    char *text = ta_arena_alloc(&system->render, length, 1);
     if (text == NULL) {
         ta_interpreter_render_fault(&values->fault);
         return TA_INVOKE_FAILED;
     }
     ta_mem_copy(text, state.ptr, state.len);
     text[state.len] = '.';
-    for (uint32_t index = 0; index < digit_count; index += 1) {
-        text[state.len + 1u + index] = digits[digit_count - 1u - index];
-    }
+    ta_dec_write(text + state.len + 1u, serial);
     ta_str id = { .ptr = text, .len = length };
     ta_result result = ta_invoke_core(ta_invoke_id_from_text(system, id, out));
     if (result != TA_OK || decl->id.kind != TA_ID_SOURCE_LOCATION) {
