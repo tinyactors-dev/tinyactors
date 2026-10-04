@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures = 0;
 
@@ -28,27 +29,8 @@ static int failures = 0;
  * An allocator that counts what is outstanding
  */
 
-static long outstanding = 0;
-
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    void *memory = aligned_alloc(alignment, size == 0 ? alignment : size);
-    outstanding += memory != NULL ? 1 : 0;
-    return memory;
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    outstanding -= params->ptr != NULL ? 1 : 0;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator allocator = { .self = NULL, .v = &allocator_vtable };
+static ta_test_allocator heap;
+static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 /* ------------------------------------------------------------------------
  * Helpers
@@ -405,7 +387,7 @@ int main(void) {
     test_refuses_other_expressions();
     test_runtime_errors();
     test_literal_invoke_src();
-    CHECK(outstanding == 0);
+    CHECK(heap.stats.live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "null data model test: %d check(s) failed\n", failures);
         return 1;

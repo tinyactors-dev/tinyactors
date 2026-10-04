@@ -33,7 +33,9 @@ CRelease.release(
   checks: [%w[mise run amalgamate -- --check], %w[mise run api -- --check], %w[mise run build],
            %w[mise run --force test]],
   regenerate: [%w[mise run amalgamate], %w[mise run api]],
-  tests: PACKED_TESTS.map { |name| [name, root.join('build/objects', "#{name}.o"), []] },
+  # Each links tests/test_allocator.o beside its own object: the shared
+  # failing, counting allocator (build:tests compiles both).
+  tests: PACKED_TESTS.map { |name| [name, [root.join('build/objects', "#{name}.o"), root.join('build/objects/test_allocator.o')], []] },
   smoke: root.join('tests/release_smoke.c'),
   readme: root.join('README.md'),
   # The source tarball has the platform amalgamation too, so a source

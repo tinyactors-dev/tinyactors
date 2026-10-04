@@ -10,6 +10,7 @@
  * does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,29 +30,8 @@ static int failures = 0;
  * Host fixtures: a counting libc allocator.
  */
 
-static size_t live_blocks = 0;
-
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    void *block = aligned_alloc(alignment, size == 0 ? alignment : size);
-    live_blocks += block != NULL ? 1u : 0u;
-    return block;
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1u;
-    }
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static ta_test_allocator heap;
+static const ta_allocator test_allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 
 #define S(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
@@ -394,9 +374,9 @@ static void test_arena_allocator(void) {
     CHECK(second[199] == 'x');
 
     /* Everything goes back to the backing allocator with the arena. */
-    CHECK(live_blocks > 0);
+    CHECK(heap.stats.live_blocks > 0);
     ta_arena_destroy(&arena);
-    CHECK(live_blocks == 0);
+    CHECK(heap.stats.live_blocks == 0);
 }
 
 int main(void) {

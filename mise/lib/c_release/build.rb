@@ -256,9 +256,10 @@ module CRelease
          'architecture right'
   end
 
-  # Links each [label, object, arguments] test against the packed static and
+  # Links each [label, objects, arguments] test against the packed static and
   # shared library of the host's target, with the host's C compiler, and
-  # runs it from the project root.
+  # runs it from the project root. `objects` is one object file, or a list of
+  # them when the test links a helper object beside its own.
   def host_tests!(project, build, tests, dependencies: [])
     Toolchain::Host.current.must_run!(build[:target], 'the host tests')
     dir = build[:dir].join('host-tests')
@@ -270,8 +271,8 @@ module CRelease
       'shared' => ["-L#{lib}", "-l:#{build[:shared_name]}", "-Wl,-rpath,#{lib}",
                    *others.flat_map { |other| ["-L#{other[:shared].dirname}", "-l:#{other[:shared].basename}",
                                                "-Wl,-rpath,#{other[:shared].dirname}"] }] }.each do |kind, library|
-      tests.each do |label, object, arguments|
-        binary = Toolchain::Target.host.program([object, *library], into: dir.join("#{label}-#{kind}"))
+      tests.each do |label, objects, arguments|
+        binary = Toolchain::Target.host.program([*objects, *library], into: dir.join("#{label}-#{kind}"))
         # A dependent's shared library names its dependencies; the loader
         # finds them on the library path, as it would installed ones.
         paths = [lib, *others.map { |other| other[:shared].dirname }].join(':')

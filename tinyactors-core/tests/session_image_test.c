@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -33,26 +34,8 @@ static int failures;
 
 #define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
 
-static long live_blocks;
-
-static void *count_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    (void)alignment;
-    void *block = malloc(size == 0 ? 1 : size);
-    live_blocks += block != NULL ? 1 : 0;
-    return block;
-}
-
-static void count_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1;
-        free(params->ptr);
-    }
-}
-
-static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = count_free };
-static const ta_allocator allocator = { .self = NULL, .v = &count_vtable };
+static ta_test_allocator heap;
+static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 /* ------------------------------------------------------------------------
  * A host value that counts its references and records any use after its
@@ -215,7 +198,7 @@ int main(void) {
     test_capture_skips_a_released_external_event();
     test_capture_keeps_a_held_external_event();
     test_capture_skips_a_released_origin();
-    CHECK(live_blocks == 0);
+    CHECK(heap.stats.live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "session_image_test: %d check(s) failed\n", failures);
         return 1;

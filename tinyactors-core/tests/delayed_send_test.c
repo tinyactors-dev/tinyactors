@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -29,30 +30,8 @@ static int failures;
  * A counting libc allocator, so teardown can prove nothing leaked.
  */
 
-static long live_blocks;
-static size_t largest_block;
-static long allocations;
-
-static void *count_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    (void)alignment;
-    void *block = malloc(size);
-    allocations += 1;
-    live_blocks += block != NULL ? 1 : 0;
-    largest_block = size > largest_block ? size : largest_block;
-    return block;
-}
-
-static void count_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1;
-        free(params->ptr);
-    }
-}
-
-static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = count_free };
-static const ta_allocator allocator = { .self = NULL, .v = &count_vtable };
+static ta_test_allocator heap;
+static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 /* ------------------------------------------------------------------------
  * A router that accepts or refuses, and records what it accepted.
@@ -362,7 +341,7 @@ static void test_owner_heap_spans_pages(void) {
     }
     enum { OWNERS = 3 * 8192 + 5 };
     static ta_actor_id actors[OWNERS];
-    largest_block = 0;
+    ta_test_allocator_reset_counts(&heap);
     for (uint32_t index = 0; index < OWNERS; index += 1u) {
         CHECK(ta_system_set_time(system, index) == TA_OK);
         actors[index] = spawn(system, definitions[index % 4u], NULL);
@@ -372,7 +351,7 @@ static void test_owner_heap_spans_pages(void) {
         CHECK(ta_actor_destroy(system, actors[index]) == TA_OK);
         live -= 1u;
     }
-    CHECK(largest_block <= 65536u);
+    CHECK(heap.stats.largest_block <= 65536u);
 
     ta_time previous = 0;
     uint32_t total = 0;
@@ -634,9 +613,9 @@ static void test_withdrawing_one_send(void) {
     ta_send_id early = view.delayed_sends[0].send_id;
     CHECK(early == send_id(system, "early"));
     uint64_t cancelled = cancelled_count(system);
-    long before = allocations;
+    uint64_t before = heap.stats.attempts;
     CHECK(ta_actor_withdraw_send(system, actor, early) == TA_OK);
-    CHECK(allocations == before);
+    CHECK(heap.stats.attempts == before);
     CHECK(cancelled_count(system) == cancelled + 1u);
 
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 2);
@@ -863,7 +842,7 @@ int main(void) {
     test_withdrawing_inside_a_paused_macrostep();
     test_an_image_from_before_a_withdrawal_is_stale();
     test_an_image_from_before_a_send_fired_is_stale();
-    CHECK(live_blocks == 0);
+    CHECK(heap.stats.live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "delayed_send_test: %d check(s) failed\n", failures);
         return 1;

@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -34,30 +35,8 @@ static int failures;
 
 #define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
 
-static long live_blocks;
-static long allocations;
-
-static void *count_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    (void)alignment;
-    void *block = malloc(size);
-    if (block != NULL) {
-        live_blocks += 1;
-        allocations += 1;
-    }
-    return block;
-}
-
-static void count_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1;
-        free(params->ptr);
-    }
-}
-
-static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = count_free };
-static const ta_allocator allocator = { .self = NULL, .v = &count_vtable };
+static ta_test_allocator heap;
+static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 static bool text_is(ta_str text, const char *expected) {
     return text.ptr != NULL && text.len == strlen(expected) && memcmp(text.ptr, expected, text.len) == 0;
@@ -213,8 +192,8 @@ static void test_message_references(void) {
                                                                  .uri = STR("http://c/r/1"),
                                                                  .out = &origin }) == TA_OK);
     ta_origin_release(&origin);
-    long before = live_blocks;
-    long calls = allocations;
+    size_t before = heap.stats.live_blocks;
+    uint64_t calls = heap.stats.allocations;
 
     /* A short URI in steady state: no allocation at all. */
     for (int round = 0; round < 1000; round += 1) {
@@ -231,8 +210,8 @@ static void test_message_references(void) {
         CHECK(origin_text(system, &copy.origin, &arena, &type, &uri) == TA_OK && text_is(uri, "http://c/r/2"));
         ta_event_release(&copy);
     }
-    CHECK(allocations == calls);
-    CHECK(live_blocks == before);
+    CHECK(heap.stats.allocations == calls);
+    CHECK(heap.stats.live_blocks == before);
 
     /* A long URI spills once, and is freed with its last reference. */
     ta_event event = { .origin = {0} };
@@ -241,7 +220,7 @@ static void test_message_references(void) {
                                         .origin_class = TA_IO_ORIGIN_MESSAGE,
                                         .uri = { .ptr = long_uri, .len = (uint32_t)strlen(long_uri) },
                                         .out = &event.origin }) == TA_OK);
-    CHECK(live_blocks == before + 1);
+    CHECK(heap.stats.live_blocks == before + 1);
     ta_event copy;
     ta_event_retain(&event, &copy);
     ta_event_release(&event);
@@ -249,10 +228,10 @@ static void test_message_references(void) {
     ta_str uri = {0};
     CHECK(origin_text(system, &copy.origin, &arena, &type, &uri) == TA_OK && text_is(uri, long_uri));
     ta_event_release(&copy);
-    CHECK(live_blocks == before);
+    CHECK(heap.stats.live_blocks == before);
     ta_arena_destroy(&arena);
     ta_system_destroy(system);
-    CHECK(live_blocks == 0);
+    CHECK(heap.stats.live_blocks == 0);
 }
 
 /* ------------------------------------------------------------------------
@@ -337,13 +316,13 @@ static void test_delivery(void) {
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &warm }) == TA_OK);
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
-    long before = live_blocks;
+    size_t before = heap.stats.live_blocks;
 
     /* The actor holds the origin after the host lets go; destroy gives it back. */
     ta_event event = message_event(system, request, "ping", long_uri);
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
     ta_event_release(&event);
-    CHECK(live_blocks == before + 1);
+    CHECK(heap.stats.live_blocks == before + 1);
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(system, actor, &inspection) == TA_OK);
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
@@ -351,7 +330,7 @@ static void test_delivery(void) {
     CHECK(status == TA_RUN_STABLE);
     /* The macrostep is over, and an actor nobody invoked keeps no event
      * between macrosteps (ADR 0069), so the origin is given back. */
-    CHECK(live_blocks == before);
+    CHECK(heap.stats.live_blocks == before);
 
     /* A finished actor refuses; the host releases, and nothing is left. */
     ta_event stop = message_event(system, request, "stop", long_uri);
@@ -360,16 +339,16 @@ static void test_delivery(void) {
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
     CHECK(status == TA_RUN_DONE);
-    long finished = live_blocks;
+    size_t finished = heap.stats.live_blocks;
     ta_event late = message_event(system, request, "ping", long_uri);
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &late }) == TA_ERR_DONE);
     ta_event_release(&late);
-    CHECK(live_blocks == finished);
+    CHECK(heap.stats.live_blocks == finished);
     CHECK(ta_actor_destroy(system, actor) == TA_OK);
     /* Everything but the actor's own allocation (ADR 0063), counted in `before`. */
-    CHECK(live_blocks == before - 1);
+    CHECK(heap.stats.live_blocks == before - 1);
     ta_system_destroy(system);
-    CHECK(live_blocks == 0);
+    CHECK(heap.stats.live_blocks == 0);
 }
 
 /* ------------------------------------------------------------------------
@@ -425,7 +404,7 @@ static void test_image(void) {
 
     ta_session_image_destroy(image);
     ta_system_destroy(system);
-    CHECK(live_blocks == 0);
+    CHECK(heap.stats.live_blocks == 0);
 }
 
 int main(void) {
