@@ -2,7 +2,7 @@
 # substitution in the word list) and `for ARG` (no `in` list). Two ForClause
 # nodes; the command substitution in the first loop's list is present.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/statements__5.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/statements__5.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

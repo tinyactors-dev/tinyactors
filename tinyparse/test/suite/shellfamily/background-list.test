@@ -1,7 +1,7 @@
 # The "&" separates and backgrounds the preceding command: `sleep 1 & echo done`
 # is two simple commands joined by an "&" separator.
 <<<cmd
-printf 'sleep 1 & echo done\n' | "$PP" run std.shell --input - --dump-tree
+printf 'sleep 1 & echo done\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

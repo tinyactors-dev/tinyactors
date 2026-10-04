@@ -4,29 +4,29 @@
 #
 # A host that drops generated parsers into its own app should see exactly the
 # parsers' public entries (each <prefix>_load / <prefix>_run) plus the public
-# pocketparse_* API it calls -- and none of the library's internals: no
-# pocketparse-internal pp_* symbol belongs in the exported table.
+# tinyparse_* API it calls -- and none of the library's internals: no
+# tinyparse-internal tp_* symbol belongs in the exported table.
 #
 # This is the recipe that delivers that. It compiles, in ONE artifact:
-#   - the pocketparse LIBRARY AMALGAMATION (dist/amalgamation/pocketparse.c);
-#   - one or more generated parser-lib translation units (each `pocketparse c
+#   - the tinyparse LIBRARY AMALGAMATION (dist/amalgamation/tinyparse.c);
+#   - one or more generated parser-lib translation units (each `tinyparse c
 #     <grammar> --parser-lib --name <prefix>'), whose own per-rule functions are
 #     `static' already (the no-statics gate proves it), leaving only the two
 #     <prefix>_load / <prefix>_run entries external;
 # and links them behind a LINKER VERSION SCRIPT generated from the prefixes, which
-# exports exactly { <prefix>_load, <prefix>_run, ..., pocketparse_* } and localizes
-# everything else. The version script is what hides the pocketparse-internal pp_*
+# exports exactly { <prefix>_load, <prefix>_run, ..., tinyparse_* } and localizes
+# everything else. The version script is what hides the tinyparse-internal tp_*
 # symbols the amalgamation leaves at default visibility (it keeps them default so
 # the normal shared library exports its public API; the embedding build wants a
 # tighter surface, so it localizes them here). The result: `nm -D' on the shared
-# object shows the parser API and the public pocketparse_* API and NOTHING else.
+# object shows the parser API and the public tinyparse_* API and NOTHING else.
 #
 # Usage:
 #   embed-lib.sh OUT.so PREFIX1:GRAMMAR1 [PREFIX2:GRAMMAR2 ...]
 # e.g.
 #   embed-lib.sh libembed.so host_parser:host.scm json_parser:std.json
 #
-# Honours PP_ROOT/PP_DIST/PP_INC/PP_CLI when set (as examples/build.sh sets them);
+# Honours TP_ROOT/TP_DIST/TP_INC/TP_CLI when set (as examples/build.sh sets them);
 # otherwise derives them from its own location and the host platform.
 set -uo pipefail
 
@@ -41,13 +41,13 @@ platform() {
 }
 PLAT="$(platform)"
 
-PP_ROOT="${PP_ROOT:-$(cd "$HERE/../.." && pwd)}"
-PP_INC="${PP_INC:-$PP_ROOT/include}"
-PP_DIST="${PP_DIST:-$PP_ROOT/dist/$PLAT}"
-PP_CLI="${PP_CLI:-$PP_DIST/pocketparse}"
-SRC="$PP_ROOT/src"
-AMALG="$PP_ROOT/dist/amalgamation"
-# The generated parser-lib TU #includes pocketparse.h and src/internal.h.
+TP_ROOT="${TP_ROOT:-$(cd "$HERE/../.." && pwd)}"
+TP_INC="${TP_INC:-$TP_ROOT/include}"
+TP_DIST="${TP_DIST:-$TP_ROOT/dist/$PLAT}"
+TP_CLI="${TP_CLI:-$TP_DIST/tinyparse}"
+SRC="$TP_ROOT/src"
+AMALG="$TP_ROOT/dist/amalgamation"
+# The generated parser-lib TU #includes tinyparse.h and src/internal.h.
 CC="${CC:-cc}"
 
 if [ "$#" -lt 2 ]; then
@@ -58,11 +58,11 @@ OUT="$1"; shift
 
 # The amalgamation must exist. Build it on demand so the
 # recipe is self-contained.
-if [ ! -f "$AMALG/pocketparse.c" ]; then
-  ( cd "$PP_ROOT" && bash amalgamate.sh ) >/dev/null 2>&1 || true
+if [ ! -f "$AMALG/tinyparse.c" ]; then
+  ( cd "$TP_ROOT" && bash amalgamate.sh ) >/dev/null 2>&1 || true
 fi
-if [ ! -f "$AMALG/pocketparse.c" ]; then
-  echo "embed-lib: amalgamation $AMALG/pocketparse.c missing (run amalgamate.sh)" >&2
+if [ ! -f "$AMALG/tinyparse.c" ]; then
+  echo "embed-lib: amalgamation $AMALG/tinyparse.c missing (run amalgamate.sh)" >&2
   exit 1
 fi
 
@@ -70,12 +70,12 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # 1. Compile the amalgamated runtime once.
-"$CC" -std=c11 -O2 -fPIC -c "$AMALG/pocketparse.c" -I"$AMALG" \
-  -o "$WORK/pocketparse.o" || exit 1
+"$CC" -std=c11 -O2 -fPIC -c "$AMALG/tinyparse.c" -I"$AMALG" \
+  -o "$WORK/tinyparse.o" || exit 1
 
 # 2. Generate and compile each parser-lib TU with its own --name prefix, and
 #    collect the exported entries the version script must keep global.
-OBJS="$WORK/pocketparse.o"
+OBJS="$WORK/tinyparse.o"
 ENTRIES=""
 for spec in "$@"; do
   prefix="${spec%%:*}"
@@ -88,24 +88,24 @@ for spec in "$@"; do
   # as the CLI resolves it.
   gpath="$grammar"
   [ -f "$HERE/$grammar" ] && gpath="$HERE/$grammar"
-  "$PP_CLI" c "$gpath" --parser-lib --name "$prefix" \
+  "$TP_CLI" c "$gpath" --parser-lib --name "$prefix" \
     --out "$WORK/$prefix.c" || exit 1
-  # The generated TU is machine output; compile it like ci/pocketparse-cc-diff.sh
+  # The generated TU is machine output; compile it like ci/tinyparse-cc-diff.sh
   # does (no -Wall -Wextra), at -O2 -fPIC.
   "$CC" -std=c11 -O2 -fPIC -c "$WORK/$prefix.c" \
-    -I"$PP_INC" -I"$SRC" -o "$WORK/$prefix.o" || exit 1
+    -I"$TP_INC" -I"$SRC" -o "$WORK/$prefix.o" || exit 1
   OBJS="$OBJS $WORK/$prefix.o"
   ENTRIES="$ENTRIES ${prefix}_load; ${prefix}_run;"
 done
 
 # 3. The exported-symbol list: export each parser's two entries plus the public
-#    pocketparse_* API; localize EVERYTHING else (the pp_* internals). GNU ld
+#    tinyparse_* API; localize EVERYTHING else (the tp_* internals). GNU ld
 #    spells this a version script; the macOS linker an -exported_symbols_list.
 case "$PLAT" in
   macos-*)
     {
       for spec in "$@"; do prefix="${spec%%:*}"; echo "_${prefix}_load"; echo "_${prefix}_run"; done
-      echo "_pocketparse_*"
+      echo "_tinyparse_*"
     } > "$WORK/export.syms"
     LINKFLAGS="-Wl,-exported_symbols_list,$WORK/export.syms"
     ;;
@@ -114,7 +114,7 @@ case "$PLAT" in
       echo "{"
       echo "  global:"
       for e in $ENTRIES; do echo "    $e"; done
-      echo "    pocketparse_*;"
+      echo "    tinyparse_*;"
       echo "  local:"
       echo "    *;"
       echo "};"
@@ -127,4 +127,4 @@ esac
 # shellcheck disable=SC2086
 "$CC" -shared -fPIC $LINKFLAGS -o "$OUT" $OBJS || exit 1
 
-echo "embed-lib: wrote $OUT (parser entries +$(echo "$ENTRIES" | wc -w | tr -d ' ')/2 +pocketparse_*; internals hidden)"
+echo "embed-lib: wrote $OUT (parser entries +$(echo "$ENTRIES" | wc -w | tr -d ' ')/2 +tinyparse_*; internals hidden)"

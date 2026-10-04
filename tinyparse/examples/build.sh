@@ -7,17 +7,17 @@
 # simply stay red/xfail).
 #
 # Each example/<name>/build.sh is invoked with these environment variables:
-#   PP_ROOT   absolute path of the pocketparse project root
-#   PP_DIST   absolute path of the host-platform dist dir (libpocketparse.a and
-#             pocketparse.h live here)
-#   PP_INC    absolute path of the pocketparse include directory
-#   PP_CLI    absolute path of the built pocketparse CLI
-# An example links the host dist archives and includes $PP_DIST/pocketparse.h.
+#   TP_ROOT   absolute path of the tinyparse project root
+#   TP_DIST   absolute path of the host-platform dist dir (libtinyparse.a and
+#             tinyparse.h live here)
+#   TP_INC    absolute path of the tinyparse include directory
+#   TP_CLI    absolute path of the built tinyparse CLI
+# An example links the host dist archives and includes $TP_DIST/tinyparse.h.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-export PP_ROOT="$HERE/.."
-export PP_INC="$PP_ROOT/include"
+export TP_ROOT="$HERE/.."
+export TP_INC="$TP_ROOT/include"
 
 platform() {
   case "$(uname -s)/$(uname -m)" in
@@ -26,17 +26,17 @@ platform() {
     *) echo linux-x86_64 ;;
   esac
 }
-export PP_DIST="$PP_ROOT/dist/$(platform)"
-export PP_CLI="$PP_DIST/pocketparse"
+export TP_DIST="$TP_ROOT/dist/$(platform)"
+export TP_CLI="$TP_DIST/tinyparse"
 
 rc=0
 for d in "$HERE"/*/; do
   [ -x "$d/build.sh" ] || continue
   name="$(basename "$d")"
   if ( cd "$d" && bash build.sh ); then
-    printf '[pp-examples] built %s\n' "$name" >&2
+    printf '[tp-examples] built %s\n' "$name" >&2
   else
-    printf '[pp-examples] WARN %s failed to build (its tests stay red)\n' "$name" >&2
+    printf '[tp-examples] WARN %s failed to build (its tests stay red)\n' "$name" >&2
     rc=1
   fi
 done

@@ -1,10 +1,10 @@
 <<<cmd
 set -e
-f=.github/workflows/pocketparse.yml
+f=.github/workflows/tinyparse.yml
 test -f "$f"
 grep -q 'on:' "$f"
 grep -q 'jobs:' "$f"
-grep -q 'pocketparse-v' "$f"
+grep -q 'tinyparse-v' "$f"
 grep -q "tinyparse/" "$f"
 grep -q 'amalgamate.sh' "$f"
 grep -q 'release.sh' "$f"

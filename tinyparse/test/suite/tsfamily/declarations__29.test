@@ -1,5 +1,5 @@
 <<<cmd
-"$PP" run std.typescript --input test/suite/tsfamily/inputs/declarations__29.ts --dump-tree
+"$TP" run std.typescript --input test/suite/tsfamily/inputs/declarations__29.ts --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

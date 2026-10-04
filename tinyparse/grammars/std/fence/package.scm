@@ -6,7 +6,7 @@
 ; `json` fences, producing one composite tree with each region parsed by its own
 ; grammar. This is OUR grammar, authored here, not ported from a third party.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (package
   name: std.fence

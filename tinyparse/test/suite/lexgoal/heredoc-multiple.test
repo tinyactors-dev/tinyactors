@@ -1,5 +1,5 @@
 <<<cmd
-printf 'cat <<A <<B\naaa\nA\nbbb\nB\n' | "$PP" run examples/heredoc/heredoc.scm --input - --dump-tree
+printf 'cat <<A <<B\naaa\nA\nbbb\nB\n' | "$TP" run examples/heredoc/heredoc.scm --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

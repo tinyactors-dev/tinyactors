@@ -31,9 +31,9 @@
 ;
 ; This is OUR grammar. It is ported (the LANGUAGE, not the code) from the
 ; build-time reference reference/tree-sitter-bash; node names follow tree-sitter
-; where reasonable, rendered in CamelCase per the pocketparse convention.
+; where reasonable, rendered in CamelCase per the tinyparse convention.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module std.shell)
 

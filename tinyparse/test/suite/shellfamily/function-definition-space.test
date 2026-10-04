@@ -2,7 +2,7 @@
 # The inter-token Space is trivia, so this parses as the same FunctionDefinition
 # as `foo()`.
 <<<cmd
-printf 'foo () { echo hi; }\n' | "$PP" run std.shell --input - --dump-tree
+printf 'foo () { echo hi; }\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

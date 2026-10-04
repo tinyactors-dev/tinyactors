@@ -1,6 +1,6 @@
 ---
 name: profiling
-description: Reach for a profiler, sanitizer, or other measurement tool FIRST when a pocketparse question is about speed, memory, a hang, or a crash — instead of guessing, eyeballing, or trial-and-error (e.g. hunting for a crashing input depth by hand). Use when a parse is slow or appears to hang, when memory balloons, when something segfaults or might overflow the stack, when "is this faster?" needs an answer, or when you catch yourself sweeping a parameter to find a threshold. Covers which tool answers which question (callgrind/gprof/perf for where time goes, AddressSanitizer/UBSan for crashes and overflow, `ulimit -s` for stack bounds, getrusage/`/usr/bin/time` for peak memory) and the existing pocketparse profiling scaffold.
+description: Reach for a profiler, sanitizer, or other measurement tool FIRST when a tinyparse question is about speed, memory, a hang, or a crash — instead of guessing, eyeballing, or trial-and-error (e.g. hunting for a crashing input depth by hand). Use when a parse is slow or appears to hang, when memory balloons, when something segfaults or might overflow the stack, when "is this faster?" needs an answer, or when you catch yourself sweeping a parameter to find a threshold. Covers which tool answers which question (callgrind/gprof/perf for where time goes, AddressSanitizer/UBSan for crashes and overflow, `ulimit -s` for stack bounds, getrusage/`/usr/bin/time` for peak memory) and the existing tinyparse profiling scaffold.
 ---
 
 # Profile first; do not guess
@@ -17,15 +17,15 @@ behaviour directly.
 ## Which tool answers which question
 
 - **"Where does the time go?"** — `callgrind` (deterministic instruction counts,
-  great for a small corpus) or `gprof`/`perf` (sampled wall time). The pocketparse
+  great for a small corpus) or `gprof`/`perf` (sampled wall time). The tinyparse
   profiling scaffold is already wired: see the *Appendix: reproduce* in
   `docs/performance.md` (`bench/prof/prof_driver`, callgrind_annotate, gprof).
   Build the driver with `-O2 -g -fno-omit-frame-pointer`, run callgrind over a few
   corpus passes, read the top of `callgrind_annotate`. The hot function is named,
   not guessed.
 - **"Is this faster?"** — the benchmark harnesses, not intuition:
-  `ci/pocketparse-perf-gate.sh` (the JS-corpus ratchet),
-  `ci/pocketparse-react-bench.sh` and `ci/pocketparse-tsc-bench.sh` (the
+  `ci/tinyparse-perf-gate.sh` (the JS-corpus ratchet),
+  `ci/tinyparse-react-bench.sh` and `ci/tinyparse-tsc-bench.sh` (the
   real-workload, multi-parser comparison). Report the median, name the hardware.
 - **"Does it crash / can it overflow?"** — a sanitizer or a bound, never a manual
   depth search:

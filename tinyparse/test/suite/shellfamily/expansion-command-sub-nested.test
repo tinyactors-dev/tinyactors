@@ -1,7 +1,7 @@
 # Nested command substitution `$(echo $(date))` (POSIX §2.6.3): the inner $(…) is
 # an Expansion inside the outer body, so two CommandSubstitution nodes appear.
 <<<cmd
-printf 'echo $(echo $(date))\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo $(echo $(date))\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

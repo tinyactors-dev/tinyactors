@@ -1,7 +1,7 @@
 # An until clause: `until list; do list; done`. Same shape as while, but the
 # body runs while the condition fails.
 <<<cmd
-printf 'until c; do x; done\n' | "$PP" run std.shell --input - --dump-tree
+printf 'until c; do x; done\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

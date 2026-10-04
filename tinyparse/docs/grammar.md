@@ -1,8 +1,8 @@
-# pocketparse grammar reference (`.scm`)
+# tinyparse grammar reference (`.scm`)
 
 The native grammar surface is `.scm`: Scheme-shaped *data*, not executable
 Scheme. This documents the subset the V1 engine implements (see
-[`../pocketparse-design.md`](../pocketparse-design.md) for the full intended
+[`../tinyparse-design.md`](../tinyparse-design.md) for the full intended
 surface and the Phase 4 roadmap). Every form here is exercised by a grammar
 under [`../examples/`](../examples/); [`../examples/sexpr/sexpr.scm`](../examples/sexpr/sexpr.scm)
 is the smallest complete example.
@@ -17,7 +17,7 @@ An unterminated list or string is a reader error.
 ## Document forms
 
 ```scheme
-(pocketparse version: "0.1")     ; optional header
+(tinyparse version: "0.1")     ; optional header
 (module a.b.c)                   ; optional module name
 
 (grammar NAME
@@ -67,12 +67,12 @@ A `rule` names a non-terminal. Its body is a rule expression:
   (seq (field open: "(") (repeat Form) (field close: ")")))
 ```
 
-A field name is readable from a cursor via `pocketparse_tree_cursor_field`;
+A field name is readable from a cursor via `tinyparse_tree_cursor_field`;
 the CLI tree dump prints it.
 
 ## Hidden rules
 
-A rule wrapped in `(hidden …)` is pocketparse's equivalent of tree-sitter's
+A rule wrapped in `(hidden …)` is tinyparse's equivalent of tree-sitter's
 leading-underscore rule-name convention: its node is **omitted from the tree
 when the rule was a pure pass-through**, with its single child promoted into the
 parent in its place.
@@ -90,7 +90,7 @@ operator or second child was produced. That child is re-tagged with the field th
 hidden rule's own call site wanted (so a precedence ladder's inner `left:` is
 replaced by whatever the outer caller named) and spliced into the parent.
 
-The collapse is conditional on purpose. pocketparse's left-factored precedence
+The collapse is conditional on purpose. tinyparse's left-factored precedence
 rules do double duty — `additive_expression ::= mult (('+'|'-') mult)*` is a bare
 wrapper when no operator matched but a real binary node when one did. A hidden
 rule therefore **collapses only in its pass-through case; when it produced an
@@ -150,7 +150,7 @@ closing. The `std.javascript` family marks its comment kinds `attach: leading`;
 
 Held `leading` trivia is restored on backtracking and across the rule memo, and a
 comment at end of input is still emitted. The mechanism — a held-trivia buffer and
-the `content_end` extent mark — lives in `pp_vm_consume_extras`, `pp_vm_flush_held`,
+the `content_end` extent mark — lives in `tp_vm_consume_extras`, `tp_vm_flush_held`,
 and the node lifecycle in `src/vm.c`.
 
 ## Deferred to Phase 4

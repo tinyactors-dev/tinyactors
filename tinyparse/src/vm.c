@@ -1,12 +1,12 @@
 /*
-** vm.c -- the bytecode VM dispatch loop (W59), the pocketparse engine.
+** vm.c -- the bytecode VM dispatch loop (W59), the tinyparse engine.
 **
-** A flat dispatch loop over the bytecode pp_compile_program lowers (see
-** vmcompile.c), driving the tree builder (pp_tree_builder_*) and the token matcher
-** (pp_token_match_memo, first-byte dispatch). Since W14-5 this is the SOLE engine:
+** A flat dispatch loop over the bytecode tp_compile_program lowers (see
+** vmcompile.c), driving the tree builder (tp_tree_builder_*) and the token matcher
+** (tp_token_match_memo, first-byte dispatch). Since W14-5 this is the SOLE engine:
 ** the recursive-descent IR interpreter that once lived in parse.c was retired once
 ** the VM was the only production path. The concrete syntax tree the
-** VM builds is byte-identical to the C-compiled parser's (ci/pocketparse-cc-diff.sh),
+** VM builds is byte-identical to the C-compiled parser's (ci/tinyparse-cc-diff.sh),
 ** with the conformance suite (296 independent expected outputs) the standing
 ** correctness anchor. The VM replaces a per-node C call frame and pointer chase
 ** with one loop over a contiguous instruction stream and explicit, arena-grown
@@ -21,40 +21,40 @@
 ** and reserved words are handled by dedicated helpers below.
 **
 ** W14-6: the dispatch is now FULLY iterative. The earlier cut still C-recursed per
-** rule call (pp_vm_run -> pp_vm_run_call -> pp_vm_run), so a deeply nested input
-** overflowed the C stack. The driver below (pp_vm_run) drives EVERY combinator --
+** rule call (tp_vm_run -> tp_vm_run_call -> tp_vm_run), so a deeply nested input
+** overflowed the C stack. The driver below (tp_vm_run) drives EVERY combinator --
 ** rule calls included -- on one explicit, arena-backed frame stack, so a ~200k-deep
-** input grows the arena instead of crashing (ci/pocketparse-vm-nocrash.sh). It is
+** input grows the arena instead of crashing (ci/tinyparse-vm-nocrash.sh). It is
 ** the single source of truth: the generated compiled parser (emitparser.c) calls
-** this same pp_vm_run rather than emitting its own loop. A CALL the lowerer marks
+** this same tp_vm_run rather than emitting its own loop. A CALL the lowerer marks
 ** tail-position is exploited via FIELD/ALIAS frame reuse (see the driver comment).
 **
 ** Freestanding: every stack grows from the parse arena.
 */
 #include "internal.h"
 
-#ifdef PP_DEBUG_INTERN_GUARD
+#ifdef TP_DEBUG_INTERN_GUARD
 #include <assert.h>
 #endif
 
-/* ** The pp_vm_sink, pp_rule_slot, pp_rule_memo, pp_vm_state and pp_vm_signal
+/* ** The tp_vm_sink, tp_rule_slot, tp_rule_memo, tp_vm_state and tp_vm_signal
 ** types now live in internal.h so the compiled recursive-descent C the emitter
 ** generates (W14-3) shares the same runtime. vm.c keeps the helpers' bodies and
 ** the dispatch loop; the generated parser calls the same helpers but bakes the
-** rule structure into C control flow instead of interpreting pp_vm_run. */
+** rule structure into C control flow instead of interpreting tp_vm_run. */
 
 /* ** Append a node index to a sink, growing geometrically. Returns 0 on OOM.
 ** Geometric growth policy (start 8, double), matching the tree builder's so the
 ** arena layout and any downstream behaviour stay predictable. */
-/* ** The slow path of pp_vm_sink_push (the geometric grow), factored out so the
+/* ** The slow path of tp_vm_sink_push (the geometric grow), factored out so the
 ** inline fast path in internal.h stays a tiny append. Returns 0 on OOM. */
-int pp_vm_sink_grow(pp_arena *arena, pp_vm_sink *sink)
+int tp_vm_sink_grow(tp_arena *arena, tp_vm_sink *sink)
 {
     uint32_t nc = sink->capacity == 0 ? 8 : sink->capacity * 2;
     /* RAW: the live prefix [0,count) is copied in below and every later slot is
     ** written before it is read (count grows one at a time), so zeroing the
     ** block would be wasted (W16-1). */
-    uint32_t *grown = (uint32_t *)pp_alloc_raw(arena, nc * sizeof *grown);
+    uint32_t *grown = (uint32_t *)tp_alloc_raw(arena, nc * sizeof *grown);
     uint32_t i;
     if (grown == 0)
         return 0;
@@ -66,22 +66,22 @@ int pp_vm_sink_grow(pp_arena *arena, pp_vm_sink *sink)
 }
 
 /* ** The injection splice (W62) pushes its injection node into the active child
-** sink through a generic callback (pp_inject_run), so inject.c needs no knowledge
-** of pp_vm_sink. This bundles the arena and the sink the callback writes through. */
-typedef struct pp_vm_inject_sink {
-    pp_tree_builder *builder;
-    pp_arena        *arena;
-    pp_vm_sink      *sink;
-} pp_vm_inject_sink;
+** sink through a generic callback (tp_inject_run), so inject.c needs no knowledge
+** of tp_vm_sink. This bundles the arena and the sink the callback writes through. */
+typedef struct tp_vm_inject_sink {
+    tp_tree_builder *builder;
+    tp_arena        *arena;
+    tp_vm_sink      *sink;
+} tp_vm_inject_sink;
 
-/* ** Append callback for pp_inject_run: push one node index into the bundled VM
+/* ** Append callback for tp_inject_run: push one node index into the bundled VM
 ** sink. Returns 1 on success, 0 on allocation failure. */
-static int pp_vm_inject_sink_append(void *sink_user, uint32_t node_index)
+static int tp_vm_inject_sink_append(void *sink_user, uint32_t node_index)
 {
-    pp_vm_inject_sink *bundle = (pp_vm_inject_sink *)sink_user;
+    tp_vm_inject_sink *bundle = (tp_vm_inject_sink *)sink_user;
     if (bundle->sink == 0)
         return 1;
-    return pp_vm_sink_push(bundle->builder, bundle->arena, bundle->sink,
+    return tp_vm_sink_push(bundle->builder, bundle->arena, bundle->sink,
                            node_index);
 }
 
@@ -92,16 +92,16 @@ static int pp_vm_inject_sink_append(void *sink_user, uint32_t node_index)
 ** self-contained SNAPSHOT of the subtree it built (relocated to base 0), which
 ** replaying copies into the builder as FRESH nodes. Both verdicts are cached only
 ** when no recovery is armed, no_extras is clear, and the body emitted no
-** diagnostic. The pp_rule_slot / pp_rule_memo / pp_vm_state types now live in
+** diagnostic. The tp_rule_slot / tp_rule_memo / tp_vm_state types now live in
 ** internal.h (shared with the generated recursive-descent C). */
 
-/* ** The slot verdict codes (PP_RULE_FAIL/SUCCESS/SEEN) and the snapshot
-** threshold (PP_RULE_MEMO_MIN_SUBTREE) now live in internal.h so the generated
+/* ** The slot verdict codes (TP_RULE_FAIL/SUCCESS/SEEN) and the snapshot
+** threshold (TP_RULE_MEMO_MIN_SUBTREE) now live in internal.h so the generated
 ** compiled parser (emitparser.c), which inlines the CALL memo logic into its
 ** explicit-stack frame machine, reproduces the same verdicts byte-for-byte. */
 
-/* ** Round up to a power of two (mirrors pp_round_pow2 in token.c). */
-static uint32_t pp_vm_round_pow2(uint32_t n)
+/* ** Round up to a power of two (mirrors tp_round_pow2 in token.c). */
+static uint32_t tp_vm_round_pow2(uint32_t n)
 {
     uint32_t p = 1;
     while (p < n)
@@ -115,21 +115,21 @@ static uint32_t pp_vm_round_pow2(uint32_t n)
 ** pow2(2*input+64) for a clean parse) was the single largest memset in the profile.
 ** It is split out of the init so the COMMON CASE -- a clean, linear parse that
 ** never goes super-linear -- can skip it entirely (W17-GOAL): the memo is dormant
-** until pp_vm_call_enter flips memo_active on, and only then is the table built.
+** until tp_vm_call_enter flips memo_active on, and only then is the table built.
 ** Returns 1 if the memo is usable (capacity != 0), 0 otherwise. */
-static int pp_rule_memo_ensure(pp_rule_memo *memo)
+static int tp_rule_memo_ensure(tp_rule_memo *memo)
 {
     uint32_t cap;
     if (memo->capacity != 0)
         return 1;            /* already allocated */
-    cap = pp_vm_round_pow2(memo->pending_length * 2u + 64u);
+    cap = tp_vm_round_pow2(memo->pending_length * 2u + 64u);
     /* The slot table is RAW: read only after the `live' column reports a slot
     ** occupied, so clearing it would be a memset the parse discards. Only the
     ** one-byte-per-slot `live' column is zeroed, which marks every slot empty
     ** -- this dormant table's zeroing dominated the profile once the token memo
     ** was fixed (W15-1). */
-    memo->slots = (pp_rule_slot *)pp_alloc_raw(memo->arena, cap * sizeof *memo->slots);
-    memo->live  = (uint8_t *)pp_alloc(memo->arena, cap * sizeof *memo->live);
+    memo->slots = (tp_rule_slot *)tp_alloc_raw(memo->arena, cap * sizeof *memo->slots);
+    memo->live  = (uint8_t *)tp_alloc(memo->arena, cap * sizeof *memo->live);
     if (memo->slots == 0 || memo->live == 0) {
         memo->slots    = 0;
         memo->live     = 0;
@@ -145,10 +145,10 @@ static int pp_rule_memo_ensure(pp_rule_memo *memo)
 /* ** Prepare the rule memo for a parse WITHOUT allocating its tables: record the
 ** arena and the size the input wants, and leave the table empty (capacity 0). A
 ** clean parse, which never activates the memo, then never allocates or zeroes the
-** input-scaled `live' column at all (W17-GOAL). pp_rule_memo_ensure builds the
+** input-scaled `live' column at all (W17-GOAL). tp_rule_memo_ensure builds the
 ** tables the first time the parse goes super-linear; the differential's force-on
 ** path calls ensure right after this so the replay path is exercised. */
-static void pp_rule_memo_init(pp_rule_memo *memo, pp_arena *arena,
+static void tp_rule_memo_init(tp_rule_memo *memo, tp_arena *arena,
                               uint32_t input_length)
 {
     memo->arena          = arena;
@@ -161,7 +161,7 @@ static void pp_rule_memo_init(pp_rule_memo *memo, pp_arena *arena,
 }
 
 /* ** Hash a memo key. */
-static uint32_t pp_rule_memo_hash(uint32_t program, uint32_t offset,
+static uint32_t tp_rule_memo_hash(uint32_t program, uint32_t offset,
                                   uint32_t goal, uint32_t field, uint32_t alias)
 {
     uint32_t h = 2166136261u;
@@ -177,7 +177,7 @@ static uint32_t pp_rule_memo_hash(uint32_t program, uint32_t offset,
 ** column, not a field in the (raw) slot, so callers must ask here rather than
 ** read the slot directly -- an empty slot's fields are uninitialised (W15-1).
 ** A NULL slot (a full table) is treated as not live. */
-int pp_rule_slot_live(const pp_rule_memo *memo, const pp_rule_slot *slot)
+int tp_rule_slot_live(const tp_rule_memo *memo, const tp_rule_slot *slot)
 {
     if (slot == 0)
         return 0;
@@ -186,16 +186,16 @@ int pp_rule_slot_live(const pp_rule_memo *memo, const pp_rule_slot *slot)
 
 /* ** Probe for a key: returns the matching occupied slot, the empty slot where
 ** it would be inserted, or NULL when the table is full. Occupancy is read from
-** the `live' column (pp_rule_slot_live), never from the raw slot. */
-pp_rule_slot *pp_rule_memo_probe(pp_rule_memo *memo, uint32_t program,
+** the `live' column (tp_rule_slot_live), never from the raw slot. */
+tp_rule_slot *tp_rule_memo_probe(tp_rule_memo *memo, uint32_t program,
                                  uint32_t offset, uint32_t goal,
                                  uint32_t field, uint32_t alias)
 {
-    uint32_t i = pp_rule_memo_hash(program, offset, goal, field, alias)
+    uint32_t i = tp_rule_memo_hash(program, offset, goal, field, alias)
                  & memo->mask;
     uint32_t steps = 0;
     while (steps <= memo->mask) {
-        pp_rule_slot *slot = &memo->slots[i];
+        tp_rule_slot *slot = &memo->slots[i];
         if (!memo->live[i])
             return slot;
         if (slot->program == program && slot->offset == offset &&
@@ -209,19 +209,19 @@ pp_rule_slot *pp_rule_memo_probe(pp_rule_memo *memo, uint32_t program,
 
 /* ** Record a verdict at a probed empty slot, stopping past ~3/4 load so probe
 ** chains stay short. For a success, snapshot/snap_count/end carry the subtree. */
-void pp_rule_memo_store(pp_rule_memo *memo, pp_rule_slot *slot,
+void tp_rule_memo_store(tp_rule_memo *memo, tp_rule_slot *slot,
                         uint32_t program, uint32_t offset, uint32_t goal,
                         uint32_t field, uint32_t alias, uint8_t matched,
-                        uint32_t end, pp_node *snapshot,
+                        uint32_t end, tp_node *snapshot,
                         uint32_t snap_count)
 {
     if (slot == 0)
         return;
-    if (pp_rule_slot_live(memo, slot)) {
+    if (tp_rule_slot_live(memo, slot)) {
         /* In-place upgrade: a SEEN success becoming a snapshotted SUCCESS. The
         ** key already occupies this slot, so no new insertion and no load check. */
-        if (slot->matched == PP_RULE_SEEN && matched == PP_RULE_SUCCESS) {
-            slot->matched    = PP_RULE_SUCCESS;
+        if (slot->matched == TP_RULE_SEEN && matched == TP_RULE_SUCCESS) {
+            slot->matched    = TP_RULE_SUCCESS;
             slot->end        = end;
             slot->snapshot   = snapshot;
             slot->snap_count = snap_count;
@@ -248,24 +248,24 @@ void pp_rule_memo_store(pp_rule_memo *memo, pp_rule_slot *slot,
 ** (so the root sits at index 0). Returns the array (and its size through
 ** *out_count) or NULL on allocation failure / an empty range. The builder's own
 ** nodes are left untouched. */
-pp_node *pp_vm_snapshot_subtree(pp_tree_builder *builder, uint32_t root,
+tp_node *tp_vm_snapshot_subtree(tp_tree_builder *builder, uint32_t root,
                                 uint32_t end_count, uint32_t *out_count)
 {
     uint32_t size = end_count - root;
-    pp_node *snap;
+    tp_node *snap;
     uint32_t i;
     if (size == 0)
         return 0;
-    snap = (pp_node *)pp_alloc(builder->arena, size * sizeof *snap);
+    snap = (tp_node *)tp_alloc(builder->arena, size * sizeof *snap);
     if (snap == 0)
         return 0;
     for (i = 0; i < size; i++) {
-        pp_node n = builder->nodes[root + i];
-        if (n.parent != PP_NO_INDEX)
+        tp_node n = builder->nodes[root + i];
+        if (n.parent != TP_NO_INDEX)
             n.parent -= root;
-        if (n.first_child != PP_NO_INDEX)
+        if (n.first_child != TP_NO_INDEX)
             n.first_child -= root;
-        if (n.next_sibling != PP_NO_INDEX)
+        if (n.next_sibling != TP_NO_INDEX)
             n.next_sibling -= root;
         snap[i] = n;
     }
@@ -278,32 +278,32 @@ pp_node *pp_vm_snapshot_subtree(pp_tree_builder *builder, uint32_t root,
 ** root to the sink, and advance the cursor to the cached end offset. The copy is
 ** independent of every other use, so the caller's later link step mutates only
 ** this copy. Returns 1 on success, 0 on allocation failure. */
-int pp_vm_replay_success(pp_vm_state *state, pp_vm_sink *sink,
-                         const pp_rule_slot *slot)
+int tp_vm_replay_success(tp_vm_state *state, tp_vm_sink *sink,
+                         const tp_rule_slot *slot)
 {
-    pp_tree_builder *builder = &state->parser->builder;
+    tp_tree_builder *builder = &state->parser->builder;
     uint32_t base = builder->count;
     uint32_t i;
     for (i = 0; i < slot->snap_count; i++) {
-        const pp_node *s = &slot->snapshot[i];
-        uint32_t idx = pp_tree_builder_push(builder, s->kind, s->field,
+        const tp_node *s = &slot->snapshot[i];
+        uint32_t idx = tp_tree_builder_push(builder, s->kind, s->field,
                                             s->start_byte, s->end_byte,
-                                            PP_NO_INDEX);
-        pp_node *d;
-        if (idx == PP_NO_INDEX)
+                                            TP_NO_INDEX);
+        tp_node *d;
+        if (idx == TP_NO_INDEX)
             return 0;
         d = &builder->nodes[idx];
-        d->parent       = (s->parent == PP_NO_INDEX) ? PP_NO_INDEX
+        d->parent       = (s->parent == TP_NO_INDEX) ? TP_NO_INDEX
                                                      : s->parent + base;
-        d->first_child  = (s->first_child == PP_NO_INDEX) ? PP_NO_INDEX
+        d->first_child  = (s->first_child == TP_NO_INDEX) ? TP_NO_INDEX
                                                           : s->first_child + base;
-        d->next_sibling = (s->next_sibling == PP_NO_INDEX) ? PP_NO_INDEX
+        d->next_sibling = (s->next_sibling == TP_NO_INDEX) ? TP_NO_INDEX
                                                            : s->next_sibling + base;
         d->child_count  = s->child_count;
         d->flags        = s->flags;
         d->language_tag = s->language_tag;
     }
-    if (sink != 0 && !pp_vm_sink_push(&state->parser->builder,
+    if (sink != 0 && !tp_vm_sink_push(&state->parser->builder,
                                       state->parser->arena, sink, base))
         return 0;
     state->position = slot->end;
@@ -317,28 +317,28 @@ int pp_vm_replay_success(pp_vm_state *state, pp_vm_sink *sink,
 /* ====================================================================== */
 
 /* ** Build the grammar's token-by-symbol index (W66): an array indexed by symbol
-** id holding each token def, so pp_vm_find_token is O(1) instead of a linear scan
+** id holding each token def, so tp_vm_find_token is O(1) instead of a linear scan
 ** over the token table on every terminal match. Built once and cached on the
 ** grammar (a runtime cache like vm_program). On allocation failure the index is
-** left NULL and pp_vm_find_token falls back to the scan, so it is purely an
+** left NULL and tp_vm_find_token falls back to the scan, so it is purely an
 ** optimization. */
-static void pp_vm_build_token_index(pocketparse_grammar *grammar)
+static void tp_vm_build_token_index(tinyparse_grammar *grammar)
 {
     uint32_t i, max_symbol = 0, size;
-    pp_token_def **index;
+    tp_token_def **index;
     if (grammar->token_count == 0)
         return;
     for (i = 0; i < grammar->token_count; i++)
-        if (grammar->tokens[i].symbol != PP_NO_SYMBOL &&
+        if (grammar->tokens[i].symbol != TP_NO_SYMBOL &&
             grammar->tokens[i].symbol > max_symbol)
             max_symbol = grammar->tokens[i].symbol;
     size = max_symbol + 1;
-    index = (pp_token_def **)pp_alloc(grammar->arena, size * sizeof *index);
+    index = (tp_token_def **)tp_alloc(grammar->arena, size * sizeof *index);
     if (index == 0)
         return; /* fall back to the linear scan */
     for (i = 0; i < grammar->token_count; i++) {
         uint32_t sym = grammar->tokens[i].symbol;
-        if (sym != PP_NO_SYMBOL && sym < size)
+        if (sym != TP_NO_SYMBOL && sym < size)
             index[sym] = &grammar->tokens[i];
     }
     grammar->token_index      = index;
@@ -346,45 +346,45 @@ static void pp_vm_build_token_index(pocketparse_grammar *grammar)
 }
 
 /* ** Build the grammar's hidden-rule-by-symbol index (W17-FLAT): a byte array
-** indexed by symbol id holding 1 for a rule marked PP_RULE_HIDDEN and 0
+** indexed by symbol id holding 1 for a rule marked TP_RULE_HIDDEN and 0
 ** otherwise, so the shared node-close path resolves "is this rule hidden?" in
 ** O(1) instead of scanning the rule table per close. Built once and cached on the
 ** grammar (a runtime cache like token_index). On allocation failure the index is
-** left NULL and pp_grammar_rule_hidden returns 0, so a hidden rule simply stays
+** left NULL and tp_grammar_rule_hidden returns 0, so a hidden rule simply stays
 ** visible -- sound, merely un-collapsed. */
-static void pp_vm_build_hidden_index(pocketparse_grammar *grammar)
+static void tp_vm_build_hidden_index(tinyparse_grammar *grammar)
 {
     uint32_t i, max_symbol = 0, size, any = 0;
     uint8_t *index;
     grammar->hidden_index_built = 1;
     for (i = 0; i < grammar->rule_count; i++) {
-        if ((grammar->rules[i].flags & PP_RULE_HIDDEN) == 0)
+        if ((grammar->rules[i].flags & TP_RULE_HIDDEN) == 0)
             continue;
         any = 1;
-        if (grammar->rules[i].symbol != PP_NO_SYMBOL &&
+        if (grammar->rules[i].symbol != TP_NO_SYMBOL &&
             grammar->rules[i].symbol > max_symbol)
             max_symbol = grammar->rules[i].symbol;
     }
     if (!any)
         return; /* no hidden rule: leave the index NULL (lookup returns 0) */
     size  = max_symbol + 1;
-    index = (uint8_t *)pp_alloc(grammar->arena, size * sizeof *index);
+    index = (uint8_t *)tp_alloc(grammar->arena, size * sizeof *index);
     if (index == 0)
         return; /* fall back to treating every rule as visible */
     for (i = 0; i < size; i++)
         index[i] = 0;
     for (i = 0; i < grammar->rule_count; i++) {
         uint32_t sym = grammar->rules[i].symbol;
-        if ((grammar->rules[i].flags & PP_RULE_HIDDEN) == 0 ||
-            sym == PP_NO_SYMBOL || sym >= size)
+        if ((grammar->rules[i].flags & TP_RULE_HIDDEN) == 0 ||
+            sym == TP_NO_SYMBOL || sym >= size)
             continue;
         /* Bit 0 marks a hidden rule (the W17-FLAT exit-time collapse candidate);
         ** bit 1 additionally marks a TRANSPARENT_ALWAYS rule (W17-RECLAIM), whose
         ** wrapper node the entry path skips outright. The two share one byte array
         ** so the hot path is still a single read. */
-        index[sym] = PP_RULE_HIDDEN;
-        if (grammar->rules[i].flags & PP_RULE_TRANSPARENT_ALWAYS)
-            index[sym] |= PP_RULE_TRANSPARENT_ALWAYS;
+        index[sym] = TP_RULE_HIDDEN;
+        if (grammar->rules[i].flags & TP_RULE_TRANSPARENT_ALWAYS)
+            index[sym] |= TP_RULE_TRANSPARENT_ALWAYS;
     }
     grammar->hidden_index      = index;
     grammar->hidden_index_size = size;
@@ -393,25 +393,25 @@ static void pp_vm_build_hidden_index(pocketparse_grammar *grammar)
 /* ** Build the hidden-rule index once (W17-FLAT). Idempotent: the
 ** `hidden_index_built' flag makes a second call a no-op, so it is cheap to call
 ** unconditionally before each parse loop. */
-void pp_grammar_build_hidden_index(pocketparse_grammar *grammar)
+void tp_grammar_build_hidden_index(tinyparse_grammar *grammar)
 {
     if (!grammar->hidden_index_built)
-        pp_vm_build_hidden_index(grammar);
+        tp_vm_build_hidden_index(grammar);
 }
 
 /* ** True when `symbol' names a hidden rule (W17-FLAT): one array read against the
-** index pp_grammar_build_hidden_index already built. Returns 0 when no rule is
+** index tp_grammar_build_hidden_index already built. Returns 0 when no rule is
 ** hidden or the index was not built. */
-int pp_grammar_rule_hidden(const pocketparse_grammar *grammar, uint32_t symbol)
+int tp_grammar_rule_hidden(const tinyparse_grammar *grammar, uint32_t symbol)
 {
     if (grammar->hidden_index != 0 && symbol < grammar->hidden_index_size)
-        return (grammar->hidden_index[symbol] & PP_RULE_HIDDEN) != 0;
+        return (grammar->hidden_index[symbol] & TP_RULE_HIDDEN) != 0;
     return 0;
 }
 
 /* ** Find a token definition by symbol, or NULL. Uses the O(1) token index when
 ** built (the common case); falls back to a linear scan otherwise. */
-static const pp_token_def *pp_vm_find_token(const pocketparse_grammar *grammar,
+static const tp_token_def *tp_vm_find_token(const tinyparse_grammar *grammar,
                                             uint32_t symbol)
 {
     uint32_t i;
@@ -429,12 +429,12 @@ static const pp_token_def *pp_vm_find_token(const pocketparse_grammar *grammar,
 /* ** Resolve a terminal reference under the active lexical goal: when the active
 ** goal redirects this trigger to a different token, return that token (so the same
 ** lexeme scans differently in this context), else NULL. */
-static const pp_token_def *pp_vm_goal_redirect(const pp_vm_state *state,
+static const tp_token_def *tp_vm_goal_redirect(const tp_vm_state *state,
                                                uint32_t trigger_symbol)
 {
-    const pocketparse_grammar *grammar = state->grammar;
+    const tinyparse_grammar *grammar = state->grammar;
     uint32_t i;
-    if (state->active_goal == PP_NO_SYMBOL || grammar->lex_goal_count == 0)
+    if (state->active_goal == TP_NO_SYMBOL || grammar->lex_goal_count == 0)
         return 0;
     for (i = 0; i < grammar->lex_goal_count; i++) {
         if (grammar->lex_goals[i].goal_symbol == state->active_goal &&
@@ -460,25 +460,25 @@ static const pp_token_def *pp_vm_goal_redirect(const pp_vm_state *state,
 ** behaviour, with no special-casing here.
 **
 ** The emitted leaf KIND is the trigger symbol itself (the parametrized token), not
-** a redirect target: the instantiated literal carries PP_NO_SYMBOL, so the kind
+** a redirect target: the instantiated literal carries TP_NO_SYMBOL, so the kind
 ** must come from here. The entry's compact index (count of parametrized entries
 ** before it in lex_goals[]) selects the param stack. */
-static int pp_vm_goal_redirect_param(const pp_vm_state *state, uint32_t trigger,
-                                     const pp_ir **out_pat, uint32_t *out_kind)
+static int tp_vm_goal_redirect_param(const tp_vm_state *state, uint32_t trigger,
+                                     const tp_ir **out_pat, uint32_t *out_kind)
 {
-    const pocketparse_grammar *grammar = state->grammar;
+    const tinyparse_grammar *grammar = state->grammar;
     uint32_t i, compact = 0;
-    if (state->active_goal == PP_NO_SYMBOL || grammar->lex_goal_count == 0)
+    if (state->active_goal == TP_NO_SYMBOL || grammar->lex_goal_count == 0)
         return 0;
     for (i = 0; i < grammar->lex_goal_count; i++) {
         if (!grammar->lex_goals[i].is_parametrized) {
             /* Static entries do not consume a compact index and are handled by the
-            ** static pp_vm_goal_redirect path. */
+            ** static tp_vm_goal_redirect path. */
             continue;
         }
         if (grammar->lex_goals[i].goal_symbol == state->active_goal &&
             grammar->lex_goals[i].trigger_symbol == trigger) {
-            pp_param_stack *stack = state->parser->param_stacks
+            tp_param_stack *stack = state->parser->param_stacks
                 ? &state->parser->param_stacks[compact] : 0;
             if (stack != 0 && stack->depth > 0) {
                 *out_pat  = stack->patterns[stack->depth - 1];
@@ -494,14 +494,14 @@ static int pp_vm_goal_redirect_param(const pp_vm_state *state, uint32_t trigger,
 
 /* ** Append one held `attach: leading' trivia span, growing the buffer
 ** geometrically. Returns 1, or 0 on allocation failure. The span is NOT yet a tree
-** node -- it materializes only at the next flush (pp_vm_flush_held). */
-static int pp_vm_hold_extra(pp_vm_state *state, uint32_t symbol,
+** node -- it materializes only at the next flush (tp_vm_flush_held). */
+static int tp_vm_hold_extra(tp_vm_state *state, uint32_t symbol,
                             uint32_t start, uint32_t end)
 {
     if (state->held_count == state->held_capacity) {
         uint32_t new_cap = state->held_capacity == 0 ? 8
                                                      : state->held_capacity * 2;
-        pp_held_extra *grown = (pp_held_extra *)pp_alloc(
+        tp_held_extra *grown = (tp_held_extra *)tp_alloc(
             state->parser->arena, new_cap * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -520,18 +520,18 @@ static int pp_vm_hold_extra(pp_vm_state *state, uint32_t symbol,
 
 /* ** Flush every held `attach: leading' trivia into `sink' as leaf nodes, in held
 ** order, then clear the buffer. See the declaration in internal.h. */
-int pp_vm_flush_held(pp_vm_state *state, pp_vm_sink *sink)
+int tp_vm_flush_held(tp_vm_state *state, tp_vm_sink *sink)
 {
     uint32_t i;
     if (state->held_count == 0)
         return 1;
     for (i = 0; i < state->held_count; i++) {
-        uint32_t node = pp_tree_builder_push(
-            &state->parser->builder, state->held[i].symbol, PP_NO_SYMBOL,
-            state->held[i].start, state->held[i].end, PP_NO_INDEX);
-        if (node == PP_NO_INDEX)
+        uint32_t node = tp_tree_builder_push(
+            &state->parser->builder, state->held[i].symbol, TP_NO_SYMBOL,
+            state->held[i].start, state->held[i].end, TP_NO_INDEX);
+        if (node == TP_NO_INDEX)
             return 0;
-        if (sink != 0 && !pp_vm_sink_push(&state->parser->builder,
+        if (sink != 0 && !tp_vm_sink_push(&state->parser->builder,
                                           state->parser->arena, sink, node))
             return 0;
         /* A flushed comment IS materialized content of THIS sink (a real sibling), so
@@ -546,12 +546,12 @@ int pp_vm_flush_held(pp_vm_state *state, pp_vm_sink *sink)
 /* ** Consume extras (trivia/skip/error tokens) at the current position: trivia and
 ** error become leaf nodes appended to `sink', skip is dropped, error also raises a
 ** diagnostic; the per-position "no extras" memo short-circuits revisits. A trivia
-** kind marked `attach: leading' is HELD (pp_vm_hold_extra) instead of linked, and the
+** kind marked `attach: leading' is HELD (tp_vm_hold_extra) instead of linked, and the
 ** held buffer is flushed into `sink' at entry so a comment a closing node tried to
 ** claim re-emerges ahead of the next sibling. Returns 0 only on allocation failure. */
-int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink)
+int tp_vm_consume_extras(tp_vm_state *state, tp_vm_sink *sink)
 {
-    const pocketparse_grammar *grammar = state->grammar;
+    const tinyparse_grammar *grammar = state->grammar;
     int progress = 1;
     uint32_t start = state->position;
     int memoable;
@@ -560,7 +560,7 @@ int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink)
     ** closed lands here, ahead of the node about to fill this sink. Done before every
     ** other early return so the buffer drains at the boundary even when the cursor byte
     ** begins no further extra. */
-    if (state->held_count != 0 && !pp_vm_flush_held(state, sink))
+    if (state->held_count != 0 && !tp_vm_flush_held(state, sink))
         return 0;
     if (state->no_extras)
         return 1;
@@ -586,7 +586,7 @@ int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink)
     /* A byte that COULD begin an extra: fall to the full scan. The extras memo
     ** short-circuits a position already proven to consume no extra (e.g. a comment
     ** opener `/` that turned out to be a divide, revisited on a backtrack). */
-    memoable = (state->active_goal == PP_NO_SYMBOL &&
+    memoable = (state->active_goal == TP_NO_SYMBOL &&
                 state->extras_memo.marks != 0 &&
                 start < state->extras_memo.length);
     if (memoable && state->extras_memo.marks[start] != 0)
@@ -598,13 +598,13 @@ int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink)
     **
     ** W18-EXTRAS: the baked scanner runs REGARDLESS of the active lexical goal. A
     ** lexical goal is purely about a TERMINAL REFERENCE in a rule body: under a goal,
-    ** pp_vm_goal_redirect rewrites a trigger terminal to a different token (the
+    ** tp_vm_goal_redirect rewrites a trigger terminal to a different token (the
     ** regex-vs-divide, template-body, JSX-text mechanism). An EXTRA is never a goal
     ** trigger nor target -- the extras loop matches each extra's fixed pattern
     ** directly and never redirects -- so which bytes are trivia (whitespace,
     ** comments) does not depend on the goal at all. The generic fallback below even
-    ** passes memo=0, so the `goal' it forwards to pp_token_match_memo (which uses it
-    ** only as a memo-probe key) is dead. The earlier `active_goal == PP_NO_SYMBOL'
+    ** passes memo=0, so the `goal' it forwards to tp_token_match_memo (which uses it
+    ** only as a memo-probe key) is dead. The earlier `active_goal == TP_NO_SYMBOL'
     ** guard was therefore conservative, not load-bearing: the baked scanner and the
     ** generic loop produce byte-identical spans in both the goal and no-goal cases.
     ** Dropping the guard lets the straight-line scanner replace the per-extra
@@ -621,8 +621,8 @@ int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink)
                 break;
             if (end == state->position)
                 break;
-            if (grammar->extras[e].policy == PP_EXTRA_TRIVIA &&
-                (grammar->extras[e].attach == PP_EXTRA_ATTACH_LEADING ||
+            if (grammar->extras[e].policy == TP_EXTRA_TRIVIA &&
+                (grammar->extras[e].attach == TP_EXTRA_ATTACH_LEADING ||
                  state->held_count != 0)) {
                 /* Hold this span when it is `attach: leading' OR when a leading comment
                 ** is already held: everything after a held comment belongs to the NEXT
@@ -630,20 +630,20 @@ int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink)
                 ** floated comment and overlap it. Both re-emerge in held order at the
                 ** next sibling boundary. content_end does NOT advance -- these bytes are
                 ** not content of the node now closing. */
-                if (!pp_vm_hold_extra(state, grammar->extras[e].token_symbol,
+                if (!tp_vm_hold_extra(state, grammar->extras[e].token_symbol,
                                       state->position, end))
                     return 0;
             } else {
-                if (grammar->extras[e].policy != PP_EXTRA_SKIP) {
-                    uint32_t node = pp_tree_builder_push(
+                if (grammar->extras[e].policy != TP_EXTRA_SKIP) {
+                    uint32_t node = tp_tree_builder_push(
                         &state->parser->builder, grammar->extras[e].token_symbol,
-                        PP_NO_SYMBOL, state->position, end, PP_NO_INDEX);
-                    if (node == PP_NO_INDEX)
+                        TP_NO_SYMBOL, state->position, end, TP_NO_INDEX);
+                    if (node == TP_NO_INDEX)
                         return 0;
-                    if (sink != 0 && !pp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
+                    if (sink != 0 && !tp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
                         return 0;
-                    if (grammar->extras[e].policy == PP_EXTRA_ERROR)
-                        pp_diag_error(&state->parser->diagnostics, "extra.error",
+                    if (grammar->extras[e].policy == TP_EXTRA_ERROR)
+                        tp_diag_error(&state->parser->diagnostics, "extra.error",
                                       "error: unexpected input",
                                       state->position, end, "unexpected here");
                 }
@@ -662,8 +662,8 @@ int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink)
         uint32_t e;
         progress = 0;
         for (e = 0; e < grammar->extra_count; e++) {
-            const pp_token_def *token =
-                pp_vm_find_token(grammar, grammar->extras[e].token_symbol);
+            const tp_token_def *token =
+                tp_vm_find_token(grammar, grammar->extras[e].token_symbol);
             uint32_t end;
             if (token == 0)
                 continue;
@@ -674,32 +674,32 @@ int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink)
             ** token memo's probe/store here was near-pure churn -- measured ~6%
             ** faster on the React corpus to skip it. The verdict is identical
             ** (the memo is a pure cache), so cc-diff stays byte-for-byte. The
-            ** terminal path (pp_vm_terminal) KEEPS the token memo, where it hits ~43%
+            ** terminal path (tp_vm_terminal) KEEPS the token memo, where it hits ~43%
             ** of the time on the same corpus and genuinely saves re-matches. */
-            if (!pp_token_match_memo(state->parser->engine, token->pattern,
+            if (!tp_token_match_memo(state->parser->engine, token->pattern,
                                      state->input, state->length, state->position,
                                      state->active_goal, 0, &end))
                 continue;
             if (end == state->position)
                 continue;
-            if (grammar->extras[e].policy == PP_EXTRA_TRIVIA &&
-                (grammar->extras[e].attach == PP_EXTRA_ATTACH_LEADING ||
+            if (grammar->extras[e].policy == TP_EXTRA_TRIVIA &&
+                (grammar->extras[e].attach == TP_EXTRA_ATTACH_LEADING ||
                  state->held_count != 0)) {
                 /* `attach: leading', or any trivia after a held comment: hold it (see
                 ** the baked branch above); content_end does NOT advance across it. */
-                if (!pp_vm_hold_extra(state, token->symbol, state->position, end))
+                if (!tp_vm_hold_extra(state, token->symbol, state->position, end))
                     return 0;
             } else {
-                if (grammar->extras[e].policy != PP_EXTRA_SKIP) {
-                    uint32_t node = pp_tree_builder_push(
-                        &state->parser->builder, token->symbol, PP_NO_SYMBOL,
-                        state->position, end, PP_NO_INDEX);
-                    if (node == PP_NO_INDEX)
+                if (grammar->extras[e].policy != TP_EXTRA_SKIP) {
+                    uint32_t node = tp_tree_builder_push(
+                        &state->parser->builder, token->symbol, TP_NO_SYMBOL,
+                        state->position, end, TP_NO_INDEX);
+                    if (node == TP_NO_INDEX)
                         return 0;
-                    if (sink != 0 && !pp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
+                    if (sink != 0 && !tp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
                         return 0;
-                    if (grammar->extras[e].policy == PP_EXTRA_ERROR)
-                        pp_diag_error(&state->parser->diagnostics, "extra.error",
+                    if (grammar->extras[e].policy == TP_EXTRA_ERROR)
+                        tp_diag_error(&state->parser->diagnostics, "extra.error",
                                       "error: unexpected input",
                                       state->position, end, "unexpected here");
                 }
@@ -718,23 +718,23 @@ int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink)
 /* ** Synthesize the active recover node's insert: a zero-width MISSING node of the
 ** recover kind at the cursor, appended to the sink, plus the author-supplied
 ** diagnostic on the first fire. */
-int pp_vm_recover_insert(pp_vm_state *state, pp_vm_sink *sink)
+int tp_vm_recover_insert(tp_vm_state *state, tp_vm_sink *sink)
 {
-    const pp_ir *r = state->recover;
+    const tp_ir *r = state->recover;
     uint32_t     kind = r->symbol;
     uint32_t     at = state->position;
-    uint32_t     node = pp_tree_builder_push(&state->parser->builder, kind,
-                                             PP_NO_SYMBOL, at, at, PP_NO_INDEX);
-    if (node == PP_NO_INDEX)
+    uint32_t     node = tp_tree_builder_push(&state->parser->builder, kind,
+                                             TP_NO_SYMBOL, at, at, TP_NO_INDEX);
+    if (node == TP_NO_INDEX)
         return 0;
-    state->parser->builder.nodes[node].flags |= PP_NODE_MISSING;
-    if (sink != 0 && !pp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
+    state->parser->builder.nodes[node].flags |= TP_NODE_MISSING;
+    if (sink != 0 && !tp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
         return 0;
     if (at > state->content_end) /* a recovery insert is materialized content */
         state->content_end = at;
     if (!state->recover_fired) {
         state->recover_fired = 1;
-        pp_diag_recover(&state->parser->diagnostics, r->recover_message,
+        tp_diag_recover(&state->parser->diagnostics, r->recover_message,
                         r->recover_help, r->recover_label, at, at);
     }
     return 1;
@@ -742,18 +742,18 @@ int pp_vm_recover_insert(pp_vm_state *state, pp_vm_sink *sink)
 
 /* ** Link a vector of child indices into a parent node, wiring each child's
 ** parent/sibling links and extending the parent's byte span to cover them. */
-void pp_vm_link_children(pp_tree_builder *builder, uint32_t parent,
-                         const pp_vm_sink *children)
+void tp_vm_link_children(tp_tree_builder *builder, uint32_t parent,
+                         const tp_vm_sink *children)
 {
-    pp_node *p = &builder->nodes[parent];
+    tp_node *p = &builder->nodes[parent];
     uint32_t i;
     p->child_count = children->count;
-    p->first_child = children->count > 0 ? children->items[0] : PP_NO_INDEX;
+    p->first_child = children->count > 0 ? children->items[0] : TP_NO_INDEX;
     for (i = 0; i < children->count; i++) {
-        pp_node *child = &builder->nodes[children->items[i]];
+        tp_node *child = &builder->nodes[children->items[i]];
         child->parent = parent;
         child->next_sibling = (i + 1 < children->count)
-                                  ? children->items[i + 1] : PP_NO_INDEX;
+                                  ? children->items[i + 1] : TP_NO_INDEX;
     }
     if (children->count > 0) {
         uint32_t first = children->items[0];
@@ -769,155 +769,155 @@ void pp_vm_link_children(pp_tree_builder *builder, uint32_t parent,
 
 /* ** Emit a rule/token trace event by symbol name, gated on a plug being
 ** installed (with no plug the seam costs one pointer compare). */
-void pp_vm_trace_symbol(pp_vm_state *state, const char *event,
+void tp_vm_trace_symbol(tp_vm_state *state, const char *event,
                         uint32_t symbol)
 {
-    pocketparse_string name;
+    tinyparse_string name;
     if (state->parser->engine->plug_count == 0)
         return;
-    name = pp_intern_name(&state->grammar->interner, symbol);
-    pp_trace(state->parser->engine, event, name);
+    name = tp_intern_name(&state->grammar->interner, symbol);
+    tp_trace(state->parser->engine, event, name);
 }
 
 /* ** Match a terminal at the cursor after consuming leading extras and emit a
-** leaf, exactly as pp_parse_terminal does. Returns 1 on a match (cursor advanced,
+** leaf, exactly as tp_parse_terminal does. Returns 1 on a match (cursor advanced,
 ** leaf emitted into `sink'), 0 on no-match, -1 on allocation failure. */
-static int pp_vm_terminal(pp_vm_state *state, const pp_ir *pattern, uint32_t kind,
-                          pp_vm_sink *sink, uint32_t field, uint32_t alias)
+static int tp_vm_terminal(tp_vm_state *state, const tp_ir *pattern, uint32_t kind,
+                          tp_vm_sink *sink, uint32_t field, uint32_t alias)
 {
     uint32_t end;
     uint32_t node;
-    uint32_t emit_kind = (alias != PP_NO_SYMBOL) ? alias : kind;
+    uint32_t emit_kind = (alias != TP_NO_SYMBOL) ? alias : kind;
     if (pattern == 0)
         return 0;
-    if (!pp_vm_consume_extras(state, sink))
+    if (!tp_vm_consume_extras(state, sink))
         return -1;
     /* W16-GOAL: match the terminal WITHOUT the per-position token memo (pass 0).
     ** On a clean predictive parse the first-byte dispatch + jump-threaded token
-    ** bytecode (pp_token_run) is so cheap that the memo's hash, random-access slot
+    ** bytecode (tp_token_run) is so cheap that the memo's hash, random-access slot
     ** probe, and store cost MORE than simply re-running the matcher -- and the memo
     ** churn thrashes the cache. Measured ~38% faster on the React corpus to skip it.
     ** The verdict is identical (a pure cache), so cc-diff stays byte-for-byte.
     ** Pathological backtracking is still bounded: once a parse goes super-linear the
-    ** rule memo (pp_rule_memo) wakes and short-circuits re-descent, so a terminal is
+    ** rule memo (tp_rule_memo) wakes and short-circuits re-descent, so a terminal is
     ** not re-matched unboundedly even without its own memo. */
-    if (!pp_token_match_memo(state->parser->engine, (pp_ir *)pattern, state->input,
+    if (!tp_token_match_memo(state->parser->engine, (tp_ir *)pattern, state->input,
                              state->length, state->position, state->active_goal,
                              0, &end))
         return 0;
-    node = pp_tree_builder_push(&state->parser->builder, emit_kind, field,
-                                state->position, end, PP_NO_INDEX);
-    if (node == PP_NO_INDEX)
+    node = tp_tree_builder_push(&state->parser->builder, emit_kind, field,
+                                state->position, end, TP_NO_INDEX);
+    if (node == TP_NO_INDEX)
         return -1;
     state->position = end;
     state->content_end = end; /* a real token leaf is materialized content */
-    pp_vm_trace_symbol(state, "token", emit_kind);
-    if (sink && !pp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
+    tp_vm_trace_symbol(state, "token", emit_kind);
+    if (sink && !tp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
         return -1;
     return 1;
 }
 
 /* ** Match a terminal whose pattern is matched by a BAKED per-token matcher
-** (W17-2): the generated parser's scan_<token> functions reproduce pp_match_ir for
+** (W17-2): the generated parser's scan_<token> functions reproduce tp_match_ir for
 ** their token's pattern as straight-line C and pass that pure matcher here, so the
-** generic token VM (pp_token_run, the ~30% profile slice) is replaced by the
-** straight-line code a hand lexer is. Byte-identical to pp_vm_terminal by
+** generic token VM (tp_token_run, the ~30% profile slice) is replaced by the
+** straight-line code a hand lexer is. Byte-identical to tp_vm_terminal by
 ** construction: the extras consume, the lexical-goal redirect, the leaf push and the
 ** cursor advance are this same shared logic; only the inner "where does the token end"
-** call changes -- and the baked matcher returns the IDENTICAL end offset pp_token_run
-** would (both mirror pp_match_ir). `kind' is the token's kind symbol and `pattern'
+** call changes -- and the baked matcher returns the IDENTICAL end offset tp_token_run
+** would (both mirror tp_match_ir). `kind' is the token's kind symbol and `pattern'
 ** its IR (needed to detect a goal redirect: a redirect keys on the token symbol, and
 ** when one is active the redirected token is matched through the generic path, exactly
-** as pp_vm_do_match_pattern does -- the baked fast path covers only the common,
+** as tp_vm_do_match_pattern does -- the baked fast path covers only the common,
 ** no-redirect case, so soundness is total). Returns 1 match, 0 no-match, -1 OOM. */
-int pp_vm_terminal_baked(pp_vm_state *state, pp_ir *pattern, uint32_t kind,
-                         pp_vm_sink *sink, uint32_t field, uint32_t alias,
-                         int (*matchfn)(const pocketparse_engine *,
+int tp_vm_terminal_baked(tp_vm_state *state, tp_ir *pattern, uint32_t kind,
+                         tp_vm_sink *sink, uint32_t field, uint32_t alias,
+                         int (*matchfn)(const tinyparse_engine *,
                                         const uint8_t *, uint32_t, uint32_t,
                                         uint32_t *))
 {
     uint32_t end;
     uint32_t node;
-    uint32_t emit_kind = (alias != PP_NO_SYMBOL) ? alias : kind;
-    /* pp_vm_extras is the inline fast-reject wrapper (W17-GOAL): the dominant
+    uint32_t emit_kind = (alias != TP_NO_SYMBOL) ? alias : kind;
+    /* tp_vm_extras is the inline fast-reject wrapper (W17-GOAL): the dominant
     ** "no extra at this byte" position is proven and skipped inline, byte-identically
-    ** to pp_vm_consume_extras, without the cross-TU call. This path is generated-only
-    ** (the VM's terminal keeps pp_vm_consume_extras, the cc-diff reference). */
-    if (!pp_vm_extras(state, sink))
+    ** to tp_vm_consume_extras, without the cross-TU call. This path is generated-only
+    ** (the VM's terminal keeps tp_vm_consume_extras, the cc-diff reference). */
+    if (!tp_vm_extras(state, sink))
         return -1;
     /* A lexical-goal redirect (the regex-vs-divide / heredoc mechanism) keys on the
     ** token symbol. When one is active for this kind, the SAME byte scans as a
     ** different token, so the baked matcher (which is this token's pattern) does not
     ** apply -- fall back to the generic terminal on the redirect's pattern, exactly as
-    ** pp_vm_do_match_pattern does. This is cold (only inside a (goal ...) scope). */
-    if (kind != PP_NO_SYMBOL && state->active_goal != PP_NO_SYMBOL) {
-        const pp_token_def *redirect;
-        const pp_ir *param_pat;
+    ** tp_vm_do_match_pattern does. This is cold (only inside a (goal ...) scope). */
+    if (kind != TP_NO_SYMBOL && state->active_goal != TP_NO_SYMBOL) {
+        const tp_token_def *redirect;
+        const tp_ir *param_pat;
         uint32_t param_kind;
         /* Phase 8: parametrized goal entry first (the live heredoc delimiter). */
-        if (pp_vm_goal_redirect_param(state, kind, &param_pat, &param_kind))
-            return pp_vm_terminal(state, param_pat, param_kind,
+        if (tp_vm_goal_redirect_param(state, kind, &param_pat, &param_kind))
+            return tp_vm_terminal(state, param_pat, param_kind,
                                   sink, field, alias);
-        redirect = pp_vm_goal_redirect(state, kind);
+        redirect = tp_vm_goal_redirect(state, kind);
         if (redirect != 0)
-            return pp_vm_terminal(state, redirect->pattern, redirect->symbol,
+            return tp_vm_terminal(state, redirect->pattern, redirect->symbol,
                                   sink, field, alias);
     }
     (void)pattern;
     if (!matchfn(state->parser->engine, state->input, state->length,
                  state->position, &end))
         return 0;
-    node = pp_tree_builder_push(&state->parser->builder, emit_kind, field,
-                                state->position, end, PP_NO_INDEX);
-    if (node == PP_NO_INDEX)
+    node = tp_tree_builder_push(&state->parser->builder, emit_kind, field,
+                                state->position, end, TP_NO_INDEX);
+    if (node == TP_NO_INDEX)
         return -1;
     state->position = end;
     state->content_end = end; /* a real token leaf is materialized content */
-    pp_vm_trace_symbol(state, "token", emit_kind);
-    if (sink && !pp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
+    tp_vm_trace_symbol(state, "token", emit_kind);
+    if (sink && !tp_vm_sink_push(&state->parser->builder, state->parser->arena, sink, node))
         return -1;
     return 1;
 }
 
 /* ** Run a MATCH given its pattern/kind directly (the instruction-free form the
-** generated recursive descent calls; the VM's PP_VM_MATCH case forwards to it).
+** generated recursive descent calls; the VM's TP_VM_MATCH case forwards to it).
 ** A token reference, literal, or unresolved reference: a token reference applies
 ** the active lexical-goal redirect; a bare literal does not. Returns 1 match,
 ** 0 no-match, -1 OOM. */
-int pp_vm_do_match_pattern(pp_vm_state *state, pp_ir *pattern, uint32_t kind,
-                           pp_vm_sink *sink, uint32_t field, uint32_t alias)
+int tp_vm_do_match_pattern(tp_vm_state *state, tp_ir *pattern, uint32_t kind,
+                           tp_vm_sink *sink, uint32_t field, uint32_t alias)
 {
     if (pattern == 0)
         return 0;
     /* Only a token reference (one whose symbol names a grammar token) is subject
     ** to goal redirection. A literal's pattern is its own bytes and its kind is the
     ** literal text; a bare literal is never goal-redirected. */
-    if (kind != PP_NO_SYMBOL) {
-        const pp_token_def *token = pp_vm_find_token(state->grammar, kind);
+    if (kind != TP_NO_SYMBOL) {
+        const tp_token_def *token = tp_vm_find_token(state->grammar, kind);
         if (token != 0 && token->pattern == pattern) {
-            const pp_token_def *redirect;
-            const pp_ir *param_pat;
+            const tp_token_def *redirect;
+            const tp_ir *param_pat;
             uint32_t param_kind;
             /* Phase 8: a parametrized goal entry takes precedence -- its live
             ** instantiated pattern (the captured heredoc delimiter) overrides the
             ** token's empty base pattern when one is on the stack. */
-            if (pp_vm_goal_redirect_param(state, kind, &param_pat, &param_kind))
-                return pp_vm_terminal(state, param_pat, param_kind,
+            if (tp_vm_goal_redirect_param(state, kind, &param_pat, &param_kind))
+                return tp_vm_terminal(state, param_pat, param_kind,
                                       sink, field, alias);
-            redirect = pp_vm_goal_redirect(state, kind);
+            redirect = tp_vm_goal_redirect(state, kind);
             if (redirect != 0)
-                return pp_vm_terminal(state, redirect->pattern, redirect->symbol,
+                return tp_vm_terminal(state, redirect->pattern, redirect->symbol,
                                       sink, field, alias);
         }
     }
-    return pp_vm_terminal(state, pattern, kind, sink, field, alias);
+    return tp_vm_terminal(state, pattern, kind, sink, field, alias);
 }
 
-/* ** Run the MATCH instruction: forwards to pp_vm_do_match_pattern. */
-static int pp_vm_do_match(pp_vm_state *state, const pp_instruction *in,
-                          pp_vm_sink *sink, uint32_t field, uint32_t alias)
+/* ** Run the MATCH instruction: forwards to tp_vm_do_match_pattern. */
+static int tp_vm_do_match(tp_vm_state *state, const tp_instruction *in,
+                          tp_vm_sink *sink, uint32_t field, uint32_t alias)
 {
-    return pp_vm_do_match_pattern(state, in->pattern, in->symbol, sink,
+    return tp_vm_do_match_pattern(state, in->pattern, in->symbol, sink,
                                   field, alias);
 }
 
@@ -925,18 +925,18 @@ static int pp_vm_do_match(pp_vm_state *state, const pp_instruction *in,
 ** generated recursive descent calls): an anonymous one-byte operator used in a
 ** rule body (any/class/class-name/not/not-keyword). Consumes extras, matches, and
 ** advances WITHOUT emitting a node. Returns 1 match, 0 no-match, -1 OOM. */
-int pp_vm_do_byte_pattern(pp_vm_state *state, pp_ir *pattern, pp_vm_sink *sink)
+int tp_vm_do_byte_pattern(tp_vm_state *state, tp_ir *pattern, tp_vm_sink *sink)
 {
     uint32_t end;
     if (pattern == 0)
         return 0;
-    if (!pp_vm_consume_extras(state, sink))
+    if (!tp_vm_consume_extras(state, sink))
         return -1;
     /* W16-GOAL: like the terminal path, match WITHOUT the per-position token memo
     ** (pass 0). On the clean predictive parse the memo churned the cache faster than
     ** it saved re-matches; the verdict is identical (a pure cache), so cc-diff stays
     ** byte-for-byte. The rule memo still bounds pathological backtracking. */
-    if (!pp_token_match_memo(state->parser->engine, pattern, state->input,
+    if (!tp_token_match_memo(state->parser->engine, pattern, state->input,
                              state->length, state->position, state->active_goal,
                              0, &end))
         return 0;
@@ -945,39 +945,39 @@ int pp_vm_do_byte_pattern(pp_vm_state *state, pp_ir *pattern, pp_vm_sink *sink)
     return 1;
 }
 
-/* ** Run a PP_VM_BYTE instruction: forwards to pp_vm_do_byte_pattern. */
-static int pp_vm_do_byte(pp_vm_state *state, const pp_instruction *in,
-                         pp_vm_sink *sink)
+/* ** Run a TP_VM_BYTE instruction: forwards to tp_vm_do_byte_pattern. */
+static int tp_vm_do_byte(tp_vm_state *state, const tp_instruction *in,
+                         tp_vm_sink *sink)
 {
-    return pp_vm_do_byte_pattern(state, in->pattern, sink);
+    return tp_vm_do_byte_pattern(state, in->pattern, sink);
 }
 
 /* ** Evaluate a rule-level NOT's token-level guard PURELY: return 1 if the guard
 ** matches at the current position (so the NOT must FAIL), 0 otherwise (so the NOT's
 ** body runs). `guard' is child[0]'s base token pattern; `trigger' is its token
-** symbol when the guard references a token (PP_NO_SYMBOL for a literal/class guard).
+** symbol when the guard references a token (TP_NO_SYMBOL for a literal/class guard).
 ** A live parametrized goal (the heredoc delimiter) overrides the base pattern --
-** the SAME pp_vm_goal_redirect_param / pp_vm_goal_redirect resolution the terminal
-** match and the VM's PP_VM_NOT_RULE use, so a parametrized guard (HeredocDelimLine)
+** the SAME tp_vm_goal_redirect_param / tp_vm_goal_redirect resolution the terminal
+** match and the VM's TP_VM_NOT_RULE use, so a parametrized guard (HeredocDelimLine)
 ** resolves identically. The match does NOT advance state->position (pure lookahead).
 ** Both the VM dispatch and the generated parser call this so the guard is evaluated
 ** byte-for-byte the same (lex-goal-implementation, "Rule-level NOT"). */
-int pp_vm_not_rule_guard(pp_vm_state *state, const pp_ir *guard, uint32_t trigger)
+int tp_vm_not_rule_guard(tp_vm_state *state, const tp_ir *guard, uint32_t trigger)
 {
-    const pp_ir *look = guard;
+    const tp_ir *look = guard;
     uint32_t end;
-    if (trigger != PP_NO_SYMBOL) {
-        const pp_ir *param_pat;
+    if (trigger != TP_NO_SYMBOL) {
+        const tp_ir *param_pat;
         uint32_t param_kind;
-        if (pp_vm_goal_redirect_param(state, trigger, &param_pat, &param_kind)) {
+        if (tp_vm_goal_redirect_param(state, trigger, &param_pat, &param_kind)) {
             look = param_pat;
         } else {
-            const pp_token_def *redirect = pp_vm_goal_redirect(state, trigger);
+            const tp_token_def *redirect = tp_vm_goal_redirect(state, trigger);
             if (redirect != 0) look = redirect->pattern;
         }
     }
     return (look != 0) &&
-        pp_token_match_memo(state->parser->engine, (pp_ir *)look,
+        tp_token_match_memo(state->parser->engine, (tp_ir *)look,
                             state->input, state->length, state->position,
                             state->active_goal, 0, &end);
 }
@@ -987,61 +987,61 @@ int pp_vm_not_rule_guard(pp_vm_state *state, const pp_ir *guard, uint32_t trigge
 ** would be held with nothing following to flush it: drain the buffer into the sink so
 ** an end-of-input doc comment lands as a trailing top-level sibling rather than being
 ** stranded. */
-int pp_vm_do_eof(pp_vm_state *state, pp_vm_sink *sink)
+int tp_vm_do_eof(tp_vm_state *state, tp_vm_sink *sink)
 {
-    if (!pp_vm_consume_extras(state, sink))
-        return PP_VM_OOM;
-    if (!pp_vm_flush_held(state, sink))
-        return PP_VM_OOM;
-    return state->position >= state->length ? PP_VM_MATCH_OK : PP_VM_FAIL;
+    if (!tp_vm_consume_extras(state, sink))
+        return TP_VM_OOM;
+    if (!tp_vm_flush_held(state, sink))
+        return TP_VM_OOM;
+    return state->position >= state->length ? TP_VM_MATCH_OK : TP_VM_FAIL;
 }
 
 /* ** Run the INJECT op (W62), with the region body supplied as a callback. Consume
 ** leading extras, match the REGION (via `body') to delimit the span, discard the
 ** host nodes REGION produced (the embedded parse replaces them), then run the
 ** inline sub-VM splice under an injection node. `inject' is the inject IR node
-** carrying the embedded grammar and language tag. Drives the VM's PP_VM_INJECT
+** carrying the embedded grammar and language tag. Drives the VM's TP_VM_INJECT
 ** case. Returns the signal. */
-int pp_vm_do_inject(pp_vm_state *state, pp_vm_sink *sink, pp_ir *inject,
-                    int (*body)(pp_vm_state *, pp_vm_sink *,
+int tp_vm_do_inject(tp_vm_state *state, tp_vm_sink *sink, tp_ir *inject,
+                    int (*body)(tp_vm_state *, tp_vm_sink *,
                                 uint32_t, uint32_t, void *),
                     void *body_user)
 {
     uint32_t   saved_count;
     uint32_t   span_start;
     uint32_t   span_end;
-    pp_vm_sink region_sink;
+    tp_vm_sink region_sink;
     int        sig;
-    if (!pp_vm_consume_extras(state, sink))
-        return PP_VM_OOM;
+    if (!tp_vm_consume_extras(state, sink))
+        return TP_VM_OOM;
     saved_count = state->parser->builder.count;
     span_start  = state->position;
     region_sink.items = 0; region_sink.count = 0; region_sink.capacity = 0;
-    region_sink.parent = PP_NO_INDEX;
-    sig = body(state, &region_sink, PP_NO_SYMBOL, PP_NO_SYMBOL, body_user);
-    if (sig == PP_VM_OOM)
-        return PP_VM_OOM;
-    if (sig != PP_VM_MATCH_OK)
-        return PP_VM_FAIL;
+    region_sink.parent = TP_NO_INDEX;
+    sig = body(state, &region_sink, TP_NO_SYMBOL, TP_NO_SYMBOL, body_user);
+    if (sig == TP_VM_OOM)
+        return TP_VM_OOM;
+    if (sig != TP_VM_MATCH_OK)
+        return TP_VM_FAIL;
     span_end = state->position;
     state->parser->builder.count = saved_count;
     {
-        pp_vm_inject_sink bundle;
+        tp_vm_inject_sink bundle;
         bundle.builder = &state->parser->builder;
         bundle.arena   = state->parser->arena;
         bundle.sink    = sink;
-        if (!pp_inject_run(state->parser, inject, span_start, span_end,
-                           pp_vm_inject_sink_append, &bundle))
-            return PP_VM_OOM;
+        if (!tp_inject_run(state->parser, inject, span_start, span_end,
+                           tp_vm_inject_sink_append, &bundle))
+            return TP_VM_OOM;
     }
-    return PP_VM_MATCH_OK;
+    return TP_VM_MATCH_OK;
 }
 
 /* ====================================================================== */
 /* The dispatch loop.                                                      */
 /* ====================================================================== */
 
-/* ** The pp_vm_signal enum (matched/failed/OOM) and the pp_vm_frame / pp_vm_stack
+/* ** The tp_vm_signal enum (matched/failed/OOM) and the tp_vm_frame / tp_vm_stack
 ** types now live in internal.h, shared with the generated compiled parser. */
 
 /* ** Append one captured item onto a slot's FIFO, growing the arena-backed item
@@ -1050,17 +1050,17 @@ int pp_vm_do_inject(pp_vm_state *state, pp_vm_sink *sink, pp_ir *inject,
 ** block is abandoned in the arena (it cannot be freed -- that is expected). The
 ** first push (items == NULL) allocates an initial block of 4 items. Returns 0 only
 ** on allocation failure (lex-goal-implementation, "Slot frame"). */
-int pp_slot_push(pp_arena *arena, pp_slot_frame *slot, pp_deferred_item item)
+int tp_slot_push(tp_arena *arena, tp_slot_frame *slot, tp_deferred_item item)
 {
     if (slot->items == 0) {
-        slot->items = (pp_deferred_item *)pp_alloc(arena, 4 * sizeof *slot->items);
+        slot->items = (tp_deferred_item *)tp_alloc(arena, 4 * sizeof *slot->items);
         if (slot->items == 0) return 0;
         slot->capacity = 4;
         slot->count    = 0;
     } else if (slot->count == slot->capacity) {
         uint32_t nc = slot->capacity * 2;
-        pp_deferred_item *grown =
-            (pp_deferred_item *)pp_alloc(arena, nc * sizeof *grown);
+        tp_deferred_item *grown =
+            (tp_deferred_item *)tp_alloc(arena, nc * sizeof *grown);
         uint32_t k;
         if (grown == 0) return 0;
         for (k = 0; k < slot->count; k++)
@@ -1078,19 +1078,19 @@ int pp_slot_push(pp_arena *arena, pp_slot_frame *slot, pp_deferred_item item)
 ** existing pointers across; the old block is abandoned in the arena (it cannot be
 ** freed -- that is expected). The first push (patterns == NULL) allocates an
 ** initial block of 4 entries. Returns 0 only on allocation failure. Mirrors
-** pp_slot_push's growth policy (lex-goal-implementation, "Goal-table stack"). */
-int pp_param_stack_push(pp_arena *arena, pp_param_stack *stack, const pp_ir *pattern)
+** tp_slot_push's growth policy (lex-goal-implementation, "Goal-table stack"). */
+int tp_param_stack_push(tp_arena *arena, tp_param_stack *stack, const tp_ir *pattern)
 {
     if (stack->patterns == 0) {
         stack->patterns =
-            (const pp_ir **)pp_alloc(arena, 4 * sizeof *stack->patterns);
+            (const tp_ir **)tp_alloc(arena, 4 * sizeof *stack->patterns);
         if (stack->patterns == 0) return 0;
         stack->capacity = 4;
         stack->depth    = 0;
     } else if (stack->depth == stack->capacity) {
         uint32_t nc = stack->capacity * 2;
-        const pp_ir **grown =
-            (const pp_ir **)pp_alloc(arena, nc * sizeof *grown);
+        const tp_ir **grown =
+            (const tp_ir **)tp_alloc(arena, nc * sizeof *grown);
         uint32_t k;
         if (grown == 0) return 0;
         for (k = 0; k < stack->depth; k++)
@@ -1105,7 +1105,7 @@ int pp_param_stack_push(pp_arena *arena, pp_param_stack *stack, const pp_ir *pat
 /* ** Pop the top instantiated pattern off a parametrized goal entry's stack. The
 ** arena block stays (append-only); only the depth shrinks. A pop on an empty stack
 ** is a defensive no-op (lex-goal-implementation, "Goal-table stack"). */
-void pp_param_stack_pop(pp_param_stack *stack)
+void tp_param_stack_pop(tp_param_stack *stack)
 {
     if (stack->depth > 0)
         stack->depth--;
@@ -1113,29 +1113,29 @@ void pp_param_stack_pop(pp_param_stack *stack)
 
 /* ** Allocate `slot_count' fresh slot frames and push them as the innermost active
 ** slot scope (Option A's unified resolution stack). Each frame starts unclaimed
-** (slot_name == PP_NO_SYMBOL -- not 0, a valid interned id) with an empty FIFO;
-** PP_OP_DEFERRED_SLOT claims a frame, PP_OP_DEFER fills it, PP_OP_PARSE_DEFERRED
-** drains it. The scope array (pp_slot_scope entries) grows by doubling off the
+** (slot_name == TP_NO_SYMBOL -- not 0, a valid interned id) with an empty FIFO;
+** TP_OP_DEFERRED_SLOT claims a frame, TP_OP_DEFER fills it, TP_OP_PARSE_DEFERRED
+** drains it. The scope array (tp_slot_scope entries) grows by doubling off the
 ** parse arena; arenas never realloc, so a full array allocates a fresh, larger
 ** block and copies. Returns the slot array, or NULL on any allocation failure (the
-** caller maps that to PP_VM_OOM). slot_count is always > 0 at the call sites
+** caller maps that to TP_VM_OOM). slot_count is always > 0 at the call sites
 ** (lex-goal-implementation, "Slot name resolution"). */
-pp_slot_frame *pp_slot_scope_push(pocketparse_parser *parser, pp_arena *arena,
+tp_slot_frame *tp_slot_scope_push(tinyparse_parser *parser, tp_arena *arena,
                                   uint32_t slot_count)
 {
-    pp_slot_frame *slots;
+    tp_slot_frame *slots;
     uint32_t k;
-    slots = (pp_slot_frame *)pp_alloc(arena, slot_count * sizeof *slots);
+    slots = (tp_slot_frame *)tp_alloc(arena, slot_count * sizeof *slots);
     if (slots == 0)
         return 0;
     for (k = 0; k < slot_count; k++) {
-        slots[k].slot_name = PP_NO_SYMBOL;
+        slots[k].slot_name = TP_NO_SYMBOL;
         slots[k].items     = 0;
         slots[k].count     = 0;
         slots[k].capacity  = 0;
     }
     if (parser->slot_scopes == 0) {
-        parser->slot_scopes = (pp_slot_scope *)pp_alloc(
+        parser->slot_scopes = (tp_slot_scope *)tp_alloc(
             arena, 8 * sizeof *parser->slot_scopes);
         if (parser->slot_scopes == 0)
             return 0;
@@ -1143,8 +1143,8 @@ pp_slot_frame *pp_slot_scope_push(pocketparse_parser *parser, pp_arena *arena,
         parser->slot_scope_count    = 0;
     } else if (parser->slot_scope_count == parser->slot_scope_capacity) {
         uint32_t nc = parser->slot_scope_capacity * 2;
-        pp_slot_scope *grown =
-            (pp_slot_scope *)pp_alloc(arena, nc * sizeof *grown);
+        tp_slot_scope *grown =
+            (tp_slot_scope *)tp_alloc(arena, nc * sizeof *grown);
         if (grown == 0)
             return 0;
         for (k = 0; k < parser->slot_scope_count; k++)
@@ -1158,25 +1158,25 @@ pp_slot_frame *pp_slot_scope_push(pocketparse_parser *parser, pp_arena *arena,
     return slots;
 }
 
-/* ** Pop the innermost active slot scope (pairs with pp_slot_scope_push). The arena
+/* ** Pop the innermost active slot scope (pairs with tp_slot_scope_push). The arena
 ** memory stays (append-only); only the scope count shrinks. A pop on an empty stack
 ** is a defensive no-op. */
-void pp_slot_scope_pop(pocketparse_parser *parser)
+void tp_slot_scope_pop(tinyparse_parser *parser)
 {
     if (parser->slot_scope_count > 0)
         parser->slot_scope_count--;
 }
 
-/* ** Allocate a parser's per-parametrized-goal stack array: one zeroed pp_param_stack
+/* ** Allocate a parser's per-parametrized-goal stack array: one zeroed tp_param_stack
 ** per parametrized goal entry (grammar->param_goal_count). The count is precomputed
-** at grammar-compile time and on .ppg load, so no scan of lex_goals[] is needed
-** here. pp_alloc zeroes the block, but the fields are set explicitly for clarity.
+** at grammar-compile time and on .tpg load, so no scan of lex_goals[] is needed
+** here. tp_alloc zeroes the block, but the fields are set explicitly for clarity.
 ** Writes the array (or 0 when the grammar has no parametrized goals) to *out;
 ** returns 0 only on allocation failure (lex-goal-implementation,
-** "Pattern instantiation"). Shared by pocketparse_parser_new and the inject.c
+** "Pattern instantiation"). Shared by tinyparse_parser_new and the inject.c
 ** sub-parser so the host and an embedded grammar are initialized identically. */
-int pp_param_stacks_alloc(pp_arena *arena, const pocketparse_grammar *grammar,
-                          pp_param_stack **out)
+int tp_param_stacks_alloc(tp_arena *arena, const tinyparse_grammar *grammar,
+                          tp_param_stack **out)
 {
     uint32_t i;
 
@@ -1185,7 +1185,7 @@ int pp_param_stacks_alloc(pp_arena *arena, const pocketparse_grammar *grammar,
         return 1;
     }
 
-    *out = (pp_param_stack *)pp_alloc(
+    *out = (tp_param_stack *)tp_alloc(
         arena, grammar->param_goal_count * sizeof **out);
     if (*out == 0)
         return 0;
@@ -1203,16 +1203,16 @@ int pp_param_stacks_alloc(pp_arena *arena, const pocketparse_grammar *grammar,
 ** frame's step starts at 0; its scratch marks are zeroed lazily by the op that
 ** uses them. Returns 0 only on allocation failure. Byte-for-byte the same growth
 ** policy the generated parser used. */
-int pp_vm_stack_push(pp_arena *arena, pp_vm_stack *stack, uint32_t program,
-                     pp_vm_sink *sink, uint32_t field, uint32_t alias)
+int tp_vm_stack_push(tp_arena *arena, tp_vm_stack *stack, uint32_t program,
+                     tp_vm_sink *sink, uint32_t field, uint32_t alias)
 {
-    pp_vm_frame *fr;
+    tp_vm_frame *fr;
     if (stack->count == stack->capacity) {
         uint32_t nc = stack->capacity == 0 ? 64 : stack->capacity * 2;
         /* RAW: the live prefix [0,count) is copied in below and each new frame is
         ** fully written by the push that claims it before any read (W16-1). */
-        pp_vm_frame *grown =
-            (pp_vm_frame *)pp_alloc_raw(arena, nc * sizeof *grown);
+        tp_vm_frame *grown =
+            (tp_vm_frame *)tp_alloc_raw(arena, nc * sizeof *grown);
         uint32_t k;
         if (grown == 0)
             return 0;
@@ -1227,7 +1227,7 @@ int pp_vm_stack_push(pp_arena *arena, pp_vm_stack *stack, uint32_t program,
     fr->sink    = sink;
     fr->field   = field;
     fr->alias   = alias;
-    /* Frames are pp_alloc_raw (indeterminate); every field a later read can reach
+    /* Frames are tp_alloc_raw (indeterminate); every field a later read can reach
     ** must be written before the read (W16-1). A non-CALL frame never owns slots,
     ** and the CALL descend path overwrites these from the annotated count. */
     fr->slot_count = 0;
@@ -1235,40 +1235,40 @@ int pp_vm_stack_push(pp_arena *arena, pp_vm_stack *stack, uint32_t program,
     return 1;
 }
 
-/* ** CALL prologue, factored out of the old recursive pp_vm_run_call_body so the
+/* ** CALL prologue, factored out of the old recursive tp_vm_run_call_body so the
 ** iterative driver can run the rule body on the SAME explicit stack. It does the
 ** memo-attempt count, the rule-memo probe (resolving a cached verdict
-** immediately), the leading-extras consume (PP_OP_REF consumes them into the
+** immediately), the leading-extras consume (TP_OP_REF consumes them into the
 ** caller's sink before the node opens), and the node open -- everything up to
 ** running the body. Returns 1 to descend into the body (the frame holds the marks
 ** for the epilogue), or 0 to resolve the CALL now with *resolved set. Reproduces
-** pp_vm_run_call_body's prologue byte-for-byte; the generated parser calls it too. */
-int pp_vm_call_enter(pp_vm_state *state, pp_vm_frame *fr,
-                     uint32_t target, uint32_t symbol, pp_vm_sink *sink,
+** tp_vm_run_call_body's prologue byte-for-byte; the generated parser calls it too. */
+int tp_vm_call_enter(tp_vm_state *state, tp_vm_frame *fr,
+                     uint32_t target, uint32_t symbol, tp_vm_sink *sink,
                      uint32_t field, uint32_t alias, int *resolved)
 {
-    fr->kind        = (alias != PP_NO_SYMBOL) ? alias : symbol;
+    fr->kind        = (alias != TP_NO_SYMBOL) ? alias : symbol;
     fr->saved_count = state->parser->builder.count;
     fr->saved_pos   = state->position;
     fr->saved_sink  = sink ? sink->count : 0;
     /* Held-trivia high-water mark and content-end mark, captured before any
     ** leading-extras consume (which may flush / advance content_end); the failure path
-    ** in pp_vm_call_exit restores both. See pp_vm_state.held / content_end. */
+    ** in tp_vm_call_exit restores both. See tp_vm_state.held / content_end. */
     fr->saved_held    = state->held_count;
     fr->saved_content = state->content_end;
     /* W17-FLAT / W17-RECLAIM: read both rule marks with one inline index probe.
-    ** Bit 0 (PP_RULE_HIDDEN) makes a no-alias call a collapse candidate (see
-    ** pp_vm_call_exit). Bit 1 (PP_RULE_TRANSPARENT_ALWAYS) additionally lets the
+    ** Bit 0 (TP_RULE_HIDDEN) makes a no-alias call a collapse candidate (see
+    ** tp_vm_call_exit). Bit 1 (TP_RULE_TRANSPARENT_ALWAYS) additionally lets the
     ** prologue skip the wrapper node and run the body into the caller's sink, set
     ** below once the memo probe has had its chance -- it is disabled while the memo
     ** is eligible, since a memoed transparent success would replay nothing (no
     ** node), so the rule keeps the exit-time collapse on the rare memo-active path. */
     {
-        uint32_t marks = (alias == PP_NO_SYMBOL)
-                         ? pp_grammar_rule_marks(state->grammar, symbol) : 0;
-        fr->hidden      = (marks & PP_RULE_HIDDEN) != 0;
+        uint32_t marks = (alias == TP_NO_SYMBOL)
+                         ? tp_grammar_rule_marks(state->grammar, symbol) : 0;
+        fr->hidden      = (marks & TP_RULE_HIDDEN) != 0;
         fr->transparent = 0; /* armed below, after the memo probe, if bit 1 is set */
-        fr->seen_transparent_mark = (marks & PP_RULE_TRANSPARENT_ALWAYS) != 0;
+        fr->seen_transparent_mark = (marks & TP_RULE_TRANSPARENT_ALWAYS) != 0;
     }
     fr->target      = target;
     fr->memo_pos    = state->position;
@@ -1279,8 +1279,8 @@ int pp_vm_call_enter(pp_vm_state *state, pp_vm_frame *fr,
     ** first activation (W17-GOAL), so a clean parse never builds or zeroes them. */
     if (!state->memo_active && ++state->call_attempts > state->memo_threshold) {
         state->memo_active = 1;
-        pp_rule_memo_ensure(&state->rule_memo);
-        pp_extras_memo_ensure(&state->extras_memo);
+        tp_rule_memo_ensure(&state->rule_memo);
+        tp_extras_memo_ensure(&state->extras_memo);
     }
     /* The rule memo is consulted only when no recovery is armed, no no_extras
     ** scope is in force, no `attach: leading' comment is held across this call
@@ -1290,27 +1290,27 @@ int pp_vm_call_enter(pp_vm_state *state, pp_vm_frame *fr,
     ** it can neither flush a comment that was held at entry (the replay would skip the
     ** flush) nor reproduce one the body left held at exit (the snapshot did not freeze
     ** it). Refusing to memo while the buffer is non-empty -- at entry here, and at exit
-    ** in pp_vm_call_exit -- removes both hazards. The buffer is non-empty only across a
+    ** in tp_vm_call_exit -- removes both hazards. The buffer is non-empty only across a
     ** doc-comment boundary, and the rule memo only wakes on a super-linear blowup
     ** (never on the generated parser at all), so this costs nothing on the hot path. */
     fr->memoable = (state->memo_active && state->recover == 0 &&
                     state->no_extras == 0 && state->held_count == 0 &&
                     state->rule_memo.capacity != 0);
     if (fr->memoable) {
-        pp_rule_slot *hit = pp_rule_memo_probe(&state->rule_memo, target,
+        tp_rule_slot *hit = tp_rule_memo_probe(&state->rule_memo, target,
                                                fr->memo_pos, state->active_goal,
                                                field, alias);
-        if (pp_rule_slot_live(&state->rule_memo, hit)) {
-            if (hit->matched == PP_RULE_FAIL) { *resolved = PP_VM_FAIL; return 0; }
-            if (hit->matched == PP_RULE_SUCCESS) {
-                if (!pp_vm_consume_extras(state, sink)) { *resolved = PP_VM_OOM; return 0; }
-                if (!pp_vm_replay_success(state, sink, hit)) { *resolved = PP_VM_OOM; return 0; }
-                *resolved = PP_VM_MATCH_OK; return 0;
+        if (tp_rule_slot_live(&state->rule_memo, hit)) {
+            if (hit->matched == TP_RULE_FAIL) { *resolved = TP_VM_FAIL; return 0; }
+            if (hit->matched == TP_RULE_SUCCESS) {
+                if (!tp_vm_consume_extras(state, sink)) { *resolved = TP_VM_OOM; return 0; }
+                if (!tp_vm_replay_success(state, sink, hit)) { *resolved = TP_VM_OOM; return 0; }
+                *resolved = TP_VM_MATCH_OK; return 0;
             }
-            fr->seen_success = 1; /* PP_RULE_SEEN: re-parse and snapshot now */
+            fr->seen_success = 1; /* TP_RULE_SEEN: re-parse and snapshot now */
         }
     }
-    if (!pp_vm_consume_extras(state, sink)) { *resolved = PP_VM_OOM; return 0; }
+    if (!tp_vm_consume_extras(state, sink)) { *resolved = TP_VM_OOM; return 0; }
     /* If THIS call's leading-extras consume held an `attach: leading' comment, the
     ** memoable decision above (taken before the consume) is now stale: a memoed
     ** success would freeze a subtree whose still-held comment a replay could not
@@ -1323,11 +1323,11 @@ int pp_vm_call_enter(pp_vm_state *state, pp_vm_frame *fr,
         fr->memoable = 0;
     /* W17-RECLAIM: a TRANSPARENT_ALWAYS rule always collapses to its single child,
     ** so off the memo path skip the wrapper node entirely -- run the body straight
-    ** into the caller's sink (no separate child sink, no pp_tree_builder_push), and
-    ** let pp_vm_call_exit re-stamp the call's field onto that child. The leading
+    ** into the caller's sink (no separate child sink, no tp_tree_builder_push), and
+    ** let tp_vm_call_exit re-stamp the call's field onto that child. The leading
     ** extras were just consumed into the caller's sink, exactly as the node-open
     ** path would have. Memoable calls keep the node + exit-collapse so the memo's
-    ** subtree snapshot/replay sees a real root (see pp_vm_call_exit). */
+    ** subtree snapshot/replay sees a real root (see tp_vm_call_exit). */
     if (!fr->memoable && fr->seen_transparent_mark) {
         fr->transparent = 1;
         fr->children     = sink;
@@ -1335,9 +1335,9 @@ int pp_vm_call_enter(pp_vm_state *state, pp_vm_frame *fr,
         /* fr->node holds the sink index of the body's first contributed node,
         ** captured AFTER the leading extras above so it names the significant child
         ** the exit re-stamps, not a leading trivia node. saved_sink stays pre-extras
-        ** for the failure rollback (see pp_vm_call_exit). */
+        ** for the failure rollback (see tp_vm_call_exit). */
         fr->node         = sink ? sink->count : 0;
-        pp_vm_trace_symbol(state, "rule.enter", fr->kind);
+        tp_vm_trace_symbol(state, "rule.enter", fr->kind);
         return 1;
     }
     /* The rule body's child sink. When the caller's frame is on a stable address
@@ -1350,9 +1350,9 @@ int pp_vm_call_enter(pp_vm_state *state, pp_vm_frame *fr,
     if (state->children_inline) {
         fr->children = &fr->children_storage;
     } else {
-        fr->children = (pp_vm_sink *)pp_alloc_raw(state->parser->arena,
+        fr->children = (tp_vm_sink *)tp_alloc_raw(state->parser->arena,
                                                   sizeof *fr->children);
-        if (fr->children == 0) { *resolved = PP_VM_OOM; return 0; }
+        if (fr->children == 0) { *resolved = TP_VM_OOM; return 0; }
     }
     fr->children->items = 0; fr->children->count = 0; fr->children->capacity = 0;
     /* Open at the last MATERIALIZED byte, not the raw cursor: if this rule's leading-
@@ -1360,35 +1360,35 @@ int pp_vm_call_enter(pp_vm_state *state, pp_vm_frame *fr,
     ** comment belongs to the next sibling, so a node that then matches empty (a trailing
     ** optional `semi') must not open past the comment and drag its span across it.
     ** content_end == state->position whenever nothing is held, so the default is
-    ** unchanged. See pp_vm_state.content_end. */
+    ** unchanged. See tp_vm_state.content_end. */
     fr->start = state->content_end;
-    fr->node  = pp_tree_builder_push(&state->parser->builder, fr->kind, field,
-                                     fr->start, fr->start, PP_NO_INDEX);
-    if (fr->node == PP_NO_INDEX) { *resolved = PP_VM_OOM; return 0; }
+    fr->node  = tp_tree_builder_push(&state->parser->builder, fr->kind, field,
+                                     fr->start, fr->start, TP_NO_INDEX);
+    if (fr->node == TP_NO_INDEX) { *resolved = TP_VM_OOM; return 0; }
     /* W17-CST: name the parent so the body's children link inline as they emit. */
     fr->children->parent = fr->node;
-    pp_vm_trace_symbol(state, "rule.enter", fr->kind);
+    tp_vm_trace_symbol(state, "rule.enter", fr->kind);
     return 1;
 }
 
-/* ** CALL epilogue, factored out of pp_vm_run_call_body: after the body returns
+/* ** CALL epilogue, factored out of tp_vm_run_call_body: after the body returns
 ** `sig', on failure restore the marks and cache the failure; on success link the
 ** children, close the span, push the node, and cache/snapshot the success.
 ** Returns the signal the CALL frame resolves with. Byte-for-byte the same as the
 ** old function's tail; the generated parser calls it too. */
-int pp_vm_call_exit(pp_vm_state *state, pp_vm_frame *fr, pp_vm_sink *sink,
+int tp_vm_call_exit(tp_vm_state *state, tp_vm_frame *fr, tp_vm_sink *sink,
                     uint32_t field, uint32_t alias, int sig)
 {
-    if (sig == PP_VM_OOM)
-        return PP_VM_OOM;
-    if (sig != PP_VM_MATCH_OK) {
+    if (sig == TP_VM_OOM)
+        return TP_VM_OOM;
+    if (sig != TP_VM_MATCH_OK) {
         state->parser->builder.count = fr->saved_count;
         state->position = fr->saved_pos;
         if (sink)
             sink->count = fr->saved_sink;
         /* Restore the held-trivia high-water mark: a flush inside the failed body
         ** materialised spans into a sink that just rolled back, so re-expose them for
-        ** the retry to re-flush (see pp_vm_state.held). The content-end mark rolls back
+        ** the retry to re-flush (see tp_vm_state.held). The content-end mark rolls back
         ** with the cursor so the retry recomputes the node extent from scratch. */
         state->held_count   = fr->saved_held;
         state->content_end  = fr->saved_content;
@@ -1396,13 +1396,13 @@ int pp_vm_call_exit(pp_vm_state *state, pp_vm_frame *fr, pp_vm_sink *sink,
         ** short-circuits before re-running the body, so it must reproduce no side
         ** effect). */
         if (fr->memoable && state->parser->diagnostics.count == fr->diag_before) {
-            pp_rule_slot *slot = pp_rule_memo_probe(&state->rule_memo, fr->target,
+            tp_rule_slot *slot = tp_rule_memo_probe(&state->rule_memo, fr->target,
                                                     fr->memo_pos, state->active_goal,
                                                     field, alias);
-            pp_rule_memo_store(&state->rule_memo, slot, fr->target, fr->memo_pos,
+            tp_rule_memo_store(&state->rule_memo, slot, fr->target, fr->memo_pos,
                                state->active_goal, field, alias, 0, 0, 0, 0);
         }
-        return PP_VM_FAIL;
+        return TP_VM_FAIL;
     }
     /* W17-RECLAIM: a transparent rule pushed no node and ran its body into the
     ** caller's sink, so its single child already sits at sink[saved_sink], wired to
@@ -1412,8 +1412,8 @@ int pp_vm_call_exit(pp_vm_state *state, pp_vm_frame *fr, pp_vm_sink *sink,
     if (fr->transparent) {
         if (sink && sink->count > fr->node)
             state->parser->builder.nodes[sink->items[fr->node]].field = field;
-        pp_vm_trace_symbol(state, "rule.exit", fr->kind);
-        return PP_VM_MATCH_OK;
+        tp_vm_trace_symbol(state, "rule.exit", fr->kind);
+        return TP_VM_MATCH_OK;
     }
     /* W17-FLAT: a hidden rule that was a pure pass-through (one child) collapses --
     ** promote its single child in place. The wrapper node is orphaned, so a memo of
@@ -1421,12 +1421,12 @@ int pp_vm_call_exit(pp_vm_state *state, pp_vm_frame *fr, pp_vm_sink *sink,
     ** pure cache, so we simply do not store a collapsed success (return early). Both
     ** engines run the SAME collapse here, so they stay byte-identical. */
     if (fr->hidden && fr->children->count == 1) {
-        pp_vm_trace_symbol(state, "rule.exit", fr->kind);
-        if (!pp_vm_collapse_hidden(state, fr, sink, field))
-            return PP_VM_OOM;
-        return PP_VM_MATCH_OK;
+        tp_vm_trace_symbol(state, "rule.exit", fr->kind);
+        if (!tp_vm_collapse_hidden(state, fr, sink, field))
+            return TP_VM_OOM;
+        return TP_VM_MATCH_OK;
     }
-    pp_vm_sink_close(&state->parser->builder, fr->node, fr->children);
+    tp_vm_sink_close(&state->parser->builder, fr->node, fr->children);
     /* Close the node's extent at the last MATERIALIZED byte, not the raw cursor: a
     ** comment captured during this node's (or a descendant's) trailing-element consume
     ** advanced the cursor past it before it floated out as a sibling, so state->position
@@ -1436,10 +1436,10 @@ int pp_vm_call_exit(pp_vm_state *state, pp_vm_frame *fr, pp_vm_sink *sink,
     ** materialized child's end), so a held-only childless node keeps its start. */
     if (state->content_end > state->parser->builder.nodes[fr->node].end_byte)
         state->parser->builder.nodes[fr->node].end_byte = state->content_end;
-    pp_vm_trace_symbol(state, "rule.exit", fr->kind);
-    if (sink && !pp_vm_sink_push(&state->parser->builder, state->parser->arena,
+    tp_vm_trace_symbol(state, "rule.exit", fr->kind);
+    if (sink && !tp_vm_sink_push(&state->parser->builder, state->parser->arena,
                                  sink, fr->node))
-        return PP_VM_OOM;
+        return TP_VM_OOM;
     /* Cache the success, but only for non-trivial subtrees and only if the body
     ** left no diagnostic. The first sizable success is merely MARKED seen; the
     ** second snapshots its subtree so later attempts replay it -- so a clean parse,
@@ -1447,55 +1447,55 @@ int pp_vm_call_exit(pp_vm_state *state, pp_vm_frame *fr, pp_vm_sink *sink,
     ** held `attach: leading' comment (held_count != 0) is NOT cached: the snapshot
     ** froze the subtree without that still-held comment, so a replay -- which advances
     ** the cursor without re-running the body -- could not reproduce it. (Soundness; see
-    ** the memoable gate in pp_vm_call_enter.) */
+    ** the memoable gate in tp_vm_call_enter.) */
     if (fr->memoable && state->held_count == 0 &&
         state->parser->diagnostics.count == fr->diag_before &&
-        state->parser->builder.count - fr->node >= PP_RULE_MEMO_MIN_SUBTREE) {
-        pp_rule_slot *slot = pp_rule_memo_probe(&state->rule_memo, fr->target,
+        state->parser->builder.count - fr->node >= TP_RULE_MEMO_MIN_SUBTREE) {
+        tp_rule_slot *slot = tp_rule_memo_probe(&state->rule_memo, fr->target,
                                                 fr->memo_pos, state->active_goal,
                                                 field, alias);
         if (fr->seen_success) {
             uint32_t snap_count = 0;
-            pp_node *snap = pp_vm_snapshot_subtree(&state->parser->builder, fr->node,
+            tp_node *snap = tp_vm_snapshot_subtree(&state->parser->builder, fr->node,
                                                    state->parser->builder.count,
                                                    &snap_count);
             if (snap != 0)
-                pp_rule_memo_store(&state->rule_memo, slot, fr->target, fr->memo_pos,
+                tp_rule_memo_store(&state->rule_memo, slot, fr->target, fr->memo_pos,
                                    state->active_goal, field, alias,
-                                   PP_RULE_SUCCESS, state->position, snap, snap_count);
+                                   TP_RULE_SUCCESS, state->position, snap, snap_count);
         } else {
-            pp_rule_memo_store(&state->rule_memo, slot, fr->target, fr->memo_pos,
-                               state->active_goal, field, alias, PP_RULE_SEEN, 0, 0, 0);
+            tp_rule_memo_store(&state->rule_memo, slot, fr->target, fr->memo_pos,
+                               state->active_goal, field, alias, TP_RULE_SEEN, 0, 0, 0);
         }
     }
-    return PP_VM_MATCH_OK;
+    return TP_VM_MATCH_OK;
 }
 
-/* ** The INJECT region body callback: pp_vm_do_inject calls this to match the
+/* ** The INJECT region body callback: tp_vm_do_inject calls this to match the
 ** region. The region is a single child program, so it runs through a nested
-** pp_vm_run driver call -- bounded by injection nesting depth (host languages
+** tp_vm_run driver call -- bounded by injection nesting depth (host languages
 ** embedded in host languages), not by input nesting, so it cannot overflow the C
 ** stack on a deeply nested ordinary input (that runs on the one explicit stack). */
-static int pp_vm_inject_body_run(pp_vm_state *state, pp_vm_sink *children,
+static int tp_vm_inject_body_run(tp_vm_state *state, tp_vm_sink *children,
                                  uint32_t field, uint32_t alias, void *body_user)
 {
     uint32_t region = *(const uint32_t *)body_user;
     (void)field; (void)alias;
-    return pp_vm_run(state, region, children, PP_NO_SYMBOL, PP_NO_SYMBOL);
+    return tp_vm_run(state, region, children, TP_NO_SYMBOL, TP_NO_SYMBOL);
 }
 
 /* ** Find the slot frame for a DEFERRED_SLOT declaration and claim it under
 ** `slot_name'. The enclosing rule invocation is the nearest frame below the
-** declaration's own top frame whose instruction is a PP_VM_CALL with allocated
+** declaration's own top frame whose instruction is a TP_VM_CALL with allocated
 ** slots. Within that frame, an entry already named `slot_name' is reused
 ** (idempotent re-init); otherwise the first unclaimed entry (slot_name ==
-** PP_NO_SYMBOL -- not 0, which is a valid interned id) is claimed. Returns 0 only
+** TP_NO_SYMBOL -- not 0, which is a valid interned id) is claimed. Returns 0 only
 ** if no enclosing CALL frame has a free slot, which means the compile-time
 ** slot_count under-counted the declarations -- an internal invariant break that
 ** should never happen (lex-goal-implementation, "Slot name resolution"). */
-int pp_slot_claim(pp_vm_state *state, uint32_t slot_name)
+int tp_slot_claim(tp_vm_state *state, uint32_t slot_name)
 {
-    pocketparse_parser *parser = state->parser;
+    tinyparse_parser *parser = state->parser;
     uint32_t si = parser->slot_scope_count;
     if (si == 0)
         return 0;
@@ -1504,13 +1504,13 @@ int pp_slot_claim(pp_vm_state *state, uint32_t slot_name)
         ** entry), so the declaration claims a frame there -- not in an enclosing
         ** rule. Scanning only the top scope matches the VM's old "nearest enclosing
         ** CALL frame" behaviour now that every invocation pushes exactly one scope. */
-        pp_slot_scope *sc = &parser->slot_scopes[si - 1];
+        tp_slot_scope *sc = &parser->slot_scopes[si - 1];
         uint32_t k;
         for (k = 0; k < sc->slot_count; k++)
             if (sc->slots[k].slot_name == slot_name)
                 return 1; /* already declared this invocation; idempotent */
         for (k = 0; k < sc->slot_count; k++)
-            if (sc->slots[k].slot_name == PP_NO_SYMBOL) {
+            if (sc->slots[k].slot_name == TP_NO_SYMBOL) {
                 sc->slots[k].slot_name = slot_name;
                 return 1;
             }
@@ -1519,17 +1519,17 @@ int pp_slot_claim(pp_vm_state *state, uint32_t slot_name)
 }
 
 /* ** Resolve a slot by name for DEFER (and Phase 4 PARSE_DEFERRED): scan frames
-** innermost to outermost for the first PP_VM_CALL frame holding a slot named
-** `slot_name', returning a pointer to that pp_slot_frame. This is the lexical-
+** innermost to outermost for the first TP_VM_CALL frame holding a slot named
+** `slot_name', returning a pointer to that tp_slot_frame. This is the lexical-
 ** scope resolution the spec requires -- a (defer NAME ...) writes into the
 ** innermost enclosing rule that declared NAME. Returns NULL if no enclosing slot
 ** carries the name (lex-goal-implementation, "Slot name resolution"). */
-pp_slot_frame *pp_slot_resolve(pp_vm_state *state, uint32_t slot_name)
+tp_slot_frame *tp_slot_resolve(tp_vm_state *state, uint32_t slot_name)
 {
-    pocketparse_parser *parser = state->parser;
+    tinyparse_parser *parser = state->parser;
     uint32_t si = parser->slot_scope_count;
     while (si > 0) {
-        pp_slot_scope *sc = &parser->slot_scopes[si - 1];
+        tp_slot_scope *sc = &parser->slot_scopes[si - 1];
         uint32_t k;
         for (k = 0; k < sc->slot_count; k++)
             if (sc->slots[k].slot_name == slot_name)
@@ -1544,10 +1544,10 @@ pp_slot_frame *pp_slot_resolve(pp_vm_state *state, uint32_t slot_name)
 ** place, so a full array allocates a fresh block of twice the capacity and copies
 ** the live prefix across; the old block is abandoned. Returns 0 only on
 ** allocation failure (lex-goal-implementation, "Parallel slot-save stack"). */
-static int pp_slot_save_emit(pocketparse_parser *parser, uint32_t value)
+static int tp_slot_save_emit(tinyparse_parser *parser, uint32_t value)
 {
     if (parser->slot_save_stack == 0) {
-        parser->slot_save_stack = (uint32_t *)pp_alloc(
+        parser->slot_save_stack = (uint32_t *)tp_alloc(
             parser->arena, 16 * sizeof *parser->slot_save_stack);
         if (parser->slot_save_stack == 0) return 0;
         parser->slot_save_capacity = 16;
@@ -1555,7 +1555,7 @@ static int pp_slot_save_emit(pocketparse_parser *parser, uint32_t value)
     } else if (parser->slot_save_count == parser->slot_save_capacity) {
         uint32_t nc = parser->slot_save_capacity * 2;
         uint32_t *grown =
-            (uint32_t *)pp_alloc(parser->arena, nc * sizeof *grown);
+            (uint32_t *)tp_alloc(parser->arena, nc * sizeof *grown);
         uint32_t k;
         if (grown == 0) return 0;
         for (k = 0; k < parser->slot_save_count; k++)
@@ -1568,28 +1568,28 @@ static int pp_slot_save_emit(pocketparse_parser *parser, uint32_t value)
 }
 
 /* ** Save the state of every active slot before entering a speculative branch.
-** Pushes a sentinel (PP_NO_INDEX) batch marker, then the `count' of every active
-** slot in the SAME innermost-to-outermost frame order pp_slot_resolve uses
-** (PP_VM_CALL frames with allocated slots only). On any allocation failure mid-
+** Pushes a sentinel (TP_NO_INDEX) batch marker, then the `count' of every active
+** slot in the SAME innermost-to-outermost frame order tp_slot_resolve uses
+** (TP_VM_CALL frames with allocated slots only). On any allocation failure mid-
 ** batch the partial batch is abandoned -- slot_save_count is reset to its value
 ** before the push, so no malformed batch is ever read -- and 0 is returned. The
-** matching pop is pp_slot_save_restore_pop (on the branch's failure) or
-** pp_slot_save_commit_pop (on its success); each push pairs with exactly one pop
+** matching pop is tp_slot_save_restore_pop (on the branch's failure) or
+** tp_slot_save_commit_pop (on its success); each push pairs with exactly one pop
 ** (lex-goal-implementation, "Saving slot state on choice entry"). */
-int pp_slot_save_push(pp_vm_state *state)
+int tp_slot_save_push(tp_vm_state *state)
 {
-    pocketparse_parser *parser = state->parser;
+    tinyparse_parser *parser = state->parser;
     uint32_t start = parser->slot_save_count;
     uint32_t si;
-    if (!pp_slot_save_emit(parser, PP_NO_INDEX)) {
+    if (!tp_slot_save_emit(parser, TP_NO_INDEX)) {
         parser->slot_save_count = start;
         return 0;
     }
     for (si = parser->slot_scope_count; si > 0; si--) {
-        pp_slot_scope *sc = &parser->slot_scopes[si - 1];
+        tp_slot_scope *sc = &parser->slot_scopes[si - 1];
         uint32_t k;
         for (k = 0; k < sc->slot_count; k++)
-            if (!pp_slot_save_emit(parser, sc->slots[k].count)) {
+            if (!tp_slot_save_emit(parser, sc->slots[k].count)) {
                 parser->slot_save_count = start;
                 return 0;
             }
@@ -1598,7 +1598,7 @@ int pp_slot_save_push(pp_vm_state *state)
 }
 
 /* ** Restore every active slot's `count' from the top batch and pop it. Finds the
-** nearest PP_NO_INDEX sentinel at index S below slot_save_count; the saved counts
+** nearest TP_NO_INDEX sentinel at index S below slot_save_count; the saved counts
 ** sit at S+1.. in innermost-first order. Re-scans the active slots in the SAME
 ** order and assigns each its saved count, then drops the batch (sentinel
 ** included) by setting slot_save_count = S. The failed branch's frames have
@@ -1608,18 +1608,18 @@ int pp_slot_save_push(pp_vm_state *state)
 ** size disagree -- an invariant break that should never happen -- only the common
 ** prefix is restored, never reading past the sentinel (lex-goal-implementation,
 ** "Restoring slot state on backtrack"). */
-void pp_slot_save_restore_pop(pp_vm_state *state)
+void tp_slot_save_restore_pop(tp_vm_state *state)
 {
-    pocketparse_parser *parser = state->parser;
+    tinyparse_parser *parser = state->parser;
     uint32_t s = parser->slot_save_count;
     uint32_t j, si;
-    while (s > 0 && parser->slot_save_stack[s - 1] != PP_NO_INDEX)
+    while (s > 0 && parser->slot_save_stack[s - 1] != TP_NO_INDEX)
         s--;
     if (s == 0) return;            /* no sentinel: nothing was pushed */
     s--;                           /* s now indexes the sentinel itself */
     j = 0;
     for (si = parser->slot_scope_count; si > 0; si--) {
-        pp_slot_scope *sc = &parser->slot_scopes[si - 1];
+        tp_slot_scope *sc = &parser->slot_scopes[si - 1];
         uint32_t k;
         for (k = 0; k < sc->slot_count; k++) {
             if (s + 1 + j >= parser->slot_save_count) break;
@@ -1631,15 +1631,15 @@ void pp_slot_save_restore_pop(pp_vm_state *state)
 }
 
 /* ** Pop the top batch WITHOUT restoring -- the speculative branch committed, so
-** its enqueued items stay in their slots. Finds the nearest PP_NO_INDEX sentinel
+** its enqueued items stay in their slots. Finds the nearest TP_NO_INDEX sentinel
 ** at index S below slot_save_count and drops everything from S upward. Pairs with
-** pp_slot_save_push as the success path (lex-goal-implementation, "Saving slot
+** tp_slot_save_push as the success path (lex-goal-implementation, "Saving slot
 ** state on choice entry"). */
-void pp_slot_save_commit_pop(pp_vm_state *state)
+void tp_slot_save_commit_pop(tp_vm_state *state)
 {
-    pocketparse_parser *parser = state->parser;
+    tinyparse_parser *parser = state->parser;
     uint32_t s = parser->slot_save_count;
-    while (s > 0 && parser->slot_save_stack[s - 1] != PP_NO_INDEX)
+    while (s > 0 && parser->slot_save_stack[s - 1] != TP_NO_INDEX)
         s--;
     if (s == 0) return;            /* no sentinel: nothing was pushed */
     parser->slot_save_count = s - 1;
@@ -1647,13 +1647,13 @@ void pp_slot_save_commit_pop(pp_vm_state *state)
 
 /* ** Run one lowered program to completion on an explicit, arena-backed frame
 ** stack (W14-6). This is the iterative transformation of the old recursive
-** pp_vm_run + pp_vm_run_call: a root frame for `program' is pushed and the stack
+** tp_vm_run + tp_vm_run_call: a root frame for `program' is pushed and the stack
 ** is pumped until it resolves. Each iteration runs the top frame's next step,
 ** which either RESOLVES it (set `signal', pop) or DESCENDS (save the resume step,
 ** push a child frame). There is NO C recursion across grammar nesting --
 ** SEQ/CHOICE/REPEAT/OPTIONAL/CALL all iterate on the arena stack -- so a deeply
 ** nested input grows the arena, never overflowing the host C stack. Each step
-** reproduces, op for op, what the old recursive pp_vm_run did in the same order,
+** reproduces, op for op, what the old recursive tp_vm_run did in the same order,
 ** so the concrete syntax tree is byte-identical (vm-diff proves it).
 **
 ** TAIL-CALL OPTIMIZATION (W14-6): a CALL the lowerer marked `tail' (its signal is
@@ -1665,53 +1665,53 @@ void pp_slot_save_commit_pop(pp_vm_state *state)
 ** recursive ladder (X -> Y (op X)?) keeps stack depth at the true nesting rather
 ** than the call-chain length. ~43-50% of CALLs in the real grammars are tail
 ** (see docs/peg-vs-glr.md, W14-6), so this measurably bounds the hot stack. */
-int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
+int tp_vm_run(tp_vm_state *state, uint32_t program, tp_vm_sink *sink,
               uint32_t field, uint32_t alias)
 {
-    pp_vm_stack stack;
-    int         signal = PP_VM_FAIL;
-    pp_arena   *arena  = state->parser->arena;
-#ifdef PP_VM_PROBE_DEPTH
-    extern unsigned long pp_vm_peak_depth;
+    tp_vm_stack stack;
+    int         signal = TP_VM_FAIL;
+    tp_arena   *arena  = state->parser->arena;
+#ifdef TP_VM_PROBE_DEPTH
+    extern unsigned long tp_vm_peak_depth;
 #endif
     stack.frames = 0; stack.count = 0; stack.capacity = 0;
-    if (program == PP_NO_INDEX)
-        return PP_VM_FAIL;
-    if (!pp_vm_stack_push(arena, &stack, program, sink, field, alias))
-        return PP_VM_OOM;
+    if (program == TP_NO_INDEX)
+        return TP_VM_FAIL;
+    if (!tp_vm_stack_push(arena, &stack, program, sink, field, alias))
+        return TP_VM_OOM;
 
     while (stack.count > 0) {
-        pp_vm_frame          *fr = &stack.frames[stack.count - 1];
-#ifdef PP_VM_PROBE_DEPTH
-        if (stack.count > pp_vm_peak_depth) pp_vm_peak_depth = stack.count;
+        tp_vm_frame          *fr = &stack.frames[stack.count - 1];
+#ifdef TP_VM_PROBE_DEPTH
+        if (stack.count > tp_vm_peak_depth) tp_vm_peak_depth = stack.count;
 #endif
-        const pp_instruction *in = &state->program->instructions[fr->program];
+        const tp_instruction *in = &state->program->instructions[fr->program];
         switch (in->op) {
 
-        case PP_VM_MATCH:
-            signal = pp_vm_do_match(state, in, fr->sink, fr->field, fr->alias);
+        case TP_VM_MATCH:
+            signal = tp_vm_do_match(state, in, fr->sink, fr->field, fr->alias);
             stack.count--; continue;
 
-        case PP_VM_BYTE:
-            signal = pp_vm_do_byte(state, in, fr->sink);
+        case TP_VM_BYTE:
+            signal = tp_vm_do_byte(state, in, fr->sink);
             stack.count--; continue;
 
-        case PP_VM_EOF:
-            signal = pp_vm_do_eof(state, fr->sink);
+        case TP_VM_EOF:
+            signal = tp_vm_do_eof(state, fr->sink);
             stack.count--; continue;
 
-        case PP_VM_HALT:
-            signal = PP_VM_MATCH_OK; stack.count--; continue;
+        case TP_VM_HALT:
+            signal = TP_VM_MATCH_OK; stack.count--; continue;
 
-        case PP_VM_CALL:
+        case TP_VM_CALL:
             if (fr->step == 0) {
-                int resolved = PP_VM_FAIL;
-                if (!pp_vm_call_enter(state, fr, in->target, in->symbol,
+                int resolved = TP_VM_FAIL;
+                if (!tp_vm_call_enter(state, fr, in->target, in->symbol,
                                       fr->sink, fr->field, fr->alias, &resolved)) {
                     signal = resolved; stack.count--; continue;
                 }
-                if (fr->target == PP_NO_INDEX) {
-                    fr->step = 1; signal = PP_VM_FAIL; continue;
+                if (fr->target == TP_NO_INDEX) {
+                    fr->step = 1; signal = TP_VM_FAIL; continue;
                 }
                 /* Tail-call optimization: if THIS CALL is in tail position, the
                 ** enclosing frame exists only to forward this CALL's signal. We
@@ -1720,7 +1720,7 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                 ** CALL's body in turn ends in a tail CALL, because each such CALL
                 ** frame resolves and pops the moment its body resolves rather than
                 ** keeping a stack of forwarding frames above it. The frame is set
-                ** to step 1 so it resumes at pp_vm_call_exit; the body is pushed as
+                ** to step 1 so it resumes at tp_vm_call_exit; the body is pushed as
                 ** a child. (Pointer fr may dangle after the push grows the stack;
                 ** index back through stack.frames.) */
                 /* Push this CALL invocation's deferred-slot scope from the annotated
@@ -1730,62 +1730,62 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                 ** rule entry, so (defer …)/(parse-deferred …) and the slot-save
                 ** rollback resolve identically in both executors. Only the descend
                 ** path needs slots; the memo-replay / immediate-resolve fast paths
-                ** (pp_vm_call_enter returned 0) skip the body entirely. fr->slot_count
+                ** (tp_vm_call_enter returned 0) skip the body entirely. fr->slot_count
                 ** records that a scope was pushed so the exit pops exactly once
                 ** (lex-goal-implementation, Option A). */
                 if (in->slot_count > 0) {
-                    if (pp_slot_scope_push(state->parser, arena,
+                    if (tp_slot_scope_push(state->parser, arena,
                                            in->slot_count) == 0)
-                        return PP_VM_OOM;
+                        return TP_VM_OOM;
                     fr->slot_count = in->slot_count;
                 } else {
                     fr->slot_count = 0;
                 }
                 fr->slots = 0;
                 stack.frames[stack.count - 1].step = 1;
-                if (!pp_vm_stack_push(arena, &stack, fr->target, fr->children,
-                                      PP_NO_SYMBOL, PP_NO_SYMBOL))
-                    return PP_VM_OOM;
+                if (!tp_vm_stack_push(arena, &stack, fr->target, fr->children,
+                                      TP_NO_SYMBOL, TP_NO_SYMBOL))
+                    return TP_VM_OOM;
                 continue;
             } else {
                 /* Pop this invocation's slot scope (pushed on the descend path) so
                 ** the unified scope stack stays balanced -- exactly once per CALL
                 ** that descended with slots (Option A). */
                 if (fr->slot_count > 0)
-                    pp_slot_scope_pop(state->parser);
-                signal = pp_vm_call_exit(state, fr, fr->sink,
+                    tp_slot_scope_pop(state->parser);
+                signal = tp_vm_call_exit(state, fr, fr->sink,
                                          fr->field, fr->alias, signal);
                 stack.count--; continue;
             }
 
-        case PP_VM_SEQ:
+        case TP_VM_SEQ:
             /* Sequential children; recovery-insert a missing required element at
-            ** end of input, exactly like the old pp_vm_run's PP_VM_SEQ. */
+            ** end of input, exactly like the old tp_vm_run's TP_VM_SEQ. */
             if (fr->step == 0) {
                 fr->i = 0;
             } else {
-                if (signal == PP_VM_OOM) return PP_VM_OOM;
-                if (signal != PP_VM_MATCH_OK) {
+                if (signal == TP_VM_OOM) return TP_VM_OOM;
+                if (signal != TP_VM_MATCH_OK) {
                     if (state->recover != 0 && state->position >= state->length &&
                         state->position > state->recover_start) {
-                        if (!pp_vm_recover_insert(state, fr->sink)) return PP_VM_OOM;
+                        if (!tp_vm_recover_insert(state, fr->sink)) return TP_VM_OOM;
                     } else {
-                        signal = PP_VM_FAIL; stack.count--; continue;
+                        signal = TP_VM_FAIL; stack.count--; continue;
                     }
                 }
                 fr->i++;
             }
             if (fr->i >= in->count) {
-                signal = PP_VM_MATCH_OK; stack.count--; continue;
+                signal = TP_VM_MATCH_OK; stack.count--; continue;
             }
             stack.frames[stack.count - 1].step = 1;
-            if (!pp_vm_stack_push(arena, &stack,
+            if (!tp_vm_stack_push(arena, &stack,
                                   state->program->children[in->start + fr->i],
-                                  fr->sink, PP_NO_SYMBOL, PP_NO_SYMBOL))
-                return PP_VM_OOM;
+                                  fr->sink, TP_NO_SYMBOL, TP_NO_SYMBOL))
+                return TP_VM_OOM;
             continue;
 
-        case PP_VM_CHOICE:
+        case TP_VM_CHOICE:
             /* Ordered choice with W46 first-set prediction: disarm recovery for the
             ** speculative alternatives, consume the shared leading extras once, then
             ** try each admitted alternative restoring the marks on failure. */
@@ -1797,19 +1797,19 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                 fr->saved_content = state->content_end;
                 fr->outer_recover = state->recover;
                 state->recover = 0;
-                if (!pp_vm_consume_extras(state, fr->sink)) {
-                    state->recover = fr->outer_recover; return PP_VM_OOM;
+                if (!tp_vm_consume_extras(state, fr->sink)) {
+                    state->recover = fr->outer_recover; return TP_VM_OOM;
                 }
                 fr->look = state->position;
                 fr->i = 0;
             } else {
-                if (signal == PP_VM_OOM) { state->recover = fr->outer_recover; return PP_VM_OOM; }
-                if (signal == PP_VM_MATCH_OK) {
-                    pp_slot_save_commit_pop(state);
+                if (signal == TP_VM_OOM) { state->recover = fr->outer_recover; return TP_VM_OOM; }
+                if (signal == TP_VM_MATCH_OK) {
+                    tp_slot_save_commit_pop(state);
                     state->recover = fr->outer_recover;
-                    signal = PP_VM_MATCH_OK; stack.count--; continue;
+                    signal = TP_VM_MATCH_OK; stack.count--; continue;
                 }
-                pp_slot_save_restore_pop(state);
+                tp_slot_save_restore_pop(state);
                 state->parser->builder.count = fr->saved_count;
                 state->position = fr->saved_pos;
                 if (fr->sink) fr->sink->count = fr->saved_sink;
@@ -1821,9 +1821,9 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
             ** node (the child instruction's `source') the prediction caches on. */
             while (fr->i < in->count) {
                 uint32_t child = state->program->children[in->start + fr->i];
-                const pp_instruction *cin = &state->program->instructions[child];
+                const tp_instruction *cin = &state->program->instructions[child];
                 if (cin->source != 0 &&
-                    !pp_choice_first_admits_fast(state->grammar, cin->source,
+                    !tp_choice_first_admits_fast(state->grammar, cin->source,
                                                  state->input, state->length, fr->look)) {
                     fr->i++;
                     continue;
@@ -1832,50 +1832,50 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
             }
             if (fr->i >= in->count) {
                 state->recover = fr->outer_recover;
-                signal = PP_VM_FAIL; stack.count--; continue;
+                signal = TP_VM_FAIL; stack.count--; continue;
             }
-            if (!pp_slot_save_push(state)) {
-                state->recover = fr->outer_recover; return PP_VM_OOM;
+            if (!tp_slot_save_push(state)) {
+                state->recover = fr->outer_recover; return TP_VM_OOM;
             }
             stack.frames[stack.count - 1].step = 1;
-            if (!pp_vm_stack_push(arena, &stack,
+            if (!tp_vm_stack_push(arena, &stack,
                                   state->program->children[in->start + fr->i],
                                   fr->sink, fr->field, fr->alias))
-                return PP_VM_OOM;
+                return TP_VM_OOM;
             continue;
 
-        case PP_VM_REPEAT:
+        case TP_VM_REPEAT:
             /* Repeat the target until it fails or makes no progress, exactly like
-            ** the old pp_vm_run's PP_VM_REPEAT (zero-width guard included). */
+            ** the old tp_vm_run's TP_VM_REPEAT (zero-width guard included). */
             if (fr->step == 0) {
                 fr->reps = 0;
                 fr->outer_recover = state->recover;
                 state->recover = 0;
             } else {
-                if (signal == PP_VM_OOM) { state->recover = fr->outer_recover; return PP_VM_OOM; }
-                if (signal != PP_VM_MATCH_OK) {
-                    pp_slot_save_restore_pop(state);
+                if (signal == TP_VM_OOM) { state->recover = fr->outer_recover; return TP_VM_OOM; }
+                if (signal != TP_VM_MATCH_OK) {
+                    tp_slot_save_restore_pop(state);
                     state->parser->builder.count = fr->saved_count;
                     state->position = fr->saved_pos;
                     if (fr->sink) fr->sink->count = fr->saved_sink;
                     state->held_count = fr->saved_held;
                     state->content_end = fr->saved_content;
                     state->recover = fr->outer_recover;
-                    signal = (fr->reps >= in->min ? PP_VM_MATCH_OK : PP_VM_FAIL);
+                    signal = (fr->reps >= in->min ? TP_VM_MATCH_OK : TP_VM_FAIL);
                     stack.count--; continue;
                 }
                 if (state->position == fr->saved_pos) { /* zero-width guard */
-                    pp_slot_save_commit_pop(state);
+                    tp_slot_save_commit_pop(state);
                     state->recover = fr->outer_recover;
-                    signal = (fr->reps >= in->min ? PP_VM_MATCH_OK : PP_VM_FAIL);
+                    signal = (fr->reps >= in->min ? TP_VM_MATCH_OK : TP_VM_FAIL);
                     stack.count--; continue;
                 }
-                pp_slot_save_commit_pop(state);
+                tp_slot_save_commit_pop(state);
                 fr->reps++;
             }
             if (in->max != 0 && fr->reps >= in->max) {
                 state->recover = fr->outer_recover;
-                signal = (fr->reps >= in->min ? PP_VM_MATCH_OK : PP_VM_FAIL);
+                signal = (fr->reps >= in->min ? TP_VM_MATCH_OK : TP_VM_FAIL);
                 stack.count--; continue;
             }
             fr->saved_count = state->parser->builder.count;
@@ -1883,19 +1883,19 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
             fr->saved_sink  = fr->sink ? fr->sink->count : 0;
             fr->saved_held  = state->held_count;
             fr->saved_content = state->content_end;
-            if (!pp_slot_save_push(state)) {
-                state->recover = fr->outer_recover; return PP_VM_OOM;
+            if (!tp_slot_save_push(state)) {
+                state->recover = fr->outer_recover; return TP_VM_OOM;
             }
-            if (in->target == PP_NO_INDEX) {
-                fr->step = 1; signal = PP_VM_FAIL; continue;
+            if (in->target == TP_NO_INDEX) {
+                fr->step = 1; signal = TP_VM_FAIL; continue;
             }
             stack.frames[stack.count - 1].step = 1;
-            if (!pp_vm_stack_push(arena, &stack, in->target, fr->sink,
-                                  PP_NO_SYMBOL, PP_NO_SYMBOL))
-                return PP_VM_OOM;
+            if (!tp_vm_stack_push(arena, &stack, in->target, fr->sink,
+                                  TP_NO_SYMBOL, TP_NO_SYMBOL))
+                return TP_VM_OOM;
             continue;
 
-        case PP_VM_OPTIONAL:
+        case TP_VM_OPTIONAL:
             if (fr->step == 0) {
                 fr->saved_count   = state->parser->builder.count;
                 fr->saved_pos     = state->position;
@@ -1904,34 +1904,34 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                 fr->saved_content = state->content_end;
                 fr->outer_recover = state->recover;
                 state->recover = 0;
-                if (!pp_slot_save_push(state)) {
-                    state->recover = fr->outer_recover; return PP_VM_OOM;
+                if (!tp_slot_save_push(state)) {
+                    state->recover = fr->outer_recover; return TP_VM_OOM;
                 }
-                if (in->target == PP_NO_INDEX) {
-                    fr->step = 1; signal = PP_VM_FAIL; continue;
+                if (in->target == TP_NO_INDEX) {
+                    fr->step = 1; signal = TP_VM_FAIL; continue;
                 }
                 stack.frames[stack.count - 1].step = 1;
-                if (!pp_vm_stack_push(arena, &stack, in->target, fr->sink,
+                if (!tp_vm_stack_push(arena, &stack, in->target, fr->sink,
                                       fr->field, fr->alias))
-                    return PP_VM_OOM;
+                    return TP_VM_OOM;
                 continue;
             } else {
-                if (signal == PP_VM_OOM) { state->recover = fr->outer_recover; return PP_VM_OOM; }
-                if (signal != PP_VM_MATCH_OK) {
-                    pp_slot_save_restore_pop(state);
+                if (signal == TP_VM_OOM) { state->recover = fr->outer_recover; return TP_VM_OOM; }
+                if (signal != TP_VM_MATCH_OK) {
+                    tp_slot_save_restore_pop(state);
                     state->parser->builder.count = fr->saved_count;
                     state->position = fr->saved_pos;
                     if (fr->sink) fr->sink->count = fr->saved_sink;
                     state->held_count = fr->saved_held;
                     state->content_end = fr->saved_content;
                 } else {
-                    pp_slot_save_commit_pop(state);
+                    tp_slot_save_commit_pop(state);
                 }
                 state->recover = fr->outer_recover;
-                signal = PP_VM_MATCH_OK; stack.count--; continue;
+                signal = TP_VM_MATCH_OK; stack.count--; continue;
             }
 
-        case PP_VM_FIELD:
+        case TP_VM_FIELD:
             /* FIELD only decorates its child's emitted node with a field symbol;
             ** it has NO epilogue (the old recursive form simply returned the
             ** child's signal). So instead of pushing the child and keeping a
@@ -1941,8 +1941,8 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
             ** (W14-6). A field-decorated rule reference in tail position is exactly
             ** where this fires. Byte-identical: the child runs with the same sink
             ** and the field passed down, as before. */
-            if (in->target == PP_NO_INDEX) {
-                signal = PP_VM_FAIL; stack.count--; continue;
+            if (in->target == TP_NO_INDEX) {
+                signal = TP_VM_FAIL; stack.count--; continue;
             }
             fr->program = in->target;
             fr->step    = 0;
@@ -1950,12 +1950,12 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
             /* fr->sink and fr->alias are inherited unchanged. */
             continue;
 
-        case PP_VM_ALIAS:
+        case TP_VM_ALIAS:
             /* ALIAS, like FIELD, only re-tags its child's node and has no epilogue,
             ** so reuse this frame in place for the child decorated with the alias
             ** kind (W14-6 tail-call frame reuse). */
-            if (in->target == PP_NO_INDEX) {
-                signal = PP_VM_FAIL; stack.count--; continue;
+            if (in->target == TP_NO_INDEX) {
+                signal = TP_VM_FAIL; stack.count--; continue;
             }
             fr->program = in->target;
             fr->step    = 0;
@@ -1963,43 +1963,43 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
             /* fr->sink and fr->field are inherited unchanged. */
             continue;
 
-        case PP_VM_GOAL:
+        case TP_VM_GOAL:
             if (fr->step == 0) {
                 fr->saved_goal = state->active_goal;
                 state->active_goal = in->symbol;
-                if (in->target == PP_NO_INDEX) {
-                    fr->step = 1; signal = PP_VM_FAIL; continue;
+                if (in->target == TP_NO_INDEX) {
+                    fr->step = 1; signal = TP_VM_FAIL; continue;
                 }
                 stack.frames[stack.count - 1].step = 1;
-                if (!pp_vm_stack_push(arena, &stack, in->target, fr->sink,
+                if (!tp_vm_stack_push(arena, &stack, in->target, fr->sink,
                                       fr->field, fr->alias))
-                    return PP_VM_OOM;
+                    return TP_VM_OOM;
                 continue;
             } else {
                 state->active_goal = fr->saved_goal;
                 stack.count--; continue;
             }
 
-        case PP_VM_NO_EXTRAS:
+        case TP_VM_NO_EXTRAS:
             if (fr->step == 0) {
                 fr->saved_no_extras = state->no_extras;
                 state->no_extras = (in->aux == 0) ? 1 : 0;
-                if (in->target == PP_NO_INDEX) {
-                    fr->step = 1; signal = PP_VM_FAIL; continue;
+                if (in->target == TP_NO_INDEX) {
+                    fr->step = 1; signal = TP_VM_FAIL; continue;
                 }
                 stack.frames[stack.count - 1].step = 1;
-                if (!pp_vm_stack_push(arena, &stack, in->target, fr->sink,
+                if (!tp_vm_stack_push(arena, &stack, in->target, fr->sink,
                                       fr->field, fr->alias))
-                    return PP_VM_OOM;
+                    return TP_VM_OOM;
                 continue;
             } else {
                 state->no_extras = fr->saved_no_extras;
                 stack.count--; continue;
             }
 
-        case PP_VM_RECOVER:
+        case TP_VM_RECOVER:
             /* Try the body cleanly (step 1); on failure re-run it with recovery
-            ** armed (step 2), exactly like the old pp_vm_run's PP_VM_RECOVER. */
+            ** armed (step 2), exactly like the old tp_vm_run's TP_VM_RECOVER. */
             if (fr->step == 0) {
                 fr->saved_count   = state->parser->builder.count;
                 fr->saved_pos     = state->position;
@@ -2009,18 +2009,18 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                 fr->outer_recover = state->recover;
                 fr->outer_fired   = state->recover_fired;
                 fr->outer_start   = state->recover_start;
-                if (in->target == PP_NO_INDEX) {
-                    fr->step = 1; signal = PP_VM_FAIL; continue;
+                if (in->target == TP_NO_INDEX) {
+                    fr->step = 1; signal = TP_VM_FAIL; continue;
                 }
                 stack.frames[stack.count - 1].step = 1;
-                if (!pp_vm_stack_push(arena, &stack, in->target, fr->sink,
+                if (!tp_vm_stack_push(arena, &stack, in->target, fr->sink,
                                       fr->field, fr->alias))
-                    return PP_VM_OOM;
+                    return TP_VM_OOM;
                 continue;
             } else if (fr->step == 1) {
-                if (signal == PP_VM_OOM) return PP_VM_OOM;
-                if (signal == PP_VM_MATCH_OK) {
-                    signal = PP_VM_MATCH_OK; stack.count--; continue;
+                if (signal == TP_VM_OOM) return TP_VM_OOM;
+                if (signal == TP_VM_MATCH_OK) {
+                    signal = TP_VM_MATCH_OK; stack.count--; continue;
                 }
                 state->parser->builder.count = fr->saved_count;
                 state->position = fr->saved_pos;
@@ -2030,13 +2030,13 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                 state->recover       = in->pattern;
                 state->recover_fired = 0;
                 state->recover_start = fr->saved_pos;
-                if (in->target == PP_NO_INDEX) {
-                    fr->step = 2; signal = PP_VM_FAIL; continue;
+                if (in->target == TP_NO_INDEX) {
+                    fr->step = 2; signal = TP_VM_FAIL; continue;
                 }
                 stack.frames[stack.count - 1].step = 2;
-                if (!pp_vm_stack_push(arena, &stack, in->target, fr->sink,
+                if (!tp_vm_stack_push(arena, &stack, in->target, fr->sink,
                                       fr->field, fr->alias))
-                    return PP_VM_OOM;
+                    return TP_VM_OOM;
                 continue;
             } else {
                 state->recover       = fr->outer_recover;
@@ -2045,53 +2045,53 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                 stack.count--; continue;
             }
 
-        case PP_VM_INJECT: {
+        case TP_VM_INJECT: {
             /* Language injection (W62): match the REGION, then splice. The region
-            ** runs through pp_vm_do_inject's body callback, on a nested driver call
+            ** runs through tp_vm_do_inject's body callback, on a nested driver call
             ** (bounded by injection depth, not input nesting). */
             uint32_t region = in->target;
-            signal = pp_vm_do_inject(state, fr->sink, in->pattern,
-                                     pp_vm_inject_body_run, &region);
+            signal = tp_vm_do_inject(state, fr->sink, in->pattern,
+                                     tp_vm_inject_body_run, &region);
             stack.count--; continue;
         }
 
-        case PP_VM_DEFERRED_SLOT:
+        case TP_VM_DEFERRED_SLOT:
             /* Claim a per-invocation slot in the enclosing rule frame and succeed
             ** zero-width (no input consumed, no node emitted). A failed claim means
             ** the compile-time slot_count under-counted the declarations -- an
             ** invariant break that should never happen; fail cleanly. */
-            if (!pp_slot_claim(state, in->symbol)) {
-                signal = PP_VM_FAIL; stack.count--; continue;
+            if (!tp_slot_claim(state, in->symbol)) {
+                signal = TP_VM_FAIL; stack.count--; continue;
             }
-            signal = PP_VM_MATCH_OK; stack.count--; continue;
+            signal = TP_VM_MATCH_OK; stack.count--; continue;
 
-        case PP_VM_DEFER:
+        case TP_VM_DEFER:
             /* Match the child sub-pattern, then on success copy its byte span into
-            ** the parse arena and enqueue it onto the named slot. Mirrors PP_VM_GOAL
+            ** the parse arena and enqueue it onto the named slot. Mirrors TP_VM_GOAL
             ** so the match is tree-transparent: the child runs in the same sink with
             ** the same field/alias, building the identical CST. */
             if (fr->step == 0) {
                 fr->saved_pos = state->position;
                 fr->look      = fr->sink ? fr->sink->count : 0; /* node-index probe */
-                if (in->target == PP_NO_INDEX) {
-                    fr->step = 1; signal = PP_VM_FAIL; continue;
+                if (in->target == TP_NO_INDEX) {
+                    fr->step = 1; signal = TP_VM_FAIL; continue;
                 }
                 stack.frames[stack.count - 1].step = 1;
-                if (!pp_vm_stack_push(arena, &stack, in->target, fr->sink,
+                if (!tp_vm_stack_push(arena, &stack, in->target, fr->sink,
                                       fr->field, fr->alias))
-                    return PP_VM_OOM;
+                    return TP_VM_OOM;
                 continue;
             } else {
-                if (signal == PP_VM_MATCH_OK) {
+                if (signal == TP_VM_MATCH_OK) {
                     uint32_t start = fr->saved_pos;
                     uint32_t len   = state->position - start;
-                    pp_slot_frame *slot;
-                    pp_deferred_item item;
+                    tp_slot_frame *slot;
+                    tp_deferred_item item;
                     uint8_t *copy = 0;
                     if (len > 0) {
                         uint32_t b;
-                        copy = (uint8_t *)pp_alloc(arena, len);
-                        if (copy == 0) return PP_VM_OOM;
+                        copy = (uint8_t *)tp_alloc(arena, len);
+                        if (copy == 0) return TP_VM_OOM;
                         /* -fno-builtin: byte-copy loop, not memcpy. */
                         for (b = 0; b < len; b++)
                             copy[b] = state->input[start + b];
@@ -2100,29 +2100,29 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                     item.text_len = len;
                     /* node_index: best-effort post-parse cross-link -- the first
                     ** node the child added to the sink (the sink's items[] holds
-                    ** node indices). PP_NO_INDEX when the child added none. */
+                    ** node indices). TP_NO_INDEX when the child added none. */
                     item.node_index =
                         (fr->sink != 0 && fr->sink->count > fr->look)
-                            ? fr->sink->items[fr->look] : PP_NO_INDEX;
+                            ? fr->sink->items[fr->look] : TP_NO_INDEX;
                     item._pad     = 0;
-                    slot = pp_slot_resolve(state, in->symbol);
+                    slot = tp_slot_resolve(state, in->symbol);
                     if (slot != 0) {
-                        if (!pp_slot_push(arena, slot, item))
-                            return PP_VM_OOM;
+                        if (!tp_slot_push(arena, slot, item))
+                            return TP_VM_OOM;
                     }
                     /* No enclosing slot (dangling defer caught at compile time):
                     ** drop the item but pass the match through, keeping the tree. */
-                    stack.count--; continue; /* signal stays PP_VM_MATCH_OK */
+                    stack.count--; continue; /* signal stays TP_VM_MATCH_OK */
                 }
                 /* Child failed: nothing enqueued; pop and propagate the failure. */
                 stack.count--; continue;
             }
 
-        case PP_VM_PARSE_DEFERRED: {
+        case TP_VM_PARSE_DEFERRED: {
             /* DRAIN the slot FIFO: for each captured item, in order, invoke the
             ** target rule once, appending its CST as a sibling in the enclosing
             ** rule's body (the rule pushes into fr->sink, exactly like a plain
-            ** CALL). Modelled on PP_VM_REPEAT's multi-step loop but with DRAIN
+            ** CALL). Modelled on TP_VM_REPEAT's multi-step loop but with DRAIN
             ** semantics: the drain is COMMITTED -- it never backtracks and never
             ** fails. A failed rule invocation does NOT abort the drain; the
             ** cursor stays wherever the rule left it (including past recovery)
@@ -2135,10 +2135,10 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
             ** into its OWN fresh slots, never this one), so re-resolution is
             ** consistent and avoids any stale-pointer worry across stack growth.
             ** Phase 4 is NON-PARAMETRIZED: no param-stack push (Phase 7-8). */
-            pp_slot_frame *slot = pp_slot_resolve(state, in->symbol);
-            if (slot == 0 || slot->count == 0 || in->target == PP_NO_INDEX) {
+            tp_slot_frame *slot = tp_slot_resolve(state, in->symbol);
+            if (slot == 0 || slot->count == 0 || in->target == TP_NO_INDEX) {
                 /* Empty slot / no target: no-op success. */
-                signal = PP_VM_MATCH_OK; stack.count--; continue;
+                signal = TP_VM_MATCH_OK; stack.count--; continue;
             }
             if (fr->step == 0)
                 fr->reps = 0;
@@ -2148,45 +2148,45 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                 ** OOM, and do NOT restore state->position -- the cursor stays
                 ** wherever the rule left it. Advance by item index.
                 **
-                ** Phase 8: for a parametrized drain (in->max != PP_NO_INDEX) the
+                ** Phase 8: for a parametrized drain (in->max != TP_NO_INDEX) the
                 ** prologue pushed an instantiated pattern onto the goal-stack before
                 ** this item's rule ran; pop it now, BEFORE advancing to the next
                 ** item, so the push/pop balance per item even when the rule failed
                 ** (the drain is non-failing -- pop unconditionally). The OOM check
                 ** runs after the pop so the stack is left balanced even on OOM. */
-                if (in->max != PP_NO_INDEX)
-                    pp_param_stack_pop(&state->parser->param_stacks[in->max]);
-                if (signal == PP_VM_OOM) return PP_VM_OOM;
+                if (in->max != TP_NO_INDEX)
+                    tp_param_stack_pop(&state->parser->param_stacks[in->max]);
+                if (signal == TP_VM_OOM) return TP_VM_OOM;
                 fr->reps++;
             }
             if (fr->reps < slot->count) {
                 /* Phase 8: instantiate the captured delimiter into the param goal's
                 ** template pattern and push it before the rule runs (the lexer's
                 ** goal redirect reads the stack top). in->aux is the template rule
-                ** index; on a bad index pp_param_instantiate returns 0 -> OOM. */
-                if (in->max != PP_NO_INDEX) {
-                    pp_deferred_item item = slot->items[fr->reps];
-                    const pp_ir *pat = pp_param_instantiate(
+                ** index; on a bad index tp_param_instantiate returns 0 -> OOM. */
+                if (in->max != TP_NO_INDEX) {
+                    tp_deferred_item item = slot->items[fr->reps];
+                    const tp_ir *pat = tp_param_instantiate(
                         state->parser->arena, state->grammar, in->aux,
                         item.text, item.text_len);
                     if (pat == 0)
-                        return PP_VM_OOM;
-                    if (!pp_param_stack_push(state->parser->arena,
+                        return TP_VM_OOM;
+                    if (!tp_param_stack_push(state->parser->arena,
                                              &state->parser->param_stacks[in->max],
                                              pat))
-                        return PP_VM_OOM;
+                        return TP_VM_OOM;
                 }
                 stack.frames[stack.count - 1].step = 1;
-                if (!pp_vm_stack_push(arena, &stack, in->target, fr->sink,
-                                      PP_NO_SYMBOL, PP_NO_SYMBOL))
-                    return PP_VM_OOM;
+                if (!tp_vm_stack_push(arena, &stack, in->target, fr->sink,
+                                      TP_NO_SYMBOL, TP_NO_SYMBOL))
+                    return TP_VM_OOM;
                 continue;
             }
             /* All items drained. */
-            signal = PP_VM_MATCH_OK; stack.count--; continue;
+            signal = TP_VM_MATCH_OK; stack.count--; continue;
         }
 
-        case PP_VM_NOT_RULE:
+        case TP_VM_NOT_RULE:
             /* Rule-level negative lookahead `(not GUARD BODY)': GUARD (in->pattern,
             ** with optional goal trigger in in->symbol) is a token-level lookahead
             ** at the current position; BODY (in->target) is a rule-level program.
@@ -2196,20 +2196,20 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
             if (fr->step == 0) {
                 /* Evaluate the guard PURELY through the shared helper (the SAME the
                 ** generated parser calls): it routes a goal-triggered guard through
-                ** pp_vm_goal_redirect_param / pp_vm_goal_redirect and matches without
+                ** tp_vm_goal_redirect_param / tp_vm_goal_redirect and matches without
                 ** advancing the cursor. Guard present -> the NOT fails; the guard does
                 ** NOT consume extras (child[0] is a raw-byte lookahead at the current
                 ** position); child[1]'s CALL consumes its own leading extras. */
-                if (pp_vm_not_rule_guard(state, in->pattern, in->symbol)) {
-                    signal = PP_VM_FAIL; stack.count--; continue;
+                if (tp_vm_not_rule_guard(state, in->pattern, in->symbol)) {
+                    signal = TP_VM_FAIL; stack.count--; continue;
                 }
-                if (in->target == PP_NO_INDEX) {
-                    signal = PP_VM_FAIL; stack.count--; continue;
+                if (in->target == TP_NO_INDEX) {
+                    signal = TP_VM_FAIL; stack.count--; continue;
                 }
                 stack.frames[stack.count - 1].step = 1;
-                if (!pp_vm_stack_push(arena, &stack, in->target, fr->sink,
+                if (!tp_vm_stack_push(arena, &stack, in->target, fr->sink,
                                       fr->field, fr->alias))
-                    return PP_VM_OOM;
+                    return TP_VM_OOM;
                 continue;
             } else {
                 /* Resume: BODY returned `signal' (MATCH_OK / FAIL / OOM); pass it
@@ -2218,20 +2218,20 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
             }
 
         default:
-            signal = PP_VM_FAIL; stack.count--; continue;
+            signal = TP_VM_FAIL; stack.count--; continue;
         }
     }
     return signal;
 }
 
 /* ** Freeze the parser's node builder into an immutable tree. */
-pocketparse_result pp_vm_freeze_tree(pocketparse_parser *parser,
+tinyparse_result tp_vm_freeze_tree(tinyparse_parser *parser,
                                      uint32_t root)
 {
-    pocketparse_tree *tree = (pocketparse_tree *)pp_alloc(
+    tinyparse_tree *tree = (tinyparse_tree *)tp_alloc(
         parser->arena, sizeof *tree);
     if (tree == 0)
-        return POCKETPARSE_OUT_OF_MEMORY;
+        return TINYPARSE_OUT_OF_MEMORY;
     tree->arena         = parser->arena;
     tree->interner      = &parser->grammar->interner;
     tree->nodes         = parser->builder.nodes;
@@ -2239,15 +2239,15 @@ pocketparse_result pp_vm_freeze_tree(pocketparse_parser *parser,
     tree->node_capacity = parser->builder.capacity;
     tree->root          = root;
     parser->tree = tree;
-    return POCKETPARSE_OK;
+    return TINYPARSE_OK;
 }
 
-/* ** Initialise a pp_vm_state for a fresh parse of `parser' over `program',
+/* ** Initialise a tp_vm_state for a fresh parse of `parser' over `program',
 ** building the token index and the (adaptive) rule memo. Factored out of
-** pp_execute_vm so the generated recursive descent (W14-3) starts from
+** tp_execute_vm so the generated recursive descent (W14-3) starts from
 ** byte-identical state. */
-void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
-                      const pp_program *program)
+void tp_vm_state_init(tp_vm_state *state, tinyparse_parser *parser,
+                      const tp_program *program)
 {
     state->parser        = parser;
     state->grammar       = parser->grammar;
@@ -2258,7 +2258,7 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
     state->recover       = 0;
     state->recover_fired = 0;
     state->recover_start = 0;
-    state->active_goal   = PP_NO_SYMBOL;
+    state->active_goal   = TP_NO_SYMBOL;
     state->no_extras     = 0;
     /* The held `attach: leading' trivia buffer starts empty; it grows lazily from
     ** parser->arena the first time a LEADING comment is scanned. */
@@ -2270,7 +2270,7 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
     ** stack and never recurses on the C stack). The generated parser lowers
     ** depth_limit to its measured value after this init. */
     state->depth         = 0;
-    state->depth_limit   = PP_NO_INDEX;
+    state->depth_limit   = TP_NO_INDEX;
     /* Default: heap-allocate each rule's child sink (safe for the VM's relocatable
     ** frame stack). The generated native parser sets children_inline = 1 after init,
     ** since its frames are stable C locals (W16-GOAL). */
@@ -2281,7 +2281,7 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
     /* The per-position TOKEN memo is no longer consulted on the parse path (W16-GOAL:
     ** every caller passes 0 -- it churned the cache faster than it saved re-matches on
     ** a clean predictive parse). Leave it DISABLED (capacity 0) rather than allocating
-    ** an input-scaled slot table the parse never reads. pp_token_match_memo still takes
+    ** an input-scaled slot table the parse never reads. tp_token_match_memo still takes
     ** the parameter (and honours a live table) so the matcher's contract is unchanged;
     ** the parse simply never hands it one. */
     state->memo.slots    = 0;
@@ -2290,12 +2290,12 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
     state->memo.mask     = 0;
     state->memo.count    = 0;
     state->memo.arena    = parser->arena;
-    pp_extras_memo_init(&state->extras_memo, parser->arena, parser->input_length);
+    tp_extras_memo_init(&state->extras_memo, parser->arena, parser->input_length);
 
     /* W17-CST: pre-size the CST node array from the input length. The node array
     ** grew by doubling from 32, and arenas never realloc in place, so each
     ** doubling COPIED every node already built -- the copy loop in
-    ** pp_tree_builder_push and the memcpy it drives were a top profile slice. A real
+    ** tp_tree_builder_push and the memcpy it drives were a top profile slice. A real
     ** parse settles near one node per few input bytes, so reserving input_length/4
     ** up front (when the builder is still empty -- it is, this is the first push of
     ** the parse) absorbs essentially all the growth into one allocation. It is a
@@ -2304,7 +2304,7 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
     ** an already-grown builder (the buffer-friendly resume path keeps its array). */
     if (parser->builder.capacity == 0 && parser->input_length >= 256u) {
         uint32_t want = parser->input_length / 4u;
-        pp_node *nodes = (pp_node *)pp_alloc_raw(parser->builder.arena,
+        tp_node *nodes = (tp_node *)tp_alloc_raw(parser->builder.arena,
                                                  want * sizeof *nodes);
         if (nodes != 0) {
             parser->builder.nodes    = nodes;
@@ -2314,24 +2314,24 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
 
     /* Build the O(1) token-by-symbol index once per grammar (W66). */
     if (parser->grammar->token_index == 0)
-        pp_vm_build_token_index(parser->grammar);
+        tp_vm_build_token_index(parser->grammar);
 
     /* Build the extras lead-byte fast-path set once per grammar (W16-1) so the
     ** per-terminal consume_extras can reject a non-extra cursor byte in O(1). */
     if (parser->grammar->extras_lead_state == 0)
-        pp_extras_lead_build(parser->grammar);
+        tp_extras_lead_build(parser->grammar);
 
     /* Build the O(1) hidden-rule-by-symbol index once per grammar (W17-FLAT) so
     ** the shared node-close can decide collapse with one array read. Shared by the
-    ** VM and the generated parser (both run pp_vm_state_init), so they flatten
+    ** VM and the generated parser (both run tp_vm_state_init), so they flatten
     ** identically. */
-    pp_grammar_build_hidden_index(parser->grammar);
+    tp_grammar_build_hidden_index(parser->grammar);
 
     /* The rule memo (W67) bounds PEG backtracking; scoped to this parse. It is
-    ** dormant until the parse goes super-linear (see pp_vm_state), so a clean parse
-    ** never pays for it. POCKETPARSE_RULEMEMO=always forces it on from the first
+    ** dormant until the parse goes super-linear (see tp_vm_state), so a clean parse
+    ** never pays for it. TINYPARSE_RULEMEMO=always forces it on from the first
     ** call (used by the differential to exercise the replay path); =off disables it. */
-    pp_rule_memo_init(&state->rule_memo, parser->arena, parser->input_length);
+    tp_rule_memo_init(&state->rule_memo, parser->arena, parser->input_length);
     state->call_attempts = 0;
     state->memo_active   = 0;
     /* Threshold: a linear parse does O(input) attempts; this multiple of the input
@@ -2341,8 +2341,8 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
     state->memo_threshold = parser->input_length * 32u + 65536u;
     if (parser->engine->vm_rule_memo_force == 1) {       /* always on */
         state->memo_active = 1;
-        pp_rule_memo_ensure(&state->rule_memo);          /* build now: forced on */
-        pp_extras_memo_ensure(&state->extras_memo);
+        tp_rule_memo_ensure(&state->rule_memo);          /* build now: forced on */
+        tp_extras_memo_ensure(&state->extras_memo);
     } else if (parser->engine->vm_rule_memo_force == 2) {/* off */
         state->memo_threshold = 0xFFFFFFFFu;
     }
@@ -2352,24 +2352,24 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
 ** engine since W14-5. It pushes the Source node, parses the start body into the
 ** root's children through the VM dispatch loop, consumes trailing extras, links,
 ** and reports trailing/leftover input. The tree and diagnostics are byte-identical
-** to the C-compiled parser's (ci/pocketparse-cc-diff.sh), anchored by the conformance suite. */
-pocketparse_result pp_execute_vm(pocketparse_parser *parser)
+** to the C-compiled parser's (ci/tinyparse-cc-diff.sh), anchored by the conformance suite. */
+tinyparse_result tp_execute_vm(tinyparse_parser *parser)
 {
-    pp_vm_state         state;
-    pp_program         *program;
-    const pp_rule_def  *start;
-    pp_vm_sink          children;
+    tp_vm_state         state;
+    tp_program         *program;
+    const tp_rule_def  *start;
+    tp_vm_sink          children;
     uint32_t            root;
     int                 sig;
-#ifdef PP_DEBUG_INTERN_GUARD
+#ifdef TP_DEBUG_INTERN_GUARD
     /* W44 tripwire: no name may be interned during the parse. Snapshot the global
     ** call counter and assert at every return that it has not moved. */
-    unsigned long       interns_before = pp_intern_call_count;
-#define PP_GUARD_NO_INTERN() \
-    assert(pp_intern_call_count == interns_before && \
-           "W44: pp_intern called on the parse hot path")
+    unsigned long       interns_before = tp_intern_call_count;
+#define TP_GUARD_NO_INTERN() \
+    assert(tp_intern_call_count == interns_before && \
+           "W44: tp_intern called on the parse hot path")
 #else
-#define PP_GUARD_NO_INTERN() ((void)0)
+#define TP_GUARD_NO_INTERN() ((void)0)
 #endif
 
     /* Locate the start rule, then lower the grammar. */
@@ -2383,9 +2383,9 @@ pocketparse_result pp_execute_vm(pocketparse_parser *parser)
             }
     }
     if (start == 0) {
-        pp_diag_error(&parser->diagnostics, "parse.no-start",
+        tp_diag_error(&parser->diagnostics, "parse.no-start",
                       "error: start rule not found", 0, 0, "missing start rule");
-        return POCKETPARSE_SYNTAX_ERROR;
+        return TINYPARSE_SYNTAX_ERROR;
     }
 
     /* Lower the grammar once per start symbol and reuse it across parses: the
@@ -2399,66 +2399,66 @@ pocketparse_result pp_execute_vm(pocketparse_parser *parser)
         ** parse, so it MUST come from the grammar's (persistent) arena, not the
         ** per-parser arena -- a per-parser child arena is reset on parser_free, and
         ** a cache pointing into reset memory would dangle on the next parse. */
-        program = pp_compile_program(parser->grammar->arena, parser->grammar,
+        program = tp_compile_program(parser->grammar->arena, parser->grammar,
                                      parser->start_symbol);
         if (program == 0)
-            return POCKETPARSE_OUT_OF_MEMORY;
+            return TINYPARSE_OUT_OF_MEMORY;
         parser->grammar->vm_program       = program;
         parser->grammar->vm_program_start = parser->start_symbol;
     }
-    pp_vm_state_init(&state, parser, program);
+    tp_vm_state_init(&state, parser, program);
 
     children.items = 0; children.count = 0; children.capacity = 0;
-    children.parent = PP_NO_INDEX;   /* root: legacy full pp_vm_link_children pass */
-    root = pp_tree_builder_push(&parser->builder, start->symbol, PP_NO_SYMBOL,
-                                0, parser->input_length, PP_NO_INDEX);
-    if (root == PP_NO_INDEX)
-        return POCKETPARSE_OUT_OF_MEMORY;
+    children.parent = TP_NO_INDEX;   /* root: legacy full tp_vm_link_children pass */
+    root = tp_tree_builder_push(&parser->builder, start->symbol, TP_NO_SYMBOL,
+                                0, parser->input_length, TP_NO_INDEX);
+    if (root == TP_NO_INDEX)
+        return TINYPARSE_OUT_OF_MEMORY;
 
-    sig = pp_vm_run(&state, program->start_program, &children,
-                    PP_NO_SYMBOL, PP_NO_SYMBOL);
-    if (sig == PP_VM_OOM)
-        return POCKETPARSE_OUT_OF_MEMORY;
+    sig = tp_vm_run(&state, program->start_program, &children,
+                    TP_NO_SYMBOL, TP_NO_SYMBOL);
+    if (sig == TP_VM_OOM)
+        return TINYPARSE_OUT_OF_MEMORY;
 
-    if (sig != PP_VM_MATCH_OK) {
-        pp_diag_error(&parser->diagnostics, "parse.syntax",
+    if (sig != TP_VM_MATCH_OK) {
+        tp_diag_error(&parser->diagnostics, "parse.syntax",
                       "error: unexpected input", state.position,
                       state.position < parser->input_length
                           ? state.position + 1 : state.position,
                       "parse failed here");
-        pp_vm_link_children(&parser->builder, root, &children);
-        pp_vm_freeze_tree(parser, root);
-        PP_GUARD_NO_INTERN();
-        return POCKETPARSE_SYNTAX_ERROR;
+        tp_vm_link_children(&parser->builder, root, &children);
+        tp_vm_freeze_tree(parser, root);
+        TP_GUARD_NO_INTERN();
+        return TINYPARSE_SYNTAX_ERROR;
     }
 
     /* Trailing extras after the start rule, then drain any held `attach: leading'
     ** comment (an end-of-input doc comment with nothing following): this is a
     ** finalizer that opens no node, so the buffer must be flushed explicitly or the
     ** comment is stranded. */
-    pp_vm_consume_extras(&state, &children);
-    pp_vm_flush_held(&state, &children);
+    tp_vm_consume_extras(&state, &children);
+    tp_vm_flush_held(&state, &children);
 
-    pp_vm_link_children(&parser->builder, root, &children);
+    tp_vm_link_children(&parser->builder, root, &children);
     parser->builder.nodes[root].end_byte = parser->input_length;
 
     if (state.position < parser->input_length) {
-        pp_diag_error(&parser->diagnostics, "parse.trailing",
+        tp_diag_error(&parser->diagnostics, "parse.trailing",
                       "error: unexpected trailing input", state.position,
                       state.position + 1, "unexpected here");
-        pp_vm_freeze_tree(parser, root);
-        PP_GUARD_NO_INTERN();
-        return POCKETPARSE_SYNTAX_ERROR;
+        tp_vm_freeze_tree(parser, root);
+        TP_GUARD_NO_INTERN();
+        return TINYPARSE_SYNTAX_ERROR;
     }
 
-    PP_GUARD_NO_INTERN();
-    return pp_vm_freeze_tree(parser, root);
+    TP_GUARD_NO_INTERN();
+    return tp_vm_freeze_tree(parser, root);
 }
-#undef PP_GUARD_NO_INTERN
+#undef TP_GUARD_NO_INTERN
 
 /* ** The buffer-friendly top-level item loop (W17-4). See the contract in
 ** internal.h. The generated <prefix>_run_chunk has already built the lowered
-** program and called pp_vm_state_init + set depth_limit / extras_match /
+** program and called tp_vm_state_init + set depth_limit / extras_match /
 ** children_inline, so `state' is ready; here we only own the resumable top-level
 ** loop and the finalisation. The native generated parser cannot suspend mid-stack,
 ** so the ONLY suspension point is this loop's item boundary, where the C stack is
@@ -2472,13 +2472,13 @@ pocketparse_result pp_execute_vm(pocketparse_parser *parser)
 ** differently. With input_complete set on the final chunk the loop runs the exact
 ** same finalisation (trailing extras, link, EOF/trailing check, freeze) as the
 ** whole-input driver, over the same items in the same order. */
-pocketparse_result pp_parser_chunk_loop(
-    pp_vm_state *state,
-    int (*item_fn)(pp_vm_state *, pp_vm_sink *, uint32_t, uint32_t),
+tinyparse_result tp_parser_chunk_loop(
+    tp_vm_state *state,
+    int (*item_fn)(tp_vm_state *, tp_vm_sink *, uint32_t, uint32_t),
     int has_eof, uint32_t min)
 {
-    pocketparse_parser *parser = state->parser;
-    pp_vm_sink         *children = &parser->bf_children;
+    tinyparse_parser *parser = state->parser;
+    tp_vm_sink         *children = &parser->bf_children;
     uint32_t            reps;
     uint32_t            saved_recover_start;
 
@@ -2486,17 +2486,17 @@ pocketparse_result pp_parser_chunk_loop(
     ** input, extended on freeze) and reset the persistent child sink. The root is
     ** built once and kept across MORE returns. */
     if (!parser->bf_active) {
-        uint32_t root = pp_tree_builder_push(&parser->builder, parser->start_symbol,
-                                             PP_NO_SYMBOL, 0, parser->input_length,
-                                             PP_NO_INDEX);
-        if (root == PP_NO_INDEX)
-            return POCKETPARSE_OUT_OF_MEMORY;
+        uint32_t root = tp_tree_builder_push(&parser->builder, parser->start_symbol,
+                                             TP_NO_SYMBOL, 0, parser->input_length,
+                                             TP_NO_INDEX);
+        if (root == TP_NO_INDEX)
+            return TINYPARSE_OUT_OF_MEMORY;
         parser->bf_root           = root;
         parser->bf_position       = 0;
         parser->bf_children.items = 0;
         parser->bf_children.count = 0;
         parser->bf_children.capacity = 0;
-        parser->bf_children.parent = PP_NO_INDEX; /* root: legacy link pass */
+        parser->bf_children.parent = TP_NO_INDEX; /* root: legacy link pass */
         parser->bf_active         = 1;
     }
 
@@ -2524,14 +2524,14 @@ pocketparse_result pp_parser_chunk_loop(
         ** ask for more. bf_position already names this item start. */
         if (!parser->input_complete && mark_pos >= parser->input_length) {
             parser->bf_position = mark_pos;
-            return POCKETPARSE_MORE;
+            return TINYPARSE_MORE;
         }
 
-        sig = item_fn(state, children, PP_NO_SYMBOL, PP_NO_SYMBOL);
-        if (sig == PP_VM_OOM)
-            return POCKETPARSE_OUT_OF_MEMORY;
+        sig = item_fn(state, children, TP_NO_SYMBOL, TP_NO_SYMBOL);
+        if (sig == TP_VM_OOM)
+            return TINYPARSE_OUT_OF_MEMORY;
 
-        if (sig != PP_VM_MATCH_OK || state->position == mark_pos) {
+        if (sig != TP_VM_MATCH_OK || state->position == mark_pos) {
             /* The item did not match (or made no progress): the repeat ends here.
             ** Roll the marks back to before the attempt. */
             parser->builder.count = mark_count;
@@ -2553,7 +2553,7 @@ pocketparse_result pp_parser_chunk_loop(
             state->held_count     = mark_held;
             state->content_end    = mark_content;
             parser->bf_position   = mark_pos;
-            return POCKETPARSE_MORE;
+            return TINYPARSE_MORE;
         }
 
         /* Commit this item and continue. */
@@ -2567,53 +2567,53 @@ pocketparse_result pp_parser_chunk_loop(
     ** every item that fits; the next call (with more bytes, or input_complete) does
     ** the rest. We return MORE rather than freeze a partial tree. */
     if (!parser->input_complete)
-        return POCKETPARSE_MORE;
+        return TINYPARSE_MORE;
 
     /* Input is complete: finalise exactly as the whole-input driver does. */
     if (reps < min) {
-        pp_diag_error(&parser->diagnostics, "parse.syntax",
+        tp_diag_error(&parser->diagnostics, "parse.syntax",
                       "error: unexpected input", state->position,
                       state->position < parser->input_length
                           ? state->position + 1 : state->position,
                       "parse failed here");
-        pp_vm_link_children(&parser->builder, parser->bf_root, children);
-        pp_vm_freeze_tree(parser, parser->bf_root);
-        return POCKETPARSE_SYNTAX_ERROR;
+        tp_vm_link_children(&parser->builder, parser->bf_root, children);
+        tp_vm_freeze_tree(parser, parser->bf_root);
+        return TINYPARSE_SYNTAX_ERROR;
     }
 
     /* Trailing extras after the last item, then the optional EOF. When the start
-    ** body ends in EOF, pp_vm_do_eof consumes the trailing extras itself (exactly
+    ** body ends in EOF, tp_vm_do_eof consumes the trailing extras itself (exactly
     ** as the whole-input driver runs the SEQ's EOF child), so do not consume them
     ** twice; otherwise consume them here as the driver's tail does. */
     if (has_eof) {
-        int sig = pp_vm_do_eof(state, children);
-        if (sig == PP_VM_OOM)
-            return POCKETPARSE_OUT_OF_MEMORY;
-        if (sig != PP_VM_MATCH_OK) {
-            pp_diag_error(&parser->diagnostics, "parse.syntax",
+        int sig = tp_vm_do_eof(state, children);
+        if (sig == TP_VM_OOM)
+            return TINYPARSE_OUT_OF_MEMORY;
+        if (sig != TP_VM_MATCH_OK) {
+            tp_diag_error(&parser->diagnostics, "parse.syntax",
                           "error: unexpected input", state->position,
                           state->position < parser->input_length
                               ? state->position + 1 : state->position,
                           "parse failed here");
-            pp_vm_link_children(&parser->builder, parser->bf_root, children);
-            pp_vm_freeze_tree(parser, parser->bf_root);
-            return POCKETPARSE_SYNTAX_ERROR;
+            tp_vm_link_children(&parser->builder, parser->bf_root, children);
+            tp_vm_freeze_tree(parser, parser->bf_root);
+            return TINYPARSE_SYNTAX_ERROR;
         }
     } else {
-        pp_vm_consume_extras(state, children);
-        pp_vm_flush_held(state, children); /* drain a stranded end-of-input doc comment */
+        tp_vm_consume_extras(state, children);
+        tp_vm_flush_held(state, children); /* drain a stranded end-of-input doc comment */
     }
 
-    pp_vm_link_children(&parser->builder, parser->bf_root, children);
+    tp_vm_link_children(&parser->builder, parser->bf_root, children);
     parser->builder.nodes[parser->bf_root].end_byte = parser->input_length;
 
     if (state->position < parser->input_length) {
-        pp_diag_error(&parser->diagnostics, "parse.trailing",
+        tp_diag_error(&parser->diagnostics, "parse.trailing",
                       "error: unexpected trailing input", state->position,
                       state->position + 1, "unexpected here");
-        pp_vm_freeze_tree(parser, parser->bf_root);
-        return POCKETPARSE_SYNTAX_ERROR;
+        tp_vm_freeze_tree(parser, parser->bf_root);
+        return TINYPARSE_SYNTAX_ERROR;
     }
 
-    return pp_vm_freeze_tree(parser, parser->bf_root);
+    return tp_vm_freeze_tree(parser, parser->bf_root);
 }

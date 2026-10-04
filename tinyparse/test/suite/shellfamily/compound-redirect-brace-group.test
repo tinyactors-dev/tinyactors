@@ -1,7 +1,7 @@
 # A redirect on a brace group: `{ a; } 2>err`. The fd-2 Redirect attaches to the
 # CompoundCommand, after the BraceGroup.
 <<<cmd
-printf '{ a; } 2>err\n' | "$PP" run std.shell --input - --dump-tree
+printf '{ a; } 2>err\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -3,7 +3,7 @@
 # operators appeared — body for A first, then body for B (FIFO). Two
 # HeredocRedirects, two HeredocBodies, A's body before B's.
 <<<cmd
-printf 'cat <<A <<B\naaa\nA\nbbb\nB\n' | "$PP" run std.shell --input - --dump-tree
+printf 'cat <<A <<B\naaa\nA\nbbb\nB\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

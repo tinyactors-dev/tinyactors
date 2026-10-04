@@ -1,6 +1,6 @@
 # Corpus: a bare $, a trailing $ after an expansion, and $$.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/commands__9.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/commands__9.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

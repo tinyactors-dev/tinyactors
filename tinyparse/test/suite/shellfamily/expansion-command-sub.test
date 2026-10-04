@@ -1,7 +1,7 @@
 # Command substitution `$(command)` (POSIX §2.6.3): the body is the recursive
 # command grammar, here a single simple command.
 <<<cmd
-printf 'echo $(date)\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo $(date)\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

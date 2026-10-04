@@ -2,7 +2,7 @@
 # redirect attaches to the body CompoundCommand (POSIX §2.9.4 redirect_list),
 # which the function body carries for free.
 <<<cmd
-printf 'f() { cat; } >out\n' | "$PP" run std.shell --input - --dump-tree
+printf 'f() { cat; } >out\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

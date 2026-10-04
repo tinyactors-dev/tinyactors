@@ -5,7 +5,7 @@
 # the (parse-deferred s Body) drain finds the slot empty and invokes Body zero
 # times. This is the milestone-5 proof (failed branch discards).
 <<<cmd
-printf 'hello\nextra\n' | "$PP" run test/suite/lexgoal/slot-rollback-choice.scm --input - --dump-tree
+printf 'hello\nextra\n' | "$TP" run test/suite/lexgoal/slot-rollback-choice.scm --input - --dump-tree
 <<<assert
 exit 0
 out-count 0 Body [

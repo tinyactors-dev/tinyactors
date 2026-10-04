@@ -1,6 +1,6 @@
 # Remove-smallest-suffix `${name%pattern}` (POSIX §2.6.2): the `%` operator.
 <<<cmd
-printf 'echo ${x%%suf}\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo ${x%%suf}\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

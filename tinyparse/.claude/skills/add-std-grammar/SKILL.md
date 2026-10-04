@@ -1,9 +1,9 @@
 ---
 name: add-std-grammar
-description: Add a new grammar (or grammar family) to the pocketparse standard library under `grammars/std/`. Use when porting a language to pocketparse as a built-in, extending an existing std grammar with a dialect, or establishing the full lifecycle — reference pin, package manifest, grammar source, test corpus, xfail seed, build embedding — for a grammar that will live alongside std.javascript and friends.
+description: Add a new grammar (or grammar family) to the tinyparse standard library under `grammars/std/`. Use when porting a language to tinyparse as a built-in, extending an existing std grammar with a dialect, or establishing the full lifecycle — reference pin, package manifest, grammar source, test corpus, xfail seed, build embedding — for a grammar that will live alongside std.javascript and friends.
 ---
 
-# Adding a standard grammar to pocketparse
+# Adding a standard grammar to tinyparse
 
 The JS/TS family is the canonical template: `std.javascript` is the base;
 `std.typescript` and `std.tsx` extend it with `(extends std.javascript)` and
@@ -93,9 +93,9 @@ entry rule the host calls as `provides:`.
 ; package.scm — std.<name>
 ; One sentence: what language this covers and where it was ported from.
 ; Ported (the LANGUAGE, not the code) from the build-time reference under
-; tools/pocketparse/reference/<reference-name>/. No third-party code is copied.
+; tools/tinyparse/reference/<reference-name>/. No third-party code is copied.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (package
   name: std.<name>
@@ -107,7 +107,7 @@ entry rule the host calls as `provides:`.
 **Dialect that extends the base:**
 
 ```scheme
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (package
   name: std.<dialect>
@@ -152,7 +152,7 @@ Start the file with the module declaration and grammar head:
 ; Ported (the LANGUAGE, not the code) from reference/<...>. Node names follow
 ; tree-sitter where reasonable.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module std.<name>)
 
@@ -226,7 +226,7 @@ Key structural decisions to make before writing rules:
 A dialect grammar adds and overrides; it does not re-state the base.
 
 ```scheme
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module std.<dialect>)
 
@@ -294,7 +294,7 @@ the existing jsfamily and tsfamily convention).
   `out-absent ERROR` and `out-absent MISSING`, not tree-equality. The reference
   output is only useful to understand what the tree-sitter grammar produces; do not
   paste it into the `.test` file as a `stdout:` golden. If you do, the test will fail
-  every time the tree shapes differ (they will — pocketparse's CST and tree-sitter's
+  every time the tree shapes differ (they will — tinyparse's CST and tree-sitter's
   are not identical).
 - *One file per corpus section vs. multi-section files.* If you keep multiple corpus
   sections in one input file, a single ERROR anywhere in the file makes the whole test
@@ -314,7 +314,7 @@ One `.test` file per input file. The standard shape for a "parses cleanly" case:
 
 ```
 <<<cmd
-"$PP" run std.<name> --input test/suite/<family>/inputs/<name>.sql --dump-tree
+"$TP" run std.<name> --input test/suite/<family>/inputs/<name>.sql --dump-tree
 <<<assert
 exit 0
 out-absent ERROR
@@ -325,7 +325,7 @@ For a "rejects a deliberately malformed input" case:
 
 ```
 <<<cmd
-"$PP" run std.<name> --input test/suite/<family>/inputs/<name>_bad.sql --dump-tree
+"$TP" run std.<name> --input test/suite/<family>/inputs/<name>_bad.sql --dump-tree
 <<<assert
 exit-not 0
 ```
@@ -334,7 +334,7 @@ Or a structural assertion (verifies the tree shape, not just acceptance):
 
 ```
 <<<cmd
-"$PP" run std.<name> --input test/suite/<family>/inputs/<name>.sql --dump-tree
+"$TP" run std.<name> --input test/suite/<family>/inputs/<name>.sql --dump-tree
 <<<assert
 exit 0
 out-absent ERROR
@@ -348,8 +348,8 @@ out-count 2 join_clause
   resolves package names from the embedded registry built by `build.sh gen_grammars`.
   Until you run `mise run build` (or `bash build.sh all`), the name does not exist.
   Use a file path instead during early authoring:
-  `"$PP" run grammars/std/<name>/grammar.scm --input …`
-- *`$PP` path wrong in `cmd`.* The harness sets `$PP` to the built CLI. If the build
+  `"$TP" run grammars/std/<name>/grammar.scm --input …`
+- *`$TP` path wrong in `cmd`.* The harness sets `$TP` to the built CLI. If the build
   has not run at all, every test in the suite will fail with "command not found".
   Run `mise run build` once before running the metric.
 - *Test name collision.* A test's identity is its path below `suite/` without the
@@ -394,14 +394,14 @@ first metric run.
 
 ```sh
 mise run build            # or: bash build.sh all
-pocketparse grammars      # check std.<name> appears in the list
-pocketparse check grammars/std/<name>/grammar.scm   # compile the grammar, report errors
+tinyparse grammars      # check std.<name> appears in the list
+tinyparse check grammars/std/<name>/grammar.scm   # compile the grammar, report errors
 ```
 
 Then run a quick smoke test against a known-good input before touching the metric:
 
 ```sh
-echo "SELECT 1;" | pocketparse run std.<name> --dump-tree
+echo "SELECT 1;" | tinyparse run std.<name> --dump-tree
 ```
 
 **Failure modes**
@@ -410,7 +410,7 @@ echo "SELECT 1;" | pocketparse run std.<name> --dump-tree
   or rule and the reason. Common causes: duplicate name, undefined reference (a rule
   that calls a token or rule that was not defined), unbalanced parentheses in the
   `.scm` reader, bad regex pattern.
-- *Grammar not listed by `pocketparse grammars`.* `build.sh gen_grammars` scans
+- *Grammar not listed by `tinyparse grammars`.* `build.sh gen_grammars` scans
   `grammars/std/*/package.scm`; if the file is missing or malformed (reader error),
   the entry is skipped silently. Run `bash build.sh gen_grammars` with `set -x` to
   see which files it processes. Also check that `src/grammars_data.h` was regenerated
@@ -420,7 +420,7 @@ echo "SELECT 1;" | pocketparse run std.<name> --dump-tree
   embedded registry. If `std.<dialect>` extends `std.<base>` and `std.<base>` was
   not embedded (perhaps because its `package.scm` had a reader error that silently
   skipped it), the dialect will fail with "package not found" at grammar-compile time.
-  Run `pocketparse grammars` to verify every member of the chain is listed.
+  Run `tinyparse grammars` to verify every member of the chain is listed.
 
 ---
 
@@ -429,14 +429,14 @@ echo "SELECT 1;" | pocketparse run std.<name> --dump-tree
 Run the metric:
 
 ```sh
-bash ci/pocketparse-metric.sh
+bash ci/tinyparse-metric.sh
 ```
 
 Pick a failing category (e.g. `sqlfamily/expressions`), run those tests
 individually to read the tree output, fix the grammar rule responsible, re-run:
 
 ```sh
-pocketparse run grammars/std/<name>/grammar.scm \
+tinyparse run grammars/std/<name>/grammar.scm \
   --input test/suite/<family>/inputs/expressions__1.sql --dump-tree
 ```
 
@@ -448,7 +448,7 @@ When a test passes, delete its line from `xfail.list`. The metric's
 - *Fixing one rule breaks another.* A rule change that makes `expressions__3` pass
   may make `declarations__5` fail. After each grammar edit, run the full metric
   rather than individual tests — a drop in PROGRESS is the signal.
-- *`ERROR` node in the tree but exit code 0.* pocketparse exits 0 even when it
+- *`ERROR` node in the tree but exit code 0.* tinyparse exits 0 even when it
   recovers from parse errors (the tree contains `ERROR` or `MISSING` nodes). The
   test asserts `out-absent ERROR` — check the dump for recovery nodes, not just the
   exit code.
@@ -466,9 +466,9 @@ When a test passes, delete its line from `xfail.list`. The metric's
 Once PROGRESS reaches the full count and `xfail.list` is empty:
 
 ```sh
-bash ci/pocketparse-metric.sh          # conformance green
-bash ci/pocketparse-vm-diff.sh         # bytecode VM == recursive oracle
-bash ci/pocketparse-cc-diff.sh         # generated C parser == bytecode VM
+bash ci/tinyparse-metric.sh          # conformance green
+bash ci/tinyparse-vm-diff.sh         # bytecode VM == recursive oracle
+bash ci/tinyparse-cc-diff.sh         # generated C parser == bytecode VM
 ```
 
 The differential gates ensure that every engine produces byte-identical trees
@@ -482,7 +482,7 @@ deliberately; a change claimed to be performance-only must leave all three green
   rule that exercises a code path not yet covered by the other engine — report it
   as a differential divergence and investigate rather than masking.
 - *cc-diff has no generated parser yet for the new grammar.* The generated C
-  parser must be explicitly produced with `pocketparse c --parser-lib` targeting
+  parser must be explicitly produced with `tinyparse c --parser-lib` targeting
   the new grammar. If it has not been generated, `cc-diff` cannot run it — either
   generate it (and add it to the diff corpus) or mark the diff gate as pending for
   this grammar until the grammar has stabilised.
@@ -494,7 +494,7 @@ deliberately; a change claimed to be performance-only must leave all three green
 Run a timing check with the rule memo disabled over a deeply-nested input:
 
 ```sh
-POCKETPARSE_RULEMEMO=off pocketparse run grammars/std/<name>/grammar.scm \
+TINYPARSE_RULEMEMO=off tinyparse run grammars/std/<name>/grammar.scm \
   --input <deeply-nested.sql> --dump-tree
 ```
 
@@ -512,11 +512,11 @@ before declaring the grammar settled.
 
 - *Memo hides the problem.* With the memo on, a deeply-nested file parses fast
   even with an unfactored grammar — the cached result short-circuits the re-parse.
-  Always measure with `POCKETPARSE_RULEMEMO=off` to see the grammar's actual cost.
+  Always measure with `TINYPARSE_RULEMEMO=off` to see the grammar's actual cost.
   Only disable the memo for this measurement; leave it on for production.
 - *Factoring shifts the tree shape.* An assignment's LHS may become a
   `ternary_expression` node instead of a dedicated `lhs` wrapper after factoring.
-  This is acceptable — pocketparse conformance is accept-level, not tree-equality.
+  This is acceptable — tinyparse conformance is accept-level, not tree-equality.
   Verify that the corpus still accepts/rejects the same inputs, not that every node
   name is unchanged.
 

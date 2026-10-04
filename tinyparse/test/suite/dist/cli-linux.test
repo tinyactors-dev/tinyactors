@@ -1,4 +1,4 @@
 <<<cmd
-test -x dist/linux-x86_64/pocketparse
+test -x dist/linux-x86_64/tinyparse
 <<<assert
 exit 0

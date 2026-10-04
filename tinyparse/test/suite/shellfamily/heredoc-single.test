@@ -3,7 +3,7 @@
 # body — the lines up to a line equal to EOF — is matched as a HeredocBody whose
 # end: is the closing delimiter line. The body content is opaque (data, not shell).
 <<<cmd
-printf 'cat <<EOF\nhello\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+printf 'cat <<EOF\nhello\nEOF\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

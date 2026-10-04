@@ -13,10 +13,10 @@
 ; std.tsx extends THIS package and turns jsx back on.
 ;
 ; This is OUR grammar, authored here from a build-time porting reference under
-; tools/pocketparse/reference/tree-sitter-typescript/. No third-party code is
+; tools/tinyparse/reference/tree-sitter-typescript/. No third-party code is
 ; copied into the package; only the language is ported.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (package
   name: std.typescript

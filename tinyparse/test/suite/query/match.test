@@ -1,5 +1,5 @@
 <<<cmd
-printf 'hi there' | "$PP" query test/suite/family/fixtures/base.scm test/suite/query/fixtures/word.scm --input -
+printf 'hi there' | "$TP" query test/suite/family/fixtures/base.scm test/suite/query/fixtures/word.scm --input -
 <<<assert
 exit 0
 out-contains @w

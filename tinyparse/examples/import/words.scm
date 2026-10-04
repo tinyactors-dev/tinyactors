@@ -6,7 +6,7 @@
 ; without redefining it. A module's own start: rule (if any) is ignored when it
 ; is merged; only its tokens, rules, and extras carry over.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module examples.import.words)
 

@@ -1,5 +1,5 @@
 /*
-** cli.c -- the hosted pocketparse command-line shell.
+** cli.c -- the hosted tinyparse command-line shell.
 **
 ** This is the ONLY file under src/ that may use libc. It is the hosted shell
 ** around the freestanding library: it reads argv, prints usage, the version,
@@ -8,8 +8,8 @@
 ** dump, and renders diagnostics to stderr. The library itself never touches IO.
 **
 ** The manual page is embedded as a C array in the generated header
-** src/manpage_data.h, produced at build time by rendering pocketparse.1.md
-** with mdc. `pocketparse man` prints those bytes verbatim.
+** src/manpage_data.h, produced at build time by rendering tinyparse.1.md
+** with mdc. `tinyparse man` prints those bytes verbatim.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,7 +17,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 
-#include "pocketparse.h"
+#include "tinyparse.h"
 #include "manpage_data.h"
 #include "grammars_data.h"
 #include "amalgamation_data.h"
@@ -25,33 +25,33 @@
 /* ** A parsed (package ...) manifest, mirrored from package.c so the hosted
 ** shell can read a manifest without pulling in the freestanding internal.h. It
 ** names only public types. KEEP IN SYNC with the definition in package.c. */
-typedef struct pocketparse_manifest {
-    pocketparse_string name;
-    pocketparse_string version;
-    pocketparse_string extends;
+typedef struct tinyparse_manifest {
+    tinyparse_string name;
+    tinyparse_string version;
+    tinyparse_string extends;
     int                ok;
-} pocketparse_manifest;
+} tinyparse_manifest;
 
 /* ** Force the rule memo on/off for parses on this engine (W67). Declared here
-** the same way; the CLI maps POCKETPARSE_RULEMEMO to it. Defined in engine.c. */
-void pp_engine_force_rule_memo(pocketparse_engine *engine, int mode);
+** the same way; the CLI maps TINYPARSE_RULEMEMO to it. Defined in engine.c. */
+void tp_engine_force_rule_memo(tinyparse_engine *engine, int mode);
 
 /* ** The name of a parser's lifecycle state (accepting, dropped, finished,
 ** failed). Declared here the same way, so `run` can report where the parser's
-** state machine ended when POCKETPARSE_TRACE_LIFECYCLE is set. Defined in
+** state machine ended when TINYPARSE_TRACE_LIFECYCLE is set. Defined in
 ** parse.c. */
-const char *pp_parser_state_name(const pocketparse_parser *parser);
+const char *tp_parser_state_name(const tinyparse_parser *parser);
 
 /* ** Parse a package.scm manifest (defined in package.c) and bind its params:
 ** onto the engine as compile-time parameters before any --param override. */
-pocketparse_result pocketparse_apply_manifest(pocketparse_engine *engine,
-                                              pocketparse_source manifest,
-                                              pocketparse_manifest *out);
+tinyparse_result tinyparse_apply_manifest(tinyparse_engine *engine,
+                                              tinyparse_source manifest,
+                                              tinyparse_manifest *out);
 
 /* ** The host memory grant for the engine. A few megabytes is ample for the
 ** grammars and inputs the CLI handles; the library never allocates outside it.
 ** grow lets a stubborn parse spill into fresh malloc'd blocks rather than fail. */
-#define POCKETPARSE_CLI_GRANT (16u * 1024u * 1024u)
+#define TINYPARSE_CLI_GRANT (16u * 1024u * 1024u)
 
 /* ** grow callback: hand the library a fresh block when its arena is exhausted.
 ** It is never freed individually; the process exit reclaims it. */
@@ -63,10 +63,10 @@ static void *cli_grow(void *user, size_t need, size_t *got)
     return malloc(need);
 }
 
-/* ** Wrap a NUL-terminated C string as a pocketparse_string. */
-static pocketparse_string cli_text(const char *s)
+/* ** Wrap a NUL-terminated C string as a tinyparse_string. */
+static tinyparse_string cli_text(const char *s)
 {
-    pocketparse_string out;
+    tinyparse_string out;
     out.pointer = (const uint8_t *)s;
     out.length  = (uint32_t)strlen(s);
     return out;
@@ -159,8 +159,8 @@ static char *read_all(const char *path, size_t *out_length);
 /* ** Look up a package in the embedded registry by name (defined below); the
 ** module resolver needs it before its definition to fall back to a built-in
 ** base grammar for (extends NAME)/(import NAME) when the filesystem has none. */
-struct pocketparse_embedded_package;
-static const struct pocketparse_embedded_package *cli_embedded_lookup(
+struct tinyparse_embedded_package;
+static const struct tinyparse_embedded_package *cli_embedded_lookup(
     const char *name);
 
 /* ** The language tag (W62 injection) of the node under a cursor, an INTERNAL
@@ -168,8 +168,8 @@ static const struct pocketparse_embedded_package *cli_embedded_lookup(
 ** include). The public header is frozen, so the tag is reached through this
 ** forward declaration only -- --dump-tree prints it as a `[lang]' annotation so a
 ** composite multi-language tree shows which grammar parsed each subtree.
-** PP_NO_SYMBOL (0xFFFFFFFF) means an untagged host-grammar node. */
-uint32_t pp_tree_cursor_language_tag(const pocketparse_tree_cursor *cursor);
+** TP_NO_SYMBOL (0xFFFFFFFF) means an untagged host-grammar node. */
+uint32_t tp_tree_cursor_language_tag(const tinyparse_tree_cursor *cursor);
 #define CLI_NO_LANGUAGE_TAG 0xFFFFFFFFu
 
 /* ** The module-resolver context: the directory of the importing grammar, used
@@ -214,8 +214,8 @@ static void cli_module_context_init(cli_module_context *ctx, const char *path)
 ** lets an embedded package's (extends std.json) find its built-in base with no
 ** filesystem at all. The filesystem is tried first, so a package on disk still
 ** SHADOWS the embedded copy, the same shadowing rule the grammar argument obeys. */
-static pocketparse_result cli_module_resolve(void *user, pocketparse_string name,
-                                             pocketparse_source *out_source)
+static tinyparse_result cli_module_resolve(void *user, tinyparse_string name,
+                                             tinyparse_source *out_source)
 {
     cli_module_context *ctx = (cli_module_context *)user;
     cli_strbuf path;
@@ -224,7 +224,7 @@ static pocketparse_result cli_module_resolve(void *user, pocketparse_string name
     size_t     length = 0;
 
     if (ctx->dir == NULL)
-        return POCKETPARSE_INVALID;
+        return TINYPARSE_INVALID;
 
     /* Build "<dir>/<dotted/name>.scm" into a growable buffer: the path has no
     ** fixed length cap, so a module reached through a long directory or a deeply
@@ -237,7 +237,7 @@ static pocketparse_result cli_module_resolve(void *user, pocketparse_string name
     }
     cli_strbuf_append_cstr(&path, ".scm");
     if (path.failed)
-        return POCKETPARSE_OUT_OF_MEMORY;
+        return TINYPARSE_OUT_OF_MEMORY;
 
     bytes = read_all(path.data, &length);
     if (bytes == NULL) {
@@ -245,26 +245,26 @@ static pocketparse_result cli_module_resolve(void *user, pocketparse_string name
         ** NAME is the dotted package name verbatim (e.g. `std.json'), so it is
         ** copied NUL-terminated and looked up as an embedded package. */
         cli_strbuf name_buf;
-        const struct pocketparse_embedded_package *embedded;
+        const struct tinyparse_embedded_package *embedded;
         cli_strbuf_init(&name_buf);
         cli_strbuf_append(&name_buf, (const char *)name.pointer, name.length);
         if (name_buf.failed)
-            return POCKETPARSE_OUT_OF_MEMORY;
+            return TINYPARSE_OUT_OF_MEMORY;
         embedded = cli_embedded_lookup(name_buf.data ? name_buf.data : "");
         if (embedded == NULL)
-            return POCKETPARSE_INVALID;
+            return TINYPARSE_INVALID;
         out_source->name.pointer  = NULL;
         out_source->name.length   = 0;
         out_source->bytes.pointer = embedded->grammar_bytes;
         out_source->bytes.length  = (uint32_t)embedded->grammar_length;
-        return POCKETPARSE_OK;
+        return TINYPARSE_OK;
     }
 
     out_source->name.pointer    = NULL; /* diagnostics name unused for modules */
     out_source->name.length     = 0;
     out_source->bytes.pointer   = (const uint8_t *)bytes;
     out_source->bytes.length    = (uint32_t)length;
-    return POCKETPARSE_OK;
+    return TINYPARSE_OK;
 }
 
 /* ** Install the filesystem-backed module resolver for compiling a grammar at
@@ -274,19 +274,19 @@ static pocketparse_result cli_module_resolve(void *user, pocketparse_string name
 ** install resolvers for several engines without them sharing one context. It
 ** outlives the synchronous compile that uses it and is leaked to the process on
 ** exit, like the rest of the CLI's grant. */
-static void cli_install_module_resolver(pocketparse_engine *engine,
+static void cli_install_module_resolver(tinyparse_engine *engine,
                                         const char *grammar_path)
 {
     cli_module_context *ctx = (cli_module_context *)malloc(sizeof *ctx);
     if (ctx == NULL)
         return; /* without a resolver, imports simply fall back to the registry */
     cli_module_context_init(ctx, grammar_path);
-    pocketparse_set_module_resolver(engine, cli_module_resolve, ctx);
+    tinyparse_set_module_resolver(engine, cli_module_resolve, ctx);
 }
 
 /* ** The built-in character classes the CLI installs as CLASS bindings before it
 ** compiles or parses a grammar, so a grammar may write (class alpha) and the
-** like without the host supplying its own. Each is a pocketparse_class_fn: it
+** like without the host supplying its own. Each is a tinyparse_class_fn: it
 ** returns nonzero when the byte belongs to the class. They are ASCII-only and
 ** pure -- the matcher may probe a byte repeatedly while backtracking. */
 static int cli_class_alpha(void *user, uint32_t byte)
@@ -313,21 +313,21 @@ static int cli_class_space(void *user, uint32_t byte)
 }
 
 /* ** Install one built-in CLASS binding by name onto the engine. */
-static void cli_bind_class(pocketparse_engine *engine, const char *name,
-                           pocketparse_class_fn fn)
+static void cli_bind_class(tinyparse_engine *engine, const char *name,
+                           tinyparse_class_fn fn)
 {
-    pocketparse_binding binding;
+    tinyparse_binding binding;
     binding.name     = cli_text(name);
-    binding.kind     = POCKETPARSE_BIND_CLASS;
+    binding.kind     = TINYPARSE_BIND_CLASS;
     binding.function = (void *)fn;
     binding.user     = NULL;
-    pocketparse_bind(engine, &binding);
+    tinyparse_bind(engine, &binding);
 }
 
 /* ** Install every built-in character class (alpha/digit/alnum/space) on the
 ** engine. Called by both `check` and `run` before the grammar is compiled, so a
 ** grammar's (class NAME) primitives resolve to these host functions. */
-static void cli_install_builtin_classes(pocketparse_engine *engine)
+static void cli_install_builtin_classes(tinyparse_engine *engine)
 {
     cli_bind_class(engine, "alpha", cli_class_alpha);
     cli_bind_class(engine, "digit", cli_class_digit);
@@ -339,10 +339,10 @@ static void cli_install_builtin_classes(pocketparse_engine *engine)
 ** NAME[=VALUE]: a bare NAME sets the parameter truthy; NAME= or NAME=0 clears it,
 ** any other VALUE sets it. Parameters feed the grammar's (when PARAM: X)
 ** combinators. The name portion is the bytes before any '='. */
-static void cli_set_param(pocketparse_engine *engine, const char *spec)
+static void cli_set_param(tinyparse_engine *engine, const char *spec)
 {
     const char        *eq = strchr(spec, '=');
-    pocketparse_string name;
+    tinyparse_string name;
     int                value = 1;
 
     name.pointer = (const uint8_t *)spec;
@@ -356,7 +356,7 @@ static void cli_set_param(pocketparse_engine *engine, const char *spec)
     }
     if (name.length == 0)
         return;
-    pocketparse_set_param(engine, name, value);
+    tinyparse_set_param(engine, name, value);
 }
 
 /* ** True when a file at the path can be opened for reading. Used to probe for a
@@ -456,10 +456,10 @@ static int cli_resolve_package(const char *arg, char **manifest_out,
 ** when no embedded package carries that name. The registry is the fallback used
 ** when no filesystem search path resolves the name; a filesystem package found
 ** first SHADOWS the embedded copy, so this is consulted only after that fails. */
-static const pocketparse_embedded_package *cli_embedded_lookup(const char *name)
+static const tinyparse_embedded_package *cli_embedded_lookup(const char *name)
 {
-    const pocketparse_embedded_package *entry;
-    for (entry = pocketparse_embedded_packages; entry->name != NULL; entry++)
+    const tinyparse_embedded_package *entry;
+    for (entry = tinyparse_embedded_packages; entry->name != NULL; entry++)
         if (strcmp(entry->name, name) == 0)
             return entry;
     return NULL;
@@ -474,7 +474,7 @@ typedef struct cli_grammar_source {
     char                               *manifest_path;
     char                               *package_grammar;
     int                                 is_package;
-    const pocketparse_embedded_package *embedded;
+    const tinyparse_embedded_package *embedded;
 } cli_grammar_source;
 
 /* ** Resolve a grammar argument to a source, honouring the shadowing rule: the
@@ -506,20 +506,20 @@ static void cli_resolve_grammar_source(const char *arg, cli_grammar_source *out)
 /* ** Apply an embedded package's manifest to the engine, binding its params:
 ** before any --param override, mirroring cli_apply_package for the filesystem
 ** case. The manifest bytes come straight from the registry, so no IO occurs. */
-static pocketparse_result cli_apply_embedded(pocketparse_engine *engine,
-                                             const pocketparse_embedded_package *pkg)
+static tinyparse_result cli_apply_embedded(tinyparse_engine *engine,
+                                             const tinyparse_embedded_package *pkg)
 {
-    pocketparse_manifest manifest;
-    pocketparse_source   source;
-    pocketparse_result   result;
+    tinyparse_manifest manifest;
+    tinyparse_source   source;
+    tinyparse_result   result;
 
     source.name          = cli_text(pkg->name);
     source.bytes.pointer = pkg->package_bytes;
     source.bytes.length  = (uint32_t)pkg->package_length;
 
-    result = pocketparse_apply_manifest(engine, source, &manifest);
-    if (result != POCKETPARSE_OK) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    result = tinyparse_apply_manifest(engine, source, &manifest);
+    if (result != TINYPARSE_OK) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
     }
@@ -529,50 +529,50 @@ static pocketparse_result cli_apply_embedded(pocketparse_engine *engine,
 /* ** Read a package's manifest and bind its params: onto the engine, BEFORE any
 ** --param the command line supplies, so the command line overrides a manifest
 ** default. The manifest bytes are read into a leaked buffer (like the rest of
-** the CLI's grant). Returns POCKETPARSE_OK on success; on failure it has already
+** the CLI's grant). Returns TINYPARSE_OK on success; on failure it has already
 ** printed an error to stderr. The manifest's identity fields are discarded here
 ** -- the resolver needs only the bound params and the sibling grammar.scm. */
-static pocketparse_result cli_apply_package(pocketparse_engine *engine,
+static tinyparse_result cli_apply_package(tinyparse_engine *engine,
                                             const char *manifest_path)
 {
-    pocketparse_manifest manifest;
-    pocketparse_source   source;
-    pocketparse_result   result;
+    tinyparse_manifest manifest;
+    tinyparse_source   source;
+    tinyparse_result   result;
     char  *bytes;
     size_t length = 0;
 
     bytes = read_all(manifest_path, &length);
     if (bytes == NULL) {
-        fprintf(stderr, "pocketparse: error: cannot read manifest '%s'\n",
+        fprintf(stderr, "tinyparse: error: cannot read manifest '%s'\n",
                 manifest_path);
-        return POCKETPARSE_INVALID;
+        return TINYPARSE_INVALID;
     }
     source.name          = cli_text(manifest_path);
     source.bytes.pointer = (const uint8_t *)bytes;
     source.bytes.length  = (uint32_t)length;
 
-    result = pocketparse_apply_manifest(engine, source, &manifest);
-    if (result != POCKETPARSE_OK) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    result = tinyparse_apply_manifest(engine, source, &manifest);
+    if (result != TINYPARSE_OK) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
     }
     return result;
 }
 
-/* ** Print the usage summary. Contains the words "pocketparse" and "usage"
+/* ** Print the usage summary. Contains the words "tinyparse" and "usage"
 ** that the test suite checks for. */
 static void print_usage(FILE *stream)
 {
     fprintf(stream,
-        "pocketparse %s\n"
-        "usage: pocketparse <command> [arguments]\n"
+        "tinyparse %s\n"
+        "usage: tinyparse <command> [arguments]\n"
         "\n"
         "commands:\n"
         "  check <grammar>                 validate a grammar\n"
         "  run <grammar> --input <file> [--dump-tree] [--chunk N] [--trace]\n"
         "                                  parse input against a grammar\n"
-        "  pack <grammar.scm> --out <file.ppg>\n"
+        "  pack <grammar.scm> --out <file.tpg>\n"
         "                                  compile and write a binary grammar\n"
         "  c <grammar.scm> --out <file.c> [--bundle|--parser|--parser-lib] [--name P]\n"
         "                                  emit C source (module or standalone)\n"
@@ -589,20 +589,20 @@ static void print_usage(FILE *stream)
         "  man                             print the manual page\n"
         "  version                         print the version\n"
         "  --help                          print this usage summary\n",
-        pocketparse_version_string());
+        tinyparse_version_string());
 }
 
 /* ** Print the embedded manual page to stdout. */
 static int command_man(void)
 {
-    fwrite(pocketparse_manpage, 1, pocketparse_manpage_length, stdout);
+    fwrite(tinyparse_manpage, 1, tinyparse_manpage_length, stdout);
     return 0;
 }
 
 /* ** Print the program name and version. */
 static int command_version(void)
 {
-    printf("pocketparse %s\n", pocketparse_version_string());
+    printf("tinyparse %s\n", tinyparse_version_string());
     return 0;
 }
 
@@ -611,8 +611,8 @@ static int command_version(void)
 ** filesystem present, baked into the binary by build.sh::gen_grammars. */
 static int command_grammars(void)
 {
-    const pocketparse_embedded_package *entry;
-    for (entry = pocketparse_embedded_packages; entry->name != NULL; entry++)
+    const tinyparse_embedded_package *entry;
+    for (entry = tinyparse_embedded_packages; entry->name != NULL; entry++)
         printf("%s\n", entry->name);
     return 0;
 }
@@ -661,37 +661,37 @@ static char *read_all(const char *path, size_t *out_length)
 
 /* ** Open an engine over a freshly allocated grant. Returns NULL on failure;
 ** the grant block is intentionally leaked to the process. */
-static pocketparse_engine *open_engine(void)
+static tinyparse_engine *open_engine(void)
 {
-    pocketparse_configuration configuration;
-    void *block = malloc(POCKETPARSE_CLI_GRANT);
+    tinyparse_configuration configuration;
+    void *block = malloc(TINYPARSE_CLI_GRANT);
     if (block == NULL)
         return NULL;
     memset(&configuration, 0, sizeof configuration);
     configuration.memory.base          = block;
-    configuration.memory.size          = POCKETPARSE_CLI_GRANT;
+    configuration.memory.size          = TINYPARSE_CLI_GRANT;
     configuration.memory.grow          = cli_grow;
     configuration.memory.user          = NULL;
     configuration.memory.chunk_minimum = 0;
     configuration.flags                = 0;
     {
-        pocketparse_engine *engine = pocketparse_open(configuration);
+        tinyparse_engine *engine = tinyparse_open(configuration);
         /* The bytecode VM is the only engine, driven by the parser lifecycle in
-        ** parse.c. POCKETPARSE_ENGINE once chose between that VM hosted in an
+        ** parse.c. TINYPARSE_ENGINE once chose between that VM hosted in an
         ** actor (the old default) and the same VM in process ("vm", and the
         ** retired "recursive"); with the actor gone every value names the same VM,
         ** so the variable is accepted and ignored and scripts that set it keep
         ** working. */
         if (engine != NULL) {
-            /* POCKETPARSE_RULEMEMO=always/off forces the rule memo on or off, so
+            /* TINYPARSE_RULEMEMO=always/off forces the rule memo on or off, so
             ** the differential can exercise its replay path on the test corpus
             ** (which is too small to wake the adaptive default). */
             {
-                const char *rm = getenv("POCKETPARSE_RULEMEMO");
+                const char *rm = getenv("TINYPARSE_RULEMEMO");
                 if (rm != NULL && strcmp(rm, "always") == 0)
-                    pp_engine_force_rule_memo(engine, 1);
+                    tp_engine_force_rule_memo(engine, 1);
                 else if (rm != NULL && strcmp(rm, "off") == 0)
-                    pp_engine_force_rule_memo(engine, 2);
+                    tp_engine_force_rule_memo(engine, 2);
             }
         }
         return engine;
@@ -700,7 +700,7 @@ static pocketparse_engine *open_engine(void)
 
 /* ** Render a diagnostic to stderr in a simple rustc-ish shape. The message is
 ** authored to contain the word "error" so the suite's err-contains holds. */
-static void render_diagnostic(const pocketparse_diagnostic *diag)
+static void render_diagnostic(const tinyparse_diagnostic *diag)
 {
     fprintf(stderr, "%.*s", (int)diag->message.length,
             (const char *)diag->message.pointer);
@@ -717,16 +717,16 @@ static void render_diagnostic(const pocketparse_diagnostic *diag)
 ** as an error to stderr and exit 1. */
 static int command_check(int argc, char **argv)
 {
-    pocketparse_engine  *engine;
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_source   source;
-    pocketparse_result   result;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_source   source;
+    tinyparse_result   result;
     char  *grammar_bytes;
     size_t grammar_length;
     cli_grammar_source   src;
 
     if (argc < 1) {
-        fprintf(stderr, "pocketparse: error: check needs a grammar path\n");
+        fprintf(stderr, "tinyparse: error: check needs a grammar path\n");
         return 1;
     }
     /* Resolve the argument: a filesystem package or file wins; failing both, the
@@ -740,7 +740,7 @@ static int command_check(int argc, char **argv)
     } else {
         grammar_bytes = read_all(src.grammar_path, &grammar_length);
         if (grammar_bytes == NULL) {
-            fprintf(stderr, "pocketparse: error: cannot read grammar '%s'\n",
+            fprintf(stderr, "tinyparse: error: cannot read grammar '%s'\n",
                     src.grammar_path);
             return 1;
         }
@@ -751,7 +751,7 @@ static int command_check(int argc, char **argv)
 
     engine = open_engine();
     if (engine == NULL) {
-        fprintf(stderr, "pocketparse: error: out of memory\n");
+        fprintf(stderr, "tinyparse: error: out of memory\n");
         return 1;
     }
 
@@ -759,10 +759,10 @@ static int command_check(int argc, char **argv)
     cli_install_module_resolver(engine, src.grammar_path);
     /* Bind the manifest's params: first, then let a --param override them. */
     if (src.embedded != NULL) {
-        if (cli_apply_embedded(engine, src.embedded) != POCKETPARSE_OK)
+        if (cli_apply_embedded(engine, src.embedded) != TINYPARSE_OK)
             return 1;
     } else if (src.is_package &&
-               cli_apply_package(engine, src.manifest_path) != POCKETPARSE_OK) {
+               cli_apply_package(engine, src.manifest_path) != TINYPARSE_OK) {
         return 1;
     }
     {
@@ -771,9 +771,9 @@ static int command_check(int argc, char **argv)
             if (strcmp(argv[i], "--param") == 0 && i + 1 < argc)
                 cli_set_param(engine, argv[++i]);
     }
-    result = pocketparse_compile_scheme(engine, source, &grammar);
-    if (result != POCKETPARSE_OK) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    result = tinyparse_compile_scheme(engine, source, &grammar);
+    if (result != TINYPARSE_OK) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
         return 1;
@@ -790,17 +790,17 @@ static int command_check(int argc, char **argv)
 ** failure. */
 static int command_node_types(int argc, char **argv)
 {
-    pocketparse_engine  *engine;
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_source   source;
-    pocketparse_result   result;
-    pocketparse_string   json;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_source   source;
+    tinyparse_result   result;
+    tinyparse_string   json;
     char  *grammar_bytes;
     size_t grammar_length;
     cli_grammar_source   src;
 
     if (argc < 1) {
-        fprintf(stderr, "pocketparse: error: node-types needs a grammar path\n");
+        fprintf(stderr, "tinyparse: error: node-types needs a grammar path\n");
         return 1;
     }
     /* Resolve the argument: a filesystem package or file wins; failing both, the
@@ -814,7 +814,7 @@ static int command_node_types(int argc, char **argv)
     } else {
         grammar_bytes = read_all(src.grammar_path, &grammar_length);
         if (grammar_bytes == NULL) {
-            fprintf(stderr, "pocketparse: error: cannot read grammar '%s'\n",
+            fprintf(stderr, "tinyparse: error: cannot read grammar '%s'\n",
                     src.grammar_path);
             return 1;
         }
@@ -825,7 +825,7 @@ static int command_node_types(int argc, char **argv)
 
     engine = open_engine();
     if (engine == NULL) {
-        fprintf(stderr, "pocketparse: error: out of memory\n");
+        fprintf(stderr, "tinyparse: error: out of memory\n");
         return 1;
     }
 
@@ -833,10 +833,10 @@ static int command_node_types(int argc, char **argv)
     cli_install_module_resolver(engine, src.grammar_path);
     /* Bind the manifest's params: first, then let a --param override them. */
     if (src.embedded != NULL) {
-        if (cli_apply_embedded(engine, src.embedded) != POCKETPARSE_OK)
+        if (cli_apply_embedded(engine, src.embedded) != TINYPARSE_OK)
             return 1;
     } else if (src.is_package &&
-               cli_apply_package(engine, src.manifest_path) != POCKETPARSE_OK) {
+               cli_apply_package(engine, src.manifest_path) != TINYPARSE_OK) {
         return 1;
     }
     {
@@ -846,17 +846,17 @@ static int command_node_types(int argc, char **argv)
                 cli_set_param(engine, argv[++i]);
     }
 
-    result = pocketparse_compile_scheme(engine, source, &grammar);
-    if (result != POCKETPARSE_OK) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    result = tinyparse_compile_scheme(engine, source, &grammar);
+    if (result != TINYPARSE_OK) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
         return 1;
     }
 
-    result = pocketparse_emit_node_types(engine, grammar, &json);
-    if (result != POCKETPARSE_OK) {
-        fprintf(stderr, "pocketparse: error: cannot emit node types\n");
+    result = tinyparse_emit_node_types(engine, grammar, &json);
+    if (result != TINYPARSE_OK) {
+        fprintf(stderr, "tinyparse: error: cannot emit node types\n");
         return 1;
     }
     fwrite(json.pointer, 1, json.length, stdout);
@@ -866,7 +866,7 @@ static int command_node_types(int argc, char **argv)
 /* ** analyze-tailcalls <grammar>: lower the grammar to bytecode and report how
 ** many rule CALLs sit in tail position and what fraction of all CALLs that is
 ** (the W14-6 tail-call analysis). It resolves the grammar exactly like
-** node-types, compiles it, lowers its start rule with pp_compile_program (which
+** node-types, compiles it, lowers its start rule with tp_compile_program (which
 ** marks the tail-position CALLs), and prints the counts. Reproducible evidence:
 ** the per-grammar numbers that drive the bytecode tail-call design come from this
 ** command, not a throwaway script. */
@@ -876,19 +876,19 @@ static int command_analyze_tailcalls(int argc, char **argv)
     ** types plus plain uint32_t out-params, so cli.c needs no internal.h -- which
     ** matters for the amalgamation, where the CLI is a separate translation unit
     ** that cannot see the private header. */
-    extern void pp_grammar_tail_call_counts(const pocketparse_grammar *grammar,
+    extern void tp_grammar_tail_call_counts(const tinyparse_grammar *grammar,
                                             uint32_t *out_total, uint32_t *out_tail);
-    pocketparse_engine  *engine;
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_source   source;
-    pocketparse_result   result;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_source   source;
+    tinyparse_result   result;
     cli_grammar_source   src;
     uint32_t             total = 0, tail = 0;
     char  *grammar_bytes;
     size_t grammar_length;
 
     if (argc < 1) {
-        fprintf(stderr, "pocketparse: error: analyze-tailcalls needs a grammar\n");
+        fprintf(stderr, "tinyparse: error: analyze-tailcalls needs a grammar\n");
         return 1;
     }
     cli_resolve_grammar_source(argv[0], &src);
@@ -899,7 +899,7 @@ static int command_analyze_tailcalls(int argc, char **argv)
     } else {
         grammar_bytes = read_all(src.grammar_path, &grammar_length);
         if (grammar_bytes == NULL) {
-            fprintf(stderr, "pocketparse: error: cannot read grammar '%s'\n",
+            fprintf(stderr, "tinyparse: error: cannot read grammar '%s'\n",
                     src.grammar_path);
             return 1;
         }
@@ -910,16 +910,16 @@ static int command_analyze_tailcalls(int argc, char **argv)
 
     engine = open_engine();
     if (engine == NULL) {
-        fprintf(stderr, "pocketparse: error: out of memory\n");
+        fprintf(stderr, "tinyparse: error: out of memory\n");
         return 1;
     }
     cli_install_builtin_classes(engine);
     cli_install_module_resolver(engine, src.grammar_path);
     if (src.embedded != NULL) {
-        if (cli_apply_embedded(engine, src.embedded) != POCKETPARSE_OK)
+        if (cli_apply_embedded(engine, src.embedded) != TINYPARSE_OK)
             return 1;
     } else if (src.is_package &&
-               cli_apply_package(engine, src.manifest_path) != POCKETPARSE_OK) {
+               cli_apply_package(engine, src.manifest_path) != TINYPARSE_OK) {
         return 1;
     }
     {
@@ -929,15 +929,15 @@ static int command_analyze_tailcalls(int argc, char **argv)
                 cli_set_param(engine, argv[++i]);
     }
 
-    result = pocketparse_compile_scheme(engine, source, &grammar);
-    if (result != POCKETPARSE_OK) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    result = tinyparse_compile_scheme(engine, source, &grammar);
+    if (result != TINYPARSE_OK) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
         return 1;
     }
 
-    pp_grammar_tail_call_counts(grammar, &total, &tail);
+    tp_grammar_tail_call_counts(grammar, &total, &tail);
 
     {
         double pct = total > 0 ? (100.0 * (double)tail / (double)total) : 0.0;
@@ -948,60 +948,60 @@ static int command_analyze_tailcalls(int argc, char **argv)
 }
 
 /* ** Decide whether a grammar path/bytes name a packed binary image rather than
-** .scm source. A path ending in ".ppg" or a buffer opening with the "PPG1"
+** .scm source. A path ending in ".tpg" or a buffer opening with the "TPG1"
 ** magic is treated as binary; everything else is .scm source. The magic check
 ** lets a renamed or piped image still load correctly. */
 static int looks_like_packed(const char *path, const char *bytes, size_t length)
 {
     size_t n = strlen(path);
-    if (n >= 4 && strcmp(path + n - 4, ".ppg") == 0)
+    if (n >= 4 && strcmp(path + n - 4, ".tpg") == 0)
         return 1;
-    if (length >= 4 && bytes[0] == 'P' && bytes[1] == 'P' &&
+    if (length >= 4 && bytes[0] == 'T' && bytes[1] == 'P' &&
         bytes[2] == 'G' && bytes[3] == '1')
         return 1;
     return 0;
 }
 
-/* ** Turn a grammar path into a grammar handle: .ppg images load through
-** pocketparse_load_binary_grammar, .scm sources compile through
-** pocketparse_compile_scheme. The resulting grammar parses identically either
-** way. Returns POCKETPARSE_OK and writes *out_grammar, or prints the fault to
+/* ** Turn a grammar path into a grammar handle: .tpg images load through
+** tinyparse_load_binary_grammar, .scm sources compile through
+** tinyparse_compile_scheme. The resulting grammar parses identically either
+** way. Returns TINYPARSE_OK and writes *out_grammar, or prints the fault to
 ** stderr and returns the failing result. */
-static pocketparse_result load_grammar(pocketparse_engine *engine,
+static tinyparse_result load_grammar(tinyparse_engine *engine,
                                        const char *path, char *bytes,
                                        size_t length,
-                                       pocketparse_grammar **out_grammar)
+                                       tinyparse_grammar **out_grammar)
 {
-    pocketparse_source source;
-    pocketparse_result result;
+    tinyparse_source source;
+    tinyparse_result result;
 
     source.name          = cli_text(path);
     source.bytes.pointer = (const uint8_t *)bytes;
     source.bytes.length  = (uint32_t)length;
 
     if (looks_like_packed(path, bytes, length))
-        result = pocketparse_load_binary_grammar(engine, source, out_grammar);
+        result = tinyparse_load_binary_grammar(engine, source, out_grammar);
     else
-        result = pocketparse_compile_scheme(engine, source, out_grammar);
+        result = tinyparse_compile_scheme(engine, source, out_grammar);
 
-    if (result != POCKETPARSE_OK) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    if (result != TINYPARSE_OK) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
     }
     return result;
 }
 
-/* ** pack <grammar.scm> --out <file.ppg>: compile the .scm, serialize the
+/* ** pack <grammar.scm> --out <file.tpg>: compile the .scm, serialize the
 ** compiled grammar to the binary format, and write the bytes to the output
 ** file. IO is fine here -- the CLI is the hosted shell -- while the library's
 ** serializer stays freestanding. */
 static int command_pack(int argc, char **argv)
 {
-    pocketparse_engine  *engine;
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_result   result;
-    pocketparse_string   packed;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_result   result;
+    tinyparse_string   packed;
     char  *grammar_bytes = NULL;
     size_t grammar_length = 0;
     const char *out_path = NULL;
@@ -1010,7 +1010,7 @@ static int command_pack(int argc, char **argv)
     int    i;
 
     if (argc < 1) {
-        fprintf(stderr, "pocketparse: error: pack needs a grammar path\n");
+        fprintf(stderr, "tinyparse: error: pack needs a grammar path\n");
         return 1;
     }
     /* Resolve the argument exactly as `run' does: a filesystem package or file
@@ -1024,21 +1024,21 @@ static int command_pack(int argc, char **argv)
         /* --param NAME[=VALUE] is applied after the engine opens, below. */
     }
     if (out_path == NULL) {
-        fprintf(stderr, "pocketparse: error: pack needs --out\n");
+        fprintf(stderr, "tinyparse: error: pack needs --out\n");
         return 1;
     }
 
     if (src.embedded == NULL) {
         grammar_bytes = read_all(src.grammar_path, &grammar_length);
         if (grammar_bytes == NULL) {
-            fprintf(stderr, "pocketparse: error: cannot read grammar '%s'\n",
+            fprintf(stderr, "tinyparse: error: cannot read grammar '%s'\n",
                     src.grammar_path);
             return 1;
         }
     }
     engine = open_engine();
     if (engine == NULL) {
-        fprintf(stderr, "pocketparse: error: out of memory\n");
+        fprintf(stderr, "tinyparse: error: out of memory\n");
         return 1;
     }
 
@@ -1046,10 +1046,10 @@ static int command_pack(int argc, char **argv)
     cli_install_module_resolver(engine, src.grammar_path);
     /* Bind the manifest's params: first, then let a --param override them. */
     if (src.embedded != NULL) {
-        if (cli_apply_embedded(engine, src.embedded) != POCKETPARSE_OK)
+        if (cli_apply_embedded(engine, src.embedded) != TINYPARSE_OK)
             return 1;
     } else if (src.is_package &&
-               cli_apply_package(engine, src.manifest_path) != POCKETPARSE_OK) {
+               cli_apply_package(engine, src.manifest_path) != TINYPARSE_OK) {
         return 1;
     }
     for (i = 1; i < argc; i++)
@@ -1057,15 +1057,15 @@ static int command_pack(int argc, char **argv)
             cli_set_param(engine, argv[++i]);
 
     /* Embedded grammars are always .scm source; a filesystem grammar may be a
-    ** packed .ppg, so it goes through load_grammar (which sniffs the format). */
+    ** packed .tpg, so it goes through load_grammar (which sniffs the format). */
     if (src.embedded != NULL) {
-        pocketparse_source embedded_source;
+        tinyparse_source embedded_source;
         embedded_source.name          = cli_text(src.embedded->name);
         embedded_source.bytes.pointer = src.embedded->grammar_bytes;
         embedded_source.bytes.length  = (uint32_t)src.embedded->grammar_length;
-        result = pocketparse_compile_scheme(engine, embedded_source, &grammar);
-        if (result != POCKETPARSE_OK) {
-            pocketparse_string fault = pocketparse_fault(engine);
+        result = tinyparse_compile_scheme(engine, embedded_source, &grammar);
+        if (result != TINYPARSE_OK) {
+            tinyparse_string fault = tinyparse_fault(engine);
             fprintf(stderr, "error: %.*s\n", (int)fault.length,
                     (const char *)fault.pointer);
             return 1;
@@ -1073,23 +1073,23 @@ static int command_pack(int argc, char **argv)
     } else {
         result = load_grammar(engine, src.grammar_path, grammar_bytes,
                               grammar_length, &grammar);
-        if (result != POCKETPARSE_OK)
+        if (result != TINYPARSE_OK)
             return 1;
     }
 
-    result = pocketparse_grammar_serialize(grammar, &packed);
-    if (result != POCKETPARSE_OK) {
-        fprintf(stderr, "pocketparse: error: cannot serialize grammar\n");
+    result = tinyparse_grammar_serialize(grammar, &packed);
+    if (result != TINYPARSE_OK) {
+        fprintf(stderr, "tinyparse: error: cannot serialize grammar\n");
         return 1;
     }
 
     out = fopen(out_path, "wb");
     if (out == NULL) {
-        fprintf(stderr, "pocketparse: error: cannot write '%s'\n", out_path);
+        fprintf(stderr, "tinyparse: error: cannot write '%s'\n", out_path);
         return 1;
     }
     if (fwrite(packed.pointer, 1, packed.length, out) != packed.length) {
-        fprintf(stderr, "pocketparse: error: short write to '%s'\n", out_path);
+        fprintf(stderr, "tinyparse: error: short write to '%s'\n", out_path);
         fclose(out);
         return 1;
     }
@@ -1104,11 +1104,11 @@ static int command_pack(int argc, char **argv)
 ** shell only handles argv and the file IO. */
 static int command_emit(int argc, char **argv)
 {
-    pocketparse_engine  *engine;
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_source   source;
-    pocketparse_result   result;
-    pocketparse_string   emitted;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_source   source;
+    tinyparse_result   result;
+    tinyparse_string   emitted;
     char  *grammar_bytes;
     size_t grammar_length;
     const char *out_path = NULL;
@@ -1119,24 +1119,24 @@ static int command_emit(int argc, char **argv)
     int    i;
     /* Library-private W16-3 hook (defined in engine.c, NOT in the public header):
     ** set the compiled-parser symbol prefix for the next emit. Declared here the
-    ** way pp_engine_force_rule_memo is, so the public API stays frozen while the
+    ** way tp_engine_force_rule_memo is, so the public API stays frozen while the
     ** CLI can pass `--name'. */
-    extern void pp_engine_set_parser_prefix(pocketparse_engine *engine,
+    extern void tp_engine_set_parser_prefix(tinyparse_engine *engine,
                                             const char *prefix);
 
     if (argc < 1) {
-        fprintf(stderr, "pocketparse: error: c needs a grammar path\n");
+        fprintf(stderr, "tinyparse: error: c needs a grammar path\n");
         return 1;
     }
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--out") == 0 && i + 1 < argc)
             out_path = argv[++i];
         else if (strcmp(argv[i], "--bundle") == 0)
-            flags |= POCKETPARSE_EMIT_BUNDLE;
+            flags |= TINYPARSE_EMIT_BUNDLE;
         else if (strcmp(argv[i], "--parser") == 0)
-            flags |= POCKETPARSE_EMIT_PARSER;
+            flags |= TINYPARSE_EMIT_PARSER;
         else if (strcmp(argv[i], "--parser-lib") == 0)
-            flags |= POCKETPARSE_EMIT_PARSER | POCKETPARSE_EMIT_PARSER_LIB;
+            flags |= TINYPARSE_EMIT_PARSER | TINYPARSE_EMIT_PARSER_LIB;
         /* W16-3: --name P prefixes every emitted file-scope symbol with `P_', so
         ** two parsers generated with distinct prefixes link into one program with
         ** no symbol collision (the embedding use case). With no --name the parser
@@ -1147,7 +1147,7 @@ static int command_emit(int argc, char **argv)
             parser_prefix = argv[++i];
     }
     if (out_path == NULL) {
-        fprintf(stderr, "pocketparse: error: c needs --out\n");
+        fprintf(stderr, "tinyparse: error: c needs --out\n");
         return 1;
     }
 
@@ -1163,7 +1163,7 @@ static int command_emit(int argc, char **argv)
     } else {
         grammar_bytes = read_all(src.grammar_path, &grammar_length);
         if (grammar_bytes == NULL) {
-            fprintf(stderr, "pocketparse: error: cannot read grammar '%s'\n",
+            fprintf(stderr, "tinyparse: error: cannot read grammar '%s'\n",
                     src.grammar_path);
             return 1;
         }
@@ -1174,26 +1174,26 @@ static int command_emit(int argc, char **argv)
 
     engine = open_engine();
     if (engine == NULL) {
-        fprintf(stderr, "pocketparse: error: out of memory\n");
+        fprintf(stderr, "tinyparse: error: out of memory\n");
         return 1;
     }
 
     cli_install_builtin_classes(engine);
     cli_install_module_resolver(engine, src.grammar_path);
     if (src.embedded != NULL) {
-        if (cli_apply_embedded(engine, src.embedded) != POCKETPARSE_OK)
+        if (cli_apply_embedded(engine, src.embedded) != TINYPARSE_OK)
             return 1;
     } else if (src.is_package &&
-               cli_apply_package(engine, src.manifest_path) != POCKETPARSE_OK) {
+               cli_apply_package(engine, src.manifest_path) != TINYPARSE_OK) {
         return 1;
     }
     for (i = 1; i < argc; i++)
         if (strcmp(argv[i], "--param") == 0 && i + 1 < argc)
             cli_set_param(engine, argv[++i]);
 
-    result = pocketparse_compile_scheme(engine, source, &grammar);
-    if (result != POCKETPARSE_OK) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    result = tinyparse_compile_scheme(engine, source, &grammar);
+    if (result != TINYPARSE_OK) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
         return 1;
@@ -1201,21 +1201,21 @@ static int command_emit(int argc, char **argv)
 
     /* Apply the symbol prefix (if any) just before emit; NULL leaves the default
     ** names in place. */
-    pp_engine_set_parser_prefix(engine, parser_prefix);
+    tp_engine_set_parser_prefix(engine, parser_prefix);
 
-    result = pocketparse_emit_c(engine, grammar, flags, &emitted);
-    if (result != POCKETPARSE_OK) {
-        fprintf(stderr, "pocketparse: error: cannot emit C source\n");
+    result = tinyparse_emit_c(engine, grammar, flags, &emitted);
+    if (result != TINYPARSE_OK) {
+        fprintf(stderr, "tinyparse: error: cannot emit C source\n");
         return 1;
     }
 
     out = fopen(out_path, "wb");
     if (out == NULL) {
-        fprintf(stderr, "pocketparse: error: cannot write '%s'\n", out_path);
+        fprintf(stderr, "tinyparse: error: cannot write '%s'\n", out_path);
         return 1;
     }
     if (fwrite(emitted.pointer, 1, emitted.length, out) != emitted.length) {
-        fprintf(stderr, "pocketparse: error: short write to '%s'\n", out_path);
+        fprintf(stderr, "tinyparse: error: short write to '%s'\n", out_path);
         fclose(out);
         return 1;
     }
@@ -1313,26 +1313,26 @@ static void dump_span(const dump_line_index *index,
 ** e.g. an extension's overridden Item or a gated Number). Each line ends with the
 ** node's span -- byte range and 0-based [line,column] range. Trivia nodes
 ** (comments) appear in place. */
-static void dump_subtree(const pocketparse_tree *tree,
-                         pocketparse_tree_cursor *cursor,
+static void dump_subtree(const tinyparse_tree *tree,
+                         tinyparse_tree_cursor *cursor,
                          const dump_line_index *index)
 {
-    uint32_t depth = pocketparse_tree_cursor_depth(cursor);
+    uint32_t depth = tinyparse_tree_cursor_depth(cursor);
     uint32_t i;
-    pocketparse_symbol kind  = pocketparse_tree_cursor_kind(cursor);
-    pocketparse_symbol field = pocketparse_tree_cursor_field(cursor);
-    uint32_t flags = pocketparse_tree_cursor_flags(cursor);
-    pocketparse_string kind_name = pocketparse_tree_symbol_name(tree, kind);
+    tinyparse_symbol kind  = tinyparse_tree_cursor_kind(cursor);
+    tinyparse_symbol field = tinyparse_tree_cursor_field(cursor);
+    uint32_t flags = tinyparse_tree_cursor_flags(cursor);
+    tinyparse_string kind_name = tinyparse_tree_symbol_name(tree, kind);
 
     for (i = 0; i < depth; i++)
         fputs("  ", stdout);
     /* A recovery-inserted node is zero-width and absent from the source; mark it
     ** "MISSING <name>" so the dump shows the parser supplied it. */
-    if (flags & POCKETPARSE_NODE_MISSING)
+    if (flags & TINYPARSE_NODE_MISSING)
         fputs("MISSING ", stdout);
-    if (field.id != POCKETPARSE_NO_FIELD) {
-        pocketparse_string field_name =
-            pocketparse_tree_symbol_name(tree, field);
+    if (field.id != TINYPARSE_NO_FIELD) {
+        tinyparse_string field_name =
+            tinyparse_tree_symbol_name(tree, field);
         printf("%.*s: ", (int)field_name.length,
                (const char *)field_name.pointer);
     }
@@ -1342,27 +1342,27 @@ static void dump_subtree(const pocketparse_tree *tree,
     ** subtree (a JS subtree under a js fence, JSON under a json fence). Host-grammar
     ** nodes are untagged and print nothing extra. */
     {
-        uint32_t lang_id = pp_tree_cursor_language_tag(cursor);
+        uint32_t lang_id = tp_tree_cursor_language_tag(cursor);
         if (lang_id != CLI_NO_LANGUAGE_TAG) {
-            pocketparse_symbol lang_symbol;
-            pocketparse_string lang_name;
+            tinyparse_symbol lang_symbol;
+            tinyparse_string lang_name;
             lang_symbol.id = lang_id;
-            lang_name = pocketparse_tree_symbol_name(tree, lang_symbol);
+            lang_name = tinyparse_tree_symbol_name(tree, lang_symbol);
             if (lang_name.length > 0)
                 printf(" [%.*s]", (int)lang_name.length,
                        (const char *)lang_name.pointer);
         }
     }
     dump_span(index,
-              pocketparse_tree_cursor_start_byte(cursor),
-              pocketparse_tree_cursor_end_byte(cursor));
+              tinyparse_tree_cursor_start_byte(cursor),
+              tinyparse_tree_cursor_end_byte(cursor));
     printf("\n");
 
-    if (pocketparse_tree_cursor_goto_first_child(cursor)) {
+    if (tinyparse_tree_cursor_goto_first_child(cursor)) {
         do {
             dump_subtree(tree, cursor, index);
-        } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
-        pocketparse_tree_cursor_goto_parent(cursor);
+        } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
+        tinyparse_tree_cursor_goto_parent(cursor);
     }
 }
 
@@ -1371,8 +1371,8 @@ static void dump_subtree(const pocketparse_tree *tree,
 ** the message carries data (the rule or token name). Tracing is observational, so
 ** it always reports success. This is the hosted side of the plug boundary; the
 ** library only ever calls this callback, never IO of its own. */
-static pocketparse_result cli_trace_emit(void *user,
-                                         const pocketparse_message *message)
+static tinyparse_result cli_trace_emit(void *user,
+                                         const tinyparse_message *message)
 {
     (void)user;
     fprintf(stderr, "trace: %.*s", (int)message->name.length,
@@ -1381,28 +1381,28 @@ static pocketparse_result cli_trace_emit(void *user,
         fprintf(stderr, " %.*s", (int)message->data.length,
                 (const char *)message->data.pointer);
     fputc('\n', stderr);
-    return POCKETPARSE_OK;
+    return TINYPARSE_OK;
 }
 
 /* ** Install the trace plug under the name "trace" so the engine's trace points
 ** route their messages to cli_trace_emit. Called by `run` only when --trace is
 ** given; without it no plug is installed and the engine's trace seam is a no-op. */
-static void cli_install_trace_plug(pocketparse_engine *engine)
+static void cli_install_trace_plug(tinyparse_engine *engine)
 {
-    pocketparse_plug plug;
+    tinyparse_plug plug;
     plug.name = cli_text("trace");
     plug.emit = cli_trace_emit;
     plug.user = NULL;
-    pocketparse_plug_install(engine, &plug);
+    tinyparse_plug_install(engine, &plug);
 }
 
 /* ** run <grammar> --input <file|-> [--dump-tree] [--chunk N] [--trace]. */
 static int command_run(int argc, char **argv)
 {
-    pocketparse_engine  *engine;
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_parser  *parser  = NULL;
-    pocketparse_result   result;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_parser  *parser  = NULL;
+    tinyparse_result   result;
     char  *grammar_bytes = NULL, *input_bytes = NULL;
     size_t grammar_length = 0, input_length = 0;
     const char *input_path = NULL;
@@ -1413,7 +1413,7 @@ static int command_run(int argc, char **argv)
     int    i;
 
     if (argc < 1) {
-        fprintf(stderr, "pocketparse: error: run needs a grammar path\n");
+        fprintf(stderr, "tinyparse: error: run needs a grammar path\n");
         return 1;
     }
     /* Resolve the argument: a filesystem package or file wins; failing both, the
@@ -1433,28 +1433,28 @@ static int command_run(int argc, char **argv)
         /* --param NAME[=VALUE] is applied after the engine opens, below. */
     }
     if (input_path == NULL) {
-        fprintf(stderr, "pocketparse: error: run needs --input\n");
+        fprintf(stderr, "tinyparse: error: run needs --input\n");
         return 1;
     }
 
     if (src.embedded == NULL) {
         grammar_bytes = read_all(src.grammar_path, &grammar_length);
         if (grammar_bytes == NULL) {
-            fprintf(stderr, "pocketparse: error: cannot read grammar '%s'\n",
+            fprintf(stderr, "tinyparse: error: cannot read grammar '%s'\n",
                     src.grammar_path);
             return 1;
         }
     }
     input_bytes = read_all(input_path, &input_length);
     if (input_bytes == NULL) {
-        fprintf(stderr, "pocketparse: error: cannot read input '%s'\n",
+        fprintf(stderr, "tinyparse: error: cannot read input '%s'\n",
                 input_path);
         return 1;
     }
 
     engine = open_engine();
     if (engine == NULL) {
-        fprintf(stderr, "pocketparse: error: out of memory\n");
+        fprintf(stderr, "tinyparse: error: out of memory\n");
         return 1;
     }
 
@@ -1464,25 +1464,25 @@ static int command_run(int argc, char **argv)
     cli_install_module_resolver(engine, src.grammar_path);
     /* Bind the manifest's params: first, then let a --param override them. */
     if (src.embedded != NULL) {
-        if (cli_apply_embedded(engine, src.embedded) != POCKETPARSE_OK)
+        if (cli_apply_embedded(engine, src.embedded) != TINYPARSE_OK)
             return 1;
     } else if (src.is_package &&
-               cli_apply_package(engine, src.manifest_path) != POCKETPARSE_OK) {
+               cli_apply_package(engine, src.manifest_path) != TINYPARSE_OK) {
         return 1;
     }
     for (i = 1; i < argc; i++)
         if (strcmp(argv[i], "--param") == 0 && i + 1 < argc)
             cli_set_param(engine, argv[++i]);
     /* Embedded grammars are always .scm source; compile them directly. A
-    ** filesystem grammar may be a packed .ppg, so it goes through load_grammar. */
+    ** filesystem grammar may be a packed .tpg, so it goes through load_grammar. */
     if (src.embedded != NULL) {
-        pocketparse_source embedded_source;
+        tinyparse_source embedded_source;
         embedded_source.name          = cli_text(src.embedded->name);
         embedded_source.bytes.pointer = src.embedded->grammar_bytes;
         embedded_source.bytes.length  = (uint32_t)src.embedded->grammar_length;
-        result = pocketparse_compile_scheme(engine, embedded_source, &grammar);
-        if (result != POCKETPARSE_OK) {
-            pocketparse_string fault = pocketparse_fault(engine);
+        result = tinyparse_compile_scheme(engine, embedded_source, &grammar);
+        if (result != TINYPARSE_OK) {
+            tinyparse_string fault = tinyparse_fault(engine);
             fprintf(stderr, "error: %.*s\n", (int)fault.length,
                     (const char *)fault.pointer);
             return 1;
@@ -1490,18 +1490,18 @@ static int command_run(int argc, char **argv)
     } else {
         result = load_grammar(engine, src.grammar_path, grammar_bytes,
                               grammar_length, &grammar);
-        if (result != POCKETPARSE_OK)
+        if (result != TINYPARSE_OK)
             return 1;
     }
 
     {
-        pocketparse_string empty;
+        tinyparse_string empty;
         empty.pointer = NULL;
         empty.length  = 0;
-        result = pocketparse_parser_new(engine, grammar, empty, &parser);
+        result = tinyparse_parser_new(engine, grammar, empty, &parser);
     }
-    if (result != POCKETPARSE_OK || parser == NULL) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    if (result != TINYPARSE_OK || parser == NULL) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
         return 1;
@@ -1515,33 +1515,33 @@ static int command_run(int argc, char **argv)
         if (step == 0)
             step = 1;
         if (input_length == 0) {
-            pocketparse_string nothing;
+            tinyparse_string nothing;
             nothing.pointer = (const uint8_t *)input_bytes;
             nothing.length  = 0;
-            pocketparse_push(parser, nothing);
+            tinyparse_push(parser, nothing);
         }
         while (offset < input_length) {
-            pocketparse_string chunk_bytes;
+            tinyparse_string chunk_bytes;
             size_t n = input_length - offset;
             if (n > step)
                 n = step;
             chunk_bytes.pointer = (const uint8_t *)(input_bytes + offset);
             chunk_bytes.length  = (uint32_t)n;
-            pocketparse_push(parser, chunk_bytes);
+            tinyparse_push(parser, chunk_bytes);
             offset += n;
         }
     }
 
-    result = pocketparse_finish(parser);
+    result = tinyparse_finish(parser);
 
     /* When asked, report the state the parser's lifecycle ended in: "finished"
     ** proves the executor ran over the buffered input, "failed" that a dropped
-    ** chunk stopped it. It costs nothing unless POCKETPARSE_TRACE_LIFECYCLE is
+    ** chunk stopped it. It costs nothing unless TINYPARSE_TRACE_LIFECYCLE is
     ** set. */
     {
-        const char *trace = getenv("POCKETPARSE_TRACE_LIFECYCLE");
+        const char *trace = getenv("TINYPARSE_TRACE_LIFECYCLE");
         if (trace != NULL && trace[0] != '\0')
-            fprintf(stderr, "lifecycle: %s\n", pp_parser_state_name(parser));
+            fprintf(stderr, "lifecycle: %s\n", tp_parser_state_name(parser));
     }
 
     /* A hard syntax error yields no usable tree: report the diagnostics and
@@ -1549,15 +1549,15 @@ static int command_run(int argc, char **argv)
     ** still records error-severity diagnostics; there the tree is dumped (so the
     ** MISSING nodes show) and the diagnostics are reported, and the exit code is
     ** nonzero whenever any error-severity diagnostic was produced. */
-    if (result == POCKETPARSE_SYNTAX_ERROR || result == POCKETPARSE_ERROR) {
-        uint32_t count = pocketparse_parser_diagnostic_count(parser);
+    if (result == TINYPARSE_SYNTAX_ERROR || result == TINYPARSE_ERROR) {
+        uint32_t count = tinyparse_parser_diagnostic_count(parser);
         uint32_t d;
         if (count == 0) {
             fprintf(stderr, "error: parse failed\n");
         }
         for (d = 0; d < count; d++) {
-            const pocketparse_diagnostic *diag =
-                pocketparse_parser_diagnostic(parser, d);
+            const tinyparse_diagnostic *diag =
+                tinyparse_parser_diagnostic(parser, d);
             if (diag != NULL)
                 render_diagnostic(diag);
         }
@@ -1565,32 +1565,32 @@ static int command_run(int argc, char **argv)
     }
 
     if (dump_tree) {
-        const pocketparse_tree *tree = pocketparse_parser_tree(parser);
-        pocketparse_tree_cursor *cursor = NULL;
+        const tinyparse_tree *tree = tinyparse_parser_tree(parser);
+        tinyparse_tree_cursor *cursor = NULL;
         if (tree != NULL &&
-            pocketparse_tree_cursor_new(tree, &cursor) == POCKETPARSE_OK) {
+            tinyparse_tree_cursor_new(tree, &cursor) == TINYPARSE_OK) {
             dump_line_index index;
             dump_line_index_build(&index, (const uint8_t *)input_bytes,
                                   (uint32_t)input_length);
             dump_subtree(tree, cursor, &index);
             dump_line_index_free(&index);
-            pocketparse_tree_cursor_free(cursor);
+            tinyparse_tree_cursor_free(cursor);
         }
     }
 
     /* Report any diagnostics gathered during a successful (recovered) parse and
     ** fail if any reached error severity. */
     {
-        uint32_t count = pocketparse_parser_diagnostic_count(parser);
+        uint32_t count = tinyparse_parser_diagnostic_count(parser);
         uint32_t d;
         int had_error = 0;
         for (d = 0; d < count; d++) {
-            const pocketparse_diagnostic *diag =
-                pocketparse_parser_diagnostic(parser, d);
+            const tinyparse_diagnostic *diag =
+                tinyparse_parser_diagnostic(parser, d);
             if (diag == NULL)
                 continue;
             render_diagnostic(diag);
-            if (diag->severity == POCKETPARSE_SEVERITY_ERROR)
+            if (diag->severity == TINYPARSE_SEVERITY_ERROR)
                 had_error = 1;
         }
         if (had_error)
@@ -1611,13 +1611,13 @@ static int command_run(int argc, char **argv)
 ** A hard syntax error is a failure here -- there is no tree to walk. */
 static int cli_parse_input(const char *grammar_arg, int argc, char **argv,
                            const char *input_bytes, size_t input_length,
-                           pocketparse_engine  **out_engine,
-                           pocketparse_parser  **out_parser)
+                           tinyparse_engine  **out_engine,
+                           tinyparse_parser  **out_parser)
 {
-    pocketparse_engine  *engine;
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_parser  *parser  = NULL;
-    pocketparse_result   result;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_parser  *parser  = NULL;
+    tinyparse_result   result;
     char  *grammar_bytes = NULL;
     size_t grammar_length = 0;
     cli_grammar_source src;
@@ -1630,7 +1630,7 @@ static int cli_parse_input(const char *grammar_arg, int argc, char **argv,
     if (src.embedded == NULL) {
         grammar_bytes = read_all(src.grammar_path, &grammar_length);
         if (grammar_bytes == NULL) {
-            fprintf(stderr, "pocketparse: error: cannot read grammar '%s'\n",
+            fprintf(stderr, "tinyparse: error: cannot read grammar '%s'\n",
                     src.grammar_path);
             return 1;
         }
@@ -1638,16 +1638,16 @@ static int cli_parse_input(const char *grammar_arg, int argc, char **argv,
 
     engine = open_engine();
     if (engine == NULL) {
-        fprintf(stderr, "pocketparse: error: out of memory\n");
+        fprintf(stderr, "tinyparse: error: out of memory\n");
         return 1;
     }
     cli_install_builtin_classes(engine);
     cli_install_module_resolver(engine, src.grammar_path);
     if (src.embedded != NULL) {
-        if (cli_apply_embedded(engine, src.embedded) != POCKETPARSE_OK)
+        if (cli_apply_embedded(engine, src.embedded) != TINYPARSE_OK)
             return 1;
     } else if (src.is_package &&
-               cli_apply_package(engine, src.manifest_path) != POCKETPARSE_OK) {
+               cli_apply_package(engine, src.manifest_path) != TINYPARSE_OK) {
         return 1;
     }
     for (i = 1; i < argc; i++)
@@ -1655,13 +1655,13 @@ static int cli_parse_input(const char *grammar_arg, int argc, char **argv,
             cli_set_param(engine, argv[++i]);
 
     if (src.embedded != NULL) {
-        pocketparse_source embedded_source;
+        tinyparse_source embedded_source;
         embedded_source.name          = cli_text(src.embedded->name);
         embedded_source.bytes.pointer = src.embedded->grammar_bytes;
         embedded_source.bytes.length  = (uint32_t)src.embedded->grammar_length;
-        result = pocketparse_compile_scheme(engine, embedded_source, &grammar);
-        if (result != POCKETPARSE_OK) {
-            pocketparse_string fault = pocketparse_fault(engine);
+        result = tinyparse_compile_scheme(engine, embedded_source, &grammar);
+        if (result != TINYPARSE_OK) {
+            tinyparse_string fault = tinyparse_fault(engine);
             fprintf(stderr, "error: %.*s\n", (int)fault.length,
                     (const char *)fault.pointer);
             return 1;
@@ -1669,38 +1669,38 @@ static int cli_parse_input(const char *grammar_arg, int argc, char **argv,
     } else {
         result = load_grammar(engine, src.grammar_path, grammar_bytes,
                               grammar_length, &grammar);
-        if (result != POCKETPARSE_OK)
+        if (result != TINYPARSE_OK)
             return 1;
     }
 
     {
-        pocketparse_string empty;
+        tinyparse_string empty;
         empty.pointer = NULL;
         empty.length  = 0;
-        result = pocketparse_parser_new(engine, grammar, empty, &parser);
+        result = tinyparse_parser_new(engine, grammar, empty, &parser);
     }
-    if (result != POCKETPARSE_OK || parser == NULL) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    if (result != TINYPARSE_OK || parser == NULL) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
         return 1;
     }
 
     {
-        pocketparse_string bytes;
+        tinyparse_string bytes;
         bytes.pointer = (const uint8_t *)input_bytes;
         bytes.length  = (uint32_t)input_length;
-        pocketparse_push(parser, bytes);
+        tinyparse_push(parser, bytes);
     }
-    result = pocketparse_finish(parser);
-    if (result == POCKETPARSE_SYNTAX_ERROR || result == POCKETPARSE_ERROR) {
-        uint32_t count = pocketparse_parser_diagnostic_count(parser);
+    result = tinyparse_finish(parser);
+    if (result == TINYPARSE_SYNTAX_ERROR || result == TINYPARSE_ERROR) {
+        uint32_t count = tinyparse_parser_diagnostic_count(parser);
         uint32_t d;
         if (count == 0)
             fprintf(stderr, "error: parse failed\n");
         for (d = 0; d < count; d++) {
-            const pocketparse_diagnostic *diag =
-                pocketparse_parser_diagnostic(parser, d);
+            const tinyparse_diagnostic *diag =
+                tinyparse_parser_diagnostic(parser, d);
             if (diag != NULL)
                 render_diagnostic(diag);
         }
@@ -1715,20 +1715,20 @@ static int cli_parse_input(const char *grammar_arg, int argc, char **argv,
 /* ** The linearize command's emit callback: print one ENTER/LEAF/EXIT token per
 ** line as `enter <Kind>` / `leaf <Kind> <text>` / `exit <Kind>`, the debugging
 ** view a query parses. Only a LEAF carries text. */
-static void cli_linearize_emit(void *user, const pocketparse_lin_token *token)
+static void cli_linearize_emit(void *user, const tinyparse_lin_token *token)
 {
     (void)user;
     switch (token->kind) {
-    case POCKETPARSE_LIN_ENTER:
+    case TINYPARSE_LIN_ENTER:
         printf("enter %.*s\n", (int)token->node_kind.length,
                (const char *)token->node_kind.pointer);
         break;
-    case POCKETPARSE_LIN_LEAF:
+    case TINYPARSE_LIN_LEAF:
         printf("leaf %.*s %.*s\n", (int)token->node_kind.length,
                (const char *)token->node_kind.pointer,
                (int)token->text.length, (const char *)token->text.pointer);
         break;
-    case POCKETPARSE_LIN_EXIT:
+    case TINYPARSE_LIN_EXIT:
         printf("exit %.*s\n", (int)token->node_kind.length,
                (const char *)token->node_kind.pointer);
         break;
@@ -1739,28 +1739,28 @@ static void cli_linearize_emit(void *user, const pocketparse_lin_token *token)
 ** ENTER/LEAF/EXIT linearization, the stream a query parses. A debugging view. */
 static int command_linearize(int argc, char **argv)
 {
-    pocketparse_engine *engine = NULL;
-    pocketparse_parser *parser = NULL;
-    const pocketparse_tree *tree;
+    tinyparse_engine *engine = NULL;
+    tinyparse_parser *parser = NULL;
+    const tinyparse_tree *tree;
     const char *input_path = NULL;
     char  *input_bytes = NULL;
     size_t input_length = 0;
     int    i;
 
     if (argc < 1) {
-        fprintf(stderr, "pocketparse: error: linearize needs a grammar path\n");
+        fprintf(stderr, "tinyparse: error: linearize needs a grammar path\n");
         return 1;
     }
     for (i = 1; i < argc; i++)
         if (strcmp(argv[i], "--input") == 0 && i + 1 < argc)
             input_path = argv[++i];
     if (input_path == NULL) {
-        fprintf(stderr, "pocketparse: error: linearize needs --input\n");
+        fprintf(stderr, "tinyparse: error: linearize needs --input\n");
         return 1;
     }
     input_bytes = read_all(input_path, &input_length);
     if (input_bytes == NULL) {
-        fprintf(stderr, "pocketparse: error: cannot read input '%s'\n",
+        fprintf(stderr, "tinyparse: error: cannot read input '%s'\n",
                 input_path);
         return 1;
     }
@@ -1768,19 +1768,19 @@ static int command_linearize(int argc, char **argv)
                         &engine, &parser) != 0)
         return 1;
 
-    tree = pocketparse_parser_tree(parser);
+    tree = tinyparse_parser_tree(parser);
     {
-        pocketparse_string input;
+        tinyparse_string input;
         input.pointer = (const uint8_t *)input_bytes;
         input.length  = (uint32_t)input_length;
-        pocketparse_linearize(engine, tree, input, cli_linearize_emit, NULL);
+        tinyparse_linearize(engine, tree, input, cli_linearize_emit, NULL);
     }
     return 0;
 }
 
 /* ** The query command's emit callback: print one line per capture as
 ** `@<name> <start>-<end> <text>'. */
-static void cli_query_emit(void *user, const pocketparse_query_capture *capture)
+static void cli_query_emit(void *user, const tinyparse_query_capture *capture)
 {
     (void)user;
     printf("@%.*s %u-%u %.*s\n", (int)capture->name.length,
@@ -1795,19 +1795,19 @@ static void cli_query_emit(void *user, const pocketparse_query_capture *capture)
 ** resolves it (a filesystem path SHADOWS the embedded registry). */
 static int command_query(int argc, char **argv)
 {
-    pocketparse_engine *engine = NULL;
-    pocketparse_parser *parser = NULL;
-    const pocketparse_tree *tree;
+    tinyparse_engine *engine = NULL;
+    tinyparse_parser *parser = NULL;
+    const tinyparse_tree *tree;
     const char *query_path = NULL;
     const char *input_path = NULL;
     char  *query_bytes = NULL, *input_bytes = NULL;
     size_t query_length = 0, input_length = 0;
     int    i;
-    pocketparse_result result;
+    tinyparse_result result;
 
     if (argc < 2) {
         fprintf(stderr,
-                "pocketparse: error: query needs a grammar and a query path\n");
+                "tinyparse: error: query needs a grammar and a query path\n");
         return 1;
     }
     query_path = argv[1];
@@ -1815,18 +1815,18 @@ static int command_query(int argc, char **argv)
         if (strcmp(argv[i], "--input") == 0 && i + 1 < argc)
             input_path = argv[++i];
     if (input_path == NULL) {
-        fprintf(stderr, "pocketparse: error: query needs --input\n");
+        fprintf(stderr, "tinyparse: error: query needs --input\n");
         return 1;
     }
     query_bytes = read_all(query_path, &query_length);
     if (query_bytes == NULL) {
-        fprintf(stderr, "pocketparse: error: cannot read query '%s'\n",
+        fprintf(stderr, "tinyparse: error: cannot read query '%s'\n",
                 query_path);
         return 1;
     }
     input_bytes = read_all(input_path, &input_length);
     if (input_bytes == NULL) {
-        fprintf(stderr, "pocketparse: error: cannot read input '%s'\n",
+        fprintf(stderr, "tinyparse: error: cannot read input '%s'\n",
                 input_path);
         return 1;
     }
@@ -1837,18 +1837,18 @@ static int command_query(int argc, char **argv)
                         &engine, &parser) != 0)
         return 1;
 
-    tree = pocketparse_parser_tree(parser);
+    tree = tinyparse_parser_tree(parser);
     {
-        pocketparse_string query, input;
+        tinyparse_string query, input;
         query.pointer = (const uint8_t *)query_bytes;
         query.length  = (uint32_t)query_length;
         input.pointer = (const uint8_t *)input_bytes;
         input.length  = (uint32_t)input_length;
-        result = pocketparse_query(engine, tree, query, input,
+        result = tinyparse_query(engine, tree, query, input,
                                    cli_query_emit, NULL);
     }
-    if (result != POCKETPARSE_OK) {
-        fprintf(stderr, "pocketparse: error: invalid query\n");
+    if (result != TINYPARSE_OK) {
+        fprintf(stderr, "tinyparse: error: invalid query\n");
         return 1;
     }
     return 0;
@@ -1859,15 +1859,15 @@ static int command_query(int argc, char **argv)
 ** the word "hello" or "Hello", optional whitespace, and a name made of letters
 ** -- into a Greeting node with a Name field. It needs no host CLASS bindings
 ** (it uses regex classes), so the starter main.c can compile it with nothing
-** beyond pocketparse_open and pocketparse_compile_scheme. */
-static const char pocketparse_starter_grammar[] =
-    "; grammar.scm -- a starter \"hello\" grammar for a seeded pocketparse project.\n"
+** beyond tinyparse_open and tinyparse_compile_scheme. */
+static const char tinyparse_starter_grammar[] =
+    "; grammar.scm -- a starter \"hello\" grammar for a seeded tinyparse project.\n"
     ";\n"
     "; It recognises a greeting: the word \"hello\" (any case), optional space,\n"
     "; and a name of letters. Whitespace between tokens is trivia (extras), so it\n"
     "; is skipped. Edit this file and rebuild -- main.c compiles it at runtime.\n"
     "\n"
-    "(pocketparse version: \"0.1\")\n"
+    "(tinyparse version: \"0.1\")\n"
     "\n"
     "(grammar hello\n"
     "  start: Greeting\n"
@@ -1884,26 +1884,26 @@ static const char pocketparse_starter_grammar[] =
 
 /* ** The starter main.c a freshly seeded project carries. It is the on-ramp the
 ** design promises: open an engine over a stack grant, read the sibling
-** grammar.scm, compile it at runtime through pocketparse_compile_scheme, parse
+** grammar.scm, compile it at runtime through tinyparse_compile_scheme, parse
 ** stdin, and dump the resulting tree through the public cursor API. It depends
-** on nothing but pocketparse.h, so once seeded the project needs no pocketparse
-** tooling on the path. Built with `cc main.c pocketparse.c -o app`. */
-static const char pocketparse_starter_main[] =
+** on nothing but tinyparse.h, so once seeded the project needs no tinyparse
+** tooling on the path. Built with `cc main.c tinyparse.c -o app`. */
+static const char tinyparse_starter_main[] =
     "/*\n"
-    " * main.c -- a starter pocketparse program.\n"
+    " * main.c -- a starter tinyparse program.\n"
     " *\n"
     " * It opens an engine, compiles the sibling grammar.scm at runtime, parses\n"
     " * standard input against it, and prints the concrete syntax tree. The whole\n"
-    " * engine is in pocketparse.c, so a single C compiler builds the project\n"
+    " * engine is in tinyparse.c, so a single C compiler builds the project\n"
     " * with no other dependency:\n"
     " *\n"
-    " *     cc main.c pocketparse.c -o app\n"
+    " *     cc main.c tinyparse.c -o app\n"
     " *     echo 'hello world' | ./app\n"
     " */\n"
     "#include <stdio.h>\n"
     "#include <stdlib.h>\n"
     "#include <string.h>\n"
-    "#include \"pocketparse.h\"\n"
+    "#include \"tinyparse.h\"\n"
     "\n"
     "/* Read an entire stream into a malloc'd buffer; writes the length. */\n"
     "static char *read_all(FILE *file, size_t *out_length)\n"
@@ -1927,29 +1927,29 @@ static const char pocketparse_starter_main[] =
     "}\n"
     "\n"
     "/* Print the subtree under the cursor, one node per line, indented by depth. */\n"
-    "static void dump(const pocketparse_tree *tree, pocketparse_tree_cursor *cursor)\n"
+    "static void dump(const tinyparse_tree *tree, tinyparse_tree_cursor *cursor)\n"
     "{\n"
-    "    uint32_t depth = pocketparse_tree_cursor_depth(cursor), i;\n"
-    "    pocketparse_symbol kind = pocketparse_tree_cursor_kind(cursor);\n"
-    "    pocketparse_string name = pocketparse_tree_symbol_name(tree, kind);\n"
+    "    uint32_t depth = tinyparse_tree_cursor_depth(cursor), i;\n"
+    "    tinyparse_symbol kind = tinyparse_tree_cursor_kind(cursor);\n"
+    "    tinyparse_string name = tinyparse_tree_symbol_name(tree, kind);\n"
     "    for (i = 0; i < depth; i++) fputs(\"  \", stdout);\n"
     "    printf(\"%.*s\\n\", (int)name.length, (const char *)name.pointer);\n"
-    "    if (pocketparse_tree_cursor_goto_first_child(cursor)) {\n"
+    "    if (tinyparse_tree_cursor_goto_first_child(cursor)) {\n"
     "        do { dump(tree, cursor); }\n"
-    "        while (pocketparse_tree_cursor_goto_next_sibling(cursor));\n"
-    "        pocketparse_tree_cursor_goto_parent(cursor);\n"
+    "        while (tinyparse_tree_cursor_goto_next_sibling(cursor));\n"
+    "        tinyparse_tree_cursor_goto_parent(cursor);\n"
     "    }\n"
     "}\n"
     "\n"
     "int main(void)\n"
     "{\n"
     "    static unsigned char grant[8u * 1024u * 1024u];\n"
-    "    pocketparse_configuration cfg;\n"
-    "    pocketparse_engine  *engine;\n"
-    "    pocketparse_grammar *grammar = NULL;\n"
-    "    pocketparse_parser  *parser  = NULL;\n"
-    "    pocketparse_source   source;\n"
-    "    pocketparse_string   empty;\n"
+    "    tinyparse_configuration cfg;\n"
+    "    tinyparse_engine  *engine;\n"
+    "    tinyparse_grammar *grammar = NULL;\n"
+    "    tinyparse_parser  *parser  = NULL;\n"
+    "    tinyparse_source   source;\n"
+    "    tinyparse_string   empty;\n"
     "    char  *grammar_bytes, *input_bytes;\n"
     "    size_t grammar_length = 0, input_length = 0;\n"
     "    FILE  *gf;\n"
@@ -1959,7 +1959,7 @@ static const char pocketparse_starter_main[] =
     "    memset(&cfg, 0, sizeof cfg);\n"
     "    cfg.memory.base = grant;\n"
     "    cfg.memory.size = sizeof grant;\n"
-    "    engine = pocketparse_open(cfg);\n"
+    "    engine = tinyparse_open(cfg);\n"
     "    if (engine == NULL) { fprintf(stderr, \"error: cannot open engine\\n\"); return 1; }\n"
     "\n"
     "    /* Read and compile the sibling grammar.scm at runtime. */\n"
@@ -1972,29 +1972,29 @@ static const char pocketparse_starter_main[] =
     "    source.name.length  = (uint32_t)strlen(\"grammar.scm\");\n"
     "    source.bytes.pointer = (const uint8_t *)grammar_bytes;\n"
     "    source.bytes.length  = (uint32_t)grammar_length;\n"
-    "    if (pocketparse_compile_scheme(engine, source, &grammar) != POCKETPARSE_OK) {\n"
-    "        pocketparse_string f = pocketparse_fault(engine);\n"
+    "    if (tinyparse_compile_scheme(engine, source, &grammar) != TINYPARSE_OK) {\n"
+    "        tinyparse_string f = tinyparse_fault(engine);\n"
     "        fprintf(stderr, \"error: %.*s\\n\", (int)f.length, (const char *)f.pointer);\n"
     "        return 1;\n"
     "    }\n"
     "\n"
     "    /* Parse standard input against the grammar. */\n"
     "    empty.pointer = NULL; empty.length = 0;\n"
-    "    if (pocketparse_parser_new(engine, grammar, empty, &parser) != POCKETPARSE_OK) {\n"
+    "    if (tinyparse_parser_new(engine, grammar, empty, &parser) != TINYPARSE_OK) {\n"
     "        fprintf(stderr, \"error: cannot create parser\\n\"); return 1;\n"
     "    }\n"
     "    input_bytes = read_all(stdin, &input_length);\n"
     "    if (input_bytes == NULL) { fprintf(stderr, \"error: out of memory\\n\"); return 1; }\n"
     "    {\n"
-    "        pocketparse_string chunk;\n"
+    "        tinyparse_string chunk;\n"
     "        chunk.pointer = (const uint8_t *)input_bytes;\n"
     "        chunk.length  = (uint32_t)input_length;\n"
-    "        pocketparse_push(parser, chunk);\n"
+    "        tinyparse_push(parser, chunk);\n"
     "    }\n"
-    "    if (pocketparse_finish(parser) != POCKETPARSE_OK) {\n"
-    "        uint32_t n = pocketparse_parser_diagnostic_count(parser), d;\n"
+    "    if (tinyparse_finish(parser) != TINYPARSE_OK) {\n"
+    "        uint32_t n = tinyparse_parser_diagnostic_count(parser), d;\n"
     "        for (d = 0; d < n; d++) {\n"
-    "            const pocketparse_diagnostic *diag = pocketparse_parser_diagnostic(parser, d);\n"
+    "            const tinyparse_diagnostic *diag = tinyparse_parser_diagnostic(parser, d);\n"
     "            if (diag != NULL)\n"
     "                fprintf(stderr, \"%.*s\\n\", (int)diag->message.length,\n"
     "                        (const char *)diag->message.pointer);\n"
@@ -2004,12 +2004,12 @@ static const char pocketparse_starter_main[] =
     "\n"
     "    /* Dump the tree. */\n"
     "    {\n"
-    "        const pocketparse_tree *tree = pocketparse_parser_tree(parser);\n"
-    "        pocketparse_tree_cursor *cursor = NULL;\n"
+    "        const tinyparse_tree *tree = tinyparse_parser_tree(parser);\n"
+    "        tinyparse_tree_cursor *cursor = NULL;\n"
     "        if (tree != NULL &&\n"
-    "            pocketparse_tree_cursor_new(tree, &cursor) == POCKETPARSE_OK) {\n"
+    "            tinyparse_tree_cursor_new(tree, &cursor) == TINYPARSE_OK) {\n"
     "            dump(tree, cursor);\n"
-    "            pocketparse_tree_cursor_free(cursor);\n"
+    "            tinyparse_tree_cursor_free(cursor);\n"
     "        }\n"
     "    }\n"
     "    return 0;\n"
@@ -2017,18 +2017,18 @@ static const char pocketparse_starter_main[] =
 
 /* ** The starter build.sh a seeded amalgamation project carries: the one-line
 ** build the design promises. */
-static const char pocketparse_starter_build[] =
+static const char tinyparse_starter_build[] =
     "#!/bin/sh\n"
-    "# Build the seeded project. The whole engine is in pocketparse.c, so one C\n"
+    "# Build the seeded project. The whole engine is in tinyparse.c, so one C\n"
     "# compiler and no other dependency suffices.\n"
-    "cc main.c pocketparse.c -o app\n";
+    "cc main.c tinyparse.c -o app\n";
 
 /* ** The starter build.sh for --lib mode: link against an installed
-** libpocketparse instead of compiling the vendored engine. */
-static const char pocketparse_starter_build_lib[] =
+** libtinyparse instead of compiling the vendored engine. */
+static const char tinyparse_starter_build_lib[] =
     "#!/bin/sh\n"
-    "# Build the seeded project against an installed libpocketparse.\n"
-    "cc main.c -lpocketparse -o app\n";
+    "# Build the seeded project against an installed libtinyparse.\n"
+    "cc main.c -ltinyparse -o app\n";
 
 /* ** Create a directory (and report the failure to stderr). Succeeds when the
 ** directory already exists. Returns 1 on success, 0 on failure. */
@@ -2038,7 +2038,7 @@ static int seed_make_dir(const char *path)
         return 1;
     if (errno == EEXIST)
         return 1;
-    fprintf(stderr, "pocketparse: error: cannot create directory '%s'\n", path);
+    fprintf(stderr, "tinyparse: error: cannot create directory '%s'\n", path);
     return 0;
 }
 
@@ -2076,17 +2076,17 @@ static int seed_write_file(const char *dir, const char *file,
 
     path = seed_join(dir, file);
     if (path == NULL) {
-        fprintf(stderr, "pocketparse: error: out of memory for path '%s'\n", file);
+        fprintf(stderr, "tinyparse: error: out of memory for path '%s'\n", file);
         return 0;
     }
     out = fopen(path, "wb");
     if (out == NULL) {
-        fprintf(stderr, "pocketparse: error: cannot write '%s'\n", path);
+        fprintf(stderr, "tinyparse: error: cannot write '%s'\n", path);
         free(path);
         return 0;
     }
     if (length > 0 && fwrite(bytes, 1, length, out) != length) {
-        fprintf(stderr, "pocketparse: error: short write to '%s'\n", path);
+        fprintf(stderr, "tinyparse: error: short write to '%s'\n", path);
         fclose(out);
         free(path);
         return 0;
@@ -2096,17 +2096,17 @@ static int seed_write_file(const char *dir, const char *file,
     return 1;
 }
 
-/* ** Write the embedded library amalgamation (pocketparse.c + pocketparse.h)
+/* ** Write the embedded library amalgamation (tinyparse.c + tinyparse.h)
 ** into dir. Shared by `init --amalgamation' and `vendor --amalgamation'. */
 static int seed_write_amalgamation(const char *dir)
 {
-    if (!seed_write_file(dir, "pocketparse.c",
-                         pocketparse_amalgamation_c_bytes,
-                         pocketparse_amalgamation_c_length))
+    if (!seed_write_file(dir, "tinyparse.c",
+                         tinyparse_amalgamation_c_bytes,
+                         tinyparse_amalgamation_c_length))
         return 0;
-    if (!seed_write_file(dir, "pocketparse.h",
-                         pocketparse_amalgamation_h_bytes,
-                         pocketparse_amalgamation_h_length))
+    if (!seed_write_file(dir, "tinyparse.h",
+                         tinyparse_amalgamation_h_bytes,
+                         tinyparse_amalgamation_h_length))
         return 0;
     return 1;
 }
@@ -2115,14 +2115,14 @@ static int seed_write_amalgamation(const char *dir)
 ** embedded standard package whose grammar bytes are written instead of the
 ** built-in hello grammar (the --grammar NAME case). */
 static int seed_write_grammar(const char *dir,
-                              const pocketparse_embedded_package *pkg)
+                              const tinyparse_embedded_package *pkg)
 {
     if (pkg != NULL)
         return seed_write_file(dir, "grammar.scm", pkg->grammar_bytes,
                                (size_t)pkg->grammar_length);
     return seed_write_file(dir, "grammar.scm",
-                           (const unsigned char *)pocketparse_starter_grammar,
-                           sizeof pocketparse_starter_grammar - 1);
+                           (const unsigned char *)tinyparse_starter_grammar,
+                           sizeof tinyparse_starter_grammar - 1);
 }
 
 /* ** A parsed seed command line: the target directory, the mode (amalgamation
@@ -2153,7 +2153,7 @@ static int seed_parse_options(int argc, char **argv, const char *verb,
         } else if (strcmp(argv[i], "--grammar") == 0 && i + 1 < argc) {
             out->grammar_name = argv[++i];
         } else if (argv[i][0] == '-') {
-            fprintf(stderr, "pocketparse: error: %s: unknown option '%s'\n",
+            fprintf(stderr, "tinyparse: error: %s: unknown option '%s'\n",
                     verb, argv[i]);
             return 0;
         } else if (out->dir == NULL) {
@@ -2161,7 +2161,7 @@ static int seed_parse_options(int argc, char **argv, const char *verb,
         }
     }
     if (out->dir == NULL) {
-        fprintf(stderr, "pocketparse: error: %s needs a directory\n", verb);
+        fprintf(stderr, "tinyparse: error: %s needs a directory\n", verb);
         return 0;
     }
     return 1;
@@ -2171,14 +2171,14 @@ static int seed_parse_options(int argc, char **argv, const char *verb,
 ** 1 and writes *out_pkg (NULL when no name was given), 0 after printing an error
 ** when a name was given that names no embedded package. */
 static int seed_resolve_grammar(const seed_options *opts,
-                                const pocketparse_embedded_package **out_pkg)
+                                const tinyparse_embedded_package **out_pkg)
 {
     *out_pkg = NULL;
     if (opts->grammar_name == NULL)
         return 1;
     *out_pkg = cli_embedded_lookup(opts->grammar_name);
     if (*out_pkg == NULL) {
-        fprintf(stderr, "pocketparse: error: unknown grammar '%s'\n",
+        fprintf(stderr, "tinyparse: error: unknown grammar '%s'\n",
                 opts->grammar_name);
         return 0;
     }
@@ -2187,15 +2187,15 @@ static int seed_resolve_grammar(const seed_options *opts,
 
 /* ** init <dir> [--amalgamation|--lib] [--grammar NAME]: seed a new project. In
 ** --amalgamation mode (the default) it drops the embedded engine source
-** (pocketparse.c + pocketparse.h), a starter grammar.scm, a main.c that compiles
+** (tinyparse.c + tinyparse.h), a starter grammar.scm, a main.c that compiles
 ** that grammar at runtime and dumps the parse of stdin, and a one-line build.sh;
-** the seeded project then builds with a single cc and needs no pocketparse
+** the seeded project then builds with a single cc and needs no tinyparse
 ** tooling. In --lib mode it writes the same main.c and grammar.scm but copies no
-** engine source, leaving the project to link an installed libpocketparse. */
+** engine source, leaving the project to link an installed libtinyparse. */
 static int command_init(int argc, char **argv)
 {
     seed_options opts;
-    const pocketparse_embedded_package *pkg = NULL;
+    const tinyparse_embedded_package *pkg = NULL;
 
     if (!seed_parse_options(argc, argv, "init", &opts))
         return 1;
@@ -2211,18 +2211,18 @@ static int command_init(int argc, char **argv)
     if (!seed_write_grammar(opts.dir, pkg))
         return 1;
     if (!seed_write_file(opts.dir, "main.c",
-                         (const unsigned char *)pocketparse_starter_main,
-                         sizeof pocketparse_starter_main - 1))
+                         (const unsigned char *)tinyparse_starter_main,
+                         sizeof tinyparse_starter_main - 1))
         return 1;
     if (opts.amalgamation) {
         if (!seed_write_file(opts.dir, "build.sh",
-                             (const unsigned char *)pocketparse_starter_build,
-                             sizeof pocketparse_starter_build - 1))
+                             (const unsigned char *)tinyparse_starter_build,
+                             sizeof tinyparse_starter_build - 1))
             return 1;
     } else {
         if (!seed_write_file(opts.dir, "build.sh",
-                             (const unsigned char *)pocketparse_starter_build_lib,
-                             sizeof pocketparse_starter_build_lib - 1))
+                             (const unsigned char *)tinyparse_starter_build_lib,
+                             sizeof tinyparse_starter_build_lib - 1))
             return 1;
     }
     return 0;
@@ -2230,8 +2230,8 @@ static int command_init(int argc, char **argv)
 
 /* ** vendor <dir> [--amalgamation|--lib]: drop or refresh just the engine source
 ** into an existing project, writing no scaffold. In --amalgamation mode it writes
-** pocketparse.c + pocketparse.h; in --lib mode it writes only pocketparse.h (the
-** project links an installed libpocketparse for the object code). */
+** tinyparse.c + tinyparse.h; in --lib mode it writes only tinyparse.h (the
+** project links an installed libtinyparse for the object code). */
 static int command_vendor(int argc, char **argv)
 {
     seed_options opts;
@@ -2245,9 +2245,9 @@ static int command_vendor(int argc, char **argv)
         if (!seed_write_amalgamation(opts.dir))
             return 1;
     } else {
-        if (!seed_write_file(opts.dir, "pocketparse.h",
-                             pocketparse_amalgamation_h_bytes,
-                             pocketparse_amalgamation_h_length))
+        if (!seed_write_file(opts.dir, "tinyparse.h",
+                             tinyparse_amalgamation_h_bytes,
+                             tinyparse_amalgamation_h_length))
             return 1;
     }
     return 0;
@@ -2293,7 +2293,7 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "vendor") == 0)
         return command_vendor(argc - 2, argv + 2);
 
-    fprintf(stderr, "pocketparse: error: unknown command '%s'\n", argv[1]);
+    fprintf(stderr, "tinyparse: error: unknown command '%s'\n", argv[1]);
     print_usage(stderr);
     return 2;
 }

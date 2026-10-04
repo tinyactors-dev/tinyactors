@@ -2,7 +2,7 @@
 w="$(mktemp -d)"
 trap 'rm -rf "$w"' EXIT
 set -e
-"$PP" pack examples/sexpr/sexpr.scm --out "$w"/pp_sexpr.ppg
-test -s "$w"/pp_sexpr.ppg
+"$TP" pack examples/sexpr/sexpr.scm --out "$w"/tp_sexpr.tpg
+test -s "$w"/tp_sexpr.tpg
 <<<assert
 exit 0

@@ -2,7 +2,7 @@
 # pipeline stage; the body follows the whole pipeline's terminating newline. The
 # HeredocRedirect is inside the first Pipeline stage; the body drains once.
 <<<cmd
-printf 'cat <<EOF | grep x\nx\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+printf 'cat <<EOF | grep x\nx\nEOF\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

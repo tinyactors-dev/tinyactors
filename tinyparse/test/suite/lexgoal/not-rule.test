@@ -1,5 +1,5 @@
 <<<cmd
-printf 'a\nb\nc\nend\n' | "$PP" run test/suite/lexgoal/not-rule.scm --input - --dump-tree
+printf 'a\nb\nc\nend\n' | "$TP" run test/suite/lexgoal/not-rule.scm --input - --dump-tree
 <<<assert
 exit 0
 out-count 3 Item [

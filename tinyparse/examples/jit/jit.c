@@ -2,7 +2,7 @@
  * jit.c -- a tiny native-codegen JIT for a sane subset of C.
  *
  * Pipeline:
- *   1. parse the C source (argv[1]) with pocketparse into a concrete syntax
+ *   1. parse the C source (argv[1]) with tinyparse into a concrete syntax
  *      tree, walked entirely through the cursor API;
  *   2. emit native machine code for the host (x86-64 on Linux) by recursing
  *      directly over that tree -- there is no intermediate AST -- into a page
@@ -24,7 +24,7 @@
  * back-patched conditional jumps. The CST already encodes the left-leaning
  * operator sequence, so no parallel host tree is built.
  *
- * This is hosted code (libc is fine); only the freestanding pocketparse core is
+ * This is hosted code (libc is fine); only the freestanding tinyparse core is
  * freestanding.
  */
 #include <stdio.h>
@@ -33,7 +33,7 @@
 #include <stdint.h>
 #include <sys/mman.h>
 
-#include "pocketparse.h"
+#include "tinyparse.h"
 
 #if !defined(__x86_64__)
 #  error "this JIT example emits x86-64; build on an x86-64 host (the repo CI host)"
@@ -51,43 +51,43 @@ static const char *g_src;
 /* -------------------------------------------------------------------------- */
 
 /* Does a field/symbol name equal the given literal? */
-static int name_is(pocketparse_string s, const char *want)
+static int name_is(tinyparse_string s, const char *want)
 {
     size_t n = strlen(want);
     return s.length == n && memcmp(s.pointer, want, n) == 0;
 }
 
 /* The source text spanned by the cursor's current node. */
-static pocketparse_string span_of(const pocketparse_tree_cursor *cursor)
+static tinyparse_string span_of(const tinyparse_tree_cursor *cursor)
 {
-    pocketparse_string out;
-    uint32_t start = pocketparse_tree_cursor_start_byte(cursor);
-    uint32_t end   = pocketparse_tree_cursor_end_byte(cursor);
+    tinyparse_string out;
+    uint32_t start = tinyparse_tree_cursor_start_byte(cursor);
+    uint32_t end   = tinyparse_tree_cursor_end_byte(cursor);
     out.pointer = (const uint8_t *)(g_src + start);
     out.length  = end - start;
     return out;
 }
 
-static int field_is(const pocketparse_tree *tree,
-                    const pocketparse_tree_cursor *cursor, const char *want)
+static int field_is(const tinyparse_tree *tree,
+                    const tinyparse_tree_cursor *cursor, const char *want)
 {
-    pocketparse_symbol field = pocketparse_tree_cursor_field(cursor);
-    if (field.id == POCKETPARSE_NO_FIELD)
+    tinyparse_symbol field = tinyparse_tree_cursor_field(cursor);
+    if (field.id == TINYPARSE_NO_FIELD)
         return 0;
-    return name_is(pocketparse_tree_symbol_name(tree, field), want);
+    return name_is(tinyparse_tree_symbol_name(tree, field), want);
 }
 
-static int kind_is(const pocketparse_tree *tree,
-                   const pocketparse_tree_cursor *cursor, const char *want)
+static int kind_is(const tinyparse_tree *tree,
+                   const tinyparse_tree_cursor *cursor, const char *want)
 {
-    pocketparse_symbol kind = pocketparse_tree_cursor_kind(cursor);
-    return name_is(pocketparse_tree_symbol_name(tree, kind), want);
+    tinyparse_symbol kind = tinyparse_tree_cursor_kind(cursor);
+    return name_is(tinyparse_tree_symbol_name(tree, kind), want);
 }
 
 /* Parse the integer literal the cursor's node spans. */
-static long literal_value(const pocketparse_tree_cursor *cursor)
+static long literal_value(const tinyparse_tree_cursor *cursor)
 {
-    pocketparse_string t = span_of(cursor);
+    tinyparse_string t = span_of(cursor);
     char buf[64];
     size_t k = t.length < sizeof buf - 1 ? t.length : sizeof buf - 1;
     memcpy(buf, t.pointer, k);
@@ -157,7 +157,7 @@ static void gen_param(code *c)
 
 /* Fold one (op, rhs) tail into the value already on the stack: the rhs result
  * is pushed on top, then both are popped and combined back onto the stack. */
-static void gen_binop(code *c, pocketparse_string op)
+static void gen_binop(code *c, tinyparse_string op)
 {
     pop_rcx(c);               /* rhs -> ecx */
     pop_rax(c);               /* lhs -> eax */
@@ -179,37 +179,37 @@ static void gen_binop(code *c, pocketparse_string op)
 }
 
 /* Forward decl: the single CST-walking expression emitter. */
-static void emit_expr(const pocketparse_tree *tree,
-                      pocketparse_tree_cursor *cursor, code *c);
+static void emit_expr(const tinyparse_tree *tree,
+                      tinyparse_tree_cursor *cursor, code *c);
 
 /* Emit a self-recursive call. The cursor sits on a Call node; its `arg` field
  * (one level down through the CallArgs child) holds the single argument. The
  * callee resolves to this function's own entry at offset 0. */
-static void emit_call(const pocketparse_tree *tree,
-                      pocketparse_tree_cursor *cursor, code *c)
+static void emit_call(const tinyparse_tree *tree,
+                      tinyparse_tree_cursor *cursor, code *c)
 {
     int emitted_arg = 0;
     size_t call_at;
     int32_t rel;
 
-    if (pocketparse_tree_cursor_goto_first_child(cursor)) {
+    if (tinyparse_tree_cursor_goto_first_child(cursor)) {
         do {
             if (field_is(tree, cursor, "arg")) {
                 emit_expr(tree, cursor, c);
                 emitted_arg = 1;
             } else if (kind_is(tree, cursor, "CallArgs")) {
-                if (pocketparse_tree_cursor_goto_first_child(cursor)) {
+                if (tinyparse_tree_cursor_goto_first_child(cursor)) {
                     do {
                         if (field_is(tree, cursor, "arg")) {
                             emit_expr(tree, cursor, c);
                             emitted_arg = 1;
                         }
-                    } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
-                    pocketparse_tree_cursor_goto_parent(cursor);
+                    } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
+                    tinyparse_tree_cursor_goto_parent(cursor);
                 }
             }
-        } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
-        pocketparse_tree_cursor_goto_parent(cursor);
+        } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
+        tinyparse_tree_cursor_goto_parent(cursor);
     }
 
     if (!emitted_arg)
@@ -240,22 +240,22 @@ static void emit_call(const pocketparse_tree *tree,
  *
  * A node may carry only some of these; the walk handles whatever it finds and
  * assembles the shape at the end. */
-static void emit_rule(const pocketparse_tree *tree,
-                      pocketparse_tree_cursor *cursor, code *c)
+static void emit_rule(const tinyparse_tree *tree,
+                      tinyparse_tree_cursor *cursor, code *c)
 {
     int  have_chain = 0;        /* an lhs has been emitted onto the stack */
     int  is_neg = 0;
     int  is_ternary = 0;
-    pocketparse_string pending_op = { (const uint8_t *)"", 0 };
+    tinyparse_string pending_op = { (const uint8_t *)"", 0 };
 
     /* Ternary back-patch sites, set when the `then` field is reached. */
     size_t jz_at = 0, jmp_at = 0;
     int32_t rel;
 
-    if (!pocketparse_tree_cursor_goto_first_child(cursor)) {
+    if (!tinyparse_tree_cursor_goto_first_child(cursor)) {
         /* A fielded leaf token with no recognized kind: classify by its own
          * source text. */
-        pocketparse_string t = span_of(cursor);
+        tinyparse_string t = span_of(cursor);
         if (t.length && t.pointer[0] >= '0' && t.pointer[0] <= '9')
             gen_num(c, literal_value(cursor));
         else
@@ -312,14 +312,14 @@ static void emit_rule(const pocketparse_tree *tree,
              * chain, Primary, Unary, ...) or a punctuation token. Descend only
              * into nodes that have structure, and only if no value is pending. */
             if (!have_chain && !is_ternary &&
-                pocketparse_tree_cursor_child_count(cursor) > 0) {
+                tinyparse_tree_cursor_child_count(cursor) > 0) {
                 emit_expr(tree, cursor, c);
                 have_chain = 1;
             }
         }
-    } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
+    } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
 
-    pocketparse_tree_cursor_goto_parent(cursor);
+    tinyparse_tree_cursor_goto_parent(cursor);
 
     if (!is_ternary && is_neg) {
         /* Prefix unary minus over the value left on the stack. */
@@ -332,8 +332,8 @@ static void emit_rule(const pocketparse_tree *tree,
 /* The single tree-driven emitter. Leaves the expression's result pushed on the
  * native stack. Dispatches on the leaf kinds, then falls through to the rule
  * walker for the layered precedence nodes. */
-static void emit_expr(const pocketparse_tree *tree,
-                      pocketparse_tree_cursor *cursor, code *c)
+static void emit_expr(const tinyparse_tree *tree,
+                      tinyparse_tree_cursor *cursor, code *c)
 {
     if (kind_is(tree, cursor, "Number")) {
         gen_num(c, literal_value(cursor));
@@ -356,18 +356,18 @@ static void emit_expr(const pocketparse_tree *tree,
 
 /* With the cursor on a return Statement, emit its `value` field expression.
  * Returns nonzero if a value field was found and emitted. */
-static int emit_statement(const pocketparse_tree *tree,
-                          pocketparse_tree_cursor *cursor, code *c)
+static int emit_statement(const tinyparse_tree *tree,
+                          tinyparse_tree_cursor *cursor, code *c)
 {
     int emitted = 0;
-    if (pocketparse_tree_cursor_goto_first_child(cursor)) {
+    if (tinyparse_tree_cursor_goto_first_child(cursor)) {
         do {
             if (field_is(tree, cursor, "value")) {
                 emit_expr(tree, cursor, c);
                 emitted = 1;
             }
-        } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
-        pocketparse_tree_cursor_goto_parent(cursor);
+        } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
+        tinyparse_tree_cursor_goto_parent(cursor);
     }
     return emitted;
 }
@@ -375,8 +375,8 @@ static int emit_statement(const pocketparse_tree *tree,
 /* With the cursor on the matched Function node, emit prologue, body, epilogue.
  * The entry is offset 0, so a self-call (rel32 to 0) reaches it. Returns
  * nonzero if a return statement was emitted. */
-static int emit_function_body(const pocketparse_tree *tree,
-                              pocketparse_tree_cursor *cursor, code *c)
+static int emit_function_body(const tinyparse_tree *tree,
+                              tinyparse_tree_cursor *cursor, code *c)
 {
     int emitted = 0;
 
@@ -388,12 +388,12 @@ static int emit_function_body(const pocketparse_tree *tree,
 
     /* Body: the function's Statement children are inlined here (the grammar's
      * (repeat Statement) introduces no wrapper node). */
-    if (pocketparse_tree_cursor_goto_first_child(cursor)) {
+    if (tinyparse_tree_cursor_goto_first_child(cursor)) {
         do {
             if (kind_is(tree, cursor, "Statement"))
                 emitted |= emit_statement(tree, cursor, c);
-        } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
-        pocketparse_tree_cursor_goto_parent(cursor);
+        } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
+        tinyparse_tree_cursor_goto_parent(cursor);
     }
 
     /* Epilogue. */
@@ -405,13 +405,13 @@ static int emit_function_body(const pocketparse_tree *tree,
 
 /* Walk the Unit's Function children, find the one whose `name` field matches,
  * and emit it. Returns nonzero on success. The cursor starts at the root. */
-static int emit_unit(const pocketparse_tree *tree,
-                     pocketparse_tree_cursor *cursor, code *c,
+static int emit_unit(const tinyparse_tree *tree,
+                     tinyparse_tree_cursor *cursor, code *c,
                      const char *want_name)
 {
     int done = 0;
 
-    if (!pocketparse_tree_cursor_goto_first_child(cursor))
+    if (!tinyparse_tree_cursor_goto_first_child(cursor))
         return 0;
     do {
         if (!kind_is(tree, cursor, "Function"))
@@ -421,12 +421,12 @@ static int emit_unit(const pocketparse_tree *tree,
          * scan the children for the name, restore, then emit only on a match. */
         {
             int matches = 0;
-            if (pocketparse_tree_cursor_goto_first_child(cursor)) {
+            if (tinyparse_tree_cursor_goto_first_child(cursor)) {
                 do {
                     if (field_is(tree, cursor, "name"))
                         matches = name_is(span_of(cursor), want_name);
-                } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
-                pocketparse_tree_cursor_goto_parent(cursor);
+                } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
+                tinyparse_tree_cursor_goto_parent(cursor);
             }
             if (matches) {
                 done = emit_function_body(tree, cursor, c);
@@ -434,8 +434,8 @@ static int emit_unit(const pocketparse_tree *tree,
                     break;
             }
         }
-    } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
-    pocketparse_tree_cursor_goto_parent(cursor);
+    } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
+    tinyparse_tree_cursor_goto_parent(cursor);
     return done;
 }
 
@@ -470,12 +470,12 @@ static int run_jit(const uint8_t *code_bytes, size_t code_len, int arg)
 }
 
 /* -------------------------------------------------------------------------- */
-/* pocketparse driver glue.                                                    */
+/* tinyparse driver glue.                                                    */
 /* -------------------------------------------------------------------------- */
 
-static pocketparse_string str_of(const char *s)
+static tinyparse_string str_of(const char *s)
 {
-    pocketparse_string out;
+    tinyparse_string out;
     out.pointer = (const uint8_t *)s;
     out.length  = (uint32_t)strlen(s);
     return out;
@@ -505,14 +505,14 @@ static void *jit_grow(void *user, size_t need, size_t *got) { (void)user; if (go
 
 int main(int argc, char **argv)
 {
-    pocketparse_configuration cfg;
-    pocketparse_engine  *engine;
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_parser  *parser  = NULL;
-    pocketparse_source   gsrc;
-    pocketparse_string    empty = { (const uint8_t *)"", 0 };
-    const pocketparse_tree *tree;
-    pocketparse_tree_cursor *cursor = NULL;
+    tinyparse_configuration cfg;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_parser  *parser  = NULL;
+    tinyparse_source   gsrc;
+    tinyparse_string    empty = { (const uint8_t *)"", 0 };
+    const tinyparse_tree *tree;
+    tinyparse_tree_cursor *cursor = NULL;
     const char *c_source, *func_name;
     int arg_value;
     char *grammar_bytes;
@@ -551,33 +551,33 @@ int main(int argc, char **argv)
         cfg.memory.base = block;
         cfg.memory.size = JIT_GRANT;
         cfg.memory.grow = jit_grow;
-        engine = pocketparse_open(cfg);
+        engine = tinyparse_open(cfg);
     }
     if (!engine) { fprintf(stderr, "jit: engine open failed\n"); return 2; }
 
     gsrc.name = str_of("jit.scm");
     gsrc.bytes.pointer = (const uint8_t *)grammar_bytes;
     gsrc.bytes.length  = (uint32_t)grammar_len;
-    if (pocketparse_compile_scheme(engine, gsrc, &grammar) != POCKETPARSE_OK) {
-        pocketparse_string f = pocketparse_fault(engine);
+    if (tinyparse_compile_scheme(engine, gsrc, &grammar) != TINYPARSE_OK) {
+        tinyparse_string f = tinyparse_fault(engine);
         fprintf(stderr, "jit: grammar error: %.*s\n", (int)f.length, f.pointer);
         return 2;
     }
 
-    if (pocketparse_parser_new(engine, grammar, empty, &parser) != POCKETPARSE_OK
+    if (tinyparse_parser_new(engine, grammar, empty, &parser) != TINYPARSE_OK
         || !parser) {
         fprintf(stderr, "jit: parser_new failed\n");
         return 2;
     }
 
-    pocketparse_push(parser, str_of(c_source));
+    tinyparse_push(parser, str_of(c_source));
     {
-        pocketparse_result r = pocketparse_finish(parser);
-        if (r == POCKETPARSE_SYNTAX_ERROR || r == POCKETPARSE_ERROR) {
-            uint32_t n = pocketparse_parser_diagnostic_count(parser), i;
+        tinyparse_result r = tinyparse_finish(parser);
+        if (r == TINYPARSE_SYNTAX_ERROR || r == TINYPARSE_ERROR) {
+            uint32_t n = tinyparse_parser_diagnostic_count(parser), i;
             for (i = 0; i < n; i++) {
-                const pocketparse_diagnostic *d =
-                    pocketparse_parser_diagnostic(parser, i);
+                const tinyparse_diagnostic *d =
+                    tinyparse_parser_diagnostic(parser, i);
                 if (d) fprintf(stderr, "jit: parse: %.*s\n",
                                (int)d->message.length, d->message.pointer);
             }
@@ -586,8 +586,8 @@ int main(int argc, char **argv)
         }
     }
 
-    tree = pocketparse_parser_tree(parser);
-    if (!tree || pocketparse_tree_cursor_new(tree, &cursor) != POCKETPARSE_OK) {
+    tree = tinyparse_parser_tree(parser);
+    if (!tree || tinyparse_tree_cursor_new(tree, &cursor) != TINYPARSE_OK) {
         fprintf(stderr, "jit: no tree\n");
         return 2;
     }
@@ -596,12 +596,12 @@ int main(int argc, char **argv)
     c.len = 0;
     c.cap = sizeof code_storage;
     if (!emit_unit(tree, cursor, &c, func_name)) {
-        pocketparse_tree_cursor_free(cursor);
+        tinyparse_tree_cursor_free(cursor);
         fprintf(stderr, "jit: function '%s' not found or not emittable\n",
                 func_name);
         return 2;
     }
-    pocketparse_tree_cursor_free(cursor);
+    tinyparse_tree_cursor_free(cursor);
 
     result = run_jit(c.buf, c.len, arg_value);
     printf("%d\n", result);

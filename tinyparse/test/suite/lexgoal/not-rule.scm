@@ -1,8 +1,8 @@
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 ; Rule-level NOT: (not GUARD BODY) where BODY is a RULE, not the keyword `any'.
 ; The repeat consumes Item rules until the GUARD token (End = "end") is next,
 ; then stops -- leaving "end" for the following `tail: End'. This exercises the
-; PP_VM_NOT_RULE lowering/dispatch (token-level guard lookahead, then run the
+; TP_VM_NOT_RULE lowering/dispatch (token-level guard lookahead, then run the
 ; rule body only when the guard is absent). extras: none so the guard's raw-byte
 ; lookahead sees the byte at the cursor.
 ;

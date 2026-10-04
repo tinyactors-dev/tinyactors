@@ -2,7 +2,7 @@
 ; system layered on.
 ;
 ; Ported (the LANGUAGE, not the code) from the build-time reference under
-; tools/pocketparse/reference/tree-sitter-typescript/ — common/define-grammar.js
+; tools/tinyparse/reference/tree-sitter-typescript/ — common/define-grammar.js
 ; (the shared type grammar) plus the JavaScript base this grammar `(extends)`.
 ; Node names follow tree-sitter where reasonable (type_annotation, union_type,
 ; interface_declaration, type_alias_declaration, generic_type, ...).
@@ -16,14 +16,14 @@
 ; interface / type / enum / namespace / declare).
 ;
 ; tree-sitter resolves the type system's ambiguities with a GLR conflict table;
-; pocketparse resolves them inside the grammar with ordered choice — the type
+; tinyparse resolves them inside the grammar with ordered choice — the type
 ; forms are tried in a deliberate order, and an expression-vs-type decision is
 ; made by which keyword or bracket leads. The `<T>`-cast-versus-JSX-element
 ; ambiguity is settled by the `jsx` parameter: with jsx off (std.typescript) a
 ; leading `<T>` opens a type assertion or a type-argument list; with jsx on
 ; (std.tsx) it opens a JSX element and a cast is written `x as T`.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module std.typescript)
 

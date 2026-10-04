@@ -1,4 +1,4 @@
-# pocketparse — hard decisions log
+# tinyparse — hard decisions log
 
 A running record of load-bearing decisions and their rationale, so they are not
 re-litigated. Newest at the bottom of each section.
@@ -11,7 +11,7 @@ re-litigated. Newest at the bottom of each section.
   corpus case as covered when `run` accepts it with no ERROR/MISSING, not by
   matching tree-sitter's exact S-expression. Full tree-equality is future work.
 - **The malformed `destructuring__5` corpus case asserts rejection** — its
-  tree-sitter reference is itself an error-recovery tree; pocketparse rejects it
+  tree-sitter reference is itself an error-recovery tree; tinyparse rejects it
   (exit non-zero). Full error-recovery-tree parity is separate future work.
 - **Language injection uses an inline sub-VM, not a child ax actor (for now)** —
   suspending/resuming the host VM across `ax_step` to await a child outcome is
@@ -29,8 +29,8 @@ re-litigated. Newest at the bottom of each section.
 - **PEG backtracking lives in an `ax_data` stack, not ax's configuration** — ax
   cannot rewind its active configuration, so choice/commit/fail manage explicit
   marks (cursor, builder, sink) in actor data.
-- **The ax VM is the library default; `pp_execute` is the opt-out** via
-  `POCKETPARSE_ENGINE=recursive`, kept as the byte-identical differential oracle.
+- **The ax VM is the library default; `tp_execute` is the opt-out** via
+  `TINYPARSE_ENGINE=recursive`, kept as the byte-identical differential oracle.
 
 ## Open issues / follow-ups
 - **Flaky `tsfamily/declarations__18`** — intermittent (~1 in 5+), engine-
@@ -45,7 +45,7 @@ re-litigated. Newest at the bottom of each section.
   One remaining mutable static (cli.c's module-resolver context) moved to the
   heap; the freestanding library holds none. The fixed caps (nodetypes field/
   type/children [64], token.c FIRST-set stack[64], cli.c path char[4096], bench
-  block registry) are now arena-grown. `ci/pocketparse-no-statics.sh` guards the
+  block registry) are now arena-grown. `ci/tinyparse-no-statics.sh` guards the
   rule (ast-grep, wired into the metric). New tests prove no truncation past the
   old caps. Byte-identical (vm-diff 289/289), API frozen, no features cut.
   - **`static const` ROM and `static` functions stay** — the guard exempts both;
@@ -59,13 +59,13 @@ re-litigated. Newest at the bottom of each section.
     is a fair like-for-like subset of a real codebase. Vendored React is pinned +
     gitignored reference data (W66).
   - **The benchmark parses each file in a fresh, immediately-closed engine.**
-    pocketparse's arena does not reclaim on parser_free, so a whole-codebase
+    tinyparse's arena does not reclaim on parser_free, so a whole-codebase
     session accretes every tree; per-file engines bound peak memory to one file.
     The per-file engine open + grammar load is OFF the meter (only the parse/walk
     is timed), matching the methodology. tree-sitter reuses one parser, timing only
     the parse, symmetrically.
   - **`pack` resolves packages (W66)** so `pack std.tsx` packs the fully-resolved
-    grammar; the benchmark loads that .ppg via pocketparse_load_binary_grammar.
+    grammar; the benchmark loads that .tpg via tinyparse_load_binary_grammar.
   - **Root cause of the gap was catastrophic PEG backtracking, not slow code.**
     The profile-guided wins (token-index O(1), W66) were minor; the React files
     exposed an exponential blowup (a 3.7 KB file: 279 ms / 100 MiB; worst ~1 GB /
@@ -83,22 +83,22 @@ re-litigated. Newest at the bottom of each section.
     touches each key once and must pay nothing, so the first success is only marked
     "seen" and the memo stays dormant until a parse exceeds 32x input-length
     rule-call attempts (proof of super-linearity). This keeps the JS perf gate
-    green (11.9 ms) while killing the React blowup. POCKETPARSE_RULEMEMO forces it
+    green (11.9 ms) while killing the React blowup. TINYPARSE_RULEMEMO forces it
     on/off; vm-diff runs a forced-on pass so the replay path stays byte-identical.
   - **≤1.5× was not reached on the React workload; integrity-first stands.**
     Measured (1070 files, 9.5 MB, ax-hosted VM): parse is 39x tree-sitter with the
-    memo adaptive (the default) and 11.7x with POCKETPARSE_RULEMEMO=always (1.1s
-    tree-sitter; 43s / 13s pocketparse). The COLLECT/traversal pass is 2.8x FASTER
+    memo adaptive (the default) and 11.7x with TINYPARSE_RULEMEMO=always (1.1s
+    tree-sitter; 43s / 13s tinyparse). The COLLECT/traversal pass is 2.8x FASTER
     than tree-sitter (82ms vs 229ms) -- the contiguous-array cursor wins, as on the
     JS corpus. So the exponential blowup is gone (bounded memory, no OOM) and
     traversal leads, but raw parse stays structurally slower: matching
     tree-sitter's pre-generated GLR tables to 1.5x would mean generating parse
-    tables (its design, not pocketparse's runtime-compiled one). Reported as
+    tables (its design, not tinyparse's runtime-compiled one). Reported as
     measured, not tuned to a number.
   - **The perf ratchet only goes down, so the memo ships ADAPTIVE by default.**
     Forcing it always-on regresses the JS micro-corpus gate (the dormant-until-
     super-linear default keeps it at ~11.9ms). Real-code consumers can opt into the
-    3.3x-faster always-on mode with POCKETPARSE_RULEMEMO=always.
+    3.3x-faster always-on mode with TINYPARSE_RULEMEMO=always.
 
 ## Exploration: grammar shape, tsc/tsgo, PEG-vs-GLR, parser_free (DONE)
 
@@ -112,8 +112,8 @@ decisions that came out of it:
   where we can express it, the memo is the general safety net.
 - **PEG is the right paradigm; the gap is interpretation, not the algorithm.**
   Measured parse-only over the React corpus: tsgo 29.2 MB/s, tsc 12.5, tree-sitter
-  (GLR) 8.3, pocketparse 0.28. The FASTEST is recursive descent (tsgo), 3.7x faster
-  than GLR. pocketparse already picked the fast family; it is slow because it
+  (GLR) 8.3, tinyparse 0.28. The FASTEST is recursive descent (tsgo), 3.7x faster
+  than GLR. tinyparse already picked the fast family; it is slow because it
   INTERPRETS an IR where tsc/tsgo are compiled.
 - **Do NOT build GLR for speed.** It is the slowest production parser here, breaks
   byte-identity (different trees, precedence/table conflict model), and needs a
@@ -128,7 +128,7 @@ decisions that came out of it:
     promised otherwise; nothing in-repo relied on it). Copy out what you need first.
   - **vm_program must be cached on the grammar's arena, not the parser's** — a
     per-parser arena is reset, so a cross-parse cache pointing into it would dangle
-    (the bug ci/pocketparse-reclaim.sh caught). It proves the fix: a 264 KB file
+    (the bug ci/tinyparse-reclaim.sh caught). It proves the fix: a 264 KB file
     parsed 300x in one engine peaks identically to 10x.
 - **Perf ratchet 12 -> 10 ms.** Left-factoring + per-parser arena locality dropped
   the JS-corpus parse to ~9 ms (2.9x tree-sitter, was 4.2x).
@@ -140,59 +140,59 @@ decisions that came out of it:
   re-parser — 310-470x on deeply nested inputs, memo OFF), `export_statement`,
   `method_head`, `arrow_function` (JS) and `export_statement`, `arrow_function`
   (TS). The method/traps/verification bar are captured in the `left-factor` skill
-  (tools/pocketparse/.claude/skills/left-factor/). Each verified 296/296 +
+  (tools/tinyparse/.claude/skills/left-factor/). Each verified 296/296 +
   vm-diff before commit. Deliberately left: `for_statement` in/of-vs-classic
   (structurally distinct headers, off the hot path, factoring risks an accept
   change), pattern/import name-vs-alias (single token, off hot path), and
   first-set-disjoint choices (predicted, never re-parse).
 - **W2: the bytecode VM is the sole production engine.** inject.c's sub-parse moved
-  off `pp_execute` onto `pp_execute_vm` (an inline sub-VM, no nested actor,
-  byte-identical). After W2 no production path uses `pp_execute`; it survives only
-  as the differential oracle + the `POCKETPARSE_ENGINE=recursive` opt-out.
-- **`pp_execute` deletion is sequenced LAST (W5), not at W2.** It is the
+  off `tp_execute` onto `tp_execute_vm` (an inline sub-VM, no nested actor,
+  byte-identical). After W2 no production path uses `tp_execute`; it survives only
+  as the differential oracle + the `TINYPARSE_ENGINE=recursive` opt-out.
+- **`tp_execute` deletion is sequenced LAST (W5), not at W2.** It is the
   independent differential oracle; deleting it before W3's C-compiled parser exists
   would leave the engine with no independent cross-check (only the conformance
   suite). So W2 removes it from production paths; W5 deletes it once the
   C-compiled parser is the new VM-vs-C oracle.
-- **W3 plan: `pocketparse c` will emit recursive-descent C** — one C function per
+- **W3 plan: `tinyparse c` will emit recursive-descent C** — one C function per
   rule, ordered choice as if/return, over the existing token matcher + tree
-  builder, self-contained (no libpocketparse link). This is the speed lever the
+  builder, self-contained (no libtinyparse link). This is the speed lever the
   exploration identified (compile the PEG, do not interpret it) and the embedding
-  deliverable. A new ci/pocketparse-cc-diff.sh asserts the generated parser is
+  deliverable. A new ci/tinyparse-cc-diff.sh asserts the generated parser is
   byte-identical to the VM — becoming the independent oracle.
 
 ### W3 design: compile the rule structure, reuse the runtime
 - **The generated C emits one function per RULE (native recursive descent), but
   calls the existing runtime primitives** — the token matcher, the contiguous tree
   builder, extras, the cursor. The interpretation cost the exploration measured was
-  the rule-level dispatch (pp_vm_run walking the lowered program); compiling THAT to
+  the rule-level dispatch (tp_vm_run walking the lowered program); compiling THAT to
   C functions removes it. Compiling the token matcher too is a later step, not this
-  one. "Self-contained / no libpocketparse link" = ship the amalgamation + the
+  one. "Self-contained / no libtinyparse link" = ship the amalgamation + the
   generated rule functions; the rule logic is native C, the runtime is shared.
-- **Byte-identical to the VM is the bar**, enforced by ci/pocketparse-cc-diff.sh
+- **Byte-identical to the VM is the bar**, enforced by ci/tinyparse-cc-diff.sh
   (generate -> compile -> `--dump-tree` == the VM's, over the corpus). That gate is
-  the new independent oracle that lets W5 delete pp_execute.
-- **New flag `pocketparse c --rd`** (POCKETPARSE_EMIT_RD), recorded as a deliberate
+  the new independent oracle that lets W5 delete tp_execute.
+- **New flag `tinyparse c --rd`** (TINYPARSE_EMIT_RD), recorded as a deliberate
   CLI/emit-API addition.
 
 ### W3 done — the compiled RD backend ships, byte-identical
-- **`POCKETPARSE_EMIT_RD` is the one permitted public-header addition** — a single
-  enum value (`0x2u`) alongside `POCKETPARSE_EMIT_BUNDLE`, driven by `pocketparse c
+- **`TINYPARSE_EMIT_RD` is the one permitted public-header addition** — a single
+  enum value (`0x2u`) alongside `TINYPARSE_EMIT_BUNDLE`, driven by `tinyparse c
   --rd`. The emitter lives in `src/emitrd.c` (freestanding, two-pass cursor like
-  emit.c, no static mutable state); `pocketparse_emit_c` branches to it on the flag.
+  emit.c, no static mutable state); `tinyparse_emit_c` branches to it on the flag.
 - **`command_emit` now resolves grammars exactly like `check`/`run`** — package
   dir, plain file, or embedded name, with the module resolver installed — so a
   grammar that `extends` a base (std.typescript, std.tsx) compiles. Previously `c`
   read a path only and failed on extends with "requires a module resolver".
 - **The generated RD parser reuses the VM runtime, it does not reimplement it.**
-  vm.c's helpers + `pp_vm_state` moved to internal.h; the VM's `pp_vm_run_call`
-  delegates to a factored `pp_vm_run_call_body(... body callback ...)` that the
+  vm.c's helpers + `tp_vm_state` moved to internal.h; the VM's `tp_vm_run_call`
+  delegates to a factored `tp_vm_run_call_body(... body callback ...)` that the
   generated code also calls, so CALL/rule-memo semantics have ONE source of truth.
-  The emitter walks the SAME lowered program (`pp_compile_program`) and emits, per
-  instruction, the C its `pp_vm_run` case would execute — that is what makes it
-  byte-identical, proven by `ci/pocketparse-cc-diff.sh` (the new independent oracle).
-- **The pp_ir pattern pointers are not baked; the parser re-lowers at startup.** A
-  MATCH/BYTE/RECOVER/INJECT carries a runtime pp_ir address, so the generated file
+  The emitter walks the SAME lowered program (`tp_compile_program`) and emits, per
+  instruction, the C its `tp_vm_run` case would execute — that is what makes it
+  byte-identical, proven by `ci/tinyparse-cc-diff.sh` (the new independent oracle).
+- **The tp_ir pattern pointers are not baked; the parser re-lowers at startup.** A
+  MATCH/BYTE/RECOVER/INJECT carries a runtime tp_ir address, so the generated file
   loads the embedded packed grammar and reads operands from `program->instructions[N]`;
   indices line up because the lowering is deterministic. Only the rule STRUCTURE is
   compiled to C; the pattern operands ride along in the lowered program.
@@ -201,10 +201,10 @@ decisions that came out of it:
   RECOVER, INJECT, the rule memo). Standing gates green at the commit.
 
 ### W3 corrections (owner directives) — rename + make the generated parser iterative
-- **No cryptic names in the final product.** `emitrd.c` / `POCKETPARSE_EMIT_RD` /
-  `--rd` / `pp_rd_*` were cryptic ("rd" = recursive descent). Rename to spelled-out
+- **No cryptic names in the final product.** `emitrd.c` / `TINYPARSE_EMIT_RD` /
+  `--rd` / `tp_rd_*` were cryptic ("rd" = recursive descent). Rename to spelled-out
   names — the emitter is `emitparser.c`, the flag is `--parser`
-  (`POCKETPARSE_EMIT_PARSER`), generated symbols `pp_parser_*`. Per GUIDELINES:
+  (`TINYPARSE_EMIT_PARSER`), generated symbols `tp_parser_*`. Per GUIDELINES:
   spell symbols out. (Cryptic names are tolerable only in throwaway scratch.)
 - **The generated parser MUST be iterative, not natively recursive.** The first
   W3 cut emitted one C function per rule that call each other — native C recursion
@@ -215,26 +215,26 @@ decisions that came out of it:
   into the dispatch. Bound by the stack, which lives in an ARENA and grows — never
   the fixed C stack. Lifetimes are known (the frame stack is per-parse), so use the
   parse arena to keep it fast. cc-diff (byte-identity to the VM) stays the bar.
-- **Known follow-up: the bytecode VM itself C-recurses per rule call** (pp_vm_run_call),
+- **Known follow-up: the bytecode VM itself C-recurses per rule call** (tp_vm_run_call),
   so it has the same deep-nesting crash exposure as the first generated cut. The
   owner's directive named the generated parser; making the VM's dispatch iterative
   too is the natural next step (tracked, not done in W3).
 - **The generated parser is macro-free and crash-bounded (W14-3 close-out).** The
-  emitter's five dispatch macros (PP_PARSER_TOP/RESOLVE/PUSH/DESCEND in the loop,
-  PP_PARSER_GRANT in main) are now inlined at their use sites in the emitted
+  emitter's five dispatch macros (TP_PARSER_TOP/RESOLVE/PUSH/DESCEND in the loop,
+  TP_PARSER_GRANT in main) are now inlined at their use sites in the emitted
   strings — the generated output contains zero `#define`/`#undef` (it is already
   generated, so the macros are expanded in the generation phase), byte-identical
   to the VM (cc-diff 267/267). The no-crash guarantee is the arena bound, verified
-  ONCE with a tool, not a depth search: ci/pocketparse-parser-nocrash.sh runs a
+  ONCE with a tool, not a depth search: ci/tinyparse-parser-nocrash.sh runs a
   ~200k-deep std.json input under `ulimit -s 512` and asserts a clean exit (code
   < 128). Cross-check: the recursive VM segfaults (139) on the same input under
   the same small stack, so the test is meaningful, not a no-op.
 
 ### W6 scheduled (owner directive): make the bytecode VM iterative
-- **A bytecode VM that C-recurses defeats the point of bytecode.** pp_vm_run /
-  pp_vm_run_call recurse per rule call, so deep input overflows the C stack — the
+- **A bytecode VM that C-recurses defeats the point of bytecode.** tp_vm_run /
+  tp_vm_run_call recurse per rule call, so deep input overflows the C stack — the
   VM segfaults under `ulimit -s 512` where the W3 compiled parser (iterative,
-  arena-backed) survives. W6 drives pp_execute_vm with the same explicit
+  arena-backed) survives. W6 drives tp_execute_vm with the same explicit
   arena-backed frame stack (reuse the W3 pattern — likely one shared iterative
   driver). Bounds depth by the arena, not the C stack.
 - **Tail-call analysis is part of W6 (owner directive).** The W6 agent must run an
@@ -248,20 +248,20 @@ decisions that came out of it:
   (vm-diff + cc-diff) + a vm-nocrash gate proving the VM survives deep input.
 
 ### W4 done — the five-way benchmark, and the honest C-vs-VM verdict
-- **One new permitted public-header addition: `POCKETPARSE_EMIT_PARSER_LIB`.** The
+- **One new permitted public-header addition: `TINYPARSE_EMIT_PARSER_LIB`.** The
   five-way bench needs the C-compiled parser driven IN-PROCESS (a subprocess per
   file would time process startup, not parsing). The existing `--parser` emits a
   standalone program with `main()` reading stdin; there was no callable entry. Added
   the flag (CLI `--parser-lib`, env-free) that emits the SAME compiled parser
-  without `main()`/dump and instead exposes `pp_compiled_parser_load(engine,
-  &grammar)` + `pp_compiled_parser_run(parser)`. Same family as W3's
-  `POCKETPARSE_EMIT_PARSER`; the bundle path is untouched (cc-diff still 267/267).
+  without `main()`/dump and instead exposes `tp_compiled_parser_load(engine,
+  &grammar)` + `tp_compiled_parser_run(parser)`. Same family as W3's
+  `TINYPARSE_EMIT_PARSER`; the bundle path is untouched (cc-diff still 267/267).
   The emitter stays freestanding and holds no static mutable state (no-statics
   GREEN). Chose a flag over a separate command to keep one emit codepath.
 - **The C-compiled arm is measured exactly like the VM arm.** `bench/react_compiled.c`
-  is `react_pocketparse.c`'s twin: per-file fresh engine, only the parse call timed,
+  is `react_tinyparse.c`'s twin: per-file fresh engine, only the parse call timed,
   grammar load off the meter. It loads the grammar through the generated loader (so
-  the baked instruction indices line up) and times `pp_compiled_parser_run`.
+  the baked instruction indices line up) and times `tp_compiled_parser_run`.
 - **Verdict (W14-4, honest): C-compiled is NOT faster than the VM — it is ~11%
   SLOWER** (2.71 vs 3.01 MB/s over the 1070-file React corpus). Recorded as-is in
   `docs/performance.md`. The cause is structural and expected: the "compiled" parser
@@ -272,23 +272,23 @@ decisions that came out of it:
   operands baked as constants — future work, not claimed here.
 
 ### W6 done — the bytecode VM is iterative; tail calls measured and exploited
-- **The VM now drives parsing through ONE iterative driver, `pp_vm_run` (vm.c).**
-  The recursive `pp_vm_run`/`pp_vm_run_call` are gone: a root frame is pushed onto
-  an explicit, arena-backed frame stack (`pp_vm_stack`/`pp_vm_frame` in internal.h)
+- **The VM now drives parsing through ONE iterative driver, `tp_vm_run` (vm.c).**
+  The recursive `tp_vm_run`/`tp_vm_run_call` are gone: a root frame is pushed onto
+  an explicit, arena-backed frame stack (`tp_vm_stack`/`tp_vm_frame` in internal.h)
   and a single loop pumps it (RESOLVE-and-pop or DESCEND-and-push). No C recursion
   across rule calls, so a ~200k-deep input grows the arena instead of overflowing
-  the C stack. The CALL prologue/epilogue were factored into `pp_vm_call_enter`/
-  `pp_vm_call_exit`. The emitter (emitparser.c) stopped emitting its own copy of
-  the loop and now CALLS the shared `pp_vm_run`, so the VM and every compiled
+  the C stack. The CALL prologue/epilogue were factored into `tp_vm_call_enter`/
+  `tp_vm_call_exit`. The emitter (emitparser.c) stopped emitting its own copy of
+  the loop and now CALLS the shared `tp_vm_run`, so the VM and every compiled
   parser run the identical loop (one source of truth; cc-diff stays 267/267).
-- **New gate `ci/pocketparse-vm-nocrash.sh`.** The VM (vm and vm-ax) survives a
+- **New gate `ci/tinyparse-vm-nocrash.sh`.** The VM (vm and vm-ax) survives a
   ~200k-deep input under `ulimit -s 512` (graceful exit 1, no crash signal); it
   cross-checks that the recursive reference still segfaults (139) on the same input
   under the same stack, so the test is meaningful. Verified the VM crashed (139)
   on this input BEFORE the change.
-- **Tail-call analysis (owner directive) — done and reproducible.** `pocketparse
+- **Tail-call analysis (owner directive) — done and reproducible.** `tinyparse
   analyze-tailcalls <grammar>` lowers and counts tail-position CALLs (marked by
-  `pp_mark_tail_calls` in vmcompile.c, a `tail` flag on the CALL instruction).
+  `tp_mark_tail_calls` in vmcompile.c, a `tail` flag on the CALL instruction).
   Measured: std.javascript 52/122 (42.6%), std.typescript 97/193 (50.3%),
   std.tsx 96/192 (50.0%), std.json/json5/jsonc 2/4 (50.0%). Tail calls are common,
   not rare — so the bytecode exploits them.
@@ -297,48 +297,48 @@ decisions that came out of it:
   frame would change the tree (vm-diff forbids it). The depth-reducing reuse is the
   pure pass-through wrappers (FIELD/ALIAS) that only decorate and forward: the
   driver rewrites the wrapper frame in place for its child instead of keeping a
-  do-nothing continuation. Measured (PP_VM_PROBE_DEPTH, trees byte-identical): the
+  do-nothing continuation. Measured (TP_VM_PROBE_DEPTH, trees byte-identical): the
   right-recursive assignment ladder drops peak frame depth 18077->15058 (-17%) and
   pushes 429298->327231 (-24%); deep arrays keep peak depth (irreducible CALL
   chain) but trim pushes 26005->22005 (-15%). Full numbers + the per-grammar table
   in docs/peg-vs-glr.md (W14-6).
 
 ### W6 before W5 (ordering correction)
-- Do W6 (make the VM iterative) BEFORE W5 (delete pp_execute). pp_execute is the
+- Do W6 (make the VM iterative) BEFORE W5 (delete tp_execute). tp_execute is the
   INDEPENDENT recursive oracle vm-diff checks the VM against; W6 rewrites the VM's
   control flow, which is exactly when that independent cross-check matters most.
-  Keep pp_execute through W6, delete it in W5 as the final teardown. After W5 the
+  Keep tp_execute through W6, delete it in W5 as the final teardown. After W5 the
   standing anchor is the conformance suite (296 independent expected outputs);
   cc-diff/vm-diff become host-consistency checks (they share runtime logic).
 
 ### W5 done — the IR interpreter is gone; the bytecode VM is the engine
-- **pp_execute and its entire scaffolding were deleted from src/parse.c (W14-5).**
-  The recursive-descent IR interpreter and every helper used only by it (pp_parse
-  and the combinator drivers pp_parse_rule_ref / pp_parse_terminal, its pp_ctx /
-  pp_sink / pp_inject_sink, pp_sink_push / pp_inject_sink_append, pp_find_token /
-  pp_find_rule / pp_goal_redirect, pp_consume_extras, pp_recover_insert,
-  pp_link_children, pp_trace_symbol, pp_freeze_tree, and the PP_DEBUG_INTERN_GUARD
+- **tp_execute and its entire scaffolding were deleted from src/parse.c (W14-5).**
+  The recursive-descent IR interpreter and every helper used only by it (tp_parse
+  and the combinator drivers tp_parse_rule_ref / tp_parse_terminal, its tp_ctx /
+  tp_sink / tp_inject_sink, tp_sink_push / tp_inject_sink_append, tp_find_token /
+  tp_find_rule / tp_goal_redirect, tp_consume_extras, tp_recover_insert,
+  tp_link_children, tp_trace_symbol, tp_freeze_tree, and the TP_DEBUG_INTERN_GUARD
   snapshot) were removed. parse.c now holds ONLY the parser front end (buffer,
   new/free, push, finish). Nothing was kept-because-shared: the VM (vm.c) carries
-  its OWN copies of every one of those helpers (pp_vm_*), so deleting parse.c's
+  its OWN copies of every one of those helpers (tp_vm_*), so deleting parse.c's
   static set left vm.c / token.c / tree.c / inject.c compiling and linking
-  unchanged. `grep -rn 'pp_execute\b' src` now finds only pp_execute_vm /
-  pp_execute_vm_actor.
+  unchanged. `grep -rn 'tp_execute\b' src` now finds only tp_execute_vm /
+  tp_execute_vm_actor.
 - **The engine is the iterative bytecode VM — in process and actor-hosted.**
-  pocketparse_finish prefers the actor-hosted VM (pp_execute_vm_actor, the library
-  default) and falls back to the in-process VM (pp_execute_vm) when no ax system
-  could be opened; pp_execute_vm always works, so there is no further fallback. The
-  CLI's POCKETPARSE_ENGINE=recursive selector can no longer name a deleted executor:
+  tinyparse_finish prefers the actor-hosted VM (tp_execute_vm_actor, the library
+  default) and falls back to the in-process VM (tp_execute_vm) when no ax system
+  could be opened; tp_execute_vm always works, so there is no further fallback. The
+  CLI's TINYPARSE_ENGINE=recursive selector can no longer name a deleted executor:
   it is accepted as a deprecated alias for the in-process VM (=vm) so old
   invocations still pick a real engine.
-- **The intern-guard tripwire moved to pp_execute_vm.** PP_DEBUG_INTERN_GUARD now
-  snapshots pp_intern_call_count on entry to pp_execute_vm and asserts it has not
+- **The intern-guard tripwire moved to tp_execute_vm.** TP_DEBUG_INTERN_GUARD now
+  snapshots tp_intern_call_count on entry to tp_execute_vm and asserts it has not
   moved at each return, so the W44 "no interning on the parse hot path" check still
   compiles and holds on the engine.
 - **The standing correctness anchor is the conformance suite.** With the
-  independent recursive oracle gone, ci/pocketparse-metric.sh (296 independent
+  independent recursive oracle gone, ci/tinyparse-metric.sh (296 independent
   expected outputs) is THE anchor. vm-diff was repointed from "vm/vm-ax vs
-  recursive pp_execute" to a host-consistency check (in-process vm vs actor-hosted
+  recursive tp_execute" to a host-consistency check (in-process vm vs actor-hosted
   vm-ax, reference held at =vm), keeping the rule-memo-forced pass; cc-diff (the
   C-compiled parser vs the VM, 267/267) remains the other consistency check. The
   vm-nocrash inverse proof (the recursive interpreter segfaulting under ulimit -s
@@ -363,25 +363,25 @@ decisions that came out of it:
   (cc-diff/vm-diff GREEN, metric 296/296). Prefer raw allocation of a
   fully-overwritten or self-validated buffer over a zeroing alloc whose result is
   discarded.
-- **`pocketparse_memory.grow` migrated to ax's 3-arg shape
+- **`tinyparse_memory.grow` migrated to ax's 3-arg shape
   `(user, need, size_t *got)`.** The ax core's `grow` had already gained the
   `*got` true-usable-size out-parameter (ax commit "grow reports its true block
-  size"), but the consumed pocketparse dist and `pocketparse_memory.grow` had not
+  size"), but the consumed tinyparse dist and `tinyparse_memory.grow` had not
   followed, so a freshly tangled ax dist no longer compiled against `engine.c`'s
   grant bridge. Rebuilding the ax dist for `ax_alloc_raw` (W15-1) surfaced the
-  latent drift. The grant is handed straight to the ax arena, so pocketparse's
+  latent drift. The grant is handed straight to the ax arena, so tinyparse's
   grow IS ax's grow; the public struct and every host `grow` callback (CLI,
   examples, benches) now take `size_t *got` and a host that returns exactly `need`
   sets `*got = need`. This realigns one source of truth rather than papering over
   the bridge with a pointer cast.
 - **W15-2: the lexer compiles to a JUMP-THREADED token bytecode; the recursive
-  `pp_match_ir` walk leaves the hot path.** Each token pattern lowers once
+  `tp_match_ir` walk leaves the hot path.** Each token pattern lowers once
   (lazily, cached on the IR node like the first-byte set) to a flat threaded
   program — leaf ops, `SAVE`/`COMMIT`/`JMP` for ordered-possessive choice and
   optional/repeat tails, a fused `STAR` for the dominant repeat-of-a-leaf, a `MARK`
   + check for the `reserved` not-keyword wrapper — run by an iterative register
-  loop (`pp_token_run`: one pc, one cursor, a fixed 64-deep save-stack). It
-  replaces the `pp_match_ir` call inside `pp_token_match_memo`. Decisions made:
+  loop (`tp_token_run`: one pc, one cursor, a fixed 64-deep save-stack). It
+  replaces the `tp_match_ir` call inside `tp_token_match_memo`. Decisions made:
   - **Jump-threaded, NOT a per-node frame VM.** The first attempt was a generic
     frame stack mirroring the rule VM; it was byte-identical but ~17% SLOWER on the
     React profile (0.553 → 0.647 s) and +9% instructions, because the per-node
@@ -391,11 +391,11 @@ decisions that came out of it:
     (keyword/identifier/number) runs as straight-line code. The threaded form lands
     at 261M vs 272M instructions (−4%) and 0.548 s (on par to faster). The frame VM
     was discarded; only the threaded VM ships.
-  - **`pp_match_ir` stays as a cold reference + fallback, off the hot path.** The
+  - **`tp_match_ir` stays as a cold reference + fallback, off the hot path.** The
     lowering declines a `(not …)` guard (it would need an inverted-lookahead
     sub-evaluation that risks byte-identity), so the comment / string / regex-literal
-    tokens keep matching with the recursive `pp_match_ir` — a byte-identical
-    fallback, ~8% of the React profile, the only residual `pp_match_ir` cost.
+    tokens keep matching with the recursive `tp_match_ir` — a byte-identical
+    fallback, ~8% of the React profile, the only residual `tp_match_ir` cost.
     query.c (no parse position to retry) also keeps the recursive path. The brief
     sanctions this; the common tokens are all bytecode.
   - **The compiled C parser gets the lexer bytecode for free.** Since W14-6 the
@@ -404,15 +404,15 @@ decisions that came out of it:
     library compiles it for the generated parser too, with zero drift risk; cc-diff
     stays byte-identical (267/267) and the C-compiled React throughput rose 2.83 →
     3.14 MB/s (+11%). The VM holds at 3.22 MB/s.
-  - **The token-program cache is keyed to `sizeof(pp_ir)`, which the .ppg ABI tag
-    embeds.** Adding the cache fields to `pp_ir` changed `PP_PACK_ABI`, so a .ppg
-    packed by an older binary is correctly rejected. No .ppg is committed (all are
+  - **The token-program cache is keyed to `sizeof(tp_ir)`, which the .tpg ABI tag
+    embeds.** Adding the cache fields to `tp_ir` changed `TP_PACK_ABI`, so a .tpg
+    packed by an older binary is correctly rejected. No .tpg is committed (all are
     gitignored and regenerated by `pack`), so the bench/CI scripts that `pack`
     before use are unaffected; only stale local fixtures need re-packing.
   - **No-crash is iterative-by-construction, not an observed-crash fix.** The
     runtime matcher has no recursion; the fused `STAR` consumes an arbitrarily long
     token in constant C-stack space (the new `vm-nocrash` big-token case, a 400 KB
-    number under `ulimit -s 512`, exits cleanly). The recursive `pp_match_ir`'s
+    number under `ulimit -s 512`, exits cleanly). The recursive `tp_match_ir`'s
     depth was always the fixed authored pattern nesting, never the input, so it was
     never an input-driven crash risk; a deeply nested *grammar* still recurses at
     compile-time lowering, identically to the existing rule lowering in vmcompile.c,
@@ -421,20 +421,20 @@ decisions that came out of it:
     corpus (on par with the W14-5 baseline — those files are tiny, so the lexer win
     lands on real files); the ceiling drops to 0.0065 to lock the small gain in.
 - **W15-3: the generated parser bakes the rule dispatch — it no longer calls
-  `pp_vm_run`.** Through W14-6 the compiled parser (emitparser.c) CALLED the shared
-  interpreter `pp_vm_run` (one loop, one source of truth), so rule dispatch was still
+  `tp_vm_run`.** Through W14-6 the compiled parser (emitparser.c) CALLED the shared
+  interpreter `tp_vm_run` (one loop, one source of truth), so rule dispatch was still
   interpreted: per step it fetched `state->program->instructions[fr->program]` and
-  switched on the opcode. W15-3 emits `pp_parser_run` instead — the SAME explicit,
+  switched on the opcode. W15-3 emits `tp_parser_run` instead — the SAME explicit,
   arena-backed frame stack and the SAME leaf helpers, but the dispatch is
   `switch (fr->program)` over one baked case per program index, each the
-  specialization of the matching `pp_vm_run` arm with every structural operand
+  specialization of the matching `tp_vm_run` arm with every structural operand
   (target/start/count/min/max/symbol/aux/tail) inlined as a constant.
   - **Only the rule control flow is baked; the leaf helpers stay shared.** The CALL
-    prologue/epilogue (`pp_vm_call_enter`/`exit`), the rule memo, the token matcher,
+    prologue/epilogue (`tp_vm_call_enter`/`exit`), the rule memo, the token matcher,
     the tree builder, extras, recovery and inject remain library functions the
     generated file pulls in through internal.h — so the memo verdicts and the tree
     build have ONE source of truth and the baked dispatch is byte-identical to the VM
-    (cc-diff 267/267). The `pp_ir` pattern/source pointers a MATCH/BYTE/RECOVER/INJECT
+    (cc-diff 267/267). The `tp_ir` pattern/source pointers a MATCH/BYTE/RECOVER/INJECT
     needs are runtime addresses, so those few operands are still read from
     `state->program->instructions[N]`; only the structural operands bake.
   - **Iterative and bounded, macro-free, tail-call-reusing.** Every combinator
@@ -446,9 +446,9 @@ decisions that came out of it:
     re-run (`analyze-tailcalls`): js 42.6%, ts 50.3%, tsx 50.0% tail CALLs — common,
     so the reuse matters; the baked parser inherits it.
   - **An `inline` frame-push helper is emitted locally.** The one cost baking ADDED
-    was a cross-translation-unit call to the library `pp_vm_stack_push` (the per-descent
+    was a cross-translation-unit call to the library `tp_vm_stack_push` (the per-descent
     hot path), which the interpreter inlined within its own TU. The generated file emits
-    a byte-identical `static inline pp_parser_push` so the C compiler folds it back into
+    a byte-identical `static inline tp_parser_push` so the C compiler folds it back into
     the descent sites; with that, instruction count is neutral vs the interpreter.
   - **A leaf-fusion experiment was MEASURED and discarded.** Running leaf children
     (MATCH/BYTE/EOF, ~⅓ of instructions) in place inside the SEQ case to skip the
@@ -461,9 +461,9 @@ decisions that came out of it:
     (the W3 deliverable + the embedding property: standalone C rule control flow) but
     not the per-node frame/memo/tree work, which the profile now spreads so no single
     slice is half the total. The residual gap is the design difference established in
-    peg-vs-glr.md / above: pocketparse interprets a runtime-compiled PEG over a
+    peg-vs-glr.md / above: tinyparse interprets a runtime-compiled PEG over a
     contiguous-array tree; tree-sitter runs pre-generated GLR tables + a DFA lexer.
-    Closing it would mean generating parse tables — its design, not pocketparse's.
+    Closing it would mean generating parse tables — its design, not tinyparse's.
     `W15-FASTER` is deliberately NOT recorded in performance.md (the phase15 metric
     greps for it), because the win was not earned. The floor and its evidence are
     in docs/performance.md (`### W15-3`) and docs/peg-vs-glr.md (`## W15-3`).
@@ -514,11 +514,11 @@ decisions that came out of it:
   725.2 M → 516.5 M instructions. Three measured wins, each byte-identical (cc-diff
   267/267, vm-diff GREEN, metric 296/296), applied to the shared `token.c`/`vm.c`
   runtime so the VM and the generated C parser both benefit:
-  - **Extras lead-byte fast path (the biggest, −12.5%).** `pp_vm_consume_extras`
+  - **Extras lead-byte fast path (the biggest, −12.5%).** `tp_vm_consume_extras`
     runs before every terminal; at almost every position the cursor byte begins no
     extra, yet it looped over all extras entries running a full token match for
     each. A 32-byte (`[256]`-bit) UNION of every extra's first-byte set is cached
-    once per grammar (`pp_extras_lead_build`, like `vm_program`/`token_index`); a
+    once per grammar (`tp_extras_lead_build`, like `vm_program`/`token_index`); a
     byte outside it is rejected with one bitset probe. Sound: an extra with an
     unpinnable lead byte sets `extras_lead_open` and the full loop runs.
   - **Raw (non-zeroing) hot allocations (−12%, the memset slice gone).** Extended
@@ -526,30 +526,30 @@ decisions that came out of it:
     overwritten on the next line) and the geometric-growth buffers whose live prefix
     is copied and whose tail is written before any read (child-sink items, VM frame
     stack, tree-builder nodes). Verified valgrind-memcheck clean on the default AND
-    the `POCKETPARSE_RULEMEMO=always` replay path — no uninitialised read.
-  - **Inlined choice predictor (−6%).** `pp_choice_first_admits` already cached its
+    the `TINYPARSE_RULEMEMO=always` replay path — no uninitialised read.
+  - **Inlined choice predictor (−6%).** `tp_choice_first_admits` already cached its
     FIRST set per node (W46); the residual cost was the cross-TU call overhead
-    dwarfing the cached bitset test. A `static inline pp_choice_first_admits_fast`
+    dwarfing the cached bitset test. A `static inline tp_choice_first_admits_fast`
     in `internal.h` does the cached case in place and calls the full (mutating)
     function only on the cold first visit; both engines fold it in.
 - **A table-driven `[256]` lexer was found ALREADY PRESENT, not re-derived.** The
   brief's sub-win 2 describes the pre-W15-2 lexer. Since W15-2 the dominant tokens
-  (identifier/number/whitespace) run as a fused `STAR` loop over `pp_class_has` — a
+  (identifier/number/whitespace) run as a fused `STAR` loop over `tp_class_has` — a
   256-bit class-table probe, i.e. the table-driven ASCII fast path. The only
-  residual recursive (`pp_match_ir`) lexer cost is the `not`-guard tokens
+  residual recursive (`tp_match_ir`) lexer cost is the `not`-guard tokens
   (comments/strings/regex), which W15-2 deliberately declined to lower for
   byte-identity; that risk is unchanged and the cost is comment-density-dependent,
   so it was NOT taken as a "design-independent low-risk win." Recorded as a known
   residual for a later, separately-verified change.
 - **meriyah added to the benchmark — the owner's bar.** `bench/meriyah_bench.mjs`
   (parseModule, jsx) installs into the gitignored `bench/tsbench` scratch and runs
-  as a sixth arm in `ci/pocketparse-bench5.sh` (kept that filename so callers and
+  as a sixth arm in `ci/tinyparse-bench5.sh` (kept that filename so callers and
   the phase metrics still find it; its header/output now say "six parsers"). meriyah
   parses ECMAScript + JSX, not TypeScript, so it rejects the corpus's TS/Flow files
   (parses 541/1070); its MB/s is over the parsed subset, reported with the
   parsed/failed counts so the figure is honest, not a false byte-for-byte compare.
 - **Result is honest: W16-1 alone does not beat tree-sitter.** Bench (1070 files,
-  9.55 MB): pocketparse VM **3.32 → 3.55 MB/s** (+7%), C-compiled 3.23 → 3.25 (held
+  9.55 MB): tinyparse VM **3.32 → 3.55 MB/s** (+7%), C-compiled 3.23 → 3.25 (held
   — its bottleneck is the per-node frame machine W16-2 removes, not these slices),
   vs tree-sitter 6.56 and meriyah 25.52 (the target, ~7× the VM). Perf ratchet
   6.5 → 5.5 ms (JS corpus ~4.8 ms). The slices shrank and meriyah is now visible;
@@ -557,32 +557,32 @@ decisions that came out of it:
 
 ### W16-2 done — the generated parser is a depth-guarded native recursive-descent parser
 - **The generated parser dropped the explicit per-node frame stack for true
-  predictive recursive descent.** Through W15-3 `pocketparse c --parser` emitted one
+  predictive recursive descent.** Through W15-3 `tinyparse c --parser` emitted one
   `switch (fr->program)` loop pushing an arena frame per combinator; the profile put
   that frame machine at ~28% of instructions (the per-node dispatch loop
-  `pp_parser_run`), the ~2.1× wall behind tree-sitter. The emitter (emitparser.c)
-  now generates one C function per program index (`pp_parser_p<N>`), intra-rule
+  `tp_parser_run`), the ~2.1× wall behind tree-sitter. The emitter (emitparser.c)
+  now generates one C function per program index (`tp_parser_p<N>`), intra-rule
   structure as straight-line C (SEQ statements, CHOICE mark/try/rewind with the
   inlined first-set predictor, REPEAT `while`, OPTIONAL try-and-restore,
   FIELD/ALIAS tail calls, GOAL/NO_EXTRAS/RECOVER save/set/call/restore), and
   rule→rule as a NATIVE C call. No frame struct, no dispatch loop. The W15-3
   per-node frame dispatch loop is DELETED from the generated output, not reduced
-  (each generated `pp_parser_p<N>` is <1% of instructions in the after-profile).
+  (each generated `tp_parser_p<N>` is <1% of instructions in the after-profile).
 - **The CALL prologue/epilogue and leaf helpers stay shared (one source of truth).**
-  A native CALL still calls the library `pp_vm_call_enter`/`pp_vm_call_exit` over a
-  C-stack-local `pp_vm_frame`, and the token matcher / tree builder / extras /
+  A native CALL still calls the library `tp_vm_call_enter`/`tp_vm_call_exit` over a
+  C-stack-local `tp_vm_frame`, and the token matcher / tree builder / extras /
   recovery / inject / rule memo remain the shared library functions. So the
   memo verdicts and the tree build are identical to the VM's, and cc-diff stays
   byte-identical (267/267) — the native parser builds the EXACT same tree as the VM
   on every corpus file.
-- **The VM (pp_vm_run) is UNCHANGED.** It keeps the explicit-stack iterative engine
+- **The VM (tp_vm_run) is UNCHANGED.** It keeps the explicit-stack iterative engine
   and stays the runtime-grammar engine and the cc-diff byte-identity reference. The
   Phase-16 kickoff decision (relax the explicit-stack mandate for the GENERATED
   parser only; the VM keeps it) is honoured exactly.
 - **Crash-safety is a MEASURED recursion-depth guard, not the arena bound.** Native
-  recursion can overflow the C stack, so `pp_vm_state` gained `depth`/`depth_limit`:
+  recursion can overflow the C stack, so `tp_vm_state` gained `depth`/`depth_limit`:
   each rule-body entry (the CALL site) bumps `depth` and FAILs gracefully when it
-  would exceed the limit. The VM leaves `depth_limit` at PP_NO_INDEX (no guard — it
+  would exceed the limit. The VM leaves `depth_limit` at TP_NO_INDEX (no guard — it
   never recurses). The limit is **1000**, justified by measurement on this hardware
   (the profiling skill's bound-not-sweep rule):
   - per-CALL-depth C-stack cost ~200 B (std.json) to ~273 B (std.tsx, the
@@ -608,7 +608,7 @@ decisions that came out of it:
   `W16-FASTER` is deliberately NOT recorded in performance.md. The structural
   overhead the Phase 15 floor blamed (the per-node frame machine) is genuinely
   removed; the residual gap is now token matching (~37%, incl. the recursive
-  `pp_match_ir` not-guard fallback W15-2 deferred for byte-identity) and the shared
+  `tp_match_ir` not-guard fallback W15-2 deferred for byte-identity) and the shared
   CALL prologue/epilogue (~15%). The meter names the LEXER as the next lever, not the
   parser control flow. Floor + evidence in docs/performance.md (`### W16-2`) and
   docs/peg-vs-glr.md (`## W16-2`).
@@ -618,31 +618,31 @@ decisions that came out of it:
 The phase's first packaging deliverable: prove the generator emits independent,
 non-colliding parsers that coexist in one program (the embedding use case).
 
-- **Decision: a `--name <prefix>` codegen option, default unchanged.** `pocketparse
+- **Decision: a `--name <prefix>` codegen option, default unchanged.** `tinyparse
   c <grammar> --parser[-lib] --name P` renames EVERY emitted file-scope symbol to
   `P_…`. With no `--name`, the parser keeps its historical default names
-  (`pp_parser_p<N>`, `pp_compiled_parser_load`/`_run`, the statics), so existing
-  callers and `ci/pocketparse-cc-diff.sh` (which compiles the default-name path) are
+  (`tp_parser_p<N>`, `tp_compiled_parser_load`/`_run`, the statics), so existing
+  callers and `ci/tinyparse-cc-diff.sh` (which compiles the default-name path) are
   byte-for-byte unaffected — verified: the generated default output is byte-identical
   and cc-diff stays 267/267. Two parsers with distinct prefixes link into one binary
   with no collision.
 - **Decision: thread the prefix on the engine, not the public header.** The CLI sets
-  it through a library-private `pp_engine_set_parser_prefix` (declared in
-  internal.h, defined in engine.c) — the same seam `POCKETPARSE_ENGINE=vm` uses — so
+  it through a library-private `tp_engine_set_parser_prefix` (declared in
+  internal.h, defined in engine.c) — the same seam `TINYPARSE_ENGINE=vm` uses — so
   the frozen public API is untouched. The prefix points at host-owned `argv`
   storage that outlives the synchronous emit; nothing is copied, and an empty string
   is treated as no prefix.
 - **Decision: one emit helper guarantees default byte-identity.**
-  `pp_parser_name(cursor, prefix, default_name, suffix)` emits `default_name`
+  `tp_parser_name(cursor, prefix, default_name, suffix)` emits `default_name`
   verbatim when prefix is NULL, else `<prefix>_<suffix>`. The historical names are
-  NOT a uniform stem (`pp_parser_p<N>` vs `pp_execute_parser` vs
-  `pp_compiled_parser_load`), so passing both the default name and the prefixed
+  NOT a uniform stem (`tp_parser_p<N>` vs `tp_execute_parser` vs
+  `tp_compiled_parser_load`), so passing both the default name and the prefixed
   suffix lets one scheme cover all of them while keeping the default path exact.
 - **Shared runtime is deduplicated by being one library, not per-TU.** The only
   symbols that ACTUALLY collided were the two exported entries — the per-program
   functions and the embedded grammar bytes are `static` (internal linkage, no
   cross-TU collision). The leaf helpers, the CALL prologue/epilogue, the tree
-  builder, the lowering, and ax all live in libpocketparse + libax, ONE archive set
+  builder, the lowering, and ax all live in libtinyparse + libax, ONE archive set
   linked once and shared between the two generated translation units. The prefix
   still renames the statics too, so a reader sees one consistent scheme and any
   future non-static symbol is covered.
@@ -654,12 +654,12 @@ non-colliding parsers that coexist in one program (the embedding use case).
   and the embedded json tree of each fence. Deliberately NOT the W62 `inject` demo
   (`std.fence` parses both languages in one grammar); here it is two separate parsers
   the host program drives, which is what exercises the no-collision linking.
-- **The gate: `ci/pocketparse-multiparser.sh`.** Builds the example (a symbol
+- **The gate: `ci/tinyparse-multiparser.sh`.** Builds the example (a symbol
   collision fails the link), runs it on a committed sample, asserts the output equals
   the golden `expected.txt` (host tree + both embedded json trees), and checks with
   `nm` that the binary carries both parsers' four distinct entries
   (`host_parser_load`/`_run`, `json_parser_load`/`_run`) and no leftover
-  `pp_compiled_parser_*` collision symbol.
+  `tp_compiled_parser_*` collision symbol.
 - **Gates at the commit:** build clean, metric 296/296, cc-diff byte-identical
   267/267, vm-diff GREEN, no-statics GREEN, vm-nocrash + parser-nocrash GREEN under
   `ulimit -s 512`, perf gate within ceiling, multiparser gate GREEN. Evidence:
@@ -670,37 +670,37 @@ non-colliding parsers that coexist in one program (the embedding use case).
 The phase's second packaging deliverable: the generated C parser may use ax
 internally (it is the freestanding runtime the compiled parser links against), but
 an embeddable object/library built from it must export ONLY the parser's own public
-API plus the public `pocketparse_*` API the host calls — no `ax_*` symbol, and no
-pocketparse-internal `pp_*` symbol, in the exported table.
+API plus the public `tinyparse_*` API the host calls — no `ax_*` symbol, and no
+tinyparse-internal `tp_*` symbol, in the exported table.
 
 - **Starting state, measured.** Before this workstream the `examples/embed` binary
-  (driver + two generated parsers, linked against `libpocketparse.a` + `libax.a` as
+  (driver + two generated parsers, linked against `libtinyparse.a` + `libax.a` as
   separate archives) exported **56 `ax_*` symbols as `T`** (external, defined) — ax
   leaked wholesale into the host's symbol table. That is the leak W16-4 closes.
 - **Decision: package the embeddable artifact as the amalgamation + a linker
   version script, not a per-symbol annotation of the frozen header.** The owner's
   preferred shape is "hidden in the generated code" — a self-contained amalgamation
-  the embedder compiles. The pieces already exist: `dist/amalgamation/pocketparse.c`
+  the embedder compiles. The pieces already exist: `dist/amalgamation/tinyparse.c`
   folds the ax engine in under `#pragma GCC visibility push(hidden)`, so `ax_*`
   never has default visibility to begin with; and the generated parser-lib's own
   per-rule functions are already `static` (the no-statics gate proves it), leaving
   only its two `<prefix>_load`/`<prefix>_run` entries external. The remaining leak
-  was that the amalgamation keeps the pocketparse part — public `pocketparse_*` AND
-  internal `pp_*` — at default visibility (correct for the standalone shared
+  was that the amalgamation keeps the tinyparse part — public `tinyparse_*` AND
+  internal `tp_*` — at default visibility (correct for the standalone shared
   library, which must export its public API). The embedding build wants a tighter
   surface, so it links behind a version script that exports exactly
-  `{ <prefix>_load, <prefix>_run, …, pocketparse_* }` and localizes everything else
-  — which makes both `ax_*` and the internal `pp_*` local.
+  `{ <prefix>_load, <prefix>_run, …, tinyparse_* }` and localizes everything else
+  — which makes both `ax_*` and the internal `tp_*` local.
 - **Why a version script and NOT `-fvisibility=hidden` alone.** The amalgamation's
-  `#pragma GCC visibility push(default)` around the pocketparse section OVERRIDES a
+  `#pragma GCC visibility push(default)` around the tinyparse section OVERRIDES a
   command-line `-fvisibility=hidden`, so the flag alone cannot hide the internal
-  `pp_*` (measured: 62 `pp_*` stayed exported under `-fvisibility=hidden`). The
+  `tp_*` (measured: 62 `tp_*` stayed exported under `-fvisibility=hidden`). The
   version script is applied at link, after the pragmas, and cleanly localizes the
   internals without touching the shared amalgamation or annotating the FROZEN public
   header (which would change the contract and risk the byte-identity gates).
 - **Why a version script and NOT a single-TU all-`static` amalgamation.** A pure
   single-TU `.o` with everything `static` except the entries would need to
-  distinguish public `pocketparse_*` from internal `pp_*` inside one file; the
+  distinguish public `tinyparse_*` from internal `tp_*` inside one file; the
   public header carries no visibility annotation, so there is no in-source seam to
   key on without editing the frozen header. The version script keys on the symbol
   names at link instead — the same mechanism real amalgamated libraries ship — and
@@ -711,9 +711,9 @@ pocketparse-internal `pp_*` symbol, in the exported table.
   `--version-script`, or the macOS `-exported_symbols_list`), and links the
   ax-hidden shared object. It is the documented embedding build recipe and what the
   gate drives.
-- **The gate: `ci/pocketparse-hide-ax.sh`.** Builds the embeddable artifact two
+- **The gate: `ci/tinyparse-hide-ax.sh`.** Builds the embeddable artifact two
   ways and asserts with `nm`: (1) a single parser (std.json, prefix `jp`) exports
-  `jp_load`/`jp_run` + the public API and ZERO `ax_*` and ZERO `pp_*`; (2) the
+  `jp_load`/`jp_run` + the public API and ZERO `ax_*` and ZERO `tp_*`; (2) the
   two-parser embed example exports both parsers' four entries, the public API, and
   ZERO `ax_*`; (3) a hardened EXECUTABLE of the two-parser case (behind the same
   version script, 0 exported `ax_*`) still parses the committed sample to the golden
@@ -722,7 +722,7 @@ pocketparse-internal `pp_*` symbol, in the exported table.
   (the emitter is UNCHANGED — packaging is a link-time recipe, so the generated C is
   bit-for-bit what W16-3 emitted), vm-diff GREEN, no-statics GREEN, vm-nocrash +
   parser-nocrash GREEN under `ulimit -s 512`, perf gate within ceiling, multiparser
-  gate still GREEN (no regression), and the new `ci/pocketparse-hide-ax.sh` GREEN.
+  gate still GREEN (no regression), and the new `ci/tinyparse-hide-ax.sh` GREEN.
   Evidence: docs/peg-vs-glr.md (`## W16-4`).
 
 ### W16-GOAL done — the last IR interpreter is off the parse hot path; the token memo retired from the clean path
@@ -730,25 +730,25 @@ pocketparse-internal `pp_*` symbol, in the exported table.
 The phase's speed push on the generated C parser. After W16-2 the profiler (callgrind,
 the React corpus through the C-compiled parser) named the residual costs: token
 matching ~37% (including the deferred `not`-guard fallback to the recursive
-`pp_match_ir`), CALL enter/exit ~15%, the tree builder ~12%, extras ~11%. Each change
+`tp_match_ir`), CALL enter/exit ~15%, the tree builder ~12%, extras ~11%. Each change
 below was MEASURED (instruction count AND wall-clock A/B on a real file); the
 measured non-wins were discarded.
 
-- **The `not`-guard tokens are lowered — `pp_match_ir` is off the parse hot path.**
+- **The `not`-guard tokens are lowered — `tp_match_ir` is off the parse hot path.**
   Comments, the regex literal, `hash_bang`, and the HTML-comment trivia all scan with
   a `(repeat (not GUARD any))` shape that W15-2 deliberately left on the recursive
-  `pp_match_ir` fallback (to keep byte-identity). `PP_OP_NOT` now lowers to a flat
-  negative-lookahead guard region in the token bytecode (`PP_TOK_NOT_BEGIN` pushes a
-  negative save resuming where the guard FAILS; `PP_TOK_NOT_END`, reached only when
+  `tp_match_ir` fallback (to keep byte-identity). `TP_OP_NOT` now lowers to a flat
+  negative-lookahead guard region in the token bytecode (`TP_TOK_NOT_BEGIN` pushes a
+  negative save resuming where the guard FAILS; `TP_TOK_NOT_END`, reached only when
   the guard matched, drops the save and fails the construct). The control flow mirrors
-  `pp_match_ir`'s `PP_OP_NOT` node-for-node, so the end offset is byte-identical
+  `tp_match_ir`'s `TP_OP_NOT` node-for-node, so the end offset is byte-identical
   (cc-diff GREEN across 267 cases, which exercise comments / regex / strings). The
-  profile confirms it: `pp_match_ir` went from ~3% of the parse to **zero instructions
+  profile confirms it: `tp_match_ir` went from ~3% of the parse to **zero instructions
   on the hot path** — the IR interpreter, the last one in the project, is no longer
   called during a parse. It stays only as the cold reference (query.c) and the
   save-stack-overflow / unlowerable fallback, so deleting it outright would remove a
   safety net for no measured gain; it is reduced to cold, not removed.
-- **DISCARDED: a fused `PP_TOK_SCAN_UNTIL` "scan to delimiter" op.** A dedicated
+- **DISCARDED: a fused `TP_TOK_SCAN_UNTIL` "scan to delimiter" op.** A dedicated
   hand-lexer scan for `(repeat (not GUARD any))` measured ~4% MORE instructions and no
   wall-time win on the corpus (comments are a small fraction of real TS files, and the
   per-scan lead-byte warm-up cost more than the plain NOT loop it replaced). Removed —
@@ -757,13 +757,13 @@ measured non-wins were discarded.
   win (~38% on a real file).** On a left-factored, first-set-predicted parse the
   token matcher rarely re-runs at the same offset; the memo's hash + random-access
   slot probe/store churned the cache faster than re-running the jump-threaded token
-  bytecode (`pp_token_run`) would, even though the matcher re-ran more often.
-  Measured: passing the memo through the terminal path (`pp_vm_terminal`) and the
-  extras scan (`pp_vm_consume_extras`) as NULL is **byte-identical** (a memo is a pure
+  bytecode (`tp_token_run`) would, even though the matcher re-ran more often.
+  Measured: passing the memo through the terminal path (`tp_vm_terminal`) and the
+  extras scan (`tp_vm_consume_extras`) as NULL is **byte-identical** (a memo is a pure
   cache) and ~38%+6% faster respectively in wall-clock A/B, despite a HIGHER
   instruction count — a cache-behaviour win callgrind cannot see, exactly the case the
   profiling skill flags for wall-time measurement. Pathological backtracking is still
-  bounded: the rule memo (`pp_rule_memo`) wakes on a super-linear parse and
+  bounded: the rule memo (`tp_rule_memo`) wakes on a super-linear parse and
   short-circuits re-descent, so a terminal is not re-matched unboundedly; verified
   fast on adversarial deep/long/wide inputs and on the no-crash gates.
 - **The RULE memo is confirmed dead on the clean path and already skipped — left
@@ -777,7 +777,7 @@ measured non-wins were discarded.
   rare `\u` alternatives when the class stops matching. Byte-identical (same ordered,
   possessive semantics), measured ~3-4% faster.
 - **Per-rule child sink uses inline frame storage on the generated path.** The
-  generated native parser's `pp_vm_frame` is a stable C local, so `pp_vm_call_enter`
+  generated native parser's `tp_vm_frame` is a stable C local, so `tp_vm_call_enter`
   now uses the frame's inline `children_storage` instead of a per-rule heap alloc
   (gated by `state->children_inline`, which the generated driver sets). The VM keeps
   the separate allocation — its frames live on a RELOCATABLE arena stack, where a
@@ -831,7 +831,7 @@ measured non-wins were discarded.
   same contiguous CST (cc-diff byte-identity stays the correctness anchor) and stay
   crash-safe (depth guard).
 - **Sequencing:** let the in-flight W16-GOAL round finish and land first — deleting
-  the last IR interpreter (`pp_match_ir`) and giving us a clean compiled lexer is
+  the last IR interpreter (`tp_match_ir`) and giving us a clean compiled lexer is
   exactly the base the hand-written design wants — then do the holistic redesign of
   the emitter on top of it.
 
@@ -840,7 +840,7 @@ measured non-wins were discarded.
 - **The CST stays arena-built and tightly packed.** The generated hand-written
   parser must construct the SAME contiguous, arena-allocated CST it builds today —
   cursor-only navigation, nodes packed in one growing array. This is also exactly
-  what `ci/pocketparse-cc-diff.sh` pins (byte-identical tree vs the VM), so it is a
+  what `ci/tinyparse-cc-diff.sh` pins (byte-identical tree vs the VM), so it is a
   hard correctness anchor, not a preference.
 - **Buffer-friendly: the parser can signal it needs more input.** Desired so the
   parser works over a growing buffer / streamed input rather than requiring the whole
@@ -849,7 +849,7 @@ measured non-wins were discarded.
   "code a human would write") holds parse state on the C stack, which cannot be
   suspended mid-parse — and ax has NO stackful fiber/coroutine/ucontext machinery
   (its continuation is the journal, event-sourced replay), so ax cannot pause a
-  native stack between input chunks. Today's streaming (`pocketparse_push`) works
+  native stack between input chunks. Today's streaming (`tinyparse_push`) works
   precisely BECAUSE the VM uses an explicit stack that holds the continuation
   between pushes. Reconciliation for the holistic round:
   - the generated native-RD parser signals "need more input" at a SHALLOW boundary
@@ -879,12 +879,12 @@ measured non-wins were discarded.
   The pre-compiled-grammar use case is the common one and demands a native parser
   that is REALLY fast — past tree-sitter, toward tsc/tsgo. The VM stays for dynamic
   runtime parsing (a reasonable multiple of native is fine there).
-- **The rewrite must NOT drop what makes pocketparse special** (owner's explicit
+- **The rewrite must NOT drop what makes tinyparse special** (owner's explicit
   fear). Non-negotiables, each gated: the tightly-packed arena CST (cc-diff); the
   context-building primitives for heredocs — lexical goals / no-extras / host class
   bindings (conformance + cc-diff); detailed error reporting via `(recover …)`
   (NEW diagnostics-parity gate — cc-diff pins the tree, not the diagnostics);
-  language embedding / nesting grammars via `PP_OP_INJECT`/`fence` + multi-parser
+  language embedding / nesting grammars via `TP_OP_INJECT`/`fence` + multi-parser
   embedding (multiparser + cc-diff on an inject grammar); importing std grammars via
   `(import …)` compile-time merge through to a generated C parser (NEW import→C gate);
   a configurable symbol prefix defaulted from grammar name + language; and ax actors
@@ -900,7 +900,7 @@ measured non-wins were discarded.
   NEED_MORE_INPUT at the shallow top-level-item boundary (full-speed native recursion
   within an item); the explicit-stack VM/actor remains the engine for
   arbitrary-granularity async push. ax orchestrates the choice.
-- **Finish line:** `ci/pocketparse-phase17-metric.sh` GREEN — PROGRESS=4/4, every
+- **Finish line:** `ci/tinyparse-phase17-metric.sh` GREEN — PROGRESS=4/4, every
   standing + new preservation gate holds, and C-compiled beats tree-sitter (closing
   on tsc), tagged `W17-FASTER`. Do not fake the marker; do not trade a feature for
   speed.
@@ -909,7 +909,7 @@ measured non-wins were discarded.
 
 - **Hardening the net found a genuine pre-existing feature-loss in the generated
   parser path, exactly the kind this phase exists to prevent.** The packed grammar
-  (.ppg) the compiled-to-C parser embeds did not serialize PP_OP_INJECT embedded
+  (.tpg) the compiled-to-C parser embeds did not serialize TP_OP_INJECT embedded
   grammars or the lex_goals table, so a generated C parser silently dropped language
   embedding and lexical goals. Fixed symmetrically in pack.c: a recursive
   embedded-grammars IMAGE section + lex_goals, wired on load with no module resolver.
@@ -926,12 +926,12 @@ measured non-wins were discarded.
 ## Phase 17 — W17-2 done: the IR-walking emitter + the per-token baked lexer
 
 - **The emitter walks the IR by name, not the lowered bytecode.** It emits one
-  `<prefix>_parse_<rule>` per rule and one `<prefix>_scan_<token>` per token; `PP_OP_REF`
+  `<prefix>_parse_<rule>` per rule and one `<prefix>_scan_<token>` per token; `TP_OP_REF`
   is a direct named call; the combinators are inline idiomatic C; the FIRST sets are
   baked byte tests. No program array, no opcode dispatch, no `program->instructions[N]`,
-  no `rule_0`/`rule_N`. The generated `std.json` parser reads as `pp_parse_Document`,
-  `pp_parse_Value` (first-set-guarded choice), `pp_scan_String` — hand-written RD.
-- **A leaf finds its run-time `pp_ir` by NAVIGATING the loaded grammar**
+  no `rule_0`/`rule_N`. The generated `std.json` parser reads as `tp_parse_Document`,
+  `tp_parse_Value` (first-set-guarded choice), `tp_scan_String` — hand-written RD.
+- **A leaf finds its run-time `tp_ir` by NAVIGATING the loaded grammar**
   (`state->grammar->rules[i].body->children[a]->…`), which round-trips in order through
   pack.c. This is what lets the emitter walk the IR at emit time yet hand the shared
   leaf helpers a real run-time pointer without serializing addresses or keeping
@@ -939,25 +939,25 @@ measured non-wins were discarded.
   lives in the C, only the few operands are read in place.
 - **Byte-identity is bought by the bake-vs-substrate split, not by reproducing the
   runtime.** The grammar control flow is baked away; the CST builder, the rule CALL
-  prologue/epilogue (`pp_vm_call_enter`/`exit`, memo included), the terminal/byte/eof/
+  prologue/epilogue (`tp_vm_call_enter`/`exit`, memo included), the terminal/byte/eof/
   extras/recover/inject helpers stay the SAME functions the VM calls. So cc-diff is
   271/271 byte-identical, diag-diff and the inject/import/goal gates all hold. The rule
   memo is keyed on the rule SYMBOL (a stable, dense per-rule key) instead of the old
   program index — a pure cache keyed consistently across enter/exit, so the verdict is
   identical.
-- **The per-token baked lexer is where the speed is.** The profile named `pp_token_run`
-  (the generic token VM) at ~31% + `pp_token_match_memo` ~14% + the extras path ~14%.
+- **The per-token baked lexer is where the speed is.** The profile named `tp_token_run`
+  (the generic token VM) at ~31% + `tp_token_match_memo` ~14% + the extras path ~14%.
   The emitter now compiles each token's pattern to straight-line C (keyword byte
   compares, `static const uint8_t [256]` class tables, class-repeat loops, `not_keyword`
   whole-slice compares, `not` lookahead guards) and bakes the whitespace/comment extras
   scan the same way (a `state->extras_match` hook the driver wires; NULL for the VM).
-  Result: total instructions 106.4M → 69.8M (~34% fewer), `pp_token_run` 31% → 6.8%,
+  Result: total instructions 106.4M → 69.8M (~34% fewer), `tp_token_run` 31% → 6.8%,
   all byte-identical. The unbakeable shapes (a host `class` binding) fall back to the
   generic matcher, so correctness is total — bake the common case, keep the substrate
   for the rest.
-- **The decision to add shared helpers (`pp_vm_terminal_baked`, the `extras_match`
+- **The decision to add shared helpers (`tp_vm_terminal_baked`, the `extras_match`
   hook) rather than fork the runtime.** Both the VM and the generated parser run one
-  `pp_vm_consume_extras`; the hook lets the generated parser inject its baked scanner
+  `tp_vm_consume_extras`; the hook lets the generated parser inject its baked scanner
   with the VM defaulting it off, so there is still ONE extras code path (one source of
   truth for the policy/node/diagnostic logic) — the substrate stays shared, only the
   inner "where does the token end" call is baked.
@@ -972,19 +972,19 @@ measured non-wins were discarded.
 
 - **The default symbol prefix is the grammar's own name, captured at compile time.**
   W16-3 prefixed emitted symbols only from an explicit `--name`; W17-3 records the
-  `NAME` in `(grammar NAME …)` onto `pocketparse_grammar.name_symbol` and defaults the
+  `NAME` in `(grammar NAME …)` onto `tinyparse_grammar.name_symbol` and defaults the
   prefix from it (`json` → `json_load`/`json_parse_…`, `javascript` → `javascript_…`).
   The decision: derive collision-freedom from a fact the grammar already states (its
   name) rather than demand a flag, so two parsers from differently named grammars coexist
   in one binary with no `--name`. `--name` still overrides; a grammar with no captured
-  name (an old binary `.ppg`) falls back to the historical flat names, so legacy callers,
-  the `pp_compiled_parser_*` profiling harnesses, and the cc-diff oracle stay byte-for-
+  name (an old binary `.tpg`) falls back to the historical flat names, so legacy callers,
+  the `tp_compiled_parser_*` profiling harnesses, and the cc-diff oracle stay byte-for-
   byte unchanged (cc-diff compares the dumped tree, which internal renaming never moves).
 - **Language injection resolves through an engine-held registry keyed by name, not the
-  compile-time grammar alone.** `pocketparse_register_language(engine, "std.json",
+  compile-time grammar alone.** `tinyparse_register_language(engine, "std.json",
   {grammar, parse})` maps a name to an entry whose `parse` is NULL (run the VM over the
   grammar — today's dynamic case, unchanged) or a separately-compiled generated parser's
-  `<name>_run`. `pp_inject_run` consults the registry first and falls back to the inject
+  `<name>_run`. `tp_inject_run` consults the registry first and falls back to the inject
   IR's compile-time `embedded_grammar` when nothing is registered. The decision: name-
   keyed runtime resolution over a static function-pointer table, because only that lets a
   host compose generated parsers it never linked, and it generalizes the existing
@@ -992,7 +992,7 @@ measured non-wins were discarded.
 - **Native nesting reuses the existing supervised-child splice; it does not add a new
   embedding path.** The registered generated parser runs over a sub-parser that shares
   only the host arena (its own builder/diagnostics/grammar/input window), and the SAME
-  `pp_inject_copy_node` offset-maps, re-interns, and language-tags the subtree into the
+  `tp_inject_copy_node` offset-maps, re-interns, and language-tags the subtree into the
   host tree under the `injection` node. So a generated host nesting a generated embedded
   parser yields a tree byte-identical to the VM's, and a failing embedded parse stays
   contained — the isolation guarantee is unchanged whether the child is VM or generated.
@@ -1005,9 +1005,9 @@ measured non-wins were discarded.
 - **The capability is gated, not just demonstrated.** `examples/nesting` links a
   generated `std.fence` host with a generated `std.json` and a generated `std.javascript`
   parser in one binary, embedded parsers registered at runtime;
-  `ci/pocketparse-nesting.sh` asserts the composite tree is byte-identical to the VM's
+  `ci/tinyparse-nesting.sh` asserts the composite tree is byte-identical to the VM's
   `std.fence --dump-tree`, all three entries link with no collision, and a hide-ax shared
-  object of the set exports the parser + `pocketparse_*` API and zero `ax_` symbols.
+  object of the set exports the parser + `tinyparse_*` API and zero `ax_` symbols.
 
 ## Phase 17 — W17-4 done: buffer-friendly generated parser + ax-coordinated chunk loop
 
@@ -1026,20 +1026,20 @@ measured non-wins were discarded.
   is what buys byte-identity.** The boundary check is a comparison of the cursor
   against the buffer length at the item edge — no matcher change. An item that reaches
   the buffer end (success or the loop-terminating failure) while input is incomplete
-  is rolled back to its start and the loop returns POCKETPARSE_MORE, because more bytes
+  is rolled back to its start and the loop returns TINYPARSE_MORE, because more bytes
   might have extended it (an atom growing, a list still open). On the final chunk
   input_complete disables the held-back check and the tail is parsed exactly as the
   whole-input driver parses it — same items, same order, same root. The decision:
   conservative hold-back at the edge over a high-water-mark scheme in the matchers,
   because it needs no runtime change and is provably byte-identical.
-- **Reuse the existing POCKETPARSE_MORE result code — no public-header change.** The
-  frozen header already declared POCKETPARSE_MORE (unused). It is exactly the
+- **Reuse the existing TINYPARSE_MORE result code — no public-header change.** The
+  frozen header already declared TINYPARSE_MORE (unused). It is exactly the
   NEED_MORE_INPUT signal, so the buffer-friendly entry returns it and the contract
   surface is unchanged. The host owns one new internal field, input_complete (default
   1 = whole input, the historical finish/run path), set on the parser before each
   run_chunk; a buffer-friendly host includes internal.h to reach it, as the nesting
   example already does for the language-tag accessor.
-- **The resumable loop is ONE shared runtime helper (pp_parser_chunk_loop), not baked
+- **The resumable loop is ONE shared runtime helper (tp_parser_chunk_loop), not baked
   per grammar.** It is parameterized by the generated per-item function, whether the
   start body ends in EOF, and the repeat's min bound. The root, the child sink, and the
   cursor boundary persist on the parser across calls (bf_root/bf_children/bf_position),
@@ -1052,17 +1052,17 @@ measured non-wins were discarded.
   the change is purely additive and cc-diff stays 271/271 byte-identical.
 - **ax coordinates the choice on the same session that already owns the buffer.** The
   parse is the W60 ax session: the parser actor owns the arena, builder, diagnostics,
-  and input buffer, and pocketparse_push routes bytes to it. The buffer-friendly path
+  and input buffer, and tinyparse_push routes bytes to it. The buffer-friendly path
   rides that session — push bytes, mark input_complete, call run_chunk; the generated
   native parser runs inside the session against its state. ax picks the native parser
   for buffer/pull + per-item streaming and the VM for async push; this workstream does
   not touch the VM push path (vm-diff GREEN).
 - **The capability is gated, not just demonstrated.** examples/bufferfriendly drives
   the generated sexpr parser over a document in fixed-size chunks through the
-  POCKETPARSE_MORE loop; ci/pocketparse-bufferfriendly.sh asserts the tree is
+  TINYPARSE_MORE loop; ci/tinyparse-bufferfriendly.sh asserts the tree is
   byte-identical to the VM's whole-input --dump-tree at eight chunk sizes (1, 2, 3, 5,
   8, 17, 64, and larger-than-file), and that chunk size 1 genuinely suspends (>0
-  POCKETPARSE_MORE), so the boundary cannot be silently bypassed. Chunked == whole ==
+  TINYPARSE_MORE), so the boundary cannot be silently bypassed. Chunked == whole ==
   VM, byte for byte, across the granularity range; depth guard and byte-identity
   preserved.
 
@@ -1077,8 +1077,8 @@ byte-identical to the VM (cc-diff 271/271) throughout. Decisions:
   `push + run`; the W17-2 profile timed run only. Profiling push+run (the new
   `bench/prof/prof_tsx.c`, generated std.tsx over the largest React file ×40) named a
   cost the run-only profile hid: the input buffer copy.
-- **Buffer the input with a bulk copy.** `pp_parser_buffer` (the body of
-  `pocketparse_push`) copied the pushed bytes into its growable arena buffer one byte
+- **Buffer the input with a bulk copy.** `tp_parser_buffer` (the body of
+  `tinyparse_push`) copied the pushed bytes into its growable arena buffer one byte
   at a time and zeroed the buffer it was about to overwrite. That byte loop was the
   single largest cost in the timed region (15.70%). Switched to `__builtin_memcpy`
   (the freestanding source takes no new header; the compiler lowers it to the
@@ -1087,24 +1087,24 @@ byte-identical to the VM (cc-diff 271/271) throughout. Decisions:
   total instructions in the timed region; no parser logic touched, so cc-diff stays
   byte-identical and every net gate is green.
 
-- **Allocate the rule-memo tables lazily.** `pp_rule_memo_init` zeroed an input-scaled
+- **Allocate the rule-memo tables lazily.** `tp_rule_memo_init` zeroed an input-scaled
   occupancy column (the `live' byte-per-slot array, ~1 MB for the 311 KB React file)
   at the start of every parse, but the rule memo is dormant until a parse goes
   super-linear (`memo_active`), which a clean parse never does — so that zeroing
   (the largest memset left after change 1, 10.41%) was pure waste on the common path.
-  Split init into a no-allocation prepare and a lazy `pp_rule_memo_ensure` called when
+  Split init into a no-allocation prepare and a lazy `tp_rule_memo_ensure` called when
   `memo_active` flips on (and on the force-on differential path). −8.0% total
   instructions; memset 10.41% → 2.65%. The memo is a pure cache built at the moment it
   first becomes usable, so the verdict is unchanged: cc-diff byte-identical 271/271
-  on both the default and `POCKETPARSE_RULEMEMO=always` paths, and the
+  on both the default and `TINYPARSE_RULEMEMO=always` paths, and the
   pathological-input nocrash gates (which activate the memo) stay GREEN.
 
 - **Inline the per-rule CALL lifecycle into the generated functions.** Once the lexer
-  was baked and the memsets cut, `pp_vm_call_enter`/`exit` (the per-rule lifecycle the
+  was baked and the memsets cut, `tp_vm_call_enter`/`exit` (the per-rule lifecycle the
   generated parser pays through the shared helpers) were the profile's top costs (~17%
   combined): their self-cost was the memo bookkeeping every entry wrote — dead on a
   clean parse — plus cross-TU call overhead over ~587K entries. Specialized them into
-  two `static inline` wrappers (`pp_vm_enter`/`pp_vm_exit`) the emitter calls: on the
+  two `static inline` wrappers (`tp_vm_enter`/`tp_vm_exit`) the emitter calls: on the
   clean steady state they do only the marks / extras / node-open / link / close / push
   a hand-written parser does, inlined with the rule's kind/field/alias in registers;
   they DELEGATE to the shared helpers the instant the lifecycle is non-trivial (memo
@@ -1116,35 +1116,35 @@ byte-identical to the VM (cc-diff 271/271) throughout. Decisions:
   cc-diff byte-identical 271/271 default and RULEMEMO=always; nocrash gates GREEN.
 
 - **Inline the extras fast-reject at the hot call sites.** Once the lifecycle was
-  inlined, `pp_vm_consume_extras` was the runaway top cost (16.91%): it runs before
+  inlined, `tp_vm_consume_extras` was the runaway top cost (16.91%): it runs before
   every terminal and rule entry, and the dominant "cursor byte begins no extra" case
   it already proves with one lead-byte bitset probe was paid as a cross-TU call
-  millions of times. Added an inline `pp_vm_extras` doing exactly that O(1) reject
+  millions of times. Added an inline `tp_vm_extras` doing exactly that O(1) reject
   (byte-for-byte the function's own fast path, same order) at the call site, falling to
-  the full function only when a byte could begin an extra. Wired into pp_vm_enter, the
-  generated choice prologue, and pp_vm_terminal_baked (generated-only paths); the VM's
-  terminal keeps pp_vm_consume_extras (cc-diff reference). −4.7% instructions; the
+  the full function only when a byte could begin an extra. Wired into tp_vm_enter, the
+  generated choice prologue, and tp_vm_terminal_baked (generated-only paths); the VM's
+  terminal keeps tp_vm_consume_extras (cc-diff reference). −4.7% instructions; the
   extras slice fell from 74.8M to ~43.8M. cc-diff byte-identical 271/271 default and
   RULEMEMO=always; all gates GREEN.
 
 - **Bake the inline rule-body literals.** The largest remaining lexer slice was the
-  bare PP_OP_LITERAL in a rule body (punctuation matched directly) -- still on the
-  generic token VM (pp_vm_do_match_pattern -> pp_token_run), ~320K calls / ~19%
+  bare TP_OP_LITERAL in a rule body (punctuation matched directly) -- still on the
+  generic token VM (tp_vm_do_match_pattern -> tp_token_run), ~320K calls / ~19%
   inclusive, even after W17-2 baked the per-token scanners. The emitter now bakes each
   DISTINCT inline literal (deduped by bytes) to a pure byte-compare matcher
   (<prefix>_litmatch_<n>, reusing the token-matcher emitter) and routes the site
-  through pp_vm_terminal_baked. A bare literal is never goal-redirected (its kind is the
+  through tp_vm_terminal_baked. A bare literal is never goal-redirected (its kind is the
   literal text, not a token symbol), so the baked path is byte-identical to
-  pp_vm_do_match_pattern -- same extras consume, leaf push, `token' trace, end offset.
+  tp_vm_do_match_pattern -- same extras consume, leaf push, `token' trace, end offset.
   A literal-registry pre-pass assigns stable matcher indices before emission; the common
-  punctuation shares one matcher. -9.0% instructions; pp_token_run/pp_token_match_memo
+  punctuation shares one matcher. -9.0% instructions; tp_token_run/tp_token_match_memo
   left the top of the profile -- every terminal is now baked straight-line C. cc-diff
   byte-identical 271/271 default and RULEMEMO=always; all gates GREEN. Cumulative -39.5%.
 
 - **Allocate the extras memo lazily too.** The last large memset was the extras memo's
   marks array (~311 KB zeroed per parse), which only helps on a backtrack a clean
   predictive parse never does. Deferred it exactly like the rule memo (lazy
-  pp_extras_memo_ensure on the memo_active wake -- super-linear parsing is when
+  tp_extras_memo_ensure on the memo_active wake -- super-linear parsing is when
   backtracking, and the memo, start to matter). marks stays NULL until then, disabling
   the pure-cache memo with no verdict change. -3.4% instructions; the arena-zeroing
   memset left the top of the profile. cc-diff byte-identical 271/271 default and
@@ -1153,8 +1153,8 @@ byte-identical to the VM (cc-diff 271/271) throughout. Decisions:
   link_children) and the one-time input copy -- the hand-written-parser floor.
 
 - **Measured and dropped: an inline sink-append fast path.** After the lazy memos and
-  the baked literals, the CST-build helpers (pp_tree_builder_push / pp_vm_sink_push /
-  pp_vm_link_children) were the profile's top costs. An inline pp_vm_sink_append (the
+  the baked literals, the CST-build helpers (tp_tree_builder_push / tp_vm_sink_push /
+  tp_vm_link_children) were the profile's top costs. An inline tp_vm_sink_append (the
   spare-capacity store/increment inlined, growth delegated) was tried to cut the
   per-node sink_push call. It MEASURED A NON-WIN: instructions rose slightly and
   wall-clock stayed flat (~0.397 s on the prof driver) -- the saved call overhead was
@@ -1205,17 +1205,17 @@ hand-written code, not a packrat engine; ax manages logical processes, not per-r
 parse machinery; the memo is VM-only).
 
 - **The rule memo is removed ENTIRELY from the generated path.** The generated-only
-  inline CALL lifecycle (`pp_vm_enter`/`pp_vm_exit` in internal.h) dropped all memo
+  inline CALL lifecycle (`tp_vm_enter`/`tp_vm_exit` in internal.h) dropped all memo
   bookkeeping: no `call_attempts` increment, no `memo_threshold` compare, no
   `memo_active` check, and no delegation-for-memo. It now does only the hand-written
-  per-rule work and delegates to the shared `pp_vm_call_enter`/`exit` only for the
+  per-rule work and delegates to the shared `tp_vm_call_enter`/`exit` only for the
   genuinely non-trivial lifecycle (recovery armed, a `no_extras` scope, the VM's
   relocatable sink, a trace plug). The generated driver pins the memo OFF
   (`memo_threshold = 0xFFFFFFFF`, `memo_active = 0`) so a delegated lifecycle cannot
   wake it. The emitted std.tsx parser now contains zero memo machinery (only the two
   explicit pin-off lines). The VM keeps its memo unchanged — it must bound
   backtracking for arbitrary runtime-supplied grammars — verified by vm-diff (incl.
-  the `POCKETPARSE_RULEMEMO=always` forced-replay path).
+  the `TINYPARSE_RULEMEMO=always` forced-replay path).
 - **Byte-identical and fast, because the memo is a pure cache and the grammars are
   left-factored.** cc-diff stays 271/271 byte-identical and completes in ~27 s — no
   exponential blowup appears without the memo, confirming the std corpora are
@@ -1231,9 +1231,9 @@ parse machinery; the memo is VM-only).
   correctness-of-form — the generated parser now reads and runs like hand-written RD.
 - **Audit: no other interpreter-generality residue left to remove on the generated
   path.** With the memo gone, the profile's top costs are the irreducible
-  hand-written-parser floor (the baked lexer `pp_token_run`, the packed-CST build
-  `pp_tree_builder_push`/`pp_vm_sink_push`/`pp_vm_link_children`, the extras policy
-  `pp_vm_consume_extras`). The `pp_vm_frame` memo fields
+  hand-written-parser floor (the baked lexer `tp_token_run`, the packed-CST build
+  `tp_tree_builder_push`/`tp_vm_sink_push`/`tp_vm_link_children`, the extras policy
+  `tp_vm_consume_extras`). The `tp_vm_frame` memo fields
   (`target`/`memo_pos`/`diag_before`/`seen_success`/`memoable`) are written only by
   the shared VM/delegated path, never by the inline hand-written path; removing them
   from the struct would touch the shared VM for no measured win (the VM still needs
@@ -1248,33 +1248,33 @@ parse machinery; the memo is VM-only).
 
 The structural-lever round the owner chose after de-packrat: push past the CST build path
 the W17-GOAL/GOAL2 floor named (per-node allocation, the per-rule child sink, the
-`pp_vm_link_children` second pass), toward tsc/tsgo, with the hard constraint that
+`tp_vm_link_children` second pass), toward tsc/tsgo, with the hard constraint that
 `--dump-tree` stays byte-identical (cc-diff) and the public cursor API / node format stays
 unchanged. Profile-driven; each change measured (callgrind + same-machine wall-clock A/B),
 non-wins discarded.
 
 - **Profile ranking (before).** Generated std.tsx over the largest React file ×20, load
-  amortized (184.57 M Ir): `pp_tree_builder_push` 9.81%, `pp_vm_sink_push` 6.20%,
-  `pp_vm_link_children` 5.54% — the build trio ≈21.5%, plus most of the `memcpy`/`ax_alloc`.
+  amortized (184.57 M Ir): `tp_tree_builder_push` 9.81%, `tp_vm_sink_push` 6.20%,
+  `tp_vm_link_children` 5.54% — the build trio ≈21.5%, plus most of the `memcpy`/`ax_alloc`.
   The extras scan (≈9%) and the baked lexer/choice prediction are the *other* hand-parser
   costs, out of this round's scope.
 - **Decision 1: incremental sibling linking; the `link_children` second pass is removed.**
   The sink's `items[]` array serves two jobs — the rollback ledger an ordered-choice attempt
   truncates, and the direct-child list `link_children` re-walked cold at close. Now
-  `pp_vm_sink_push` wires each child's `parent` and forward `next_sibling` as the child is
-  appended (while the node is hot in cache), and `pp_vm_sink_close` finalises in O(1)
+  `tp_vm_sink_push` wires each child's `parent` and forward `next_sibling` as the child is
+  appended (while the node is hot in cache), and `tp_vm_sink_close` finalises in O(1)
   (`first_child`/`child_count`, terminate the last sibling, span). The previous sibling is
   read from `items[count-1]`, so a failed-attempt rollback re-derives the correct last
   sibling for free. The sink gained a `parent` field; the VM and the generated parser share
   the same helpers (lockstep → cc-diff byte-identical). Both helpers are `static inline` at
   the emit sites — a first, non-inline cut REGRESSED (+1.6% Ir: the extra call cost more
   than the tight loop it replaced), so the inline form is load-bearing, not cosmetic.
-  Measured: 184.57 M → 178.64 M Ir (−3.21%); `pp_vm_link_children` gone.
+  Measured: 184.57 M → 178.64 M Ir (−3.21%); `tp_vm_link_children` gone.
 - **Decision 2: pre-size the node array from input length.** The node array doubled from 32
   and ax arenas never realloc in place, so each doubling copied every prior node. A parse
-  settles near one node per few bytes, so `pp_vm_state_init` reserves `input_length/4` nodes
+  settles near one node per few bytes, so `tp_vm_state_init` reserves `input_length/4` nodes
   up front (builder still empty), absorbing the growth into one allocation. Pure capacity
-  hint — byte-identical. Measured: 178.64 M → 175.68 M Ir (−1.65%); `pp_tree_builder_push`
+  hint — byte-identical. Measured: 178.64 M → 175.68 M Ir (−1.65%); `tp_tree_builder_push`
   18.1 M → 15.2 M. Peak RSS for the compiled bench arm DROPPED 55.8 → 45.2 MB (the doubling
   over-allocated more than input/4).
 - **End-to-end A/B (baseline `b17d56a` in a worktree, same machine):** −4.8% Ir
@@ -1287,13 +1287,13 @@ non-wins discarded.
   rollback, so a bare first/last pair on the frame would require rewriting the generated
   rollback marks (`*_sink_NNN = sink->count`) and re-validating cc-diff — real regression
   risk for an already-single inline append. The redundant `parent`/`next_sibling` writes in
-  `pp_tree_builder_push` (overwritten by the incremental link for every parented child) were
+  `tp_tree_builder_push` (overwritten by the incremental link for every parented child) were
   left in place: they are needed by the root and the non-parented sinks, store-coalesce to
   ~0 Ir, and splitting the push into leaf/open variants is complexity for no measured win.
   The remaining build cost is the genuine floor: write+link the 40-byte node while hot, open
   and close per rule — the minimum a flat-array, cursor-navigable CST builder performs.
 - **Root and buffer-friendly sinks keep the legacy full `link_children` pass**
-  (`parent = PP_NO_INDEX`): once per parse, negligible, and it avoids touching the
+  (`parent = TP_NO_INDEX`): once per parse, negligible, and it avoids touching the
   resume-path's deferred root link (bufferfriendly 8/8 unchanged).
 - **Gates:** build clean; cc-diff 271/271 byte-identical (dump-tree did not move); metric
   296/296; vm-diff GREEN; diag-diff 8/8; import-c/nesting/bufferfriendly/multiparser/hide-ax
@@ -1311,21 +1311,21 @@ rules hidden (a leading `_`) so they are omitted and their children promote.
 
 **Decision: a `(hidden …)` rule marker, collapsing only in the pass-through case.**
 - *Syntax.* `(hidden (rule …))` / `(hidden (override (rule …)))`, carried as a
-  `PP_RULE_HIDDEN` flag on `pp_rule_def`. Chosen over the leading-underscore
+  `TP_RULE_HIDDEN` flag on `tp_rule_def`. Chosen over the leading-underscore
   convention because our left-factored ladder rules do double duty (a bare wrapper
   with zero operators, a real binary node with one), so the rule's node — and its
   name — must survive whenever it earned structure; `_additive_expression` showing
   in the operator case would only obscure it. The marker hides the *empty node*,
   not the name. The keyword form needs no reference renaming, and the flag rides
-  the `.ppg` wire format (version 3) so a packed grammar collapses identically.
+  the `.tpg` wire format (version 3) so a packed grammar collapses identically.
 - *Semantics.* A hidden rule collapses **only when it added no structure**: exactly
   one child, no alias, no operator/second child. Then its single child is promoted,
   re-stamped with the call's field (the ladder's inner `left:`/`condition:` gives
   way to the outer caller's field, as tree-sitter attaches a field only to the
   surviving node). A pure dispatch rule (`(choice …)`) is always single-child, so
   always collapses; an operator-ladder rule collapses only on its no-operator path.
-- *Where it lives.* The shared node-close — `pp_vm_exit` (generated, inline) and
-  `pp_vm_call_exit` (VM) — both call `pp_vm_collapse_hidden`, which pushes the child
+- *Where it lives.* The shared node-close — `tp_vm_exit` (generated, inline) and
+  `tp_vm_call_exit` (VM) — both call `tp_vm_collapse_hidden`, which pushes the child
   in the wrapper's place and orphans the wrapper node (nothing links to it; the
   cursor never reaches it). Because the mechanism is in the shared close, the VM and
   the generated parser flatten identically **by construction** — the differential
@@ -1367,22 +1367,22 @@ import-c/multiparser/hide-ax/no-statics GREEN; vm-/parser-nocrash GREEN under
 the riskier ladder case rather than weaken the byte-identical guarantee.
 
 - *The problem.* W17-FLAT fixed the tree but not the allocation. A hidden rule still
-  opened its node at entry (`pp_tree_builder_push`); the exit-time collapse merely
+  opened its node at entry (`tp_tree_builder_push`); the exit-time collapse merely
   orphaned it. The ~57% of nodes that collapse were still allocated and written —
   pure waste, which is why W17-FLAT's throughput was flat.
 
-- *Stage 1 (done).* A new compile-time flag `PP_RULE_TRANSPARENT_ALWAYS` marks a
+- *Stage 1 (done).* A new compile-time flag `TP_RULE_TRANSPARENT_ALWAYS` marks a
   hidden rule whose body yields *exactly one child by every path* — a bare dispatch
   wrapper, a `(choice ref …)` of plain refs, a `(field f: ref)`/`(goal …)`, or a
-  lone ref (`pp_ir_yields_one_child` / `pp_grammar_mark_transparent_rules`, run after
+  lone ref (`tp_ir_yields_one_child` / `tp_grammar_mark_transparent_rules`, run after
   refs resolve so the analysis follows `(choice ref)` through the rule table). Such a
-  rule always collapses, so the CALL prologue (`pp_vm_enter`, `pp_vm_call_enter`)
+  rule always collapses, so the CALL prologue (`tp_vm_enter`, `tp_vm_call_enter`)
   skips its node entirely: leading extras into the caller's sink, body run straight
   into that sink, the call's field re-stamped onto the single child at exit —
-  byte-identical to `pp_vm_collapse_hidden`, allocation reclaimed. The flag implies
-  `PP_RULE_HIDDEN` and rides the packed flags field, so `.ppg` load and the generated
+  byte-identical to `tp_vm_collapse_hidden`, allocation reclaimed. The flag implies
+  `TP_RULE_HIDDEN` and rides the packed flags field, so `.tpg` load and the generated
   parser inherit it. Both marks are read with one inline byte probe
-  (`pp_grammar_rule_marks`, bit 0 hidden / bit 1 transparent) — the two-call form
+  (`tp_grammar_rule_marks`, bit 0 hidden / bit 1 transparent) — the two-call form
   measured *slower* than the node it saved (+1.0%); folding it to one made it a win.
   Gated `!memoable` on the VM so the rule memo's contiguous-subtree snapshot is never
   asked to relocate a node that was never opened.
@@ -1397,7 +1397,7 @@ the riskier ladder case rather than weaken the byte-identical guarantee.
   children, inverting parent-precedes-children. The investigation found the cursor,
   linearizer, inject subtree-copy, and node-types are all index-link-driven and
   order-independent; the **only** consumer requiring contiguous `[root, count)`
-  preorder is the rule memo (`pp_vm_snapshot_subtree` / `pp_vm_replay_success`), which
+  preorder is the rule memo (`tp_vm_snapshot_subtree` / `tp_vm_replay_success`), which
   is off on the generated parser and never wakes on the linear left-factored ladders.
   So lazy-open *could* be made safe by gating `!memoable`. But after Stage 1 only
   ~5.2% of node pushes remain orphaned (≈7,300 of 140,830 per parse of a 311 KB React
@@ -1407,7 +1407,7 @@ the riskier ladder case rather than weaken the byte-identical guarantee.
 
 **Measured.** Generated parser, callgrind, 3 passes: 315 KB expression file
 1,481,620,816 → 1,425,982,163 instructions (**−3.75%**); 311 KB React file 552.3M →
-547.0M (**−0.95%**), `pp_tree_builder_push` 168.7M → 151.2M; React compiled-arm peak
+547.0M (**−0.95%**), `tp_tree_builder_push` 168.7M → 151.2M; React compiled-arm peak
 RSS 45.2 → ~42.4 MB; ~3–4% faster wall-clock on the React file. **Did we pass tsc?**
 No — C-compiled ~9.5 MB/s vs tsc 14.58 MB/s = 0.65× tsc; past tree-sitter, not past
 tsc. Output-invariant: `--dump-tree` byte-identical to b52cbde across 345 corpus
@@ -1448,42 +1448,42 @@ changed no code. The full study is in `docs/peg-vs-glr.md` (W18-WORDCACHE).
   matcher.
 
 - *The standing target.* The study's profile predates W17-FLAT/W17-RECLAIM. On the
-  current engine the top costs are `pp_vm_enter`/`pp_vm_exit`, `pp_tree_builder_push`,
-  and `pp_vm_consume_extras`. A future tsc-chasing round should attack extras
+  current engine the top costs are `tp_vm_enter`/`tp_vm_exit`, `tp_tree_builder_push`,
+  and `tp_vm_consume_extras`. A future tsc-chasing round should attack extras
   consumption or the frame enter/exit overhead, not word re-scans.
 
 **Measured (baseline only; no B-side).** JS corpus 3.5 ms, 1.2× tree-sitter, within
-the 4.0 ms perf-gate ceiling. React TSX corpus (9.55 MB, 50 iters): pocketparse 6.19
+the 4.0 ms perf-gate ceiling. React TSX corpus (9.55 MB, 50 iters): tinyparse 6.19
 MB/s vs tree-sitter 7.49 MB/s (0.83×); C-compiled arm 0.42× tsc (tsc 14.58 MB/s).
 Output-invariant by inaction: no code changed, so the corpus reference dump is
 byte-identical and every golden is untouched.
 
 ## Phase 18 — W18-EXTRAS: run the baked extras scanner regardless of lexical goal
 
-**Decision.** Drop the `state->active_goal == PP_NO_SYMBOL` guard on the baked extras
-fast path in `pp_vm_consume_extras` (`tools/pocketparse/src/vm.c`). The baked
+**Decision.** Drop the `state->active_goal == TP_NO_SYMBOL` guard on the baked extras
+fast path in `tp_vm_consume_extras` (`tools/tinyparse/src/vm.c`). The baked
 `<prefix>_extras_match` scanner now runs under an active lexical goal too, which in TSX
 is almost everywhere a goal is live. This is the standing target W18-WORDCACHE named —
 extras consumption — and it lands a **−17.4% instruction cut** on the 311 KB React file
 for a one-condition change. The full study is in `docs/peg-vs-glr.md` (W18-EXTRAS).
 
 - *Why the guard was conservative.* A lexical goal only rewrites a *terminal reference
-  in a rule body*: `pp_vm_goal_redirect` maps a `(goal, trigger, target)` triple so the
+  in a rule body*: `tp_vm_goal_redirect` maps a `(goal, trigger, target)` triple so the
   same byte scans as a different token in a different context (regex-vs-divide, template
   body, JSX text). An *extra* (whitespace, comment) is never a goal trigger nor target —
   the extras loop matches each extra's fixed pattern directly and never redirects. The
-  `goal` the slow fallback forwards to `pp_token_match_memo` is dead there too: the loop
+  `goal` the slow fallback forwards to `tp_token_match_memo` is dead there too: the loop
   passes `memo = 0`, and `goal` is used only as a memo-probe key; the match itself
-  (`pp_token_run` / `pp_match_ir`) takes no goal. The baked scanner takes no goal in its
+  (`tp_token_run` / `tp_match_ir`) takes no goal. The baked scanner takes no goal in its
   signature. So which bytes are trivia is a pure function of `(input, position)`,
   identical under every goal — the guard guarded nothing.
 
-- *What it removed.* The slow generic loop re-ran `pp_token_match_memo → pp_token_run`
+- *What it removed.* The slow generic loop re-ran `tp_token_match_memo → tp_token_run`
   (the token bytecode VM) for every extra def at every cursor under a goal. That subtree
   was the profile's largest mass (~24.6% self / 26.7% inclusive on the React file);
-  `pp_token_run`'s entire 10.46% self was trivia scanning. After the change both
-  `pp_token_run` and `pp_token_match_memo` drop below the callgrind threshold and
-  `pp_vm_consume_extras` inclusive falls from 26.71% to ~12.2%.
+  `tp_token_run`'s entire 10.46% self was trivia scanning. After the change both
+  `tp_token_run` and `tp_token_match_memo` drop below the callgrind threshold and
+  `tp_vm_consume_extras` inclusive falls from 26.71% to ~12.2%.
 
 - *Invariant kept.* The per-position extras memo and the lead-byte bitset reject are
   untouched and still run alongside; the memo stays gated to the no-goal case, where its
@@ -1503,7 +1503,7 @@ every gate green with no golden re-baseline.
 **Decision.** Do not replace the binary-operator ladder with a precedence-climbing
 (Pratt) loop. The `(precedence-climb …)` grammar primitive was built end to end — a new
 IR op, VM dispatch arm, generated-C emitter, and one shared driver
-(`pp_vm_prec_climb`) both engines call — and proven **byte-identical** to the ladder.
+(`tp_vm_prec_climb`) both engines call — and proven **byte-identical** to the ladder.
 It is declined because it raises the instruction count, not lowers it. The engine and
 the `std.javascript` grammar are reverted to the ladder; the full study is in
 `docs/peg-vs-glr.md` (W18-PRATT).
@@ -1523,12 +1523,12 @@ the `std.javascript` grammar are reverted to the ladder; the full study is in
   no golden re-baseline.
 
 - *Why it loses.* On `ReactDOMFloat-test.js` (3 passes) the slice measured
-  **451,776,574 → 481,704,930 Ir, +6.62%**. Collapsing two rung frames cut `pp_vm_enter`
+  **451,776,574 → 481,704,930 Ir, +6.62%**. Collapsing two rung frames cut `tp_vm_enter`
   by 9.81M — real, and the only saving. But this engine already pays for a rung cheaply
   where a Pratt loop cannot: a rung's operator check is a one-probe lead-byte bitset
   reject (no node, no rollback), and each rung is already a flat `repeat`, not recursion.
   The driver trades N cheap rejections for one loop with O(levels) speculative operator
-  matching per operand; `pp_vm_climb_match_operator` ran 84,834 times (vs ~5,200 per
+  matching per operand; `tp_vm_climb_match_operator` ran 84,834 times (vs ~5,200 per
   rung), adding 5.09M of `consume_extras` and 9.3M of new driver self cost. After
   W17-FLAT/RECLAIM thinned the frames and W18-EXTRAS thinned the lexer, the ladder is not
   the instruction sink frame-attribution suggested.
@@ -1539,7 +1539,7 @@ exceeds the frame descent it removes, and the gap widens with level count becaus
 scales with it. The profile's highest-value target stays the trivia/extras path, not the
 operator ladder.
 
-## Phase 18 — wrap-up: where pocketparse stands against tsc, and what it cost to know
+## Phase 18 — wrap-up: where tinyparse stands against tsc, and what it cost to know
 
 Phase 18 set out to close the React-corpus gap to tsc. It did, on the question that
 turned out to matter, and it learned more from what it declined than from what it shipped.
@@ -1549,10 +1549,10 @@ fixed engine.
 
 ### The calibration that framed the phase
 
-Earlier rounds had calibrated pocketparse against the two production recursive-descent
+Earlier rounds had calibrated tinyparse against the two production recursive-descent
 TypeScript parsers and tree-sitter. The finding that set the phase's direction: the
 *fastest* parser on this workload is recursive descent (tsgo, native Go, ~37 MB/s), not
-tree-sitter's GLR table (~8 MB/s). A parse table is not the fast option here; pocketparse's
+tree-sitter's GLR table (~8 MB/s). A parse table is not the fast option here; tinyparse's
 residual gap is **interpretation overhead** plus its per-byte lexer, not its PEG choice.
 tsc (TypeScript on V8's JIT, ~14.6 MB/s) was the bar to reach; tsgo and meriyah (~37 MB/s)
 were out of reach without a different lexer architecture. So the phase chased tsc and
@@ -1562,7 +1562,7 @@ treated the native-compiler arms as the horizon, not the target.
 
 One change shipped, and it was the largest single-round instruction cut in the series.
 Between every token the parser scans trivia; a baked straight-line C scanner existed but was
-gated behind `active_goal == PP_NO_SYMBOL`, and in TSX a lexical goal is live almost
+gated behind `active_goal == TP_NO_SYMBOL`, and in TSX a lexical goal is live almost
 everywhere (`div`/`slash`, JSX text, template bodies), so the fast scanner barely fired and a
 generic per-extra-def loop carried the cost. The investigation showed the guard was
 conservative, not load-bearing: a goal cannot change which bytes are trivia — whitespace is
@@ -1585,7 +1585,7 @@ The phase declined three probes at the thesis gate. Each taught something:
 
 - **W18-PRATT (a precedence-climbing primitive).** Built end to end and proven byte-identical
   to the operator ladder, then declined because it raised the instruction count +6.62%.
-  Collapsing rung frames cut `pp_vm_enter` by 9.81M, but the Pratt loop's O(levels) speculative
+  Collapsing rung frames cut `tp_vm_enter` by 9.81M, but the Pratt loop's O(levels) speculative
   operator peek (84,834 match calls vs ~5,200 per rung) and per-chain bookkeeping cost more than
   the frames it removed. *Lesson: the operator ladder is not the instruction sink frame-attribution
   suggested. After W17-FLAT/RECLAIM thinned the frames, the ladder rungs are flat `repeat`s with a
@@ -1602,22 +1602,22 @@ surfaced **silent data corruption on the shipping default parse path** (the acto
 `engine_use_vm_actor`): reusing one engine across many parses of a large file collapsed a
 ~96k-node tree to a one-node root once the arena pool had grown, with no error surfaced.
 
-Root cause (confirmed with ASan/UBSan and pool instrumentation): `pocketparse_push` on the
+Root cause (confirmed with ASan/UBSan and pool instrumentation): `tinyparse_push` on the
 actor path marshalled each input chunk through `ax_post`, whose `event_make` copies the
-payload into the **fixed system slice** `pocketparse_open` carves off the grant. The ax pool's
+payload into the **fixed system slice** `tinyparse_open` carves off the grant. The ax pool's
 first-fit free list let a tiny allocation claim a freed file-sized chunk, so across reused
 parses the slice fragmented until a chunk-sized allocation failed: `ax_post` returned
-`AX_NOMEM`, `push` returned `POCKETPARSE_INVALID` — and `finish`/`run` still ran, producing a
+`AX_NOMEM`, `push` returned `TINYPARSE_INVALID` — and `finish`/`run` still ran, producing a
 degenerate one-node tree with no fault. Two compounding faults: a copy through the fixed slice
 that should not have existed (it contradicted the actor's own "adds no copy" contract), and a
 failed push that passed as a successful degenerate parse.
 
-Fixed in commit `86c4317`: `pp_parser_actor_push` now buffers each chunk straight into the
+Fixed in commit `86c4317`: `tp_parser_actor_push` now buffers each chunk straight into the
 parser's own growable arena instead of posting it as an ax event, so nothing large flows
 through the system slice; and a failed push records `push_failed`, which `finish` and the
 generated `<prefix>_run` honour by refusing to build a tree and returning the error, so a
 dropped chunk can never again pass as a degenerate parse. The standing oracle is
-`ci/pocketparse-reuse-regression.sh`, which reuses one engine across 120 parses of a generated
+`ci/tinyparse-reuse-regression.sh`, which reuses one engine across 120 parses of a generated
 pool-growing `.tsx` and asserts every tree is byte-identical to the fresh parse. *Lesson: a
 byte-identical assertion in a benchmark is a correctness gate, not bench scaffolding — it found
 a shipping-path corruption that every conformance case missed, because the corruption only
@@ -1632,19 +1632,19 @@ all 1070 files**: the persistent-engine arm parses the corpus at **16.48 MB/s = 
 2.03× tree-sitter**, and the fresh-per-file (RSS-bounded) arm at 11.04 MB/s = 0.76× tsc. The
 gap between the two arms — not parse speed — is the entire corpus shortfall, and it is the
 per-file engine-reopen / grammar-reload artifact behind the old "0.65× tsc" headline. Across
-file sizes pocketparse parse-only is at or above tsc at every size measured (2.06× at 1 KB,
-1.14× at 311 KB). Both arms are now reported by `ci/pocketparse-bench5.sh`, with the assertion
+file sizes tinyparse parse-only is at or above tsc at every size measured (2.06× at 1 KB,
+1.14× at 311 KB). Both arms are now reported by `ci/tinyparse-bench5.sh`, with the assertion
 in the harness so a corrupt parse can never be timed silently again. The full study is in
 `docs/peg-vs-glr.md` (W18-PARITY) and `docs/performance.md` (W18-PARITY).
 
 ### Honest conclusion, and the one lever left
 
-On the fixed engine, driven the way a host actually parses a codebase, **pocketparse is no
+On the fixed engine, driven the way a host actually parses a codebase, **tinyparse is no
 longer behind tsc on the React corpus** — it is past it at 1.13×, and ahead of tsc on every
 single-file size. It remains comfortably past tree-sitter (the phase floor) and well short of
 the native-compiler arms tsgo and meriyah (~37 MB/s). Closing *that* distance, or pushing the
 corpus well past tsc, would need a generated DFA lexer in place of the per-byte trivia scanner
-— the token layer tsc's JIT and tree-sitter's table both have and pocketparse does not. That is
+— the token layer tsc's JIT and tree-sitter's table both have and tinyparse does not. That is
 a separate project and is not committed: a maximal-munch DFA is unsafe to bake naively from the
 grammar's terminals (the longest-match rule a hand-lexer encodes is not free to derive), and it
 is recorded as future work. The deliverable of Phase 18 is the shipped W18-EXTRAS win, the three

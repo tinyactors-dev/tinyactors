@@ -1,4 +1,4 @@
 <<<cmd
-printf 'a &&' | "$PP" run std.shell --input -
+printf 'a &&' | "$TP" run std.shell --input -
 <<<assert
 exit-not 0

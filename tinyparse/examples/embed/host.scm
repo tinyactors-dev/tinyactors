@@ -23,7 +23,7 @@
 ;
 ; This is OUR grammar; it is authored here, not ported from a third party.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module examples.embed.host)
 

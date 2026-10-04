@@ -2,7 +2,7 @@
 ** bufferfriendly.c -- the W17-4 BUFFER-FRIENDLY driver.
 **
 ** ONE LESSON: the GENERATED native parser can be driven over a GROWING buffer
-** via the NEED_MORE_INPUT (POCKETPARSE_MORE) signal, and the tree it builds that
+** via the NEED_MORE_INPUT (TINYPARSE_MORE) signal, and the tree it builds that
 ** way is byte-identical to parsing the whole input at once -- and to the VM.
 **
 ** Native recursion cannot suspend mid-stack and there is no stackful fiber to
@@ -10,7 +10,7 @@
 ** SHALLOW top-level-item boundary -- the start rule's repeat of top-level forms,
 ** where the C stack is empty. Within a form it runs at full native speed. The
 ** generated <prefix>_run_chunk parses every form that completes within the buffer,
-** then returns POCKETPARSE_MORE; the driver here appends the next chunk and calls
+** then returns TINYPARSE_MORE; the driver here appends the next chunk and calls
 ** again, and the parse resumes at the next form. On the final chunk (input_complete
 ** set) it finalises into the same tree a single whole run produces.
 **
@@ -32,21 +32,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "pocketparse.h"
+#include "tinyparse.h"
 /* internal.h gives the parser struct so the host can set input_complete -- the
 ** buffer-friendly contract field. A host that drives the generated parser over a
 ** growing buffer owns this flag (it knows when its input is complete). */
 #include "internal.h"
 
 /* The generated sexpr parser-lib entries, under the --name prefix `sx'. */
-pocketparse_result sx_load(pocketparse_engine *engine,
-                           pocketparse_grammar **out_grammar);
-pocketparse_result sx_run(pocketparse_parser *parser);
-pocketparse_result sx_run_chunk(pocketparse_parser *parser);
+tinyparse_result sx_load(tinyparse_engine *engine,
+                           tinyparse_grammar **out_grammar);
+tinyparse_result sx_run(tinyparse_parser *parser);
+tinyparse_result sx_run_chunk(tinyparse_parser *parser);
 
 /* The internal language-tag accessor --dump-tree uses (sexpr has no injection, so
-** it is always PP_NO_SYMBOL here, but the dump stays byte-identical to the CLI's). */
-uint32_t pp_tree_cursor_language_tag(const pocketparse_tree_cursor *cursor);
+** it is always TP_NO_SYMBOL here, but the dump stays byte-identical to the CLI's). */
+uint32_t tp_tree_cursor_language_tag(const tinyparse_tree_cursor *cursor);
 
 /* A generous parse arena (BSS: untouched pages cost nothing). */
 static unsigned char grant[(size_t)512u * 1024u * 1024u];
@@ -90,34 +90,34 @@ static void line_col(const line_index *ix, uint32_t byte, uint32_t *ol, uint32_t
 /* ** Dump one node exactly as the CLI / generated standalone main does: indent by
 ** depth, MISSING marker, `field: ' prefix, kind name, optional `[language]' tag,
 ** and the `[s-e] [l,c]-[l,c]' span. */
-static void dump_node(const pocketparse_tree *tree, pocketparse_tree_cursor *cursor,
+static void dump_node(const tinyparse_tree *tree, tinyparse_tree_cursor *cursor,
                       const line_index *ix)
 {
-    uint32_t depth = pocketparse_tree_cursor_depth(cursor);
+    uint32_t depth = tinyparse_tree_cursor_depth(cursor);
     uint32_t i;
-    pocketparse_symbol kind  = pocketparse_tree_cursor_kind(cursor);
-    pocketparse_symbol field = pocketparse_tree_cursor_field(cursor);
-    uint32_t flags = pocketparse_tree_cursor_flags(cursor);
-    pocketparse_string kn = pocketparse_tree_symbol_name(tree, kind);
+    tinyparse_symbol kind  = tinyparse_tree_cursor_kind(cursor);
+    tinyparse_symbol field = tinyparse_tree_cursor_field(cursor);
+    uint32_t flags = tinyparse_tree_cursor_flags(cursor);
+    tinyparse_string kn = tinyparse_tree_symbol_name(tree, kind);
     for (i = 0; i < depth; i++) fputs("  ", stdout);
-    if (flags & POCKETPARSE_NODE_MISSING) fputs("MISSING ", stdout);
-    if (field.id != POCKETPARSE_NO_FIELD) {
-        pocketparse_string fn = pocketparse_tree_symbol_name(tree, field);
+    if (flags & TINYPARSE_NODE_MISSING) fputs("MISSING ", stdout);
+    if (field.id != TINYPARSE_NO_FIELD) {
+        tinyparse_string fn = tinyparse_tree_symbol_name(tree, field);
         printf("%.*s: ", (int)fn.length, (const char *)fn.pointer);
     }
     printf("%.*s", (int)kn.length, (const char *)kn.pointer);
     {
-        uint32_t lang = pp_tree_cursor_language_tag(cursor);
+        uint32_t lang = tp_tree_cursor_language_tag(cursor);
         if (lang != (uint32_t)-1) {
-            pocketparse_symbol ls; pocketparse_string ln;
-            ls.id = lang; ln = pocketparse_tree_symbol_name(tree, ls);
+            tinyparse_symbol ls; tinyparse_string ln;
+            ls.id = lang; ln = tinyparse_tree_symbol_name(tree, ls);
             if (ln.length > 0)
                 printf(" [%.*s]", (int)ln.length, (const char *)ln.pointer);
         }
     }
     {
-        uint32_t sb = pocketparse_tree_cursor_start_byte(cursor);
-        uint32_t eb = pocketparse_tree_cursor_end_byte(cursor);
+        uint32_t sb = tinyparse_tree_cursor_start_byte(cursor);
+        uint32_t eb = tinyparse_tree_cursor_end_byte(cursor);
         uint32_t sl, sc, el, ec;
         line_col(ix, sb, &sl, &sc);
         line_col(ix, eb, &el, &ec);
@@ -127,34 +127,34 @@ static void dump_node(const pocketparse_tree *tree, pocketparse_tree_cursor *cur
 }
 
 /* ** Pre-order dump of the whole tree, iteratively (cursor-driven). */
-static void dump_tree(const pocketparse_tree *tree, const line_index *ix)
+static void dump_tree(const tinyparse_tree *tree, const line_index *ix)
 {
-    pocketparse_tree_cursor *cursor = NULL;
+    tinyparse_tree_cursor *cursor = NULL;
     if (tree == NULL ||
-        pocketparse_tree_cursor_new(tree, &cursor) != POCKETPARSE_OK)
+        tinyparse_tree_cursor_new(tree, &cursor) != TINYPARSE_OK)
         return;
     for (;;) {
         dump_node(tree, cursor, ix);
-        if (pocketparse_tree_cursor_goto_first_child(cursor))
+        if (tinyparse_tree_cursor_goto_first_child(cursor))
             continue;
         for (;;) {
-            if (pocketparse_tree_cursor_goto_next_sibling(cursor))
+            if (tinyparse_tree_cursor_goto_next_sibling(cursor))
                 break;
-            if (!pocketparse_tree_cursor_goto_parent(cursor)) {
-                pocketparse_tree_cursor_free(cursor);
+            if (!tinyparse_tree_cursor_goto_parent(cursor)) {
+                tinyparse_tree_cursor_free(cursor);
                 return;
             }
         }
     }
 }
 
-static pocketparse_engine *open_engine(void)
+static tinyparse_engine *open_engine(void)
 {
-    pocketparse_configuration cfg;
+    tinyparse_configuration cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.memory.base = grant;
     cfg.memory.size = sizeof grant;
-    return pocketparse_open(cfg);
+    return tinyparse_open(cfg);
 }
 
 int main(int argc, char **argv)
@@ -165,11 +165,11 @@ int main(int argc, char **argv)
     unsigned char *input = NULL;
     size_t len = 0, cap = 0;
     int ch;
-    pocketparse_engine  *engine;
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_parser  *parser  = NULL;
-    pocketparse_string   empty;
-    pocketparse_result   result = POCKETPARSE_MORE;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_parser  *parser  = NULL;
+    tinyparse_string   empty;
+    tinyparse_result   result = TINYPARSE_MORE;
     size_t off;
     int calls = 0, mores = 0;
 
@@ -185,14 +185,14 @@ int main(int argc, char **argv)
 
     engine = open_engine();
     if (engine == NULL) { fputs("out of memory\n", stderr); return 1; }
-    if (sx_load(engine, &grammar) != POCKETPARSE_OK) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    if (sx_load(engine, &grammar) != TINYPARSE_OK) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
                 (const char *)fault.pointer);
         return 1;
     }
     empty.pointer = NULL; empty.length = 0;
-    if (pocketparse_parser_new(engine, grammar, empty, &parser) != POCKETPARSE_OK ||
+    if (tinyparse_parser_new(engine, grammar, empty, &parser) != TINYPARSE_OK ||
         parser == NULL) {
         fputs("error: parser_new failed\n", stderr);
         return 1;
@@ -200,20 +200,20 @@ int main(int argc, char **argv)
 
     /* Drive the generated parser over the input in fixed-size chunks. Each chunk:
     ** push the bytes, mark whether the input is now complete, and run. While the
-    ** parser still needs more it returns POCKETPARSE_MORE; on the final chunk it
+    ** parser still needs more it returns TINYPARSE_MORE; on the final chunk it
     ** finalises and freezes the tree. */
     for (off = 0; off < len; ) {
         size_t take = (off + chunk < len) ? chunk : (len - off);
         int last = (off + take >= len);
-        pocketparse_string bytes;
+        tinyparse_string bytes;
         bytes.pointer = input + off;
         bytes.length  = (uint32_t)take;
-        pocketparse_push(parser, bytes);
+        tinyparse_push(parser, bytes);
         off += take;
         parser->input_complete = last ? 1 : 0;
         result = sx_run_chunk(parser);
         calls++;
-        if (result == POCKETPARSE_MORE) mores++;
+        if (result == TINYPARSE_MORE) mores++;
         if (last) break;
     }
     /* Empty input: one final run with input_complete to finalise an empty tree. */
@@ -223,20 +223,20 @@ int main(int argc, char **argv)
         calls++;
     }
 
-    fprintf(stderr, "bufferfriendly: %d calls, %d POCKETPARSE_MORE suspensions, "
+    fprintf(stderr, "bufferfriendly: %d calls, %d TINYPARSE_MORE suspensions, "
             "result=%d\n", calls, mores, (int)result);
 
-    if (result == POCKETPARSE_OUT_OF_MEMORY) {
+    if (result == TINYPARSE_OUT_OF_MEMORY) {
         fprintf(stderr, "error: out of memory\n");
         free(input);
         return 2;
     }
-    if (result == POCKETPARSE_SYNTAX_ERROR || result == POCKETPARSE_ERROR) {
-        uint32_t count = pocketparse_parser_diagnostic_count(parser), d;
+    if (result == TINYPARSE_SYNTAX_ERROR || result == TINYPARSE_ERROR) {
+        uint32_t count = tinyparse_parser_diagnostic_count(parser), d;
         if (count == 0) fprintf(stderr, "error: parse failed\n");
         for (d = 0; d < count; d++) {
-            const pocketparse_diagnostic *diag =
-                pocketparse_parser_diagnostic(parser, d);
+            const tinyparse_diagnostic *diag =
+                tinyparse_parser_diagnostic(parser, d);
             if (diag != NULL)
                 fprintf(stderr, "%.*s\n", (int)diag->message.length,
                         (const char *)diag->message.pointer);
@@ -244,7 +244,7 @@ int main(int argc, char **argv)
         free(input);
         return 1;
     }
-    if (result == POCKETPARSE_MORE) {
+    if (result == TINYPARSE_MORE) {
         fprintf(stderr, "error: parser still wants input after the final chunk\n");
         free(input);
         return 1;
@@ -253,7 +253,7 @@ int main(int argc, char **argv)
     {
         line_index ix;
         line_index_build(&ix, input, (uint32_t)len);
-        dump_tree(pocketparse_parser_tree(parser), &ix);
+        dump_tree(tinyparse_parser_tree(parser), &ix);
         free(ix.starts);
     }
     free(input);

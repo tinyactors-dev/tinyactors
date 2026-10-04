@@ -1,7 +1,7 @@
 ; sexpr.scm — the canonical smoke grammar: parenthesized s-expressions.
 ; Used by the core test suite to exercise seq/choice/repeat/field/extras.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module examples.sexpr)
 

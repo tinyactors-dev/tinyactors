@@ -1,6 +1,6 @@
 # Corpus: a function with a nested brace group, and a redirected brace group.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/statements__21.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/statements__21.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

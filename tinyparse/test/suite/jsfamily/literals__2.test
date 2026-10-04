@@ -1,5 +1,5 @@
 <<<cmd
-"$PP" run std.javascript --input test/suite/jsfamily/inputs/literals__2.js --dump-tree
+"$TP" run std.javascript --input test/suite/jsfamily/inputs/literals__2.js --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

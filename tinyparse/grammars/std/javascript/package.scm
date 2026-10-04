@@ -8,10 +8,10 @@
 ; the resolver compiles with these parameters in scope.
 ;
 ; This is OUR grammar, authored here from a build-time porting reference under
-; tools/pocketparse/reference/tree-sitter-javascript/. No third-party code is
+; tools/tinyparse/reference/tree-sitter-javascript/. No third-party code is
 ; copied into the package; only the language is ported.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (package
   name: std.javascript

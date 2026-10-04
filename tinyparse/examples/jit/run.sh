@@ -9,7 +9,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-: "${PP_ROOT:=$(cd "$HERE/../.." && pwd)}"
+: "${TP_ROOT:=$(cd "$HERE/../.." && pwd)}"
 
 platform() {
   case "$(uname -s)/$(uname -m)" in
@@ -18,10 +18,10 @@ platform() {
     *) echo linux-x86_64 ;;
   esac
 }
-: "${PP_DIST:=$PP_ROOT/dist/$(platform)}"
+: "${TP_DIST:=$TP_ROOT/dist/$(platform)}"
 
 if [ ! -x "$HERE/jit" ] || [ "$HERE/jit.c" -nt "$HERE/jit" ]; then
-  PP_ROOT="$PP_ROOT" PP_DIST="$PP_DIST" bash "$HERE/build.sh" || exit 2
+  TP_ROOT="$TP_ROOT" TP_DIST="$TP_DIST" bash "$HERE/build.sh" || exit 2
 fi
 
 if [ "$#" -lt 3 ]; then

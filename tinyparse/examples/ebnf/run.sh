@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # examples/ebnf/run.sh <file.ebnf>
 #
-# Convert an EBNF grammar into a pocketparse .scm grammar. It prints the .scm to
+# Convert an EBNF grammar into a tinyparse .scm grammar. It prints the .scm to
 # stdout AND writes a copy to examples/uri/uri.scm, so the URI example downstream
 # consumes a freshly generated grammar.
 #

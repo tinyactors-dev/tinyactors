@@ -1,6 +1,6 @@
 # A deliberately malformed if clause: `if cmd; fi` has no `then`. The grammar
 # rejects it rather than recovering.
 <<<cmd
-printf 'if cmd; fi\n' | "$PP" run std.shell --input -
+printf 'if cmd; fi\n' | "$TP" run std.shell --input -
 <<<assert
 exit-not 0

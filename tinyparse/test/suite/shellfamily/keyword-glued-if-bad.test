@@ -3,6 +3,6 @@
 # `ifx; then a; fi` is NOT an if clause — the delimited `If` token refuses to
 # match `if` as a prefix of `ifx`, and the input is a syntax error.
 <<<cmd
-printf 'ifx; then a; fi\n' | "$PP" run std.shell --input -
+printf 'ifx; then a; fi\n' | "$TP" run std.shell --input -
 <<<assert
 exit-not 0

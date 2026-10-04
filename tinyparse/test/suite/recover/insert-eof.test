@@ -1,5 +1,5 @@
 <<<cmd
-printf '(a (b c)' | "$PP" run examples/recover/list.scm --input - --dump-tree
+printf '(a (b c)' | "$TP" run examples/recover/list.scm --input - --dump-tree
 <<<assert
 exit 1
 out-contains MISSING

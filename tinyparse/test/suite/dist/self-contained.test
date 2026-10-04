@@ -2,19 +2,19 @@
 # static library's only undefined references are the freestanding C memory
 # primitives a compiler may emit (memcpy/memset/memmove/memcmp): no allocator,
 # no I/O, no actor runtime. Neither the archive nor the CLI defines a symbol of
-# the actor runtime pocketparse was born in (an `ax_` prefix).
+# the actor runtime tinyparse was born in (an `ax_` prefix).
 <<<cmd
 set -e
 d=dist/linux-x86_64
-test -f "$d/libpocketparse.a"
+test -f "$d/libtinyparse.a"
 test ! -e "$d/libax.a"
 test ! -e "$d/.consumes-ax"
-nm -u "$d/libpocketparse.a" | awk 'NF == 2 { print $2 }' | sort -u > "$d/.undefined"
-nm --defined-only -g "$d/libpocketparse.a" | awk 'NF == 3 { print $3 }' | sort -u > "$d/.defined"
+nm -u "$d/libtinyparse.a" | awk 'NF == 2 { print $2 }' | sort -u > "$d/.undefined"
+nm --defined-only -g "$d/libtinyparse.a" | awk 'NF == 3 { print $3 }' | sort -u > "$d/.defined"
 extra="$(comm -23 "$d/.undefined" "$d/.defined" | grep -vxE 'memcpy|memset|memmove|memcmp' || true)"
 rm -f "$d/.undefined" "$d/.defined"
 test -z "$extra" || { echo "unexpected undefined symbols: $extra"; exit 1; }
-nm "$d/libpocketparse.a" "$d/pocketparse" 2>/dev/null | grep -qE ' [A-Za-z] ax_' && exit 1
+nm "$d/libtinyparse.a" "$d/tinyparse" 2>/dev/null | grep -qE ' [A-Za-z] ax_' && exit 1
 exit 0
 <<<assert
 exit 0

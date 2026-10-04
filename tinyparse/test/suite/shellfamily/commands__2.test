@@ -2,7 +2,7 @@
 # continuation. Three command lines, each a SimpleCommand; the last keeps its
 # continued word as a single argument across the escaped newline.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/commands__2.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/commands__2.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

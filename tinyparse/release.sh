@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# release.sh — assemble the pocketparse release artifacts into dist/release/.
+# release.sh — assemble the tinyparse release artifacts into dist/release/.
 #
 # It produces the three deliverables described in docs/distribution.md:
 #
-#   pocketparse-$V-linux-x86_64.tar.gz   prefix tree (bin/lib/include/share)
-#   pocketparse-$V-macos-arm64.tar.gz    prefix tree (bin/lib/include/share)
-#   pocketparse-$V-amalgamation.tar.gz   the single-file distribution
+#   tinyparse-$V-linux-x86_64.tar.gz   prefix tree (bin/lib/include/share)
+#   tinyparse-$V-macos-arm64.tar.gz    prefix tree (bin/lib/include/share)
+#   tinyparse-$V-amalgamation.tar.gz   the single-file distribution
 #
 # Subcommands:
 #   tarballs   build the dist matrix, then stage and tar all artifacts (default)
@@ -21,9 +21,9 @@ RELEASE="$DIST/release"
 
 V="$(cat "$HERE/VERSION")"
 
-log()  { printf '[pp-release] %s\n' "$*" >&2; }
-warn() { printf '[pp-release] WARNING: %s\n' "$*" >&2; }
-die()  { printf '[pp-release] ERROR: %s\n' "$*" >&2; exit 1; }
+log()  { printf '[tp-release] %s\n' "$*" >&2; }
+warn() { printf '[tp-release] WARNING: %s\n' "$*" >&2; }
+die()  { printf '[tp-release] ERROR: %s\n' "$*" >&2; exit 1; }
 
 shared_ext() { case "$1" in macos-arm64) echo dylib ;; *) echo so ;; esac; }
 
@@ -36,10 +36,10 @@ stage_platform() {
   local plat="$1"
   local ext; ext="$(shared_ext "$plat")"
   local src="$DIST/$plat"
-  local name="pocketparse-$V-$plat"
+  local name="tinyparse-$V-$plat"
 
-  if [ ! -f "$src/pocketparse" ]; then
-    warn "no CLI for $plat at $src/pocketparse; skipping its tarball"
+  if [ ! -f "$src/tinyparse" ]; then
+    warn "no CLI for $plat at $src/tinyparse; skipping its tarball"
     return 0
   fi
 
@@ -47,27 +47,27 @@ stage_platform() {
   local root="$stage/$name"
   mkdir -p "$root/bin" "$root/lib" "$root/include" "$root/share/man/man1"
 
-  install -m 0755 "$src/pocketparse" "$root/bin/pocketparse"
+  install -m 0755 "$src/tinyparse" "$root/bin/tinyparse"
 
-  if [ -f "$src/libpocketparse.a" ]; then
-    install -m 0644 "$src/libpocketparse.a" "$root/lib/libpocketparse.a"
+  if [ -f "$src/libtinyparse.a" ]; then
+    install -m 0644 "$src/libtinyparse.a" "$root/lib/libtinyparse.a"
   else
-    warn "$plat: libpocketparse.a missing"
+    warn "$plat: libtinyparse.a missing"
   fi
-  if [ -f "$src/libpocketparse.$ext" ]; then
-    install -m 0644 "$src/libpocketparse.$ext" "$root/lib/libpocketparse.$ext"
+  if [ -f "$src/libtinyparse.$ext" ]; then
+    install -m 0644 "$src/libtinyparse.$ext" "$root/lib/libtinyparse.$ext"
   else
-    warn "$plat: libpocketparse.$ext missing"
+    warn "$plat: libtinyparse.$ext missing"
   fi
-  if [ -f "$src/pocketparse.h" ]; then
-    install -m 0644 "$src/pocketparse.h" "$root/include/pocketparse.h"
+  if [ -f "$src/tinyparse.h" ]; then
+    install -m 0644 "$src/tinyparse.h" "$root/include/tinyparse.h"
   else
-    warn "$plat: pocketparse.h missing"
+    warn "$plat: tinyparse.h missing"
   fi
-  if [ -f "$HERE/pocketparse.1" ]; then
-    install -m 0644 "$HERE/pocketparse.1" "$root/share/man/man1/pocketparse.1"
+  if [ -f "$HERE/tinyparse.1" ]; then
+    install -m 0644 "$HERE/tinyparse.1" "$root/share/man/man1/tinyparse.1"
   else
-    warn "$plat: pocketparse.1 missing"
+    warn "$plat: tinyparse.1 missing"
   fi
 
   write_install_note "$root/INSTALL.md" "$plat"
@@ -89,7 +89,7 @@ write_install_note() {
     sed -e "s/@VERSION@/$V/g" -e "s/@PLATFORM@/$plat/g" "$HERE/INSTALL.md" > "$out"
   else
     cat > "$out" <<EOF
-# pocketparse $V — $plat
+# tinyparse $V — $plat
 
 Install into a prefix by copying the tree:
 
@@ -108,22 +108,22 @@ EOF
 # stage_amalgamation: build the single-file distribution and tar it.
 # ---------------------------------------------------------------------------
 stage_amalgamation() {
-  local name="pocketparse-$V-amalgamation"
+  local name="tinyparse-$V-amalgamation"
   local amalg="$DIST/amalgamation"
 
   bash "$HERE/amalgamate.sh" || die "amalgamate.sh failed"
 
   local f
-  for f in pocketparse.c pocketparse.h pocketparse_cli.c README.md; do
+  for f in tinyparse.c tinyparse.h tinyparse_cli.c README.md; do
     [ -f "$amalg/$f" ] || die "amalgamation missing $f"
   done
 
   local stage; stage="$(mktemp -d)"
   local root="$stage/$name"
   mkdir -p "$root"
-  install -m 0644 "$amalg/pocketparse.c"     "$root/pocketparse.c"
-  install -m 0644 "$amalg/pocketparse.h"     "$root/pocketparse.h"
-  install -m 0644 "$amalg/pocketparse_cli.c" "$root/pocketparse_cli.c"
+  install -m 0644 "$amalg/tinyparse.c"     "$root/tinyparse.c"
+  install -m 0644 "$amalg/tinyparse.h"     "$root/tinyparse.h"
+  install -m 0644 "$amalg/tinyparse_cli.c" "$root/tinyparse_cli.c"
   install -m 0644 "$amalg/README.md"         "$root/README.md"
 
   ( cd "$stage" && tar czf "$RELEASE/$name.tar.gz" "$name" ) \
@@ -135,7 +135,7 @@ stage_amalgamation() {
 cmd_tarballs() {
   mkdir -p "$RELEASE"
 
-  # Ensure the dist matrix (and pocketparse.1) is built.
+  # Ensure the dist matrix (and tinyparse.1) is built.
   log "building dist matrix via build.sh dist"
   ( cd "$HERE" && bash build.sh dist ) 2>&1 | sed 's/^/  /'
 

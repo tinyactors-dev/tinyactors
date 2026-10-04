@@ -1,12 +1,12 @@
 // tsc_bench.mjs -- parse-only benchmark of the TypeScript compiler's parser
 // (the canonical hand-written recursive-descent TS parser) over the React
-// corpus, the exact same byte set ci/pocketparse-react-bench.sh uses.
+// corpus, the exact same byte set ci/tinyparse-react-bench.sh uses.
 //
 // We call ts.createSourceFile(name, text, ScriptTarget.Latest,
 // /*setParentNodes*/ false, ScriptKind.TSX) -- parse only. No Program is
 // created, so no type-checker, no module resolution, no binder beyond what the
 // parser itself does. This isolates parse time, matching the tsgo and
-// pocketparse "parse-to-discard" measurements.
+// tinyparse "parse-to-discard" measurements.
 //
 // Usage:  node tsc_bench.mjs MANIFEST ITERS
 // Reads typescript from ./tsbench/node_modules (installed by the orchestrator).

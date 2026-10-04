@@ -1,5 +1,5 @@
 <<<cmd
-printf '{"a":1 // note\n}' | "$PP" run std.jsonc --input -
+printf '{"a":1 // note\n}' | "$TP" run std.jsonc --input -
 <<<assert
 exit 0
 out-absent ERROR

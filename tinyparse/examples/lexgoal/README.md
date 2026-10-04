@@ -6,7 +6,7 @@ canonical case is JavaScript's `/`: at the start of an expression it opens a
 operator** (`c / d`). The same byte is two different tokens, and no ordering of
 grammar rules settles which — the *scanner* has to ask the parser.
 
-`pocketparse` answers with **lexical goals**. A goal is a named lexing mode; a
+`tinyparse` answers with **lexical goals**. A goal is a named lexing mode; a
 rule selects one while it matches, and the scanner consults the active goal when
 it meets an ambiguous lexeme.
 
@@ -43,7 +43,7 @@ becomes `Div`.
 
 ```sh
 printf 'a = /ab/ ; b = c / d ;' \
-  | pocketparse run examples/lexgoal/mini-js.scm --input - --dump-tree
+  | tinyparse run examples/lexgoal/mini-js.scm --input - --dump-tree
 ```
 
 The first statement reads its right-hand side in the `expr` goal, so `/ab/` is a
@@ -78,9 +78,9 @@ Source
 - A grammar that names no `(lex-goal …)` form has an empty goal table and behaves
   exactly as before; the active goal starts unset and the redirect lookup is a
   no-op, so the hot path pays nothing.
-- Lexical goals round-trip through the binary grammar format: `pocketparse pack
-  mini-js.scm --out mini-js.ppg` then `run mini-js.ppg` parses identically. The
-  goal table is a gated trailing section of the `.ppg` image, so images written
+- Lexical goals round-trip through the binary grammar format: `tinyparse pack
+  mini-js.scm --out mini-js.tpg` then `run mini-js.tpg` parses identically. The
+  goal table is a gated trailing section of the `.tpg` image, so images written
   by grammars without goals stay byte-for-byte compatible.
 - The intermediate representation carries a full table of `(goal, trigger →
   target)` redirects, so although this grammar uses two goals the design admits

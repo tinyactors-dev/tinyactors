@@ -1,7 +1,7 @@
 # A simple command of two bare words parses cleanly into a SimpleCommand with a
 # name and one argument. No ERROR, no MISSING recovery nodes.
 <<<cmd
-printf 'echo hi\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo hi\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

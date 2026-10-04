@@ -1,6 +1,6 @@
 # jit — a native-codegen JIT for a sane C subset
 
-This example parses a small subset of C with `pocketparse` and emits native
+This example parses a small subset of C with `tinyparse` and emits native
 x86-64 machine code by recursing directly over the concrete syntax tree through
 the cursor API. There is no intermediate AST: the one tree walk is also the code
 emitter. The bytes land in a W^X page, and the page is called.
@@ -29,14 +29,14 @@ Precedence is encoded by layered rules: `Ternary` over `Relational` over
 `Additive` over `Multiplicative` over `Unary` over `Primary`, so the parser
 needs no precedence-climbing machinery. Left-associative chains are written as a
 head `lhs` followed by `(repeat (op rhs))`, and the emitter folds them
-left-to-right. The grammar uses only the V1 forms `pocketparse` ships:
+left-to-right. The grammar uses only the V1 forms `tinyparse` ships:
 `token`/`regex`, `seq`, `choice`, `repeat`, `optional`, and `field`.
 
 ## Codegen straight off the cursor
 
 The driver opens an engine, compiles `jit.scm`, parses the source string in one
 `push` + `finish`, and emits machine code by walking the resulting tree
-**entirely through the cursor API** (`pocketparse_tree_cursor_*`). There is no
+**entirely through the cursor API** (`tinyparse_tree_cursor_*`). There is no
 lowering step and no node tree of its own. `emit_expr(tree, cursor)` is the whole
 codegen: it reads the node under the cursor and emits inline.
 
@@ -102,6 +102,6 @@ afterward.
 
 - `jit.scm` — the C-subset grammar.
 - `jit.c` — the JIT driver (parse → emit off the cursor → run).
-- `build.sh` — compiles `jit.c` against `$PP_DIST/libpocketparse.a`,
-  including `$PP_DIST/pocketparse.h`.
+- `build.sh` — compiles `jit.c` against `$TP_DIST/libtinyparse.a`,
+  including `$TP_DIST/tinyparse.h`.
 - `run.sh` — build-if-needed, JIT, run.

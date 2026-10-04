@@ -1,27 +1,27 @@
 /*
 ** emit.c -- the optional C emitter: turn a compiled grammar into C source.
 **
-** pocketparse can hand a host a parser as generated C rather than as a runtime
+** tinyparse can hand a host a parser as generated C rather than as a runtime
 ** call. This module builds that C *text* and nothing else: it serializes the
-** compiled grammar with pocketparse_grammar_serialize, then writes a C source
+** compiled grammar with tinyparse_grammar_serialize, then writes a C source
 ** file that embeds those packed bytes as a `static const unsigned char[]`. No
 ** IO happens here -- cli.c, the one hosted file, writes the returned bytes to
 ** disk. Like the rest of src/ except cli.c, this file is freestanding: it
-** depends only on internal.h (and through it pocketparse.h), never on
+** depends only on internal.h (and through it tinyparse.h), never on
 ** libc, and every byte it produces is carved from the engine arena.
 **
 ** Two shapes come out, selected by a flag:
 **
 **   module mode (default)
 **     A reusable translation unit: the embedded packed grammar plus a small
-**     documented accessor that hands the bytes back as a pocketparse_string, so
-**     a host can pocketparse_load_binary_grammar() it and link libpocketparse.
+**     documented accessor that hands the bytes back as a tinyparse_string, so
+**     a host can tinyparse_load_binary_grammar() it and link libtinyparse.
 **
-**   bundle mode (POCKETPARSE_EMIT_BUNDLE)
+**   bundle mode (TINYPARSE_EMIT_BUNDLE)
 **     A self-contained program: the same embedded bytes plus a main() that opens
 **     an engine over a static memory grant, loads the binary grammar, reads all
 **     of stdin, pushes/finishes, and prints a pre-order dump of the CST using
-**     only the public cursor API. Linked with libpocketparse it is a
+**     only the public cursor API. Linked with libtinyparse it is a
 **     working standalone parser for that grammar.
 **
 ** The text is assembled in two passes, exactly like pack.c's serializer: a
@@ -34,13 +34,13 @@
 /* ** A text cursor mirroring pack.c's byte cursor. When `bytes` is NULL the
 ** writer only advances `length` (the measuring pass); when it points at a real
 ** buffer the writer fills it. There is no read side -- emission is write-only. */
-typedef struct pp_emit_cursor {
+typedef struct tp_emit_cursor {
     char    *bytes;
     uint32_t length;
-} pp_emit_cursor;
+} tp_emit_cursor;
 
 /* ** Append one byte, or just count it during the measuring pass. */
-static void pp_emit_byte(pp_emit_cursor *cursor, char value)
+static void tp_emit_byte(tp_emit_cursor *cursor, char value)
 {
     if (cursor->bytes != 0)
         cursor->bytes[cursor->length] = value;
@@ -48,20 +48,20 @@ static void pp_emit_byte(pp_emit_cursor *cursor, char value)
 }
 
 /* ** Append a NUL-terminated C literal (the NUL itself is not written). */
-static void pp_emit_text(pp_emit_cursor *cursor, const char *text)
+static void tp_emit_text(tp_emit_cursor *cursor, const char *text)
 {
     while (*text != '\0')
-        pp_emit_byte(cursor, *text++);
+        tp_emit_byte(cursor, *text++);
 }
 
 /* ** Append a non-negative integer in decimal. */
-static void pp_emit_u32(pp_emit_cursor *cursor, uint32_t value)
+static void tp_emit_u32(tp_emit_cursor *cursor, uint32_t value)
 {
     char     digits[10];
     uint32_t count = 0;
 
     if (value == 0) {
-        pp_emit_byte(cursor, '0');
+        tp_emit_byte(cursor, '0');
         return;
     }
     while (value > 0 && count < sizeof digits) {
@@ -69,172 +69,172 @@ static void pp_emit_u32(pp_emit_cursor *cursor, uint32_t value)
         value /= 10u;
     }
     while (count > 0)
-        pp_emit_byte(cursor, digits[--count]);
+        tp_emit_byte(cursor, digits[--count]);
 }
 
 /* ** Append a length-prefixed slice verbatim. Used for the grammar source name
 ** so the generated file's banner says which grammar it came from. Bytes that
 ** would break a C line comment (newlines) are folded to spaces. */
-static void pp_emit_slice(pp_emit_cursor *cursor, pocketparse_string slice)
+static void tp_emit_slice(tp_emit_cursor *cursor, tinyparse_string slice)
 {
     uint32_t i;
     for (i = 0; i < slice.length; i++) {
         char c = (char)slice.pointer[i];
-        pp_emit_byte(cursor, (c == '\n' || c == '\r') ? ' ' : c);
+        tp_emit_byte(cursor, (c == '\n' || c == '\r') ? ' ' : c);
     }
 }
 
 /* ** Append the packed grammar bytes as a C array body: comma-separated decimal
 ** byte values, wrapped to a readable width. The surrounding declaration is
 ** emitted by the caller; this writes only the initializer elements. */
-static void pp_emit_byte_array(pp_emit_cursor *cursor, pocketparse_string bytes)
+static void tp_emit_byte_array(tp_emit_cursor *cursor, tinyparse_string bytes)
 {
     uint32_t i;
     for (i = 0; i < bytes.length; i++) {
         if (i % 16u == 0u)
-            pp_emit_text(cursor, "\n    ");
-        pp_emit_u32(cursor, bytes.pointer[i]);
-        pp_emit_byte(cursor, ',');
+            tp_emit_text(cursor, "\n    ");
+        tp_emit_u32(cursor, bytes.pointer[i]);
+        tp_emit_byte(cursor, ',');
     }
-    pp_emit_byte(cursor, '\n');
+    tp_emit_byte(cursor, '\n');
 }
 
 /* ** Emit the shared head of every generated file: a banner naming the source
 ** grammar and the start rule, the embedded packed-grammar array, and an
-** accessor returning those bytes as a pocketparse_string. Both modes build on
+** accessor returning those bytes as a tinyparse_string. Both modes build on
 ** this; bundle mode adds a main() afterward. start_name is the start rule's
 ** printable name (possibly empty), used only in the banner. */
-static void pp_emit_common(pp_emit_cursor *cursor,
-                           pocketparse_string source_name,
-                           pocketparse_string start_name,
-                           pocketparse_string packed,
+static void tp_emit_common(tp_emit_cursor *cursor,
+                           tinyparse_string source_name,
+                           tinyparse_string start_name,
+                           tinyparse_string packed,
                            int bundle)
 {
-    pp_emit_text(cursor,
+    tp_emit_text(cursor,
         "/*\n"
-        "** Generated by pocketparse -- do not edit.\n"
+        "** Generated by tinyparse -- do not edit.\n"
         "**\n"
         "** Source grammar: ");
-    pp_emit_slice(cursor, source_name);
-    pp_emit_text(cursor, "\n** Start rule:     ");
-    pp_emit_slice(cursor, start_name);
-    pp_emit_text(cursor, "\n**\n");
+    tp_emit_slice(cursor, source_name);
+    tp_emit_text(cursor, "\n** Start rule:     ");
+    tp_emit_slice(cursor, start_name);
+    tp_emit_text(cursor, "\n**\n");
 
     if (bundle) {
-        pp_emit_text(cursor,
+        tp_emit_text(cursor,
             "** Bundle mode: a self-contained parser program. Build it with:\n"
             "**\n"
-            "**   cc -std=c11 -O2 this.c -lpocketparse -lax -o parser\n"
+            "**   cc -std=c11 -O2 this.c -ltinyparse -lax -o parser\n"
             "**\n"
             "** then feed input on stdin; it prints a pre-order dump of the CST,\n"
             "** one node kind per line, indented by depth.\n"
             "*/\n");
     } else {
-        pp_emit_text(cursor,
+        tp_emit_text(cursor,
             "** Module mode: embeds the packed grammar plus an accessor. Load it\n"
-            "** at runtime and link against libpocketparse:\n"
+            "** at runtime and link against libtinyparse:\n"
             "**\n"
-            "**   pocketparse_source s;\n"
-            "**   s.name  = (pocketparse_string){0};\n"
-            "**   s.bytes = pocketparse_embedded_grammar();\n"
-            "**   pocketparse_load_binary_grammar(engine, s, &grammar);\n"
+            "**   tinyparse_source s;\n"
+            "**   s.name  = (tinyparse_string){0};\n"
+            "**   s.bytes = tinyparse_embedded_grammar();\n"
+            "**   tinyparse_load_binary_grammar(engine, s, &grammar);\n"
             "*/\n");
     }
 
-    pp_emit_text(cursor, "#include \"pocketparse.h\"\n\n");
+    tp_emit_text(cursor, "#include \"tinyparse.h\"\n\n");
 
-    /* The embedded packed grammar: the exact bytes pocketparse pack would
-    ** write, ready for pocketparse_load_binary_grammar. */
-    pp_emit_text(cursor,
+    /* The embedded packed grammar: the exact bytes tinyparse pack would
+    ** write, ready for tinyparse_load_binary_grammar. */
+    tp_emit_text(cursor,
         "/* The packed grammar image, as produced by the binary serializer. */\n"
-        "static const unsigned char pocketparse_grammar_bytes[] = {");
-    pp_emit_byte_array(cursor, packed);
-    pp_emit_text(cursor, "};\n\n");
+        "static const unsigned char tinyparse_grammar_bytes[] = {");
+    tp_emit_byte_array(cursor, packed);
+    tp_emit_text(cursor, "};\n\n");
 
-    /* The accessor: hand the embedded bytes back as a pocketparse_string. */
-    pp_emit_text(cursor,
+    /* The accessor: hand the embedded bytes back as a tinyparse_string. */
+    tp_emit_text(cursor,
         "/* The embedded packed grammar, ready for"
-        " pocketparse_load_binary_grammar. */\n"
-        "pocketparse_string pocketparse_embedded_grammar(void)\n"
+        " tinyparse_load_binary_grammar. */\n"
+        "tinyparse_string tinyparse_embedded_grammar(void)\n"
         "{\n"
-        "    pocketparse_string s;\n"
-        "    s.pointer = pocketparse_grammar_bytes;\n"
-        "    s.length  = (uint32_t)sizeof pocketparse_grammar_bytes;\n"
+        "    tinyparse_string s;\n"
+        "    s.pointer = tinyparse_grammar_bytes;\n"
+        "    s.length  = (uint32_t)sizeof tinyparse_grammar_bytes;\n"
         "    return s;\n"
         "}\n");
 }
 
 /* ** Emit the bundle-mode main(): open an engine over a static grant, load the
 ** embedded grammar, slurp stdin, push/finish, and dump the CST through the
-** public cursor API. Uses only the public pocketparse API plus the three libc
+** public cursor API. Uses only the public tinyparse API plus the three libc
 ** facilities a standalone program needs (stdio for stdin/stdout). This text is
 ** compiled by the *host* of the generated file, not by the freestanding
 ** library, so naming libc here is fine -- emit.c itself stays freestanding. */
-static void pp_emit_bundle_main(pp_emit_cursor *cursor)
+static void tp_emit_bundle_main(tp_emit_cursor *cursor)
 {
-    pp_emit_text(cursor,
+    tp_emit_text(cursor,
         "\n#include <stdio.h>\n"
         "#include <stdlib.h>\n"
         "\n"
         "/* A fixed memory grant for the engine. The packed grammar and a single\n"
         "** stdin parse fit comfortably; the library never allocates outside it. */\n"
-        "#define POCKETPARSE_BUNDLE_GRANT (8u * 1024u * 1024u)\n"
-        "static unsigned char pocketparse_bundle_grant[POCKETPARSE_BUNDLE_GRANT];\n"
+        "#define TINYPARSE_BUNDLE_GRANT (8u * 1024u * 1024u)\n"
+        "static unsigned char tinyparse_bundle_grant[TINYPARSE_BUNDLE_GRANT];\n"
         "\n"
         "/* Pre-order dump of the subtree under the cursor: one node kind per\n"
         "** line, indented two spaces per level of depth. Public cursor API only. */\n"
-        "static void pocketparse_bundle_dump(const pocketparse_tree *tree,\n"
-        "                                    pocketparse_tree_cursor *cursor)\n"
+        "static void tinyparse_bundle_dump(const tinyparse_tree *tree,\n"
+        "                                    tinyparse_tree_cursor *cursor)\n"
         "{\n"
-        "    uint32_t depth = pocketparse_tree_cursor_depth(cursor);\n"
+        "    uint32_t depth = tinyparse_tree_cursor_depth(cursor);\n"
         "    uint32_t i;\n"
-        "    pocketparse_symbol kind = pocketparse_tree_cursor_kind(cursor);\n"
-        "    pocketparse_string name = pocketparse_tree_symbol_name(tree, kind);\n"
+        "    tinyparse_symbol kind = tinyparse_tree_cursor_kind(cursor);\n"
+        "    tinyparse_string name = tinyparse_tree_symbol_name(tree, kind);\n"
         "    for (i = 0; i < depth; i++)\n"
         "        fputs(\"  \", stdout);\n"
         "    printf(\"%.*s\\n\", (int)name.length, (const char *)name.pointer);\n"
-        "    if (pocketparse_tree_cursor_goto_first_child(cursor)) {\n"
+        "    if (tinyparse_tree_cursor_goto_first_child(cursor)) {\n"
         "        do {\n"
-        "            pocketparse_bundle_dump(tree, cursor);\n"
-        "        } while (pocketparse_tree_cursor_goto_next_sibling(cursor));\n"
-        "        pocketparse_tree_cursor_goto_parent(cursor);\n"
+        "            tinyparse_bundle_dump(tree, cursor);\n"
+        "        } while (tinyparse_tree_cursor_goto_next_sibling(cursor));\n"
+        "        tinyparse_tree_cursor_goto_parent(cursor);\n"
         "    }\n"
         "}\n"
         "\n"
         "int main(void)\n"
         "{\n"
-        "    pocketparse_configuration configuration;\n"
-        "    pocketparse_engine  *engine;\n"
-        "    pocketparse_grammar *grammar = NULL;\n"
-        "    pocketparse_parser  *parser  = NULL;\n"
-        "    pocketparse_source   source;\n"
-        "    pocketparse_string   empty;\n"
-        "    pocketparse_result   result;\n"
-        "    const pocketparse_tree  *tree;\n"
-        "    pocketparse_tree_cursor *cursor = NULL;\n"
+        "    tinyparse_configuration configuration;\n"
+        "    tinyparse_engine  *engine;\n"
+        "    tinyparse_grammar *grammar = NULL;\n"
+        "    tinyparse_parser  *parser  = NULL;\n"
+        "    tinyparse_source   source;\n"
+        "    tinyparse_string   empty;\n"
+        "    tinyparse_result   result;\n"
+        "    const tinyparse_tree  *tree;\n"
+        "    tinyparse_tree_cursor *cursor = NULL;\n"
         "    unsigned char *input = NULL;\n"
         "    size_t length = 0, capacity = 0;\n"
         "\n"
         "    /* Open the engine over the static grant. */\n"
-        "    configuration.memory.base          = pocketparse_bundle_grant;\n"
-        "    configuration.memory.size          = POCKETPARSE_BUNDLE_GRANT;\n"
+        "    configuration.memory.base          = tinyparse_bundle_grant;\n"
+        "    configuration.memory.size          = TINYPARSE_BUNDLE_GRANT;\n"
         "    configuration.memory.grow          = NULL;\n"
         "    configuration.memory.user          = NULL;\n"
         "    configuration.memory.chunk_minimum = 0;\n"
         "    configuration.flags                = 0;\n"
-        "    engine = pocketparse_open(configuration);\n"
+        "    engine = tinyparse_open(configuration);\n"
         "    if (engine == NULL) {\n"
-        "        fputs(\"pocketparse: error: out of memory\\n\", stderr);\n"
+        "        fputs(\"tinyparse: error: out of memory\\n\", stderr);\n"
         "        return 1;\n"
         "    }\n"
         "\n"
         "    /* Load the embedded packed grammar. */\n"
-        "    source.name  = pocketparse_embedded_grammar();\n"
+        "    source.name  = tinyparse_embedded_grammar();\n"
         "    source.name.length = 0;\n"
-        "    source.bytes = pocketparse_embedded_grammar();\n"
-        "    if (pocketparse_load_binary_grammar(engine, source, &grammar)\n"
-        "            != POCKETPARSE_OK) {\n"
-        "        pocketparse_string fault = pocketparse_fault(engine);\n"
+        "    source.bytes = tinyparse_embedded_grammar();\n"
+        "    if (tinyparse_load_binary_grammar(engine, source, &grammar)\n"
+        "            != TINYPARSE_OK) {\n"
+        "        tinyparse_string fault = tinyparse_fault(engine);\n"
         "        fprintf(stderr, \"error: %.*s\\n\", (int)fault.length,\n"
         "                (const char *)fault.pointer);\n"
         "        return 1;\n"
@@ -243,9 +243,9 @@ static void pp_emit_bundle_main(pp_emit_cursor *cursor)
         "    /* Start the parser at the grammar's own start rule (empty name). */\n"
         "    empty.pointer = NULL;\n"
         "    empty.length  = 0;\n"
-        "    if (pocketparse_parser_new(engine, grammar, empty, &parser)\n"
-        "            != POCKETPARSE_OK || parser == NULL) {\n"
-        "        pocketparse_string fault = pocketparse_fault(engine);\n"
+        "    if (tinyparse_parser_new(engine, grammar, empty, &parser)\n"
+        "            != TINYPARSE_OK || parser == NULL) {\n"
+        "        tinyparse_string fault = tinyparse_fault(engine);\n"
         "        fprintf(stderr, \"error: %.*s\\n\", (int)fault.length,\n"
         "                (const char *)fault.pointer);\n"
         "        return 1;\n"
@@ -267,21 +267,21 @@ static void pp_emit_bundle_main(pp_emit_cursor *cursor)
         "\n"
         "    /* Push the whole input, then finish. */\n"
         "    {\n"
-        "        pocketparse_string bytes;\n"
+        "        tinyparse_string bytes;\n"
         "        bytes.pointer = input;\n"
         "        bytes.length  = (uint32_t)length;\n"
-        "        pocketparse_push(parser, bytes);\n"
+        "        tinyparse_push(parser, bytes);\n"
         "    }\n"
-        "    result = pocketparse_finish(parser);\n"
-        "    if (result == POCKETPARSE_SYNTAX_ERROR ||\n"
-        "        result == POCKETPARSE_ERROR) {\n"
-        "        uint32_t count = pocketparse_parser_diagnostic_count(parser);\n"
+        "    result = tinyparse_finish(parser);\n"
+        "    if (result == TINYPARSE_SYNTAX_ERROR ||\n"
+        "        result == TINYPARSE_ERROR) {\n"
+        "        uint32_t count = tinyparse_parser_diagnostic_count(parser);\n"
         "        uint32_t d;\n"
         "        if (count == 0)\n"
         "            fputs(\"error: parse failed\\n\", stderr);\n"
         "        for (d = 0; d < count; d++) {\n"
-        "            const pocketparse_diagnostic *diag =\n"
-        "                pocketparse_parser_diagnostic(parser, d);\n"
+        "            const tinyparse_diagnostic *diag =\n"
+        "                tinyparse_parser_diagnostic(parser, d);\n"
         "            if (diag != NULL)\n"
         "                fprintf(stderr, \"%.*s\\n\", (int)diag->message.length,\n"
         "                        (const char *)diag->message.pointer);\n"
@@ -291,11 +291,11 @@ static void pp_emit_bundle_main(pp_emit_cursor *cursor)
         "    }\n"
         "\n"
         "    /* Dump the CST in pre-order through the public cursor API. */\n"
-        "    tree = pocketparse_parser_tree(parser);\n"
+        "    tree = tinyparse_parser_tree(parser);\n"
         "    if (tree != NULL &&\n"
-        "        pocketparse_tree_cursor_new(tree, &cursor) == POCKETPARSE_OK) {\n"
-        "        pocketparse_bundle_dump(tree, cursor);\n"
-        "        pocketparse_tree_cursor_free(cursor);\n"
+        "        tinyparse_tree_cursor_new(tree, &cursor) == TINYPARSE_OK) {\n"
+        "        tinyparse_bundle_dump(tree, cursor);\n"
+        "        tinyparse_tree_cursor_free(cursor);\n"
         "    }\n"
         "    free(input);\n"
         "    return 0;\n"
@@ -306,21 +306,21 @@ static void pp_emit_bundle_main(pp_emit_cursor *cursor)
 ** is built in two passes -- measure with a NULL buffer, then fill a single
 ** arena block of that exact size -- because arenas never realloc. The packed
 ** grammar is serialized once up front and embedded by both passes. With the
-** POCKETPARSE_EMIT_BUNDLE flag the output is a standalone program; without it a
+** TINYPARSE_EMIT_BUNDLE flag the output is a standalone program; without it a
 ** reusable module. The bytes are written into the engine arena and returned
 ** through out_source; the host owns nothing it must free and does the file IO. */
-pocketparse_result pocketparse_emit_c(
-    pocketparse_engine        *engine,
-    const pocketparse_grammar *grammar,
+tinyparse_result tinyparse_emit_c(
+    tinyparse_engine        *engine,
+    const tinyparse_grammar *grammar,
     uint32_t                   flags,
-    pocketparse_string        *out_source)
+    tinyparse_string        *out_source)
 {
-    pp_emit_cursor     measure;
-    pp_emit_cursor     emit;
-    pocketparse_string packed;
-    pocketparse_string source_name;
-    pocketparse_string start_name;
-    pocketparse_result result;
+    tp_emit_cursor     measure;
+    tp_emit_cursor     emit;
+    tinyparse_string packed;
+    tinyparse_string source_name;
+    tinyparse_string start_name;
+    tinyparse_result result;
     char              *buffer;
     int                bundle;
 
@@ -329,49 +329,49 @@ pocketparse_result pocketparse_emit_c(
         out_source->length  = 0;
     }
     if (engine == 0 || grammar == 0 || out_source == 0)
-        return POCKETPARSE_INVALID;
+        return TINYPARSE_INVALID;
 
     /* W14-3: compiled-parser mode is a distinct backend (emitparser.c) -- an
     ** explicit-stack parser with the grammar baked in, byte-identical to the VM. */
-    if ((flags & POCKETPARSE_EMIT_PARSER) != 0)
-        return pp_emit_parser(engine, grammar,
-                              (flags & POCKETPARSE_EMIT_PARSER_LIB) != 0,
+    if ((flags & TINYPARSE_EMIT_PARSER) != 0)
+        return tp_emit_parser(engine, grammar,
+                              (flags & TINYPARSE_EMIT_PARSER_LIB) != 0,
                               out_source);
 
-    bundle = (flags & POCKETPARSE_EMIT_BUNDLE) != 0;
+    bundle = (flags & TINYPARSE_EMIT_BUNDLE) != 0;
 
-    /* The embedded image is the same bytes `pocketparse pack` would write. */
-    result = pocketparse_grammar_serialize(grammar, &packed);
-    if (result != POCKETPARSE_OK)
+    /* The embedded image is the same bytes `tinyparse pack` would write. */
+    result = tinyparse_grammar_serialize(grammar, &packed);
+    if (result != TINYPARSE_OK)
         return result;
 
     /* The banner reports the grammar's name (here just "grammar") and the start
     ** rule's printable name, looked up through the shared interner. */
-    source_name = pp_text("grammar");
-    if (grammar->start_symbol == PP_NO_SYMBOL)
-        start_name = pp_text("");
+    source_name = tp_text("grammar");
+    if (grammar->start_symbol == TP_NO_SYMBOL)
+        start_name = tp_text("");
     else
-        start_name = pp_intern_name(&grammar->interner, grammar->start_symbol);
+        start_name = tp_intern_name(&grammar->interner, grammar->start_symbol);
 
     /* Pass one: measure. */
     measure.bytes  = 0;
     measure.length = 0;
-    pp_emit_common(&measure, source_name, start_name, packed, bundle);
+    tp_emit_common(&measure, source_name, start_name, packed, bundle);
     if (bundle)
-        pp_emit_bundle_main(&measure);
+        tp_emit_bundle_main(&measure);
 
-    buffer = (char *)pp_alloc(grammar->arena, measure.length);
+    buffer = (char *)tp_alloc(grammar->arena, measure.length);
     if (buffer == 0)
-        return POCKETPARSE_OUT_OF_MEMORY;
+        return TINYPARSE_OUT_OF_MEMORY;
 
     /* Pass two: emit into the sized buffer along an identical path. */
     emit.bytes  = buffer;
     emit.length = 0;
-    pp_emit_common(&emit, source_name, start_name, packed, bundle);
+    tp_emit_common(&emit, source_name, start_name, packed, bundle);
     if (bundle)
-        pp_emit_bundle_main(&emit);
+        tp_emit_bundle_main(&emit);
 
     out_source->pointer = (const uint8_t *)buffer;
     out_source->length  = emit.length;
-    return POCKETPARSE_OK;
+    return TINYPARSE_OK;
 }

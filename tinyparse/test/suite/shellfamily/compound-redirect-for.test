@@ -1,7 +1,7 @@
 # A redirect on a for clause: `for i in x; do a; done >out`. The Redirect
 # attaches to the CompoundCommand, after the ForClause.
 <<<cmd
-printf 'for i in x; do a; done >out\n' | "$PP" run std.shell --input - --dump-tree
+printf 'for i in x; do a; done >out\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -1,12 +1,12 @@
-# pocketparse — build plan and supervised loop
+# tinyparse — build plan and supervised loop
 
-This document is the **durable, resumable schedule** for building `pocketparse`.
+This document is the **durable, resumable schedule** for building `tinyparse`.
 A fresh session (or a summarized context) resumes from here. The canonical
-design is [`../pocketparse-design.md`](../pocketparse-design.md); the
+design is [`../tinyparse-design.md`](../tinyparse-design.md); the
 architecture is [`architecture.md`](architecture.md).
 
 All work lands **directly on `main`**, one commit per workstream, named by its
-workstream id (e.g. `pocketparse W4: .scm reader`). Every committed turn is
+workstream id (e.g. `tinyparse W4: .scm reader`). Every committed turn is
 pushed to `origin/main` by the `push-main.sh` Stop hook.
 
 ## The finish line is a program
@@ -20,7 +20,7 @@ The finish line is a **data-driven, ratcheting test harness**:
 - `test/xfail.list` is the **ratchet ledger**: every test currently allowed to
   fail. We seed the suite with *every intended behaviour* up front, all listed
   in `xfail.list`, so the suite starts at `PROGRESS=0/n` and red.
-- `ci/pocketparse-metric.sh` builds everything, runs the harness, and prints
+- `ci/tinyparse-metric.sh` builds everything, runs the harness, and prints
   `PROGRESS=k/n`. It exits `0` **only** when `k == n` and `xfail.list` is
   empty. The number only goes up; a drop is a regression.
 
@@ -30,35 +30,35 @@ from `xfail.list` — verified by re-running the metric, not by an agent's claim
 Run the metric:
 
 ```sh
-bash ci/pocketparse-metric.sh            # structural + harness, fast
-RUN_GATE=1 bash ci/pocketparse-metric.sh # also build cross-dist + run examples
+bash ci/tinyparse-metric.sh            # structural + harness, fast
+RUN_GATE=1 bash ci/tinyparse-metric.sh # also build cross-dist + run examples
 ```
 
-Arm the autonomous loop with a prompt containing `pocketparse-run`; stop it with
-`pocketparse-halt`.
+Arm the autonomous loop with a prompt containing `tinyparse-run`; stop it with
+`tinyparse-halt`.
 
 ## Toolchain
 
-`pocketparse` builds with **Zig 0.15.1** (`zig cc` / `zig ar`), pinned in
+`tinyparse` builds with **Zig 0.15.1** (`zig cc` / `zig ar`), pinned in
 [`../mise.toml`](../mise.toml) — independent of the repo's 0.16 freestanding
-toolchain. `scripts/pocketparse-setup.sh` (SessionStart) provisions it. The
+toolchain. `scripts/tinyparse-setup.sh` (SessionStart) provisions it. The
 portable build engine is [`../build.sh`](../build.sh); the `mise` tasks wrap it.
 
-`pocketparse` **consumes the release artifacts in `dist/`**: it links the
+`tinyparse` **consumes the release artifacts in `dist/`**: it links the
 prebuilt `dist/<platform>/libax.a` and `#include`s `dist/<platform>/ax.h`
 rather than recompiling `ax`. `build.sh` populates `dist/` (via the repo's
 `make libs` / `ci/zig-build.sh`) if it is empty.
 
 ## Deliverables (the contract)
 
-- `tools/pocketparse/dist/<platform>/` ships `libpocketparse.{a,so}` for
-  `linux-x86_64`, `libpocketparse.{a,dylib}` for `macos-arm64`, and the
-  `pocketparse` CLI per platform.
+- `tools/tinyparse/dist/<platform>/` ships `libtinyparse.{a,so}` for
+  `linux-x86_64`, `libtinyparse.{a,dylib}` for `macos-arm64`, and the
+  `tinyparse` CLI per platform.
 - The CLI links the prebuilt `dist/<platform>/libax.a`.
 - Zig 0.15.1 compiler, `mise.toml` for deps + tasks.
 - Regular C, **not** literate C.
 - Design + architecture documented under `docs/`.
-- An embedded manpage (`pocketparse man`), in the spirit of `mdc`.
+- An embedded manpage (`tinyparse man`), in the spirit of `mdc`.
 - `examples/`: TCL parser (pathological `echo {*}"a b"${c}d[expr {1+1}]`),
   a native-codegen JIT for a sane C subset (x86-64 Linux, aarch64 macOS, WASM
   bonus), a C `#define`→`enum` rewriter, and an EBNF→`.scm`→generated-`.c`
@@ -67,7 +67,7 @@ rather than recompiling `ax`. `build.sh` populates `dist/` (via the repo's
 ## Status
 
 **Phases 0–5 are complete and the metric is GREEN (`PROGRESS=47/47`, empty
-ledger before Phase 6 seeding).** The freestanding `libpocketparse` (`.scm` reader → grammar IR →
+ledger before Phase 6 seeding).** The freestanding `libtinyparse` (`.scm` reader → grammar IR →
 token/lexical engine → streaming parse → contiguous CST + cursors →
 diagnostics), the CLI with an embedded manpage, the Zig 0.15.1 cross-`dist`
 matrix, all four examples, binary `pack`/`load`, the C emitter, the recovery
@@ -84,12 +84,12 @@ included; one deliberately-malformed corpus case is asserted rejected),
 **`std.typescript` + `std.tsx` 112/112**. The ports needed three engine
 primitives — `(reserved …)`, `extras: none/all`, and `\xHH` byte classes —
 all documented in the design. Phase 9 benchmarked `std.javascript` against
-tree-sitter (`ci/pocketparse-bench.sh`); the honest result is in the README's
+tree-sitter (`ci/tinyparse-bench.sh`); the honest result is in the README's
 *Compared to tree-sitter* section: tree-sitter is ~45× faster, the structural
 cost of pre-generated GLR tables versus runtime grammar execution. W39 (JSX)
 folded into W38, since tree-sitter-javascript carries JSX.
 
-The design is in [`../pocketparse-design.md`](../pocketparse-design.md) under
+The design is in [`../tinyparse-design.md`](../tinyparse-design.md) under
 *Grammar packages*, *Grammar composition*, *Queries as parsers over linearized
 trees*, *Embedding without a runtime dependency*, and *Seeding a project*.
 
@@ -102,13 +102,13 @@ Legend: ✅ done.
 - ✅ **W0** scaffold: dirs, `mise.toml`, `build.sh`, `README.md`, docs skeleton,
   `.gitignore`.
 - ✅ **W1** finish line: `test/harness.c`, the `.test` format, the seeded suite,
-  `test/xfail.list`, `ci/pocketparse-metric.sh`, the SessionStart setup and the
+  `test/xfail.list`, `ci/tinyparse-metric.sh`, the SessionStart setup and the
   Stop/arm loop hooks.
 
 ### Phase 1 — core library (the floor)
 
-- ✅ **W2** public header `include/pocketparse.h` (design API → regular C).
-- ✅ **W3** memory/arena + `pocketparse_string` utilities over the host grant
+- ✅ **W2** public header `include/tinyparse.h` (design API → regular C).
+- ✅ **W3** memory/arena + `tinyparse_string` utilities over the host grant
   (reusing `ax` arenas from `dist` `libax.a`).
 - ✅ **W4** `.scm` reader (lists, symbols, `keyword:`, strings, integers,
   byte/hex, line comments).
@@ -123,10 +123,10 @@ Legend: ✅ done.
 ### Phase 2 — CLI + packaging
 
 - ✅ **W9** CLI: `check`, `run --input --dump-tree`, exit codes, diagnostics
-  rendering; links `libpocketparse` + `dist` `libax`.
-- ✅ **W10** manpage `pocketparse.1.md` + embed (generated C array) + `man`
+  rendering; links `libtinyparse` + `dist` `libax`.
+- ✅ **W10** manpage `tinyparse.1.md` + embed (generated C array) + `man`
   subcommand.
-- ✅ **W11** `dist` cross-build with Zig 0.15.1: `libpocketparse.{a,so}`
+- ✅ **W11** `dist` cross-build with Zig 0.15.1: `libtinyparse.{a,so}`
   (linux-x86_64), `{a,dylib}` (macos-arm64), CLI per platform; consume `dist`
   `libax`. `mise` tasks.
 - ✅ **W12** docs: `architecture.md`, `grammar.md`, `cli.md`.
@@ -146,10 +146,10 @@ Introduced in tranches and ratcheted to zero, same as before.
 
 Tranche 1 (CLI-testable, self-contained):
 
-- ✅ **W21** binary grammar `pack` + `load_binary_grammar`: `pocketparse pack
-  g.scm --out g.ppg`; `run` auto-detects a `.ppg` and parses identically.
-- ✅ **W22** C emitter: `pocketparse c g.scm --out g.c [--bundle]`; the bundle is a
-  standalone parser program linking `libpocketparse`.
+- ✅ **W21** binary grammar `pack` + `load_binary_grammar`: `tinyparse pack
+  g.scm --out g.tpg`; `run` auto-detects a `.tpg` and parses identically.
+- ✅ **W22** C emitter: `tinyparse c g.scm --out g.c [--bundle]`; the bundle is a
+  standalone parser program linking `libtinyparse`.
 - ✅ **W23** recovery DSL: `(recover … (on eof … insert: …))` — a malformed parse
   yields a MISSING/error node plus a diagnostic instead of aborting.
 - ✅ **W24** module import: `(import name)` resolved by the CLI from the grammar's
@@ -157,9 +157,9 @@ Tranche 1 (CLI-testable, self-contained):
 
 Tranche 2 (harder; complete):
 
-- ✅ **W25** bindings: `(class NAME)` token primitive + `pocketparse_bind`; the CLI
+- ✅ **W25** bindings: `(class NAME)` token primitive + `tinyparse_bind`; the CLI
   installs built-in character classes (alpha/digit/alnum/space).
-- ✅ **W26** plugs: `pocketparse_plug_install` + a trace plug; `run --trace` prints
+- ✅ **W26** plugs: `tinyparse_plug_install` + a trace plug; `run --trace` prints
   engine trace messages through it.
 - ✅ **W27** parser-directed lexical goals (`lex-goal`): the scanner selects a goal
   from parser context (the JS `/` regex-vs-divide case).
@@ -168,18 +168,18 @@ Tranche 2 (harder; complete):
 
 Ship downloadable, installable artifacts; details in
 [`distribution.md`](distribution.md). Cross-built from Linux with Zig 0.15.1;
-released by pushing a `pocketparse-v*` tag.
+released by pushing a `tinyparse-v*` tag.
 
 - ✅ **W17** `VERSION` (0.1.0) + `release.sh`: per-platform tarballs
   (`bin/lib/include/share/man` + INSTALL) for linux-x86_64 and macos-arm64;
   version consistency across `VERSION` and the CLI.
-- ✅ **W18** `amalgamate.sh`: the dumb concatenator → `pocketparse.{c,h}` +
-  `pocketparse_cli.c`, with `ax.c` folded in and hidden (visibility pragma) so
-  a shared lib exports only `pocketparse_*`; an amalgamation tarball.
+- ✅ **W18** `amalgamate.sh`: the dumb concatenator → `tinyparse.{c,h}` +
+  `tinyparse_cli.c`, with `ax.c` folded in and hidden (visibility pragma) so
+  a shared lib exports only `tinyparse_*`; an amalgamation tarball.
 - ✅ **W19** `install.sh`: detect OS/arch, download the matching release tarball,
   install into a prefix (`--from-file`/`--prefix` for offline/custom installs).
-- ✅ **W20** `.github/workflows/pocketparse.yml`: path-scoped build gate; on a
-  `pocketparse-v*` tag, run `release.sh` and publish a GitHub Release with all
+- ✅ **W20** `.github/workflows/tinyparse.yml`: path-scoped build gate; on a
+  `tinyparse-v*` tag, run `release.sh` and publish a GitHub Release with all
   artifacts attached.
 
 ### Phase 6 — grammar family foundation (the floor for everything below)
@@ -201,18 +201,18 @@ ports start. Built on the existing `import` merge (W24).
   directory and binds its parameters. Done: a multi-file package compiles and
   parses through the CLI.
 - **W30** embedded registry: bake the standard packages into the CLI with Zig
-  `@embedFile`; `pocketparse grammars` lists them; name resolution falls back to
+  `@embedFile`; `tinyparse grammars` lists them; name resolution falls back to
   the embedded registry when no search path resolves a name, and a path entry
   shadows the embedded copy. Done: resolving `std.json` works with no filesystem
   package present.
-- **W31** `node-types.json` generation: `pocketparse node-types g.scm --out
+- **W31** `node-types.json` generation: `tinyparse node-types g.scm --out
   node-types.json` emits the node schema (kinds, fields, child types, supertypes).
   Done: the schema round-trips the grammar's named nodes and fields.
-- **W32** `pocketparse init` / `vendor`: scaffold a project in `--amalgamation`
+- **W32** `tinyparse init` / `vendor`: scaffold a project in `--amalgamation`
   (default) or `--lib` mode, optional `--grammar NAME`; the amalgamation is
   embedded in the CLI via `@embedFile`; the starter `main.c` compiles its
   grammar at runtime. Done: `init` produces a tree that builds with one `cc` and
-  parses stdin, with no pocketparse install on the path.
+  parses stdin, with no tinyparse install on the path.
 
 ### Phase 7 — query engine (queries as parsers over linearized trees)
 
@@ -223,9 +223,9 @@ ports start. Built on the existing `import` merge (W24).
   the linearized stream; captures become fields, descendant matching becomes a
   balanced-subtree skip rule, the `.` anchor disables the skip. Done: a query
   matches the documented `call_expression function: (identifier) @fn` shape.
-- **W35** query public API + predicates: `pocketparse_query_*` plus the built-in
+- **W35** query public API + predicates: `tinyparse_query_*` plus the built-in
   `eq?` and `match?` predicates (byte compare and the engine's regex, no host
-  binding); `pocketparse query g.scm q.scm --input f` runs it. Done: captures
+  binding); `tinyparse query g.scm q.scm --input f` runs it. Done: captures
   and predicate filtering report through the CLI.
 - **W36** prove parameterization end to end: `std.json` → `std.jsonc` /
   `std.json5` as one parameterized family via W28/W29, with conformance tests.
@@ -266,16 +266,16 @@ expected S-expressions is the next bar after full acceptance.
 
 ### Phase 9 — benchmark vs tree-sitter (the first question users ask)
 
-- **W42** benchmark harness `ci/pocketparse-bench.sh`: parse the reference
+- **W42** benchmark harness `ci/tinyparse-bench.sh`: parse the reference
   corpus with both tree-sitter (`libtree-sitter` + the compiled upstream
-  grammar) and pocketparse (`libpocketparse` + the port), over the same inputs.
+  grammar) and tinyparse (`libtinyparse` + the port), over the same inputs.
   Measure parse throughput, per-file wall time, and peak memory; take the median
   of N runs; capture hardware (CPU model and core count, RAM, OS) from `/proc`.
   Gated behind `BENCH=1` so the loop stays fast. Done: the harness prints a
   reproducible table plus the hardware line.
 - **W43** the README section: generate `## Compared to tree-sitter` in
   [`../README.md`](../README.md) from the harness output — the per-input table,
-  the hardware line, and an **honest** framing of the trade-off (pocketparse's
+  the hardware line, and an **honest** framing of the trade-off (tinyparse's
   edge is footprint, freestanding embedding, and runtime grammar compilation;
   tree-sitter's is raw throughput from its GLR tables and hand-tuned scanner).
   The section reports the numbers as measured, win or lose. Done: the section
@@ -288,25 +288,25 @@ expected S-expressions is the next bar after full acceptance.
 (token-match memo + first-byte dispatch, 2×), and W46 (first-set prediction +
 extras memo, 3×) are done and the perf ceiling is ratcheted to 0.012s. W47
 (compiled lexer dispatch) is subsumed by W45's token memo. W48
-(`pocketparse_parser_reset`) and a packrat whole-rule memo remain optional; the
+(`tinyparse_parser_reset`) and a packrat whole-rule memo remain optional; the
 profile shows the residual cost is the irreducible recursive-descent IR walk, so
 further gains are small and closing the rest would need a generated parse table.
 
 Execute the ranked proposal in [`performance.md`](performance.md). The fair
-benchmark put pocketparse ~39× behind tree-sitter, and the callgrind/gprof
-profile localized the cost: token matching (`pp_match_ir`, ~45%) and string
-interning on the hot path (`pp_intern_find`, a linear scan, ~32–44%), then
-ordered-choice backtracking (`pp_parse`, ~13%) and trivia (`pp_consume_extras`,
+benchmark put tinyparse ~39× behind tree-sitter, and the callgrind/gprof
+profile localized the cost: token matching (`tp_match_ir`, ~45%) and string
+interning on the hot path (`tp_intern_find`, a linear scan, ~32–44%), then
+ordered-choice backtracking (`tp_parse`, ~13%) and trivia (`tp_consume_extras`,
 ~6%). The work moves cost from parse time to the one-time grammar compile,
 keeping the runtime-compiled, actor-shaped, freestanding design.
 
 **The finish line is two programs.** Correctness is the hard floor; speed is a
 ratchet:
 
-- **Correctness invariant.** `ci/pocketparse-metric.sh` MUST stay GREEN at
+- **Correctness invariant.** `ci/tinyparse-metric.sh` MUST stay GREEN at
   291/291 after every workstream. No optimization may break a single corpus
   case — this is non-negotiable and checked first.
-- **Perf ratchet.** A new `ci/pocketparse-perf-gate.sh` runs the parse benchmark,
+- **Perf ratchet.** A new `ci/tinyparse-perf-gate.sh` runs the parse benchmark,
   reads a recorded ceiling from `test/perf-baseline.txt` (median ms), and fails
   if the current median exceeds the ceiling beyond a small noise margin. Each
   landed workstream lowers the ceiling; the number only goes down. It prints
@@ -324,9 +324,9 @@ Dependency-ordered workstreams:
 
 - **W44** (the floor; biggest win, no public change) pre-intern symbols at
   compile time: after grammar compilation, resolve every name reference in the
-  IR to its interned id, and remove `pp_intern`/`pp_intern_find` from the
+  IR to its interned id, and remove `tp_intern`/`tp_intern_find` from the
   `push`/`finish` path. Done: correctness GREEN; a debug assertion that
-  `pp_intern` is never called during a parse; median drops (expect the ~32–44%
+  `tp_intern` is never called during a parse; median drops (expect the ~32–44%
   share to translate to a ~1.5–1.8× speedup).
 - **W45** packrat memoization of rule results per input position: cache
   `(rule, position) → outcome` so ordered-choice re-entry stops re-parsing the
@@ -335,24 +335,24 @@ Dependency-ordered workstreams:
 - **W46** first-set / lookahead prediction: compute each alternative's first set
   at compile time and skip alternatives whose first set excludes the next token,
   pruning dead branches before descent. Done: correctness GREEN; median drops;
-  callgrind shows fewer `pp_parse`/`pp_match_ir` calls. Complements W45.
+  callgrind shows fewer `tp_parse`/`tp_match_ir` calls. Complements W45.
 - **W47** compiled lexer dispatch: a compile-time first-byte table plus a
-  per-position token-match memo so `pp_match_ir` is not re-interpreted on each
+  per-position token-match memo so `tp_match_ir` is not re-interpreted on each
   ordered-choice attempt. Done: correctness GREEN; median drops (targets the
   ~45% token-match share). Largest engine change; lands after the rule-level
   wins.
-- **W48** `pocketparse_parser_reset` / arena reuse: a convenience for embedders
+- **W48** `tinyparse_parser_reset` / arena reuse: a convenience for embedders
   and a small setup saving (the profile shows setup is not the bottleneck, so
   this is ergonomics, not the speed fix). Public surface change → design doc
   first. Done: correctness GREEN; parser reuse works; design updated.
 
-Teardown keeps `ci/pocketparse-perf-gate.sh` + `test/perf-baseline.txt` as the
+Teardown keeps `ci/tinyparse-perf-gate.sh` + `test/perf-baseline.txt` as the
 ongoing perf-regression gate, so a future change cannot silently slow parsing.
 
 ### Phase 11 — lift execution onto ax (make the actor model real)
 
-The honest reckoning: pocketparse's identity is an actor-shaped parser on `ax`,
-but the parser has never used `ax` beyond its arena allocator — `pp_execute` is
+The honest reckoning: tinyparse's identity is an actor-shaped parser on `ax`,
+but the parser has never used `ax` beyond its arena allocator — `tp_execute` is
 plain C recursive descent, and the *Actor model* sections of the design were
 aspiration that never shipped. This phase makes them true. **Decided direction
 (owner), after design exploration:** the first cut in
@@ -372,16 +372,16 @@ Markdown) as child VM actors.
 
 **The finish line is the same public surface, a different engine underneath:**
 
-- **Frozen API.** `include/pocketparse.h` MUST be byte-identical to its
+- **Frozen API.** `include/tinyparse.h` MUST be byte-identical to its
   Phase-11 baseline; the benchmarks and `axtest`/the 291-case suite compile and
   run **unchanged**. A check asserts no diff to the public header.
-- **Correctness floor.** `ci/pocketparse-metric.sh` GREEN at 291/291, now via
+- **Correctness floor.** `ci/tinyparse-metric.sh` GREEN at 291/291, now via
   the `ax` execution path.
 - **Genuinely on ax (the point).** A structural check asserts the parse path
   actually exercises the `ax` actor API (`ax_open`/`ax_define`/`ax_spawn`/
   `ax_post`/`ax_step`), the inverse of the gap that started this phase.
 - **Perf re-benchmarked, expected at/under 4.6×.** Re-run
-  `ci/pocketparse-bench.sh`; the VM-on-`ax` path is expected to *beat* today's
+  `ci/tinyparse-bench.sh`; the VM-on-`ax` path is expected to *beat* today's
   recursive descent, so the perf-gate still applies — this phase should not
   regress speed and ideally improves it.
 
@@ -406,18 +406,18 @@ behind the frozen API. Status and outcome of each workstream:
   compile the IR to bytecode plus a dispatch loop — terminals, ordered choice via
   Choice/Commit over explicit backtrack/return stacks, Call/Return, CST
   open/close + fields, `reserved`, lexical-goal switch, recovery. **Outcome:**
-  `src/vm.c` + `src/vmcompile.c` run in process behind `POCKETPARSE_ENGINE=vm`,
-  byte-identical to `pp_execute`.
+  `src/vm.c` + `src/vmcompile.c` run in process behind `TINYPARSE_ENGINE=vm`,
+  byte-identical to `tp_execute`.
 - **W60** (VM managed by an actor + `ax` harness, DONE) the engine opens `ax_sys`
   (`ax_open`); the parser actor owns the program in `ax_heap`, registers in
   `ax_data`, and `ax_alloc`-grown backtrack/return/CST stacks; `push`/`finish`
   post `input.chunk`/`input.end`; the loop runs inside one action; pumped to
   quiescence. **Outcome:** `src/vmactor.c` parses end-to-end on `ax`
-  (`POCKETPARSE_ENGINE=vm-ax`); `POCKETPARSE_TRACE_ACTOR` proves the action ran.
+  (`TINYPARSE_ENGINE=vm-ax`); `TINYPARSE_TRACE_ACTOR` proves the action ran.
 - **W61** (full grammar on the VM-on-`ax` path, DONE) all combinators, the lexer +
   lexical goals + extras, recovery; the W44–W46 wins carried into the VM.
   **Outcome:** the json/sexpr/JS/TS families parse green via `ax`, with
-  `pp_execute` as the byte-identical differential reference.
+  `tp_execute` as the byte-identical differential reference.
 - **W62** (language injection — the marquee, DONE) parse a span with a *different*
   grammar and splice one composite, language-tagged tree. **Outcome:**
   `src/inject.c` + `grammars/std/fence` implement `(inject grammar: …)` with
@@ -426,14 +426,14 @@ behind the frozen API. Status and outcome of each workstream:
   sub-VM for this pass (the spawned child-actor shape in
   [`ax-topologies.md`](ax-topologies.md) is the eventual form).
 - **W63** (full corpus on `ax`, DONE) **Outcome:** all tests green through the
-  VM-on-`ax` path, made the CLI default; `pp_execute` kept as the differential
-  oracle and the `POCKETPARSE_ENGINE=recursive` opt-out rather than retired.
+  VM-on-`ax` path, made the CLI default; `tp_execute` kept as the differential
+  oracle and the `TINYPARSE_ENGINE=recursive` opt-out rather than retired.
 - **W64** (re-benchmark + docs, DONE) **Outcome:** the actor-hosted VM is now the
-  **library** default (set in `pocketparse_open`, not just the CLI), so the
+  **library** default (set in `tinyparse_open`, not just the CLI), so the
   benchmark harness and any embedder parse on `ax` with no flag; the parser-actor
   spec is defined per engine so re-opening the engine no longer drops off the
   actor path. Re-benchmarked: tree-sitter ~4× on the JS corpus, and the ax VM is
-  ~1.1× faster than `pp_execute`. The design doc, README, and `performance.md`
+  ~1.1× faster than `tp_execute`. The design doc, README, and `performance.md`
   are reconciled to the real engine, and language injection is documented.
 
 Teardown keeps the frozen-API and genuinely-on-ax structural checks as ongoing
@@ -441,12 +441,12 @@ gates, so the engine cannot silently drift back off `ax`.
 
 ### Phase 12 — no static mutable state, growable arenas (DONE, W65)
 
-Enforce `ax`'s own "no global mutable state" rule inside pocketparse and remove
+Enforce `ax`'s own "no global mutable state" rule inside tinyparse and remove
 the fixed caps that silently truncated large grammars/paths. **Outcome:** the one
 remaining mutable static (the CLI module-resolver context) moved to the heap; the
 freestanding library holds none; the nodetypes field/type/children tables, the
 `token.c` FIRST-set stack, the CLI path buffers, and the bench block registry are
-all arena-grown. `ci/pocketparse-no-statics.sh` guards the rule (ast-grep, wired
+all arena-grown. `ci/tinyparse-no-statics.sh` guards the rule (ast-grep, wired
 into the metric); over-cap tests prove no truncation. Byte-identical, API frozen.
 
 ### Phase 13 — real-workload benchmark + VM optimization (DONE, W66–W67)
@@ -454,29 +454,29 @@ into the metric); over-cap tests prove no truncation. Byte-identical, API frozen
 A real benchmark over a real codebase, and the optimization it motivated.
 **Outcome:**
 - **W66** vendored ReactJS (pinned, gitignored) and built
-  `ci/pocketparse-react-bench.sh`: parse the React sources with `std.tsx` and
+  `ci/tinyparse-react-bench.sh`: parse the React sources with `std.tsx` and
   collect every function definition (1070 clean-parsing files, 9.5 MB; the same
   set for both engines). `pack` learned to resolve packages so `pack std.tsx`
-  produces a self-contained `.ppg`. A token-by-symbol index made
-  `pp_vm_find_token` O(1).
+  produces a self-contained `.tpg`. A token-by-symbol index made
+  `tp_vm_find_token` O(1).
 - **W67** the benchmark exposed a catastrophic PEG-backtracking blowup on deeply
   nested TS/JSX (a 3.7 KB file: 279 ms / ~100 MiB; worst ~1 GB / 5.7 s). Fixed
   with a rule memo: failure memoization (don't re-descend a doomed alternative)
   plus success memoization (snapshot a built subtree, replay it as fresh nodes).
   The memo is adaptive — dormant until a parse goes super-linear — so the JS perf
-  ratchet is preserved; `POCKETPARSE_RULEMEMO=always` forces it on (and
+  ratchet is preserved; `TINYPARSE_RULEMEMO=always` forces it on (and
   `vm-diff` runs a forced-on pass so the replay path stays byte-identical).
 - **Result, as measured (not tuned to a number):** the blowup is gone (bounded
   memory, no OOM); traversal is **2.8× faster** than tree-sitter on the React
   tree; raw parse is **39×** slower (adaptive default) / **11.7×** (memo forced
   on). The ≤1.5× target was not reached — that needs generated parse tables,
-  tree-sitter's design, not pocketparse's runtime-compiled one. See
+  tree-sitter's design, not tinyparse's runtime-compiled one. See
   [`docs/performance.md`](performance.md) and [`docs/decisions.md`](decisions.md).
 
 ## The loop (supervisor's turn)
 
 > read the metric → pick a red workstream → delegate it to an agent (disjoint
-> files only) → verify by re-running `ci/pocketparse-metric.sh` → remove the
+> files only) → verify by re-running `ci/tinyparse-metric.sh` → remove the
 > landed tests from `xfail.list` → commit (named by workstream) and push →
 > re-read the metric → repeat until green.
 
@@ -488,6 +488,6 @@ has not risen across two stops, the loop disarms and surfaces the blocker.
 
 - Fold the durable rules (freestanding constraints, the `dist`-consume seam,
   the data-test discipline) into `architecture.md`.
-- Keep `test/harness.c` + `xfail.list` + `ci/pocketparse-metric.sh` as the
+- Keep `test/harness.c` + `xfail.list` + `ci/tinyparse-metric.sh` as the
   ongoing gate.
 - Remove the loop/arm scaffolding; keep `push-main.sh`.

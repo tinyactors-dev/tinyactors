@@ -1,5 +1,5 @@
 <<<cmd
-printf '(a (b c))' | "$PP" run examples/sexpr/sexpr.scm --input - --trace 2>&1
+printf '(a (b c))' | "$TP" run examples/sexpr/sexpr.scm --input - --trace 2>&1
 <<<assert
 exit 0
 out-contains trace:

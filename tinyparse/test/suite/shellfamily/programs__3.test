@@ -1,6 +1,6 @@
 # Corpus: escaped newline immediately after a character.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/programs__3.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/programs__3.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -1,6 +1,6 @@
 # A command with three arguments binds each as its own arg: Word field.
 <<<cmd
-printf 'ls -l -a /tmp\n' | "$PP" run std.shell --input - --dump-tree
+printf 'ls -l -a /tmp\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

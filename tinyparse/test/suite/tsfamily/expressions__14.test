@@ -1,5 +1,5 @@
 <<<cmd
-"$PP" run std.tsx --input test/suite/tsfamily/inputs/expressions__14.tsx --dump-tree
+"$TP" run std.tsx --input test/suite/tsfamily/inputs/expressions__14.tsx --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

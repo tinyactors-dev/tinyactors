@@ -16,7 +16,7 @@
 ; BodyCommand invocation gets its own deferred-slot instance, so inner and
 ; outer heredoc queues never interfere.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 (module examples.heredoc)
 
 (grammar heredoc
@@ -33,7 +33,7 @@
   ; Parametrized token: no static pattern.
   ; The (param delimiter ...) body is a pattern in the grammar's own language;
   ; parse-deferred instantiates it by substituting `delimiter' with a
-  ; PP_OP_LITERAL of the captured bytes, then pushes the result onto the
+  ; TP_OP_LITERAL of the captured bytes, then pushes the result onto the
   ; goal-table stack. On return it pops, restoring the enclosing delimiter.
   (token HeredocDelimLine)
 

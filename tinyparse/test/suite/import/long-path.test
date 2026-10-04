@@ -1,5 +1,5 @@
 <<<cmd
-D="${TMPDIR:-/tmp}/pp_longpath_$$"; rm -rf "$D"; P="$D"; SEG=segment_directory_with_a_fairly_long_name; for i in $(seq 1 40); do P="$P/${SEG}${i}"; done; mkdir -p "$P" && cp examples/import/main.scm examples/import/words.scm "$P"/ && printf 'a b c' | "$PP" run "$P/main.scm" --input - --dump-tree; rc=$?; rm -rf "$D"; exit $rc
+D="${TMPDIR:-/tmp}/tp_longpath_$$"; rm -rf "$D"; P="$D"; SEG=segment_directory_with_a_fairly_long_name; for i in $(seq 1 40); do P="$P/${SEG}${i}"; done; mkdir -p "$P" && cp examples/import/main.scm examples/import/words.scm "$P"/ && printf 'a b c' | "$TP" run "$P/main.scm" --input - --dump-tree; rc=$?; rm -rf "$D"; exit $rc
 <<<assert
 exit 0
 # The grammar sits at the bottom of a ~2000-byte directory path and (import

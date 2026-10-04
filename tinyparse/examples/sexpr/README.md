@@ -1,6 +1,6 @@
 # sexpr — recursion, fields, and trivia in one grammar
 
-This is the canonical pocketparse grammar: parenthesized s-expressions parsed
+This is the canonical tinyparse grammar: parenthesized s-expressions parsed
 by a rule that calls itself. It is the example to read first, and the one the
 core test suite leans on to exercise `seq`, `choice`, `repeat`, `field`, and
 `extras`.
@@ -47,7 +47,7 @@ Three smaller ideas ride along:
 
 ```sh
 printf '(define (square x) (* x x))' \
-  | pocketparse run examples/sexpr/sexpr.scm --input - --dump-tree
+  | tinyparse run examples/sexpr/sexpr.scm --input - --dump-tree
 ```
 
 The dump follows the recursion: each nested list is a `List` under a `Form`,
@@ -91,7 +91,7 @@ before the first `Form`, and no rule names it:
 
 ```sh
 printf '; a comment\n(a b)' \
-  | pocketparse run examples/sexpr/sexpr.scm --input - --dump-tree
+  | tinyparse run examples/sexpr/sexpr.scm --input - --dump-tree
 ```
 
 ```

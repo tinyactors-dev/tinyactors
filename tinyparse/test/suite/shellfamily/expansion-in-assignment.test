@@ -1,7 +1,7 @@
 # An expansion as an assignment value `X=$y` (POSIX §2.9.1): the value Word holds a
 # SimpleExpansion.
 <<<cmd
-printf 'X=$y\n' | "$PP" run std.shell --input - --dump-tree
+printf 'X=$y\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

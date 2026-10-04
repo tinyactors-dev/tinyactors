@@ -1,6 +1,6 @@
 # An arithmetic expansion inside double quotes `"sum=$((a+b))"`.
 <<<cmd
-printf 'echo "sum=$((a+b))"\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo "sum=$((a+b))"\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

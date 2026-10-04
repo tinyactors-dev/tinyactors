@@ -1,7 +1,7 @@
 # Corpus: single-quoted strings — `echo 'a b' 'c d'`. Two raw single-quoted
 # words, no expansion fired inside them.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/literals__10.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/literals__10.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

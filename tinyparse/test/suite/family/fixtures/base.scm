@@ -5,7 +5,7 @@
 ; nodes, add rules, and override rules. The package fixture and the node-types
 ; test also read it.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module family.base)
 

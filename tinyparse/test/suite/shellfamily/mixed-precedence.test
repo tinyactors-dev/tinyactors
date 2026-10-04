@@ -4,7 +4,7 @@
 # The tree therefore nests Pipeline inside AndOrList inside CompleteCommand: the
 # "|" appears before the "&&", which appears before the ";".
 <<<cmd
-printf 'a | b && c; d\n' | "$PP" run std.shell --input - --dump-tree
+printf 'a | b && c; d\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

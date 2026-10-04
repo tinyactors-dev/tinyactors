@@ -6,7 +6,7 @@
 ; it is an additive merge — no name the base owns is redefined, so no (override
 ; …) is needed. The new start: rule points at the added rule.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module family.ext-merge)
 

@@ -5,7 +5,7 @@
 ; MISSING `)` node and raises an "unterminated list" diagnostic instead of
 ; aborting, so a tree is still produced. Driven by the recover/insert-eof test.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module examples.recover)
 

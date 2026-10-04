@@ -1,5 +1,5 @@
 <<<cmd
-printf 'VAR= echo hi\n' | "$PP" run std.shell --input - --dump-tree
+printf 'VAR= echo hi\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

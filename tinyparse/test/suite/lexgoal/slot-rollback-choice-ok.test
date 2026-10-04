@@ -4,7 +4,7 @@
 # (parse-deferred s Body) drain invokes Body exactly once. The companion of
 # slot-rollback-choice-fail: rollback discards on failure but keeps on success.
 <<<cmd
-printf 'hello X\nbody\n' | "$PP" run test/suite/lexgoal/slot-rollback-choice.scm --input - --dump-tree
+printf 'hello X\nbody\n' | "$TP" run test/suite/lexgoal/slot-rollback-choice.scm --input - --dump-tree
 <<<assert
 exit 0
 out-count 1 Body [

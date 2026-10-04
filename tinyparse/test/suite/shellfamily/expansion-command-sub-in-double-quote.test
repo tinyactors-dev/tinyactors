@@ -1,7 +1,7 @@
 # A command substitution inside double quotes `"path is $(pwd)"`: the $(…) is a
 # CommandSubstitution child of DoubleQuoted, with the literal prefix as DQText.
 <<<cmd
-printf 'echo "path is $(pwd)"\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo "path is $(pwd)"\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

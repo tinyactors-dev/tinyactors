@@ -1,5 +1,5 @@
 <<<cmd
-"$PP" node-types test/suite/family/fixtures/base.scm
+"$TP" node-types test/suite/family/fixtures/base.scm
 <<<assert
 exit 0
 out-contains Source

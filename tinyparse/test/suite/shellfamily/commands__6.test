@@ -1,6 +1,6 @@
 # Corpus: empty variable assignments, then an assignment-prefixed command.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/commands__6.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/commands__6.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

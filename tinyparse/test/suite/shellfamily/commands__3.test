@@ -1,6 +1,6 @@
 # Corpus: a quoted command name built from expansions and a string.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/commands__3.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/commands__3.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

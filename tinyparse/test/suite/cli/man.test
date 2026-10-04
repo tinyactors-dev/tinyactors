@@ -1,6 +1,6 @@
 <<<cmd
-"$PP" man
+"$TP" man
 <<<assert
 exit 0
-out-contains POCKETPARSE
+out-contains TINYPARSE
 out-contains SYNOPSIS

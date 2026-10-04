@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # examples/uri/run.sh <url>
 #
-# Parse a URL with the generated pocketparse grammar and print its components.
+# Parse a URL with the generated tinyparse grammar and print its components.
 # Builds the driver if needed and regenerates uri.scm from the EBNF if it is
 # missing, so the example is self-contained. Works from any cwd: paths resolve
 # from the script's own location.

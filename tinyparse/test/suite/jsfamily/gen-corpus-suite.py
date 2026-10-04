@@ -7,18 +7,18 @@
 #
 #   test/suite/jsfamily/inputs/<file>__<n>.js   the case's input bytes, verbatim
 #   test/suite/jsfamily/<file>__<n>.test        a harness test that runs
-#       `pocketparse run std.javascript --input <that file> --dump-tree`
+#       `tinyparse run std.javascript --input <that file> --dump-tree`
 #       and asserts exit 0 with no ERROR / no MISSING in the dumped tree.
 #
 # The committed .js fixtures make the suite reproducible in a fresh container,
-# where reference/ is absent. Run from tools/pocketparse:
+# where reference/ is absent. Run from tools/tinyparse:
 #
 #   python3 test/suite/jsfamily/gen-corpus-suite.py
 import os, re, glob, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PP_DIR = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-CORPUS = os.path.join(PP_DIR, "reference", "tree-sitter-javascript",
+TP_DIR = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+CORPUS = os.path.join(TP_DIR, "reference", "tree-sitter-javascript",
                       "test", "corpus")
 INPUTS = os.path.join(HERE, "inputs")
 
@@ -30,7 +30,7 @@ os.makedirs(INPUTS, exist_ok=True)
 
 TEST_TEMPLATE = """\
 <<<cmd
-"$PP" run std.javascript --input test/suite/jsfamily/inputs/%s --dump-tree
+"$TP" run std.javascript --input test/suite/jsfamily/inputs/%s --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

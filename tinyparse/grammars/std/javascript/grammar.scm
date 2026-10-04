@@ -1,7 +1,7 @@
 ; grammar.scm — std.javascript, a competent core JavaScript grammar.
 ;
 ; Ported (the LANGUAGE, not the code) from the build-time reference under
-; tools/pocketparse/reference/tree-sitter-javascript/. Node names follow
+; tools/tinyparse/reference/tree-sitter-javascript/. Node names follow
 ; tree-sitter where reasonable (program, expression_statement, binary_expression,
 ; call_expression, member_expression, arrow_function, ...).
 ;
@@ -25,7 +25,7 @@
 ; additive > multiplicative > exponent > unary > update > postfix (call / member
 ; / subscript) > primary.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module std.javascript)
 

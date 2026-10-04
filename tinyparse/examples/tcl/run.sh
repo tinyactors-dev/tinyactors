@@ -3,7 +3,7 @@
 #
 #   ./run.sh 'echo {*}"a b"${c}d[expr {1+1}]'
 #
-# It feeds the argument to the pocketparse CLI on stdin and dumps the tree.
+# It feeds the argument to the tinyparse CLI on stdin and dumps the tree.
 # This is a convenience for humans; the test suite drives the CLI directly.
 set -eu
 
@@ -17,9 +17,9 @@ case "$plat" in
   Darwin/arm64|Darwin/aarch64) sub=macos-arm64 ;;
   *)                       sub=linux-x86_64 ;;
 esac
-pp="$here/../../dist/$sub/pocketparse"
-[ -x "$pp" ] || pp=pocketparse
+tp="$here/../../dist/$sub/tinyparse"
+[ -x "$tp" ] || tp=tinyparse
 
 line=${1:-'echo {*}"a b"${c}d[expr {1+1}]'}
 
-printf '%s' "$line" | "$pp" run "$grammar" --input - --dump-tree
+printf '%s' "$line" | "$tp" run "$grammar" --input - --dump-tree

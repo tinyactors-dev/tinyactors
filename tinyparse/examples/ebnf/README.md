@@ -1,12 +1,12 @@
-# EBNF to pocketparse grammar
+# EBNF to tinyparse grammar
 
-This example parses a grammar language with pocketparse, then walks the tree to
+This example parses a grammar language with tinyparse, then walks the tree to
 emit another grammar.
 
 It is the first stage of the pipeline example. An EBNF meta-grammar, embedded in
 `ebnf2scm.c` as `.scm` text, is compiled at runtime; the input EBNF is parsed
 into a concrete syntax tree; and the tree is walked through the public cursor
-API to print an equivalent pocketparse `.scm` grammar. The EBNF nests through
+API to print an equivalent tinyparse `.scm` grammar. The EBNF nests through
 `[...]`, `{...}`, and `(...)` groups, so the walk recurses: each group is its
 own rule, and `emit_factor` calls back into `emit_alternation` for the
 alternation it holds.
@@ -16,9 +16,9 @@ alternation it holds.
 - `uri.ebnf` — an EBNF grammar for the RFC 3986 URI: scheme, authority (with
   optional userinfo, host, optional port), path, optional query, optional
   fragment.
-- `ebnf2scm.c` — the converter. Hosted (libc), linked against the pocketparse
+- `ebnf2scm.c` — the converter. Hosted (libc), linked against the tinyparse
   dist archives.
-- `build.sh` — compiles `ebnf2scm` against `$PP_DIST`.
+- `build.sh` — compiles `ebnf2scm` against `$TP_DIST`.
 - `run.sh` — runs the converter, prints the `.scm`, and saves a copy to
   `../uri/uri.scm` so the URI example consumes a freshly generated grammar.
 

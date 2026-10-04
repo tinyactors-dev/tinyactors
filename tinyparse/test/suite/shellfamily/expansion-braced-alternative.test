@@ -1,6 +1,6 @@
 # Use-alternative `${name:+word}` (POSIX §2.6.2).
 <<<cmd
-printf 'echo ${x:+alt}\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo ${x:+alt}\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

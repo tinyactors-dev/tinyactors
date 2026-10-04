@@ -2,7 +2,7 @@
 # SimpleCommand. FunctionDefinition backtracks (no `( )` after the name) and the
 # Command choice falls through to SimpleCommand.
 <<<cmd
-printf 'foo\n' | "$PP" run std.shell --input - --dump-tree
+printf 'foo\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -7,7 +7,7 @@
 ; it. Imports resolve entirely at compile time; the compiled grammar and its
 ; packed form are exactly as if Word had been written here directly.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module examples.import.main)
 

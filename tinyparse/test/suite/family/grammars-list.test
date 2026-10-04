@@ -1,5 +1,5 @@
 <<<cmd
-"$PP" grammars
+"$TP" grammars
 <<<assert
 exit 0
 out-contains std.json

@@ -1,4 +1,4 @@
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 (grammar drain
   start: Program
   (token Space (regex "[ \t]+"))

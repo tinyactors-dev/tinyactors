@@ -19,7 +19,7 @@
 ** The host binary NAMES the embedded languages (the inject form's `grammar:'
 ** constant) but is NOT linked against their parsers directly. The wiring happens
 ** at RUNTIME: the driver registers each embedded language on the engine with
-** pocketparse_register_language(engine, "std.json", {grammar, json_lang_run}).
+** tinyparse_register_language(engine, "std.json", {grammar, json_lang_run}).
 ** When the generated host parser reaches an inject site, the inject runtime
 ** resolves the language by name in that registry and drives the registered
 ** generated parser over the region, sharing the host arena so the subtree splices
@@ -28,7 +28,7 @@
 **
 ** The point of the gate around this driver: the tree this prints must match,
 ** byte for byte, what the VM prints for the SAME std.fence grammar on the SAME
-** document (`pocketparse run std.fence --dump-tree'). Generated host nesting
+** document (`tinyparse run std.fence --dump-tree'). Generated host nesting
 ** generated embedded yields the same composite tree as the dynamic VM -- nothing
 ** about native nesting changes the CST.
 **
@@ -40,28 +40,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "pocketparse.h"
+#include "tinyparse.h"
 
 /* ** The generated load/run entries each parser-lib TU exposes, under its own
 ** --name prefix (so three full parser symbol sets coexist with no collision --
 ** the W17-3 default prefix would already disjoint them, but the example names them
 ** explicitly for clarity). fence_host_* is the host; the other two are embedded
 ** languages registered at runtime. */
-pocketparse_result fence_host_load(pocketparse_engine *engine,
-                                   pocketparse_grammar **out_grammar);
-pocketparse_result fence_host_run(pocketparse_parser *parser);
-pocketparse_result json_lang_load(pocketparse_engine *engine,
-                                  pocketparse_grammar **out_grammar);
-pocketparse_result json_lang_run(pocketparse_parser *parser);
-pocketparse_result js_lang_load(pocketparse_engine *engine,
-                                pocketparse_grammar **out_grammar);
-pocketparse_result js_lang_run(pocketparse_parser *parser);
+tinyparse_result fence_host_load(tinyparse_engine *engine,
+                                   tinyparse_grammar **out_grammar);
+tinyparse_result fence_host_run(tinyparse_parser *parser);
+tinyparse_result json_lang_load(tinyparse_engine *engine,
+                                  tinyparse_grammar **out_grammar);
+tinyparse_result json_lang_run(tinyparse_parser *parser);
+tinyparse_result js_lang_load(tinyparse_engine *engine,
+                                tinyparse_grammar **out_grammar);
+tinyparse_result js_lang_run(tinyparse_parser *parser);
 
 /* ** The internal language-tag accessor the CLI's --dump-tree uses (W62). It is
-** a pp_ symbol the static library exports, declared here exactly as src/cli.c
+** a tp_ symbol the static library exports, declared here exactly as src/cli.c
 ** declares it, so this driver can print the SAME `[lang]' annotation the VM dump
 ** prints and the gate can compare the two byte for byte. */
-uint32_t pp_tree_cursor_language_tag(const pocketparse_tree_cursor *cursor);
+uint32_t tp_tree_cursor_language_tag(const tinyparse_tree_cursor *cursor);
 
 #define NESTING_NO_LANGUAGE_TAG 0xFFFFFFFFu
 #define NESTING_GRANT (16u * 1024u * 1024u)
@@ -74,9 +74,9 @@ static void *nesting_grow(void *user, size_t need, size_t *got)
 }
 
 /* ** Open a fresh engine over its own grant. */
-static pocketparse_engine *nesting_open(void)
+static tinyparse_engine *nesting_open(void)
 {
-    pocketparse_configuration cfg;
+    tinyparse_configuration cfg;
     void *block = malloc(NESTING_GRANT);
     if (block == NULL)
         return NULL;
@@ -87,7 +87,7 @@ static pocketparse_engine *nesting_open(void)
     cfg.memory.user = NULL;
     cfg.memory.chunk_minimum = 0;
     cfg.flags = 0;
-    return pocketparse_open(cfg);
+    return tinyparse_open(cfg);
 }
 
 /* ** A source line index, identical to src/cli.c's dump_line_index: the byte
@@ -172,46 +172,46 @@ static void nesting_span(const nesting_line_index *index,
 ** an embedded-language node, and the node's span -- the SAME shape src/cli.c's
 ** dump_subtree prints, so this driver's tree compares byte-identical to
 ** `run --dump-tree'. */
-static void nesting_dump(const pocketparse_tree *tree,
-                         pocketparse_tree_cursor *cursor,
+static void nesting_dump(const tinyparse_tree *tree,
+                         tinyparse_tree_cursor *cursor,
                          const nesting_line_index *index)
 {
-    uint32_t depth = pocketparse_tree_cursor_depth(cursor);
+    uint32_t depth = tinyparse_tree_cursor_depth(cursor);
     uint32_t i;
-    pocketparse_symbol kind  = pocketparse_tree_cursor_kind(cursor);
-    pocketparse_symbol field = pocketparse_tree_cursor_field(cursor);
-    uint32_t flags = pocketparse_tree_cursor_flags(cursor);
-    pocketparse_string kn = pocketparse_tree_symbol_name(tree, kind);
+    tinyparse_symbol kind  = tinyparse_tree_cursor_kind(cursor);
+    tinyparse_symbol field = tinyparse_tree_cursor_field(cursor);
+    uint32_t flags = tinyparse_tree_cursor_flags(cursor);
+    tinyparse_string kn = tinyparse_tree_symbol_name(tree, kind);
 
     for (i = 0; i < depth; i++) fputs("  ", stdout);
-    if (flags & POCKETPARSE_NODE_MISSING)
+    if (flags & TINYPARSE_NODE_MISSING)
         fputs("MISSING ", stdout);
-    if (field.id != POCKETPARSE_NO_FIELD) {
-        pocketparse_string fn = pocketparse_tree_symbol_name(tree, field);
+    if (field.id != TINYPARSE_NO_FIELD) {
+        tinyparse_string fn = tinyparse_tree_symbol_name(tree, field);
         printf("%.*s: ", (int)fn.length, (const char *)fn.pointer);
     }
     printf("%.*s", (int)kn.length, (const char *)kn.pointer);
     {
-        uint32_t lang_id = pp_tree_cursor_language_tag(cursor);
+        uint32_t lang_id = tp_tree_cursor_language_tag(cursor);
         if (lang_id != NESTING_NO_LANGUAGE_TAG) {
-            pocketparse_symbol ls;
-            pocketparse_string ln;
+            tinyparse_symbol ls;
+            tinyparse_string ln;
             ls.id = lang_id;
-            ln = pocketparse_tree_symbol_name(tree, ls);
+            ln = tinyparse_tree_symbol_name(tree, ls);
             if (ln.length > 0)
                 printf(" [%.*s]", (int)ln.length, (const char *)ln.pointer);
         }
     }
     nesting_span(index,
-                 pocketparse_tree_cursor_start_byte(cursor),
-                 pocketparse_tree_cursor_end_byte(cursor));
+                 tinyparse_tree_cursor_start_byte(cursor),
+                 tinyparse_tree_cursor_end_byte(cursor));
     printf("\n");
 
-    if (pocketparse_tree_cursor_goto_first_child(cursor)) {
+    if (tinyparse_tree_cursor_goto_first_child(cursor)) {
         do {
             nesting_dump(tree, cursor, index);
-        } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
-        pocketparse_tree_cursor_goto_parent(cursor);
+        } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
+        tinyparse_tree_cursor_goto_parent(cursor);
     }
 }
 
@@ -219,16 +219,16 @@ static void nesting_dump(const pocketparse_tree *tree,
 ** (so the registered grammar is the one the generated parser's baked indices read)
 ** and register that grammar plus the generated run function under the language name
 ** the host grammar's inject form carries. Returns 0 on success. */
-static int register_language(pocketparse_engine *engine, const char *name,
-                             pocketparse_result (*load)(pocketparse_engine *,
-                                                        pocketparse_grammar **),
-                             pocketparse_result (*run)(pocketparse_parser *))
+static int register_language(tinyparse_engine *engine, const char *name,
+                             tinyparse_result (*load)(tinyparse_engine *,
+                                                        tinyparse_grammar **),
+                             tinyparse_result (*run)(tinyparse_parser *))
 {
-    pocketparse_language_entry entry;
-    pocketparse_grammar       *grammar = NULL;
-    pocketparse_string         lang;
+    tinyparse_language_entry entry;
+    tinyparse_grammar       *grammar = NULL;
+    tinyparse_string         lang;
 
-    if (load(engine, &grammar) != POCKETPARSE_OK || grammar == NULL) {
+    if (load(engine, &grammar) != TINYPARSE_OK || grammar == NULL) {
         fprintf(stderr, "nesting: cannot load embedded grammar '%s'\n", name);
         return 1;
     }
@@ -236,7 +236,7 @@ static int register_language(pocketparse_engine *engine, const char *name,
     entry.parse   = run;            /* the GENERATED embedded parser's run entry */
     lang.pointer  = (const uint8_t *)name;
     lang.length   = (uint32_t)strlen(name);
-    if (pocketparse_register_language(engine, lang, &entry) != POCKETPARSE_OK) {
+    if (tinyparse_register_language(engine, lang, &entry) != TINYPARSE_OK) {
         fprintf(stderr, "nesting: cannot register language '%s'\n", name);
         return 1;
     }
@@ -269,12 +269,12 @@ static char *read_all(const char *path, size_t *out_length)
 
 int main(int argc, char **argv)
 {
-    pocketparse_engine  *engine;
-    pocketparse_grammar *host_grammar = NULL;
-    pocketparse_parser  *parser  = NULL;
-    pocketparse_string   empty, doc_bytes;
-    const pocketparse_tree  *tree;
-    pocketparse_tree_cursor *cursor = NULL;
+    tinyparse_engine  *engine;
+    tinyparse_grammar *host_grammar = NULL;
+    tinyparse_parser  *parser  = NULL;
+    tinyparse_string   empty, doc_bytes;
+    const tinyparse_tree  *tree;
+    tinyparse_tree_cursor *cursor = NULL;
     char  *doc;
     size_t doc_length = 0;
 
@@ -295,7 +295,7 @@ int main(int argc, char **argv)
     ** embedded languages so the host parser's inject sites resolve them at runtime
     ** to the SEPARATELY-COMPILED generated parsers. The host parser names the
     ** languages; the registry links them. */
-    if (fence_host_load(engine, &host_grammar) != POCKETPARSE_OK) {
+    if (fence_host_load(engine, &host_grammar) != TINYPARSE_OK) {
         fputs("nesting: cannot load host grammar\n", stderr);
         return 2;
     }
@@ -304,27 +304,27 @@ int main(int argc, char **argv)
         return 2;
 
     empty.pointer = NULL; empty.length = 0;
-    if (pocketparse_parser_new(engine, host_grammar, empty, &parser)
-            != POCKETPARSE_OK || parser == NULL) {
+    if (tinyparse_parser_new(engine, host_grammar, empty, &parser)
+            != TINYPARSE_OK || parser == NULL) {
         fputs("nesting: cannot create host parser\n", stderr);
         return 2;
     }
     doc_bytes.pointer = (const uint8_t *)doc;
     doc_bytes.length  = (uint32_t)doc_length;
-    pocketparse_push(parser, doc_bytes);
+    tinyparse_push(parser, doc_bytes);
 
     /* Run the GENERATED host parser. Its baked inject sites call the inject
     ** runtime, which resolves each fence's language in the registry and drives the
     ** GENERATED embedded parser over the fence content, splicing the subtree in
     ** place -- native nesting, no VM in the loop. */
-    if (fence_host_run(parser) != POCKETPARSE_OK) {
+    if (fence_host_run(parser) != TINYPARSE_OK) {
         fputs("nesting: host parse failed\n", stderr);
         return 1;
     }
 
-    tree = pocketparse_parser_tree(parser);
+    tree = tinyparse_parser_tree(parser);
     if (tree == NULL ||
-        pocketparse_tree_cursor_new(tree, &cursor) != POCKETPARSE_OK) {
+        tinyparse_tree_cursor_new(tree, &cursor) != TINYPARSE_OK) {
         fputs("nesting: host parse produced no tree\n", stderr);
         return 1;
     }
@@ -336,9 +336,9 @@ int main(int argc, char **argv)
         nesting_line_index_free(&index);
     }
 
-    pocketparse_tree_cursor_free(cursor);
-    pocketparse_parser_free(parser);
-    pocketparse_close(engine);
+    tinyparse_tree_cursor_free(cursor);
+    tinyparse_parser_free(parser);
+    tinyparse_close(engine);
     free(doc);
     return 0;
 }

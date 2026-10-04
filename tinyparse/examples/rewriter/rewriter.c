@@ -1,7 +1,7 @@
 /*
-** rewriter.c -- a #define -> enum codemod driven by a pocketparse CST.
+** rewriter.c -- a #define -> enum codemod driven by a tinyparse CST.
 **
-** It reads a C source file, parses it with pocketparse against the
+** It reads a C source file, parses it with tinyparse against the
 ** line-oriented grammar in cdefines.scm, and rewrites it: every
 ** object-like integer macro
 **
@@ -29,7 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "pocketparse.h"
+#include "tinyparse.h"
 #include "cdefines_scm.h"
 
 /* ** The host memory grant. A few megabytes is ample for the source files
@@ -66,10 +66,10 @@ typedef struct rewrite_plan {
     uint32_t       define_capacity;
 } rewrite_plan;
 
-/* ** Wrap a NUL-terminated C string as a pocketparse_string. */
-static pocketparse_string text_of(const char *s)
+/* ** Wrap a NUL-terminated C string as a tinyparse_string. */
+static tinyparse_string text_of(const char *s)
 {
-    pocketparse_string out;
+    tinyparse_string out;
     out.pointer = (const uint8_t *)s;
     out.length  = (uint32_t)strlen(s);
     return out;
@@ -106,9 +106,9 @@ static char *read_all(const char *path, size_t *out_length)
 
 /* ** Open an engine over a freshly allocated grant. Returns NULL on
 ** failure; the grant block is intentionally leaked to the process. */
-static pocketparse_engine *open_engine(void)
+static tinyparse_engine *open_engine(void)
 {
-    pocketparse_configuration configuration;
+    tinyparse_configuration configuration;
     void *block = malloc(REWRITER_GRANT);
     if (block == NULL)
         return NULL;
@@ -117,16 +117,16 @@ static pocketparse_engine *open_engine(void)
     configuration.memory.size = REWRITER_GRANT;
     configuration.memory.grow = rewriter_grow;
     configuration.flags       = 0;
-    return pocketparse_open(configuration);
+    return tinyparse_open(configuration);
 }
 
 /* ** Does the symbol under the cursor have the given kind name? */
-static int cursor_kind_is(const pocketparse_tree *tree,
-                          const pocketparse_tree_cursor *cursor,
+static int cursor_kind_is(const tinyparse_tree *tree,
+                          const tinyparse_tree_cursor *cursor,
                           const char *name)
 {
-    pocketparse_symbol kind = pocketparse_tree_cursor_kind(cursor);
-    pocketparse_string have = pocketparse_tree_symbol_name(tree, kind);
+    tinyparse_symbol kind = tinyparse_tree_cursor_kind(cursor);
+    tinyparse_string have = tinyparse_tree_symbol_name(tree, kind);
     size_t want = strlen(name);
     return have.length == want &&
            memcmp(have.pointer, name, want) == 0;
@@ -151,24 +151,24 @@ static int plan_add(rewrite_plan *plan, macro_define def)
 /* ** With the cursor on a Define node, read its `name' and `value' fields
 ** by name and record their byte spans in the plan. Returns 0 on failure
 ** (a malformed Define missing a field is skipped, not fatal). */
-static int collect_define(pocketparse_tree_cursor *cursor,
+static int collect_define(tinyparse_tree_cursor *cursor,
                           rewrite_plan *plan)
 {
     macro_define def;
 
     /* Move to the `name' field, read its span, then back to the Define. */
-    if (!pocketparse_tree_cursor_goto_first_child_by_field(cursor, text_of("name")))
+    if (!tinyparse_tree_cursor_goto_first_child_by_field(cursor, text_of("name")))
         return 0;
-    def.name_start = pocketparse_tree_cursor_start_byte(cursor);
-    def.name_end   = pocketparse_tree_cursor_end_byte(cursor);
-    pocketparse_tree_cursor_goto_parent(cursor);
+    def.name_start = tinyparse_tree_cursor_start_byte(cursor);
+    def.name_end   = tinyparse_tree_cursor_end_byte(cursor);
+    tinyparse_tree_cursor_goto_parent(cursor);
 
-    if (!pocketparse_tree_cursor_goto_first_child_by_field(cursor, text_of("value"))) {
+    if (!tinyparse_tree_cursor_goto_first_child_by_field(cursor, text_of("value"))) {
         return 0;
     }
-    def.value_start = pocketparse_tree_cursor_start_byte(cursor);
-    def.value_end   = pocketparse_tree_cursor_end_byte(cursor);
-    pocketparse_tree_cursor_goto_parent(cursor);
+    def.value_start = tinyparse_tree_cursor_start_byte(cursor);
+    def.value_end   = tinyparse_tree_cursor_end_byte(cursor);
+    tinyparse_tree_cursor_goto_parent(cursor);
 
     return plan_add(plan, def);
 }
@@ -193,24 +193,24 @@ static void emit_enum(const rewrite_plan *plan)
 /* ** First pass: walk the Source node's Line children and gather every
 ** integer macro, in source order, into the plan. The cursor ends back at
 ** the root. Returns 0 only on an empty tree. */
-static int collect_pass(const pocketparse_tree *tree,
-                        pocketparse_tree_cursor *cursor,
+static int collect_pass(const tinyparse_tree *tree,
+                        tinyparse_tree_cursor *cursor,
                         rewrite_plan *plan)
 {
-    if (!pocketparse_tree_cursor_goto_first_child(cursor))
+    if (!tinyparse_tree_cursor_goto_first_child(cursor))
         return 0; /* empty input */
 
     do {
         if (!cursor_kind_is(tree, cursor, "Line"))
             continue; /* EOF marker or stray node */
-        if (pocketparse_tree_cursor_goto_first_child(cursor)) {
+        if (tinyparse_tree_cursor_goto_first_child(cursor)) {
             if (cursor_kind_is(tree, cursor, "Define"))
                 collect_define(cursor, plan);
-            pocketparse_tree_cursor_goto_parent(cursor); /* back to Line */
+            tinyparse_tree_cursor_goto_parent(cursor); /* back to Line */
         }
-    } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
+    } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
 
-    pocketparse_tree_cursor_reset_to_root(cursor);
+    tinyparse_tree_cursor_reset_to_root(cursor);
     return 1;
 }
 
@@ -218,19 +218,19 @@ static int collect_pass(const pocketparse_tree *tree,
 ** from the bytes their span covers; #define lines are dropped, and the
 ** single enum is emitted in place of the first one. Runs only after the
 ** collect pass has filled the plan, so the enum holds every macro. */
-static void emit_pass(const pocketparse_tree *tree,
-                      pocketparse_tree_cursor *cursor,
+static void emit_pass(const tinyparse_tree *tree,
+                      tinyparse_tree_cursor *cursor,
                       const rewrite_plan *plan)
 {
     int enum_emitted = 0;
 
-    if (!pocketparse_tree_cursor_goto_first_child(cursor))
+    if (!tinyparse_tree_cursor_goto_first_child(cursor))
         return;
 
     do {
         if (!cursor_kind_is(tree, cursor, "Line"))
             continue;
-        if (pocketparse_tree_cursor_goto_first_child(cursor)) {
+        if (tinyparse_tree_cursor_goto_first_child(cursor)) {
             if (cursor_kind_is(tree, cursor, "Define")) {
                 /* Drop the #define line; emit the enum once, where the
                 ** first macro stood. */
@@ -241,34 +241,34 @@ static void emit_pass(const pocketparse_tree *tree,
             } else {
                 /* Raw line: copy the bytes its span covers through
                 ** unchanged, including the trailing newline. */
-                uint32_t span_start = pocketparse_tree_cursor_start_byte(cursor);
-                uint32_t span_end   = pocketparse_tree_cursor_end_byte(cursor);
+                uint32_t span_start = tinyparse_tree_cursor_start_byte(cursor);
+                uint32_t span_end   = tinyparse_tree_cursor_end_byte(cursor);
                 fwrite(plan->source + span_start, 1,
                        (size_t)(span_end - span_start), stdout);
             }
-            pocketparse_tree_cursor_goto_parent(cursor); /* back to Line */
+            tinyparse_tree_cursor_goto_parent(cursor); /* back to Line */
         }
-    } while (pocketparse_tree_cursor_goto_next_sibling(cursor));
+    } while (tinyparse_tree_cursor_goto_next_sibling(cursor));
 }
 
 /* ** Parse the input bytes and build the tree. Returns the parser (with its
 ** tree) or NULL, reporting faults/diagnostics to stderr. */
-static pocketparse_parser *parse_input(pocketparse_engine *engine,
+static tinyparse_parser *parse_input(tinyparse_engine *engine,
                                        const char *source_bytes,
                                        size_t source_length)
 {
-    pocketparse_grammar *grammar = NULL;
-    pocketparse_parser  *parser  = NULL;
-    pocketparse_source   grammar_source;
-    pocketparse_string   chunk, start;
-    pocketparse_result   result;
+    tinyparse_grammar *grammar = NULL;
+    tinyparse_parser  *parser  = NULL;
+    tinyparse_source   grammar_source;
+    tinyparse_string   chunk, start;
+    tinyparse_result   result;
 
     grammar_source.name = text_of("cdefines.scm");
     grammar_source.bytes.pointer = cdefines_scm;
     grammar_source.bytes.length  = (uint32_t)cdefines_scm_length;
-    result = pocketparse_compile_scheme(engine, grammar_source, &grammar);
-    if (result != POCKETPARSE_OK) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    result = tinyparse_compile_scheme(engine, grammar_source, &grammar);
+    if (result != TINYPARSE_OK) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "rewriter: grammar error: %.*s\n",
                 (int)fault.length, (const char *)fault.pointer);
         return NULL;
@@ -276,9 +276,9 @@ static pocketparse_parser *parse_input(pocketparse_engine *engine,
 
     start.pointer = NULL;
     start.length  = 0;
-    result = pocketparse_parser_new(engine, grammar, start, &parser);
-    if (result != POCKETPARSE_OK || parser == NULL) {
-        pocketparse_string fault = pocketparse_fault(engine);
+    result = tinyparse_parser_new(engine, grammar, start, &parser);
+    if (result != TINYPARSE_OK || parser == NULL) {
+        tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "rewriter: parser error: %.*s\n",
                 (int)fault.length, (const char *)fault.pointer);
         return NULL;
@@ -286,15 +286,15 @@ static pocketparse_parser *parse_input(pocketparse_engine *engine,
 
     chunk.pointer = (const uint8_t *)source_bytes;
     chunk.length  = (uint32_t)source_length;
-    pocketparse_push(parser, chunk);
+    tinyparse_push(parser, chunk);
 
-    result = pocketparse_finish(parser);
-    if (result == POCKETPARSE_SYNTAX_ERROR || result == POCKETPARSE_ERROR) {
-        uint32_t count = pocketparse_parser_diagnostic_count(parser);
+    result = tinyparse_finish(parser);
+    if (result == TINYPARSE_SYNTAX_ERROR || result == TINYPARSE_ERROR) {
+        uint32_t count = tinyparse_parser_diagnostic_count(parser);
         uint32_t d;
         for (d = 0; d < count; d++) {
-            const pocketparse_diagnostic *diag =
-                pocketparse_parser_diagnostic(parser, d);
+            const tinyparse_diagnostic *diag =
+                tinyparse_parser_diagnostic(parser, d);
             if (diag != NULL)
                 fprintf(stderr, "rewriter: %.*s\n",
                         (int)diag->message.length,
@@ -308,10 +308,10 @@ static pocketparse_parser *parse_input(pocketparse_engine *engine,
 /* ** Entry point: rewriter <file.c>. */
 int main(int argc, char **argv)
 {
-    pocketparse_engine      *engine;
-    pocketparse_parser      *parser;
-    const pocketparse_tree  *tree;
-    pocketparse_tree_cursor *cursor = NULL;
+    tinyparse_engine      *engine;
+    tinyparse_parser      *parser;
+    const tinyparse_tree  *tree;
+    tinyparse_tree_cursor *cursor = NULL;
     rewrite_plan             plan;
     char  *source_bytes;
     size_t source_length;
@@ -336,9 +336,9 @@ int main(int argc, char **argv)
     if (parser == NULL)
         return 1;
 
-    tree = pocketparse_parser_tree(parser);
+    tree = tinyparse_parser_tree(parser);
     if (tree == NULL ||
-        pocketparse_tree_cursor_new(tree, &cursor) != POCKETPARSE_OK) {
+        tinyparse_tree_cursor_new(tree, &cursor) != TINYPARSE_OK) {
         fprintf(stderr, "rewriter: no tree\n");
         return 1;
     }
@@ -352,6 +352,6 @@ int main(int argc, char **argv)
     collect_pass(tree, cursor, &plan);
     emit_pass(tree, cursor, &plan);
 
-    pocketparse_tree_cursor_free(cursor);
+    tinyparse_tree_cursor_free(cursor);
     return 0;
 }

@@ -5,7 +5,7 @@
 # BodyCommand; the closing "EOF" line matches the instantiated HeredocDelimLine and
 # ends the body. No ERROR, no MISSING anywhere.
 <<<cmd
-printf 'cat <<EOF\nhello\nEOF\n' | "$PP" run examples/heredoc/heredoc.scm --input - --dump-tree
+printf 'cat <<EOF\nhello\nEOF\n' | "$TP" run examples/heredoc/heredoc.scm --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

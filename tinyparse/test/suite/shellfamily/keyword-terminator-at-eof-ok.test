@@ -2,7 +2,7 @@
 # boundary), so the zero-width boundary assertion succeeds with no byte to consume.
 # `if x; then a; fi` with no trailing newline parses as a complete if clause.
 <<<cmd
-printf 'if x; then a; fi' | "$PP" run std.shell --input - --dump-tree
+printf 'if x; then a; fi' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

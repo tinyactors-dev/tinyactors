@@ -18,7 +18,7 @@
 **
 ** The child runs as an INLINE sub-parse: a synchronous parse over the span via a
 ** throwaway sub-parser that goes through the same lifecycle transition as any
-** parser (pp_parser_run). Nothing suspends: the host VM simply calls into the
+** parser (tp_parser_run). Nothing suspends: the host VM simply calls into the
 ** child and continues with its tree. The child still gets full isolation (its own
 ** builder, diagnostics, lexical goals, and backtrack stack) because it is a wholly
 ** separate sub-parser.
@@ -40,40 +40,40 @@
 /* ** Copy the embedded subtree rooted at child_index (in `child') into the host
 ** builder as a descendant of host_parent, shifting byte spans by span_start,
 ** re-interning kind/field names into host_interner, and stamping language_tag on
-** every node. Returns the new host node index, or PP_NO_INDEX on allocation
+** every node. Returns the new host node index, or TP_NO_INDEX on allocation
 ** failure. Recursive over the child tree; the child tree is bounded by the span,
 ** so the recursion depth is bounded by that subtree's depth. */
-static uint32_t pp_inject_copy_node(pp_tree_builder *builder,
-                                    pp_interner *host_interner,
-                                    const pocketparse_tree *child,
+static uint32_t tp_inject_copy_node(tp_tree_builder *builder,
+                                    tp_interner *host_interner,
+                                    const tinyparse_tree *child,
                                     uint32_t child_index,
                                     uint32_t span_start,
                                     uint32_t language_tag,
                                     uint32_t host_parent)
 {
-    const pp_node *src = &child->nodes[child_index];
-    uint32_t       kind  = PP_NO_SYMBOL;
-    uint32_t       field = PP_NO_SYMBOL;
+    const tp_node *src = &child->nodes[child_index];
+    uint32_t       kind  = TP_NO_SYMBOL;
+    uint32_t       field = TP_NO_SYMBOL;
     uint32_t       node;
     uint32_t       walk;
-    uint32_t       previous = PP_NO_INDEX;
+    uint32_t       previous = TP_NO_INDEX;
     uint32_t       child_count = 0;
-    uint32_t       first = PP_NO_INDEX;
+    uint32_t       first = TP_NO_INDEX;
 
     /* Re-intern the child's names into the host interner. The child interner names
     ** them; the host tree reads only its own interner, so each name is interned
     ** afresh and the new id used. This runs once per spliced node -- off the
     ** per-token hot path -- so interning here is sound. */
-    if (src->kind != PP_NO_SYMBOL)
-        kind = pp_intern(host_interner, pp_intern_name(child->interner, src->kind));
-    if (src->field != PP_NO_SYMBOL)
-        field = pp_intern(host_interner, pp_intern_name(child->interner, src->field));
+    if (src->kind != TP_NO_SYMBOL)
+        kind = tp_intern(host_interner, tp_intern_name(child->interner, src->kind));
+    if (src->field != TP_NO_SYMBOL)
+        field = tp_intern(host_interner, tp_intern_name(child->interner, src->field));
 
-    node = pp_tree_builder_push(builder, kind, field,
+    node = tp_tree_builder_push(builder, kind, field,
                                 src->start_byte + span_start,
                                 src->end_byte + span_start, host_parent);
-    if (node == PP_NO_INDEX)
-        return PP_NO_INDEX;
+    if (node == TP_NO_INDEX)
+        return TP_NO_INDEX;
     builder->nodes[node].flags        = src->flags;
     builder->nodes[node].language_tag = language_tag;
 
@@ -81,14 +81,14 @@ static uint32_t pp_inject_copy_node(pp_tree_builder *builder,
     ** grow (and move) during a child copy, so re-fetch the parent's record by
     ** index every time rather than holding a pointer across the recursion. */
     walk = src->first_child;
-    while (walk != PP_NO_INDEX) {
-        uint32_t copied = pp_inject_copy_node(builder, host_interner, child, walk,
+    while (walk != TP_NO_INDEX) {
+        uint32_t copied = tp_inject_copy_node(builder, host_interner, child, walk,
                                               span_start, language_tag, node);
-        if (copied == PP_NO_INDEX)
-            return PP_NO_INDEX;
-        if (first == PP_NO_INDEX)
+        if (copied == TP_NO_INDEX)
+            return TP_NO_INDEX;
+        if (first == TP_NO_INDEX)
             first = copied;
-        if (previous != PP_NO_INDEX)
+        if (previous != TP_NO_INDEX)
             builder->nodes[previous].next_sibling = copied;
         previous = copied;
         child_count++;
@@ -109,38 +109,38 @@ static uint32_t pp_inject_copy_node(pp_tree_builder *builder,
 ** derailing the host parse.
 **
 ** `append' is the host's "push a node index into the active child sink" callback,
-** so this function serves both executors (parse.c's pp_sink and vm.c's pp_vm_sink)
+** so this function serves both executors (parse.c's tp_sink and vm.c's tp_vm_sink)
 ** without depending on either's sink type. */
-int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
+int tp_inject_run(tinyparse_parser *host, const tp_ir *inject,
                   uint32_t span_start, uint32_t span_end,
                   int (*append)(void *sink_user, uint32_t node_index),
                   void *sink_user)
 {
-    pocketparse_grammar *embedded = inject->embedded_grammar;
+    tinyparse_grammar *embedded = inject->embedded_grammar;
     uint32_t             language_tag = inject->language_symbol;
     uint32_t             injection_node;
     uint32_t             interned_lang;
-    pocketparse_string   lang_name;
-    pocketparse_result   sub_result;
+    tinyparse_string   lang_name;
+    tinyparse_result   sub_result;
     /* W17-3 native nesting: the host's registered language entry for this region's
     ** language, if any. When set, it supplies the embedded grammar AND (optionally)
     ** a separately-compiled generated parser's run function, so a generated host
     ** parser can drive a generated embedded parser without linking it directly.
     ** registered_parse stays NULL for the dynamic / unregistered case, in which the
     ** region is parsed by the in-process VM over `embedded' exactly as before. */
-    const pocketparse_language_entry *registered;
-    pocketparse_result (*registered_parse)(pocketparse_parser *) = 0;
-    pocketparse_parser   sub;
+    const tinyparse_language_entry *registered;
+    tinyparse_result (*registered_parse)(tinyparse_parser *) = 0;
+    tinyparse_parser   sub;
 
     /* The injection node spans the whole embedded region and carries the language
     ** tag, so the dump shows a clear `injection [lang]' boundary. Its kind name is
     ** the fixed marker "injection", interned into the host grammar's interner. */
-    injection_node = pp_tree_builder_push(&host->builder,
-                                          pp_intern_c(&host->grammar->interner,
+    injection_node = tp_tree_builder_push(&host->builder,
+                                          tp_intern_c(&host->grammar->interner,
                                                       "injection"),
-                                          PP_NO_SYMBOL, span_start, span_end,
-                                          PP_NO_INDEX);
-    if (injection_node == PP_NO_INDEX)
+                                          TP_NO_SYMBOL, span_start, span_end,
+                                          TP_NO_INDEX);
+    if (injection_node == TP_NO_INDEX)
         return 0;
     host->builder.nodes[injection_node].language_tag = language_tag;
 
@@ -150,8 +150,8 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     ** id, which belongs to the host interner already (the inject form interned the
     ** name into the host grammar's interner at compile time -- see grammar.c), so
     ** language_tag is already a host id. interned_lang keeps that explicit. */
-    lang_name     = pp_intern_name(&host->grammar->interner, language_tag);
-    interned_lang = pp_intern(&host->grammar->interner, lang_name);
+    lang_name     = tp_intern_name(&host->grammar->interner, language_tag);
+    interned_lang = tp_intern(&host->grammar->interner, lang_name);
     host->builder.nodes[injection_node].language_tag = interned_lang;
 
     /* Resolve the embedded language through the engine's registry by name (W17-3).
@@ -162,7 +162,7 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     ** compile-time embedded_grammar (the in-grammar injection case), parsed by the
     ** VM. This is how a host binary names a language without linking it: the
     ** registration wires the two separately-compiled parsers at runtime. */
-    registered = pp_engine_find_language(host->engine, lang_name);
+    registered = tp_engine_find_language(host->engine, lang_name);
     if (registered != 0) {
         if (registered->grammar != 0)
             embedded = registered->grammar;
@@ -187,7 +187,7 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     sub.input          = host->input + span_start;
     sub.input_length   = span_end - span_start;
     sub.input_capacity = span_end - span_start;
-    sub.state          = PP_PARSER_ACCEPTING;
+    sub.state          = TP_PARSER_ACCEPTING;
     sub.builder.arena  = host->arena;
     sub.builder.nodes  = 0;
     sub.builder.count  = 0;
@@ -197,7 +197,7 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     sub.diagnostics.count = 0;
     sub.diagnostics.capacity = 0;
     sub.tree         = 0;
-    sub.push_failed  = POCKETPARSE_OK;
+    sub.push_failed  = TINYPARSE_OK;
     sub.slot_save_stack    = 0;
     sub.slot_save_count    = 0;
     sub.slot_save_capacity = 0;
@@ -210,7 +210,7 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     ** host and an injected grammar are initialized identically. 0 when the embedded
     ** grammar has no parametrized goals. On allocation failure fall back to 0; the
     ** failure surfaces as the embedded parse's own OOM rather than aborting the host. */
-    if (!pp_param_stacks_alloc(host->arena, embedded, &sub.param_stacks))
+    if (!tp_param_stacks_alloc(host->arena, embedded, &sub.param_stacks))
         sub.param_stacks = 0;
 
     /* Run the embedded parse over the span. Two modes (W17-3):
@@ -220,7 +220,7 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     **     cc-diff), so the spliced subtree is byte-identical -- a generated host
     **     parser nesting a generated embedded parser yields the same tree as the VM.
     **   - DYNAMIC: otherwise the inline child runs the in-process bytecode VM
-    **     (pp_execute_vm) over the span -- today's behavior, unchanged.
+    **     (tp_execute_vm) over the span -- today's behavior, unchanged.
     ** Either way the parse is a SUPERVISED, isolated child: it has its own builder,
     ** diagnostics, grammar, and input window, sharing only the host arena so its
     ** nodes outlive this call for the splice. A failed embedded parse is contained
@@ -232,7 +232,7 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     if (registered_parse != 0)
         sub_result = registered_parse(&sub);
     else
-        sub_result = pp_parser_run(&sub, pp_execute_vm);
+        sub_result = tp_parser_run(&sub, tp_execute_vm);
     (void)sub_result;
 
     /* Splice the embedded tree's root subtree under the injection node, mapping
@@ -241,16 +241,16 @@ int pp_inject_run(pocketparse_parser *host, const pp_ir *inject,
     ** start rule's node; we splice the root itself so the embedded document's own
     ** top node (e.g. JSON `Document') appears under the injection node. */
     if (sub.tree != 0 && sub.tree->node_count > 0) {
-        uint32_t copied = pp_inject_copy_node(&host->builder,
+        uint32_t copied = tp_inject_copy_node(&host->builder,
                                               &host->grammar->interner,
                                               sub.tree, sub.tree->root,
                                               span_start, interned_lang,
                                               injection_node);
-        if (copied == PP_NO_INDEX)
+        if (copied == TP_NO_INDEX)
             return 0;
         host->builder.nodes[injection_node].first_child = copied;
         host->builder.nodes[injection_node].child_count = 1;
-        host->builder.nodes[copied].next_sibling = PP_NO_INDEX;
+        host->builder.nodes[copied].next_sibling = TP_NO_INDEX;
     }
 
     return append(sink_user, injection_node);

@@ -1,10 +1,10 @@
-# pocketparse test suite — data, not code
+# tinyparse test suite — data, not code
 
-The finish line for `pocketparse` is this suite, interpreted by
+The finish line for `tinyparse` is this suite, interpreted by
 [`harness.c`](harness.c) and ratcheted against [`xfail.list`](xfail.list). See
 [`../docs/build-plan.md`](../docs/build-plan.md).
 
-Every behaviour `pocketparse` must exhibit is a **data file** here, never a
+Every behaviour `tinyparse` must exhibit is a **data file** here, never a
 hand-written C test. A test is a `*.test` file under `suite/`; its name is its
 path below `suite/` without the extension (e.g. `suite/cli/help.test` →
 `cli/help`).
@@ -30,17 +30,17 @@ only if *every* assertion holds.
 | `stderr`         | exact expected standard error (golden)                              |
 | `end`            | optional terminator                                                  |
 
-Inside `cmd`/`args`, `$PP` is the built CLI, `$IN` the default input file,
+Inside `cmd`/`args`, `$TP` is the built CLI, `$IN` the default input file,
 `$GRAMMAR` the grammar path, and `$NAME` each named input file. Commands run
-with the working directory set to `tools/pocketparse`.
+with the working directory set to `tools/tinyparse`.
 
 ### The grammar template
 
 When a test gives `grammar` (and no `cmd`), the harness runs the standard
 invocation, so tests don't repeat the plumbing:
 
-- `mode run` (default): `"$PP" run "$GRAMMAR" --input "$IN" --dump-tree <args>`
-- `mode check`:         `"$PP" check "$GRAMMAR" <args>`
+- `mode run` (default): `"$TP" run "$GRAMMAR" --input "$IN" --dump-tree <args>`
+- `mode check`:         `"$TP" check "$GRAMMAR" <args>`
 
 ### Assertions
 

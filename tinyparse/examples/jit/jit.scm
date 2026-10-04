@@ -12,11 +12,11 @@
 ;   Unary      -            (prefix)
 ;   Primary    literals, identifiers, calls, ( … )
 ;
-; The parser is the canonical pocketparse one: layered rules give precedence,
+; The parser is the canonical tinyparse one: layered rules give precedence,
 ; (choice …) picks a form, (repeat …) gathers the tails of left-associative
 ; chains, and (field …) labels the parts the codegen walker cares about.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module examples.jit)
 

@@ -1,6 +1,6 @@
 # Corpus: escaped newlines joining words and assignments.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/programs__2.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/programs__2.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

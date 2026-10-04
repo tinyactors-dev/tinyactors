@@ -1,8 +1,8 @@
-# pocketparse parse-speed ceiling: median seconds to parse the JS corpus
-# (116 docs, 200 iterations) as measured by ci/pocketparse-bench.sh.
+# tinyparse parse-speed ceiling: median seconds to parse the JS corpus
+# (116 docs, 200 iterations) as measured by ci/tinyparse-bench.sh.
 #
 # The Phase 10 ratchet. Lower this as each optimization lands; the perf gate
-# (ci/pocketparse-perf-gate.sh) fails if the measured median exceeds it by >5%.
+# (ci/tinyparse-perf-gate.sh) fails if the measured median exceeds it by >5%.
 # Starting point: the fair-methodology baseline, ~39x tree-sitter.
 # W14-5: the iterative bytecode VM is now the sole engine; measured ~5.6ms, so the
 # ceiling drops 10ms -> 7ms to lock in the gain (the ratchet only ever goes down).
@@ -13,7 +13,7 @@
 # inlined choice predictor cut ~29% of parse instructions on real files; the JS
 # corpus now measures ~4.8ms, so ratchet 6.5 -> 5.5ms to lock the gain in (the
 # ratchet only ever goes down; the margin leaves room for noisier CI hardware).
-# W16-GOAL: lowering the not-guard tokens off pp_match_ir, dropping the token memo
+# W16-GOAL: lowering the not-guard tokens off tp_match_ir, dropping the token memo
 # from the hot path (it churned the cache faster than it saved re-matches on a clean
 # predictive parse), and fusing the identifier choice-leaf run lifted real-file
 # throughput sharply; the tiny JS corpus (setup-dominated) measures ~5.0ms, so
