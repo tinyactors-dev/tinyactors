@@ -35,7 +35,7 @@ name, an origin URI, an unresolved address) are bytes in the name area
 |---|---|---|
 | `next` | 4 | the next envelope on whatever list holds this one: the run queue, a macrostep's outgoing list, a waiting list, or the free list |
 | `owner_next` | 4 | the next pending delayed send of the same sender (for `<cancel>` and unloading) |
-| `heap_index` | 4 | where it sits in the deadline index, or none |
+| `heap_index` | 4 | while a timer, where it sits in the deadline index; while runnable, its arrival number ([below](#mail-for-an-active-session)) |
 | `state` | 1 | free, outgoing, runnable, waiting, taken, timer, invocation token, child stop |
 | `type`, `source`, `flags` | 3 | `_event.type`; where it came from (`input_source` in the catalog); recorded/replaying flags and original invocation report kind/ends bits |
 | `target` | 8 | the target session, or 0 while the target is an address in the name area |
@@ -131,24 +131,55 @@ A session holds a slot from the take of an input until its
 next input must wait for that, but other sessions' envelopes behind it
 must not.
 
+**The rule: a session's mail keeps its place in the run queue.** A fill
+takes the first envelope in arrival order whose session is not active. An
+envelope for an active session is skipped, not reordered. When the session's
+input completes, its mail competes again at the place its arrival gives it:
+not ahead of other sessions' earlier mail, and not behind their later mail.
+The deferred list is how core keeps that rule without walking the skipped
+envelopes on every fill:
+
 - **When core fills a slot,** it walks the run queue from the head. An
   envelope whose target is active moves to the end of that session's
   **deferred list**. The walk takes the first envelope whose target is not
   active. Each envelope is moved at most once per activity of its target,
   so the walk costs at most the envelopes it moves, plus one.
-- **When the session's input completes,** core moves the first envelope of
-  its deferred list to the head of the run queue, and keeps the rest
-  deferred. The next fill takes it, the session is active again, and the
-  rest stay where they are. The session's mail therefore runs in arrival
-  order, one input at a time, without being walked again.
+- **Each runnable envelope carries an arrival number.** Core numbers an
+  envelope when it joins the run queue. The number shares `heap_index`'s
+  four bytes: an envelope in the deadline index is not runnable, and a
+  runnable one is not in the deadline index. Numbers are compared modulo
+  2^32, which is exact while fewer than 2^31 envelopes are runnable.
+- **When the session's input completes,** core returns the first envelope
+  of its deferred list to the run queue, at the position its arrival
+  number gives it. The rest stay deferred: they cannot run before the first
+  one, and its take makes the session active again. Every deferred
+  envelope arrived before every envelope that no fill has walked past, so
+  that position is among the returned envelopes at the head of the run
+  queue. The next fill takes the first of them, so there is at most one
+  per free slot, and the merge walks at most that many.
+- **A returned envelope that leaves before it is taken,** because it is
+  withdrawn ([below](#withdrawing-an-admitted-input)), makes core return
+  the next envelope of the same deferred list in its place.
 - **Order is kept per pair.** Every envelope on a deferred list arrived
-  before any envelope for that session still in the run queue. Putting the
-  deferred one at the head may let it overtake envelopes for *other*
-  sessions that arrived earlier; SCXML orders only one sender's events to
-  one receiver, so that is allowed.
+  before any envelope for that session still in the run queue, and a
+  session's envelopes return one at a time, in order.
 - **A deferred envelope is still runnable.** It counts against the pool,
   can be withdrawn ([below](#withdrawing-an-admitted-input)), and is
   recycled like any other when its session is destroyed.
+
+**Why arrival order, and not the session's backlog first.** An earlier
+version moved the first deferred envelope to the head of the run queue.
+A session with a long backlog then ran its inputs back to back, ahead of
+mail that arrived before them. With several slots, a busy target holds one
+slot while the others go on; the rule also stops it from taking more than
+its share each time it finishes an input.
+
+**Round robin across targets is not used.** It was considered: a
+queue per target, taken in turn, so that one busy target cannot delay
+another's mail. It needs more structure, and it breaks the one run queue in
+arrival order that the scenarios and replay's scheduling rule rely on. It
+is internal scheduling with no protocol change, so it can come later if a
+test host scenario with one slot and a hot target shows the need.
 
 With one slot, nothing is ever deferred.
 
@@ -187,6 +218,11 @@ When both the run queue and h2c have work, core alternates: it runs up to
 admitting or bouncing an event according to capacity. Internal work goes first, so work already started
 finishes before new work comes in. The ratio keeps two sessions that mail
 each other forever from shutting out external input.
+
+The ratio is the only fairness policy. Between sessions, the run queue's
+arrival order decides, including for mail that waited on a deferred list
+([above](#mail-for-an-active-session)). There is no round robin across
+targets.
 
 The ratio is part of the system's parameters. A new execution may choose a
 different ratio, including when seeded by replay

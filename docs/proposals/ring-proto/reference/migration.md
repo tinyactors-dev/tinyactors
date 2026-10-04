@@ -255,6 +255,12 @@ when h2c and c2h arrive, not at the end.
 
 ## Decided along the way
 
+- **Fairness is the ratio and arrival order.** One run queue in arrival
+  order, and `fairnessRatio` between mail and admitted input. Mail that
+  waited on a deferred list returns to the run queue at the place its
+  arrival gives it, not at the head. There is no round robin across
+  targets; it can come later as internal scheduling, with no protocol
+  change ([envelope.md](envelope.md#mail-for-an-active-session)).
 - **Debugging temporarily replaces the production driver.** Attachment
   suspends the pump and transfers exclusive ownership of the whole system.
   Debugger commands stay outside the rings; native primitives support
@@ -300,9 +306,6 @@ when h2c and c2h arrive, not at the end.
 
 ## Open questions
 
-- **Fairness.** Is a ratio of mail to admitted input enough, or does
-  core need round robin across targets so that one busy actor cannot
-  delay another's mail? ([envelope.md](envelope.md))
 - **Default sizes.** The pool, the name area and the rings
   ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Partly answered: a full c2h
   pauses a slot, so ring size is a throughput setting, and the rings

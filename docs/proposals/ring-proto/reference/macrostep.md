@@ -626,8 +626,9 @@ abandon at that boundary:
 - `c2h.macrostep_ended` and `c2h.input_completed` say `runaway`, and core
   writes the `TA_TRACE_RUNAWAY` telemetry record ADR 0075 defines, with the
   configuration and the transitions of the looping microstep;
-- the slot is free, and the session takes the next input from its
-  deferred list.
+- the slot is free, and the first envelope of the session's deferred list
+  returns to the run queue at the position its arrival gives it
+  ([envelope.md](envelope.md#mail-for-an-active-session)).
 
 It is like a `RecursionError` that only the event loop can catch: the
 handler stops, the process lives on, and nothing it already changed or

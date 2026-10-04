@@ -372,7 +372,7 @@ Questions that must be answered before the phase that depends on them:
 | Open question | Blocks |
 |---|---|
 | Size of the mandatory internal-event arena ([macrostep.md](reference/macrostep.md#sizing-mandatory-storage)) | 4.4 |
-| Fairness: is a ratio enough? ([migration.md](reference/migration.md#open-questions)) | 4.2 |
+| Fairness: is a ratio enough? **Answered:** yes. One run queue in arrival order and `fairnessRatio`; deferred mail returns to the run queue at its arrival position; no round robin across targets ([envelope.md](reference/envelope.md#mail-for-an-active-session)) | 4.2 |
 | Default sizes for the pool, the name area and the rings. **Answered in part:** a full c2h pauses the writing slot instead of failing the action, so a ring's size is a throughput setting. The rings default to 16 KiB each; the pool (4,096 envelopes) and the name area (256 KiB) keep their bounds ([BEHAVIORS.md](BEHAVIORS.md#parameters)). **Open:** measuring the ring defaults with napi's suites, `scale.js` and the IRP suite, recorded in the pool ADR | 4.2 |
 | The exact encoding of definition specs and diagnostics ([definitions.md](reference/definitions.md)) | 5.4 |
 | A home for the MCP server mapping, now that the kernel goes | 6 |
