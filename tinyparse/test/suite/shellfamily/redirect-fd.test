@@ -1,7 +1,7 @@
 # A file-descriptor redirection: ls 2>err redirects fd 2. The 2 abuts the > with
 # no blank, so it is read as an fd: IoNumber, not an argument.
 <<<cmd
-printf 'ls 2>err\n' | "$PP" run std.shell --input - --dump-tree
+printf 'ls 2>err\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

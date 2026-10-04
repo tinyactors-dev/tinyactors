@@ -1,7 +1,7 @@
 # Two commands on two lines: the newline separates them, so the program holds
 # two SimpleCommand nodes.
 <<<cmd
-printf 'echo a\necho b\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo a\necho b\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

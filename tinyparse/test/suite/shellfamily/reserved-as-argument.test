@@ -2,7 +2,7 @@
 # ordinary word: `echo if then fi` has `echo` as the command and `if`/`then`/`fi`
 # as three argument words, no compound command.
 <<<cmd
-printf 'echo if then fi\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo if then fi\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -3,8 +3,8 @@ set -e
 d="$(mktemp -d)"
 trap 'rm -rf "$d"' EXIT
 cd "$d"
-"$PP" vendor . --amalgamation
-test -f pocketparse.c
-test -f pocketparse.h
+"$TP" vendor . --amalgamation
+test -f tinyparse.c
+test -f tinyparse.h
 <<<assert
 exit 0

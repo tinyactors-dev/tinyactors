@@ -6,7 +6,7 @@
 ; the intent explicit and lets a digit run parse where the base grammar would
 ; reject it.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module family.ext-override)
 

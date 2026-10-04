@@ -1,4 +1,4 @@
 <<<cmd
-test -f dist/macos-arm64/libpocketparse.a
+test -f dist/macos-arm64/libtinyparse.a
 <<<assert
 exit 0

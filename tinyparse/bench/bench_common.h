@@ -1,5 +1,5 @@
 /*
-** bench_common.h -- shared scaffolding for the pocketparse vs tree-sitter
+** bench_common.h -- shared scaffolding for the tinyparse vs tree-sitter
 ** benchmark harnesses (Phase 9, W42).
 **
 ** Both harnesses receive, on the command line, a manifest file listing the
@@ -145,7 +145,7 @@ static long bench_peak_rss_kb(void)
 }
 
 /* ** Report a result line in a machine-parseable KEY=VALUE form the orchestrator
-** script greps for. parser is "pocketparse" or "tree-sitter". */
+** script greps for. parser is "tinyparse" or "tree-sitter". */
 static void bench_report(const char *parser, double median_seconds,
                          size_t total_bytes, size_t iterations,
                          long peak_rss_kb)
@@ -162,7 +162,7 @@ static void bench_report(const char *parser, double median_seconds,
 ** orchestrator greps for. The walk visits a fixed number of nodes (a property
 ** of the built tree, not the iteration), so we report that node count once and
 ** normalize the median walk time by it: nodes per second, and nanoseconds of
-** walk work per node. Because pocketparse and tree-sitter build trees of
+** walk work per node. Because tinyparse and tree-sitter build trees of
 ** different shapes, each side reports its OWN node count, and ns/node is the
 ** per-node figure that makes the two comparable. */
 static void bench_report_walk(const char *parser, double median_seconds,

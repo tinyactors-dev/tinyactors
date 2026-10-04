@@ -1,9 +1,9 @@
 ---
 name: left-factor
-description: Left-factor a pocketparse `.scm` grammar so its ordered choices stop re-parsing a shared prefix — the transform that turns a PEG's quadratic/exponential backtracking into linear descent. Use when a grammar parses pathologically slowly or uses huge memory on deeply nested input (expression ladders are the classic culprit), when porting a tree-sitter grammar (whose unordered `choice` the LR table left-factors for free, but ordered PEG choice does not), or when asked to make a pocketparse grammar faster at the source rather than leaning on the rule memo. Covers how to spot a re-parsing choice, the transform, the verification bar (conformance + the engine differential + a memo-OFF before/after), and the traps.
+description: Left-factor a tinyparse `.scm` grammar so its ordered choices stop re-parsing a shared prefix — the transform that turns a PEG's quadratic/exponential backtracking into linear descent. Use when a grammar parses pathologically slowly or uses huge memory on deeply nested input (expression ladders are the classic culprit), when porting a tree-sitter grammar (whose unordered `choice` the LR table left-factors for free, but ordered PEG choice does not), or when asked to make a tinyparse grammar faster at the source rather than leaning on the rule memo. Covers how to spot a re-parsing choice, the transform, the verification bar (conformance + the engine differential + a memo-OFF before/after), and the traps.
 ---
 
-# Left-factoring a pocketparse grammar
+# Left-factoring a tinyparse grammar
 
 A PEG's `(choice a b)` is **ordered and backtracking**: it tries `a` fully, and if
 `a` fails it throws that entire parse away and tries `b` from the same offset. When
@@ -14,7 +14,7 @@ exponential. tree-sitter grammars do not show this because their `choice` is
 you port such a grammar to ordered PEG choice, the merge is gone and the re-parse
 appears. Left-factoring puts the merge back, by hand, in the grammar.
 
-This is the *source-level* cure. pocketparse also has a runtime rule memo (a
+This is the *source-level* cure. tinyparse also has a runtime rule memo (a
 packrat safety net), but factoring is better where it applies: it removes the work
 instead of caching it, costs no memory, and helps every engine. Use both — factor
 the hot rules, let the memo catch the rest.
@@ -68,18 +68,18 @@ whose earlier alternative fails *immediately* is not the problem.
 ## Verifying (the bar — do not skip)
 
 Tree shapes may shift (e.g. an assignment's LHS becomes the ternary-derived node
-rather than a dedicated `lhs` node). That is acceptable: pocketparse conformance is
+rather than a dedicated `lhs` node). That is acceptable: tinyparse conformance is
 **accept-level**, not tree-equality (`docs/decisions.md`). The bar is:
 
-1. **Conformance unchanged:** `bash ci/pocketparse-metric.sh` stays 296/296 (or
+1. **Conformance unchanged:** `bash ci/tinyparse-metric.sh` stays 296/296 (or
    whatever the current count is). The corpus must still accept what it accepted and
    reject what it rejected.
-2. **Engines agree:** `bash ci/pocketparse-vm-diff.sh` green — the change is in the
+2. **Engines agree:** `bash ci/tinyparse-vm-diff.sh` green — the change is in the
    grammar, so every engine sees it; they must still produce identical trees.
 3. **It actually helped:** measure with the memo OFF so you see the *grammar*
    effect, not the memo's. Pack and time a pathological input both ways:
    ```sh
-   POCKETPARSE_RULEMEMO=off <harness> <file>   # before vs after
+   TINYPARSE_RULEMEMO=off <harness> <file>   # before vs after
    ```
    A good factoring drops a deeply nested file from seconds to milliseconds and its
    peak memory from hundreds of MB to tens. Record the before/after.
@@ -93,8 +93,8 @@ rather than a dedicated `lhs` node). That is acceptable: pocketparse conformance
   *different* fields/aliases, you cannot factor it into one parse without losing
   that distinction — leave it, or push the field onto the branches.
 - **Edit the grammar, not the generated C.** These are `.scm` data; the engines read
-  them directly. After editing, **re-pack** any cached `.ppg` the benchmarks load
-  (`pocketparse pack …`), or they will run the old grammar.
+  them directly. After editing, **re-pack** any cached `.tpg` the benchmarks load
+  (`tinyparse pack …`), or they will run the old grammar.
 - **Right-associativity via recursion stays.** `(seq left op (… assignment))` with
   the rule recursing on its right is how right-assoc is expressed; the optional-tail
   factoring preserves it (`(optional (seq op right:assignment))`).

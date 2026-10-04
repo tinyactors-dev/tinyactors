@@ -6,7 +6,7 @@
 ; silently shadow a base rule. Compiling this grammar must fail with a diagnostic
 ; that names `override`.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module family.ext-bare)
 

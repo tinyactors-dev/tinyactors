@@ -1,7 +1,7 @@
 # A double-quoted string is one argument word: the spaces inside the quotes are
 # literal, so "a b c" is a single arg holding a DoubleQuoted part.
 <<<cmd
-printf 'echo "a b c"\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo "a b c"\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

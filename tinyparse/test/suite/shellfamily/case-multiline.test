@@ -1,7 +1,7 @@
 # A case clause across lines, with the last item omitting the trailing `;;` (the
 # newline before `esac` ends the body). Both items still parse as CaseItems.
 <<<cmd
-printf 'case w in\n  a) echo a ;;\n  b) echo b\nesac\n' | "$PP" run std.shell --input - --dump-tree
+printf 'case w in\n  a) echo a ;;\n  b) echo b\nesac\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

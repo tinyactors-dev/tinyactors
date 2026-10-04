@@ -2,8 +2,8 @@
 w="$(mktemp -d)"
 trap 'rm -rf "$w"' EXIT
 set -e
-"$PP" pack examples/lexgoal/mini-js.scm --out "$w"/pp_minijs.ppg
-printf 'a = /ab/ ; b = c / d ;' | "$PP" run "$w"/pp_minijs.ppg --input - --dump-tree
+"$TP" pack examples/lexgoal/mini-js.scm --out "$w"/tp_minijs.tpg
+printf 'a = /ab/ ; b = c / d ;' | "$TP" run "$w"/tp_minijs.tpg --input - --dump-tree
 <<<assert
 exit 0
 out-contains RegexLiteral

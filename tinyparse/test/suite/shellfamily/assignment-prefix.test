@@ -2,7 +2,7 @@
 # binds as an Assignment (Name "VAR", value Word "x"), then echo is the command
 # and hi its argument.
 <<<cmd
-printf 'VAR=x echo hi\n' | "$PP" run std.shell --input - --dump-tree
+printf 'VAR=x echo hi\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

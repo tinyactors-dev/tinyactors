@@ -1,7 +1,7 @@
 /*
 ** reader.c -- the .scm reader.
 **
-** Turns Scheme-shaped grammar bytes into a tree of pp_form records: lists,
+** Turns Scheme-shaped grammar bytes into a tree of tp_form records: lists,
 ** symbols, keyword symbols (trailing colon), strings with escapes, integers,
 ** byte/hex literals, with `;' line comments and whitespace skipped. It is not a
 ** Scheme evaluator -- it only reads data. Freestanding: all forms come from the
@@ -10,34 +10,34 @@
 #include "internal.h"
 
 /* ** The reader's mutable cursor over the source bytes. */
-typedef struct pp_reader {
-    pp_arena          *arena;
+typedef struct tp_reader {
+    tp_arena          *arena;
     const uint8_t     *bytes;
     uint32_t           length;
     uint32_t           position;
     int                ok;
     const char        *error;
     uint32_t           error_byte;
-} pp_reader;
+} tp_reader;
 
 /* ** True for ASCII whitespace, which separates tokens and is discarded. */
-static int pp_is_space(uint8_t c)
+static int tp_is_space(uint8_t c)
 {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v';
 }
 
 /* ** True for a byte that terminates a bare symbol or number token. */
-static int pp_is_delimiter(uint8_t c)
+static int tp_is_delimiter(uint8_t c)
 {
-    return pp_is_space(c) || c == '(' || c == ')' || c == ';' || c == '"' || c == '\0';
+    return tp_is_space(c) || c == '(' || c == ')' || c == ';' || c == '"' || c == '\0';
 }
 
 /* ** Skip whitespace and `;'-to-end-of-line comments before the next form. */
-static void pp_skip_trivia(pp_reader *reader)
+static void tp_skip_trivia(tp_reader *reader)
 {
     while (reader->position < reader->length) {
         uint8_t c = reader->bytes[reader->position];
-        if (pp_is_space(c)) {
+        if (tp_is_space(c)) {
             reader->position++;
         } else if (c == ';') {
             while (reader->position < reader->length &&
@@ -50,9 +50,9 @@ static void pp_skip_trivia(pp_reader *reader)
 }
 
 /* ** Allocate a fresh form of the given kind at the current source offset. */
-static pp_form *pp_form_new(pp_reader *reader, pp_form_kind kind)
+static tp_form *tp_form_new(tp_reader *reader, tp_form_kind kind)
 {
-    pp_form *form = (pp_form *)pp_alloc(reader->arena, sizeof *form);
+    tp_form *form = (tp_form *)tp_alloc(reader->arena, sizeof *form);
     if (form == 0) {
         reader->ok = 0;
         reader->error = "out of memory reading grammar";
@@ -60,7 +60,7 @@ static pp_form *pp_form_new(pp_reader *reader, pp_form_kind kind)
         return 0;
     }
     form->kind       = kind;
-    form->text       = pp_text("");
+    form->text       = tp_text("");
     form->integer    = 0;
     form->items      = 0;
     form->count      = 0;
@@ -68,14 +68,14 @@ static pp_form *pp_form_new(pp_reader *reader, pp_form_kind kind)
     return form;
 }
 
-static pp_form *pp_read_form(pp_reader *reader);
+static tp_form *tp_read_form(tp_reader *reader);
 
 /* ** Read a parenthesised list. The opening `(' has been consumed. Children are
 ** collected into a geometrically grown vector. A missing `)' is an error. */
-static pp_form *pp_read_list(pp_reader *reader)
+static tp_form *tp_read_list(tp_reader *reader)
 {
-    pp_form  *list = pp_form_new(reader, PP_FORM_LIST);
-    pp_form **items = 0;
+    tp_form  *list = tp_form_new(reader, TP_FORM_LIST);
+    tp_form **items = 0;
     uint32_t  count = 0;
     uint32_t  capacity = 0;
 
@@ -84,7 +84,7 @@ static pp_form *pp_read_list(pp_reader *reader)
     list->start_byte = reader->position - 1; /* the '(' */
 
     for (;;) {
-        pp_skip_trivia(reader);
+        tp_skip_trivia(reader);
         if (reader->position >= reader->length) {
             reader->ok = 0;
             reader->error = "unterminated list";
@@ -96,12 +96,12 @@ static pp_form *pp_read_list(pp_reader *reader)
             break;
         }
         {
-            pp_form *child = pp_read_form(reader);
+            tp_form *child = tp_read_form(reader);
             if (child == 0)
                 return 0;
             if (count == capacity) {
                 uint32_t new_capacity = capacity == 0 ? 4 : capacity * 2;
-                pp_form **grown = (pp_form **)pp_alloc(
+                tp_form **grown = (tp_form **)tp_alloc(
                     reader->arena, new_capacity * sizeof *grown);
                 uint32_t i;
                 if (grown == 0) {
@@ -127,9 +127,9 @@ static pp_form *pp_read_list(pp_reader *reader)
 /* ** Read a double-quoted string, decoding the escapes the grammar uses:
 ** \n \t \r \\ \" \0 and \xHH. The decoded bytes are stored in the form. An
 ** unterminated string is an error. */
-static pp_form *pp_read_string(pp_reader *reader)
+static tp_form *tp_read_string(tp_reader *reader)
 {
-    pp_form *form = pp_form_new(reader, PP_FORM_STRING);
+    tp_form *form = tp_form_new(reader, TP_FORM_STRING);
     uint8_t *out;
     uint32_t out_len = 0;
     uint32_t cap;
@@ -140,7 +140,7 @@ static pp_form *pp_read_string(pp_reader *reader)
 
     /* Worst case the decoded string is no longer than the remaining input. */
     cap = reader->length - reader->position + 1;
-    out = (uint8_t *)pp_alloc(reader->arena, cap == 0 ? 1 : cap);
+    out = (uint8_t *)tp_alloc(reader->arena, cap == 0 ? 1 : cap);
     if (out == 0) {
         reader->ok = 0;
         reader->error = "out of memory reading string";
@@ -203,9 +203,9 @@ static pp_form *pp_read_string(pp_reader *reader)
 
 /* ** Decode a hex byte literal of the form #xHH... into bytes. The `#' has been
 ** seen; consumes the `x' and the following hex digit pairs. */
-static pp_form *pp_read_hex(pp_reader *reader)
+static tp_form *tp_read_hex(tp_reader *reader)
 {
-    pp_form *form = pp_form_new(reader, PP_FORM_BYTES);
+    tp_form *form = tp_form_new(reader, TP_FORM_BYTES);
     uint8_t *out;
     uint32_t out_len = 0;
     uint32_t cap;
@@ -219,7 +219,7 @@ static pp_form *pp_read_hex(pp_reader *reader)
         reader->position++;
 
     cap = reader->length - reader->position + 1;
-    out = (uint8_t *)pp_alloc(reader->arena, cap == 0 ? 1 : cap);
+    out = (uint8_t *)tp_alloc(reader->arena, cap == 0 ? 1 : cap);
     if (out == 0) {
         reader->ok = 0;
         reader->error = "out of memory reading byte literal";
@@ -249,7 +249,7 @@ static pp_form *pp_read_hex(pp_reader *reader)
 }
 
 /* ** True if the run of bytes is a plain decimal integer (optionally signed). */
-static int pp_is_integer(const uint8_t *p, uint32_t n)
+static int tp_is_integer(const uint8_t *p, uint32_t n)
 {
     uint32_t i = 0;
     if (n == 0)
@@ -267,22 +267,22 @@ static int pp_is_integer(const uint8_t *p, uint32_t n)
 
 /* ** Read a bare token: a symbol, a keyword (trailing colon), or an integer.
 ** The token runs to the next delimiter. */
-static pp_form *pp_read_atom(pp_reader *reader)
+static tp_form *tp_read_atom(tp_reader *reader)
 {
     uint32_t start = reader->position;
-    pp_form *form;
+    tp_form *form;
     const uint8_t *text;
     uint32_t       length;
 
     while (reader->position < reader->length &&
-           !pp_is_delimiter(reader->bytes[reader->position]))
+           !tp_is_delimiter(reader->bytes[reader->position]))
         reader->position++;
 
     text   = reader->bytes + start;
     length = reader->position - start;
 
     if (length > 0 && text[length - 1] == ':') {
-        form = pp_form_new(reader, PP_FORM_KEYWORD);
+        form = tp_form_new(reader, TP_FORM_KEYWORD);
         if (form == 0)
             return 0;
         form->start_byte   = start;
@@ -291,11 +291,11 @@ static pp_form *pp_read_atom(pp_reader *reader)
         return form;
     }
 
-    if (pp_is_integer(text, length)) {
+    if (tp_is_integer(text, length)) {
         int64_t  value = 0;
         int      negative = 0;
         uint32_t i = 0;
-        form = pp_form_new(reader, PP_FORM_INTEGER);
+        form = tp_form_new(reader, TP_FORM_INTEGER);
         if (form == 0)
             return 0;
         form->start_byte = start;
@@ -311,7 +311,7 @@ static pp_form *pp_read_atom(pp_reader *reader)
         return form;
     }
 
-    form = pp_form_new(reader, PP_FORM_SYMBOL);
+    form = tp_form_new(reader, TP_FORM_SYMBOL);
     if (form == 0)
         return 0;
     form->start_byte   = start;
@@ -321,10 +321,10 @@ static pp_form *pp_read_atom(pp_reader *reader)
 }
 
 /* ** Read the next single form. Dispatches on the leading byte. */
-static pp_form *pp_read_form(pp_reader *reader)
+static tp_form *tp_read_form(tp_reader *reader)
 {
     uint8_t c;
-    pp_skip_trivia(reader);
+    tp_skip_trivia(reader);
     if (reader->position >= reader->length) {
         reader->ok = 0;
         reader->error = "unexpected end of grammar";
@@ -335,7 +335,7 @@ static pp_form *pp_read_form(pp_reader *reader)
     c = reader->bytes[reader->position];
     if (c == '(') {
         reader->position++;
-        return pp_read_list(reader);
+        return tp_read_list(reader);
     }
     if (c == ')') {
         reader->ok = 0;
@@ -344,23 +344,23 @@ static pp_form *pp_read_form(pp_reader *reader)
         return 0;
     }
     if (c == '"')
-        return pp_read_string(reader);
+        return tp_read_string(reader);
     /* `#xHH...' is a hex byte literal. A `#' followed by anything else is an
     ** ordinary symbol -- this is how query predicates spell their heads, e.g.
     ** `#eq?' and `#match?' -- so only the `#x'/`#X' form enters the hex reader. */
     if (c == '#' && reader->position + 1 < reader->length &&
         (reader->bytes[reader->position + 1] == 'x' ||
          reader->bytes[reader->position + 1] == 'X'))
-        return pp_read_hex(reader);
-    return pp_read_atom(reader);
+        return tp_read_hex(reader);
+    return tp_read_atom(reader);
 }
 
 /* ** Read a whole .scm source into a vector of top-level forms. */
-pp_read_result pp_read(pp_arena *arena, pocketparse_string source)
+tp_read_result tp_read(tp_arena *arena, tinyparse_string source)
 {
-    pp_reader      reader;
-    pp_read_result result;
-    pp_form      **forms = 0;
+    tp_reader      reader;
+    tp_read_result result;
+    tp_form      **forms = 0;
     uint32_t       count = 0;
     uint32_t       capacity = 0;
 
@@ -373,16 +373,16 @@ pp_read_result pp_read(pp_arena *arena, pocketparse_string source)
     reader.error_byte = 0;
 
     for (;;) {
-        pp_form *form;
-        pp_skip_trivia(&reader);
+        tp_form *form;
+        tp_skip_trivia(&reader);
         if (reader.position >= reader.length)
             break;
-        form = pp_read_form(&reader);
+        form = tp_read_form(&reader);
         if (form == 0)
             break;
         if (count == capacity) {
             uint32_t new_capacity = capacity == 0 ? 8 : capacity * 2;
-            pp_form **grown = (pp_form **)pp_alloc(
+            tp_form **grown = (tp_form **)tp_alloc(
                 arena, new_capacity * sizeof *grown);
             uint32_t i;
             if (grown == 0) {

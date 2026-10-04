@@ -1,6 +1,6 @@
 # Tcl-ish words
 
-A small pocketparse grammar for one Tcl command line. It teaches two things
+A small tinyparse grammar for one Tcl command line. It teaches two things
 at once: how `[ … ]` and `{ … }` recurse to any depth, and how a single word
 can fuse several substitution forms with no whitespace between them.
 

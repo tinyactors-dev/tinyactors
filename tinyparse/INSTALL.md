@@ -1,12 +1,12 @@
-# pocketparse @VERSION@ — @PLATFORM@
+# tinyparse @VERSION@ — @PLATFORM@
 
 This tarball unpacks to a prefix-shaped tree:
 
-    bin/pocketparse                 the command-line tool
-    lib/libpocketparse.a            static library
-    lib/libpocketparse.{so,dylib}   shared library
-    include/pocketparse.h           the public header
-    share/man/man1/pocketparse.1    the manual page
+    bin/tinyparse                 the command-line tool
+    lib/libtinyparse.a            static library
+    lib/libtinyparse.{so,dylib}   shared library
+    include/tinyparse.h           the public header
+    share/man/man1/tinyparse.1    the manual page
 
 ## Install
 
@@ -18,12 +18,12 @@ Into your home prefix:
 
     cp -r * ~/.local/
 
-After installing, `pocketparse --help` prints the usage summary and
-`man pocketparse` shows the manual page (make sure the prefix's
+After installing, `tinyparse --help` prints the usage summary and
+`man tinyparse` shows the manual page (make sure the prefix's
 `share/man` is on your `MANPATH`).
 
 ## Linking against the library
 
-    cc myprog.c -lpocketparse        # add -L/-I if not in a default prefix
+    cc myprog.c -ltinyparse        # add -L/-I if not in a default prefix
 
-Include only `pocketparse.h`; the library has no dependencies of its own.
+Include only `tinyparse.h`; the library has no dependencies of its own.

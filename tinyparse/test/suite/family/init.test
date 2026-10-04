@@ -2,9 +2,9 @@
 set -e
 d="$(mktemp -d)"
 trap 'rm -rf "$d"' EXIT
-"$PP" init "$d/proj" --amalgamation
-test -f "$d/proj/pocketparse.c"
-test -f "$d/proj/pocketparse.h"
+"$TP" init "$d/proj" --amalgamation
+test -f "$d/proj/tinyparse.c"
+test -f "$d/proj/tinyparse.h"
 test -f "$d/proj/main.c"
 test -f "$d/proj/grammar.scm"
 <<<assert

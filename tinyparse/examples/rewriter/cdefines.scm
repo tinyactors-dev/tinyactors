@@ -16,7 +16,7 @@
 ; reachable through the tree. Horizontal whitespace inside a #define is
 ; matched explicitly by the Gap token.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module examples.rewriter)
 

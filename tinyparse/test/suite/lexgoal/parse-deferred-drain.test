@@ -1,5 +1,5 @@
 <<<cmd
-printf 'head one two\nalpha\nbravo\n' | "$PP" run test/suite/lexgoal/parse-deferred-drain.scm --input - --dump-tree
+printf 'head one two\nalpha\nbravo\n' | "$TP" run test/suite/lexgoal/parse-deferred-drain.scm --input - --dump-tree
 <<<assert
 exit 0
 out-count 2 Body [

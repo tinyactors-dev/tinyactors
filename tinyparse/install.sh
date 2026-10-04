@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh — fetch the matching pocketparse release tarball and install it
+# install.sh — fetch the matching tinyparse release tarball and install it
 # into a prefix. Designed to be run from a laptop, including via `curl | sh`.
 #
 # Usage:
@@ -12,10 +12,10 @@
 #   --from-file FILE  install from a local tarball; skips all network access
 #
 # The result is a prefix-shaped tree:
-#   <prefix>/bin/pocketparse
-#   <prefix>/lib/libpocketparse.{a,so,dylib}
-#   <prefix>/include/pocketparse.h
-#   <prefix>/share/man/man1/pocketparse.1
+#   <prefix>/bin/tinyparse
+#   <prefix>/lib/libtinyparse.{a,so,dylib}
+#   <prefix>/include/tinyparse.h
+#   <prefix>/share/man/man1/tinyparse.1
 set -eu
 
 PREFIX="${HOME:-}/.local"
@@ -23,10 +23,10 @@ REPO="dhamidi/tinyactors"
 VERSION=""
 FROM_FILE=""
 
-PROG="pocketparse"
+PROG="tinyparse"
 
-die() { printf '[pp-install] ERROR: %s\n' "$*" >&2; exit 1; }
-log() { printf '[pp-install] %s\n' "$*" >&2; }
+die() { printf '[tp-install] ERROR: %s\n' "$*" >&2; exit 1; }
+log() { printf '[tp-install] %s\n' "$*" >&2; }
 
 # ---------------------------------------------------------------------------
 # Parse arguments.
@@ -98,7 +98,7 @@ fetch_stdout() {
 
 # ---------------------------------------------------------------------------
 # resolve_latest_version REPO: query the GitHub API for the latest release tag
-# and strip a leading `pocketparse-v` to get the bare version.
+# and strip a leading `tinyparse-v` to get the bare version.
 # ---------------------------------------------------------------------------
 resolve_latest_version() {
   repo="$1"
@@ -109,8 +109,8 @@ resolve_latest_version() {
     | head -n 1 \
     | sed -e 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//' -e 's/".*//')"
   [ -n "$tag" ] || die "could not read tag_name from $api response"
-  # Strip a leading pocketparse-v (or a bare leading v) to get the version.
-  ver="${tag#pocketparse-v}"
+  # Strip a leading tinyparse-v (or a bare leading v) to get the version.
+  ver="${tag#tinyparse-v}"
   ver="${ver#v}"
   [ -n "$ver" ] || die "could not derive a version from tag '$tag'"
   echo "$ver"
@@ -144,8 +144,8 @@ else
   fi
   log "version: $VERSION"
 
-  ASSET="pocketparse-$VERSION-$PLAT.tar.gz"
-  URL="https://github.com/$REPO/releases/download/pocketparse-v$VERSION/$ASSET"
+  ASSET="tinyparse-$VERSION-$PLAT.tar.gz"
+  URL="https://github.com/$REPO/releases/download/tinyparse-v$VERSION/$ASSET"
   TARBALL="$TMPDIR_INSTALL/$ASSET"
   log "downloading $URL"
   fetch "$URL" "$TARBALL" \
@@ -160,7 +160,7 @@ EXTRACT="$TMPDIR_INSTALL/extract"
 mkdir -p "$EXTRACT"
 tar xzf "$TARBALL" -C "$EXTRACT" || die "could not extract $TARBALL"
 
-# The tarball unpacks to a single top-level pocketparse-<ver>-<plat>/ directory.
+# The tarball unpacks to a single top-level tinyparse-<ver>-<plat>/ directory.
 TOPDIR=""
 for d in "$EXTRACT"/*/; do
   [ -d "$d" ] || continue
@@ -170,7 +170,7 @@ for d in "$EXTRACT"/*/; do
   TOPDIR="$d"
 done
 [ -n "$TOPDIR" ] || die "unexpected tarball layout: no top-level directory"
-[ -d "$TOPDIR/bin" ] || die "tarball has no bin/ directory; is this a pocketparse release?"
+[ -d "$TOPDIR/bin" ] || die "tarball has no bin/ directory; is this a tinyparse release?"
 
 mkdir -p "$PREFIX" || die "could not create prefix: $PREFIX"
 
@@ -180,18 +180,18 @@ for sub in bin lib include share; do
   cp -R "$TOPDIR/$sub" "$PREFIX/" || die "failed to copy $sub into $PREFIX"
 done
 
-[ -x "$PREFIX/bin/pocketparse" ] || die "install failed: $PREFIX/bin/pocketparse is missing"
+[ -x "$PREFIX/bin/tinyparse" ] || die "install failed: $PREFIX/bin/tinyparse is missing"
 
 # ---------------------------------------------------------------------------
 # Summary and PATH hint.
 # ---------------------------------------------------------------------------
-log "installed pocketparse into $PREFIX"
-log "  $PREFIX/bin/pocketparse"
-[ -f "$PREFIX/include/pocketparse.h" ] && log "  $PREFIX/include/pocketparse.h"
-for lib in "$PREFIX"/lib/libpocketparse.*; do
+log "installed tinyparse into $PREFIX"
+log "  $PREFIX/bin/tinyparse"
+[ -f "$PREFIX/include/tinyparse.h" ] && log "  $PREFIX/include/tinyparse.h"
+for lib in "$PREFIX"/lib/libtinyparse.*; do
   [ -e "$lib" ] && log "  $lib"
 done
-[ -f "$PREFIX/share/man/man1/pocketparse.1" ] && log "  $PREFIX/share/man/man1/pocketparse.1"
+[ -f "$PREFIX/share/man/man1/tinyparse.1" ] && log "  $PREFIX/share/man/man1/tinyparse.1"
 
 case ":${PATH:-}:" in
   *":$PREFIX/bin:"*) : ;;
@@ -199,4 +199,4 @@ case ":${PATH:-}:" in
      log "      export PATH=\"$PREFIX/bin:\$PATH\"" ;;
 esac
 
-log "done. Try: $PREFIX/bin/pocketparse version"
+log "done. Try: $PREFIX/bin/tinyparse version"

@@ -1,9 +1,9 @@
-/* pocketparse test harness — runs DATA-driven CLI tests against an xfail
+/* tinyparse test harness — runs DATA-driven CLI tests against an xfail
  * ledger and ratchets toward a green finish line.
  *
  * This is host development tooling (it shells out, reads files, prints), so it
  * uses libc freely; it is NOT part of the freestanding library. Test cases are
- * data, never code: every behaviour pocketparse must exhibit is a `.test` file,
+ * data, never code: every behaviour tinyparse must exhibit is a `.test` file,
  * and `xfail.list` records which ones are still allowed to fail.
  *
  * --- Test file format (see test/README.md) --------------------------------
@@ -37,7 +37,7 @@
  *   err-absent TEXT         stderr does not contain TEXT
  *   err-regex RE            stderr matches POSIX extended regex RE
  *
- * Inside cmd/args, $PP is the CLI, $IN the default input file, $GRAMMAR the
+ * Inside cmd/args, $TP is the CLI, $IN the default input file, $GRAMMAR the
  * grammar path, and $NAME each named input file.
  *
  * Usage: harness --suite DIR --xfail FILE --cwd DIR
@@ -305,7 +305,7 @@ static int eval_assertions(const char *asrt, int code, const char *out, const ch
 
 /* ** Run one test; return 1 on PASS, 0 on FAIL, with failure detail. ** */
 static int run_test(const testcase *t, const char *cwd, buffer *detail) {
-    char dir[] = "/tmp/ppharness.XXXXXX";
+    char dir[] = "/tmp/tpharness.XXXXXX";
     if (!mkdtemp(dir)) { buffer_push(detail, "        - mkdtemp failed\n", 25); return 0; }
 
     /* write input blobs to temp files; remember their paths for env + cleanup */
@@ -333,9 +333,9 @@ static int run_test(const testcase *t, const char *cwd, buffer *detail) {
         char a[512] = ""; if (t->args.data) { strncpy(a, t->args.data, sizeof a - 1); } trim(a);
         char templ[1400];
         if (!strcmp(m, "check"))
-            snprintf(templ, sizeof templ, "\"$PP\" check \"$GRAMMAR\" %s", a);
+            snprintf(templ, sizeof templ, "\"$TP\" check \"$GRAMMAR\" %s", a);
         else
-            snprintf(templ, sizeof templ, "\"$PP\" run \"$GRAMMAR\" --input \"%s\" --dump-tree %s", in_default, a);
+            snprintf(templ, sizeof templ, "\"$TP\" run \"$GRAMMAR\" --input \"%s\" --dump-tree %s", in_default, a);
         buffer_push(&cmd, templ, strlen(templ));
     } else {
         buffer_push(detail, "        - test has neither <<<cmd nor <<<grammar\n", 48);

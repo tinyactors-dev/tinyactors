@@ -2,8 +2,8 @@
 set -e
 w="$(mktemp -d)"
 trap 'rm -rf "$w"' EXIT
-"$PP" c examples/sexpr/sexpr.scm --out "$w/pp_g.c" --bundle
-cc -std=c11 -O2 -I dist/linux-x86_64 "$w/pp_g.c" dist/linux-x86_64/libpocketparse.a -o "$w/pp_g"
-printf '(a (b c))' | "$w/pp_g"
+"$TP" c examples/sexpr/sexpr.scm --out "$w/tp_g.c" --bundle
+cc -std=c11 -O2 -I dist/linux-x86_64 "$w/tp_g.c" dist/linux-x86_64/libtinyparse.a -o "$w/tp_g"
+printf '(a (b c))' | "$w/tp_g"
 <<<assert
 exit 0

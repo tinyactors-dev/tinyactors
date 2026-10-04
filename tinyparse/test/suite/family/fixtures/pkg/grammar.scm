@@ -5,7 +5,7 @@
 ; the package compiles this grammar with that parameter in scope, so "hi !"
 ; parses through the CLI.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module family.demo)
 

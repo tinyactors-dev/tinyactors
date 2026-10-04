@@ -6,7 +6,7 @@
 ; end of input. This is OUR grammar; it lives under grammars/std because it is
 ; authored and owned here, not ported from a third party.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module std.json)
 

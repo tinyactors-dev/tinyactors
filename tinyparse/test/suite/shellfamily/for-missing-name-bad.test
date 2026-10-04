@@ -1,6 +1,6 @@
 # A deliberately malformed for clause: `for; do x; done` has no loop variable
 # name. The grammar rejects it.
 <<<cmd
-printf 'for; do x; done\n' | "$PP" run std.shell --input -
+printf 'for; do x; done\n' | "$TP" run std.shell --input -
 <<<assert
 exit-not 0

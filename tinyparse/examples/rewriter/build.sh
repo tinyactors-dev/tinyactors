@@ -2,7 +2,7 @@
 # build.sh — compile the #define -> enum rewriter against the host dist.
 #
 # Invoked two ways, both supported:
-#   * by examples/build.sh, which exports PP_ROOT, PP_DIST, PP_INC, PP_CLI;
+#   * by examples/build.sh, which exports TP_ROOT, TP_DIST, TP_INC, TP_CLI;
 #   * directly (cd examples/rewriter && bash build.sh), in which case we
 #     default those variables from this script's own location.
 set -uo pipefail
@@ -10,7 +10,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 # Default the dispatcher's environment when run standalone.
-: "${PP_ROOT:=$(cd "$HERE/../.." && pwd)}"
+: "${TP_ROOT:=$(cd "$HERE/../.." && pwd)}"
 platform() {
   case "$(uname -s)/$(uname -m)" in
     Linux/x86_64) echo linux-x86_64 ;;
@@ -18,12 +18,12 @@ platform() {
     *) echo linux-x86_64 ;;
   esac
 }
-: "${PP_DIST:=$PP_ROOT/dist/$(platform)}"
+: "${TP_DIST:=$TP_ROOT/dist/$(platform)}"
 
 CC="${CC:-cc}"
 
-if [ ! -f "$PP_DIST/pocketparse.h" ] || [ ! -f "$PP_DIST/libpocketparse.a" ]; then
-  echo "rewriter: missing dist at $PP_DIST (run: cd tinyparse && bash build.sh dist)" >&2
+if [ ! -f "$TP_DIST/tinyparse.h" ] || [ ! -f "$TP_DIST/libtinyparse.a" ]; then
+  echo "rewriter: missing dist at $TP_DIST (run: cd tinyparse && bash build.sh dist)" >&2
   exit 1
 fi
 
@@ -48,9 +48,9 @@ gen_header() {
 gen_header
 
 "$CC" -std=c99 -O2 -Wall -Wextra -pedantic \
-  -I"$PP_DIST" -I"$HERE" \
+  -I"$TP_DIST" -I"$HERE" \
   -o "$HERE/rewriter" \
   "$HERE/rewriter.c" \
-  "$PP_DIST/libpocketparse.a"
+  "$TP_DIST/libtinyparse.a"
 
 echo "rewriter: built $HERE/rewriter"

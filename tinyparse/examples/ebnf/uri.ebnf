@@ -1,5 +1,5 @@
-(* RFC 3986 URI grammar, EBNF subset for the pocketparse pipeline example. *)
-(* The converter parses this with pocketparse and emits uri.scm.           *)
+(* RFC 3986 URI grammar, EBNF subset for the tinyparse pipeline example. *)
+(* The converter parses this with tinyparse and emits uri.scm.           *)
 
 uri =
   scheme: SCHEME "://" authority

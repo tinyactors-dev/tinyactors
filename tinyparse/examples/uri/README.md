@@ -13,10 +13,10 @@ sub-rule.
 
 ## Files
 
-- `uri.scm` — the generated pocketparse grammar. A copy is committed so this
+- `uri.scm` — the generated tinyparse grammar. A copy is committed so this
   example runs standalone; `../ebnf/run.sh` regenerates it.
 - `uri.c` — the parser driver. Hosted (libc), linked against the dist archives.
-- `build.sh` — compiles `uri` against `$PP_DIST`.
+- `build.sh` — compiles `uri` against `$TP_DIST`.
 - `run.sh` — builds if needed (regenerating `uri.scm` if absent) and runs.
 
 ## Use
@@ -53,6 +53,6 @@ decoded.
 ## The pipeline
 
 ```
-uri.ebnf --(ebnf2scm, parses EBNF with pocketparse)--> uri.scm
-uri.scm  --(uri.c, parses the URL with pocketparse)--> components
+uri.ebnf --(ebnf2scm, parses EBNF with tinyparse)--> uri.scm
+uri.scm  --(uri.c, parses the URL with tinyparse)--> components
 ```

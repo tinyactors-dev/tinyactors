@@ -1,7 +1,7 @@
-# pocketparse performance
+# tinyparse performance
 
 This document is the meter and the map. It states what the
-pocketparse-versus-others benchmarks measure, reports the current numbers,
+tinyparse-versus-others benchmarks measure, reports the current numbers,
 profiles where the engine spends its time, and explains the residual gap to
 table-driven and compiled parsers. Every figure here was measured on the
 hardware named below and is reproducible from the [appendix](#appendix-reproduce);
@@ -10,16 +10,16 @@ the deeper round-by-round history lives in [`decisions.md`](decisions.md) and
 
 All numbers below were re-measured on **2026-06-27** on one host: Intel(R)
 Xeon(R) @ 2.80GHz (4 cores), 15.7 GiB RAM, Linux 6.18.5 x86_64. The orchestrators
-are [`ci/pocketparse-bench.sh`](../../../ci/pocketparse-bench.sh) (the JavaScript
-corpus) and [`ci/pocketparse-bench5.sh`](../../../ci/pocketparse-bench5.sh) (the
+are [`ci/tinyparse-bench.sh`](../../../ci/tinyparse-bench.sh) (the JavaScript
+corpus) and [`ci/tinyparse-bench5.sh`](../../../ci/tinyparse-bench5.sh) (the
 React workload), both gated behind `BENCH=1`. The harness sources are under
-[`tools/pocketparse/bench/`](../bench/).
+[`tools/tinyparse/bench/`](../bench/).
 
 ## The headline
 
-pocketparse runs two interchangeable engines over one grammar. The **bytecode
+tinyparse runs two interchangeable engines over one grammar. The **bytecode
 VM** is the default: it accepts a grammar as data and parses with no build step.
-The **generated C parser** (`pocketparse c --parser-lib`) is the ahead-of-time
+The **generated C parser** (`tinyparse c --parser-lib`) is the ahead-of-time
 path: it compiles a settled grammar to recursive-descent C, byte-identical to the
 VM. They trade differently against the field.
 
@@ -33,9 +33,9 @@ VM. They trade differently against the field.
   is 1.45× slower. The VM interprets a grammar it compiled at runtime; tree-sitter
   runs a pre-generated table. The generated C parser is how you buy that back when
   the grammar has stopped changing.
-- **Traversal is pocketparse's to win, on either engine.** The CST is one
+- **Traversal is tinyparse's to win, on either engine.** The CST is one
   contiguous array and a cursor is an index into it, so a walk is a linear sweep.
-  Collecting every function definition from the parsed React tree, pocketparse is
+  Collecting every function definition from the parsed React tree, tinyparse is
   **5.5× faster** than tree-sitter (43.7 ms against 239.3 ms over ~29,000
   functions).
 
@@ -54,13 +54,13 @@ timed loop; the median is over 200 iterations. The tree-sitter runtime is pinned
 at `d861eab2`.
 
 This corpus measures the **default VM**, used per its API (a parser per document,
-since pocketparse has no parser-reset). tree-sitter is reported both ways: reusing
+since tinyparse has no parser-reset). tree-sitter is reported both ways: reusing
 one parser (idiomatic) and creating one per document (symmetric), so the
 parser-setup cost both sides pay is visible rather than hidden.
 
 | variant   | parser      | median parse | throughput | gap          |
 | --------- | ----------- | ------------ | ---------- | ------------ |
-| idiomatic | pocketparse | 4.84 ms      | 2.26 MB/s  | —            |
+| idiomatic | tinyparse | 4.84 ms      | 2.26 MB/s  | —            |
 | idiomatic | tree-sitter | 3.28 ms      | 3.34 MB/s  | 1.5× faster  |
 | symmetric | tree-sitter | 3.65 ms      | 3.00 MB/s  | 1.3× faster  |
 
@@ -74,10 +74,10 @@ node count and the comparable figure is nanoseconds of walk work per node.
 
 | parser      | nodes | median walk | ns/node |
 | ----------- | ----- | ----------- | ------- |
-| pocketparse | 8,139 | 0.20 ms     | 24.2    |
+| tinyparse | 8,139 | 0.20 ms     | 24.2    |
 | tree-sitter | 5,465 | 0.52 ms     | 95.8    |
 
-pocketparse walks at about **24 ns/node against tree-sitter's 96**, roughly 4×
+tinyparse walks at about **24 ns/node against tree-sitter's 96**, roughly 4×
 faster per node. It freezes its CST into a single contiguous array of records; a
 cursor is an index into it and a depth-first walk is a near-linear sweep the
 prefetcher loves. tree-sitter's pointer-linked tree reconstructs node state as
@@ -91,10 +91,10 @@ Measured fairly (the base grant plus every block the engine actually grew, rathe
 than the over-provisioned grant size or process RSS), one corpus pass has a **14.1
 MiB high-water mark, of which 13.5 MiB is the one-time grammar compile** and 0.6
 MiB is the parse arena for all 116 documents. A single document's parse is about
-0.1 MiB; the per-pass figure is larger only because `pocketparse_parser_free`
+0.1 MiB; the per-pass figure is larger only because `tinyparse_parser_free`
 does not return memory to the arena, so a pass accretes. tree-sitter, carrying
 pre-generated tables, grows on demand to a 2.9 MiB peak. The grammar compile
-dominates pocketparse's footprint, and it is paid once.
+dominates tinyparse's footprint, and it is paid once.
 
 ## The React/TSX workload
 
@@ -110,7 +110,7 @@ set.
 ### Parse: six parsers, one corpus
 
 Parse-only, warm, median of 30 (in-process arms) / 15 (tsc, meriyah). The two
-pocketparse C arms parse the identical bytes — `ci/pocketparse-cc-diff.sh` proves
+tinyparse C arms parse the identical bytes — `ci/tinyparse-cc-diff.sh` proves
 the generated parser and the VM build byte-identical trees — and differ only in
 whether the engine and grammar are reused across files (persistent) or reopened
 per file to bound peak memory (fresh).
@@ -119,10 +119,10 @@ per file to bound peak memory (fresh).
 | -------------------------- | ------- | ----------- | -------- |
 | meriyah (JS+JSX subset)    | 0.198 s | 29.21 MB/s  | —        |
 | tsc (TypeScript compiler)  | 0.738 s | 12.34 MB/s  | —        |
-| pocketparse (C, persistent)| 0.759 s | 12.00 MB/s  | 150.8 MB |
-| pocketparse (C, fresh)     | 1.094 s | 8.32 MB/s   | 98.8 MB  |
+| tinyparse (C, persistent)| 0.759 s | 12.00 MB/s  | 150.8 MB |
+| tinyparse (C, fresh)     | 1.094 s | 8.32 MB/s   | 98.8 MB  |
 | tree-sitter (TSX, GLR)     | 1.330 s | 6.84 MB/s   | 22.4 MB  |
-| pocketparse (bytecode VM)  | 1.949 s | 4.67 MB/s   | 50.4 MB  |
+| tinyparse (bytecode VM)  | 1.949 s | 4.67 MB/s   | 50.4 MB  |
 
 Read it carefully, because the ordering is the whole story:
 
@@ -130,7 +130,7 @@ Read it carefully, because the ordering is the whole story:
   12.00 MB/s persistent (1.75×). The persistent arm is **level with tsc** (12.34
   MB/s), the production TypeScript parser. This is a measured win on a real
   workload, and it crossed the line that the round-by-round history in
-  [`peg-vs-glr.md`](peg-vs-glr.md) records pocketparse chasing for a dozen rounds.
+  [`peg-vs-glr.md`](peg-vs-glr.md) records tinyparse chasing for a dozen rounds.
 - **The C parser is 1.78× the VM** (8.32 vs 4.67 MB/s, the same fresh-per-file
   methodology). Compiling the grammar to native recursive descent removes the
   per-opcode interpreter dispatch and the per-node frame machine; what remains is
@@ -156,22 +156,22 @@ handful because the grammars categorize a few constructs at different granularit
 
 | parser      | median collect | functions | functions/sec |
 | ----------- | -------------- | --------- | ------------- |
-| pocketparse | 43.7 ms        | 29,093    | 665,125       |
+| tinyparse | 43.7 ms        | 29,093    | 665,125       |
 | tree-sitter | 239.3 ms       | 29,079    | 121,501       |
 
 The contiguous-array traversal advantage holds on a 9.5 MB tree and is larger
-than on the small corpus: **5.5× faster**. The slow part of pocketparse is
+than on the small corpus: **5.5× faster**. The slow part of tinyparse is
 building the tree; once built, it is the faster tree to read.
 
 ### The rule memo and PEG backtracking
 
 A PEG with ordered choice can re-parse a shared prefix and blow up (exponential
-time, runaway memory) on deeply nested input. pocketparse bounds it with a rule
+time, runaway memory) on deeply nested input. tinyparse bounds it with a rule
 memo (packrat-style failure and success memoization, byte-identical to the
 recursive oracle). The memo ships **adaptive**: dormant until a parse goes
 super-linear, so clean parses pay nothing and the VM numbers above are
 memo-dormant. It can be forced on from the first call with
-`POCKETPARSE_RULEMEMO=always`, which is slower on clean input and was not
+`TINYPARSE_RULEMEMO=always`, which is slower on clean input and was not
 re-measured on this pass (forcing it across the whole React corpus is
 impractically slow, which is exactly why the default is adaptive). The
 left-factoring that makes the std grammars linear, so the generated parser needs
@@ -187,28 +187,28 @@ from the timed loop.
 
 The tree-sitter side links the official runtime and the generated grammar
 (`tree-sitter-javascript` or `tree-sitter-typescript` TSX) plus its hand-written
-scanner, and parses with `ts_parser_parse_string`. The pocketparse side links
-`libpocketparse.a` and `libax.a`, compiles the `.scm` grammar once, then for each
-document creates a parser, pushes the whole input, and calls `pocketparse_finish`.
-The generated-C arm links the unit `pocketparse c --parser-lib` emits and calls
+scanner, and parses with `ts_parser_parse_string`. The tinyparse side links
+`libtinyparse.a` and `libax.a`, compiles the `.scm` grammar once, then for each
+document creates a parser, pushes the whole input, and calls `tinyparse_finish`.
+The generated-C arm links the unit `tinyparse c --parser-lib` emits and calls
 its entry point. The governing rule is that **both sides do the same job**: parse
 a document to a tree, then either discard it or walk it identically.
 
 ## Fairness audit
 
-Three asymmetries once charged pocketparse for work tree-sitter never did, or hid
-work it did, or reported a footprint pocketparse never used. Each is corrected in
+Three asymmetries once charged tinyparse for work tree-sitter never did, or hid
+work it did, or reported a footprint tinyparse never used. Each is corrected in
 the harnesses, and the corrections stand.
 
-- **The extra tree walk (removed).** The old pocketparse harness walked the whole
+- **The extra tree walk (removed).** The old tinyparse harness walked the whole
   CST after every parse while the tree-sitter harness did not. Because
-  `pocketparse_finish` builds the tree eagerly — every node record, span, and
+  `tinyparse_finish` builds the tree eagerly — every node record, span, and
   link is populated before it returns, and a cursor only navigates an array that
   already exists — that walk was pure extra work, not deferred parse work. It is
   deleted, so on the parse benchmark **neither side traverses**. (Traversal is
   measured separately, above, with both sides walking.)
 - **Parser lifecycle (reported both ways).** tree-sitter reuses one parser;
-  pocketparse has no reset and creates one per document. That is a genuine API
+  tinyparse has no reset and creates one per document. That is a genuine API
   difference, so the JavaScript corpus reports tree-sitter both reusing one parser
   (idiomatic) and creating one per document (symmetric), and the React C arms
   report both persistent and fresh-per-file.
@@ -225,14 +225,14 @@ instructions in the steady state) puts the cost here:
 
 | self cost | function | what it is |
 | --------- | -------- | ---------- |
-| 24.2% | `pp_vm_run` | the bytecode dispatch loop |
+| 24.2% | `tp_vm_run` | the bytecode dispatch loop |
 | 18.8% | `__memset_avx2` (libc) | zeroing freshly granted arena blocks |
-| 18.4% | `pp_token_match_memo` | matching a token at the cursor (memoized) |
-| 7.9%  | `pp_vm_consume_extras` | skipping whitespace and comments between tokens |
-| 5.3%  | `pp_vm_call_enter` | the per-rule CALL prologue (node open) |
-| 3.2%  | `pp_tree_builder_push` | appending a packed node to the CST array |
+| 18.4% | `tp_token_match_memo` | matching a token at the cursor (memoized) |
+| 7.9%  | `tp_vm_consume_extras` | skipping whitespace and comments between tokens |
+| 5.3%  | `tp_vm_call_enter` | the per-rule CALL prologue (node open) |
+| 3.2%  | `tp_tree_builder_push` | appending a packed node to the CST array |
 | 3.0%  | `ax_alloc_raw` | bumping the arena pointer |
-| 2.5%  | `pp_intern` | symbol interning |
+| 2.5%  | `tp_intern` | symbol interning |
 
 Two things stand out against the engine's history. **Interning is no longer the
 bottleneck.** It was about a third of every parse before symbols were resolved to
@@ -255,7 +255,7 @@ node-open/close lifecycle, extras, and the tree build.
 The residual gap from the VM to tree-sitter, and from the generated parser to
 nothing, is structural and named honestly. tree-sitter ships pre-generated GLR
 parse tables and a lexer compiled to a C `switch`; at parse time it is mostly
-table lookups and pointer bumps. The pocketparse VM carries no generated tables;
+table lookups and pointer bumps. The tinyparse VM carries no generated tables;
 it compiles a grammar to flat bytecode at runtime and interprets it, trading
 throughput for the ability to accept a brand-new grammar as data. The generated C
 parser closes most of that distance by baking the grammar into native recursive
@@ -284,46 +284,46 @@ to a profiled cost and gated against regression, is recorded in full in
 - **Lowering the grammar to a bytecode VM hosted in an `ax` actor** replaced the
   original recursive-descent executor; the actor wrapper costs about 1% over the
   bare loop, and the executor remains reachable as the differential oracle and an
-  opt-out (`POCKETPARSE_ENGINE=recursive`).
+  opt-out (`TINYPARSE_ENGINE=recursive`).
 - **The generated C emitter** then took the settled grammars to native recursive
   descent — per-token baked lexers, compile-time FIRST tests, a native call graph
   with locals instead of an operand-reading loop — which is the arm that now
   passes tree-sitter.
 
 Every step held the tree byte-identical across the differential and golden gates;
-the conformance metric (`ci/pocketparse-metric.sh`) stays green throughout.
+the conformance metric (`ci/tinyparse-metric.sh`) stays green throughout.
 
 ## Appendix: reproduce
 
 Run everything from the repository root. The benchmarks need the pinned
-references under `tools/pocketparse/reference/` (see
+references under `tools/tinyparse/reference/` (see
 [`reference/PINS.txt`](../reference/PINS.txt)); the tree-sitter runtime is cloned
 on first run.
 
 The JavaScript corpus benchmark (builds the dist, extracts the corpus, runs
 idiomatic + symmetric + traversal + the footprint accounting):
 
-    BENCH=1 bash ci/pocketparse-bench.sh
+    BENCH=1 bash ci/tinyparse-bench.sh
     # override the iteration count with ITERS=, e.g. ITERS=200
 
 The React six-parser parse-only benchmark (needs the pinned React clone and
 `tree-sitter-typescript`; installs typescript and meriyah into a gitignored
 scratch dir; the corpus manifest is built by the React workload bench below):
 
-    REGEN=1 BENCH=1 bash ci/pocketparse-react-bench.sh   # builds the manifest + parse/collect table
-    BENCH=1 bash ci/pocketparse-bench5.sh                # the six-parser parse-only table
+    REGEN=1 BENCH=1 bash ci/tinyparse-react-bench.sh   # builds the manifest + parse/collect table
+    BENCH=1 bash ci/tinyparse-bench5.sh                # the six-parser parse-only table
 
 The conformance metric must stay green:
 
-    bash ci/pocketparse-metric.sh
+    bash ci/tinyparse-metric.sh
 
 Profile the VM with callgrind over the JavaScript corpus (the harness binary
 carries function symbols, so no special build is needed):
 
-    G=tools/pocketparse/grammars/std/javascript/grammar.scm
-    M=tools/pocketparse/bench/corpus/MANIFEST.txt    # produced by the bench run
+    G=tools/tinyparse/grammars/std/javascript/grammar.scm
+    M=tools/tinyparse/bench/corpus/MANIFEST.txt    # produced by the bench run
     valgrind --tool=callgrind --callgrind-out-file=callgrind.out \
-      tools/pocketparse/bench/bench_pocketparse "$M" 2 "$G"
+      tools/tinyparse/bench/bench_tinyparse "$M" 2 "$G"
     callgrind_annotate --threshold=92 callgrind.out
 
 Everything the profiling build produces is gitignored scratch.

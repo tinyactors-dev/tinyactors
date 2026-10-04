@@ -1,26 +1,26 @@
-# Developing pocketparse
+# Developing tinyparse
 
 The contributor's guide: building from source, the test suite, the correctness
 gates a change must clear, and how to run the benchmarks. For *using* the library
 see [README.md](README.md); for the design see
-[pocketparse-design.md](pocketparse-design.md).
+[tinyparse-design.md](tinyparse-design.md).
 
 ## Building from source
 
-pocketparse is regular C (not the literate C the rest of the `ax` repo uses). It
+tinyparse is regular C (not the literate C the rest of the `ax` repo uses). It
 builds with **Zig 0.15.1**, pinned in [mise.toml](mise.toml), and links the
 prebuilt `ax` release archives from the repo's `dist/`.
 
 ```sh
 mise install          # provision Zig 0.15.1
-mise run build        # libpocketparse + CLI + examples for this platform
+mise run build        # libtinyparse + CLI + examples for this platform
 mise run dist         # cross-build linux-x86_64 and macos-arm64 deliverables
 mise run test         # the finish-line metric (build + data-driven harness)
 mise run gate         # the thorough gate: cross-dist + every example
 ```
 
 Without `mise`, the same engine runs directly: `bash build.sh all`, then
-`bash ../../ci/pocketparse-metric.sh`. If Zig is not on `PATH`, `build.sh` looks
+`bash ../../ci/tinyparse-metric.sh`. If Zig is not on `PATH`, `build.sh` looks
 for it under `.toolchain/zig/`.
 
 ## The test suite
@@ -34,14 +34,14 @@ green.
 
 ## Correctness gates
 
-pocketparse runs more than one engine over a grammar, and they must agree byte
+tinyparse runs more than one engine over a grammar, and they must agree byte
 for byte. The differential gates enforce that:
 
-- **cc-diff** (`ci/pocketparse-cc-diff.sh`) — the generated C parser
-  (`pocketparse c --parser-lib`) against the bytecode VM.
-- **vm-diff** (`ci/pocketparse-vm-diff.sh`) — the bytecode VM against the
+- **cc-diff** (`ci/tinyparse-cc-diff.sh`) — the generated C parser
+  (`tinyparse c --parser-lib`) against the bytecode VM.
+- **vm-diff** (`ci/tinyparse-vm-diff.sh`) — the bytecode VM against the
   original recursive-descent executor, which survives as the differential oracle
-  and a safety opt-out (`POCKETPARSE_ENGINE=recursive`).
+  and a safety opt-out (`TINYPARSE_ENGINE=recursive`).
 - **diag-diff** — the generated parser's diagnostics against the VM's on a
   broken-input corpus, so error reporting may be extended but never regressed.
 
@@ -58,9 +58,9 @@ All are gated behind `BENCH=1` and reproducible per the methodology in
 [docs/performance.md](docs/performance.md):
 
 ```sh
-BENCH=1 bash ../../ci/pocketparse-bench.sh                # JavaScript corpus: VM vs tree-sitter
-REGEN=1 BENCH=1 bash ../../ci/pocketparse-react-bench.sh  # React: parse + collect; builds the manifest
-BENCH=1 bash ../../ci/pocketparse-bench5.sh               # React: six parsers, parse-only
+BENCH=1 bash ../../ci/tinyparse-bench.sh                # JavaScript corpus: VM vs tree-sitter
+REGEN=1 BENCH=1 bash ../../ci/tinyparse-react-bench.sh  # React: parse + collect; builds the manifest
+BENCH=1 bash ../../ci/tinyparse-bench5.sh               # React: six parsers, parse-only
 ```
 
 The pinned reference clones live under [reference/](reference/) (see
@@ -91,7 +91,7 @@ rediscover them.
 - **Zig is not on `PATH`.** The SessionStart hook fetches Zig 0.15.1 to
   `.toolchain/zig/` but does not export it, so `build.sh dist` fails to build the
   `ax` archives. Prefix build and bench commands with
-  `PATH="$PWD/tools/pocketparse/.toolchain/zig:$PATH"` (add `/opt/node22/bin` and
+  `PATH="$PWD/tools/tinyparse/.toolchain/zig:$PATH"` (add `/opt/node22/bin` and
   `/usr/local/go/bin` for the React arms).
 
 - **A tarball runtime is not a git checkout.** The bench scripts record the
@@ -103,7 +103,7 @@ rediscover them.
   clone (403) plus a full Go build that pulls a large module graph; it is reported
   as not-obtained rather than staged. `tsc` and `meriyah` install fine from npm.
 
-- **`POCKETPARSE_RULEMEMO=always` over React does not finish.** Forcing the rule
+- **`TINYPARSE_RULEMEMO=always` over React does not finish.** Forcing the rule
   memo on from the first call is impractically slow at the default iteration
   count; the published numbers use the adaptive default, which stays dormant until
   a parse goes super-linear.
@@ -113,5 +113,5 @@ rediscover them.
   `bench/react-corpus/MANIFEST.txt`.
 
 - **Profile the built harness directly.** The old `bench/prof/` driver is gone,
-  but `bench/bench_pocketparse` carries function symbols, so run it straight under
+  but `bench/bench_tinyparse` carries function symbols, so run it straight under
   callgrind (see the performance doc's appendix).

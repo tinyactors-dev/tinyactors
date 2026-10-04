@@ -1,5 +1,5 @@
 <<<cmd
-"$PP" version
+"$TP" version
 <<<assert
 exit 0
 out-regex [0-9]+\.[0-9]+

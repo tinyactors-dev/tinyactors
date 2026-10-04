@@ -12,14 +12,14 @@
 #
 #   test/suite/tsfamily/inputs/<file>__<n>.{ts,tsx}  the case's input bytes
 #   test/suite/tsfamily/<file>__<n>.test             a harness test that runs
-#       `pocketparse run std.<dialect> --input <that file> --dump-tree`
+#       `tinyparse run std.<dialect> --input <that file> --dump-tree`
 #       and asserts exit 0 with no ERROR / no MISSING in the dumped tree.
 #
 # Every case in the vendored corpus is VALID TypeScript (none of the expected
 # trees carries an (ERROR) or (MISSING) node), so every test is an accept test.
 #
 # The committed fixtures make the suite reproducible in a fresh container, where
-# reference/ is absent. Run from tools/pocketparse:
+# reference/ is absent. Run from tools/tinyparse:
 #
 #   python3 test/suite/tsfamily/gen-corpus-suite.py
 #
@@ -30,8 +30,8 @@
 import os, re, glob, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PP_DIR = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-CORPUS = os.path.join(PP_DIR, "reference", "tree-sitter-typescript",
+TP_DIR = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+CORPUS = os.path.join(TP_DIR, "reference", "tree-sitter-typescript",
                       "test", "corpus")
 INPUTS = os.path.join(HERE, "inputs")
 
@@ -43,7 +43,7 @@ os.makedirs(INPUTS, exist_ok=True)
 
 TEST_TEMPLATE = """\
 <<<cmd
-"$PP" run std.%s --input test/suite/tsfamily/inputs/%s --dump-tree
+"$TP" run std.%s --input test/suite/tsfamily/inputs/%s --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -1,6 +1,6 @@
 # import — module import across `.scm` files
 
-This example shows pocketparse's `(import NAME)` form: a grammar that pulls
+This example shows tinyparse's `(import NAME)` form: a grammar that pulls
 token, rule, and `extras` definitions out of a second `.scm` module and uses
 them by name.
 
@@ -13,9 +13,9 @@ them by name.
 
 ## How it resolves
 
-The pocketparse core has no filesystem, so it never reads `words.scm` itself.
+The tinyparse core has no filesystem, so it never reads `words.scm` itself.
 When the compiler meets `(import words)` it asks the **host's module resolver**
-for the module's bytes (`pocketparse_set_module_resolver`). The CLI installs a
+for the module's bytes (`tinyparse_set_module_resolver`). The CLI installs a
 filesystem-backed resolver that maps the module name to a file relative to the
 importing grammar's directory: `words` → `words.scm`, and a dotted name like
 `a.b` → `a/b.scm`. The resolved bytes are compiled and their definitions are
@@ -23,7 +23,7 @@ importing grammar's directory: `words` → `words.scm`, and a dotted name like
 `Source` names it.
 
 Resolution happens entirely at **compile time**: the compiled grammar (and the
-packed `.ppg` it would serialize to) is identical to one where `Word` had been
+packed `.tpg` it would serialize to) is identical to one where `Word` had been
 written in `main.scm` directly. Import cycles are detected and rejected, and a
 grammar that imports anything without a resolver installed fails with a clear
 diagnostic.
@@ -31,7 +31,7 @@ diagnostic.
 ## Run it
 
 ```sh
-printf 'a b c' | pocketparse run examples/import/main.scm --input - --dump-tree
+printf 'a b c' | tinyparse run examples/import/main.scm --input - --dump-tree
 ```
 
 The input `a b c` parses to a `Source` of three `Word` nodes, with the

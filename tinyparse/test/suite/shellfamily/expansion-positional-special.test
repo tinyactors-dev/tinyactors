@@ -1,7 +1,7 @@
 # Positional and special parameters (POSIX §2.5): $1 (positional) and $@ $# $?
 # (special) each parse as a SimpleExpansion whose name is a SpecialParam.
 <<<cmd
-printf 'echo $1 $@ $# $?\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo $1 $@ $# $?\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -3,7 +3,7 @@
 ; disabled restore) would cross-assign the saved counts between frames, so the
 ; drains land on the wrong slot. Correct: a keeps its item (BodyA drains), b
 ; rolls back to empty (BodyB never drains).
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 (grammar mf
   start: Program
   (token Space (regex "[ \t]+"))

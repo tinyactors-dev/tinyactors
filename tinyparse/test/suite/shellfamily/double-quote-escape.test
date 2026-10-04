@@ -2,7 +2,7 @@
 # escaped quotes do not close the string: "he said \"hi\"" is one DoubleQuoted
 # argument with no parse error.
 <<<cmd
-printf 'echo "he said \\"hi\\""\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo "he said \\"hi\\""\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

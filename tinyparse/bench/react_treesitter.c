@@ -2,18 +2,18 @@
 ** react_treesitter.c -- the tree-sitter side of the React real-workload
 ** benchmark (Project B). It links the tree-sitter runtime with the vendored
 ** tree-sitter-typescript TSX parser.c + scanner.c, then runs the same task the
-** pocketparse harness runs: parse every (clean-parsing) ReactJS source file and
+** tinyparse harness runs: parse every (clean-parsing) ReactJS source file and
 ** COLLECT every function definition.
 **
 ** Two modes, selected by the third argument:
 **   parse   -- parse every document to a TSTree and delete it (per-document
-**              parser lifecycle, matching the pocketparse harness which creates a
+**              parser lifecycle, matching the tinyparse harness which creates a
 **              parser per parse). Only the parse calls are timed.
 **   collect -- parse every document UNTIMED into live trees, then time only a
 **              preorder TSTreeCursor walk that counts nodes whose symbol names a
 **              function definition. The function symbols are precomputed once via
 **              ts_language_symbol_for_name, so the per-node hot path is an integer
-**              membership test -- exactly what the pocketparse side does.
+**              membership test -- exactly what the tinyparse side does.
 **
 ** Usage: react_treesitter <manifest> <iterations> [parse|collect]
 */
@@ -24,7 +24,7 @@
 const TSLanguage *tree_sitter_tsx(void);
 
 /* ** The node kinds counted as a "function definition." The same set is used on
-** the pocketparse side, so the totals are directly comparable. */
+** the tinyparse side, so the totals are directly comparable. */
 static const char *const FUNCTION_KINDS[] = {
     "function_declaration",
     "generator_function_declaration",
@@ -55,7 +55,7 @@ static void build_function_symbol_set(const TSLanguage *lang)
 
 /* ** Parse the whole corpus once, reusing ONE parser (reset between files) and
 ** deleting each tree as we go. Parser creation/teardown is one-time setup and is
-** off the meter -- matching the pocketparse harness, which times only the parse
+** off the meter -- matching the tinyparse harness, which times only the parse
 ** call and excludes its per-file engine open + grammar load. */
 static void parse_corpus(TSParser *parser, const bench_corpus *corpus)
 {

@@ -4,7 +4,7 @@ This example rewrites source code from its parse tree, copying the bytes it does
 not touch straight from the original through their recorded spans.
 
 It turns object-like integer macros into a single C `enum`, driven entirely by a
-pocketparse concrete syntax tree.
+tinyparse concrete syntax tree.
 
 Given input like
 
@@ -29,7 +29,7 @@ in place of the first macro, and passes every other line through untouched.
 ## How it works
 
 The rewrite is *not* a regex over the file. It parses the source with
-pocketparse and walks the tree through the public cursor API.
+tinyparse and walks the tree through the public cursor API.
 
 1. **Grammar** ([`cdefines.scm`](cdefines.scm)) — a deliberately small,
    line-oriented grammar. A `Line` is either a `Define`
@@ -42,7 +42,7 @@ pocketparse and walks the tree through the public cursor API.
 2. **Collect pass** ([`rewriter.c`](rewriter.c)) — the program descends to
    the `Source` node's `Line` children, and for each `Line` whose child is a
    `Define`, jumps to the `name` and `value` fields with
-   `pocketparse_tree_cursor_goto_first_child_by_field` and records their byte
+   `tinyparse_tree_cursor_goto_first_child_by_field` and records their byte
    spans, in source order.
 
 3. **Emit pass** — a second walk over the same tree. `Raw` lines are copied
@@ -70,8 +70,8 @@ examples/rewriter/run.sh examples/rewriter/sample.c
 
 `run.sh` builds the program on first use (or when its sources change), then
 runs it on the given file and prints the rewritten source to stdout. The
-build links the host dist archive `libpocketparse.a` and
-includes `pocketparse.h` from the dist directory.
+build links the host dist archive `libtinyparse.a` and
+includes `tinyparse.h` from the dist directory.
 
 You can also build directly:
 

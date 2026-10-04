@@ -1,7 +1,7 @@
 # A for clause with an `in` word list: `for name in words; do list; done`.
 # Each word after `in` is a value field; the body is a compound-list.
 <<<cmd
-printf 'for i in a b c; do echo hi; done\n' | "$PP" run std.shell --input - --dump-tree
+printf 'for i in a b c; do echo hi; done\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

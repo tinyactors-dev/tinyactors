@@ -22,7 +22,7 @@
 ; becomes a RegexLiteral; for `b = c / d ;` the `/` between two values is read in
 ; the `op` goal and becomes a Div.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module examples.lexgoal.mini-js)
 

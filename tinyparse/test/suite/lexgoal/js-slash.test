@@ -1,5 +1,5 @@
 <<<cmd
-printf 'a = /ab/ ; b = c / d ;' | "$PP" run examples/lexgoal/mini-js.scm --input - --dump-tree
+printf 'a = /ab/ ; b = c / d ;' | "$TP" run examples/lexgoal/mini-js.scm --input - --dump-tree
 <<<assert
 exit 0
 out-contains RegexLiteral

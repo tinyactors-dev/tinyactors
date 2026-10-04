@@ -1,7 +1,7 @@
 <<<cmd
 set -e
-"$PP" check test/suite/family/fixtures/ext-param.scm
-printf 'hi there' | "$PP" run test/suite/family/fixtures/ext-param.scm --input - --dump-tree
+"$TP" check test/suite/family/fixtures/ext-param.scm
+printf 'hi there' | "$TP" run test/suite/family/fixtures/ext-param.scm --input - --dump-tree
 <<<assert
 exit 0
 out-contains Item

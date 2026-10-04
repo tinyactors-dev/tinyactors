@@ -2,7 +2,7 @@
 # the command (`2>&1 whoami`), and `>&2`. Four Redirect nodes across the four
 # command lines, none recovered into an ERROR.
 <<<cmd
-"$PP" run std.shell --input test/suite/shellfamily/inputs/commands__7.sh --dump-tree
+"$TP" run std.shell --input test/suite/shellfamily/inputs/commands__7.sh --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

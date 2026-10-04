@@ -1,6 +1,6 @@
 <<<cmd
-"$PP" --help
+"$TP" --help
 <<<assert
 exit 0
-out-contains pocketparse
+out-contains tinyparse
 out-contains usage

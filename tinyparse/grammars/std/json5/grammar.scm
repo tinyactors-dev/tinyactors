@@ -13,7 +13,7 @@
 ; unchanged through (extends std.jsonc). This is OUR grammar, the third member of
 ; the std.json family, parameterized off the base to prove composition.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module std.json5)
 

@@ -2,7 +2,7 @@
 # compound-lists; the keywords if/then/fi bracket them and the body terminates
 # at `fi` because `fi` cannot be a command name.
 <<<cmd
-printf 'if cmd; then a; fi\n' | "$PP" run std.shell --input - --dump-tree
+printf 'if cmd; then a; fi\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

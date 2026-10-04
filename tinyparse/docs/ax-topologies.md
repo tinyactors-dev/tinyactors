@@ -1,8 +1,8 @@
-# Actor topologies for running pocketparse on ax
+# Actor topologies for running tinyparse on ax
 
 This document is a design exploration, not a change. It asks a question the two
 prior analyses left half-answered: *what is the right shape of actors and
-messages for running pocketparse on `ax`?* The fine-grained statechart design
+messages for running tinyparse on `ax`?* The fine-grained statechart design
 ([`ax-execution.md`](ax-execution.md)) answered "the most literal one" and paid
 for it — a regression to roughly 5–15× slower than today, low tens of times
 tree-sitter. The owner rejected that and asked for the topology *space* to be
@@ -22,7 +22,7 @@ the VM instruction set and first named the "coarse actor / tight loop" pattern;
 [`ax-execution.md`](ax-execution.md), the statechart design whose cost is the
 baseline to beat; [`performance.md`](performance.md), which measured today's
 residual; [`architecture.md`](architecture.md), which draws the layer
-boundaries; and the contracts [`../pocketparse-design.md`](../pocketparse-design.md)
+boundaries; and the contracts [`../tinyparse-design.md`](../tinyparse-design.md)
 and [`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md). Untagged code
 blocks below are illustrative; `mdc` extracts nothing from this file.
 
@@ -161,7 +161,7 @@ its `ax_heap` holds the program, the input buffer, the memos, and three
 loop runs *inside a transition action*; `ax` sees coarse events only.
 
 ```
-pocketparse_push(chunk) ─ax_post─▶ [parser actor]
+tinyparse_push(chunk) ─ax_post─▶ [parser actor]
                                       on "input.chunk":
                                         ┌──────────────────────────────┐
                                         │  for (;;) switch(program[pc]) │  ← tight C loop
@@ -169,7 +169,7 @@ pocketparse_push(chunk) ─ax_post─▶ [parser actor]
                                         │    push/pop arena stacks      │     thousands of
                                         └──────────────────────────────┘     opcodes per event
                                       blocks on "need input" or chunk end
-pocketparse_finish() ─ax_post─▶      on "input.end": finalize, raise done.state
+tinyparse_finish() ─ax_post─▶      on "input.end": finalize, raise done.state
    (sub-parse) ─ax_spawn─▶ [child VM actor] ─done.child──▶ splice subtree
    (trace/diag/module) ─────────────────────────────────▶ [plug → host]
 ```
@@ -287,7 +287,7 @@ input.chunk ─▶ [lexer] ─token─▶ [parser] ─open/close/field─▶ [tr
   statechart design.
 - **Genuineness:** moderate, and *bought at the worst price* — the per-token
   message is exactly the stringy hot path the design forbids.
-- **Complexity:** moderate, plus a fatal coupling problem: pocketparse's lexer is
+- **Complexity:** moderate, plus a fatal coupling problem: tinyparse's lexer is
   **parser-directed** ([`ax-execution.md`](ax-execution.md), *The lexer and
   token events*). Which token is produced at an offset depends on the parser's
   active lexical goal. A separate lexer actor would need the goal pushed to it
@@ -310,7 +310,7 @@ This is not a whole-parse topology but a *decision rule* that overlays whichever
 parse topology is chosen: when is a nested parse a VM `CALL` within one actor,
 and when is it a spawned child actor? Three nested constructs force the question:
 lexical-goal re-entry, a nested grammar (templates / quasiquote), and the query
-engine ([`pp_query_run`](../src/internal.h)) over the linearized ENTER/LEAF/EXIT
+engine ([`tp_query_run`](../src/internal.h)) over the linearized ENTER/LEAF/EXIT
 stream.
 
 ```
@@ -372,7 +372,7 @@ per worker, which is a host concern outside this design.
   many small documents — parallelism is the host's loop over documents, not an
   `ax` topology.
 - **Genuineness / fit:** out of scope. `ax` does not offer it; faking it would
-  mean the host owning threads, which neither the core nor pocketparse's
+  mean the host owning threads, which neither the core nor tinyparse's
   freestanding contract wants. Recorded here only to close the enumeration: the
   honest answer is "`ax` does not do this, and parsing does not need it."
 
@@ -410,9 +410,9 @@ Concretely:
 
 2. **Parse with a VM the parser actor manages.** One actor owns the bytecode
    program in `ax_heap`, the VM registers in `ax_data`, and three
-   `ax_alloc`-grown stacks (backtrack, return, CST builder). `pocketparse_push`
+   `ax_alloc`-grown stacks (backtrack, return, CST builder). `tinyparse_push`
    posts `input.chunk`; the handling transition runs the dispatch loop until it
-   blocks on "need input" or exhausts the chunk; `pocketparse_finish` posts
+   blocks on "need input" or exhausts the chunk; `tinyparse_finish` posts
    `input.end` to finalize and raise `done.state`. The message rate `ax` sees is
    one per chunk; the dispatch loop runs thousands of opcodes per message inside
    one action. The lexer is a function the action calls — never its own actor —
@@ -429,7 +429,7 @@ Concretely:
 4. **Host I/O stays on plugs.** Tracing, diagnostics, and compile-time module
    loading go through ports, firing on cold/structural events — a chunk arriving,
    a child spawned or completed, a parse finishing — never per opcode. A `(class
-   NAME)` predicate calls a host binding (a `pocketparse_class_fn`, a direct C
+   NAME)` predicate calls a host binding (a `tinyparse_class_fn`, a direct C
    function pointer) from inside the lexer function, a host boundary but not a
    message, "for hot predicates" as the design says.
 
@@ -457,7 +457,7 @@ What `ax` deliberately does *not* do is see each opcode — and that omission is
 not a compromise of genuineness but the lesson the examples teach: axforest is
 genuinely on `ax` with 100k actors precisely because the per-cell hot work stays
 in actions and the bus carries only the fire front. The same discipline makes
-pocketparse genuinely on `ax` while being fast.
+tinyparse genuinely on `ax` while being fast.
 
 ### Honest performance estimate
 
@@ -469,7 +469,7 @@ verbatim rather than re-implemented. The per-chunk `ax` overhead is one `ax_post
 and one transition match per push — a few events for the whole parse, negligible
 against thousands of opcodes per event. Net: the parse gets **faster**, landing
 the corpus plausibly near **1.5–2.5× tree-sitter**, *under* today's 4.6×. It will
-not reach tree-sitter's generated-table speed — pocketparse compiles grammars at
+not reach tree-sitter's generated-table speed — tinyparse compiles grammars at
 runtime, and that is the whole point of the project — but it is the rare
 re-architecture that improves both integrity and speed instead of trading one for
 the other. This is the decisive contrast with the statechart design, which bought
@@ -502,7 +502,7 @@ from this design, and the absence is principled, not an oversight:
   recover, and durability would violate the never-block-the-hot-loop contract.
 
 The one capability journaling would buy — checkpoint/resume of a long-running
-parse over a huge input — is real but not pocketparse's problem; the corpus is
+parse over a huge input — is real but not tinyparse's problem; the corpus is
 many small documents, and a host that needs it can wrap the parser without the
 core knowing. Leaving journaling off is the correct default here.
 
@@ -515,7 +515,7 @@ inside an HTML `<style>` — tree-sitter's "injections" — is not a new subsyst
 here. It is a child VM actor whose program is a *different grammar*. "Parse this
 byte span with grammar G, splice the result" is one operation; same-grammar
 (a quasiquote body) and cross-grammar (SQL in a string) differ only in which
-compiled program the child loads. This is the capability that moves pocketparse
+compiled program the child loads. This is the capability that moves tinyparse
 past single-language toys.
 
 ### Why the actor model fits injection better than a bolt-on
@@ -543,7 +543,7 @@ not plumbing:
 
 ### The two triggers
 
-Injection mirrors the grammar/query split pocketparse already has:
+Injection mirrors the grammar/query split tinyparse already has:
 
 - **Declarative, in the grammar** — a rule marks a region and names the
   sublanguage:
@@ -599,13 +599,13 @@ for, and what a flat parse-table design has to bolt on.
 
 The composition can be reached incrementally, behind the frozen public API, with
 the conformance suite as the differential oracle at every step. The public
-surface — `pocketparse_parser_new`, `pocketparse_push`, `pocketparse_finish`,
-the cursor API, the `pocketparse_class_fn` binding
-([`../include/pocketparse.h`](../include/pocketparse.h)) — **does not move.**
+surface — `tinyparse_parser_new`, `tinyparse_push`, `tinyparse_finish`,
+the cursor API, the `tinyparse_class_fn` binding
+([`../include/tinyparse.h`](../include/tinyparse.h)) — **does not move.**
 
-1. **Keep `pp_execute` as the reference executor.** Today's recursive-descent
+1. **Keep `tp_execute` as the reference executor.** Today's recursive-descent
    walk ([`parse.c`](../src/parse.c)) stays as the fallback and the debugging
-   oracle. `pocketparse_finish` chooses which executor runs — a flag or a
+   oracle. `tinyparse_finish` chooses which executor runs — a flag or a
    build-time switch — so the public behavior is unchanged while the VM is
    incomplete.
 
@@ -616,19 +616,19 @@ the cursor API, the `pocketparse_class_fn` binding
    the "compiler as actors" claim concrete early.
 
 3. **Lower a subset of opcodes; run the VM only for grammars that use that
-   subset.** Fall back to `pp_execute` otherwise. Prove **byte-identical
+   subset.** Fall back to `tp_execute` otherwise. Prove **byte-identical
    output** — the same CST, fields, and diagnostics — on every conformance case.
-   The 291/291 metric ([`ci/pocketparse-metric.sh`](../../../ci/pocketparse-metric.sh))
+   The 291/291 metric ([`ci/tinyparse-metric.sh`](../../../ci/tinyparse-metric.sh))
    is the oracle: the VM is correct exactly when it produces the byte-identical
-   tree `pp_execute` produces.
+   tree `tp_execute` produces.
 
 4. **Extend the opcode set until the VM covers the full IR**, the perf gate
-   ([`ci/pocketparse-perf-gate.sh`](../../../ci/pocketparse-perf-gate.sh))
+   ([`ci/tinyparse-perf-gate.sh`](../../../ci/tinyparse-perf-gate.sh))
    confirming each step does not regress the median. Add the sub-parse child
    actors when the quasiquote/query cases land, with the same differential check.
 
-5. **Make the VM the default once it dominates `pp_execute`** on the benchmark
-   and matches it on every conformance case. Keep `pp_execute` as a reference and
+5. **Make the VM the default once it dominates `tp_execute`** on the benchmark
+   and matches it on every conformance case. Keep `tp_execute` as a reference and
    a divergence oracle indefinitely — a flat instruction stream is unreadable in
    a debugger, and the tree walk *is* the grammar.
 
@@ -661,11 +661,11 @@ sub-rule shows up as a regression).
 
 **3. Byte-identical behavior across a second executor.** Recovery insertion,
 extras emission order, trivia placement, the whole-slice reserved-word check, and
-field tagging must match `pp_execute` exactly, and the subtle cases are where a
+field tagging must match `tp_execute` exactly, and the subtle cases are where a
 divergence would hide — extras folded into `MATCH`/`CHOICE`, recovery disarmed
 across a speculative `CHOICE` and re-armed on `FAIL`-restore, the `RESERVED`
 guard on a matched slice. The handling is the migration discipline itself: keep
-`pp_execute` as the reference forever, advance the VM one opcode subset at a time,
+`tp_execute` as the reference forever, advance the VM one opcode subset at a time,
 and treat the 291/291 suite as the gate that turns any divergence into a visibly
 wrong tree rather than a silent behavioral drift. The VM is not "done" until it
 is byte-identical on every case *and* faster on the benchmark.

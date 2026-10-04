@@ -1,6 +1,6 @@
 # A braced expansion concatenated with raw text `pre${v}post` is one command word.
 <<<cmd
-printf 'pre${v}post\n' | "$PP" run std.shell --input - --dump-tree
+printf 'pre${v}post\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -1,6 +1,6 @@
 # Parsing on the ax actor engine
 
-This document is the design gate for re-architecting pocketparse so that
+This document is the design gate for re-architecting tinyparse so that
 parsing genuinely runs on the `ax` actor engine, not merely on its arena. It
 specifies how the grammar IR lowers to compiled `ax` state machines, how a
 parser becomes a spawned actor, how tokens drive transitions, and — the part
@@ -13,14 +13,14 @@ claims this architecture as the intended one ("Grammar rules lower to `ax`
 machines"); [`performance.md`](performance.md), which measured the residual this
 re-architecture must not wreck; [`bytecode-vm.md`](bytecode-vm.md), the prior
 analysis of a flat bytecode VM, which this document deliberately contrasts; and
-the two design contracts, [`../pocketparse-design.md`](../pocketparse-design.md)
+the two design contracts, [`../tinyparse-design.md`](../tinyparse-design.md)
 and [`../../../src/ax/ax-design.md`](../../../src/ax/ax-design.md). Untagged code
 blocks below are illustrative; `mdc` extracts nothing from this file.
 
 ## Abstract
 
-pocketparse parses today by walking an in-memory IR tree with a recursive C
-function ([`pp_parse`/`pp_execute`](../src/parse.c)) that touches `ax` only
+tinyparse parses today by walking an in-memory IR tree with a recursive C
+function ([`tp_parse`/`tp_execute`](../src/parse.c)) that touches `ax` only
 through `ax_alloc`. The actor model the design promised never shipped. This
 document specifies how to make it real: each grammar rule lowers to an `ax_spec`
 whose states and transitions encode `seq`/`choice`/`repeat`/`optional`, the
@@ -28,7 +28,7 @@ parser runs as an actor spawned with `ax_spawn`, the lexer produces tokens that
 arrive as events driving transitions, `ax_step` is pumped to quiescence, and a
 genuinely separate sub-parse spawns a child actor whose `done.child` completion
 feeds recovery and tracing. The public API in
-[`../include/pocketparse.h`](../include/pocketparse.h) does not move. The crux is
+[`../include/tinyparse.h`](../include/tinyparse.h) does not move. The crux is
 ordered-choice backtracking: `ax` statecharts only move forward on events, while
 PEG must try an alternative and roll back the input cursor and the half-built
 tree on failure. The mechanism specified here keeps an explicit backtrack stack
@@ -77,8 +77,8 @@ happens to be inside an actor."
 
 ## Lowering the IR to ax specs
 
-Each rule becomes one `ax_spec`. The rule's body — a tree of `pp_ir` nodes
-(`PP_OP_SEQ`, `PP_OP_CHOICE`, and the rest, defined in
+Each rule becomes one `ax_spec`. The rule's body — a tree of `tp_ir` nodes
+(`TP_OP_SEQ`, `TP_OP_CHOICE`, and the rest, defined in
 [`../src/internal.h`](../src/internal.h)) — lowers to a tree of `ax_state`s with
 transitions between them. The mapping is structural, combinator by combinator.
 
@@ -100,7 +100,7 @@ unrolled into a state that transitions back to itself on a successful iteration
 and to its `done` final on the iteration's `fail`. Because a repeat is iterated
 choice, it reuses the same backtrack-frame machinery, with the refinement that a
 successful iteration *rewrites* the frame's cursor mark in place rather than
-pushing a new frame — the bounded-stack trick `pp_parse`'s `PP_OP_REPEAT` loop
+pushing a new frame — the bounded-stack trick `tp_parse`'s `TP_OP_REPEAT` loop
 gets for free today by reusing `saved_pos` each iteration.
 
 **An optional is a one-alternative choice.** `(optional X)` enters a state that
@@ -121,17 +121,17 @@ child actor at the recursion point.
 
 **Field and alias are capture actions.** `(field name X)` and `(alias kind X)`
 do not add states; they set a one-shot decoration on the transition action that
-emits `X`'s node, exactly as `pp_parse` threads its `field`/`alias` arguments
+emits `X`'s node, exactly as `tp_parse` threads its `field`/`alias` arguments
 down the recursion. The lowered transition's `then` action reads the decoration
 and stamps the emitted node.
 
-**The pocketparse-specific combinators are bracketing transitions.** `(goal NAME
-X)` and `(rule … extras: none …)` (`PP_OP_NO_EXTRAS`) lower to an enter action
+**The tinyparse-specific combinators are bracketing transitions.** `(goal NAME
+X)` and `(rule … extras: none …)` (`TP_OP_NO_EXTRAS`) lower to an enter action
 that pushes the active goal or the no-extras flag onto a small stack in
-`ax_data` and a leave action that pops it — the save/restore `pp_parse` does
+`ax_data` and a leave action that pops it — the save/restore `tp_parse` does
 around `active_goal` and `no_extras` becomes a state's `enter`/`leave` pair, so
 "shutdown by geometry" cleans them up even on a failing match.
-`(reserved …)` (`PP_OP_NOT_KEYWORD`) is a guard (`ax_test`) on the transition
+`(reserved …)` (`TP_OP_NOT_KEYWORD`) is a guard (`ax_test`) on the transition
 that would accept the matched slice. `(recover …)` is its own section
 ([recovery](#recovery-plugs-and-durability)).
 
@@ -184,13 +184,13 @@ const ax_spec list_spec = {
 };
 ```
 
-Read against [`pp_parse`](../src/parse.c): `enter = match_open_paren` is the
-`pp_consume_extras` + `pp_token_match_memo` the `PP_OP_LITERAL` case runs;
-`emit_open`/`emit_close` are the `pp_tree_builder_push` + field stamp;
+Read against [`tp_parse`](../src/parse.c): `enter = match_open_paren` is the
+`tp_consume_extras` + `tp_token_match_memo` the `TP_OP_LITERAL` case runs;
+`emit_open`/`emit_close` are the `tp_tree_builder_push` + field stamp;
 `push_backtrack_frame`/`rewrite_frame_cursor`/`pop_restore_frame` are the
-`saved_pos`/`saved_count`/`saved_sink` save-and-restore the `PP_OP_REPEAT` case
+`saved_pos`/`saved_count`/`saved_sink` save-and-restore the `TP_OP_REPEAT` case
 does by hand, lifted into named transition actions; the `done` final's `outcome`
-is the `pp_link_children` + span fixup `pp_parse_rule_ref` performs on a matched
+is the `tp_link_children` + span fixup `tp_parse_rule_ref` performs on a matched
 body. The whole rule is six states walked by `ax`'s transition engine, against a
 recursive descent through a `seq` node, two `field` nodes, a `repeat` node, a
 `ref`, and two literals today.
@@ -206,10 +206,10 @@ next token and receives it as an event that drives a transition. The question is
 *who* produces that token.
 
 **Decision: the lexer is a function the parser actor calls rather than its own
-actor.** The reason is parser-directed scanning. pocketparse's lexer is not
+actor.** The reason is parser-directed scanning. tinyparse's lexer is not
 free-running;
 which token it produces at a given offset depends on the parser's active lexical
-goal (`pp_goal_redirect` in [`../src/parse.c`](../src/parse.c)) and on whether
+goal (`tp_goal_redirect` in [`../src/parse.c`](../src/parse.c)) and on whether
 extras are suppressed in the current scope. A separate lexer actor would have to
 be told the current goal before every token — a message round-trip per token,
 the stringy hot path `ax` warns against — or would have to read the parser's
@@ -219,22 +219,22 @@ needs is already in `ax_data(self)`, reachable with no message at all. This is
 exactly `ax`'s rule that "the datamodel is C": the lexer is C the action calls,
 not behavior the scheduler dispatches.
 
-So a transition that wants the next token calls `pp_token_match_memo` directly,
+So a transition that wants the next token calls `tp_token_match_memo` directly,
 gets back match/no-match and an end offset, and *itself* synthesizes the
 `token.matched` or `fail` event via `ax_raise` to drive the next transition. The
 "token event" is real — it is an `ax` internal event the state machine matches on
 — but it is raised inside the action that produced the token, not posted from
-outside. The token payload is the compact `pocketparse_token` the public header
+outside. The token payload is the compact `tinyparse_token` the public header
 already defines (kind, start, end, flags), never a formatted name.
 
 **Lexical goals** ride in `ax_data` as a small stack, pushed and popped by the
 `(goal …)` state's `enter`/`leave` (above). The lexer function reads the top of
-that stack to resolve a redirect, exactly as `pp_goal_redirect` reads
+that stack to resolve a redirect, exactly as `tp_goal_redirect` reads
 `ctx->active_goal` today.
 
 **Extras** are consumed by the same lexer function before each significant token,
 folded into the `match_*` action rather than given a state of their own — the
-W46 extras memo (`pp_extras_memo`) carries through and answers a revisit in O(1).
+W46 extras memo (`tp_extras_memo`) carries through and answers a revisit in O(1).
 Giving extras their own state per element would double the transition count for
 no gain, since extras consumption emits nodes as a side effect but never branches
 the machine.
@@ -266,8 +266,8 @@ frame snapshotted — the input cursor (today's `ctx->position`), the
 tree-builder count (`builder.count`, which truncates a failed subtree wholesale
 because nodes are linked into a parent only after the body matches), and the
 sink count. These are precisely the `saved_count`/`saved_pos`/`saved_sink`
-locals scattered through `pp_parse`'s `PP_OP_CHOICE`, `PP_OP_REPEAT`, and
-`PP_OP_OPTIONAL` cases, gathered into one explicit stack so they survive across
+locals scattered through `tp_parse`'s `TP_OP_CHOICE`, `TP_OP_REPEAT`, and
+`TP_OP_OPTIONAL` cases, gathered into one explicit stack so they survive across
 transitions instead of living on the C call stack.
 
 Mapped to concrete `ax` states and transitions, a three-way choice is:
@@ -308,13 +308,13 @@ its own frame, and its `exhausted` re-raises `fail`, which the outer choice's
 current alternative catches and turns into *its* `restore_frame_marks` + advance.
 The stack depth is the grammar's choice-nesting depth at the current position,
 bounded by the grammar, arena-allocated, and never the C stack — which is a
-robustness win over today's `pp_parse`, whose recursion depth is the grammar
+robustness win over today's `tp_parse`, whose recursion depth is the grammar
 depth on the C stack.
 
 **Repeat is iterated choice** and reuses the frame, but a successful iteration
 calls `rewrite_frame_cursor` (advance the saved cursor to the new position)
 instead of pushing a fresh frame, so an `n`-element repeat costs one frame, not
-`n`. This is the in-place rewrite the `PP_OP_REPEAT` loop achieves by reassigning
+`n`. This is the in-place rewrite the `TP_OP_REPEAT` loop achieves by reassigning
 `saved_pos` each pass; `bytecode-vm.md` names it `PartialCommit` after LPeg.
 
 ### Why not record/replay speculation
@@ -343,15 +343,15 @@ inner backtracking.
 Backtracking is where W45 and W46 paid off, and the statechart must not lose
 them. Both survive because both are keyed on data the actor still holds.
 
-The **W45 token-match memo** (`pp_match_memo`, keyed on `(pattern, offset,
+The **W45 token-match memo** (`tp_match_memo`, keyed on `(pattern, offset,
 goal)`) lives in `ax_data` and is consulted by the lexer function the `try_altN`
 and `match_*` actions call. A choice that retries the same offset under the same
 goal hits the cache, exactly as today — the retry is now a `fail`-driven
 transition to the next alternative rather than a loop iteration in
-`PP_OP_CHOICE`, but the call into `pp_token_match_memo` is identical, so the memo
+`TP_OP_CHOICE`, but the call into `tp_token_match_memo` is identical, so the memo
 is identical.
 
-The **W46 first-set prediction** (`pp_choice_first_admits`) folds into the
+The **W46 first-set prediction** (`tp_choice_first_admits`) folds into the
 choice's alternative-advance. Before `try_altN`'s enter action runs the
 alternative, it tests the lookahead byte against the alternative's cached FIRST
 set and, on a provable miss, immediately raises `fail` to skip to the next
@@ -367,12 +367,12 @@ revisit to a proven-empty offset answers in O(1).
 
 ## Streaming and the pump
 
-The public streaming contract is unchanged: `pocketparse_push(bytes)` buffers a
-chunk, `pocketparse_finish()` finalizes, and the tree comes out through the
+The public streaming contract is unchanged: `tinyparse_push(bytes)` buffers a
+chunk, `tinyparse_finish()` finalizes, and the tree comes out through the
 cursor API. Under the new architecture these map to `ax` as follows, and the
 mapping is deliberately *coarse*.
 
-**`pocketparse_push(chunk)` posts one event to the parser actor.** It appends the
+**`tinyparse_push(chunk)` posts one event to the parser actor.** It appends the
 bytes to the actor's input buffer (in `ax_heap`) and posts an `input.chunk`
 event via `ax_post`. The transition that handles `input.chunk` runs the parser
 forward — many transitions, the whole inner advance through the grammar — until
@@ -389,14 +389,14 @@ chunk, not one per token and emphatically not one per transition — the
 transitions are internal (`ax_raise`), which `ax` runs inside the step without
 re-queuing on the external mailbox.
 
-**`pocketparse_finish()` posts an `input.end` event.** The parser, blocked
+**`tinyparse_finish()` posts an `input.end` event.** The parser, blocked
 waiting for more input or sitting at the start rule's `done`, takes the
 `input.end` transition: it consumes trailing extras, checks for leftover input
 (the `parse.trailing` diagnostic today), freezes the tree, and enters its
 top-level final, which raises `done.state` carrying the result. The CST is then
 read through the unchanged cursor API.
 
-The one semantic subtlety: today `pp_execute` runs the entire parse at
+The one semantic subtlety: today `tp_execute` runs the entire parse at
 `finish` time over the fully buffered input, so streaming is buffered, not
 incremental. The actor model *permits* incremental parsing — a chunk could
 advance the machine as far as its bytes allow — but matching the current public
@@ -432,7 +432,7 @@ Three cases qualify, each conceptually a *different parser*:
   actor at the recursion edge, using `ax`'s self-naming child spec. This bounds
   the state nesting at the cost of one spawn per recursion descent — coarse
   enough to amortize.
-- **The query engine.** [`pp_query_run`](../src/internal.h) is itself a parser
+- **The query engine.** [`tp_query_run`](../src/internal.h) is itself a parser
   over the linearized ENTER/LEAF/EXIT stream. It is the same *kind* of need as a
   sub-parse and would spawn a child actor running a query-matcher spec; this is
   one case, not a second, exactly as [`bytecode-vm.md`](bytecode-vm.md) notes.
@@ -456,19 +456,19 @@ semantics recovery and tracing want.
 ## Recovery, plugs, and durability
 
 **Recovery is an ordinary transition path.** `(recover BODY (on eof
-…))` (`PP_OP_RECOVER`) lowers to a state that first tries `BODY` cleanly; on the
+…))` (`TP_OP_RECOVER`) lowers to a state that first tries `BODY` cleanly; on the
 body's `fail` at end of input, an armed-recovery transition runs
-`insert_missing` — the `pp_recover_insert` action that emits a zero-width
-`PP_NODE_MISSING` node and the author's diagnostic — and continues into the next
+`insert_missing` — the `tp_recover_insert` action that emits a zero-width
+`TP_NODE_MISSING` node and the author's diagnostic — and continues into the next
 element instead of propagating `fail`. The "recovery armed" state is the
 `ctx->recover` flag of today, carried in `ax_data` and snapshotted into the
 backtrack frame (the `recover_flag` field above) so a speculative alternative
 correctly disarms recovery and a `fail`-restore re-arms it. This is the subtle
 case `bytecode-vm.md` flags: a choice must disarm recovery for its speculative
-alternatives, exactly as `PP_OP_CHOICE` saves and clears `ctx->recover` today.
+alternatives, exactly as `TP_OP_CHOICE` saves and clears `ctx->recover` today.
 
 **Plugs and bindings stay at the boundaries the design already drew.** A `(class
-NAME)` token primitive calls a host *binding* (a `pocketparse_class_fn`, a direct
+NAME)` token primitive calls a host *binding* (a `tinyparse_class_fn`, a direct
 C function pointer) from inside the lexer function — a host boundary, not a
 message, "for hot predicates" as the design says. Tracing, diagnostics, and the
 module resolver are *plugs*, which the design backs with `ax_port`. They fire on
@@ -488,7 +488,7 @@ internal cascade (`ax_raise`, automatic transitions), it re-derives
 deterministically during replay and is not journaled — which is precisely why
 the determinism contract holds: the lexer and actions read only `ax_data`, the
 arena, and the event, with no clock and no entropy. This is a genuine new
-capability the recursive `pp_execute` cannot offer: a long-running parse over a
+capability the recursive `tp_execute` cannot offer: a long-running parse over a
 huge input becomes checkpointable and resumable, and an idle parser pages out for
 the cost of its journal. It is the strongest concrete win the re-architecture
 buys beyond "the design's promise made real."
@@ -588,7 +588,7 @@ record/replay makes a parse checkpointable. The honest cost is a regression to
 roughly the low tens of times tree-sitter, which the mandate accepts and which
 integer event codes can later soften. The first build step should mirror the
 incremental path the design suggests: lower a subset of combinators, run the
-actor parser only for grammars that use that subset, fall back to `pp_execute`
+actor parser only for grammars that use that subset, fall back to `tp_execute`
 otherwise, and use the 291/291 conformance suite as the differential oracle —
 the actor parser is correct exactly when it produces the byte-identical CST,
-fields, and diagnostics that `pp_parse` produces. Proceed.
+fields, and diagnostics that `tp_parse` produces. Proceed.

@@ -27,7 +27,7 @@ tree is still produced.
 ## Try it
 
 ```sh
-printf '(a (b c)' | pocketparse run examples/recover/list.scm --input - --dump-tree
+printf '(a (b c)' | tinyparse run examples/recover/list.scm --input - --dump-tree
 ```
 
 The input is missing one closing parenthesis. The dump shows the recovered tree

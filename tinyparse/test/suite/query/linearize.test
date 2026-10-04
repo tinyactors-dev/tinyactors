@@ -1,5 +1,5 @@
 <<<cmd
-printf 'hi there' | "$PP" linearize test/suite/family/fixtures/base.scm --input -
+printf 'hi there' | "$TP" linearize test/suite/family/fixtures/base.scm --input -
 <<<assert
 exit 0
 out-contains enter Source

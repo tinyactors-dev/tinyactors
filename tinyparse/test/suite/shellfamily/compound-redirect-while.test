@@ -1,7 +1,7 @@
 # A redirect on a while clause: `while c; do a; done >>log`. The append Redirect
 # attaches to the CompoundCommand, after the WhileClause.
 <<<cmd
-printf 'while c; do a; done >>log\n' | "$PP" run std.shell --input - --dump-tree
+printf 'while c; do a; done >>log\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

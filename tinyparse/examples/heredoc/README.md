@@ -101,7 +101,7 @@ everywhere else in the grammar.
 
 When `parse-deferred` processes an item with captured text `T`, it
 instantiates the body by substituting `delimiter` with a
-`PP_OP_LITERAL(T, len(T))` node, producing a concrete pattern, and pushes
+`TP_OP_LITERAL(T, len(T))` node, producing a concrete pattern, and pushes
 it onto `heredoc-body-mode`'s `HeredocDelimLine` stack. The lexer, while
 `heredoc-body-mode` is active, reads the top of that stack to resolve
 `HeredocDelimLine`. When `HeredocBody` returns, `parse-deferred` pops the

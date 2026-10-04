@@ -3,7 +3,7 @@
 # Redirect both attach to the simple command; the heredoc body still drains after
 # the line's newline.
 <<<cmd
-printf 'cat <<EOF >out\nx\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+printf 'cat <<EOF >out\nx\nEOF\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

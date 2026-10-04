@@ -1,7 +1,7 @@
 # Braced parameter expansion `${name}` (POSIX §2.6.2): the explicit-delimited
 # form, parsed as a BracedExpansion with a name field.
 <<<cmd
-printf 'echo ${x}\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo ${x}\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

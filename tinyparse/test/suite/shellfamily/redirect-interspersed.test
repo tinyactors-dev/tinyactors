@@ -1,7 +1,7 @@
 # Redirections may sit among the arguments in the suffix: echo a >out b binds
 # echo as the command, a and b as arguments, and >out as a Redirect between them.
 <<<cmd
-printf 'echo a >out b\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo a >out b\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

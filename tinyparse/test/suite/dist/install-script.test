@@ -2,11 +2,11 @@
 set -e
 bash release.sh tarballs >/dev/null 2>&1
 pfx=$(mktemp -d)
-bash install.sh --from-file dist/release/pocketparse-0.1.0-linux-x86_64.tar.gz --prefix "$pfx" >/dev/null 2>&1
-test -x "$pfx/bin/pocketparse"
-test -f "$pfx/include/pocketparse.h"
-test -f "$pfx/lib/libpocketparse.a"
-test -f "$pfx/share/man/man1/pocketparse.1"
-"$pfx/bin/pocketparse" version | grep -q '0\.1\.0'
+bash install.sh --from-file dist/release/tinyparse-0.1.0-linux-x86_64.tar.gz --prefix "$pfx" >/dev/null 2>&1
+test -x "$pfx/bin/tinyparse"
+test -f "$pfx/include/tinyparse.h"
+test -f "$pfx/lib/libtinyparse.a"
+test -f "$pfx/share/man/man1/tinyparse.1"
+"$pfx/bin/tinyparse" version | grep -q '0\.1\.0'
 <<<assert
 exit 0

@@ -3,7 +3,7 @@
 # COMMITS. The deferred item survives, so the (parse-deferred s Body) drain
 # invokes Body exactly once.
 <<<cmd
-printf 'hello X next\nbody\n' | "$PP" run test/suite/lexgoal/slot-rollback-optional.scm --input - --dump-tree
+printf 'hello X next\nbody\n' | "$TP" run test/suite/lexgoal/slot-rollback-optional.scm --input - --dump-tree
 <<<assert
 exit 0
 out-count 1 Body [

@@ -2,7 +2,7 @@
 # literal, not a word separator, so 'hello world' is one arg, not two. The arg
 # Word holds a SingleQuoted part.
 <<<cmd
-printf "echo 'hello world'\n" | "$PP" run std.shell --input - --dump-tree
+printf "echo 'hello world'\n" | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

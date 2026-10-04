@@ -1,5 +1,5 @@
 <<<cmd
-printf 'hi !' | "$PP" run test/suite/family/fixtures/ext-param.scm --input - --dump-tree --param feature
+printf 'hi !' | "$TP" run test/suite/family/fixtures/ext-param.scm --input - --dump-tree --param feature
 <<<assert
 exit 0
 out-contains Bang

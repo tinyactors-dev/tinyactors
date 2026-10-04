@@ -1,4 +1,4 @@
-; tcl.scm — a Tcl-ish grammar for pocketparse.
+; tcl.scm — a Tcl-ish grammar for tinyparse.
 ;
 ; It models Tcl commands as sequences of words, where a word is a run of
 ; adjacent parts: barewords, brace expansion, quoted words, variable
@@ -21,7 +21,7 @@
 ; TOKENS, so the bytes inside a quoted word (including its space) are preserved
 ; verbatim and never mistaken for an inter-word separator.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module examples.tcl)
 

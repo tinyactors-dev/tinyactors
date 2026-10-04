@@ -1,6 +1,6 @@
-# pocketparse examples
+# tinyparse examples
 
-Each subdirectory is a worked example of one pocketparse capability: a
+Each subdirectory is a worked example of one tinyparse capability: a
 grammar, sometimes a host program that consumes the tree it produces, and a
 README that shows the thing running. This file records what every example
 owes the reader, and indexes them by the single lesson each one teaches.
@@ -43,15 +43,15 @@ over.
 
 **Stay green.** Every example is pinned by a test under `test/suite/` that
 exercises its lesson, including the nested case where the lesson is
-recursion. `bash ci/pocketparse-metric.sh` runs them all.
+recursion. `bash ci/tinyparse-metric.sh` runs them all.
 
 ## Grammars you run with the CLI
 
-These need only the `pocketparse` binary. Feed input on stdin and dump the
+These need only the `tinyparse` binary. Feed input on stdin and dump the
 tree:
 
 ```sh
-printf '(a (b c))' | pocketparse run examples/sexpr/sexpr.scm --input - --dump-tree
+printf '(a (b c))' | tinyparse run examples/sexpr/sexpr.scm --input - --dump-tree
 ```
 
 | Example | The lesson |
@@ -66,12 +66,12 @@ printf '(a (b c))' | pocketparse run examples/sexpr/sexpr.scm --input - --dump-t
 ## Programs that consume the tree
 
 These link the dist archives and walk the CST through the cursor API. Build
-them with `examples/build.sh` (the dispatcher passes each a `$PP_DIST`,
-`$PP_CLI`, and `$PP_INC`); each also has a `run.sh` that builds on demand.
+them with `examples/build.sh` (the dispatcher passes each a `$TP_DIST`,
+`$TP_CLI`, and `$TP_INC`); each also has a `run.sh` that builds on demand.
 
 | Example | The lesson |
 |---------|------------|
-| [`ebnf`](ebnf/)         | A meta-grammar: pocketparse parses an EBNF document, and the program walks that tree to emit an equivalent `.scm` grammar. |
+| [`ebnf`](ebnf/)         | A meta-grammar: tinyparse parses an EBNF document, and the program walks that tree to emit an equivalent `.scm` grammar. |
 | [`uri`](uri/)           | Reading named components straight off the tree's fields, never re-scanning the input, using the grammar `ebnf` generated. |
 | [`rewriter`](rewriter/) | A codemod that rebuilds its output from the byte spans the tree records, copying every untouched byte through verbatim. |
 | [`jit`](jit/)           | Native x86-64 emitted by recursing over the cursor, with no intermediate AST between the parse tree and the machine code. |

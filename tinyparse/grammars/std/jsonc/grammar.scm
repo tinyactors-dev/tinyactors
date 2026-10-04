@@ -11,7 +11,7 @@
 ; comments are purely additive trivia. This is OUR grammar, authored and owned
 ; here, parameterized off std.json to prove grammar composition.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module std.jsonc)
 

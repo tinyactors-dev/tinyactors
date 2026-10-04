@@ -1,5 +1,5 @@
 <<<cmd
-printf 'hi there !' | "$PP" run test/suite/family/fixtures/pkg --input - --dump-tree
+printf 'hi there !' | "$TP" run test/suite/family/fixtures/pkg --input - --dump-tree
 <<<assert
 exit 0
 out-contains Source

@@ -1,9 +1,9 @@
-# mise.toml — pocketparse's pinned toolchain and task runner.
+# mise.toml — tinyparse's pinned toolchain and task runner.
 #
 # `mise install` provisions the compiler; `mise run <task>` (or `mise <task>`)
 # drives the lifecycle. Run it from this directory (tinyparse/).
 #
-# pocketparse builds with Zig 0.15.1, independent of the monorepo's zig pin.
+# tinyparse builds with Zig 0.15.1, independent of the monorepo's zig pin.
 # It depends on nothing else: the library is freestanding C.
 
 [tools]
@@ -11,14 +11,14 @@ zig = "0.15.1"
 
 [env]
 # Point build.sh at the mise-managed Zig explicitly so it never guesses.
-POCKETPARSE_ZIG = "{{ exec(command='command -v zig || true') }}"
+TINYPARSE_ZIG = "{{ exec(command='command -v zig || true') }}"
 
 [tasks.lib]
-description = "Build libpocketparse.{a,so|dylib} for the host platform"
+description = "Build libtinyparse.{a,so|dylib} for the host platform"
 run = "bash build.sh lib"
 
 [tasks.cli]
-description = "Build the pocketparse CLI"
+description = "Build the tinyparse CLI"
 run = "bash build.sh cli"
 
 [tasks.examples]
@@ -35,19 +35,19 @@ run = "bash build.sh dist"
 
 [tasks.man]
 description = "Render the manpage from the embedded source"
-run = "./dist/$(uname -s | tr A-Z a-z)-*/pocketparse man"
+run = "./dist/$(uname -s | tr A-Z a-z)-*/tinyparse man"
 
 [tasks.test]
 description = "Run the finish-line metric (build + data-driven harness + ratchet)"
-run = "bash ci/pocketparse-metric.sh"
+run = "bash ci/tinyparse-metric.sh"
 
 [tasks.metric]
 description = "Alias for test — the finish-line metric"
-run = "bash ci/pocketparse-metric.sh"
+run = "bash ci/tinyparse-metric.sh"
 
 [tasks.gate]
 description = "Full gate: cross-dist build + run every example through the harness"
-run = "RUN_GATE=1 bash ci/pocketparse-metric.sh"
+run = "RUN_GATE=1 bash ci/tinyparse-metric.sh"
 
 [tasks.clean]
 description = "Remove build outputs"

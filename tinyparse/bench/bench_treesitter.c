@@ -5,8 +5,8 @@
 ** with the vendored tree-sitter-javascript parser.c + scanner.c, then parses
 ** every corpus document with ts_parser_parse_string and immediately deletes the
 ** resulting tree -- it never walks the TSTree. This is the apples-to-apples
-** counterpart to bench_pocketparse.c, which likewise parses to a tree and
-** discards it without a post-parse walk (pocketparse builds its CST eagerly at
+** counterpart to bench_tinyparse.c, which likewise parses to a tree and
+** discards it without a post-parse walk (tinyparse builds its CST eagerly at
 ** finish, so neither side does any traversal). Only the per-document parse calls
 ** are timed; library load is not.
 **
@@ -15,14 +15,14 @@
 **                 reset between parses. This is how the tree-sitter API intends
 **                 a parser to be used and is the default.
 **   lifecycle  -- a fresh TSParser is created (and its language set) and deleted
-**                 for EVERY document, mirroring pocketparse's create-a-parser-
+**                 for EVERY document, mirroring tinyparse's create-a-parser-
 **                 per-parse model. This isolates and exposes the parser-setup
 **                 cost so the comparison is symmetric.
 **
 ** A third mode, "walk", measures TRAVERSAL instead of parsing. It parses each
 ** document UNTIMED into a TSTree (held alive), then times ONLY a preorder
 ** depth-first TSTreeCursor walk that touches every node (reading its symbol and
-** start byte into a volatile sink), counting the nodes visited. The pocketparse
+** start byte into a volatile sink), counting the nodes visited. The tinyparse
 ** harness runs the identical walk over its own cursor, so the traversal numbers
 ** are apples-to-apples even though the two trees have different shapes; each side
 ** reports its own node count and we normalize by it (ns/node).
@@ -54,7 +54,7 @@ static void parse_corpus_reuse(TSParser *parser, const bench_corpus *corpus)
 
 /* ** Symmetric (lifecycle): create a fresh parser per document, set its
 ** language, parse, delete the tree, delete the parser -- mirroring
-** pocketparse's per-parse parser. The whole per-document cost, parser setup
+** tinyparse's per-parse parser. The whole per-document cost, parser setup
 ** included, is on the meter. */
 static void parse_corpus_per_doc(const TSLanguage *lang,
                                  const bench_corpus *corpus)
@@ -81,7 +81,7 @@ static volatile uint32_t bench_walk_sink;
 
 /* ** Walk one TSTree preorder, depth-first, with a TSTreeCursor, touching every
 ** node's symbol and start byte and counting it. This is the timed traversal; it
-** mirrors the pocketparse side's cursor walk exactly (same order, same touch).
+** mirrors the tinyparse side's cursor walk exactly (same order, same touch).
 ** Returns the number of nodes visited. */
 static size_t walk_tree(TSTree *tree)
 {

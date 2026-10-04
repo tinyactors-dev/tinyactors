@@ -1,17 +1,17 @@
-# pocketparse architecture
+# tinyparse architecture
 
-This document describes how `pocketparse` is built and how its pieces fit. The
+This document describes how `tinyparse` is built and how its pieces fit. The
 *what* and *why* of the public contract live in
-[`../pocketparse-design.md`](../pocketparse-design.md); this is the *how*. The
+[`../tinyparse-design.md`](../tinyparse-design.md); this is the *how*. The
 build schedule is [`build-plan.md`](build-plan.md).
 
 ## Layers
 
 ```
         ┌─────────────────────────────────────────────┐
-        │  pocketparse CLI  (hosted: libc, argv, IO)   │  src/cli.c
+        │  tinyparse CLI  (hosted: libc, argv, IO)   │  src/cli.c
         ├─────────────────────────────────────────────┤
-        │  libpocketparse  (freestanding: no libc)     │  src/*.c, include/pocketparse.h
+        │  libtinyparse  (freestanding: no libc)     │  src/*.c, include/tinyparse.h
         │   reader → IR → lowering → scanner → CST      │
         ├─────────────────────────────────────────────┤
         │  ax actor core   (freestanding)              │  dist/<plat>/libax.a + ax.h
@@ -25,7 +25,7 @@ two never blur: nothing under `src/` except `cli.c` may call libc.
 
 ## Consuming the `ax` release artifacts
 
-`pocketparse` does not recompile `ax`. It links the prebuilt release archive
+`tinyparse` does not recompile `ax`. It links the prebuilt release archive
 `dist/<platform>/libax.a` and includes `dist/<platform>/ax.h`. `build.sh`
 populates `dist/` (via the repo's `ci/zig-build.sh` / `make libs`) if it is
 empty, then links against it. The marker `dist/<platform>/.consumes-ax`, written
@@ -38,7 +38,7 @@ the engine is pumped to quiescence per push.
 
 The library and CLI are built with **Zig 0.15.1** (`zig cc` / `zig ar`), pinned
 in [`../mise.toml`](../mise.toml) and provisioned by
-`scripts/pocketparse-setup.sh`. Zig cross-compiles the deliverable matrix from
+`scripts/tinyparse-setup.sh`. Zig cross-compiles the deliverable matrix from
 one host: `x86_64-linux-gnu` and `aarch64-macos-none`. This is deliberately
 independent of the repo's 0.16 freestanding toolchain; static-archive linking
 against `libax.a` is ABI-stable across the two Zig versions.
@@ -60,17 +60,17 @@ against `libax.a` is ABI-stable across the two Zig versions.
 
 Development is gated by a **data-driven, ratcheting test suite** (`test/`,
 interpreted by `test/harness.c` against `test/xfail.list`) and the metric
-`ci/pocketparse-metric.sh`. Tests are data, never code; the metric goes green
+`ci/tinyparse-metric.sh`. Tests are data, never code; the metric goes green
 only when every test passes and the ledger is empty. This gate outlives the
 build and is the standing guard against regressions.
 
 ## Source layout
 
 ```
-tools/pocketparse/
-  pocketparse-design.md   canonical design (the contract)
-  include/pocketparse.h   public API (regular C)
-  src/                    libpocketparse + cli.c (regular C, not literate)
+tools/tinyparse/
+  tinyparse-design.md   canonical design (the contract)
+  include/tinyparse.h   public API (regular C)
+  src/                    libtinyparse + cli.c (regular C, not literate)
   docs/                   this doc, the build plan, grammar + CLI guides
   examples/               sexpr, tcl, rewriter, ebnf, uri, jit
   test/                   harness.c, suite/**/*.test (data), xfail.list

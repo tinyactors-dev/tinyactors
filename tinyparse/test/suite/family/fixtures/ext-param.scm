@@ -7,7 +7,7 @@
 ; its body only when the parameter is truthy. Because Source is a name the base
 ; already defines, the redefinition is wrapped in (override …).
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module family.ext-param)
 

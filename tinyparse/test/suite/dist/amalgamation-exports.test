@@ -1,14 +1,14 @@
 # A shared library built from the amalgamation with -fvisibility=hidden exports
-# the public API, and every symbol it defines for export belongs to pocketparse
-# itself: the public pocketparse_* API or the library's own pp_* helpers. Nothing
+# the public API, and every symbol it defines for export belongs to tinyparse
+# itself: the public tinyparse_* API or the library's own tp_* helpers. Nothing
 # foreign leaks into the dynamic symbol table.
 <<<cmd
 set -e
 bash amalgamate.sh >/dev/null 2>&1
 a=dist/amalgamation
-cc -shared -fPIC -fvisibility=hidden -I"$a" "$a/pocketparse.c" -o "$a/libpocketparse.so"
-nm -D --defined-only "$a/libpocketparse.so" | grep -q ' pocketparse_open'
-foreign="$(nm -D --defined-only "$a/libpocketparse.so" | awk '$2 ~ /^[TDBRVW]$/ { print $3 }' | grep -vE '^(pocketparse_|pp_)' || true)"
+cc -shared -fPIC -fvisibility=hidden -I"$a" "$a/tinyparse.c" -o "$a/libtinyparse.so"
+nm -D --defined-only "$a/libtinyparse.so" | grep -q ' tinyparse_open'
+foreign="$(nm -D --defined-only "$a/libtinyparse.so" | awk '$2 ~ /^[TDBRVW]$/ { print $3 }' | grep -vE '^(tinyparse_|tp_)' || true)"
 test -z "$foreign" || { echo "foreign exports: $foreign"; exit 1; }
 exit 0
 <<<assert

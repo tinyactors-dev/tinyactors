@@ -2,7 +2,7 @@
 # single argument word concatenating a RawWord, a SingleQuoted, and a
 # DoubleQuoted part.
 <<<cmd
-printf 'echo abc%sdef%s"ghi"\n' "'" "'" | "$PP" run std.shell --input - --dump-tree
+printf 'echo abc%sdef%s"ghi"\n' "'" "'" | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

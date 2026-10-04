@@ -15,7 +15,7 @@
 # Phase 8 — std.javascript corpus (complete: all 116 cases handled)
 # 115 valid cases parse cleanly; the 1 deliberately-malformed case
 # (destructuring__5) is asserted to be rejected, matching tree-sitter flagging
-# it as an error (tree-sitter recovers into an (ERROR)/(MISSING) tree, pocketparse
+# it as an error (tree-sitter recovers into an (ERROR)/(MISSING) tree, tinyparse
 # rejects — both detect it). Full error-recovery-tree parity is future work.
 
 # Phase 8 — std.typescript / std.tsx corpus (complete: all 112 cases parse)

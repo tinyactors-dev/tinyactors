@@ -3,7 +3,7 @@
 # `then a`, `fi` are all delimited here by `;` (and EOF), so `if x;then a;fi`
 # parses as a complete if clause with no prefix theft.
 <<<cmd
-printf 'if x;then a;fi\n' | "$PP" run std.shell --input - --dump-tree
+printf 'if x;then a;fi\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -20,9 +20,9 @@ two generated parsers, two trees, one binary.
 
 ## How two parsers avoid colliding
 
-`pocketparse c <grammar> --parser-lib` emits a parser as a C translation unit
-with a fixed set of file-scope symbols — `pp_parser_p<N>`, `pp_compiled_parser_load`,
-`pp_compiled_parser_run`, and the emitted statics. Link two such units into one
+`tinyparse c <grammar> --parser-lib` emits a parser as a C translation unit
+with a fixed set of file-scope symbols — `tp_parser_p<N>`, `tp_compiled_parser_load`,
+`tp_compiled_parser_run`, and the emitted statics. Link two such units into one
 program and those symbols collide.
 
 The `--name <prefix>` option (W16-3) renames **every** emitted file-scope symbol
@@ -31,13 +31,13 @@ so existing callers are unchanged. `build.sh` generates the two parsers with
 distinct prefixes:
 
 ```sh
-pocketparse c host.scm  --parser-lib --name host_parser --out host_parser.c
-pocketparse c std.json  --parser-lib --name json_parser --out json_parser.c
+tinyparse c host.scm  --parser-lib --name host_parser --out host_parser.c
+tinyparse c std.json  --parser-lib --name json_parser --out json_parser.c
 ```
 
 so their entries become `host_parser_load` / `host_parser_run` and
 `json_parser_load` / `json_parser_run`, and the two units link cleanly. The
-shared runtime (`libpocketparse`, which the leaf helpers, the CALL prologue, and
+shared runtime (`libtinyparse`, which the leaf helpers, the CALL prologue, and
 the tree builder live in) is one archive, linked once, so it is
 shared — not duplicated — between the two parsers.
 
@@ -90,7 +90,7 @@ Document
           ...
 ```
 
-`ci/pocketparse-multiparser.sh` builds this example and asserts the output equals
+`ci/tinyparse-multiparser.sh` builds this example and asserts the output equals
 `expected.txt`, and that the linked binary carries both parsers' distinct entries.
 
 ## Exporting only the parser API from the embeddable artifact (W16-4)
@@ -98,25 +98,25 @@ Document
 A host that links the parser into its own application should not inherit the
 library's internals: the embeddable object or library must export ONLY the
 parser's own entries (`<prefix>_load` / `<prefix>_run`) plus the public
-`pocketparse_*` API the host calls — no pocketparse-internal `pp_*`.
+`tinyparse_*` API the host calls — no tinyparse-internal `tp_*`.
 
-`embed-lib.sh` is the recipe. It compiles the pocketparse **amalgamation**
-(`dist/amalgamation/pocketparse.c`) plus each generated parser-lib unit, and links behind a linker version script generated
+`embed-lib.sh` is the recipe. It compiles the tinyparse **amalgamation**
+(`dist/amalgamation/tinyparse.c`) plus each generated parser-lib unit, and links behind a linker version script generated
 from the `--name` prefixes that exports exactly the parser entries and
-`pocketparse_*` and localizes everything else:
+`tinyparse_*` and localizes everything else:
 
 ```sh
-# from the pocketparse project root
+# from the tinyparse project root
 bash examples/embed/embed-lib.sh libembed.so host_parser:host.scm json_parser:std.json
-nm -D --defined-only libembed.so | grep -cE ' pp_'  # -> 0
+nm -D --defined-only libembed.so | grep -cE ' tp_'  # -> 0
 nm -D --defined-only libembed.so | grep -E ' (host_parser|json_parser)_'
 #   T host_parser_load / _run, T json_parser_load / _run
 ```
 
 The emitter is unchanged — this is a link-time recipe — so the generated C is
-byte-for-byte what `--name` already produces. `ci/pocketparse-exports.sh` is the
+byte-for-byte what `--name` already produces. `ci/tinyparse-exports.sh` is the
 gate: it builds the artifact (single parser and the two-parser case), asserts with
-`nm` that the exported table is exactly the parser API plus `pocketparse_*`, and
+`nm` that the exported table is exactly the parser API plus `tinyparse_*`, and
 checks that a hardened executable still parses the sample to the golden tree.
 
 ## Scope

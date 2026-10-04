@@ -1,4 +1,4 @@
 <<<cmd
-test -f dist/linux-x86_64/libpocketparse.so
+test -f dist/linux-x86_64/libtinyparse.so
 <<<assert
 exit 0

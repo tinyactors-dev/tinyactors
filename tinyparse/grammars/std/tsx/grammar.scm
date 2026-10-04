@@ -12,7 +12,7 @@
 ; leading `<` to open a JSX element (reached through primary_expression). The
 ; `as`/`satisfies` postfix forms stay.
 
-(pocketparse version: "0.1")
+(tinyparse version: "0.1")
 
 (module std.tsx)
 

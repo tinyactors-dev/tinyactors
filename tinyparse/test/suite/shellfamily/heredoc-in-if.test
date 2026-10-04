@@ -3,7 +3,7 @@
 # line's newline, and `fi` still closes the clause. This exercises the per-line
 # slot/drain inside CompoundList (not just at the top level).
 <<<cmd
-printf 'if true; then cat <<EOF\nx\nEOF\n fi\n' | "$PP" run std.shell --input - --dump-tree
+printf 'if true; then cat <<EOF\nx\nEOF\n fi\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

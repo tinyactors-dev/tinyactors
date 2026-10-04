@@ -3,7 +3,7 @@
 # an injection node tagged [std.json]. A self-contained proof that injecting one
 # embedded language works end to end, independent of the multi-language demo.
 <<<cmd
-"$PP" run std.fence --input test/suite/inject/inputs/json_only.fence --dump-tree
+"$TP" run std.fence --input test/suite/inject/inputs/json_only.fence --dump-tree
 <<<assert
 exit 0
 out-contains injection [std.json]

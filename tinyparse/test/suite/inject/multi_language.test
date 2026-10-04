@@ -5,7 +5,7 @@
 # [std.json] under the json fence -- proof that each region was parsed by the
 # language its info string selected, not by the host fence grammar.
 <<<cmd
-"$PP" run std.fence --input test/suite/inject/inputs/multi.fence --dump-tree
+"$TP" run std.fence --input test/suite/inject/inputs/multi.fence --dump-tree
 <<<assert
 exit 0
 # the two injection boundaries, each tagged with the embedded language

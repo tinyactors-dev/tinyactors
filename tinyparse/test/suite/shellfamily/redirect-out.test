@@ -1,7 +1,7 @@
 # An output redirection: echo hi >out is a command echo with argument hi and a
 # Redirect using the > operator to target out.
 <<<cmd
-printf 'echo hi >out\n' | "$PP" run std.shell --input - --dump-tree
+printf 'echo hi >out\n' | "$TP" run std.shell --input - --dump-tree
 <<<assert
 exit 0
 out-absent ERROR

@@ -1,5 +1,5 @@
 <<<cmd
-printf 'foo bar123 x' | "$PP" run examples/bindings/ident.scm --input - --dump-tree
+printf 'foo bar123 x' | "$TP" run examples/bindings/ident.scm --input - --dump-tree
 <<<assert
 exit 0
 out-contains Ident

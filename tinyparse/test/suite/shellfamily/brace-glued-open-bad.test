@@ -3,6 +3,6 @@
 # delimited `LBrace` token refuses to match `{` as a prefix of `{a`, and the input
 # is a syntax error (`{a` is an ordinary command word with no following command).
 <<<cmd
-printf '{a; }\n' | "$PP" run std.shell --input -
+printf '{a; }\n' | "$TP" run std.shell --input -
 <<<assert
 exit-not 0
