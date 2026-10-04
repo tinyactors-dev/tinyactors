@@ -17,33 +17,205 @@
 #endif
 #endif
 
+/**
+ * @file memory.h
+ *
+ * # Memory helpers
+ *
+ * The freestanding replacements for `malloc`, `free`, `memcpy` and
+ * `memset` that every unit of core uses, plus the arithmetic of sizes and
+ * alignments. Core links no C library: all of its memory comes from a
+ * `ta_allocator` the host injects (`include/tinyactors.h`), and it reaches
+ * that allocator only through `ta_mem_alloc` and `ta_mem_free`.
+ *
+ * ## Contract
+ *
+ * - `ta_mem_alloc(allocator, size, alignment)` asks the allocator for
+ *   `size` bytes aligned to `alignment`. It answers NULL, without calling
+ *   the allocator, for a size of 0 or an allocator with no vtable or no
+ *   `alloc`; otherwise it answers what the allocator answers, NULL when it
+ *   is out of memory.
+ * - `ta_mem_free(allocator, ptr, layout)` gives `ptr` back with the size
+ *   and alignment it was allocated with (`layout->size`,
+ *   `layout->alignment`; `layout->ptr` is ignored and replaced by `ptr`).
+ *   Freeing NULL, or through an allocator with no vtable or no `free`,
+ *   does nothing.
+ * - `ta_mem_copy` and `ta_mem_zero` copy and clear bytes one at a time.
+ *   The regions given to `ta_mem_copy` must not overlap.
+ * - `ta_align_up(value, alignment)` rounds up to any non-zero multiple;
+ *   `TA_ALIGN_UP(v, a)` rounds up to a power of two `a`, in the type of
+ *   `v`, and is a constant expression when its operands are.
+ * - `TA_ARRAY_COUNT(a)` is the element count of an array (not a
+ *   pointer), as a `uint32_t`.
+ *
+ * ## Memory
+ *
+ * The unit owns nothing. `ta_mem_alloc` allocates, and its caller owns the
+ * block until it hands it to `ta_mem_free` with the same allocator and
+ * layout. Whether a caller may allocate inside a macrostep is that
+ * caller's contract; the other helpers never allocate and may run
+ * anywhere.
+ *
+ * ## Complexity
+ *
+ * `ta_mem_alloc` and `ta_mem_free` cost one call to the allocator;
+ * `ta_mem_copy` and `ta_mem_zero` are O(size); the rest are O(1).
+ *
+ * ## Failure
+ *
+ * `ta_mem_alloc` answers NULL, which callers turn into `TA_ERR_NOMEM`.
+ * Nothing else fails. A zero alignment, overlapping copies and a layout
+ * that differs from the allocation's are programmer errors, not checked.
+ *
+ * ## Users
+ *
+ * Every unit that allocates: arenas, vectors, paged arrays, the atom
+ * table, the system, sessions, actors and their definitions, the session
+ * image and the text writer's renderer; and every unit that copies or
+ * clears bytes.
+ */
 
-/* Private base header: every implementation module reaches the public API here. */
 
+/** The element count of array `a` (an array, not a pointer), as a `uint32_t`. */
 #define TA_ARRAY_COUNT(a) ((uint32_t)(sizeof(a) / sizeof((a)[0])))
+/** `v` rounded up to a multiple of `a`, which is a power of two. */
 #define TA_ALIGN_UP(v, a) (((v) + ((a) - 1u)) & ~((a) - 1u))
 
-typedef struct {
-    uint32_t offset;
-    uint32_t length;
-} ta_span32;
-
-typedef struct {
-    uint32_t slot;
-    uint32_t generation;
-} ta_actor_key;
-
-/* Freestanding memory helpers over an injected ta_allocator. */
+/**
+ * Allocates `size` bytes aligned to `alignment` from `allocator`. Answers
+ * NULL for a size of 0, an allocator without `alloc`, or when the
+ * allocator is out of memory. The caller owns the block.
+ */
 TA_PRIVATE void *ta_mem_alloc(ta_allocator allocator, size_t size, size_t alignment);
+/**
+ * Gives `ptr` back to `allocator`, with the size and alignment in
+ * `layout` that it was allocated with. Does nothing for NULL or an
+ * allocator without `free`. Never fails.
+ */
 TA_PRIVATE void ta_mem_free(ta_allocator allocator, void *ptr, const ta_allocator_free_params *layout);
+/** Copies `size` bytes from `src` to `dst`, which do not overlap. Never allocates. */
 TA_PRIVATE void ta_mem_copy(void *dst, const void *src, size_t size);
+/** Sets `size` bytes at `dst` to 0. Never allocates. */
 TA_PRIVATE void ta_mem_zero(void *dst, size_t size);
+
+/** `value` rounded up to a multiple of `alignment`, which is never zero. */
+TA_PRIVATE inline size_t ta_align_up(size_t value, size_t alignment) {
+    return (value + alignment - 1u) / alignment * alignment;
+}
+
+/**
+ * @file str.h
+ *
+ * # String views
+ *
+ * Helpers for `ta_str`, the public `{ptr, len}` view of bytes that core
+ * uses for every name, URI and text (`include/tinyactors.h`): comparing
+ * two views and making one from a NUL-terminated C string.
+ *
+ * ## Contract
+ *
+ * - A `ta_str` borrows its bytes; it is not NUL-terminated, and `ptr` may
+ *   be NULL when `len` is 0.
+ * - `ta_str_equal` compares lengths, then bytes: two empty views are
+ *   equal whatever their pointers.
+ * - `ta_str_from_cstr` answers a view of `text` up to, not including, its
+ *   terminating NUL. `text` is never NULL.
+ *
+ * ## Memory
+ *
+ * Nothing here owns or allocates memory: a view borrows bytes its caller
+ * keeps alive. Both functions may run inside a macrostep.
+ *
+ * ## Complexity
+ *
+ * `ta_str_equal` is O(length) and stops at the first difference;
+ * `ta_str_from_cstr` is O(length of the C string).
+ *
+ * ## Failure
+ *
+ * Neither function fails. A NULL `text`, or a view whose `ptr` does not
+ * hold `len` bytes, is a programmer error, not checked.
+ *
+ * ## Users
+ *
+ * The atom table, addresses and sessions, the builder and compiler, the
+ * interpreter, the data model, the SCXML URI parser, the codec, the
+ * system, the session image, and the tests.
+ */
+
+
+/** Whether `left` and `right` hold the same bytes. Never allocates. */
 TA_PRIVATE bool ta_str_equal(ta_str left, ta_str right);
 
-/*
- * A growable array of fixed-size elements. `items` is reallocated as it
- * grows, so callers keep indices, never element pointers, across a push.
+/** A view of the NUL-terminated `text`, without its NUL. Borrows `text`; never allocates. */
+TA_PRIVATE inline ta_str ta_str_from_cstr(const char *text) {
+    ta_str out = { .ptr = text, .len = 0 };
+    while (text[out.len] != '\0') {
+        out.len += 1;
+    }
+    return out;
+}
+
+/**
+ * @file vec.h
+ *
+ * # Growable array
+ *
+ * `ta_vec` is a contiguous array of fixed-size elements that grows by
+ * doubling. The element size and alignment are fixed at `ta_vec_init`
+ * (`TA_VEC_LAYOUT(T)` gives them for a type), and elements are addressed by
+ * `uint32_t` index from 0.
+ *
+ * ## Contract and invariants
+ *
+ * - `count <= capacity`; elements `0 .. count - 1` are in use.
+ *   `items` is NULL exactly when `capacity` is 0.
+ * - `capacity` is 0 or 8 times a power of two: the first growth makes room
+ *   for 8 elements, and each later one doubles until the request fits.
+ * - Growing moves `items`. A pointer from `ta_vec_at` is valid only until
+ *   the next `ta_vec_reserve`, `ta_vec_extend` or `ta_vec_push`; callers
+ *   keep indices, never element pointers, across them.
+ * - `ta_vec_extend` and `ta_vec_push` append elements; nothing here
+ *   removes one. A caller shrinks the array by lowering `count`
+ *   itself; the memory stays until `ta_vec_destroy`.
+ * - `ta_vec_at(vec, index)` does not check `index`: `index < count` is the
+ *   caller's precondition.
+ *
+ * ## Memory
+ *
+ * The vector owns `items`, allocated from the `ta_allocator` it was
+ * initialised with and freed by `ta_vec_destroy` (or by the copy of a
+ * growth). The `ta_vec` struct itself belongs to the caller, who embeds it.
+ * `ta_vec_init`, `ta_vec_at` and `ta_vec_destroy` never allocate.
+ * `ta_vec_reserve`, `ta_vec_extend` and `ta_vec_push` allocate when the
+ * request exceeds `capacity`; a caller that must not allocate at that
+ * point reserves beforehand, at a point where it may.
+ *
+ * ## Complexity
+ *
+ * `ta_vec_at` and `ta_vec_init` are O(1). `ta_vec_reserve` copies every
+ * element when it grows, O(count); `ta_vec_push` and `ta_vec_extend` are
+ * O(1) amortised plus the zeroing of the new elements. `ta_vec_destroy`
+ * is O(1).
+ *
+ * ## Failure
+ *
+ * Growth answers `TA_ERR_NOMEM` when the allocator fails or the capacity
+ * would pass `UINT32_MAX`, and the vector is unchanged: its elements,
+ * `count` and `capacity` stay as they were.
+ *
+ * ## Users
+ *
+ * The atom table, the event-name trie, the page directories of addresses,
+ * sessions, I/O origins, timers and the actor table (ADR 0063), an
+ * actor's activation effects and pending invokes, the system's
+ * definitions and registrations, the builder's state lists and the
+ * compiler's frames (ADR 0060), the internal queue (ADR 0064), and the
+ * session image.
  */
+
+
+/** A growable array of fixed-size elements; see the file comment. */
 typedef struct {
     ta_allocator allocator;
     void *items;
@@ -53,24 +225,79 @@ typedef struct {
     size_t element_alignment;
 } ta_vec;
 
+/** The element layout of type `T`, for `ta_vec_init`. */
+#define TA_VEC_LAYOUT(T) (&(ta_tree_list_layout){ .element_size = sizeof(T), .element_alignment = _Alignof(T) })
+
+/** Makes `*vec` an empty vector of elements of `layout`, over `allocator`. Never allocates. */
 TA_PRIVATE void ta_vec_init(ta_vec *vec, ta_allocator allocator, const ta_tree_list_layout *layout);
+/** Frees the elements and leaves `*vec` empty, still usable. Never allocates. */
 TA_PRIVATE void ta_vec_destroy(ta_vec *vec);
+/**
+ * Makes room for `count` elements in all. May allocate; answers
+ * `TA_ERR_NOMEM`, changing nothing, when it cannot.
+ */
 TA_PRIVATE ta_result ta_vec_reserve(ta_vec *vec, uint32_t count);
-/* Appends `count` zeroed elements and stores the index of the first in `*out`. */
+/**
+ * Appends `count` zeroed elements and stores the index of the first in
+ * `*out` (when `out` is not NULL). May allocate; answers `TA_ERR_NOMEM`,
+ * changing nothing, when it cannot.
+ */
 TA_PRIVATE ta_result ta_vec_extend(ta_vec *vec, uint32_t count, uint32_t *out);
+/**
+ * Appends a copy of the element at `element`. May allocate; answers
+ * `TA_ERR_NOMEM`, changing nothing, when it cannot.
+ */
 TA_PRIVATE ta_result ta_vec_push(ta_vec *vec, const void *element);
+/** The address of element `index`, which is below `count`; valid until the vector next grows. */
 TA_PRIVATE void *ta_vec_at(const ta_vec *vec, uint32_t index);
 
-/* `value` rounded up to a multiple of `alignment`, which is never zero. */
-TA_PRIVATE inline size_t ta_align_up(size_t value, size_t alignment) {
-    return (value + alignment - 1u) / alignment * alignment;
-}
+/**
+ * @file bitset.h
+ *
+ * # Bitset
+ *
+ * A bitset is an array of `uint64_t` words in which bit `b` is bit
+ * `b % 64` of word `b / 64`. It has no struct: the caller keeps the words
+ * and knows how many bits they hold. Core uses bitsets for sets of states
+ * and other dense sets of small IDs.
+ *
+ * ## Contract
+ *
+ * - `ta_bits_words(bits)` is the number of words that hold `bits` bits.
+ * - `ta_bits_get` and `ta_bits_put` read and write one bit. The bit must
+ *   lie within the words the caller has: that is a precondition, not
+ *   checked.
+ *
+ * ## Memory
+ *
+ * Nothing here owns or allocates memory: the words belong to the caller
+ * (an actor's state sets, a definition's tables, a configuration). Every
+ * function may run inside a macrostep.
+ *
+ * ## Complexity
+ *
+ * Every operation is O(1).
+ *
+ * ## Failure
+ *
+ * Nothing fails. A bit beyond the caller's words is a programmer error.
+ *
+ * ## Users
+ *
+ * State configurations and history, an actor's active and
+ * late-initialised states, the builder's and the interpreter's state sets.
+ */
 
-/* Bitsets of 64-bit words, used for state sets. */
+#include <stdbool.h>
+#include <stdint.h>
+
+/** The number of 64-bit words that hold `bits` bits. */
 TA_PRIVATE inline uint32_t ta_bits_words(uint32_t bits) { return (bits + 63u) / 64u; }
+/** Whether bit `bit` of `words` is set. */
 TA_PRIVATE inline bool ta_bits_get(const uint64_t *words, uint32_t bit) {
     return (words[bit / 64u] >> (bit % 64u)) & 1u;
 }
+/** Sets bit `bit` of `words` to `value`. */
 TA_PRIVATE inline void ta_bits_put(uint64_t *words, uint32_t bit, bool value) {
     uint64_t mask = (uint64_t)1u << (bit % 64u);
     if (value) {
@@ -80,12 +307,108 @@ TA_PRIVATE inline void ta_bits_put(uint64_t *words, uint32_t bit, bool value) {
     }
 }
 
-#define TA_VEC_LAYOUT(T) (&(ta_tree_list_layout){ .element_size = sizeof(T), .element_alignment = _Alignof(T) })
-
-/*
- * Bounded text output: writes while there is room and always counts the full
- * length, so one pass both sizes and fills a caller's buffer.
+/**
+ * @file span.h
+ *
+ * # Span
+ *
+ * `ta_span32` names a run of consecutive elements by the index of the
+ * first, `offset`, and their number, `length`, without a pointer: the
+ * array it indexes is known from where the span is stored. A compiled
+ * definition keeps its states, transitions, actions and parameters in
+ * flat arrays, and each list inside it is a span into one of them; a
+ * ring record names its variable-length fields as spans of its tail.
+ *
+ * ## Contract
+ *
+ * - A span with `length` 0 is empty, whatever its `offset`.
+ * - `offset + length` never exceeds the length of the array the span
+ *   indexes. Whoever writes a span ensures it (the compiler, a record
+ *   writer); a validating reader checks it for bytes it did not write.
+ *
+ * ## Memory
+ *
+ * A span is 8 bytes the caller embeds; it owns nothing and points at
+ * nothing, so it stays valid when the array it indexes moves. Spans stay
+ * compact and local to what holds them: a definition's spans index that
+ * definition's arrays, never another's.
+ *
+ * ## Complexity and failure
+ *
+ * There are no operations here: nothing costs anything, and nothing fails.
+ *
+ * ## Users
+ *
+ * Compiled definitions and the interpreter that walks them, continuations,
+ * export, the ring records and their codec.
  */
+
+#include <stdint.h>
+
+/** Elements `offset .. offset + length - 1` of an array known from context. */
+typedef struct {
+    uint32_t offset;
+    uint32_t length;
+} ta_span32;
+
+/**
+ * @file text_writer.h
+ *
+ * # Bounded text writer
+ *
+ * `ta_text_writer` writes text into a caller's buffer while there is room
+ * and always counts the full length, so one pass both sizes and fills a
+ * buffer: run a writer with no buffer to measure, or with a buffer that
+ * may be too small and learn from `ta_text_finish` how much was needed.
+ * `ta_text_render` builds on it to write text of unknown length into
+ * memory of its own.
+ *
+ * ## Contract and invariants
+ *
+ * - `length` counts every byte put, whether or not it was stored.
+ * - A writer with `skip` s stores text bytes s to s + capacity - 1 at
+ *   `buffer[0 ..]`, so a long text is rendered through a small buffer a
+ *   window at a time (ADR 0090). With `skip` 0 it stores from the start.
+ * - A writer with a NULL `buffer` stores nothing and only counts.
+ * - `ta_text_finish` NUL-terminates the text when the whole text and its
+ *   NUL fit, and reports the bytes needed, the NUL included, either way.
+ *   It assumes `skip` 0.
+ * - `ta_text_render` calls its `write` function twice, once to measure and
+ *   once to fill, and `write` must put the same text both times.
+ *
+ * ## Memory
+ *
+ * The writer owns nothing: its buffer belongs to the caller, and the
+ * struct is a value the caller keeps on its stack. `ta_text_put`,
+ * `ta_text_put_u64` and `ta_text_finish` never allocate and may run
+ * inside a macrostep. `ta_text_render` allocates the text, NUL-terminated,
+ * from the allocator it is given; the caller owns it and frees it with
+ * that allocator, `length + 1` bytes at alignment 1.
+ *
+ * ## Complexity
+ *
+ * `ta_text_put` is O(length of the text); `ta_text_put_u64` is O(digits);
+ * `ta_text_finish` is O(1); `ta_text_render` is two runs of `write` and one
+ * allocation.
+ *
+ * ## Failure
+ *
+ * Putting never fails: text beyond the buffer is counted, not stored.
+ * `ta_text_finish` answers `TA_ERR_NOMEM` when the text and its NUL did not
+ * fit (and what was written is not useful). `ta_text_render` answers
+ * `TA_ERR_NOT_FOUND` when `write` reports there is no text, and
+ * `TA_ERR_NOMEM` when the allocation fails; on failure it allocates
+ * nothing and leaves `*out` alone.
+ *
+ * ## Users
+ *
+ * Everything that answers text to a host or writes it into a trace: event
+ * names, send IDs, origins and SCXML URIs, compile errors and the builder,
+ * the data model, definitions, export, the codec, I/O and the interpreter.
+ */
+
+
+/** Where text goes; see the file comment. Zero-initialise, then set `buffer`, `capacity` and `skip`. */
 typedef struct {
     char *buffer;
     uint32_t capacity;
@@ -96,29 +419,35 @@ typedef struct {
     uint32_t skip;
 } ta_text_writer;
 
+/** Puts `text`, storing what falls in the window and counting all of it. Borrows `text`; never allocates. */
 TA_PRIVATE void ta_text_put(ta_text_writer *writer, ta_str text);
+/** Puts `value` in decimal. Never allocates. */
 TA_PRIVATE void ta_text_put_u64(ta_text_writer *writer, uint64_t value);
-/* NUL-terminates; TA_ERR_NOMEM (and nothing useful written) when it did not fit. */
+/**
+ * NUL-terminates the text and stores in `*needed` the bytes it takes with
+ * its NUL. Answers `TA_ERR_NOMEM` (and nothing useful written) when it
+ * did not fit. Never allocates.
+ */
 TA_PRIVATE ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed);
-/*
+/**
  * Writes text of unknown length into memory from `allocator`: `write` runs
  * once to measure and once to fill. It answers false when there is no text,
  * which becomes TA_ERR_NOT_FOUND.
  */
 typedef bool (*ta_text_write_fn)(const void *context, ta_text_writer *writer);
+/** What `ta_text_render` writes, with what, and where it stores the text. */
 typedef struct {
     ta_text_write_fn write;
     const void *context;
     ta_str *out;
 } ta_text_render_params;
+/**
+ * Renders `params->write`'s text into a NUL-terminated block from
+ * `allocator` and stores it in `*params->out`; the caller owns the block.
+ * Allocates. Answers `TA_ERR_NOT_FOUND` when there is no text and
+ * `TA_ERR_NOMEM` when the allocation fails, changing nothing.
+ */
 TA_PRIVATE ta_result ta_text_render(ta_allocator allocator, const ta_text_render_params *params);
-TA_PRIVATE inline ta_str ta_str_from_cstr(const char *text) {
-    ta_str out = { .ptr = text, .len = 0 };
-    while (text[out.len] != '\0') {
-        out.len += 1;
-    }
-    return out;
-}
 
 
 
@@ -1855,6 +2184,9 @@ TA_PRIVATE inline uint32_t ta_ring_available(const ta_ring *ring) {
  * rings themselves are `ta_ring`s, which frame records by their `kind`,
  * `size` and `seq`.
  */
+
+#include <stddef.h>
+#include <stdint.h>
 
 
 /** The common header's size: every record starts with `ta_record_header`. */
@@ -6978,10 +7310,6 @@ TA_PRIVATE void ta_invoke_attach_child(ta_system *system, const ta_actor_parent 
 TA_PRIVATE void ta_invoke_release(ta_system *system, ta_actor *actor);
 
 
-TA_API uint32_t ta_version(void) {
-    return TA_VERSION;
-}
-
 TA_PRIVATE void *ta_mem_alloc(ta_allocator allocator, size_t size, size_t alignment) {
     if (allocator.v == NULL || allocator.v->alloc == NULL || size == 0) {
         return NULL;
@@ -7013,6 +7341,7 @@ TA_PRIVATE void ta_mem_zero(void *dst, size_t size) {
     }
 }
 
+
 TA_PRIVATE bool ta_str_equal(ta_str left, ta_str right) {
     if (left.len != right.len) {
         return false;
@@ -7024,6 +7353,7 @@ TA_PRIVATE bool ta_str_equal(ta_str left, ta_str right) {
     }
     return true;
 }
+
 
 TA_PRIVATE void ta_vec_init(ta_vec *vec, ta_allocator allocator, const ta_tree_list_layout *layout) {
     *vec = (ta_vec){
@@ -7105,6 +7435,7 @@ TA_PRIVATE ta_result ta_vec_push(ta_vec *vec, const void *element) {
 TA_PRIVATE void *ta_vec_at(const ta_vec *vec, uint32_t index) {
     return (unsigned char *)vec->items + (size_t)index * vec->element_size;
 }
+
 
 TA_PRIVATE void ta_text_put(ta_text_writer *writer, ta_str text) {
     for (uint32_t index = 0; index < text.len; index += 1) {
@@ -26768,4 +27099,9 @@ TA_PRIVATE ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor) 
     ta_compact_sparse(it);
     ta_block_settle(system, actor);
     return TA_OK;
+}
+
+
+TA_API uint32_t ta_version(void) {
+    return TA_VERSION;
 }

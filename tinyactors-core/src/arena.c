@@ -1,4 +1,6 @@
 #include "arena.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
 
 static bool ta_arena_valid_alignment(size_t alignment) {
     return alignment != 0 && (alignment & (alignment - 1u)) == 0;

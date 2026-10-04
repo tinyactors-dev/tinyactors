@@ -1,5 +1,8 @@
 #include "timer.h"
 #include "routing.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
+#include "vec.h"
 
 /* ------------------------------------------------------------------------
  * Keys and the owner heap

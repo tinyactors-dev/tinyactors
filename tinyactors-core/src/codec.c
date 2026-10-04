@@ -1,5 +1,11 @@
 #include "codec.h"
 #include "system.h"
+#include "memory.h"
+#include "str.h"
+#include "text_writer.h"
+#include "../include/tinyactors.h"
+#include "definition.h"
+#include "export.h"
 
 /*
  * Import: decode, compile, register. The decode's arena holds the spec,

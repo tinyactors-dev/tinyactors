@@ -3,6 +3,7 @@
 #include "configuration.h"
 #include "event.h"
 #include "fault.h"
+#include "../include/tinyactors.h"
 
 typedef struct ta_actor ta_actor;
 

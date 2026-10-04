@@ -1,6 +1,8 @@
 #pragma once
 
 #include "address.h"
+#include "vec.h"
+#include "../include/tinyactors.h"
 
 /*
  * Sessions whose ID is not a resident actor's runtime ID (ADR 0066). A

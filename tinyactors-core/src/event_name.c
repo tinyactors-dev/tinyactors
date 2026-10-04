@@ -1,4 +1,8 @@
 #include "event_name.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
+#include "vec.h"
+#include "atom.h"
 
 static const ta_event_name_node *ta_event_name_node_at(const ta_event_name_table *table,
                                                        ta_event_name_id name) {

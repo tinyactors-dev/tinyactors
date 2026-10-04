@@ -2,7 +2,6 @@
 
 #include "event_name.h"
 #include "io_origin.h"
-#include "types.h"
 
 /* Events, faults, and queued events are fully public. */
 

@@ -3,6 +3,7 @@
 #include "address.h"
 #include "event.h"
 #include "fault.h"
+#include "../include/tinyactors.h"
 
 /* External delivery and the router boundary are fully public. */
 

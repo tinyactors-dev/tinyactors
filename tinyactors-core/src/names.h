@@ -110,6 +110,7 @@
 #pragma once
 
 #include "atom.h"
+#include "../include/tinyactors.h"
 
 /** The atom a segment resolves to when it is not an atom; see the file
  * comment for why it equals no real atom. */

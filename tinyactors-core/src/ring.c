@@ -1,4 +1,6 @@
 #include "ring.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
 
 static void ta_ring_free_bytes(ta_ring *ring) {
     if (ring->bytes == NULL) {

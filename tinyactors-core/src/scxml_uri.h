@@ -1,6 +1,7 @@
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
+#include "text_writer.h"
 
 /*
  * The SCXML Event I/O Processor target URI grammar (ADR 0044).

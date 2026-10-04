@@ -1,4 +1,6 @@
 #include "paged_array.h"
+#include "../include/tinyactors.h"
+#include "memory.h"
 
 static size_t ta_paged_array_page_bytes(const ta_paged_array *array) {
     return array->entry_size << array->page_shift;

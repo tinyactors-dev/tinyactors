@@ -1,6 +1,10 @@
 /* The record codec: see ring_codec.h. Generated from protocol/catalog.rb
  * by `mise run protocol` in tinyactors-core. Do not edit. */
 #include "ring_codec.h"
+#include "../memory.h"
+#include "../../include/tinyactors.h"
+#include "../span.h"
+#include "ring_records.h"
 
 /* One kind as the reader and the writers check it. */
 typedef struct {

@@ -1,6 +1,13 @@
 #include "definition.h"
 #include "interpreter.h"
 #include "system.h"
+#include "memory.h"
+#include "str.h"
+#include "../include/tinyactors.h"
+#include "span.h"
+#include "arena.h"
+#include "atom.h"
+#include "event_name.h"
 
 void ta_definition_destroy(ta_definition *definition) {
     if (definition == NULL) {

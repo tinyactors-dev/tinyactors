@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 
 typedef enum {
     TA_CONFIG_SINGLE_LEAF,

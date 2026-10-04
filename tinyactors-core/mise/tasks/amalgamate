@@ -68,8 +68,13 @@ modules.each do |name|
 end
 headers = modules.map { |name| read_module(root, name, 'h') }
 # A module may be a header alone, of inline functions (list.h): it has no
-# source to append.
-sources = modules.select { |name| root.join('src', "#{name}.c").file? }.map { |name| read_module(root, name, 'c') }
+# source to append. It may also be a source alone (version.c), which defines
+# public functions only, so it has no header for internal.h to list: those
+# follow the listed modules' sources, by name.
+headerless = Dir[root.join('src/*.c').to_s].map { |path| File.basename(path, '.c') }.sort.select do |name|
+  PlatformFiles.portable?("#{name}.c") && !root.join('src', "#{name}.h").file?
+end
+sources = (modules.select { |name| root.join('src', "#{name}.c").file? } + headerless).map { |name| read_module(root, name, 'c') }
 platform_sources = PLATFORM_OUTPUTS.keys.to_h do |suffix|
   files = Dir[root.join("src/*_#{suffix}.c").to_s].sort.select { |path| PlatformFiles.platform(path) == suffix }
   [suffix, files.map { |path| Pathname.new(path) }.map { |path| [path, path.read] }]
@@ -94,6 +99,12 @@ end
 
 defined = sources.flat_map { |_path, text| text.scan(DEFINITION).map { |match| match[1] } }
 private_functions = defined - public_functions
+headerless.each do |name|
+  path, text = read_module(root, name, 'c')
+  (text.scan(DEFINITION).map { |match| match[1] } - public_functions).each do |function|
+    errors << "#{path.relative_path_from(root)}: #{function} is private; a source without a header defines public functions only"
+  end
+end
 
 sources = sources.map do |path, text|
   [path, text.gsub(DEFINITION) { "#{public_functions.include?($2) ? 'TA_API' : 'TA_PRIVATE'} #{$1}#{$2}#{$3}" }]

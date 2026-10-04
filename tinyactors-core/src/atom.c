@@ -1,4 +1,9 @@
 #include "atom.h"
+#include "memory.h"
+#include "str.h"
+#include "../include/tinyactors.h"
+#include "vec.h"
+#include "arena.h"
 
 uint32_t ta_hash_bytes(uint32_t seed, const void *bytes, size_t size) {
     const unsigned char *in = bytes;

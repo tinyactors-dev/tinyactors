@@ -1,6 +1,20 @@
 #include "builder.h"
 #include "system.h"
 #include "interpreter.h"
+#include "memory.h"
+#include "str.h"
+#include "vec.h"
+#include "bitset.h"
+#include "span.h"
+#include "text_writer.h"
+#include "../include/tinyactors.h"
+#include "arena.h"
+#include "atom.h"
+#include "event_name.h"
+#include "configuration.h"
+#include "history.h"
+#include "definition.h"
+#include "actor.h"
 
 /* A state by its interned name, for the name index built after pass one. */
 typedef struct {

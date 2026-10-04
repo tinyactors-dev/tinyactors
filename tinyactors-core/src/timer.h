@@ -2,6 +2,8 @@
 
 #include "clock.h"
 #include "event.h"
+#include "vec.h"
+#include "../include/tinyactors.h"
 
 /*
  * Delayed sends (ADR 0026, ADR 0054).

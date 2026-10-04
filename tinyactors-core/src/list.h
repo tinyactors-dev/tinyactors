@@ -95,7 +95,7 @@
  */
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 
 /** A list of item indices: `{0, 0}` is empty. */
 typedef struct {

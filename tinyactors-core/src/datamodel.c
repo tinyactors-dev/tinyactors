@@ -3,6 +3,13 @@
 #include "interpreter.h"
 #include "scxml_uri.h"
 #include "system.h"
+#include "memory.h"
+#include "str.h"
+#include "text_writer.h"
+#include "../include/tinyactors.h"
+#include "atom.h"
+#include "event_name.h"
+#include "io.h"
 
 bool ta_dm_host_in_state(const ta_dm_host *host, ta_state_id state) {
     if (host == NULL || host->impl == NULL || host->impl->actor == NULL) {

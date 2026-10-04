@@ -1,6 +1,11 @@
 #pragma once
 
-#include "types.h"
+#include "memory.h"
+#include "str.h"
+#include "vec.h"
+#include "bitset.h"
+#include "span.h"
+#include "text_writer.h"
 #include "arena.h"
 #include "list.h"
 #include "paged_array.h"

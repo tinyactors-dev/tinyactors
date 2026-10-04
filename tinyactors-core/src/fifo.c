@@ -1,4 +1,6 @@
 #include "fifo.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
 
 static void ta_fifo_free_entries(ta_fifo *fifo) {
     if (fifo->entries == NULL) {

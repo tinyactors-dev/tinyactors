@@ -4,15 +4,19 @@
 pulls the private module headers together in dependency order, and the
 amalgamation task uses the same order to lay out `tinyactors.c`.
 
-The public API is `include/tinyactors.h` alone (ADR 0041). Private module
-headers reach it through `types.h` and add only layouts and internal functions;
-they must never redeclare a `TA_API` function. Exact struct layouts remain free
+The public API is `include/tinyactors.h` alone (ADR 0041). There is no
+private base header: each module includes what it uses itself, the public
+header or the units that bring it. Module headers add only layouts and
+internal functions, and must never redeclare a `TA_API` function. A unit that
+defines only public functions is a source alone (`version.c`), which the
+amalgamation appends after the listed modules' sources. Exact struct layouts remain free
 to change as the implementation is specialized for memory density.
 
 The current umbrella order is:
 
 ```text
-types -> arena/atom -> event_name/value/event/fault/routing/clock
+memory/str/vec/bitset/span/text_writer
+      -> arena/atom -> event_name/value/event/fault/routing/clock
       -> configuration/history/continuation/timer
       -> datamodel/io/invoke
       -> definition/builder/actor/session_image/store/system/interpreter

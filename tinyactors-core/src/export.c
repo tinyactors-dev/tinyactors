@@ -1,5 +1,13 @@
 #include "export.h"
 #include "system.h"
+#include "memory.h"
+#include "vec.h"
+#include "span.h"
+#include "text_writer.h"
+#include "../include/tinyactors.h"
+#include "atom.h"
+#include "event_name.h"
+#include "definition.h"
 
 /*
  * Rebuilds the author-level ta_scxml_spec of a compiled definition. The

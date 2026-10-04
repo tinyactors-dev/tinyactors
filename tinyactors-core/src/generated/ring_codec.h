@@ -104,7 +104,9 @@
  */
 #pragma once
 
+#include "../../include/tinyactors.h"
 #include "ring_records.h"
+#include "../span.h"
 
 /** Where a writer puts a record: for example a ring reservation's bytes and size. */
 typedef struct {

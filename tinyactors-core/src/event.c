@@ -1,5 +1,7 @@
 #include "event.h"
 #include "routing.h"
+#include "../include/tinyactors.h"
+#include "io_origin.h"
 
 void ta_event_retain(const ta_event *event, ta_event *out) {
     *out = *event;

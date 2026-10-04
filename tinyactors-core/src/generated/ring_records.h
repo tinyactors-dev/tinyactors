@@ -51,7 +51,10 @@
  */
 #pragma once
 
-#include "../types.h"
+#include <stddef.h>
+#include <stdint.h>
+
+#include "../span.h"
 
 /** The common header's size: every record starts with `ta_record_header`. */
 #define TA_RECORD_HEADER_BYTES 32u

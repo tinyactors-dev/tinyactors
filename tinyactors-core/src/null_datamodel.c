@@ -1,4 +1,6 @@
 #include "null_datamodel.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
 
 /*
  * The Null data model (SCXML B.1, ADR 0057). Its whole expression language

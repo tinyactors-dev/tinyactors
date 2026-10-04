@@ -2,6 +2,21 @@
 #include "bytes.h"
 #include "interpreter.h"
 #include "timer.h"
+#include "memory.h"
+#include "str.h"
+#include "vec.h"
+#include "../include/tinyactors.h"
+#include "atom.h"
+#include "io_origin.h"
+#include "session.h"
+#include "trace.h"
+#include "routing.h"
+#include "continuation.h"
+#include "datamodel.h"
+#include "io.h"
+#include "invoke.h"
+#include "actor.h"
+#include "system.h"
 
 /*
  * A session image owns one arena, and every core-owned byte it keeps lives

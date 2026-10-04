@@ -1,6 +1,10 @@
 #include "io.h"
 #include "system.h"
 #include "scxml_uri.h"
+#include "text_writer.h"
+#include "../include/tinyactors.h"
+#include "atom.h"
+#include "io_origin.h"
 
 typedef struct {
     const ta_system *system;

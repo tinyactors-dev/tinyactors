@@ -1,5 +1,10 @@
 #include "address.h"
 #include "system.h"
+#include "memory.h"
+#include "str.h"
+#include "../include/tinyactors.h"
+#include "vec.h"
+#include "atom.h"
 
 static uint32_t ta_address_hash(const ta_actor_address *address) {
     uint32_t hash = ta_hash_bytes(0, address->family.name.ptr, address->family.name.len);

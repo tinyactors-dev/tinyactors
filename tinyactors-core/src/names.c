@@ -1,4 +1,6 @@
 #include "names.h"
+#include "../include/tinyactors.h"
+#include "atom.h"
 
 void ta_names_init(ta_names *names, const ta_names_init_params *params) {
     *names = (ta_names){

@@ -3,6 +3,14 @@
 
 #include "interpreter.h"
 #include "system.h"
+#include "memory.h"
+#include "str.h"
+#include "../include/tinyactors.h"
+#include "text_writer.h"
+#include "atom.h"
+#include "session.h"
+#include "datamodel.h"
+#include "actor.h"
 
 /*
  * SCXML 6.2 and C.1 define the target URIs of the SCXML Event I/O

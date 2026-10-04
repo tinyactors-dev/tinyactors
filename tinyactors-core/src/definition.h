@@ -3,6 +3,9 @@
 #include "configuration.h"
 #include "datamodel.h"
 #include "history.h"
+#include "span.h"
+#include "text_writer.h"
+#include "../include/tinyactors.h"
 
 /* Functions over compiled definitions, shared by the compiler and interpreter. */
 

@@ -1,5 +1,19 @@
 #include "invoke.h"
 #include "interpreter.h"
+#include "memory.h"
+#include "str.h"
+#include "vec.h"
+#include "span.h"
+#include "../include/tinyactors.h"
+#include "atom.h"
+#include "event_name.h"
+#include "routing.h"
+#include "clock.h"
+#include "timer.h"
+#include "datamodel.h"
+#include "definition.h"
+#include "actor.h"
+#include "system.h"
 
 /*
  * SCXML <invoke>: starting services at the end of a macrostep, cancelling

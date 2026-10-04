@@ -1,6 +1,7 @@
 #pragma once
 
 #include "definition.h"
+#include "../include/tinyactors.h"
 
 /*
  * ta_definition_export() rebuilds a ta_scxml_spec from a compiled definition.

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "arena.h"
+#include "vec.h"
+#include "../include/tinyactors.h"
 
 /* Atom text lives in arena blocks, so a returned ta_str never moves. */
 typedef struct {

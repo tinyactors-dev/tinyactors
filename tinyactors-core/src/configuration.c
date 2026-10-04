@@ -1,4 +1,7 @@
 #include "configuration.h"
+#include "memory.h"
+#include "bitset.h"
+#include "../include/tinyactors.h"
 
 bool ta_configuration_contains_atomic(const ta_configuration *config,
                                       ta_state_id atomic_state) {

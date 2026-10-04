@@ -1,4 +1,6 @@
 #include "bytes.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
 
 /* The smallest run an arena sink takes, in bytes. */
 #define TA_ARENA_SINK_MIN_RUN 64u

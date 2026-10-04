@@ -5,7 +5,12 @@ are private and hold layouts and internal functions.
 
 | Header | Responsibility |
 |---|---|
-| `types.h` | private base header: includes `tinyactors.h`, span/key helpers |
+| `memory.h` | `ta_mem_alloc`/`_free`/`_copy`/`_zero` over the injected allocator, alignment, `TA_ARRAY_COUNT` |
+| `str.h` | `ta_str` equality and construction from a C string |
+| `vec.h` | `ta_vec`, the growable array |
+| `bitset.h` | `ta_bits_*`, bitsets of 64-bit words |
+| `span.h` | `ta_span32`, an offset and length into an array |
+| `text_writer.h` | the bounded text writer and `ta_text_render` |
 | `store.h` | empty compatibility boundary; durability is not a core store API |
 | `arena.h` | transient allocation |
 | `atom.h` | ordinary string interning |

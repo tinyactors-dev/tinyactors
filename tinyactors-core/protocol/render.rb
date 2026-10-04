@@ -218,7 +218,7 @@ module RingProto
 
     def c_records(model)
       out = +c_file_comment('ring_records.h', RECORDS_COMMENT)
-      out << "#pragma once\n\n#include \"../types.h\"\n\n"
+      out << "#pragma once\n\n#include <stddef.h>\n#include <stdint.h>\n\n#include \"../span.h\"\n\n"
       out << "/** The common header's size: every record starts with `ta_record_header`. */\n"
       out << "#define TA_RECORD_HEADER_BYTES #{HEADER_SIZE}u\n"
       out << "/** How many rings there are; `ta_record_ring` numbers them from 1. */\n"
@@ -389,7 +389,9 @@ module RingProto
       out << <<~C
         #pragma once
 
+        #include "../../include/tinyactors.h"
         #include "ring_records.h"
+        #include "../span.h"
 
         /** Where a writer puts a record: for example a ring reservation's bytes and size. */
         typedef struct {
@@ -524,6 +526,10 @@ module RingProto
         /* The record codec: see ring_codec.h. Generated from protocol/catalog.rb
          * by `mise run protocol` in tinyactors-core. Do not edit. */
         #include "ring_codec.h"
+        #include "../memory.h"
+        #include "../../include/tinyactors.h"
+        #include "../span.h"
+        #include "ring_records.h"
 
         /* One kind as the reader and the writers check it. */
         typedef struct {

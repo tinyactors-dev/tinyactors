@@ -1,5 +1,7 @@
 #include "routing.h"
 #include "system.h"
+#include "../include/tinyactors.h"
+#include "address.h"
 
 void ta_actor_ref_retain(const ta_actor_ref *ref) {
     if (ref->kind == TA_ACTOR_REF_NAMED) {

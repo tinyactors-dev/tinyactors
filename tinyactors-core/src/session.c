@@ -1,5 +1,10 @@
 #include "session.h"
 #include "system.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
+#include "vec.h"
+#include "datamodel.h"
+#include "actor.h"
 
 static uint32_t ta_session_hash(uint64_t id) {
     /* A 64-bit finalizer: runtime IDs differ mostly in their low slot bits. */

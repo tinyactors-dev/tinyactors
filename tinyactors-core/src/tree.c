@@ -1,4 +1,6 @@
 #include "tree.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
 
 /* The arena block every tree starts from, as elsewhere in core. */
 #define TA_TREE_BLOCK_SIZE 4096u

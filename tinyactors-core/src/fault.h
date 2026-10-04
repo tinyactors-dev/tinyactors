@@ -1,6 +1,7 @@
 #pragma once
 
 #include "event.h"
+#include "../include/tinyactors.h"
 
 typedef enum {
     TA_FAULT_CONTEXT_CONDITION,

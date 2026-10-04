@@ -1,0 +1,21 @@
+id: header-file-comment
+language: c
+severity: error
+message: A header in tinyactors-core/src/ opens with a doxygen-style file comment, `/** @file <name>.h ... */`, before anything else.
+note: |
+  The header is what a reader of a unit sees first, so it says what the
+  unit is: the one object it defines, its contract and invariants, who
+  owns its memory and for how long, when it may allocate, its complexity,
+  how it fails, and its users (core's `src/list.h` is an example). Put
+  the comment before `#pragma once`, starting with `/**` and the
+  `@file` tag. `mise run check-header-comments` in tinyactors-core scans
+  src/ and src/generated/ with this rule; headers written before the rule
+  are on the allow-list in that task until a change to them adds the
+  comment.
+rule:
+  kind: translation_unit
+  not:
+    has:
+      nthChild: 1
+      kind: comment
+      regex: '\A/\*\*[\s*]*@file\b'

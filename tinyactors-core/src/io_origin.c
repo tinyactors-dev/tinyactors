@@ -1,4 +1,8 @@
 #include "io_origin.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
+#include "vec.h"
+#include "arena.h"
 
 #define TA_IO_ORIGIN_FREE UINT32_MAX
 

@@ -5,6 +5,11 @@
 #include "invoke.h"
 #include "timer.h"
 #include "session.h"
+#include "vec.h"
+#include "../include/tinyactors.h"
+#include "configuration.h"
+#include "history.h"
+#include "datamodel.h"
 
 typedef struct {
     ta_actor_id id;

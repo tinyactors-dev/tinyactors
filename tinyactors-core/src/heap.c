@@ -1,4 +1,6 @@
 #include "heap.h"
+#include "../include/tinyactors.h"
+#include "paged_array.h"
 
 /* An item's key, read once per item that moves. */
 typedef struct {

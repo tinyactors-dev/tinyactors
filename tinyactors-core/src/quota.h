@@ -101,7 +101,7 @@
  */
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 
 /** A bounded resource: `used + reserved <= capacity`. */
 typedef struct {

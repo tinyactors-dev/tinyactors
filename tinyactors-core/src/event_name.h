@@ -1,6 +1,8 @@
 #pragma once
 
 #include "atom.h"
+#include "vec.h"
+#include "../include/tinyactors.h"
 
 typedef struct {
     ta_event_name_id parent;

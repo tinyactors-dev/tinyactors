@@ -2,6 +2,14 @@
 
 #include "system.h"
 #include "datamodel.h"
+#include "span.h"
+#include "text_writer.h"
+#include "../include/tinyactors.h"
+#include "continuation.h"
+#include "timer.h"
+#include "invoke.h"
+#include "definition.h"
+#include "actor.h"
 
 /* A generated send ID (`#_send.<n>`, ADR 0048) is this bit and the session's counter n. */
 #define TA_GENERATED_SEND_ID_BIT ((ta_send_id)1u << 63)

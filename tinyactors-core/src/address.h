@@ -2,6 +2,8 @@
 
 #include "arena.h"
 #include "atom.h"
+#include "vec.h"
+#include "../include/tinyactors.h"
 
 /*
  * Interned named addresses (ADR 0065). A system keeps one record per

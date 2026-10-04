@@ -94,7 +94,7 @@
  */
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 
 /** What `ta_fifo_init` needs. */
 typedef struct {

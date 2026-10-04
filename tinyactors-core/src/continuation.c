@@ -1,4 +1,6 @@
 #include "continuation.h"
+#include "memory.h"
+#include "../include/tinyactors.h"
 
 /* Offsets of the arrays that follow a continuation's header, in order. */
 typedef struct {

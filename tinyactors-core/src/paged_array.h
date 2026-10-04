@@ -91,7 +91,8 @@
  */
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
+#include "memory.h"
 
 /** What `ta_paged_array_init` needs. */
 typedef struct {

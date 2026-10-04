@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 #include "arena.h"
 
 /*

@@ -1,0 +1,31 @@
+id: header-file-comment
+valid:
+  - |
+    /**
+     * @file list.h
+     *
+     * # Intrusive index list
+     */
+    #pragma once
+  - |
+    /** @file span.h */
+    #pragma once
+    #include <stdint.h>
+invalid:
+  - |
+    #pragma once
+
+    #include "arena.h"
+  - |
+    /* @file plain.h: an ordinary comment, not a doxygen one */
+    #pragma once
+  - |
+    /**
+     * A doxygen comment without the file tag.
+     */
+    #pragma once
+  - |
+    #pragma once
+    /** @file late.h: after the first line */
+  - |
+    typedef int ta_x;

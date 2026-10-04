@@ -2,6 +2,8 @@
 
 #include "event.h"
 #include "routing.h"
+#include "span.h"
+#include "../include/tinyactors.h"
 
 typedef enum {
     TA_EXEC_FRAME_ACTIONS = 0,

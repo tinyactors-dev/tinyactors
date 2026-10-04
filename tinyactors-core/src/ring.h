@@ -163,7 +163,7 @@
  */
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 
 /** Every record and pad starts at a multiple of this, and its size is
  * one. */

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 
 struct ta_arena_block {
     struct ta_arena_block *next;

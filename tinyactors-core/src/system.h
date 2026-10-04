@@ -13,6 +13,10 @@
 #include "routing.h"
 #include "timer.h"
 #include "trace.h"
+#include "vec.h"
+#include "../include/tinyactors.h"
+#include "clock.h"
+#include "continuation.h"
 
 /*
  * A nested interpreter's memory (ADR 0092 section 3): its structural region

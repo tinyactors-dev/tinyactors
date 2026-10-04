@@ -66,3 +66,19 @@ all of them takes 1.6 s of CPU time.
 ## Residency
 
 Named actors may exist while not resident: unloading lets one process hold far more actors than fit in memory, and it is not persistence. The actor directory/name index is distinct from the resident execution cache. The exact directory representation is an implementation concern and may itself be store-backed for populations larger than RAM.
+
+## Handles and run-time IDs
+
+A handle names a run-time object by a slot and a generation, so a stale
+handle to a slot that was freed and reused is told apart from the object that
+now lives there.
+
+- Handles are fixed-width integers, never pointers.
+- The public `ta_actor_id` is an opaque 64-bit identity; core decomposes it
+  into a slot and a generation (`ta_actor_id_make`, `ta_actor_id_slot`,
+  `ta_actor_id_generation`) to reject a stale reference (ADR 0059).
+- Run-time handles and IDs (atoms, event names, definitions, actors) are
+  process-local accelerators. Exact definition identity, logical actor
+  addresses, and anything a durable or portable encoding records use stable
+  logical forms, never a numeric run-time handle, which does not survive a
+  restart (ADR 0028).

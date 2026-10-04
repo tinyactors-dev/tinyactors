@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 
 /*
  * Tinyactors core deliberately defines no persistence-store protocol.  This

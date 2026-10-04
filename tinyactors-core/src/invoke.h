@@ -3,6 +3,7 @@
 #include "datamodel.h"
 #include "event.h"
 #include "fault.h"
+#include "../include/tinyactors.h"
 
 typedef struct {
     ta_atom type;

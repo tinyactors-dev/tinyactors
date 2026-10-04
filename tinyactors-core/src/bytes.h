@@ -87,7 +87,7 @@
  */
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 
 /** A sink that gathers one unit into one run of an arena; see the file
  * comment. Read `ptr` and `len` after `end(keep=true)`. */

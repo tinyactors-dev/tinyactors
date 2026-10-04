@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 
 /*
  * Tracing (ADR 0067): the sink a system writes records to, and the rules

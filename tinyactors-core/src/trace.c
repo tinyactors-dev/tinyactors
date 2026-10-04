@@ -1,6 +1,9 @@
 #include "trace.h"
 #include "system.h"
 #include "interpreter.h"
+#include "../include/tinyactors.h"
+#include "datamodel.h"
+#include "actor.h"
 
 /* ------------------------------------------------------------------------
  * The null sink (ADR 0067 section 2)

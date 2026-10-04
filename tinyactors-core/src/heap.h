@@ -117,7 +117,7 @@
  */
 #pragma once
 
-#include "types.h"
+#include "../include/tinyactors.h"
 #include "paged_array.h"
 
 /** What `ta_heap_init` needs. */
