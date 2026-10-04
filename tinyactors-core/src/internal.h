@@ -2,6 +2,7 @@
 
 #include "types.h"
 #include "hash.h"
+#include "handle.h"
 #include "format.h"
 #include "layout.h"
 #include "vec.h"
