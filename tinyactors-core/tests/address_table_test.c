@@ -15,7 +15,7 @@
  *   1. 3 x 4096 names with ONE 32-bit hash: every intern is TA_OK, find and
  *      re-intern answer the same pointers, release in any order empties the
  *      table, and every free matches its allocation (strict allocator).
- *   2. 4300 names that share only the low 12 bits of the hash (so they stay
+ *   2. Names that share only the low 12 bits of the hash (so they stay
  *      in one page through 4096 pages' worth of splits): the same.
  *   3. Allocation failures: every allocation the first intern makes, and the
  *      two the 4097th equal-hash name makes (the record, the doubled page),
@@ -29,11 +29,13 @@
  *
  * Sizes. Items 1 to 3 are quadratic by nature (an equal-hash set costs a
  * scan per intern), so the program has two sizes. By default it runs the
- * small one: item 1 with 900 names (the page still doubles from 64 slots up
- * to the 4096 cap, at 897), item 2 with 700 names, item 3 with 449 equal-hash
- * names. With TA_TEST_FULL=1 (`mise run test --full`) it runs the sizes
- * above, which add the 4096-slot page cap, its directory and the sweep over
- * a full page. Every check holds at both sizes; only counts change.
+ * small one: item 1 with 900 names, item 2 with 700, and item 3's sweep on
+ * 449 equal-hash names. With TA_TEST_FULL=1 (`mise run test --full`) it
+ * runs the sizes above, and item 3 adds the sweep over a full 4096-slot page.
+ * The small sweep is a different case from the full-page one (two
+ * allocations, one refusal that answers NOMEM, instead of three and three),
+ * so its thresholds are its own; the full-page thresholds are unchanged.
+ * Every other check holds at both sizes; only counts change.
  *
  * Includes the amalgamation, because the table is private to core.
  */
@@ -57,6 +59,9 @@ static int failures = 0;
 
 /* TA_TEST_FULL=1 asks for the large sizes; read once at the top of main, never changed after. */
 static bool full_run = false;
+#ifndef FP
+#define FP 3072u
+#endif
 
 /* pick answers the fast size, or the full one when TA_TEST_FULL asked for it. It only chooses sizes, never an asserted value. */
 static uint32_t pick(uint32_t fast, uint32_t full) {
@@ -262,58 +267,17 @@ static void test_shared_low_bits(void) {
     free(names);
 }
 
-/* 3. Refusing each allocation of an intern: nothing leaked, nothing interned, the retry works. */
-static void test_allocation_failures(void) {
-    name one = { .length = 3u };
-    memcpy(one.text, "abc", 3);
-    ta_actor_address address = address_of(&one);
+/*
+ * sweep_full_page interns full_page equal-hash names, then refuses each
+ * allocation of the next intern in turn (the record, the pool's next page, a
+ * grow of the index that may only be postponed, the doubled page): either
+ * NOMEM with nothing interned, or success because the refused grow was only
+ * a postponement; the retry always works. The first, unrefused run must make
+ * at least min_allocations allocations, and at least min_refused of the
+ * refusals must answer NOMEM.
+ */
+static void sweep_full_page(uint32_t full_page, uint64_t min_allocations, uint32_t min_refused) {
     ta_address_table table;
-    ta_address_table_init(&table, ta_test_allocator_get(&strict_heap));
-    ta_test_allocator_reset_counts(&strict_heap);
-    ta_address *interned = NULL;
-    CHECK(ta_address_table_intern(&table, &address, &interned) == TA_OK);
-    uint64_t first_intern = strict_heap.stats.allocations; /* record, pool directory and page, index directory and page */
-    CHECK(first_intern == 5u);
-    ta_address_release(interned);
-    ta_address_table_destroy(&table);
-    CHECK(ta_test_allocator_finish(&strict_heap) == 0);
-    for (uint64_t nth = 1; nth <= first_intern; nth += 1u) {
-        ta_address_table_init(&table, ta_test_allocator_get(&strict_heap));
-        ta_test_allocator_reset_counts(&strict_heap);
-        ta_test_allocator_fail_nth(&strict_heap, nth);
-        interned = NULL;
-        CHECK(ta_address_table_intern(&table, &address, &interned) == TA_ERR_NOMEM && interned == NULL);
-        ta_test_allocator_disarm(&strict_heap);
-        CHECK(table_is_empty(&table));
-        CHECK(ta_address_table_intern(&table, &address, &interned) == TA_OK);
-        CHECK(interned != NULL && interned->references == 1u && ta_address_in(interned, &table));
-        ta_address_release(interned);
-        ta_address_table_destroy(&table);
-        CHECK(strict_heap.stats.bad_frees == 0 && ta_test_allocator_finish(&strict_heap) == 0);
-    }
-
-    /*
-     * The 4097th name with one hash must double a full page. Refuse each
-     * allocation of that intern in turn (the record, the pool's next page,
-     * a grow of the index that may only be postponed, the doubled page):
-     * either NOMEM with nothing interned, or the intern succeeds because the
-     * refused grow was only a postponement; and the retry always works.
-     */
-    prepare_stages();
-    /*
-     * Full: 4096 names fill the largest page, so the 4097th intern makes
-     * three allocations (the record, the pool's next page, the doubled
-     * page) and each is refused in turn. Fast: 449 names are the point where
-     * the small first page doubles (2048 slots), which makes two (the record
-     * and the page); a third needs the pool's next page to fall on the same
-     * intern, which happens only at a multiple of 1024 names, and no growth
-     * is due at one below 4096. So the fast sweep expects two allocations. Its
-     * grow is only postponed when refused (the page still has free slots), so
-     * only the record is refused with NOMEM there; with a full page, all three are.
-     */
-    const uint32_t full_page = pick(449u, 4096u);
-    const uint64_t min_allocations = full_run ? 3u : 2u;
-    const uint32_t min_refused = full_run ? 3u : 1u;
     uint64_t total = 0;
     uint32_t refused = 0;
     for (uint64_t nth = 0; nth <= total; nth += 1u) {
@@ -358,6 +322,55 @@ static void test_allocation_failures(void) {
         CHECK(strict_heap.stats.bad_frees == 0 && ta_test_allocator_finish(&strict_heap) == 0);
     }
     CHECK(refused >= min_refused);
+}
+
+/* 3. Refusing each allocation of an intern: nothing leaked, nothing interned, the retry works. */
+static void test_allocation_failures(void) {
+    name one = { .length = 3u };
+    memcpy(one.text, "abc", 3);
+    ta_actor_address address = address_of(&one);
+    ta_address_table table;
+    ta_address_table_init(&table, ta_test_allocator_get(&strict_heap));
+    ta_test_allocator_reset_counts(&strict_heap);
+    ta_address *interned = NULL;
+    CHECK(ta_address_table_intern(&table, &address, &interned) == TA_OK);
+    uint64_t first_intern = strict_heap.stats.allocations; /* record, pool directory and page, index directory and page */
+    CHECK(first_intern == 5u);
+    ta_address_release(interned);
+    ta_address_table_destroy(&table);
+    CHECK(ta_test_allocator_finish(&strict_heap) == 0);
+    for (uint64_t nth = 1; nth <= first_intern; nth += 1u) {
+        ta_address_table_init(&table, ta_test_allocator_get(&strict_heap));
+        ta_test_allocator_reset_counts(&strict_heap);
+        ta_test_allocator_fail_nth(&strict_heap, nth);
+        interned = NULL;
+        CHECK(ta_address_table_intern(&table, &address, &interned) == TA_ERR_NOMEM && interned == NULL);
+        ta_test_allocator_disarm(&strict_heap);
+        CHECK(table_is_empty(&table));
+        CHECK(ta_address_table_intern(&table, &address, &interned) == TA_OK);
+        CHECK(interned != NULL && interned->references == 1u && ta_address_in(interned, &table));
+        ta_address_release(interned);
+        ta_address_table_destroy(&table);
+        CHECK(strict_heap.stats.bad_frees == 0 && ta_test_allocator_finish(&strict_heap) == 0);
+    }
+
+    prepare_stages();
+    /*
+     * Fast: 449 equal-hash names fill the first page, so the next intern
+     * doubles it. Measured: two allocations (the record and the doubled
+     * page), of which only the record is refused with NOMEM; a refused grow
+     * is only postponed while the page has free slots. This is a different
+     * case from the full page below, not a smaller copy of it.
+     * Full: 4096 names fill the largest page, and the 4097th intern makes
+     * three allocations (the record, the pool's next page, the doubled
+     * page), each refused in turn. No smaller size has three: I tried 256,
+     * 512, 1024, 2048 and 3072, none doubles a page on the next intern at
+     * a pool page boundary. The thresholds are not relaxed for the full case.
+     */
+    sweep_full_page(449u, 2u, 1u);
+    if (full_run) {
+        sweep_full_page(4096u, 3u, 3u);
+    }
 }
 
 /* 4. Pointer identity and reference counting; detached copies and other tables. */
