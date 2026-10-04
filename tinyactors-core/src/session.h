@@ -69,7 +69,10 @@
  * which doubles the one page those hashes fill, at this safe point, so
  * ta_session_insert always has a slot. Such a set costs the sender probe
  * length (lookups of those IDs are linear in their number) and memory, and
- * never a refused load while memory allows.
+ * never a refused load while memory allows. The same holds for
+ * ta_session_drop_resident, which ta_actor_free calls for a reloaded session:
+ * it is O(probe length), so freeing the actors of n crafted equal-hash IDs
+ * costs O(n) each. It is probe length only, never a failure.
  *
  * Invariants.
  *
@@ -92,7 +95,8 @@
  * node plus 8 bytes per slot at a load of 7/16 (about 18 bytes), and
  * no per-node allocation.
  *
- * Example, a load that continues a session and an unload that parks it:
+ * Example, a load that continues a session, its actor's free, and an unload
+ * that parks another session at its address:
  *
  *     uint32_t index;                                     // safe point: may allocate
  *     if (ta_session_node_new(&system->sessions,
@@ -102,6 +106,13 @@
  *     ta_session_insert(&system->sessions, index);        // resident
  *     ...
  *     ta_session_drop_resident(&system->sessions, id, actor);    // actor freed
+ *
+ *     // unload of a named actor: the same safe point, before other changes
+ *     if (ta_session_node_new(&system->sessions,
+ *             &(ta_session_node_params){ .id = id }, &index) != TA_OK) {
+ *         return TA_ERR_NOMEM;                            // nothing changed
+ *     }
+ *     ta_session_park(&system->sessions, index, address); // parked at address
  */
 
 typedef struct ta_session_node {
