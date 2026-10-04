@@ -38,10 +38,3 @@ internal queue. Its envelope `invoke_id` remains `TA_INVOKE_ID_NONE`, because th
 processor generated the error rather than receiving it from the invoked child.
 
 A callback should not directly enqueue the error. It reports a `ta_fault`; the interpreter maps operation context to the appropriate event and implements the correct local semantic consequence.
-
-`ta_fault_to_internal_event()` receives both send and invocation identity in
-`ta_fault_event_params`. The invocation ID is used to construct the detailed
-event name and perform bookkeeping; it does not populate the resulting event's
-invoke-ID field. Reconstruction uses `TA_FAULT_CONTEXT_INVOKE_UNAVAILABLE`; no
-invoker callback or invoker-supplied fault is required for that core-generated
-error.

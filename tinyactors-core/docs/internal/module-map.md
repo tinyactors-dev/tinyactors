@@ -12,7 +12,6 @@ are private and hold layouts and internal functions.
 | `event_name.h` | structured dot-token event-name interning/matching |
 | `value.h` | host value ownership helpers |
 | `event.h` | event envelope and queued-event ownership |
-| `fault.h` | plugin fault -> SCXML error event mapping |
 | `scxml_uri.h` | the SCXML target URI grammar, parsed and written (ADR 0044) |
 | `routing.h` | host scheduling/routing of normalized external actor events |
 | `clock.h` | caller-supplied logical time |
