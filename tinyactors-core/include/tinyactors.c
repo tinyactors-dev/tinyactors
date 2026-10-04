@@ -11417,7 +11417,9 @@ typedef struct {
     ta_result result;
     /* Action blocks still to export, each with the member that receives it
      * (ADR 0060: no recursion). At most one per block, so the capacity is
-     * bounded by the definition. */
+     * bounded by the definition. Lifetime: one export call; arena memory,
+     * allocated at the first ta_export_actions and never grown or freed on
+     * its own. Deliberately not a ta_vec (vec.h). */
     struct ta_export_block *pending;
     uint32_t pending_count;
     uint32_t pending_capacity;
@@ -11457,8 +11459,11 @@ static void *ta_export_list(ta_exporter *exporter, const ta_tree_list_layout *la
     if (count == 0 || exporter->result != TA_OK) {
         return NULL;
     }
-    size_t size = layout->element_size * ((size_t)count + 1u);
-    void *items = ta_arena_alloc(exporter->arena, size, layout->element_alignment);
+    size_t size = 0;
+    void *items = NULL;
+    if (ta_checked_mul(layout->element_size, (size_t)count + 1u, &size)) {
+        items = ta_arena_alloc(exporter->arena, size, layout->element_alignment);
+    }
     if (items == NULL) {
         exporter->result = TA_ERR_NOMEM;
         return NULL;
@@ -11702,12 +11707,20 @@ static const ta_scxml_action_spec *ta_export_actions(ta_exporter *exporter, ta_s
     const ta_scxml_action_spec *result = NULL;
     if (exporter->pending == NULL && exporter->result == TA_OK && exporter->definition->action_count != 0) {
         /* Every block but a root block is nested in one action, and an
-         * action owns at most two: capacity for all of them at once. */
-        exporter->pending_capacity = 2u * exporter->definition->action_count + 1u;
-        exporter->pending = ta_arena_alloc(exporter->arena,
-                                           (size_t)exporter->pending_capacity * sizeof(struct ta_export_block),
-                                           _Alignof(struct ta_export_block));
+         * action owns at most two: capacity for all of them at once. The
+         * queue is allocated once per export call, from the call's arena
+         * (freed with it, never individually), and never grows; it is not a
+         * ta_vec, which frees with an allocator. Sizes are checked, so a
+         * count that cannot be queued fails the export instead of wrapping. */
+        size_t bytes = 0;
+        bool fits = exporter->definition->action_count <= (UINT32_MAX - 1u) / 2u;
+        exporter->pending_capacity = fits ? 2u * exporter->definition->action_count + 1u : 0;
+        exporter->pending = NULL;
+        if (fits && ta_checked_mul(exporter->pending_capacity, sizeof(struct ta_export_block), &bytes)) {
+            exporter->pending = ta_arena_alloc(exporter->arena, bytes, _Alignof(struct ta_export_block));
+        }
         if (exporter->pending == NULL) {
+            exporter->pending_capacity = 0;
             exporter->result = TA_ERR_NOMEM;
         }
     }
