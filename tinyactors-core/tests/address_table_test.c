@@ -94,6 +94,7 @@ static uint32_t name_state(void) {
 
 enum { STAGES = 14, BLOCK = 4 };
 
+/* block_text writes `number` as BLOCK base-36 digits, least significant first, into out. It makes the keys the collision search tries; it never fails and writes exactly BLOCK bytes (no NUL). */
 static void block_text(uint32_t number, char *out) {
     for (uint32_t digit = 0; digit < BLOCK; digit += 1u) {
         uint32_t value = number % 36u;
@@ -134,6 +135,7 @@ static uint32_t find_collision(uint32_t state, char *first, char *second) {
 static char stage_blocks[STAGES][2][BLOCK];
 static bool stages_ready = false;
 
+/* prepare_stages fills stage_blocks: for each of the STAGES stages, two blocks that lead the running hash state to the same next state, so every choice of one block per stage ends in the same hash. It runs the search once (stages_ready) and must be called before equal_hash_name. */
 static void prepare_stages(void) {
     if (stages_ready) {
         return;
@@ -146,6 +148,7 @@ static void prepare_stages(void) {
     stages_ready = true;
 }
 
+/* equal_hash_name writes into out the name selected by the STAGES low bits of mask: bit n picks which of stage n's two blocks is used. All 2^STAGES names have the same 32-bit hash. It needs prepare_stages to have run. */
 static void equal_hash_name(uint32_t mask, name *out) {
     for (uint32_t stage = 0; stage < STAGES; stage += 1u) {
         memcpy(out->text + stage * BLOCK, stage_blocks[stage][(mask >> stage) & 1u], BLOCK);
@@ -153,6 +156,7 @@ static void equal_hash_name(uint32_t mask, name *out) {
     out->length = STAGES * BLOCK;
 }
 
+/* hash_of answers the address hash (ta_address_hash) of the address that the name denotes under FAMILY. */
 static uint32_t hash_of(const name *entry) {
     ta_actor_address address = address_of(entry);
     return ta_address_hash(&address);
@@ -162,11 +166,12 @@ static uint32_t hash_of(const name *entry) {
  * Helpers over a table
  */
 
+/* table_is_empty answers whether the table holds no interned address and no record: the state every release of the last reference must leave it in. */
 static bool table_is_empty(const ta_address_table *table) {
     return ta_table_count(&table->index) == 0 && table->records.used == 0;
 }
 
-/* Releases every address of `names` once, in a scrambled order (7919 is prime). */
+/* release_scrambled releases each of the count addresses once, in a scrambled order (stepping by 7919, a prime, visits every index once when count is not a multiple of it), so release order is not creation order. */
 static void release_scrambled(ta_address **addresses, uint32_t count) {
     for (uint32_t step = 0; step < count; step += 1u) {
         ta_address_release(addresses[(uint32_t)(((uint64_t)step * 7919u) % count)]);
