@@ -66,6 +66,10 @@ What the maintainer cares about, in order:
    when it allocates, its invariants, complexity, failure behaviour, and a short usage example. Every
    declared function has a comment that begins with its name and says what it does, what it needs and
    what it guarantees. Explain why, not just what.
+Core's test programs are registered by a first-line marker, not by lists: a new tests/x_test.c starts
+with /* test: runtime asan */ (or standalone, with or without asan; mise/lib/test_programs.rb in
+tinyactors-core explains them). Never add test names to the build, test or asan tasks.
+
 4. A measured approach: small steps, each verified; record numbers (lines of core before/after, test
    results) rather than claims; change nothing the unit does not need; do not refactor code a later
    phase deletes (timer.c, the event blocks, io.c / io_origin.c, the kernel's containers).
@@ -191,7 +195,7 @@ core (stdint, stddef, stdbool are fine); at most three parameters per function; 
 all caps or all lowercase; public API only in include/tinyactors.h with TA_API; include/tinyactors.c
 regenerated, not hand-edited; APIs changed in place with every caller migrated, no _v2 / _ex /
 compatibility shims; nothing left unused; the duplicates the unit claims to replace are actually gone;
-new test programs are listed in the core test task's sources; commit subjects scoped like
+a new core test program starts with its /* test: runtime|standalone [asan] */ marker line; commit subjects scoped like
 refactor(core): with a body that says what a caller does if behaviour or API changed. Broken rules are
 blocking; style is a nit.`,
   },
