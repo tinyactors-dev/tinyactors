@@ -98,14 +98,41 @@ h2c.load {address, image, request_seq: 0}
 h2c.time {at: now}          # the delayed send that was due fires as an envelope
 ```
 
-This is what `tah_record_wake` and the wakeup heap in
-`tinyactors-host/src/loads.c` do today. It becomes host policy over two
-records instead of a kernel module.
+Today `tah_record_wake` and the wakeup heap in
+`tinyactors-host/src/loads.c` do this in a kernel module. Here it is host
+policy over two records.
 
-## Loading when mail arrives
+## No directory vtable: not resident means ask
 
-An envelope for an unloaded address can be an `h2c.event`, or mail from a
-local session. It does not fail. It **waits in the pool**:
+Core keeps the directory of resident sessions and nothing else. It has no
+`ta_actor_directory_vtable` and no other way to ask the host whether an
+address exists. Mail, a timer or an external event for an address that is
+not resident waits on that address's list, and core writes
+`c2h.load_needed`. The host answers from its own index: `h2c.load`,
+`h2c.spawn` for a family whose first message creates the actor, or
+`h2c.load_failed` for an address it does not know
+([below](#loading-when-an-envelope-arrives)).
+
+- **One source of truth on each side.** Core knows the resident sessions.
+  The host knows the unloaded ones. Nothing keeps a second copy.
+- **No call out of a macrostep.** A miss only puts the envelope on a
+  waiting list. Core never calls the host, which may do I/O, in the middle
+  of a `<send>`.
+- **A send to an address that never existed costs a round trip.** It holds
+  its envelope until the host answers `h2c.load_failed`, and then becomes
+  `error.communication` for its sender, as for any failed load. A host
+  that knows an address cannot exist answers at once. Core has no table of
+  loadable address families: the host already answers that question, and
+  a second copy would need a declaration and could disagree with it.
+- **Mail to addresses that do not exist holds pool capacity** until the
+  host answers. The pool bounds it, as it bounds any slow load
+  ([below](#waiting-envelopes-count-against-the-pool)).
+
+## Loading when an envelope arrives
+
+An envelope for an address that is not resident can be an `h2c.event`,
+mail from a local session, or a resident session's timer that fell due. It
+does not fail. It **waits in the pool**:
 
 1. Core puts the envelope on the address's waiting list, and writes
    `c2h.load_needed {address, waiting: 1}`. The record is written once per
@@ -116,39 +143,40 @@ local session. It does not fail. It **waits in the pool**:
 3. The host answers in one of three ways:
    - [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) with the
      image and `request_seq` equal to the request's `seq`. The waiting
-     envelopes become runnable, in order, before
-     anything sent to the session later. Core writes `c2h.loaded`.
+     envelopes become runnable, in order, before anything sent to the
+     session later. Core writes `c2h.loaded`.
    - [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) at the
      address, for a virtual family where the first message creates the
      actor (napi ADR 0020, the loader's `{ spawn }` result), with the same
      `request_seq`. The waiting envelopes go to the new session.
    - [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed)
-     with a reason and the same `request_seq`. The waiting envelopes are
-     recycled (below).
+     with a reason and the same `request_seq`, for an address the host
+     does not know or an image it cannot read. The waiting envelopes are
+     recycled ([below](#recycling-on-h2cload_failed)).
 
 How long the host takes is the host's business: it may read a file, query
 a database or call a service. Core does not time out a load. A host that
-wants a timeout posts `h2c.load_failed {request_seq, reason: "timeout"}` itself, as
-napi's loader timeout does today (napi ADR 0020).
+wants a timeout posts `h2c.load_failed {request_seq, reason: "timeout"}`
+itself, as napi's loader timeout does today (napi ADR 0020).
 
 Core checks a nonzero `request_seq` before changing anything. A response
 for a retired request, or for an address with no matching active request,
-bounces as `stale_request`. It cannot answer a newer request for the same address.
-The host also retires its asynchronous operation when it times out and
-discards late results. A proactive load from the unloaded-session wakeup
-index uses `request_seq: 0`. When a request for that address is already
+bounces as `stale_request`. It cannot answer a newer request for the
+same address. A host that times out a load also retires its asynchronous
+operation and discards late results. A proactive load from the
+unloaded-session wakeup index uses `request_seq: 0`. When a request for that address is already
 active, the host uses its sequence instead. A `load_failed` must answer an
 active request and therefore cannot use zero.
 
-`h2c.load_failed` can require several bounded batches of refusal reports
-and recycled envelopes. Core retains the command until those consequences
-are complete, yielding for c2h drains as needed, and then writes
-`c2h.load_result` with its `cause_seq` and `request_seq`. Only that result
-acknowledges completion of the load failure; the h2c read position or a
-single refused input does not acknowledge all waiting inputs.
-No later h2c command is consumed and no session runs while this bounded
-recycling cursor remains active. Newly submitted events therefore cannot
-join the failed attempt's sealed waiting list.
+`h2c.load_failed` can take several bounded batches of refusal reports
+and recycled envelopes. Core retains the command until all of them are
+complete, yielding for c2h drains as needed, and then writes
+`c2h.load_result` with its `cause_seq` and `request_seq`. Only that record
+acknowledges the load failure. Neither the h2c read position nor a single
+`c2h.input_refused` acknowledges all waiting inputs. While this recycling
+cursor is active, core consumes no later h2c command and runs no session,
+so a newly submitted event cannot join the failed attempt's sealed
+waiting list.
 
 ### Loading is atomic and may refuse
 
@@ -212,38 +240,12 @@ a destroyed session's waiting envelopes the same way.
 
 ### Mail for a session that has gone
 
-Today, mail a chart sends to a session ID (not an address) that is no
-longer resident starts a load keyed by the session's text (napi ADR 0032
-section 2, `TAH_LOAD_WHY_SESSION`). In this design the envelope's target
-is that text in the name area ([names.md](names.md)), and
-`c2h.load_needed.address` carries it. The host's index maps it to an
-image as before.
-
-## No directory vtable: not resident means ask
-
-Core keeps the directory of resident sessions and nothing else. It has no
-`ta_actor_directory_vtable` and no other way to ask the host whether an
-address exists. Mail, a timer or an external event for an address that is
-not resident waits on that address's list, and core writes
-`c2h.load_needed`. The host answers from its own index: `h2c.load`,
-`h2c.spawn` for a family whose first message creates the actor, or
-`h2c.load_failed` for an address it does not know.
-
-- **One source of truth on each side.** Core knows the resident sessions;
-  the host knows the unloaded ones. Nothing keeps a second copy.
-- **No call out of a macrostep.** `resolve` was a synchronous host call in
-  the middle of a `<send>`, which may do I/O. A miss now only puts the
-  envelope on a waiting list.
-- **A send to an address that never existed costs a round trip.** It holds
-  its envelope until the host answers `h2c.load_failed`, and then becomes
-  `error.communication` for its sender, as for any failed load. A host
-  that knows an address cannot exist answers at once. Declaring loadable
-  address families, so that a miss elsewhere fails without asking, was
-  considered and left out: it adds a declaration and a table for a case
-  the host already answers.
-- **A chart that floods mail to addresses that do not exist** holds pool
-  capacity until the host answers. The pool bounds it, as for any slow
-  load ([above](#waiting-envelopes-count-against-the-pool)).
+Mail a chart sends to a session ID (not an address) that is not resident
+waits like any other envelope. Its target is the session's text in the
+name area ([names.md](names.md)), and `c2h.load_needed.address` carries
+it. The host's index maps that text to an image. This is the load keyed by
+the session's text that napi ADR 0032 section 2 makes today
+(`TAH_LOAD_WHY_SESSION`).
 
 ## What this replaces
 
@@ -251,7 +253,7 @@ not resident waits on that address's list, and core writes
 |---|---|
 | `tinyactors-host/include/tinyactors_host/loads.h`, `src/loads.c` (about 530 lines): load records, waiting mailboxes, `max_waiting`, the wakeup min-heap, load outcomes | waiting lists in core's pool; `c2h.load_needed` / `h2c.load` / `h2c.spawn` / `h2c.load_failed`; the wakeup index is the host's (a `Map` and a heap, or a SQL index) |
 | `tinyactors-host/include/tinyactors_host/offloads.h`, `src/offloads.c`: the bytes of offloaded actors, kept per address | the host keeps the `blob` from `c2h.unloaded` wherever it likes |
-| `tinyactors-host/src/directory.c`: the in-memory directory and its unloaded entries | core's directory of resident sessions. Unloaded addresses are the host's index. `ta_actor_directory_vtable` goes: "not resident" means "ask with `c2h.load_needed`" ([below](#no-directory-vtable-not-resident-means-ask)) |
+| `tinyactors-host/src/directory.c`: the in-memory directory and its unloaded entries | core's directory of resident sessions. Unloaded addresses are the host's index. There is no `ta_actor_directory_vtable`: "not resident" means "ask with `c2h.load_needed`" ([above](#no-directory-vtable-not-resident-means-ask)) |
 | `tinyactors-napi/src/napi_loads.c` (about 550 lines): JavaScript loaders, timeouts, results | the loader stays in JavaScript, and calls `h2c.load`, `h2c.spawn` or `h2c.load_failed` |
 | napi's dead letters `waiting-full`, `not-found`, `rejected`, `load-failed` | recycled `error.communication` to senders, or dropped external events reported on `tel` |
 
