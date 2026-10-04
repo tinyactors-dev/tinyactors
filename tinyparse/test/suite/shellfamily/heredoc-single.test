@@ -1,0 +1,15 @@
+# A here-document (POSIX §2.7.4): `cat <<EOF` captures the delimiter EOF into the
+# command line's deferred slot; after the line's newline the slot drains and the
+# body — the lines up to a line equal to EOF — is matched as a HeredocBody whose
+# end: is the closing delimiter line. The body content is opaque (data, not shell).
+<<<cmd
+printf 'cat <<EOF\nhello\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains HeredocRedirect
+out-contains delimiter: HeredocDelimiterWord
+out-count 1 HeredocBody [
+out-count 1 HeredocContentLine
+out-contains end: HeredocDelimLine

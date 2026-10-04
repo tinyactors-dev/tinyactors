@@ -1,0 +1,10 @@
+# An expansion as the case word `case $x in …` (POSIX §2.9.4): the case value Word
+# holds a SimpleExpansion.
+<<<cmd
+printf 'case $x in a) b;; esac\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains CaseClause
+out-contains SimpleExpansion

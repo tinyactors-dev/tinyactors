@@ -1,0 +1,10 @@
+${parameter-default}
+${parameter:-default}
+${parameter=default}
+${parameter:=default}
+${parameter+alt_value}
+${parameter:+alt_value}
+${parameter?err_msg}
+${parameter:?err_msg}
+${var%Pattern}
+${var%%Pattern}

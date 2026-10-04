@@ -1,0 +1,7 @@
+# A deliberately malformed function definition: `() { x; }` has no name. The
+# grammar rejects it (a function name is required, and a bare `(` opens no
+# command form here).
+<<<cmd
+printf '() { x; }\n' | "$PP" run std.shell --input -
+<<<assert
+exit-not 0

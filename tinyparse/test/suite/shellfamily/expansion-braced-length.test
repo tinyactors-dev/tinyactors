@@ -1,0 +1,11 @@
+# String length `${#name}` (POSIX §2.6.2): the leading `#` makes it a length
+# expansion, parsed as a BracedExpansion with a name field and no operator.
+<<<cmd
+printf 'echo ${#x}\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains BracedExpansion
+out-contains name: Name
+out-absent op: BracedOperator

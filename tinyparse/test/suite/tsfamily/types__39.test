@@ -1,0 +1,16 @@
+<<<cmd
+"$PP" run std.typescript --input test/suite/tsfamily/inputs/types__39.ts --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+# Each floated comment is a program-level sibling (two-space indent) ...
+out-regex ^  line_comment \[74-114\]
+out-regex ^  line_comment \[141-160\]
+# ... and the preceding type_alias_declaration's extent is TRIMMED to its last real
+# token (ends at 74 / 141, each comment's start), not extended across the comment.
+# Over-extension would print [44-115] / [115-161] and overlap the floated comment.
+out-regex ^  type_alias_declaration \[44-74\]
+out-regex ^  type_alias_declaration \[115-141\]
+out-absent type_alias_declaration [44-115]
+out-absent type_alias_declaration [115-161]

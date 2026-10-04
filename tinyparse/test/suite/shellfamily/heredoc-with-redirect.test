@@ -1,0 +1,13 @@
+# A here-document combined with an ordinary redirect on the same command: `cat
+# <<EOF >out` opens a heredoc AND redirects stdout. The HeredocRedirect and the
+# Redirect both attach to the simple command; the heredoc body still drains after
+# the line's newline.
+<<<cmd
+printf 'cat <<EOF >out\nx\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 HeredocRedirect
+out-count 1 redirect: Redirect
+out-count 1 HeredocBody [

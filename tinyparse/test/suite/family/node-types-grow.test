@@ -1,0 +1,15 @@
+<<<cmd
+"$PP" node-types test/suite/family/fixtures/big-node-types.scm
+<<<assert
+exit 0
+# A rule with 70 distinct fields (>64, the old POCKETPARSE_NODETYPES_MAX_FIELDS).
+# The field list now grows, so every field is emitted -- including those past the
+# old cap, which would have been silently truncated.
+out-contains "f63"
+out-contains "f64"
+out-contains "f69"
+# A rule with 70 distinct loose children (>64): the children list grows too.
+out-contains { "type": "W69", "named": true }
+# A single field admitting 70 distinct types via a choice (>64): the per-field
+# type list grows; W69 appears under the "many" field.
+out-contains "many"

@@ -1,0 +1,7 @@
+# Corpus: a file without a trailing newline terminator.
+<<<cmd
+"$PP" run std.shell --input test/suite/shellfamily/inputs/programs__5.sh --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING

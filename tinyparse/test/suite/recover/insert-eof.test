@@ -1,0 +1,6 @@
+<<<cmd
+printf '(a (b c)' | "$PP" run examples/recover/list.scm --input - --dump-tree
+<<<assert
+exit 1
+out-contains MISSING
+err-contains unterminated

@@ -1,0 +1,10 @@
+<<<cmd
+printf 'VAR= echo hi\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains assignment: Assignment
+out-absent value: Word
+out-contains name: CommandName
+out-order name: Name ~ name: CommandName ~ arg: Word

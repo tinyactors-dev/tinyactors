@@ -1,0 +1,11 @@
+# A single-quoted string is one argument word: the space inside the quotes is
+# literal, not a word separator, so 'hello world' is one arg, not two. The arg
+# Word holds a SingleQuoted part.
+<<<cmd
+printf "echo 'hello world'\n" | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 arg: Word
+out-contains SingleQuoted

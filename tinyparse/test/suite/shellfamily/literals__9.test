@@ -1,0 +1,11 @@
+# Corpus: command substitutions in both forms — four backtick `...` and three
+# $(...), the last two concatenated with adjacent words. Four Backtick and three
+# CommandSubstitution nodes.
+<<<cmd
+"$PP" run std.shell --input test/suite/shellfamily/inputs/literals__9.sh --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 4 Backtick [
+out-count 3 CommandSubstitution [

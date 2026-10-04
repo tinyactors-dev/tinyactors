@@ -1,0 +1,9 @@
+<<<cmd
+set -e
+"$PP" pack examples/lexgoal/mini-js.scm --out /tmp/pp_minijs.ppg
+printf 'a = /ab/ ; b = c / d ;' | "$PP" run /tmp/pp_minijs.ppg --input - --dump-tree
+<<<assert
+exit 0
+out-contains RegexLiteral
+out-contains Div
+out-order RegexLiteral ~ Div

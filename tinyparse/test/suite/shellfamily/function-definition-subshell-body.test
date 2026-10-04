@@ -1,0 +1,11 @@
+# A function definition whose body is a subshell: `bar() ( echo hi )`. POSIX lets
+# the body be any compound command, so the body is a Subshell.
+<<<cmd
+printf 'bar() ( echo hi )\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains FunctionDefinition
+out-contains body: CompoundCommand
+out-contains Subshell

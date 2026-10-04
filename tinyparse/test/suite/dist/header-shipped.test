@@ -1,0 +1,4 @@
+<<<cmd
+test -f dist/linux-x86_64/pocketparse.h
+<<<assert
+exit 0

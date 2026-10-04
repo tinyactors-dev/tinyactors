@@ -1,0 +1,6 @@
+<<<cmd
+"$PP" man
+<<<assert
+exit 0
+out-contains POCKETPARSE
+out-contains SYNOPSIS

@@ -1,0 +1,13 @@
+# The delimited keyword tokens still match when the keyword abuts an OPERATOR or
+# separator with no surrounding blanks — an operator is a word delimiter. `if x`,
+# `then a`, `fi` are all delimited here by `;` (and EOF), so `if x;then a;fi`
+# parses as a complete if clause with no prefix theft.
+<<<cmd
+printf 'if x;then a;fi\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains IfClause
+out-contains condition: CompoundList
+out-contains body: CompoundList

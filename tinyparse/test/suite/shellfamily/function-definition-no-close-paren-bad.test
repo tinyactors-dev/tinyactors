@@ -1,0 +1,6 @@
+# A deliberately malformed function definition: `foo(` never closes the
+# parenthesis. The grammar rejects it.
+<<<cmd
+printf 'foo(\n' | "$PP" run std.shell --input -
+<<<assert
+exit-not 0

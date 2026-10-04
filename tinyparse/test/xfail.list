@@ -1,0 +1,37 @@
+# xfail.list — the ratchet ledger. Every test here is allowed to fail.
+# Remove a line when its workstream lands and the test goes green.
+# Done = this list is empty and PROGRESS=n/n.
+
+# Phase 7 — query engine (complete)
+
+# Phase 6 — grammar family (complete)
+
+# Phase 5 — distribution
+
+# Phase 4 — grow into the full design doc (tranche 1)
+
+# Phase 4 — tranche 2
+
+# Phase 8 — std.javascript corpus (complete: all 116 cases handled)
+# 115 valid cases parse cleanly; the 1 deliberately-malformed case
+# (destructuring__5) is asserted to be rejected, matching tree-sitter flagging
+# it as an error (tree-sitter recovers into an (ERROR)/(MISSING) tree, pocketparse
+# rejects — both detect it). Full error-recovery-tree parity is future work.
+
+# Phase 8 — std.typescript / std.tsx corpus (complete: all 112 cases parse)
+# Every vendored tree-sitter TypeScript corpus case is valid TypeScript (none of
+# the expected trees carries an (ERROR)/(MISSING) node), so every tsfamily test
+# is an accept test, run against std.typescript or — for the :language(tsx) cases
+# — std.tsx, and all parse cleanly.
+#
+# Eight of those accept tests also carry structural assertions (see
+# suite/tsfamily/gen-corpus-suite.py): an accept-only check passed even when the
+# grammar built a degenerate tree, so the cases whose tree turns on a parser
+# decision (function signature vs declaration, an asserts/predicate return type,
+# an import(...) type) now assert the deciding node counts and would catch a
+# regression to a clean-but-wrong parse.
+#
+# Two cases (types__39, functions__10) place a comment under a different parent
+# than tree-sitter does. The comment is present as a node either way; only its
+# attachment differs, which is a structural limit of the extras model rather than
+# a grammar bug. docs/comment-attachment.md proposes the fix.

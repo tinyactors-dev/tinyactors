@@ -1,0 +1,2 @@
+y // comment
+  * z;

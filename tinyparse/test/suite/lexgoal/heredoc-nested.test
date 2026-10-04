@@ -1,0 +1,8 @@
+<<<cmd
+printf 'cat <<EOF\necho Hello\necho $(\n  cat <<NESTED\nworld\nNESTED\n)\nEOF\n' | "$PP" run examples/heredoc/heredoc.scm --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 2 end: HeredocDelimLine
+out-order HeredocBody [10 ~ CommandSubstitution ~ HeredocBody [44 ~ end: HeredocDelimLine [50 ~ end: HeredocDelimLine [59

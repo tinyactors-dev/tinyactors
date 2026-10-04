@@ -1,0 +1,21 @@
+(* RFC 3986 URI grammar, EBNF subset for the pocketparse pipeline example. *)
+(* The converter parses this with pocketparse and emits uri.scm.           *)
+
+uri =
+  scheme: SCHEME "://" authority
+  [ path: SEGMENTS ]
+  [ "?" query: QUERY ]
+  [ "#" fragment: FRAGMENT ] ;
+
+authority =
+  [ userinfo: USERINFO "@" ]
+  host: HOST
+  [ ":" port: PORT ] ;
+
+SCHEME   = /[A-Za-z][A-Za-z0-9+.-]*/ ;
+USERINFO = /[A-Za-z0-9._~%!$&'()*+,;=:-]+/ ;
+HOST     = /[A-Za-z0-9._~%!$&'()*+,;=-]+/ ;
+PORT     = /[0-9]+/ ;
+SEGMENTS = /\/[A-Za-z0-9._~%!$&'()*+,;=:@\/-]*/ ;
+QUERY    = /[A-Za-z0-9._~%!$&'()*+,;=:@\/?-]*/ ;
+FRAGMENT = /[A-Za-z0-9._~%!$&'()*+,;=:@\/?-]*/ ;

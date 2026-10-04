@@ -1,0 +1,6 @@
+<<<cmd
+"$PP" --help
+<<<assert
+exit 0
+out-contains pocketparse
+out-contains usage

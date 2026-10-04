@@ -1,0 +1,5 @@
+<<<cmd
+examples/jit/run.sh 'int fib(int n){return n<2?n:fib(n-1)+fib(n-2);}' fib 10
+<<<assert
+exit 0
+out-contains 55

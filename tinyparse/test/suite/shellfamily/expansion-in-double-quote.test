@@ -1,0 +1,10 @@
+# A parameter expansion inside a double-quoted string (POSIX §2.2.3): `"$x"` keeps
+# the expansion live, so SimpleExpansion is a child of DoubleQuoted.
+<<<cmd
+printf 'echo "$x"\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains DoubleQuoted
+out-contains SimpleExpansion

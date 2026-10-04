@@ -1,0 +1,5 @@
+<<<cmd
+printf '{a:1,}' | "$PP" run std.json5 --input -
+<<<assert
+exit 0
+out-absent ERROR

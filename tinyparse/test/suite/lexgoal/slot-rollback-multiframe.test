@@ -1,0 +1,7 @@
+<<<cmd
+printf 'outer foo\nbodyline\n' | "$PP" run test/suite/lexgoal/slot-rollback-multiframe.scm --input - --dump-tree
+<<<assert
+exit 0
+out-contains x: W
+out-contains la: W
+out-absent lb: W

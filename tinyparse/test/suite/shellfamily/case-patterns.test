@@ -1,0 +1,12 @@
+# A case clause: `case word in (pattern|pattern) list ;; ... esac`. Each item is
+# a CaseItem with one or more pattern fields; `b|c)` yields two patterns.
+<<<cmd
+printf 'case w in a) x;; b|c) y;; esac\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains CaseClause
+out-contains value: Word
+out-count 2 item: CaseItem
+out-count 3 pattern: Word

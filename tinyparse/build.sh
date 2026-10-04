@@ -1,0 +1,456 @@
+#!/usr/bin/env bash
+# build.sh — the portable build engine for pocketparse.
+#
+# This is the single source of build truth: the `mise` tasks in mise.toml wrap
+# it, and ci/pocketparse-metric.sh calls it. It builds with Zig 0.15.1 and
+# CONSUMES the prebuilt ax release artifacts from the repo's dist/ (it links
+# dist/<platform>/libax.a and includes dist/<platform>/ax.h rather than
+# recompiling ax).
+#
+# Subcommands:
+#   ax        ensure dist/<platform>/libax.a + ax.h exist (build them if not)
+#   lib       build libpocketparse.{a,so|dylib} for the host platform
+#   cli       build the pocketparse CLI (links dist libax) -> dist/<plat>/
+#   examples  build the example programs
+#   dist      cross-build the full deliverable matrix (linux-x86_64, macos-arm64)
+#   all       ax + lib + cli + examples for the host platform
+#   clean     remove build outputs
+#
+# It is tolerant by design: pieces that are not implemented yet are skipped, so
+# the finish-line metric can run from day one and report honest red.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+SRC="$HERE/src"
+INC="$HERE/include"
+DIST="$HERE/dist"
+
+log() { printf '[pp-build] %s\n' "$*" >&2; }
+
+# --- platform detection -----------------------------------------------------
+host_platform() {
+  local s m
+  s="$(uname -s)"; m="$(uname -m)"
+  case "$s/$m" in
+    Linux/x86_64)         echo "linux-x86_64" ;;
+    Darwin/arm64|Darwin/aarch64) echo "macos-arm64" ;;
+    *) echo "linux-x86_64" ;;   # default; cross-targets are explicit
+  esac
+}
+
+zig_target() {  # platform -> zig target triple
+  case "$1" in
+    linux-x86_64) echo "x86_64-linux-gnu" ;;
+    macos-arm64)  echo "aarch64-macos-none" ;;
+    *) echo "" ;;
+  esac
+}
+
+shared_ext() { case "$1" in macos-arm64) echo dylib ;; *) echo so ;; esac; }
+
+# --- locate the Zig 0.15 compiler -------------------------------------------
+find_zig() {
+  if [ -n "${POCKETPARSE_ZIG:-}" ]; then echo "$POCKETPARSE_ZIG"; return; fi
+  if command -v mise >/dev/null 2>&1; then
+    local w; w="$(cd "$HERE" && mise where zig 2>/dev/null)"
+    [ -n "$w" ] && [ -x "$w/zig" ] && { echo "$w/zig"; return; }
+  fi
+  if [ -x "$HERE/.toolchain/zig/zig" ]; then echo "$HERE/.toolchain/zig/zig"; return; fi
+  if command -v zig >/dev/null 2>&1; then echo "zig"; return; fi
+  if [ -x "$REPO/.freestanding/tools/zig" ]; then echo "$REPO/.freestanding/tools/zig"; return; fi
+  echo ""
+}
+
+ZIG="$(find_zig)"
+
+# ---------------------------------------------------------------------------
+# ax: consume the dist/ release artifacts (build them if absent)
+# ---------------------------------------------------------------------------
+ensure_ax() {
+  local plat="$1"
+  local out="$REPO/dist/$plat"
+  if [ -f "$out/libax.a" ] && [ -f "$out/ax.h" ]; then
+    log "ax: $plat already present in dist/"
+    return 0
+  fi
+  log "ax: $plat missing from dist/ — building via repo toolchain"
+  export PATH="$REPO/.freestanding/tools:$PATH"
+  if [ -x "$REPO/ci/zig-build.sh" ]; then
+    ( cd "$REPO" && bash ci/zig-build.sh ) >/dev/null 2>&1 || log "ax: ci/zig-build.sh did not fully succeed"
+  fi
+  if [ ! -f "$out/libax.a" ]; then
+    # host fallback: the Makefile builds the host platform's dist
+    ( cd "$REPO" && make -s libs ) >/dev/null 2>&1 || log "ax: make libs did not succeed"
+  fi
+  [ -f "$out/libax.a" ] && [ -f "$out/ax.h" ]
+}
+
+have_sources() { ls "$SRC"/*.c >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------------------
+# gen_manpage: render pocketparse.1.md to mdoc with the repo's mdc, then embed
+# the rendered bytes as a C array in the GENERATED header src/manpage_data.h.
+# Idempotent: it rebuilds mdc and the header on every call but writes the same
+# bytes, so it is safe to call before each CLI compile. The CLI's `man`
+# subcommand prints these bytes verbatim.
+# ---------------------------------------------------------------------------
+gen_manpage() {
+  local man_md="$HERE/pocketparse.1.md"
+  local man_out="$HERE/pocketparse.1"
+  local header="$SRC/manpage_data.h"
+  local tmp="$HERE/build/_gen"
+  mkdir -p "$tmp"
+
+  [ -f "$man_md" ] || { log "gen_manpage: $man_md missing; skipping"; return 0; }
+
+  # Build the repo's mdc (a host dev tool; libc is fine here).
+  local mdc="$tmp/mdc"
+  if ! cc -std=c99 -Wall -Wextra -pedantic -o "$mdc" "$REPO/tools/mdc/mdc.c" 2>"$tmp/mdc.log"; then
+    log "gen_manpage: mdc did not compile:"; sed 's/^/    /' "$tmp/mdc.log" >&2; return 1
+  fi
+
+  # Render the man-shaped markdown to mdoc.
+  if ! "$mdc" man "$man_md" > "$man_out" 2>"$tmp/man.log"; then
+    log "gen_manpage: mdc man failed:"; sed 's/^/    /' "$tmp/man.log" >&2; return 1
+  fi
+
+  # Embed the rendered bytes as a chunked C array. ISO C99 caps a single
+  # string literal, so emit one literal per input line (each kept well under
+  # the limit) and rely on adjacent-literal concatenation. A trailing length
+  # is provided so the CLI need not scan for a terminator.
+  {
+    printf '%s\n' '/*'
+    printf '%s\n' '** manpage_data.h -- the rendered pocketparse(1) manual, embedded.'
+    printf '%s\n' '** GENERATED by build.sh::gen_manpage from pocketparse.1.md via mdc.'
+    printf '%s\n' '** Do not edit by hand; it is a gitignored build artifact.'
+    printf '%s\n' '*/'
+    printf '%s\n' '#ifndef POCKETPARSE_MANPAGE_DATA_H'
+    printf '%s\n' '#define POCKETPARSE_MANPAGE_DATA_H'
+    printf '%s\n' ''
+    printf '%s\n' 'static const char pocketparse_manpage[] ='
+    # Escape each line into a C string literal, re-adding the newline.
+    awk '
+      {
+        line = $0
+        out = ""
+        n = length(line)
+        for (i = 1; i <= n; i++) {
+          c = substr(line, i, 1)
+          if (c == "\\")      out = out "\\\\"
+          else if (c == "\"") out = out "\\\""
+          else                out = out c
+        }
+        printf "    \"%s\\n\"\n", out
+      }
+    ' "$man_out"
+    printf '%s\n' '    ;'
+    printf '%s\n' ''
+    printf '%s\n' 'static const unsigned long pocketparse_manpage_length ='
+    printf '%s\n' '    sizeof(pocketparse_manpage) - 1;'
+    printf '%s\n' ''
+    printf '%s\n' '#endif /* POCKETPARSE_MANPAGE_DATA_H */'
+  } > "$header"
+
+  log "gen_manpage: wrote $header ($(wc -c < "$man_out") bytes of mdoc)"
+}
+
+# ---------------------------------------------------------------------------
+# emit_byte_array: print a NUL-terminated C unsigned-char array initialiser from
+# a file's bytes, as a comma-separated list of decimal octets. Used by
+# gen_grammars to embed package.scm / grammar.scm verbatim. A trailing 0 is
+# appended so the bytes are also a valid C string, while the registry tracks the
+# exact length separately and never relies on the terminator.
+# ---------------------------------------------------------------------------
+emit_byte_array() {
+  local file="$1" name="$2"
+  printf 'static const unsigned char %s[] = {\n' "$name"
+  od -An -v -tu1 "$file" | awk '
+    { for (i = 1; i <= NF; i++) printf "%s,", $i }
+    END { print "" }
+  '
+  printf '0};\n'
+}
+
+# ---------------------------------------------------------------------------
+# gen_grammars: bake the standard grammar packages under grammars/std/ into the
+# GENERATED header src/grammars_data.h as a registry. Each package contributes
+# its name (the manifest's name:, e.g. std.json), its package.scm bytes, and its
+# grammar.scm bytes. The CLI lists these for `pocketparse grammars` and falls
+# back to them when a name resolves to no filesystem package.
+#
+# This mirrors gen_manpage: the embed is a generated C array, not C23 #embed, so
+# the amalgamated single-file CLI stays self-contained (the array is inlined the
+# same way manpage_data.h is) with no external files to ship.
+# ---------------------------------------------------------------------------
+gen_grammars() {
+  local std="$HERE/grammars/std"
+  local header="$SRC/grammars_data.h"
+  local pkg manifest grammar name idx=0
+  local entries=""
+
+  {
+    printf '%s\n' '/*'
+    printf '%s\n' '** grammars_data.h -- the embedded standard grammar registry.'
+    printf '%s\n' '** GENERATED by build.sh::gen_grammars from grammars/std/<pkg>/.'
+    printf '%s\n' '** Do not edit by hand; it is a gitignored build artifact.'
+    printf '%s\n' '*/'
+    printf '%s\n' '#ifndef POCKETPARSE_GRAMMARS_DATA_H'
+    printf '%s\n' '#define POCKETPARSE_GRAMMARS_DATA_H'
+    printf '%s\n' ''
+    printf '%s\n' 'typedef struct pocketparse_embedded_package {'
+    printf '%s\n' '    const char          *name;'
+    printf '%s\n' '    const unsigned char *package_bytes;'
+    printf '%s\n' '    unsigned long        package_length;'
+    printf '%s\n' '    const unsigned char *grammar_bytes;'
+    printf '%s\n' '    unsigned long        grammar_length;'
+    printf '%s\n' '} pocketparse_embedded_package;'
+    printf '%s\n' ''
+
+    if [ -d "$std" ]; then
+      for pkg in "$std"/*/; do
+        manifest="$pkg/package.scm"
+        grammar="$pkg/grammar.scm"
+        [ -f "$manifest" ] && [ -f "$grammar" ] || continue
+        # Extract the manifest's name: value (a dotted symbol like std.json).
+        name="$(awk '
+          /name:/ { for (i = 1; i <= NF; i++) if ($i == "name:") { print $(i+1); exit } }
+        ' "$manifest")"
+        [ -n "$name" ] || name="$(basename "$pkg")"
+        emit_byte_array "$manifest" "pp_embed_pkg_${idx}"
+        emit_byte_array "$grammar"  "pp_embed_grm_${idx}"
+        entries="$entries    { \"$name\", pp_embed_pkg_${idx}, sizeof pp_embed_pkg_${idx} - 1, pp_embed_grm_${idx}, sizeof pp_embed_grm_${idx} - 1 },\n"
+        idx=$((idx + 1))
+      done
+    fi
+
+    printf '%s\n' 'static const pocketparse_embedded_package pocketparse_embedded_packages[] = {'
+    printf "$entries"
+    printf '%s\n' '    { 0, 0, 0, 0, 0 }'
+    printf '%s\n' '};'
+    printf '%s\n' ''
+    printf '%s\n' '#endif /* POCKETPARSE_GRAMMARS_DATA_H */'
+  } > "$header"
+
+  log "gen_grammars: wrote $header ($idx package(s))"
+}
+
+# ---------------------------------------------------------------------------
+# build_library_amalgamation: fold the ax engine and the pocketparse library
+# into one translation unit (pocketparse.c) plus the public header
+# (pocketparse.h), writing both into $1 (an output directory). This is the
+# LIBRARY amalgamation -- it folds in every src/*.c EXCEPT cli.c, so embedding
+# the result into cli.c is not circular. It is the same fold amalgamate.sh
+# performs for its pocketparse.{c,h}, factored out here so both the embedded
+# CLI asset (gen_amalgamation, below) and amalgamate.sh produce byte-identical
+# library sources. Returns nonzero on any failure.
+# ---------------------------------------------------------------------------
+build_library_amalgamation() {
+  local out="$1"
+  local tmp="$HERE/build/_libamalg"
+  local version; version="$(cat "$HERE/VERSION")"
+  mkdir -p "$out" "$tmp"
+
+  # Tangle ax.h and ax.c from the literate sources (build/core.md names them:
+  # ax-design.md -> ax.h, ax-implementation.md -> ax.c) with a fresh mdc.
+  local mdc="$tmp/mdc"
+  if ! cc -std=c99 -Wall -Wextra -pedantic -o "$mdc" "$REPO/tools/mdc/mdc.c" 2>"$tmp/mdc.log"; then
+    log "build_library_amalgamation: mdc did not compile:"; sed 's/^/    /' "$tmp/mdc.log" >&2; return 1
+  fi
+  local ax_h="$tmp/ax.h" ax_c="$tmp/ax.c"
+  if ! "$mdc" tangle "$REPO/src/ax/ax-design.md" ax.h > "$ax_h" 2>"$tmp/ax-h.log"; then
+    sed 's/^/    /' "$tmp/ax-h.log" >&2; log "build_library_amalgamation: tangle ax.h failed"; return 1
+  fi
+  if ! "$mdc" tangle "$REPO/src/ax/ax-implementation.md" ax.c > "$ax_c" 2>"$tmp/ax-c.log"; then
+    sed 's/^/    /' "$tmp/ax-c.log" >&2; log "build_library_amalgamation: tangle ax.c failed"; return 1
+  fi
+
+  # Strip only the local "..." includes whose targets are folded in.
+  strip_inlined_includes() {
+    grep -vE '^[[:space:]]*#[[:space:]]*include[[:space:]]+"(ax\.h|pocketparse\.h|internal\.h|manpage_data\.h)"' "$@"
+  }
+
+  # pocketparse.h: verbatim public header.
+  cp "$INC/pocketparse.h" "$out/pocketparse.h"
+
+  # pocketparse.c: the single translation unit.
+  {
+    cat <<EOF
+/*
+** pocketparse.c -- single-file amalgamation of the pocketparse library.
+**
+** GENERATED by tools/pocketparse/build.sh for pocketparse $version.
+** Do not edit by hand. It folds together, in one translation unit:
+**   - the ax actor engine (ax.h + ax.c), wrapped in hidden visibility so its
+**     ax_* symbols never escape a shared library built from this file;
+**   - the pocketparse public header;
+**   - the private internal.h contract;
+**   - every library source (all of src/*.c except the CLI).
+**
+** Build:  cc -c pocketparse.c
+**         cc -shared -fPIC -fvisibility=hidden pocketparse.c -o libpocketparse.so
+*/
+
+/* ===== ax engine (hidden) ================================================= */
+/*
+** The ax engine forward-declares the libc memory primitives it uses
+** (memcpy/memset/memcmp). Declare them with explicit default visibility before
+** the push so the references stay resolvable when this file is built with
+** -fvisibility=hidden for a shared library.
+*/
+#include <stddef.h>
+void *memcpy(void *dst, const void *src, size_t n) __attribute__((visibility("default")));
+void *memset(void *dst, int byte, size_t n) __attribute__((visibility("default")));
+int   memcmp(const void *a, const void *b, size_t n) __attribute__((visibility("default")));
+
+#pragma GCC visibility push(hidden)
+
+/* --- ax.h --- */
+EOF
+    cat "$ax_h"
+    printf '\n/* --- ax.c --- */\n'
+    strip_inlined_includes "$ax_c"
+    cat <<'EOF'
+
+#pragma GCC visibility pop
+/* ===== end ax engine ====================================================== */
+
+#pragma GCC visibility push(default)
+
+/* ===== pocketparse public header ========================================== */
+EOF
+    cat "$INC/pocketparse.h"
+    printf '\n/* ===== pocketparse internal header ======================================== */\n'
+    strip_inlined_includes "$SRC/internal.h"
+    for c in $(ls "$SRC"/*.c | sort); do
+      base="$(basename "$c")"
+      [ "$base" = "cli.c" ] && continue
+      printf '\n/* ===== src/%s ============================================ */\n' "$base"
+      strip_inlined_includes "$c"
+    done
+    printf '\n#pragma GCC visibility pop\n'
+  } > "$out/pocketparse.c"
+
+  unset -f strip_inlined_includes
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# gen_amalgamation: bake the LIBRARY amalgamation (pocketparse.c + pocketparse.h)
+# into the GENERATED header src/amalgamation_data.h as byte arrays, exactly like
+# gen_grammars embeds the standard grammars. The CLI's `init`/`vendor`
+# subcommands write these bytes out to seed or vendor a project, so a seeded
+# project carries the whole engine with no pocketparse install on the path.
+#
+# Build ordering: the library amalgamation must exist BEFORE cli.c compiles, so
+# this runs before the CLI build (build_platform calls it alongside gen_manpage
+# and gen_grammars). The library amalgamation does not include cli.c, so
+# embedding pocketparse.c into cli.c is not circular.
+# ---------------------------------------------------------------------------
+gen_amalgamation() {
+  local header="$SRC/amalgamation_data.h"
+  local tmp="$HERE/build/_genamalg"
+  mkdir -p "$tmp"
+
+  build_library_amalgamation "$tmp" || { log "gen_amalgamation: cannot build library amalgamation"; return 1; }
+
+  {
+    printf '%s\n' '/*'
+    printf '%s\n' '** amalgamation_data.h -- the embedded pocketparse library amalgamation.'
+    printf '%s\n' '** GENERATED by build.sh::gen_amalgamation from the library sources.'
+    printf '%s\n' '** It carries pocketparse.c (ax folded in, hidden) and pocketparse.h as'
+    printf '%s\n' '** byte arrays so the CLI can seed a project (init/vendor) with no install.'
+    printf '%s\n' '** Do not edit by hand; it is a gitignored build artifact.'
+    printf '%s\n' '*/'
+    printf '%s\n' '#ifndef POCKETPARSE_AMALGAMATION_DATA_H'
+    printf '%s\n' '#define POCKETPARSE_AMALGAMATION_DATA_H'
+    printf '%s\n' ''
+    emit_byte_array "$tmp/pocketparse.c" pocketparse_amalgamation_c_bytes
+    printf '%s\n' 'static const unsigned long pocketparse_amalgamation_c_length ='
+    printf '%s\n' '    sizeof pocketparse_amalgamation_c_bytes - 1;'
+    printf '%s\n' ''
+    emit_byte_array "$tmp/pocketparse.h" pocketparse_amalgamation_h_bytes
+    printf '%s\n' 'static const unsigned long pocketparse_amalgamation_h_length ='
+    printf '%s\n' '    sizeof pocketparse_amalgamation_h_bytes - 1;'
+    printf '%s\n' ''
+    printf '%s\n' '#endif /* POCKETPARSE_AMALGAMATION_DATA_H */'
+  } > "$header"
+
+  log "gen_amalgamation: wrote $header ($(wc -c < "$tmp/pocketparse.c") bytes pocketparse.c)"
+}
+
+# ---------------------------------------------------------------------------
+# lib + cli for a given platform (cross-compiles via zig)
+# ---------------------------------------------------------------------------
+build_platform() {
+  local plat="$1"
+  local target; target="$(zig_target "$plat")"
+  local ext; ext="$(shared_ext "$plat")"
+  local axdir="$REPO/dist/$plat"
+  local out="$DIST/$plat"
+  mkdir -p "$out" "$HERE/build/$plat"
+
+  if [ -z "$ZIG" ]; then log "no zig found; cannot build $plat"; return 1; fi
+  if ! have_sources; then log "no src/*.c yet; skipping lib/cli for $plat"; return 0; fi
+  ensure_ax "$plat" || { log "ax artifacts unavailable for $plat; cannot link"; return 1; }
+
+  local libflags="-std=c99 -O2 -fPIC -ffreestanding -fno-builtin -Wall -Wextra -I$INC -I$axdir"
+  local objs=()
+  local c o
+  for c in "$SRC"/*.c; do
+    [ "$(basename "$c")" = "cli.c" ] && continue   # CLI is hosted, built separately
+    o="$HERE/build/$plat/$(basename "${c%.c}").o"
+    if ! "$ZIG" cc -target "$target" $libflags -c "$c" -o "$o"; then
+      log "compile failed: $c"; return 1
+    fi
+    objs+=("$o")
+  done
+
+  # static archive
+  "$ZIG" ar rcs "$out/libpocketparse.a" "${objs[@]}" || return 1
+  # shared library (links the dist ax archive in)
+  local sharedflags=(-target "$target" -shared -o "$out/libpocketparse.$ext" "${objs[@]}" "$axdir/libax.a")
+  [ "$plat" = "macos-arm64" ] && sharedflags+=(-Wl,-install_name,@rpath/libpocketparse.dylib)
+  "$ZIG" cc "${sharedflags[@]}" || log "shared link failed for $plat (continuing)"
+
+  # ship the header
+  cp "$INC/pocketparse.h" "$out/pocketparse.h" 2>/dev/null || true
+
+  # CLI (hosted): links libpocketparse.a + the dist ax archive
+  if [ -f "$SRC/cli.c" ]; then
+    gen_manpage || { log "gen_manpage failed; cannot build CLI for $plat"; return 1; }
+    gen_grammars || { log "gen_grammars failed; cannot build CLI for $plat"; return 1; }
+    gen_amalgamation || { log "gen_amalgamation failed; cannot build CLI for $plat"; return 1; }
+    local cliflags="-std=c11 -O2 -Wall -Wextra -I$INC -I$axdir -I$SRC"
+    if "$ZIG" cc -target "$target" $cliflags "$SRC/cli.c" "$out/libpocketparse.a" "$axdir/libax.a" -o "$out/pocketparse"; then
+      # integration proof: the CLI linked against the dist ax release archive.
+      # Copy the consumed archive into the pocketparse dist next to the CLI and
+      # drop the marker there, so the suite (cwd tools/pocketparse) can verify
+      # both at dist/<plat>/.
+      cp "$axdir/libax.a" "$out/libax.a" 2>/dev/null || true
+      : > "$out/.consumes-ax"
+      log "$plat: CLI linked against dist/$plat/libax.a"
+    else
+      log "CLI link failed for $plat"
+    fi
+  fi
+}
+
+build_examples() {
+  if [ -x "$HERE/examples/build.sh" ]; then
+    bash "$HERE/examples/build.sh" || log "examples build reported errors"
+  else
+    log "no examples/build.sh yet; skipping"
+  fi
+}
+
+cmd="${1:-all}"
+case "$cmd" in
+  ax)       ensure_ax "$(host_platform)" ;;
+  lib|cli)  build_platform "$(host_platform)" ;;
+  examples) build_examples ;;
+  dist)     for p in linux-x86_64 macos-arm64; do build_platform "$p"; done ;;
+  all)      build_platform "$(host_platform)"; build_examples ;;
+  clean)    rm -rf "$HERE/build" "$DIST"/*/ ;;
+  *) log "unknown subcommand: $cmd"; exit 2 ;;
+esac

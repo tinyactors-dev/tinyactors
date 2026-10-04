@@ -1,0 +1,10 @@
+# A `$` that begins no expansion is a literal dollar (POSIX §2.6.2): `echo $`
+# parses with a DollarLiteral word part and NO expansion and NO error.
+<<<cmd
+printf 'echo $\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains DollarLiteral
+out-absent SimpleExpansion

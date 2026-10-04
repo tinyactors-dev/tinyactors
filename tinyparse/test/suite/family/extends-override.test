@@ -1,0 +1,7 @@
+<<<cmd
+printf '42 99' | "$PP" run test/suite/family/fixtures/ext-override.scm --input - --dump-tree
+<<<assert
+exit 0
+out-contains Number
+out-contains Item
+out-absent ERROR

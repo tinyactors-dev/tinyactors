@@ -1,0 +1,8 @@
+<<<grammar
+examples/tcl/tcl.scm
+<<<input
+set x 1
+<<<assert
+exit 0
+out-contains Command
+out-count 1 Command

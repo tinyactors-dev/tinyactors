@@ -1,0 +1,4 @@
+<<<cmd
+printf 'a;;b' | "$PP" run std.shell --input -
+<<<assert
+exit-not 0

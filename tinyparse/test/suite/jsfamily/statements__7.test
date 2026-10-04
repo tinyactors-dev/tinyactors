@@ -1,0 +1,6 @@
+<<<cmd
+"$PP" run std.javascript --input test/suite/jsfamily/inputs/statements__7.js --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING

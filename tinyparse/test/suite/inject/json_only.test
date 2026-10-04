@@ -1,0 +1,15 @@
+# W62 language injection, the demonstrable partial: a std.fence document with a
+# single json fence parses its content with std.json and splices the result under
+# an injection node tagged [std.json]. A self-contained proof that injecting one
+# embedded language works end to end, independent of the multi-language demo.
+<<<cmd
+"$PP" run std.fence --input test/suite/inject/inputs/json_only.fence --dump-tree
+<<<assert
+exit 0
+out-contains injection [std.json]
+out-contains Object [std.json]
+out-contains Array [std.json]
+out-contains String [std.json]
+out-contains JsonFence
+out-absent ERROR
+out-absent MISSING

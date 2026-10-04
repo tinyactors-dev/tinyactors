@@ -1,0 +1,11 @@
+<<<cmd
+# tree-sitter corpus "Extra complex literals in expressions": this input is
+# DELIBERATELY MALFORMED JS (`if ({a:'b'} {c:'d'})` — two adjacent objects, no
+# operator). tree-sitter's own expected output contains (ERROR ...) and
+# (MISSING ";"): it error-RECOVERS into a tree. pocketparse instead flags the
+# syntax error and rejects (exit non-zero). Both detect the error; matching
+# tree-sitter's exact error-recovery tree is separate future work, not JS
+# language coverage. All 115 VALID corpus cases parse cleanly.
+"$PP" run std.javascript --input test/suite/jsfamily/inputs/destructuring__5.js --dump-tree
+<<<assert
+exit-not 0

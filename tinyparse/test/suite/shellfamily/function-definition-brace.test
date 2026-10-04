@@ -1,0 +1,13 @@
+# A function definition (POSIX §2.9.5): `fname() compound-command`. `foo() { … }`
+# binds the name foo to a brace-group body. The `()` has no blank, the body is a
+# BraceGroup.
+<<<cmd
+printf 'foo() { echo hi; }\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains FunctionDefinition
+out-contains name: ReservedWord
+out-contains body: CompoundCommand
+out-contains BraceGroup

@@ -1,0 +1,7 @@
+<<<cmd
+printf 'a\nb\nc\nend\n' | "$PP" run test/suite/lexgoal/not-rule.scm --input - --dump-tree
+<<<assert
+exit 0
+out-count 3 Item [
+out-contains tail: End
+out-order Item [ ~ Item [ ~ Item [ ~ tail: End

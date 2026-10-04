@@ -1,0 +1,7 @@
+# Corpus: literal words.
+<<<cmd
+"$PP" run std.shell --input test/suite/shellfamily/inputs/literals__1.sh --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING

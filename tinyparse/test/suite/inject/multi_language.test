@@ -1,0 +1,32 @@
+# W62 language injection: a std.fence document with a js fence AND a json fence
+# parses each region with its OWN grammar, splicing both into ONE composite tree.
+# The dump must show JavaScript nodes (function_declaration, call_head) tagged
+# [std.javascript] under the js fence, and JSON nodes (Object, Array) tagged
+# [std.json] under the json fence -- proof that each region was parsed by the
+# language its info string selected, not by the host fence grammar.
+<<<cmd
+"$PP" run std.fence --input test/suite/inject/inputs/multi.fence --dump-tree
+<<<assert
+exit 0
+# the two injection boundaries, each tagged with the embedded language
+out-contains injection [std.javascript]
+out-contains injection [std.json]
+# JavaScript subtree under the js fence: a function declaration and a call. The
+# call shows as member_or_call -- the expression-ladder pass-through wrappers
+# above it (call_head and the precedence ladder) are hidden and collapse out
+# (W17-FLAT).
+out-contains function_declaration [std.javascript]
+out-contains member_or_call [std.javascript]
+out-contains identifier [std.javascript]
+# JSON subtree under the json fence: an object containing an array
+out-contains Object [std.json]
+out-contains Array [std.json]
+# the host fence grammar's own structure frames both injected subtrees
+out-contains JsFence
+out-contains JsonFence
+# each language's nodes appear exactly where its fence is; the js fence holds no
+# JSON Object node and the json fence holds no JS function_declaration
+out-order JsFence ~ injection [std.javascript] ~ JsonFence ~ injection [std.json]
+# no part of the composite tree failed to parse
+out-absent ERROR
+out-absent MISSING

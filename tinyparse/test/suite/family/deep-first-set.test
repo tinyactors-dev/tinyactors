@@ -1,0 +1,16 @@
+<<<grammar
+test/suite/family/fixtures/deep-first-set.scm
+<<<input
+a
+<<<assert
+exit 0
+# Source is (choice Chain0 (seq B)). Predicting the first alternative resolves
+# Chain0's FIRST set, which chains 100 rules deep (Chain0 -> Chain1 -> ... ->
+# Chain100 -> token A) before bottoming out. The resolving FIRST-set walk grows
+# its `visiting' stack past the old fixed depth of 64 rather than bailing, so the
+# deeply-nested alternative is still predicted and the input parses to the bottom
+# of the chain. A 100-deep chain would have overflowed (or silently disabled
+# pruning at) the old stack[64].
+out-contains Chain0
+out-contains Chain100
+out-contains A

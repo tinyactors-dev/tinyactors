@@ -1,0 +1,7 @@
+<<<mode
+check
+<<<grammar
+test/suite/lexgoal/bad-undeclared-slot.scm
+<<<assert
+exit 1
+err-contains undeclared slot

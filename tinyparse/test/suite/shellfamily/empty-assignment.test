@@ -1,0 +1,11 @@
+# An assignment with an empty value (VAR=) sets the variable to the empty
+# string: the Assignment has a name but no value: Word.
+<<<cmd
+printf 'EMPTY=\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 assignment: Assignment
+out-contains name: Name
+out-absent value: Word

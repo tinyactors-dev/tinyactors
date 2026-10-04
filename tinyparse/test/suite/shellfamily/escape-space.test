@@ -1,0 +1,10 @@
+# A backslash-escaped space is a literal space within the word, not a separator:
+# a\ b is one argument word, not two. The escaped byte is an EscapeSequence part.
+<<<cmd
+printf 'echo a\\ b\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 arg: Word
+out-contains EscapeSequence

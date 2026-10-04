@@ -1,0 +1,5 @@
+<<<cmd
+printf '{"a":[1,true,null]}' | "$PP" run std.json --input -
+<<<assert
+exit 0
+out-absent ERROR

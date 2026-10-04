@@ -1,0 +1,16 @@
+# Phase 8 -- the payoff: a single heredoc parses cleanly. The (defer ...) captures
+# the delimiter "EOF" into the slot; (parse-deferred ...) instantiates the
+# parametrized HeredocDelimLine pattern (seq "EOF" "\n") from the captured bytes,
+# pushes it onto the goal stack, and runs HeredocBody. The body's "hello" line is a
+# BodyCommand; the closing "EOF" line matches the instantiated HeredocDelimLine and
+# ends the body. No ERROR, no MISSING anywhere.
+<<<cmd
+printf 'cat <<EOF\nhello\nEOF\n' | "$PP" run examples/heredoc/heredoc.scm --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 HeredocBody [
+out-count 1 BodyCommand [
+out-contains end: HeredocDelimLine
+out-contains name: Word

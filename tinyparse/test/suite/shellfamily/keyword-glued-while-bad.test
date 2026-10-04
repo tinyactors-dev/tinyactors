@@ -1,0 +1,7 @@
+# `whilex` is the word `whilex`, not `while` glued to `x`. The delimited `While`
+# token does not match `while` as a prefix, so `whilex c; do y; done` is rejected
+# rather than read as a while clause.
+<<<cmd
+printf 'whilex c; do y; done\n' | "$PP" run std.shell --input -
+<<<assert
+exit-not 0

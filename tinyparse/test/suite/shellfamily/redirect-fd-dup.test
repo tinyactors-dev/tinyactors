@@ -1,0 +1,11 @@
+# A descriptor-duplication redirection: cmd 2>&1 uses the >& operator with fd 2.
+# The >& operator wins over a bare > in the ordered choice.
+<<<cmd
+printf 'cmd 2>&1\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 redirect: Redirect
+out-contains fd: IoNumber
+out-contains target: Word

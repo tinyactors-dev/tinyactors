@@ -1,0 +1,4 @@
+if true; then cat <<EOF
+x
+EOF
+ fi

@@ -1,0 +1,8 @@
+<<<cmd
+"$PP" run std.typescript --input test/suite/tsfamily/inputs/types__37.ts --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 2 function_declaration
+out-absent function_signature

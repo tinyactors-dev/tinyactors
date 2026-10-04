@@ -1,0 +1,12 @@
+# A reserved word is special only in command position. As an argument it is an
+# ordinary word: `echo if then fi` has `echo` as the command and `if`/`then`/`fi`
+# as three argument words, no compound command.
+<<<cmd
+printf 'echo if then fi\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-absent IfClause
+out-contains name: CommandName
+out-count 3 arg: Word

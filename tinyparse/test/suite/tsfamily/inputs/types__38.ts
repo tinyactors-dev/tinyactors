@@ -1,0 +1,5 @@
+type t = a[]
+type t = readonly a[]
+type t = readonly a[][]
+type t = (readonly a[])[]
+type t = readonly (readonly a[]) []

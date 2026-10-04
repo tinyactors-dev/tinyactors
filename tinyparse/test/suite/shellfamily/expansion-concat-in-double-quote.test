@@ -1,0 +1,9 @@
+# Two adjacent expansions inside one double-quoted string `"$x$y"` are both live.
+<<<cmd
+printf 'echo "$x$y"\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 arg: Word
+out-count 2 SimpleExpansion

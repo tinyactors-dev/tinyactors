@@ -1,0 +1,50 @@
+# pocketparse build outputs
+/dist/
+/build/
+/.toolchain/
+/.zig-cache/
+/zig-cache/
+# generated codegen artifacts
+/src/manpage_data.h
+/src/grammars_data.h
+/src/amalgamation_data.h
+/pocketparse.1
+# tree-sitter porting references (build-time only; see reference/PINS.txt)
+/reference/tree-sitter-javascript/
+/reference/tree-sitter-typescript/
+/reference/tree-sitter-bash/
+# ReactJS codebase — Project B real-workload benchmark corpus (build-time only)
+/reference/react/
+# pocketparse benchmark (Phase 9): the harness C sources + bench_common.h are
+# tracked; everything the bench build produces is scratch — the cloned
+# tree-sitter runtime, compiled objects/archives, the harness binaries, the
+# extracted corpus, and the recorded runtime pin.
+/bench/tree-sitter/
+/bench/tree-sitter-runtime.pin
+# Project B React benchmark scratch: the assembled corpus manifest + packed
+# grammar, the tsx objects, and the harness binaries are all rebuilt by the
+# orchestrator; only the harness C sources are tracked.
+/bench/react-corpus/
+/bench/react_pocketparse
+/bench/react_compiled
+/bench/react_treesitter
+/bench/tsx_parser.o
+/bench/tsx_scanner.o
+/bench/corpus/
+/bench/*.o
+/bench/*.a
+/bench/bench_treesitter
+/bench/bench_pocketparse
+# Throwaway profiling build dir (prof_driver + objects + callgrind/gmon output).
+/bench/prof/
+# W1 tsc/tsgo calibration scratch: the npm install (typescript + native-preview)
+# and the cloned microsoft/typescript-go tree + its built harness. Only the
+# tracked harness sources are kept (tsc_bench.mjs, ci/pocketparse-tsc-bench.sh).
+/bench/tsbench/
+/bench/typescript-go/
+/bench/reclaim-scratch/
+/bench/reclaim_test
+# pocketparse differential scratch: ci/pocketparse-vm-diff.sh writes <input>.ref
+# and <input>.vm next to the suite inputs while comparing engines.
+/test/suite/**/*.ref
+/test/suite/**/*.vm

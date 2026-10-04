@@ -1,0 +1,13 @@
+# Multiple here-documents on one command line (POSIX §2.7.4): `cat <<A <<B` opens
+# two heredocs; their bodies follow the line's newline in the SAME order the
+# operators appeared — body for A first, then body for B (FIFO). Two
+# HeredocRedirects, two HeredocBodies, A's body before B's.
+<<<cmd
+printf 'cat <<A <<B\naaa\nA\nbbb\nB\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 2 HeredocRedirect
+out-count 2 HeredocBody [
+out-order HeredocBody [12 ~ HeredocBody [18

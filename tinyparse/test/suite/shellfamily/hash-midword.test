@@ -1,0 +1,11 @@
+# A "#" in the middle of a word does NOT start a comment: a#b is one argument
+# word a#b. (A "#" only begins a comment at a word boundary, where the Comment
+# extra consumes it before any terminal is matched.)
+<<<cmd
+printf 'echo a#b\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 arg: Word
+out-contains RawWord

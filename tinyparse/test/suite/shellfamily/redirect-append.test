@@ -1,0 +1,10 @@
+# An append redirection: echo x >>log uses the two-character >> operator. The
+# longer operator wins the ordered choice over a bare >.
+<<<cmd
+printf 'echo x >>log\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 redirect: Redirect
+out-contains target: Word

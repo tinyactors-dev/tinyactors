@@ -1,0 +1,10 @@
+# Expansions in a for word-list `for i in $a $b; do …` (POSIX §2.9.4): each value
+# Word after `in` holds a SimpleExpansion.
+<<<cmd
+printf 'for i in $a $b; do echo hi; done\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains ForClause
+out-count 2 SimpleExpansion

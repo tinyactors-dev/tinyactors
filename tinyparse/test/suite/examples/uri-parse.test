@@ -1,0 +1,10 @@
+<<<cmd
+examples/uri/run.sh 'https://user@example.com:8080/a/b?x=1#frag'
+<<<assert
+exit 0
+out-contains scheme=https
+out-contains host=example.com
+out-contains port=8080
+out-contains path=/a/b
+out-contains query=x=1
+out-contains fragment=frag

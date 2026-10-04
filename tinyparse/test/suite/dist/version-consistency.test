@@ -1,0 +1,6 @@
+<<<cmd
+set -e
+test "$(cat VERSION)" = 0.1.0
+"$PP" version | grep -q '0\.1\.0'
+<<<assert
+exit 0

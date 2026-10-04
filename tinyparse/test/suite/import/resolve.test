@@ -1,0 +1,6 @@
+<<<cmd
+printf 'a b c' | "$PP" run examples/import/main.scm --input - --dump-tree
+<<<assert
+exit 0
+out-contains Word
+out-absent ERROR

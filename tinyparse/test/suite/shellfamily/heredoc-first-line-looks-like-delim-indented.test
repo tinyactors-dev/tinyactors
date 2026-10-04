@@ -1,0 +1,18 @@
+# A here-document whose FIRST body line is ` EOF` — the delimiter spelling but with
+# ONE leading space (POSIX §2.7.4). For a plain `<<` heredoc a delimiter line must
+# equal the delimiter with NO leading blanks, so ` EOF` is ordinary CONTENT, not the
+# closer; the heredoc closes only at the later bare `EOF` at column 0. (Pre-fix the
+# leading space was eaten at the body boundary, `EOF\n` then matched the delimiter,
+# and the heredoc CLOSED EARLY — `real` and the real `EOF` became stray commands and
+# a second/third CommandLine appeared.) Here there is exactly ONE HeredocBody holding
+# BOTH the ` EOF` line and the `real` line, closing on the column-0 `EOF`.
+<<<cmd
+printf 'cat <<EOF\n EOF\nreal\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 CommandLine [
+out-count 1 HeredocBody [
+out-count 2 HeredocContentLine
+out-order HeredocContentLine [10-15] ~ HeredocContentLine [15-20] ~ end: HeredocDelimLine [20-24]

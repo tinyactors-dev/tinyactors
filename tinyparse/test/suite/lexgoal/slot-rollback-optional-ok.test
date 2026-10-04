@@ -1,0 +1,12 @@
+# Phase 6 -- slot rollback on backtrack (OPTIONAL, committed body). The optional
+# body captures a word via (defer s W) and the required "X" matches, so the body
+# COMMITS. The deferred item survives, so the (parse-deferred s Body) drain
+# invokes Body exactly once.
+<<<cmd
+printf 'hello X next\nbody\n' | "$PP" run test/suite/lexgoal/slot-rollback-optional.scm --input - --dump-tree
+<<<assert
+exit 0
+out-count 1 Body [
+out-count 0 Extra [
+out-contains line: W
+out-absent ERROR

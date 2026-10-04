@@ -1,0 +1,10 @@
+# A trailing "&" with no following command backgrounds the only command:
+# `sleep 1 &` is one simple command terminated by an "&" separator.
+<<<cmd
+printf 'sleep 1 &\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 SimpleCommand
+out-contains sep: &

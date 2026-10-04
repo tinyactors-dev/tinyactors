@@ -1,0 +1,7 @@
+<<<mode
+check
+<<<grammar
+examples/sexpr/broken.scm
+<<<assert
+exit 1
+err-contains error

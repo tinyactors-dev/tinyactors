@@ -1,0 +1,9 @@
+<<<grammar
+examples/sexpr/sexpr.scm
+<<<input
+(x)
+<<<assert
+exit 0
+out-contains open
+out-contains close
+out-order open ~ close

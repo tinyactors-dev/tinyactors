@@ -1,0 +1,7 @@
+# The `in` of a for clause is a delimited reserved word too: `inx` is the word
+# `inx`, not `in` glued to `x`. The delimited `In` token does not match `in` as a
+# prefix, so `for i inx a; do y; done` is rejected.
+<<<cmd
+printf 'for i inx a; do y; done\n' | "$PP" run std.shell --input -
+<<<assert
+exit-not 0

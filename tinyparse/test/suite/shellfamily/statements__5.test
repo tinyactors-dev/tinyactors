@@ -1,0 +1,11 @@
+# Corpus: two for-loops — `for a in 1 2 $(seq 5 10)` (with a command
+# substitution in the word list) and `for ARG` (no `in` list). Two ForClause
+# nodes; the command substitution in the first loop's list is present.
+<<<cmd
+"$PP" run std.shell --input test/suite/shellfamily/inputs/statements__5.sh --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 2 ForClause [
+out-contains CommandSubstitution

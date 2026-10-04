@@ -1,0 +1,13 @@
+# Phase 6 -- slot rollback on backtrack (OPTIONAL, failed body). The optional
+# body captures a word via (defer s W) then requires "X". With "X" absent the
+# body FAILS; the optional then succeeds matching nothing, but the deferred item
+# MUST be discarded, so the (parse-deferred s Body) drain invokes Body zero
+# times.
+<<<cmd
+printf 'word\nextra\n' | "$PP" run test/suite/lexgoal/slot-rollback-optional.scm --input - --dump-tree
+<<<assert
+exit 0
+out-count 0 Body [
+out-count 1 Extra [
+out-contains a: W
+out-absent ERROR

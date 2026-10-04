@@ -1,0 +1,7 @@
+<<<grammar
+examples/sexpr/sexpr.scm
+<<<input
+<<<assert
+exit 0
+out-contains Source
+out-absent ERROR

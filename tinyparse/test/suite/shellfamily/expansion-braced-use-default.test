@@ -1,0 +1,11 @@
+# Use-default `${name:-word}` (POSIX §2.6.2): a BracedExpansion with a name, a
+# BracedOperator (`:-`), and a BraceBody operand.
+<<<cmd
+printf 'echo ${x:-default}\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains BracedExpansion
+out-contains op: BracedOperator
+out-contains word: BraceBody

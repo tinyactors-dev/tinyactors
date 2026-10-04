@@ -1,0 +1,7 @@
+# Corpus: a while whose condition is a subshell.
+<<<cmd
+"$PP" run std.shell --input test/suite/shellfamily/inputs/statements__23.sh --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING

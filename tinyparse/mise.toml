@@ -1,0 +1,59 @@
+# mise.toml — pocketparse's pinned toolchain and task runner.
+#
+# `mise install` provisions the compiler; `mise run <task>` (or `mise <task>`)
+# drives the lifecycle. Run it from this directory (tools/pocketparse).
+#
+# pocketparse builds with Zig 0.15.1 — deliberately independent of the repo's
+# 0.16 freestanding toolchain. Static-archive linking against the prebuilt
+# dist/<platform>/libax.a is ABI-stable across the two Zig versions.
+
+[tools]
+zig = "0.15.1"
+
+[env]
+# Point build.sh at the mise-managed Zig explicitly so it never guesses.
+POCKETPARSE_ZIG = "{{ exec(command='command -v zig || true') }}"
+
+[tasks.ax]
+description = "Ensure the prebuilt ax release artifacts exist in dist/ (build if not)"
+run = "bash build.sh ax"
+
+[tasks.lib]
+description = "Build libpocketparse.{a,so|dylib} for the host platform"
+run = "bash build.sh lib"
+
+[tasks.cli]
+description = "Build the pocketparse CLI (links the dist ax archive)"
+run = "bash build.sh cli"
+
+[tasks.examples]
+description = "Build the example programs (TCL, rewriter, EBNF/URI, JIT)"
+run = "bash build.sh examples"
+
+[tasks.build]
+description = "Build lib + CLI + examples for the host platform"
+run = "bash build.sh all"
+
+[tasks.dist]
+description = "Cross-build the full deliverable matrix (linux-x86_64, macos-arm64)"
+run = "bash build.sh dist"
+
+[tasks.man]
+description = "Render the manpage from the embedded source"
+run = "./dist/$(uname -s | tr A-Z a-z)-*/pocketparse man"
+
+[tasks.test]
+description = "Run the finish-line metric (build + data-driven harness + ratchet)"
+run = "bash ../../ci/pocketparse-metric.sh"
+
+[tasks.metric]
+description = "Alias for test — the finish-line metric"
+run = "bash ../../ci/pocketparse-metric.sh"
+
+[tasks.gate]
+description = "Full gate: cross-dist build + run every example through the harness"
+run = "RUN_GATE=1 bash ../../ci/pocketparse-metric.sh"
+
+[tasks.clean]
+description = "Remove build outputs"
+run = "bash build.sh clean"

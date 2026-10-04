@@ -1,0 +1,5 @@
+<<<cmd
+"$PP" check test/suite/family/fixtures/ext-bare.scm
+<<<assert
+exit-not 0
+err-contains override

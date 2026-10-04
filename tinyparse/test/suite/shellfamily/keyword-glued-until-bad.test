@@ -1,0 +1,6 @@
+# `untilx` is the word `untilx`, not `until` glued to `x`. The delimited `Until`
+# token does not match `until` as a prefix, so `untilx c; do y; done` is rejected.
+<<<cmd
+printf 'untilx c; do y; done\n' | "$PP" run std.shell --input -
+<<<assert
+exit-not 0

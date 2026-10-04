@@ -1,0 +1,11 @@
+# Inside double quotes a backslash before `$` is literal (POSIX §2.2.3): `"lit \$x"`
+# is DQText/DQEscape with NO expansion — the `\$` is an escaped dollar.
+<<<cmd
+printf 'echo "lit \\$x"\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains DoubleQuoted
+out-contains DQEscape
+out-absent SimpleExpansion

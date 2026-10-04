@@ -1,0 +1,8 @@
+<<<cmd
+set -e
+"$PP" pack examples/sexpr/sexpr.scm --out /tmp/pp_sexpr.ppg
+printf '(a (b c))' | "$PP" run /tmp/pp_sexpr.ppg --input - --dump-tree
+<<<assert
+exit 0
+out-order Source ~ List ~ Atom
+out-contains Atom

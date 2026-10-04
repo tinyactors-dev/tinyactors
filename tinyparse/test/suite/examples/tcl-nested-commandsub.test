@@ -1,0 +1,11 @@
+<<<grammar
+examples/tcl/tcl.scm
+<<<input
+set x [a [b] c]
+<<<assert
+exit 0
+out-contains Command
+# [a [b] c] nests: the inner [b] is a CommandSub inside the outer CommandSub,
+# so the dump holds two CommandSub nodes (depth >= 2).
+out-count 2 CommandSub
+out-order CommandSub ~ CommandSub
