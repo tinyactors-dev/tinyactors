@@ -10,6 +10,7 @@
 #include "vec.h"
 #include "pool.h"
 #include "ilist.h"
+#include "chain.h"
 #include "index_heap.h"
 #include "arena.h"
 #include "tree.h"
