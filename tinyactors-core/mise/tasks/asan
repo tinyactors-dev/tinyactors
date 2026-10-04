@@ -33,7 +33,9 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
 # again, the ones about lifetimes run: actor lifetimes, and a compile that
 # runs out of memory at every allocation (span_test). The codec, export,
 # compile error and event pattern tests exercise pure functions.
-STANDALONE = %w[actor_id_test session_id_test offload_test span_test hash_format_test].freeze
+# test_allocator_test needs no runtime at all; it tests the allocator that
+# every one of these builds links (tests/test_allocator.c).
+STANDALONE = %w[actor_id_test session_id_test offload_test span_test hash_format_test test_allocator_test].freeze
 
 # A binary is rebuilt only when one of its inputs is newer: its test, the
 # amalgamation or a header. Tests build and run in parallel, one per CPU.
@@ -55,7 +57,7 @@ failed = Queue.new
 workers = Array.new(Etc.nprocessors) do
   Thread.new do
     while (test = queue.pop)
-      sources = [root.join("tests/#{test}.c").to_s]
+      sources = [root.join("tests/#{test}.c").to_s, root.join('tests/test_allocator.c').to_s]
       sources << runtime.to_s if WITH_RUNTIME.include?(test)
       binary = build.join(test)
       if stale.call(binary, sources) && !system(*cc, *flags, *sources, '-o', binary.to_s, chdir: root.to_s)
