@@ -1,0 +1,19 @@
+# The arena allocator and the parser lifecycle that replaced the ax runtime,
+# checked directly through the internal API: alignment, zeroing (pp_alloc)
+# versus raw reuse (pp_alloc_raw), child resets recycling chunks first-fit, the
+# grow callback contract, NULL on a spent or impossible request, and the
+# accepting/dropped/finished/failed transitions including out of memory during a
+# push, a second run after a failure, and 2000 parses in one fixed grant.
+<<<cmd
+set -e
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
+cc -std=c11 -O1 -Wall -Wextra -Werror -D_GNU_SOURCE -I include -I src test/suite/core/lifecycle.c dist/linux-x86_64/libpocketparse.a -o "$w/lifecycle"
+"$w/lifecycle" examples/sexpr/sexpr.scm
+<<<assert
+exit 0
+out-contains failures=0
+out-absent FAIL
+out-contains ok arena-overflow-refused
+out-contains ok run-again-after-failure-returns-failure
+out-contains ok engine-reuse-2000-parses

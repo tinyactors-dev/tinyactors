@@ -163,7 +163,8 @@ pocketparse_result pocketparse_push(pocketparse_parser *parser,
     return result;
 }
 
-/* ** The finishing transition (see internal.h). From DROPPED the executor never
+/* ** The finishing transition (see internal.h). From DROPPED (and again from
+** FAILED, when a generated run entry is called a second time) the executor never
 ** runs: the buffered input is incomplete, so any tree it built would be a lie --
 ** this is the guard that keeps a dropped chunk from passing as a successful
 ** one-node parse. Otherwise the executor runs to completion, in this call, and
@@ -172,7 +173,7 @@ pocketparse_result pp_parser_run(pocketparse_parser *parser,
                                  pp_parser_executor execute)
 {
     pocketparse_result result;
-    if (parser->state == PP_PARSER_DROPPED) {
+    if (parser->state == PP_PARSER_DROPPED || parser->state == PP_PARSER_FAILED) {
         parser->state = PP_PARSER_FAILED;
         return parser->push_failed;
     }
