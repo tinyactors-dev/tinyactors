@@ -1,6 +1,8 @@
 #pragma once
 
 #include "types.h"
+#include "hash.h"
+#include "format.h"
 #include "arena.h"
 #include "tree.h"
 #include "atom.h"

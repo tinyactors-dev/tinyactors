@@ -122,6 +122,199 @@ TA_PRIVATE inline ta_str ta_str_from_cstr(const char *text) {
 
 
 
+/*
+ * Package hash is block D5 of the ring protocol's catalog: the three hash
+ * functions core uses, in one place.
+ *
+ * What it is for. Core hashes in three situations and wants each one to have
+ * exactly one implementation:
+ *
+ *   - bucket keys for tables (atoms, actor addresses, the event-name trie):
+ *     ta_fnv1a32, 32 bits, cheap, any distribution that spreads text;
+ *   - the content hash of a compiled definition, which is persisted as
+ *     definition->content_hash and, when the chart names no revision, written
+ *     out as the 16-digit revision fingerprint: ta_fnv1a64;
+ *   - integer scrambling: runtime session IDs differ mostly in their low
+ *     slot bits, and span IDs are derived from step keys, so both need every
+ *     input bit to reach every output bit: ta_mix64.
+ *
+ * Contract. All three are pure functions of their arguments. They keep no
+ * state between calls and read no global. ta_fnv1a32 and ta_fnv1a64 take a
+ * running state, not a seed: the result of one call is the state for the
+ * next, so hashing "foo" and then "bar" gives the same value as hashing
+ * "foobar" in one call. Start from TA_FNV1A32_BASIS or TA_FNV1A64_BASIS.
+ * This is why a caller can hash a structure field by field, as the
+ * definition compiler does, without building a buffer first.
+ *
+ * Lifetime. Call. A function owns nothing and keeps no pointer after it
+ * returns; "bytes" is only read, and only during the call. The running state
+ * a caller threads through is the caller's own value and lives as long as the
+ * caller's object: the compiler's state lives for one compile and its final
+ * value becomes definition->content_hash (definition lifetime); an atom's
+ * hash is stored with the atom entry (system lifetime); a session hash is
+ * recomputed on every lookup and stored nowhere.
+ *
+ * Allocation. Never. There is no allocator parameter, no static mutable
+ * state, no failure result. The functions are safe at any point, including
+ * inside a macrostep and from the render arena's paths.
+ *
+ * Invariants. The values are fixed forever. ta_fnv1a64 is persisted
+ * (content_hash, revision fingerprints) and ta_mix64 derives span IDs that
+ * every host must reproduce, so neither may change; tests/hash_format_test.c
+ * pins vectors captured from the code this block replaced. ta_fnv1a32 over
+ * integers hashes their in-memory bytes, so its value depends on endianness
+ * and is only for in-process tables, never written out.
+ *
+ * Complexity. ta_fnv1a32 and ta_fnv1a64 are O(size), one xor and one multiply
+ * per byte. ta_mix64 is O(1), two multiplies and three shifts.
+ *
+ * Not here. Neither FNV-1a nor Murmur's finalizer is cryptographic or
+ * resistant to chosen input; nothing in core relies on that. Where core
+ * needs a pseudo-random sequence rather than a hash (ta_splitmix64 in
+ * trace.c) it stays with its one user.
+ *
+ * Example:
+ *
+ *     uint32_t bucket = ta_fnv1a32(TA_FNV1A32_BASIS, name.ptr, name.len);
+ *
+ *     uint64_t state = TA_FNV1A64_BASIS;
+ *     state = ta_fnv1a64(state, &length, sizeof(length));
+ *     state = ta_fnv1a64(state, text, length);        // same as one call
+ *
+ *     uint32_t slot = (uint32_t)ta_mix64(session_id);  // spread low bits
+ */
+
+/* TA_FNV1A32_BASIS is the FNV-1a offset basis of the 32-bit variant: the state to start a hash from. */
+#define TA_FNV1A32_BASIS 2166136261u
+/* TA_FNV1A64_BASIS is the FNV-1a offset basis of the 64-bit variant: the state to start a hash from. */
+#define TA_FNV1A64_BASIS 14695981039346656037ull
+
+/*
+ * ta_fnv1a32 continues a 32-bit FNV-1a hash over size bytes and returns the
+ * new state. Start from TA_FNV1A32_BASIS; pass the result back as state to
+ * add more bytes. size 0 returns state unchanged, and bytes may be NULL
+ * then. It reads bytes[0..size) during the call, keeps nothing, never
+ * allocates. The value of multi-byte integers depends on endianness, so do
+ * not persist it.
+ */
+TA_PRIVATE uint32_t ta_fnv1a32(uint32_t state, const void *bytes, size_t size);
+
+/*
+ * ta_fnv1a64 is ta_fnv1a32 in 64 bits. Its value is persisted as a
+ * definition's content hash and revision fingerprint, so it is fixed
+ * forever. size 0 returns state unchanged; bytes may be NULL then.
+ */
+TA_PRIVATE uint64_t ta_fnv1a64(uint64_t state, const void *bytes, size_t size);
+
+/*
+ * ta_mix64 is the finalizer of MurmurHash3's 64-bit variant (fmix64): every
+ * input bit reaches every output bit, and ta_mix64(0) is 0. Fixed, because
+ * span IDs derive from it and every host must agree. Truncate to 32 bits
+ * with a cast for a table index; the low bits are as good as any.
+ */
+TA_PRIVATE uint64_t ta_mix64(uint64_t value);
+
+
+
+/*
+ * Package format is block D6 of the ring protocol's catalog: the small
+ * formatters core uses to write numbers as text, in one place.
+ *
+ * What it is for. Core writes decimal numbers (send IDs, counters in error
+ * messages), lowercase hex (trace and span IDs, revision fingerprints, \xHH
+ * escapes), uppercase hex (percent-encoding in URIs), and reads a hex digit
+ * back (percent-decoding). Each used to be written out locally, three times
+ * for decimal and four for hex. This block is the one copy. It also owns
+ * reading a hex digit, ta_hex_digit_value, so writer and reader live side
+ * by side.
+ *
+ * Contract. Every function works on a buffer the caller supplies and sizes.
+ * Nothing here writes a terminating NUL, formats a sign, or pads, except
+ * where a function says so. The functions measure and write separately, so a
+ * caller can measure, reserve exactly that many bytes, then fill them:
+ *
+ *     uint32_t digits = ta_dec_len(serial);
+ *     char *text = ta_arena_alloc(&arena, prefix + digits, 1);
+ *     if (text == NULL) { ... }             // the caller's failure path
+ *     ta_dec_write(text + prefix, serial);
+ *
+ * Lifetime. Call. A function writes into the caller's buffer and keeps no
+ * pointer after it returns. The destination decides how long the text
+ * lives: a stack buffer (the call), the render arena (until the macrostep's
+ * next render reset) or a definition arena (the definition's lifetime).
+ *
+ * Allocation. Never. There is no allocator parameter and no failure result;
+ * the only allocation near these functions is the caller's, which keeps its
+ * own safe point and its own failure path. Safe at any point, including
+ * inside a macrostep.
+ *
+ * Invariants. A buffer shorter than the documented count is a caller bug,
+ * not a runtime error; the documented upper bound for decimal is
+ * TA_DEC_U64_DIGITS, and a caller that cannot know the value in advance
+ * sizes a stack buffer by it. Output is deterministic and independent of the
+ * locale. Hex output is lowercase unless the caller asks for uppercase.
+ *
+ * Complexity. O(digits) for decimal (a division per digit), O(count) for
+ * hex, O(1) for the digit helpers.
+ *
+ * Not here. The traceparent readers in trace.c (ta_hex_read and friends) are
+ * tuned word-at-a-time parsers for one fixed format (ADR 0073) and stay with
+ * their user. The decimal parsers stay with the lexers that own their error
+ * handling. ta_str_from_cstr, which turns a NUL-terminated literal into a
+ * ta_str, is the block's third helper and lives in types.h beside the type
+ * it builds.
+ *
+ * Example:
+ *
+ *     char digits[TA_DEC_U64_DIGITS];
+ *     uint32_t count = ta_dec_write(digits, value);
+ *     ta_text_put(writer, (ta_str){ .ptr = digits, .len = count });
+ *
+ *     char span[16];
+ *     ta_hex_write(span, span_id, 16u);        // "00f067aa0ba902b7"
+ */
+
+/* TA_DEC_U64_DIGITS is the number of decimal digits of UINT64_MAX: the size of a buffer that holds any value ta_dec_write can write. */
+#define TA_DEC_U64_DIGITS 20u
+
+/*
+ * ta_dec_len returns the number of decimal digits of value, 1 for 0. It lets
+ * a caller measure, reserve exactly that many bytes, then fill with
+ * ta_dec_write. Never allocates.
+ */
+TA_PRIVATE uint32_t ta_dec_len(uint64_t value);
+
+/*
+ * ta_dec_write writes value in decimal at out and returns the number of
+ * bytes written, which is exactly ta_dec_len(value) and at most
+ * TA_DEC_U64_DIGITS. It writes no NUL and touches no byte past that count.
+ * out must have room for it; out is only written during the call.
+ */
+TA_PRIVATE uint32_t ta_dec_write(char *out, uint64_t value);
+
+/*
+ * ta_hex_digit returns the ASCII digit for a nibble, lowercase or, when
+ * upper is true, uppercase. Only the low four bits of nibble are used, so a
+ * caller may pass an unmasked byte shifted down.
+ */
+TA_PRIVATE char ta_hex_digit(uint32_t nibble, bool upper);
+
+/*
+ * ta_hex_write writes the low count hex digits of value at out, most
+ * significant first, lowercase, keeping leading zeros: exactly count bytes,
+ * no NUL. count must be 1 to 16; out must have room for it.
+ */
+TA_PRIVATE void ta_hex_write(char *out, uint64_t value, uint32_t count);
+
+/*
+ * ta_hex_digit_value returns the value 0 to 15 of a hex digit in either
+ * case, or -1 for any other character. It is the inverse of ta_hex_digit
+ * for the characters that function writes.
+ */
+TA_PRIVATE int ta_hex_digit_value(char digit);
+
+
+
 struct ta_arena_block {
     struct ta_arena_block *next;
     size_t allocation_size;
@@ -2518,6 +2711,79 @@ TA_PRIVATE ta_result ta_text_render(ta_allocator allocator, const ta_text_render
 }
 
 
+TA_PRIVATE uint32_t ta_fnv1a32(uint32_t state, const void *bytes, size_t size) {
+    const unsigned char *in = bytes;
+    for (size_t index = 0; index < size; index += 1) {
+        state ^= in[index];
+        state *= 16777619u;
+    }
+    return state;
+}
+
+TA_PRIVATE uint64_t ta_fnv1a64(uint64_t state, const void *bytes, size_t size) {
+    const unsigned char *in = bytes;
+    for (size_t index = 0; index < size; index += 1) {
+        state ^= in[index];
+        state *= 1099511628211ull;
+    }
+    return state;
+}
+
+TA_PRIVATE uint64_t ta_mix64(uint64_t value) {
+    value ^= value >> 33;
+    value *= 0xff51afd7ed558ccdull;
+    value ^= value >> 33;
+    value *= 0xc4ceb9fe1a85ec53ull;
+    value ^= value >> 33;
+    return value;
+}
+
+
+TA_PRIVATE uint32_t ta_dec_len(uint64_t value) {
+    uint32_t count = 1;
+    while (value >= 10u) {
+        value /= 10u;
+        count += 1;
+    }
+    return count;
+}
+
+TA_PRIVATE uint32_t ta_dec_write(char *out, uint64_t value) {
+    uint32_t count = ta_dec_len(value);
+    for (uint32_t index = count; index > 0; index -= 1) {
+        out[index - 1u] = (char)('0' + value % 10u);
+        value /= 10u;
+    }
+    return count;
+}
+
+TA_PRIVATE char ta_hex_digit(uint32_t nibble, bool upper) {
+    static const char lower[] = "0123456789abcdef";
+    static const char capital[] = "0123456789ABCDEF";
+    return (upper ? capital : lower)[nibble & 0xfu];
+}
+
+TA_PRIVATE void ta_hex_write(char *out, uint64_t value, uint32_t count) {
+    for (uint32_t index = count; index > 0; index -= 1) {
+        out[index - 1u] = ta_hex_digit((uint32_t)(value & 0xfu), false);
+        value >>= 4;
+    }
+}
+
+TA_PRIVATE int ta_hex_digit_value(char digit) {
+    if (digit >= '0' && digit <= '9') {
+        return digit - '0';
+    }
+    if (digit >= 'a' && digit <= 'f') {
+        return digit - 'a' + 10;
+    }
+    if (digit >= 'A' && digit <= 'F') {
+        return digit - 'A' + 10;
+    }
+    return -1;
+}
+
+
 static bool ta_arena_valid_alignment(size_t alignment) {
     return alignment != 0 && (alignment & (alignment - 1u)) == 0;
 }
@@ -4048,16 +4314,6 @@ static bool ta_hex_read16(const char *text, uint64_t *out) {
     bool low_valid = ta_hex_read8(text + 8, &low);
     *out = ((uint64_t)high << 32) | low;
     return high_valid && low_valid;
-}
-
-static const char ta_hex_digits[] = "0123456789abcdef";
-
-/* Writes `count` hex digits of `value`, most significant first. */
-static void ta_hex_write(char *out, uint64_t value, uint32_t count) {
-    for (uint32_t index = count; index > 0; index -= 1) {
-        out[index - 1u] = ta_hex_digits[value & 0xfu];
-        value >>= 4;
-    }
 }
 
 static bool ta_trace_space(char c) {

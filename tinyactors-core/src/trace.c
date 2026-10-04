@@ -1,4 +1,5 @@
 #include "trace.h"
+#include "format.h"
 #include "system.h"
 #include "interpreter.h"
 
@@ -186,16 +187,6 @@ static bool ta_hex_read16(const char *text, uint64_t *out) {
     bool low_valid = ta_hex_read8(text + 8, &low);
     *out = ((uint64_t)high << 32) | low;
     return high_valid && low_valid;
-}
-
-static const char ta_hex_digits[] = "0123456789abcdef";
-
-/* Writes `count` hex digits of `value`, most significant first. */
-static void ta_hex_write(char *out, uint64_t value, uint32_t count) {
-    for (uint32_t index = count; index > 0; index -= 1) {
-        out[index - 1u] = ta_hex_digits[value & 0xfu];
-        value >>= 4;
-    }
 }
 
 static bool ta_trace_space(char c) {
