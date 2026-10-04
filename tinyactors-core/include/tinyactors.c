@@ -2707,6 +2707,30 @@ TA_PRIVATE ta_result ta_text_render(ta_allocator allocator, const ta_text_render
     return TA_OK;
 }
 
+/*
+ * Implementation of block D5 (hash). The contract, lifetime and usage are in
+ * hash.h; this comment records what the code relies on.
+ *
+ * Lifetime and allocation. Call lifetime only. Nothing here allocates, frees
+ * or keeps a pointer: no function takes an allocator, so none can fail.
+ *
+ * Constants. The FNV prime for 32 bits is 16777619 and for 64 bits
+ * 1099511628211. The bases live in hash.h. The mixer is the fixed 64-bit
+ * Murmur3 finalizer (shifts of 33, multipliers 0xff51afd7ed558ccd and
+ * 0xc4ceb9fe1a85ec53). These values are persisted or visible: content
+ * hashes become revision fingerprints, and span and trace IDs derive from
+ * ta_mix64, so changing any constant changes IDs that tests compare
+ * bit for bit (span_test).
+ *
+ * Byte order. FNV-1a consumes bytes one at a time in memory order, through
+ * an unsigned char pointer, so the result does not depend on the host's
+ * endianness or alignment. Multiplication wraps modulo 2^32 or 2^64 by
+ * definition of the unsigned types; that wrap is intended, and it is the only
+ * arithmetic in the file, so there is no size computation to check.
+ *
+ * Complexity. ta_fnv1a32 and ta_fnv1a64 are O(size); ta_mix64 is O(1).
+ */
+
 
 TA_PRIVATE uint32_t ta_fnv1a32(uint32_t state, const void *bytes, size_t size) {
     const unsigned char *in = bytes;
@@ -2734,6 +2758,34 @@ TA_PRIVATE uint64_t ta_mix64(uint64_t value) {
     value ^= value >> 33;
     return value;
 }
+
+/*
+ * Implementation of block D6 (format). The contract, lifetime and usage are
+ * in format.h; this comment records what the code relies on.
+ *
+ * Lifetime and allocation. Call lifetime only. Nothing here allocates,
+ * frees or keeps a pointer. The writers fill a buffer the caller owns and
+ * sized beforehand; they never look past the count they were given or
+ * return, and write no terminator. The caller sizes the buffer with
+ * ta_dec_len (decimal) or from the digit count it passes (hex), so no size
+ * arithmetic happens here and none can overflow.
+ *
+ * Ordering. Both writers fill from the last digit backwards, so the most
+ * significant digit lands first and no scratch buffer or reversal is needed.
+ * Decimal peels one digit per division by 10; hex peels one nibble per shift
+ * by 4. ta_hex_write keeps only the low "count" digits of the value and
+ * pads on the left with zeros, which is what fixed-width fingerprints and
+ * IDs need.
+ *
+ * Case. ta_hex_write always writes lower case, which is the form persisted
+ * in IDs and fingerprints. ta_hex_digit takes the case as an argument for
+ * the callers that print upper case. ta_hex_digit_value accepts both and
+ * returns -1 for anything else, so parsing is case-insensitive while output
+ * is canonical.
+ *
+ * Complexity. Each function is O(digits); ta_hex_digit and
+ * ta_hex_digit_value are O(1).
+ */
 
 
 TA_PRIVATE uint32_t ta_dec_len(uint64_t value) {
