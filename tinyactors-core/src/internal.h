@@ -20,6 +20,7 @@
 #include "io_origin.h"
 #include "session.h"
 #include "event_name.h"
+#include "name_resolver.h"
 #include "event.h"
 #include "trace.h"
 #include "scxml_uri.h"
