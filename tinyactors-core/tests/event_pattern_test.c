@@ -1,3 +1,4 @@
+/* test: standalone */
 /*
  * Event descriptors (ADR 0060 section 5): a `*` segment anywhere matches
  * zero or more event segments, descriptors match by prefix, and matching is

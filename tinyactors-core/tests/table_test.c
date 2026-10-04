@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * Block B3 (src/table.h): the open addressing hash table.
  *

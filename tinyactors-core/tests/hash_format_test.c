@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * Blocks D5 (hash) and D6 (format): the hash functions and the number
  * formatters pin the values of the code they replaced.

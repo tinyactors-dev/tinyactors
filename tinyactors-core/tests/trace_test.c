@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * Tracing (ADR 0067): the null sink a system starts with, the mask that
  * keeps core from building records nobody wants, sampling, exact record

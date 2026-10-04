@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * Block D7 (src/trie.h): the trie of atoms.
  *

@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * Block A2 (src/layout.h): the layout builder. Arithmetic, alignment, the
  * start offset, zero counts and a failure at every edge of size_t, which is

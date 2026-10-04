@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * The null data model core ships (SCXML B.1, ADR 0057): its name and shape,
  * the In(state) predicate, compile-time refusal of every other expression,

@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * A session image holds only the events the actor holds (ADR 0038). An
  * actor's event slots are valid only while its flags say so: releasing an

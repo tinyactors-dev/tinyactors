@@ -1,3 +1,4 @@
+/* test: runtime */
 /*
  * No recursion in core (ADR 0060): charts nested 10,000 levels deep, in
  * states and in executable content, compile, export, register and run on a

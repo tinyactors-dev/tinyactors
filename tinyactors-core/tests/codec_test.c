@@ -1,3 +1,4 @@
+/* test: standalone */
 /*
  * Chart codecs (ADR 0053): the arena allocator a decode builds on, the media
  * type of literal content, which is part of a chart's revision and survives

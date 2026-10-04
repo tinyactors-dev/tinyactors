@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * ADR 0059: an actor ID is a public slot and generation. The split and join
  * functions round-trip, a released slot's generation moves on so the old ID

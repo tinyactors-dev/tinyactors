@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * Operator transitions and abandoning a macrostep (ADR 0082): a jump runs
  * through the normal engine as the first microstep of its macrostep, in

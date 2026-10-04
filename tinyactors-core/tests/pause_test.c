@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * Pausing inside executable content (ADR 0061): a run that pauses before
  * every unit of executable content is observably identical to one that

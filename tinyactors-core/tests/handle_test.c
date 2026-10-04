@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * Block E1 (handle.h): generation handles. Pure functions, so nothing here
  * allocates. Checks the packing at its edges (slot 0, the largest slot,

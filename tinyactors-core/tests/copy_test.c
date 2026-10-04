@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * Values leaving a session are copies (ADR 0097, SCXML C.1): the data of a
  * <send> to anything but #_internal, an <invoke>'s params and content expr,

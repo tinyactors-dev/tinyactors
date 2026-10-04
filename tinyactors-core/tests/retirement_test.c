@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * Definition retirement and generational definition IDs (ADR 0043, work
  * package 3), exercised through the public header and the amalgamation only.

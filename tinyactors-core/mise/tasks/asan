@@ -16,6 +16,7 @@
 require 'etc'
 require 'fileutils'
 require 'pathname'
+require_relative '../lib/test_programs'
 require 'toolchain'
 
 root = Pathname.new(__dir__).join('../..').expand_path
@@ -26,16 +27,13 @@ cc = Toolchain::Target.host.compile_command
 flags = %W[-I#{root.join("include")} -std=c11 -Wall -Wextra -Werror -pedantic -g -O1 -fno-omit-frame-pointer
            -fsanitize=address,undefined -fno-sanitize-recover=all]
 
-# Tests that link the amalgamation, and tests that include it themselves.
-WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_test null_datamodel_test pause_test microstep_start_test operator_test trace_test inspection_test
-                  retirement_test replay_test params_test copy_test scxml_uri_test send_id_test tree_test].freeze
-# Of the tests that include the amalgamation themselves, and so compile it
-# again, the ones about lifetimes run: actor lifetimes, and a compile that
-# runs out of memory at every allocation (span_test). The codec, export,
-# compile error and event pattern tests exercise pure functions.
-# test_allocator_test needs no runtime at all; it tests the allocator that
-# every one of these builds links (tests/test_allocator.c).
-STANDALONE = %w[layout_test handle_test actor_id_test session_id_test offload_test span_test hash_format_test test_allocator_test vec_test pool_test table_test trie_test].freeze
+# The tests marked `asan` on their first line (mise/lib/test_programs.rb): the
+# ones that link the amalgamation, and the ones that include it themselves.
+WITH_RUNTIME = TestPrograms.asan.select(&:runtime).map(&:name)
+# A test is marked `asan` when it is about lifetimes or allocation failure.
+# The codec, export, compile error and event pattern tests exercise pure
+# functions and are not.
+STANDALONE = TestPrograms.asan.reject(&:runtime).map(&:name)
 
 # A binary is rebuilt only when one of its inputs is newer: its test, the
 # amalgamation or a header. Tests build and run in parallel, one per CPU.

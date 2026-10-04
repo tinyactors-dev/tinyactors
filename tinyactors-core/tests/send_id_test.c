@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * The send ID text grammar (ADR 0048). Core owns it, so this is the one
  * place it is specified: the text a chart sees through `idlocation`,

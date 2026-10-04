@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * ta_tree / ta_tree_list: the public storage an importer uses to author a
  * specification tree at run time (include/tinyactors.h, "Storage for

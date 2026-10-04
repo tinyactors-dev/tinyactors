@@ -1,3 +1,4 @@
+/* test: standalone */
 /*
  * Compile errors (ADR 0058): every code a chart can reach, the path to a
  * fault under every list member of the spec, the subject and related text

@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * System parameters (ADR 0092): set once at creation and checked there;
  * buffers every run needs are allocated at creation, nested interpreter

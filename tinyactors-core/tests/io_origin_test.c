@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * I/O origins and the processor registry (ADR 0068).
  *

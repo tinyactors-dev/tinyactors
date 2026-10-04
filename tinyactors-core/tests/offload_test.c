@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * ADR 0074: a stable named actor offloads to bytes and loads back from
  * them, in the system that wrote them; and a host re-arms an actor's

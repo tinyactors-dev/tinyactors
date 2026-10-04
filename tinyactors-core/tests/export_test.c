@@ -1,3 +1,4 @@
+/* test: standalone */
 /*
  * ta_definition_export(): representative charts export to specs that
  * recompile to the same revision (ADR 0042), and the authored text the

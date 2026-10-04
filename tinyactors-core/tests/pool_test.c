@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * Block A5 (src/pool.h): the index pool.
  *

@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * Delayed sends live with their owner (ADR 0054), exercised through the
  * public header and the amalgamation only: inspection returns an actor's

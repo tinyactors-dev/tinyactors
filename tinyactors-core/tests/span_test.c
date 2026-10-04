@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * Source spans (ADR 0085): a spec's spans reach the definition's side table,
  * ta_definition_span() answers by kind and ID, export carries them back,

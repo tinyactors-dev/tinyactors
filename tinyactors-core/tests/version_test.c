@@ -1,3 +1,4 @@
+/* test: runtime */
 /*
  * The version: ta_version() answers TA_VERSION of the header the library
  * was built from, packed as (major << 16) | (minor << 8) | patch.

@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * ADR 0066: a session ID outlives residency. A session is named by the
  * runtime ID it was spawned with; load keeps it; reconstruct keeps it unless

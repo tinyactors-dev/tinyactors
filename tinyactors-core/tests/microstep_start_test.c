@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * Pausing at a microstep's start (ADR 0086): a resume with
  * `pause_at_microstep_start` selects the next microstep's transitions and

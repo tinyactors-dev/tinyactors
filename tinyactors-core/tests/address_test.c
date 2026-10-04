@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * An event's named origin outlives the actor that sent it (ADR 0065). A
  * named sender is destroyed while one of its events is still held: by an

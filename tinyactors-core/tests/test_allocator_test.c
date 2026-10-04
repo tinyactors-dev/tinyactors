@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * The test allocator (tests/test_allocator.h) is what every other core test
  * trusts to count and to fail, so it is tested first: its counters agree

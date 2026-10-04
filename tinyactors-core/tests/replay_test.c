@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * An actor is rebuilt by replaying its inputs before it is published (ADR
  * 0089), through the public header and the amalgamation only:

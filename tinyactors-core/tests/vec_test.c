@@ -1,3 +1,4 @@
+/* test: standalone asan */
 /*
  * Block B6 (src/vec.h): the growable tables, ta_vec and ta_columns.
  *

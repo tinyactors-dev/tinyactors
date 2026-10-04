@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * The SCXML target URI grammar (ADR 0044). Core owns it, so this is the one
  * place it is specified: every spelling of a `<send>` target and every URI

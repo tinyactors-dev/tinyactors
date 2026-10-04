@@ -1,3 +1,4 @@
+/* test: runtime asan */
 /*
  * Definition and actor inspection (ADR 0042, work package 1), exercised
  * through the public header and the amalgamation only.
