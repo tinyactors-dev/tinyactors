@@ -23,7 +23,8 @@ even when the suite passes; most have a gate that fails when it is broken.
 2. **All memory comes from the host's grant** (`tinyparse_memory`); `grow`
    hands back a new block, never a `realloc`, so nothing moves.
 3. **No global mutable state.** State lives on the engine or the parser; a
-   `static` is a `const` table or a function. `gate:no-statics`.
+   `static` is a `const` table or a function, in the library and in the
+   parsers it generates. `gate:no-statics`.
 4. **Depends on neither ax nor tinyactors.** No actor runtime, no symbol of
    one. `gate:vm-diff` checks the sources, `dist/self-contained` the binaries.
 5. **The public API is `include/tinyparse.h` alone,** every function declared
@@ -32,7 +33,8 @@ even when the suite passes; most have a gate that fails when it is broken.
    shares with the library is internal too. `gate:exports` holds an embedded
    artifact to exactly the API.
 6. **Deep input does not overflow the C stack.** The VM runs rule calls on an
-   arena-backed frame stack, and a generated parser is bounded the same way.
+   arena-backed frame stack; a generated parser recurses natively under a
+   depth guard (`TP_PARSER_DEPTH_LIMIT`) measured to fit a 512 KiB stack.
    `gate:vm-nocrash`, `gate:parser-nocrash`.
 7. **Every engine builds the same tree.** The VM with its rule memo off, on
    or adaptive, and every parser `tinyparse c` generates, agree byte for byte

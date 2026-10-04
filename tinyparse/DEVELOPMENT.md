@@ -53,24 +53,33 @@ workload) declares `--full`, which `mise run test --full` and the root's
   the json family, std.fence, the heredoc grammars and the corpora (`--full`:
   every JavaScript, TypeScript and shell input).
 - **vm-diff** — the VM with its rule memo adaptive and forced on against the
-  memo off, on the same inputs and every example grammar (`--full`: every corpus
-  input); and that the library calls no actor runtime.
+  memo off, on the same inputs, every example grammar and
+  `test/gates/backtrack.scm` (`--full`: every corpus input). That grammar is the
+  one that makes the memo replay a cached success and wakes the adaptive memo
+  mid-parse, and the gate checks both happened (the trace events `rule.replay`
+  and `rule.memo-on`); no corpus reaches either. It also checks that the library
+  calls no actor runtime.
 - **diag-diff** — the generated parser's diagnostics against the VM's on a
   broken-input corpus, so error reporting may be extended but never regressed.
 - **import-c**, **multiparser**, **nesting**, **bufferfriendly** — a grammar that
   imports another, two prefixed parsers in one program, generated parsers nested
-  through the language registry, and a generated parser fed a growing buffer:
-  each builds the VM's tree and the committed golden.
+  through the language registry, and a generated parser fed a growing buffer
+  (lists, and top-level atoms a chunk boundary splits): each builds the VM's
+  tree and the committed golden. The nesting driver also reports how many
+  regions each registered parser parsed, since the inject runtime's fallback
+  to the VM builds the same tree.
 - **exports** — a shared object built with `examples/embed/embed-lib.sh` exports
   its parsers' entries and the public API, nothing else (`--full`: at -O2).
-- **vm-nocrash**, **parser-nocrash** — the VM and a generated parser survive a
-  200,000-deep input under a 512 KiB C stack.
+- **vm-nocrash**, **parser-nocrash** — the VM and the generated std.json and
+  std.shell parsers survive a deeply nested input under a 512 KiB C stack
+  (`--full`: also the JavaScript and TSX parsers, whose frames are largest).
 - **reclaim**, **reuse-regression** — one engine across many parses stays at
   about one parse's memory and builds the same tree every time (`--full`: 300
   parses; std.tsx).
 - **no-statics** — no mutable static storage in the library: the ast-grep rule
   `tinyparse-no-static-mutable` (in the monorepo's `mise/ast-grep/rules/`) over
-  `src/*.c`, and no writable data symbol in `libtinyparse.a`.
+  `src/*.c`, and no writable data symbol in `libtinyparse.a` or in the parsers
+  `tinyparse c --parser-lib` generates for std.json, std.fence and std.shell.
 
 A change that alters the tree updates the goldens deliberately; a change that
 claims to be performance-only keeps every gate green unchanged. The project

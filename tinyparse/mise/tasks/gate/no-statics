@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-#MISE description="Gate: the library keeps no mutable state in static storage (ast-grep over src/*.c, and the archive's data symbols)"
-#MISE depends=["lib"]
+#MISE description="Gate: the library and the parsers it generates keep no mutable state in static storage (ast-grep over src/*.c, and the data symbols of the archive and of generated parser-lib objects)"
+#MISE depends=["lib", "cli"]
 # vim:ft=ruby
 
 # tinyparse keeps no process-global mutable state: two engines in one
@@ -16,6 +16,12 @@
 #      (no data, BSS or common symbol, local or global), which the rule
 #      cannot see: a global without `static`, or a const-qualified table of
 #      mutable pointers.
+#   3. Neither does the code the library generates: a parser emitted with
+#      `tinyparse c --parser-lib` (std.json; std.fence, with inject sites;
+#      std.shell, with deferred slots) and compiled is linked into a host's
+#      program, and two parses there share its statics just as they would
+#      the library's. (The standalone --parser program keeps its memory
+#      grant in a static buffer; it is a program, not a library.)
 
 require 'json'
 require_relative '../../lib/gate'
@@ -37,9 +43,20 @@ Tinyparse::Gate.run('no-statics', 'no-global-mutable-state gate') do |gate|
   puts "STATIC_MUTABLE=#{findings.size}"
   gate.ok("#{sources.size} sources declare no static mutable variable") if findings.empty?
 
-  library = Tinyparse.host_library
-  symbols = Toolchain::Tool[:llvm_nm].run(library.to_s).lines.map(&:split).select { |fields| fields.size == 3 }
-  writable = symbols.select { |_address, type, _name| type.match?(/\A[DdBbCc]\z/) }
-  writable.each { |_address, type, name| gate.fail("#{Tinyparse.relative(library)} defines writable data #{name} (#{type})") }
-  gate.ok("#{Tinyparse.relative(library)} defines no writable data (#{symbols.size} symbols)") if writable.empty?
+  objects = { Tinyparse.relative(Tinyparse.host_library) => Tinyparse.host_library }
+  grammars = %w[std.json std.fence std.shell]
+  generated = gate.each_parallel(grammars) do |grammar|
+    source = gate.scratch.join("#{grammar}.c")
+    gate.cli!('c', grammar, '--parser-lib', '--name', grammar.tr('.', '_'), '--out', source)
+    object = gate.scratch.join("#{grammar}.o")
+    Tinyparse.host.compile(source.to_s, into: object.to_s, flags: Tinyparse::Gate::COMPILED_FLAGS)
+    object
+  end
+  grammars.zip(generated).each { |grammar, object| objects["the generated #{grammar} parser-lib"] = object if object }
+  objects.each do |label, object|
+    symbols = Toolchain::Tool[:llvm_nm].run(object.to_s).lines.map(&:split).select { |fields| fields.size == 3 }
+    writable = symbols.select { |_address, type, _name| type.match?(/\A[DdBbCc]\z/) }
+    writable.each { |_address, type, name| gate.fail("#{label} defines writable data #{name} (#{type})") }
+    gate.ok("#{label} defines no writable data (#{symbols.size} symbols)") if writable.empty?
+  end
 end
