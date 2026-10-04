@@ -22,7 +22,8 @@
  * (TA_RING_MIN_RECORD), a multiple of 8, and starts 8-byte aligned. Bytes
  * 4..8 hold its size (u32) and 8..16 its seq (u64): the ring writes those two
  * fields at commit, so the producer fills the rest (kind and flags at 0..4,
- * and everything after 16) and must not rely on what it puts in 4..16. A pad
+ * and everything after 16) and must not rely on what it puts in 4..16. A
+ * record's kind is never 0: kind 0 is how the consumer recognizes a pad. A pad
  * is an 8-byte prefix with kind 0, flags 0 and size = the bytes up to the end
  * of the buffer; it carries no seq, and is never shown to the consumer.
  * Native byte order, as the rest of the record.

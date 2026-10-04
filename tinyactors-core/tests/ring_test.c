@@ -206,7 +206,9 @@ static void ring_at(ta_ring *ring, uint64_t at) {
 /* What a host consumer does with a ring it drains: store the tail. */
 static void host_release(ta_ring *ring, uint64_t bytes) { ring->shared->tail += bytes; }
 
+/* Fills what the producer owns: a nonzero kind (kind 0 is a pad) and the payload after the header. */
 static void fill_record(unsigned char *bytes, uint32_t size, uint32_t tag) {
+    bytes[0] = 0x08, bytes[1] = 0x02, bytes[2] = 0, bytes[3] = 0;
     for (uint32_t i = 16; i < size; i += 1) bytes[i] = (unsigned char)(tag * 13u + i);
 }
 
@@ -381,6 +383,168 @@ static void test_producer_corrupt_tail(void) {
     fixture_down(&f);
 }
 
+/* ---- consumer ---- */
+
+static void test_peek_release_basics(void) {
+    fixture f;
+    ta_rings_specs specs = specs_of(64, 32, TA_RING_LOSSLESS);
+    fixture_up(&f, &specs);
+    ta_ring *ring = &f.rings.ring[TA_RING_C2H];
+    ta_ring_record rec;
+    ta_ring_reservation res;
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_EMPTY);
+    ta_ring_release(ring); /* nothing peeked: harmless, cannot move the tail */
+    CHECK(ring->shared->tail == 0 && ring->tail == 0);
+    CHECK(ta_ring_reserve(ring, 24, &res) == TA_RING_OK);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_EMPTY); /* reserved is not committed */
+    fill_record(res.bytes, 24, 1);
+    ta_ring_commit(ring);
+    ta_ring_record again;
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK && rec.size == 24 && rec.seq == 1 && rec.gap == 0);
+    CHECK(record_ok(rec.bytes, 24, 1));
+    CHECK(ta_ring_peek(ring, &again) == TA_RING_OK && again.bytes == rec.bytes && again.seq == 1); /* idempotent */
+    CHECK(ring->shared->tail == 0);
+    ta_ring_release(ring);
+    CHECK(ring->shared->tail == 24);
+    ta_ring_release(ring); /* a second release has nothing to release */
+    CHECK(ring->shared->tail == 24);
+    /* Two more of 24: the second wraps (16 bytes left of 64), so a pad of 16 precedes it. It is never shown and takes no seq. */
+    CHECK(ta_ring_reserve(ring, 24, &res) == TA_RING_OK && res.seq == 2);
+    fill_record(res.bytes, 24, 2);
+    ta_ring_commit(ring);
+    CHECK(ta_ring_reserve(ring, 24, &res) == TA_RING_OK && res.seq == 3 && res.bytes == ring->data);
+    fill_record(res.bytes, 24, 3);
+    ta_ring_commit(ring);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK && rec.seq == 2 && rec.bytes == ring->data + 24);
+    ta_ring_release(ring);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK && rec.seq == 3 && rec.size == 24 && record_ok(rec.bytes, 24, 3));
+    ta_ring_release(ring);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_EMPTY);
+    fixture_down(&f);
+}
+
+/* Thousands of records across many wraps, random sizes, both sides real: seq is 1, 2, 3, ... and contents survive. */
+static void test_gap_free_across_wraps(void) {
+    static const uint32_t capacities[] = { 64, 72, 200, 1024 };
+    for (uint32_t ci = 0; ci < TA_ARRAY_COUNT(capacities); ci += 1) {
+        fixture f;
+        ta_rings_specs specs = specs_of(capacities[ci], capacities[ci] / 2 / 8 * 8, TA_RING_LOSSLESS);
+        fixture_up(&f, &specs);
+        ta_ring *ring = &f.rings.ring[TA_RING_H2C];
+        uint32_t max = specs.ring[0].max_record_bytes;
+        uint64_t rng = 12345 + ci, produced = 0, consumed = 0;
+        uint32_t sizes[4096];
+        for (uint32_t step = 0; step < 6000; step += 1) {
+            rng = rng * 6364136223846793005ull + 1442695040888963407ull;
+            uint32_t size = 16 + (uint32_t)((rng >> 33) % (max - 15));
+            ta_ring_reservation res;
+            ta_ring_status status = ta_ring_reserve(ring, size, &res);
+            if (status == TA_RING_OK) {
+                CHECK(res.seq == produced + 1);
+                fill_record(res.bytes, res.size, (uint32_t)res.seq);
+                sizes[produced % 4096] = res.size;
+                ta_ring_commit(ring);
+                produced += 1;
+                continue;
+            }
+            CHECK(status == TA_RING_FULL);
+            ta_ring_record rec;
+            /* Drain one or two: a full ring (or the lone pad) always frees up. */
+            for (uint32_t k = 0; k < 2; k += 1) {
+                ta_ring_status got = ta_ring_peek(ring, &rec);
+                if (got == TA_RING_EMPTY) break;
+                CHECK(got == TA_RING_OK && rec.seq == consumed + 1 && rec.gap == 0);
+                CHECK(rec.size == sizes[consumed % 4096] && record_ok(rec.bytes, rec.size, (uint32_t)rec.seq));
+                CHECK(rec.bytes >= ring->data && rec.bytes + rec.size <= ring->data + ring->capacity);
+                ta_ring_release(ring);
+                consumed += 1;
+            }
+        }
+        CHECK(produced > 500);
+        CHECK(ring->shared->next_seq == produced + 1);
+        fixture_down(&f);
+    }
+}
+
+/* A header written by hand, as a host would write into h2c. */
+static void put_header(ta_ring *ring, uint64_t position, uint32_t kind_flags, uint32_t size, uint64_t seq) {
+    memcpy(ring->data + position, &kind_flags, 4);
+    memcpy(ring->data + position + 4, &size, 4);
+    memcpy(ring->data + position + 8, &seq, 8);
+}
+
+/* A ring whose counters stand at `at`, with `bytes` committed by a hand-written header. */
+static ta_ring *scribbled(fixture *f, uint64_t at, uint64_t bytes, uint32_t kind_flags, uint32_t size, uint64_t seq) {
+    ta_rings_specs specs = specs_of(64, 32, TA_RING_LOSSLESS);
+    fixture_up(f, &specs);
+    ta_ring *ring = &f->rings.ring[TA_RING_H2C];
+    ring_at(ring, at);
+    put_header(ring, at % 64, kind_flags, size, seq);
+    ring->shared->head = at + bytes;
+    return ring;
+}
+
+static void test_corrupt_framing(void) {
+    ta_ring_record rec = { 0 };
+    fixture f;
+    ta_ring *ring;
+    /* The well-framed baseline. */
+    ring = scribbled(&f, 0, 32, 0x0208, 32, 1);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK && rec.size == 32);
+    fixture_down(&f);
+    /* Record sizes: 0, 8, 12 (not a multiple of 8), beyond what is committed, beyond the buffer end. */
+    static const uint32_t bad_sizes[] = { 0, 8, 12, 40, 72, 0xFFFFFFF8u };
+    for (uint32_t i = 0; i < TA_ARRAY_COUNT(bad_sizes); i += 1) {
+        ring = scribbled(&f, 0, 32, 0x0208, bad_sizes[i], 1);
+        CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+        fixture_down(&f);
+    }
+    ring = scribbled(&f, 48, 32, 0x0208, 24, 1); /* 24 bytes at offset 48 run past the end (16 left) */
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    fixture_down(&f);
+    ring = scribbled(&f, 0, 24, 0x0208, 32, 1); /* size 32 but only 24 committed */
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    fixture_down(&f);
+    ring = scribbled(&f, 0, 4, 0x0208, 32, 1); /* head not a multiple of 8 */
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    fixture_down(&f);
+    /* Pads: size must be exactly the rest of the buffer, flags zero. */
+    ring = scribbled(&f, 32, 32, 0, 16, 1); /* 32 left, pad says 16 */
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    fixture_down(&f);
+    ring = scribbled(&f, 32, 40, 0, 40, 1); /* pad runs past the end */
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    fixture_down(&f);
+    ring = scribbled(&f, 32, 32, 0x10000, 32, 1); /* kind 0 with flags set */
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    fixture_down(&f);
+    ring = scribbled(&f, 32, 32, 0, 32, 1); /* a pad and nothing behind it: released, then empty */
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_EMPTY && ring->shared->tail == 64);
+    fixture_down(&f);
+    /* Seq: a lossless ring starts at 1 and has no holes, repeats or reversals. */
+    ring = scribbled(&f, 0, 32, 0x0208, 32, 2); /* a hole */
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    fixture_down(&f);
+    ring = scribbled(&f, 0, 32, 0x0208, 32, 0);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    fixture_down(&f);
+    ring = scribbled(&f, 0, 32, 0x0208, 32, 1);
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK);
+    ta_ring_release(ring);
+    put_header(ring, 32, 0x0208, 32, 1); /* a repeat of seq 1 where 2 is expected */
+    ring->shared->head = 64;
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    /* Head: backwards, past tail + capacity, or not aligned. */
+    ring->shared->head = 24;
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    ring->shared->head = 32 + 64 + 8;
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    ring->shared->head = 36;
+    CHECK(ta_ring_peek(ring, &rec) == TA_RING_CORRUPT);
+    CHECK(ring->tail == 32 && ring->peer_head == 64); /* the last valid head is kept */
+    fixture_down(&f);
+}
+
 int main(void) {
     test_layout();
     test_init();
@@ -390,6 +554,9 @@ int main(void) {
     test_sizes_busy_abandon();
     test_lossless_full();
     test_producer_corrupt_tail();
+    test_peek_release_basics();
+    test_gap_free_across_wraps();
+    test_corrupt_framing();
     if (failures != 0) {
         fprintf(stderr, "ring_test: %d check(s) failed\n", failures);
         return 1;

@@ -174,3 +174,90 @@ void ta_ring_abandon(ta_ring *ring) {
     ring->pending_size = 0;
     ring->pending_pad = 0;
 }
+
+/* Native-order loads of the header cells the ring reads (the stores are above). */
+static uint32_t get_u32(const unsigned char *at) {
+    uint32_t value;
+    ta_mem_copy(&value, at, sizeof value);
+    return value;
+}
+
+static uint64_t get_u64(const unsigned char *at) {
+    uint64_t value;
+    ta_mem_copy(&value, at, sizeof value);
+    return value;
+}
+
+/*
+ * refresh_peer_head reads the producer's head from the control block. On h2c
+ * the host writes it, so it is untrusted: it must not go back, must not run
+ * more than one capacity ahead of our tail, and must be a multiple of 8
+ * (every record and pad is). Only distances from our tail are compared (I1).
+ */
+static bool refresh_peer_head(ta_ring *ring) {
+    uint64_t head = ring->shared->head;
+    uint64_t seen = ring->peer_head - ring->tail;
+    uint64_t distance = head - ring->tail;
+    if (distance < seen || distance > ring->capacity || head % TA_RING_ALIGN != 0) {
+        return false;
+    }
+    ring->peer_head = head;
+    return true;
+}
+
+/*
+ * ta_ring_peek: see ring.h. Every length read from the ring is checked
+ * against what is committed and the end of the buffer before it is used, so
+ * a hostile h2c record can make peek answer CORRUPT but never read outside
+ * the data area. While a record is peeked the head is not re-read, so a
+ * second peek is the same record.
+ */
+ta_ring_status ta_ring_peek(ta_ring *ring, ta_ring_record *out) {
+    if (ring->peeked_size == 0 && !refresh_peer_head(ring)) {
+        return TA_RING_CORRUPT;
+    }
+    for (;;) {
+        uint64_t available = ring->peer_head - ring->tail;
+        if (available == 0) {
+            return TA_RING_EMPTY;
+        }
+        if (available < 8) {
+            return TA_RING_CORRUPT; /* not even a pad prefix is committed */
+        }
+        uint64_t position = ring->tail % ring->capacity;
+        uint64_t to_end = ring->capacity - position;
+        const unsigned char *record = ring->data + position;
+        uint32_t size = get_u32(record + 4);
+        if (record[0] == 0 && record[1] == 0) {
+            /* A pad covers exactly the rest of the buffer: release it and read on from offset 0. */
+            if (record[2] != 0 || record[3] != 0 || size != to_end || size > available) {
+                return TA_RING_CORRUPT;
+            }
+            ring->tail += size;
+            ring->shared->tail = ring->tail;
+            continue;
+        }
+        if (size < TA_RING_MIN_RECORD || size % TA_RING_ALIGN != 0 || size > to_end || size > available) {
+            return TA_RING_CORRUPT;
+        }
+        uint64_t seq = get_u64(record + 8);
+        if (seq < ring->expected_seq || (seq > ring->expected_seq && ring->mode == TA_RING_LOSSLESS)) {
+            return TA_RING_CORRUPT; /* a repeat, going back, or a hole in a gap-free ring */
+        }
+        ring->peeked_size = size;
+        ring->peeked_seq = seq;
+        *out = (ta_ring_record){ .bytes = record, .size = size, .seq = seq, .gap = seq - ring->expected_seq };
+        return TA_RING_OK;
+    }
+}
+
+/* ta_ring_release: see ring.h. */
+void ta_ring_release(ta_ring *ring) {
+    if (ring->peeked_size == 0) {
+        return;
+    }
+    ring->tail += ring->peeked_size;
+    ring->expected_seq = ring->peeked_seq + 1;
+    ring->shared->tail = ring->tail;
+    ring->peeked_size = 0;
+}
