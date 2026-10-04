@@ -60,7 +60,8 @@
  * op's transient peak), heldBytes (live while the op holds its result),
  * allocsPerOp, freesPerOp, allocatedBytesPerOp, and retainedBytes, which
  * must be 0. Time: a warm-up, a calibration that doubles the iterations
- * until a sample takes --sample-ms, then --samples samples; the median ns/op
+ * until a sample takes --sample-ms and holds at least 8 ops (or takes ten
+ * times --sample-ms), then --samples samples; the median ns/op
  * is the headline, with the best, p25, p75 and spread = (p75 - p25)/median.
  *
  *   bench [--jsonl] [--only=NAME[,NAME]] [--size=N] [--filter=PREFIX]
@@ -1248,6 +1249,8 @@ static double nearest_rank(const double *sorted, uint32_t count, uint32_t p) {
     return sorted[rank - 1];
 }
 
+enum { MIN_OPS = 8, SLOW_SAMPLE = 10 };
+
 static bool measure_time(bench_run *run, const bench_options *options, bench_result *result) {
     uint64_t sample_ns = (uint64_t)options->sample_ms * 1000000u;
     uint64_t start = now_ns();
@@ -1256,19 +1259,21 @@ static bool measure_time(bench_run *run, const bench_options *options, bench_res
         if (!do_op(run)) return false;
         warmed++;
     }
+    /* A sample takes at least --sample-ms and, unless that makes it longer
+     * than SLOW_SAMPLE samples' worth, MIN_OPS ops: one or two ops of a few
+     * milliseconds each leave a sample to the allocator and page faults. */
     uint64_t iterations = 1;
     uint64_t ns = 0;
     for (;;) {
         if (!time_ops(run, iterations, &ns)) return false;
-        if (ns >= sample_ns) break;
+        if (ns >= sample_ns && (iterations >= MIN_OPS || ns >= sample_ns * SLOW_SAMPLE)) break;
         iterations *= 2;
     }
+    /* Long samples: as many as fit in --max-case-s, and at least 5. */
     uint32_t count = options->samples;
-    if (iterations == 1) {
-        uint64_t cap = (uint64_t)options->max_case_s * 1000000000u / (ns == 0 ? 1 : ns);
-        if (cap < 5) cap = 5;
-        if (cap < count) count = (uint32_t)cap;
-    }
+    uint64_t cap = (uint64_t)options->max_case_s * 1000000000u / (ns == 0 ? 1 : ns);
+    if (cap < 5) cap = 5;
+    if (cap < count) count = (uint32_t)cap;
     double *samples = malloc(sizeof *samples * count);
     if (samples == NULL) return fail(run, "out of memory");
     for (uint32_t i = 0; i < count; i++) {
