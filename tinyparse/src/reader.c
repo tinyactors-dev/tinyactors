@@ -11,7 +11,7 @@
 
 /* ** The reader's mutable cursor over the source bytes. */
 typedef struct pp_reader {
-    ax_arena          *arena;
+    pp_arena          *arena;
     const uint8_t     *bytes;
     uint32_t           length;
     uint32_t           position;
@@ -52,7 +52,7 @@ static void pp_skip_trivia(pp_reader *reader)
 /* ** Allocate a fresh form of the given kind at the current source offset. */
 static pp_form *pp_form_new(pp_reader *reader, pp_form_kind kind)
 {
-    pp_form *form = (pp_form *)ax_alloc(reader->arena, sizeof *form);
+    pp_form *form = (pp_form *)pp_alloc(reader->arena, sizeof *form);
     if (form == 0) {
         reader->ok = 0;
         reader->error = "out of memory reading grammar";
@@ -101,7 +101,7 @@ static pp_form *pp_read_list(pp_reader *reader)
                 return 0;
             if (count == capacity) {
                 uint32_t new_capacity = capacity == 0 ? 4 : capacity * 2;
-                pp_form **grown = (pp_form **)ax_alloc(
+                pp_form **grown = (pp_form **)pp_alloc(
                     reader->arena, new_capacity * sizeof *grown);
                 uint32_t i;
                 if (grown == 0) {
@@ -140,7 +140,7 @@ static pp_form *pp_read_string(pp_reader *reader)
 
     /* Worst case the decoded string is no longer than the remaining input. */
     cap = reader->length - reader->position + 1;
-    out = (uint8_t *)ax_alloc(reader->arena, cap == 0 ? 1 : cap);
+    out = (uint8_t *)pp_alloc(reader->arena, cap == 0 ? 1 : cap);
     if (out == 0) {
         reader->ok = 0;
         reader->error = "out of memory reading string";
@@ -219,7 +219,7 @@ static pp_form *pp_read_hex(pp_reader *reader)
         reader->position++;
 
     cap = reader->length - reader->position + 1;
-    out = (uint8_t *)ax_alloc(reader->arena, cap == 0 ? 1 : cap);
+    out = (uint8_t *)pp_alloc(reader->arena, cap == 0 ? 1 : cap);
     if (out == 0) {
         reader->ok = 0;
         reader->error = "out of memory reading byte literal";
@@ -356,7 +356,7 @@ static pp_form *pp_read_form(pp_reader *reader)
 }
 
 /* ** Read a whole .scm source into a vector of top-level forms. */
-pp_read_result pp_read(ax_arena *arena, pocketparse_string source)
+pp_read_result pp_read(pp_arena *arena, pocketparse_string source)
 {
     pp_reader      reader;
     pp_read_result result;
@@ -382,7 +382,7 @@ pp_read_result pp_read(ax_arena *arena, pocketparse_string source)
             break;
         if (count == capacity) {
             uint32_t new_capacity = capacity == 0 ? 8 : capacity * 2;
-            pp_form **grown = (pp_form **)ax_alloc(
+            pp_form **grown = (pp_form **)pp_alloc(
                 arena, new_capacity * sizeof *grown);
             uint32_t i;
             if (grown == 0) {

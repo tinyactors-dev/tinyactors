@@ -4,14 +4,46 @@
 ** Everything declared here is private to the library; none of it appears in the
 ** public header. The modules (reader, grammar, token, parse, tree, diag) share
 ** these structs and helpers. Like the rest of src/ (except cli.c) this file is
-** freestanding: it depends only on pocketparse.h and the consumed ax.h, never
-** on libc. All memory comes from ax arenas carved from the host grant.
+** freestanding: it depends only on pocketparse.h, never on libc. All memory
+** comes from arenas carved from the host grant (arena.c).
 */
 #ifndef POCKETPARSE_INTERNAL_H
 #define POCKETPARSE_INTERNAL_H
 
 #include "pocketparse.h"
-#include "ax.h"
+
+/* ** The region allocator (arena.c). The host's grant is owned by one pool; an
+** arena bump-allocates over a chain of chunks drawn from that pool and is reset
+** as a whole, never freed object by object. Every hand-out is 16-byte aligned,
+** pp_alloc zeroes it and pp_alloc_raw does not, and NULL is the only
+** out-of-memory signal. An arena never reallocates in place, so a growing array
+** allocates a fresh, larger block and copies. A child arena shares its parent's
+** pool: resetting it returns its chunks to the pool's free list for reuse, which
+** is how one engine runs many parses without accreting their trees. */
+typedef struct pp_pool  pp_pool;
+typedef struct pp_chunk pp_chunk;
+typedef struct pp_arena {
+    pp_pool  *pool;
+    pp_chunk *head;     /* the chunk being filled; older ones chained behind */
+} pp_arena;
+
+/* ** The root arena over a host grant, carved from the front of the grant;
+** NULL when the grant cannot hold the bookkeeping plus one chunk. */
+pp_arena *pp_arena_open(pocketparse_memory memory);
+
+/* ** A child arena on the parent's pool (its bookkeeping comes from the parent,
+** which must outlive it); NULL on a spent grant. */
+pp_arena *pp_arena_child(pp_arena *parent);
+
+/* ** Return every chunk of the arena to its pool's free list; the arena stays
+** usable and everything allocated from it becomes invalid. */
+void pp_arena_reset(pp_arena *arena);
+
+/* ** n zeroed, aligned bytes from the arena, or NULL. */
+void *pp_alloc(pp_arena *arena, size_t n);
+
+/* ** n aligned bytes from the arena, NOT zeroed, or NULL. */
+void *pp_alloc_raw(pp_arena *arena, size_t n);
 
 /* ** One installed host binding: the public binding record stored verbatim. The
 ** name bytes are copied into the engine arena so the binding outlives the host's
@@ -69,7 +101,7 @@ typedef struct pp_language_slot {
 ** one is installed, builds a message and calls its emit -- otherwise it is a cheap
 ** no-op so the hot path pays nothing for tracing nobody asked for. */
 struct pocketparse_engine {
-    ax_arena                   *arena;
+    pp_arena                   *arena;
     pocketparse_string          fault;
     uint32_t                    flags;
     pocketparse_module_resolver module_resolve;
@@ -83,37 +115,6 @@ struct pocketparse_engine {
     pp_param                   *params;
     uint32_t                    param_count;
     uint32_t                    param_capacity;
-    /* W59 in-process bytecode VM selector. Private to the library; NOT in the
-    ** public flags word, which the host owns. When engine_use_vm_actor is off and
-    ** this is set, pocketparse_finish runs the bytecode VM in process. The CLI sets
-    ** it through pp_engine_select_vm when POCKETPARSE_ENGINE=vm; since W14-5 retired
-    ** the recursive IR interpreter, the in-process VM is also the fallback when no ax
-    ** system could be opened. */
-    int                         engine_use_vm;
-    /* W60 actor-hosted VM selector. Private, like engine_use_vm. When nonzero
-    ** pocketparse_finish runs the SAME bytecode VM, but inside an ax actor: the
-    ** dispatch loop runs in one transition action driven by input.chunk /
-    ** input.end events the parser actor receives. W64 makes this the LIBRARY
-    ** default: pocketparse_open sets it whenever it could open an ax system, so
-    ** every consumer of the public API parses on ax with no flag set. It is
-    ** cleared (through pp_engine_select_vm_actor) only to select the in-process VM
-    ** (POCKETPARSE_ENGINE=vm). On a grant too small to host a system it stays zero
-    ** and the engine falls back to the in-process VM (pp_execute_vm). */
-    int                         engine_use_vm_actor;
-    /* W60 ax system, opened over a partition of the host grant alongside the
-    ** engine arena. The actor-hosted VM (vmactor.c) spawns its parser actor here.
-    ** NULL when the grant was too small to host a system as well as the arena, in
-    ** which case the actor path falls back to the in-process VM. The reference and
-    ** plain-VM executors never touch it. */
-    ax_sys                     *system;
-    /* W64 whether the parser_actor spec has been defined on THIS engine's system.
-    ** The spec is defined lazily on first use (pp_parser_actor_ensure). It is
-    ** tracked per engine -- not in a process-global static -- because a long-lived
-    ** host (the benchmark harness, an embedder) re-opens the engine many times in
-    ** one process, each open a FRESH ax system with nothing defined on it; a
-    ** process-global guard would skip the define on every system after the first,
-    ** so every later parse would silently fall back off the actor path. */
-    int                         parser_actor_defined;
     /* W67 rule-memo force override (host-set, since the freestanding core cannot
     ** read the environment). 0 = adaptive (the default: the memo wakes only when a
     ** parse goes super-linear); 1 = always on from the first call; 2 = off. The CLI
@@ -150,45 +151,6 @@ void pp_engine_set_parser_prefix(pocketparse_engine *engine, const char *prefix)
 
 /* ** Set the rule-memo force override (see vm_rule_memo_force). Private, host-set. */
 void pp_engine_force_rule_memo(pocketparse_engine *engine, int mode);
-
-/* ** Select the in-process bytecode VM (nonzero) for subsequent parses on this
-** engine. Private, never in the public header, so the public API stays frozen;
-** the CLI calls it when the environment variable POCKETPARSE_ENGINE=vm is set.
-** Lives in engine.c. */
-void pp_engine_select_vm(pocketparse_engine *engine, int use_vm);
-
-/* ** Select the actor-hosted bytecode VM (nonzero) or leave it off (zero) for
-** subsequent parses on this engine. Private, never in the public header, so the
-** public API stays frozen; the CLI calls it when POCKETPARSE_ENGINE=vm-ax. Lives
-** in engine.c. */
-void pp_engine_select_vm_actor(pocketparse_engine *engine, int use_vm_actor);
-
-/* ** Run the compiled grammar over the buffered input by driving the bytecode VM
-** inside an ax actor: the engine's ax_sys spawns a parser actor, the parser's
-** input arrives as input.chunk / input.end events, and the dispatch loop runs in
-** one transition action. The tree it builds is byte-identical to the in-process
-** pp_execute_vm. Lives in vmactor.c. Falls back to the in-process VM if
-** the engine has no ax system. */
-pocketparse_result pp_execute_vm_actor(pocketparse_parser *parser);
-
-/* ** Spawn the parser actor for this parser on the engine's ax system and tell it
-** which host parser it drives. Returns 1 on success (actor_pid set), 0 if no
-** system is available or the spawn failed (the actor path then falls back to the
-** in-process VM). Lives in vmactor.c; called from pocketparse_parser_new on the
-** actor path. */
-int pp_parser_actor_spawn(pocketparse_parser *parser);
-
-/* ** Post one input.chunk event to the parser actor and pump the system. The
-** action buffers the bytes into the parser before this returns. Lives in
-** vmactor.c; called from pocketparse_push on the actor path. */
-pocketparse_result pp_parser_actor_push(pocketparse_parser *parser,
-                                        pocketparse_string bytes);
-
-/* ** Report whether the actor-hosted VM action genuinely ran for this parser:
-** nonzero only after the parser actor's input.end action executed the dispatch
-** loop. The CLI prints this as the structural proof that the parse ran on ax.
-** Lives in vmactor.c. */
-int pp_parser_actor_ran(const pocketparse_parser *parser);
 
 /* ** Test whether a grammar parameter is set (truthy) on the engine. Returns 1
 ** when a parameter of that name is set, 0 otherwise (unknown or cleared). The
@@ -258,7 +220,7 @@ typedef struct pp_read_result {
 } pp_read_result;
 
 /* ** Read .scm source bytes into a form tree, allocating from the arena. */
-pp_read_result pp_read(ax_arena *arena, pocketparse_string source);
+pp_read_result pp_read(pp_arena *arena, pocketparse_string source);
 
 /* ** Token/rule IR opcodes. A single node type expresses both token patterns
 ** (literals, classes, repeats) and rule bodies (seq/choice/repeat/field), so
@@ -330,7 +292,7 @@ typedef struct pp_ir {
     ** when the pattern is nullable or its lead byte cannot be pinned down (a host
     ** (class NAME), `any`, or a `not` body), in which case dispatch must not
     ** prune; otherwise first_byte_set holds the 256-bit set of bytes the pattern
-    ** can begin with. Zeroed by ax_alloc on both the compile and .ppg-load paths,
+    ** can begin with. Zeroed by pp_alloc on both the compile and .ppg-load paths,
     ** so the lazy guard is sound without explicit initialisation. */
     uint8_t          first_byte_state;
     uint8_t          first_byte_any;
@@ -453,7 +415,7 @@ typedef struct pp_token_program {
 ** backtrack and return stacks instead of the C call stack. The ISA is structural:
 ** each IR combinator lowers to a short, fixed instruction sequence with a
 ** well-defined save/restore order, so the concrete syntax tree is byte-identical
-** across the in-process VM and the actor-hosted VM (vm-diff) and the C-compiled
+** between the VM and the C-compiled
 ** parser (cc-diff), all anchored by the conformance suite. Terminals call the
 ** SAME token matcher (pp_token_match_memo) and the SAME tree builder
 ** (pp_tree_builder_*); only dispatch differs between the lowered forms.
@@ -527,7 +489,7 @@ typedef struct pp_instruction {
 ** structure is built once per parse by pp_compile_program and read-only during
 ** dispatch. */
 typedef struct pp_program {
-    ax_arena       *arena;
+    pp_arena       *arena;
     pp_instruction *instructions;
     uint32_t        instruction_count;
     uint32_t        instruction_capacity;
@@ -543,7 +505,7 @@ typedef struct pp_program {
 ** allocation failure. The lowering reuses the W44 compile-time symbol ids cached
 ** in the IR and the W46 first-sets (consulted from the IR nodes at dispatch
 ** time), so prediction and the no-intern guarantee carry over unchanged. */
-pp_program *pp_compile_program(ax_arena *arena,
+pp_program *pp_compile_program(pp_arena *arena,
                                const pocketparse_grammar *grammar,
                                uint32_t start_symbol);
 
@@ -558,9 +520,8 @@ void pp_count_tail_calls(const pp_program *program,
 
 /* ** Run the compiled grammar over a parser's buffered input via the in-process
 ** bytecode VM, building the concrete syntax tree. This is the engine (W14-5
-** retired the recursive IR interpreter); the tree is byte-identical across the
-** in-process VM, the actor-hosted VM (ci/pocketparse-vm-diff.sh) and the
-** C-compiled parser (ci/pocketparse-cc-diff.sh), with the conformance suite as
+** retired the recursive IR interpreter); the tree is byte-identical between
+** the VM and the C-compiled parser (ci/pocketparse-cc-diff.sh), with the conformance suite as
 ** the standing correctness anchor. Returns POCKETPARSE_OK on a full parse or
 ** POCKETPARSE_SYNTAX_ERROR (with a diagnostic) on failure. */
 pocketparse_result pp_execute_vm(pocketparse_parser *parser);
@@ -589,7 +550,7 @@ typedef struct pp_match_slot {
 ** scoped to a single parse and sized to the input length, keeping memory
 ** O(input).
 **
-** ZEROING (W15-1). The slot table dominated the parse: ax_alloc clears every
+** ZEROING (W15-1). The slot table dominated the parse: pp_alloc clears every
 ** block, and the slots array is ~24 bytes per slot sized to input*4, so a 6 KB
 ** parse memset ~768 KB it then overwrites -- the single largest cost in the
 ** profile. The fix splits occupancy from data. `slots' is allocated RAW (its
@@ -602,7 +563,7 @@ typedef struct pp_match_slot {
 ** (capacity 0) disables memoisation -- the matcher then behaves exactly as
 ** before. */
 typedef struct pp_match_memo {
-    ax_arena      *arena;
+    pp_arena      *arena;
     pp_match_slot *slots;     /* raw (not zeroed): read only when live[i] != 0 */
     uint8_t       *live;      /* zeroed occupancy column, one byte per slot     */
     uint32_t       mask;      /* capacity - 1 (capacity is a power of two) */
@@ -613,7 +574,7 @@ typedef struct pp_match_memo {
 /* ** Initialise an empty memo bound to `arena' and sized for an input of
 ** `input_length' bytes. Allocates the slot table; on allocation failure the memo
 ** is left with capacity 0, which simply disables memoisation. */
-void pp_match_memo_init(pp_match_memo *memo, ax_arena *arena,
+void pp_match_memo_init(pp_match_memo *memo, pp_arena *arena,
                         uint32_t input_length);
 
 /* ** Per-position "no extras here" memo (Phase 10). Backtracking revisits the
@@ -644,7 +605,7 @@ void pp_match_memo_init(pp_match_memo *memo, ax_arena *arena,
 typedef struct pp_extras_memo {
     uint8_t  *marks;          /* one byte per input offset (length+1 entries) */
     uint32_t  length;         /* number of entries (input_length + 1)         */
-    ax_arena *arena;          /* arena to allocate marks from (lazily)        */
+    pp_arena *arena;          /* arena to allocate marks from (lazily)        */
     uint32_t  pending_length; /* input length the marks size to when ensured  */
 } pp_extras_memo;
 
@@ -655,7 +616,7 @@ typedef struct pp_extras_memo {
 ** lazily when the parse goes super-linear (the same wake as the rule memo); until
 ** then marks is NULL, which disables the memo and pp_consume_extras behaves exactly
 ** as before -- the memo is a pure cache, so the verdict is byte-identical. */
-void pp_extras_memo_init(pp_extras_memo *memo, ax_arena *arena,
+void pp_extras_memo_init(pp_extras_memo *memo, pp_arena *arena,
                          uint32_t input_length);
 
 /* ** Allocate the extras memo's zeroed marks array (lazy; see pp_extras_memo_init).
@@ -802,17 +763,17 @@ typedef struct pp_param_stack {
 } pp_param_stack;
 
 /* ** Append one captured item onto a slot's FIFO, growing the arena-backed item
-** array by doubling (ax arenas never realloc, so growth allocates a fresh, larger
+** array by doubling (arenas never realloc, so growth allocates a fresh, larger
 ** block and copies; the old block is abandoned). The first push allocates an
 ** initial block of 4 items. Returns 0 only on allocation failure
 ** (lex-goal-implementation, "Slot frame"). */
-int pp_slot_push(ax_arena *arena, pp_slot_frame *slot, pp_deferred_item item);
+int pp_slot_push(pp_arena *arena, pp_slot_frame *slot, pp_deferred_item item);
 
 /* ** Push an instantiated pattern onto a parametrized goal entry's stack. The
-** patterns array is arena-allocated and grows by doubling (ax arenas never
+** patterns array is arena-allocated and grows by doubling (arenas never
 ** realloc: a new block is allocated and the existing pointers copied). Returns 0
 ** only on allocation failure (lex-goal-implementation, "Goal-table stack"). */
-int pp_param_stack_push(ax_arena *arena, pp_param_stack *stack, const pp_ir *pattern);
+int pp_param_stack_push(pp_arena *arena, pp_param_stack *stack, const pp_ir *pattern);
 
 /* ** Pop the top pattern (decrement depth; the arena block stays). A pop on an
 ** empty stack is a no-op (defensive). */
@@ -822,7 +783,7 @@ void pp_param_stack_pop(pp_param_stack *stack);
 ** pp_param_stack per parametrized goal entry (grammar->param_goal_count). Writes
 ** the array to *out (0 when the grammar has no parametrized goals). Returns 0 only
 ** on allocation failure (lex-goal-implementation, "Pattern instantiation"). */
-int pp_param_stacks_alloc(ax_arena *arena, const pocketparse_grammar *grammar,
+int pp_param_stacks_alloc(pp_arena *arena, const pocketparse_grammar *grammar,
                           pp_param_stack **out);
 
 /* ** Allocate `slot_count' zeroed (slot_name == PP_NO_SYMBOL) pp_slot_frame entries
@@ -832,7 +793,7 @@ int pp_param_stacks_alloc(ax_arena *arena, const pocketparse_grammar *grammar,
 ** which the caller treats as PP_VM_OOM). slot_count must be > 0. The unified scope
 ** stack is what (defer …)/(parse-deferred …) and the slot-save rollback scan
 ** (lex-goal-implementation, Option A). */
-pp_slot_frame *pp_slot_scope_push(pocketparse_parser *parser, ax_arena *arena,
+pp_slot_frame *pp_slot_scope_push(pocketparse_parser *parser, pp_arena *arena,
                                   uint32_t slot_count);
 
 /* ** Pop the innermost active slot scope (the matching pp_slot_scope_push). A pop on
@@ -848,14 +809,14 @@ void pp_slot_scope_pop(pocketparse_parser *parser);
 ** lowers into it lazily). Returns 0 on a bad index or any allocation failure --
 ** callers degrade to no-pattern -> no-match (lex-goal-implementation,
 ** "Pattern instantiation"). Defined in token.c next to pp_compile_pattern. */
-const pp_ir *pp_param_instantiate(ax_arena *arena, const pocketparse_grammar *grammar,
+const pp_ir *pp_param_instantiate(pp_arena *arena, const pocketparse_grammar *grammar,
                                   uint32_t rule_index, const uint8_t *text,
                                   uint32_t text_len);
 
 /* ** A dense, arena-backed string-interning table. Names map to small ids; the
 ** name bytes are copied into the arena so they outlive the grammar source. */
 typedef struct pp_interner {
-    ax_arena          *arena;
+    pp_arena          *arena;
     pocketparse_string *names;
     uint32_t           count;
     uint32_t           capacity;
@@ -864,7 +825,7 @@ typedef struct pp_interner {
 /* ** A compiled grammar: the interner (shared with the tree for symbol names),
 ** the token and rule tables, the extras policy, and the start rule symbol. */
 struct pocketparse_grammar {
-    ax_arena      *arena;
+    pp_arena      *arena;
     pp_interner    interner;
     /* W17-3 grammar name from the source `(grammar NAME ...)' form (e.g. "json",
     ** "javascript"). The emitter derives the DEFAULT symbol prefix from it, so two
@@ -1001,7 +962,7 @@ typedef struct pp_node {
 /* ** The concrete syntax tree: a contiguous node array plus the interner that
 ** names kinds and fields. root is the index of the Source node. */
 struct pocketparse_tree {
-    ax_arena         *arena;
+    pp_arena         *arena;
     const pp_interner *interner;
     pp_node          *nodes;
     uint32_t          node_count;
@@ -1011,7 +972,7 @@ struct pocketparse_tree {
 
 /* ** A growable node builder used while parsing, then frozen into a tree. */
 typedef struct pp_tree_builder {
-    ax_arena *arena;
+    pp_arena *arena;
     pp_node  *nodes;
     uint32_t  count;
     uint32_t  capacity;
@@ -1025,7 +986,7 @@ uint32_t pp_tree_builder_push(pp_tree_builder *builder, uint32_t kind,
 
 /* ** A diagnostic collector. Diagnostics and their labels live in the arena. */
 typedef struct pp_diag_list {
-    ax_arena               *arena;
+    pp_arena               *arena;
     pocketparse_diagnostic *items;
     uint32_t                count;
     uint32_t                capacity;
@@ -1068,6 +1029,49 @@ typedef struct pp_vm_sink {
     uint32_t  parent;
 } pp_vm_sink;
 
+/* ** The parser lifecycle: a four-state machine that orchestrates one parse
+** around the executor (the bytecode VM, or a generated parser's run function).
+**
+**                  push ok                     push fails
+**   (parser_new) ACCEPTING --------> ACCEPTING ----------> DROPPED
+**                     |                                      |
+**                     | finish / run                         | finish / run
+**                     v                                      v
+**                 FINISHED                                FAILED
+**     (the executor ran over the buffer;       (the executor never ran; finish
+**      the tree and diagnostics are built)      returns the push's failure)
+**
+** ACCEPTING buffers each pushed chunk into the parser's arena. A push that cannot
+** buffer its bytes moves the parser to DROPPED and records the result in
+** push_failed; later pushes still buffer, but the input is known incomplete, so
+** finishing never runs the executor over it. FINISHED and FAILED are final: a
+** push there is INVALID, and a second finish reports whether a tree was built.
+** The machine is plain C over the parser struct -- the transitions live in
+** parse.c (pocketparse_push, pocketparse_finish, pp_parser_run). */
+typedef enum pp_parser_state {
+    PP_PARSER_ACCEPTING = 0,
+    PP_PARSER_DROPPED,
+    PP_PARSER_FINISHED,
+    PP_PARSER_FAILED
+} pp_parser_state;
+
+/* ** An executor: runs a grammar over the parser's buffered input, building the
+** tree into the parser. pp_execute_vm is one; a generated parser's execute
+** function is another. */
+typedef pocketparse_result (*pp_parser_executor)(pocketparse_parser *parser);
+
+/* ** The finishing transition, shared by pocketparse_finish, a generated parser's
+** run entry, and an injected sub-parse. From DROPPED it moves to FAILED and
+** returns push_failed without running anything; otherwise it runs `execute' and
+** moves to FINISHED, returning the executor's result. Lives in parse.c. */
+pocketparse_result pp_parser_run(pocketparse_parser *parser,
+                                 pp_parser_executor execute);
+
+/* ** The lowercase name of the parser's lifecycle state ("accepting",
+** "finished", ...), for the CLI's POCKETPARSE_TRACE_LIFECYCLE report. Lives in
+** parse.c. */
+const char *pp_parser_state_name(const pocketparse_parser *parser);
+
 /* ** The streaming parser. Input chunks accumulate into an arena-backed byte
 ** buffer; the grammar is executed over the buffer at finish time. The CST and
 ** diagnostics are built into the parser's own arena. */
@@ -1075,12 +1079,11 @@ struct pocketparse_parser {
     pocketparse_engine        *engine;
     pocketparse_grammar       *grammar;
     uint32_t                   start_symbol;
-    ax_arena                  *arena;
+    pp_arena                  *arena;
 
     uint8_t                   *input;
     uint32_t                   input_length;
     uint32_t                   input_capacity;
-    int                        finished;
 
     /* W17-4 buffer-friendly streaming of the GENERATED native parser. The
     ** generated parser is true C recursion, so it cannot suspend mid-stack; it can
@@ -1109,22 +1112,12 @@ struct pocketparse_parser {
     pocketparse_tree          *tree;
     pp_interner                tree_interner; /* copy of grammar names      */
 
-    /* W60 actor-hosted VM wiring. When the engine selects the actor path,
-    ** pocketparse_parser_new spawns a parser actor here; pocketparse_push posts
-    ** input.chunk events that the actor buffers, and pocketparse_finish posts
-    ** input.end, which runs the VM inside the actor's action and writes the parse
-    ** result back here. actor_pid is null on every other path. actor_result holds
-    ** the result code the action produced; actor_ran records that the action
-    ** genuinely executed (the structural proof the parse ran on ax). */
-    ax_pid                     actor_pid;
-    pocketparse_result         actor_result;
-    int                        actor_ran;
+    /* Where this parser is in its lifecycle (see pp_parser_state). */
+    pp_parser_state            state;
 
-    /* A push that failed must never let finish report success with a degenerate
-    ** tree (the W60 silent-corruption failure mode). When any pocketparse_push
-    ** returns non-OK this records the offending result; pocketparse_finish then
-    ** refuses to produce a tree and returns that same code with a fault set, so a
-    ** dropped chunk surfaces as an error rather than as a one-node root. */
+    /* The FIRST failed push's result. A push that failed must never let finish
+    ** report success with a degenerate tree over a truncated buffer: finish (and a
+    ** generated parser's run) returns this code instead of parsing. */
     pocketparse_result         push_failed;
 
     /* Deferred-slot / parametrized-goal runtime state (lex-goal-implementation). */
@@ -1145,7 +1138,7 @@ struct pocketparse_parser {
 ** seq/choice/repeat/optional/field/alias/not/any) into IR, resolving named
 ** references through the interner. Shared by token bodies and rule bodies. On
 ** failure returns NULL and writes a message + offset. */
-pp_ir *pp_compile_pattern(const pocketparse_engine *engine, ax_arena *arena,
+pp_ir *pp_compile_pattern(const pocketparse_engine *engine, pp_arena *arena,
                           pp_interner *interner, const pp_form *form,
                           const char **error, uint32_t *error_byte);
 
@@ -1160,7 +1153,7 @@ int pp_resolve_embedded_grammar(pocketparse_engine *engine,
 
 /* ** Parse a regex-subset pattern string into IR (character classes with ranges
 ** and negation, `+`/`*` postfix, literal runs, `.` as any). */
-pp_ir *pp_compile_regex(ax_arena *arena, pocketparse_string pattern,
+pp_ir *pp_compile_regex(pp_arena *arena, pocketparse_string pattern,
                         const char **error);
 
 /* ** Try to match a token's IR pattern against the input starting at `start`.
@@ -1378,14 +1371,14 @@ typedef struct pp_rule_slot {
 ** input. A NULL table (capacity 0) disables it.
 **
 ** ZEROING (W15-1). Like the token-match memo, the rule-slot table is sized to
-** input and ~48 bytes per slot, so ax_alloc would memset ~768 KB every parse --
+** input and ~48 bytes per slot, so pp_alloc would memset ~768 KB every parse --
 ** and the rule memo is DORMANT on a clean parse (it wakes only when backtracking
 ** goes super-linear), so that zeroing was pure waste on the common path. The fix
 ** is the same split: `slots' is raw (read only when occupied), and a parallel
 ** one-byte-per-slot `live' column -- the only thing zeroed -- carries occupancy:
 ** live[i] == 0 means slot i is empty. */
 typedef struct pp_rule_memo {
-    ax_arena     *arena;
+    pp_arena     *arena;
     pp_rule_slot *slots;     /* raw (not zeroed): read only when live[i] != 0 */
     uint8_t      *live;      /* zeroed occupancy column, one byte per slot     */
     uint32_t      mask;
@@ -1587,7 +1580,7 @@ typedef struct pp_vm_frame {
 } pp_vm_frame;
 
 /* ** The explicit work/continuation stack, grown geometrically from the parse
-** arena (ax arenas never realloc in place, so growth copies; the lifetime is the
+** arena (arenas never realloc in place, so growth copies; the lifetime is the
 ** parse). Shared by vm.c and the generated parser. */
 typedef struct pp_vm_stack {
     pp_vm_frame *frames;
@@ -1598,7 +1591,7 @@ typedef struct pp_vm_stack {
 /* ** Push a fresh frame for `program' onto the arena-backed stack. The new frame's
 ** step starts at 0; its scratch marks are zeroed lazily by the op that uses them.
 ** Returns 0 only on allocation failure. */
-int pp_vm_stack_push(ax_arena *arena, pp_vm_stack *stack, uint32_t program,
+int pp_vm_stack_push(pp_arena *arena, pp_vm_stack *stack, uint32_t program,
                      pp_vm_sink *sink, uint32_t field, uint32_t alias);
 
 /* ** The CALL prologue/epilogue, factored out of the old recursive
@@ -1633,7 +1626,7 @@ static inline uint32_t pp_grammar_rule_marks(const pocketparse_grammar *grammar,
 /* The clean-path inline lifecycle below references these runtime helpers (also
 ** declared in full further down); declare them here so the inline bodies compile. */
 int pp_vm_consume_extras(pp_vm_state *state, pp_vm_sink *sink);
-int pp_vm_sink_grow(ax_arena *arena, pp_vm_sink *sink);
+int pp_vm_sink_grow(pp_arena *arena, pp_vm_sink *sink);
 void pp_vm_link_children(pp_tree_builder *builder, uint32_t parent,
                          const pp_vm_sink *children);
 
@@ -1668,7 +1661,7 @@ static inline int pp_vm_collapse_hidden(pp_vm_state *state, pp_vm_frame *fr,
 ** sibling is read from items[count-1] (the rollback ledger), not a cached pointer,
 ** so a failed-attempt rollback that truncated the count re-derives the correct
 ** last sibling on the next push; pp_vm_sink_close terminates the final one. */
-static inline int pp_vm_sink_push(pp_tree_builder *builder, ax_arena *arena,
+static inline int pp_vm_sink_push(pp_tree_builder *builder, pp_arena *arena,
                                   pp_vm_sink *sink, uint32_t index)
 {
     if (sink->count == sink->capacity && !pp_vm_sink_grow(arena, sink))

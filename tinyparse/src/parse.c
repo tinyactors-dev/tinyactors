@@ -3,14 +3,13 @@
 **
 ** pocketparse_push buffers input bytes in arbitrary chunks; pocketparse_finish
 ** runs the compiled grammar over the whole buffer by driving the iterative
-** bytecode VM -- inside an ax actor when one is available (the library default),
-** in process otherwise. The VM, its token matcher, and the contiguous tree
-** builder live in vm.c / token.c / tree.c. This file owns only the parser
-** lifecycle and the input buffer; the recursive-descent IR interpreter that once
-** lived here was retired in W14-5 once the bytecode VM became the
-** sole engine, with the conformance suite as the standing correctness anchor and
-** vm-diff (vm vs vm-ax) and cc-diff as consistency checks. Freestanding: all
-** memory is arena memory.
+** bytecode VM. The VM, its token matcher, and the contiguous tree builder live
+** in vm.c / token.c / tree.c. This file owns only the parser lifecycle (the
+** state machine pp_parser_state documents in internal.h) and the input buffer;
+** the recursive-descent IR interpreter that once lived here was retired in W14-5
+** once the bytecode VM became the sole engine, with the conformance suite as the
+** standing correctness anchor and cc-diff as the consistency check against the
+** generated parsers. Freestanding: all memory is arena memory.
 */
 #include "internal.h"
 
@@ -24,7 +23,7 @@ pocketparse_result pp_parser_buffer(pocketparse_parser *parser,
         uint8_t *grown;
         while (parser->input_length + bytes.length > nc)
             nc *= 2;
-        grown = (uint8_t *)ax_alloc_raw(parser->arena, nc);
+        grown = (uint8_t *)pp_alloc_raw(parser->arena, nc);
         if (grown == 0)
             return POCKETPARSE_OUT_OF_MEMORY;
         if (parser->input_length != 0)
@@ -65,17 +64,17 @@ pocketparse_result pocketparse_parser_new(
     }
 
     /* The parser STRUCT lives in the engine arena (stable, ~one struct per parse,
-    ** negligible) so the parser actor's back-pointer to it never dangles. The parse
+    ** negligible) so a pointer to it stays valid after the parse is freed. The parse
     ** DATA -- builder, sinks, memos, input buffer, and the tree -- goes in a child
     ** arena sharing the engine's pool, so pocketparse_parser_free can hand all of it
     ** back to the pool for the next parse to reuse: a whole codebase parses in one
     ** engine without accreting every tree. CONTRACT: the tree is valid until
     ** pocketparse_parser_free; use it (or copy out what you need) before freeing. */
-    parser = (pocketparse_parser *)ax_alloc(engine->arena, sizeof *parser);
+    parser = (pocketparse_parser *)pp_alloc(engine->arena, sizeof *parser);
     if (parser == 0)
         return POCKETPARSE_OUT_OF_MEMORY;
     {
-        ax_arena *child = ax_arena_child(engine->arena);
+        pp_arena *child = pp_arena_child(engine->arena);
         if (child == 0)
             return POCKETPARSE_OUT_OF_MEMORY;
         parser->arena         = child;
@@ -89,7 +88,7 @@ pocketparse_result pocketparse_parser_new(
     parser->input         = 0;
     parser->input_length  = 0;
     parser->input_capacity = 0;
-    parser->finished      = 0;
+    parser->state          = PP_PARSER_ACCEPTING;
     /* Whole input known up front by default (the historical finish/run path,
     ** byte-identical). A buffer-friendly host clears this before each non-final
     ** run_chunk and sets it on the final one (see pocketparse_parser, W17-4). */
@@ -108,9 +107,6 @@ pocketparse_result pocketparse_parser_new(
     parser->diagnostics.count = 0;
     parser->diagnostics.capacity = 0;
     parser->tree = 0;
-    parser->actor_pid    = (ax_pid){ 0, 0 };
-    parser->actor_result = POCKETPARSE_OK;
-    parser->actor_ran    = 0;
     parser->push_failed  = POCKETPARSE_OK;
     parser->slot_save_stack    = 0;
     parser->slot_save_count    = 0;
@@ -126,13 +122,6 @@ pocketparse_result pocketparse_parser_new(
     if (!pp_param_stacks_alloc(parser->arena, grammar, &parser->param_stacks))
         return POCKETPARSE_OUT_OF_MEMORY;
 
-    /* W60: on the actor-hosted VM path, spawn the parser actor now so push can
-    ** post input.chunk to it. A spawn failure (or no ax system on a small grant)
-    ** simply leaves actor_pid null; pocketparse_push and pocketparse_finish then
-    ** fall back to the in-process VM, so the flag never breaks a parse. */
-    if (engine->engine_use_vm_actor && engine->system != 0)
-        (void)pp_parser_actor_spawn(parser);
-
     *out_parser = parser;
     return POCKETPARSE_OK;
 }
@@ -143,70 +132,79 @@ pocketparse_result pocketparse_parser_new(
 ** engine without accreting. The parser and its tree are invalid after this call
 ** (the tree's lifetime ends here; copy out anything you still need first). The
 ** arena handle itself lives in the engine arena and outlives the reset, so reading
-** parser->arena before resetting is safe. On the actor path the parser's actor has
-** already reached its final state during finish (pumped to quiescence), so ax has
-** reaped it; nothing in the ax system is left dangling. */
+** parser->arena before resetting is safe. */
 void pocketparse_parser_free(pocketparse_parser *parser)
 {
-    ax_arena *arena;
+    pp_arena *arena;
     if (parser == 0)
         return;
     arena = parser->arena;
-    ax_arena_reset(arena);
+    pp_arena_reset(arena);
 }
 
-/* ** Feed the next chunk of input. Buffering tolerates arbitrary chunk sizes,
-** so callers may push one byte at a time. */
+/* ** Feed the next chunk of input: the ACCEPTING and DROPPED states buffer it.
+** Buffering tolerates arbitrary chunk sizes, so callers may push one byte at a
+** time. The first push that cannot buffer moves the parser to DROPPED. */
 pocketparse_result pocketparse_push(pocketparse_parser *parser,
                                     pocketparse_string bytes)
 {
     pocketparse_result result;
     if (parser == 0)
         return POCKETPARSE_INVALID;
-    if (parser->finished)
+    if (parser->state == PP_PARSER_FINISHED || parser->state == PP_PARSER_FAILED)
         return POCKETPARSE_INVALID;
     if (bytes.length == 0)
         return POCKETPARSE_OK;
-    /* W60: on the actor path with a live actor, buffer the chunk through
-    ** pp_parser_actor_push (which writes it into the parser arena, never the ax
-    ** system slice). Otherwise buffer directly, exactly as before. */
-    if (parser->engine != 0 && parser->engine->engine_use_vm_actor &&
-        ax_pid_ok(parser->actor_pid))
-        result = pp_parser_actor_push(parser, bytes);
-    else
-        result = pp_parser_buffer(parser, bytes);
-    /* Remember the FIRST failure so finish cannot later report a successful-
-    ** looking parse over input that was never fully buffered. */
-    if (result != POCKETPARSE_OK && parser->push_failed == POCKETPARSE_OK)
+    result = pp_parser_buffer(parser, bytes);
+    if (result != POCKETPARSE_OK && parser->state == PP_PARSER_ACCEPTING) {
         parser->push_failed = result;
+        parser->state       = PP_PARSER_DROPPED;
+    }
     return result;
 }
 
-/* ** Signal end of input and run the parse. */
+/* ** The finishing transition (see internal.h). From DROPPED the executor never
+** runs: the buffered input is incomplete, so any tree it built would be a lie --
+** this is the guard that keeps a dropped chunk from passing as a successful
+** one-node parse. Otherwise the executor runs to completion, in this call, and
+** the parser is FINISHED. */
+pocketparse_result pp_parser_run(pocketparse_parser *parser,
+                                 pp_parser_executor execute)
+{
+    pocketparse_result result;
+    if (parser->state == PP_PARSER_DROPPED) {
+        parser->state = PP_PARSER_FAILED;
+        return parser->push_failed;
+    }
+    result        = execute(parser);
+    parser->state = PP_PARSER_FINISHED;
+    return result;
+}
+
+/* ** Signal end of input and run the parse with the bytecode VM. A parser that
+** has already finished (or failed) is not run again: the result reports whether
+** a tree exists. */
 pocketparse_result pocketparse_finish(pocketparse_parser *parser)
 {
     if (parser == 0)
         return POCKETPARSE_INVALID;
-    if (parser->finished)
+    if (parser->state == PP_PARSER_FINISHED || parser->state == PP_PARSER_FAILED)
         return parser->tree != 0 ? POCKETPARSE_OK : POCKETPARSE_SYNTAX_ERROR;
-    parser->finished = 1;
-    /* A push dropped a chunk: the buffered input is incomplete, so any tree we
-    ** could build would be a lie. Surface the failure instead of running the VM
-    ** over a truncated buffer -- this is the guard that keeps a dropped chunk
-    ** from passing as a successful one-node parse (the W60 silent corruption). */
-    if (parser->push_failed != POCKETPARSE_OK) {
-        if (parser->engine != 0)
-            parser->engine->fault = pp_text("input chunk was dropped before finish");
-        return parser->push_failed;
+    if (parser->state == PP_PARSER_DROPPED && parser->engine != 0)
+        parser->engine->fault = pp_text("input chunk was dropped before finish");
+    return pp_parser_run(parser, pp_execute_vm);
+}
+
+/* ** The lowercase name of the parser's lifecycle state. */
+const char *pp_parser_state_name(const pocketparse_parser *parser)
+{
+    if (parser == 0)
+        return "none";
+    switch (parser->state) {
+    case PP_PARSER_ACCEPTING: return "accepting";
+    case PP_PARSER_DROPPED:   return "dropped";
+    case PP_PARSER_FINISHED:  return "finished";
+    case PP_PARSER_FAILED:    return "failed";
     }
-    /* The bytecode VM is the only engine (W14-5 retired the recursive interpreter).
-    ** Prefer the actor-hosted VM when its private selector is set -- the library
-    ** default, also reached via POCKETPARSE_ENGINE=vm-ax: the dispatch loop runs
-    ** inside the parser actor's input.end action and the tree is byte-identical to
-    ** the in-process VM. With no ax system (a grant too small to carve one, or the
-    ** CLI's POCKETPARSE_ENGINE=vm), fall back to the SAME VM in process. Either way
-    ** pp_execute_vm always works, so there is no further fallback to reach. */
-    if (parser->engine != 0 && parser->engine->engine_use_vm_actor)
-        return pp_execute_vm_actor(parser);
-    return pp_execute_vm(parser);
+    return "unknown";
 }

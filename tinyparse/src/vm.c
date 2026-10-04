@@ -6,8 +6,7 @@
 ** (pp_token_match_memo, first-byte dispatch). Since W14-5 this is the SOLE engine:
 ** the recursive-descent IR interpreter that once lived in parse.c was retired once
 ** the VM was the only production path. The concrete syntax tree the
-** VM builds is byte-identical across the in-process VM, the actor-hosted VM
-** (ci/pocketparse-vm-diff.sh) and the C-compiled parser (ci/pocketparse-cc-diff.sh),
+** VM builds is byte-identical to the C-compiled parser's (ci/pocketparse-cc-diff.sh),
 ** with the conformance suite (296 independent expected outputs) the standing
 ** correctness anchor. The VM replaces a per-node C call frame and pointer chase
 ** with one loop over a contiguous instruction stream and explicit, arena-grown
@@ -49,13 +48,13 @@
 ** arena layout and any downstream behaviour stay predictable. */
 /* ** The slow path of pp_vm_sink_push (the geometric grow), factored out so the
 ** inline fast path in internal.h stays a tiny append. Returns 0 on OOM. */
-int pp_vm_sink_grow(ax_arena *arena, pp_vm_sink *sink)
+int pp_vm_sink_grow(pp_arena *arena, pp_vm_sink *sink)
 {
     uint32_t nc = sink->capacity == 0 ? 8 : sink->capacity * 2;
     /* RAW: the live prefix [0,count) is copied in below and every later slot is
     ** written before it is read (count grows one at a time), so zeroing the
     ** block would be wasted (W16-1). */
-    uint32_t *grown = (uint32_t *)ax_alloc_raw(arena, nc * sizeof *grown);
+    uint32_t *grown = (uint32_t *)pp_alloc_raw(arena, nc * sizeof *grown);
     uint32_t i;
     if (grown == 0)
         return 0;
@@ -71,7 +70,7 @@ int pp_vm_sink_grow(ax_arena *arena, pp_vm_sink *sink)
 ** of pp_vm_sink. This bundles the arena and the sink the callback writes through. */
 typedef struct pp_vm_inject_sink {
     pp_tree_builder *builder;
-    ax_arena        *arena;
+    pp_arena        *arena;
     pp_vm_sink      *sink;
 } pp_vm_inject_sink;
 
@@ -129,8 +128,8 @@ static int pp_rule_memo_ensure(pp_rule_memo *memo)
     ** one-byte-per-slot `live' column is zeroed, which marks every slot empty
     ** -- this dormant table's zeroing dominated the profile once the token memo
     ** was fixed (W15-1). */
-    memo->slots = (pp_rule_slot *)ax_alloc_raw(memo->arena, cap * sizeof *memo->slots);
-    memo->live  = (uint8_t *)ax_alloc(memo->arena, cap * sizeof *memo->live);
+    memo->slots = (pp_rule_slot *)pp_alloc_raw(memo->arena, cap * sizeof *memo->slots);
+    memo->live  = (uint8_t *)pp_alloc(memo->arena, cap * sizeof *memo->live);
     if (memo->slots == 0 || memo->live == 0) {
         memo->slots    = 0;
         memo->live     = 0;
@@ -149,7 +148,7 @@ static int pp_rule_memo_ensure(pp_rule_memo *memo)
 ** input-scaled `live' column at all (W17-GOAL). pp_rule_memo_ensure builds the
 ** tables the first time the parse goes super-linear; the differential's force-on
 ** path calls ensure right after this so the replay path is exercised. */
-static void pp_rule_memo_init(pp_rule_memo *memo, ax_arena *arena,
+static void pp_rule_memo_init(pp_rule_memo *memo, pp_arena *arena,
                               uint32_t input_length)
 {
     memo->arena          = arena;
@@ -257,7 +256,7 @@ pp_node *pp_vm_snapshot_subtree(pp_tree_builder *builder, uint32_t root,
     uint32_t i;
     if (size == 0)
         return 0;
-    snap = (pp_node *)ax_alloc(builder->arena, size * sizeof *snap);
+    snap = (pp_node *)pp_alloc(builder->arena, size * sizeof *snap);
     if (snap == 0)
         return 0;
     for (i = 0; i < size; i++) {
@@ -334,7 +333,7 @@ static void pp_vm_build_token_index(pocketparse_grammar *grammar)
             grammar->tokens[i].symbol > max_symbol)
             max_symbol = grammar->tokens[i].symbol;
     size = max_symbol + 1;
-    index = (pp_token_def **)ax_alloc(grammar->arena, size * sizeof *index);
+    index = (pp_token_def **)pp_alloc(grammar->arena, size * sizeof *index);
     if (index == 0)
         return; /* fall back to the linear scan */
     for (i = 0; i < grammar->token_count; i++) {
@@ -369,7 +368,7 @@ static void pp_vm_build_hidden_index(pocketparse_grammar *grammar)
     if (!any)
         return; /* no hidden rule: leave the index NULL (lookup returns 0) */
     size  = max_symbol + 1;
-    index = (uint8_t *)ax_alloc(grammar->arena, size * sizeof *index);
+    index = (uint8_t *)pp_alloc(grammar->arena, size * sizeof *index);
     if (index == 0)
         return; /* fall back to treating every rule as visible */
     for (i = 0; i < size; i++)
@@ -502,7 +501,7 @@ static int pp_vm_hold_extra(pp_vm_state *state, uint32_t symbol,
     if (state->held_count == state->held_capacity) {
         uint32_t new_cap = state->held_capacity == 0 ? 8
                                                      : state->held_capacity * 2;
-        pp_held_extra *grown = (pp_held_extra *)ax_alloc(
+        pp_held_extra *grown = (pp_held_extra *)pp_alloc(
             state->parser->arena, new_cap * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -1046,22 +1045,22 @@ int pp_vm_do_inject(pp_vm_state *state, pp_vm_sink *sink, pp_ir *inject,
 ** types now live in internal.h, shared with the generated compiled parser. */
 
 /* ** Append one captured item onto a slot's FIFO, growing the arena-backed item
-** array by doubling. ax arenas never realloc in place, so a full slot allocates a
+** array by doubling. arenas never realloc in place, so a full slot allocates a
 ** fresh block of twice the capacity and copies the existing items across; the old
 ** block is abandoned in the arena (it cannot be freed -- that is expected). The
 ** first push (items == NULL) allocates an initial block of 4 items. Returns 0 only
 ** on allocation failure (lex-goal-implementation, "Slot frame"). */
-int pp_slot_push(ax_arena *arena, pp_slot_frame *slot, pp_deferred_item item)
+int pp_slot_push(pp_arena *arena, pp_slot_frame *slot, pp_deferred_item item)
 {
     if (slot->items == 0) {
-        slot->items = (pp_deferred_item *)ax_alloc(arena, 4 * sizeof *slot->items);
+        slot->items = (pp_deferred_item *)pp_alloc(arena, 4 * sizeof *slot->items);
         if (slot->items == 0) return 0;
         slot->capacity = 4;
         slot->count    = 0;
     } else if (slot->count == slot->capacity) {
         uint32_t nc = slot->capacity * 2;
         pp_deferred_item *grown =
-            (pp_deferred_item *)ax_alloc(arena, nc * sizeof *grown);
+            (pp_deferred_item *)pp_alloc(arena, nc * sizeof *grown);
         uint32_t k;
         if (grown == 0) return 0;
         for (k = 0; k < slot->count; k++)
@@ -1074,24 +1073,24 @@ int pp_slot_push(ax_arena *arena, pp_slot_frame *slot, pp_deferred_item item)
 }
 
 /* ** Push an instantiated pattern onto a parametrized goal entry's stack, growing
-** the arena-backed patterns array by doubling. ax arenas never realloc in place,
+** the arena-backed patterns array by doubling. arenas never realloc in place,
 ** so a full stack allocates a fresh block of twice the capacity and copies the
 ** existing pointers across; the old block is abandoned in the arena (it cannot be
 ** freed -- that is expected). The first push (patterns == NULL) allocates an
 ** initial block of 4 entries. Returns 0 only on allocation failure. Mirrors
 ** pp_slot_push's growth policy (lex-goal-implementation, "Goal-table stack"). */
-int pp_param_stack_push(ax_arena *arena, pp_param_stack *stack, const pp_ir *pattern)
+int pp_param_stack_push(pp_arena *arena, pp_param_stack *stack, const pp_ir *pattern)
 {
     if (stack->patterns == 0) {
         stack->patterns =
-            (const pp_ir **)ax_alloc(arena, 4 * sizeof *stack->patterns);
+            (const pp_ir **)pp_alloc(arena, 4 * sizeof *stack->patterns);
         if (stack->patterns == 0) return 0;
         stack->capacity = 4;
         stack->depth    = 0;
     } else if (stack->depth == stack->capacity) {
         uint32_t nc = stack->capacity * 2;
         const pp_ir **grown =
-            (const pp_ir **)ax_alloc(arena, nc * sizeof *grown);
+            (const pp_ir **)pp_alloc(arena, nc * sizeof *grown);
         uint32_t k;
         if (grown == 0) return 0;
         for (k = 0; k < stack->depth; k++)
@@ -1117,16 +1116,16 @@ void pp_param_stack_pop(pp_param_stack *stack)
 ** (slot_name == PP_NO_SYMBOL -- not 0, a valid interned id) with an empty FIFO;
 ** PP_OP_DEFERRED_SLOT claims a frame, PP_OP_DEFER fills it, PP_OP_PARSE_DEFERRED
 ** drains it. The scope array (pp_slot_scope entries) grows by doubling off the
-** parse arena; ax arenas never realloc, so a full array allocates a fresh, larger
+** parse arena; arenas never realloc, so a full array allocates a fresh, larger
 ** block and copies. Returns the slot array, or NULL on any allocation failure (the
 ** caller maps that to PP_VM_OOM). slot_count is always > 0 at the call sites
 ** (lex-goal-implementation, "Slot name resolution"). */
-pp_slot_frame *pp_slot_scope_push(pocketparse_parser *parser, ax_arena *arena,
+pp_slot_frame *pp_slot_scope_push(pocketparse_parser *parser, pp_arena *arena,
                                   uint32_t slot_count)
 {
     pp_slot_frame *slots;
     uint32_t k;
-    slots = (pp_slot_frame *)ax_alloc(arena, slot_count * sizeof *slots);
+    slots = (pp_slot_frame *)pp_alloc(arena, slot_count * sizeof *slots);
     if (slots == 0)
         return 0;
     for (k = 0; k < slot_count; k++) {
@@ -1136,7 +1135,7 @@ pp_slot_frame *pp_slot_scope_push(pocketparse_parser *parser, ax_arena *arena,
         slots[k].capacity  = 0;
     }
     if (parser->slot_scopes == 0) {
-        parser->slot_scopes = (pp_slot_scope *)ax_alloc(
+        parser->slot_scopes = (pp_slot_scope *)pp_alloc(
             arena, 8 * sizeof *parser->slot_scopes);
         if (parser->slot_scopes == 0)
             return 0;
@@ -1145,7 +1144,7 @@ pp_slot_frame *pp_slot_scope_push(pocketparse_parser *parser, ax_arena *arena,
     } else if (parser->slot_scope_count == parser->slot_scope_capacity) {
         uint32_t nc = parser->slot_scope_capacity * 2;
         pp_slot_scope *grown =
-            (pp_slot_scope *)ax_alloc(arena, nc * sizeof *grown);
+            (pp_slot_scope *)pp_alloc(arena, nc * sizeof *grown);
         if (grown == 0)
             return 0;
         for (k = 0; k < parser->slot_scope_count; k++)
@@ -1171,12 +1170,12 @@ void pp_slot_scope_pop(pocketparse_parser *parser)
 /* ** Allocate a parser's per-parametrized-goal stack array: one zeroed pp_param_stack
 ** per parametrized goal entry (grammar->param_goal_count). The count is precomputed
 ** at grammar-compile time and on .ppg load, so no scan of lex_goals[] is needed
-** here. ax_alloc zeroes the block, but the fields are set explicitly for clarity.
+** here. pp_alloc zeroes the block, but the fields are set explicitly for clarity.
 ** Writes the array (or 0 when the grammar has no parametrized goals) to *out;
 ** returns 0 only on allocation failure (lex-goal-implementation,
 ** "Pattern instantiation"). Shared by pocketparse_parser_new and the inject.c
 ** sub-parser so the host and an embedded grammar are initialized identically. */
-int pp_param_stacks_alloc(ax_arena *arena, const pocketparse_grammar *grammar,
+int pp_param_stacks_alloc(pp_arena *arena, const pocketparse_grammar *grammar,
                           pp_param_stack **out)
 {
     uint32_t i;
@@ -1186,7 +1185,7 @@ int pp_param_stacks_alloc(ax_arena *arena, const pocketparse_grammar *grammar,
         return 1;
     }
 
-    *out = (pp_param_stack *)ax_alloc(
+    *out = (pp_param_stack *)pp_alloc(
         arena, grammar->param_goal_count * sizeof **out);
     if (*out == 0)
         return 0;
@@ -1200,11 +1199,11 @@ int pp_param_stacks_alloc(ax_arena *arena, const pocketparse_grammar *grammar,
 }
 
 /* ** Push a fresh frame for `program' onto the arena-backed work stack, growing it
-** geometrically (ax arenas never realloc in place, so growth copies). The new
+** geometrically (arenas never realloc in place, so growth copies). The new
 ** frame's step starts at 0; its scratch marks are zeroed lazily by the op that
 ** uses them. Returns 0 only on allocation failure. Byte-for-byte the same growth
 ** policy the generated parser used. */
-int pp_vm_stack_push(ax_arena *arena, pp_vm_stack *stack, uint32_t program,
+int pp_vm_stack_push(pp_arena *arena, pp_vm_stack *stack, uint32_t program,
                      pp_vm_sink *sink, uint32_t field, uint32_t alias)
 {
     pp_vm_frame *fr;
@@ -1213,7 +1212,7 @@ int pp_vm_stack_push(ax_arena *arena, pp_vm_stack *stack, uint32_t program,
         /* RAW: the live prefix [0,count) is copied in below and each new frame is
         ** fully written by the push that claims it before any read (W16-1). */
         pp_vm_frame *grown =
-            (pp_vm_frame *)ax_alloc_raw(arena, nc * sizeof *grown);
+            (pp_vm_frame *)pp_alloc_raw(arena, nc * sizeof *grown);
         uint32_t k;
         if (grown == 0)
             return 0;
@@ -1228,7 +1227,7 @@ int pp_vm_stack_push(ax_arena *arena, pp_vm_stack *stack, uint32_t program,
     fr->sink    = sink;
     fr->field   = field;
     fr->alias   = alias;
-    /* Frames are ax_alloc_raw (indeterminate); every field a later read can reach
+    /* Frames are pp_alloc_raw (indeterminate); every field a later read can reach
     ** must be written before the read (W16-1). A non-CALL frame never owns slots,
     ** and the CALL descend path overwrites these from the annotated count. */
     fr->slot_count = 0;
@@ -1351,7 +1350,7 @@ int pp_vm_call_enter(pp_vm_state *state, pp_vm_frame *fr,
     if (state->children_inline) {
         fr->children = &fr->children_storage;
     } else {
-        fr->children = (pp_vm_sink *)ax_alloc_raw(state->parser->arena,
+        fr->children = (pp_vm_sink *)pp_alloc_raw(state->parser->arena,
                                                   sizeof *fr->children);
         if (fr->children == 0) { *resolved = PP_VM_OOM; return 0; }
     }
@@ -1541,14 +1540,14 @@ pp_slot_frame *pp_slot_resolve(pp_vm_state *state, uint32_t slot_name)
 }
 
 /* ** Append one uint32 onto the parser's flat slot-save stack, growing the arena-
-** backed array by doubling (initial capacity 16). ax arenas never realloc in
+** backed array by doubling (initial capacity 16). arenas never realloc in
 ** place, so a full array allocates a fresh block of twice the capacity and copies
 ** the live prefix across; the old block is abandoned. Returns 0 only on
 ** allocation failure (lex-goal-implementation, "Parallel slot-save stack"). */
 static int pp_slot_save_emit(pocketparse_parser *parser, uint32_t value)
 {
     if (parser->slot_save_stack == 0) {
-        parser->slot_save_stack = (uint32_t *)ax_alloc(
+        parser->slot_save_stack = (uint32_t *)pp_alloc(
             parser->arena, 16 * sizeof *parser->slot_save_stack);
         if (parser->slot_save_stack == 0) return 0;
         parser->slot_save_capacity = 16;
@@ -1556,7 +1555,7 @@ static int pp_slot_save_emit(pocketparse_parser *parser, uint32_t value)
     } else if (parser->slot_save_count == parser->slot_save_capacity) {
         uint32_t nc = parser->slot_save_capacity * 2;
         uint32_t *grown =
-            (uint32_t *)ax_alloc(parser->arena, nc * sizeof *grown);
+            (uint32_t *)pp_alloc(parser->arena, nc * sizeof *grown);
         uint32_t k;
         if (grown == 0) return 0;
         for (k = 0; k < parser->slot_save_count; k++)
@@ -1671,7 +1670,7 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
 {
     pp_vm_stack stack;
     int         signal = PP_VM_FAIL;
-    ax_arena   *arena  = state->parser->arena;
+    pp_arena   *arena  = state->parser->arena;
 #ifdef PP_VM_PROBE_DEPTH
     extern unsigned long pp_vm_peak_depth;
 #endif
@@ -2091,7 +2090,7 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
                     uint8_t *copy = 0;
                     if (len > 0) {
                         uint32_t b;
-                        copy = (uint8_t *)ax_alloc(arena, len);
+                        copy = (uint8_t *)pp_alloc(arena, len);
                         if (copy == 0) return PP_VM_OOM;
                         /* -fno-builtin: byte-copy loop, not memcpy. */
                         for (b = 0; b < len; b++)
@@ -2229,7 +2228,7 @@ int pp_vm_run(pp_vm_state *state, uint32_t program, pp_vm_sink *sink,
 pocketparse_result pp_vm_freeze_tree(pocketparse_parser *parser,
                                      uint32_t root)
 {
-    pocketparse_tree *tree = (pocketparse_tree *)ax_alloc(
+    pocketparse_tree *tree = (pocketparse_tree *)pp_alloc(
         parser->arena, sizeof *tree);
     if (tree == 0)
         return POCKETPARSE_OUT_OF_MEMORY;
@@ -2294,7 +2293,7 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
     pp_extras_memo_init(&state->extras_memo, parser->arena, parser->input_length);
 
     /* W17-CST: pre-size the CST node array from the input length. The node array
-    ** grew by doubling from 32, and ax arenas never realloc in place, so each
+    ** grew by doubling from 32, and arenas never realloc in place, so each
     ** doubling COPIED every node already built -- the copy loop in
     ** pp_tree_builder_push and the memcpy it drives were a top profile slice. A real
     ** parse settles near one node per few input bytes, so reserving input_length/4
@@ -2305,7 +2304,7 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
     ** an already-grown builder (the buffer-friendly resume path keeps its array). */
     if (parser->builder.capacity == 0 && parser->input_length >= 256u) {
         uint32_t want = parser->input_length / 4u;
-        pp_node *nodes = (pp_node *)ax_alloc_raw(parser->builder.arena,
+        pp_node *nodes = (pp_node *)pp_alloc_raw(parser->builder.arena,
                                                  want * sizeof *nodes);
         if (nodes != 0) {
             parser->builder.nodes    = nodes;
@@ -2353,8 +2352,7 @@ void pp_vm_state_init(pp_vm_state *state, pocketparse_parser *parser,
 ** engine since W14-5. It pushes the Source node, parses the start body into the
 ** root's children through the VM dispatch loop, consumes trailing extras, links,
 ** and reports trailing/leftover input. The tree and diagnostics are byte-identical
-** across the in-process VM, the actor-hosted VM (ci/pocketparse-vm-diff.sh) and the
-** C-compiled parser (ci/pocketparse-cc-diff.sh), anchored by the conformance suite. */
+** to the C-compiled parser's (ci/pocketparse-cc-diff.sh), anchored by the conformance suite. */
 pocketparse_result pp_execute_vm(pocketparse_parser *parser)
 {
     pp_vm_state         state;

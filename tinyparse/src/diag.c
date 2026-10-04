@@ -51,7 +51,7 @@ int pp_diag_recover(pp_diag_list *list, pocketparse_string message,
 
     if (list->count == list->capacity) {
         uint32_t new_capacity = list->capacity == 0 ? 4 : list->capacity * 2;
-        pocketparse_diagnostic *grown = (pocketparse_diagnostic *)ax_alloc(
+        pocketparse_diagnostic *grown = (pocketparse_diagnostic *)pp_alloc(
             list->arena, new_capacity * sizeof *grown);
         uint32_t i;
         if (grown == 0)
@@ -62,7 +62,7 @@ int pp_diag_recover(pp_diag_list *list, pocketparse_string message,
         list->capacity = new_capacity;
     }
 
-    label = (pocketparse_label *)ax_alloc(list->arena, sizeof *label);
+    label = (pocketparse_label *)pp_alloc(list->arena, sizeof *label);
     if (label == 0)
         return 0;
     label->start_byte = start_byte;
