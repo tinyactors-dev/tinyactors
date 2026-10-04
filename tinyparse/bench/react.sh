@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# ci/tinyparse-react-bench.sh -- Project B's real-workload benchmark: parse the
+# bench/react.sh -- Project B's real-workload benchmark: parse the
 # ReactJS codebase with std.tsx and collect every function definition, compared
 # against tree-sitter's TSX parser doing the identical task.
 #
-# Where ci/tinyparse-bench.sh measures parse-to-discard over the small
+# Where bench/javascript.sh measures parse-to-discard over the small
 # tree-sitter JS test corpus, this measures a realistic pass over a real, large
 # codebase -- the kind of work a linter, doc generator, or codemod does: parse
 # every source file, then walk the tree collecting all function definitions.
@@ -11,7 +11,7 @@
 # GATED behind BENCH=1 so the normal metric never pays its cost or its network
 # dependency. Run from the repo root:
 #
-#     BENCH=1 bash ci/tinyparse-react-bench.sh
+#     mise run bench:react
 #
 # End to end, re-runnably:
 #   1. build the tinyparse dist (libtinyparse.a + the CLI);
@@ -31,8 +31,8 @@
 set -uo pipefail
 
 if [ "${BENCH:-0}" != "1" ]; then
-  echo "ci/tinyparse-react-bench.sh is gated behind BENCH=1 (skipping)."
-  echo "Run it with:  BENCH=1 bash ci/tinyparse-react-bench.sh"
+  echo "bench/react.sh is gated behind BENCH=1 (skipping)."
+  echo "Run it with:  mise run bench:react"
   exit 0
 fi
 
@@ -43,7 +43,7 @@ cd "$REPO" || exit 1
 
 ITERS="${ITERS:-50}"
 
-LIB="${TP_LIB:?run it with mise run bench react-bench, which builds tinyparse and sets TP_CLI, TP_LIB, TP_CC and TP_AR}"
+LIB="${TP_LIB:?run it with mise run bench:react, which builds tinyparse and sets TP_CLI, TP_LIB, TP_CC and TP_AR}"
 CLI="$TP_CLI"
 
 log() { printf '[react-bench] %s\n' "$*" >&2; }

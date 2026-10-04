@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ci/tinyparse-js-coverage.sh — corpus coverage for the std.javascript grammar.
+# bench/javascript-coverage.sh — corpus coverage for the std.javascript grammar.
 #
 # A helper, NOT wired into the gate. For every case in the vendored tree-sitter
 # JavaScript corpus it extracts the input, runs `tinyparse run std.javascript`
@@ -8,14 +8,14 @@
 #
 #     JS_COVERAGE=<parsed>/<total>
 #
-# line. Run from the repo root:  bash ci/tinyparse-js-coverage.sh
+# line. Run from the repo root:  mise run bench:javascript-coverage
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TP_DIR="$REPO"
 CORPUS="$TP_DIR/reference/tree-sitter-javascript/test/corpus"
 
-TP="${TP_CLI:?run it with mise run bench js-coverage, which builds tinyparse and sets TP_CLI}"
+TP="${TP_CLI:?run it with mise run bench:javascript-coverage, which builds tinyparse and sets TP_CLI}"
 
 if [ ! -x "$TP" ]; then
   echo "FATAL: tinyparse is not built at $TP"

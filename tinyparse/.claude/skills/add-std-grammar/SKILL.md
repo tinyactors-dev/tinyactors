@@ -24,26 +24,20 @@ Add one line per reference to `reference/PINS.txt`:
 tree-sitter-sql  https://github.com/DerekStride/tree-sitter-sql  <full-40-char-commit>
 ```
 
-Include the re-fetch commands as comments (see existing entries for the format).
-Pin the exact commit you cloned and extracted corpus from — not `HEAD`, not a tag.
+Pin the exact commit you extracted the corpus from — not `HEAD`, not a tag — and
+fetch it with `mise run bench:fetch tree-sitter-sql`, which downloads that
+commit's tarball into `reference/tree-sitter-sql/`.
 
 **Failure modes**
 
-- *Wrong commit pinned.* You cloned at HEAD, corpus was extracted, then you wrote
+- *Wrong commit pinned.* You looked at HEAD, extracted the corpus, then wrote
   down a different SHA. The reference and the corpus diverge silently. Fix: pin
-  the commit you actually extracted, verified with `git -C reference/<name> rev-parse HEAD`.
-  In the web environment `git rev-parse` reads the host repo instead of the
-  reference tarball — trust `PINS.txt` and set the SHA manually from the tarball
-  URL you used.
-- *Clone fails in the web environment.* Outbound `git clone` is rewritten to a
-  proxy that returns 403 for repos outside this one. Fetch as a tarball instead:
-  ```sh
-  curl -sSL --cacert /root/.ccr/ca-bundle.crt \
-    -o ref.tar.gz https://codeload.github.com/<owner>/<repo>/tar.gz/<commit>
-  tar -xf ref.tar.gz -C reference/
-  ```
-  The extracted directory will be `<repo>-<short-sha>/`; rename it to match what
-  `PINS.txt` re-fetch commands expect.
+  the commit you actually extracted from. A tarball is not a git checkout, and
+  `git rev-parse` inside it reads the enclosing repository: trust the commit in
+  `PINS.txt`, which `bench:fetch` downloaded.
+- *Fetching in the web environment.* Outbound `git clone` of other repositories
+  may be refused there; `bench:fetch` downloads a tarball from
+  `codeload.github.com` through the HTTPS proxy instead.
 
 ---
 
@@ -93,7 +87,7 @@ entry rule the host calls as `provides:`.
 ; package.scm — std.<name>
 ; One sentence: what language this covers and where it was ported from.
 ; Ported (the LANGUAGE, not the code) from the build-time reference under
-; tools/tinyparse/reference/<reference-name>/. No third-party code is copied.
+; reference/<reference-name>/. No third-party code is copied.
 
 (tinyparse version: "0.1")
 
@@ -351,7 +345,7 @@ out-count 2 join_clause
   `"$TP" run grammars/std/<name>/grammar.scm --input …`
 - *`$TP` path wrong in `cmd`.* The harness sets `$TP` to the built CLI. If the build
   has not run at all, every test in the suite will fail with "command not found".
-  Run `mise run build` once before running the metric.
+  Run `mise run build` once before running the suite.
 - *Test name collision.* A test's identity is its path below `suite/` without the
   `.test` extension. If you create `suite/sqlfamily/expressions__1.test` and there is
   already a `suite/jsfamily/expressions__1.test`, they are distinct (different paths).
@@ -362,7 +356,7 @@ out-count 2 join_clause
 
 ## Step 8 — Seed `test/xfail.list` with every new test
 
-Before running the metric, add every new test name to `test/xfail.list`:
+Before running the suite, add every new test name to `test/xfail.list`:
 
 ```
 # std.sql / std.sqlite / std.postgres — W-next
@@ -373,15 +367,15 @@ sqlfamily/declarations__1
 ```
 
 The ratchet rule: any test that fails and is **not** in `xfail.list` is a
-regression (FAIL) and the metric exits non-zero. Seed all of them before the
-first metric run.
+regression (FAIL) and `mise run test` fails. Seed all of them before the
+first run.
 
 **Failure modes**
 
 - *Forgetting to seed.* The first `mise run test` after adding tests fails with
-  `FAIL` entries and a red metric. Add all the new names to `xfail.list` and re-run.
+  `FAIL` entries. Add all the new names to `xfail.list` and re-run.
 - *Seeding tests that already pass.* A test in `xfail.list` that passes is
-  reported as `XPASS` (unexpected pass) and the metric also exits non-zero. If a
+  reported as `XPASS` (unexpected pass), which fails `mise run test` too. If a
   test passes immediately (e.g. a trivially-accepted input), remove it from
   `xfail.list` right away.
 - *Misspelled test name in `xfail.list`.* The harness matches by exact string. A
@@ -398,7 +392,7 @@ tinyparse grammars      # check std.<name> appears in the list
 tinyparse check grammars/std/<name>/grammar.scm   # compile the grammar, report errors
 ```
 
-Then run a quick smoke test against a known-good input before touching the metric:
+Then run a quick smoke test against a known-good input before running the suite:
 
 ```sh
 echo "SELECT 1;" | tinyparse run std.<name> --dump-tree
@@ -425,7 +419,7 @@ echo "SELECT 1;" | tinyparse run std.<name> --dump-tree
 
 ## Step 10 — Work tests off `xfail.list` one category at a time
 
-Run the metric:
+Run the suite:
 
 ```sh
 mise run test
@@ -439,20 +433,20 @@ tinyparse run grammars/std/<name>/grammar.scm \
   --input test/suite/<family>/inputs/expressions__1.sql --dump-tree
 ```
 
-When a test passes, delete its line from `xfail.list`. The metric's
+When a test passes, delete its line from `xfail.list`. The suite's
 `PROGRESS=k/n` counter only rises; a drop means a previously-passing test broke.
 
 **Failure modes**
 
 - *Fixing one rule breaks another.* A rule change that makes `expressions__3` pass
-  may make `declarations__5` fail. After each grammar edit, run the full metric
+  may make `declarations__5` fail. After each grammar edit, run the full suite
   rather than individual tests — a drop in PROGRESS is the signal.
 - *`ERROR` node in the tree but exit code 0.* tinyparse exits 0 even when it
   recovers from parse errors (the tree contains `ERROR` or `MISSING` nodes). The
   test asserts `out-absent ERROR` — check the dump for recovery nodes, not just the
   exit code.
-- *Test passes locally but remains in `xfail.list`.* An `XPASS` is also a metric
-  failure. Delete the line from `xfail.list` as soon as the test passes.
+- *Test passes locally but remains in `xfail.list`.* An `XPASS` also fails
+  the suite. Delete the line from `xfail.list` as soon as the test passes.
 - *A corpus input is beyond the grammar's current scope.* Some reference corpus
   sections cover features you have not implemented yet. It is correct to leave those
   in `xfail.list` while you work on them; do not delete them from the suite. The
@@ -465,13 +459,15 @@ When a test passes, delete its line from `xfail.list`. The metric's
 Once PROGRESS reaches the full count and `xfail.list` is empty:
 
 ```sh
-mise run test                        # conformance green
-mise run gate vm-diff                # bytecode VM == recursive oracle
-mise run gate cc-diff                # generated C parser == bytecode VM
+mise run test --full                 # conformance green, and every gate exhaustively
+mise run gate:vm-diff --full         # the VM, rule memo off == adaptive == forced on
+mise run gate:cc-diff --full         # generated C parser == bytecode VM
 ```
 
 The differential gates ensure that every engine produces byte-identical trees
-for the new grammar. A grammar change that alters the tree must update goldens
+for the new grammar. They read the suite's `jsfamily`, `tsfamily` and
+`shellfamily` corpora (`Tinyparse::Corpus` in `mise/lib/gate.rb`); a new family
+is added there, with a few inputs in the fast pass and all of them in `--full`. A grammar change that alters the tree must update goldens
 deliberately; a change claimed to be performance-only must leave all three green.
 
 **Failure modes**
@@ -529,7 +525,7 @@ grammars/std/<base>/grammar.scm        — base grammar source
 grammars/std/<dialect>/package.scm     — manifest for each dialect
 grammars/std/<dialect>/grammar.scm     — dialect extension source
 
-reference/PINS.txt                     — new entry (+ re-fetch commands)
+reference/PINS.txt                     — new entry (NAME URL COMMIT)
 
 test/suite/<family>/inputs/*.sql       — corpus inputs (one per corpus section)
 test/suite/<family>/*.test             — one test file per input

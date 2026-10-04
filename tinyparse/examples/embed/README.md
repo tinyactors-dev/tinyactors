@@ -89,7 +89,7 @@ Document
           ...
 ```
 
-`ci/tinyparse-multiparser.sh` builds this example and asserts the output equals
+`mise run gate:multiparser` builds this example and asserts the output equals
 `expected.txt`, and that the linked binary carries both parsers' distinct entries.
 
 ## Exporting only the parser API from the embeddable artifact (W16-4)
@@ -113,7 +113,7 @@ nm -D --defined-only libembed.so | grep -E ' (host_parser|json_parser)_'
 ```
 
 The emitter is unchanged — this is a link-time recipe — so the generated C is
-byte-for-byte what `--name` already produces. `ci/tinyparse-exports.sh` is the
+byte-for-byte what `--name` already produces. `mise run gate:exports` is the
 gate: it builds the artifact (single parser and the two-parser case), asserts with
 `nm` that the exported table is exactly the parser API plus `tinyparse_*`, and
 checks that a hardened executable still parses the sample to the golden tree.

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# ci/tinyparse-bench5.sh -- ONE benchmark, SIX parsers, parse-only, over the
-# same ReactJS corpus. (Named "bench5" since W14-4 when it ran five arms; W16-1
-# added meriyah as a sixth -- the owner's bar -- and the name is kept so existing
-# callers and the phase metrics keep finding it.) It always compares:
+# bench/parsers.sh -- ONE benchmark, SIX parsers, parse-only, over the
+# same ReactJS corpus. (It was ci/tinyparse-bench5.sh, named in W14-4 when it ran
+# five arms; W16-1 added meriyah as a sixth -- the owner's bar. It is
+# `mise run bench:parsers` since the move into the tinyactors monorepo.) It
+# always compares:
 #
 #   1. tsc                   -- the TypeScript compiler API parser (TS on V8, JIT)
 #   2. tsgo                  -- microsoft/typescript-go's parser (native Go)
@@ -30,13 +31,13 @@
 # It reuses the existing benches' scratch (tsbench, typescript-go, tree-sitter
 # runtime, the cached manifest) rather than re-cloning. GATED behind BENCH=1.
 #
-#     BENCH=1 bash ci/tinyparse-bench5.sh
+#     mise run bench:parsers
 #
 set -uo pipefail
 
 if [ "${BENCH:-0}" != "1" ]; then
-  echo "ci/tinyparse-bench5.sh is gated behind BENCH=1 (skipping)."
-  echo "Run it with:  BENCH=1 bash ci/tinyparse-bench5.sh"
+  echo "bench/parsers.sh is gated behind BENCH=1 (skipping)."
+  echo "Run it with:  mise run bench:parsers"
   exit 0
 fi
 
@@ -50,7 +51,7 @@ cd "$REPO" || exit 1
 ITERS="${ITERS:-30}"
 TS_ITERS="${TS_ITERS:-15}"
 
-LIB="${TP_LIB:?run it with mise run bench bench5, which builds tinyparse and sets TP_CLI, TP_LIB, TP_CC and TP_AR}"
+LIB="${TP_LIB:?run it with mise run bench:parsers, which builds tinyparse and sets TP_CLI, TP_LIB, TP_CC and TP_AR}"
 CLI="$TP_CLI"
 CC="$TP_CC"
 
@@ -61,7 +62,7 @@ field() { sed -n "s/.*\b$2=\([^ ]*\).*/\1/p" <<<"$1"; }
 MANIFEST="$BENCHDIR/react-corpus/MANIFEST.txt"
 if [ ! -s "$MANIFEST" ]; then
   log "FATAL: corpus manifest missing at $MANIFEST"
-  log "       generate it first with: REGEN=1 BENCH=1 bash ci/tinyparse-react-bench.sh"
+  log "       generate it first with: REGEN=1 mise run bench:react"
   exit 1
 fi
 CASES="$(wc -l < "$MANIFEST" | tr -d ' ')"
@@ -155,7 +156,7 @@ TSGO_OK=0; TSGO_FAIL_REASON=""; TSGO_PIN=""
 if ! command -v go >/dev/null 2>&1; then
   TSGO_FAIL_REASON="go toolchain not on PATH"
 elif [ ! -x "$TSGO_HARNESS" ]; then
-  TSGO_FAIL_REASON="tsgo parse harness not built (run ci/tinyparse-tsc-bench.sh once to build it)"
+  TSGO_FAIL_REASON="tsgo parse harness not built (run mise run bench:tsc once to build it)"
   [ -d "$TSGO_SRC/.git" ] && TSGO_PIN="$(git -C "$TSGO_SRC" rev-parse HEAD 2>/dev/null)"
 else
   TSGO_OK=1

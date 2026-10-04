@@ -1,8 +1,8 @@
 # tinyparse parse-speed ceiling: median seconds to parse the JS corpus
-# (116 docs, 200 iterations) as measured by ci/tinyparse-bench.sh.
+# (116 docs, 200 iterations) as measured by `mise run bench:javascript`.
 #
 # The Phase 10 ratchet. Lower this as each optimization lands; the perf gate
-# (ci/tinyparse-perf-gate.sh) fails if the measured median exceeds it by >5%.
+# (`mise run bench:perf-gate`) fails if the measured median exceeds it by >5%.
 # Starting point: the fair-methodology baseline, ~39x tree-sitter.
 # W14-5: the iterative bytecode VM is now the sole engine; measured ~5.6ms, so the
 # ceiling drops 10ms -> 7ms to lock in the gain (the ratchet only ever goes down).

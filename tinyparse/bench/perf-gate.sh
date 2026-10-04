@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ci/tinyparse-perf-gate.sh -- standing performance regression guard for
+# bench/perf-gate.sh -- standing performance regression guard for
 # tinyparse.
 #
 # Two gates. Correctness is the hard floor: `mise run test` must be
@@ -23,7 +23,7 @@ echo "$cm"
 case "$cm" in *GREEN*) ;; *) echo "RESULT: correctness not GREEN -- abort"; exit 1;; esac
 
 echo "== perf gate: benchmark =="
-bench="$(BENCH=1 bash ci/tinyparse-bench.sh 2>&1)"
+bench="$(BENCH=1 bash bench/javascript.sh 2>&1)"
 tp="$(printf '%s\n' "$bench" | awk -F'median_seconds=' '/raw: BENCH parser=tinyparse /{split($2,a," "); print a[1]; exit}')"
 ts="$(printf '%s\n' "$bench" | awk -F'median_seconds=' '/raw: BENCH parser=tree-sitter /{split($2,a," "); print a[1]; exit}')"
 ceiling="$(grep -vE '^#|^[[:space:]]*$' "$BASELINE" | head -1 | tr -d '[:space:]')"

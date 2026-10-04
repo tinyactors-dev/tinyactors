@@ -1,0 +1,47 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: tinyparse_parser_free reclaims, so many parses in one engine peak at about one parse's memory (--full: 300 parses)"
+#MISE depends=["build"]
+#USAGE flag "--full" help="300 parses in one engine, not 12"
+# vim:ft=ruby
+
+# Each parser allocates from its own child arena of the engine's pool,
+# which tinyparse_parser_free returns to the pool. Before that, the engine
+# arena reclaimed nothing, and N parses in one engine cost about N trees
+# (the React benchmark reopened the engine for every file to stay out of
+# memory). bench/reclaim_test.c parses one input many times in one engine,
+# freeing each parser, and reports the peak resident set.
+#
+# The input is 4,500 lines of JavaScript generated here (about 260 KB, a
+# tree of about 100 MB), parsed with std.javascript, packed by the CLI. The
+# gate first measures the peak of one parse, then requires the peak of 12
+# parses (300 with --full) to stay under twice that: without reclaiming,
+# 12 parses would cost about 12 times as much. (In ax the bound was a fixed
+# 1 GiB for 300 parses; one parse peaked at 109 MB and 300 at 143 MB.)
+
+require_relative '../../lib/gate'
+
+Tinyparse::Gate.run('reclaim', 'parser_free reclaims') do |gate|
+  grammar = gate.scratch.join('std.javascript.tpg')
+  gate.cli!('pack', Tinyparse::ROOT.join('grammars/std/javascript/grammar.scm'), '--out', grammar)
+  input = gate.write('input.js', (0...1500).map do |i|
+    "const v#{i} = a + b * c - d / (e + f) && g || h ?? i;\n" \
+      "function f#{i}(x, y){ return x.a.b.c(y, 1, 2, [3,4,{k:5}]); }\n" \
+      "const g#{i} = (p, q) => p.map(z => z.v).filter(z => z > #{i});\n"
+  end.join)
+  harness = gate.program([Tinyparse::ROOT.join('bench/reclaim_test.c'), Tinyparse.host_library],
+                         gate.scratch.join('reclaim_test'), flags: %w[-Wall])
+
+  peak = lambda do |iterations, ceiling|
+    run = gate.execute([harness, grammar, input, iterations, ceiling])
+    puts "  #{run.out.lines.first&.strip}"
+    [run, run.out[/peak_rss_kb=(\d+)/, 1].to_i]
+  end
+  one, one_peak = peak.call(1, 1_048_576)
+  next gate.fail("one parse failed (exit #{one.code}):\n#{one.out}") unless one.success? && one_peak.positive?
+
+  iterations = gate.full? ? 300 : 12
+  many, many_peak = peak.call(iterations, 2 * one_peak)
+  gate.check(many.success?, "#{iterations} parses peaked at #{many_peak} KB, over twice one parse's #{one_peak} KB: " \
+                            'tinyparse_parser_free is not reclaiming')
+  gate.ok("#{iterations} parses in one engine peaked at #{many_peak} KB; one parse, #{one_peak} KB") if many.success?
+end

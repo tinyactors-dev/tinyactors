@@ -1,0 +1,116 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: the VM builds the same tree with its rule memo off, adaptive and forced on (--full: every input of the JavaScript, TypeScript and shell corpora)"
+#MISE depends=["build"]
+#USAGE flag "--full" help="Every input of the JavaScript, TypeScript and shell corpora, not two of each kind"
+# vim:ft=ruby
+
+# The bytecode VM is tinyparse's one engine; the conformance suite and
+# cc-diff (the generated C parser against the VM) are its independent
+# oracles. This gate holds the VM to its one internal variation, the rule
+# memo, which snapshots a rule's subtree and replays it and must change
+# nothing. The reference runs with the memo off (TINYPARSE_RULEMEMO=off);
+# the candidates run it adaptive (the default, dormant until a parse goes
+# super-linear) and forced on (=always, so its replay path runs on inputs
+# too small to wake it). Every candidate must print the reference's tree
+# and exit with its code on:
+#
+#   - the json family (Tinyparse::Corpus::JSON_FAMILY);
+#   - every other grammar the suite parses: the examples and the
+#     family and query fixtures, each reaching a different VM feature
+#     (EXAMPLES below), and std.shell's here-documents;
+#   - the suite's JavaScript, TypeScript and shell corpora: two inputs of
+#     each kind in the fast pass, every input with --full.
+#
+# It then checks that the library calls no actor runtime (tinyparse depends
+# on neither the runtime it was born in, ax, nor tinyactors), and that the
+# parser lifecycle (src/parse.c) ends in "finished" on a valid input.
+# `mise run bench:rule-memo` times the memo; a time is no gate.
+
+require_relative '../../lib/gate'
+
+ROOT = Tinyparse::ROOT
+EXAMPLES_DIR = ROOT.join('examples')
+FAMILY = ROOT.join('test/suite/family/fixtures')
+QUERY = ROOT.join('test/suite/query/fixtures')
+SHELL = ROOT.join('test/suite/shellfamily/fixtures')
+
+# label => [grammar, input, extra arguments]; an input that is a Pathname
+# is a committed file, a String is the bytes to parse.
+EXAMPLES = {
+  'tcl-basic' => [EXAMPLES_DIR.join('tcl/tcl.scm'), 'set x 1'],
+  'tcl-braces' => [EXAMPLES_DIR.join('tcl/tcl.scm'), 'set y {a {b} c}'],
+  'tcl-cmdsub' => [EXAMPLES_DIR.join('tcl/tcl.scm'), 'set z [expr {1 + [foo]}]'],
+  'tcl-mixed' => [EXAMPLES_DIR.join('tcl/tcl.scm'), 'puts "hi $world"; if {$x} { set a b }'],
+  'uri-full' => [EXAMPLES_DIR.join('uri/uri.scm'), 'https://user@example.com:8080/a/b?x=1#frag'],
+  'uri-bare' => [EXAMPLES_DIR.join('uri/uri.scm'), 'http://example.com'],
+  'sexpr' => [EXAMPLES_DIR.join('sexpr/sexpr.scm'), '(a (b c) d)'],
+  'lexgoal' => [EXAMPLES_DIR.join('lexgoal/mini-js.scm'), 'a = /ab/ ; b = c / d ;'],
+  'import' => [EXAMPLES_DIR.join('import/main.scm'), 'a b c'],
+  'bindings-class' => [EXAMPLES_DIR.join('bindings/ident.scm'), 'foo bar123 x'],
+  'jit' => [EXAMPLES_DIR.join('jit/jit.scm'), 'int f(int x){return x*x+1;}'],
+  'rewriter-define' => [EXAMPLES_DIR.join('rewriter/cdefines.scm'), '#define MAX_USERS 100'],
+  'rewriter-sample' => [EXAMPLES_DIR.join('rewriter/cdefines.scm'), EXAMPLES_DIR.join('rewriter/sample.c')],
+  'recover-ok' => [EXAMPLES_DIR.join('recover/list.scm'), '(a (b c))'],
+  'recover-missing' => [EXAMPLES_DIR.join('recover/list.scm'), '(a (b c)'],
+  'family-base' => [FAMILY.join('base.scm'), 'hello world'],
+  'family-merge' => [FAMILY.join('ext-merge.scm'), 'hello world'],
+  'family-override' => [FAMILY.join('ext-override.scm'), 'hello world'],
+  'family-bare' => [FAMILY.join('ext-bare.scm'), 'hello world'],
+  'family-param-on' => [FAMILY.join('ext-param.scm'), 'hi !', '--param', 'feature'],
+  'family-param-off' => [FAMILY.join('ext-param.scm'), 'hi'],
+  'query-word' => [QUERY.join('word.scm'), 'a b c'],
+  'query-word-eq' => [QUERY.join('word-eq.scm'), 'a b c'],
+  # std.shell's here-documents: the deferred slots, the parametrized goal
+  # of HeredocDelimLine and the first-in-first-out order of several.
+  **%w[single multiple in-if dash pipeline].to_h do |name|
+    ["shell-heredoc-#{name}", ['std.shell', SHELL.join("heredoc-#{name}.input")]]
+  end
+}.freeze
+
+CANDIDATES = { 'memo-adaptive' => nil, 'memo-always' => 'always' }.freeze
+
+Tinyparse::Gate.run('vm-diff', 'bytecode-VM rule-memo differential') do |gate|
+  cases = Tinyparse::Corpus.json_family(gate).map { |grammar, path| ["#{grammar}/#{path.basename}", grammar, path, []] }
+  EXAMPLES.each do |label, (grammar, input, *extra)|
+    path = input.is_a?(Pathname) ? input : gate.write("examples/#{label}.input", input)
+    cases << [label, grammar, path, extra]
+  end
+  Tinyparse::Corpus::FAMILIES.each_key do |family|
+    Tinyparse::Corpus.family(family, all: gate.full?).each do |grammar, path|
+      cases << ["#{family}/#{File.basename(path)}", grammar, path, []]
+    end
+  end
+
+  runs = gate.each_parallel(cases) do |label, grammar, path, extra|
+    reference = gate.vm_tree(grammar, path, *extra, env: { 'TINYPARSE_RULEMEMO' => 'off' })
+    [label, reference, CANDIDATES.transform_values do |mode|
+      gate.vm_tree(grammar, path, *extra, env: { 'TINYPARSE_RULEMEMO' => mode })
+    end]
+  end
+  CANDIDATES.each_key do |candidate|
+    runs.compact.each { |label, reference, candidates| gate.compare("#{candidate}: #{label}", reference, candidates[candidate]) }
+    gate.result(candidate)
+  end
+
+  # tinyparse depends on no actor runtime: neither ax (ax_*) nor tinyactors
+  # (ta_*, tah_*). The pattern is built in pieces so this file names none.
+  calls = /\b(?:#{%w[ax ta tah].join('|')})#{'_'}[a-z]+\(/
+  sources = Dir[ROOT.join('src/*.{c,h}').to_s].sort
+  offending = sources.flat_map do |source|
+    File.binread(source).each_line.each_with_index.select { |line, _| line.match?(calls) }
+        .map { |line, index| "#{Tinyparse.relative(source)}:#{index + 1}: #{line.strip}" }
+  end
+  if offending.empty?
+    gate.ok("the #{sources.size} library sources call no actor runtime")
+  else
+    gate.fail("the library calls an actor runtime:\n    #{offending.join("\n    ")}")
+  end
+
+  nested = gate.write('lifecycle.json', Tinyparse::Corpus::JSON_FAMILY['std.json']['nested'])
+  lifecycle = gate.vm_tree('std.json', nested, env: { 'TINYPARSE_TRACE_LIFECYCLE' => '1' }, separate: true)
+  if lifecycle.err.strip == 'lifecycle: finished'
+    gate.ok('the parser lifecycle ends in finished')
+  else
+    gate.fail("the parser lifecycle does not end in finished: #{lifecycle.err.strip.inspect}")
+  end
+end

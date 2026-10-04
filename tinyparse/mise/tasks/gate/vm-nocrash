@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: the VM survives a 200,000-deep input and a 400 KB token under a 512 KiB C stack"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# The bytecode VM is iterative: rule calls run on an arena-backed frame
+# stack driven by one dispatch loop, with no C recursion across them, so a
+# deep input grows the arena instead of the C stack. This runs the CLI on
+# one pathologically deep input (200,000 unclosed `[`, malformed on
+# purpose), and on one 400,000-byte number literal (a single token, which
+# the lexer's fused repeat loop matches), each under a 512 KiB C stack, and
+# fails when either dies by a signal. A clean parse and a syntax error both
+# pass. One input under a bound is the whole test: the guarantee is the
+# arena bound, so it does not sweep depths (see the profiling skill). The
+# recursive interpreter it replaced died with SIGSEGV on this input under
+# this bound (docs/decisions.md, W14-6).
+
+require_relative '../../lib/gate'
+
+STACK = 512 * 1024
+
+Tinyparse::Gate.run('vm-nocrash', 'bytecode-VM crash bound') do |gate|
+  inputs = {
+    'deep input: 200000 nested [' => gate.write('deep.json', '[' * 200_000),
+    'one 400000-byte number literal' => gate.write('bignum.json', '1234567890' * 40_000)
+  }
+  inputs.each do |label, input|
+    run = gate.vm_tree('std.json', input, stack: STACK)
+    if run.signaled?
+      gate.fail("#{label}: the VM died by signal #{run.status.termsig} under a 512 KiB stack")
+    else
+      gate.ok("#{label}: exit #{run.code} under a 512 KiB stack, no crash signal")
+    end
+  end
+end

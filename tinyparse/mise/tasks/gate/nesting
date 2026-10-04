@@ -1,0 +1,45 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: a generated host parser nests generated embedded parsers in one program and builds the VM's composite tree"
+#MISE depends=["build", "amalgamate"]
+#USAGE flag "--full" help="Build the shared object of the three parsers at the recipe's -O2 rather than -O0"
+# vim:ft=ruby
+
+# std.fence names the languages it embeds in its (inject grammar: NAME
+# ...) forms but is not linked against their parsers: a host program
+# registers each embedded generated parser on the engine
+# (tinyparse_register_language), and the generated host parser's inject
+# sites find them by name at run time. examples/nesting, which `mise run
+# examples` builds, links three parsers generated with distinct prefixes
+# (std.fence as fence_host, std.json as json_lang, std.javascript as
+# js_lang) with the nesting.c driver. This gate:
+#
+#   1. runs it on the sample: its composite tree must be the VM's (`tinyparse
+#      run std.fence --dump-tree`) and the committed expected.txt;
+#   2. reads the program's symbols: all three parsers' entries are there;
+#   3. builds a shared object of the three parsers with
+#      examples/embed/embed-lib.sh: it exports their entries and the public
+#      API, and nothing else (gate:exports checks the recipe on one and two
+#      parsers).
+
+require_relative '../../lib/gate'
+
+Tinyparse::Gate.run('nesting', 'native-nesting gate') do |gate|
+  example = Tinyparse::ROOT.join('examples/nesting')
+  program = Tinyparse::BUILD.join('examples/nesting/nesting')
+  next gate.fail("#{Tinyparse.relative(program)} is not built (mise run examples)") unless program.executable?
+
+  sample = example.join('sample.md')
+  got = gate.execute([program, sample])
+  gate.compare('nesting: the generated parsers vs the VM', gate.vm_tree('std.fence', sample), got)
+  gate.compare('nesting: output vs expected.txt', example.join('expected.txt').binread, got)
+
+  parsers = { 'fence_host' => 'std.fence', 'json_lang' => 'std.json', 'js_lang' => 'std.javascript' }
+  symbols = gate.defined_symbols(program)
+  parsers.each_key do |prefix|
+    %w[load run].each { |entry| gate.check(symbols.include?("#{prefix}_#{entry}"), "the program does not define #{prefix}_#{entry}") }
+  end
+
+  library = gate.embedded_library('libnesting.so', parsers)
+  gate.must_export_only(library, parsers.keys.flat_map { |prefix| ["#{prefix}_load", "#{prefix}_run"] })
+  gate.result
+end

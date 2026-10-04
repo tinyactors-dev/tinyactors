@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+#MISE description="Benchmark six parsers parse-only over the React corpus: tsc, tsgo, meriyah, tree-sitter, the VM and the generated parser (opt-in; needs the network)"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# bench/parsers.sh: needs the manifest `REGEN=1 mise run bench:react` writes,
+# and npm packages it installs into bench/tsbench/.
+
+require_relative '../../lib/tinyparse'
+
+Tinyparse.bench('parsers.sh', *ARGV)

@@ -1,0 +1,43 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: a generated parser fed a growing buffer (TINYPARSE_MORE) builds the VM's tree at every chunk size"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# A generated parser can be driven over a growing buffer: it returns
+# TINYPARSE_MORE at the boundary between the start rule's top-level items,
+# and resumes there when the driver has appended more bytes. (Generated
+# code recurses natively and cannot suspend deeper; the VM's push API is the
+# engine for streaming at any granularity, and is not tested here.)
+#
+# examples/bufferfriendly drives the generated s-expression parser (start
+# rule: a repeat of forms, then EOF). Fed the sample in chunks of 1, 2, 3,
+# 5, 8, 17, 64 and 1,000,000 bytes, every tree must equal the VM's tree of
+# the whole document, and feeding it a byte at a time must suspend at
+# least once, so the boundary is exercised and not bypassed.
+
+require_relative '../../lib/gate'
+
+Tinyparse::Gate.run('bufferfriendly', 'buffer-friendly generated parser') do |gate|
+  example = Tinyparse::ROOT.join('examples/bufferfriendly')
+  built = Tinyparse::BUILD.join('examples/bufferfriendly')
+  driver = built.join('bufferfriendly')
+  next gate.fail("#{Tinyparse.relative(driver)} is not built (mise run examples)") unless driver.executable?
+
+  gate.check(built.join('sx.c').read.include?('sx_run_chunk'),
+             'the generated parser has no sx_run_chunk: the item boundary was not emitted')
+  sample = example.join('sample.sx')
+  vm = gate.vm_tree(example.join('sexpr.scm'), sample, separate: true)
+  next gate.fail("the VM exits #{vm.code} on the sample:\n#{vm.err}") unless vm.success?
+
+  [1, 2, 3, 5, 8, 17, 64, 1_000_000].each do |size|
+    run = gate.execute([driver, sample, size], separate: true)
+    suspensions = run.err[/(\d+) TINYPARSE_MORE/, 1].to_i
+    next gate.fail("chunk=#{size}: exit #{run.code}\n#{run.err}") unless run.success?
+    next unless gate.compare("chunk=#{size}", vm.out, run.out)
+
+    gate.check(size != 1 || suspensions.positive?,
+               'a byte at a time, the parser never returned TINYPARSE_MORE: the boundary was bypassed')
+    puts "  chunk=#{size}: the VM's tree (#{suspensions} TINYPARSE_MORE suspensions)"
+  end
+  gate.result
+end

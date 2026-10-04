@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+#MISE description="The performance ratchet: the suite is green, and bench:javascript's median is within 5% of test/perf-baseline.txt (opt-in; needs the network)"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# bench/perf-gate.sh runs `mise run test` and bench/javascript.sh. The
+# ceiling in test/perf-baseline.txt only moves down.
+
+require_relative '../../lib/tinyparse'
+
+Tinyparse.bench('perf-gate.sh', *ARGV)

@@ -19,14 +19,16 @@ behaviour directly.
 - **"Where does the time go?"** — `callgrind` (deterministic instruction counts,
   great for a small corpus) or `gprof`/`perf` (sampled wall time). The tinyparse
   profiling scaffold is already wired: see the *Appendix: reproduce* in
-  `docs/performance.md` (`bench/prof/prof_driver`, callgrind_annotate, gprof).
-  Build the driver with `-O2 -g -fno-omit-frame-pointer`, run callgrind over a few
-  corpus passes, read the top of `callgrind_annotate`. The hot function is named,
-  not guessed.
+  `docs/performance.md` (callgrind_annotate, gprof). The old `bench/prof/`
+  driver is gone; `bench/bench_tinyparse`, which `mise run bench:javascript`
+  builds, carries function symbols, so run it straight under callgrind (or
+  rebuild it with `-O2 -g -fno-omit-frame-pointer`) over a few corpus passes and
+  read the top of `callgrind_annotate`. The hot function is named, not guessed.
 - **"Is this faster?"** — the benchmark harnesses, not intuition:
-  `ci/tinyparse-perf-gate.sh` (the JS-corpus ratchet),
-  `ci/tinyparse-react-bench.sh` and `ci/tinyparse-tsc-bench.sh` (the
-  real-workload, multi-parser comparison). Report the median, name the hardware.
+  `mise run bench:perf-gate` (the JS-corpus ratchet),
+  `mise run bench:react`, `bench:parsers` and `bench:tsc` (the real-workload,
+  multi-parser comparison; `mise run bench:fetch` first, for the references).
+  Report the median, name the hardware.
 - **"Does it crash / can it overflow?"** — a sanitizer or a bound, never a manual
   depth search:
   - **AddressSanitizer** (`-fsanitize=address`) reports a stack-overflow or a
@@ -35,11 +37,14 @@ behaviour directly.
     fast depth instead of needing millions of frames — and, conversely, proves an
     *iterative* parser survives a deep input where a recursive one would not:
     `( ulimit -s 256 && ./parser deep-input )` should exit cleanly, not by signal.
+    `mise run gate:vm-nocrash` and `gate:parser-nocrash` are this check, standing:
+    one 200,000-deep input under a 512 KiB stack.
   - **UBSan** (`-fsanitize=undefined`) catches the overflow/UB a crash hides.
   The right assertion for a no-crash guarantee is "exits without a crash signal on
   pathological input," verified once with a tool — not "depth N works" for a magic N.
-- **"How much memory?"** — `getrusage` peak RSS (the bench harnesses print
-  `peak_rss_kb`) or `/usr/bin/time -v`, not a mental model of allocations.
+- **"How much memory?"** — `getrusage` peak RSS (the bench harnesses and
+  `bench/reclaim_test.c` print `peak_rss_kb`; `mise run gate:reclaim` holds it)
+  or `/usr/bin/time -v`, not a mental model of allocations.
 
 ## The discipline
 

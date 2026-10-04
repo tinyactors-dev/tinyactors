@@ -1,0 +1,27 @@
+id: tinyparse-no-static-mutable
+language: c
+severity: error
+message: tinyparse keeps no mutable state in static storage; put it on the engine (tinyparse_engine) or the parser.
+note: |
+  A static variable written at run time is state every engine in the
+  process shares, and that survives closing one: a `static int defined`
+  that outlived an engine once changed how every later parse ran. Mutable
+  state belongs on the engine or the parser. A `static const` table (the
+  embedded grammars, the manual page, a lookup table) is read-only and
+  stays; a static function is linkage, not data. `mise run gate:no-statics`
+  in tinyparse scans src/*.c with this rule.
+rule:
+  kind: declaration
+  all:
+    - has:
+        kind: storage_class_specifier
+        regex: ^static$
+    - not:
+        has:
+          kind: type_qualifier
+          regex: const
+          stopBy: end
+    - not:
+        has:
+          kind: function_declarator
+          stopBy: end

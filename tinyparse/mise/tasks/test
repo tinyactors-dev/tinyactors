@@ -1,9 +1,9 @@
 #!/usr/bin/env ruby
-#MISE description="Test tinyparse: the data-driven suite over the xfail ledger, and the gates in ci/ (all of them with --full)"
-#MISE sources=["include/**/*", "src/**/*", "test/**/*", "ci/**/*", "examples/**/*", "grammars/**/*", "bench/reclaim_test.c", "tinyparse.1", "INSTALL.md", "install.sh", "VERSION", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise/tasks/test/_default", "../mise.toml"]
+#MISE description="Test tinyparse: the data-driven suite over the xfail ledger, and every gate in mise/tasks/gate/ (their exhaustive versions with --full)"
+#MISE sources=["include/**/*", "src/**/*", "test/**/*", "examples/**/*", "grammars/**/*", "bench/reclaim_test.c", "bench/bench_common.h", "tinyparse.1", "INSTALL.md", "install.sh", "VERSION", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise/ast-grep/rules/tinyparse-*.yml", "../mise/tasks/test/_default", "../mise.toml"]
 #MISE outputs={auto=true}
-#MISE depends=["build", "amalgamate", "dist", "release"]
-#USAGE flag "--full" help="Also run the gates that take more than a few seconds: the engine and compiled-parser differentials, the export surface, nesting, reclaim and reuse"
+#MISE depends=["build", "amalgamate", "dist", "release", "gate:*"]
+#USAGE flag "--full" help="Also run the exhaustive version of each gate that has one: every corpus input through both engines and the generated parsers, 300 parses for reclaim, std.tsx for reuse, the -O2 embedded libraries"
 # vim:ft=ruby
 
 # The suite (test/suite/**/*.test) is data: build/bin/harness runs each case
@@ -12,23 +12,25 @@
 # ledger is empty, and prints PROGRESS=passing/total. The dist/ cases read
 # what `dist`, `amalgamate` and `release` built.
 #
-# The gates (ci/tinyparse-*.sh, Tinyparse::GATES) run beside it, each in its
-# own process. The fast pass runs those that take a second or two; --full
-# (which `mise run test:full` at the root passes down) runs every one: the
-# differentials sweep every suite input through both engines, or compile a
-# parser for each, and take half a minute each.
+# The gates (mise/tasks/gate/, Tinyparse::Gate) are dependencies, which mise
+# runs side by side before this task, each checking one property across many
+# inputs in a second or two. A gate that declares a --full flag has an
+# exhaustive version of the same property (a sweep of every corpus input, a
+# larger workload); `mise run test --full`, which `mise run test:full` at the
+# root passes down, runs those here, beside the suite.
 
 require_relative '../lib/tinyparse'
 
-full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
-SLOW_GATES = %w[exports vm-diff cc-diff nesting reclaim reuse-regression].freeze
-gates = full ? Tinyparse::GATES : Tinyparse::GATES - SLOW_GATES
-
+full = ARGV.include?('--full') || ENV['usage_full'] == 'true'
 root = Tinyparse::ROOT
+exhaustive = Dir[root.join('mise/tasks/gate/*').to_s].sort.select { |task| File.read(task).include?('#USAGE flag "--full"') }
+
 harness = [Tinyparse.harness.to_s, '--suite', root.join('test/suite').to_s, '--xfail', root.join('test/xfail.list').to_s,
            '--cwd', root.to_s]
-jobs = [['suite', harness], *gates.map { |name| ["gate #{name}", ['bash', Tinyparse.gate_script(name).to_s]] }]
-failed = Tinyparse.run_all(jobs.map { |label, command| [label.tr(' ', '-'), command] }, Tinyparse.test_environment)
-puts "test: #{full ? 'every gate' : "the fast gates (--full adds #{SLOW_GATES.join(', ')})"}"
+jobs = [['suite', harness]]
+jobs += exhaustive.map { |task| ["gate-#{File.basename(task)}-full", [task, '--full']] } if full
+failed = Tinyparse.run_all(jobs, Tinyparse.test_environment)
+names = exhaustive.map { |task| File.basename(task) }
+puts "test: the suite and every gate#{full ? ", and the exhaustive #{names.join(', ')}" : " (--full adds the exhaustive #{names.join(', ')})"}"
 abort "test: failed: #{failed.join(' ')}" unless failed.empty?
 puts 'test: GREEN'

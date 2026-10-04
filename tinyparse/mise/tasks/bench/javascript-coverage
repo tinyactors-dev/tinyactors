@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+#MISE description="Count the cases of tree-sitter's JavaScript corpus std.javascript parses with no ERROR or MISSING node: JS_COVERAGE=parsed/total"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# bench/javascript-coverage.sh: needs reference/tree-sitter-javascript.
+
+require_relative '../../lib/tinyparse'
+
+Tinyparse.bench('javascript-coverage.sh', *ARGV)

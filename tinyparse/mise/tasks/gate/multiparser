@@ -1,0 +1,34 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: two generated parsers with distinct --name prefixes link into one program and build the golden trees"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# `tinyparse c GRAMMAR --parser-lib --name P` renames every file-scope
+# symbol it emits to P_..., so parsers generated from two grammars link
+# into one program. examples/embed, which `mise run examples` builds, links
+# a fenced-block host grammar (host.scm, prefix host_parser) and std.json
+# (prefix json_parser) with the embed.c driver: the driver parses the
+# sample with the host parser and runs the json parser on each fence's
+# bytes. A symbol collision fails that link. This gate runs it on the
+# sample, holds its output to the committed expected.txt byte for byte, and
+# reads the program's symbols: both parsers' entries are there, and the
+# default entry names (tp_compiled_parser_load and _run), which two parsers
+# without prefixes would both define, are not.
+
+require_relative '../../lib/gate'
+
+Tinyparse::Gate.run('multiparser', 'multi-parser gate') do |gate|
+  example = Tinyparse::ROOT.join('examples/embed')
+  program = Tinyparse::BUILD.join('examples/embed/embed')
+  next gate.fail("#{Tinyparse.relative(program)} is not built (mise run examples)") unless program.executable?
+
+  gate.compare('embed: output vs expected.txt', example.join('expected.txt').binread,
+               gate.execute([program, example.join('sample.md')]))
+  symbols = gate.defined_symbols(program)
+  %w[host_parser_load host_parser_run json_parser_load json_parser_run].each do |entry|
+    gate.check(symbols.include?(entry), "the program does not define #{entry}")
+  end
+  defaults = %w[tp_compiled_parser_load tp_compiled_parser_run].select { |entry| symbols.include?(entry) }
+  gate.check(defaults.empty?, "the default entry #{defaults.join(', ')} survived: a prefix was not applied")
+  gate.result
+end

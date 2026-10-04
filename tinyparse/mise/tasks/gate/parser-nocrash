@@ -1,0 +1,24 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: a generated C parser survives a 200,000-deep input under a 512 KiB C stack"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# A parser generated with `tinyparse c --parser` runs the grammar on an
+# arena-backed frame stack with one dispatch loop, not by C recursion, so
+# its depth is bounded by the arena, not the C stack. This generates the
+# std.json parser, runs it on 200,000 unclosed `[` (malformed on purpose)
+# under a 512 KiB C stack, and fails when it dies by a signal. A clean parse
+# and a syntax error both pass. One input under one bound is the whole test
+# (see the profiling skill): it does not sweep depths.
+
+require_relative '../../lib/gate'
+
+Tinyparse::Gate.run('parser-nocrash', 'compiled-parser crash bound') do |gate|
+  input = gate.write('deep.json', '[' * 200_000)
+  run = gate.execute([gate.parser('std.json')], stdin: input, stack: 512 * 1024)
+  if run.signaled?
+    gate.fail("the generated parser died by signal #{run.status.termsig} under a 512 KiB stack")
+  else
+    gate.ok("200000 nested [: exit #{run.code} under a 512 KiB stack, no crash signal")
+  end
+end
