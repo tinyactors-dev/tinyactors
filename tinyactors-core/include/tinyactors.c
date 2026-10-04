@@ -7926,6 +7926,11 @@ static const ta_type_builtin ta_type_invoker_items[] = {
 };
 const ta_type_builtin_set ta_type_registry_invoker_builtins = { .items = ta_type_invoker_items, .count = 1 };
 
+/*
+ * ta_type_hash returns the 32-bit table hash of an interned name. The atom
+ * number is already unique per string, so mixing it (not the bytes) gives a
+ * well-spread hash in constant time. It never allocates and has no state.
+ */
 static uint32_t ta_type_hash(ta_atom name) {
     return (uint32_t)ta_mix64(name);
 }
