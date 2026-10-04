@@ -1,127 +1,143 @@
-# Embedding one parser inside another
+# embed: link two generated parsers into one program
 
-This example links **two separately compiled parsers into one program** and runs
-both: a host grammar finds fenced code blocks in a Markdown-ish document, and the
-bytes inside each fence are parsed by a second, independently generated parser.
+`embed.c` parses a Markdown-like document with a parser generated from
+`host.scm`, which finds fenced code blocks, and parses the bytes inside each
+block with a second parser generated from std.json. Both generated parsers
+live in one program because each was generated with its own symbol prefix.
+The example uses `tinyparse c --parser-lib --name` from the
+[manual](../../tinyparse.1.md#c), the [generated parser
+interface](../../docs/reference/c-api.md#generated-parser-interface) and the
+[tree cursor](../../docs/reference/c-api.md#tree-cursor) functions.
 
-That is the lesson — *two grammars compiled to C coexist in one binary* — and no
-other example teaches it. It is the embedding use case: a host markup format that
-carries code in another language, where the code is a different parser's job.
+## Prerequisites
 
-## Not the same as injection
+Run the commands from the `tinyparse/` directory of a source tree, as
+[Examples](../README.md) describes. A generated parser builds only from a
+source tree: it includes `src/internal.h`.
 
-The standard grammar `std.fence` also parses fenced code blocks of mixed
-languages, but it does so inside **one** grammar with the runtime
-`(inject grammar: NAME content: REGION)` form, yielding a single composite tree.
-This example does the opposite: there is no `inject`. The host grammar
-(`host.scm`) treats a fence's body as **opaque bytes** and only delimits it; the
-*host program* then runs a wholly separate parser on those bytes. Two grammars,
-two generated parsers, two trees, one binary.
+## Run it
 
-## How two parsers avoid colliding
-
-`tinyparse c <grammar> --parser-lib` emits a parser as a C translation unit
-with a fixed set of file-scope symbols — `tp_parser_p<N>`, `tp_compiled_parser_load`,
-`tp_compiled_parser_run`, and the emitted statics. Link two such units into one
-program and those symbols collide.
-
-The `--name <prefix>` option (W16-3) renames **every** emitted file-scope symbol
-to `<prefix>_…`. With no `--name`, the parser keeps its historical default names,
-so existing callers are unchanged. `mise run examples` generates the two parsers
-with distinct prefixes:
+Build the example programs, then run this one on the sample document, which
+holds two `json` fences:
 
 ```sh
-tinyparse c host.scm  --parser-lib --name host_parser --out host_parser.c
-tinyparse c std.json  --parser-lib --name json_parser --out json_parser.c
-```
-
-so their entries become `host_parser_load` / `host_parser_run` and
-`json_parser_load` / `json_parser_run`, and the two units link cleanly. The
-shared runtime (`libtinyparse`, which the leaf helpers, the CALL prologue, and
-the tree builder live in) is one archive, linked once, so it is
-shared — not duplicated — between the two parsers.
-
-## How the host program embeds
-
-`embed.c` parses the whole document with the host parser, then walks the host
-tree through the cursor API. For every node bound to the `code` field it reads
-the node's byte span (`start_byte`/`end_byte`) straight off the tree — it never
-re-scans the document — and hands exactly those bytes to the json parser. The CST
-is the data structure: the host tree locates the spans, and the json parser turns
-each span into its own tree.
-
-## Files
-
-- `host.scm` — the host fenced-block grammar; exposes `lang` and `code` fields.
-- `embed.c` — the driver. Hosted (libc), linked against the dist archives and
-  the two generated parser units.
-- `sample.md` — a sample document with two json fences.
-- `expected.txt` — the golden output (host tree + both embedded json trees).
-
-The generated `host_parser.c` / `json_parser.c` and the `embed` binary are build
-artifacts in `build/examples/embed/`; `mise run examples` regenerates them.
-
-## Use
-
-```sh
-# from tinyparse/
 mise run examples
 build/examples/embed/embed examples/embed/sample.md
 ```
 
-Output (abridged): the host tree, then the json tree of each fence's contents,
-each indented under the fence it came from.
+The program prints the host tree, then the tree of each fence's contents,
+indented under the fence. A line feed token's kind name is a line feed, so each
+one prints as an indented empty line followed by a blank line. The second
+fence's tree is cut and replaced by `...`:
 
-```
+````text
 === host tree (host.scm) ===
 Document
   Fence
     ```
     lang: Info
+    
+
     code: Body
+    
+
     ```
-  ...
+  Space
+  Fence
+    ```
+    lang: Info
+    
+
+    code: Body
+    
+
+    ```
+  Space
 === embedded parses (std.json) ===
 --- embedded json parse of code span [8,24) ---
     Document
       Value
         Object
-          ...
-```
+          open: {
+          Member
+            key: String
+            :
+            Space
+            value: Value
+              Array
+                open: [
+                Value
+                  Number
+                ,
+                Space
+                Value
+                  Number
+                ,
+                Space
+                Value
+                  Number
+                close: ]
+          close: }
+--- embedded json parse of code span [37,49) ---
+...
+````
 
-`mise run gate:multiparser` builds this example and asserts the output equals
-`expected.txt`, and that the linked binary carries both parsers' distinct entries.
+The full output is `examples/embed/expected.txt`.
 
-## Exporting only the parser API from the embeddable artifact (W16-4)
+## How it works
 
-A host that links the parser into its own application should not inherit the
-library's internals: the embeddable object or library must export ONLY the
-parser's own entries (`<prefix>_load` / `<prefix>_run`) plus the public
-`tinyparse_*` API the host calls — no tinyparse-internal `tp_*`.
-
-`embed-lib.sh` is the recipe. It compiles the tinyparse **amalgamation**
-(`dist/amalgamation/tinyparse.c`) plus each generated parser-lib unit, and links behind a linker version script generated
-from the `--name` prefixes that exports exactly the parser entries and
-`tinyparse_*` and localizes everything else:
+`mise run examples` generates the two parsers with different prefixes,
+compiles them with `-std=c11 -O2 -I include -I src`, and links them with
+`embed.c` and `build/lib/libtinyparse.a` into `build/examples/embed/embed`:
 
 ```sh
-# from the tinyparse project root
-bash examples/embed/embed-lib.sh libembed.so host_parser:host.scm json_parser:std.json
-nm -D --defined-only libembed.so | grep -cE ' tp_'  # -> 0
-nm -D --defined-only libembed.so | grep -E ' (host_parser|json_parser)_'
-#   T host_parser_load / _run, T json_parser_load / _run
+tinyparse c examples/embed/host.scm --parser-lib --name host_parser --out build/examples/embed/host_parser.c
+tinyparse c std.json --parser-lib --name json_parser --out build/examples/embed/json_parser.c
 ```
 
-The emitter is unchanged — this is a link-time recipe — so the generated C is
-byte-for-byte what `--name` already produces. `mise run gate:exports` is the
-gate: it builds the artifact (single parser and the two-parser case), asserts with
-`nm` that the exported table is exactly the parser API plus `tinyparse_*`, and
-checks that a hardened executable still parses the sample to the golden tree.
+Each file defines its entries under its prefix: `host_parser_load`,
+`host_parser_run`, `json_parser_load` and `json_parser_run`, plus
+`host_parser_run_chunk`, because `host.scm`'s start rule is
+`(seq (repeat1 Fence) EOF)`. Without `--name` the prefixes would be the grammar
+names, `host` and `json`, which differ too; two parsers collide only when their
+prefixes are equal. `embed.c` declares the four entries it calls.
 
-## Scope
+`host.scm` captures each fence's info string in the field `lang` and its
+contents in the field `code`. Its `Body` rule matches any byte up to a line
+feed followed by three backticks, so the host grammar delimits the contents
+without parsing them.
 
-The host grammar recognizes ```` ``` ````-delimited fences whose info string is a
-single identifier; the body runs up to the closing fence. The embedded language
-here is `std.json`, but any generated parser works the same way — the embedding is
-the host program reading a span and running a second parser on it, not anything
-specific to JSON.
+`embed.c` loads the host grammar with `host_parser_load`, pushes the document
+and runs `host_parser_run` in place of `tinyparse_finish`. It then walks the
+tree with a cursor, and for each node in the `code` field it takes the node's
+byte range and parses those bytes with `json_parser_load` and
+`json_parser_run`, on a new engine. It never scans the document text itself.
+
+A grammar can also parse a region with another grammar during one parse,
+through the [`inject`](../../docs/reference/grammar.md#inject) form, which
+builds a single tree. The [nesting](../nesting/README.md) example does that with generated
+parsers; here the host program runs the second parser and gets a second tree.
+
+## Limits
+
+- Every fence is parsed as JSON, whatever its info string. A fence such as
+  ```` ```python ```` prints `(json parse failed)` under its code span, and the
+  program exits with status 1.
+- `host.scm` accepts only fences whose info string is letters, digits and
+  `_`, with a line of contents between the opening and the closing line, and
+  only whitespace between fences. Text outside a fence, a fence with no info
+  string, or a closing line right after the opening line makes the program
+  print `embed: host parse failed` and exit with status 1.
+- The host parse and each fence open their own engine over an 8 MiB `malloc`
+  block with a `malloc` grow callback; the program frees neither the blocks nor
+  what `grow` returns.
+
+## Files
+
+| File | Contents |
+|------|----------|
+| `host.scm` | The host grammar: fenced blocks with `lang` and `code` fields. |
+| `embed.c` | The program. |
+| `sample.md` | A document with two `json` fences. |
+| `expected.txt` | The program's output for `sample.md`. |
+| `embed-lib.sh` | Builds a shared library that exports only generated parsers' entries and the public API; [Ship a generated C parser](../../docs/how-to/generated-parser.md) shows how to use it. |

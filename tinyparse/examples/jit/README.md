@@ -1,105 +1,121 @@
-# jit — a native-codegen JIT for a sane C subset
+# jit: generate x86-64 code from a tree
 
-This example parses a small subset of C with `tinyparse` and emits native
-x86-64 machine code by recursing directly over the concrete syntax tree through
-the cursor API. There is no intermediate AST: the one tree walk is also the code
-emitter. The bytes land in a W^X page, and the page is called.
+`jit.c` parses a function written in a small subset of C, generates x86-64
+machine code for it while walking the concrete syntax tree (CST), and calls
+the code with an integer argument. It shows code generation driven by the
+tree itself: the walk dispatches on node kinds and field names and emits
+instructions as it goes, with no intermediate data structure between the
+tree and the machine code. It uses the
+[tree cursor](../../docs/reference/c-api.md#tree-cursor) functions and a
+grammar built from the [`token`](../../docs/reference/grammar.md#tokens),
+[`seq`, `choice`, `repeat`, `optional`](../../docs/reference/grammar.md#rules)
+and [`field`](../../docs/reference/grammar.md#field) forms.
+
+## Prerequisites
+
+Run the commands from the `tinyparse/` directory after `mise run examples`,
+as [Examples](../README.md#prerequisites) describes.
+
+## Run it
+
+`run.sh` takes the C source, the name of the function to call and its
+integer argument. Square 7 and add 1:
 
 ```sh
-# from tinyparse/
-examples/jit/run.sh 'int f(int x){return x*x+1;}' f 7      # -> 50
-examples/jit/run.sh 'int fib(int n){return n<2?n:fib(n-1)+fib(n-2);}' fib 10   # -> 55
+examples/jit/run.sh 'int f(int x){return x*x+1;}' f 7
 ```
 
-`run.sh '<C source>' <function> <int-arg>` builds the driver if needed, JITs the
-named function, calls it with the integer argument, and prints the integer
-result.
+The program prints the result and exits with status 0:
 
-## The C subset
+```text
+50
+```
 
-The grammar (`jit.scm`) accepts one or more `int`-returning functions of `int`
-parameters whose body is a single `return <expr>;`. Expressions cover:
+A function can call itself. The tenth Fibonacci number:
 
-- integer literals and parameter identifiers,
-- function calls (so a function can call itself — recursion),
-- the operators `*`, `+`, `-`, `<`, and the ternary `?:`,
-- parentheses and prefix unary `-`.
+```sh
+examples/jit/run.sh 'int fib(int n){return n<2?n:fib(n-1)+fib(n-2);}' fib 10
+```
 
-Precedence is encoded by layered rules: `Ternary` over `Relational` over
-`Additive` over `Multiplicative` over `Unary` over `Primary`, so the parser
-needs no precedence-climbing machinery. Left-associative chains are written as a
-head `lhs` followed by `(repeat (op rhs))`, and the emitter folds them
-left-to-right. The grammar uses only the V1 forms `tinyparse` ships:
-`token`/`regex`, `seq`, `choice`, `repeat`, `optional`, and `field`.
+```text
+55
+```
 
-## Codegen straight off the cursor
+## How it works
 
-The driver opens an engine, compiles `jit.scm`, parses the source string in one
-`push` + `finish`, and emits machine code by walking the resulting tree
-**entirely through the cursor API** (`tinyparse_tree_cursor_*`). There is no
-lowering step and no node tree of its own. `emit_expr(tree, cursor)` is the whole
-codegen: it reads the node under the cursor and emits inline.
+The grammar, `jit.scm`, reads one or more functions of the form
+`int NAME(int PARAM, ...) { return EXPR; ... }`, with integer literals,
+identifiers, calls, parentheses, prefix `-`, `*`, `+`, `-`, `<` and `?:`.
+Precedence comes from a ladder of rules from `Ternary` down to `Primary`.
+Each binary level is `(field lhs: ...)` followed by
+`(repeat (seq (field op: ...) (field rhs: ...)))`, so `a - b - c` is one node
+with the children `lhs`, `op`, `rhs`, `op`, `rhs`.
 
-It first dispatches on the node's kind name. A `Number` emits a literal load, an
-`Ident` loads the parameter, and a `Call` emits a recursive call. Everything else
-is a layered precedence rule, so `emit_expr` hands off to a walker that scans the
-node's children once and dispatches on the field names the grammar attached:
+`emit_expr` handles the leaves by node kind: a `Number` loads its value, an
+`Ident` loads the parameter, and a `Call` calls the function. Every other
+node goes to `emit_rule`, which visits the node's children once, in order,
+and acts on each child's field name:
 
-- `lhs` / `op` / `rhs` — a left-associative chain. The CST already records it
-  left-leaning, as a head `lhs` and a flat run of `(op, rhs)` tails. The walker
-  emits `lhs`, then for each tail emits `rhs` and folds the pair into the value
-  already on the stack, advancing along the siblings. Nothing rebuilds the shape
-  the tree already holds.
-- `cond` / `then` / `else` — a ternary, emitted as the children are reached: the
-  condition and its `jz` at `cond`, the then-branch and the `jmp` past the else
-  at `then`, the else-branch at `else`. The two rel32 displacements are
-  back-patched in place.
-- `neg` — prefix unary minus over the operand emitted beside it.
-- `num` / `var` / `group` / `expr` — a `Primary` or `Expr` forwarding to a
-  literal, the parameter, a parenthesized group, or a nested expression.
+| Field | Code emitted |
+|-------|--------------|
+| `lhs` | the operand |
+| `op` | nothing; the operator is remembered |
+| `rhs` | the operand, then the remembered operator applied to the two values on the stack |
+| `cond`, `then`, `else` | the condition and a conditional jump, the then-branch and a jump past the else-branch, the else-branch; both jump offsets are filled in when their targets are known |
+| `neg` | nothing; the operand that follows has no field, and its value is negated after the walk |
+| `num`, `var`, `group`, `expr` | the literal, the parameter, or the nested expression |
+| no field | the child, when it has children and no value is on the stack yet |
 
-Source text for literals and operators is read from the node's byte span. The
-backend is a stack machine using the System V x86-64 calling convention: each
-expression leaves its 32-bit result pushed on the native stack, binary operators
-pop two operands and push one, and the single incoming parameter arrives in `edi`
-and is stored at `-8(%rbp)`.
+Folding each `op` and `rhs` pair into the value on the stack, in sibling
+order, evaluates the chain left to right. The text of a literal or operator
+is the input at the node's byte range.
 
-- `+`/`-`/`*` → `add`/`sub`/`imul` on `eax`/`ecx`.
-- `<` → `cmp` then `setl`/`movzx`, giving a 0/1 result.
-- `?:` → `test` the condition, `jz` past the then-branch, `jmp` past the
-  else-branch; rel32 displacements are back-patched once both targets are known.
-- a call → move the argument into `edi`, then a real `call` (rel32) to the
-  function's own entry at offset 0. With a proper prologue (`push rbp; mov rbp,
-  rsp; sub rsp, 16`) and epilogue (`leave; ret`), recursion just works: `fib`
-  calls itself.
-
-The host is selected at compile time. This example asserts `__x86_64__` and emits
-x86-64, the repo's CI host. An aarch64/macOS backend would slot into the same
-emitter under an `#if defined(__aarch64__)` block.
+The generated code is a stack machine in the System V x86-64 calling
+convention. The argument arrives in `edi` and is stored at `-8(%rbp)`, and
+each expression pushes its 32-bit result. A call moves its argument into
+`edi` and calls offset 0 of the code buffer. `run_jit` writes the code into a
+readable and writable page, then makes it readable and executable with
+`mprotect` before calling it.
 
 ## Limits
 
-The subset is deliberately small, and the emitter takes the grammar at its word.
-A function body is a single `return <expr>;`. The one parameter lives in a fixed
-stack slot, so a function of several parameters, or one that names anything other
-than its parameter, is out of range. A `Call` resolves to the entry at offset 0,
-which is correct only for self-recursion; calling a different function would jump
-to the wrong code. Arithmetic is 32-bit and unchecked, so overflow wraps the way
-the hardware does, and there is no division. These are properties of the demo,
-not of the cursor-walking technique, which carries over to a fuller backend
-unchanged.
+The grammar accepts more than the code generator handles correctly.
 
-## W^X execution
-
-Generated bytes are placed in a fresh page mapped `PROT_READ | PROT_WRITE`, then
-flipped to `PROT_READ | PROT_EXEC` with `mprotect` before the page is ever
-called. The page is never simultaneously writable and executable, which is the
-W^X discipline modern kernels and hardened allocators expect. The function
-pointer is then cast from the page base and invoked; the page is `munmap`'d
-afterward.
+- Every parameter and every identifier reads the same stack slot, which holds
+  the first argument. `int f(int a, int b){return a-b;}` called with 7 prints
+  `0`, and `int f(int x){return y+1;}` called with 7 prints `8`; both exit
+  with status 0.
+- A call always jumps to the function being compiled.
+  `int g(int x){return x+1;} int f(int x){return g(x)*2;}` called as `f`
+  recurses until the stack overflows, and the program dies with a
+  segmentation fault, exit status 139.
+- A call passes one argument. A call with two or more arguments
+  unbalances the stack: `int f(int x){return x<1?0:f(x-1,5)+1;}` called as
+  `f 3` dies with a segmentation fault, exit status 139. A call with no
+  arguments passes 0: `int f(int x){return x<1?0:f()+1;}` called with 3
+  prints `1`.
+- A function with several `return` statements returns the value of the last
+  one: `int f(int x){return 1; return 2;}` prints `2`.
+- `/`, `>` and every other operator are syntax errors: the program prints
+  `jit: parse: error: unexpected input` and `jit: could not parse the C
+  source`, and exits with status 2.
+- Arithmetic is 32-bit and wraps: `2147483647+x` called with 1 prints
+  `-2147483648`.
+- The argument is read with `atoi`, so `abc` is passed as 0.
+- The code buffer holds 4,096 bytes. A longer function stops with
+  `jit: code buffer overflow` and exit status 2; 500 additions in one
+  expression are enough.
+- The program finds its grammar through the environment variable
+  `JIT_GRAMMAR`, which `run.sh` sets, and otherwise at the relative path
+  `examples/jit/jit.scm`. Run directly from another directory without
+  `JIT_GRAMMAR`, it prints `jit: cannot read grammar 'examples/jit/jit.scm'`
+  and exits with status 2.
+- `jit.c` stops at compile time on a host that is not x86-64.
 
 ## Files
 
-- `jit.scm` — the C-subset grammar.
-- `jit.c` — the JIT driver (parse → emit off the cursor → run).
-- `run.sh` — JIT and run, with the driver `mise run examples` built.
+| File | Contents |
+|------|----------|
+| `jit.scm` | the grammar for the C subset |
+| `jit.c` | the program: parse, generate code from the tree, call it |
+| `run.sh` | runs the program built by `mise run examples` with `JIT_GRAMMAR` set |
