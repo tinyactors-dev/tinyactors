@@ -197,6 +197,72 @@ export const v = pick(0);
 --- value
 {"pick":<function>,"v":"b"}
 
+=== falling off the end after a nested if
+[0, 1, 2].map(x => { if (x) { if (x > 1) return 2; } })
+--- value
+[undefined,undefined,2]
+
+=== falling off the end after an if in an else
+[0, 1, 2].map(x => { if (x === 1) return 1; else { if (x === 2) return 2; } })
+--- value
+[undefined,1,2]
+
+=== falling off the end after an if in a block
+[0, 1, 2].map(x => { { if (x) return 1; } })
+--- value
+[undefined,1,1]
+
+=== falling off the end after code after a return
+[0, 1].map(x => { if (x) { return 1; const y = 2; } })
+--- value
+[undefined,1]
+
+=== a closure made before a block that shadows its name
+(a => { const g = () => a; { const a = 2; return [g(), a]; } })(1)
+--- value
+[1,2]
+
+=== a block's const is gone after it, and the global is seen again
+@global g = 5
+(x => { { const g = 1; } return g; })(0)
+--- value
+5
+
+=== a name that starts with if
+(x => { const iffy = 1; if (iffy) return iffy; })(0)
+--- value
+1
+
+=== keywords without spaces around them
+(x => { if(x)return 1;else{return 2} })(0)
+--- value
+2
+
+=== a property named if, called and divided in a parameter's default
+((o = {if: x => x}, a = () => o.if(4) / 2) => a())()
+--- value
+2
+
+=== a property named if divided twice, read ahead
+((o = {if: x => x}, a = () => { return o.if(4) /2/ 1 }) => a())()
+--- value
+2
+
+=== a property named while, read ahead
+((o = {while: x => x}, a = () => { return o.while(4) /2/ 1 }) => a())()
+--- value
+2
+
+=== a property named catch, read ahead
+((p = {catch: x => x}, a = () => p.catch(8) / 2) => a())()
+--- value
+4
+
+=== a property named if after ?., read ahead
+((o = {if: x => x}, a = () => { return o?.if(4) /2/ 1 }) => a())()
+--- value
+2
+
 # Errors: syntax
 
 === a const as the body of an if
@@ -320,6 +386,84 @@ if (a) { export const b = 1; }
 (x => { class {} })
 --- error syntax expected a statement
 
+=== an empty statement between an if's block and else
+(x => { if (x) {}; else return 1; })
+--- error syntax expected a statement
+
+=== two semicolons between a return and else
+(x => { if (x) return 1;; else return 2; })
+--- error syntax expected a statement
+
+=== else after else
+(x => { if (x) return 1; else return 2; else return 3; })
+--- error syntax expected a statement
+
+=== a block between an if and else
+(x => { if (x) return 1; { } else return 2; })
+--- error syntax expected a statement
+
+=== else if without its condition
+(x => { if (x) return 1; else if })
+--- error syntax expected ( after if
+
+=== let as the body of an if in a module
+@module e
+export default x => { if (x) let; return 0; }
+--- error syntax lexical declaration
+
+=== a label inside one of the same name
+(() => { l: l: return 1; })()
+--- error syntax label
+
+=== a label inside one of the same name, in an if
+(() => { if (1) l: l: return 1; })()
+--- error syntax label
+
+=== a label in a block inside one of the same name
+(() => { l: { l: return 1 } })()
+--- error syntax label
+
+=== a label in blocks inside one of the same name
+(() => { a: { b: { a: return 1 } } })()
+--- error syntax label
+
+=== a label inside one of the same name in a module
+@module e
+export const f = () => { if (1) l: l: return 1 };
+--- error syntax label
+
+=== a label inside one of the same name, around an if
+(() => { l: if (1) l: return 1; })
+--- error syntax label
+
+=== break to a label around the function
+(() => { l: { const f = () => { break l; }; } })
+--- error syntax break
+
+=== break to a label that has ended
+(() => { l: { } break l; })
+--- error syntax break
+
+=== break to a label that is not open
+(() => { l: { m: { break n; } } })()
+--- error syntax break
+
+=== break to a label with something after it
+(() => { l: { break l 1; } })
+--- error syntax expected ; after break
+
+=== continue to a label
+(() => { l: { continue l; } })
+--- error syntax expected a statement
+
+=== a label with no statement
+(() => { l: })
+--- error syntax expected a statement
+
+=== a syntax error in a label's statement
+(() => { l: return 1 2; })
+--- error syntax expected an operator
+
 # Errors: unsupported
 
 === while
@@ -379,12 +523,58 @@ y = 1; return y; })
 (x => { l: function f() {} })
 --- error unsupported no labels
 
+=== the same label on two statements
+(() => { l: return 1; l: return 2; })()
+--- error unsupported no labels
+
+=== the same label in a function inside it
+(() => { l: { const f = () => { l: return 1; }; } return 1; })()
+--- error unsupported no labels
+
+=== break to the label around it
+(() => { l: { if (1) break l; } return 1; })()
+--- error unsupported no labels
+
+=== break to the label around it, through a block
+(() => { l: { m: { break l; } } return 1; })()
+--- error unsupported no labels
+
+=== break as a label's statement
+(() => { l: break l; })()
+--- error unsupported no labels
+
+=== break to a label, and a line break
+(() => { l: { break l
+1 } })
+--- error unsupported no labels
+
+=== two labels
+(() => { l: m: return 1; })()
+--- error unsupported no labels
+
 === an expression statement
 (x => { x; return 1; })
 --- error unsupported expression statement
 
 === an expression statement as the body of an if
 (x => { if (x) x; return 1; })
+--- error unsupported expression statement
+
+=== let and a name on the next line as the body of an if
+(x => { if (x) let
+y = 1; return 0; })
+--- error unsupported expression statement
+
+=== let alone as the body of an if
+(x => { if (x) let; return 0; })
+--- error unsupported expression statement
+
+=== a name that starts with else
+(x => { if (x) return 1; elsewhere; })
+--- error unsupported expression statement
+
+=== a name that starts with if
+(x => { iffy; })
 --- error unsupported expression statement
 
 === a function as the body of an if in a script
@@ -429,6 +619,14 @@ y = 1; return y; })
 (x => { { const f = () => w; } const w = 1; })
 --- error unsupported used before
 
+=== a name read by a closure in a block, declared later in it, with an outer binding
+(a => { { const f = () => a; const a = 2; return f(); } })(1)
+--- error unsupported used before
+
+=== a name read through two functions in a block, declared later in it
+(a => { { const f = () => () => a; const a = 2; return f()(); } })(1)
+--- error unsupported used before
+
 === an if at a module's top level
 @module e
 if (true) {}
@@ -445,6 +643,10 @@ if (true) {}
 (x => { if (x) return nope; return 1; })(1)
 --- error name not bound
 
+=== a block's const is gone after it
+(x => { { const a = 1; } return a; })(0)
+--- error name not bound
+
 # Faults
 
 === a fault in a branch that is taken
@@ -455,6 +657,14 @@ if (true) {}
 (x => { if (x) return [] === []; return 1; })(0)
 --- value
 1
+
+=== a fault in a condition
+(x => { if ([] === []) return 1; return 2; })(0)
+--- fault identity
+
+=== a fault in a later test of an else-if chain
+(x => { if (x) return 1; else if ([] === []) return 2; return 3; })(0)
+--- fault identity
 
 === a fault in a condition's branch
 (o => { if (o.a) return o.a + {}; return 0; })({a: "x"})

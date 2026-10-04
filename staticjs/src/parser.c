@@ -83,6 +83,7 @@ enum {
     F_BLOCK,               /* an arrow function's block body */
     F_INNER_BLOCK,         /* a block statement */
     F_IF,                  /* an if, or a whole else-if chain */
+    F_LABEL,               /* `name:`, refused and read on to its statement's end */
     F_CONST,
     F_RETURN,
     F_EXPRESSION_STATEMENT, /* refused, and read on to its end */
@@ -157,7 +158,8 @@ typedef struct {
     uint8_t not_pattern;   /* F_ARRAY, F_OBJECT: an item no assignment pattern takes */
     uint32_t ops_base;
     uint32_t count;
-    uint32_t held_base;    /* F_CONST: its pattern's first held event; F_IMPORT, F_EXPORT: its specifiers' */
+    uint32_t held_base;    /* F_CONST: its pattern's first held event; F_IMPORT, F_EXPORT: its specifiers';
+                            * F_LABEL: where its name begins in sjs_parser.labels (count: its length) */
     uint32_t held_mid;     /* F_CONST: its value's first; F_INITIALIZER: its default value's */
     uint32_t target_base;  /* F_PARAMS, F_PATTERN_*: the held target's first */
     sjs_position at;
@@ -231,6 +233,7 @@ struct sjs_parser {
     paren_scan scan;
     sjs_buf scan_levels;   /* a byte per pattern level the scan has open: 1 for an object */
     sjs_buf scan_brackets; /* a byte per bracket open in what a lookahead balances: BR_* */
+    sjs_buf labels;        /* the names of the F_LABEL frames open */
     /* The first JavaScript staticjs leaves out, while the parser reads on to
      * find a syntax error after it; no event is sent after it. */
     sjs_error_slot refusal;
@@ -709,6 +712,7 @@ enum { BR_OTHER = 0, BR_CONDITION, BR_BODY, BR_BLOCK };
 
 /* What the lookahead knows of the token before the one it reads. */
 typedef struct {
+    const queued_token *before;  /* the token before prev, or NULL */
     const queued_token *prev;
     uint8_t open;          /* BR_*: the innermost bracket open */
     uint8_t closed;        /* BR_*: the last bracket closed */
@@ -716,12 +720,14 @@ typedef struct {
 
 /* The kind of bracket `t` opens. The statements staticjs leaves out count
  * too: the lookahead reads JavaScript, and must not mistake their regular
- * expressions for a division. */
+ * expressions for a division. A keyword after `.` or `?.` is a property's
+ * name, as in `o.if(4) / 2`, and heads nothing. */
 static uint8_t bracket_kind(const sjs_parser *p, const queued_token *t, const bracket_seen *seen) {
     static const char *const headed[] = { "if", "while", "for", "with", "switch", "catch" };
     static const char *const blocks[] = { "else", "do", "try", "finally" };
     const queued_token *prev = seen->prev;
-    bool reserved = prev->kind == SJS_TOKEN_NAME && prev->keyword == SJS_K_RESERVED;
+    bool property = seen->before != NULL && (is_punctuator(seen->before, SJS_P_DOT) || is_punctuator(seen->before, SJS_P_OPTIONAL));
+    bool reserved = prev->kind == SJS_TOKEN_NAME && prev->keyword == SJS_K_RESERVED && !property;
     if (is_punctuator(t, SJS_P_LPAREN)) return reserved && word_listed(token_text(p, prev), WORD_LIST(headed)) ? BR_CONDITION : BR_OTHER;
     if (!is_punctuator(t, SJS_P_LBRACE)) return BR_OTHER;
     if (is_punctuator(prev, SJS_P_ARROW)) return BR_BODY;
@@ -752,9 +758,11 @@ static bool scan_bracket(sjs_parser *p, uint32_t depth, uint8_t kind) {
     return true;
 }
 
-static bracket_seen scan_seen(sjs_parser *p, const queued_token *prev) {
+/* What the paren scan has seen before the token at s->next. */
+static bracket_seen scan_seen(sjs_parser *p) {
     const paren_scan *s = &p->scan;
-    bracket_seen seen = { prev, BR_OTHER, s->closed };
+    const queued_token *before = s->next >= 2u ? peek(p, s->next - 2u) : NULL;
+    bracket_seen seen = { before, peek(p, s->next - 1u), BR_OTHER, s->closed };
     if (s->inner > 0) seen.open = SJS_BUF_AT(p->scan_brackets, uint8_t, s->inner - 1u);
     return seen;
 }
@@ -765,7 +773,7 @@ static decision scan_region(sjs_parser *p, const queued_token *t) {
     paren_scan *s = &p->scan;
     if (t->kind == SJS_TOKEN_END) return D_EXPRESSION;
     if (scan_opens(t)) {
-        bracket_seen seen = scan_seen(p, peek(p, s->next - 1u));
+        bracket_seen seen = scan_seen(p);
         if (!scan_bracket(p, s->inner, bracket_kind(p, t, &seen))) return D_FAILED;
         s->inner++;
         return D_NEXT;
@@ -893,7 +901,7 @@ static decision decide_paren(sjs_parser *p, const queued_token *paren, uint32_t 
         if (t == NULL) return D_WAIT;
         decision d;
         if (s->region != SCAN_PATTERN) {
-            bracket_seen seen = scan_seen(p, peek(p, s->next - 1u));
+            bracket_seen seen = scan_seen(p);
             if (scan_starts_regex(p, t, &seen)) {
                 s->paren = 0;
                 parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no regular expressions" });
@@ -2185,7 +2193,7 @@ static handled cover_initializer(sjs_parser *p, const queued_token *t) {
     uint32_t level = frame_depth(p) - 1u;  /* the literal's frame */
     uint32_t i = 1;                        /* tokens ahead of `=` */
     uint32_t depth = 1;                    /* brackets open in the literal */
-    bracket_seen seen = { NULL, BR_OTHER, BR_OTHER };
+    bracket_seen seen = { NULL, NULL, BR_OTHER, BR_OTHER };
     if (!scan_bracket(p, 0, BR_OTHER)) return H_STOP;
     for (;;) {
         for (; depth > 0; i++) {
@@ -2195,6 +2203,7 @@ static handled cover_initializer(sjs_parser *p, const queued_token *t) {
             const queued_token *next = peek(p, i);
             if (next == NULL) return H_WAIT;
             if (next->kind == SJS_TOKEN_END) return parse_fail(p, t, syntax);
+            seen.before = i >= 2u ? peek(p, i - 2u) : NULL;
             seen.prev = peek(p, i - 1u);
             seen.open = SJS_BUF_AT(p->scan_brackets, uint8_t, depth - 1u);
             if (scan_starts_regex(p, next, &seen)) {
@@ -2436,12 +2445,17 @@ static handled end_if_chain(sjs_parser *p) {
     return H_TAKEN;
 }
 
-/* A statement has ended. The if whose consequent it was waits for an else;
- * the if whose alternative it was ends, and with it, perhaps, the if whose
- * branch that if was. */
+/* A statement has ended. The labels it had end; the if whose consequent it
+ * was waits for an else; the if whose alternative it was ends, and with it,
+ * perhaps, the if whose branch that if was. */
 static handled statement_done(sjs_parser *p) {
     for (;;) {
         frame *f = top_frame(p);
+        if (f != NULL && f->type == F_LABEL) {
+            p->labels.length = f->held_base;
+            pop_frame(p);
+            continue;
+        }
         if (f == NULL || f->type != F_IF) return H_TAKEN;
         if (f->state == IF_CONSEQUENT) {
             f->state = IF_AFTER_CONSEQUENT;
@@ -2513,10 +2527,59 @@ static bool label_word(const sjs_parser *p, const queued_token *t) {
     return t->keyword == SJS_K_RESERVED && word_problem(p, token_text(p, t), USE_REFERENCE).code == SJS_ERROR_UNSUPPORTED;
 }
 
+/* Is a label named `t` open around the statement being read, in the same
+ * function? JavaScript rejects a label inside one of the same name, and
+ * takes `break name` only inside it. */
+static bool label_open(sjs_parser *p, const queued_token *t) {
+    sjs_str name = token_text(p, t);
+    for (uint32_t i = frame_depth(p); i > 0; i--) {
+        const frame *f = &SJS_BUF_AT(p->frames, frame, i - 1u);
+        if (f->type == F_BLOCK || f->type == F_MODULE) return false;
+        if (f->type != F_LABEL) continue;
+        sjs_str open = { (const char *)p->labels.ptr + f->held_base, f->count };
+        if (sjs_str_equal(open, name)) return true;
+    }
+    return false;
+}
+
+/* Open the label `t`: refused already, and read on to its statement's end. */
+static handled open_label(sjs_parser *p, const queued_token *t) {
+    if (label_open(p, t)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "a label of this name is already open around it" });
+    uint32_t start = p->labels.length;
+    if (sjs_buf_append(&p->allocator, &p->labels, (sjs_bytes){ (const uint8_t *)p->queue_text.ptr + t->text_offset, t->text_length }) != SJS_OK) {
+        return fail_memory(p);
+    }
+    if (push_frame(p, F_LABEL, t->at) == H_STOP) return H_STOP;
+    frame *f = top_frame(p);
+    f->held_base = start;
+    f->count = t->text_length;
+    return H_TAKEN;
+}
+
+/* `break name` inside the label `name`: JavaScript, but staticjs has no
+ * labels. Anything else after break is a syntax error, as staticjs has no
+ * loop or switch for a break to leave. */
+static handled break_word(sjs_parser *p, const queued_token *t) {
+    const queued_token *label = peek(p, 1);
+    if (label == NULL) return H_WAIT;
+    if (label->kind != SJS_TOKEN_NAME || label->newline_before || !label_open(p, label)) {
+        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a statement: break leaves only a loop, a switch or a label it names" });
+    }
+    const queued_token *after = peek(p, 2);
+    if (after == NULL) return H_WAIT;
+    bool semicolon = is_punctuator(after, SJS_P_SEMICOLON);
+    if (!semicolon && !is_punctuator(after, SJS_P_RBRACE) && after->kind != SJS_TOKEN_END && !after->newline_before) {
+        return parse_fail(p, after, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after break" });
+    }
+    if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no labels" }) == H_STOP) return H_STOP;
+    p->head += semicolon ? 2u : 1u;
+    return statement_done(p);
+}
+
 /* `name:` labels a statement. staticjs has no labels, and so nothing to
- * break or continue to; the statement after the labels is in a
- * single-statement context, but for a function declaration in a script's
- * block (Annex B). */
+ * break or continue to: refused, and read on. The statement after the
+ * labels is in a single-statement context, but for a function declaration
+ * in a script's block (Annex B). */
 static handled labelled_statement(sjs_parser *p, const queued_token *t, bool single) {
     uint32_t i = 0;
     for (;;) {
@@ -2536,7 +2599,15 @@ static handled labelled_statement(sjs_parser *p, const queued_token *t, bool sin
     if (declares == SD_DECLARATION || (declares == SD_FUNCTION && (single || p->goal == SJS_GOAL_MODULE))) {
         return parse_fail(p, item, declaration_single);
     }
-    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no labels" });
+    if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no labels" }) == H_STOP) return H_STOP;
+    for (uint32_t k = 0; k < i; k += 2u) {
+        if (open_label(p, peek(p, k)) == H_STOP) return H_STOP;
+    }
+    /* The labels and their colons are read; the statement is read under
+     * them as a single statement (a function declaration there, which the
+     * checks above let through, is refused as one). */
+    p->head += i - 1u;
+    return H_TAKEN;
 }
 
 /* Why staticjs leaves out the statement `t` begins. */
@@ -2599,6 +2670,7 @@ static handled statement_token(sjs_parser *p, const queued_token *t, bool single
         if (next == NULL) return H_WAIT;
         if (is_punctuator(next, SJS_P_COLON)) return labelled_statement(p, t, single);
     }
+    if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_RESERVED && is_word(p, t, SJS_STR("break"))) return break_word(p, t);
     if (!starts_operand(p, t)) return refuse_statement(p, t, statement_problem(p, t));
     /* An expression statement: refused, as it can have no effect, and read
      * on as an expression, for a syntax error after it. */
@@ -3182,6 +3254,7 @@ static bool expects_operator(const sjs_parser *p, const frame *f) {
     case F_MODULE:
     case F_BLOCK:
     case F_INNER_BLOCK:
+    case F_LABEL:
     case F_IMPORT:
     case F_EXPORT:
     case F_NEW:
@@ -3231,6 +3304,8 @@ static handled dispatch(sjs_parser *p, const queued_token *t) {
         return block_token(p, t);
     case F_IF:
         return if_token(p, t);
+    case F_LABEL:
+        return statement_token(p, t, true);
     case F_IMPORT:
         return import_token(p, t);
     case F_EXPORT:
@@ -3396,5 +3471,6 @@ void sjs_parser_destroy(sjs_parser *parser) {
     sjs_buf_free(&allocator, &parser->name);
     sjs_buf_free(&allocator, &parser->scan_levels);
     sjs_buf_free(&allocator, &parser->scan_brackets);
+    sjs_buf_free(&allocator, &parser->labels);
     sjs_mem_free(&allocator, parser, sizeof *parser);
 }
