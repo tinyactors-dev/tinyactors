@@ -96,7 +96,7 @@ needed, as with ADR 0093 today.
 | **Waiting list** | envelopes for an address that is not resident | arrival | address being loaded |
 | **Owner list** | a session's pending delayed sends | send order | session |
 | **Free list** | free envelopes | – | system |
-| Deadline index | pending delayed sends, as a binary heap of envelope indexes ordered by (due, send order) | – | system |
+| Deadline index | pending delayed sends, as a binary heap of envelope indexes ordered by (due, send order), its positions in a paged array that grows and trims with the pool | – | system |
 
 **There is one run queue in arrival order, not one queue per target.**
 Arrival order keeps every sender-to-receiver pair in order, which is what

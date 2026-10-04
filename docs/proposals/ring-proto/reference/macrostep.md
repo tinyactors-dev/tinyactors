@@ -386,8 +386,10 @@ high-water mark. `ta_system_trim(system, keep)` is a native call the host
 makes between `ta_run` calls, by its own policy: when idle, on a timer,
 under memory pressure. It frees every whole free page above its
 structure's reserve, or above `keep`, in the pool, the name area and the
-park area. It is written once, in the index pool (A5), so all three get
-it. A page goes back only when every item on it is free. Items never move,
+park area, and the deadline index's pages above the number of pending
+delayed sends. It is written once in the index pool (A5) and once in the
+paged array (B8), so all four get it. A pool page goes back only when every
+item on it is free. Items never move,
 because envelope indices stay stable, so a burst can leave partly used
 pages that cannot be freed.
 

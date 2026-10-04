@@ -276,8 +276,8 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
      operator abandon stops it
      ([envelope.md](envelope.md#withdrawing-an-admitted-input)).
    - **The host gives memory back.** `ta_system_trim` frees whole free
-     pages above each reserve in the pool, the name area and the park
-     area, between `ta_run` calls; core never trims on its own
+     pages above each reserve in the pool, the name area, the park
+     area and the deadline index, between `ta_run` calls; core never trims on its own
      ([macrostep.md](macrostep.md#parking-one-running-workspace-and-a-park-area)).
 4. **Delayed sends are envelopes.** Exact `<cancel>`, one wake, timers
    travel in images. Refines 0026 and 0054.
