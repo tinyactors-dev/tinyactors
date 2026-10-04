@@ -89,7 +89,12 @@ element copies the properties the pattern does not name, in their order.
 An array pattern destructures an array, a set (in insertion order) or a
 string (by code point). The parser reads an arrow function's parameter list
 ahead to tell it from a parenthesized expression, so the list, defaults
-included, must fit in `max_lookahead` tokens (256 by default).
+included, must fit in `max_lookahead` tokens (256 by default), and its
+patterns nest at most `max_nesting` deep, as everything else does. A
+`const`'s pattern comes before its value in the source and after it in
+evaluation order, so the parser holds the pattern's events, its default
+values whole, until the value has been read: `max_held_events` (65,536 by
+default) bounds them, and with them the parser's memory.
 
 Modules: `const` declarations, `import x from "m"`, `import { a, b as c }
 from "m"`, `import * as ns from "m"`, `import x, { y }` and `import x, *
@@ -126,9 +131,17 @@ compare identities, or find something on a prototype.
   or `<` on values that are not both numbers (or, for `<`, both strings).
 - An object rest element of a string (`const {...r} = "ab"`), as with
   spreading a string into an object: JavaScript copies UTF-16 code units,
-  which can split a character.
+  which can split a character. An object pattern's key that indexes half of
+  a character outside the BMP (`const {0: c} = "😀"`), as indexing does.
+- An object pattern over a number or a boolean (`[1].map(({a = 2}) => a)`),
+  whose properties JavaScript finds on its prototype; an object rest
+  element of one gives `{}`, as in JavaScript.
+- A computed key, in a literal or a pattern, that is an object or an array:
+  JavaScript turns it into a string.
 - A property JavaScript finds on `Object.prototype` (`toString`,
-  `__proto__`); reading a method without calling it. A namespace
+  `__proto__`); reading a method without calling it, by name, through a
+  pattern or with `in`: any method of an array, a string or a set, those
+  staticjs leaves out included (`const {at = 1} = "x"`). A namespace
   (`import * as ns`) is an object too: `ns.toString` and `"valueOf" in ns`
   fault where JavaScript finds nothing, and so does turning a namespace into
   a string.
@@ -156,6 +169,15 @@ can assign (`a.b = 1`, `[a] = xs`), and as a syntax error where it cannot
 (`1 = 2`, `a + b = 1`). In a script, which is sloppy, `eval`, `arguments` and the
 words only strict code reserves (`yield`, `let`, ...) are names, which
 staticjs does not bind; in a module they are syntax errors.
+
+After JavaScript staticjs leaves out, the parser reads on where it can,
+sending nothing more: past an assignment, the comma operator, an operator
+staticjs does not have, `this`, `new.target` and a method in an object
+literal. So a program that is not JavaScript further on, such as `([a.b =
+1]) => 0` or `a = 1 = 2`, is a syntax error, not unsupported. It stops at
+the first refusal where it cannot read on: a statement staticjs does not
+have, a regular expression (where it reads ahead without parsing, a `/`
+that cannot divide is one), a `/` in a method's body.
 
 Errors come in the order JavaScript finds them only so far as a stage that
 streams can know it. The compiler stops at the first error it meets; what it

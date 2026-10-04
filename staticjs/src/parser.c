@@ -18,7 +18,9 @@
  * The lookahead after `(` is one scan that resumes where it stopped: in a
  * pattern it decides as soon as a token no pattern takes appears, so `(a +
  * b)` is an expression at `+`; a default value or a computed key it only
- * balances, to the `,` or the bracket that ends it.
+ * balances, to the `,` or the bracket that ends it. There a `/` that cannot
+ * divide begins a regular expression, whose body the lexer cannot read, so
+ * the scan stops and refuses it.
  *
  * Events wait in a held list where the source and the evaluation order
  * differ. A const holds its pattern until its value has been sent. A
@@ -31,6 +33,13 @@
  * A module's import and export statements hold their specifiers until the
  * statement's end says what they are; then each one is an event. A line
  * break ends a statement where JavaScript would insert a semicolon.
+ *
+ * JavaScript staticjs leaves out is refused, but where the parser can read
+ * on (an assignment, the comma operator, an operator staticjs does not
+ * have, `this`, a method) it does, sending no more events, so that a syntax
+ * error further on is reported as one: "unsupported" must be JavaScript.
+ * The refusal is reported at the end, or at the first construct the parser
+ * cannot read past.
  */
 #include "syntax.h"
 
@@ -140,7 +149,9 @@ typedef struct {
 } frame;
 
 /* Operators waiting for their right operand. */
-enum { OP_UNARY = 1, OP_BINARY, OP_LOGICAL, OP_ARROW, OP_ELSE };
+/* OP_ASSIGN is an assignment refused (refuse) and read on: its `op` is 1
+ * when it can be a pattern's target with a default value. */
+enum { OP_UNARY = 1, OP_BINARY, OP_LOGICAL, OP_ARROW, OP_ELSE, OP_ASSIGN };
 
 typedef struct {
     uint8_t kind;
@@ -154,8 +165,7 @@ typedef struct {
 typedef struct {
     uint32_t paren;        /* the `(` it decides: its offset + 1; 0 for none */
     uint32_t next;         /* the next token to read, counted from the `(` */
-    uint64_t objects;      /* bit i: pattern level i + 1 is an object, not an array */
-    uint32_t levels;       /* pattern levels open inside the parentheses */
+    uint32_t levels;       /* pattern levels open inside the parentheses (sjs_parser.scan_levels) */
     uint32_t inner;        /* brackets open inside a default value or a computed key */
     uint32_t commas;       /* at level 0 */
     uint8_t region;        /* SCAN_* */
@@ -203,31 +213,58 @@ struct sjs_parser {
     uint8_t last_operand;  /* LO_*: what the operand just read can be assigned as */
     bool default_exported; /* a module exported a name `default` */
     paren_scan scan;
+    sjs_buf scan_levels;   /* a byte per pattern level the scan has open: 1 for an object */
+    /* The first JavaScript staticjs leaves out, while the parser reads on to
+     * find a syntax error after it; no event is sent after it. */
+    sjs_error_slot refusal;
+    bool refusing;
+    uint8_t skip;          /* SKIP_*: reading past a method staticjs refused */
+    uint32_t skip_depth;   /* brackets open in that method */
 };
 
 typedef enum { H_TAKEN = 0, H_AGAIN, H_WAIT, H_STOP } handled;
 
+/* sjs_parser.skip: a method's head, before its body's `{`, or its body. */
+enum { SKIP_NONE = 0, SKIP_HEAD, SKIP_BODY };
+
 /* What an operand is to the `=` after it, by its last event: a name or a
  * member (a simple target), a call (JavaScript reads `f() = 1`, and throws
  * when it runs), an array or object literal that can be read as a pattern,
- * or anything else, which cannot be assigned to. */
-enum { LO_OTHER = 0, LO_SIMPLE, LO_CALL, LO_PATTERN };
+ * or anything else, which cannot be assigned to. LO_DEFAULTED is `target =
+ * value`: not a target, but an element of a pattern with a default value. */
+enum { LO_OTHER = 0, LO_SIMPLE, LO_CALL, LO_PATTERN, LO_DEFAULTED };
 
 #define PRECEDENCE_ELSE 1u
 #define PRECEDENCE_COALESCE 4u
 #define PRECEDENCE_OR 4u
 #define PRECEDENCE_AND 5u
+#define PRECEDENCE_BITWISE_OR 6u
+#define PRECEDENCE_BITWISE_XOR 7u
+#define PRECEDENCE_BITWISE_AND 8u
 #define PRECEDENCE_EQUALITY 9u
 #define PRECEDENCE_RELATIONAL 10u
+#define PRECEDENCE_SHIFT 11u
 #define PRECEDENCE_ADDITIVE 12u
 #define PRECEDENCE_MULTIPLICATIVE 13u
+#define PRECEDENCE_EXPONENT 14u
 #define PRECEDENCE_UNARY 15u
 
 /* ------------------------------------------------------------------------
  * Errors and events
  */
 
+/* Report the refusal the parser read on after. */
+static handled report_refusal(sjs_parser *p) {
+    p->error = p->refusal;
+    p->error.error.subject.ptr = p->error.subject;
+    p->failed = true;
+    return H_STOP;
+}
+
+/* A syntax error after a refusal is still the program's error, as JavaScript
+ * rejects the whole program for it; any other stop reports the refusal. */
 static handled parse_fail(sjs_parser *p, const queued_token *t, sjs_problem problem) {
+    if (p->refusing && problem.code != SJS_ERROR_SYNTAX) return report_refusal(p);
     sjs_position at = t != NULL ? t->at : p->lexer.here;
     sjs_error_set(&p->error, at, problem);
     if (t != NULL && t->text_length > 0) {
@@ -235,6 +272,20 @@ static handled parse_fail(sjs_parser *p, const queued_token *t, sjs_problem prob
     }
     p->failed = true;
     return H_STOP;
+}
+
+/* JavaScript staticjs leaves out, where the parser can read on: the first
+ * one is reported when the source ends without a syntax error, since
+ * JavaScript would refuse the whole program for one ("unsupported" must be
+ * JavaScript). From here on no event is sent. */
+static handled refuse(sjs_parser *p, const queued_token *t, sjs_problem problem) {
+    if (p->refusing) return H_TAKEN;
+    sjs_error_set(&p->refusal, t->at, problem);
+    if (t->text_length > 0) {
+        sjs_error_subject(&p->refusal, (sjs_str){ (const char *)p->queue_text.ptr + t->text_offset, t->text_length });
+    }
+    p->refusing = true;
+    return H_TAKEN;
 }
 
 static handled fail_memory(sjs_parser *p) {
@@ -262,6 +313,9 @@ static bool buffering(sjs_parser *p) {
 }
 
 static handled hold_event(sjs_parser *p, const sjs_event *e) {
+    if (SJS_BUF_COUNT(p->held, held_event) >= p->limits.max_held_events) {
+        return parse_fail(p, NULL, (sjs_problem){ SJS_ERROR_LIMIT, "the parser holds more events than max_held_events" });
+    }
     held_event h = { 0 };
     h.kind = (uint8_t)e->kind;
     h.count = e->count;
@@ -300,6 +354,7 @@ static handled send(sjs_parser *p, const sjs_event *e) {
         p->last_operand = LO_OTHER;
         break;
     }
+    if (p->refusing) return H_TAKEN;
     if (buffering(p)) return hold_event(p, e);
     sjs_result r = p->sink.v->event(p->sink.self, e);
     if (r != SJS_OK) {
@@ -363,6 +418,7 @@ static void drop_held(sjs_parser *p, uint32_t from) {
 /* Send the held events from `from` on, in order, and forget them. */
 static handled send_held(sjs_parser *p, uint32_t from) {
     uint32_t n = held_count(p);
+    if (p->refusing) n = from;
     for (uint32_t i = from; i < n; i++) {
         held_event h = SJS_BUF_AT(p->held, held_event, i);
         sjs_event e = { 0 };
@@ -476,6 +532,10 @@ static handled pop_op(sjs_parser *p) {
     case OP_ARROW:
         top_frame(p)->segment = op.saved_segment;
         return send_kind(p, SJS_EV_ARROW_END, op.at);
+    case OP_ASSIGN:
+        top_frame(p)->segment = op.saved_segment;
+        p->last_operand = op.op ? LO_DEFAULTED : LO_OTHER;
+        return H_TAKEN;
     default:
         top_frame(p)->segment = op.saved_segment;
         return send_kind(p, SJS_EV_CONDITIONAL_END, op.at);
@@ -539,10 +599,14 @@ static sjs_str held_name(const sjs_parser *p) {
  * Expressions: operands
  */
 
+/* Does the operator `op` wait for an assignment expression? */
+static bool takes_assignment(const pending_op *op) {
+    return op == NULL || op->kind == OP_ARROW || op->kind == OP_ELSE || op->kind == OP_ASSIGN;
+}
+
 /* An arrow function may start only where an assignment expression may. */
 static bool arrow_allowed(sjs_parser *p) {
-    pending_op *op = top_op(p);
-    return op == NULL || op->kind == OP_ARROW || op->kind == OP_ELSE;
+    return takes_assignment(top_op(p));
 }
 
 /* After `=>`: a block, or an expression that runs as far as it can. */
@@ -568,8 +632,6 @@ enum { SCAN_PATTERN = 0, SCAN_DEFAULT, SCAN_KEY };
 /* paren_scan.key: where an object pattern is. */
 enum { SK_KEY = 0, SK_VALUE, SK_AFTER };
 
-#define SCAN_MAX_LEVELS 64u
-
 static bool scan_opens(const queued_token *t) {
     if (t->kind == SJS_TOKEN_TEMPLATE_HEAD) return true;
     return t->kind == SJS_TOKEN_PUNCTUATOR &&
@@ -580,6 +642,38 @@ static bool scan_closes(const queued_token *t) {
     if (t->kind == SJS_TOKEN_TEMPLATE_TAIL) return true;
     return t->kind == SJS_TOKEN_PUNCTUATOR &&
            (t->punctuator == SJS_P_RPAREN || t->punctuator == SJS_P_RBRACKET || t->punctuator == SJS_P_RBRACE);
+}
+
+/* Can `t` end an operand, so that a `/` after it divides? Where the parser
+ * reads ahead without parsing, this tells a division from a regular
+ * expression, whose body the lexer cannot read: `(a = /'/) => a`. */
+static bool ends_operand(const queued_token *t) {
+    switch (t->kind) {
+    case SJS_TOKEN_NUMBER:
+    case SJS_TOKEN_STRING:
+    case SJS_TOKEN_TEMPLATE:
+    case SJS_TOKEN_TEMPLATE_TAIL:
+        return true;
+    case SJS_TOKEN_NAME:
+        return t->keyword == SJS_K_NONE || t->keyword == SJS_K_TRUE || t->keyword == SJS_K_FALSE ||
+               t->keyword == SJS_K_NULL || t->keyword == SJS_K_UNSUPPORTED_NAME;
+    case SJS_TOKEN_PUNCTUATOR:
+        return t->punctuator == SJS_P_RPAREN || t->punctuator == SJS_P_RBRACKET || t->punctuator == SJS_P_RBRACE ||
+               t->punctuator == SJS_P_PLUS_PLUS || t->punctuator == SJS_P_MINUS_MINUS;
+    default:
+        return false;
+    }
+}
+
+/* Is `t` a slash, which may begin a regular expression? */
+static bool is_slash(const sjs_parser *p, const queued_token *t) {
+    return is_punctuator(t, SJS_P_SLASH) ||
+           (is_punctuator(t, SJS_P_ASSIGN_OPERATOR) && sjs_str_equal(token_text(p, t), SJS_STR("/=")));
+}
+
+/* Does `t`, after `before`, begin a regular expression? */
+static bool starts_regex(const sjs_parser *p, const queued_token *before, const queued_token *t) {
+    return is_slash(p, t) && !ends_operand(before);
 }
 
 /* A token of a default value or a computed key: D_NEXT, or D_AGAIN when it
@@ -611,14 +705,19 @@ static decision scan_region(paren_scan *s, const queued_token *t) {
     return D_NEXT;
 }
 
-/* Open a level of array (object 0) or object (1) pattern. */
-static decision scan_open(sjs_parser *p, uint32_t object) {
+/* Open a level of array (object 0) or object (1) pattern. As many can be
+ * open as the parser could then read: max_nesting. */
+static decision scan_open(sjs_parser *p, uint8_t object) {
     paren_scan *s = &p->scan;
-    if (s->levels >= SCAN_MAX_LEVELS) {
-        parse_fail(p, peek(p, s->next), (sjs_problem){ SJS_ERROR_LIMIT, "an arrow function's parameters nest deeper than 64 patterns" });
+    if (s->levels >= p->limits.max_nesting) {
+        parse_fail(p, peek(p, s->next), (sjs_problem){ SJS_ERROR_LIMIT, "the program nests deeper than max_nesting" });
         return D_FAILED;
     }
-    s->objects = (s->objects & ~(1ull << s->levels)) | ((uint64_t)object << s->levels);
+    p->scan_levels.length = s->levels;
+    if (sjs_buf_append(&p->allocator, &p->scan_levels, (sjs_bytes){ &object, 1 }) != SJS_OK) {
+        fail_memory(p);
+        return D_FAILED;
+    }
     s->levels++;
     s->key = SK_KEY;
     return D_NEXT;
@@ -629,7 +728,7 @@ static decision scan_open(sjs_parser *p, uint32_t object) {
 static decision scan_pattern(sjs_parser *p, const queued_token *t) {
     paren_scan *s = &p->scan;
     uint32_t level = s->levels;
-    bool object = level > 0 && ((s->objects >> (level - 1u)) & 1u) != 0;
+    bool object = level > 0 && SJS_BUF_AT(p->scan_levels, uint8_t, level - 1u) != 0;
     if (t->kind == SJS_TOKEN_NAME) {
         if (object) {
             if (s->key == SK_AFTER) return D_EXPRESSION;
@@ -704,6 +803,11 @@ static decision decide_paren(sjs_parser *p, const queued_token *paren, uint32_t 
         if (t == NULL) return D_WAIT;
         decision d;
         if (s->region != SCAN_PATTERN) {
+            if (starts_regex(p, peek(p, s->next - 1u), t)) {
+                s->paren = 0;
+                parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no regular expressions" });
+                return D_FAILED;
+            }
             s->trailing = 0;
             d = scan_region(s, t);
             if (d == D_AGAIN) continue;
@@ -929,6 +1033,13 @@ static handled unsupported_word(sjs_parser *p, const queued_token *t) {
     if (next == NULL) return H_WAIT;
     if (is_punctuator(next, SJS_P_ARROW)) return parse_fail(p, t, word_problem(p, word, USE_PARAM));
     if (p->goal == SJS_GOAL_MODULE && sjs_str_equal(word, SJS_STR("await"))) return await_word(p, t);
+    if (sjs_str_equal(word, SJS_STR("this"))) {
+        /* Refused, and read on as an operand no pattern takes: `[this] = x`. */
+        if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs does not have this" }) == H_STOP) return H_STOP;
+        p->expect = E_OPERATOR;
+        p->last_operand = LO_OTHER;
+        return H_TAKEN;
+    }
     if (word_listed(word, WORD_LIST(starters))) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs does not have this" });
     return parse_fail(p, t, word_problem(p, word, USE_REFERENCE));
 }
@@ -1093,8 +1204,12 @@ static handled operand(sjs_parser *p, const queued_token *t) {
     case SJS_P_PLUS_PLUS:
     case SJS_P_MINUS_MINUS:
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no ++ or --: values do not change" });
-    case SJS_P_TILDE:
-        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no bitwise operators" });
+    case SJS_P_TILDE: {
+        /* Refused, and read on as a unary operator. */
+        if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no bitwise operators" }) == H_STOP) return H_STOP;
+        pending_op op = { OP_UNARY, SJS_OP_NOT, PRECEDENCE_UNARY, 0, t->at };
+        return push_op(p, op);
+    }
     default:
         /* `#name` and `@` too: outside a class, which staticjs has none of, and a decorator are not JavaScript. */
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
@@ -1203,7 +1318,7 @@ static handled parse_optional(sjs_parser *p, const queued_token *t) {
 /* Can the item of an array or object literal just read be a target, were
  * the literal an assignment pattern? A simple target or a pattern. */
 static bool assignable_item(const sjs_parser *p) {
-    return p->last_operand == LO_SIMPLE || p->last_operand == LO_PATTERN;
+    return p->last_operand == LO_SIMPLE || p->last_operand == LO_PATTERN || p->last_operand == LO_DEFAULTED;
 }
 
 static handled close_object(sjs_parser *p, const queued_token *t) {
@@ -1217,24 +1332,69 @@ static handled close_object(sjs_parser *p, const queued_token *t) {
 
 /* `=` or an operator such as `+=` after an operand: JavaScript that staticjs
  * leaves out when the operand can be assigned to there, and not JavaScript
- * when it cannot. */
+ * when it cannot. A refusal: the parser reads the value on, as an
+ * operator, for a syntax error after it (`a = 1 = 2`, `([a.b = 1]) => 0`). */
 static handled assignment(sjs_parser *p, const queued_token *t) {
-    pending_op *op = top_op(p);
-    bool position = op == NULL || op->kind == OP_ARROW || op->kind == OP_ELSE;
+    frame *f = top_frame(p);
+    bool position = takes_assignment(top_op(p));
     bool plain = t->punctuator == SJS_P_ASSIGN;
     sjs_str text = token_text(p, t);
     bool logical = sjs_str_equal(text, SJS_STR("&&=")) || sjs_str_equal(text, SJS_STR("||=")) || sjs_str_equal(text, SJS_STR("?\?="));
     uint8_t left = p->last_operand;
     bool target = left == LO_SIMPLE || (left == LO_CALL && !logical) || (left == LO_PATTERN && plain);
     if (!position || !target) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "the left side of this assignment cannot be assigned to" });
-    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no assignment: values do not change" });
+    if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no assignment: values do not change" }) == H_STOP) return H_STOP;
+    uint8_t defaulted = plain && (left == LO_SIMPLE || left == LO_PATTERN) ? 1u : 0u;
+    pending_op op = { OP_ASSIGN, defaulted, PRECEDENCE_ELSE, f->segment, t->at };
+    f->segment = 0;
+    p->expect = E_OPERAND;
+    return push_op(p, op);
+}
+
+/* A binary operator staticjs leaves out (`problem`): a refusal, read on as
+ * the operator JavaScript reads. */
+static handled refused_binary(sjs_parser *p, const queued_token *t, sjs_problem problem) {
+    uint8_t precedence;
+    switch (t->punctuator) {
+    case SJS_P_EQUAL:
+    case SJS_P_NOT_EQUAL:
+        precedence = PRECEDENCE_EQUALITY;
+        break;
+    case SJS_P_STAR_STAR:
+        /* `-a ** 2` is not JavaScript: a unary operand needs parentheses. */
+        if (end_chain(p) == H_STOP) return H_STOP;
+        if (top_op(p) != NULL && top_op(p)->kind == OP_UNARY) {
+            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "** cannot follow a unary operator without parentheses" });
+        }
+        precedence = PRECEDENCE_EXPONENT;
+        break;
+    case SJS_P_SHIFT_LEFT:
+    case SJS_P_SHIFT_RIGHT:
+    case SJS_P_SHIFT_RIGHT_UNSIGNED:
+        precedence = PRECEDENCE_SHIFT;
+        break;
+    case SJS_P_AMPERSAND:
+        precedence = PRECEDENCE_BITWISE_AND;
+        break;
+    case SJS_P_CARET:
+        precedence = PRECEDENCE_BITWISE_XOR;
+        break;
+    case SJS_P_PIPE:
+        precedence = PRECEDENCE_BITWISE_OR;
+        break;
+    default: /* instanceof */
+        precedence = PRECEDENCE_RELATIONAL;
+        break;
+    }
+    if (refuse(p, t, problem) == H_STOP) return H_STOP;
+    return parse_binary(p, t, infix(SJS_OP_ADD, precedence));
 }
 
 static handled operator_token(sjs_parser *p, const queued_token *t) {
     if (t->kind == SJS_TOKEN_NAME) {
         if (t->keyword == SJS_K_IN) return parse_binary(p, t, infix(SJS_OP_IN, PRECEDENCE_RELATIONAL));
         if (sjs_str_equal(token_text(p, t), SJS_STR("instanceof"))) {
-            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no instanceof" });
+            return refused_binary(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no instanceof" });
         }
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an operator" });
     }
@@ -1288,7 +1448,7 @@ static handled operator_token(sjs_parser *p, const queued_token *t) {
         return H_TAKEN;
     case SJS_P_EQUAL:
     case SJS_P_NOT_EQUAL:
-        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs compares with === and !== only" });
+        return refused_binary(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs compares with === and !== only" });
     case SJS_P_ASSIGN:
     case SJS_P_ASSIGN_OPERATOR:
         return assignment(p, t);
@@ -1296,14 +1456,14 @@ static handled operator_token(sjs_parser *p, const queued_token *t) {
     case SJS_P_MINUS_MINUS:
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no ++ or --: values do not change" });
     case SJS_P_STAR_STAR:
-        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no ** operator" });
+        return refused_binary(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no ** operator" });
     case SJS_P_SHIFT_LEFT:
     case SJS_P_SHIFT_RIGHT:
     case SJS_P_SHIFT_RIGHT_UNSIGNED:
     case SJS_P_AMPERSAND:
     case SJS_P_PIPE:
     case SJS_P_CARET:
-        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no bitwise operators" });
+        return refused_binary(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no bitwise operators" });
     case SJS_P_ARROW:
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "=> follows a name or a parameter list" });
     default:
@@ -1353,7 +1513,10 @@ static handled list_terminator(sjs_parser *p, const queued_token *t, uint8_t clo
     if (empty && f->count > 0 && !f->after_comma) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a value" });
     if (!empty) {
         if (end_expression(p) == H_STOP) return H_STOP;
-        if (is_array && !assignable_item(p)) top_frame(p)->not_pattern = 1;
+        /* `[...a = 1]`: a rest element has no default value. */
+        if (is_array && (!assignable_item(p) || (top_frame(p)->spread && p->last_operand == LO_DEFAULTED))) {
+            top_frame(p)->not_pattern = 1;
+        }
         if (end_item(p, is_array ? SJS_EV_ELEMENT : SJS_EV_ARGUMENT,
                      is_array ? SJS_EV_SPREAD_ELEMENT : SJS_EV_SPREAD_ARGUMENT) == H_STOP) {
             return H_STOP;
@@ -1377,6 +1540,16 @@ static handled finish_const(sjs_parser *p) {
     frame *f = top_frame(p);
     if (settle_held(p, f->held_base, f->held_mid) == H_STOP) return H_STOP;
     return send_kind(p, SJS_EV_CONST_END, top_frame(p)->at);
+}
+
+/* `a, b` where an expression may be: a refusal, read on. */
+static handled comma_operator(sjs_parser *p, const queued_token *t) {
+    frame *f = top_frame(p);
+    if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no comma operator" }) == H_STOP) return H_STOP;
+    f->after_comma = 1;
+    f->segment = 0;
+    p->expect = E_OPERAND;
+    return H_TAKEN;
 }
 
 static handled terminator(sjs_parser *p, const queued_token *t) {
@@ -1406,19 +1579,26 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
     }
     if (end_expression(p) == H_STOP) return H_STOP;
     f = top_frame(p);
+    /* Where JavaScript reads an Expression, not an AssignmentExpression. */
+    bool sequence = f->type == F_EXPRESSION_GOAL || f->type == F_PAREN || f->type == F_INDEX || f->type == F_TEMPLATE ||
+                    f->type == F_RETURN;
+    if (sequence && is_punctuator(t, SJS_P_COMMA)) return comma_operator(p, t);
     switch (f->type) {
     case F_EXPRESSION_GOAL:
         if (t->kind != SJS_TOKEN_END) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected the end of the expression" });
+        if (p->refusing) return report_refusal(p);
         p->done = true;
         return send_kind(p, SJS_EV_END, t->at) == H_STOP ? H_STOP : H_TAKEN;
-    case F_PAREN:
-        if (is_punctuator(t, SJS_P_COMMA)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no comma operator" });
+    case F_PAREN: {
         if (!is_punctuator(t, SJS_P_RPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected )" });
+        bool comma = f->after_comma != 0;
         pop_frame(p);
         p->expect = E_OPERATOR;
-        /* `(a) = 1` is an assignment; `([a]) = 1` is not JavaScript. */
-        if (p->last_operand == LO_PATTERN) p->last_operand = LO_OTHER;
+        /* `(a) = 1` is an assignment; `([a]) = 1`, `[(a = 1)] = x` and
+         * `(a, b) = 1` are not JavaScript. */
+        if (comma || p->last_operand == LO_PATTERN || p->last_operand == LO_DEFAULTED) p->last_operand = LO_OTHER;
         return H_TAKEN;
+    }
     case F_INDEX:
         if (!is_punctuator(t, SJS_P_RBRACKET)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ]" });
         pop_frame(p);
@@ -1891,6 +2071,8 @@ static const pending_op *waiting_op(const sjs_parser *p, uint32_t inner) {
     return &SJS_BUF_AT(p->ops, pending_op, f->ops_base - 1u);
 }
 
+static handled cover_assigned(sjs_parser *p, const queued_token *t);
+
 /* `{ a = 1 }` in an object literal: JavaScript reads it only as the cover of
  * an assignment pattern, when the literal, or an array or object literal it
  * is an element of, is assigned to; staticjs has no assignment. Anywhere
@@ -1908,6 +2090,9 @@ static handled cover_initializer(sjs_parser *p, const queued_token *t) {
             const queued_token *next = peek(p, i);
             if (next == NULL) return H_WAIT;
             if (next->kind == SJS_TOKEN_END) return parse_fail(p, t, syntax);
+            if (starts_regex(p, peek(p, i - 1u), next)) {
+                return parse_fail(p, next, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no regular expressions" });
+            }
             if (scan_opens(next)) depth++;
             else if (scan_closes(next)) depth--;
         }
@@ -1916,8 +2101,8 @@ static handled cover_initializer(sjs_parser *p, const queued_token *t) {
         const pending_op *op = waiting_op(p, level);
         if (is_punctuator(after, SJS_P_ASSIGN)) {
             /* Assigned to, where an assignment can be. */
-            if (op != NULL && op->kind != OP_ARROW && op->kind != OP_ELSE) return parse_fail(p, t, syntax);
-            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no assignment: values do not change" });
+            if (!takes_assignment(op)) return parse_fail(p, t, syntax);
+            return cover_assigned(p, t);
         }
         const frame *outer = &SJS_BUF_AT(p->frames, frame, level - 1u);
         bool element = outer->type == F_ARRAY && !(outer->spread && is_punctuator(after, SJS_P_COMMA));
@@ -1935,6 +2120,69 @@ static handled cover_initializer(sjs_parser *p, const queued_token *t) {
         }
         level--;
     }
+}
+
+/* Read past a method staticjs refused (refuse), to the `}` that ends its
+ * body, for a syntax error after it: its brackets balanced, as the parser does
+ * not read its statements. A `/` may begin a regular expression, whose body
+ * the lexer cannot read, so the refusal is reported there. */
+static handled skip_token(sjs_parser *p, const queued_token *t) {
+    if (t->kind == SJS_TOKEN_END) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "the source ends inside a method" });
+    if (is_slash(p, t)) return report_refusal(p);
+    if (scan_opens(t)) {
+        if (p->skip_depth == 0 && is_punctuator(t, SJS_P_LBRACE)) p->skip = SKIP_BODY;
+        if (p->skip_depth >= p->limits.max_nesting) return report_refusal(p);
+        p->skip_depth++;
+        return H_TAKEN;
+    }
+    if (!scan_closes(t)) return H_TAKEN;
+    if (p->skip_depth == 0) return report_refusal(p);
+    p->skip_depth--;
+    if (p->skip_depth == 0 && p->skip == SKIP_BODY) {
+        /* The method is the property's value. */
+        p->skip = SKIP_NONE;
+        top_frame(p)->state = O_VALUE;
+        p->expect = E_OPERATOR;
+        p->last_operand = LO_OTHER;
+    }
+    return H_TAKEN;
+}
+
+/* After the name `get`, `set` or `async`: does `t` begin a method's name? */
+static bool method_prefix(sjs_parser *p, const queued_token *t) {
+    sjs_str word = held_name(p);
+    bool name = t->kind == SJS_TOKEN_NAME || t->kind == SJS_TOKEN_STRING || t->kind == SJS_TOKEN_NUMBER ||
+                is_punctuator(t, SJS_P_LBRACKET);
+    if (sjs_str_equal(word, SJS_STR("get")) || sjs_str_equal(word, SJS_STR("set"))) return name;
+    /* `async` and the method's name on one line; `async *g() {}` too. */
+    return sjs_str_equal(word, SJS_STR("async")) && !t->newline_before && (name || is_punctuator(t, SJS_P_STAR));
+}
+
+/* A method, getter, setter or generator in an object literal, from `t` on. */
+static handled refuse_method(sjs_parser *p, const queued_token *t, const char *message) {
+    if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, message }) == H_STOP) return H_STOP;
+    p->skip = SKIP_HEAD;
+    p->skip_depth = 0;
+    return skip_token(p, t);
+}
+
+/* A shorthand property's name, read as a reference: a reserved word cannot be. */
+static handled shorthand_word(sjs_parser *p, const queued_token *t) {
+    if (p->name_keyword == SJS_K_NONE) return H_TAKEN;
+    sjs_problem problem = word_problem(p, held_name(p), USE_REFERENCE);
+    if (problem.code == SJS_ERROR_SYNTAX) problem.message = "this word cannot stand for a value";
+    return parse_fail(p, t, problem);
+}
+
+/* `{ a = 1 }` assigned to: refused, and read on as `a` and an assignment. */
+static handled cover_assigned(sjs_parser *p, const queued_token *t) {
+    if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no assignment: values do not change" }) == H_STOP) return H_STOP;
+    if (shorthand_word(p, t) == H_STOP) return H_STOP;
+    if (send_event(p, texted(SJS_EV_KEY, held_name(p), p->name_at)) == H_STOP) return H_STOP;
+    if (send_event(p, texted(SJS_EV_NAME, held_name(p), p->name_at)) == H_STOP) return H_STOP;
+    top_frame(p)->state = O_VALUE;
+    p->expect = E_OPERATOR;
+    return H_AGAIN;
 }
 
 static handled object_key_token(sjs_parser *p, const queued_token *t) {
@@ -1978,6 +2226,7 @@ static handled object_key_token(sjs_parser *p, const queued_token *t) {
             p->expect = E_OPERAND;
             return H_TAKEN;
         }
+        if (is_punctuator(t, SJS_P_STAR)) return refuse_method(p, t, "staticjs objects have no methods");
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a property" });
     case O_KEY_NAME:
         if (is_punctuator(t, SJS_P_COLON)) {
@@ -1990,11 +2239,7 @@ static handled object_key_token(sjs_parser *p, const queued_token *t) {
             return H_TAKEN;
         }
         if (is_punctuator(t, SJS_P_COMMA) || is_punctuator(t, SJS_P_RBRACE)) {
-            if (p->name_keyword != SJS_K_NONE) {
-                sjs_problem problem = word_problem(p, held_name(p), USE_REFERENCE);
-                if (problem.code == SJS_ERROR_SYNTAX) problem.message = "this word cannot stand for a value";
-                return parse_fail(p, t, problem);
-            }
+            if (shorthand_word(p, t) == H_STOP) return H_STOP;
             if (sjs_str_equal(held_name(p), SJS_STR("__proto__"))) {
                 return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs objects have no prototype" });
             }
@@ -2004,13 +2249,15 @@ static handled object_key_token(sjs_parser *p, const queued_token *t) {
             p->expect = E_OPERATOR;
             return H_AGAIN;
         }
-        if (is_punctuator(t, SJS_P_LPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs objects have no methods" });
+        if (is_punctuator(t, SJS_P_LPAREN)) return refuse_method(p, t, "staticjs objects have no methods");
         if (is_punctuator(t, SJS_P_ASSIGN)) return cover_initializer(p, t);
-        if (t->kind == SJS_TOKEN_NAME || t->kind == SJS_TOKEN_STRING || is_punctuator(t, SJS_P_LBRACKET)) {
-            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs objects have no getters or setters" });
+        if (p->name_keyword != NAME_STRING && method_prefix(p, t)) {
+            bool async = sjs_str_equal(held_name(p), SJS_STR("async"));
+            return refuse_method(p, t, async ? "staticjs objects have no methods" : "staticjs objects have no getters or setters");
         }
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected : after a property name" });
     default: /* O_COLON */
+        if (is_punctuator(t, SJS_P_LPAREN)) return refuse_method(p, t, "staticjs objects have no methods");
         if (!is_punctuator(t, SJS_P_COLON)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected :" });
         f->state = O_VALUE;
         p->expect = E_OPERAND;
@@ -2522,6 +2769,7 @@ static handled module_token(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     if (f->state == M_EXPORT) return export_start(p, t);
     if (t->kind == SJS_TOKEN_END) {
+        if (p->refusing) return report_refusal(p);
         p->done = true;
         return send_kind(p, SJS_EV_END, t->at) == H_STOP ? H_STOP : H_TAKEN;
     }
@@ -2559,7 +2807,13 @@ static handled new_token(sjs_parser *p, const queued_token *t) {
             if (p->goal == SJS_GOAL_MODULE || !is_word(p, next, SJS_STR("target"))) {
                 return parse_fail(p, next, (sjs_problem){ SJS_ERROR_SYNTAX, "new. is only new.target, in a function" });
             }
-            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no new.target" });
+            /* Refused, and read on as an operand no pattern takes. */
+            if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no new.target" }) == H_STOP) return H_STOP;
+            pop_frame(p);
+            p->expect = E_OPERATOR;
+            p->last_operand = LO_OTHER;
+            p->head++;
+            return H_TAKEN;
         }
         if (t->kind != SJS_TOKEN_NAME || !sjs_str_equal(token_text(p, t), SJS_STR("Set"))) {
             /* What new constructs is a member expression: no unary operator,
@@ -2626,6 +2880,7 @@ static handled lone_surrogate_string(sjs_parser *p, const queued_token *t) {
 static handled dispatch(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     if (f == NULL) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "unexpected token after the end" });
+    if (p->skip != SKIP_NONE) return skip_token(p, t);
     if (t->kind == SJS_TOKEN_STRING && t->lone_surrogate && !expects_operator(p, f)) {
         /* Unless it begins a directive prologue that holds "use strict". */
         if (f->type == F_BLOCK && f->count == 0 && f->nonsimple) {
@@ -2802,5 +3057,6 @@ void sjs_parser_destroy(sjs_parser *parser) {
     sjs_buf_free(&allocator, &parser->held);
     sjs_buf_free(&allocator, &parser->held_text);
     sjs_buf_free(&allocator, &parser->name);
+    sjs_buf_free(&allocator, &parser->scan_levels);
     sjs_mem_free(&allocator, parser, sizeof *parser);
 }

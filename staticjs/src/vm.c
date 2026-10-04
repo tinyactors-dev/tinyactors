@@ -89,6 +89,38 @@ static bool is_mutating_method(sjs_str name) {
     return false;
 }
 
+/* Whether JavaScript finds `name` on the prototype of an array, a string or
+ * a set: every method there, not only the ones staticjs has, so that reading
+ * one faults instead of giving undefined. The names are those of Node 22. */
+static bool on_prototype(uint8_t kind, sjs_str name) {
+    static const char *const arrays[] = { "at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find",
+                                          "findIndex", "findLast", "findLastIndex", "flat", "flatMap", "forEach",
+                                          "includes", "indexOf", "join", "keys", "lastIndexOf", "map", "pop", "push",
+                                          "reduce", "reduceRight", "reverse", "shift", "slice", "some", "sort",
+                                          "splice", "toReversed", "toSorted", "toSpliced", "unshift", "values",
+                                          "with" };
+    static const char *const strings[] = { "anchor", "at", "big", "blink", "bold", "charAt", "charCodeAt",
+                                           "codePointAt", "concat", "endsWith", "fixed", "fontcolor", "fontsize",
+                                           "includes", "indexOf", "isWellFormed", "italics", "lastIndexOf", "link",
+                                           "localeCompare", "match", "matchAll", "normalize", "padEnd", "padStart",
+                                           "repeat", "replace", "replaceAll", "search", "slice", "small", "split",
+                                           "startsWith", "strike", "sub", "substr", "substring", "sup",
+                                           "toLocaleLowerCase", "toLocaleUpperCase", "toLowerCase", "toUpperCase",
+                                           "toWellFormed", "trim", "trimEnd", "trimLeft", "trimRight", "trimStart" };
+    static const char *const sets[] = { "add", "clear", "delete", "difference", "entries", "forEach", "has",
+                                        "intersection", "isDisjointFrom", "isSubsetOf", "isSupersetOf", "keys",
+                                        "symmetricDifference", "union", "values" };
+    const char *const *names = kind == SJS_ARRAY ? arrays : kind == SJS_STRING ? strings : sets;
+    uint32_t count = kind == SJS_ARRAY    ? (uint32_t)(sizeof arrays / sizeof arrays[0])
+                     : kind == SJS_STRING ? (uint32_t)(sizeof strings / sizeof strings[0])
+                                          : (uint32_t)(sizeof sets / sizeof sets[0]);
+    if (sjs_is_prototype_name(name)) return true;
+    for (uint32_t i = 0; i < count; i++) {
+        if (sjs_str_equal(name, sjs_cstr(names[i]))) return true;
+    }
+    return false;
+}
+
 /* A character of a string, by UTF-16 index. */
 typedef struct {
     const sjs_string *string;
@@ -179,7 +211,7 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out) {
     default:
         return fault_named(vm, "staticjs reads properties of objects, arrays, strings and sets", name);
     }
-    if (sjs_method_lookup(object.kind, name) != SJS_BUILTIN_NONE || sjs_is_prototype_name(name) || is_mutating_method(name)) {
+    if (on_prototype(object.kind, name)) {
         return fault_named(vm, "staticjs calls methods; it does not read them as values", name);
     }
     return SJS_OK;
@@ -279,7 +311,7 @@ static sjs_result in(sjs_vm *vm, const sjs_value *pair, sjs_value *out) {
         *out = sjs_boolean(k->index < SJS_AS_ARRAY(object)->length);
     } else if (object.kind == SJS_ARRAY && sjs_str_equal(name, SJS_STR("length"))) {
         *out = sjs_boolean(true);
-    } else if (sjs_is_prototype_name(name) || (object.kind == SJS_ARRAY && sjs_method_lookup(SJS_ARRAY, name) != SJS_BUILTIN_NONE)) {
+    } else if (sjs_is_prototype_name(name) || (object.kind == SJS_ARRAY && on_prototype(SJS_ARRAY, name))) {
         r = fault_named(vm, "staticjs objects have no prototype", name);
     } else {
         *out = sjs_boolean(false);

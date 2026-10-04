@@ -616,6 +616,54 @@ static void test_limits(void) {
     CHECK(strcmp(out, "40") == 0);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
+
+    /* The lookahead after `(` opens as many pattern levels as max_nesting
+     * allows, as the parser itself does: 70 nested arrays in parentheses,
+     * and a parameter 70 patterns deep. */
+    char source[1024];
+    char *at = source;
+    at += sprintf(at, "(");
+    for (int i = 0; i < 70; i++) *at++ = '[';
+    *at++ = '1';
+    for (int i = 0; i < 70; i++) *at++ = ']';
+    sprintf(at, ").length");
+    context = new_context(&c, SJS_LIMITS_DEFAULT);
+    e.context = context;
+    CHECK(evaluate(&e, source, out) == SJS_OK && strcmp(out, "1") == 0);
+    at = source;
+    at += sprintf(at, "((");
+    for (int i = 0; i < 70; i++) *at++ = '[';
+    *at++ = 'a';
+    for (int i = 0; i < 70; i++) *at++ = ']';
+    at += sprintf(at, ") => a)(");
+    for (int i = 0; i < 70; i++) *at++ = '[';
+    *at++ = '7';
+    for (int i = 0; i < 70; i++) *at++ = ']';
+    sprintf(at, ")");
+    CHECK(evaluate(&e, source, out) == SJS_OK && strcmp(out, "7") == 0);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    limits = SJS_LIMITS_DEFAULT;
+    limits.max_nesting = 8;
+    context = new_context(&c, limits);
+    e.context = context;
+    CHECK(evaluate(&e, "(([[[[[[[[[a]]]]]]]]]) => a)", out) == SJS_ERR_PROGRAM);
+    CHECK(strcmp(out, "error 4 the program nests deeper than max_nesting") == 0);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+
+    /* A const's pattern, its default values included, is held until its
+     * value has been sent: max_held_events bounds it. */
+    limits = SJS_LIMITS_DEFAULT;
+    limits.max_held_events = 16;
+    context = new_context(&c, limits);
+    e.context = context;
+    CHECK(evaluate(&e, "(() => { const [a = [1, 2]] = []; return a.length; })()", out) == SJS_OK && strcmp(out, "2") == 0);
+    CHECK(evaluate(&e, "(() => { const [a = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]] = []; return a; })()", out) ==
+          SJS_ERR_PROGRAM);
+    CHECK(strcmp(out, "error 4 the parser holds more events than max_held_events") == 0);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
 }
 
 /* Fail every allocation in turn: each run ends with an error, never a

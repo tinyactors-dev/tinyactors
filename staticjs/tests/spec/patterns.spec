@@ -491,6 +491,84 @@ export const [h = 0, ...t] = [undefined, 1, 2];
 {"h":0,"t":[1,2]}
 
 # ------------------------------------------------------------------------
+# Keys, key order and null
+
+=== a string key is not read as a number
+(({"01": a, ...r}) => [a, r])({1: "x", "01": "y"})
+--- value
+["y",{"1":"x"}]
+
+=== numeric keys with separators, fractions and prefixes
+(({1_0: a, .5: b, 0b11: c}) => [a, b, c])({10: 1, "0.5": 2, 3: 3})
+--- value
+[1,2,3]
+
+=== a numeric key past 1e21
+(({1e21: a}) => a)({"1e+21": 5})
+--- value
+5
+
+=== 2^32 - 1 is not an array index, so object rest keeps it in insertion order
+(({b, ...r}) => r)({x: 1, 4294967295: 2, 4294967294: 3})
+--- value
+{"4294967294":3,"x":1,"4294967295":2}
+
+=== a computed key reads an earlier parameter
+((a, {[a]: v = a}) => v)("k", {})
+--- value
+"k"
+
+=== computed keys null and undefined are left out of the rest
+(({[null]: v, [undefined]: w, ...r}) => [v, w, r])({null: 1, undefined: 2, x: 3})
+--- value
+[1,2,{"x":3}]
+
+=== a computed key -0 is the key 0
+(({[-0]: v, ...r}) => [v, r])({0: "a", 1: "b"})
+--- value
+["a",{"1":"b"}]
+
+=== a key named twice is left out of the rest once
+(({a: x, ["a"]: y, ...r}) => r)({a: 1})
+--- value
+{}
+
+=== null does not take a parameter's default, and a closure sees both
+((a = 1, b = a, c = () => [a, b]) => c())(undefined, null)
+--- value
+[1,null]
+
+=== null does not take a property's default
+(({a = 1, b = a}) => [a, b])({a: null})
+--- value
+[null,null]
+
+=== a default over a set's element
+(([a = 1, ...r]) => [a, r])(new Set([undefined, 2]))
+--- value
+[1,[2]]
+
+=== a hole, then a default
+(([, b = 2]) => b)([1])
+--- value
+2
+
+=== a rest parameter after a default
+((a = 1, ...r) => [a, r])(undefined, 2)
+--- value
+[1,[2]]
+
+=== a default reads the outer name when the body declares it in a nested function
+(c => ((a = c) => { const f = () => { const c = 1; return c; }; return [a, f()]; })())(5)
+--- value
+[5,1]
+
+=== a function in a default declares its own name
+(c => ((f = () => { const c = 2; return c; }) => { const c = 1; return [c, f()]; })())(5)
+--- value
+[1,2]
+
+# ------------------------------------------------------------------------
 # Not JavaScript
 
 === a trailing comma after a rest element
@@ -615,6 +693,191 @@ String({a = 1})
 return a; })
 --- error syntax use strict
 
+=== a parenthesized default is not a parameter
+((a = 1)) => a
+--- error syntax
+
+=== a string among parameters
+((a, "b") => a)
+--- error syntax
+
+=== a number among parameters
+((a, 1) => a)
+--- error syntax
+
+=== an operation among parameters
+((a, b + 1) => a)
+--- error syntax
+
+=== a member with a default among parameters
+((a.b = 1) => 0)
+--- error syntax
+
+=== a parenthesized name after a default
+((a = 1, (b)) => 0)
+--- error syntax
+
+=== a parenthesized name among parameters
+((a, (b)) => 1)
+--- error syntax
+
+=== a parenthesized name with a default as a parameter
+(((a) = 1) => a)
+--- error syntax
+
+=== a default that is an arrow function with a number for its parameter
+(x = 1 => x)
+--- error syntax
+
+=== a member with a default in an array parameter
+(([a.b = 1]) => 1)
+--- error syntax
+
+=== an index with a default in an array parameter
+(([a[0] = 1]) => 1)
+--- error syntax
+
+=== a member with a default in an object parameter
+(({a: b.c = 1}) => b)
+--- error syntax
+
+=== a call with a default in an object parameter
+(({a: f() = 1}) => 1)
+--- error syntax
+
+=== a parenthesized element with a default in an array parameter
+(([(a) = 1]) => 1)
+--- error syntax
+
+=== a compound assignment as a parameter
+((a += 1) => 1)
+--- error syntax
+
+=== a logical assignment as a parameter
+((a ||= 1) => 1)
+--- error syntax
+
+=== a compound assignment in an object parameter
+(({a: b += 1}) => 1)
+--- error syntax
+
+=== a logical assignment in an object parameter
+(({a: b ??= 1}) => 1)
+--- error syntax
+
+=== a compound assignment in an array parameter
+(([a += 1]) => 1)
+--- error syntax
+
+=== a member in an array parameter
+(([a.b]) => 0)
+--- error syntax
+
+=== a member as an object parameter's rest
+(({...a.b}) => 0)
+--- error syntax
+
+=== a getter in an object parameter
+(({get a(){}}) => 1)
+--- error syntax
+
+=== a setter in an object parameter
+(({set a(v){}}) => 1)
+--- error syntax
+
+=== a method in an object parameter
+(({a() {}}) => 1)
+--- error syntax
+
+=== a comparison staticjs leaves out, as a parameter
+((a == b) => 1)
+--- error syntax
+
+=== a bitwise operator staticjs leaves out, as a parameter
+((a | b) => 1)
+--- error syntax
+
+=== => on the line after a default
+((a = 1)
+=> a)
+--- error syntax on the line
+
+=== a name in two parameters
+((a, {a}) => 0)
+--- error syntax twice
+
+=== a name and the rest element in one parameter
+(([a, ...a]) => 0)
+--- error syntax twice
+
+=== an assignment to an assignment
+a = 1 = 2
+--- error syntax cannot be assigned to
+
+=== an assignment to an assignment, parenthesized
+(a = 1 = 2)
+--- error syntax cannot be assigned to
+
+=== an assignment to a member, then to an assignment
+a.b = 1 = 2
+--- error syntax cannot be assigned to
+
+=== an assignment pattern, then an assignment to it
+[a] = 1 = 2
+--- error syntax cannot be assigned to
+
+=== an assignment whose value is assigned to
+a = b + 1 = 2
+--- error syntax cannot be assigned to
+
+=== an arrow function's body assigns to an assignment
+x => a = 1 = 2
+--- error syntax cannot be assigned to
+
+=== an element's default assigns to a number
+[a = 1 = 2] = x
+--- error syntax cannot be assigned to
+
+=== a rest element with a default in an assignment pattern
+[...a = 1] = x
+--- error syntax cannot be assigned to
+
+=== a rest property with a default in an assignment pattern
+({...a = 1} = x)
+--- error syntax cannot be assigned to
+
+=== a rest element that is not last, in an assignment pattern
+[...a, b = 1] = x
+--- error syntax cannot be assigned to
+
+=== a parenthesized assignment as an element of an assignment pattern
+[(a = 1)] = x
+--- error syntax cannot be assigned to
+
+=== a call with a default in an assignment pattern
+[f() = 1] = x
+--- error syntax cannot be assigned to
+
+=== this as an element of an assignment pattern
+[this] = x
+--- error syntax cannot be assigned to
+
+=== new.target as an element of an assignment pattern
+[new.target] = x
+--- error syntax cannot be assigned to
+
+=== a comma expression assigned to
+(a, b) = 1
+--- error syntax cannot be assigned to
+
+=== a parenthesized comma expression with a trailing comma
+(a, b,)
+--- error syntax
+
+=== a unary operand of **
+(-a ** 2)
+--- error syntax unary
+
 === a default that assigns to a number
 ((a = 1 = 2) => a)
 --- error syntax cannot be assigned to
@@ -645,6 +908,134 @@ return a; })
 === an assignment pattern with a default in a conditional
 (true ? {a = 1} = {} : 0)
 --- error unsupported assignment
+
+=== an assignment in parentheses
+(a = 1)
+--- error unsupported assignment
+
+=== an assignment to a parenthesized name
+((a)) = 1
+--- error unsupported assignment
+
+=== an assignment pattern with a member and a default
+[a.b = 1, (c) = 2] = []
+--- error unsupported assignment
+
+=== an assignment pattern with a default that assigns
+[a = b = 1] = []
+--- error unsupported assignment
+
+=== an assignment pattern with this in a member
+[this.x] = []
+--- error unsupported this
+
+=== an assignment in the branch of a conditional
+(true ? 1 : a = 2)
+--- error unsupported assignment
+
+=== an assignment whose value is an arrow function
+a = x => 1
+--- error unsupported assignment
+
+=== a shorthand default whose name is eval
+({eval = 1} = {})
+--- error unsupported
+
+=== the comma operator as the whole expression
+1, 2
+--- error unsupported comma
+
+=== the comma operator in an index
+[1][0, 0]
+--- error unsupported comma
+
+=== the comma operator in a template
+`${1, 2}`
+--- error unsupported comma
+
+=== the comma operator in a return
+(x => { return 1, 2; })()
+--- error unsupported comma
+
+=== a regular expression in a default value
+((a = /'/) => 1)
+--- error unsupported regular expressions
+
+=== a regular expression in a shorthand default of an assignment pattern
+({a = 1, b = /'/} = {})
+--- error unsupported regular expressions
+
+=== a generator method
+({*a(){}})
+--- error unsupported methods
+
+=== an async method
+({async a(){}})
+--- error unsupported methods
+
+=== an async generator method
+({async *a(){}})
+--- error unsupported methods
+
+=== a method with a string for its name
+({"a"(){}})
+--- error unsupported methods
+
+=== a method with a number for its name
+({1(){}})
+--- error unsupported methods
+
+=== a method with a computed name
+({[1](){}})
+--- error unsupported methods
+
+=== a getter with a number for its name
+({get 1(){}})
+--- error unsupported getters or setters
+
+=== a getter with a computed name, then a property
+({get [1](){ return 1; }, b: 2})
+--- error unsupported getters or setters
+
+=== ** with a parenthesized unary operand
+((-1) ** 2)
+--- error unsupported **
+
+=== new.target in a script's function
+(x => new.target)
+--- error unsupported new.target
+
+=== a default's closure reads a name the body declares, through another default
+(c => ((f = (g = () => c) => g()) => { const c = 1; return f(); })())(5)
+--- error unsupported before its declaration
+
+=== a default's function reads a name the body declares, in its own default
+(c => ((f = ({x = c}) => x) => { const c = 1; return f({}); })())(5)
+--- error unsupported before its declaration
+
+=== a computed key reads a name the body declares
+(c => (({[c]: v}) => { const c = "y"; return v; })({x: 1, y: 2}))("x")
+--- error unsupported before its declaration
+
+=== a rest parameter's default reads a name the body declares
+(c => ((...[a = c]) => { const c = 1; return a; })())(5)
+--- error unsupported before its declaration
+
+=== an array parameter's default reads a name the body declares
+(c => (([a = c]) => { const c = 1; return a; })([]))(5)
+--- error unsupported before its declaration
+
+=== a computed key reads a later parameter
+(({[b]: v}, b) => v)
+--- error unsupported before its declaration
+
+=== a computed key reads its own target
+(({[v]: v}) => v)
+--- error unsupported before its declaration
+
+=== a computed key in a const reads a later const
+(x => { const {[b]: a} = x; const b = "k"; return a; })
+--- error unsupported before its declaration
 
 === a default reads a later parameter
 ((a = b, b) => a)
@@ -743,3 +1134,23 @@ return a; })
 === a default that faults when it is taken
 ((a = undefined.x) => a)()
 --- fault property of undefined
+
+=== a nested pattern's default is not taken for null
+(({a: {b} = {}}) => b)({a: null})
+--- fault destructured
+
+=== an object rest of null
+(({...r}) => r)(null)
+--- fault destructured
+
+=== an object pattern over a number
+(({a}) => a)(5)
+--- fault reads properties
+
+=== a default over a number's property is not taken
+[1].map(({a = 2}) => a)
+--- fault reads properties
+
+=== an object pattern key that indexes half of a surrogate pair
+(({0: c}) => c)("😀")
+--- fault half of a character
