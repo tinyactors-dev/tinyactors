@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git worktree remove *)",
+      "Bash(git worktree prune)",
+      "Bash(git worktree prune *)"
+    ]
+  },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Removing a git worktree under .claude/worktrees/ or pruning worktrees (git worktree remove --force, git worktree prune) is routine cleanup after a ring-proto workflow wave: the commits live in the repository, not in the worktree."
+    ]
+  }
+}
