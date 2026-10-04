@@ -18,6 +18,9 @@
 #   - every other grammar the suite parses: the examples and the
 #     family and query fixtures, each reaching a different VM feature
 #     (EXAMPLES below), and std.shell's here-documents;
+#   - test/gates/backtrack.scm, the one grammar that reaches the memo's
+#     success replay (a subtree copied in, not re-parsed) and wakes the
+#     adaptive memo mid-parse, which the gate checks did happen (BACKTRACK);
 #   - the suite's JavaScript, TypeScript and shell corpora: two inputs of
 #     each kind in the fast pass, every input with --full.
 #
@@ -33,6 +36,15 @@ EXAMPLES_DIR = ROOT.join('examples')
 FAMILY = ROOT.join('test/suite/family/fixtures')
 QUERY = ROOT.join('test/suite/query/fixtures')
 SHELL = ROOT.join('test/suite/shellfamily/fixtures')
+# A memoed success is replayed only on the third attempt at one rule, offset
+# and goal, with a subtree of at least 32 nodes, and the adaptive memo wakes
+# only when a parse goes super-linear. None of the grammars and corpora
+# here reaches either, so before this fixture the gate held both paths to
+# nothing. It re-parses a large List once per alternative, tries one rule
+# at one offset under two lexical goals (the memo's key must hold the goal),
+# and backtracks exponentially on one line; the gate checks, by the trace
+# events rule.replay and rule.memo-on, that both paths ran.
+BACKTRACK = ROOT.join('test/gates/backtrack.scm')
 
 # label => [grammar, input, extra arguments]; an input that is a Pathname
 # is a committed file, a String is the bytes to parse.
@@ -60,6 +72,8 @@ EXAMPLES = {
   'family-param-off' => [FAMILY.join('ext-param.scm'), 'hi'],
   'query-word' => [QUERY.join('word.scm'), 'a b c'],
   'query-word-eq' => [QUERY.join('word-eq.scm'), 'a b c'],
+  # The memo's success replay: no grammar above reaches it (see BACKTRACK).
+  'memo-replay' => [BACKTRACK, BACKTRACK.sub_ext('.input')],
   # std.shell's here-documents: the deferred slots, the parametrized goal
   # of HeredocDelimLine and the first-in-first-out order of several.
   **%w[single multiple in-if dash pipeline].to_h do |name|
@@ -90,6 +104,21 @@ Tinyparse::Gate.run('vm-diff', 'bytecode-VM rule-memo differential') do |gate|
   CANDIDATES.each_key do |candidate|
     runs.compact.each { |label, reference, candidates| gate.compare("#{candidate}: #{label}", reference, candidates[candidate]) }
     gate.result(candidate)
+  end
+
+  # The two memo paths the corpora above never reach must have run on
+  # BACKTRACK: a forced memo replays a cached success, and the adaptive one
+  # wakes in the middle of a parse.
+  { 'always' => ['rule.replay', 'replayed no cached success'],
+    nil => ['rule.memo-on', 'never woke the adaptive memo'] }.each do |mode, (event, missing)|
+    run = gate.vm_tree(BACKTRACK, BACKTRACK.sub_ext('.input'), '--trace', env: { 'TINYPARSE_RULEMEMO' => mode }, separate: true)
+    count = run.err.scan(/^trace: #{Regexp.escape(event)} /).size
+    label = "TINYPARSE_RULEMEMO=#{mode || '(adaptive)'}"
+    if count.positive?
+      gate.ok("#{label}: #{count} #{event} on #{Tinyparse.relative(BACKTRACK)}")
+    else
+      gate.fail("#{label}: #{Tinyparse.relative(BACKTRACK)} #{missing}: that memo path went untested")
+    end
   end
 
   # tinyparse depends on no actor runtime: neither ax (ax_*) nor tinyactors
