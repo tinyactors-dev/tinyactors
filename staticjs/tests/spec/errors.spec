@@ -338,9 +338,14 @@ String.raw`x`
 ({ __proto__: null })
 --- error unsupported no prototype
 
-=== a statement in a block
-(x => { if (x) {} return 1; })
---- error unsupported holds const declarations and one return
+=== an if with an empty block
+(x => { if (x) {} return 1; })(1)
+--- value
+1
+
+=== a loop in a block
+(x => { while (x) {} return 1; })
+--- error unsupported no loops
 
 === a token no statement starts with, in a block
 (() => { const a = 1; .foo })()
@@ -356,7 +361,7 @@ String.raw`x`
 
 === if with no condition
 (() => { if; return 1; })
---- error syntax expected a statement
+--- error syntax expected (
 
 === a statement of new with nothing to construct
 (() => { new; return 1; })
@@ -368,21 +373,22 @@ String.raw`x`
 
 === let as a name in a script's block
 (() => { let; return 1; })
---- error unsupported holds const declarations and one return
+--- error unsupported expression statement
 
 === a line break before ! ends a const in a block
 (() => { const a = 1
 !a; return a; })()
---- error unsupported holds const declarations and one return
+--- error unsupported expression statement
 
 === a line break before ~ ends a const in a block
 (() => { const a = 1
 ~a; return a; })()
---- error unsupported holds const declarations and one return
+--- error unsupported expression statement
 
-=== code after return
-(x => { return 1; const y = 2; })
---- error unsupported ends with its return
+=== code after return is accepted, and never runs
+(x => { return 1; const y = 2; })(0)
+--- value
+1
 
 === a value on the line after return
 (() => { return

@@ -28,7 +28,7 @@
 #endif
 
 #define SJS_VERSION_MAJOR 0
-#define SJS_VERSION_MINOR 2
+#define SJS_VERSION_MINOR 3
 #define SJS_VERSION_PATCH 0
 /* (major << 16) | (minor << 8) | patch; sjs_version() answers it for the library linked. */
 #define SJS_VERSION ((SJS_VERSION_MAJOR << 16) | (SJS_VERSION_MINOR << 8) | SJS_VERSION_PATCH)
@@ -81,7 +81,7 @@ typedef enum {
     SJS_ERROR_NONE = 0,
     /* Not JavaScript. */
     SJS_ERROR_SYNTAX,
-    /* JavaScript, but outside staticjs: a statement, an assignment, a regular
+    /* JavaScript, but outside staticjs: a loop, an assignment, a regular
      * expression, a name that refers to itself. */
     SJS_ERROR_UNSUPPORTED,
     /* A name that is not bound anywhere, or bound twice. */
@@ -128,7 +128,8 @@ typedef struct { void *self; const sjs_allocator_vtable *v; } sjs_allocator;
 typedef struct {
     uint32_t max_source_bytes;  /* bytes pushed to one parser */
     uint32_t max_token_bytes;   /* one identifier, number, string or template piece */
-    uint32_t max_nesting;       /* open brackets, operators and functions at once */
+    uint32_t max_nesting;       /* open brackets, operators, functions, blocks and ifs at once;
+                                 * an else-if chain counts once */
     uint32_t max_lookahead;     /* tokens held to tell `(a, b = 1) =>` from `(a, b)`: an arrow
                                  * function's parameter list, defaults included, must fit */
     uint32_t max_held_events;   /* events the parser holds to send in evaluation order: a const's
@@ -292,6 +293,19 @@ SJS_API sjs_result sjs_function_native(sjs_context *context, sjs_native native, 
  *   {k: x = d, [e]: y, ...r}  OBJECT_PATTERN_BEGIN PATTERN_KEY(k) DEFAULT <d>
  *                             DEFAULT_END <x> <e> PATTERN_COMPUTED_KEY <y>
  *                             PATTERN_REST BIND(r) OBJECT_PATTERN_END
+ *
+ * Statements in a function's block body come in source order; an if's test
+ * before its IF, as the test of ?: comes before CONDITIONAL:
+ *
+ *   if (t) s1                 <t> IF <s1> IF_END
+ *   if (t) s1 else s2         <t> IF <s1> ELSE(0) <s2> IF_END
+ *   if (t) a else if (u) b else c
+ *                             <t> IF <a> ELSE(1) <u> IF <b> ELSE(0) <c> IF_END
+ *   { s }                     BLOCK_STATEMENT_BEGIN <s> BLOCK_STATEMENT_END
+ *   ;                         (nothing)
+ *
+ * ELSE comes even when the alternative is `;`. A branch in braces is a
+ * BLOCK_STATEMENT, with a scope of its own; a branch without braces has none.
  */
 
 typedef enum {
@@ -340,9 +354,16 @@ typedef enum {
     SJS_EV_REST_PARAM,       /* `...`; count: its position, the last; a pattern follows */
     SJS_EV_PARAMS_END,
     SJS_EV_ARROW_END,
-    SJS_EV_BLOCK_BEGIN,      /* a body of const declarations and one return */
-    SJS_EV_RETURN,           /* after the returned value; none: return; */
+    SJS_EV_BLOCK_BEGIN,      /* a function's block body: its statements */
+    SJS_EV_RETURN,           /* after the returned value; count 0: `return;`, anywhere in a body */
     SJS_EV_BLOCK_END,
+    /* Statements. */
+    SJS_EV_BLOCK_STATEMENT_BEGIN, /* `{` of a block statement: a scope of its own */
+    SJS_EV_BLOCK_STATEMENT_END,
+    SJS_EV_IF,               /* after an if's test */
+    SJS_EV_ELSE,             /* after the consequent; count 1: else if, whose test and IF
+                              * follow and continue the chain, which one IF_END ends */
+    SJS_EV_IF_END,           /* after the last branch of an if or an else-if chain */
     /* Patterns: each one takes the value before it. A target's default
      * value comes before its pattern, as it is evaluated first. */
     SJS_EV_BIND,             /* text: the name bound */

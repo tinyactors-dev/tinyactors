@@ -23,10 +23,12 @@ too; and 100,000 doubles must format as `String(x)` does.
 ## What it guarantees
 
 - **No side effects.** There is no assignment, no mutating method, no
-  statement but `const` and `return`, and no way to reach anything that is
-  not passed in. Values cannot change once they are shared.
+  statements but `const`, `if`, blocks and `return`, and no way to reach
+  anything that is not passed in. Values cannot change once they are
+  shared.
 - **Every evaluation ends.** Loops are built-ins over collections that
-  already exist. A function cannot refer to itself or to a later `const`
+  already exist; code jumps only forward. A function cannot refer to itself
+  or to a later `const`
   (refused when compiled), and a function that is already running cannot
   be entered again (refused when called, as Starlark does). Evaluation runs
   on fuel the caller pushes, and stops where the fuel ends.
@@ -75,8 +77,16 @@ Expressions: numbers, strings, template literals, `true`, `false`, `null`,
 shorthand keys), `new Set(...)`; `+ - * / %`, `< <= > >=`, `=== !==`,
 `&& || ??`, `?:`, `!`, unary `-` and `+`, `typeof`, `in`; members, calls
 and spread arguments, with `?.`; arrow functions with an expression body,
-or a block of `const` declarations ending in one `return`; array and object
-patterns in parameters and `const`.
+or a block body of statements: `const`, `if`/`else` (with `else if`), nested
+blocks `{ }` and `return` anywhere in them; array and object patterns in
+parameters and `const`.
+
+A `const` belongs to the block it is in, as in JavaScript: a block may
+shadow a name from around it, and its names are gone after it. An `if`
+tests its condition for truthiness, as JavaScript does; a dangling `else`
+binds to the nearest `if`; falling off the end of a body returns
+`undefined`; code after a `return` is accepted, and never runs. A line
+break after `return` ends it, as JavaScript inserts a semicolon there.
 
 Parameters and the targets of patterns take default values (`(a, b = a *
 2) => ...`, `const {limit = 10} = o`), taken when the value is `undefined`
@@ -170,14 +180,29 @@ can assign (`a.b = 1`, `[a] = xs`), and as a syntax error where it cannot
 words only strict code reserves (`yield`, `let`, ...) are names, which
 staticjs does not bind; in a module they are syntax errors.
 
+Among the statements: loops, `switch`, `throw`, `try`, `let` and `var`,
+labels, function and class declarations, and expression statements, which
+can have no effect, are unsupported; `break` and `continue` are syntax
+errors, as staticjs has no loop or label for them to leave. A declaration
+as the statement of an `if`, an `else` or a label is a syntax error, as in
+JavaScript (`if (x) const y = 1`). An `if` or a block at a module's top
+level is unsupported, as a module holds imports, `const` and exports; the
+parser reads on through it, so a `return` in it is the syntax error
+JavaScript reports. A name read in a block, or in a function in it, and
+declared later in that block or in one around it, is refused as a use
+before its declaration, as at a function's top level. A name bound nowhere
+is refused even in a branch that never runs.
+
 After JavaScript staticjs leaves out, the parser reads on where it can,
 sending nothing more: past an assignment, the comma operator, an operator
-staticjs does not have, `this`, `new.target` and a method in an object
-literal. So a program that is not JavaScript further on, such as `([a.b =
-1]) => 0` or `a = 1 = 2`, is a syntax error, not unsupported. It stops at
-the first refusal where it cannot read on: a statement staticjs does not
-have, a regular expression (where it reads ahead without parsing, a `/`
-that cannot divide is one), a `/` in a method's body.
+staticjs does not have, `this`, `new.target`, a method in an object
+literal, an expression statement, and an `if` or a block at a module's top
+level. So a program that is not JavaScript further on, such as `([a.b =
+1]) => 0`, `a = 1 = 2` or `x => { a b; }`, is a syntax error, not
+unsupported. It stops at the first refusal where it cannot read on: a loop,
+`switch`, `try` or another statement staticjs does not have, a label, a
+regular expression (where it reads ahead without parsing, a `/` that cannot
+divide is one, as after an `if`'s condition), a `/` in a method's body.
 
 Errors come in the order JavaScript finds them only so far as a stage that
 streams can know it. The compiler stops at the first error it meets; what it

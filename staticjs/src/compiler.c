@@ -2,13 +2,28 @@
  * The compiler: a sink of syntax events that emits bytecode as each event
  * arrives. Events come in evaluation order, so most become one instruction;
  * the branching constructs keep their jumps on a stack and patch them when
- * their end arrives.
+ * their end arrives. Every jump goes forward: there is no loop.
+ *
+ * Statements: an if is a JUMP_FALSY over its consequent, and a JUMP over the
+ * alternative after a consequent that does not end in a return. An else-if
+ * chain is one construct, whose jumps to its end wait in c->jumps until its
+ * IF_END, so a chain of any length nests once. Whether code falls through is
+ * a peephole (ends_in_return): the last instruction is a RETURN and no jump
+ * lands after it. Falling off the end of a body returns undefined.
+ *
+ * Scopes: one stack holds the scopes of functions and of block statements.
+ * A block's names are its own, in slots of its function after those in use
+ * when it begins; when it ends, the slots are free for what follows, and a
+ * function's locals are the most it uses at once. Reusing a slot is safe: a
+ * closure copies what it captures when it is made, and a slot is set before
+ * it is read, as a name cannot be read before its declaration.
  *
  * Names are resolved when they are read. A function captures the values of
  * the names it uses from enclosing functions when it is created: every
  * binding is const, so a copy is the same as a reference. A name may not be
  * used before its const declaration or import, which also makes a function
- * unable to refer to itself. A name bound nowhere is reported at the end, so
+ * unable to refer to itself: a name read is noted in every scope it is
+ * looked for in, blocks included, and a later declaration there is refused. A name bound nowhere is reported at the end, so
  * that a syntax error after it comes first, as in JavaScript.
  *
  * A module's value is its namespace: an object of every export, with keys in
@@ -59,13 +74,19 @@ typedef struct {
     const sjs_buf *text;   /* the buffer the names are in */
 } name_index;
 
+/* Kinds of scope: a function's (the program's too), or a block statement's. */
+enum { SC_FUNCTION = 0, SC_BLOCK };
+
 typedef struct {
-    uint32_t function;
+    uint8_t kind;          /* SC_* */
+    uint32_t function_scope; /* the function scope this one is in: itself for a function */
+    uint32_t function;     /* SC_FUNCTION: its sjs_function_info */
     uint32_t bindings_base;
-    uint32_t jump_over;    /* operand of the jump around the body */
     uint16_t params;       /* as ARROW_BEGIN said, a rest parameter included */
     uint16_t params_seen;
-    uint16_t slots;
+    uint16_t slots;        /* SC_FUNCTION: the next free slot */
+    uint16_t slot_high;    /* SC_FUNCTION: the most slots in use at once, its locals */
+    uint16_t slot_base;    /* SC_BLOCK: the function's next free slot when it began */
     uint16_t capture_count;
     uint8_t params_open;   /* between ARROW_BEGIN and PARAMS_END */
     uint8_t rest;          /* the last parameter is a rest parameter */
@@ -76,8 +97,7 @@ typedef struct {
     uint32_t early_read_offset;
     uint32_t early_read_length;
     sjs_position early_read_at;
-    uint8_t block;
-    uint8_t returned;
+    uint8_t block;         /* SC_FUNCTION: its body is a block */
     sjs_position at;
     name_index names;      /* its bindings, by name */
     name_index read;       /* names read in it, or in a function it holds, that it did not bind then */
@@ -93,17 +113,22 @@ typedef struct {
 } capture;
 
 /* Open constructs. */
-enum { K_LOGICAL = 1, K_CONDITIONAL, K_CHAIN, K_CALL, K_NEW, K_FUNCTION, K_CONST, K_TEMPLATE, K_DEFAULT };
+enum { K_LOGICAL = 1, K_CONDITIONAL, K_CHAIN, K_CALL, K_NEW, K_FUNCTION, K_CONST, K_TEMPLATE, K_DEFAULT, K_IF, K_BLOCK };
+
+/* construct.branch of a K_IF: in which part of the if, or of its else-if
+ * chain, the events are. KI_ELSE_IF waits for the next test's IF. */
+enum { KI_CONSEQUENT = 0, KI_ELSE_IF, KI_ALTERNATIVE };
 
 typedef struct {
     uint8_t kind;
     uint8_t method;
     uint8_t spread;
     uint8_t exported;      /* K_CONST: export what it binds */
-    uint32_t jump;         /* an operand to patch */
+    uint8_t branch;        /* K_IF: KI_* */
+    uint32_t jump;         /* an operand to patch; K_IF: the pending JUMP_FALSY's, 0 for none */
     uint32_t jump_else;
     uint32_t depth;        /* K_CHAIN: the chain's depth */
-    uint32_t jumps_base;   /* K_CHAIN: its jumps */
+    uint32_t jumps_base;   /* K_CHAIN, K_IF: its jumps, in c->jumps */
     uint32_t param;        /* K_DEFAULT: the parameter's slot + 1, or 0 for an element's */
 } construct;
 
@@ -463,9 +488,16 @@ static uint32_t scope_count(const sjs_compiler *c) {
     return SJS_BUF_COUNT(c->scopes, scope);
 }
 
-static sjs_result open_scope(sjs_compiler *c, sjs_position at) {
+/* The function scope the current scope is in. */
+static scope *function_scope(sjs_compiler *c) {
+    return &SJS_BUF_AT(c->scopes, scope, current(c)->function_scope);
+}
+
+static sjs_result open_function_scope(sjs_compiler *c, sjs_position at) {
     sjs_function_info info = { 0 };
     scope s = { 0 };
+    s.kind = SC_FUNCTION;
+    s.function_scope = scope_count(c);
     s.function = SJS_BUF_COUNT(c->functions, sjs_function_info);
     s.bindings_base = SJS_BUF_COUNT(c->bindings, binding);
     s.at = at;
@@ -475,6 +507,34 @@ static sjs_result open_scope(sjs_compiler *c, sjs_position at) {
     sjs_result r = buf_add(c, &c->functions, bytes_of(&info, sizeof info));
     if (r == SJS_OK) r = buf_add(c, &c->scopes, bytes_of(&s, sizeof s));
     return r == SJS_OK ? SJS_OK : fail_result(c, r, at);
+}
+
+/* A block statement's scope: its names of its own, in the slots after the
+ * ones its function uses when it begins. */
+static sjs_result open_block_scope(sjs_compiler *c, sjs_position at) {
+    scope s = { 0 };
+    s.kind = SC_BLOCK;
+    s.function_scope = current(c)->function_scope;
+    s.bindings_base = SJS_BUF_COUNT(c->bindings, binding);
+    s.slot_base = function_scope(c)->slots;
+    s.at = at;
+    s.names = index_over(&c->names);
+    s.read = index_over(&c->names);
+    sjs_result r = buf_add(c, &c->scopes, bytes_of(&s, sizeof s));
+    return r == SJS_OK ? SJS_OK : fail_result(c, r, at);
+}
+
+/* The block ends: its names go, and its slots are free for what follows.
+ * The names read in it stay noted in the scopes around it, as a function's
+ * do. No pending capture refers to its bindings: a capture is taken by a
+ * function inside the block, which has ended before it. */
+static void close_block_scope(sjs_compiler *c) {
+    scope s = *current(c);
+    c->bindings.length = s.bindings_base * (uint32_t)sizeof(binding);
+    index_free(c, &current(c)->names);
+    index_free(c, &current(c)->read);
+    c->scopes.length -= (uint32_t)sizeof(scope);
+    SJS_BUF_AT(c->scopes, scope, s.function_scope).slots = s.slot_base;
 }
 
 static bool reserved_binding(sjs_str name) {
@@ -558,10 +618,13 @@ static sjs_result declare(sjs_compiler *c, const sjs_event *e, target to) {
     return SJS_OK;
 }
 
+/* A slot of the current function, the first free one: a block's slots are
+ * free again after it. */
 static sjs_result new_slot(sjs_compiler *c, sjs_position at, uint32_t *slot) {
-    scope *s = current(c);
+    scope *s = function_scope(c);
     if (s->slots == UINT16_MAX) return compile_fail(c, at, (sjs_problem){ SJS_ERROR_LIMIT, "a function has more than 65535 names" });
     *slot = s->slots++;
+    if (s->slots > s->slot_high) s->slot_high = s->slots;
     return SJS_OK;
 }
 
@@ -596,7 +659,9 @@ static sjs_result find_capture(sjs_compiler *c, capture *made) {
     return buf_add(c, &c->pending_captures, bytes_of(made, sizeof *made));
 }
 
-/* Read a name: a local, a capture, a constant, a global or a built-in. */
+/* Read a name: a local, a capture, a constant, a global or a built-in. The
+ * name is noted as read in every scope it is looked for in, blocks
+ * included, so that a later declaration there is refused. */
 static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
     uint32_t count = scope_count(c);
     uint32_t inner = count - 1;
@@ -605,11 +670,14 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
         if (index_find(&SJS_BUF_AT(c->scopes, scope, s).names, e->text, &i)) {
             binding *b = &SJS_BUF_AT(c->bindings, binding, i);
             if (b->kind == B_CONSTANT) return op32(c, ins(SJS_OP_CONSTANT, b->index, e->at));
-            if (s == inner) return op16(c, ins(SJS_OP_LOCAL, b->index, e->at));
+            if (SJS_BUF_AT(c->scopes, scope, s).function_scope == current(c)->function_scope) {
+                return op16(c, ins(SJS_OP_LOCAL, b->index, e->at));
+            }
             /* Captured: through every function between. */
             uint16_t from_capture = 0;
             uint32_t index = b->index;
             for (uint32_t t = s + 1; t <= inner; t++) {
+                if (SJS_BUF_AT(c->scopes, scope, t).kind != SC_FUNCTION) continue;
                 capture made = { 0 };
                 made.scope = t;
                 made.binding = i;
@@ -735,21 +803,22 @@ static sjs_result begin_function(sjs_compiler *c, const sjs_event *e) {
     k.kind = K_FUNCTION;
     if (jump(c, ins(SJS_OP_JUMP, 0, at), &k.jump) != SJS_OK) return SJS_ERR_PROGRAM;
     if (push_construct(c, k, at) != SJS_OK) return SJS_ERR_PROGRAM;
-    if (open_scope(c, at) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (open_function_scope(c, at) != SJS_OK) return SJS_ERR_PROGRAM;
     scope *s = current(c);
     s->params = (uint16_t)e->count;
     s->slots = (uint16_t)e->count;
+    s->slot_high = (uint16_t)e->count;
     s->params_open = 1;
     return SJS_OK;
 }
 
 /* Close the innermost function: its captures go to the program's table. */
-static sjs_result close_scope(sjs_compiler *c, sjs_position at) {
+static sjs_result close_function_scope(sjs_compiler *c, sjs_position at) {
     scope s = *current(c);
     uint32_t scope_index = scope_count(c) - 1;
     sjs_function_info *info = &SJS_BUF_AT(c->functions, sjs_function_info, s.function);
     info->params = s.params;
-    info->locals = s.slots;
+    info->locals = s.slot_high;
     info->flags = s.rest ? SJS_FUNCTION_REST : 0u;
     info->capture_count = s.capture_count;
     info->captures = SJS_BUF_COUNT(c->captures, sjs_capture_info);
@@ -785,12 +854,15 @@ static sjs_result close_scope(sjs_compiler *c, sjs_position at) {
 
 static sjs_result end_function(sjs_compiler *c, sjs_position at) {
     scope *s = current(c);
+    if (s->kind != SC_FUNCTION || s->params_open || scope_count(c) < 2) {
+        return compile_fail(c, at, (sjs_problem){ SJS_ERROR_SYNTAX, "the events are out of order" });
+    }
+    if (expect_construct(c, K_FUNCTION, at) != SJS_OK) return SJS_ERR_PROGRAM;
     if (!s->block) {
         if (op(c, SJS_OP_RETURN, at) != SJS_OK) return SJS_ERR_PROGRAM;
     }
-    uint32_t function = s->function;
-    if (close_scope(c, at) != SJS_OK) return SJS_ERR_PROGRAM;
-    if (expect_construct(c, K_FUNCTION, at) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t function = current(c)->function;
+    if (close_function_scope(c, at) != SJS_OK) return SJS_ERR_PROGRAM;
     construct k = pop_construct(c);
     land(c, k.jump);
     return op32(c, ins(SJS_OP_CLOSURE, function, at));
@@ -1447,6 +1519,130 @@ static sjs_result const_end(sjs_compiler *c, const sjs_event *e) {
     return SJS_OK;
 }
 
+/* ------------------------------------------------------------------------
+ * Statements
+ */
+
+/* Does the code end in a RETURN that nothing jumps past? Then what follows
+ * is reached only by a jump that lands later, and falling off the end needs
+ * no code. A peephole: no jump lands after the last instruction, which is a
+ * RETURN. */
+static bool ends_in_return(const sjs_compiler *c) {
+    return c->last_op_valid && c->code.ptr[c->last_op] == SJS_OP_RETURN && c->last_op + 1u == here(c) &&
+           c->last_label <= c->last_op;
+}
+
+/* Can a statement begin here? In a function's block body, at its top or in
+ * a block statement or a branch of an if. */
+static bool statement_level(sjs_compiler *c) {
+    if (!function_scope(c)->block) return false;
+    const construct *k = top_construct(c);
+    if (k == NULL) return false;
+    if (k->kind == K_FUNCTION) return current(c)->kind == SC_FUNCTION && scope_count(c) > 1;
+    if (k->kind == K_BLOCK) return true;
+    return k->kind == K_IF && (k->branch == KI_CONSEQUENT || k->branch == KI_ALTERNATIVE);
+}
+
+/* IF: after the test. A new if, or the next test of an else-if chain. */
+static sjs_result compile_if(sjs_compiler *c, const sjs_event *e) {
+    construct *chain = top_construct(c);
+    if (chain != NULL && chain->kind == K_IF && chain->branch == KI_ELSE_IF) {
+        uint32_t operand;
+        if (jump(c, ins(SJS_OP_JUMP_FALSY, 0, e->at), &operand) != SJS_OK) return SJS_ERR_PROGRAM;
+        chain = top_construct(c);
+        chain->jump = operand;
+        chain->branch = KI_CONSEQUENT;
+        return SJS_OK;
+    }
+    if (!statement_level(c)) return out_of_order(c, e->at);
+    construct k = { 0 };
+    k.kind = K_IF;
+    k.branch = KI_CONSEQUENT;
+    k.jumps_base = SJS_BUF_COUNT(c->jumps, uint32_t);
+    if (jump(c, ins(SJS_OP_JUMP_FALSY, 0, e->at), &k.jump) != SJS_OK) return SJS_ERR_PROGRAM;
+    return push_construct(c, k, e->at);
+}
+
+/* ELSE: the consequent ends. Unless it ends in a return, it jumps to the
+ * end of the chain; the test's jump lands on what follows. */
+static sjs_result compile_else(sjs_compiler *c, const sjs_event *e) {
+    construct *k = top_construct(c);
+    if (k == NULL || k->kind != K_IF || k->branch != KI_CONSEQUENT) return out_of_order(c, e->at);
+    if (!ends_in_return(c)) {
+        uint32_t operand;
+        if (jump(c, ins(SJS_OP_JUMP, 0, e->at), &operand) != SJS_OK) return SJS_ERR_PROGRAM;
+        sjs_result r = buf_add(c, &c->jumps, bytes_of(&operand, sizeof operand));
+        if (r != SJS_OK) return fail_result(c, r, e->at);
+        k = top_construct(c);
+    }
+    land(c, k->jump);
+    k->jump = 0;
+    k->branch = e->count != 0 ? KI_ELSE_IF : KI_ALTERNATIVE;
+    return SJS_OK;
+}
+
+/* IF_END: every jump of the chain that is still open lands here. */
+static sjs_result compile_if_end(sjs_compiler *c, const sjs_event *e) {
+    construct *top = top_construct(c);
+    if (top == NULL || top->kind != K_IF || top->branch == KI_ELSE_IF) return out_of_order(c, e->at);
+    construct k = pop_construct(c);
+    if (k.jump != 0) land(c, k.jump);
+    uint32_t n = SJS_BUF_COUNT(c->jumps, uint32_t);
+    for (uint32_t i = k.jumps_base; i < n; i++) land(c, SJS_BUF_AT(c->jumps, uint32_t, i));
+    c->jumps.length = k.jumps_base * (uint32_t)sizeof(uint32_t);
+    return SJS_OK;
+}
+
+/* BLOCK_STATEMENT_BEGIN: a scope of its own, and no code. */
+static sjs_result compile_block_begin(sjs_compiler *c, const sjs_event *e) {
+    if (!statement_level(c)) return out_of_order(c, e->at);
+    construct k = { 0 };
+    k.kind = K_BLOCK;
+    if (push_construct(c, k, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    return open_block_scope(c, e->at);
+}
+
+static sjs_result compile_block_end(sjs_compiler *c, const sjs_event *e) {
+    if (expect_construct(c, K_BLOCK, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (current(c)->kind != SC_BLOCK) return out_of_order(c, e->at);
+    pop_construct(c);
+    close_block_scope(c);
+    return SJS_OK;
+}
+
+static sjs_result compile_return(sjs_compiler *c, const sjs_event *e) {
+    if (!statement_level(c)) return out_of_order(c, e->at);
+    if (e->count == 0 && op(c, SJS_OP_UNDEFINED_, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    return op(c, SJS_OP_RETURN, e->at);
+}
+
+/* BLOCK_END: falling off the end of a body returns undefined. */
+static sjs_result compile_body_end(sjs_compiler *c, const sjs_event *e) {
+    if (expect_construct(c, K_FUNCTION, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (!statement_level(c)) return out_of_order(c, e->at);
+    if (ends_in_return(c)) return SJS_OK;
+    if (op(c, SJS_OP_UNDEFINED_, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    return op(c, SJS_OP_RETURN, e->at);
+}
+
+static sjs_result compile_body_begin(sjs_compiler *c, const sjs_event *e) {
+    if (expect_construct(c, K_FUNCTION, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    scope *s = current(c);
+    if (s->kind != SC_FUNCTION || s->params_open || s->block || scope_count(c) < 2) return out_of_order(c, e->at);
+    s->block = 1;
+    return SJS_OK;
+}
+
+static sjs_result compile_const_begin(sjs_compiler *c, const sjs_event *e) {
+    /* In a function, a const is a statement of its block body. */
+    if (scope_count(c) > 1 && !statement_level(c)) return out_of_order(c, e->at);
+    construct k = { 0 };
+    k.kind = K_CONST;
+    k.exported = c->exporting ? 1u : 0u;
+    c->exporting = false;
+    return push_construct(c, k, e->at);
+}
+
 static sjs_result end(sjs_compiler *c, const sjs_event *e) {
     if (SJS_BUF_COUNT(c->constructs, construct) != 0 || scope_count(c) != 1) {
         return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_SYNTAX, "the events are out of order" });
@@ -1456,7 +1652,7 @@ static sjs_result end(sjs_compiler *c, const sjs_event *e) {
     else if (c->unbound) r = fail_unbound(c);
     else r = op(c, SJS_OP_RETURN, e->at);
     if (r != SJS_OK) return SJS_ERR_PROGRAM;
-    if (close_scope(c, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (close_function_scope(c, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     c->ended = true;
     return SJS_OK;
 }
@@ -1580,23 +1776,23 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     case SJS_EV_ARROW_END:
         return end_function(c, e->at);
     case SJS_EV_BLOCK_BEGIN:
-        current(c)->block = 1;
-        return SJS_OK;
+        return compile_body_begin(c, e);
     case SJS_EV_RETURN:
-        if (e->count == 0 && op(c, SJS_OP_UNDEFINED_, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
-        current(c)->returned = 1;
-        return op(c, SJS_OP_RETURN, e->at);
+        return compile_return(c, e);
     case SJS_EV_BLOCK_END:
-        if (current(c)->returned) return SJS_OK;
-        if (op(c, SJS_OP_UNDEFINED_, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
-        return op(c, SJS_OP_RETURN, e->at);
-    case SJS_EV_CONST_BEGIN: {
-        construct k = { 0 };
-        k.kind = K_CONST;
-        k.exported = c->exporting ? 1u : 0u;
-        c->exporting = false;
-        return push_construct(c, k, e->at);
-    }
+        return compile_body_end(c, e);
+    case SJS_EV_BLOCK_STATEMENT_BEGIN:
+        return compile_block_begin(c, e);
+    case SJS_EV_BLOCK_STATEMENT_END:
+        return compile_block_end(c, e);
+    case SJS_EV_IF:
+        return compile_if(c, e);
+    case SJS_EV_ELSE:
+        return compile_else(c, e);
+    case SJS_EV_IF_END:
+        return compile_if_end(c, e);
+    case SJS_EV_CONST_BEGIN:
+        return compile_const_begin(c, e);
     case SJS_EV_CONST_END:
         return const_end(c, e);
     case SJS_EV_EXPORT:
@@ -1658,7 +1854,7 @@ sjs_result sjs_compiler_init(sjs_compiler **out, const sjs_compiler_config *conf
         if (r == SJS_OK) r = index_put(c, &c->global_index, at_offset(offset, c->globals[i].length, i));
     }
     sjs_position start = { 0, 1, 1 };
-    if (r == SJS_OK && open_scope(c, start) != SJS_OK) r = SJS_ERR_NOMEM;
+    if (r == SJS_OK && open_function_scope(c, start) != SJS_OK) r = SJS_ERR_NOMEM;
     if (r != SJS_OK) {
         sjs_compiler_destroy(c);
         return r;
