@@ -6,7 +6,9 @@
 protocol. Attachment suspends the production pump and transfers exclusive
 ownership of one `ta_system` to the debugger. Intervention is limited to
 operator transitions and the abandonment needed to enable them. The
-debugger freezes the entire system; there is no operator ring.
+debugger freezes the entire system; there is no operator ring. Reading
+needs no attachment: a host inspects a live system between `ta_run` calls
+([below](#inspection-without-attaching)).
 
 ## Attachment and ownership
 
@@ -37,14 +39,40 @@ does not roll back debug operations. The host must release ownership on
 disconnect or failure of a debugger connection. Exact attachment API names
 and disconnect policy remain to be specified.
 
+## Inspection without attaching
+
+`ta_actor_inspect` is a native call the host may make whenever core has
+returned, without attaching a debugger. It reads one session's
+configuration, data and execution position, changes nothing, and never
+stops another actor. A `ta_system` has one thread, so a read between
+`ta_run` calls is safe by construction.
+
+The result says whether the session is **stable** (not in a slot) or
+**active** (in a slot). An active session may be parked in the middle of
+a macrostep, after a budget pause or a slice end or while it waits for
+c2h. Its configuration and data are then part-way through a step, and the
+result gives its position (slot, unit, `<foreach>` iteration) as ADR 0083
+does, so a reader cannot mistake it for a stable state. Data is read
+through the data model outside a macrostep; a JavaScript data model's
+values may change by the next call.
+
+This is how dashboards and the read-only tools of the
+[MCP server](../../mcp-server.md) look at a live system. A view that must
+be consistent across several sessions, and every intervention, attaches.
+The test host forwards `ta_actor_inspect` to remote clients like its other
+native calls. Inspection is not a ring request: a request answered only for
+stable sessions would add records and a round trip per read, and would
+fail exactly for the session that keeps running, which is the one an
+operator most wants to see.
+
 ## Native debugging primitives
 
 These are debugging capabilities, not additional production request records.
 Their exact signatures remain a sketch:
 
-- **Inspect:** read configuration, data and execution position while the
-  debugger owns the system, including at a budget pause (core ADR 0083).
-  Inspection changes no execution state.
+- **Inspect:** read configuration, data and execution position, including
+  at a budget pause (core ADR 0083). Inspection changes no execution state.
+  Under attachment it sees a frozen system, so successive reads agree.
 - **Reach a microstep boundary:** when paused inside a microstep, drive
   only that actor until its current microstep finishes, then return before
   another microstep or actor starts. A budget pause may require several
