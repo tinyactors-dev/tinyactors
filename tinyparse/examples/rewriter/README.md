@@ -49,8 +49,8 @@ tinyparse and walks the tree through the public cursor API.
    straight from the source bytes their span covers; `#define` lines are
    dropped; and the single `enum` is emitted where the first macro stood.
 
-The grammar is embedded into the binary at build time (`build.sh` turns
-`cdefines.scm` into `cdefines_scm.h`), so the program needs no grammar path
+The grammar is embedded into the binary at build time (`mise run examples`
+turns `cdefines.scm` into `cdefines_scm.h`), so the program needs no grammar path
 at runtime.
 
 ## Limits
@@ -62,21 +62,19 @@ through untouched, so the codemod is conservative by construction.
 
 ## Build and run
 
-From `tinyparse/` (after `bash build.sh dist`):
+From `tinyparse/` (after `mise run examples`):
 
 ```sh
 examples/rewriter/run.sh examples/rewriter/sample.c
 ```
 
-`run.sh` builds the program on first use (or when its sources change), then
-runs it on the given file and prints the rewritten source to stdout. The
-build links the host dist archive `libtinyparse.a` and
-includes `tinyparse.h` from the dist directory.
-
-You can also build directly:
+`run.sh` runs the program `mise run examples` built into
+`build/examples/rewriter/` (linked against `build/lib/libtinyparse.a`) on the
+given file and prints the rewritten source to stdout. You can also run it
+directly:
 
 ```sh
-cd examples/rewriter && bash build.sh && ./rewriter sample.c
+build/examples/rewriter/rewriter examples/rewriter/sample.c
 ```
 
 ## Files
@@ -86,5 +84,4 @@ cd examples/rewriter && bash build.sh && ./rewriter sample.c
 | `cdefines.scm`   | the line-oriented grammar                          |
 | `rewriter.c`     | the codemod: parse, walk the CST, emit the rewrite |
 | `sample.c`       | example input mixing macros with ordinary C        |
-| `build.sh`       | compiles the program against the host dist         |
-| `run.sh`         | builds if needed, then runs the rewriter on a file |
+| `run.sh`         | runs the built rewriter on a file                  |

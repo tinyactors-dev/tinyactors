@@ -1,4 +1,5 @@
+# The public header ships with each release target's libraries.
 <<<cmd
-test -f dist/linux-x86_64/tinyparse.h
+test -f dist/x86_64-linux/include/tinyparse.h
 <<<assert
 exit 0

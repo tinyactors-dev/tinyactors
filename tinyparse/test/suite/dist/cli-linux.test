@@ -1,4 +1,5 @@
+# `mise run dist` builds the CLI for x86_64 Linux.
 <<<cmd
-test -x dist/linux-x86_64/tinyparse
+test -x dist/x86_64-linux/bin/tinyparse
 <<<assert
 exit 0

@@ -1,0 +1,57 @@
+#!/usr/bin/env ruby
+#MISE description="Pack the release tarballs into dist/release/: one per release target, and the amalgamation"
+#MISE depends=["dist", "amalgamate"]
+# vim:ft=ruby
+
+# What a tinyparse release ships, packed as deterministic tarballs (sorted
+# entries, one mtime, owner 0, no timestamp in the gzip header; pinned GNU
+# tar and gzip, CRelease.tarball) whose mtime is the commit's:
+#
+#   tinyparse-<version>-<target>.tar.gz     a prefix tree: bin/, lib/,
+#                                           include/, share/man/man1/ and
+#                                           INSTALL.md, for each release target
+#   tinyparse-<version>-amalgamation.tar.gz the single-file distribution
+#
+# It publishes nothing: tagging and uploading a release is not wired yet.
+
+require 'cache'
+require 'c_release'
+require 'fileutils'
+require 'open3'
+require_relative '../lib/tinyparse'
+
+ROOT = Tinyparse::ROOT
+OUT = Tinyparse::DIST.join('release')
+version = Tinyparse.version
+base = "tinyparse-#{version}"
+labels = [*Tinyparse::RELEASE_TARGETS, 'amalgamation']
+
+Cache.gate('release', inputs: [*Cache.files('dist/*/bin/*', 'dist/*/lib/*', 'dist/*/include/*', 'dist/amalgamation/*'),
+                               *Cache.files('tinyparse.1', 'INSTALL.md', 'VERSION', 'mise/tasks/release')],
+                      outputs: labels.map { |label| OUT.join("#{base}-#{label}.tar.gz") })
+
+epoch, status = Open3.capture2('git', 'log', '-1', '--format=%ct', chdir: ROOT.to_s)
+abort 'release: cannot read the commit time' unless status.success?
+epoch = epoch.strip
+
+staging = Tinyparse::BUILD.join('release-staging')
+FileUtils.rm_rf([staging, OUT])
+FileUtils.mkdir_p([staging, OUT])
+
+Tinyparse::RELEASE_TARGETS.each do |name|
+  tree = staging.join("#{base}-#{name}")
+  source = Tinyparse::DIST.join(name)
+  FileUtils.mkdir_p(tree.join('share/man/man1'))
+  %w[bin lib include].each { |part| FileUtils.cp_r(source.join(part), tree, preserve: false) }
+  FileUtils.cp(ROOT.join('tinyparse.1'), tree.join('share/man/man1'))
+  tree.join('INSTALL.md').write(ROOT.join('INSTALL.md').binread.gsub('@VERSION@', version).gsub('@PLATFORM@', name))
+  CRelease.tarball(staging, tree.basename, OUT.join("#{tree.basename}.tar.gz"), epoch)
+end
+
+tree = staging.join("#{base}-amalgamation")
+FileUtils.cp_r(Tinyparse::DIST.join('amalgamation'), tree)
+FileUtils.rm_f(Dir[tree.join('*').to_s].reject { |path| %w[tinyparse.c tinyparse.h tinyparse_cli.c README.md].include?(File.basename(path)) })
+CRelease.tarball(staging, tree.basename, OUT.join("#{tree.basename}.tar.gz"), epoch)
+
+FileUtils.rm_rf(staging)
+labels.each { |label| puts "release: #{Tinyparse.relative(OUT.join("#{base}-#{label}.tar.gz"))}" }

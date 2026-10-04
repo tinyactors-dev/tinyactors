@@ -43,7 +43,7 @@ over.
 
 **Stay green.** Every example is pinned by a test under `test/suite/` that
 exercises its lesson, including the nested case where the lesson is
-recursion. `bash ci/tinyparse-metric.sh` runs them all.
+recursion. `mise run test` runs them all.
 
 ## Grammars you run with the CLI
 
@@ -65,9 +65,10 @@ printf '(a (b c))' | tinyparse run examples/sexpr/sexpr.scm --input - --dump-tre
 
 ## Programs that consume the tree
 
-These link the dist archives and walk the CST through the cursor API. Build
-them with `examples/build.sh` (the dispatcher passes each a `$TP_DIST`,
-`$TP_CLI`, and `$TP_INC`); each also has a `run.sh` that builds on demand.
+These link the library archive and walk the CST through the cursor API.
+`mise run examples` builds each into `build/examples/<name>/` (an example that
+embeds a generated parser runs `tinyparse c` first); those with a `run.sh` run
+the built program.
 
 | Example | The lesson |
 |---------|------------|

@@ -1,0 +1,94 @@
+#!/usr/bin/env ruby
+#MISE description="Build the example programs into build/examples/<name>/"
+#MISE depends=["cli"]
+# vim:ft=ruby
+
+# Each example with a host program is built with the pinned clang for this
+# machine (Toolchain::Target.host) against build/lib/libtinyparse.a, into
+# build/examples/<name>/. A hand-written driver is held to -Wall -Wextra
+# -pedantic -Werror. An example that embeds a generated parser first runs
+# the CLI (`tinyparse c GRAMMAR --parser-lib --name PREFIX`); the generated
+# translation unit is machine output that includes the engine's
+# internal.h, so it is compiled at -O2 without the warnings, as the cc-diff
+# gate compiles it.
+#
+# Objects are reused while their sources are unchanged and programs relinked
+# only when an input's bytes changed (mise/lib/cache.rb), so a second run
+# costs a few hashes and the parser generations.
+
+require 'cache'
+require_relative '../lib/tinyparse'
+
+ROOT = Tinyparse::ROOT
+OUT = Tinyparse::BUILD.join('examples')
+CLI = Tinyparse.host_cli
+HOST = Tinyparse.host
+DRIVER = [*HOST.compile_command, *Tinyparse::COMMON_FLAGS, '-Iinclude'].freeze
+GENERATED = [*HOST.compile_command, '-std=c11', '-O2', '-Iinclude', '-Isrc'].freeze
+
+# name => { driver: the hand-written C file, parsers: { prefix => grammar },
+#           includes: extra include directories, embed: [scm, header] }
+EXAMPLES = {
+  'ebnf' => { program: 'ebnf2scm', driver: 'examples/ebnf/ebnf2scm.c' },
+  'uri' => { program: 'uri', driver: 'examples/uri/uri.c' },
+  'jit' => { program: 'jit', driver: 'examples/jit/jit.c' },
+  # The rewriter embeds its grammar, so it needs no .scm path at run time.
+  'rewriter' => { program: 'rewriter', driver: 'examples/rewriter/rewriter.c',
+                  embed: ['examples/rewriter/cdefines.scm', 'cdefines_scm.h', 'cdefines_scm'] },
+  # Two parsers with distinct prefixes in one program (the multiparser gate).
+  'embed' => { program: 'embed', driver: 'examples/embed/embed.c',
+               parsers: { 'host_parser' => 'examples/embed/host.scm', 'json_parser' => 'std.json' } },
+  # A generated host parser nesting two generated languages (the nesting gate).
+  'nesting' => { program: 'nesting', driver: 'examples/nesting/nesting.c',
+                 parsers: { 'fence_host' => 'std.fence', 'json_lang' => 'std.json', 'js_lang' => 'std.javascript' } },
+  # The generated parser driven over a growing buffer (the bufferfriendly gate).
+  'bufferfriendly' => { program: 'bufferfriendly', driver: 'examples/bufferfriendly/bufferfriendly.c',
+                        parsers: { 'sx' => 'examples/bufferfriendly/sexpr.scm' }, includes: ['src'] }
+}.freeze
+
+# The C header that holds `scm`'s bytes as `name`, for a program that
+# carries its grammar.
+def embedded_grammar(scm, name)
+  bytes = ROOT.join(scm).binread
+  <<~C
+    /* #{name}.h -- generated from #{scm} by `mise run examples`. */
+    #ifndef #{name.upcase}_H
+    #define #{name.upcase}_H
+    #include <stddef.h>
+    #include <stdint.h>
+    static const uint8_t #{name}[] = {
+    #{bytes.bytes.each_slice(24).map { |slice| "    #{slice.join(',')}," }.join("\n")}
+    };
+    static const size_t #{name}_length = sizeof #{name};
+    #endif
+  C
+end
+
+EXAMPLES.each do |name, example|
+  dir = OUT.join(name)
+  objects = Tinyparse::BUILD.join('objects/examples', name)
+  includes = (example[:includes] || []).map { |path| "-I#{path}" }
+  if (embed = example[:embed])
+    scm, header, symbol = embed
+    Tinyparse.write_if_changed(dir.join(header), embedded_grammar(scm, symbol))
+    includes << "-I#{Tinyparse.relative(dir)}"
+  end
+  inputs = Tinyparse.compile_all([*DRIVER, *includes], [ROOT.join(example[:driver])], objects, "examples: #{name}")
+  (example[:parsers] || {}).each do |prefix, grammar|
+    generated = dir.join("#{prefix}.c")
+    grammar_path = ROOT.join(grammar).file? ? ROOT.join(grammar).to_s : grammar
+    temporary = dir.join("#{prefix}.c.new")
+    FileUtils.mkdir_p(dir)
+    abort "examples: #{name}: tinyparse c #{grammar} failed" unless
+      system(CLI.to_s, 'c', grammar_path, '--parser-lib', '--name', prefix, '--out', temporary.to_s)
+    Tinyparse.write_if_changed(generated, temporary.binread)
+    FileUtils.rm_f(temporary)
+    inputs += Tinyparse.compile_all(GENERATED, [generated], objects, "examples: #{name}: #{prefix}")
+  end
+  inputs << Tinyparse.host_library
+  program = dir.join(example[:program])
+  outcome = Tinyparse.link("example-#{name}", program, %w[program], inputs) do
+    HOST.program(inputs, into: program)
+  end
+  puts "examples: #{Tinyparse.relative(program)} #{outcome == :reused ? 'up to date' : 'linked'}"
+end

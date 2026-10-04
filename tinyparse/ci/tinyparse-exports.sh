@@ -25,8 +25,8 @@
 #      behind the same version script) runs on the committed sample and produces the
 #      golden tree byte for byte — proving the restricted artifact still WORKS.
 #
-# Run from the project root:
-#     bash ci/tinyparse-exports.sh
+# Run it with:
+#     mise run gate exports
 # Exit 0 only when every artifact builds, exports exactly its intended API, and
 # the hardened example still parses correctly.
 set -uo pipefail
@@ -36,29 +36,14 @@ TP_DIR="$REPO"
 EX="$TP_DIR/examples/embed"
 cd "$REPO" || exit 1
 
-platform() {
-  case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64) echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64) echo macos-arm64 ;;
-    *) echo linux-x86_64 ;;
-  esac
-}
-PLAT="$(platform)"
-TP="$TP_DIR/dist/$PLAT/tinyparse"
-AMALG="$TP_DIR/dist/amalgamation"
-CC="${CC:-cc}"
+: "${TP:?run the gates through mise run gate, which builds what they need and sets TP, TP_LIB, TP_CC and TP_NM}"
+AMALG="$TP_AMALGAMATION"
+CC="$TP_CC"
 
 echo "== tinyparse export-surface gate (W16-4) =="
 
-if ! command -v nm >/dev/null 2>&1; then
-  echo "FATAL: nm not found; cannot verify the exported symbol table"
-  exit 1
-fi
-
-# 1. Build the CLI (which also bakes the amalgamation) and the amalgamation source
-#    the embedding recipe folds in.
-( cd "$TP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-( cd "$TP_DIR" && bash amalgamate.sh ) >/dev/null 2>&1 || true
+# 1. The CLI and the amalgamation source the embedding recipe folds in, which
+#    `mise run gate` builds first (`cli`, `amalgamate`).
 if [ ! -x "$TP" ] || [ ! -f "$AMALG/tinyparse.c" ]; then
   echo "FATAL: CLI ($TP) or amalgamation ($AMALG/tinyparse.c) missing"
   echo "RESULT=0/0"
@@ -79,15 +64,15 @@ assert_exact() {
   local so="$1" ; shift
   local allowed="^tinyparse_" prefix tp foreign
   for prefix in "$@"; do allowed="$allowed|^${prefix}_(load|run)\$"; done
-  tp="$(nm -D --defined-only "$so" 2>/dev/null | grep -cE ' tp_')"
+  tp="$("$TP_NM" -D --defined-only "$so" 2>/dev/null | grep -cE ' tp_')"
   if [ "$tp" -ne 0 ]; then
     echo "  FAIL: $so exports $tp tinyparse-internal tp_* symbol(s):"
-    nm -D --defined-only "$so" 2>/dev/null | grep -E ' tp_' | sed 's/^/    /' | head
+    "$TP_NM" -D --defined-only "$so" 2>/dev/null | grep -E ' tp_' | sed 's/^/    /' | head
     FAIL=1
   else
     echo "  OK: $so exports 0 tinyparse-internal tp_* symbols"
   fi
-  foreign="$(nm -D --defined-only "$so" 2>/dev/null \
+  foreign="$("$TP_NM" -D --defined-only "$so" 2>/dev/null \
     | awk '$2 ~ /^[TDBRVWi]$/ { print $3 }' | grep -vE "$allowed" || true)"
   if [ -n "$foreign" ]; then
     echo "  FAIL: $so exports symbols outside its intended API:"
@@ -103,7 +88,7 @@ assert_exact() {
 # ---------------------------------------------------------------------------
 assert_present() {
   local so="$1" entry="$2"
-  if nm -D --defined-only "$so" 2>/dev/null | grep -qE " T $entry\$"; then
+  if "$TP_NM" -D --defined-only "$so" 2>/dev/null | grep -qE " T $entry\$"; then
     echo "  OK: $so exports $entry"
   else
     echo "  FAIL: $so does NOT export the public entry $entry"
@@ -113,7 +98,7 @@ assert_present() {
 
 # 2. Single generated parser → restricted shared object.
 echo "-- single parser (std.json, prefix jp) --"
-if ! bash "$EX/embed-lib.sh" "$WORK/libjp.so" jp:std.json 2>&1 | sed 's/^/  /'; then
+if ! CC="$TP_CC" TP_CLI="$TP" bash "$EX/embed-lib.sh" "$WORK/libjp.so" jp:std.json 2>&1 | sed 's/^/  /'; then
   echo "  FAIL: embed-lib.sh could not build the single-parser artifact"
   FAIL=1
 else
@@ -127,7 +112,7 @@ fi
 
 # 3. Two-parser embed example → restricted shared object.
 echo "-- two parsers (host_parser + json_parser) --"
-if ! bash "$EX/embed-lib.sh" "$WORK/libembed.so" \
+if ! CC="$TP_CC" TP_CLI="$TP" bash "$EX/embed-lib.sh" "$WORK/libembed.so" \
         host_parser:host.scm json_parser:std.json 2>&1 | sed 's/^/  /'; then
   echo "  FAIL: embed-lib.sh could not build the two-parser artifact"
   FAIL=1
@@ -165,7 +150,7 @@ if [ "$FAIL" -eq 0 ]; then
     "$WORK/embed.o" "$WORK/host_parser.o" "$WORK/json_parser.o" "$WORK/tp.o" || FAIL=1
 fi
 if [ "$FAIL" -eq 0 ] && [ -x "$WORK/embed" ]; then
-  tpexe="$(nm -D --defined-only "$WORK/embed" 2>/dev/null | grep -cE ' tp_')"
+  tpexe="$("$TP_NM" -D --defined-only "$WORK/embed" 2>/dev/null | grep -cE ' tp_')"
   if [ "$tpexe" -ne 0 ]; then
     echo "  FAIL: hardened executable exports $tpexe tp_* symbol(s)"
     FAIL=1

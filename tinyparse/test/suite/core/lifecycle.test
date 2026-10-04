@@ -8,7 +8,7 @@
 set -e
 w="$(mktemp -d)"
 trap 'rm -rf "$w"' EXIT
-cc -std=c11 -O1 -Wall -Wextra -Werror -D_GNU_SOURCE -I include -I src test/suite/core/lifecycle.c dist/linux-x86_64/libtinyparse.a -o "$w/lifecycle"
+"$TP_CC" -std=c11 -O1 -Wall -Wextra -Werror -D_GNU_SOURCE -I include -I src test/suite/core/lifecycle.c "$TP_LIB" -o "$w/lifecycle"
 "$w/lifecycle" examples/sexpr/sexpr.scm
 <<<assert
 exit 0

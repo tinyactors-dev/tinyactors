@@ -1,0 +1,67 @@
+#!/usr/bin/env ruby
+#MISE description="Write the single-file distribution into dist/amalgamation/"
+#MISE depends=["generate"]
+# vim:ft=ruby
+
+# The amalgamation is a concatenation in a fixed order, with the #include
+# lines of what it folds in removed (mise/lib/tinyparse.rb):
+#
+#   tinyparse.h      the public header, verbatim
+#   tinyparse.c      one translation unit: the public header, internal.h and
+#                    every library source but the CLI
+#   tinyparse_cli.c  the CLI, with the generated headers inlined
+#   README.md        how to build the three files
+#
+# The library depends on nothing: it is freestanding C with its own arena
+# allocator, so the amalgamation is the library alone.
+
+require 'cache'
+require_relative '../lib/tinyparse'
+
+OUT = Tinyparse::DIST.join('amalgamation')
+FILES = %w[tinyparse.h tinyparse.c tinyparse_cli.c README.md].freeze
+
+Cache.gate('amalgamate', inputs: [*Tinyparse.generated_inputs, *Cache.files('build/generated/*.h', 'mise/tasks/amalgamate')],
+                         outputs: FILES.map { |file| OUT.join(file) })
+
+version = Tinyparse.version
+readme = <<~MARKDOWN
+  # tinyparse #{version} — single-file amalgamation
+
+  This directory is the single-file distribution of tinyparse. Drop the two
+  sources and the header into your project; they need only a C11 compiler and the
+  freestanding headers `<stddef.h>` and `<stdint.h>`.
+
+  | File | Role |
+  |------|------|
+  | `tinyparse.h` | the public header — the only interface you include |
+  | `tinyparse.c` | the whole library in one translation unit |
+  | `tinyparse_cli.c` | the optional command-line front end, with its manual page embedded |
+
+  ## Build
+
+  ```sh
+  # the library object
+  cc -c tinyparse.c
+
+  # the command-line tool
+  cc tinyparse.c tinyparse_cli.c -o tinyparse
+
+  # a shared library exporting the public tinyparse_* API
+  cc -shared -fPIC -fvisibility=hidden tinyparse.c -o libtinyparse.so
+  ```
+
+  Include `tinyparse.h` from your own code and link against the object, the
+  shared library, or `tinyparse.c` directly.
+MARKDOWN
+
+outputs = {
+  'tinyparse.h' => Tinyparse::HEADER.binread,
+  'tinyparse.c' => Tinyparse.library_amalgamation,
+  'tinyparse_cli.c' => Tinyparse.cli_amalgamation,
+  'README.md' => readme.b
+}
+outputs.each do |file, text|
+  changed = Tinyparse.write_if_changed(OUT.join(file), text)
+  puts "amalgamate: #{Tinyparse.relative(OUT.join(file))} #{changed ? 'written' : 'unchanged'}"
+end

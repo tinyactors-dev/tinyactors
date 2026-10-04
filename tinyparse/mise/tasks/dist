@@ -1,0 +1,66 @@
+#!/usr/bin/env ruby
+#MISE description="Build the library and the CLI for every release target into dist/<target>/, with zig cc, and check their symbols"
+#MISE depends=["generate"]
+# vim:ft=ruby
+
+# For each release target (Tinyparse::RELEASE_TARGETS: x86_64-linux and
+# aarch64-macos), from any host, with zig cc (Toolchain::Target.release):
+#
+#   dist/<target>/include/tinyparse.h
+#   dist/<target>/lib/libtinyparse.a       every library object; the tp_*
+#                                          internals stay global for the
+#                                          parsers `tinyparse c` generates
+#   dist/<target>/lib/libtinyparse.so.0.1  (and libtinyparse.so) on Linux,
+#   dist/<target>/lib/libtinyparse.0.1.dylib on macOS: exports the API alone
+#   dist/<target>/bin/tinyparse            the CLI; static on Linux (musl)
+#
+# Then each file is checked (Toolchain::Binary): its architecture; that the
+# archive leaves undefined only the memory functions a compiler emits calls
+# to; that the shared library exports exactly the functions tinyparse.h
+# declares with TINYPARSE_API, and names itself by its versioned file.
+
+require 'cache'
+require 'fileutils'
+require_relative '../lib/tinyparse'
+
+Cache.gate('dist', inputs: [*Tinyparse.generated_inputs, *Cache.files('build/generated/*.h', 'mise/tasks/dist'),
+                            *Cache.files('../mise/lib/toolchain.rb', '../mise/lib/toolchain/*.rb')],
+                   extra: [Toolchain::Tool[:zig].identity],
+                   outputs: Tinyparse::RELEASE_TARGETS.map { |name| Tinyparse::DIST.join(name, 'bin/tinyparse') })
+
+api = Tinyparse.api
+abort 'dist: tinyparse.h declares no TINYPARSE_API function' if api.empty?
+
+Tinyparse::RELEASE_TARGETS.each do |name|
+  target = Toolchain::Target.release(name)
+  out = Tinyparse::DIST.join(name)
+  objects_dir = Tinyparse::BUILD.join('objects', name)
+  FileUtils.rm_rf(out)
+
+  # -g0: what is shipped carries no debug info, so no path of the machine
+  # that built it.
+  library_command = target.compile_command(*Tinyparse::LIBRARY_FLAGS, '-g0', "-D#{Tinyparse::API_VISIBILITY}")
+  objects = Tinyparse.compile_all(library_command, Tinyparse.library_sources, objects_dir.join('lib'), "dist: #{name}")
+  archive = target.archive(objects, into: out.join('lib/libtinyparse.a'))
+  exports = objects_dir.join('exports.txt')
+  exports.write(api.map { |function| "#{target.format.symbol(function)}\n" }.join)
+  shared = target.shared_library(objects, library: 'tinyparse', version: Tinyparse.shared_version, dir: out.join('lib'),
+                                          exports: exports)
+
+  cli_command = target.compile_command(*Tinyparse::PROGRAM_FLAGS, '-g0')
+  cli_object = Tinyparse.compile_all(cli_command, [Tinyparse.cli_source], objects_dir.join('cli'), "dist: #{name} cli").first
+  cli = target.program([cli_object, archive.path], into: out.join('bin/tinyparse'))
+  # The C library's start files carry debug info naming where zig is
+  # installed; drop it, and keep the symbol table.
+  Toolchain::Tool[:llvm_objcopy].run('--strip-debug', cli.path)
+
+  FileUtils.mkdir_p(out.join('include'))
+  FileUtils.cp(Tinyparse::HEADER, out.join('include'))
+
+  archive.must_be_for!(target).must_leave_undefined_only!(Tinyparse::MEMORY + archive.exports.to_a)
+  shared.must_be_for!(target).must_export_exactly!(api).must_leave_undefined_only!(Tinyparse::MEMORY)
+        .must_be_named!(shared.basename)
+  cli.must_be_for!(target)
+  puts "dist: #{name}: #{Tinyparse.relative(out)}: the shared library exports the #{api.size} API functions; " \
+       'the library leaves undefined only the memory functions'
+end

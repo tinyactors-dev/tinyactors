@@ -33,8 +33,8 @@
 # One representative deep input under a reduced stack is the whole test. Do not
 # sweep depths: the guarantee is the arena bound, verified here once.
 #
-# Run it from the repo root:
-#     bash ci/tinyparse-vm-nocrash.sh
+# Run it with:
+#     mise run gate vm-nocrash
 #
 # Exit 0 only when the VM survives the deep input under the small stack.
 set -uo pipefail
@@ -43,20 +43,11 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TP_DIR="$REPO"
 cd "$REPO" || exit 1
 
-platform() {
-  case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64) echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64) echo macos-arm64 ;;
-    *) echo linux-x86_64 ;;
-  esac
-}
-PLAT="$(platform)"
-TP="$TP_DIR/dist/$PLAT/tinyparse"
+: "${TP:?run the gates through mise run gate, which builds what they need and sets TP, TP_LIB, TP_CC and TP_NM}"
 
 echo "== tinyparse bytecode-VM crash-prevention (vm-nocrash) =="
 
-# Build the CLI (carries the VM; the engine is selected at run time).
-( cd "$TP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
+# The CLI `mise run gate` built (it carries the VM; the engine is selected at run time).
 if [ ! -x "$TP" ]; then
   echo "FATAL: CLI not built at $TP"
   exit 1

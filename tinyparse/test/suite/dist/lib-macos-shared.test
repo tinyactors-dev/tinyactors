@@ -1,4 +1,5 @@
+# The shared library for macOS on Apple silicon, named by its version.
 <<<cmd
-test -f dist/macos-arm64/libtinyparse.dylib
+test -f dist/aarch64-macos/lib/libtinyparse.0.1.dylib
 <<<assert
 exit 0

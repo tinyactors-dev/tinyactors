@@ -22,8 +22,8 @@
 #   4. asserts the linked binary actually carries BOTH parsers' distinct exported
 #      entries and no leftover collision-prone default symbol.
 #
-# Run it from the repo root:
-#     bash ci/tinyparse-multiparser.sh
+# Run it with:
+#     mise run gate multiparser
 #
 # Exit 0 only when both parsers build, link, run, and produce the golden trees.
 set -uo pipefail
@@ -33,43 +33,29 @@ TP_DIR="$REPO"
 EX="$TP_DIR/examples/embed"
 cd "$REPO" || exit 1
 
-platform() {
-  case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64) echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64) echo macos-arm64 ;;
-    *) echo linux-x86_64 ;;
-  esac
-}
-PLAT="$(platform)"
-TP="$TP_DIR/dist/$PLAT/tinyparse"
-LIB="$TP_DIR/dist/$PLAT/libtinyparse.a"
+: "${TP:?run the gates through mise run gate, which builds what they need and sets TP, TP_LIB, TP_CC and TP_NM}"
+LIB="$TP_LIB"
 
 echo "== tinyparse multi-parser gate (W16-3) =="
 
-# 1. Build the CLI + the library archive the generated parsers link against.
-( cd "$TP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
+# 1. The CLI and the library archive `mise run gate` built (the generated parsers link against it).
 if [ ! -x "$TP" ] || [ ! -f "$LIB" ]; then
   echo "FATAL: CLI ($TP) or libtinyparse ($LIB) not built"
   echo "RESULT=0/0"
   exit 1
 fi
 
-# 2. Build the example: it generates BOTH parsers (distinct --name prefixes) and
-#    links them with the driver. A link-time symbol collision fails here.
-if ! ( cd "$EX" && rm -f embed embed.o host_parser.c json_parser.c && \
-       bash build.sh ) 2>&1 | sed 's/^/  /'; then
-  echo "FAIL: example build failed (symbol collision or compile error)"
-  echo "== multiparser: RED =="
-  exit 1
-fi
-if [ ! -x "$EX/embed" ]; then
-  echo "FAIL: example binary $EX/embed was not produced"
+# 2. The example, which `mise run examples` builds into $TP_EXAMPLES/embed: it generates BOTH parsers (distinct --name prefixes) and
+#    links them with the driver; a link-time symbol collision fails that build.
+BUILT="$TP_EXAMPLES/embed"
+if [ ! -x "$BUILT/embed" ]; then
+  echo "FAIL: example binary $BUILT/embed was not produced (mise run examples)"
   echo "== multiparser: RED =="
   exit 1
 fi
 
 # 3. Run it on the committed sample and assert the golden output, byte for byte.
-GOT="$("$EX/embed" "$EX/sample.md")"
+GOT="$("$BUILT/embed" "$EX/sample.md")"
 RC=$?
 if [ "$RC" -ne 0 ]; then
   echo "FAIL: example exited $RC (expected 0)"
@@ -84,8 +70,8 @@ fi
 
 # 4. Assert both parsers' distinct entries are present and no collision-prone
 #    default symbol survived (proof the --name prefix actually disjointed them).
-if command -v nm >/dev/null 2>&1; then
-  SYMS="$(nm "$EX/embed" 2>/dev/null || true)"
+if true; then
+  SYMS="$("$TP_NM" "$BUILT/embed" 2>/dev/null || true)"
   for s in host_parser_load host_parser_run json_parser_load json_parser_run; do
     if ! printf '%s\n' "$SYMS" | grep -qE " T $s$"; then
       echo "FAIL: expected exported entry '$s' missing from the linked binary"

@@ -7,21 +7,28 @@ see [README.md](README.md); for the design see
 
 ## Building from source
 
-tinyparse is regular C (not the literate C the rest of the `ax` repo uses). It
-builds with **Zig 0.15.1**, pinned in [mise.toml](mise.toml), and links the
-prebuilt `ax` release archives from the repo's `dist/`.
+tinyparse is plain C11, one project of the tinyactors monorepo, built by
+Ruby file tasks in [mise/tasks/](mise/tasks/) with the toolchain the root
+`mise.toml` pins (see the monorepo's `docs/build/`): the pinned clang 22 for
+what runs on this machine (`Toolchain::Target.host`), zig cc for what is
+shipped (`Toolchain::Target.release`). Nothing is taken from `PATH`.
 
 ```sh
-mise install          # provision Zig 0.15.1
-mise run build        # libtinyparse + CLI + examples for this platform
-mise run dist         # cross-build linux-x86_64 and macos-arm64 deliverables
-mise run test         # the finish-line metric (build + data-driven harness)
-mise run gate         # the thorough gate: cross-dist + every example
+mise install          # at the monorepo root: clang, llvm-tools, zig, ruby, ast-grep
+mise run build        # build/: libtinyparse.a, the CLI, the harness, the examples
+mise run dist         # dist/<target>/: libraries and CLI for x86_64-linux, aarch64-macos
+mise run amalgamate   # dist/amalgamation/: the single-file distribution
+mise run release      # dist/release/: the release tarballs
+mise run test         # the suite over the xfail ledger, and the fast gates
+mise run test --full  # the same, and every gate in ci/
+mise run gate cc-diff # one gate (or several, or all when none is named)
+mise run clean        # remove build/ and dist/
 ```
 
-Without `mise`, the same engine runs directly: `bash build.sh all`, then
-`bash ../../ci/tinyparse-metric.sh`. If Zig is not on `PATH`, `build.sh` looks
-for it under `.toolchain/zig/`.
+Every task compiles and links by content (the monorepo's `mise/lib/cache.rb`),
+so a second run costs a few hashes. The generated headers the CLI embeds (the
+manual page, the standard grammars, the library amalgamation) are written to
+`build/generated/` by `mise run generate`.
 
 ## The test suite
 
@@ -37,7 +44,7 @@ green.
 tinyparse runs more than one engine over a grammar, and they must agree byte
 for byte. The differential gates enforce that:
 
-- **cc-diff** (`ci/tinyparse-cc-diff.sh`) — the generated C parser
+- **cc-diff** (`ci/tinyparse-cc-diff.sh`, `mise run gate cc-diff`) — the generated C parser
   (`tinyparse c --parser-lib`) against the bytecode VM.
 - **vm-diff** (`ci/tinyparse-vm-diff.sh`) — the bytecode VM against the
   original recursive-descent executor, which survives as the differential oracle
@@ -58,9 +65,9 @@ All are gated behind `BENCH=1` and reproducible per the methodology in
 [docs/performance.md](docs/performance.md):
 
 ```sh
-BENCH=1 bash ../../ci/tinyparse-bench.sh                # JavaScript corpus: VM vs tree-sitter
-REGEN=1 BENCH=1 bash ../../ci/tinyparse-react-bench.sh  # React: parse + collect; builds the manifest
-BENCH=1 bash ../../ci/tinyparse-bench5.sh               # React: six parsers, parse-only
+BENCH=1 mise run bench bench               # JavaScript corpus: VM vs tree-sitter
+REGEN=1 BENCH=1 mise run bench react-bench # React: parse + collect; builds the manifest
+BENCH=1 mise run bench bench5              # React: six parsers, parse-only
 ```
 
 The pinned reference clones live under [reference/](reference/) (see
@@ -87,12 +94,6 @@ rediscover them.
 
   Extract it into the path the script expects under `reference/` or `bench/`, at
   the commit pinned in `reference/PINS.txt`.
-
-- **Zig is not on `PATH`.** The SessionStart hook fetches Zig 0.15.1 to
-  `.toolchain/zig/` but does not export it, so `build.sh dist` fails to build the
-  `ax` archives. Prefix build and bench commands with
-  `PATH="$PWD/tools/tinyparse/.toolchain/zig:$PATH"` (add `/opt/node22/bin` and
-  `/usr/local/go/bin` for the React arms).
 
 - **A tarball runtime is not a git checkout.** The bench scripts record the
   tree-sitter pin with `git -C "$runtime" rev-parse HEAD`; over an extracted

@@ -68,7 +68,7 @@ grammars/std/<dialect1>/
     grammar.scm
 ```
 
-`build.sh`'s `gen_grammars` function scans `grammars/std/*/package.scm`
+`mise run generate` (which `mise run build` runs) scans `grammars/std/*/package.scm`
 automatically — no build file to edit.
 
 **Failure modes**
@@ -129,7 +129,7 @@ with the params overridden.
 - *`extends:` names a package not in the embedded registry.* Unresolved extends
   fail at grammar-compile time with a "package not found" error. The full chain
   must be reachable — either all packages are in `grammars/std/` (and therefore
-  embedded by `build.sh`) or the path is resolved by the grammar compiler from
+  embedded by `mise run generate`) or the path is resolved by the grammar compiler from
   file paths. For a new family, add all members to `grammars/std/` before testing
   any extending dialect.
 - *`params:` omits a param used in `grammar.scm`.* A `(when missing-param: …)`
@@ -345,8 +345,8 @@ out-count 2 join_clause
 **Failure modes**
 
 - *Referencing `std.<name>` by package name before the grammar is embedded.* The CLI
-  resolves package names from the embedded registry built by `build.sh gen_grammars`.
-  Until you run `mise run build` (or `bash build.sh all`), the name does not exist.
+  resolves package names from the embedded registry `mise run generate` writes.
+  Until you run `mise run build`, the name does not exist.
   Use a file path instead during early authoring:
   `"$TP" run grammars/std/<name>/grammar.scm --input …`
 - *`$TP` path wrong in `cmd`.* The harness sets `$TP` to the built CLI. If the build
@@ -393,7 +393,7 @@ first metric run.
 ## Step 9 — Build and verify the grammar resolves
 
 ```sh
-mise run build            # or: bash build.sh all
+mise run build
 tinyparse grammars      # check std.<name> appears in the list
 tinyparse check grammars/std/<name>/grammar.scm   # compile the grammar, report errors
 ```
@@ -410,11 +410,10 @@ echo "SELECT 1;" | tinyparse run std.<name> --dump-tree
   or rule and the reason. Common causes: duplicate name, undefined reference (a rule
   that calls a token or rule that was not defined), unbalanced parentheses in the
   `.scm` reader, bad regex pattern.
-- *Grammar not listed by `tinyparse grammars`.* `build.sh gen_grammars` scans
-  `grammars/std/*/package.scm`; if the file is missing or malformed (reader error),
-  the entry is skipped silently. Run `bash build.sh gen_grammars` with `set -x` to
-  see which files it processes. Also check that `src/grammars_data.h` was regenerated
-  (it is a generated file — look for your grammar's name inside it).
+- *Grammar not listed by `tinyparse grammars`.* `mise run generate` scans
+  `grammars/std/*/package.scm`; a package without both `package.scm` and
+  `grammar.scm` is skipped. Check that `build/generated/grammars_data.h` was
+  regenerated (it is a generated file — look for your grammar's name inside it).
 - *`extends:` chain unresolved at runtime.* Even if `package.scm` is syntactically
   correct, the runtime resolver must find every package in the chain by name in the
   embedded registry. If `std.<dialect>` extends `std.<base>` and `std.<base>` was
@@ -429,7 +428,7 @@ echo "SELECT 1;" | tinyparse run std.<name> --dump-tree
 Run the metric:
 
 ```sh
-bash ci/tinyparse-metric.sh
+mise run test
 ```
 
 Pick a failing category (e.g. `sqlfamily/expressions`), run those tests
@@ -466,9 +465,9 @@ When a test passes, delete its line from `xfail.list`. The metric's
 Once PROGRESS reaches the full count and `xfail.list` is empty:
 
 ```sh
-bash ci/tinyparse-metric.sh          # conformance green
-bash ci/tinyparse-vm-diff.sh         # bytecode VM == recursive oracle
-bash ci/tinyparse-cc-diff.sh         # generated C parser == bytecode VM
+mise run test                        # conformance green
+mise run gate vm-diff                # bytecode VM == recursive oracle
+mise run gate cc-diff                # generated C parser == bytecode VM
 ```
 
 The differential gates ensure that every engine produces byte-identical trees

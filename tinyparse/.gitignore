@@ -1,13 +1,7 @@
-# tinyparse build outputs
+# tinyparse build outputs (`mise run build`, `dist`, `release`); the
+# generated headers are in build/generated/
 /dist/
 /build/
-/.toolchain/
-/.zig-cache/
-/zig-cache/
-# generated codegen artifacts
-/src/manpage_data.h
-/src/grammars_data.h
-/src/amalgamation_data.h
 # tree-sitter porting references (build-time only; see reference/PINS.txt)
 /reference/tree-sitter-javascript/
 /reference/tree-sitter-typescript/
@@ -41,7 +35,6 @@
 # tracked harness sources are kept (tsc_bench.mjs, ci/tinyparse-tsc-bench.sh).
 /bench/tsbench/
 /bench/typescript-go/
-/bench/reclaim-scratch/
 /bench/reclaim_test
 # tinyparse differential scratch: ci/tinyparse-vm-diff.sh writes <input>.ref
 # and <input>.vm next to the suite inputs while comparing engines.

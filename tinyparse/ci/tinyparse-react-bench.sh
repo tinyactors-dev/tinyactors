@@ -43,24 +43,14 @@ cd "$REPO" || exit 1
 
 ITERS="${ITERS:-50}"
 
-platform() {
-  case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64) echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64) echo macos-arm64 ;;
-    *) echo linux-x86_64 ;;
-  esac
-}
-PLAT="$(platform)"
-DIST="$TP/dist/$PLAT"
-CLI="$DIST/tinyparse"
+LIB="${TP_LIB:?run it with mise run bench react-bench, which builds tinyparse and sets TP_CLI, TP_LIB, TP_CC and TP_AR}"
+CLI="$TP_CLI"
 
 log() { printf '[react-bench] %s\n' "$*" >&2; }
 
 # --- 1. tinyparse dist -----------------------------------------------------
-log "building tinyparse dist ..."
-( cd "$TP" && bash build.sh all ) >/dev/null 2>&1
-if [ ! -f "$DIST/libtinyparse.a" ] || [ ! -x "$CLI" ]; then
-  log "FATAL: tinyparse dist did not build ($DIST)"
+if [ ! -f "$LIB" ] || [ ! -x "$CLI" ]; then
+  log "FATAL: tinyparse is not built ($LIB)"
   exit 1
 fi
 
@@ -86,7 +76,7 @@ TS_PIN="$(git -C "$TS_RUNTIME" rev-parse HEAD 2>/dev/null)"
 echo "$TS_PIN" > "$TS_PIN_FILE"
 log "tree-sitter runtime pinned at $TS_PIN"
 
-CC="${CC:-cc}"
+CC="$TP_CC"
 TS_INC="$TS_RUNTIME/lib/include"
 TS_SRC="$TS_RUNTIME/lib/src"
 TSX_SRC="$TSTS_REF/tsx/src"
@@ -96,7 +86,7 @@ if [ ! -f "$BENCHDIR/libtreesitter.a" ]; then
   $CC -std=c11 -O2 -D_DEFAULT_SOURCE -D_GNU_SOURCE \
       -c -I "$TS_INC" -I "$TS_SRC" "$TS_SRC/lib.c" -o "$BENCHDIR/ts_lib.o" || {
     log "FATAL: tree-sitter runtime did not compile"; exit 1; }
-  ar rcs "$BENCHDIR/libtreesitter.a" "$BENCHDIR/ts_lib.o"
+  "$TP_AR" rcs "$BENCHDIR/libtreesitter.a" "$BENCHDIR/ts_lib.o"
 fi
 # The TSX scanner includes ../../common/scanner.h relative to its own directory.
 $CC -std=c11 -O2 -c -I "$TS_INC" -I "$TSX_SRC" \
@@ -154,7 +144,7 @@ $CC -std=c11 -O2 -Wall -Wextra -I "$TS_INC" \
     "$BENCHDIR/libtreesitter.a" -o "$BENCHDIR/react_treesitter" || {
   log "FATAL: tree-sitter React harness did not compile"; exit 1; }
 $CC -std=c11 -O2 -Wall -Wextra -I "$TP/include" \
-    "$BENCHDIR/react_tinyparse.c" "$DIST/libtinyparse.a" \
+    "$BENCHDIR/react_tinyparse.c" "$LIB" \
     -o "$BENCHDIR/react_tinyparse" || {
   log "FATAL: tinyparse React harness did not compile"; exit 1; }
 

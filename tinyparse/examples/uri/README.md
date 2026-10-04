@@ -16,8 +16,8 @@ sub-rule.
 - `uri.scm` — the generated tinyparse grammar. A copy is committed so this
   example runs standalone; `../ebnf/run.sh` regenerates it.
 - `uri.c` — the parser driver. Hosted (libc), linked against the dist archives.
-- `build.sh` — compiles `uri` against `$TP_DIST`.
-- `run.sh` — builds if needed (regenerating `uri.scm` if absent) and runs.
+- `run.sh` — runs the driver `mise run examples` built (regenerating `uri.scm`
+  if absent).
 
 ## Use
 

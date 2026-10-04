@@ -1,0 +1,9 @@
+#!/usr/bin/env ruby
+#MISE description="Remove build/ and dist/"
+# vim:ft=ruby
+
+require 'fileutils'
+require_relative '../lib/tinyparse'
+
+FileUtils.rm_rf([Tinyparse::BUILD, Tinyparse::DIST])
+puts 'clean: removed build/ and dist/'

@@ -14,27 +14,19 @@
 # VM (defence in depth: the golden pins the expected shape, the VM cross-checks the
 # generated parser against the reference engine on the same composed grammar).
 #
-# Run it from the repo root:
-#     bash ci/tinyparse-import-c.sh
+# Run it with:
+#     mise run gate import-c
 #
 # Exit 0 only when the imported grammar compiles to C, builds, runs, and produces
 # the golden tree, identical to the VM.
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TP_DIR="$REPO"
-platform() {
-  case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64) echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64) echo macos-arm64 ;;
-    *) echo linux-x86_64 ;;
-  esac
-}
-PLAT="$(platform)"
-TP="$TP_DIR/dist/$PLAT/tinyparse"
-LIB="$TP_DIR/dist/$PLAT/libtinyparse.a"
+: "${TP:?run the gates through mise run gate, which builds what they need and sets TP, TP_LIB, TP_CC and TP_NM}"
+LIB="$TP_LIB"
 INC="$TP_DIR/include"
 SRC="$TP_DIR/src"
-CC="${CC:-cc}"
+CC="$TP_CC"
 
 GRAMMAR="$TP_DIR/examples/import/main.scm"
 SAMPLE="$TP_DIR/examples/import/fixtures/sample.words"
@@ -42,8 +34,7 @@ GOLDEN="$TP_DIR/examples/import/fixtures/expected.tree"
 
 echo "== tinyparse import->C gate =="
 
-# 1. Build the CLI + the library archive (the generated parser links against it).
-( cd "$TP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
+# 1. The CLI and the library archive `mise run gate` built (the generated parser links against it).
 if [ ! -x "$TP" ] || [ ! -f "$LIB" ]; then
   echo "FATAL: CLI ($TP) or libtinyparse ($LIB) not built"; exit 1
 fi

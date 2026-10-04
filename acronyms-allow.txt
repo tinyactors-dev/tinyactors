@@ -45,3 +45,12 @@ spanId         tinyactors-napi/tools/otel-demo.js                        # OTLP/
 # llvm-readobj's name for a Mach-O header's CPU type, which the C release
 # matches to check a binary's architecture.
 CpuType        mise/lib/c_release/build.rb                               # llvm-readobj output field
+
+# callgrind's event `Ir` (instructions read), as its reports name it, in the
+# profiles tinyparse's research notes quote.
+Ir             tinyparse/docs/peg-vs-glr.md                              # callgrind event name Ir
+
+# A JSX test input of tinyparse's JavaScript grammar, copied in from
+# tree-sitter-javascript's corpus: other people's code, kept byte for byte.
+userId         tinyparse/test/suite/jsfamily/inputs/expressions__56.js   # tree-sitter-javascript corpus input
+creatorId      tinyparse/test/suite/jsfamily/inputs/expressions__56.js   # tree-sitter-javascript corpus input

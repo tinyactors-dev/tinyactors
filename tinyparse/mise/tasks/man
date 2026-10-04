@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+#MISE description="Print the manual page the CLI embeds (tinyparse.1, mdoc): mise run man | mandoc -a"
+#MISE depends=["cli"]
+# vim:ft=ruby
+
+# tinyparse.1 is the rendered page, committed beside its source,
+# tinyparse.1.md; `generate` embeds it in the CLI, whose `man` prints it.
+require_relative '../lib/tinyparse'
+
+exec(Tinyparse.host_cli.to_s, 'man')

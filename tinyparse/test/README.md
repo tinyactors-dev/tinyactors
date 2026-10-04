@@ -32,7 +32,23 @@ only if *every* assertion holds.
 
 Inside `cmd`/`args`, `$TP` is the built CLI, `$IN` the default input file,
 `$GRAMMAR` the grammar path, and `$NAME` each named input file. Commands run
-with the working directory set to `tools/tinyparse`.
+with the working directory set to `tinyparse/`.
+
+`mise run test` builds what the cases read and names it in their environment
+(`mise/lib/tinyparse.rb`, `test_environment`), so a case never runs a
+compiler or binutil from `PATH`:
+
+| Variable          | What it names                                                    |
+|-------------------|------------------------------------------------------------------|
+| `TP`, `TP_CLI`    | the CLI, `build/bin/tinyparse`                                  |
+| `TP_LIB`          | the library archive, `build/lib/libtinyparse.a`                 |
+| `TP_AMALGAMATION` | the single-file distribution, `dist/amalgamation/`              |
+| `TP_EXAMPLES`     | the built examples, `build/examples/`                           |
+| `TP_CC`           | the pinned clang for this machine                               |
+| `TP_LINUX_CC`     | zig cc for x86_64 Linux (an ELF object reads the same anywhere) |
+| `TP_NM`, `TP_AR`  | the pinned `llvm-nm` and `llvm-ar`                              |
+
+The `dist/` cases read what `mise run dist`, `amalgamate` and `release` wrote.
 
 ### The grammar template
 

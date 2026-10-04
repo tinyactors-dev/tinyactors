@@ -1,54 +1,8 @@
-# mise.toml — tinyparse's pinned toolchain and task runner.
+# tinyparse's tasks are the file tasks in mise/tasks/ (Ruby); the toolchain
+# is the root mise.toml's: the pinned clang and llvm-tools for what runs
+# here, zig cc for what is shipped (Toolchain::Target.release).
 #
-# `mise install` provisions the compiler; `mise run <task>` (or `mise <task>`)
-# drives the lifecycle. Run it from this directory (tinyparse/).
-#
-# tinyparse builds with Zig 0.15.1, independent of the monorepo's zig pin.
-# It depends on nothing else: the library is freestanding C.
-
-[tools]
-zig = "0.15.1"
-
-[env]
-# Point build.sh at the mise-managed Zig explicitly so it never guesses.
-TINYPARSE_ZIG = "{{ exec(command='command -v zig || true') }}"
-
-[tasks.lib]
-description = "Build libtinyparse.{a,so|dylib} for the host platform"
-run = "bash build.sh lib"
-
-[tasks.cli]
-description = "Build the tinyparse CLI"
-run = "bash build.sh cli"
-
-[tasks.examples]
-description = "Build the example programs (TCL, rewriter, EBNF/URI, JIT)"
-run = "bash build.sh examples"
-
-[tasks.build]
-description = "Build lib + CLI + examples for the host platform"
-run = "bash build.sh all"
-
-[tasks.dist]
-description = "Cross-build the full deliverable matrix (linux-x86_64, macos-arm64)"
-run = "bash build.sh dist"
-
-[tasks.man]
-description = "Render the manpage from the embedded source"
-run = "./dist/$(uname -s | tr A-Z a-z)-*/tinyparse man"
-
-[tasks.test]
-description = "Run the finish-line metric (build + data-driven harness + ratchet)"
-run = "bash ci/tinyparse-metric.sh"
-
-[tasks.metric]
-description = "Alias for test — the finish-line metric"
-run = "bash ci/tinyparse-metric.sh"
-
-[tasks.gate]
-description = "Full gate: cross-dist build + run every example through the harness"
-run = "RUN_GATE=1 bash ci/tinyparse-metric.sh"
-
-[tasks.clean]
-description = "Remove build outputs"
-run = "bash build.sh clean"
+#   mise run build       the library, the CLI, the harness and the examples
+#   mise run test        build, then the suite over the xfail ledger
+#   mise run dist        the libraries and the CLI for every release target
+#   mise run release     the release tarballs in dist/release/

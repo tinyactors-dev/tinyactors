@@ -3,7 +3,7 @@ set -e
 w="$(mktemp -d)"
 trap 'rm -rf "$w"' EXIT
 "$TP" c examples/sexpr/sexpr.scm --out "$w/tp_g.c" --bundle
-cc -std=c11 -O2 -I dist/linux-x86_64 "$w/tp_g.c" dist/linux-x86_64/libtinyparse.a -o "$w/tp_g"
+"$TP_CC" -std=c11 -O2 -I include "$w/tp_g.c" "$TP_LIB" -o "$w/tp_g"
 printf '(a (b c))' | "$w/tp_g"
 <<<assert
 exit 0

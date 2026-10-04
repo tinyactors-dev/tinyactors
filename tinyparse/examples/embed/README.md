@@ -27,8 +27,8 @@ program and those symbols collide.
 
 The `--name <prefix>` option (W16-3) renames **every** emitted file-scope symbol
 to `<prefix>_…`. With no `--name`, the parser keeps its historical default names,
-so existing callers are unchanged. `build.sh` generates the two parsers with
-distinct prefixes:
+so existing callers are unchanged. `mise run examples` generates the two parsers
+with distinct prefixes:
 
 ```sh
 tinyparse c host.scm  --parser-lib --name host_parser --out host_parser.c
@@ -57,17 +57,16 @@ each span into its own tree.
   the two generated parser units.
 - `sample.md` — a sample document with two json fences.
 - `expected.txt` — the golden output (host tree + both embedded json trees).
-- `build.sh` — generates both parsers (distinct `--name`) and links the program.
 
 The generated `host_parser.c` / `json_parser.c` and the `embed` binary are build
-artifacts (gitignored); `build.sh` regenerates them.
+artifacts in `build/examples/embed/`; `mise run examples` regenerates them.
 
 ## Use
 
 ```sh
 # from tinyparse/
-bash examples/embed/build.sh
-examples/embed/embed examples/embed/sample.md
+mise run examples
+build/examples/embed/embed examples/embed/sample.md
 ```
 
 Output (abridged): the host tree, then the json tree of each fence's contents,

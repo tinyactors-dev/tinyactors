@@ -149,9 +149,17 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    /* Locate uri.scm beside this executable. argv[0] holds the path run.sh used. */
+    /* The grammar is URI_GRAMMAR when set (run.sh names examples/uri/uri.scm),
+    ** else uri.scm beside this executable. */
     self = argv[0];
-    {
+    if (getenv("URI_GRAMMAR") != NULL) {
+        const char *named = getenv("URI_GRAMMAR");
+        if (strlen(named) >= sizeof grammar_path) {
+            fprintf(stderr, "uri: error: URI_GRAMMAR is too long\n");
+            return 2;
+        }
+        strcpy(grammar_path, named);
+    } else {
         const char *slash = strrchr(self, '/');
         if (slash != NULL) {
             size_t dirlen = (size_t)(slash - self) + 1;

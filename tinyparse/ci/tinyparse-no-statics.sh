@@ -20,8 +20,8 @@
 # It is the regression tripwire for requirement 1 of Project A; the metric and
 # the differential prove behaviour is unchanged, this proves the constraint holds.
 #
-# Run it from the repo root:
-#     bash ci/tinyparse-no-statics.sh
+# Run it with:
+#     mise run gate no-statics
 #
 # Exit 0 only when zero static mutable variables remain.
 set -uo pipefail
@@ -32,10 +32,8 @@ cd "$REPO" || exit 1
 
 echo "== tinyparse no-statics guard =="
 
-if ! command -v ast-grep >/dev/null 2>&1; then
-  echo "FATAL: ast-grep is not installed; cannot run the no-statics guard."
-  exit 2
-fi
+# The pinned ast-grep (the root mise.toml), which `mise run gate` names.
+AST_GREP="${TP_AST_GREP:-ast-grep}"
 
 # The rule: a C `declaration` that carries a `static` storage class, is NOT
 # const-qualified anywhere in its type, and whose declarator is NOT a function
@@ -71,7 +69,7 @@ if [ "${#SOURCES[@]}" -eq 0 ]; then
   exit 2
 fi
 
-OUTPUT="$(ast-grep scan -r "$RULE" "${SOURCES[@]}" 2>&1)"
+OUTPUT="$("$AST_GREP" scan -r "$RULE" "${SOURCES[@]}" 2>&1)"
 COUNT="$(printf '%s\n' "$OUTPUT" | grep -c 'tinyparse-no-static-mutable')"
 
 if [ "$COUNT" -ne 0 ]; then

@@ -4,8 +4,8 @@
 # folded in any more).
 <<<cmd
 set -e
-bash amalgamate.sh >/dev/null 2>&1
-a=dist/amalgamation
+a="$TP_AMALGAMATION"
+test -f "$a/tinyparse.c"
 test ! -f "$a/ax.h"
 grep -qE 'ax\.h|ax_open|ax_sys' "$a/tinyparse.h" && exit 1
 grep -qE '(^|[^A-Za-z0-9_])ax_[A-Za-z_]' "$a/tinyparse.c" && exit 1

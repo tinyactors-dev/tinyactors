@@ -18,7 +18,6 @@ alternation it holds.
   fragment.
 - `ebnf2scm.c` — the converter. Hosted (libc), linked against the tinyparse
   dist archives.
-- `build.sh` — compiles `ebnf2scm` against `$TP_DIST`.
 - `run.sh` — runs the converter, prints the `.scm`, and saves a copy to
   `../uri/uri.scm` so the URI example consumes a freshly generated grammar.
 

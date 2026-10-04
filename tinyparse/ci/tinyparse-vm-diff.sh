@@ -27,7 +27,7 @@
 # and in its default mode, and report the ratio.
 #
 # Run it from the project root:
-#     bash ci/tinyparse-vm-diff.sh
+#     mise run gate vm-diff
 #
 # Exit 0 only when every input matched.
 set -uo pipefail
@@ -36,20 +36,11 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TP_DIR="$REPO"
 cd "$REPO" || exit 1
 
-platform() {
-  case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64) echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64) echo macos-arm64 ;;
-    *) echo linux-x86_64 ;;
-  esac
-}
-PLAT="$(platform)"
-TP="$TP_DIR/dist/$PLAT/tinyparse"
+: "${TP:?run the gates through mise run gate, which builds what they need and sets TP, TP_LIB, TP_CC and TP_NM}"
 
 echo "== tinyparse bytecode-VM differential =="
 
-# 1. Build the CLI.
-( cd "$TP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
+# 1. The CLI `mise run gate` built.
 if [ ! -x "$TP" ]; then
   echo "FATAL: CLI not built at $TP"
   echo "RESULT=0/0"

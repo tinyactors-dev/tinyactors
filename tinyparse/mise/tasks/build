@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+#MISE description="Build for this machine: the library, the CLI, the test harness and the examples"
+#MISE depends=["lib", "cli", "harness", "examples"]
+# vim:ft=ruby
+
+# The dependencies do the work, in parallel where they can: `lib` the
+# archive, `cli` the CLI (after `generate`), `harness` the suite's
+# interpreter, `examples` the example programs. `dist` cross-builds the
+# release targets; `release` packs them.
+puts 'build: build/lib/libtinyparse.a, build/bin/tinyparse, build/bin/harness, build/examples/'

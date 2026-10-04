@@ -217,12 +217,12 @@ six-parser React comparison, and the profile are in
 ## Build
 
 Install a release tarball and link against it as shown in
-[`INSTALL.md`](INSTALL.md), or build it from source: plain C, built with
-**Zig 0.15.1**:
+[`INSTALL.md`](INSTALL.md), or build it from source: plain C11, built by
+the monorepo's pinned toolchain (clang 22 for this machine, zig cc for the
+release targets):
 
 ```sh
-mise install && mise run build    # libtinyparse + the CLI + examples
-bash build.sh all                 # the same, without mise
+mise install && mise run build    # libtinyparse + the CLI + the harness + examples
 ```
 
 The test suite, the correctness gates, and the benchmarks are in

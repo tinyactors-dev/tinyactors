@@ -8,25 +8,21 @@
 #
 # Self-contained: generates its own input and uses the self-contained
 # std.javascript grammar (no module resolver needed), so it does not depend on the
-# gitignored React reference. Run from the repo root: bash ci/tinyparse-reclaim.sh
+# gitignored React reference. Run it with: mise run gate reclaim
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-TP="$REPO"
 cd "$REPO" || exit 1
-PLAT=linux-x86_64
-case "$(uname -s)/$(uname -m)" in Darwin/arm64|Darwin/aarch64) PLAT=macos-arm64;; esac
-DIST="$TP/dist/$PLAT"; CLI="$DIST/tinyparse"; CC="${CC:-cc}"
+: "${TP:?run the gates through mise run gate, which builds what they need and sets TP, TP_LIB, TP_CC and TP_NM}"
+CLI="$TP"; LIB="$TP_LIB"; CC="$TP_CC"
 ITERS="${ITERS:-300}"; CEILING_KB="${CEILING_KB:-1048576}"   # 1 GiB; reclaim keeps it far under
 log(){ printf '[reclaim] %s\n' "$*" >&2; }
 
-log "building tinyparse dist ..."
-( cd "$TP" && bash build.sh all ) >/dev/null 2>&1
-[ -f "$DIST/libtinyparse.a" ] && [ -x "$CLI" ] || { log "FATAL: dist did not build"; exit 1; }
+[ -f "$LIB" ] && [ -x "$CLI" ] || { log "FATAL: the CLI ($CLI) or the library ($LIB) is not built"; exit 1; }
 
-SCRATCH="$TP/bench/reclaim-scratch"; mkdir -p "$SCRATCH"
+SCRATCH="$(mktemp -d)"; trap 'rm -rf "$SCRATCH"' EXIT
 TPG="$SCRATCH/std.javascript.tpg"
 log "packing std.javascript ..."
-"$CLI" pack "$TP/grammars/std/javascript/grammar.scm" --out "$TPG" || { log "FATAL: pack failed"; exit 1; }
+"$CLI" pack "$REPO/grammars/std/javascript/grammar.scm" --out "$TPG" || { log "FATAL: pack failed"; exit 1; }
 
 # Generate a non-trivial JS file that exercises the expression parser across many
 # statements (the path the W2 left-factoring touched).
@@ -42,8 +38,8 @@ BYTES=$(stat -c%s "$INPUT" 2>/dev/null || wc -c < "$INPUT")
 log "generated input: $BYTES bytes; will parse it $ITERS times in ONE engine"
 
 log "building reclaim harness ..."
-$CC -std=c11 -O2 -Wall -I "$TP/include" \
-    "$TP/bench/reclaim_test.c" "$DIST/libtinyparse.a" \
+"$CC" -std=c11 -O2 -Wall -I "$REPO/include" \
+    "$REPO/bench/reclaim_test.c" "$LIB" \
     -o "$SCRATCH/reclaim_test" 2>/dev/null || { log "FATAL: harness did not compile"; exit 1; }
 
 log "running ($ITERS iterations, ceiling ${CEILING_KB} kb) ..."

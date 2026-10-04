@@ -1,4 +1,4 @@
 <<<cmd
-test -f dist/macos-arm64/libtinyparse.a
+test -f dist/aarch64-macos/lib/libtinyparse.a
 <<<assert
 exit 0

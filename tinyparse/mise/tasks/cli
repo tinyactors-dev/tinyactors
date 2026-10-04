@@ -1,0 +1,20 @@
+#!/usr/bin/env ruby
+#MISE description="Build the tinyparse CLI for this machine: build/bin/tinyparse"
+#MISE depends=["lib", "generate"]
+# vim:ft=ruby
+
+# src/cli.c is a hosted program: it reads files and prints. It is compiled
+# with the pinned clang for this machine and linked against the library
+# archive `lib` built.
+
+require 'cache'
+require_relative '../lib/tinyparse'
+
+command = [*Tinyparse.host.compile_command, *Tinyparse::PROGRAM_FLAGS]
+object = Tinyparse.compile_all(command, [Tinyparse.cli_source], Tinyparse::BUILD.join('objects/cli'), 'cli').first
+cli = Tinyparse.host_cli
+inputs = [object, Tinyparse.host_library]
+outcome = Tinyparse.link('tinyparse', cli, %w[program], inputs) do
+  Tinyparse.host.program(inputs, into: cli)
+end
+puts "cli: #{Tinyparse.relative(cli)} #{outcome == :reused ? 'up to date' : 'linked'}"

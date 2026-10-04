@@ -57,8 +57,8 @@ detect_platform() {
   os="$(uname -s)"
   arch="$(uname -m)"
   case "$os/$arch" in
-    Linux/x86_64)                  echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64)   echo macos-arm64 ;;
+    Linux/x86_64)                  echo x86_64-linux ;;
+    Darwin/arm64|Darwin/aarch64)   echo aarch64-macos ;;
     *) die "unsupported platform: $os/$arch (supported: Linux/x86_64, Darwin/arm64)" ;;
   esac
 }

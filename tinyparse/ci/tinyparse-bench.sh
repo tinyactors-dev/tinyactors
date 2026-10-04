@@ -39,23 +39,13 @@ cd "$REPO" || exit 1
 # Iteration count: enough passes for a stable median. Override with ITERS=.
 ITERS="${ITERS:-200}"
 
-platform() {
-  case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64) echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64) echo macos-arm64 ;;
-    *) echo linux-x86_64 ;;
-  esac
-}
-PLAT="$(platform)"
-DIST="$TP/dist/$PLAT"
+LIB="${TP_LIB:?run it with mise run bench bench, which builds tinyparse and sets TP_CLI, TP_LIB, TP_CC and TP_AR}"
 
 log() { printf '[tp-bench] %s\n' "$*" >&2; }
 
 # --- 1. tinyparse dist -----------------------------------------------------
-log "building tinyparse dist ..."
-( cd "$TP" && bash build.sh dist ) >/dev/null 2>&1
-if [ ! -f "$DIST/libtinyparse.a" ]; then
-  log "FATAL: tinyparse dist did not build ($DIST)"
+if [ ! -f "$LIB" ]; then
+  log "FATAL: tinyparse is not built ($LIB)"
   exit 1
 fi
 
@@ -82,7 +72,7 @@ TS_PIN="$(git -C "$TS_RUNTIME" rev-parse HEAD 2>/dev/null)"
 echo "$TS_PIN" > "$TS_PIN_FILE"
 log "tree-sitter runtime pinned at $TS_PIN"
 
-CC="${CC:-cc}"
+CC="$TP_CC"
 TS_INC="$TS_RUNTIME/lib/include"
 TS_SRC="$TS_RUNTIME/lib/src"
 
@@ -91,7 +81,7 @@ log "building tree-sitter runtime + grammar ..."
 $CC -std=c11 -O2 -D_DEFAULT_SOURCE -D_GNU_SOURCE \
     -c -I "$TS_INC" -I "$TS_SRC" "$TS_SRC/lib.c" -o "$BENCHDIR/ts_lib.o" || {
   log "FATAL: tree-sitter runtime did not compile"; exit 1; }
-ar rcs "$BENCHDIR/libtreesitter.a" "$BENCHDIR/ts_lib.o"
+"$TP_AR" rcs "$BENCHDIR/libtreesitter.a" "$BENCHDIR/ts_lib.o"
 $CC -std=c11 -O2 -c -I "$TS_INC" -I "$TSJS_REF/src" \
     "$TSJS_REF/src/parser.c" -o "$BENCHDIR/ts_parser.o" || {
   log "FATAL: tree-sitter-javascript parser.c did not compile"; exit 1; }
@@ -151,7 +141,7 @@ $CC -std=c11 -O2 -Wall -Wextra -I "$TS_INC" \
     "$BENCHDIR/libtreesitter.a" -o "$BENCHDIR/bench_treesitter" || {
   log "FATAL: tree-sitter harness did not compile"; exit 1; }
 $CC -std=c11 -O2 -Wall -Wextra -I "$TP/include" \
-    "$BENCHDIR/bench_tinyparse.c" "$DIST/libtinyparse.a" \
+    "$BENCHDIR/bench_tinyparse.c" "$LIB" \
     -o "$BENCHDIR/bench_tinyparse" || {
   log "FATAL: tinyparse harness did not compile"; exit 1; }
 

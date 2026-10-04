@@ -1,0 +1,34 @@
+#!/usr/bin/env ruby
+#MISE description="Test tinyparse: the data-driven suite over the xfail ledger, and the gates in ci/ (all of them with --full)"
+#MISE sources=["include/**/*", "src/**/*", "test/**/*", "ci/**/*", "examples/**/*", "grammars/**/*", "bench/reclaim_test.c", "tinyparse.1", "INSTALL.md", "install.sh", "VERSION", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
+#MISE outputs={auto=true}
+#MISE depends=["build", "amalgamate", "dist", "release"]
+#USAGE flag "--full" help="Also run the gates that take more than a few seconds: the engine and compiled-parser differentials, the export surface, nesting, reclaim and reuse"
+# vim:ft=ruby
+
+# The suite (test/suite/**/*.test) is data: build/bin/harness runs each case
+# against the built CLI and checks its assertions, and test/xfail.list names
+# the cases allowed to fail. It passes only when every case passes and the
+# ledger is empty, and prints PROGRESS=passing/total. The dist/ cases read
+# what `dist`, `amalgamate` and `release` built.
+#
+# The gates (ci/tinyparse-*.sh, Tinyparse::GATES) run beside it, each in its
+# own process. The fast pass runs those that take a second or two; --full
+# (which `mise run test:full` at the root passes down) runs every one: the
+# differentials sweep every suite input through both engines, or compile a
+# parser for each, and take half a minute each.
+
+require_relative '../lib/tinyparse'
+
+full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
+SLOW_GATES = %w[exports vm-diff cc-diff nesting reclaim reuse-regression].freeze
+gates = full ? Tinyparse::GATES : Tinyparse::GATES - SLOW_GATES
+
+root = Tinyparse::ROOT
+harness = [Tinyparse.harness.to_s, '--suite', root.join('test/suite').to_s, '--xfail', root.join('test/xfail.list').to_s,
+           '--cwd', root.to_s]
+jobs = [['suite', harness], *gates.map { |name| ["gate #{name}", ['bash', Tinyparse.gate_script(name).to_s]] }]
+failed = Tinyparse.run_all(jobs.map { |label, command| [label.tr(' ', '-'), command] }, Tinyparse.test_environment)
+puts "test: #{full ? 'every gate' : "the fast gates (--full adds #{SLOW_GATES.join(', ')})"}"
+abort "test: failed: #{failed.join(' ')}" unless failed.empty?
+puts 'test: GREEN'

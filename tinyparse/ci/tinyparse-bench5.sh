@@ -50,17 +50,9 @@ cd "$REPO" || exit 1
 ITERS="${ITERS:-30}"
 TS_ITERS="${TS_ITERS:-15}"
 
-platform() {
-  case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64) echo linux-x86_64 ;;
-    Darwin/arm64|Darwin/aarch64) echo macos-arm64 ;;
-    *) echo linux-x86_64 ;;
-  esac
-}
-PLAT="$(platform)"
-DIST="$TP/dist/$PLAT"
-CLI="$DIST/tinyparse"
-CC="${CC:-cc}"
+LIB="${TP_LIB:?run it with mise run bench bench5, which builds tinyparse and sets TP_CLI, TP_LIB, TP_CC and TP_AR}"
+CLI="$TP_CLI"
+CC="$TP_CC"
 
 log() { printf '[bench5] %s\n' "$*" >&2; }
 field() { sed -n "s/.*\b$2=\([^ ]*\).*/\1/p" <<<"$1"; }
@@ -77,10 +69,8 @@ CORPUS_BYTES="$(tr '\n' '\0' < "$MANIFEST" | xargs -0 stat -c%s 2>/dev/null | aw
 log "corpus: $CASES React files, $CORPUS_BYTES bytes"
 
 # --- 1. tinyparse dist + CLI ----------------------------------------------
-log "building tinyparse dist ..."
-( cd "$TP" && bash build.sh all ) >/dev/null 2>&1
-if [ ! -f "$DIST/libtinyparse.a" ] || [ ! -x "$CLI" ]; then
-  log "FATAL: tinyparse dist did not build ($DIST)"
+if [ ! -f "$LIB" ] || [ ! -x "$CLI" ]; then
+  log "FATAL: tinyparse is not built ($LIB)"
   exit 1
 fi
 
@@ -105,7 +95,7 @@ log "building tree-sitter runtime + TSX grammar ..."
 if [ ! -f "$BENCHDIR/libtreesitter.a" ]; then
   $CC -std=c11 -O2 -D_DEFAULT_SOURCE -D_GNU_SOURCE -c -I "$TS_INC" -I "$TS_SRC" \
       "$TS_SRC/lib.c" -o "$BENCHDIR/ts_lib.o" || { log "FATAL: ts runtime"; exit 1; }
-  ar rcs "$BENCHDIR/libtreesitter.a" "$BENCHDIR/ts_lib.o"
+  "$TP_AR" rcs "$BENCHDIR/libtreesitter.a" "$BENCHDIR/ts_lib.o"
 fi
 $CC -std=c11 -O2 -c -I "$TS_INC" -I "$TSX_SRC" "$TSX_SRC/parser.c" \
     -o "$BENCHDIR/tsx_parser.o" || { log "FATAL: tsx parser.c"; exit 1; }
@@ -121,7 +111,7 @@ GRAMMAR_TPG="$BENCHDIR/react-corpus/std.tsx.tpg"
 log "packing std.tsx -> $GRAMMAR_TPG ..."
 "$CLI" pack std.tsx --out "$GRAMMAR_TPG" || { log "FATAL: pack std.tsx"; exit 1; }
 $CC -std=c11 -O2 -Wall -Wextra -I "$TP/include" \
-    "$BENCHDIR/react_tinyparse.c" "$DIST/libtinyparse.a" \
+    "$BENCHDIR/react_tinyparse.c" "$LIB" \
     -o "$BENCHDIR/react_tinyparse" 2>/dev/null || {
   log "FATAL: tinyparse VM harness did not compile"; exit 1; }
 
@@ -136,7 +126,7 @@ log "emitting compiled parser (tinyparse c std.tsx --parser-lib) ..."
   log "FATAL: could not emit the compiled parser"; exit 1; }
 log "building the in-process compiled-parser harness ..."
 $CC -std=c11 -O2 -Wall -Wextra -I "$TP/include" -I "$TP/src" \
-    "$BENCHDIR/react_compiled.c" "$GEN_PARSER" "$DIST/libtinyparse.a" \
+    "$BENCHDIR/react_compiled.c" "$GEN_PARSER" "$LIB" \
     -o "$BENCHDIR/react_compiled" 2>/dev/null || {
   log "FATAL: compiled-parser harness did not compile"; exit 1; }
 
