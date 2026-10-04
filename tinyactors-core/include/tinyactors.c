@@ -3686,14 +3686,10 @@ TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry) {
 }
 
 
+/* Runtime IDs differ mostly in their low slot bits, so the bucket hash is the
+ * 64-bit finalizer (D5) cut to 32 bits. */
 static uint32_t ta_session_hash(uint64_t id) {
-    /* A 64-bit finalizer: runtime IDs differ mostly in their low slot bits. */
-    id ^= id >> 33;
-    id *= 0xff51afd7ed558ccdull;
-    id ^= id >> 33;
-    id *= 0xc4ceb9fe1a85ec53ull;
-    id ^= id >> 33;
-    return (uint32_t)id;
+    return (uint32_t)ta_mix64(id);
 }
 
 static uint32_t ta_session_bucket_count(const ta_session_table *table) {
@@ -4157,24 +4153,13 @@ TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink)
  * Step keys as span IDs (section 6)
  */
 
-/* The finalizer of MurmurHash3's 64-bit variant: every input bit reaches
- * every output bit. Fixed, so every host derives the same span IDs. */
-static uint64_t ta_trace_mix(uint64_t value) {
-    value ^= value >> 33;
-    value *= 0xff51afd7ed558ccdull;
-    value ^= value >> 33;
-    value *= 0xc4ceb9fe1a85ec53ull;
-    value ^= value >> 33;
-    return value;
-}
-
 TA_API uint64_t ta_step_key_span_id(ta_step_key key) {
     if (key.session == 0) {
         return key.macrostep;
     }
-    uint64_t span = ta_trace_mix(key.session);
-    span = ta_trace_mix(span ^ key.macrostep);
-    span = ta_trace_mix(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
+    uint64_t span = ta_mix64(key.session);
+    span = ta_mix64(span ^ key.macrostep);
+    span = ta_mix64(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
     return span == 0 ? 1u : span;
 }
 

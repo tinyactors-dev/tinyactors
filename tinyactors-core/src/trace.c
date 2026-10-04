@@ -1,5 +1,6 @@
 #include "trace.h"
 #include "format.h"
+#include "hash.h"
 #include "system.h"
 #include "interpreter.h"
 
@@ -30,24 +31,13 @@ ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink) {
  * Step keys as span IDs (section 6)
  */
 
-/* The finalizer of MurmurHash3's 64-bit variant: every input bit reaches
- * every output bit. Fixed, so every host derives the same span IDs. */
-static uint64_t ta_trace_mix(uint64_t value) {
-    value ^= value >> 33;
-    value *= 0xff51afd7ed558ccdull;
-    value ^= value >> 33;
-    value *= 0xc4ceb9fe1a85ec53ull;
-    value ^= value >> 33;
-    return value;
-}
-
 uint64_t ta_step_key_span_id(ta_step_key key) {
     if (key.session == 0) {
         return key.macrostep;
     }
-    uint64_t span = ta_trace_mix(key.session);
-    span = ta_trace_mix(span ^ key.macrostep);
-    span = ta_trace_mix(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
+    uint64_t span = ta_mix64(key.session);
+    span = ta_mix64(span ^ key.macrostep);
+    span = ta_mix64(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
     return span == 0 ? 1u : span;
 }
 
