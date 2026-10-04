@@ -145,3 +145,28 @@ uint32_t ta_chain_payload(const ta_pool *pool);
  * O(1).
  */
 uint32_t ta_chain_need(const ta_pool *pool, const ta_chain *chain, uint32_t bytes);
+
+/*
+ * ta_chain_write appends `bytes` bytes from `data` to the chain, first
+ * filling the unused end of the tail chunk and then taking chunks from the
+ * pool. It never allocates: the chunks come from the pool's free list or its
+ * extent. It is all or nothing: it checks that length + bytes fits a u32 and
+ * that the pool has ta_chain_need chunks free (ta_pool_counts_get), and only
+ * then takes and copies; on failure the chain, the pool's counters and free
+ * list, and every chunk byte are as they were. It answers TA_ERR_NOMEM for
+ * either failure (a caller that reserved with ta_chain_need and refilled
+ * never sees the pool one, and sees the length one only past 4 GiB) and
+ * TA_ERR_INVALID for a NULL pool or chain, or NULL data with bytes != 0. A
+ * write of 0 bytes succeeds and changes nothing. O(bytes).
+ */
+ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *data, uint32_t bytes);
+
+/*
+ * ta_chain_free gives every chunk of the chain back to the pool and zeroes
+ * *chain. It reads each chunk's next before the give, because the give
+ * overwrites that word with the pool's link. It returns how many chunks it
+ * gave back, which the owner releases from its quota. A zeroed chain is a
+ * no-op that returns 0, so freeing twice is safe. It never allocates and
+ * never returns memory to the allocator (pages stay with the pool). O(chunks).
+ */
+uint32_t ta_chain_free(ta_pool *pool, ta_chain *chain);

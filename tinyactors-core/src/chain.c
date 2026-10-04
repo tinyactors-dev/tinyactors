@@ -34,3 +34,76 @@ uint32_t ta_chain_need(const ta_pool *pool, const ta_chain *chain, uint32_t byte
     /* In 64 bits: bytes - slack + payload - 1 can pass UINT32_MAX. */
     return (uint32_t)(((uint64_t)(bytes - slack) + payload - 1u) / payload);
 }
+
+/* next_get and next_set access the chunk's link word. A chunk is 4-aligned; the copy keeps it type-safe. */
+static uint32_t next_get(const unsigned char *chunk) {
+    uint32_t next;
+    ta_mem_copy(&next, chunk, sizeof(next));
+    return next;
+}
+
+static void next_set(unsigned char *chunk, uint32_t next) {
+    ta_mem_copy(chunk, &next, sizeof(next));
+}
+
+ta_result ta_chain_write(ta_pool *pool, ta_chain *chain, const void *data, uint32_t bytes) {
+    if (pool == NULL || chain == NULL || (data == NULL && bytes != 0)) {
+        return TA_ERR_INVALID;
+    }
+    if (bytes == 0) {
+        return TA_OK;
+    }
+    /* Preflight: everything that can fail is decided before any state changes. */
+    if (bytes > UINT32_MAX - chain->length) {
+        return TA_ERR_NOMEM;
+    }
+    ta_pool_counts counts;
+    ta_pool_counts_get(pool, &counts);
+    if (counts.free < ta_chain_need(pool, chain, bytes)) {
+        return TA_ERR_NOMEM;
+    }
+
+    uint32_t payload = ta_chain_payload(pool);
+    const unsigned char *source = data;
+    uint32_t left = bytes;
+    uint32_t fill = chain->length % payload; /* 0 for an empty chain or a full tail */
+    if (fill != 0) {
+        unsigned char *tail = ta_pool_at(pool, chain->tail);
+        uint32_t room = payload - fill;
+        uint32_t count = left < room ? left : room;
+        ta_mem_copy(tail + 4u + fill, source, count);
+        source += count;
+        left -= count;
+        chain->length += count;
+    }
+    while (left != 0) {
+        /* Cannot be 0: the preflight counted these chunks free. */
+        uint32_t index = ta_pool_take(pool);
+        unsigned char *chunk = ta_pool_at(pool, index);
+        uint32_t count = left < payload ? left : payload;
+        ta_mem_copy(chunk + 4u, source, count);
+        if (chain->tail != 0) {
+            next_set(ta_pool_at(pool, chain->tail), index);
+        } else {
+            chain->head = index;
+        }
+        chain->tail = index; /* its next is already 0: a taken item's link bytes are zero */
+        source += count;
+        left -= count;
+        chain->length += count;
+    }
+    return TA_OK;
+}
+
+uint32_t ta_chain_free(ta_pool *pool, ta_chain *chain) {
+    uint32_t freed = 0;
+    uint32_t index = chain->head;
+    while (index != 0) {
+        uint32_t next = next_get(ta_pool_at(pool, index)); /* before the give overwrites it */
+        ta_pool_give(pool, index);
+        freed += 1;
+        index = next;
+    }
+    ta_mem_zero(chain, sizeof(*chain));
+    return freed;
+}
