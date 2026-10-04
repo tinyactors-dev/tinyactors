@@ -50,6 +50,7 @@ typedef struct {
     uint8_t keyword;       /* sjs_keyword */
     uint8_t newline_before;
     uint8_t lone_surrogate; /* a string with a surrogate that has no partner; its text is not the string */
+    uint8_t escaped;       /* a string with an escape: not a directive such as "use strict" */
     sjs_position at;
     double number;
     sjs_str text;          /* the name, or the cooked string */
@@ -86,6 +87,7 @@ typedef struct {
     uint32_t escape_digits;
     uint32_t pending_high;  /* a high surrogate from \u, waiting for its pair */
     bool lone_surrogate;    /* the string holds a surrogate with no partner */
+    bool escaped;           /* the string holds an escape */
     uint32_t radix;
     int32_t exponent;
     int32_t exponent_sign;

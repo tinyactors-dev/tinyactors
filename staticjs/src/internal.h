@@ -337,20 +337,29 @@ typedef enum {
     SJS_OP_PATTERN_ARRAY,  /* checks the value can be destructured as an array */
     SJS_OP_PATTERN_OBJECT,
     SJS_OP_PATTERN_INDEX,  /* u32 index: [source] -> [source, element] */
-    SJS_OP_PATTERN_KEY     /* u32 constant: [source] -> [source, property] */
+    SJS_OP_PATTERN_KEY,    /* u32 constant: [source] -> [source, property] */
+    SJS_OP_PATTERN_COMPUTED, /* u16 slot: [source, key] -> [source, property]; the key, as a string, in the slot */
+    SJS_OP_PATTERN_REST,   /* u32 start: [source] -> [source, array of the elements from start] */
+    SJS_OP_PATTERN_REST_OBJECT, /* u32 constant (array of keys, or UINT32_MAX), u16 n:
+                                 * [source, n keys] -> [source, object of the other properties] */
+    SJS_OP_DEFAULT,        /* u32 target: not undefined: jump, keeping it; else pop it */
+    SJS_OP_DEFAULT_LOCAL   /* u16 slot, u32 target: the slot is not undefined: jump */
 } sjs_opcode;
 
 /* SJS_OP_CALL flags. */
 #define SJS_CALL_METHOD 1u
 #define SJS_CALL_SPREAD 2u
 
+/* sjs_function_info flags. */
+#define SJS_FUNCTION_REST 1u  /* the last parameter takes the rest of the arguments, as an array */
+
 typedef struct {
     uint32_t code;          /* offset of the first instruction */
     uint32_t captures;      /* first entry in the capture table */
-    uint16_t params;
+    uint16_t params;        /* a rest parameter included */
     uint16_t locals;        /* slots, the parameters included */
     uint16_t capture_count;
-    uint16_t reserved;
+    uint16_t flags;         /* SJS_FUNCTION_* */
 } sjs_function_info;
 
 typedef struct {

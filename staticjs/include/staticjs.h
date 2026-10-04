@@ -28,7 +28,7 @@
 #endif
 
 #define SJS_VERSION_MAJOR 0
-#define SJS_VERSION_MINOR 1
+#define SJS_VERSION_MINOR 2
 #define SJS_VERSION_PATCH 0
 /* (major << 16) | (minor << 8) | patch; sjs_version() answers it for the library linked. */
 #define SJS_VERSION ((SJS_VERSION_MAJOR << 16) | (SJS_VERSION_MINOR << 8) | SJS_VERSION_PATCH)
@@ -129,7 +129,8 @@ typedef struct {
     uint32_t max_source_bytes;  /* bytes pushed to one parser */
     uint32_t max_token_bytes;   /* one identifier, number, string or template piece */
     uint32_t max_nesting;       /* open brackets, operators and functions at once */
-    uint32_t max_lookahead;     /* tokens held to tell `(a, b) =>` from `(a, b)` */
+    uint32_t max_lookahead;     /* tokens held to tell `(a, b = 1) =>` from `(a, b)`: an arrow
+                                 * function's parameter list, defaults included, must fit */
     uint32_t max_stack;         /* evaluator value slots */
     uint32_t max_frames;        /* evaluator frames: calls and looping built-ins */
     uint32_t max_value_items;   /* elements of one array, object or set */
@@ -276,6 +277,18 @@ SJS_API sjs_result sjs_function_native(sjs_context *context, sjs_native native, 
  * operands of an operator come before it, and markers stand where `&&`, `?:`,
  * `??` and `?.` branch. A sink sees each event once, as the parser reaches
  * it. The compiler is a sink; a formatter or a linter can be another.
+ *
+ * Where the source puts a pattern before what it takes, the events put it
+ * after, as it is evaluated:
+ *
+ *   const p = v               CONST_BEGIN <v> <p> CONST_END
+ *   (a, b = d, ...r) => ...   ARROW_BEGIN(3) PARAM(0) <a> PARAM(1) DEFAULT <d>
+ *                             DEFAULT_END <b> REST_PARAM(2) <r> PARAMS_END ...
+ *   [x = d, ...r]             ARRAY_PATTERN_BEGIN PATTERN_INDEX(0) DEFAULT <d>
+ *                             DEFAULT_END <x> PATTERN_REST(1) <r> ARRAY_PATTERN_END
+ *   {k: x = d, [e]: y, ...r}  OBJECT_PATTERN_BEGIN PATTERN_KEY(k) DEFAULT <d>
+ *                             DEFAULT_END <x> <e> PATTERN_COMPUTED_KEY <y>
+ *                             PATTERN_REST BIND(r) OBJECT_PATTERN_END
  */
 
 typedef enum {
@@ -318,21 +331,32 @@ typedef enum {
     SJS_EV_CONDITIONAL_ELSE, /* after the consequent */
     SJS_EV_CONDITIONAL_END,  /* after the alternative */
     /* Functions. */
-    SJS_EV_ARROW_BEGIN,
-    SJS_EV_PARAM,            /* count: the parameter's position; a pattern follows */
+    SJS_EV_ARROW_BEGIN,      /* count: its parameters, a rest parameter included */
+    SJS_EV_PARAM,            /* count: the parameter's position; a default value
+                              * (DEFAULT ... DEFAULT_END) may follow, then a pattern */
+    SJS_EV_REST_PARAM,       /* `...`; count: its position, the last; a pattern follows */
     SJS_EV_PARAMS_END,
     SJS_EV_ARROW_END,
     SJS_EV_BLOCK_BEGIN,      /* a body of const declarations and one return */
     SJS_EV_RETURN,           /* after the returned value; none: return; */
     SJS_EV_BLOCK_END,
-    /* Patterns: each one takes the value before it. */
+    /* Patterns: each one takes the value before it. A target's default
+     * value comes before its pattern, as it is evaluated first. */
     SJS_EV_BIND,             /* text: the name bound */
     SJS_EV_ARRAY_PATTERN_BEGIN,
-    SJS_EV_PATTERN_INDEX,    /* count: an element's index; a pattern follows */
+    SJS_EV_PATTERN_INDEX,    /* count: an element's index; a default value may
+                              * follow, then a pattern */
     SJS_EV_ARRAY_PATTERN_END,
     SJS_EV_OBJECT_PATTERN_BEGIN,
-    SJS_EV_PATTERN_KEY,      /* text: a property's key; a pattern follows */
+    SJS_EV_PATTERN_KEY,      /* text: a property's key (a number's in canonical
+                              * form); a default value may follow, then a pattern */
+    SJS_EV_PATTERN_COMPUTED_KEY, /* after the value of `[key]`; as PATTERN_KEY */
+    SJS_EV_PATTERN_REST,     /* `...`, the last item. In an array pattern, count:
+                              * the first index it takes, and a pattern follows;
+                              * in an object pattern, count 0 and a BIND follows */
     SJS_EV_OBJECT_PATTERN_END,
+    SJS_EV_DEFAULT,          /* a default value's events follow: taken when the */
+    SJS_EV_DEFAULT_END,      /* value is undefined */
     /* Declarations: the value, then its pattern. */
     SJS_EV_CONST_BEGIN,
     SJS_EV_CONST_END,

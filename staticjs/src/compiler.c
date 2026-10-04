@@ -18,6 +18,19 @@
  *
  * Every lookup by name goes through a hash index, so that compiling takes
  * time in proportion to the source, and to each module it imports from once.
+ *
+ * Parameters compile in order, as they arrive: ARROW_BEGIN says how many
+ * there are, so they take the first slots, and a pattern's names the ones
+ * after. A default value is code at the start of the body that runs when
+ * its parameter or element is undefined; the parser sends its events before
+ * the target's, so nothing jumps backwards. A default may read the
+ * parameters before it, which are bound by then; reading a later one, its
+ * own, or a name the body declares is refused as a read before the
+ * declaration (JavaScript throws, or, through the separate scope it gives
+ * the parameters, finds another binding). With that, the separate scope
+ * needs no work of its own: a body's const cannot share a parameter's name
+ * (declared twice), and a closure in a default captures parameters by
+ * value, which every binding being const makes the same as a reference.
  */
 #include "internal.h"
 
@@ -50,9 +63,19 @@ typedef struct {
     uint32_t function;
     uint32_t bindings_base;
     uint32_t jump_over;    /* operand of the jump around the body */
-    uint16_t params;
+    uint16_t params;       /* as ARROW_BEGIN said, a rest parameter included */
+    uint16_t params_seen;
     uint16_t slots;
     uint16_t capture_count;
+    uint8_t params_open;   /* between ARROW_BEGIN and PARAMS_END */
+    uint8_t rest;          /* the last parameter is a rest parameter */
+    /* The parameters' first read of a name before its declaration: refused
+     * at PARAMS_END, so that a parameter given twice, a syntax error, comes
+     * first. The name is in c->names. */
+    uint8_t early_read;
+    uint32_t early_read_offset;
+    uint32_t early_read_length;
+    sjs_position early_read_at;
     uint8_t block;
     uint8_t returned;
     sjs_position at;
@@ -70,7 +93,7 @@ typedef struct {
 } capture;
 
 /* Open constructs. */
-enum { K_LOGICAL = 1, K_CONDITIONAL, K_CHAIN, K_CALL, K_NEW, K_FUNCTION, K_CONST, K_TEMPLATE };
+enum { K_LOGICAL = 1, K_CONDITIONAL, K_CHAIN, K_CALL, K_NEW, K_FUNCTION, K_CONST, K_TEMPLATE, K_DEFAULT };
 
 typedef struct {
     uint8_t kind;
@@ -81,16 +104,19 @@ typedef struct {
     uint32_t jump_else;
     uint32_t depth;        /* K_CHAIN: the chain's depth */
     uint32_t jumps_base;   /* K_CHAIN: its jumps */
+    uint32_t param;        /* K_DEFAULT: the parameter's slot + 1, or 0 for an element's */
 } construct;
 
-/* An event held between ARROW_BEGIN and PARAMS_END. */
+/* An array or object pattern being compiled. An object pattern keeps its
+ * keys, for a rest element to leave out: the constants of the static ones,
+ * and the slots that hold the computed ones. */
+enum { PK_ARRAY = 0, PK_OBJECT };
+
 typedef struct {
     uint8_t kind;
-    uint32_t count;
-    uint32_t text_offset;
-    uint32_t text_length;
-    sjs_position at;
-} held_param;
+    uint32_t keys_base;    /* in pattern_keys */
+    uint32_t slots_base;   /* in pattern_slots */
+} pattern_frame;
 
 enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY };
 
@@ -156,13 +182,14 @@ struct sjs_compiler {
     /* Constructs. */
     sjs_buf constructs;
     sjs_buf jumps;
-    /* Parameters, held until all are known. */
-    bool in_params;
-    sjs_buf params;
-    sjs_buf params_text;
     /* A PARAM whose pattern has not started. */
     bool param_pending;
     uint32_t param_index;
+    /* Patterns open: pattern_frame, with their keys (uint32_t constants) and
+     * the slots of their computed keys (uint32_t). */
+    sjs_buf patterns;
+    sjs_buf pattern_keys;
+    sjs_buf pattern_slots;
     /* Method calls: the last instruction, and the last jump target. */
     uint32_t last_op;
     bool last_op_valid;
@@ -479,6 +506,13 @@ static sjs_result add_export(sjs_compiler *c, const export_entry *entry, sjs_str
     return r == SJS_OK ? SJS_OK : fail_result(c, r, entry->at);
 }
 
+static sjs_result fail_early_read(sjs_compiler *c, sjs_position at, sjs_str name) {
+    compile_fail(c, at, (sjs_problem){ SJS_ERROR_UNSUPPORTED,
+                                       "this name is used before its declaration or import; staticjs functions cannot call themselves" });
+    sjs_error_subject(&c->error, name);
+    return SJS_ERR_PROGRAM;
+}
+
 /* Bind `e->text` in the current scope. */
 static sjs_result declare(sjs_compiler *c, const sjs_event *e, target to) {
     uint8_t kind = to.kind;
@@ -490,8 +524,17 @@ static sjs_result declare(sjs_compiler *c, const sjs_event *e, target to) {
     /* A name read in this scope before now, here or in a function it holds,
      * meant something else then: JavaScript would find this binding. */
     if (index_find(&current(c)->read, e->text, &seen)) {
-        return fail_name(c, e, (sjs_problem){ SJS_ERROR_UNSUPPORTED,
-                                              "this name is used before its declaration or import; staticjs functions cannot call themselves" });
+        if (!current(c)->params_open) return fail_early_read(c, e->at, e->text);
+        if (!current(c)->early_read) {
+            uint32_t offset;
+            sjs_result r = keep_name(c, e->text, &offset);
+            if (r != SJS_OK) return fail_result(c, r, e->at);
+            scope *s = current(c);
+            s->early_read = 1;
+            s->early_read_offset = offset;
+            s->early_read_length = e->text.length;
+            s->early_read_at = e->at;
+        }
     }
     binding b = { 0 };
     b.name_length = e->text.length;
@@ -684,15 +727,19 @@ static sjs_result expect_construct(sjs_compiler *c, uint8_t kind, sjs_position a
  * Functions
  */
 
-static sjs_result begin_function(sjs_compiler *c, sjs_position at) {
+/* ARROW_BEGIN: its parameters take the first slots. */
+static sjs_result begin_function(sjs_compiler *c, const sjs_event *e) {
+    sjs_position at = e->at;
+    if (e->count > UINT16_MAX) return compile_fail(c, at, (sjs_problem){ SJS_ERROR_LIMIT, "a function has too many parameters" });
     construct k = { 0 };
     k.kind = K_FUNCTION;
     if (jump(c, ins(SJS_OP_JUMP, 0, at), &k.jump) != SJS_OK) return SJS_ERR_PROGRAM;
     if (push_construct(c, k, at) != SJS_OK) return SJS_ERR_PROGRAM;
     if (open_scope(c, at) != SJS_OK) return SJS_ERR_PROGRAM;
-    c->in_params = true;
-    c->params.length = 0;
-    c->params_text.length = 0;
+    scope *s = current(c);
+    s->params = (uint16_t)e->count;
+    s->slots = (uint16_t)e->count;
+    s->params_open = 1;
     return SJS_OK;
 }
 
@@ -703,6 +750,7 @@ static sjs_result close_scope(sjs_compiler *c, sjs_position at) {
     sjs_function_info *info = &SJS_BUF_AT(c->functions, sjs_function_info, s.function);
     info->params = s.params;
     info->locals = s.slots;
+    info->flags = s.rest ? SJS_FUNCTION_REST : 0u;
     info->capture_count = s.capture_count;
     info->captures = SJS_BUF_COUNT(c->captures, sjs_capture_info);
     uint32_t n = SJS_BUF_COUNT(c->pending_captures, capture);
@@ -752,6 +800,69 @@ static sjs_result end_function(sjs_compiler *c, sjs_position at) {
  * Patterns: each takes the value on top of the stack, or a parameter
  */
 
+static sjs_result out_of_order(sjs_compiler *c, sjs_position at) {
+    return compile_fail(c, at, (sjs_problem){ SJS_ERROR_SYNTAX, "the events are out of order" });
+}
+
+/* PARAM and REST_PARAM: the next parameter, whose pattern follows. */
+static sjs_result param_event(sjs_compiler *c, const sjs_event *e) {
+    scope *s = current(c);
+    bool rest = e->kind == SJS_EV_REST_PARAM;
+    /* A rest parameter is the last: the parser finds one that is not before
+     * PARAMS_END, so only a parameter after it is out of order here. */
+    if (!s->params_open || c->param_pending || s->rest || e->count != s->params_seen || e->count >= s->params) {
+        return out_of_order(c, e->at);
+    }
+    s->params_seen++;
+    if (rest) s->rest = 1;
+    c->param_pending = true;
+    c->param_index = e->count;
+    return SJS_OK;
+}
+
+static sjs_result params_end(sjs_compiler *c, const sjs_event *e) {
+    scope *s = current(c);
+    if (!s->params_open || c->param_pending || s->params_seen != s->params) return out_of_order(c, e->at);
+    if (expect_construct(c, K_FUNCTION, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    s->params_open = 0;
+    if (s->early_read) {
+        return fail_early_read(c, s->early_read_at, (sjs_str){ (const char *)c->names.ptr + s->early_read_offset, s->early_read_length });
+    }
+    return SJS_OK;
+}
+
+/* DEFAULT: a parameter's default runs when its slot is undefined; an
+ * element's or a property's, when the value on the stack is, which it
+ * replaces. The parameter state is kept across the default, whose arrow
+ * functions have parameters of their own. */
+static sjs_result default_begin(sjs_compiler *c, const sjs_event *e) {
+    construct k = { 0 };
+    k.kind = K_DEFAULT;
+    if (c->param_pending) {
+        c->param_pending = false;
+        k.param = c->param_index + 1u;
+        if (op16(c, ins(SJS_OP_DEFAULT_LOCAL, c->param_index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+        k.jump = here(c);
+        if (u32(c, 0) != SJS_OK) return SJS_ERR_PROGRAM;
+    } else if (jump(c, ins(SJS_OP_DEFAULT, 0, e->at), &k.jump) != SJS_OK) {
+        return SJS_ERR_PROGRAM;
+    }
+    return push_construct(c, k, e->at);
+}
+
+static sjs_result default_end(sjs_compiler *c, const sjs_event *e) {
+    if (expect_construct(c, K_DEFAULT, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    construct k = pop_construct(c);
+    if (k.param != 0 && op16(c, ins(SJS_OP_SET_LOCAL, k.param - 1u, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    land(c, k.jump);
+    if (k.param != 0) {
+        /* The parameter's pattern follows. */
+        c->param_pending = true;
+        c->param_index = k.param - 1u;
+    }
+    return SJS_OK;
+}
+
 /* A pattern begins on a parameter: put it on the stack. */
 static sjs_result take_param(sjs_compiler *c, sjs_position at) {
     if (!c->param_pending) return SJS_OK;
@@ -759,12 +870,95 @@ static sjs_result take_param(sjs_compiler *c, sjs_position at) {
     return op16(c, ins(SJS_OP_LOCAL, c->param_index, at));
 }
 
+static pattern_frame *top_pattern(sjs_compiler *c) {
+    uint32_t n = SJS_BUF_COUNT(c->patterns, pattern_frame);
+    return n == 0 ? NULL : &SJS_BUF_AT(c->patterns, pattern_frame, n - 1);
+}
+
+static sjs_result open_pattern(sjs_compiler *c, const sjs_event *e, uint8_t kind) {
+    if (take_param(c, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    pattern_frame f = { kind, SJS_BUF_COUNT(c->pattern_keys, uint32_t), SJS_BUF_COUNT(c->pattern_slots, uint32_t) };
+    sjs_result r = buf_add(c, &c->patterns, bytes_of(&f, sizeof f));
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    return op(c, kind == PK_ARRAY ? SJS_OP_PATTERN_ARRAY : SJS_OP_PATTERN_OBJECT, e->at);
+}
+
+static sjs_result close_pattern_frame(sjs_compiler *c, const sjs_event *e, uint8_t kind) {
+    pattern_frame *f = top_pattern(c);
+    if (f == NULL || f->kind != kind) return out_of_order(c, e->at);
+    c->pattern_keys.length = f->keys_base * (uint32_t)sizeof(uint32_t);
+    c->pattern_slots.length = f->slots_base * (uint32_t)sizeof(uint32_t);
+    c->patterns.length -= (uint32_t)sizeof(pattern_frame);
+    /* The source. */
+    return op(c, SJS_OP_POP, e->at);
+}
+
+/* Is the innermost pattern of this kind? */
+static bool in_pattern(sjs_compiler *c, uint8_t kind) {
+    pattern_frame *f = top_pattern(c);
+    return f != NULL && f->kind == kind;
+}
+
+static sjs_result pattern_key(sjs_compiler *c, const sjs_event *e) {
+    if (!in_pattern(c, PK_OBJECT)) return out_of_order(c, e->at);
+    uint32_t index;
+    if (string_constant(c, e, &index) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_result r = buf_add(c, &c->pattern_keys, bytes_of(&index, sizeof index));
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    return op32(c, ins(SJS_OP_PATTERN_KEY, index, e->at));
+}
+
+/* `[key]: target`: the key, made a string, waits in a slot of its own for
+ * a rest element to leave it out. */
+static sjs_result pattern_computed_key(sjs_compiler *c, const sjs_event *e) {
+    if (!in_pattern(c, PK_OBJECT)) return out_of_order(c, e->at);
+    uint32_t slot;
+    if (new_slot(c, e->at, &slot) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_result r = buf_add(c, &c->pattern_slots, bytes_of(&slot, sizeof slot));
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    return op16(c, ins(SJS_OP_PATTERN_COMPUTED, slot, e->at));
+}
+
+/* The static keys of the innermost object pattern, as one array constant. */
+static sjs_result static_keys(sjs_compiler *c, const pattern_frame *f, uint32_t *index) {
+    uint32_t n = SJS_BUF_COUNT(c->pattern_keys, uint32_t) - f->keys_base;
+    *index = UINT32_MAX;
+    if (n == 0) return SJS_OK;
+    sjs_array *keys;
+    sjs_result r = sjs_array_make(c->context, n, &keys);
+    if (r != SJS_OK) return r;
+    for (uint32_t i = 0; i < n; i++) {
+        sjs_value key = SJS_BUF_AT(c->constants, sjs_value, SJS_BUF_AT(c->pattern_keys, uint32_t, f->keys_base + i));
+        sjs_retain(key);
+        keys->items[keys->length++] = key;
+    }
+    return value_constant(c, sjs_heap_value(SJS_ARRAY, &keys->h), index);
+}
+
+/* `...rest`: in an array, the elements from its index on; in an object, the
+ * properties its keys do not name. */
+static sjs_result pattern_rest(sjs_compiler *c, const sjs_event *e) {
+    pattern_frame *f = top_pattern(c);
+    if (f == NULL) return out_of_order(c, e->at);
+    if (f->kind == PK_ARRAY) return op32(c, ins(SJS_OP_PATTERN_REST, e->count, e->at));
+    pattern_frame frame = *f;
+    uint32_t computed = SJS_BUF_COUNT(c->pattern_slots, uint32_t) - frame.slots_base;
+    if (computed > UINT16_MAX) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_LIMIT, "a pattern has too many computed keys" });
+    for (uint32_t i = 0; i < computed; i++) {
+        if (op16(c, ins(SJS_OP_LOCAL, SJS_BUF_AT(c->pattern_slots, uint32_t, frame.slots_base + i), e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    uint32_t keys;
+    sjs_result r = static_keys(c, &frame, &keys);
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    if (op32(c, ins(SJS_OP_PATTERN_REST_OBJECT, keys, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    return u16(c, (uint16_t)computed);
+}
+
 static sjs_result pattern_event(sjs_compiler *c, const sjs_event *e) {
     switch (e->kind) {
     case SJS_EV_PARAM:
-        c->param_pending = true;
-        c->param_index = e->count;
-        return SJS_OK;
+    case SJS_EV_REST_PARAM:
+        return param_event(c, e);
     case SJS_EV_BIND: {
         if (c->param_pending) {
             /* A plain parameter is its own slot. */
@@ -777,60 +971,30 @@ static sjs_result pattern_event(sjs_compiler *c, const sjs_event *e) {
         return declare(c, e, (target){ B_LOCAL, slot });
     }
     case SJS_EV_ARRAY_PATTERN_BEGIN:
-        if (take_param(c, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
-        return op(c, SJS_OP_PATTERN_ARRAY, e->at);
+        return open_pattern(c, e, PK_ARRAY);
     case SJS_EV_OBJECT_PATTERN_BEGIN:
-        if (take_param(c, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
-        return op(c, SJS_OP_PATTERN_OBJECT, e->at);
+        return open_pattern(c, e, PK_OBJECT);
     case SJS_EV_PATTERN_INDEX:
+        if (!in_pattern(c, PK_ARRAY)) return out_of_order(c, e->at);
         return op32(c, ins(SJS_OP_PATTERN_INDEX, e->count, e->at));
-    case SJS_EV_PATTERN_KEY: {
-        uint32_t index;
-        if (string_constant(c, e, &index) != SJS_OK) return SJS_ERR_PROGRAM;
-        return op32(c, ins(SJS_OP_PATTERN_KEY, index, e->at));
-    }
-    default: /* the end of an array or object pattern */
-        return op(c, SJS_OP_POP, e->at);
+    case SJS_EV_PATTERN_KEY:
+        return pattern_key(c, e);
+    case SJS_EV_PATTERN_COMPUTED_KEY:
+        return pattern_computed_key(c, e);
+    case SJS_EV_PATTERN_REST:
+        return pattern_rest(c, e);
+    case SJS_EV_ARRAY_PATTERN_END:
+        return close_pattern_frame(c, e, PK_ARRAY);
+    default: /* SJS_EV_OBJECT_PATTERN_END */
+        return close_pattern_frame(c, e, PK_OBJECT);
     }
 }
 
 static bool is_pattern_event(uint32_t kind) {
-    return kind == SJS_EV_PARAM || kind == SJS_EV_BIND || kind == SJS_EV_ARRAY_PATTERN_BEGIN ||
-           kind == SJS_EV_ARRAY_PATTERN_END || kind == SJS_EV_OBJECT_PATTERN_BEGIN ||
-           kind == SJS_EV_OBJECT_PATTERN_END || kind == SJS_EV_PATTERN_INDEX || kind == SJS_EV_PATTERN_KEY;
-}
-
-static sjs_result hold_param_event(sjs_compiler *c, const sjs_event *e) {
-    held_param h = { (uint8_t)e->kind, e->count, c->params_text.length, e->text.length, e->at };
-    sjs_result r = buf_add(c, &c->params_text, bytes_of(e->text.ptr, e->text.length));
-    if (r == SJS_OK) r = buf_add(c, &c->params, bytes_of(&h, sizeof h));
-    return r == SJS_OK ? SJS_OK : fail_result(c, r, e->at);
-}
-
-/* All parameters are known: they take the first slots, and their patterns
- * compile into the start of the body. */
-static sjs_result end_params(sjs_compiler *c, sjs_position at) {
-    uint32_t n = SJS_BUF_COUNT(c->params, held_param);
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < n; i++) {
-        held_param *h = &SJS_BUF_AT(c->params, held_param, i);
-        if (h->kind == SJS_EV_PARAM && h->count + 1u > count) count = h->count + 1u;
-    }
-    if (count > UINT16_MAX) return compile_fail(c, at, (sjs_problem){ SJS_ERROR_LIMIT, "a function has too many parameters" });
-    scope *s = current(c);
-    s->params = (uint16_t)count;
-    s->slots = (uint16_t)count;
-    c->in_params = false;
-    for (uint32_t i = 0; i < n; i++) {
-        held_param h = SJS_BUF_AT(c->params, held_param, i);
-        sjs_event e = { 0 };
-        e.kind = h.kind;
-        e.count = h.count;
-        e.at = h.at;
-        e.text = (sjs_str){ (const char *)c->params_text.ptr + h.text_offset, h.text_length };
-        if (pattern_event(c, &e) != SJS_OK) return SJS_ERR_PROGRAM;
-    }
-    return SJS_OK;
+    return kind == SJS_EV_PARAM || kind == SJS_EV_REST_PARAM || kind == SJS_EV_BIND || kind == SJS_EV_ARRAY_PATTERN_BEGIN ||
+           kind == SJS_EV_ARRAY_PATTERN_END || kind == SJS_EV_OBJECT_PATTERN_BEGIN || kind == SJS_EV_OBJECT_PATTERN_END ||
+           kind == SJS_EV_PATTERN_INDEX || kind == SJS_EV_PATTERN_KEY || kind == SJS_EV_PATTERN_COMPUTED_KEY ||
+           kind == SJS_EV_PATTERN_REST;
 }
 
 /* ------------------------------------------------------------------------
@@ -1301,11 +1465,6 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     if (c->space != NS_NONE && e->kind != SJS_EV_MEMBER) {
         return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "Math, Object, Number and Array are used only as Math.name" });
     }
-    if (c->in_params) {
-        if (e->kind == SJS_EV_PARAMS_END) return end_params(c, e->at);
-        if (!is_pattern_event(e->kind)) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_SYNTAX, "the events are out of order" });
-        return hold_param_event(c, e);
-    }
     if (is_pattern_event(e->kind)) return pattern_event(c, e);
     switch (e->kind) {
     case SJS_EV_NUMBER:
@@ -1411,7 +1570,13 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         land(c, pop_construct(c).jump_else);
         return SJS_OK;
     case SJS_EV_ARROW_BEGIN:
-        return begin_function(c, e->at);
+        return begin_function(c, e);
+    case SJS_EV_PARAMS_END:
+        return params_end(c, e);
+    case SJS_EV_DEFAULT:
+        return default_begin(c, e);
+    case SJS_EV_DEFAULT_END:
+        return default_end(c, e);
     case SJS_EV_ARROW_END:
         return end_function(c, e->at);
     case SJS_EV_BLOCK_BEGIN:
@@ -1585,8 +1750,8 @@ void sjs_compiler_destroy(sjs_compiler *compiler) {
     for (uint32_t i = 0; i < sizeof indices / sizeof indices[0]; i++) index_free(c, indices[i]);
     sjs_buf *bufs[] = { &c->code, &c->numbers, &c->constants, &c->functions, &c->captures, &c->lines,
                         &c->scopes, &c->bindings, &c->names, &c->pending_captures, &c->string_text, &c->global_text,
-                        &c->constructs, &c->jumps, &c->params, &c->params_text, &c->exports, &c->stars,
-                        &c->sorting };
+                        &c->constructs, &c->jumps, &c->patterns, &c->pattern_keys, &c->pattern_slots, &c->exports,
+                        &c->stars, &c->sorting };
     for (uint32_t i = 0; i < sizeof bufs / sizeof bufs[0]; i++) sjs_buf_free(a, bufs[i]);
     sjs_mem_free(a, c, sizeof *c);
 }
