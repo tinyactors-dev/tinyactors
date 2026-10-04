@@ -59,6 +59,7 @@ Do it at release time, not between releases.
   | `tinyactors-core` code or tests     | all of them                              |
   | `tinyactors-host` (the host kernel) | the kernel, the test host, napi          |
   | `tinyxml`, `tinyactors-scxml`       | that one, the scxml codec, test host, napi |
+  | `staticjs`                          | staticjs                                 |
   | `tinyactors-test`                   | test host, and napi when the IRP importer changed |
   | `tinyactors-napi`                   | napi                                     |
   | root `mise/lib`, `mise.toml`        | all of them                              |
@@ -132,7 +133,7 @@ new one beside them, not in a parallel list.
 ## The libraries are private: change APIs in place
 
 Every caller of every library in this repo is in this repo:
-`tinyactors-core`, `tinyxml`, `tinyactors-scxml`, the test host in
+`tinyactors-core`, `tinyxml`, `tinyactors-scxml`, `staticjs`, the test host in
 `tinyactors-test`, and the addon in `tinyactors-napi`. Nothing is published,
 so no outside code depends on an API or ABI staying the same.
 

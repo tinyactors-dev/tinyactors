@@ -1,0 +1,30 @@
+#!/usr/bin/env ruby
+#MISE description="Fail on a function in src/ or the public header with more than three parameters"
+# vim:ft=ruby
+
+# The C rule core, the kernel and tinyxml share: at most three parameters,
+# and a struct for more. The functions are found with tinyxml's scanner
+# (tinyxml/mise/lib/c_scan.rb), on comment- and string-stripped text.
+
+require_relative '../staticjs'
+require_relative '../../../tinyxml/mise/lib/c_scan'
+
+LIMIT = 3
+files = (Dir[StaticJS::ROOT.join('src/*.[ch]').to_s] + [StaticJS::ROOT.join('include/staticjs.h').to_s]).sort
+errors = []
+count = 0
+files.each do |path|
+  text = File.read(path)
+  relative = Pathname.new(path).relative_path_from(StaticJS::ROOT)
+  CScan.functions(text).each do |function|
+    count += 1
+    n = CScan.count_parameters(function.params)
+    errors << "#{relative}:#{CScan.line_of(text, function.name_at)}: #{function.name} takes #{n} parameters" if n > LIMIT
+  end
+  CScan.function_pointers(text).each do |name, params, offset|
+    n = CScan.count_parameters(params)
+    errors << "#{relative}:#{CScan.line_of(text, offset)}: function pointer #{name} takes #{n} parameters" if n > LIMIT
+  end
+end
+abort "check-parameters: #{errors.size} function(s) with more than #{LIMIT} parameters:\n  #{errors.join("\n  ")}" unless errors.empty?
+puts "check-parameters: #{count} functions, none with more than #{LIMIT} parameters"

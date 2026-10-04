@@ -68,6 +68,8 @@ Two rules follow from the table:
   driver: a binding that exercises core, and the kernel, from scenarios.
 - `tinyactors-scxml/` is the SCXML codec, and `tinyxml/` the XML reader it
   is built on.
+- `staticjs/` is a pure, total subset of JavaScript: the language of a
+  proposed data model (`docs/proposals/staticjs.md`).
 - `docs/proposals/` holds outlines of possible future work, such as new
   hosts. They are not plans or decisions; see its README.
 - `docs/research/` holds background research that informed the designs,

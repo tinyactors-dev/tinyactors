@@ -1,7 +1,7 @@
 monorepo_root = true
 
 [monorepo]
-config_roots = ["tinyactors-core", "tinyactors-host", "tinyactors-napi", "tinyactors-scxml", "tinyactors-test", "tinyxml"]
+config_roots = ["staticjs", "tinyactors-core", "tinyactors-host", "tinyactors-napi", "tinyactors-scxml", "tinyactors-test", "tinyxml"]
 
 [tools]
 ruby = "4"

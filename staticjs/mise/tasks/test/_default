@@ -1,0 +1,22 @@
+#!/usr/bin/env ruby
+#MISE description="Test staticjs: three parameters at most, no recursion, freestanding for wasm32, the tests under the sanitizers, every test program, and the spec against Node"
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../tinyxml/mise/lib/c_scan.rb", "../mise/lib/**/*", "../mise.toml"]
+#MISE outputs={auto=true}
+#MISE depends=["build"]
+#USAGE flag "--full" help="Also fail every allocation of every spec case"
+# vim:ft=ruby
+
+require_relative '../../staticjs'
+
+full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
+StaticJS.run('mise', 'run', 'check-parameters')
+StaticJS.run('mise', 'run', 'check-recursion')
+StaticJS.run('mise', 'run', 'check-freestanding')
+StaticJS.run('mise', 'run', 'asan', *(full ? ['--full'] : []))
+
+failed = StaticJS::TESTS.reject do |test, arguments|
+  system(StaticJS::BUILD.join(test).to_s, *arguments.fetch(full ? :full : :fast), chdir: StaticJS::ROOT.to_s)
+end.keys
+abort "staticjs: failed: #{failed.join(', ')}" unless failed.empty?
+StaticJS.run('mise', 'run', 'diff-node')
+puts "staticjs: #{StaticJS.tests.size} test program(s) pass#{full ? ' (full)' : ''}"

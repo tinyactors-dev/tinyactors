@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+#MISE description="Compile every staticjs source for wasm32-freestanding and check it needs no C library"
+# vim:ft=ruby
+
+# staticjs must build wherever core does, the browser included. Each source
+# is compiled with the release's zig for wasm32-freestanding, which has no C
+# library: a libc header does not exist there, and a libc call would stay
+# undefined. What each object leaves undefined may be staticjs's own
+# functions (sjs_*) and the memory builtins the compiler emits, nothing else.
+
+require_relative '../staticjs'
+require 'fileutils'
+
+target = Toolchain::Target.release('wasm32-freestanding')
+out = StaticJS::BUILD.join('wasm32')
+FileUtils.mkdir_p(out)
+bad = []
+StaticJS.sources.each do |source|
+  object = out.join("#{source.basename('.c')}.o")
+  binary = target.compile(source.to_s, into: object.to_s,
+                                       includes: [StaticJS::ROOT.join('include'), StaticJS::ROOT.join('src')],
+                                       flags: StaticJS::WARNINGS)
+  foreign = (binary.undefined - binary.format.runtime_undefined).to_a.reject do |symbol|
+    symbol.start_with?('sjs_') || StaticJS::MEMORY.include?(symbol)
+  end
+  bad << "#{source.basename}: #{foreign.join(', ')}" unless foreign.empty?
+end
+abort "check-freestanding: undefined symbols outside staticjs and the memory builtins:\n  #{bad.join("\n  ")}" unless bad.empty?
+puts "check-freestanding: #{StaticJS.sources.size} sources build for wasm32-freestanding with no C library"

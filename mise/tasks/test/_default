@@ -34,6 +34,8 @@ steps = [
   ['host kernel', ['mise', 'run', *flags.call], root.join('tinyactors-host')],
   ['tinyxml', ['mise', 'run', *flags.call], root.join('tinyxml')],
   ['scxml codec', ['mise', 'run', *flags.call], root.join('tinyactors-scxml')],
+  # --full: every spec case with each of its allocations failing.
+  ['staticjs', ['mise', 'run', *flags.call(*full_flag)], root.join('staticjs')],
   # --full: the exhaustive scenarios, and scale_test up to four million actors.
   ['test host', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyactors-test')],
   # --full: scale.js on Bun too, and up to a million actors.
