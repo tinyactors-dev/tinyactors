@@ -21,6 +21,7 @@ export const meta = {
 //   max_rounds  review rounds per unit before it is handed to a human (default 2)
 //   integrate   false to stop after review and leave the wip branches unmerged
 //   prewave     the commit ring-proto was at before the wave, for timing baselines
+//   units[].existing  true when the unit's wip branch already holds its implementation
 //
 // The workflow never starts a second wave by itself. The human checkpoint is
 // the gap between runs: read the report, inspect the pushed commits, then run
@@ -363,8 +364,13 @@ log(`wave ${WAVE}: ${UNITS.map(u => u.id).join(', ')}; up to ${MAX_ROUNDS} revie
 
 const results = await pipeline(
   UNITS,
-  u => planUnit(u),
-  (plan, u) => implementUnit(plan, u).then(impl => ({ plan, impl })),
+  // A unit marked `existing` already has its implementation on its wip branch
+  // (a wave interrupted by a container restart): it skips planning and
+  // implementation and resumes at review, against the branch as it stands.
+  u => u.existing ? { summary: `Existing implementation on ${wip(u)}. Brief: ${u.brief}`, full_test_needed: !!u.full_test } : planUnit(u),
+  (plan, u) => (u.existing
+    ? Promise.resolve({ branch: wip(u), commits: [], tests_run: [], deviations_from_plan: 'resumed from the existing branch', open_questions: [] })
+    : implementUnit(plan, u)).then(impl => ({ plan, impl })),
   async ({ plan, impl }, u) => {
     const rounds = []
     let open = []
