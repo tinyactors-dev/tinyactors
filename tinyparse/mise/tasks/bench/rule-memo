@@ -1,0 +1,36 @@
+#!/usr/bin/env ruby
+#MISE description="Time the CLI on one json document with the VM's rule memo off and in its default mode: mise run bench:rule-memo [ITERATIONS]"
+#MISE depends=["cli"]
+# vim:ft=ruby
+
+# A coarse, process-level signal, reported as measured: each of ITERATIONS
+# (400 unless given) runs of `tinyparse run std.json` pays process start,
+# the grammar's compile and its lowering to bytecode as well as the parse.
+# bench:javascript measures the parse alone, in process. This was the speed
+# check at the end of ax's vm-diff gate; a time decides nothing in a
+# gate, so `mise run gate:vm-diff` holds the memo to the same trees and
+# this reports what it costs.
+
+require 'tmpdir'
+require_relative '../../lib/tinyparse'
+
+iterations = Integer(ARGV.first || 400)
+Dir.mktmpdir('tinyparse-rule-memo-') do |dir|
+  input = File.join(dir, 'nested.json')
+  File.write(input, '{"a":[1,{"b":[2,3]},true],"c":{"d":null}}')
+  clock = -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+  time = lambda do |memo|
+    started = clock.call
+    iterations.times do
+      system({ 'TINYPARSE_RULEMEMO' => memo }, Tinyparse.host_cli.to_s, 'run', 'std.json', '--input', input,
+             out: File::NULL, err: File::NULL)
+    end
+    clock.call - started
+  end
+  off = time.call('off')
+  default = time.call(nil)
+  puts "bench:rule-memo: #{iterations} runs of std.json on a nested document"
+  puts format('  rule memo off:      %.3fs', off)
+  puts format('  rule memo default:  %.3fs', default)
+  puts format('  ratio (off / default): %.2fx (above 1, the default is faster)', off / default)
+end

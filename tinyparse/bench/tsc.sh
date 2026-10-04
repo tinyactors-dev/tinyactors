@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ci/tinyparse-tsc-bench.sh -- W1 of the tinyparse exploration: calibrate
+# bench/tsc.sh -- W1 of the tinyparse exploration: calibrate
 # tinyparse against the two PRODUCTION hand-written recursive-descent TypeScript
 # parsers, parse-only, over the EXACT same React file set the react bench uses.
 #
@@ -12,14 +12,14 @@
 #
 # Both parse the identical bytes listed in
 #   tinyparse/bench/react-corpus/MANIFEST.txt
-# (1070 React .js files, ~9.5 MB), the same manifest ci/tinyparse-react-bench.sh
+# (1070 React .js files, ~9.5 MB), the same manifest bench/react.sh
 # produces, so the table reads tinyparse vs tree-sitter vs tsc vs tsgo over one
 # corpus. For context (measured elsewhere): tree-sitter ~1.10 s, tinyparse ~43 s
 # adaptive / ~13 s memo-forced over this same set.
 #
 # GATED behind BENCH=1 like the sibling bench scripts. Run from the repo root:
 #
-#     BENCH=1 bash ci/tinyparse-tsc-bench.sh
+#     mise run bench:tsc
 #
 # Re-runnably:
 #   1. install typescript + @typescript/native-preview into a gitignored scratch
@@ -31,8 +31,8 @@
 set -uo pipefail
 
 if [ "${BENCH:-0}" != "1" ]; then
-  echo "ci/tinyparse-tsc-bench.sh is gated behind BENCH=1 (skipping)."
-  echo "Run it with:  BENCH=1 bash ci/tinyparse-tsc-bench.sh"
+  echo "bench/tsc.sh is gated behind BENCH=1 (skipping)."
+  echo "Run it with:  mise run bench:tsc"
   exit 0
 fi
 
@@ -48,7 +48,7 @@ log() { printf '[tsc-bench] %s\n' "$*" >&2; }
 
 if [ ! -s "$MANIFEST" ]; then
   log "FATAL: corpus manifest missing at $MANIFEST"
-  log "       generate it first with: BENCH=1 bash ci/tinyparse-react-bench.sh"
+  log "       generate it first with: mise run bench:react"
   exit 1
 fi
 CASES="$(wc -l < "$MANIFEST" | tr -d ' ')"

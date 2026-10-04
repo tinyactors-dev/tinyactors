@@ -136,7 +136,7 @@ struct tinyparse_engine {
     /* W16-3 compiled-parser symbol prefix (host-set). When NULL the emitted
     ** parser keeps its historical file-scope symbol names (tp_parser_p<N>,
     ** tp_compiled_parser_load/_run, every emitted static) so existing callers and
-    ** ci/tinyparse-cc-diff.sh are byte-for-byte unchanged. When set to a prefix
+    ** mise run gate:cc-diff are byte-for-byte unchanged. When set to a prefix
     ** P, EVERY emitted file-scope symbol is renamed to P_..., so two parsers
     ** compiled with distinct prefixes link into one program with no collision. The
     ** CLI sets it from `c ... --parser[-lib] --name P'. It points at host-owned
@@ -521,7 +521,7 @@ void tp_count_tail_calls(const tp_program *program,
 /* ** Run the compiled grammar over a parser's buffered input via the in-process
 ** bytecode VM, building the concrete syntax tree. This is the engine (W14-5
 ** retired the recursive IR interpreter); the tree is byte-identical between
-** the VM and the C-compiled parser (ci/tinyparse-cc-diff.sh), with the conformance suite as
+** the VM and the C-compiled parser (mise run gate:cc-diff), with the conformance suite as
 ** the standing correctness anchor. Returns TINYPARSE_OK on a full parse or
 ** TINYPARSE_SYNTAX_ERROR (with a diagnostic) on failure. */
 tinyparse_result tp_execute_vm(tinyparse_parser *parser);

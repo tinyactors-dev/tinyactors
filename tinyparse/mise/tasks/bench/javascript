@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+#MISE description="Benchmark std.javascript against tree-sitter's JavaScript parser, in process, over tree-sitter's JavaScript corpus (opt-in; needs the network)"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# bench/javascript.sh: parse time, throughput, memory and tree walking, each
+# side over its own tree; needs reference/tree-sitter-javascript.
+
+require_relative '../../lib/tinyparse'
+
+Tinyparse.bench('javascript.sh', *ARGV)

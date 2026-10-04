@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+#MISE description="Benchmark tinyparse against the tsc and tsgo parsers, parse-only, on the React corpus (opt-in; needs the network)"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# bench/tsc.sh: needs the manifest of bench:react, and installs typescript
+# and builds typescript-go into bench/.
+
+require_relative '../../lib/tinyparse'
+
+Tinyparse.bench('tsc.sh', *ARGV)

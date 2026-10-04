@@ -1,0 +1,47 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: one engine reused across many parses of a large input builds the same tree every time (--full: std.tsx, 120 parses)"
+#MISE depends=["build"]
+#USAGE flag "--full" help="Reuse the engine across 120 parses of a large .tsx with the generated std.tsx parser, not 40 of a large .json"
+# vim:ft=ruby
+
+# A benchmark once caught silent corruption on the default parse path:
+# while the VM ran inside an actor of the runtime tinyparse was born in,
+# tinyparse_push copied each chunk through the runtime's mailbox into a
+# fixed slice of the grant, and reusing one engine across many parses of a
+# large file fragmented it until a copy failed, push returned
+# TINYPARSE_INVALID, and finish still produced a one-node tree with no
+# fault: a 90 KB file of about 96,000 nodes became one root node.
+#
+# A push now buffers into the parser's own arena (a child of the engine's
+# growable pool, reset by tinyparse_parser_free), and a parser whose push
+# failed stays failed (src/parse.c). test/gates/reuse.c holds both: it
+# reuses one default engine with an 8 MiB grant across many parses of an
+# input large enough to grow the pool, with a generated parser, and fails
+# when a tree differs from the first (node count, and a fingerprint of the
+# kinds in order), when a call fails, or when the pool never grew. The
+# fast pass parses 20,000 json objects 40 times with the generated std.json
+# parser; --full parses 1,500 lines of .tsx 120 times with the generated
+# std.tsx parser, the path the bug was found on, whose parser takes some
+# seconds to compile.
+
+require_relative '../../lib/gate'
+
+Tinyparse::Gate.run('reuse-regression', 'engine-reuse regression') do |gate|
+  if gate.full?
+    grammar = 'std.tsx'
+    repetitions = 120
+    input = gate.write('input.tsx', (0...1500).map { |i| "const x#{i} = [1, 2, 3].map((v) => v * #{i} + foo.bar(#{i}));\n" }.join)
+  else
+    grammar = 'std.json'
+    repetitions = 40
+    input = gate.write('input.json', "[\n#{(0...20_000).map { |i| %({"k#{i}": [1, 2.5, true, null], "v": "x#{i}"}) }.join(",\n")}\n]\n")
+  end
+  puts "  #{grammar}: #{input.size} bytes, #{repetitions} parses in one engine"
+  source = gate.scratch.join('parser.c')
+  gate.cli!('c', grammar, '--parser-lib', '--name', 'parser', '--out', source)
+  harness = gate.program([Tinyparse::ROOT.join('test/gates/reuse.c'), source, Tinyparse.host_library],
+                         gate.scratch.join('reuse'), flags: %w[-Wall -Wextra])
+  run = gate.execute([harness, input, repetitions])
+  puts run.out
+  gate.check(run.success?, "the reused engine diverged (exit #{run.code})")
+end

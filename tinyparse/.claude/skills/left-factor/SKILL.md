@@ -71,11 +71,12 @@ Tree shapes may shift (e.g. an assignment's LHS becomes the ternary-derived node
 rather than a dedicated `lhs` node). That is acceptable: tinyparse conformance is
 **accept-level**, not tree-equality (`docs/decisions.md`). The bar is:
 
-1. **Conformance unchanged:** `mise run test` stays 296/296 (or
+1. **Conformance unchanged:** `mise run test` stays green at 496/496 (or
    whatever the current count is). The corpus must still accept what it accepted and
    reject what it rejected.
-2. **Engines agree:** `mise run gate vm-diff` green — the change is in the
-   grammar, so every engine sees it; they must still produce identical trees.
+2. **Engines agree:** `mise run gate:vm-diff --full` and
+   `mise run gate:cc-diff --full` green — the change is in the grammar, so every
+   engine sees it; they must still produce identical trees.
 3. **It actually helped:** measure with the memo OFF so you see the *grammar*
    effect, not the memo's. Pack and time a pathological input both ways:
    ```sh
@@ -87,7 +88,7 @@ rather than a dedicated `lhs` node). That is acceptable: tinyparse conformance i
 ## Traps
 
 - **Do not change what the corpus accepts or rejects.** If a factoring makes a
-  previously-rejected input parse (or vice versa), it is wrong — the metric catches
+  previously-rejected input parse (or vice versa), it is wrong — the suite catches
   it. Left-factoring is meant to be behaviour-preserving at the accept level.
 - **Field/alias on the shared prefix.** If the two branches need the prefix bound to
   *different* fields/aliases, you cannot factor it into one parse without losing

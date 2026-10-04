@@ -41,7 +41,7 @@
 ** byte-identical (node count + per-node kind, field, and span fingerprint) to the
 ** fresh arm, for every file. A divergence -- the corruption signature -- aborts
 ** the bench rather than letting it ever report a number measured over silently
-** wrong parses. The standing oracle for the fix is ci/tinyparse-reuse-regression.sh;
+** wrong parses. The standing oracle for the fix is mise run gate:reuse-regression;
 ** this assertion is the bench's own in-line guard so corrupt parses can never be
 ** timed here either.
 **
@@ -245,7 +245,7 @@ static int run_parse(const bench_corpus *corpus, size_t iterations)
 ** with the same fingerprint built the same tree down to spans -- the assertion
 ** the persistent arm must pass against the fresh arm, since the silent-corruption
 ** bug (86c4317) collapsed reused parses to a degenerate one-node tree while the
-** API reported success. Mirrors ci/tinyparse-reuse-regression.sh's walk, with
+** API reported success. Mirrors mise run gate:reuse-regression's walk, with
 ** field + span folded in for a stricter check. */
 typedef struct tree_fingerprint {
     unsigned long nodes;

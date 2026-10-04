@@ -52,8 +52,8 @@
 **     (tp_vm_recover_insert), the inject splice (tp_vm_do_inject -> tp_inject_run).
 **
 ** So the generated parser builds the SAME tightly-packed, arena-allocated CST the
-** VM builds (ci/tinyparse-cc-diff.sh proves it, byte-identical), keeps the
-** detailed recovery diagnostics (ci/tinyparse-diag-diff.sh), nests embedded
+** VM builds (mise run gate:cc-diff proves it, byte-identical), keeps the
+** detailed recovery diagnostics (mise run gate:diag-diff), nests embedded
 ** languages (the std.fence inject grammar), and is bounded against a pathological
 ** deep input by the measured recursion-depth guard.
 **

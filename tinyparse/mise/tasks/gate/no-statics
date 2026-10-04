@@ -1,0 +1,45 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: the library keeps no mutable state in static storage (ast-grep over src/*.c, and the archive's data symbols)"
+#MISE depends=["lib"]
+# vim:ft=ruby
+
+# tinyparse keeps no process-global mutable state: two engines in one
+# process would share it, and it would outlive closing one (a `static int
+# defined` that survived an engine once changed how every later parse ran).
+# Such state belongs on the engine or the parser. Two checks:
+#
+#   1. The ast-grep rule tinyparse-no-static-mutable (the root's
+#      mise/ast-grep/rules/, tested by `mise run check-portability`) finds
+#      no `static` declaration in src/*.c that is neither const nor a
+#      function. The CLI, src/cli.c, is held to it too.
+#   2. The archive build/lib/libtinyparse.a defines no writable data at all
+#      (no data, BSS or common symbol, local or global), which the rule
+#      cannot see: a global without `static`, or a const-qualified table of
+#      mutable pointers.
+
+require 'json'
+require_relative '../../lib/gate'
+
+Tinyparse::Gate.run('no-statics', 'no-global-mutable-state gate') do |gate|
+  rule = Tinyparse::ROOT.join('../mise/ast-grep/rules/tinyparse-no-static-mutable.yml').expand_path
+  sources = Dir[Tinyparse::ROOT.join('src/*.c').to_s].sort.map { |path| Tinyparse.relative(path) }
+  next gate.fail('no sources under src/') if sources.empty?
+
+  out, err, status = Toolchain::Tool[:ast_grep].capture('scan', '--rule', rule.to_s, '--json=compact', *sources,
+                                                         chdir: Tinyparse::ROOT.to_s)
+  next gate.fail("ast-grep scan failed:\n#{err}") if out.strip.empty? && !status.success?
+
+  findings = JSON.parse(out)
+  findings.each do |match|
+    line = match.fetch('range').fetch('start').fetch('line') + 1
+    gate.fail("#{match.fetch('file')}:#{line}: a static mutable variable: #{match.fetch('text').lines.first.strip}")
+  end
+  puts "STATIC_MUTABLE=#{findings.size}"
+  gate.ok("#{sources.size} sources declare no static mutable variable") if findings.empty?
+
+  library = Tinyparse.host_library
+  symbols = Toolchain::Tool[:llvm_nm].run(library.to_s).lines.map(&:split).select { |fields| fields.size == 3 }
+  writable = symbols.select { |_address, type, _name| type.match?(/\A[DdBbCc]\z/) }
+  writable.each { |_address, type, name| gate.fail("#{Tinyparse.relative(library)} defines writable data #{name} (#{type})") }
+  gate.ok("#{Tinyparse.relative(library)} defines no writable data (#{symbols.size} symbols)") if writable.empty?
+end

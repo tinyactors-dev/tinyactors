@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+#MISE description="Benchmark std.tsx against tree-sitter's TSX parser on the React codebase: parse every file, collect every function (opt-in; needs the network)"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# bench/react.sh: needs reference/react and reference/tree-sitter-typescript;
+# REGEN=1 rebuilds the corpus manifest.
+
+require_relative '../../lib/tinyparse'
+
+Tinyparse.bench('react.sh', *ARGV)

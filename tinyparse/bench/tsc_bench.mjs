@@ -1,6 +1,6 @@
 // tsc_bench.mjs -- parse-only benchmark of the TypeScript compiler's parser
 // (the canonical hand-written recursive-descent TS parser) over the React
-// corpus, the exact same byte set ci/tinyparse-react-bench.sh uses.
+// corpus, the exact same byte set bench/react.sh uses.
 //
 // We call ts.createSourceFile(name, text, ScriptTarget.Latest,
 // /*setParentNodes*/ false, ScriptKind.TSX) -- parse only. No Program is

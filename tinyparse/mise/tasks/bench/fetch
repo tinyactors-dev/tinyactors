@@ -1,0 +1,55 @@
+#!/usr/bin/env ruby
+#MISE description="Fetch the pinned porting and benchmark references of reference/PINS.txt into reference/, by tarball (opt-in; needs the network)"
+# vim:ft=ruby
+
+# reference/PINS.txt names each reference (`NAME URL COMMIT`): the
+# tree-sitter grammars tinyparse's std grammars were ported from, whose
+# corpora are the conformance and benchmark inputs, and the React codebase
+# the React benchmarks parse. They are build-time references, never linked
+# or shipped, and git-ignored. This downloads each one's tarball at its
+# pinned commit from GitHub's codeload (a tarball, not a clone, so it works
+# where only HTTPS is let through) and unpacks it with the pinned GNU tar
+# into reference/NAME, skipping one that is there. NAMES limits it to
+# those references: `mise run bench:fetch tree-sitter-bash`.
+
+require 'fileutils'
+require 'net/http'
+require 'tmpdir'
+require 'uri'
+require_relative '../../lib/tinyparse'
+
+REFERENCE = Tinyparse::ROOT.join('reference')
+
+pins = REFERENCE.join('PINS.txt').read.lines.map(&:strip).reject { |line| line.empty? || line.start_with?('#') }
+                .map(&:split).select { |fields| fields.size == 3 }
+pins.select! { |name, _url, _commit| ARGV.include?(name) } unless ARGV.empty?
+abort "bench:fetch: no pin named #{ARGV.join(', ')} in reference/PINS.txt" if pins.empty?
+
+# GET `url`, following redirects; answers the body.
+def download(url, limit = 5)
+  uri = URI(url)
+  response = Net::HTTP.get_response(uri)
+  return download(response['location'], limit - 1) if response.is_a?(Net::HTTPRedirection) && limit.positive?
+  raise "#{url}: HTTP #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+
+  response.body
+end
+
+pins.each do |name, url, commit|
+  target = REFERENCE.join(name)
+  if target.directory?
+    puts "bench:fetch: reference/#{name} is there"
+    next
+  end
+  path = URI(url).path.delete_suffix('.git')
+  tarball = "https://codeload.github.com#{path}/tar.gz/#{commit}"
+  puts "bench:fetch: #{name} at #{commit[0, 12]} from #{tarball}"
+  Dir.mktmpdir('tinyparse-reference-') do |dir|
+    archive = File.join(dir, 'reference.tar.gz')
+    File.binwrite(archive, download(tarball))
+    Toolchain::Tool[:tar].run('-xzf', archive, '-C', dir, env: { 'PATH' => "#{File.dirname(Toolchain::Tool[:gzip].path)}:#{ENV.fetch('PATH', '')}" })
+    unpacked = Dir[File.join(dir, '*/')].first or abort "bench:fetch: #{name}: the tarball is empty"
+    FileUtils.mv(unpacked, target)
+  end
+  puts "bench:fetch: reference/#{name}"
+end

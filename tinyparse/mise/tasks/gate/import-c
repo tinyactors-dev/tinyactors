@@ -1,0 +1,25 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: a grammar that imports another compiles to a C parser that builds the golden tree, the same as the VM's"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# (import NAME) merges the imported module's definitions at compile time,
+# so the packed grammar a generated parser embeds must already carry them.
+# examples/import/main.scm imports words.scm: compiled to a standalone C
+# parser, built and run on the committed sample, its tree must equal both
+# the committed golden (which pins the shape) and the VM's (which holds the
+# generated parser to the reference engine on the same composed grammar).
+
+require_relative '../../lib/gate'
+
+Tinyparse::Gate.run('import-c', 'import->C gate') do |gate|
+  example = Tinyparse::ROOT.join('examples/import')
+  grammar = example.join('main.scm')
+  sample = example.join('fixtures/sample.words')
+  golden = example.join('fixtures/expected.tree').binread
+
+  generated = gate.execute([gate.parser(grammar)], stdin: sample)
+  gate.compare('import: generated parser vs the golden tree', golden, generated)
+  gate.compare('import: generated parser vs the VM', gate.vm_tree(grammar, sample), generated)
+  gate.result
+end

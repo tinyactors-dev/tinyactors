@@ -32,11 +32,6 @@
 /bench/prof/
 # W1 tsc/tsgo calibration scratch: the npm install (typescript + native-preview)
 # and the cloned microsoft/typescript-go tree + its built harness. Only the
-# tracked harness sources are kept (tsc_bench.mjs, ci/tinyparse-tsc-bench.sh).
+# tracked harness sources are kept (tsc_bench.mjs, bench/tsc.sh).
 /bench/tsbench/
 /bench/typescript-go/
-/bench/reclaim_test
-# tinyparse differential scratch: ci/tinyparse-vm-diff.sh writes <input>.ref
-# and <input>.vm next to the suite inputs while comparing engines.
-/test/suite/**/*.ref
-/test/suite/**/*.vm

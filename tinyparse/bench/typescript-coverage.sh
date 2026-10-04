@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ci/tinyparse-ts-coverage.sh — corpus coverage for the std.typescript family.
+# bench/typescript-coverage.sh — corpus coverage for the std.typescript family.
 #
-# The TS-family sibling of ci/tinyparse-js-coverage.sh. For every case in the
+# The TS-family sibling of bench/javascript-coverage.sh. For every case in the
 # vendored tree-sitter TypeScript corpus it extracts the input, picks the dialect
 # the case's `:language(...)` directive names (tsx, else typescript), runs
 # `tinyparse run std.<dialect>` on it, and counts a case as "parsed" when the
@@ -11,14 +11,14 @@
 #     TS_COVERAGE=<parsed>/<total>
 #
 # line. A helper, NOT wired into the gate. Run from the repo root:
-#     bash ci/tinyparse-ts-coverage.sh
+#     mise run bench:typescript-coverage
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TP_DIR="$REPO"
 CORPUS="$TP_DIR/reference/tree-sitter-typescript/test/corpus"
 
-TP="${TP_CLI:?run it with mise run bench ts-coverage, which builds tinyparse and sets TP_CLI}"
+TP="${TP_CLI:?run it with mise run bench:typescript-coverage, which builds tinyparse and sets TP_CLI}"
 
 if [ ! -x "$TP" ]; then
   echo "FATAL: tinyparse is not built at $TP"

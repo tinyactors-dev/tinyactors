@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+#MISE description="Count the cases of tree-sitter's TypeScript corpus std.typescript or std.tsx parses with no ERROR or MISSING node: TS_COVERAGE=parsed/total"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# bench/typescript-coverage.sh: needs reference/tree-sitter-typescript.
+
+require_relative '../../lib/tinyparse'
+
+Tinyparse.bench('typescript-coverage.sh', *ARGV)

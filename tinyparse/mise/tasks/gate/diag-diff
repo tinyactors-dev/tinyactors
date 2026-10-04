@@ -1,0 +1,32 @@
+#!/usr/bin/env ruby
+#MISE description="Gate: the generated C parser reports the same diagnostics as the VM (message, help, severity, MISSING nodes) on broken inputs"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# cc-diff holds the recovered tree of a generated parser to the VM's, with
+# stdout and stderr in one stream. This gate holds the diagnostics on their
+# own: for every broken input to the (recover ...) grammar
+# examples/recover/list.scm (each ends with a list still open, so recovery
+# synthesizes a MISSING `)` and raises "unterminated list"), the generated
+# parser and the VM (`tinyparse run`) must print the same tree on stdout,
+# the same diagnostics on stderr (message, [code], help line), and exit
+# with the same code, which an error-severity diagnostic decides. Both
+# render diagnostics through the same code, so a difference is a change of
+# behaviour, not of formatting. It guards the detailed error reporting a
+# rewrite of the emitter could quietly drop.
+
+require_relative '../../lib/gate'
+
+Tinyparse::Gate.run('diag-diff', 'diagnostics differential: generated parser vs VM') do |gate|
+  grammar = Tinyparse::ROOT.join('examples/recover/list.scm')
+  inputs = Dir[Tinyparse::ROOT.join('examples/recover/broken/*.list').to_s].sort
+  next gate.fail('no broken inputs under examples/recover/broken/') if inputs.empty?
+
+  parser = gate.parser(grammar)
+  inputs.each do |input|
+    generated = gate.execute([parser], stdin: input, separate: true)
+    vm = gate.vm_tree(grammar, input, separate: true)
+    gate.compare("recover/#{File.basename(input)}", vm, generated)
+  end
+  gate.result
+end

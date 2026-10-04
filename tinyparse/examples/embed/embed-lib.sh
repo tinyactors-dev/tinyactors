@@ -27,8 +27,9 @@
 #   embed-lib.sh libembed.so host_parser:host.scm json_parser:std.json
 #
 # Honours TP_ROOT, TP_INC, TP_CLI (the CLI; build/bin/tinyparse after `mise run
-# cli`), TP_AMALGAMATION (dist/amalgamation after `mise run amalgamate`) and CC
-# when set; otherwise derives them from its own location and the host platform.
+# cli`), TP_AMALGAMATION (dist/amalgamation after `mise run amalgamate`), CC and
+# CFLAGS (the optimisation, -O2 by default) when set; otherwise derives them from
+# its own location and the host platform.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -49,6 +50,7 @@ SRC="$TP_ROOT/src"
 AMALG="${TP_AMALGAMATION:-$TP_ROOT/dist/amalgamation}"
 # The generated parser-lib TU #includes tinyparse.h and src/internal.h.
 CC="${CC:-cc}"
+CFLAGS="${CFLAGS:--O2}"
 
 if [ "$#" -lt 2 ]; then
   echo "usage: $0 OUT.so PREFIX:GRAMMAR [PREFIX:GRAMMAR ...]" >&2
@@ -67,7 +69,8 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # 1. Compile the amalgamated runtime once.
-"$CC" -std=c11 -O2 -fPIC -c "$AMALG/tinyparse.c" -I"$AMALG" \
+# shellcheck disable=SC2086
+"$CC" -std=c11 $CFLAGS -fPIC -c "$AMALG/tinyparse.c" -I"$AMALG" \
   -o "$WORK/tinyparse.o" || exit 1
 
 # 2. Generate and compile each parser-lib TU with its own --name prefix, and
@@ -87,9 +90,10 @@ for spec in "$@"; do
   [ -f "$HERE/$grammar" ] && gpath="$HERE/$grammar"
   "$TP_CLI" c "$gpath" --parser-lib --name "$prefix" \
     --out "$WORK/$prefix.c" || exit 1
-  # The generated TU is machine output; compile it like ci/tinyparse-cc-diff.sh
-  # does (no -Wall -Wextra), at -O2 -fPIC.
-  "$CC" -std=c11 -O2 -fPIC -c "$WORK/$prefix.c" \
+  # The generated TU is machine output; compile it as `mise run gate:cc-diff`
+  # does (no -Wall -Wextra), with -fPIC.
+  # shellcheck disable=SC2086
+  "$CC" -std=c11 $CFLAGS -fPIC -c "$WORK/$prefix.c" \
     -I"$TP_INC" -I"$SRC" -o "$WORK/$prefix.o" || exit 1
   OBJS="$OBJS $WORK/$prefix.o"
   ENTRIES="$ENTRIES ${prefix}_load; ${prefix}_run;"

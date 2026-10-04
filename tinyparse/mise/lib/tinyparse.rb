@@ -308,8 +308,8 @@ module Tinyparse
   TOOLS = BUILD.join('tools')
 
   # A one-line shell script in build/tools that runs `command`, so a test
-  # (a shell command in a .test file, or a gate in ci/) runs the pinned
-  # toolchain by one quoted path.
+  # (a shell command in a .test file, or examples/embed/embed-lib.sh) runs
+  # the pinned toolchain by one quoted path.
   def tool_script(name, command)
     path = TOOLS.join(name)
     write_if_changed(path, "#!/bin/sh\nexec #{command.shelljoin} \"$@\"\n")
@@ -317,7 +317,7 @@ module Tinyparse
     path
   end
 
-  # The environment of the suite's cases and the gates in ci/: the built
+  # The environment of the suite's cases and the benchmarks: the built
   # CLI and library, the amalgamation, the examples, and the pinned
   # toolchain: TP_CC (the pinned clang for this machine), TP_LINUX_CC (zig cc
   # for x86_64 Linux, whose objects read the same from any host), TP_NM
@@ -343,18 +343,9 @@ module Tinyparse
 end
 
 module Tinyparse
-  # The gates in ci/: each a shell program, tinyparse-<name>.sh, that
-  # checks one property across many inputs or builds (a differential, a
-  # crash sweep, an export surface) and exits 0 when it holds. They read
-  # what to run from test_environment.
-  GATES = %w[no-statics exports vm-diff cc-diff diag-diff vm-nocrash parser-nocrash multiparser nesting
-             bufferfriendly import-c reclaim reuse-regression].freeze
-
   LOGS = BUILD.join('logs')
 
   module_function
-
-  def gate_script(name) = ROOT.join("ci/tinyparse-#{name}.sh")
 
   # Runs each [label, command] at once, each with its output in
   # build/logs/<label>.log, and reports them in the order given, with each
@@ -388,5 +379,20 @@ module Tinyparse
       end
       ok
     end.map { |job| job[:label] }
+  end
+end
+
+module Tinyparse
+  module_function
+
+  # Runs bench/<script>, a benchmark or corpus count in bash, with the
+  # environment of the suite (test_environment) and BENCH=1, which the
+  # scripts ask for so that nothing runs them by accident. They are opt-in
+  # tasks (`mise run bench:<name>`), never part of `mise run test`: they
+  # measure time, so they run alone, and need the references of
+  # reference/PINS.txt (`mise run bench:fetch`) and the network for the
+  # tree-sitter runtime and the npm packages they compare against.
+  def bench(script, *arguments)
+    exec(test_environment.merge('BENCH' => '1'), 'bash', ROOT.join('bench', script).to_s, *arguments, chdir: ROOT.to_s)
   end
 end

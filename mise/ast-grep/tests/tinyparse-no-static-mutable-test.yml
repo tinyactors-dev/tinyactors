@@ -1,0 +1,13 @@
+id: tinyparse-no-static-mutable
+valid:
+  - "static const unsigned char tinyparse_manpage[] = { 1, 2, 0 };"
+  - "static const char *const names[] = { \"a\", \"b\" };"
+  - "static int class_digit(void *user, unsigned b) { return b >= '0' && b <= '9'; }"
+  - "static void tp_reset(tp_engine *engine);"
+  - "int f(void) { const int limit = 3; int count = 0; return count + limit; }"
+  - "int defined;"
+invalid:
+  - "static int defined;"
+  - "static tp_engine *current = 0;"
+  - "static char scratch[256];"
+  - "int f(void) { static int calls; return ++calls; }"

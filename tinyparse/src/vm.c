@@ -6,7 +6,7 @@
 ** (tp_token_match_memo, first-byte dispatch). Since W14-5 this is the SOLE engine:
 ** the recursive-descent IR interpreter that once lived in parse.c was retired once
 ** the VM was the only production path. The concrete syntax tree the
-** VM builds is byte-identical to the C-compiled parser's (ci/tinyparse-cc-diff.sh),
+** VM builds is byte-identical to the C-compiled parser's (mise run gate:cc-diff),
 ** with the conformance suite (296 independent expected outputs) the standing
 ** correctness anchor. The VM replaces a per-node C call frame and pointer chase
 ** with one loop over a contiguous instruction stream and explicit, arena-grown
@@ -24,7 +24,7 @@
 ** rule call (tp_vm_run -> tp_vm_run_call -> tp_vm_run), so a deeply nested input
 ** overflowed the C stack. The driver below (tp_vm_run) drives EVERY combinator --
 ** rule calls included -- on one explicit, arena-backed frame stack, so a ~200k-deep
-** input grows the arena instead of crashing (ci/tinyparse-vm-nocrash.sh). It is
+** input grows the arena instead of crashing (mise run gate:vm-nocrash). It is
 ** the single source of truth: the generated compiled parser (emitparser.c) calls
 ** this same tp_vm_run rather than emitting its own loop. A CALL the lowerer marks
 ** tail-position is exploited via FIELD/ALIAS frame reuse (see the driver comment).
@@ -2352,7 +2352,7 @@ void tp_vm_state_init(tp_vm_state *state, tinyparse_parser *parser,
 ** engine since W14-5. It pushes the Source node, parses the start body into the
 ** root's children through the VM dispatch loop, consumes trailing extras, links,
 ** and reports trailing/leftover input. The tree and diagnostics are byte-identical
-** to the C-compiled parser's (ci/tinyparse-cc-diff.sh), anchored by the conformance suite. */
+** to the C-compiled parser's (mise run gate:cc-diff), anchored by the conformance suite. */
 tinyparse_result tp_execute_vm(tinyparse_parser *parser)
 {
     tp_vm_state         state;

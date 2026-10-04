@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# ci/tinyparse-bench.sh — Phase 9 (W42): a fair, in-process benchmark of
+# bench/javascript.sh — Phase 9 (W42): a fair, in-process benchmark of
 # tinyparse's std.javascript grammar against tree-sitter's JavaScript parser.
 #
 # It is GATED behind BENCH=1 so the normal metric never pays its cost or its
 # network dependency. Run it from the repo root:
 #
-#     BENCH=1 bash ci/tinyparse-bench.sh
+#     mise run bench:javascript
 #
 # What it does, end to end and re-runnably:
 #   1. builds the tinyparse dist (libtinyparse.a + the CLI);
@@ -26,8 +26,8 @@
 set -uo pipefail
 
 if [ "${BENCH:-0}" != "1" ]; then
-  echo "ci/tinyparse-bench.sh is gated behind BENCH=1 (skipping)."
-  echo "Run it with:  BENCH=1 bash ci/tinyparse-bench.sh"
+  echo "bench/javascript.sh is gated behind BENCH=1 (skipping)."
+  echo "Run it with:  mise run bench:javascript"
   exit 0
 fi
 
@@ -39,7 +39,7 @@ cd "$REPO" || exit 1
 # Iteration count: enough passes for a stable median. Override with ITERS=.
 ITERS="${ITERS:-200}"
 
-LIB="${TP_LIB:?run it with mise run bench bench, which builds tinyparse and sets TP_CLI, TP_LIB, TP_CC and TP_AR}"
+LIB="${TP_LIB:?run it with mise run bench:javascript, which builds tinyparse and sets TP_CLI, TP_LIB, TP_CC and TP_AR}"
 
 log() { printf '[tp-bench] %s\n' "$*" >&2; }
 
@@ -102,7 +102,7 @@ idx = 0
 manifest = open(os.path.join(out, "MANIFEST.txt"), "w")
 concat = open(os.path.join(out, "corpus.js"), "w", encoding="utf-8")
 # tree-sitter case format: ===\nTitle\n===\n<input>\n---\n<expected tree>.
-# We keep only the input half of each case (see ci/tinyparse-js-coverage.sh).
+# We keep only the input half of each case (see bench/javascript-coverage.sh).
 for path in sorted(glob.glob(os.path.join(corpus, "*.txt"))):
     txt = open(path, encoding="utf-8").read()
     pat = re.compile(r'(?m)^={3,}[ \t]*\n(.*?)\n={3,}[ \t]*\n')
@@ -235,7 +235,7 @@ ratio_sym="$(awk "BEGIN{printf \"%.0f\", $tp_t/$tsl_t}")"
 CORPUS_BYTES="$(field "$TP_LINE" corpus_bytes)"
 
 # Coverage, for honest framing (not apples-to-apples on grammar coverage).
-COV="$(bash "$REPO/ci/tinyparse-js-coverage.sh" 2>/dev/null | grep -m1 '^JS_COVERAGE=' | cut -d= -f2)"
+COV="$(bash "$REPO/bench/javascript-coverage.sh" 2>/dev/null | grep -m1 '^JS_COVERAGE=' | cut -d= -f2)"
 [ -z "$COV" ] && COV="(unknown)"
 
 echo
