@@ -26,9 +26,9 @@ three. The records themselves are defined in
   looks when it is next its turn: core when the host calls `ta_run`, the host
   when `ta_run` returns.
 
-This is the same idea as the trace sink (`ta_trace_sink`, core ADR 0067),
-with one change: the sink was a callback per record, and a ring is a buffer
-the reader drains when it chooses.
+This is the idea of today's trace sink (`ta_trace_sink`, core ADR 0067),
+with one difference: the sink is a callback per record, and a ring is a
+buffer the reader drains when it chooses.
 
 ## The control block
 
@@ -182,7 +182,7 @@ are three:
 | Ring | Producer | When full | Who retries |
 |---|---|---|---|
 | `h2c` | host | The host cannot post. It refuses at its edge (HTTP 503, or it stops reading a socket), or keeps the input in its own memory. Core never waits on h2c. | The external client, or the host by its own policy |
-| `c2h` | core | An ordinary action whose record does not fit while preserving the mandatory reserve parks its slot before the action, which is checked before it evaluates anything and runs once after a drain. Control and startup work can return for a drain between macrosteps. | The host, by draining; core then runs the action |
+| `c2h` | core | Before an action that may write c2h, and before it evaluates anything, core checks for room for the largest record beside every slot's mandatory reserve. Without it, the slot parks before the action, and the action runs once, after a drain. Mandatory records use their reservation and never wait. Control and startup work return for a drain between macrosteps. | The host, by draining; core then runs the action |
 | `tel` | core | The record is dropped and counted. The next [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) reports it. | Nobody: telemetry is allowed to be incomplete |
 
 ### The c2h reserve
@@ -215,12 +215,12 @@ hold a reservation at once. A larger batch reserves more, and fewer slots
 hold reservations at once. That costs throughput, not correctness
 ([BEHAVIORS.md](../BEHAVIORS.md#c2hbytes)).
 
-Actions preserve that reservation when checking whether an optional effect
-fits. An action that may write an optional effect first checks for room
-for the largest record, before it evaluates anything. Without that room
-its slot parks before the action, which runs once, after the host drains
+An ordinary action never takes the reserved space. Before an action that
+may write c2h evaluates anything, core checks for room for the largest
+record beside every slot's reserve. Without that room the slot parks
+before the action, and the action runs once, after the host drains
 ([macrostep.md](macrostep.md#a-full-c2h-pauses-the-slot)). Mandatory
-lifecycle records never wait for it. Internal
+lifecycle records use the reservation and never wait. Internal
 error storage is sized at compilation as described in
 [envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool); one spare
 error slot is not a sufficient bound for several failing executable blocks.
@@ -267,11 +267,6 @@ a bounded host-owned buffer ([definitions.md](definitions.md)).
 
 ## One thread
 
-An attached debugger temporarily replaces the production driver on this
-same thread. It owns the system and its rings exclusively until detachment;
-debugger commands use the host's debugger connection, not an operator ring
-([debugging.md](debugging.md)).
-
 **A `ta_system` is not thread-safe, and neither are its rings.** Core and
 the host take turns on the system's own thread. The host writes h2c, calls
 `ta_run(budget)`, and reads c2h and tel when it returns. Core calls the data
@@ -283,6 +278,11 @@ a Node worker) puts **its own queue or channel in front of the system**.
 Other threads hand inputs to the system's thread through it, and that
 thread alone touches the rings. Separate systems may run on separate
 threads, since they share nothing.
+
+An attached debugger replaces the production driver on this same thread
+while it is attached. It owns the system and its rings exclusively until
+it detaches. Debugger commands use the host's debugger connection, not an
+operator ring ([debugging.md](debugging.md)).
 
 **Why one owner thread:**
 
@@ -364,7 +364,7 @@ objects so an invalidated attempt releases its image instead of posting.
 | `tel` | core → host | lossy; full means drop and count | trace records for observability ([telemetry.md](telemetry.md)) |
 
 **There are exactly three because there are three delivery guarantees, not
-three purposes.** Splitting by purpose instead was considered and rejected:
+three purposes.** Why not a ring per purpose:
 
 - **Recording on a ring of its own** would add another lossless core-to-host
   stream without a new delivery guarantee. c2h already carries input
@@ -374,8 +374,7 @@ three purposes.** Splitting by purpose instead was considered and rejected:
 - **Recording on tel**, "replay is driven by tracing", fails because tel
   drops. A replay log that can lose an input isn't one.
 - **Telemetry on c2h** would let a slow OTLP exporter stall a chart's sends.
-- **Mail between local sessions on a ring** was rejected. It deadlocks when
-  the ring the running session writes to is the ring only that run can
-  drain. Mail lives in the envelope pool instead ([envelope.md](envelope.md)).
+- **Mail between local sessions on a ring** deadlocks when the ring the
+  running session writes to is the ring only that run can drain. Mail lives in the envelope pool instead ([envelope.md](envelope.md)).
 
 A fourth ring would need a fourth guarantee. None has come up.

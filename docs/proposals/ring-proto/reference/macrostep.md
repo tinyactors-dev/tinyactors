@@ -167,7 +167,7 @@ typedef enum {
     TA_RUN_IDLE,        /* nothing runnable and nothing to admit */
     TA_RUN_MORE,        /* the budget ran out and no slot is inside a macrostep */
     TA_RUN_PAUSED,      /* the budget ran out with at least one slot inside a macrostep */
-    TA_RUN_C2H_FULL     /* nothing can go on until c2h has room: drain c2h and call again */
+    TA_RUN_C2H_FULL     /* every slot that could run waits for c2h and no input can be taken: drain c2h and call again */
 } ta_run_status;
 
 typedef struct {
@@ -197,23 +197,23 @@ A macrostep stops in the middle for three reasons only:
   drain c2h and tel, and serve its own I/O. The next `ta_run` continues
   every slot where it stood.
 - **A slot uses its `slotSlice`.** Core moves to the next slot that can
-  run, within the same `ta_run`. This is what keeps a long macrostep from
-  holding the others.
-- **An ordinary action's c2h record does not fit**
-  ([below](#a-full-c2h-pauses-the-slot)). The slot waits before that
-  action until the host drains c2h. Core moves to the next slot that can
-  run.
+  run, within the same `ta_run`. This keeps a long macrostep from holding
+  the others.
+- **c2h has no room for the next unit's record**
+  ([below](#a-full-c2h-pauses-the-slot)). The slot waits before that unit
+  until the host drains c2h. Core moves to the next slot that can run.
 
 A slot that reaches the chain limit does not stop in the middle: its input
 ends ([below](#runaways-the-chain-limit)).
 
 When `ta_run`'s budget runs out, the running slot stays in the running
-workspace; nothing is copied. When a slot's slice ends, core parks it, and
-parking can fail without harm: a slot that cannot park keeps the thread
+workspace; nothing is copied. When a slot's slice ends, or it waits for
+c2h, core parks it. Parking can fail without harm: a slot that cannot park
+keeps the thread
 ([below](#parking-one-running-workspace-and-a-park-area)).
-Nested interpreters for invocations still have scratch of their own
-(ADR 0060). During debugger attachment only the debugger drives core; the
-production pump cannot resume any slot until ownership is returned.
+Nested interpreters for invocations have scratch of their own (ADR 0060).
+While a debugger is attached, only the debugger drives core; the
+production pump resumes no slot until ownership is returned.
 
 Mandatory records never wait inside a macrostep: they use their preflight
 reservation. Core can return for a drain before a macrostep starts or
@@ -225,53 +225,56 @@ completion.
 An ordinary action writes at most one c2h record. For example, a `<send>`
 to an I/O processor writes [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend),
 and a `<log>` writes [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog).
-When that record does not fit while preserving every slot's outstanding
-mandatory reserve, the action does not fail:
+Such a record never fails for lack of room. The slot waits for room:
 
-- **Core checks for room before it evaluates anything.** A unit is an
-  action or a `<foreach>` iteration (ADR 0061). Before a unit that may
-  write a c2h record, core checks that the outstanding reserves leave room
-  for the largest record it could write: `maxRecordBytes` plus its pad.
-  That is before any expression is evaluated, before a sendid is counted
-  and before `idlocation` is assigned. A unit may write c2h when it is a
+- **Core checks for room before the unit starts.** A unit is an action or
+  a `<foreach>` iteration (ADR 0061). A unit may write c2h when it is a
   `<log>`, or a `<send>` whose type or target is not a literal local
   session. A `<send>` with `typeexpr` or `targetexpr` is checked, because
-  its destination is known only after evaluation.
-- **If there is no room, the slot parks before the unit.** Nothing of the
-  unit has run, so nothing runs twice: an expression with side effects
-  is evaluated once, when the unit finally runs. After the check the
+  its destination is known only after evaluation. Before such a unit, core
+  checks that every slot's outstanding reserve leaves room for the largest
+  record: `maxRecordBytes` plus its pad. The check comes before any
+  expression is evaluated, before a sendid is counted and before
+  `idlocation` is assigned.
+- **Without that room, the slot parks before the unit.** Nothing of the
+  unit has run. The unit runs once, after the host drains, so an
+  expression with side effects is evaluated once. After the check the
   record always fits, because no record is larger than `maxRecordBytes`.
   The price is a wait when the real record would have fit in less room.
-  Sizing the record first and running the unit again was rejected: it
-  evaluated the unit's expressions twice when c2h was full.
+  Why not size the record first and wait only when it does not fit: that
+  evaluates the unit's expressions, and a full c2h would then make the
+  unit evaluate them again.
 - **Other slots go on.** Core moves to the next slot that can run, as at
   the end of a slice. A waiting slot keeps its taken envelope, its
   outgoing mail, its deferred list and its outstanding reserve.
-- **`ta_run` returns `TA_RUN_C2H_FULL` when nothing else can run.** That is
-  when every slot that could run waits for c2h, and no input can be taken
-  without more c2h room. The host drains c2h and calls again. While other
-  work remains, `ta_run` goes on until its budget or the work runs out, and
-  the host drains c2h on that return as on any other.
+- **`ta_run` returns `TA_RUN_C2H_FULL` when nothing else can run:** every
+  slot that could run waits for c2h, and no input can be taken. The host
+  drains c2h and calls again. While other work remains, `ta_run` goes on
+  until its budget or the work runs out, and the host drains c2h on that
+  return as on any other.
 - **A slot that cannot park keeps the running workspace**
   ([below](#parking-one-running-workspace-and-a-park-area)). No other slot
   runs, and `ta_run` returns `TA_RUN_C2H_FULL` at once.
 
-A record larger than `maxRecordBytes` can never fit, so waiting cannot
-help. That action fails as `error.execution.capacity.record` instead.
+A record larger than `maxRecordBytes` never fits, so waiting cannot help.
+Its action fails as `error.execution.capacity.record`. That is the only
+c2h failure an action has; there is no `error.execution.capacity.c2h`.
 
 Startup records, such as
 [`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke), are written
-outside a macrostep. Startup already returns for a drain before an
-operation it cannot write.
+outside a macrostep. Startup returns for a drain before an operation it
+cannot write.
 
-**The wait always ends.** A slot needs room for one record of at most
-`maxRecordBytes`, plus a pad at the wrap. Core takes an input only when the
-outstanding reserves, its own included, leave 2 × `maxRecordBytes` on an
-empty ring
+**The wait always ends.** A waiting slot needs room for one record of at
+most `maxRecordBytes`, plus a pad at the wrap. Core takes an input only
+when the outstanding reserves, its own included, leave 2 ×
+`maxRecordBytes` of an empty ring
 ([ring.md](ring.md#the-c2h-reserve)). So once the host has drained, at
-least one waiting slot's record fits.
+least one waiting slot's record fits, and that slot's reserve comes back
+when its input completes.
 
-**Why a full c2h pauses, and a full pool fails:**
+**Why a full c2h pauses, and a full pool fails.** The rule is: pause where
+the host can free the space, fail where only sessions can.
 
 - **The host frees c2h without any session making progress.** Draining is
   the host's own work. A slot that waits for c2h waits for the host, never
@@ -281,11 +284,11 @@ least one waiting slot's record fits.
   slots that each wait for an envelope the other would free never go on.
   So a full pool or name area fails the action as
   `error.execution.capacity.pool` or `.names`, in the chart.
-- **Nothing is half done.** The record was never written, and core checks
-  the fit before the unit changes core state. Rerunning the unit from the
-  start is what ADR 0061's pause between units already does.
-- **The pieces exist.** Slots already park at unit boundaries, and each
-  slot already holds its own outstanding reserve while it is paused
+- **Nothing is half done.** The record is not written, and core checks the
+  fit before the unit changes core state. Running the unit from its start
+  is what ADR 0061's pause between units does.
+- **The pieces exist.** Slots park at unit boundaries, and each slot holds
+  its own outstanding reserve while it is paused
   ([ring.md](ring.md#the-c2h-reserve)).
 
 The data model's memory is different, and fails the operation
@@ -295,18 +298,18 @@ changed something.
 
 **What it costs:**
 
-- **The chart no longer feels the outside world's backpressure.** A slow
+- **The chart does not feel the outside world's backpressure.** A slow
   I/O processor means the host either buffers what it drains, within its
-  own bound and policy, or stops draining. If it stops, the slot simply
-  waits. A chart that wants to bound its work in flight clocks it by
+  own bound and policy, or stops draining. If it stops, the slot waits. A
+  chart that wants to bound its work in flight clocks it by
   acknowledgements ([windowed chart](../charts/campaign-windowed.scxml)).
 - **A slot that waits holds its input longer.** A slot parked in the
   middle of a fanout keeps its taken envelope, and mail for its session
   stays on the deferred list. That is latency, not failure.
-- **A small c2h also bounds how many slots can hold a reserve at once.**
-  An input waits in the run queue until its reserve fits. This is a
-  throughput limit, measured with the ring defaults
-  ([BEHAVIORS.md](../BEHAVIORS.md#c2hbytes)).
+- **A ring's size is a throughput setting, not a correctness one.** A
+  small c2h bounds how many slots can hold a reserve at once, and an input
+  waits in the run queue until its reserve fits. It is measured with the
+  ring defaults ([BEHAVIORS.md](../BEHAVIORS.md#c2hbytes)).
 - **A host must not make draining c2h wait for room in h2c.** If it did,
   core would wait for the host and the host for core. A host that cannot
   post a result buffers or drops it by its own policy
