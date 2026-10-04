@@ -9,6 +9,7 @@
  * identity before registration; it uses the C library, the core does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,57 +30,10 @@ static int failures = 0;
     } while (0)
 
 /* ------------------------------------------------------------------------
- * Host fixtures: an allocator that counts and can fail, and a data model
- * that evaluates nothing.
+ * Host fixtures: a data model that evaluates nothing, and the shared test
+ * allocator (tests/test_allocator.h), which counts and can fail. It is strict:
+ * a free of memory it never handed out fails the test.
  */
-
-#define MAX_BLOCKS 4096u
-
-typedef struct {
-    void *ptrs[MAX_BLOCKS];
-    uint32_t live;
-    uint32_t attempts;
-    /* Allocations after which every allocation fails; 0 never fails. */
-    uint32_t fail_after;
-} counting_allocator;
-
-static void *counting_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *heap = self;
-    heap->attempts += 1u;
-    if ((heap->fail_after != 0 && heap->attempts > heap->fail_after) || heap->live == MAX_BLOCKS) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = size == 0 ? alignment : (size + alignment - 1u) / alignment * alignment;
-    void *ptr = aligned_alloc(alignment, size);
-    if (ptr != NULL) {
-        heap->ptrs[heap->live++] = ptr;
-    }
-    return ptr;
-}
-
-static void counting_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *heap = self;
-    for (uint32_t index = 0; params->ptr != NULL && index < heap->live; index += 1u) {
-        if (heap->ptrs[index] == params->ptr) {
-            heap->ptrs[index] = heap->ptrs[--heap->live];
-            free(params->ptr);
-            return;
-        }
-    }
-    if (params->ptr != NULL) {
-        fprintf(stderr, "free of %p, which this allocator never handed out\n", params->ptr);
-        failures += 1;
-    }
-}
-
-static const ta_allocator_vtable counting_vtable = { .alloc = counting_alloc, .free = counting_free };
-
-static ta_allocator allocator_of(counting_allocator *heap) {
-    return (ta_allocator){ .self = heap, .v = &counting_vtable };
-}
 
 static ta_result null_prepare(void *self, const ta_datamodel_prepare_definition_params *params) {
     (void)self;
@@ -116,7 +70,7 @@ static const ta_datamodel_vtable null_datamodel_vtable = {
 };
 static const ta_datamodel null_datamodel = { .self = NULL, .v = &null_datamodel_vtable };
 
-static counting_allocator heap;
+static ta_test_allocator heap = { .strict = true };
 
 /* ------------------------------------------------------------------------
  * The chart. Every element that becomes a compiled ID has a span, except
@@ -275,7 +229,7 @@ static ta_result compile_with(ta_system *system, const ta_scxml_spec *spec, ta_a
 
 static ta_definition_id register_spec(ta_system *system, const ta_scxml_spec *spec) {
     ta_definition *definition = NULL;
-    CHECK(compile_with(system, spec, allocator_of(&heap), &definition) == TA_OK);
+    CHECK(compile_with(system, spec, ta_test_allocator_get(&heap), &definition) == TA_OK);
     ta_definition_id id = 0;
     CHECK(definition != NULL && ta_system_register_definition(system, definition, &id) == TA_OK);
     return id;
@@ -420,7 +374,7 @@ static void test_without_spans(ta_system *system) {
 
     /* Export of a definition without spans has none. */
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, allocator_of(&heap), 512) == TA_OK);
+    CHECK(ta_arena_init(&arena, ta_test_allocator_get(&heap), 512) == TA_OK);
     const ta_scxml_spec *exported = NULL;
     CHECK(ta_definition_export(system, &(ta_definition_export_params){
                                            .definition = definition, .arena = &arena, .out = &exported }) == TA_OK);
@@ -479,7 +433,7 @@ static void test_export(ta_system *system) {
     ta_scxml_spec spec = chart(&options);
     ta_definition_id original = register_spec(system, &spec);
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, allocator_of(&heap), 512) == TA_OK);
+    CHECK(ta_arena_init(&arena, ta_test_allocator_get(&heap), 512) == TA_OK);
     const ta_scxml_spec *exported = NULL;
     CHECK(ta_definition_export(system, &(ta_definition_export_params){
                                            .definition = original, .arena = &arena, .out = &exported }) == TA_OK);
@@ -515,7 +469,7 @@ static void test_export(ta_system *system) {
 /* A span index outside the table, or a span naming no source, is refused. */
 static void test_malformed(ta_system *system) {
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, allocator_of(&heap), 512) == TA_OK);
+    CHECK(ta_arena_init(&arena, ta_test_allocator_get(&heap), 512) == TA_OK);
     chart_options options = with_spans(0);
     ta_scxml_spec spec = chart(&options);
     spec.span_count = 14; /* the <if>'s cond is span 15 */
@@ -523,7 +477,7 @@ static void test_malformed(ta_system *system) {
     ta_compile_error error = {0};
     CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                  .spec = &spec, .datamodel = null_datamodel,
-                                                 .allocator = allocator_of(&heap), .out = &definition,
+                                                 .allocator = ta_test_allocator_get(&heap), .out = &definition,
                                                  .error = &error, .error_arena = &arena }) == TA_ERR_INVALID);
     CHECK(error.code == TA_COMPILE_ERROR_MALFORMED_SPEC);
     CHECK(error.path_length != 0 && error.path[error.path_length - 1u].member == TA_SPEC_MEMBER_SPAN);
@@ -539,7 +493,7 @@ static void test_malformed(ta_system *system) {
     spans_copy[2].source = 2; /* busy names a third source */
     CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                  .spec = &spec, .datamodel = null_datamodel,
-                                                 .allocator = allocator_of(&heap), .out = &definition,
+                                                 .allocator = ta_test_allocator_get(&heap), .out = &definition,
                                                  .error = &error, .error_arena = &arena }) == TA_ERR_INVALID);
     CHECK(error.code == TA_COMPILE_ERROR_MALFORMED_SPEC && error.path_length == 3 &&
           error.path[1].member == TA_SPEC_MEMBER_STATES && error.path[1].index == 1 &&
@@ -552,7 +506,7 @@ static void test_malformed(ta_system *system) {
     spec.source_count = 0;
     CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                  .spec = &spec, .datamodel = null_datamodel,
-                                                 .allocator = allocator_of(&heap), .out = &definition,
+                                                 .allocator = ta_test_allocator_get(&heap), .out = &definition,
                                                  .error = &error, .error_arena = &arena }) == TA_ERR_INVALID);
     CHECK(error.code == TA_COMPILE_ERROR_MALFORMED_SPEC && error.path_length == 2 &&
           error.path[0].member == TA_SPEC_MEMBER_SCRIPT && error.path[1].member == TA_SPEC_MEMBER_SPAN);
@@ -561,7 +515,7 @@ static void test_malformed(ta_system *system) {
     options = with_spans(0);
     spec = chart(&options);
     spans_copy[3].source = 99;
-    CHECK(compile_with(system, &spec, allocator_of(&heap), &definition) == TA_OK);
+    CHECK(compile_with(system, &spec, ta_test_allocator_get(&heap), &definition) == TA_OK);
     ta_definition_destroy(definition);
     ta_arena_destroy(&arena);
 }
@@ -660,7 +614,7 @@ static uint32_t line_of(uint32_t span) {
 /* Encode reports where each element landed, spans or not. */
 static void check_encode(ta_system *system, ta_definition_id definition) {
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, allocator_of(&heap), 512) == TA_OK);
+    CHECK(ta_arena_init(&arena, ta_test_allocator_get(&heap), 512) == TA_OK);
     ta_bytes out = {0};
     ta_source_map map = {0};
     ta_chart_codec codec = { .self = NULL, .v = &lines_codec };
@@ -713,9 +667,10 @@ static void test_out_of_memory(ta_system *system) {
     ta_scxml_spec spec = chart(&options);
     bool compiled = false;
     for (uint32_t limit = 1; limit < 2000 && !compiled; limit += 1u) {
-        counting_allocator failing = { .fail_after = limit };
+        ta_test_allocator failing = { .strict = true };
+        ta_test_allocator_fail_from_nth(&failing, (uint64_t)limit + 1u); /* the first `limit` succeed */
         ta_definition *definition = NULL;
-        ta_result result = compile_with(system, &spec, allocator_of(&failing), &definition);
+        ta_result result = compile_with(system, &spec, ta_test_allocator_get(&failing), &definition);
         if (result == TA_OK) {
             compiled = true;
             CHECK(definition->spans != NULL && definition->source_count == 2);
@@ -723,10 +678,12 @@ static void test_out_of_memory(ta_system *system) {
         } else {
             CHECK(result == TA_ERR_NOMEM);
         }
-        if (failing.live != 0) {
-            fprintf(stderr, "failing after %u allocations: %u blocks leaked\n", limit, failing.live);
+        if (failing.stats.live_blocks != 0) {
+            fprintf(stderr, "failing after %u allocations: %u blocks leaked\n", limit,
+                    (unsigned)failing.stats.live_blocks);
             failures += 1;
         }
+        CHECK(failing.stats.bad_frees == 0);
     }
     CHECK(compiled);
 }
@@ -763,7 +720,7 @@ static void test_cost(ta_system *system) {
  * by the definition an earlier test left (ADR 0077). */
 static void run(void (*test)(ta_system *system)) {
     ta_system *system = NULL;
-    if (ta_system_create(&(ta_system_config){ .allocator = allocator_of(&heap) }, &system) != TA_OK) {
+    if (ta_system_create(&(ta_system_config){ .allocator = ta_test_allocator_get(&heap) }, &system) != TA_OK) {
         fprintf(stderr, "cannot create a system\n");
         failures += 1;
         return;
@@ -781,10 +738,11 @@ int main(void) {
     run(test_encode);
     run(test_out_of_memory);
     run(test_cost);
-    if (heap.live != 0) {
-        fprintf(stderr, "span test: %u blocks leaked\n", heap.live);
+    if (heap.stats.live_blocks != 0) {
+        fprintf(stderr, "span test: %u blocks leaked\n", (unsigned)heap.stats.live_blocks);
         failures += 1;
     }
+    CHECK(heap.stats.bad_frees == 0);
     if (failures != 0) {
         fprintf(stderr, "span test: %d check(s) failed\n", failures);
         return 1;

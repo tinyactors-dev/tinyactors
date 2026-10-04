@@ -38,6 +38,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -53,91 +54,21 @@ static int failures;
 #define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
 
 /* ------------------------------------------------------------------------
- * A counting allocator: it remembers every block it handed out, so the test
- * can see that a destroyed tree returned all of them, with the size and
- * alignment they were allocated with, and nothing else.
+ * The shared test allocator (tests/test_allocator.h), in strict mode: it
+ * remembers every block it handed out, so the test can see that a destroyed
+ * tree returned all of them, with the size and alignment they were allocated
+ * with, and nothing else.
  */
 
-#define MAX_BLOCKS 8192u
-
-typedef struct {
-    void *ptr;
-    size_t size;
-    size_t alignment;
-} block;
-
-typedef struct {
-    block blocks[MAX_BLOCKS];
-    uint32_t live;
-    size_t live_bytes;
-    uint32_t attempts;
-    /* Allocations after which every allocation fails; 0 never fails. */
-    uint32_t fail_after;
-    /* Frees of memory this allocator did not hand out, or with wrong facts. */
-    uint32_t bad_frees;
-} counting_allocator;
-
-static void *counting_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *heap = self;
-    heap->attempts += 1;
-    if (heap->fail_after != 0 && heap->attempts > heap->fail_after) {
-        return NULL;
-    }
-    if (heap->live == MAX_BLOCKS) {
-        return NULL;
-    }
-    size_t align = alignment < sizeof(void *) ? sizeof(void *) : alignment;
-    size_t rounded = size == 0 ? align : ((size + align - 1u) / align) * align;
-    void *ptr = aligned_alloc(align, rounded);
-    if (ptr == NULL) {
-        return NULL;
-    }
-    heap->blocks[heap->live] = (block){ .ptr = ptr, .size = size, .alignment = alignment };
-    heap->live += 1;
-    heap->live_bytes += size;
-    return ptr;
-}
-
-static void counting_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *heap = self;
-    if (params->ptr == NULL) {
-        return;
-    }
-    for (uint32_t index = 0; index < heap->live; index += 1) {
-        if (heap->blocks[index].ptr != params->ptr) {
-            continue;
-        }
-        if (heap->blocks[index].size != params->size ||
-            heap->blocks[index].alignment != params->alignment) {
-            fprintf(stderr, "free of %p as %zu/%zu, allocated as %zu/%zu\n", params->ptr,
-                    params->size, params->alignment, heap->blocks[index].size,
-                    heap->blocks[index].alignment);
-            heap->bad_frees += 1;
-        }
-        heap->live_bytes -= heap->blocks[index].size;
-        heap->blocks[index] = heap->blocks[heap->live - 1u];
-        heap->live -= 1;
-        free(params->ptr);
-        return;
-    }
-    fprintf(stderr, "free of %p, which this allocator never handed out\n", params->ptr);
-    heap->bad_frees += 1;
-}
-
-static const ta_allocator_vtable counting_vtable = { .alloc = counting_alloc, .free = counting_free };
-
-static ta_allocator allocator_of(counting_allocator *heap) {
-    return (ta_allocator){ .self = heap, .v = &counting_vtable };
-}
-
 /* Every block is back, and none was returned with the wrong facts. */
-static void check_drained(counting_allocator *heap, const char *what) {
-    if (heap->live != 0 || heap->live_bytes != 0) {
-        fprintf(stderr, "%s: %u blocks (%zu bytes) still live\n", what, heap->live, heap->live_bytes);
+static void check_drained(ta_test_allocator *heap, const char *what) {
+    if (heap->stats.live_blocks != 0 || heap->stats.live_bytes != 0) {
+        fprintf(stderr, "%s: %u blocks (%zu bytes) still live\n", what, (unsigned)heap->stats.live_blocks,
+                heap->stats.live_bytes);
         failures += 1;
     }
-    if (heap->bad_frees != 0) {
-        fprintf(stderr, "%s: %u bad frees\n", what, heap->bad_frees);
+    if (heap->stats.bad_frees != 0) {
+        fprintf(stderr, "%s: %u bad frees\n", what, (unsigned)heap->stats.bad_frees);
         failures += 1;
     }
 }
@@ -206,9 +137,9 @@ static bool bytes_equal(ta_bytes left, ta_bytes right) {
  */
 
 static void test_a_closed_list_is_terminated(void) {
-    counting_allocator heap = {0};
+    ta_test_allocator heap = { .strict = true };
     ta_tree tree;
-    ta_tree_init(&tree, allocator_of(&heap));
+    ta_tree_init(&tree, ta_test_allocator_get(&heap));
     CHECK(ta_tree_result(&tree) == TA_OK);
 
     ta_tree_list states;
@@ -252,9 +183,9 @@ static void test_a_closed_list_is_terminated(void) {
  * shape: the transitions of a state are closed while the state list is open.
  */
 static void test_lists_nest(void) {
-    counting_allocator heap = {0};
+    ta_test_allocator heap = { .strict = true };
     ta_tree tree;
-    ta_tree_init(&tree, allocator_of(&heap));
+    ta_tree_init(&tree, ta_test_allocator_get(&heap));
 
     ta_tree_list states;
     ta_tree_list_init(&states, &tree,
@@ -323,9 +254,9 @@ static void test_lists_nest(void) {
  */
 
 static void test_alloc_is_aligned_and_distinct(void) {
-    counting_allocator heap = {0};
+    ta_test_allocator heap = { .strict = true };
     ta_tree tree;
-    ta_tree_init(&tree, allocator_of(&heap));
+    ta_tree_init(&tree, ta_test_allocator_get(&heap));
 
     static const size_t sizes[] = { 1, 3, 64, 7, 4096 };
     static const size_t alignments[] = { 1, 8, 16, 4, 64 };
@@ -365,9 +296,10 @@ static void test_alloc_is_aligned_and_distinct(void) {
  */
 
 static void test_the_first_failure_is_retained(void) {
-    counting_allocator heap = { .fail_after = 1 };
+    ta_test_allocator heap = { .strict = true };
+    ta_test_allocator_fail_from_nth(&heap, 2); /* the first allocation succeeds, then it runs dry */
     ta_tree tree;
-    ta_tree_init(&tree, allocator_of(&heap));
+    ta_tree_init(&tree, ta_test_allocator_get(&heap));
 
     ta_tree_list states;
     ta_tree_list_init(&states, &tree,
@@ -525,8 +457,8 @@ static ta_result compile_and_register(ta_system *system, ta_allocator allocator,
  * back after the tree that held them is gone.
  */
 static void test_a_tree_built_spec_is_the_literal_chart(void) {
-    counting_allocator heap = {0};
-    ta_allocator allocator = allocator_of(&heap);
+    ta_test_allocator heap = { .strict = true };
+    ta_allocator allocator = ta_test_allocator_get(&heap);
     ta_system *system = NULL;
     if (ta_system_create(&(ta_system_config){ .allocator = allocator, .initial_time = 0 }, &system) != TA_OK) {
         fprintf(stderr, "tree test: could not create a system\n");
@@ -539,9 +471,9 @@ static void test_a_tree_built_spec_is_the_literal_chart(void) {
                                &(ta_scxml_spec){ .name = STR("light"), .states = literal_states },
                                &literal) == TA_OK);
 
-    counting_allocator tree_heap = {0};
+    ta_test_allocator tree_heap = { .strict = true };
     ta_tree tree;
-    ta_tree_init(&tree, allocator_of(&tree_heap));
+    ta_tree_init(&tree, ta_test_allocator_get(&tree_heap));
     const ta_scxml_state_spec *states = build_states(&tree);
     CHECK(ta_tree_result(&tree) == TA_OK);
 
