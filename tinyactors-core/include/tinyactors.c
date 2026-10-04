@@ -15509,37 +15509,75 @@ static ta_result ta_params_resolve(const ta_system_config *config, uint32_t valu
     return TA_OK;
 }
 
-/* Bytes of one interpreter: its structural region and its render area,
- * each a fixed arena, the render area starting aligned. */
-static size_t ta_interpreter_region_bytes(const uint32_t params[TA_PARAM_COUNT]) {
-    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(params[TA_PARAM_INTERPRETER_BYTES]),
-                                    (size_t)_Alignof(ta_arena_block));
-    return structural + ta_arena_fixed_bytes(params[TA_PARAM_RENDER_BYTES]);
+/*
+ * Where the parts of a system's one arena allocation go (ADR 0092 section 3):
+ * an interpreter region (the structural arena and, after it, the render
+ * arena), then the table of nested regions. System lifetime: the figures
+ * depend on parameters that are fixed when the system is created, so the
+ * allocation that ta_system_arena_open makes and the free that
+ * ta_system_arena_close does with `arena_bytes` always agree. The nested
+ * regions are allocated one by one, later, each of `bytes`.
+ */
+typedef struct {
+    size_t render;       /* offset of the render arena; the structural arena is [0, render) */
+    size_t bytes;        /* one interpreter region: structural arena and render arena */
+    size_t nested_table; /* offset of the table of nested regions, aligned for it */
+    size_t total;        /* the whole arena allocation: region 0 and the table */
+} ta_region_layout;
+
+/*
+ * Lays out the system arena. Each arena starts at the alignment of an arena
+ * block, so the render arena starts at the structural arena's size rounded
+ * up. It never allocates, and answers TA_ERR_NOMEM with `*out` untouched
+ * when a size does not fit in a size_t (on a 32-bit host, a large
+ * interpreterBytes with a deep interpreterNesting), so ta_system_create
+ * fails before anything is allocated for the arena.
+ */
+static ta_result ta_interpreter_region_layout(const uint32_t params[TA_PARAM_COUNT], ta_region_layout *out) {
+    ta_layout layout;
+    ta_region_layout region;
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = ta_arena_fixed_bytes(params[TA_PARAM_INTERPRETER_BYTES]),
+                                               .alignment = _Alignof(ta_arena_block), .count = 1u });
+    region.render = ta_layout_add(&layout, &(ta_layout_entry){ .size = ta_arena_fixed_bytes(params[TA_PARAM_RENDER_BYTES]),
+                                                               .alignment = _Alignof(ta_arena_block), .count = 1u });
+    region.bytes = ta_layout_bytes(&layout);
+    /* The table has one entry per nested interpreter; the first has region 0. */
+    region.nested_table = ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_nested_region),
+                                                                     .alignment = _Alignof(ta_nested_region),
+                                                                     .count = params[TA_PARAM_INTERPRETER_NESTING] - 1u });
+    ta_result result = ta_layout_finish(&layout, &region.total, NULL);
+    if (result == TA_OK) {
+        *out = region;
+    }
+    return result;
 }
 
 /* Lays a region's two fixed arenas over its memory. */
-static void ta_interpreter_region_open(const ta_system *system, void *memory, ta_arena *scratch, ta_arena *render) {
-    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(system->params[TA_PARAM_INTERPRETER_BYTES]),
-                                    (size_t)_Alignof(ta_arena_block));
-    ta_arena_init_fixed(scratch, memory, structural);
-    ta_arena_init_fixed(render, (unsigned char *)memory + structural,
-                        ta_arena_fixed_bytes(system->params[TA_PARAM_RENDER_BYTES]));
+static void ta_interpreter_region_open(const ta_region_layout *layout, void *memory, ta_arena *scratch,
+                                       ta_arena *render) {
+    ta_arena_init_fixed(scratch, memory, layout->render);
+    ta_arena_init_fixed(render, (unsigned char *)memory + layout->render, layout->bytes - layout->render);
 }
 
 TA_PRIVATE ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *scratch, ta_arena *render) {
     if (depth == 0 || depth >= system->params[TA_PARAM_INTERPRETER_NESTING]) {
         return TA_ERR_UNSUPPORTED;
     }
+    ta_region_layout layout;
+    ta_result result = ta_interpreter_region_layout(system->params, &layout);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_nested_region *region = &system->nested[depth - 1u];
     if (region->memory == NULL) {
-        size_t bytes = ta_interpreter_region_bytes(system->params);
-        region->memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+        region->memory = ta_mem_alloc(system->allocator, layout.bytes, _Alignof(ta_arena_block));
         if (region->memory == NULL) {
             return TA_ERR_NOMEM;
         }
-        region->bytes = bytes;
+        region->bytes = layout.bytes;
     }
-    ta_interpreter_region_open(system, region->memory, scratch, render);
+    ta_interpreter_region_open(&layout, region->memory, scratch, render);
     return TA_OK;
 }
 
@@ -15549,17 +15587,18 @@ TA_PRIVATE ta_result ta_system_nested_region(ta_system *system, uint32_t depth, 
  * regions; and the event-block cache, filled to its parameter.
  */
 static ta_result ta_system_arena_open(ta_system *system) {
-    size_t region = ta_interpreter_region_bytes(system->params);
-    size_t nested = (size_t)(system->params[TA_PARAM_INTERPRETER_NESTING] - 1u) * sizeof(ta_nested_region);
-    size_t bytes = TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)) + nested;
-    system->arena_memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+    ta_region_layout layout;
+    ta_result result = ta_interpreter_region_layout(system->params, &layout);
+    if (result != TA_OK) {
+        return result;
+    }
+    system->arena_memory = ta_mem_alloc(system->allocator, layout.total, _Alignof(ta_arena_block));
     if (system->arena_memory == NULL) {
         return TA_ERR_NOMEM;
     }
-    system->arena_bytes = bytes;
-    ta_interpreter_region_open(system, system->arena_memory, &system->scratch, &system->render);
-    system->nested = (ta_nested_region *)((unsigned char *)system->arena_memory +
-                                          TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)));
+    system->arena_bytes = layout.total;
+    ta_interpreter_region_open(&layout, system->arena_memory, &system->scratch, &system->render);
+    system->nested = (ta_nested_region *)((unsigned char *)system->arena_memory + layout.nested_table);
     for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
         system->nested[index] = (ta_nested_region){ 0 };
     }
