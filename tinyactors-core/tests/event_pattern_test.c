@@ -8,6 +8,7 @@
  * the core does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,22 +25,8 @@ static int failures = 0;
         } \
     } while (0)
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static ta_test_allocator heap;
+static const ta_allocator test_allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 static ta_system *system_under_test;
 

@@ -8,6 +8,7 @@
  * UINT32_MAX directly instead of reusing one slot four billion times.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,22 +26,8 @@ static int failures = 0;
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static ta_test_allocator heap;
+static const ta_allocator test_allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 static void test_split_and_join(void) {
     ta_actor_id id = ta_actor_id_make(7u, 3u);
