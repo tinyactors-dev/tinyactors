@@ -141,11 +141,10 @@ typedef enum {
     TRP_BOUNCE_REASON_RESERVED_TYPE = 15,
 } trp_bounce_reason;
 
-/* The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (reference/macrostep.md, "Two kinds of exhaustion"). Stored as uint8_t. */
+/* The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (reference/macrostep.md, "Two kinds of exhaustion"). A full c2h is not one of them: the slot waits for the host to drain. Stored as uint8_t. */
 typedef enum {
     TRP_CAPACITY_RESOURCE_POOL = 1,
     TRP_CAPACITY_RESOURCE_NAMES = 2,
-    TRP_CAPACITY_RESOURCE_C2H = 3,
     TRP_CAPACITY_RESOURCE_INTERNAL = 4,
     TRP_CAPACITY_RESOURCE_RECORD = 5,
 } trp_capacity_resource;

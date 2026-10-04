@@ -20,7 +20,8 @@ can retry:
 | The notify processor rejects a notification | the processor | `notify.rejected` as an [`h2c.event`][h2c.event] | nobody: final | [S01.16](scenarios/S01-fanout.md#outcomes) |
 | A notification cannot reach its relay | the processor | `error.communication` as an [`h2c.event`][h2c.event] | the chart, on its timeout | [S01.17](scenarios/S01-fanout.md#outcomes), [S01.22](scenarios/S01-fanout.md#the-retry-and-the-reply) |
 | A send finds the pool full | core, in the sender's macrostep | `error.execution.capacity.pool`; the rest of the block is abandoned | the chart: `throttled` resumes on the next outcome | [S02.5](scenarios/S02-full-pool.md#the-brutal-chart), [S02.15](scenarios/S02-full-pool.md#the-brutal-chart) |
-| An action's record does not fit in c2h | core, in the sender's macrostep | `error.execution.capacity.c2h` (`.record` if it could never fit) | the chart | [ring](reference/ring.md#the-c2h-reserve) |
+| An action's record does not fit in c2h | nothing is dropped: the slot parks before the action | nobody: other slots go on, and `ta_run` answers `TA_RUN_C2H_FULL` when none can | core, after the host drains | [macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot) |
+| An action's record is larger than `maxRecordBytes` | core, in the sender's macrostep | `error.execution.capacity.record` | nobody: it can never fit | [`maxRecordBytes`](#maxrecordbytes) |
 | A computed name does not fit in the name area | core, in the sender's macrostep | `error.execution.capacity.names` | the chart | [S10](scenarios/S10-run-time-names.md#names-a-chart-computes) |
 | The pool or name area is past its watermark, or an input cannot fit | core consumes and bounces the event after reserving its reply | `c2h.bounced` with `pool` or `names`; host retains its own original in a bounded table | host or external client | [S02.10](scenarios/S02-full-pool.md#the-brutal-chart), [S09](scenarios/S09-edge-backpressure.md) |
 | h2c is full and a client posts | the host, at its edge | HTTP 503 | the client | [S02.12](scenarios/S02-full-pool.md#the-brutal-chart), [S09.5](scenarios/S09-edge-backpressure.md#filling-up) |
@@ -49,7 +50,7 @@ different sends before and after a crash ([S03.4](scenarios/S03-crash-unrecorded
 | Resource | Bounded by | When it is full | Who notices | Steps |
 |---|---|---|---|---|
 | **h2c** | `h2cBytes` | The host cannot post. It refuses at its edge or keeps the input in its own bounded buffer. Core never waits on h2c. | the external client | [S09.5](scenarios/S09-edge-backpressure.md#filling-up) |
-| **c2h** | `c2hBytes`, `maxRecordBytes` | Ordinary actions preserve the mandatory reserve or fail as `error.execution.capacity.c2h`. Outside macrosteps, core can return for a drain before consuming or mutating a control operation. | sending chart or host driver | [ring](reference/ring.md), [macrostep](reference/macrostep.md) |
+| **c2h** | `c2hBytes`, `maxRecordBytes` | Ordinary actions preserve the mandatory reserve. One whose record does not fit parks its slot before the action and runs again after the host drains; other slots go on. Outside macrosteps, core can return for a drain before consuming or mutating a control operation. | the host driver (`TA_RUN_C2H_FULL`) | [ring](reference/ring.md), [macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot) |
 | **tel** | `telBytes` | The record is dropped and counted in [`tel.dropped`][tel.dropped]. | the operator | [telemetry](reference/telemetry.md) |
 | **Pool** | `poolEnvelopes`, `admissionWatermark` | Core bounces capacity-blocked h2c events. A local send or delayed send fails as `error.execution.capacity.pool`. Local invocations hold lifetime tokens acquired before startup. | host/client and sending chart | [S02](scenarios/S02-full-pool.md) |
 | **Name area** | `nameAreaBytes` | Core bounces capacity-blocked h2c events. A computed name that does not fit fails as `error.execution.capacity.names`. | host/client and sending chart | [S10](scenarios/S10-run-time-names.md) |
@@ -88,8 +89,11 @@ click, and the processor's content key.
 2. **Handle `error.execution.capacity`** where a fanout can hit it, and
    make the handler safe to fail again without looping
    ([S02.7](scenarios/S02-full-pool.md#the-brutal-chart)).
-3. **Keep optional traffic out of essential blocks,** or clock the
-   fanout by acknowledgements ([windowed chart](charts/campaign-windowed.scxml)).
+3. **Keep optional traffic out of essential blocks.** Clocking a big
+   fanout by acknowledgements ([windowed chart](charts/campaign-windowed.scxml))
+   is still good practice: it bounds the work in flight, the envelopes it
+   holds and how long its slot waits. A full c2h no longer fails a chart,
+   so the window is not needed to avoid errors from c2h.
 4. **Resync derived state** instead of recording it
    ([S04.9](scenarios/S04-crash-campaign-recorded.md#restart), [S05.5](scenarios/S05-crash-both-recorded.md#per-session-replay)).
 5. **Treat every asynchronous reply as one that may never come.**
@@ -103,7 +107,15 @@ maximum.
 
 **Every default is a guess.** The real figures come from measuring napi's
 suites, `scale.js` and the IRP suite, as ADR 0092 did for
-`interpreterBytes`. The ADR that adopts them records them.
+`interpreterBytes`. The ADR that adopts them records them. The pool ADR
+records the ring sizes, measured in step 4.2.
+
+**A ring's size is a throughput setting, not a correctness one.** A full
+h2c makes the host refuse at its edge, a full c2h makes a slot wait for
+the host, and a full tel drops telemetry. None of them fails a chart. So
+the rings are small by default. The pool and the name area keep large
+bounds, because they fill on demand and cost nothing until used, and
+because a full one fails the chart's action.
 
 | Parameter | Default | Minimum | Maximum | When it runs out, who is told |
 |---|---|---|---|---|
@@ -115,9 +127,9 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 | [`parkAreaBytes`](#parkareabytes) | derived: `maxConcurrentInputs` × the largest parked execution | 0 (no parking) | the derived ceiling | nobody: a slot that cannot park keeps the thread; a runaway that cannot park is abandoned |
 | [`slotSlice`](#slotslice) | 1,024 | 1 | 1,048,576 | nobody: it shapes latency |
 | [`internalQueueEvents`](#internalqueueevents) | 256 ordinary entries, plus compiler-sized mandatory storage | 0 ordinary entries | 65,536 ordinary entries | the chart (`.internal`) |
-| [`h2cBytes`](#h2cbytes) | 65,536 | `maxRecordBytes` | 2 GiB | the client (the host refuses) |
-| [`c2hBytes`](#c2hbytes) | 262,144 | 4 × `maxRecordBytes` | 2 GiB | the chart (`.c2h`); the host (`TA_RUN_C2H_FULL`) |
-| [`telBytes`](#telbytes) | 262,144 | `maxRecordBytes` | 2 GiB | the operator (`tel.dropped`) |
+| [`h2cBytes`](#h2cbytes) | 16,384 | `maxRecordBytes` | 2 GiB | the client (the host refuses) |
+| [`c2hBytes`](#c2hbytes) | 16,384 | 4 × `maxRecordBytes` | 2 GiB | nobody: the slot waits; the host (`TA_RUN_C2H_FULL`) |
+| [`telBytes`](#telbytes) | 16,384 | `maxRecordBytes` | 2 GiB | the operator (`tel.dropped`) |
 | [`maxRecordBytes`](#maxrecordbytes) | 4,096 | 256 | `c2hBytes` / 4 | the chart (`.record`); the host (`c2h.bounced`) |
 | [`telemetryValueBytes`](#telemetryvaluebytes) | 1,024 | 0 | `maxRecordBytes` − 256 | the operator (`truncated`) |
 | [`maxPendingSends`](#maxpendingsends) (changed) | no quota | 0 | `poolEnvelopes` | the chart (`.pool`) |
@@ -304,10 +316,11 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 
 - **What it bounds:** the h2c ring ([ring.md](reference/ring.md)). Unit:
   bytes.
-- **Default 65,536 (64 KiB).** An `h2c.event` is 104 fixed bytes plus its
-  name and origin, about 128 bytes in all, so about 500 inputs fit. Every
+- **Default 16,384 (16 KiB).** An `h2c.event` is 104 fixed bytes plus its
+  name and origin, about 128 bytes in all, so about 125 inputs fit. Every
   `ta_run` moves h2c into the pool, so h2c only has to cover the inputs
-  that arrive during one turn of the host's loop.
+  that arrive during one turn of the host's loop. A busy server that sees
+  503s while the pool has room raises it.
 - **Minimum `maxRecordBytes`,** so the largest record fits. **Maximum
   2 GiB:** a ring that big means the host is not calling `ta_run`, and no
   size fixes that.
@@ -323,33 +336,40 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
 ### `c2hBytes`
 
 - **What it bounds:** the c2h ring. Unit: bytes.
-- **Default 262,144 (256 KiB).** A `c2h.send` is 88 fixed bytes plus
+- **Default 16,384 (16 KiB).** A `c2h.send` is 88 fixed bytes plus
   sendid, type, target and name, about 150 bytes in all. That allows about
-  1,700 sends between drains. During budget pauses the host may execute
-  effects and release ring space before the macrostep end. A fanout of 1,000 fits
-  as it is. Bigger fanouts
-  should be clocked by acknowledgements
-  ([windowed chart](charts/campaign-windowed.scxml)).
+  100 sends between drains. A fanout bigger than that does not fail: its
+  slot waits while the host drains, and other slots go on
+  ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)). During
+  budget pauses the host may execute effects and release ring space before
+  the macrostep end. A bigger ring means fewer waits and fewer returns from
+  `ta_run`, not fewer errors.
 - **Minimum 4 × `maxRecordBytes`** for the base configuration. Definition
   and session setup also check their actual mandatory batch: input
   observation, cancellations, autoforwards, completion and end records,
-  including wrap padding. The factor of four alone is not a guarantee.
-  **Maximum 2 GiB,** for the same reason as h2c.
+  including wrap padding, plus room for one ordinary record of
+  `maxRecordBytes` ([ring](reference/ring.md#the-c2h-reserve)). The factor
+  of four alone is not a guarantee. **Maximum 2 GiB,** for the same reason
+  as h2c.
 - **What it drives:** how much one macrostep can say to the outside world
-  before the host drains.
+  before the host drains, and how many slots can hold their mandatory
+  reserve at once. With the defaults, at most 12 KiB is reserved; an
+  input whose reserve does not fit waits in the run queue. Step 4.2
+  measures whether 16 KiB costs throughput.
 - **How it surfaces:**
-  - **chart:** an action whose record doesn't fit fails as
-    `error.execution.capacity.c2h`;
-  - **host:** `ta_run` returns `TA_RUN_C2H_FULL` when the reserve is not
-    there before a macrostep. Drain and call again.
+  - **chart:** nothing. A slot that waits for c2h holds its input longer;
+  - **host:** `ta_run` returns `TA_RUN_C2H_FULL` when nothing can go on
+    until c2h has room: every slot that could run waits for c2h, or the
+    reserve for the next input is not there. Drain and call again.
 
 ### `telBytes`
 
 - **What it bounds:** the tel ring ([telemetry.md](reference/telemetry.md)).
   Unit: bytes.
-- **Default 262,144 (256 KiB).** With every trace kind on, one microstep
-  writes several records of about 170 bytes. 256 KiB holds about 1,500
-  between drains, enough for a busy turn with sampling.
+- **Default 16,384 (16 KiB).** With every trace kind on, one microstep
+  writes several records of about 170 bytes. 16 KiB holds about 95 between
+  drains, enough for a quiet turn or a sampled one. tel stays lossy: a host
+  that traces every kind in a busy turn raises it, or sees `tel.dropped`.
 - **Minimum `maxRecordBytes`,** so the largest record fits. To turn tracing
   off, set the kind masks to zero; the ring stays. **Maximum 2 GiB.**
 - **What it drives:** how much telemetry survives a slow exporter.
@@ -364,7 +384,8 @@ suites, `scale.js` and the IRP suite, as ADR 0092 did for
   `c2h.input` representation, even when its receiver is unrecorded. Mandatory
   output batch sizes are checked separately. Unit: bytes.
 - **Default 4,096.** Event names, targets and origins in practice are well
-  under 1 KiB. 4 KiB leaves room while keeping the reserve small.
+  under 1 KiB. 4 KiB leaves room while keeping the reserve small. It is
+  the most the default `c2hBytes` allows (16,384 / 4).
 - **Minimum 256:** the largest fixed part (`tel.trace`, 120 bytes) plus a
   short name. **Maximum `c2hBytes` / 4,** the reserve constraint.
 - **What it drives:** the longest name, target or origin one record can
@@ -423,8 +444,8 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 | running workspace: `interpreterBytes` 65,536 + 256 ordinary internal entries × about 48, plus compiler-sized mandatory storage, once | 77,824 plus the compiled bound |
 | slot records: up to 64 × about 48, on demand | at most 3,072 |
 | park area: a reserve of one parked execution, on demand; more only while slots are parked | about 1 KiB for a chart of 100 states |
-| h2c + c2h + tel | 589,824 |
-| **total before compiler-sized mandatory storage** | **about 1.25 MiB** |
+| h2c + c2h + tel: 3 × 16,384 | 49,152 |
+| **total before compiler-sized mandatory storage** | **about 752 KiB** |
 
 The running workspace was already there as run to completion's single
 continuation, scratch and internal queue; earlier versions of this table
@@ -433,8 +454,9 @@ park area, both on demand. With 64 slots all parked, a chart of 100 states
 costs about 64 KiB of continuations, plus whatever internal events they
 had pending; the derived ceiling bounds the worst case.
 
-That is more than napi's roughly 1 MB per system today, which ADR 0093
-judged too much for quiet systems and test suites that create many. So:
+Most of that is the pool and the name area at their bounds. napi uses
+roughly 1 MB per system today, which ADR 0093 judged too much for quiet
+systems and test suites that create many. So:
 
 - **The pool and the name area fill on demand, up to their bounds**
   (ADR 0093's shape). They grow only between macrosteps: at admission and
@@ -442,8 +464,8 @@ judged too much for quiet systems and test suites that create many. So:
   so the macrostep invariant holds ([macrostep.md](reference/macrostep.md)).
   A quiet system pays for its peak, not for the bound.
 - **The rings are fixed at creation,** because the host holds positions in
-  them. Hosts that are not busy, such as test suites, create systems with
-  16 KiB rings.
+  them. They are small by default, 48 KiB for all three, because their size
+  is a throughput setting. A busy server raises them.
 
 ### Changed parameters
 

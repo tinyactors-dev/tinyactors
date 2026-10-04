@@ -15,7 +15,7 @@ heap. Core holds only value references to them
 | Chart | Address | What it demonstrates |
 |---|---|---|
 | [`campaign.scxml`](campaign.scxml) | `campaign/<id>` | The brutal version. One HTTP click fans out to every notification and sends one tracker message per notification. It is reliable through its own structure. |
-| [`campaign-windowed.scxml`](campaign-windowed.scxml) | `campaign/<id>` | The same job clocked by acknowledgements. Its use of the pool and of c2h is bounded by its window, not by the batch size, so it cannot hit a capacity error. |
+| [`campaign-windowed.scxml`](campaign-windowed.scxml) | `campaign/<id>` | The same job clocked by acknowledgements. Its use of the pool and of c2h is bounded by its window, not by the batch size, so it cannot hit a capacity error and its slot never waits long for c2h. A full c2h fails neither chart, so the window is good practice for bounding work in flight, not a requirement. |
 | [`progress.scxml`](progress.scxml) | `progress/<id>` | A derived actor. It resyncs from the campaign instead of being recorded and replayed. |
 
 ## campaign.scxml
@@ -23,7 +23,7 @@ heap. Core holds only value references to them
 | Structure | Why | Scenario |
 |---|---|---|
 | `attempt` schedules the timeout `t` in its `onentry`, before `sending` fans out | A capacity error abandons the rest of its block ([macrostep](../reference/macrostep.md)). A timer scheduled after the fanout would be lost with it. | [S02](../scenarios/S02-full-pool.md) |
-| `error.execution.capacity` in `attempt` → `throttled` | The pool or c2h was full partway through the fanout. Every notification that went out is in `sent`. The rest wait. | [S02](../scenarios/S02-full-pool.md) |
+| `error.execution.capacity` in `attempt` → `throttled` | The pool or the name area was full partway through the fanout. Every notification that went out is in `sent`. The rest wait. A full c2h raises nothing: the slot waits for the host to drain, and the fanout goes on ([macrostep](../reference/macrostep.md#a-full-c2h-pauses-the-slot)). | [S02](../scenarios/S02-full-pool.md) |
 | `throttled` swallows its own `error.execution.capacity` | Its resume timer may itself find no room. Without this transition the error would re-enter `throttled` and loop until the microstep limit stops it. | [S02](../scenarios/S02-full-pool.md) |
 | `outcome.received`, raised on every acknowledgement or rejection | An outcome means the system has drained some work. It is the cheapest signal to try again. | [S02](../scenarios/S02-full-pool.md) |
 | `error.communication` with `_event.sendid in idOf` | A notification never reached the processor. It leaves `sent`, so the next attempt sends it again. | [S01](../scenarios/S01-fanout.md) |

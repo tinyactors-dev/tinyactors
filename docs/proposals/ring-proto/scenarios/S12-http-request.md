@@ -93,7 +93,7 @@ server.on('request', async (req, res) => {
 | S12.15 | The chart replies twice | two `c2h.send` records to `req:1` | the second finds nothing: drop |
 | S12.16 | No transition matches `http.get` | `c2h.input_completed {flags: ignored}` | answers 404 at once, not after the timeout |
 | S12.17 | The chart writes `type="htp"` | `error.execution` in the chart's own block, during its macrostep, because `htp` is not in the type set | – |
-| S12.18 | c2h is full at the `<send>` | `error.execution.capacity.c2h` in the chart | the timeout fires; answers 504 |
+| S12.18 | c2h is full at the `<send>` | the slot parks before the `<send>` and runs it again after the host drains ([macrostep](../reference/macrostep.md#a-full-c2h-pauses-the-slot)); the chart sees nothing | answers when the record arrives; answers 504 only if its timeout removed `req:1` first, because the host stopped draining |
 | S12.19 | The chart loops | `c2h.input_completed {runaway}` ([macrostep](../reference/macrostep.md#runaways-the-chain-limit)) | answers 500 |
 | S12.20 | The chart replies after calling another service | `c2h.input_completed` first, `c2h.send` later | the reply finds `req:1` until the timeout removes it |
 
@@ -118,7 +118,7 @@ server.on('request', async (req, res) => {
 | A bounced request | core (S12.12) | `c2h.bounced` → HTTP 503 | the client |
 | A reply to a client that left | the processor (S12.14) | nobody | nobody: the client has gone |
 | A second reply | the processor (S12.15) | nobody | – |
-| A reply that did not fit c2h | the chart's action (S12.18) | `error.execution.capacity.c2h` | the chart, or the client after 504 |
+| A reply delayed by a full c2h | nobody: it is late, not lost (S12.18) | – | the client after 504, if the host stopped draining |
 
 [h2c.event]: ../protocol/generated/MESSAGES.md#h2cevent
 [h2c.type_declare]: ../protocol/generated/MESSAGES.md#h2ctype_declare

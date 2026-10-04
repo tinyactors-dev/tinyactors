@@ -95,7 +95,8 @@ on an edge input:  if admitting and h2c and the bounded submission table have ro
                    else refuse (503) or keep it within an explicit bound (policy)
 on wake timer:     retain the latest time; post h2c.time(now) before new ordinary inputs
 loop:
-  ta_run(budget)                         # admits from h2c, runs macrosteps to completion
+  ta_run(budget)                         # admits from h2c, runs macrosteps; returns on budget,
+                                         # idle, or TA_RUN_C2H_FULL (drain c2h, then call again)
   read each available c2h record:
     c2h.definition_result → resolve the request; reclaim its buffers; report compile errors
     c2h.input         → recorder; journal on the application's schedule
@@ -161,8 +162,10 @@ command. Refusal requires an explicit retry or application decision.
    The envelope stays owned through invocation startup and its internal follow-up.
 4. **Macrostep.** Data model calls go through the vtable. Each effect is
    either a `c2h` record or a new envelope (mail, delayed send). Nothing
-   allocates. A resource that is full fails the action as
-   `error.execution.capacity`. ([S02](scenarios/S02-full-pool.md))
+   allocates. A full pool or name area fails the action as
+   `error.execution.capacity` ([S02](scenarios/S02-full-pool.md)). A full
+   c2h parks the slot before the action until the host drains, and the
+   action runs again ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)).
 5. **Macrostep end and startup.** Core writes [`c2h.macrostep_ended`](protocol/generated/MESSAGES.md#c2hmacrostep_ended),
    then starts surviving pending invocations. Resulting internal errors run
    before another external input. Once the chain and notification flushing
@@ -177,7 +180,7 @@ command. Refusal requires an explicit retry or application decision.
 
 | `<send>` to | Becomes | Delivered | Full | Reference |
 |---|---|---|---|---|
-| An I/O processor, no delay | [`c2h.send`](protocol/generated/MESSAGES.md#c2hsend) | on receipt, by the host, including before the macrostep end | `c2h` has no room: `error.execution.capacity` | [ring](reference/ring.md) |
+| An I/O processor, no delay | [`c2h.send`](protocol/generated/MESSAGES.md#c2hsend) | on receipt, by the host, including before the macrostep end | `c2h` has no room: the slot waits for the host to drain, then runs the `<send>` again; a record larger than `maxRecordBytes` fails as `error.execution.capacity.record` | [macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot) |
 | A local session (`#_scxml_…`, an actor URI) | an envelope on the run queue, at the macrostep end | when core takes it | pool or name area is full: `error.execution.capacity` | [envelope](reference/envelope.md) |
 | Anything, with a delay | an envelope in the deadline index | when `h2c.time` reaches its due time: mail is taken, an I/O send becomes `c2h.send` | as above | [envelope](reference/envelope.md) |
 | An unloaded session | an envelope that waits; `c2h.load_needed` | after `h2c.load` | as above; if the load fails, the envelope becomes `error.communication` for its sender | [unloading](reference/unloading.md) |

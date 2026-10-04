@@ -73,10 +73,12 @@ For one slot, the steps are:
    observation, macrostep end, cancellation of
    every invocation currently active in the session, terminal session
    notification, and all autoforwards of the input. It includes actual aligned
-   record sizes and wrap padding. Unless the reserve fits, core takes nothing
-   and `ta_run` returns. A definition/session whose mandatory batch cannot fit
-   even an empty ring is refused before execution
-   ([ring.md](ring.md#the-c2h-reserve)).
+   record sizes and wrap padding. The outstanding reserves of all slots,
+   this one included, must leave room for one record of `maxRecordBytes`.
+   Unless they do, core takes nothing; when no slot can run either, `ta_run`
+   returns. A definition/session whose mandatory batch and one record of
+   `maxRecordBytes` cannot fit even an empty ring is refused before
+   execution ([ring.md](ring.md#the-c2h-reserve)).
 3. **Take** the envelope after its recording snapshot has been prepared
    without changing the session. For a recorded session, write `c2h.input`.
    Bind the event, apply the matching invocation's finalize handler, then
@@ -115,9 +117,10 @@ a fixed number of slots, taken in turn.
 
 An earlier version of this design ran one macrostep at a time for the
 whole system, with one continuation. It rejected interleaving because
-interleaving does not prevent deadlock. That is true, and refusing sends
-that don't fit still prevents it. But interleaving was never for deadlock.
-It is for isolation: with one continuation, any long macrostep stops every
+interleaving does not prevent deadlock. That is true, and refusing local
+sends that don't fit, while waiting only for c2h, which the host drains,
+still prevents it ([below](#a-full-c2h-pauses-the-slot)). But interleaving
+was never for deadlock. It is for isolation: with one continuation, any long macrostep stops every
 other session until it ends.
 
 - **Long but correct macrosteps exist.** A chart that walks a list with a
@@ -161,7 +164,7 @@ typedef enum {
     TA_RUN_IDLE,        /* nothing runnable and nothing to admit */
     TA_RUN_MORE,        /* the budget ran out and no slot is inside a macrostep */
     TA_RUN_PAUSED,      /* the budget ran out with at least one slot inside a macrostep */
-    TA_RUN_C2H_FULL     /* the reserve is not there: drain c2h and call again */
+    TA_RUN_C2H_FULL     /* nothing can go on until c2h has room: drain c2h and call again */
 } ta_run_status;
 
 typedef struct {
@@ -184,7 +187,7 @@ This one call replaces `ta_actor_deliver`, `ta_actor_resume` and
 
 ## Pauses: the budget and the slice
 
-A macrostep stops in the middle for two reasons only:
+A macrostep stops in the middle for three reasons only:
 
 - **`ta_run`'s `budget` or `action_budget` runs out** (ADR 0061). The pause
   gives the host's event loop its turn back. The host may post to h2c,
@@ -193,6 +196,10 @@ A macrostep stops in the middle for two reasons only:
 - **A slot uses its `slotSlice`.** Core moves to the next slot that can
   run, within the same `ta_run`. This is what keeps a long macrostep from
   holding the others.
+- **An ordinary action's c2h record does not fit**
+  ([below](#a-full-c2h-pauses-the-slot)). The slot waits before that
+  action until the host drains c2h. Core moves to the next slot that can
+  run.
 
 A slot that reaches the chain limit does not stop in the middle: its input
 ends ([below](#runaways-the-chain-limit)).
@@ -205,11 +212,98 @@ Nested interpreters for invocations still have scratch of their own
 (ADR 0060). During debugger attachment only the debugger drives core; the
 production pump cannot resume any slot until ownership is returned.
 
-**A full ring never pauses executable content inside a macrostep.** An
-ordinary action whose record does not fit fails instead (below), while
-mandatory records use their preflight reservation. Core can return for a
-drain before a macrostep starts or between post-macrostep phases, including
-startup and terminal input completion.
+Mandatory records never wait inside a macrostep: they use their preflight
+reservation. Core can return for a drain before a macrostep starts or
+between post-macrostep phases, including startup and terminal input
+completion.
+
+### A full c2h pauses the slot
+
+An ordinary action writes at most one c2h record. For example, a `<send>`
+to an I/O processor writes [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend),
+and a `<log>` writes [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog).
+When that record does not fit while preserving every slot's outstanding
+mandatory reserve, the action does not fail:
+
+- **The slot parks before the unit.** A unit is an action or a `<foreach>`
+  iteration (ADR 0061). Core sizes the record before the unit changes
+  anything: before a sendid is counted and before `idlocation` is assigned.
+  The record is never written, so nothing is half done. Provisional
+  retains are released.
+- **The unit runs again from the start** when the slot next has its turn
+  and the record fits. Its expressions are evaluated again. SCXML
+  expressions in a `<send>` or `<log>` are meant to be free of side
+  effects; one that is not runs twice when c2h is full.
+- **Other slots go on.** Core moves to the next slot that can run, as at
+  the end of a slice. A waiting slot keeps its taken envelope, its
+  outgoing mail, its deferred list and its outstanding reserve.
+- **`ta_run` returns `TA_RUN_C2H_FULL` when nothing else can run.** That is
+  when every slot that could run waits for c2h, and no input can be taken
+  without more c2h room. The host drains c2h and calls again. While other
+  work remains, `ta_run` goes on until its budget or the work runs out, and
+  the host drains c2h on that return as on any other.
+- **A slot that cannot park keeps the running workspace**
+  ([below](#parking-one-running-workspace-and-a-park-area)). No other slot
+  runs, and `ta_run` returns `TA_RUN_C2H_FULL` at once.
+
+A record larger than `maxRecordBytes` can never fit, so waiting cannot
+help. That action fails as `error.execution.capacity.record` instead.
+
+Startup records, such as
+[`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke), are written
+outside a macrostep. Startup already returns for a drain before an
+operation it cannot write.
+
+**The wait always ends.** A slot needs room for one record of at most
+`maxRecordBytes`. Core takes an input only when the outstanding reserves,
+its own included, leave room for that much on an empty ring
+([ring.md](ring.md#the-c2h-reserve)). So once the host has drained, at
+least one waiting slot's record fits.
+
+**Why a full c2h pauses, and a full pool fails:**
+
+- **The host frees c2h without any session making progress.** Draining is
+  the host's own work. A slot that waits for c2h waits for the host, never
+  for another slot, so no cycle of waits can form.
+- **The pool and the name area are freed only by sessions.** An envelope
+  is freed when its receiver takes the mail, and its text with it. Two
+  slots that each wait for an envelope the other would free never go on.
+  So a full pool or name area fails the action as
+  `error.execution.capacity.pool` or `.names`, in the chart.
+- **Nothing is half done.** The record was never written, and core checks
+  the fit before the unit changes core state. Rerunning the unit from the
+  start is what ADR 0061's pause between units already does.
+- **The pieces exist.** Slots already park at unit boundaries, and each
+  slot already holds its own outstanding reserve while it is paused
+  ([ring.md](ring.md#the-c2h-reserve)).
+
+The data model's memory is different, and fails the operation
+([below](#what-this-replaces-the-out-of-memory-stop-adrs-0047-0070)): core
+cannot free it, and a data model operation that ran out partway may have
+changed something.
+
+**What it costs:**
+
+- **The chart no longer feels the outside world's backpressure.** A slow
+  I/O processor means the host either buffers what it drains, within its
+  own bound and policy, or stops draining. If it stops, the slot simply
+  waits. A chart that wants to bound its work in flight clocks it by
+  acknowledgements ([windowed chart](../charts/campaign-windowed.scxml)).
+- **A slot that waits holds its input longer.** A slot parked in the
+  middle of a fanout keeps its taken envelope, and mail for its session
+  stays on the deferred list. That is latency, not failure.
+- **A small c2h also bounds how many slots can hold a reserve at once.**
+  An input waits in the run queue until its reserve fits. This is a
+  throughput limit, measured with the ring defaults
+  ([BEHAVIORS.md](../BEHAVIORS.md#c2hbytes)).
+- **A host must not make draining c2h wait for room in h2c.** If it did,
+  core would wait for the host and the host for core. A host that cannot
+  post a result buffers or drops it by its own policy
+  ([S09](../scenarios/S09-edge-backpressure.md)).
+
+**Open:** whether core should instead check for `maxRecordBytes` of room
+before evaluating the unit at all. Nothing would ever be evaluated twice,
+but a slot would wait while a smaller record would still fit.
 
 ### Parking: one running workspace and a park area
 
@@ -375,8 +469,9 @@ executed remain executed.
 
 | | Who can free it | What happens | Does the chart see it? |
 |---|---|---|---|
-| **Rings:** c2h full when an action writes | the host, by draining | The action fails as `error.execution.capacity.c2h`. The run doesn't wait. | yes |
-| **Before a macrostep:** c2h lacks the reserve | the host, by draining | No macrostep starts, and `ta_run` answers `TA_RUN_C2H_FULL`. | no |
+| **Rings:** c2h full when an action writes | the host, by draining | The slot parks before the action and runs it again once the record fits. Other slots go on; when none can, `ta_run` answers `TA_RUN_C2H_FULL` ([above](#a-full-c2h-pauses-the-slot)). | no |
+| **Rings:** an action's record is larger than `maxRecordBytes` | nobody | The action fails as `error.execution.capacity.record`. | yes |
+| **Before a macrostep:** c2h lacks the reserve | the host, by draining | No macrostep starts, and `ta_run` answers `TA_RUN_C2H_FULL` when nothing else can run. | no |
 | **h2c full** | core, by admitting | The host refuses at its edge | no; the external client does |
 | **The pool or name area** when an action needs an envelope or text | the receivers, by running | The action fails as `error.execution.capacity.pool` or `.names` | yes |
 | **Admission:** pool above `admissionWatermark` | the receivers, by running | Core consumes the event and writes a reserved capacity bounce; following controls remain reachable | no; the external client does |
@@ -389,7 +484,7 @@ executable content:
 - **The rest of the block is abandoned.** A fanout fails once, at the first
   send that doesn't fit, not once per remaining item.
 - **The last segment of its name says what ran out:** `pool`, `names`,
-  `c2h`, `internal` or `record`, as the catalog's
+  `internal` or `record`, as the catalog's
   [`capacity_resource`](../protocol/generated/MESSAGES.md#capacity_resource-u8)
   enum lists them. A chart that doesn't care which one matches
   `error.execution.capacity`.
@@ -615,7 +710,9 @@ stands: a shortage anywhere becomes a refusal the chart sees. The price is
 that a passing memory shortage in the host becomes chart behaviour, which is
 what charts are for ([migration.md](migration.md)).
 
-**Why an error and not a pause:**
+**Why an error and not a pause:** this is about the data model's memory. A
+full c2h ring pauses the slot instead, because the host frees it and
+nothing has been done yet ([above](#a-full-c2h-pauses-the-slot)).
 
 - **The memory is the data model's, not core's.** Core can't free it and
   can't know when it will be free. A pause that waits for it is a guess.

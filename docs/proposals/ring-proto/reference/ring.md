@@ -75,7 +75,7 @@ tail. A record's size is rounded up to 8 bytes, so every record starts
 
 - **The largest record is `maxRecordBytes`.** A producer never writes a
   bigger one. On c2h, an action whose record would be bigger fails as
-  `error.execution.capacity` ([macrostep.md](macrostep.md)). On h2c, core
+  `error.execution.capacity.record` ([macrostep.md](macrostep.md)). On h2c, core
   bounces a bigger record with
   [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced)
   (`invalid`), and the host should never write one. On tel, a too-long
@@ -182,7 +182,7 @@ are three:
 | Ring | Producer | When full | Who retries |
 |---|---|---|---|
 | `h2c` | host | The host cannot post. It refuses at its edge (HTTP 503, or it stops reading a socket), or keeps the input in its own memory. Core never waits on h2c. | The external client, or the host by its own policy |
-| `c2h` | core | An ordinary action whose record does not fit while preserving the mandatory reserve fails as `error.execution.capacity.c2h`. Control and startup work can return for a drain between macrosteps. | Sending chart or host driver |
+| `c2h` | core | An ordinary action whose record does not fit while preserving the mandatory reserve parks its slot before the action, which runs again after a drain. Control and startup work can return for a drain between macrosteps. | The host, by draining; core runs the action again |
 | `tel` | core | The record is dropped and counted. The next [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) reports it. | Nobody: telemetry is allowed to be incomplete |
 
 ### The c2h reserve
@@ -197,8 +197,10 @@ whose mandatory reservation cannot fit even an empty c2h ring is refused
 before execution; retrying an impossible reservation is not progress.
 
 Actions preserve that reservation when checking whether an optional effect
-fits. A refusible effect can fail as `error.execution.capacity.c2h`, but
-mandatory lifecycle records cannot disappear as a consequence. Internal
+fits. An optional effect that does not fit parks its slot before the
+action, and the action runs again from the start after the host drains
+([macrostep.md](macrostep.md#a-full-c2h-pauses-the-slot)). Mandatory
+lifecycle records never wait for it. Internal
 error storage is sized at compilation as described in
 [envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool); one spare
 error slot is not a sufficient bound for several failing executable blocks.
@@ -208,7 +210,19 @@ slots' bounded continuations, to drain c2h before reserving the next phase.
 Each macrostep slot holds its own outstanding reservation while it is
 paused, so another slot that runs meanwhile cannot take the space a paused
 macrostep's mandatory records need. A slot whose reservation does not fit
-waits; the others go on ([macrostep.md](macrostep.md#macrostep-slots)). Input completion
+waits; the others go on ([macrostep.md](macrostep.md#macrostep-slots)).
+
+**The reserves always leave room for one ordinary record.** Core takes an
+input only when the outstanding reservations of all slots, the new one
+included, leave at least `maxRecordBytes` of an empty ring. A slot waiting
+to write an action's record needs at most that much, so once the host has
+drained, at least one waiting slot can go on, and its reserve comes back
+when its input completes. Without this rule, slots could hold reserves for
+the whole ring, each waiting for room only the others' completion would
+free. Registration refuses a definition whose mandatory batch and one
+record of `maxRecordBytes` cannot fit even an empty ring.
+
+Input completion
 has its own fixed reservation after startup followups; a macrostep end
 alone does not settle the input.
 
@@ -326,7 +340,7 @@ objects so an invalidated attempt releases its image instead of posting.
 | Ring | Direction | Guarantee | Carries |
 |---|---|---|---|
 | `h2c` | host → core | lossless, gap-free; full means the host refuses at its edge | every input: [`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent), [`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime), [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn), [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload), [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report), ... |
-| `c2h` | core → host | lossless, gap-free, ordered with macrostep ends; full means the action fails | effects, macrostep ends, bounces, load requests, images, and the inputs of recorded sessions |
+| `c2h` | core → host | lossless, gap-free, ordered with macrostep ends; full means the writing slot waits for the host to drain | effects, macrostep ends, bounces, load requests, images, and the inputs of recorded sessions |
 | `tel` | core → host | lossy; full means drop and count | trace records for observability ([telemetry.md](telemetry.md)) |
 
 **There are exactly three because there are three delivery guarantees, not
@@ -339,7 +353,7 @@ three purposes.** Splitting by purpose instead was considered and rejected:
   ([recording-and-replay.md](recording-and-replay.md)).
 - **Recording on tel**, "replay is driven by tracing", fails because tel
   drops. A replay log that can lose an input isn't one.
-- **Telemetry on c2h** would let a slow OTLP exporter fail a chart's sends.
+- **Telemetry on c2h** would let a slow OTLP exporter stall a chart's sends.
 - **Mail between local sessions on a ring** was rejected. It deadlocks when
   the ring the running session writes to is the ring only that run can
   drain. Mail lives in the envelope pool instead ([envelope.md](envelope.md)).

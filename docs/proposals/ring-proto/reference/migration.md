@@ -215,15 +215,17 @@ history, with a status line pointing at the ADR that removes the kernel.
 Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
 
 1. **Core talks to its host through three rings.** h2c, c2h and tel, and
-   their record format. The vtables for routing, I/O, invocation, logs
-   and traces go. The data model vtable stays.
+   their record format. A full c2h pauses the slot whose action does not
+   fit, until the host drains; it never fails the action. The vtables for
+   routing, I/O, invocation, logs and traces go. The data model vtable
+   stays.
 2. **A macrostep never allocates core memory.** Capacity becomes
    `error.execution.capacity`. Supersedes 0070 for core's memory. Records
    the figures: per-actor bytes before and after.
 3. **Pending inputs are envelopes in one pool per system.** One run
    queue in arrival order, admission watermark, fairness, recycling. Supersedes 0011, 0029,
-   0040, 0055, 0064, 0069 and 0093. Records the bytes per envelope and the
-   pool's default.
+   0040, 0055, 0064, 0069 and 0093. Records the bytes per envelope, the
+   pool's default and the ring defaults, measured in step 4.2.
 4. **Delayed sends are envelopes.** Exact `<cancel>`, one wake, timers
    travel in images. Refines 0026 and 0054.
 5. **Only authored names are interned.** Run-time names are bytes,
@@ -302,8 +304,9 @@ when h2c and c2h arrive, not at the end.
   core need round robin across targets so that one busy actor cannot
   delay another's mail? ([envelope.md](envelope.md))
 - **Default sizes.** The pool, the name area and the rings
-  ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Busy servers and test suites
-  pull in opposite directions.
+  ([BEHAVIORS.md](../BEHAVIORS.md#parameters)). Partly answered: a full c2h
+  pauses a slot, so ring size is a throughput setting, and the rings
+  default to 16 KiB each. What remains is measuring them in step 4.2.
 - **The MCP server proposal** ([mcp-server.md](../../mcp-server.md))
   places its mapping in the host kernel, "implemented once". With the
   kernel gone, it needs a new home. Candidates: a small C library beside

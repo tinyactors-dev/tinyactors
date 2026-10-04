@@ -507,7 +507,7 @@ communication error, deliberately:
   send that doesn't fit. There is no flood of 9,000 errors to raise.
 - The chart knows exactly what happened: everything before the failing
   action ran, and nothing after it did. The event's last segment names the
-  resource (`error.execution.capacity.pool`, `.names`, `.c2h`, `.internal`,
+  resource (`error.execution.capacity.pool`, `.names`, `.internal`,
   `.record`), and `_event.data` names the action
   ([macrostep.md](macrostep.md#two-kinds-of-exhaustion)).
 

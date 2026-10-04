@@ -72,10 +72,16 @@ Put the queue in core, give it a fixed size, and those problems go away. See
      covers it.
 
    ([BEHAVIORS.md](BEHAVIORS.md))
-4. **A macrostep never waits for ring capacity.** Core reserves mandatory
-   observations, cancellations, forwarding and end reports before taking
-   input. Ordinary actions can fail. Startup and control work can return
-   for the host to drain c2h between macrosteps; a budget can pause execution.
+4. **A macrostep never waits for ring capacity in a way that can
+   deadlock.** Core reserves mandatory observations, cancellations,
+   forwarding and end reports before taking input. An ordinary action whose
+   record does not fit in c2h parks its slot before that action, and the
+   action runs again after the host drains c2h. The host drains c2h without
+   any session making progress, so the wait always ends. Other slots go on.
+   The pool and the name area fail the action instead: only sessions free
+   them, so a wait there could deadlock. Startup and control work can return
+   for the host to drain c2h between macrosteps; a budget can pause execution
+   ([reference/macrostep.md](reference/macrostep.md#a-full-c2h-pauses-the-slot)).
 5. **One session never stops the others.** Each session runs one input at
    a time, but up to `maxConcurrentInputs` sessions run at once, taking turns
    between units of executable content. A runaway holds one slot, not the
@@ -184,6 +190,13 @@ The scenarios run this example through:
   100 states. The area fills on demand up to a ceiling core derives, so no
   host has to size it, and a slot that cannot park keeps the thread
   ([parking](reference/macrostep.md#parking-one-running-workspace-and-a-park-area)).
+- **Accepted c2h backpressure:** an ordinary action whose c2h record does
+  not fit pauses its slot, not its chart, and runs again after the host
+  drains. `error.execution.capacity.c2h` is gone; a full pool or name area
+  still fails the action. So a ring's size is a throughput setting, not a
+  correctness one, and the rings are 16 KiB each by default
+  ([reference/macrostep.md](reference/macrostep.md#a-full-c2h-pauses-the-slot),
+  [BEHAVIORS.md](BEHAVIORS.md#parameters)).
 - **Accepted removal of quarantine:** napi's quarantine existed so that
   one bad actor could not take the loop's turns. Slots do that now, so the
   implementation removes quarantine, `release()` and the parent's

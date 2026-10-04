@@ -49,8 +49,9 @@ ring :h2c,
 
 ring :c2h,
      producer: :core, consumer: :host, loss: :none,
-     when_full: 'A record an action would write does not fit: the action fails ' \
-                'as error.execution.capacity. Core starts a macrostep only when ' \
+     when_full: 'A record an action would write does not fit: its slot parks ' \
+                'before the action, which runs again after the host drains. ' \
+                'Other slots go on. Core starts a macrostep only when ' \
                 'c2h has room for all mandatory observations, cancellations, ' \
                 'autoforwards, completion and end reports, including wrap padding. ' \
                 'Startup and control phases can yield between macrosteps.',
@@ -125,10 +126,10 @@ end
 enum :capacity_resource, :u8,
      doc: 'The last segment of error.execution.capacity.<resource>, the event an ' \
           'action raises when a bounded resource has no room for it. Its data names ' \
-          'the action (reference/macrostep.md, "Two kinds of exhaustion").' do
+          'the action (reference/macrostep.md, "Two kinds of exhaustion"). A full ' \
+          'c2h is not one of them: the slot waits for the host to drain.' do
   value :pool, 1, 'no free envelope for mail or a delayed send (poolEnvelopes)'
   value :names, 2, 'no room in the name area for a run-time name (nameAreaBytes)'
-  value :c2h, 3, 'no room on c2h for the record the action writes (c2hBytes)'
   value :internal, 4, 'the internal queue is full; <raise> failed'
   value :record, 5, 'the record would be larger than maxRecordBytes'
 end

@@ -12,7 +12,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | Ring | Producer → consumer | Loss | When full |
 |---|---|---|---|
 | `h2c` | host → core | none | The host cannot post. It refuses at its edge (for example HTTP 503) or keeps the input itself. Core never waits on h2c. |
-| `c2h` | core → host | none | A record an action would write does not fit: the action fails as error.execution.capacity. Core starts a macrostep only when c2h has room for all mandatory observations, cancellations, autoforwards, completion and end reports, including wrap padding. Startup and control phases can yield between macrosteps. |
+| `c2h` | core → host | none | A record an action would write does not fit: its slot parks before the action, which runs again after the host drains. Other slots go on. Core starts a macrostep only when c2h has room for all mandatory observations, cancellations, autoforwards, completion and end reports, including wrap padding. Startup and control phases can yield between macrosteps. |
 | `tel` | core → host | drop | The record is dropped and counted. The next tel.dropped says how many. Telemetry never slows the system. |
 
 ## Index
@@ -743,13 +743,12 @@ Why core handed an h2c record back unrun.
 
 ### `capacity_resource` (u8)
 
-The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (reference/macrostep.md, "Two kinds of exhaustion").
+The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (reference/macrostep.md, "Two kinds of exhaustion"). A full c2h is not one of them: the slot waits for the host to drain.
 
 | Value | Name | Meaning |
 |---|---|---|
 | 1 | `pool` | no free envelope for mail or a delayed send (poolEnvelopes) |
 | 2 | `names` | no room in the name area for a run-time name (nameAreaBytes) |
-| 3 | `c2h` | no room on c2h for the record the action writes (c2hBytes) |
 | 4 | `internal` | the internal queue is full; <raise> failed |
 | 5 | `record` | the record would be larger than maxRecordBytes |
 

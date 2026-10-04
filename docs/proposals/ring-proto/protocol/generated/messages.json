@@ -70,7 +70,7 @@
       "producer": "core",
       "consumer": "host",
       "loss": "none",
-      "when_full": "A record an action would write does not fit: the action fails as error.execution.capacity. Core starts a macrostep only when c2h has room for all mandatory observations, cancellations, autoforwards, completion and end reports, including wrap padding. Startup and control phases can yield between macrosteps.",
+      "when_full": "A record an action would write does not fit: its slot parks before the action, which runs again after the host drains. Other slots go on. Core starts a macrostep only when c2h has room for all mandatory observations, cancellations, autoforwards, completion and end reports, including wrap padding. Startup and control phases can yield between macrosteps.",
       "doc": "Everything that leaves the process or must not be lost: effects for I/O processors and invokers, macrostep end reports, bounces, load requests, images, and the inputs of recorded sessions."
     },
     {
@@ -325,11 +325,6 @@
           "doc": "no room in the name area for a run-time name (nameAreaBytes)"
         },
         {
-          "name": "c2h",
-          "value": 3,
-          "doc": "no room on c2h for the record the action writes (c2hBytes)"
-        },
-        {
           "name": "internal",
           "value": 4,
           "doc": "the internal queue is full; <raise> failed"
@@ -340,7 +335,7 @@
           "doc": "the record would be larger than maxRecordBytes"
         }
       ],
-      "doc": "The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (reference/macrostep.md, \"Two kinds of exhaustion\")."
+      "doc": "The last segment of error.execution.capacity.<resource>, the event an action raises when a bounded resource has no room for it. Its data names the action (reference/macrostep.md, \"Two kinds of exhaustion\"). A full c2h is not one of them: the slot waits for the host to drain."
     },
     {
       "name": "invoke_report_kind",

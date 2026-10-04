@@ -114,7 +114,7 @@ composition of them, plus the policy that belongs to it alone.
 | Name area | A5 (64-byte chunks) + A6 + C3 | the field layout inside an envelope's chain (each field prefixed by a `u16` length); reserving room for a later `error.communication` |
 | Event matching | D4 + the existing matcher | none |
 | Internal queue | B4 + C3 × 2 (ordinary and mandatory quotas) | compiler sizing of the mandatory quota (still open) |
-| Macrostep slots | A5 (slot records) + C3 (per-slot c2h claim) | turn-taking by `slotSlice`; the chain limit |
+| Macrostep slots | A5 (slot records) + C3 (per-slot c2h claim) | turn-taking by `slotSlice`; a slot that waits for c2h; the chain limit |
 | Park area | A5 (256-byte chunks) + A6 + D1 (chunk-chain sink) + D2 | "a slot that cannot park keeps the thread"; the derived ceiling |
 | Running workspace | A2 + A3 (fixed) + B4 | grows at registration for the largest definition |
 | Unload / load / checkpoint | D1 (host blob) + D2 | atomic load staging |
