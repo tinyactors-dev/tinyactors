@@ -67,6 +67,8 @@ Two rules follow from the table:
 - `tinyactors-scxml/` (an SCXML codec over tinyxml) and `tinyactors-otlp/`
   (an OTLP encoder) are parked: they were written for the earlier core,
   kept at the tag `ring-proto-final`, and wait to be ported to this one.
+- `tinyparse/` is a freestanding parser runtime and its CLI: grammar data
+  in, a streaming parser and a syntax tree out, or a generated C parser.
 - `docs/proposals/` holds outlines of possible future work, such as new
   hosts. They are not plans or decisions; see its README.
 - `docs/research/` holds background research that informed the designs,

@@ -61,11 +61,12 @@ Do it at release time, not between releases.
   |-------------------------------------|------------------------------------------|
   | `tinyactors-core` (code, bindings, tests, tools) | core                  |
   | `tinyxml`                           | tinyxml                                  |
+  | `tinyparse`                         | tinyparse                                |
   | root `mise/lib`, `mise.toml`        | all of them                              |
+  | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
 
   `tinyactors-scxml` and `tinyactors-otlp` are parked (README.md): no
   test runs them until they are ported to the current core.
-  | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
 
   When you add a directory a project's tests read, add it to that
   project's `#MISE sources`, or a change there will not rerun them.
@@ -73,7 +74,9 @@ Do it at release time, not between releases.
 - **`mise run test:full`** runs everything, plus what the fast pass leaves
   out:
   - every torture chamber scenario (the fast pass runs one);
-  - the cross builds for each release target (`mise run check:cross`).
+  - the cross builds for each release target (`mise run check:cross`);
+  - tinyparse's exhaustive gates: every corpus input through the VM and
+    the generated parsers, and the larger reuse and reclaim workloads.
 
   Run it before a release, and before committing a change to core's
   memory layout, scheduling, hibernation or migration, or to per-actor
@@ -90,6 +93,8 @@ Do it at release time, not between releases.
   - one Node.js binding suite: `node --test test/<suite>.test.js` in
     `tinyactors-core/bindings/node`, after `mise run node:build`, then
     `bun test test/<suite>.test.js` (`node:test` runs both);
+  - one tinyparse gate: `mise run //tinyparse:gate:cc-diff` (`--full` for
+    its exhaustive version);
   - one project's whole suite: `mise run test` inside it.
 - Do not skip, weaken or delete a check to make the fast pass faster. Make
   it cheaper, or move it to the full pass as below.
