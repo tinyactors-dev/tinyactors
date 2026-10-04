@@ -21,7 +21,7 @@ log(){ printf '[reclaim] %s\n' "$*" >&2; }
 
 log "building pocketparse dist ..."
 ( cd "$PP" && bash build.sh all ) >/dev/null 2>&1
-[ -f "$DIST/libpocketparse.a" ] && [ -f ] && [ -x "$CLI" ] || { log "FATAL: dist did not build"; exit 1; }
+[ -f "$DIST/libpocketparse.a" ] && [ -x "$CLI" ] || { log "FATAL: dist did not build"; exit 1; }
 
 SCRATCH="$PP/bench/reclaim-scratch"; mkdir -p "$SCRATCH"
 PPG="$SCRATCH/std.javascript.ppg"

@@ -44,7 +44,7 @@ echo "== pocketparse import->C gate =="
 
 # 1. Build the CLI + the library archive (the generated parser links against it).
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ]; then
   echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"; exit 1
 fi
 for f in "$GRAMMAR" "$SAMPLE" "$GOLDEN"; do

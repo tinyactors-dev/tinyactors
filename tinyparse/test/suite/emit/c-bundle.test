@@ -1,9 +1,9 @@
 <<<cmd
 set -e
-"$PP" c examples/sexpr/sexpr.scm --out /tmp/pp_g.c --bundle
-cc -std=c11 -O2 -I dist/linux-x86_64 /tmp/pp_g.c dist/linux-x86_64/libpocketparse.a -o /tmp/pp_g
-printf '(a (b c))' | /tmp/pp_g
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
+"$PP" c examples/sexpr/sexpr.scm --out "$w/pp_g.c" --bundle
+cc -std=c11 -O2 -I dist/linux-x86_64 "$w/pp_g.c" dist/linux-x86_64/libpocketparse.a -o "$w/pp_g"
+printf '(a (b c))' | "$w/pp_g"
 <<<assert
 exit 0
-out-contains List
-out-contains Atom

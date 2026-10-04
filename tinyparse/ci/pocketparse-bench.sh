@@ -54,7 +54,7 @@ log() { printf '[pp-bench] %s\n' "$*" >&2; }
 # --- 1. pocketparse dist -----------------------------------------------------
 log "building pocketparse dist ..."
 ( cd "$PP" && bash build.sh dist ) >/dev/null 2>&1
-if [ ! -f "$DIST/libpocketparse.a" ] || [ ! -f ]; then
+if [ ! -f "$DIST/libpocketparse.a" ]; then
   log "FATAL: pocketparse dist did not build ($DIST)"
   exit 1
 fi

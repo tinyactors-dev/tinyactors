@@ -61,7 +61,7 @@ cp "$INC/pocketparse.h" "$OUT/pocketparse.h"
 ** Do not edit by hand. It folds together, in one translation unit:
 **   - the pocketparse public header;
 **   - the private internal.h contract;
-**   - every library source (all of src/*.c except the CLI).
+**   - every library source (each C file in src/ except the CLI).
 **
 ** Build:  cc -c pocketparse.c
 **         cc -shared -fPIC -fvisibility=hidden pocketparse.c -o libpocketparse.so
