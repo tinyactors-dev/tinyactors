@@ -199,7 +199,9 @@ static void tp_emit_bundle_main(tp_emit_cursor *cursor)
         "        } while (tinyparse_tree_cursor_goto_next_sibling(cursor));\n"
         "        tinyparse_tree_cursor_goto_parent(cursor);\n"
         "    }\n"
-        "}\n"
+        "}\n");
+    /* Two calls, not one: ISO C caps a string literal at 4095 bytes. */
+    tp_emit_text(cursor,
         "\n"
         "int main(void)\n"
         "{\n"

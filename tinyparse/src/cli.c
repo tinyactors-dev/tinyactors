@@ -1888,7 +1888,7 @@ static const char tinyparse_starter_grammar[] =
 ** stdin, and dump the resulting tree through the public cursor API. It depends
 ** on nothing but tinyparse.h, so once seeded the project needs no tinyparse
 ** tooling on the path. Built with `cc main.c tinyparse.c -o app`. */
-static const char tinyparse_starter_main[] =
+static const char tinyparse_starter_main_helpers[] =
     "/*\n"
     " * main.c -- a starter tinyparse program.\n"
     " *\n"
@@ -1940,7 +1940,11 @@ static const char tinyparse_starter_main[] =
     "        tinyparse_tree_cursor_goto_parent(cursor);\n"
     "    }\n"
     "}\n"
-    "\n"
+    "\n";
+
+/* ** The starter's main() itself. It is a second array because ISO C caps a
+** string literal at 4095 bytes; seed_write_starter_main joins the two. */
+static const char tinyparse_starter_main_body[] =
     "int main(void)\n"
     "{\n"
     "    static unsigned char grant[8u * 1024u * 1024u];\n"
@@ -2096,6 +2100,26 @@ static int seed_write_file(const char *dir, const char *file,
     return 1;
 }
 
+/* ** Write the starter main.c into dir: the helpers, then main() itself. */
+static int seed_write_starter_main(const char *dir)
+{
+    size_t helpers = sizeof tinyparse_starter_main_helpers - 1;
+    size_t body = sizeof tinyparse_starter_main_body - 1;
+    unsigned char *bytes;
+    int written;
+
+    bytes = malloc(helpers + body);
+    if (bytes == NULL) {
+        fprintf(stderr, "tinyparse: error: out of memory for main.c\n");
+        return 0;
+    }
+    memcpy(bytes, tinyparse_starter_main_helpers, helpers);
+    memcpy(bytes + helpers, tinyparse_starter_main_body, body);
+    written = seed_write_file(dir, "main.c", bytes, helpers + body);
+    free(bytes);
+    return written;
+}
+
 /* ** Write the embedded library amalgamation (tinyparse.c + tinyparse.h)
 ** into dir. Shared by `init --amalgamation' and `vendor --amalgamation'. */
 static int seed_write_amalgamation(const char *dir)
@@ -2210,9 +2234,7 @@ static int command_init(int argc, char **argv)
     }
     if (!seed_write_grammar(opts.dir, pkg))
         return 1;
-    if (!seed_write_file(opts.dir, "main.c",
-                         (const unsigned char *)tinyparse_starter_main,
-                         sizeof tinyparse_starter_main - 1))
+    if (!seed_write_starter_main(opts.dir))
         return 1;
     if (opts.amalgamation) {
         if (!seed_write_file(opts.dir, "build.sh",
