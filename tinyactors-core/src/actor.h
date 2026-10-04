@@ -284,9 +284,6 @@ bool ta_actor_input_time_valid(const ta_system *system, const ta_actor *actor, t
 /* Moves a replaying actor's clock to a checked `time`, dropping held delayed
  * sends due by then (ADR 0089 section 2); nothing for any other actor. */
 void ta_actor_move_clock(ta_actor *actor, ta_time time);
-/* A replaying actor's clock moved by a record that is not an input (ADR 0090
- * section 7's reducer): TA_ERR_INVALID, TA_ERR_BUSY or TA_ERR_NOT_FOUND as
- * an input's time would be refused. */
 
 /* Materialized effects of an unpublished replacement's bootstrap. */
 ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);

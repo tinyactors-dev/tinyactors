@@ -1885,9 +1885,6 @@ TA_PRIVATE bool ta_actor_input_time_valid(const ta_system *system, const ta_acto
 /* Moves a replaying actor's clock to a checked `time`, dropping held delayed
  * sends due by then (ADR 0089 section 2); nothing for any other actor. */
 TA_PRIVATE void ta_actor_move_clock(ta_actor *actor, ta_time time);
-/* A replaying actor's clock moved by a record that is not an input (ADR 0090
- * section 7's reducer): TA_ERR_INVALID, TA_ERR_BUSY or TA_ERR_NOT_FOUND as
- * an input's time would be refused. */
 
 /* Materialized effects of an unpublished replacement's bootstrap. */
 TA_PRIVATE ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);
@@ -2201,13 +2198,14 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
 TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
                                     ta_bytes *bytes);
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
-/* Frees cached event blocks until the cache holds no more than its limit
- * (ADR 0069); a limit of 0 frees them all, at teardown. */
 /* The interpreter scratch a definition needs (ADR 0092 section 3). */
 TA_PRIVATE size_t ta_interpreter_scratch_need(const ta_definition *definition);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 TA_PRIVATE void ta_interpreter_render_fault(ta_fault *fault);
-/* Fills the event-block cache to its limit, at creation (ADR 0092 section 3). */
+/* ta_interpreter_block_cache_trim frees cached event blocks until the cache
+ * holds no more than the system's block_cache_limit (ADR 0069); with a limit
+ * of 0 it empties the cache, which is what ta_system_destroy does. The cache
+ * fills on demand, never at creation (ADR 0093). It never allocates. */
 TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system);
 /* Frees the continuation and sparse state the system keeps for a run that
  * stops (ADR 0070), at teardown. */
