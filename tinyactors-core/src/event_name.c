@@ -9,7 +9,7 @@ ta_result ta_event_name_child(ta_event_name_table *table,
     if (!ta_atom_valid(table->atoms, segment)) {
         return TA_ERR_INVALID;
     }
-    return ta_trie_child(&table->trie, parent, segment, out);
+    return ta_trie_child(&table->trie, &(ta_trie_key){ parent, segment }, out);
 }
 
 static ta_result ta_event_name_builtin(ta_event_name_table *table, const char *parent_and_segment) {

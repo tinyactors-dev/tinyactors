@@ -57,14 +57,18 @@ bool ta_trie_valid(const ta_atom_trie *trie, uint32_t node) {
     return node < trie->nodes.count;
 }
 
-ta_result ta_trie_find(const ta_atom_trie *trie, uint32_t parent, ta_atom segment, uint32_t *out) {
+ta_result ta_trie_find(const ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out) {
+    uint32_t parent = key->parent;
+    ta_atom segment = key->segment;
     if (!ta_trie_valid(trie, parent) || segment == TA_ATOM_NONE) {
         return TA_ERR_INVALID;
     }
     return ta_trie_lookup(trie, parent, segment, ta_trie_hash(parent, segment), out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
-ta_result ta_trie_child(ta_atom_trie *trie, uint32_t parent, ta_atom segment, uint32_t *out) {
+ta_result ta_trie_child(ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out) {
+    uint32_t parent = key->parent;
+    ta_atom segment = key->segment;
     if (!ta_trie_valid(trie, parent) || segment == TA_ATOM_NONE) {
         return TA_ERR_INVALID;
     }

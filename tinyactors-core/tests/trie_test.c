@@ -55,31 +55,31 @@ static void test_basics(void) {
     uint32_t first = 0;
     uint32_t again = 0;
     uint32_t child = 0;
-    CHECK(ta_trie_find(&trie, TA_TRIE_ROOT, 5u, &first) == TA_ERR_NOT_FOUND);
+    CHECK(ta_trie_find(&trie, &(ta_trie_key){ TA_TRIE_ROOT, 5u }, &first) == TA_ERR_NOT_FOUND);
     CHECK(trie.nodes.count == 1u && ta_table_count(&trie.index) == 0); /* find made nothing */
-    CHECK(ta_trie_child(&trie, TA_TRIE_ROOT, 5u, &first) == TA_OK && first == 1u);
-    CHECK(ta_trie_child(&trie, TA_TRIE_ROOT, 5u, &again) == TA_OK && again == first);
-    CHECK(ta_trie_find(&trie, TA_TRIE_ROOT, 5u, &again) == TA_OK && again == first);
-    CHECK(ta_trie_child(&trie, first, 5u, &child) == TA_OK && child == 2u && child != first);
+    CHECK(ta_trie_child(&trie, &(ta_trie_key){ TA_TRIE_ROOT, 5u }, &first) == TA_OK && first == 1u);
+    CHECK(ta_trie_child(&trie, &(ta_trie_key){ TA_TRIE_ROOT, 5u }, &again) == TA_OK && again == first);
+    CHECK(ta_trie_find(&trie, &(ta_trie_key){ TA_TRIE_ROOT, 5u }, &again) == TA_OK && again == first);
+    CHECK(ta_trie_child(&trie, &(ta_trie_key){ first, 5u }, &child) == TA_OK && child == 2u && child != first);
     CHECK(trie.nodes.count == 3u && ta_table_count(&trie.index) == 2u);
     CHECK(ta_trie_segments(&trie, child, segments) == 2u && segments[0] == 5u && segments[1] == 5u);
     CHECK(ta_trie_under(&trie, child, first) && ta_trie_under(&trie, child, child) && ta_trie_under(&trie, child, TA_TRIE_ROOT));
     CHECK(!ta_trie_under(&trie, first, child));
 
     /* Refusals change nothing. */
-    CHECK(ta_trie_child(&trie, 99u, 1u, &again) == TA_ERR_INVALID);
-    CHECK(ta_trie_child(&trie, TA_TRIE_ROOT, TA_ATOM_NONE, &again) == TA_ERR_INVALID);
-    CHECK(ta_trie_find(&trie, 99u, 1u, &again) == TA_ERR_INVALID);
-    CHECK(ta_trie_find(&trie, TA_TRIE_ROOT, TA_ATOM_NONE, &again) == TA_ERR_INVALID);
+    CHECK(ta_trie_child(&trie, &(ta_trie_key){ 99u, 1u }, &again) == TA_ERR_INVALID);
+    CHECK(ta_trie_child(&trie, &(ta_trie_key){ TA_TRIE_ROOT, TA_ATOM_NONE }, &again) == TA_ERR_INVALID);
+    CHECK(ta_trie_find(&trie, &(ta_trie_key){ 99u, 1u }, &again) == TA_ERR_INVALID);
+    CHECK(ta_trie_find(&trie, &(ta_trie_key){ TA_TRIE_ROOT, TA_ATOM_NONE }, &again) == TA_ERR_INVALID);
     CHECK(trie.nodes.count == 3u);
 
     /* The depth limit: eight segments are fine, the ninth is not, and finding an existing path still works. */
     uint32_t node = TA_TRIE_ROOT;
     for (uint32_t depth = 1; depth <= 8u; depth += 1u) {
-        CHECK(ta_trie_child(&trie, node, 100u + depth, &node) == TA_OK);
+        CHECK(ta_trie_child(&trie, &(ta_trie_key){ node, 100u + depth }, &node) == TA_OK);
     }
     uint32_t count = trie.nodes.count;
-    CHECK(ta_trie_child(&trie, node, 1u, &again) == TA_ERR_INVALID);
+    CHECK(ta_trie_child(&trie, &(ta_trie_key){ node, 1u }, &again) == TA_ERR_INVALID);
     CHECK(trie.nodes.count == count);
     CHECK(ta_trie_segments(&trie, node, segments) == 8u && segments[7] == 108u && segments[0] == 101u);
 
@@ -123,8 +123,8 @@ static void test_random_paths(void) {
             path.atoms[index] = random32() % ALPHABET;
             uint32_t expected = trie.nodes.count;
             uint32_t found = 0;
-            bool existed = ta_trie_find(&trie, node, path.atoms[index], &found) == TA_OK;
-            CHECK(ta_trie_child(&trie, node, path.atoms[index], &node) == TA_OK);
+            bool existed = ta_trie_find(&trie, &(ta_trie_key){ node, path.atoms[index] }, &found) == TA_OK;
+            CHECK(ta_trie_child(&trie, &(ta_trie_key){ node, path.atoms[index] }, &node) == TA_OK);
             /* A node that is new is the next one in order: IDs are dense. */
             CHECK(existed ? node == found : node == expected && trie.nodes.count == expected + 1u);
             /* The node of a prefix is the node of exactly that prefix, whichever path reached it. */
@@ -168,7 +168,7 @@ static void test_allocation_failures(void) {
     uint32_t node = TA_TRIE_ROOT;
     for (uint32_t index = 0; index < RUN; index += 1u) {
         node = TA_TRIE_ROOT;
-        CHECK(ta_trie_child(&trie, TA_TRIE_ROOT, index, &node) == TA_OK);
+        CHECK(ta_trie_child(&trie, &(ta_trie_key){ TA_TRIE_ROOT, index }, &node) == TA_OK);
     }
     ta_trie_destroy(&trie);
     uint64_t init_and_run = heap.stats.allocations;
@@ -191,14 +191,14 @@ static void test_allocation_failures(void) {
         for (uint32_t index = 0; index < RUN; index += 1u) {
             uint32_t count = trie.nodes.count;
             uint32_t entries = ta_table_count(&trie.index);
-            result = ta_trie_child(&trie, TA_TRIE_ROOT, index, &node);
+            result = ta_trie_child(&trie, &(ta_trie_key){ TA_TRIE_ROOT, index }, &node);
             if (result != TA_OK) {
                 refused += 1u;
                 CHECK(result == TA_ERR_NOMEM);
                 CHECK(trie.nodes.count == count && ta_table_count(&trie.index) == entries);
                 uint32_t missing = 0;
-                CHECK(ta_trie_find(&trie, TA_TRIE_ROOT, index, &missing) == TA_ERR_NOT_FOUND);
-                CHECK(ta_trie_child(&trie, TA_TRIE_ROOT, index, &node) == TA_OK);
+                CHECK(ta_trie_find(&trie, &(ta_trie_key){ TA_TRIE_ROOT, index }, &missing) == TA_ERR_NOT_FOUND);
+                CHECK(ta_trie_child(&trie, &(ta_trie_key){ TA_TRIE_ROOT, index }, &node) == TA_OK);
             }
             CHECK(node == index + 1u);
         }
@@ -206,7 +206,7 @@ static void test_allocation_failures(void) {
         CHECK(refused <= 1u);
         for (uint32_t index = 0; index < RUN; index += 1u) {
             uint32_t found = 0;
-            CHECK(ta_trie_find(&trie, TA_TRIE_ROOT, index, &found) == TA_OK && found == index + 1u);
+            CHECK(ta_trie_find(&trie, &(ta_trie_key){ TA_TRIE_ROOT, index }, &found) == TA_OK && found == index + 1u);
         }
         ta_trie_destroy(&trie);
         ta_test_allocator_disarm(&heap);

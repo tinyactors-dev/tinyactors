@@ -60,8 +60,8 @@
  *     ta_atom_trie trie;
  *     ta_trie_init(&trie, allocator, 16);
  *     uint32_t done, invoke;                         // atoms made by the owner
- *     ta_trie_child(&trie, TA_TRIE_ROOT, done_atom, &done);
- *     ta_trie_child(&trie, done, invoke_atom, &invoke);
+ *     ta_trie_child(&trie, &(ta_trie_key){ TA_TRIE_ROOT, done_atom }, &done);
+ *     ta_trie_child(&trie, &(ta_trie_key){ done, invoke_atom }, &invoke);
  *     ta_trie_under(&trie, invoke, done);            // true: done.invoke is under done
  */
 
@@ -69,8 +69,8 @@
 #define TA_TRIE_ROOT 0u
 /* TA_TRIE_MAX_DEPTH is the ceiling of max_depth; it sizes the arrays callers pass to ta_trie_segments. */
 #define TA_TRIE_MAX_DEPTH 64u
-/* Slots per index page: 2 KiB, so the index grows in small, flat steps. */
-#define TA_TRIE_PAGE_SLOTS 256u
+/* Slots per index page: 8 KiB, so the index grows in small, flat steps. */
+#define TA_TRIE_PAGE_SLOTS 1024u
 
 typedef struct ta_trie_node {
     uint32_t parent;
@@ -94,15 +94,21 @@ ta_result ta_trie_init(ta_atom_trie *trie, ta_allocator allocator, uint32_t max_
 /* ta_trie_destroy frees the nodes and the index; every node ID is dead. */
 void ta_trie_destroy(ta_atom_trie *trie);
 
+/* ta_trie_key names a child: the node it hangs from and its segment atom. A call-lifetime value, copied by the callee. */
+typedef struct ta_trie_key {
+    uint32_t parent;
+    ta_atom segment;
+} ta_trie_key;
+
 /*
- * ta_trie_child stores in *out the node of `segment` below `parent`, making
+ * ta_trie_child stores in *out the node of key->segment below key->parent, making
  * it if it is new. Allocates only for a new node (see the package comment).
  * TA_ERR_INVALID for an unknown parent, TA_ATOM_NONE or a path longer than
  * max_depth; TA_ERR_NOMEM when memory is out. Failure leaves no node.
  */
-ta_result ta_trie_child(ta_atom_trie *trie, uint32_t parent, ta_atom segment, uint32_t *out);
+ta_result ta_trie_child(ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out);
 /* ta_trie_find is ta_trie_child without the making: TA_ERR_NOT_FOUND when the node does not exist. Never allocates. */
-ta_result ta_trie_find(const ta_atom_trie *trie, uint32_t parent, ta_atom segment, uint32_t *out);
+ta_result ta_trie_find(const ta_atom_trie *trie, const ta_trie_key *key, uint32_t *out);
 /* ta_trie_valid says whether `node` is a node of this trie (the root is). */
 bool ta_trie_valid(const ta_atom_trie *trie, uint32_t node);
 /*
