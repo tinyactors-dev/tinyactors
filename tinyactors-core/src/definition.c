@@ -110,7 +110,7 @@ bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
                               ta_event_name_id event) {
     ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&definition->system->event_names, event, segments);
+    uint32_t count = ta_trie_segments(&definition->system->event_names.trie, event, segments);
     if (count == 0) {
         return false;
     }

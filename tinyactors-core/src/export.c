@@ -91,7 +91,7 @@ static ta_str ta_export_authored(const ta_exporter *exporter, ta_authored_text_i
 /* A dotted event name. The compiler rejects empty segments, so joining them restores the text. */
 static ta_str ta_export_event_name(ta_exporter *exporter, ta_event_name_id name) {
     ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&exporter->system->event_names, name, segments);
+    uint32_t count = ta_trie_segments(&exporter->system->event_names.trie, name, segments);
     if (count == 1) {
         return ta_export_atom(exporter, segments[0]);
     }

@@ -73,7 +73,7 @@ static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
         return true;
     }
     ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&system->event_names, event->name, segments);
+    uint32_t count = ta_trie_segments(&system->event_names.trie, event->name, segments);
     for (uint32_t index = 0; index < count; index += 1) {
         if (index != 0) {
             ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });

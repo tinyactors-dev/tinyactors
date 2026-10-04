@@ -399,11 +399,11 @@ static void ta_trace_fault(ta_trace_record *record, const ta_fault *fault) {
 
 /* Counts one error event by its kind (ADR 0072); other events count nothing. */
 static void ta_count_error(ta_system *system, const ta_actor *actor, ta_event_name_id name) {
-    if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_EXECUTION)) {
+    if (ta_trie_under(&system->event_names.trie, name, TA_EVENT_NAME_ERROR_EXECUTION)) {
         TA_COUNT(system, actor->definition, errors_execution);
-    } else if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_COMMUNICATION)) {
+    } else if (ta_trie_under(&system->event_names.trie, name, TA_EVENT_NAME_ERROR_COMMUNICATION)) {
         TA_COUNT(system, actor->definition, errors_communication);
-    } else if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_PLATFORM)) {
+    } else if (ta_trie_under(&system->event_names.trie, name, TA_EVENT_NAME_ERROR_PLATFORM)) {
         TA_COUNT(system, actor->definition, errors_platform);
     }
 }

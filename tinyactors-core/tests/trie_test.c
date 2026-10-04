@@ -214,7 +214,69 @@ static void test_allocation_failures(void) {
     }
 }
 
+static bool name_is(const ta_event_name_table *names, ta_event_name_id name, const char *expected) {
+    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
+    uint32_t count = ta_trie_segments(&names->trie, name, segments);
+    uint32_t at = 0;
+    for (uint32_t index = 0; index < count; index += 1u) {
+        ta_str text = ta_atom_text(names->atoms, segments[index]);
+        if (index > 0) {
+            if (expected[at] != '.') {
+                return false;
+            }
+            at += 1u;
+        }
+        for (uint32_t byte = 0; byte < text.len; byte += 1u, at += 1u) {
+            if (expected[at] != text.ptr[byte]) {
+                return false;
+            }
+        }
+    }
+    return expected[at] == '\0';
+}
+
+/* Event names are the trie's nodes: the built-ins have the IDs of the constants, in order. */
+static void test_event_names(void) {
+    ta_test_allocator_reset_counts(&heap);
+    ta_atom_table atoms;
+    ta_event_name_table names;
+    CHECK(ta_atom_table_init(&atoms, ta_test_allocator_get(&heap)) == TA_OK);
+    CHECK(ta_event_name_table_init(&names, ta_test_allocator_get(&heap), &atoms) == TA_OK);
+    CHECK(names.trie.nodes.count == 8u);
+    CHECK(name_is(&names, TA_EVENT_NAME_ROOT, ""));
+    CHECK(name_is(&names, TA_EVENT_NAME_ERROR, "error"));
+    CHECK(name_is(&names, TA_EVENT_NAME_ERROR_EXECUTION, "error.execution"));
+    CHECK(name_is(&names, TA_EVENT_NAME_ERROR_COMMUNICATION, "error.communication"));
+    CHECK(name_is(&names, TA_EVENT_NAME_ERROR_PLATFORM, "error.platform"));
+    CHECK(name_is(&names, TA_EVENT_NAME_DONE, "done"));
+    CHECK(name_is(&names, TA_EVENT_NAME_DONE_STATE, "done.state"));
+    CHECK(name_is(&names, TA_EVENT_NAME_DONE_INVOKE, "done.invoke"));
+
+    ta_event_name_id name = 0;
+    ta_event_name_id again = 0;
+    CHECK(ta_event_name_intern_dotted(&names, (ta_str){ "done.invoke.x", 13 }, &name) == TA_OK);
+    CHECK(name == 8u && name_is(&names, name, "done.invoke.x"));
+    CHECK(ta_event_name_intern_dotted(&names, (ta_str){ "done.invoke.x", 13 }, &again) == TA_OK && again == name);
+    CHECK(ta_trie_under(&names.trie, name, TA_EVENT_NAME_DONE_INVOKE) && !ta_trie_under(&names.trie, name, TA_EVENT_NAME_ERROR));
+    CHECK(ta_event_name_intern_dotted(&names, (ta_str){ "done..x", 7 }, &again) == TA_ERR_INVALID);
+    CHECK(ta_event_name_child(&names, name, atoms.entries.count, &again) == TA_ERR_INVALID); /* not an atom */
+    CHECK(ta_event_name_child(&names, 1000u, 0, &again) == TA_ERR_INVALID);              /* not a name */
+
+    /* The system lowers the limit after init (eventNameDepth). */
+    names.trie.max_depth = 3u;
+    CHECK(ta_event_name_intern_dotted(&names, (ta_str){ "a.b.c", 5 }, &again) == TA_OK);
+    CHECK(ta_event_name_intern_dotted(&names, (ta_str){ "a.b.c.d", 7 }, &again) == TA_ERR_INVALID);
+    ta_atom list[4] = { 1u, 1u, 1u, 1u };
+    CHECK(ta_event_name_intern_atoms_internal(&names, &(ta_atom_list){ .atoms = list, .count = 4u }, &again) == TA_ERR_INVALID);
+    CHECK(ta_event_name_intern_atoms_internal(&names, &(ta_atom_list){ .atoms = list, .count = 3u }, &again) == TA_OK);
+
+    ta_event_name_table_destroy(&names);
+    ta_atom_table_destroy(&atoms);
+    CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
+}
+
 int main(void) {
+    test_event_names();
     test_basics();
     test_random_paths();
     test_allocation_failures();

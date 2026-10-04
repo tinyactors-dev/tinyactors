@@ -289,7 +289,7 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     }
     result = ta_event_name_table_init(&system->event_names, config->allocator, &system->atoms);
     if (result == TA_OK) {
-        system->event_names.max_depth = params[TA_PARAM_EVENT_NAME_DEPTH];
+        system->event_names.trie.max_depth = params[TA_PARAM_EVENT_NAME_DEPTH];
         result = ta_timer_heap_init(&system->timers, config->allocator);
     }
     if (result == TA_OK) {
@@ -875,16 +875,16 @@ ta_result ta_event_name_intern(ta_system *system, const ta_atom_list *segments, 
 }
 
 bool ta_event_name_matches(const ta_system *system, ta_event_name_id event, ta_event_name_id prefix) {
-    return system != NULL && ta_event_name_matches_internal(&system->event_names, event, prefix);
+    return system != NULL && ta_trie_under(&system->event_names.trie, event, prefix);
 }
 
 ta_result ta_event_name_format(const ta_system *system, const ta_event_name_format_params *params) {
     if (system == NULL || params == NULL || params->needed == NULL ||
-        !ta_event_name_valid(&system->event_names, params->name)) {
+        !ta_trie_valid(&system->event_names.trie, params->name)) {
         return TA_ERR_INVALID;
     }
     ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&system->event_names, params->name, segments);
+    uint32_t count = ta_trie_segments(&system->event_names.trie, params->name, segments);
     uint32_t length = 0;
     for (uint32_t index = 0; index < count; index += 1) {
         length += ta_atom_text(&system->atoms, segments[index]).len + (index == 0 ? 0u : 1u);

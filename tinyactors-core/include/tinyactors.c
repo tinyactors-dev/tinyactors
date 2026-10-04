@@ -1753,27 +1753,48 @@ TA_PRIVATE bool ta_session_route(const ta_system *system, const ta_actor_ref *re
 
 
 
-typedef struct {
-    ta_event_name_id parent;
-    ta_atom segment;
-    uint16_t depth;
-    uint16_t flags;
-    uint32_t hash_next;
-} ta_event_name_node;
+/*
+ * Package event_name is the event-name vocabulary of core (ADR 0007): the
+ * one user of the atom trie (block D7, trie.h) that knows what the paths
+ * mean. An event name is the path of the atoms of its dot-separated
+ * segments; `done.invoke.x` is (done, invoke, x). The name's ID is its node
+ * in the trie, so the nodes, their IDs, validity, segments and the prefix
+ * test are the trie's: ta_trie_valid, ta_trie_segments and ta_trie_under on
+ * `table->trie`. What stays here is what is specific to events:
+ *
+ *   - the built-in names every system has, with fixed IDs (the
+ *     TA_EVENT_NAME_* constants), made at init in that order;
+ *   - the check that a segment is an atom of this system's atom table, which
+ *     the trie, knowing atoms only as numbers, cannot make;
+ *   - the dotted text form, used by the compiler for authored names.
+ *
+ * Lifetime: system. The table does not own the atom table it points at (the
+ * system does, and destroys the trie first); the trie it embeds owns its
+ * nodes and index. Names are never removed.
+ *
+ * When it allocates. ta_event_name_table_init, and the three functions that
+ * intern (ta_event_name_child, ta_event_name_intern_atoms_internal,
+ * ta_event_name_intern_dotted) when a name or atom is new. The latter two
+ * run at registration and compile time, and today also for invoke IDs
+ * inside a macrostep; Phase 4 (4.2) of the ring protocol removes run-time
+ * interning (see trie.h and atom.h for how growth is requested meanwhile).
+ * Matching and lookup (the trie functions) never allocate.
+ *
+ * Example:
+ *
+ *     ta_event_name_id name;
+ *     ta_event_name_intern_dotted(&system->event_names, (ta_str){ "done.invoke.x", 13 }, &name);
+ *     ta_trie_under(&system->event_names.trie, name, TA_EVENT_NAME_DONE_INVOKE);   // true
+ */
 
 typedef struct {
-    ta_allocator allocator;
     ta_atom_table *atoms;
-    ta_vec nodes;
-    uint32_t *buckets;
-    uint32_t bucket_count;
-    /* Segments a name may have: the system's eventNameDepth (ADR 0092),
-     * at most TA_EVENT_NAME_MAX_DEPTH, which sizes callers' arrays. */
-    uint32_t max_depth;
+    /* Event names are the trie's nodes. Its max_depth is the system's eventNameDepth (ADR 0092). */
+    ta_atom_trie trie;
 } ta_event_name_table;
 
 enum {
-    TA_EVENT_NAME_ROOT = 0u,
+    TA_EVENT_NAME_ROOT = TA_TRIE_ROOT,
     TA_EVENT_NAME_ERROR = 1u,
     TA_EVENT_NAME_ERROR_EXECUTION = 2u,
     TA_EVENT_NAME_ERROR_COMMUNICATION = 3u,
@@ -1784,30 +1805,38 @@ enum {
 };
 
 /* The ceiling of eventNameDepth (ADR 0092): it sizes segment arrays. */
-#define TA_EVENT_NAME_MAX_DEPTH 64u
+#define TA_EVENT_NAME_MAX_DEPTH TA_TRIE_MAX_DEPTH
 
+/*
+ * ta_event_name_table_init makes the table over `atoms` with the built-in
+ * names, the depth limit at its ceiling (the system lowers
+ * table->trie.max_depth afterwards). Safe point: it allocates. On failure
+ * nothing is left allocated.
+ */
 TA_PRIVATE ta_result ta_event_name_table_init(ta_event_name_table *table,
                                    ta_allocator allocator,
                                    ta_atom_table *atoms);
+/* ta_event_name_table_destroy frees the trie; every name ID is dead. */
 TA_PRIVATE void ta_event_name_table_destroy(ta_event_name_table *table);
+/*
+ * ta_event_name_intern_atoms_internal interns the name made of `segments`,
+ * each of which must be an atom of the atom table, at most max_depth of them.
+ * TA_ERR_INVALID otherwise. Allocates for a new name.
+ */
 TA_PRIVATE ta_result ta_event_name_intern_atoms_internal(ta_event_name_table *table,
                                               const ta_atom_list *segments,
                                               ta_event_name_id *out);
-/* Interns one more segment below `parent`. */
+/*
+ * ta_event_name_child interns one more segment below `parent`;
+ * TA_ERR_INVALID if parent is no name, the segment is no atom of the atom
+ * table, or the name would be deeper than max_depth. Allocates for a new name.
+ */
 TA_PRIVATE ta_result ta_event_name_child(ta_event_name_table *table,
                               ta_event_name_id parent,
                               ta_atom segment,
                               ta_event_name_id *out);
-/* Interns a dotted name; used by the compiler for authored names only. */
+/* Interns a dotted name; used by the compiler for authored names only. Allocates. */
 TA_PRIVATE ta_result ta_event_name_intern_dotted(ta_event_name_table *table, ta_str dotted, ta_event_name_id *out);
-TA_PRIVATE bool ta_event_name_matches_internal(const ta_event_name_table *table,
-                                    ta_event_name_id event,
-                                    ta_event_name_id prefix);
-TA_PRIVATE bool ta_event_name_valid(const ta_event_name_table *table, ta_event_name_id name);
-/* Writes the name's segments root-first; returns the segment count. */
-TA_PRIVATE uint32_t ta_event_name_segments(const ta_event_name_table *table,
-                                ta_event_name_id name,
-                                ta_atom out[TA_EVENT_NAME_MAX_DEPTH]);
 
 
 
@@ -6104,78 +6133,16 @@ TA_PRIVATE bool ta_session_route(const ta_system *system, const ta_actor_ref *re
 }
 
 
-static const ta_event_name_node *ta_event_name_node_at(const ta_event_name_table *table,
-                                                       ta_event_name_id name) {
-    return ta_vec_at(&table->nodes, name);
-}
-
-static uint32_t ta_event_name_hash(ta_event_name_id parent, ta_atom segment) {
-    uint32_t key[2] = { parent, segment };
-    /* Offsetting the basis keeps these hashes apart from the atom table's. */
-    return ta_fnv1a32(TA_FNV1A32_BASIS ^ 0x9e3779b9u, key, sizeof(key));
-}
-
-static ta_result ta_event_name_rehash(ta_event_name_table *table, uint32_t bucket_count) {
-    uint32_t *buckets = ta_mem_alloc(table->allocator, bucket_count * sizeof(uint32_t),
-                                     _Alignof(uint32_t));
-    if (buckets == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    for (uint32_t index = 0; index < bucket_count; index += 1) {
-        buckets[index] = UINT32_MAX;
-    }
-    /* Node 0 is the root and is never looked up as a child. */
-    for (uint32_t name = 1; name < table->nodes.count; name += 1) {
-        ta_event_name_node *node = ta_vec_at(&table->nodes, name);
-        uint32_t bucket = ta_event_name_hash(node->parent, node->segment) & (bucket_count - 1u);
-        node->hash_next = buckets[bucket];
-        buckets[bucket] = name;
-    }
-    ta_mem_free(table->allocator, table->buckets,
-                &(ta_allocator_free_params){ .size = table->bucket_count * sizeof(uint32_t),
-                                             .alignment = _Alignof(uint32_t) });
-    table->buckets = buckets;
-    table->bucket_count = bucket_count;
-    return TA_OK;
-}
+/* The package comment is in event_name.h. */
 
 TA_PRIVATE ta_result ta_event_name_child(ta_event_name_table *table,
                               ta_event_name_id parent,
                               ta_atom segment,
                               ta_event_name_id *out) {
-    if (!ta_event_name_valid(table, parent) || !ta_atom_valid(table->atoms, segment)) {
+    if (!ta_atom_valid(table->atoms, segment)) {
         return TA_ERR_INVALID;
     }
-    uint32_t depth = ta_event_name_node_at(table, parent)->depth + 1u;
-    if (depth > table->max_depth) {
-        return TA_ERR_INVALID;
-    }
-    uint32_t hash = ta_event_name_hash(parent, segment);
-    for (uint32_t name = table->buckets[hash & (table->bucket_count - 1u)]; name != UINT32_MAX;) {
-        const ta_event_name_node *node = ta_event_name_node_at(table, name);
-        if (node->parent == parent && node->segment == segment) {
-            *out = name;
-            return TA_OK;
-        }
-        name = node->hash_next;
-    }
-    uint32_t name = table->nodes.count;
-    ta_event_name_node node = {
-        .parent = parent,
-        .segment = segment,
-        .depth = (uint16_t)depth,
-        .hash_next = table->buckets[hash & (table->bucket_count - 1u)],
-    };
-    ta_result result = ta_vec_push(&table->nodes, &node);
-    if (result != TA_OK) {
-        return result;
-    }
-    table->buckets[hash & (table->bucket_count - 1u)] = name;
-    if (table->nodes.count > table->bucket_count) {
-        (void)ta_event_name_rehash(table, table->bucket_count * 2u);
-    }
-    *out = name;
-    return TA_OK;
+    return ta_trie_child(&table->trie, parent, segment, out);
 }
 
 static ta_result ta_event_name_builtin(ta_event_name_table *table, const char *parent_and_segment) {
@@ -6194,13 +6161,8 @@ static ta_result ta_event_name_builtin(ta_event_name_table *table, const char *p
 TA_PRIVATE ta_result ta_event_name_table_init(ta_event_name_table *table,
                                    ta_allocator allocator,
                                    ta_atom_table *atoms) {
-    *table = (ta_event_name_table){ .allocator = allocator, .atoms = atoms, .max_depth = TA_EVENT_NAME_MAX_DEPTH };
-    ta_vec_init(&table->nodes, allocator, TA_VEC_LAYOUT(ta_event_name_node));
-    ta_event_name_node root = { .parent = TA_EVENT_NAME_ROOT, .segment = TA_ATOM_NONE };
-    ta_result result = ta_vec_push(&table->nodes, &root);
-    if (result == TA_OK) {
-        result = ta_event_name_rehash(table, 64);
-    }
+    *table = (ta_event_name_table){ .atoms = atoms };
+    ta_result result = ta_trie_init(&table->trie, allocator, TA_EVENT_NAME_MAX_DEPTH);
     /* Order matches the TA_EVENT_NAME_* constants. */
     static const char *const builtins[] = {
         "0:error", "1:execution", "1:communication", "1:platform",
@@ -6216,23 +6178,14 @@ TA_PRIVATE ta_result ta_event_name_table_init(ta_event_name_table *table,
 }
 
 TA_PRIVATE void ta_event_name_table_destroy(ta_event_name_table *table) {
-    ta_vec_destroy(&table->nodes);
-    ta_mem_free(table->allocator, table->buckets,
-                &(ta_allocator_free_params){ .size = table->bucket_count * sizeof(uint32_t),
-                                             .alignment = _Alignof(uint32_t) });
-    table->buckets = NULL;
-    table->bucket_count = 0;
-}
-
-TA_PRIVATE bool ta_event_name_valid(const ta_event_name_table *table, ta_event_name_id name) {
-    return name < table->nodes.count;
+    ta_trie_destroy(&table->trie);
 }
 
 TA_PRIVATE ta_result ta_event_name_intern_atoms_internal(ta_event_name_table *table,
                                               const ta_atom_list *segments,
                                               ta_event_name_id *out) {
     if (segments == NULL || segments->count == 0 || segments->atoms == NULL ||
-        segments->count > table->max_depth) {
+        segments->count > table->trie.max_depth) {
         return TA_ERR_INVALID;
     }
     for (uint32_t index = 0; index < segments->count; index += 1) {
@@ -6278,34 +6231,6 @@ TA_PRIVATE ta_result ta_event_name_intern_dotted(ta_event_name_table *table, ta_
     }
     *out = name;
     return TA_OK;
-}
-
-TA_PRIVATE bool ta_event_name_matches_internal(const ta_event_name_table *table,
-                                    ta_event_name_id event,
-                                    ta_event_name_id prefix) {
-    if (!ta_event_name_valid(table, event) || !ta_event_name_valid(table, prefix)) {
-        return false;
-    }
-    uint16_t depth = ta_event_name_node_at(table, prefix)->depth;
-    while (ta_event_name_node_at(table, event)->depth > depth) {
-        event = ta_event_name_node_at(table, event)->parent;
-    }
-    return event == prefix;
-}
-
-TA_PRIVATE uint32_t ta_event_name_segments(const ta_event_name_table *table,
-                                ta_event_name_id name,
-                                ta_atom out[TA_EVENT_NAME_MAX_DEPTH]) {
-    if (!ta_event_name_valid(table, name)) {
-        return 0;
-    }
-    uint32_t depth = ta_event_name_node_at(table, name)->depth;
-    for (uint32_t index = depth; index > 0; index -= 1) {
-        const ta_event_name_node *node = ta_event_name_node_at(table, name);
-        out[index - 1u] = node->segment;
-        name = node->parent;
-    }
-    return depth;
 }
 
 
@@ -7825,7 +7750,7 @@ static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
         return true;
     }
     ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&system->event_names, event->name, segments);
+    uint32_t count = ta_trie_segments(&system->event_names.trie, event->name, segments);
     for (uint32_t index = 0; index < count; index += 1) {
         if (index != 0) {
             ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
@@ -9813,7 +9738,7 @@ TA_PRIVATE bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
                               ta_event_name_id event) {
     ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&definition->system->event_names, event, segments);
+    uint32_t count = ta_trie_segments(&definition->system->event_names.trie, event, segments);
     if (count == 0) {
         return false;
     }
@@ -12988,7 +12913,7 @@ static ta_str ta_export_authored(const ta_exporter *exporter, ta_authored_text_i
 /* A dotted event name. The compiler rejects empty segments, so joining them restores the text. */
 static ta_str ta_export_event_name(ta_exporter *exporter, ta_event_name_id name) {
     ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&exporter->system->event_names, name, segments);
+    uint32_t count = ta_trie_segments(&exporter->system->event_names.trie, name, segments);
     if (count == 1) {
         return ta_export_atom(exporter, segments[0]);
     }
@@ -14541,7 +14466,7 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
     const ta_definition *definition = actor->definition;
     for (uint32_t index = 0; index < count; index += 1) {
         const ta_delayed_send_info *info = &params->pending_sends[index];
-        if (!ta_event_name_valid(&system->event_names, info->event) ||
+        if (!ta_trie_valid(&system->event_names.trie, info->event) ||
             (info->has_content && info->content >= definition->content_count) ||
             (info->has_target_text && info->target_text >= definition->content_count) ||
             (info->destination.kind == TA_ACTOR_REF_RUNTIME &&
@@ -14803,7 +14728,7 @@ static ta_result ta_actor_state_check(const ta_system *system, const ta_definiti
         if (info->submitted) {
             continue;
         }
-        if (!ta_event_name_valid(&system->event_names, info->event) || !ta_atom_valid(&system->atoms, info->io_type) ||
+        if (!ta_trie_valid(&system->event_names.trie, info->event) || !ta_atom_valid(&system->atoms, info->io_type) ||
             (info->has_content && info->content >= definition->content_count) ||
             (info->has_target_text && info->target_text >= definition->content_count)) {
             return TA_ERR_INVALID;
@@ -15312,7 +15237,7 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
         return TA_ERR_NOT_FOUND;
     }
     const ta_operator_transition *transition = params->transition;
-    if (!ta_event_name_valid(&system->event_names, event->name) || event->name == TA_EVENT_NAME_ROOT ||
+    if (!ta_trie_valid(&system->event_names.trie, event->name) || event->name == TA_EVENT_NAME_ROOT ||
         (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||
         !ta_actor_input_time_valid(system, actor, params->time)) {
         return TA_ERR_INVALID;
@@ -17644,7 +17569,7 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     result = ta_event_name_table_init(&system->event_names, config->allocator, &system->atoms);
     if (result == TA_OK) {
-        system->event_names.max_depth = params[TA_PARAM_EVENT_NAME_DEPTH];
+        system->event_names.trie.max_depth = params[TA_PARAM_EVENT_NAME_DEPTH];
         result = ta_timer_heap_init(&system->timers, config->allocator);
     }
     if (result == TA_OK) {
@@ -18230,16 +18155,16 @@ TA_API ta_result ta_event_name_intern(ta_system *system, const ta_atom_list *seg
 }
 
 TA_API bool ta_event_name_matches(const ta_system *system, ta_event_name_id event, ta_event_name_id prefix) {
-    return system != NULL && ta_event_name_matches_internal(&system->event_names, event, prefix);
+    return system != NULL && ta_trie_under(&system->event_names.trie, event, prefix);
 }
 
 TA_API ta_result ta_event_name_format(const ta_system *system, const ta_event_name_format_params *params) {
     if (system == NULL || params == NULL || params->needed == NULL ||
-        !ta_event_name_valid(&system->event_names, params->name)) {
+        !ta_trie_valid(&system->event_names.trie, params->name)) {
         return TA_ERR_INVALID;
     }
     ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&system->event_names, params->name, segments);
+    uint32_t count = ta_trie_segments(&system->event_names.trie, params->name, segments);
     uint32_t length = 0;
     for (uint32_t index = 0; index < count; index += 1) {
         length += ta_atom_text(&system->atoms, segments[index]).len + (index == 0 ? 0u : 1u);
@@ -18793,11 +18718,11 @@ static void ta_trace_fault(ta_trace_record *record, const ta_fault *fault) {
 
 /* Counts one error event by its kind (ADR 0072); other events count nothing. */
 static void ta_count_error(ta_system *system, const ta_actor *actor, ta_event_name_id name) {
-    if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_EXECUTION)) {
+    if (ta_trie_under(&system->event_names.trie, name, TA_EVENT_NAME_ERROR_EXECUTION)) {
         TA_COUNT(system, actor->definition, errors_execution);
-    } else if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_COMMUNICATION)) {
+    } else if (ta_trie_under(&system->event_names.trie, name, TA_EVENT_NAME_ERROR_COMMUNICATION)) {
         TA_COUNT(system, actor->definition, errors_communication);
-    } else if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_PLATFORM)) {
+    } else if (ta_trie_under(&system->event_names.trie, name, TA_EVENT_NAME_ERROR_PLATFORM)) {
         TA_COUNT(system, actor->definition, errors_platform);
     }
 }
