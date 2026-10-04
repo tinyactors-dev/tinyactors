@@ -2956,7 +2956,8 @@ typedef struct {
 typedef struct {
     ta_definition *definition;
     uint32_t generation;
-    /* While free: the next free slot, or UINT32_MAX. */
+    /* The pool's free-list link: the next free slot's pool index (0 for none) while the
+     * slot is free, zero while it is in use. */
     uint32_t next_free;
 } ta_definition_slot;
 
@@ -2973,11 +2974,12 @@ struct ta_system {
     ta_event_name_table event_names;
 
     /*
-     * ta_definition_slot; a definition ID is a handle (handle.h), as
-     * for actors. Freed slots form a list through `next_free`.
+     * ta_definition_slot; a definition ID is a handle (handle.h), as for
+     * actors. An index pool (pool.h; lifetime: system): freed slots form a
+     * free list through `next_free`, and a slot is recycled with a new
+     * generation, never freed before the system's destroy.
      */
-    ta_vec definitions;
-    uint32_t free_definition_slot;
+    ta_pool definitions;
     /* Compiled definitions still owned by callers, reclaimed at teardown. */
     ta_definition *unregistered_definitions;
     /* Orders registrations, so the newest identity match wins after slot reuse. */
@@ -3059,6 +3061,8 @@ struct ta_system {
  * unknown or stale ID.
  */
 TA_PRIVATE ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
+/* The definition slot numbered `slot`, or NULL when it was never issued. Never allocates. */
+TA_PRIVATE ta_definition_slot *ta_system_definition_slot(const ta_system *system, uint32_t slot);
 /*
  * A nested interpreter's two arenas (ADR 0092 section 3): region `depth`,
  * from 1, allocated the first time it is needed and kept. TA_ERR_UNSUPPORTED
@@ -15385,8 +15389,8 @@ TA_API ta_result ta_session_image_definition(const ta_system *system, const ta_s
     if (result != TA_ERR_NOT_FOUND) {
         return result;
     }
-    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
-        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+    for (uint32_t slot = 0; slot < ta_pool_extent(&system->definitions); slot += 1) {
+        const ta_definition_slot *entry = ta_system_definition_slot(system, slot);
         const ta_definition *definition = entry->definition;
         if (definition != NULL && !definition->retired &&
             ta_str_equal(definition->identity.family.name, image->definition.family.name)) {
@@ -16731,6 +16735,22 @@ TA_PRIVATE bool ta_system_quota_actor(ta_system *system) {
     return true;
 }
 
+/* A definition slot that has never been issued: generation 1 (0 is never issued) and no definition. */
+static const ta_definition_slot ta_definition_slot_fresh = { .generation = 1 };
+
+/* Definition slots are few and small: a 1 KiB page holds sixty-four. */
+#define TA_DEFINITION_PAGE_SLOTS 64u
+
+/*
+ * ta_system_definition_slot returns the definition slot numbered `slot`
+ * (0-based, the number a definition ID carries), or NULL when that slot was
+ * never issued. The pool counts from 1; this is the one place the table adds
+ * the 1. The slot is valid until the system is destroyed. Never allocates.
+ */
+TA_PRIVATE ta_definition_slot *ta_system_definition_slot(const ta_system *system, uint32_t slot) {
+    return ta_pool_at(&system->definitions, slot + 1u);
+}
+
 TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     if (config == NULL || out == NULL || config->allocator.v == NULL ||
         config->allocator.v->alloc == NULL || config->allocator.v->free == NULL) {
@@ -16754,13 +16774,19 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
     ta_result table_result = ta_actor_table_init(&system->actors, config->allocator);
+    if (table_result == TA_OK) {
+        table_result = ta_pool_init(&system->definitions, config->allocator,
+                                    &(ta_pool_params){ .item_size = sizeof(ta_definition_slot),
+                                                       .item_alignment = _Alignof(ta_definition_slot),
+                                                       .link_offset = offsetof(ta_definition_slot, next_free),
+                                                       .page_items = TA_DEFINITION_PAGE_SLOTS,
+                                                       .fresh = &ta_definition_slot_fresh });
+    }
     if (table_result != TA_OK) {
         ta_mem_free(config->allocator, system,
                     &(ta_allocator_free_params){ .size = sizeof(ta_system), .alignment = _Alignof(ta_system) });
         return table_result; /* only a bad constant can fail here: the pool allocates nothing */
     }
-    ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
-    system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
     ta_vec_init(&system->invokers, config->allocator, TA_VEC_LAYOUT(ta_invoker_registration));
     ta_address_table_init(&system->addresses, config->allocator);
@@ -16819,15 +16845,15 @@ TA_API void ta_system_destroy(ta_system *system) {
     }
     /* Every actor is gone, so every definition goes, retired or not, and
      * the host hears of each while it is still intact (ADR 0079). */
-    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
-        ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+    for (uint32_t slot = 0; slot < ta_pool_extent(&system->definitions); slot += 1) {
+        ta_definition_slot *entry = ta_system_definition_slot(system, slot);
         if (entry->definition != NULL) {
             ta_system_tell_definition(system, entry->definition, TA_DEFINITION_EVENT_FREED);
             ta_definition_destroy(entry->definition);
             entry->definition = NULL;
         }
     }
-    ta_vec_destroy(&system->definitions);
+    ta_pool_destroy(&system->definitions);
     ta_timer_heap_destroy(&system->timers);
     ta_pool_destroy(&system->actors);
     /* After the actors: their held events released their MESSAGE origins. */
@@ -16934,8 +16960,8 @@ static bool ta_bytes_same(ta_bytes left, ta_bytes right);
 static ta_definition *ta_system_live_definition(const ta_system *system, const ta_definition_identity *identity) {
     /* Slots are reused, so registration order decides: the newest match wins. */
     ta_definition *best = NULL;
-    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
-        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+    for (uint32_t slot = 0; slot < ta_pool_extent(&system->definitions); slot += 1) {
+        const ta_definition_slot *entry = ta_system_definition_slot(system, slot);
         ta_definition *definition = entry->definition;
         if (definition == NULL || definition->retired ||
             (best != NULL && best->registration_serial > definition->registration_serial)) {
@@ -16983,8 +17009,8 @@ static bool ta_definition_same_handles(const ta_definition *left, const ta_defin
 static ta_result ta_system_match_definition(const ta_system *system, const ta_definition *definition,
                                             ta_definition **out) {
     ta_definition *best = NULL;
-    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1u) {
-        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+    for (uint32_t slot = 0; slot < ta_pool_extent(&system->definitions); slot += 1u) {
+        const ta_definition_slot *entry = ta_system_definition_slot(system, slot);
         ta_definition *live = entry->definition;
         if (live == NULL || live->retired || !ta_str_equal(live->identity.family.name, definition->identity.family.name) ||
             !ta_bytes_same(live->identity.revision, definition->identity.revision)) {
@@ -17039,19 +17065,10 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
         system->counters.quota_refusals += 1u;
         return TA_ERR_NOMEM;
     }
-    uint32_t slot = system->free_definition_slot;
-    if (slot == UINT32_MAX) {
-        ta_definition_slot fresh = { .generation = 1, .next_free = UINT32_MAX };
-        result = ta_vec_push(&system->definitions, &fresh);
-        if (result != TA_OK) {
-            return result;
-        }
-        slot = system->definitions.count - 1u;
-    }
-    ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
-    if (slot == system->free_definition_slot) {
-        system->free_definition_slot = entry->next_free;
-    }
+    /*
+     * The last fallible step comes before the slot is taken, so a failure
+     * here leaves the table untouched (a slot taken first would be stranded).
+     */
     if (definition->occupancy == NULL && definition->state_count != 0) {
         definition->occupancy = ta_arena_alloc(&definition->arena, (size_t)definition->state_count * sizeof(uint32_t),
                                                _Alignof(uint32_t));
@@ -17060,8 +17077,18 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
         }
         ta_mem_zero(definition->occupancy, (size_t)definition->state_count * sizeof(uint32_t));
     }
+    uint32_t index = ta_pool_take(&system->definitions);
+    if (index == 0) {
+        /* Registration is a safe point, so the table may grow. */
+        result = ta_pool_refill(&system->definitions, 1u);
+        if (result != TA_OK) {
+            return result;
+        }
+        index = ta_pool_take(&system->definitions);
+    }
+    uint32_t slot = index - 1u;
+    ta_definition_slot *entry = ta_pool_at(&system->definitions, index);
     entry->definition = definition;
-    entry->next_free = UINT32_MAX;
     system->live_definitions += 1u;
     if (definition->unregistered_previous != NULL) {
         definition->unregistered_previous->unregistered_next = definition->unregistered_next;
@@ -17087,10 +17114,10 @@ TA_PRIVATE ta_definition *ta_system_definition(const ta_system *system, ta_defin
         return NULL;
     }
     uint32_t slot = ta_handle_slot(id);
-    if (slot >= system->definitions.count) {
+    const ta_definition_slot *entry = ta_system_definition_slot(system, slot);
+    if (entry == NULL) {
         return NULL;
     }
-    const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
     return ta_handle_matches(id, entry->generation) ? entry->definition : NULL;
 }
 
@@ -17137,13 +17164,12 @@ TA_PRIVATE void ta_system_settle_definition(ta_system *system, ta_definition *de
         doomed = freeing->free_next;
         ta_system_tell_definition(system, freeing, TA_DEFINITION_EVENT_FREED);
         uint32_t slot = ta_handle_slot(freeing->id);
-        ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+        ta_definition_slot *entry = ta_system_definition_slot(system, slot);
         /* The slot's next occupant gets a new generation, so this ID goes stale. */
         entry->definition = NULL;
         system->live_definitions -= 1u;
         entry->generation = ta_handle_next_generation(entry->generation);
-        entry->next_free = system->free_definition_slot;
-        system->free_definition_slot = slot;
+        ta_pool_give(&system->definitions, slot + 1u);
         ta_definition_destroy(freeing);
     }
 }
@@ -17176,8 +17202,8 @@ TA_API ta_result ta_system_retire_definition(ta_system *system, ta_definition_id
          */
         uint32_t slot = ta_handle_slot(id);
         uint32_t generation = ta_handle_generation(id);
-        bool freed = slot < system->definitions.count && generation != 0 &&
-                     generation < ((const ta_definition_slot *)ta_vec_at(&system->definitions, slot))->generation;
+        const ta_definition_slot *entry = ta_system_definition_slot(system, slot);
+        bool freed = entry != NULL && generation != 0 && generation < entry->generation;
         return freed ? TA_OK : TA_ERR_NOT_FOUND;
     }
     if (!definition->retired) {
@@ -17225,11 +17251,11 @@ TA_API ta_result ta_system_definitions(const ta_system *system, const ta_system_
     /* Slots in increasing order: a definition held throughout a walk keeps
      * its slot, so it is listed exactly once (ADR 0078). */
     uint32_t count = 0;
-    for (uint32_t slot = params->from; slot < system->definitions.count; slot += 1u) {
+    for (uint32_t slot = params->from; slot < ta_pool_extent(&system->definitions); slot += 1u) {
         if (params->limit != 0 && count == params->limit) {
             break;
         }
-        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+        const ta_definition_slot *entry = ta_system_definition_slot(system, slot);
         if (entry->definition == NULL) {
             continue;
         }

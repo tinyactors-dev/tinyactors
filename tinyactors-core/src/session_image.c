@@ -491,8 +491,8 @@ ta_result ta_session_image_definition(const ta_system *system, const ta_session_
     if (result != TA_ERR_NOT_FOUND) {
         return result;
     }
-    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
-        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+    for (uint32_t slot = 0; slot < ta_pool_extent(&system->definitions); slot += 1) {
+        const ta_definition_slot *entry = ta_system_definition_slot(system, slot);
         const ta_definition *definition = entry->definition;
         if (definition != NULL && !definition->retired &&
             ta_str_equal(definition->identity.family.name, image->definition.family.name)) {

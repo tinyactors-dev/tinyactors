@@ -27,7 +27,8 @@ typedef struct {
 typedef struct {
     ta_definition *definition;
     uint32_t generation;
-    /* While free: the next free slot, or UINT32_MAX. */
+    /* The pool's free-list link: the next free slot's pool index (0 for none) while the
+     * slot is free, zero while it is in use. */
     uint32_t next_free;
 } ta_definition_slot;
 
@@ -44,11 +45,12 @@ struct ta_system {
     ta_event_name_table event_names;
 
     /*
-     * ta_definition_slot; a definition ID is a handle (handle.h), as
-     * for actors. Freed slots form a list through `next_free`.
+     * ta_definition_slot; a definition ID is a handle (handle.h), as for
+     * actors. An index pool (pool.h; lifetime: system): freed slots form a
+     * free list through `next_free`, and a slot is recycled with a new
+     * generation, never freed before the system's destroy.
      */
-    ta_vec definitions;
-    uint32_t free_definition_slot;
+    ta_pool definitions;
     /* Compiled definitions still owned by callers, reclaimed at teardown. */
     ta_definition *unregistered_definitions;
     /* Orders registrations, so the newest identity match wins after slot reuse. */
@@ -130,6 +132,8 @@ struct ta_system {
  * unknown or stale ID.
  */
 ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
+/* The definition slot numbered `slot`, or NULL when it was never issued. Never allocates. */
+ta_definition_slot *ta_system_definition_slot(const ta_system *system, uint32_t slot);
 /*
  * A nested interpreter's two arenas (ADR 0092 section 3): region `depth`,
  * from 1, allocated the first time it is needed and kept. TA_ERR_UNSUPPORTED

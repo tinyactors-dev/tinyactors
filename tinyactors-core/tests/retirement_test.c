@@ -1084,6 +1084,56 @@ static void test_definition_records(void) {
     CHECK((TA_TRACE_DEFINITIONS_SESSION & 0xffffffffu) == 0xffffffffu);
 }
 
+/*
+ * A registration that fails after its last fallible step before the slot is
+ * taken (the occupancy counters are allocated first) leaves the slot table
+ * as it was: the freed slot of an earlier definition is still the next one.
+ * Before the slot table became an index pool the slot was taken first and
+ * stranded by this failure.
+ */
+static void test_register_failure_keeps_slot(void) {
+    /* Enough states that the occupancy counters (4 bytes each) do not fit the 4 KiB arena block's slack,
+     * so registering has to allocate. */
+    enum { STATES = 1500 };
+    static char names[STATES][8];
+    static ta_scxml_state_spec many[STATES + 1];
+    for (unsigned index = 0; index < STATES; index += 1u) {
+        names[index][0] = 's';
+        names[index][1] = (char)(48u + index / 1000u % 10u);
+        names[index][2] = (char)(48u + index / 100u % 10u);
+        names[index][3] = (char)(48u + index / 10u % 10u);
+        names[index][4] = (char)(48u + index % 10u);
+        many[index] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = { .ptr = names[index], .len = 5 } };
+    }
+    fixture f;
+    fixture_init(&f);
+    ta_definition_id first = register_chart(&f, "first");
+    CHECK(ta_system_retire_definition(f.system, first) == TA_OK); /* frees its slot */
+
+    ta_definition_identity identity = { .family = { STR("retiree") },
+                                        .revision = { .ptr = (const uint8_t *)"second", .len = 6 } };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(f.system,
+                                     &(ta_definition_compile_params){
+                                         .spec = &(ta_scxml_spec){ .identity = &identity, .states = many },
+                                         .datamodel = { .self = &f.model, .v = &counting_vtable },
+                                         .allocator = f.allocator,
+                                         .out = &definition,
+                                     }) == TA_OK);
+    ta_test_allocator_refuse_all(&f.heap, true);
+    ta_definition_id refused = 0;
+    ta_result result = ta_system_register_definition(f.system, definition, &refused);
+    ta_test_allocator_refuse_all(&f.heap, false);
+    CHECK(result == TA_ERR_NOMEM);
+    CHECK(refused == 0);
+    ta_definition_id second = 0;
+    CHECK(ta_system_register_definition(f.system, definition, &second) == TA_OK);
+    CHECK((second & 0xffffffffu) == (first & 0xffffffffu)); /* the freed slot, not a new one */
+    CHECK((second >> 32) == (first >> 32) + 1u);
+    ta_system_destroy(f.system);
+    CHECK(f.heap.stats.live_blocks == 0);
+}
+
 int main(void) {
     test_ids();
     test_retire_without_actors();
@@ -1097,6 +1147,7 @@ int main(void) {
     test_system_destroy();
     test_definition_sink();
     test_definition_records();
+    test_register_failure_keeps_slot();
     if (failures != 0) {
         fprintf(stderr, "retirement test: %d check(s) failed\n", failures);
         return 1;

@@ -117,7 +117,7 @@ static void test_definition_generation_wrap(void) {
     ta_definition_id id = 0;
     CHECK(ta_system_register_definition(system, definition, &id) == TA_OK);
     CHECK(ta_handle_valid(id));
-    ta_definition_slot *entry = ta_vec_at(&system->definitions, ta_handle_slot(id));
+    ta_definition_slot *entry = ta_system_definition_slot(system, ta_handle_slot(id));
     entry->generation = UINT32_MAX;
     ta_definition_id last = ta_handle_make(ta_handle_slot(id), UINT32_MAX);
     CHECK(ta_system_definition(system, last) == definition);
