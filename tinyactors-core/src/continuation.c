@@ -1,3 +1,24 @@
+/*
+ * The implementation of package continuation (see continuation.h for the
+ * contract, the lifetime and the layout of the allocation).
+ *
+ * Lifetime: a continuation is one allocation owned by one actor (or by a
+ * session image while paused); ta_continuation_free is the only free and
+ * uses the size stored in the header. Nothing here allocates: the
+ * allocation is made by the callers, at the safe points the catalog names,
+ * after ta_continuation_bytes has answered.
+ *
+ * Sizes: ta_continuation_bytes is the only place the arrays' offsets and
+ * the total are computed. It does it with a ta_layout and finishes it, so
+ * an overflow, or a total or offset that does not fit the header's 32 bits,
+ * is a TA_ERR_NOMEM result and never a number. The accessors below are
+ * field reads with no arithmetic and cannot fail; they are valid for the
+ * shape the offsets were computed for.
+ *
+ * Complexity: ta_continuation_bytes is O(1); the accessors are O(1);
+ * retain and release walk the frames, O(frame_count).
+ */
+
 #include "continuation.h"
 
 /*
