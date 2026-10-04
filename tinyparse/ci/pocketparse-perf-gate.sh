@@ -5,16 +5,16 @@
 # Two gates. Correctness is the hard floor: ci/pocketparse-metric.sh must be
 # GREEN (no optimization may break a corpus case). Speed is a ratchet: the
 # pocketparse parse median must not exceed the ceiling recorded in
-# tools/pocketparse/test/perf-baseline.txt by more than a small noise margin.
+# tinyparse/test/perf-baseline.txt by more than a small noise margin.
 # The ceiling only moves down, never up; a regression that raises the median
 # above it fails here.
 #
 # Prints PERF=<ms> ceiling=<ms> ratio_vs_treesitter=<x>. Exit 0 only when
 # correctness is GREEN and the median is within the ceiling.
 set -uo pipefail
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO" || exit 1
-BASELINE="$REPO/tools/pocketparse/test/perf-baseline.txt"
+BASELINE="$REPO/test/perf-baseline.txt"
 MARGIN="0.05"
 
 echo "== perf gate: correctness =="

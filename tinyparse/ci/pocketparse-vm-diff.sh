@@ -1,34 +1,39 @@
 #!/usr/bin/env bash
-# ci/pocketparse-vm-diff.sh — the bytecode-VM host-consistency harness.
+# ci/pocketparse-vm-diff.sh — the bytecode-VM rule-memo differential.
 #
-# Since W14-5 the bytecode VM (tools/pocketparse/src/vm.c, lowered by vmcompile.c)
-# is the SOLE engine; the recursive-descent IR interpreter (pp_execute) that this
+# Since W14-5 the bytecode VM (src/vm.c, lowered by vmcompile.c) is the SOLE
+# engine; the recursive-descent IR interpreter (pp_execute) that this
 # differential once held as its independent reference has been deleted. The
 # standing INDEPENDENT correctness anchor is now the conformance suite
-# (ci/pocketparse-metric.sh, 296 independent expected outputs) together with
-# ci/pocketparse-cc-diff.sh (the C-compiled parser vs the VM). This script is the
-# remaining HOST-CONSISTENCY check: the SAME VM run in process ("vm") and run
-# inside an ax actor ("vm-ax") must build the byte-identical concrete syntax tree
-# for every input. It proves this for the json/jsonc/json5 grammar family, the
-# full JS/TS corpora, and every other grammar the suite parses (the example
-# grammars and the family/query fixtures), so the consistency contract covers
-# every feature the suite exercises.
+# (ci/pocketparse-metric.sh) together with ci/pocketparse-cc-diff.sh (the
+# C-compiled parser vs the VM).
 #
-# POCKETPARSE_ENGINE selects the engine: unset / "vm-ax" is the actor-hosted VM
-# (the default), "vm" is the in-process VM. This script holds the reference fixed
-# at "vm" (the in-process VM) and compares the actor-hosted "vm-ax" against it.
+# Until the migration out of the actor runtime pocketparse was born in, this
+# script compared the VM run in process against the SAME VM hosted inside an
+# actor. That host is gone -- the VM now always runs in process, driven by the
+# parser lifecycle in src/parse.c -- so the differential holds the VM against its
+# one remaining internal variation: the W67 rule memo. The memo is an
+# optimisation that snapshots and replays a rule's subtree; it must be
+# transparent. The reference runs with the memo OFF (POCKETPARSE_RULEMEMO=off);
+# the candidate runs with it in its default adaptive mode, and an extra pass runs
+# it FORCED ON (POCKETPARSE_RULEMEMO=always) so the replay path is exercised even
+# on inputs too small to wake it. Both must build the byte-identical concrete
+# syntax tree (and exit code) for every input: the json/jsonc/json5 grammar
+# family, the full JS/TS/shell corpora, and every other grammar the suite parses
+# (the example grammars and the family/query fixtures).
 #
-# It then runs a speed sanity check: parse one document many times under each
-# engine and report the ratio.
+# It then checks the parser lifecycle ends in "finished" (POCKETPARSE_TRACE_LIFECYCLE)
+# and runs a speed sanity check: parse one document many times with the memo off
+# and in its default mode, and report the ratio.
 #
-# Run it from the repo root:
+# Run it from the project root:
 #     bash ci/pocketparse-vm-diff.sh
 #
 # Exit 0 only when every input matched.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 cd "$REPO" || exit 1
 
 platform() {
@@ -43,7 +48,7 @@ PP="$PP_DIR/dist/$PLAT/pocketparse"
 
 echo "== pocketparse bytecode-VM differential =="
 
-# 1. Build the CLI (carries both engines; the VM is selected at run time).
+# 1. Build the CLI.
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
 if [ ! -x "$PP" ]; then
   echo "FATAL: CLI not built at $PP"
@@ -85,7 +90,7 @@ write_case std.json nested           '{"a":[1,{"b":[2,3]},true],"c":{"d":null}}'
 write_case std.json whitespace       '  {  "a" : [ 1 , 2 ]  ,  "b" : true  }  '
 write_case std.json deep             '[[[[[[[1]]]]]]]'
 write_case std.json bignum           '123456789012345678901234567890'
-# negative cases (must fail identically under both engines)
+# negative cases (must fail identically with and without the memo)
 write_case std.json err_trailing     '1 2'
 write_case std.json err_unterminated '{"a":'
 write_case std.json err_garbage      '@@@'
@@ -122,8 +127,8 @@ write_case std.json5 err_bad_key     '{1:2}'
 # error-severity diagnostic), and the grammar-family fixtures (extends, override,
 # and a (when PARAM:) gate, run both with and without the param). Each tuple is
 # "grammar | input | extra-args"; the inputs mirror the suite's own cases so the
-# differential covers exactly the features the suite depends on. The in-process VM
-# and the actor-hosted VM must agree byte-for-byte on every one.
+# differential covers exactly the features the suite depends on. The VM with and
+# without the rule memo must agree byte-for-byte on every one.
 CASES_FILE="$CORPUS/cases.tsv"
 : > "$CASES_FILE"
 add_case() { # label grammar input [extra-args...]
@@ -160,7 +165,7 @@ add_case query-word-eq    "$QX/word-eq.scm"            'a b c'
 # std.shell here-documents: the deferred-slot / parametrized-goal opcodes exercised
 # inside the std POSIX-shell grammar. Multi-line inputs come from committed fixture
 # files (@FILE:) so the newline-significant heredoc bodies survive verbatim. The
-# in-process and actor-hosted VM must agree on the deferred-slot drain, the
+# VM with and without the rule memo must agree on the deferred-slot drain, the
 # parametrized HeredocDelimLine instantiation, and the FIFO multi-heredoc order.
 SHX="$PP_DIR/test/suite/shellfamily/fixtures"
 add_case shell-heredoc-single   std.shell "@FILE:$SHX/heredoc-single.input"
@@ -169,12 +174,11 @@ add_case shell-heredoc-in-if    std.shell "@FILE:$SHX/heredoc-in-if.input"
 add_case shell-heredoc-dash     std.shell "@FILE:$SHX/heredoc-dash.input"
 add_case shell-heredoc-pipeline std.shell "@FILE:$SHX/heredoc-pipeline.input"
 
-# The candidate executor compared against the reference in-process VM
-# (POCKETPARSE_ENGINE=vm). "vm-ax" is the SAME VM hosted inside an ax actor (W60);
-# it must produce --dump-tree output byte-identical to the in-process VM for every
-# input. The differential below runs once per candidate engine; the script is
-# GREEN only when EVERY candidate matched.
-ENGINES="${ENGINES:-vm-ax}"
+# The candidate configuration compared against the reference (the VM with the
+# rule memo off): the memo in whatever mode POCKETPARSE_RULEMEMO names -- adaptive
+# when it is unset, forced on in the extra pass below. The label names it in the
+# report.
+ENGINES="memo-${POCKETPARSE_RULEMEMO:-adaptive}"
 fail=0
 
 # Exercise the W67 rule memo's replay path. The memo is adaptive -- dormant until a
@@ -211,9 +215,9 @@ diff_suite() { # engine suite-dir default-grammar
       *)     g="$default" ;;
     esac
     stotal=$((stotal + 1))
-    POCKETPARSE_ENGINE=vm "$PP" run "$g" --input "$f" --dump-tree > "$f.ref" 2>&1
+    POCKETPARSE_RULEMEMO=off "$PP" run "$g" --input "$f" --dump-tree > "$f.ref" 2>&1
     local rrc=$?
-    POCKETPARSE_ENGINE="$engine" "$PP" run "$g" --input "$f" --dump-tree > "$f.vm" 2>&1
+    "$PP" run "$g" --input "$f" --dump-tree > "$f.vm" 2>&1
     local vrc=$?
     if [ "$rrc" = "$vrc" ] && diff -q "$f.ref" "$f.vm" >/dev/null; then
       smatch=$((smatch + 1))
@@ -249,11 +253,11 @@ diff_cases() { # engine
     esac
     ctotal=$((ctotal + 1))
     # shellcheck disable=SC2086
-    POCKETPARSE_ENGINE=vm "$PP" run "$grammar" --input "$inpath" \
+    POCKETPARSE_RULEMEMO=off "$PP" run "$grammar" --input "$inpath" \
       --dump-tree $extra > "$inpath.ref" 2>&1
     local rrc=$?
     # shellcheck disable=SC2086
-    POCKETPARSE_ENGINE="$engine" "$PP" run "$grammar" --input "$inpath" \
+    "$PP" run "$grammar" --input "$inpath" \
       --dump-tree $extra > "$inpath.vm" 2>&1
     local vrc=$?
     if [ "$rrc" = "$vrc" ] && diff -q "$inpath.ref" "$inpath.vm" >/dev/null; then
@@ -276,17 +280,17 @@ diff_cases() { # engine
 run_differential() { # engine
   local engine="$1"
   local total=0 match=0
-  echo "== candidate engine: POCKETPARSE_ENGINE=$engine =="
+  echo "== candidate: rule memo $engine (reference: rule memo off) =="
   local gdir grammar input ref_rc vm_rc
   for gdir in "$CORPUS"/*/; do
     grammar="$(basename "$gdir")"
     for input in "$gdir"*.input; do
       [ -f "$input" ] || continue
       total=$((total + 1))
-      POCKETPARSE_ENGINE=vm "$PP" run "$grammar" --input "$input" \
+      POCKETPARSE_RULEMEMO=off "$PP" run "$grammar" --input "$input" \
         --dump-tree > "$input.ref" 2>&1
       ref_rc=$?
-      POCKETPARSE_ENGINE="$engine" "$PP" run "$grammar" --input "$input" \
+      "$PP" run "$grammar" --input "$input" \
         --dump-tree > "$input.vm" 2>&1
       vm_rc=$?
       if [ "$ref_rc" = "$vm_rc" ] && diff -q "$input.ref" "$input.vm" >/dev/null; then
@@ -318,53 +322,32 @@ for ENGINE in $ENGINES; do
   run_differential "$ENGINE"
 done
 
-# 3c. Structural proof that the vm-ax path genuinely runs the parse on ax (the
-#     inverse of the Phase 11 gap, where ax was used only as an arena allocator).
-#     First, the source proof: the parse path calls ax_open/ax_define/ax_spawn/
-#     ax_post/ax_step. Second, the runtime proof: POCKETPARSE_TRACE_ACTOR makes the
-#     CLI report whether the parser actor's input.end action genuinely ran.
-echo "== structural proof: ax calls on the vm-ax parse path =="
-if grep -nE 'ax_(open|define|spawn|post|tell|step)' "$PP_DIR/src"/*.c \
-     | grep -vE '/(cli|amalgamation)' | sed 's/^/  /'; then
-  :
-else
-  echo "  FATAL: no ax_open/define/spawn/post/step on the parse path"
+# 3d. Structural proof that the parse depends on nothing: no actor-runtime call
+#     anywhere in the library sources, and the parser lifecycle (src/parse.c)
+#     reaches "finished" on a valid input -- the executor genuinely ran. (The
+#     pattern is spelled in two pieces so this script carries no such symbol.)
+echo "== structural proof: no actor runtime on the parse path =="
+if grep -nE '\<a''x_[a-z]+\(' "$PP_DIR/src"/*.c "$PP_DIR/src"/*.h | sed 's/^/  /' | grep .; then
+  echo "  FATAL: the library still calls into an actor runtime"
   fail=$((fail + 1))
+else
+  echo "  OK: src/ calls no actor runtime"
 fi
 
-echo "== structural proof: the actor actually ran (POCKETPARSE_TRACE_ACTOR) =="
+echo "== structural proof: the lifecycle finished (POCKETPARSE_TRACE_LIFECYCLE) =="
 PROOF_INPUT="$CORPUS/std.json/nested.input"
-actor_line="$(POCKETPARSE_ENGINE=vm-ax POCKETPARSE_TRACE_ACTOR=1 \
+lifecycle_line="$(POCKETPARSE_TRACE_LIFECYCLE=1 \
   "$PP" run std.json --input "$PROOF_INPUT" --dump-tree 2>&1 >/dev/null)"
-echo "  $actor_line"
-if [ "$actor_line" = "actor: parse ran on ax = 1" ]; then
-  echo "  OK: the vm-ax parse executed inside the ax actor"
+echo "  $lifecycle_line"
+if [ "$lifecycle_line" = "lifecycle: finished" ]; then
+  echo "  OK: the parse ran the VM and the parser finished"
 else
-  echo "  FATAL: the vm-ax parse did NOT run inside the ax actor"
-  fail=$((fail + 1))
-fi
-# W63: the DEFAULT path (no POCKETPARSE_ENGINE set) must now ALSO report the actor
-# ran -- this is the whole point of the flip: parsing runs on ax for everyone.
-default_line="$(POCKETPARSE_TRACE_ACTOR=1 \
-  "$PP" run std.json --input "$PROOF_INPUT" --dump-tree 2>&1 >/dev/null)"
-echo "  default path: $default_line"
-if [ "$default_line" = "actor: parse ran on ax = 1" ]; then
-  echo "  OK: the DEFAULT parse (no env var) executed inside the ax actor"
-else
-  echo "  FATAL: the default path did NOT run on the actor (the flip did not take)"
-  fail=$((fail + 1))
-fi
-# The in-process VM opt-out must NOT report the actor ran (proves the opt-out, the
-# reference for this differential, genuinely runs off the actor).
-optout_line="$(POCKETPARSE_ENGINE=vm POCKETPARSE_TRACE_ACTOR=1 \
-  "$PP" run std.json --input "$PROOF_INPUT" --dump-tree 2>&1 >/dev/null)"
-echo "  in-process VM opt-out: $optout_line"
-if [ "$optout_line" != "actor: parse ran on ax = 0" ]; then
-  echo "  FATAL: the in-process VM opt-out unexpectedly ran on the actor"
+  echo "  FATAL: the parser lifecycle did not end in finished"
   fail=$((fail + 1))
 fi
 
-# 4. Speed sanity check: parse one document many times under each engine and
+# 4. Speed sanity check: parse one document many times with the memo off and in
+#    its default mode, and
 #    report the wall-clock ratio. This is a coarse, subprocess-level signal (it
 #    includes process startup, grammar compile, and the IR->bytecode lowering the
 #    VM pays per run), not the in-process parse-only number ci/pocketparse-bench.sh
@@ -383,12 +366,12 @@ if [ -f "$SPEED_INPUT" ]; then
     t1=$(date +%s.%N)
     awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f", b-a}'
   }
-  vm_t="$(time_engine 'POCKETPARSE_ENGINE=vm')"
-  vma_t="$(time_engine 'POCKETPARSE_ENGINE=vm-ax')"
-  echo "  bytecode VM (in process):       ${vm_t}s"
-  echo "  bytecode VM on ax (default):    ${vma_t}s"
-  awk -v v="$vm_t" -v a="$vma_t" 'BEGIN{
-    if (a > 0) printf "  ratio (VM / VM-ax):         %.2fx (>1 means VM-ax faster)\n", v/a;
+  off_t="$(time_engine 'POCKETPARSE_RULEMEMO=off')"
+  def_t="$(time_engine 'POCKETPARSE_RULEMEMO=')"
+  echo "  bytecode VM, rule memo off:     ${off_t}s"
+  echo "  bytecode VM, default memo:      ${def_t}s"
+  awk -v v="$off_t" -v a="$def_t" 'BEGIN{
+    if (a > 0) printf "  ratio (off / default):      %.2fx (>1 means the default is faster)\n", v/a;
   }'
 fi
 

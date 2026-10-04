@@ -5,8 +5,8 @@
 # POCKETPARSE_MORE (NEED_MORE_INPUT) at the SHALLOW top-level-item boundary so a
 # driver can feed it more bytes and resume at the next item -- and the tree it
 # builds that way must be byte-identical to parsing the input WHOLE, and to the VM.
-# Native recursion cannot suspend mid-stack and ax has no fiber, so the boundary is
-# the start rule's repeat of top-level items only; the explicit-stack VM/actor stays
+# Native recursion cannot suspend mid-stack and there are no fibers, so the boundary is
+# the start rule's repeat of top-level items only; the explicit-stack VM stays
 # the engine for arbitrary-granularity async push (pocketparse_push streaming), which
 # this gate does NOT touch.
 #
@@ -24,8 +24,8 @@
 # Exit 0 only when chunked == whole == VM, byte for byte.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 EX="$PP_DIR/examples/bufferfriendly"
 cd "$REPO" || exit 1
 
@@ -39,14 +39,13 @@ platform() {
 PLAT="$(platform)"
 PP="$PP_DIR/dist/$PLAT/pocketparse"
 LIB="$PP_DIR/dist/$PLAT/libpocketparse.a"
-AXLIB="$REPO/dist/$PLAT/libax.a"
 
 echo "== pocketparse buffer-friendly gate (W17-4) =="
 
 # 1. Build the CLI + the library archive the generated parser links against.
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f "$AXLIB" ]; then
-  echo "FATAL: CLI ($PP), libpocketparse ($LIB) or libax ($AXLIB) not built"
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+  echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"
   echo "RESULT=0/0"
   exit 1
 fi
@@ -76,7 +75,7 @@ fi
 SAMPLE="$EX/sample.sx"
 
 # 3. The oracle: the VM's whole-input dump of the same grammar on the same document.
-VM="$(POCKETPARSE_ENGINE=vm-ax "$PP" run "$EX/sexpr.scm" --input "$SAMPLE" --dump-tree)"
+VM="$("$PP" run "$EX/sexpr.scm" --input "$SAMPLE" --dump-tree)"
 RC=$?
 if [ "$RC" -ne 0 ]; then
   echo "FAIL: VM oracle parse exited $RC (expected 0)"

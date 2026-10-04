@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ci/pocketparse-vm-nocrash.sh — the W14-6 bytecode-VM crash-prevention proof.
 #
-# The bytecode VM (`pocketparse run ... ` under POCKETPARSE_ENGINE=vm / vm-ax) is
+# The bytecode VM (`pocketparse run ...`, the only engine) is
 # now ITERATIVE: rule calls run on an explicit, arena-backed frame stack driven by
 # one dispatch loop (pp_vm_run in src/vm.c), with NO C recursion across rule calls.
 # So its working set is bounded by the parse ARENA, not by the host's C call stack.
@@ -17,7 +17,7 @@
 #   1. builds the CLI (which carries the VM, selected at run time),
 #   2. generates ONE pathologically deep input (~200k nested '['), deep enough
 #      that a recursive descent would overflow even a normal C stack,
-#   3. runs the VM (POCKETPARSE_ENGINE=vm and =vm-ax) under a DELIBERATELY SMALL C
+#   3. runs the VM under a DELIBERATELY SMALL C
 #      stack (ulimit -s 512, in a subshell) and asserts it exits WITHOUT a crash
 #      signal: exit code < 128. A clean parse or a graceful syntax error are both
 #      fine; only a death by signal (SIGSEGV -> 139, the 128+N range) is a failure.
@@ -39,8 +39,8 @@
 # Exit 0 only when the VM survives the deep input under the small stack.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 cd "$REPO" || exit 1
 
 platform() {
@@ -87,7 +87,7 @@ run_under_small_stack() { # engine
 }
 
 fail=0
-for ENGINE in vm vm-ax; do
+for ENGINE in vm; do
   rc="$(run_under_small_stack "$ENGINE")"
   echo "  POCKETPARSE_ENGINE=$ENGINE under ulimit -s 512: exit code = $rc"
   if [ "$rc" -ge 128 ]; then
@@ -109,7 +109,7 @@ done
 LEXINPUT="$SCRATCH/bignum.json"
 yes '1234567890' | head -n 40000 | tr -d '\n' > "$LEXINPUT"
 echo "  big-token input: one $(wc -c < "$LEXINPUT")-byte number literal (lexer repeat loop)"
-for ENGINE in vm vm-ax; do
+for ENGINE in vm; do
   rc="$( ( ulimit -s 512; POCKETPARSE_ENGINE="$ENGINE" "$PP" run std.json --input "$LEXINPUT" --dump-tree > /dev/null 2>&1 ); echo $? )"
   echo "  POCKETPARSE_ENGINE=$ENGINE big-token under ulimit -s 512: exit code = $rc"
   if [ "$rc" -ge 128 ]; then

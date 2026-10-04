@@ -8,7 +8,7 @@
 #     BENCH=1 bash ci/pocketparse-bench.sh
 #
 # What it does, end to end and re-runnably:
-#   1. builds the pocketparse dist (libpocketparse.a + libax.a + the CLI);
+#   1. builds the pocketparse dist (libpocketparse.a + the CLI);
 #   2. clones the tree-sitter RUNTIME (pinned by commit) and builds its
 #      amalgamated lib into a static archive, plus the vendored
 #      tree-sitter-javascript parser.c + scanner.c;
@@ -31,8 +31,8 @@ if [ "${BENCH:-0}" != "1" ]; then
   exit 0
 fi
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$REPO"
 BENCHDIR="$PP/bench"
 cd "$REPO" || exit 1
 
@@ -54,7 +54,7 @@ log() { printf '[pp-bench] %s\n' "$*" >&2; }
 # --- 1. pocketparse dist -----------------------------------------------------
 log "building pocketparse dist ..."
 ( cd "$PP" && bash build.sh dist ) >/dev/null 2>&1
-if [ ! -f "$DIST/libpocketparse.a" ] || [ ! -f "$DIST/libax.a" ]; then
+if [ ! -f "$DIST/libpocketparse.a" ] || [ ! -f ]; then
   log "FATAL: pocketparse dist did not build ($DIST)"
   exit 1
 fi
@@ -63,7 +63,7 @@ fi
 TSJS_REF="$PP/reference/tree-sitter-javascript"
 if [ ! -d "$TSJS_REF/src" ]; then
   log "FATAL: tree-sitter-javascript reference missing at $TSJS_REF"
-  log "       re-fetch per tools/pocketparse/reference/PINS.txt"
+  log "       re-fetch per tinyparse/reference/PINS.txt"
   exit 1
 fi
 
@@ -151,7 +151,7 @@ $CC -std=c11 -O2 -Wall -Wextra -I "$TS_INC" \
     "$BENCHDIR/libtreesitter.a" -o "$BENCHDIR/bench_treesitter" || {
   log "FATAL: tree-sitter harness did not compile"; exit 1; }
 $CC -std=c11 -O2 -Wall -Wextra -I "$PP/include" \
-    "$BENCHDIR/bench_pocketparse.c" "$DIST/libpocketparse.a" "$DIST/libax.a" \
+    "$BENCHDIR/bench_pocketparse.c" "$DIST/libpocketparse.a" \
     -o "$BENCHDIR/bench_pocketparse" || {
   log "FATAL: pocketparse harness did not compile"; exit 1; }
 

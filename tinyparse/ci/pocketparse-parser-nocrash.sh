@@ -29,8 +29,8 @@
 # Exit 0 only when the parser survives the deep input under the small stack.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 cd "$REPO" || exit 1
 
 platform() {
@@ -43,7 +43,6 @@ platform() {
 PLAT="$(platform)"
 PP="$PP_DIR/dist/$PLAT/pocketparse"
 LIB="$PP_DIR/dist/$PLAT/libpocketparse.a"
-AXDIR="$REPO/dist/$PLAT"
 INC="$PP_DIR/include"
 SRC="$PP_DIR/src"
 
@@ -51,8 +50,8 @@ echo "== pocketparse compiled-parser crash-prevention (nocrash) =="
 
 # Build the CLI + the library archive (the generated parser links against it).
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f "$AXDIR/libax.a" ]; then
-  echo "FATAL: CLI ($PP), libpocketparse ($LIB) or libax not built"
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+  echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"
   exit 1
 fi
 
@@ -67,8 +66,8 @@ if ! "$PP" c std.json --parser --out "$CFILE" 2>"$SCRATCH/gen.err"; then
   echo "FATAL: parser generation failed: $(head -1 "$SCRATCH/gen.err")"
   exit 1
 fi
-if ! "$CC" -std=c11 -O2 -I"$INC" -I"$AXDIR" -I"$SRC" \
-      "$CFILE" "$LIB" "$AXDIR/libax.a" -o "$BIN" 2>"$SCRATCH/cc.err"; then
+if ! "$CC" -std=c11 -O2 -I"$INC" -I"$SRC" \
+      "$CFILE" "$LIB" -o "$BIN" 2>"$SCRATCH/cc.err"; then
   echo "FATAL: parser compilation failed:"
   sed 's/^/    /' "$SCRATCH/cc.err" | head -20
   exit 1

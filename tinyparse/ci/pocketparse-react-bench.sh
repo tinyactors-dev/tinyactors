@@ -14,7 +14,7 @@
 #     BENCH=1 bash ci/pocketparse-react-bench.sh
 #
 # End to end, re-runnably:
-#   1. build the pocketparse dist (libpocketparse.a + libax.a + the CLI);
+#   1. build the pocketparse dist (libpocketparse.a + the CLI);
 #   2. build the tree-sitter runtime archive and the vendored tree-sitter-
 #      typescript TSX parser.c + scanner.c;
 #   3. assemble the corpus: every React packages/*/src/*.js file that std.tsx
@@ -36,8 +36,8 @@ if [ "${BENCH:-0}" != "1" ]; then
   exit 0
 fi
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$REPO"
 BENCHDIR="$PP/bench"
 cd "$REPO" || exit 1
 
@@ -59,7 +59,7 @@ log() { printf '[react-bench] %s\n' "$*" >&2; }
 # --- 1. pocketparse dist -----------------------------------------------------
 log "building pocketparse dist ..."
 ( cd "$PP" && bash build.sh all ) >/dev/null 2>&1
-if [ ! -f "$DIST/libpocketparse.a" ] || [ ! -f "$DIST/libax.a" ] || [ ! -x "$CLI" ]; then
+if [ ! -f "$DIST/libpocketparse.a" ] || [ ! -f ] || [ ! -x "$CLI" ]; then
   log "FATAL: pocketparse dist did not build ($DIST)"
   exit 1
 fi
@@ -68,7 +68,7 @@ fi
 TSTS_REF="$PP/reference/tree-sitter-typescript"
 if [ ! -d "$TSTS_REF/tsx/src" ]; then
   log "FATAL: tree-sitter-typescript reference missing at $TSTS_REF"
-  log "       re-fetch per tools/pocketparse/reference/PINS.txt"
+  log "       re-fetch per tinyparse/reference/PINS.txt"
   exit 1
 fi
 
@@ -110,7 +110,7 @@ $CC -std=c11 -O2 -c -I "$TS_INC" -I "$TSX_SRC" \
 REACT="$PP/reference/react"
 if [ ! -d "$REACT/packages" ]; then
   log "FATAL: ReactJS reference missing at $REACT"
-  log "       re-fetch per tools/pocketparse/reference/PINS.txt"
+  log "       re-fetch per tinyparse/reference/PINS.txt"
   exit 1
 fi
 CORPUS_OUT="$BENCHDIR/react-corpus"
@@ -154,7 +154,7 @@ $CC -std=c11 -O2 -Wall -Wextra -I "$TS_INC" \
     "$BENCHDIR/libtreesitter.a" -o "$BENCHDIR/react_treesitter" || {
   log "FATAL: tree-sitter React harness did not compile"; exit 1; }
 $CC -std=c11 -O2 -Wall -Wextra -I "$PP/include" \
-    "$BENCHDIR/react_pocketparse.c" "$DIST/libpocketparse.a" "$DIST/libax.a" \
+    "$BENCHDIR/react_pocketparse.c" "$DIST/libpocketparse.a" \
     -o "$BENCHDIR/react_pocketparse" || {
   log "FATAL: pocketparse React harness did not compile"; exit 1; }
 

@@ -5,8 +5,8 @@
 # gates hold, AND the headline goal (C-compiled > tree-sitter, tagged W15-FASTER) is
 # recorded. Cheap by default; RUN_GATE=1 runs the behavioural gates.
 set -uo pipefail
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$REPO"
 cd "$REPO" || exit 1
 pass=0; total=3
 row(){ printf '  [%s] %s\n' "$1" "$2"; }

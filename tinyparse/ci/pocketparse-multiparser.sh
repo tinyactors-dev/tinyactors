@@ -28,8 +28,8 @@
 # Exit 0 only when both parsers build, link, run, and produce the golden trees.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 EX="$PP_DIR/examples/embed"
 cd "$REPO" || exit 1
 
@@ -43,14 +43,13 @@ platform() {
 PLAT="$(platform)"
 PP="$PP_DIR/dist/$PLAT/pocketparse"
 LIB="$PP_DIR/dist/$PLAT/libpocketparse.a"
-AXLIB="$REPO/dist/$PLAT/libax.a"
 
 echo "== pocketparse multi-parser gate (W16-3) =="
 
 # 1. Build the CLI + the library archive the generated parsers link against.
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f "$AXLIB" ]; then
-  echo "FATAL: CLI ($PP), libpocketparse ($LIB) or libax ($AXLIB) not built"
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+  echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"
   echo "RESULT=0/0"
   exit 1
 fi

@@ -2,7 +2,7 @@
 # ci/pocketparse-nesting.sh — the W17-3 NATIVE NESTING gate.
 #
 # A GENERATED host parser must be able to nest GENERATED embedded parsers, in one
-# binary, coordinated by ax's language registry — and produce the SAME composite
+# binary, coordinated by the engine's language registry — and produce the SAME composite
 # tree the VM produces. This is the inject hook the codegen blueprint describes:
 # the host grammar (std.fence) names embedded languages in its (inject grammar:
 # NAME ...) forms but is not linked against their parsers; the host program
@@ -21,8 +21,10 @@
 #   3. asserts the example's composite tree is BYTE-IDENTICAL to the VM's
 #      `run std.fence --dump-tree' on the same document (the real oracle), and to
 #      the committed golden expected.txt,
-#   4. asserts the linked binary carries all three parsers' distinct entries and no
-#      exported ax_ symbol (the hide-ax property: ax is the runtime, never leaked).
+#   4. asserts the linked binary carries all three parsers' distinct entries, and
+#      that a shared object of the set exports only the parsers' entries and the
+#      public pocketparse_* API (the export property ci/pocketparse-exports.sh
+#      checks for the embed example).
 #
 # Run it from the repo root:
 #     bash ci/pocketparse-nesting.sh
@@ -31,8 +33,8 @@
 # composite tree matches the VM byte for byte.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 EX="$PP_DIR/examples/nesting"
 cd "$REPO" || exit 1
 
@@ -46,14 +48,13 @@ platform() {
 PLAT="$(platform)"
 PP="$PP_DIR/dist/$PLAT/pocketparse"
 LIB="$PP_DIR/dist/$PLAT/libpocketparse.a"
-AXLIB="$REPO/dist/$PLAT/libax.a"
 
 echo "== pocketparse native-nesting gate (W17-3) =="
 
 # 1. Build the CLI + the library archive the generated parsers link against.
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f "$AXLIB" ]; then
-  echo "FATAL: CLI ($PP), libpocketparse ($LIB) or libax ($AXLIB) not built"
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+  echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"
   echo "RESULT=0/0"
   exit 1
 fi
@@ -82,7 +83,7 @@ if [ "$RC" -ne 0 ]; then
   echo "== nesting: RED =="
   exit 1
 fi
-VM="$(POCKETPARSE_ENGINE=vm-ax "$PP" run std.fence --input "$EX/sample.md" --dump-tree)"
+VM="$("$PP" run std.fence --input "$EX/sample.md" --dump-tree)"
 if ! diff -u <(printf '%s\n' "$VM") <(printf '%s\n' "$GOT") ; then
   echo "FAIL: generated nesting tree differs from the VM (native nesting must match)"
   echo "== nesting: RED =="
@@ -112,39 +113,39 @@ if command -v nm >/dev/null 2>&1; then
   echo "  all three parsers' entries present (no prefix collision)"
 fi
 
-# 5. The hide-ax property for the nesting set: build a SHARED OBJECT of all three
+# 5. The export property for the nesting set: build a SHARED OBJECT of all three
 #    parsers over the amalgamated runtime behind a version script, and assert
-#    `nm -D' exports the parser + public pocketparse_* API and ZERO ax_ symbols.
-#    A plain static executable always shows ax_ in its full symbol table; the
-#    exported surface of a hide-ax artifact is what must be clean, and a host that
-#    nests these parsers ships that artifact, not the static executable.
+#    `nm -D' exports the parser entries + public pocketparse_* API and ZERO
+#    library-internal pp_ symbols. A plain static executable always shows pp_ in
+#    its full symbol table; the exported surface of the embeddable artifact is
+#    what must be clean, and a host that nests these parsers ships that artifact.
 if command -v nm >/dev/null 2>&1; then
   SO="$EX/libnesting.so"
   rm -f "$SO"
   if ! ( cd "$PP_DIR/examples/embed" && \
-         bash hide-ax.sh "$SO" \
+         bash embed-lib.sh "$SO" \
            fence_host:std.fence json_lang:std.json js_lang:std.javascript ) \
        2>&1 | sed 's/^/  /'; then
-    echo "FAIL: hide-ax shared object for the nesting set did not build"
+    echo "FAIL: shared object for the nesting set did not build"
     echo "== nesting: RED =="
     exit 1
   fi
-  DYN="$(nm -D "$SO" 2>/dev/null || true)"
-  if printf '%s\n' "$DYN" | grep -qE " [TtWwiD] ax_"; then
-    echo "FAIL: an ax_ symbol is EXPORTED from the hide-ax shared object"
-    printf '%s\n' "$DYN" | grep -E " [TtWwiD] ax_" | head -5 | sed 's/^/      /'
+  DYN="$(nm -D --defined-only "$SO" 2>/dev/null || true)"
+  if printf '%s\n' "$DYN" | grep -qE " [TtWwiDdBbRr] pp_"; then
+    echo "FAIL: a library-internal pp_ symbol is EXPORTED from the shared object"
+    printf '%s\n' "$DYN" | grep -E " [TtWwiDdBbRr] pp_" | head -5 | sed 's/^/      /'
     echo "== nesting: RED =="
     exit 1
   fi
   for s in fence_host_run json_lang_run js_lang_run; do
     if ! printf '%s\n' "$DYN" | grep -qE " T $s$"; then
-      echo "FAIL: hide-ax shared object does not export generated entry '$s'"
+      echo "FAIL: shared object does not export generated entry '$s'"
       echo "== nesting: RED =="
       exit 1
     fi
   done
   rm -f "$SO"
-  echo "  hide-ax shared object exports the parsers + pocketparse_* and zero ax_"
+  echo "  shared object exports the parsers + pocketparse_* and zero pp_ internals"
 fi
 
 echo "RESULT=1/1"
