@@ -3857,18 +3857,30 @@ static uint32_t ta_decl_words(const ta_definition *definition) {
     return ta_bits_words(definition->data_decl_count) + 1u;
 }
 
-/* The largest continuation a run of this definition can save: every set,
- * every enabled transition, and every frame the executor can open. 0 when
- * that does not fit in a size_t (ta_continuation_bytes). */
-static size_t ta_continuation_capacity(const ta_definition *definition) {
-    ta_continuation shape = {
+/*
+ * ta_continuation_capacity describes the largest continuation a run of this
+ * definition can save: every set, every enabled transition, and every frame
+ * the executor can open. It fills `*shape` with those counts and the offsets
+ * of its arrays, and `*bytes` with its size. It answers TA_ERR_NOMEM, with
+ * the outputs untouched, when that does not fit (ta_continuation_bytes). It
+ * never allocates; it is called where a continuation is allocated or loaded
+ * (ta_reserve_stop, the restore of an image), and the result is stored.
+ */
+ta_result ta_continuation_capacity(const ta_definition *definition, ta_continuation *shape, size_t *bytes) {
+    ta_continuation capacity = {
         .words = ta_bits_words(definition->state_count),
         .decl_words = ta_decl_words(definition),
         .state_count = definition->state_count,
         .enabled_count = definition->state_count + 1u,
         .frame_count = ta_exec_capacity(definition),
     };
-    return ta_continuation_bytes(&shape);
+    size_t total = 0;
+    ta_result result = ta_continuation_bytes(&capacity, &total, &capacity.offsets);
+    if (result == TA_OK) {
+        *shape = capacity;
+        *bytes = total;
+    }
+    return result;
 }
 
 static void ta_continuation_forget(ta_system *system, ta_continuation *continuation) {
@@ -3915,9 +3927,11 @@ static ta_result ta_reserve_stop(ta_system *system, ta_actor *actor) {
     if (actor->sparse != NULL && actor->sparse->paused != NULL) {
         return TA_OK;
     }
-    size_t bytes = ta_continuation_capacity(actor->definition);
-    if (bytes == 0) {
-        return TA_ERR_NOMEM;
+    ta_continuation shape;
+    size_t bytes = 0;
+    ta_result result = ta_continuation_capacity(actor->definition, &shape, &bytes);
+    if (result != TA_OK) {
+        return result;
     }
     ta_continuation *spare = system->spare_continuation;
     if (spare == NULL || spare->bytes < bytes) {
@@ -3930,7 +3944,12 @@ static ta_result ta_reserve_stop(ta_system *system, ta_actor *actor) {
             ta_continuation_forget(system, spare);
         }
         system->spare_continuation = grown;
+        spare = grown;
     }
+    /* A spare that is reused may have been laid out for another definition:
+     * its offsets are rewritten for this one, and fit because spare->bytes
+     * is at least the bytes this shape needs. */
+    spare->offsets = shape.offsets;
     if (actor->sparse == NULL && system->spare_sparse == NULL) {
         system->spare_sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
                                             _Alignof(ta_actor_sparse_state));
@@ -3961,9 +3980,13 @@ static void ta_stop(ta_interpreter *it) {
         saved = system->spare_continuation;
         system->spare_continuation = NULL;
     }
+    /* The offsets stay: they were set for the capacity shape when the
+     * continuation was reserved or loaded, and the counts written here never
+     * exceed it. */
     *saved = (ta_continuation){ .bytes = saved->bytes, .at = it->at, .words = it->words,
                                 .decl_words = it->decl_words, .state_count = it->definition->state_count,
-                                .enabled_count = it->enabled_count, .frame_count = it->exec_count };
+                                .enabled_count = it->enabled_count, .frame_count = it->exec_count,
+                                .offsets = saved->offsets };
     ta_mem_copy(ta_continuation_decls(saved), it->bound_decls, (size_t)it->decl_words * sizeof(uint64_t));
     uint64_t *sets = ta_continuation_sets(saved);
     const uint64_t *from[] = { it->active, it->to_exit, it->to_enter, it->default_entry };

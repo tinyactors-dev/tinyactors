@@ -148,6 +148,11 @@ void ta_interpreter_render_fault(ta_fault *fault);
  * of 0 it empties the cache, which is what ta_system_destroy does. The cache
  * fills on demand, never at creation (ADR 0093). It never allocates. */
 void ta_interpreter_block_cache_trim(ta_system *system);
+/* The largest continuation a run of the definition can save: its shape with
+ * the offsets of its arrays, and its size; TA_ERR_NOMEM, outputs untouched,
+ * when that does not fit. Never allocates. */
+ta_result ta_continuation_capacity(const ta_definition *definition, ta_continuation *shape, size_t *bytes);
+
 /* Frees the continuation and sparse state the system keeps for a run that
  * stops (ADR 0070), at teardown. */
 void ta_interpreter_release_spares(ta_system *system);

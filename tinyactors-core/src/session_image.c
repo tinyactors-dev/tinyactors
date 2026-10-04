@@ -588,15 +588,31 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
  * retained again, so the image keeps its own.
  */
 static ta_result ta_image_restore_pause(const ta_session_image *image, ta_actor *actor, ta_system *system) {
+    /* The offsets are not trusted from the image: they are computed for the
+     * actor's definition, and the image's counts and size must agree with
+     * that shape before anything is allocated. */
+    ta_continuation shape;
+    size_t needed = 0;
+    ta_result result = ta_continuation_capacity(actor->definition, &shape, &needed);
+    if (result != TA_OK) {
+        return result;
+    }
+    const ta_continuation *saved = image->paused;
+    if (saved->bytes < needed || saved->words != shape.words || saved->decl_words != shape.decl_words ||
+        saved->state_count != shape.state_count || saved->enabled_count > shape.enabled_count ||
+        saved->frame_count > shape.frame_count) {
+        return TA_ERR_INVALID;
+    }
     ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
     if (sparse == NULL) {
         return TA_ERR_NOMEM;
     }
-    ta_continuation *copy = ta_mem_alloc(system->allocator, image->paused->bytes, TA_CONTINUATION_ALIGN);
+    ta_continuation *copy = ta_mem_alloc(system->allocator, saved->bytes, TA_CONTINUATION_ALIGN);
     if (copy == NULL) {
         return TA_ERR_NOMEM;
     }
-    ta_mem_copy(copy, image->paused, image->paused->bytes);
+    ta_mem_copy(copy, saved, saved->bytes);
+    copy->offsets = shape.offsets;
     ta_continuation_retain(copy);
     sparse->paused = copy;
     return TA_OK;

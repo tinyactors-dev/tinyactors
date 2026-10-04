@@ -186,8 +186,9 @@ typedef struct {
     size_t scratch_need;
 } golden;
 
-/* A chart of `states` atomic states with one transition, compiled for the null data model. */
-static void check_chart(ta_system *system, golden expected) {
+/* A chart of `states` atomic states with one transition, compiled for the null data model.
+ * It checks the golden figures, then destroys the definition, or hands it to the caller in `*keep`. */
+static void check_chart(ta_system *system, golden expected, ta_definition **keep) {
     uint32_t n = expected.states;
     ta_scxml_state_spec *states = calloc(n + 1u, sizeof *states);
     ta_str *ids = calloc(n + 1u, sizeof *ids);
@@ -214,13 +215,18 @@ static void check_chart(ta_system *system, golden expected) {
         ta_continuation shape = { .words = ta_bits_words(n), .decl_words = 2, .state_count = n,
                                   .enabled_count = n + 1u, .frame_count = 3 };
         size_t need = 0;
+        size_t continuation = 0;
         CHECK(definition->actor_block_bytes == expected.block_bytes);
         CHECK(definition->actor_session_offset == 232u);
         CHECK(definition->actor_instance_offset == expected.instance_offset);
         CHECK(definition->actor_block_alignment == 8u);
-        CHECK(ta_continuation_bytes(&shape) == expected.continuation_bytes);
+        CHECK(ta_continuation_bytes(&shape, &continuation, NULL) == TA_OK && continuation == expected.continuation_bytes);
         CHECK(ta_interpreter_scratch_need(definition, &need) == TA_OK && need == expected.scratch_need);
-        ta_definition_destroy(definition);
+        if (keep != NULL) {
+            *keep = definition;
+        } else {
+            ta_definition_destroy(definition);
+        }
     }
     free(states);
     free(ids);
@@ -233,10 +239,10 @@ static void test_golden_figures(void) {
     if (system == NULL) {
         return;
     }
-    check_chart(system, (golden){ 2, 248, 248, 240, 652 });
-    check_chart(system, (golden){ 7, 248, 248, 280, 776 });
-    check_chart(system, (golden){ 70, 264, 264, 816, 2444 });
-    check_chart(system, (golden){ 700, 408, 408, 6144, 18988 });
+    check_chart(system, (golden){ 2, 248, 248, 256, 652 }, NULL);
+    check_chart(system, (golden){ 7, 248, 248, 296, 776 }, NULL);
+    check_chart(system, (golden){ 70, 264, 264, 832, 2444 }, NULL);
+    check_chart(system, (golden){ 700, 408, 408, 6160, 18988 }, NULL);
     /* The default system's arena: one region (interpreterBytes and renderBytes) and the nested table. */
     CHECK(system->arena_bytes == 82048u);
     /* The header is 12 bytes since the jump stores its own size (it was 8). */
@@ -249,8 +255,83 @@ static void test_golden_figures(void) {
     ta_system_destroy(system);
 }
 
+/* ta_continuation_bytes: the offsets it stores, the 32-bit bound, nothing written on failure. */
+static void test_continuation_bytes(void) {
+    ta_continuation shape = { .words = 1, .decl_words = 2, .state_count = 7, .enabled_count = 8, .frame_count = 3 };
+    size_t bytes = 0;
+    ta_continuation_offsets offsets = { 0 };
+    CHECK(sizeof(ta_continuation) == 64u);
+    CHECK(ta_continuation_bytes(&shape, &bytes, &offsets) == TA_OK);
+    /* The sets (4 words) follow the header; then each array at its own alignment. */
+    CHECK(offsets.decls == sizeof(ta_continuation) + 4u * 8u);
+    CHECK(offsets.history == offsets.decls + 2u * 8u);
+    CHECK(offsets.enabled >= offsets.history + 7u * sizeof(ta_state_id));
+    CHECK(offsets.frames >= offsets.enabled + 8u * sizeof(ta_transition_id));
+    CHECK(offsets.frames % _Alignof(ta_exec_frame) == 0);
+    CHECK(bytes == offsets.frames + 3u * sizeof(ta_exec_frame));
+    CHECK(ta_continuation_bytes(&shape, &bytes, NULL) == TA_OK);
+    /* A count whose arrays do not fit in 32 bits is refused on 64-bit hosts, and nothing is written. */
+    ta_continuation huge = shape;
+    huge.decl_words = UINT32_MAX;
+    bytes = 77u;
+    offsets = (ta_continuation_offsets){ .decls = 5u };
+    CHECK(ta_continuation_bytes(&huge, &bytes, &offsets) == TA_ERR_NOMEM);
+    CHECK(bytes == 77u && offsets.decls == 5u);
+    /* Just under and just over the 32-bit bound, by frames of known size. */
+    ta_continuation edge = { .frame_count = (uint32_t)((UINT32_MAX - sizeof(ta_continuation)) / sizeof(ta_exec_frame)) };
+    CHECK(ta_continuation_bytes(&edge, &bytes, NULL) == TA_OK && bytes <= UINT32_MAX);
+    CHECK(edge.frame_count != 0);
+    edge.frame_count += 1u;
+    CHECK(ta_continuation_bytes(&edge, &bytes, NULL) == TA_ERR_NOMEM);
+}
+
+/* A spare laid out for a big definition and reused for a small one has its offsets rewritten. */
+static void test_spare_reuse(void) {
+    ta_system *system = NULL;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system) == TA_OK);
+    if (system == NULL) {
+        return;
+    }
+    ta_definition *big = NULL;
+    ta_definition *small = NULL;
+    check_chart(system, (golden){ 700, 408, 408, 6160, 18988 }, &big);
+    check_chart(system, (golden){ 2, 248, 248, 256, 652 }, &small);
+    ta_actor *actor_big = calloc(1, sizeof *actor_big);
+    ta_actor *actor_small = calloc(1, sizeof *actor_small);
+    if (big != NULL && small != NULL && actor_big != NULL && actor_small != NULL) {
+        actor_big->definition = big;
+        actor_small->definition = small;
+        ta_continuation shape_big, shape_small;
+        size_t bytes_big = 0, bytes_small = 0;
+        CHECK(ta_continuation_capacity(big, &shape_big, &bytes_big) == TA_OK);
+        CHECK(ta_continuation_capacity(small, &shape_small, &bytes_small) == TA_OK);
+        CHECK(bytes_big > bytes_small && shape_big.offsets.frames != shape_small.offsets.frames);
+        CHECK(ta_reserve_stop(system, actor_big) == TA_OK);
+        ta_continuation *spare = system->spare_continuation;
+        CHECK(spare != NULL && spare->bytes == bytes_big);
+        CHECK(spare != NULL && memcmp(&spare->offsets, &shape_big.offsets, sizeof spare->offsets) == 0);
+        CHECK(ta_reserve_stop(system, actor_small) == TA_OK);
+        /* The same allocation, still sized for the big one, laid out for the small one. */
+        CHECK(system->spare_continuation == spare);
+        CHECK(spare != NULL && spare->bytes == bytes_big);
+        CHECK(spare != NULL && memcmp(&spare->offsets, &shape_small.offsets, sizeof spare->offsets) == 0);
+        CHECK(spare != NULL && spare->offsets.frames + shape_small.frame_count * sizeof(ta_exec_frame) <= spare->bytes);
+    }
+    free(actor_big);
+    free(actor_small);
+    if (big != NULL) {
+        ta_definition_destroy(big);
+    }
+    if (small != NULL) {
+        ta_definition_destroy(small);
+    }
+    ta_system_destroy(system);
+}
+
 int main(void) {
     test_golden_figures();
+    test_continuation_bytes();
+    test_spare_reuse();
     test_empty();
     test_single_and_mixed();
     test_start_offset();
