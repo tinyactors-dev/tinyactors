@@ -178,10 +178,17 @@ proposal](../replay-persistence.md).
 
 Each document goes to the place its readers already look:
 
-- **Core's internal reference** (`tinyactors-core/docs/internal/`) has one
-  document per module. Each `reference/` document becomes the document
-  for the module it describes, and replaces or merges into what is there
-  today.
+- **The source** takes everything that explains one unit: its contract,
+  invariants, lifetimes, safe points and the reasons for its shape. It
+  goes into the unit's header as a comment
+  ([below](#documentation-lives-with-the-code)). Most of
+  `building-blocks.md` and much of `envelope.md`, `ring.md` and
+  `macrostep.md` land there.
+- **Core's internal reference** (`tinyactors-core/docs/internal/`) keeps
+  what crosses units: the memory model, the invariants, event ordering,
+  the macrostep, and the building-block catalog as an index of links to
+  headers. Where a row below sends a document to `docs/internal/`, the
+  part about one unit goes to that unit's header instead.
 - **Core's manual** (`tinyactors-core/docs/manual/`) is for embedders. It
   takes what a host author needs: the host loop, capacity and failure,
   parameters, and the walkthroughs.
@@ -190,6 +197,41 @@ Each document goes to the place its readers already look:
   its fixtures.
 - **ADRs** take every decision, and the **root `ROADMAP.md`** takes the
   steps of this plan.
+
+### Documentation lives with the code
+
+The reference documents carry knowledge the code needs, and a reader of
+the code should find it beside what it explains. Every step writes it as
+part of the step.
+
+- **Each unit's header opens with a doxygen-style file comment**
+  (`/** @file ... */`, Markdown prose): the one object the unit defines,
+  its contract, its invariants, who owns its memory and for how long,
+  when it may allocate (only at a safe point, or never in a macrostep),
+  its complexity, how it fails, and the ADRs behind it.
+- **Each function a unit exports has a `/** ... */` comment:** what it
+  does, what it borrows or takes over, whether it may run in a macrostep,
+  and what it answers on failure. Tags only where they help (`@param` for
+  a parameter whose meaning is not obvious). The existing `/* */` prose
+  style stays; the comments are doxygen-compatible so that a generated
+  index is possible, not required.
+- **The comment is written in the commit that adds or changes the unit,**
+  from the matching proposal text: a block's row and notes in
+  `building-blocks.md`, the envelope fields in `envelope.md`, the reserve
+  rules in `ring.md`. A step is not done until its units say what the
+  proposal said about them.
+- **Existing per-module documents fold in as steps touch them.**
+  `docs/internal/` has one document per module today (`arena.md`,
+  `atom.md`, `timer.md`, ...). The first step that changes a unit moves
+  that document's description of the unit into its header, and the
+  document is deleted or reduced to what crosses units. `module-map.md`
+  becomes an index of headers.
+- **A check keeps it true.** Step 1.0 adds an ast-grep rule, with a test
+  (`mise/ast-grep/rules/`), that every header in `tinyactors-core/src/`
+  opens with a file comment. Headers that predate it are on an allow-list
+  that shrinks as steps touch them; `mise run test` runs the rule.
+- **Rendering is optional.** A `docs:api` task may render the headers
+  with a pinned doxygen; it is not a gate.
 
 ### From the proposal
 
@@ -225,8 +267,9 @@ docs/proposals/ring-proto/
 │   ├── README.md               →        tinyactors-core/protocol/README.md (2.9)
 │   └── generated/              ▶        tinyactors-core/src/generated/ (2.9)
 └── reference/
-    ├── building-blocks.md      ⇢        the catalog → core docs/internal/building-blocks.md (Phase 1);
-    │                                    each block's contract → the header comment of its unit;
+    ├── building-blocks.md      ⇢        each block's contract, notes and duplication record → the file
+    │                                    comment of its unit, in the step that adds it (Phases 1, 2);
+    │                                    the catalog → core docs/internal/building-blocks.md, an index of headers;
     │                                    the removal table and tree → this file, as history
     ├── ring.md                 →        core docs/internal/ring.md (2.8, 5.1)
     ├── envelope.md             ⇢        core docs/internal/envelope.md (4.2); delayed sends
@@ -265,7 +308,7 @@ tinyactors-core/docs/
 │   ├── embedding.md            ~        ta_run and the rings instead of deliver, resume and the vtables
 │   └── extensions.md           ~        I/O processors and invokers as declared types and records
 └── internal/
-    ├── building-blocks.md      +        the catalog of blocks and their lifetimes
+    ├── building-blocks.md      +        the catalog of blocks and their lifetimes, linking to each header
     ├── ring.md                 +
     ├── envelope.md             +
     ├── deadline.md             +        replaces timer.md and timer-lifecycle.md
@@ -292,7 +335,9 @@ tinyactors-core/docs/
     ├── invariants.md           ~        the proposal's invariants
     ├── invoke.md               ~        lifetime tokens, invocation_seq, records instead of the vtable
     ├── datamodel-*.md, value.md ~       no TA_OP_NOMEM; _ioprocessors from the binding; vrefs
-    ├── module-map.md           ~        follows the source tree above
+    ├── module-map.md           ~        follows the source tree above; an index of unit headers
+    ├── <module>.md             -        each folds into its unit's header comment when a step first
+    │                                    changes the unit (arena, atom, event, configuration, ...)
     └── README.md               ~        the new cross-cutting references
 
 tinyactors-test/docs/protocol.md ~       hosted.post, hosted.turn and hosted.batches as a ring driver (5.1)
@@ -333,6 +378,10 @@ tinyactors-host/                 -       with the package; its ADRs stay as hist
 - **Delete what a step replaces, in that step.** The removal table in
   [building-blocks.md](reference/building-blocks.md#what-core-can-remove)
   is the checklist. A step is done when its rows are gone.
+- **Documentation is part of the step.** The commit that adds or changes
+  a unit writes or updates its file comment and its functions' comments
+  ([above](#documentation-lives-with-the-code)), and folds that unit's
+  `docs/internal/` document in. A reviewer reads the header first.
 - **One unit per object.** Each new block is its own unit (`vec.c` /
   `vec.h`), named after the object it defines. Nothing is added to a
   catch-all header, and `types.h` is split up in 1.0.
@@ -385,7 +434,7 @@ gets its own test program in `tinyactors-core/tests/`.
 
 | Step | Block | Replaces | Notes |
 |---|---|---|---|
-| 1.0 | – | `types.c` / `types.h` | Split into `memory`, `str`, `vec`, `bitset.h`, `span.h`, `text_writer` and `version.c`. Move `ta_actor_key` to `handle.h` with 1.2. Every module includes what it uses instead of `types.h`. |
+| 1.0 | – | `types.c` / `types.h` | Split into `memory`, `str`, `vec`, `bitset.h`, `span.h`, `text_writer` and `version.c`. Move `ta_actor_key` to `handle.h` with 1.2. Every module includes what it uses instead of `types.h`. Add the ast-grep rule that a header opens with a file comment, with today's headers on its allow-list; each new unit from the split gets its comment. |
 | 1.1 | D5 hash functions, D6 formatters | The Murmur finalizer duplicated in `session.c:4` and `trace.c:34`; FNV-1a in 32-bit and 64-bit forms; three decimal formatters, four hex helpers, two `cstr` helpers | One header. Trace and span IDs must stay identical: `span_test` covers them. |
 | 1.2 | E1 generation handles | The hand-packed definition IDs (`system.c:456`), and `ta_actor_id_make` as the only shared helper | |
 | 1.3 | E2 failing, counting test allocator | Nine hand-rolled copies in core's tests | It lives with the tests and is never amalgamated into the library. |
@@ -397,7 +446,8 @@ gets its own test program in `tinyactors-core/tests/`.
 
 **Exit:** the duplication summary in the catalog is resolved, except for
 code that later phases delete. `mise run test:full` passes. Core has fewer
-lines than before.
+lines than before. Every unit the phase touched opens with a file comment,
+and its `docs/internal/` document is folded in.
 
 ## Phase 2: add the new blocks, unused
 
@@ -420,7 +470,8 @@ exception to "remove what nothing uses".
 | 2.10 | C4 claim set (optional) | Reserves across C3 quotas, all or nothing. |
 
 **Exit:** every new block has its own test program, and the core `test`
-task's sources include them.
+task's sources include them. Each block's header carries its contract from
+`building-blocks.md`; the catalog's row for it links to the header.
 
 ## Phase 3: match names by lookup
 
@@ -512,3 +563,101 @@ rings.
 | 4 | pool, timer, capacity and slot tests; out-of-memory sweep shrinks | through the kernel | through the kernel; quarantine removed | changed in place each commit |
 | 5 | ring script tests (E3) | **ring driver**; S01 to S13 | through the kernel, which drives the rings | shrinks each step |
 | 6 | – | – | **drives the rings** | deleted |
+
+## Running the work
+
+### The critical path
+
+Most of the plan can run side by side. One chain cannot, because each link
+changes the interpreter, the actor record, the system and the kernel that
+the next link builds on:
+
+```
+1.0 ─▶ 1.5 ─▶ 1.6 ─▶ 4.2 ─▶ 4.3 ─▶ 4.4 ─▶ 4.5 ─▶ 5.1 ─▶ 5.3 ─▶ 5.5 ─▶ 6.1 ─▶ 6.3
+```
+
+4.2 builds the pool on A5 (1.5) and the `h2c.withdraw` index on B3 (1.6).
+Everything else is a side lane that must land before the link that needs
+it: 4.2 also needs A6 (2.4), B1, C3, the name resolver and Phase 3. The rule for scheduling is: keep the critical path busy, and use the
+other lanes to have its inputs ready before it needs them.
+
+### Lanes
+
+| When | Lane | Steps | Waits for | Touches |
+|---|---|---|---|---|
+| first, alone | foundation | 1.0 | – | every module's includes, `internal.h`; nothing else can land cleanly beside it |
+| Phase 1 | tables | 1.5 → 1.6 | 1.0 | actor, address, session, atom, trie |
+| Phase 1 | helpers | 1.1, 1.2, 1.4, then 1.7 | 1.0 | hash and format helpers, handles, layouts, invoke and export arrays; 1.1 also edits `session.c`, so it lands before 1.5 or rebases onto it |
+| Phase 1 | tests and dead code | 1.3, 1.8 | 1.0 | core's tests, `fault.h`, `configuration` |
+| with Phase 1 | free blocks | 2.1, 2.2, 2.3, 2.8, 2.10 | 1.0 | new units only |
+| with Phase 1 | generator | 2.9 | 1.0 | `protocol/`, a mise task, `src/generated/`, `docs/build/` |
+| after its inputs | dependent blocks | 2.4 (needs A5), 2.7 (needs B3) | 1.5, 1.6 | new units |
+| with Phase 1 | names and images | 2.5, 2.6 | 1.0 | new units; 2.5 moves sinks out of `session_image.c`; 2.6 uses today's `ta_atom_find`, whose storage 1.6 changes underneath it |
+| beside Phase 2 | matching | 3.1, 3.2 | 2.6 | the matcher's input; lands before 4.2 |
+| beside Phase 3 | telemetry | 4.1 | 2.8, 2.9 | `trace.c`, the kernel's OTLP adapter |
+| right after 4.1 | OTLP library | 6.2's `tinyactors-otlp` | 4.1 | a new package; the kernel links it until Phase 6 |
+| Phase 4 | core | 4.2 → 4.3 → 4.4 → 4.5 | Phase 3, Phase 2 blocks | interpreter, actor, system, the kernel; one lane, serial |
+| Phase 5 | driver | 5.1 | 4.5 | the test host becomes a ring driver |
+| after 5.1 | scenarios | S01 … S13 as ring scripts, one per lane | 5.1 | one test file and one walkthrough each |
+| after 5.1 | effects, definitions | 5.2 and 5.4, side by side | 5.1 | I/O and invoke code; builder and definition code |
+| after 5.1 | images | 5.3 → 5.5 | 5.1 | session images, actor records, the recorder; serial because both change images |
+| Phase 6 | napi | 6.1 | Phase 5 | napi, with the session rewriting it |
+| last | removal | 6.3 | 6.1, 6.2 | deletes the kernel |
+
+Two moves shorten the critical path most. **4.1 and `tinyactors-otlp`
+run before Phase 4**, so 2,300 lines of encoder move while the
+interpreter work has not started. **The free blocks and the generator run
+during Phase 1**, so Phase 2 is mostly done when the tables land.
+
+Work that lands in the same commit as a critical-path step is prepared
+beside it but never lands alone: the jq, quickjs and napi data models'
+change from `TA_OP_NOMEM` to `TA_OP_ERROR` lands with 4.4, as every API
+change lands with its callers.
+
+### How parallel lanes land
+
+The repository has no feature branches: every lane commits to `main`. A
+lane works in its own worktree, rebases onto `main` before each commit,
+runs `mise run test`, and lands small commits. A lane owns its files;
+two lanes that need the same module run one after the other.
+
+Three places conflict often and are handled the same way each time:
+
+- **`src/internal.h`** lists units in amalgamation order. A rebase
+  re-applies the lane's lines in the group order of the source tree.
+- **`protocol/catalog.rb` and `src/generated/`.** Only the catalog is
+  merged. The generated files are rendered again after the rebase, never
+  merged by hand.
+- **The kernel during Phases 4 and 5.** Every critical-path step changes
+  it in place. Side lanes do not touch it.
+
+### Where oversight is needed
+
+The automated checks cover most of the risk: `mise run test`,
+`mise run test:full`, the sanitizer builds, the acronym and portability
+checks, `check-api-status`, the header-comment rule, the core test that an
+allocator refusing every request after a macrostep starts never sees a
+call, and the IRP suites. These gates need a person as well:
+
+| Gate | Who | What they check |
+|---|---|---|
+| Each ADR (Phase 0, just before the phase that needs it) | the maintainer | the decision and its figures; the ADR is the decision, not the proposal |
+| Public API changes in `tinyactors.h` | the maintainer | names, ownership, failure codes; the `// status:` markers napi needs |
+| 2.9, the generator and its build task | the maintainer | the rules in `docs/build/`; nothing host-specific outside `mise/lib/toolchain/` |
+| Each commit of 4.2 to 4.5 | the maintainer, reading the header comments first | the macrostep invariants hold; `test:full` passed and the message says so; IRP results unchanged |
+| Phase 4's and Phase 7's benchmarks | the maintainer | `bench-compare` with throughput, memory and the machine signature; per-actor bytes before and after; whether a regression is accepted |
+| 5.1, the test host becoming a ring driver | a reviewer who did not write it | every scenario property the old driver checked is still checked; nothing is weakened or dropped to make a scenario pass |
+| Removals that supersede ADRs (5.x, 6.3) | the maintainer | the ADR's status line, and that nothing still depends on what goes |
+| 4.5 and 6.1 in napi | the session rewriting napi | which napi files change, and when |
+
+### Who does which work
+
+- **Suited to agents, with an ordinary review:** the Phase 2 blocks (each
+  has a contract in `building-blocks.md`, no callers and its own tests),
+  the Phase 1 refactors (the existing tests are the oracle), folding
+  `docs/internal/` documents into headers, the scenario ring scripts (the
+  step IDs name the tests), and moving the OTLP encoder.
+- **Agents with close review:** 1.0 (wide but mechanical), 2.9, Phase 3,
+  and 5.2 to 5.5.
+- **Led by a person, agents assisting:** the Phase 0 ADRs, 4.2 to 4.5,
+  5.1's change of oracle, and 6.1 with the napi session.
