@@ -16,7 +16,9 @@ records, and what happens when something runs out. The rings are in
      interpreter workspace, including mandatory internal-event storage, by
      growing the one running workspace);
    - when a session is created or loaded (its fixed-size record, sized by its
-     definition).
+     definition, and any nested interpreter workspace its definition needs,
+     with that workspace's mandatory internal-event storage;
+     [sizing](#sizing-mandatory-storage)).
 
    Growing the pool, the slot records and the park area up to their bounds
    happens between macrosteps ([envelope.md](envelope.md#the-pool),
@@ -118,13 +120,10 @@ a fixed number of slots, taken in turn.
 
 ### Why slots, and why a fixed number
 
-An earlier version of this design ran one macrostep at a time for the
-whole system, with one continuation. It rejected interleaving because
-interleaving does not prevent deadlock. That is true, and refusing local
-sends that don't fit, while waiting only for c2h, which the host drains,
-still prevents it ([below](#a-full-c2h-pauses-the-slot)). But interleaving
-was never for deadlock. It is for isolation: with one continuation, any long macrostep stops every
-other session until it ends.
+Slots are for isolation, not for deadlock. Deadlock is prevented by
+refusing local sends that don't fit and by waiting only for c2h, which the
+host drains ([below](#a-full-c2h-pauses-the-slot)). With one slot, any long
+macrostep stops every other session until it ends.
 
 - **Long but correct macrosteps exist.** A chart that walks a list with a
   guarded eventless transition, a parser driven by `<raise>` chains, a
@@ -485,7 +484,7 @@ executed remain executed.
 
 | | Who can free it | What happens | Does the chart see it? |
 |---|---|---|---|
-| **Rings:** c2h full when an action writes | the host, by draining | The slot parks before the action and runs it again once the record fits. Other slots go on; when none can, `ta_run` answers `TA_RUN_C2H_FULL` ([above](#a-full-c2h-pauses-the-slot)). | no |
+| **Rings:** c2h full when an action may write | the host, by draining | Core checks for room before the action evaluates anything. Without room the slot parks before it, and the action runs once, after the host drains. Other slots go on; when none can, `ta_run` answers `TA_RUN_C2H_FULL` ([above](#a-full-c2h-pauses-the-slot)). | no |
 | **Rings:** an action's record is larger than `maxRecordBytes` | nobody | The action fails as `error.execution.capacity.record`. | yes |
 | **Before a macrostep:** c2h lacks the reserve | the host, by draining | No macrostep starts, and `ta_run` answers `TA_RUN_C2H_FULL` when nothing else can run. | no |
 | **h2c full** | core, by admitting | The host refuses at its edge | no; the external client does |
@@ -742,7 +741,7 @@ prepared resources and queues the corresponding invocation error before the
 next external input. Storage for all errors in that startup pass is sized
 before any invoke executes.
 
-Core no longer stops an executable block because core ran out of memory.
+Core never stops an executable block because core ran out of memory, as ADR 0070's stop does today.
 `TA_ERR_NOMEM` can arise only outside macrosteps, while growing the pool or
 preparing a session and its workspace. A failed preparation changes nothing;
 an invocation-start failure follows the internal-error rules above.

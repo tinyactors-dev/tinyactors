@@ -2,11 +2,11 @@
 
 **Status:** Sketch (2026-10-02), part of [the ring protocol proposal](../README.md)
 
-**Accepted boundary:** debugger commands stay outside the production
+**Boundary:** debugger commands stay outside the production
 protocol. Attachment suspends the production pump and transfers exclusive
 ownership of one `ta_system` to the debugger. Intervention is limited to
-operator transitions and the abandonment needed to enable them. The initial
-design freezes the entire system; it adds no operator ring.
+operator transitions and the abandonment needed to enable them. The
+debugger freezes the entire system; there is no operator ring.
 
 ## Attachment and ownership
 
@@ -125,8 +125,9 @@ Freezing the system preserves every slot's continuation and internal
 queue. Parking already keeps one actor's macrostep aside while others run
 ([macrostep.md](macrostep.md#parking-one-running-workspace-and-a-park-area)).
 A debugger that holds one actor and lets the rest of the system run would
-build on it, but it is not part of this design: the initial debugger
-freezes everything. It is also how an operator looks at a live actor now
-that quarantine is removed ([macrostep.md](macrostep.md#runaways-the-chain-limit)). An actor-only hold between macrosteps would need rules
-for pending inputs and timers. Separate
+build on it, but it is not part of this design: the debugger freezes
+everything. Such a hold would also be how an operator looks at a live
+actor, since this design has no quarantine
+([macrostep.md](macrostep.md#runaways-the-chain-limit)). An actor-only hold
+between macrosteps would need rules for pending inputs and timers. Separate
 systems can already be debugged independently.

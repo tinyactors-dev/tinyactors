@@ -69,9 +69,9 @@ A recorded session's log is:
 3. optionally [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate)
    records, which let the log be truncated (see [Checkpoints](#checkpoints)).
 
-This replaces the kernel's recorder (`tinyactors-host/src/recorder.c`).
-The old input log byte layout (core ADR 0090) was already removed by kernel
-ADR 0006. The ring is an observation format; the application chooses its
+It takes the place of today's kernel recorder
+(`tinyactors-host/src/recorder.c`). There is no input log byte layout:
+kernel ADR 0006 removed core ADR 0090's. The ring is an observation format; the application chooses its
 journal format, encoding vrefs with the binding's codec.
 
 ### Why record from c2h and not from h2c
@@ -311,7 +311,7 @@ that an [`h2c.unload`](../protocol/generated/MESSAGES.md#h2cunload) earlier
 in the recording produced. The new execution runs that unload
 and produces its own image, which may differ from the old one. The recorded
 `h2c.load` holds a blob handle from the old process, which means nothing
-now. The replaying host gives core the image the matching unload just
+in the new one. The replaying host gives core the image the matching unload just
 produced. No image is ever stored for replay.
 
 The application maps load records to images produced in the new execution.

@@ -572,6 +572,7 @@ typedef struct {
     uint64_t cause_session;
     uint64_t cause_macrostep;
     uint32_t microstep;
+    uint32_t cause_microstep;
     uint32_t state;
     uint32_t transition;
     uint32_t action;
@@ -583,7 +584,7 @@ typedef struct {
     uint8_t trace_flags;
     uint8_t trace_detail;
     uint8_t runaway_cause; /* trp_runaway_cause */
-    uint8_t pad18[1];
+    uint8_t pad19[1];
     trp_span address;
     trp_span definition;
     trp_span state_name;
@@ -597,8 +598,9 @@ typedef struct {
     trp_span fault_message;
     trp_span transitions;
     trp_span states;
+    uint8_t pad_end[4];
 } trp_tel_trace;
-_Static_assert(sizeof(trp_tel_trace) == 216, "tel.trace");
+_Static_assert(sizeof(trp_tel_trace) == 224, "tel.trace");
 
 /* tel.dropped: Telemetry records were dropped. */
 typedef struct {

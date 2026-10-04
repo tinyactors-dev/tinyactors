@@ -14,11 +14,11 @@ The rings are split by delivery guarantee, not by purpose:
 | | `c2h` | `tel` |
 |---|---|---|
 | Loss | none | drops when full |
-| When full | the action that writes fails as `error.execution.capacity`; a macrostep starts only with room for its reserve ([ring.md](ring.md)) | the record is dropped and counted |
+| When full | the slot parks before the action that would write, and the action runs once after the host drains; an input starts only with room for its reserve ([ring.md](ring.md#the-c2h-reserve)) | the record is dropped and counted |
 | Carries vrefs | yes, ownership passes to the host | never |
 | Used for replay | yes ([`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput)) | never |
 
-If telemetry shared `c2h`, a slow OTLP exporter would make sends fail.
+If telemetry shared `c2h`, a slow OTLP exporter would hold up sends.
 If recording shared `tel`, a burst of traces would lose inputs. Both
 rings use one record format and one reader API ([ring.md](ring.md)), so a
 host reads them with the same code.

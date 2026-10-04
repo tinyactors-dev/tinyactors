@@ -49,8 +49,9 @@ ring :h2c,
 
 ring :c2h,
      producer: :core, consumer: :host, loss: :none,
-     when_full: 'A record an action would write does not fit: its slot parks ' \
-                'before the action, which runs again after the host drains. ' \
+     when_full: 'Before an action that may write c2h evaluates anything, core ' \
+                'checks for room for the largest record. Without it the slot parks ' \
+                'before the action, which runs once, after the host drains. ' \
                 'Other slots go on. Core starts a macrostep only when ' \
                 'c2h has room for all mandatory observations, cancellations, ' \
                 'autoforwards, completion and end reports, including wrap padding. ' \
@@ -63,8 +64,8 @@ ring :tel,
      producer: :core, consumer: :host, loss: :drop,
      when_full: 'The record is dropped and counted. The next tel.dropped says ' \
                 'how many. Telemetry never slows the system.',
-     doc: 'Observability: the trace records of core ADR 0067 under the ' \
-          'existing kind masks and sampling. Never used for replay.'
+     doc: 'Observability: the trace records of core ADR 0067 under core\'s ' \
+          'kind masks and sampling (core ADR 0073). Never used for replay.'
 
 # ---------------------------------------------------------------- enums
 
@@ -153,7 +154,7 @@ end
 enum :definition_status, :u8, doc: 'The result of a definition request.' do
   value :ok, 0
   value :compile_error, 1, 'the complete spec was refused; diagnostic describes the first fault'
-  value :capacity, 2, 'allocation, a configured bound or diagnostic buffer capacity was exhausted'
+  value :capacity, 2, 'the diagnostic did not fit completely in its memory (nothing partial is written), or allocation or definition capacity ran out'
   value :mismatch, 3, 'an explicit identity names different content (core ADR 0077)'
   value :not_found, 4, 'an unknown or stale definition ID'
   value :invalid, 5, 'a malformed or unknown spec or adapter handle, or an invalid release request'
@@ -314,7 +315,7 @@ message 'h2c.definition_register', code: 0x010B, summary: 'Compile and register 
       'retains nothing from the submitted spec.'
   field :spec, :u64, 'process-local handle of a complete native ta_scxml_spec built by the binding'
   field :datamodel, :u64, 'process-local handle of a native-installed data model adapter'
-  field :diagnostic, :blob, 'host-owned bounded memory core writes the native compile-error struct (core ADR 0058) into'
+  field :diagnostic, :blob, 'host memory, owned and bounded by the host, that core writes core ADR 0058\'s native compile-error struct (ta_compile_error) into'
   replies_with 'c2h.definition_result'
 end
 
@@ -364,7 +365,7 @@ message 'h2c.type_declare', code: 0x010F, summary: 'Declare an I/O processor or 
       'could not raise later from c2h. Declaring a declared type changes ' \
       'nothing and writes nothing. A name core owns (scxml and its URI ' \
       'aliases) is bounced as reserved_type; failing to store the name is ' \
-      'bounced as allocation. A type cannot be withdrawn yet.'
+      'bounced as allocation. A declared type cannot be withdrawn.'
   field :registry, :type_registry
   field :type, :text, 'the type name as bytes; interned as an atom when declared'
   replies_with 'c2h.bounced'
@@ -623,22 +624,27 @@ end
 
 message 'tel.trace', code: 0x0301, summary: 'One trace record (core ADR 0067)' do
   doc 'One ta_trace_record, kind for kind; only the fields its kind names ' \
-      'are meaningful. The record is self-contained: names, values, the ' \
-      'fault and the state and transition lists are text in its tail, so ' \
-      'a reader needs no live system (reference/telemetry.md). Values are ' \
+      'are meaningful. The record is self-contained: names, values and the ' \
+      'fault are text in its tail, and the state and transition lists are ' \
+      'bytes in its tail holding u32 IDs with their names, so a reader ' \
+      'needs no live system (reference/telemetry.md). Values are ' \
       'text the data model renders (value_text), cut at the parameter ' \
       'telemetryValueBytes; vrefs never go on a lossy ring. Header `at` ' \
       'is logical time; wall_ns is when it happened.'
+  doc 'The step key is header `session`, `macrostep` and `microstep`. There ' \
+      'is no span ID field: a span ID is a fixed 64-bit mix of the step key ' \
+      '(core ADR 0067, ta_step_key_span_id), the same in every reader.'
   flag :truncated, 0, 'value_text was cut, or a list in the tail was cut to fit maxRecordBytes'
   flag :suppressed, 1, 'an effect a replaying session did not perform'
   field :wall_ns, :u64, 'the host clock when core wrote the record: wall-clock ' \
                         'nanoseconds since the Unix epoch; 0 when the host installed no clock'
-  field :macrostep, :macrostep
+  field :macrostep, :macrostep, 'with header session and microstep, the step key; 0 outside a macrostep'
   field :trace_id_high, :u64
   field :trace_id_low, :u64
-  field :cause_session, :session
-  field :cause_macrostep, :macrostep
-  field :microstep, :u32
+  field :cause_session, :session, 'the session of the step that caused this one; 0 for a host-delivered cause'
+  field :cause_macrostep, :macrostep, 'the macrostep of the causing step; with cause_session 0, the host\'s parent span ID (W3C parent-id), or 0'
+  field :microstep, :u32, 'from 1 per macrostep; 0 for the macrostep itself'
+  field :cause_microstep, :u32, 'the microstep of the causing step; with cause_session and cause_macrostep, the cause\'s step key, whose span ID is the parent span'
   field :state, :u32
   field :transition, :u32
   field :action, :u32

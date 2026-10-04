@@ -21,8 +21,8 @@ The data model's own memory is not core's memory. A JavaScript `assign`
 may allocate as much as it likes: the rule that a macrostep never
 allocates ([macrostep.md](macrostep.md)) is about core's allocator. A data
 model that runs out of memory answers `TA_OP_ERROR`, and the chart sees
-`error.execution`. `TA_OP_NOMEM` and the pause it caused are removed.
-Why is in
+`error.execution`. There is no `TA_OP_NOMEM` and no pause for it, unlike
+today's core. Why is in
 [macrostep.md](macrostep.md#what-this-replaces-the-out-of-memory-stop-adrs-0047-0070).
 
 ## Value references
@@ -126,10 +126,10 @@ An image is self-contained. When core writes one for
 send the session holds in the pool. The image holds bytes, not vrefs.
 Loading calls `value_read`.
 
-This is why unloading does not have "two halves", one in core and one in
-the JavaScript heap. That concern applied only to the rejected option (b)
-([below](#decided-the-data-model-stays-a-synchronous-vtable)), where core
-would hold references to values that live elsewhere.
+So unloading does not have "two halves", one in core and one in the
+JavaScript heap. It would have them only if core held references to values
+that live elsewhere, as in the request-record data model
+([below](#why-the-data-model-is-not-on-a-ring)).
 
 ## Replay derives new state
 
@@ -148,15 +148,14 @@ Reproducing the earlier state is not the replay contract.
 [recording-and-replay.md](recording-and-replay.md) describes how a host
 can detect a divergence with telemetry.
 
-## Decided: the data model stays a synchronous vtable
 
-An earlier iteration of the design kept a second option open, "option (b)":
-every data model call would become a request record on c2h (`dm.assign`,
-`dm.eval`, `dm.foreach`, ...), and the macrostep would suspend until the
-answer arrived on h2c. **It is rejected.** The data model stays a vtable
-that core calls synchronously, inside the macrostep.
+## Why the data model is not on a ring
 
-**Why:**
+The alternative is a data model on the rings: every data model call
+becomes a request record on c2h (`dm.assign`, `dm.eval`, `dm.foreach`,
+...), and the macrostep suspends until the answer arrives on h2c. The data
+model is instead a vtable that core calls synchronously, inside the
+macrostep, for these reasons:
 
 - **In-process data models gain nothing from it.** napi, the test host, and
   the SQLite and PostgreSQL sketches (core runs inside the database
@@ -172,12 +171,12 @@ that core calls synchronously, inside the macrostep.
   already evaluated, so that resuming never evaluates them twice. That
   means more state in the continuation, more code in every action, and the
   ADR 0047/0070 kind of reasoning about interrupted steps that this design
-  removes ([macrostep.md](macrostep.md#what-this-replaces-the-out-of-memory-stop-adrs-0047-0070)).
+  does without ([macrostep.md](macrostep.md#what-this-replaces-the-out-of-memory-stop-adrs-0047-0070)).
 - **Slots would not help.** Macrostep slots interleave sessions only
   between units of executable content
   ([macrostep.md](macrostep.md#macrostep-slots)). A slow answer arrives in
   the middle of an action, so it would still hold the thread unless every
-  action could stop in the middle, which the next point rules out.
+  action could stop in the middle, which the point above rules out.
 - **A data model in another process can still be served synchronously.**
   The binding's vtable may block on it. A system runs on one thread
   ([ring.md](ring.md#one-thread)), so blocking it is the binding's choice to

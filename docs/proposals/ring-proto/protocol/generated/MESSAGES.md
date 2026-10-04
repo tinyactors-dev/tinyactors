@@ -12,7 +12,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | Ring | Producer → consumer | Loss | When full |
 |---|---|---|---|
 | `h2c` | host → core | none | The host cannot post. It refuses at its edge (for example HTTP 503) or keeps the input itself. Core never waits on h2c. |
-| `c2h` | core → host | none | A record an action would write does not fit: its slot parks before the action, which runs again after the host drains. Other slots go on. Core starts a macrostep only when c2h has room for all mandatory observations, cancellations, autoforwards, completion and end reports, including wrap padding. Startup and control phases can yield between macrosteps. |
+| `c2h` | core → host | none | Before an action that may write c2h evaluates anything, core checks for room for the largest record. Without it the slot parks before the action, which runs once, after the host drains. Other slots go on. Core starts a macrostep only when c2h has room for all mandatory observations, cancellations, autoforwards, completion and end reports, including wrap padding. Startup and control phases can yield between macrosteps. |
 | `tel` | core → host | drop | The record is dropped and counted. The next tel.dropped says how many. Telemetry never slows the system. |
 
 ## Index
@@ -55,7 +55,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x0213` | [`c2h.input_refused`](#c2hinput_refused) | An admitted host input was not taken | 48 |
 | `0x0214` | [`c2h.input_completed`](#c2hinput_completed) | A host input and its startup follow-up settled | 56 |
 | `0x0215` | [`c2h.load_result`](#c2hload_result) | A load-failure response finished recycling waiting inputs | 48 |
-| `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 216 |
+| `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 224 |
 | `0x0302` | [`tel.dropped`](#teldropped) | Telemetry records were dropped | 48 |
 
 ## Common header (32 bytes)
@@ -242,7 +242,7 @@ The host keeps spec valid and diagnostic writable until the correlated c2h.defin
 |---|---|---|---|
 | 32 | `spec` | u64 | process-local handle of a complete native ta_scxml_spec built by the binding |
 | 40 | `datamodel` | u64 | process-local handle of a native-installed data model adapter |
-| 48 | `diagnostic` | blob | host-owned bounded memory core writes the native compile-error struct (core ADR 0058) into |
+| 48 | `diagnostic` | blob | host memory, owned and bounded by the host, that core writes core ADR 0058's native compile-error struct (ta_compile_error) into |
 
 - may be answered by: [`c2h.definition_result`](#c2hdefinition_result)
 
@@ -290,7 +290,7 @@ If the input is no longer waiting, the withdrawal changes nothing and writes not
 
 Header session is 0. A control: it takes no envelope and is applied when read. Every record after it sees the type declared, so replay sees the same declarations at the same points. Core keeps only the name: the implementation is the binding's, reached through c2h.send or c2h.invoke, c2h.invoke_cancel and c2h.invoke_forward.
 
-Core checks a <send type> against the io registry and an <invoke type> against the invoker registry when the action runs. An undeclared type is error.execution in the chart, which the host could not raise later from c2h. Declaring a declared type changes nothing and writes nothing. A name core owns (scxml and its URI aliases) is bounced as reserved_type; failing to store the name is bounced as allocation. A type cannot be withdrawn yet.
+Core checks a <send type> against the io registry and an <invoke type> against the invoker registry when the action runs. An undeclared type is error.execution in the chart, which the host could not raise later from c2h. Declaring a declared type changes nothing and writes nothing. A name core owns (scxml and its URI aliases) is bounced as reserved_type; failing to store the name is bounced as allocation. A declared type cannot be withdrawn.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -624,43 +624,46 @@ Acknowledges h2c.load_failed after all waiting envelopes were recycled or refuse
 
 ## tel.trace
 
-`0x0301` on `tel`, 216 fixed bytes. One trace record (core ADR 0067).
+`0x0301` on `tel`, 224 fixed bytes. One trace record (core ADR 0067).
 
-One ta_trace_record, kind for kind; only the fields its kind names are meaningful. The record is self-contained: names, values, the fault and the state and transition lists are text in its tail, so a reader needs no live system (reference/telemetry.md). Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `at` is logical time; wall_ns is when it happened.
+One ta_trace_record, kind for kind; only the fields its kind names are meaningful. The record is self-contained: names, values and the fault are text in its tail, and the state and transition lists are bytes in its tail holding u32 IDs with their names, so a reader needs no live system (reference/telemetry.md). Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `at` is logical time; wall_ns is when it happened.
+
+The step key is header `session`, `macrostep` and `microstep`. There is no span ID field: a span ID is a fixed 64-bit mix of the step key (core ADR 0067, ta_step_key_span_id), the same in every reader.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 32 | `wall_ns` | u64 | the host clock when core wrote the record: wall-clock nanoseconds since the Unix epoch; 0 when the host installed no clock |
-| 40 | `macrostep` | macrostep |  |
+| 40 | `macrostep` | macrostep | with header session and microstep, the step key; 0 outside a macrostep |
 | 48 | `trace_id_high` | u64 |  |
 | 56 | `trace_id_low` | u64 |  |
-| 64 | `cause_session` | session |  |
-| 72 | `cause_macrostep` | macrostep |  |
-| 80 | `microstep` | u32 |  |
-| 84 | `state` | u32 |  |
-| 88 | `transition` | u32 |  |
-| 92 | `action` | u32 |  |
-| 96 | `iteration` | u32 |  |
-| 100 | `fault_code` | i32 | the fault’s code, with fault_detail |
-| 104 | `trace_kind` | u16 | ta_trace_kind |
-| 106 | `position` | u8 | ta_trace_at |
-| 107 | `result` | bool |  |
-| 108 | `trace_flags` | u8 | the trace context’s flags (sampled) |
-| 109 | `trace_detail` | u8 | the trace context’s detail (watched) |
-| 110 | `runaway_cause` | runaway_cause (u8) | RUNAWAY only: what stopped the input |
-| 112 | `address` | text | the session’s family/name |
-| 120 | `definition` | text | the definition’s document name and source, on the kinds that open a run |
-| 128 | `state_name` | text | the name of `state` |
-| 136 | `transition_name` | text | the name of `transition` |
-| 144 | `action_name` | text | the name of `action` |
-| 152 | `name` | text | the event name, or the name the kind carries |
-| 160 | `send_id` | text | the send ID, for SENT and its kin |
-| 168 | `invoke_id` | text | the invoke ID, for INVOKED and its kin |
-| 176 | `value_text` | text |  |
-| 184 | `fault_detail` | text | the fault’s error event name |
-| 192 | `fault_message` | text |  |
-| 200 | `transitions` | bytes | the microstep’s transitions: a u32 count, then per transition its u32 ID, then its name as a u32 length and UTF-8 bytes |
-| 208 | `states` | bytes | exited, entered, history, states: per list a u32 count, then per state its u32 ID, then its name as a u32 length and UTF-8 bytes |
+| 64 | `cause_session` | session | the session of the step that caused this one; 0 for a host-delivered cause |
+| 72 | `cause_macrostep` | macrostep | the macrostep of the causing step; with cause_session 0, the host's parent span ID (W3C parent-id), or 0 |
+| 80 | `microstep` | u32 | from 1 per macrostep; 0 for the macrostep itself |
+| 84 | `cause_microstep` | u32 | the microstep of the causing step; with cause_session and cause_macrostep, the cause's step key, whose span ID is the parent span |
+| 88 | `state` | u32 |  |
+| 92 | `transition` | u32 |  |
+| 96 | `action` | u32 |  |
+| 100 | `iteration` | u32 |  |
+| 104 | `fault_code` | i32 | the fault’s code, with fault_detail |
+| 108 | `trace_kind` | u16 | ta_trace_kind |
+| 110 | `position` | u8 | ta_trace_at |
+| 111 | `result` | bool |  |
+| 112 | `trace_flags` | u8 | the trace context’s flags (sampled) |
+| 113 | `trace_detail` | u8 | the trace context’s detail (watched) |
+| 114 | `runaway_cause` | runaway_cause (u8) | RUNAWAY only: what stopped the input |
+| 116 | `address` | text | the session’s family/name |
+| 124 | `definition` | text | the definition’s document name and source, on the kinds that open a run |
+| 132 | `state_name` | text | the name of `state` |
+| 140 | `transition_name` | text | the name of `transition` |
+| 148 | `action_name` | text | the name of `action` |
+| 156 | `name` | text | the event name, or the name the kind carries |
+| 164 | `send_id` | text | the send ID, for SENT and its kin |
+| 172 | `invoke_id` | text | the invoke ID, for INVOKED and its kin |
+| 180 | `value_text` | text |  |
+| 188 | `fault_detail` | text | the fault’s error event name |
+| 196 | `fault_message` | text |  |
+| 204 | `transitions` | bytes | the microstep’s transitions: a u32 count, then per transition its u32 ID, then its name as a u32 length and UTF-8 bytes |
+| 212 | `states` | bytes | exited, entered, history, states: per list a u32 count, then per state its u32 ID, then its name as a u32 length and UTF-8 bytes |
 
 - flag bit 0 `truncated`: value_text was cut, or a list in the tail was cut to fit maxRecordBytes
 - flag bit 1 `suppressed`: an effect a replaying session did not perform
@@ -803,7 +806,7 @@ The result of a definition request.
 |---|---|---|
 | 0 | `ok` |  |
 | 1 | `compile_error` | the complete spec was refused; diagnostic describes the first fault |
-| 2 | `capacity` | allocation, a configured bound or diagnostic buffer capacity was exhausted |
+| 2 | `capacity` | the diagnostic did not fit completely in its memory (nothing partial is written), or allocation or definition capacity ran out |
 | 3 | `mismatch` | an explicit identity names different content (core ADR 0077) |
 | 4 | `not_found` | an unknown or stale definition ID |
 | 5 | `invalid` | a malformed or unknown spec or adapter handle, or an invalid release request |
