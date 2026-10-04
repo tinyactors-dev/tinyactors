@@ -26,6 +26,15 @@ fi
 
 INPUT="$1"
 
-# Emit to stdout and, in the same pass, persist the grammar for the URI example.
-"$BIN" "$INPUT" | tee "$URI_DIR/uri.scm"
-exit "${PIPESTATUS[0]}"
+# Emit to stdout and persist the grammar for the URI example. The copy is
+# written beside it and renamed into place only when its bytes differ, so a
+# reader of uri.scm running at the same time (the test suite runs the URI
+# example and the gates read uri.scm while this runs) never sees it half
+# written, and an unchanged grammar leaves the committed file untouched.
+TMP="$(mktemp "$URI_DIR/.uri.scm.XXXXXX")" || exit 1
+trap 'rm -f "$TMP"' EXIT
+"$BIN" "$INPUT" >"$TMP" || exit $?
+cat "$TMP"
+if ! cmp -s "$TMP" "$URI_DIR/uri.scm"; then
+  chmod 644 "$TMP" && mv "$TMP" "$URI_DIR/uri.scm" || exit 1
+fi

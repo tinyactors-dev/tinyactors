@@ -269,6 +269,12 @@ module Tinyparse
       */
       #pragma GCC visibility push(default)
 
+      /*
+      ** internal.h's rule-call helpers for generated parsers are unused here, so
+      ** this translation unit leaves them out (see internal.h).
+      */
+      #define TINYPARSE_AMALGAMATION 1
+
       /* ===== tinyparse public header ========================================== */
     C
     banner + HEADER.binread + "\n/* ===== tinyparse internal header ======================================== */\n" +
@@ -315,7 +321,8 @@ module Tinyparse
   # CLI and library, the amalgamation, the examples, and the pinned
   # toolchain: TP_CC (the pinned clang for this machine), TP_LINUX_CC (zig cc
   # for x86_64 Linux, whose objects read the same from any host), TP_NM
-  # (llvm-nm), TP_AR (llvm-ar), TP_AST_GREP. TP and TP_CLI both name the CLI.
+  # (llvm-nm), TP_AR (llvm-ar), TP_TAR and TP_GZIP (GNU tar and
+  # gzip), TP_AST_GREP. TP and TP_CLI both name the CLI.
   def test_environment
     {
       'TP' => host_cli.to_s,
@@ -328,6 +335,8 @@ module Tinyparse
       'TP_LINUX_CC' => tool_script('x86_64-linux-cc', Toolchain::Target.release('x86_64-linux').compile_command).to_s,
       'TP_NM' => tool_script('nm', Toolchain::Tool[:llvm_nm].command).to_s,
       'TP_AR' => tool_script('ar', Toolchain::Tool[:llvm_ar].command).to_s,
+      'TP_TAR' => tool_script('tar', Toolchain::Tool[:tar].command).to_s,
+      'TP_GZIP' => tool_script('gzip', Toolchain::Tool[:gzip].command).to_s,
       'TP_AST_GREP' => Toolchain::Tool[:ast_grep].path
     }
   end

@@ -497,9 +497,9 @@ int main(int argc, char **argv) {
     printf("\nPROGRESS=%d/%d  PASS=%d  xfail=%d  XPASS=%d  FAIL=%d  xfail-ledger=%zu\n",
            passing, n, passing, xfail_fail, xpass, hardfail, xfail.count);
 
-    if (hardfail > 0) { printf("RESULT: RED — %d regression(s): a test not in xfail.list failed.\n", hardfail); return 1; }
-    if (passing == n && xfail.count == 0) { printf("RESULT: GREEN — every test passes and the xfail ledger is empty.\n"); return 0; }
-    if (xpass > 0) printf("RESULT: RATCHET — %d test(s) now pass; remove them from xfail.list.\n", xpass);
-    else printf("RESULT: pending — %d expected failure(s) remain in the ledger.\n", xfail_fail);
+    if (hardfail > 0) { printf("RESULT: RED -- %d regression(s): a test not in xfail.list failed.\n", hardfail); return 1; }
+    if (passing == n && xfail.count == 0) { printf("RESULT: GREEN -- every test passes and the xfail ledger is empty.\n"); return 0; }
+    if (xpass > 0) printf("RESULT: RATCHET -- %d test(s) now pass; remove them from xfail.list.\n", xpass);
+    else printf("RESULT: pending -- %d expected failure(s) remain in the ledger.\n", xfail_fail);
     return 2;
 }
