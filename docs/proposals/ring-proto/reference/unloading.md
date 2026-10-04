@@ -204,26 +204,29 @@ reserve only yields to the host; it does not partially restore the actor.
 
 The waiting list is threaded through envelopes in the pool, as the run
 queue is ([envelope.md](envelope.md#the-lists-an-envelope-can-be-on)). So a load that takes long
-holds pool capacity:
+holds pool capacity, and the pool's limits apply to waiting mail as to
+any other:
 
 - admission from h2c stops when the pool reaches `admissionWatermark`
   ([BEHAVIORS.md](../BEHAVIORS.md#parameters)), and the host refuses at its edge.
   Already-posted events that cannot be admitted are consumed and bounced;
   they do not prevent a later load answer or clock update from being read;
 - a local `<send>` to the waiting address fails as
-  `error.execution.capacity` once the pool is full.
+  `error.execution.capacity.pool` once the pool is full.
 
-This replaces napi's per-family `maxWaiting` and the `waiting-full` dead
-letters. **There is no per-address cap.** The pool bounds the waiting
-lists, and the host bounds how long they wait: it answers `h2c.load_failed`
-at once for an address it does not know, and times out a slow load
-itself. `c2h.load_needed` tells it how many envelopes wait. The price is
-that isolation depends on the host answering promptly: mail to one slow or
-unknown address can use the pool's headroom for mail, and other charts'
-local sends then fail as `error.execution.capacity.pool`. A cap per
-address (`maxWaitingPerAddress`) was considered and left out: it adds a
-parameter and refuses bursts to a popular actor that is slow to load even
-when the pool has room.
+The pool is the only bound on how many envelopes wait; no limit applies
+per address. The host bounds how long they wait: it answers
+`h2c.load_failed` at once for an address it does not know, and times out a
+slow load itself. `c2h.load_needed` tells it how many envelopes wait. This
+takes the place of napi's per-family `maxWaiting` and its `waiting-full`
+dead letters.
+
+Isolation therefore depends on the host answering promptly. Mail to one
+slow or unknown address can use the pool's headroom for mail, and other
+charts' local sends then fail as `error.execution.capacity.pool`. A cap
+per address (`maxWaitingPerAddress`) would add a parameter that refuses
+bursts to a popular actor that is slow to load, even when the pool has
+room.
 
 ### Recycling on `h2c.load_failed`
 
