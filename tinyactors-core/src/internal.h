@@ -9,6 +9,7 @@
 #include "pool.h"
 #include "arena.h"
 #include "tree.h"
+#include "table.h"
 #include "atom.h"
 #include "address.h"
 #include "io_origin.h"
