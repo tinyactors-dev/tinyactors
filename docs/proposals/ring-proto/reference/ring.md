@@ -138,12 +138,13 @@ Why a pad and not the other choices:
 The cost is at most `maxRecordBytes - 8` bytes left unused per wrap.
 
 If a pad and record cannot fit together even when the ring is empty, the
-producer may commit the pad alone and return for the consumer to release it.
+producer commits the pad alone and returns for the consumer to release it.
 The next reservation starts at offset zero. This guarantees progress when
 `capacity = maxRecordBytes` and the empty ring's counters are at a nonzero
-offset. Pads never acquire values or consume a sequence number. Mandatory
-batch preflight includes padding or performs this empty-ring alignment
-before beginning the phase; no record is partially committed.
+offset. Pads never acquire values or consume a sequence number. A
+mandatory batch's reservation counts a pad for every record in it
+([The c2h reserve](#the-c2h-reserve)), so no record of the batch is ever
+partially committed.
 
 ## Reading: look, use, release
 
@@ -187,83 +188,97 @@ are three:
 
 ### The c2h reserve
 
-Before taking an input or starting a macrostep, core reserves all mandatory
-records for that phase: its input observation when recorded, required
-autoforwards, invocation cancellations, macrostep end and terminal
-`finished` notification. It uses the actual event metadata and the
-definition's bound on invocations that can be active.
+Core never lets an ordinary record take the space that an input's
+mandatory records need. Before it takes an input, it reserves the
+input's **mandatory batch** on c2h:
 
-**One pad per reserved record.** Each reserved record counts its aligned
-size plus one pad of up to `maxRecordBytes - 8` bytes. The bound holds
-however the records of several slots interleave, and needs no argument
-about how many wraps occur before a drain. Two other bounds were
-considered. One shared pad per ring is sound only by such an argument.
-An exact pad from the write position is unsound once several slots
-reserve.
+- the recorded input observation
+  ([`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput)), when the
+  input is recorded;
+- [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended);
+- a [`c2h.invoke_cancel`](../protocol/generated/MESSAGES.md#c2hinvoke_cancel)
+  for every invocation active in the session;
+- the terminal session notification,
+  [`c2h.finished`](../protocol/generated/MESSAGES.md#c2hfinished);
+- every autoforward of the input;
+- [`c2h.input_completed`](../protocol/generated/MESSAGES.md#c2hinput_completed).
 
-**Headroom.** Core takes an input only if the outstanding reserves of all
-slots, its own included, leave room for one ordinary record plus its pad:
-2 × `maxRecordBytes`. A system/definition combination whose mandatory
-batch plus that headroom cannot fit even an empty c2h ring is refused
-before execution; retrying an impossible reservation is not progress.
+Each record counts at its actual aligned size, from the input's metadata.
+A macrostep end does not settle an input; `c2h.input_completed` does,
+after the startup followups. An admitted input that is later discarded
+gets a reserved
+[`c2h.input_refused`](../protocol/generated/MESSAGES.md#c2hinput_refused)
+in place of `c2h.input_completed`. Both carry
+the originating h2c seq whether or not the input is recorded.
 
-**Sizing.** `c2hBytes` defaults to `(3 × maxConcurrentInputs + 2) ×
-maxRecordBytes`. A slot's smallest batch (input observation,
-`c2h.macrostep_ended`, `c2h.input_completed`) costs at most
-3 × `maxRecordBytes` with pads, and the headroom 2 ×. So every slot can
-hold a reservation at once. A larger batch reserves more, and fewer slots
-hold reservations at once. That costs throughput, not correctness
-([BEHAVIORS.md](../BEHAVIORS.md#c2hbytes)).
+**Each reserved record also reserves a pad.** A record reserves its
+aligned size plus a pad of up to `maxRecordBytes - 8` bytes
+([the pad](#a-record-never-splits-across-the-end-the-pad)). This bound is
+sound however the records of several slots interleave. One shared pad per
+ring would need an argument about how many wraps can occur before a
+drain, and a pad computed exactly from the write position does not hold
+once other slots write in between.
 
-An ordinary action never takes the reserved space. Before an action that
-may write c2h evaluates anything, core checks for room for the largest
-record beside every slot's reserve. Without that room the slot parks
-before the action, and the action runs once, after the host drains
-([macrostep.md](macrostep.md#a-full-c2h-pauses-the-slot)). Mandatory
-lifecycle records use the reservation and never wait. Internal
-error storage is sized at compilation as described in
-[envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool); one spare
-error slot is not a sufficient bound for several failing executable blocks.
+**Headroom.** Core takes an input only when the outstanding reservations
+of all slots, the new one included, leave at least 2 × `maxRecordBytes`
+of the ring unreserved: room for one ordinary record of up to `maxRecordBytes`
+and its pad. A slot waiting to write an action's record needs no more
+than that, so once the host drains, at least one waiting slot can go on,
+and its reservation comes back when its input completes. Without the
+headroom, slots could hold reservations for the whole ring, each waiting
+for room that only the others' completion would free.
 
-Core may return to the host between completed phases, retaining only its
-slots' bounded continuations, to drain c2h before reserving the next phase.
-Each macrostep slot holds its own outstanding reservation while it is
-paused, so another slot that runs meanwhile cannot take the space a paused
-macrostep's mandatory records need. A slot whose reservation does not fit
-waits; the others go on ([macrostep.md](macrostep.md#macrostep-slots)).
+**Registration** refuses a definition whose mandatory batch plus the
+headroom cannot fit an empty c2h ring. Retrying a reservation that can
+never fit is not progress.
 
-**The reserves always leave room for one ordinary record.** Core takes an
-input only when the outstanding reservations of all slots, the new one
-included, leave at least `maxRecordBytes` of an empty ring. A slot waiting
-to write an action's record needs at most that much, so once the host has
-drained, at least one waiting slot can go on, and its reserve comes back
-when its input completes. Without this rule, slots could hold reserves for
-the whole ring, each waiting for room only the others' completion would
-free. Registration refuses a definition whose mandatory batch and one
-record of `maxRecordBytes` cannot fit even an empty ring.
+**A paused slot keeps its reservation.** Each macrostep slot holds its
+own outstanding reservation while it is paused, so another slot that runs
+meanwhile cannot take the space the paused macrostep's mandatory records
+need. Mandatory records write into the reservation and never wait. An
+ordinary action that may write c2h checks, before it evaluates anything,
+for room for the largest record beside every slot's reservation. Without
+that room its slot parks before the action, and the action runs once,
+after the host drains
+([macrostep.md](macrostep.md#a-full-c2h-pauses-the-slot)). A slot whose
+reservation does not fit waits; the others go on
+([macrostep.md](macrostep.md#macrostep-slots)).
 
-Input completion
-has its own fixed reservation after startup followups; a macrostep end
-alone does not settle the input.
+**Sizing.** [`c2hBytes`](../BEHAVIORS.md#c2hbytes) defaults to
+`(3 × maxConcurrentInputs + 2) × maxRecordBytes`. A slot's smallest batch
+(input observation, `c2h.macrostep_ended`, `c2h.input_completed`) costs
+at most 3 × `maxRecordBytes` with pads, and the headroom costs
+2 × `maxRecordBytes`, so with the default every slot can hold a
+reservation at once. With 4 KiB records that is 20 KiB for one
+concurrent input and 776 KiB for 64. The rings are fixed when the system
+is created, before any definition exists, so the formula uses parameters
+only. A definition with a larger batch reserves more, and fewer slots
+hold reservations at once: that costs throughput, not correctness. An
+explicit `c2hBytes` replaces the default; the minimum is
+5 × `maxRecordBytes`.
 
-When the reserve isn't there, core takes no envelope and `ta_run` returns.
-The host drains c2h and calls `ta_run` again. Records outside a macrostep
-work the same way: [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced),
-[`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed),
-[`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake). If c2h has no room
-for one, core doesn't consume the h2c record or event that would cause it.
-When an event cannot be admitted because the pool or name area is full,
-core reserves a bounded `c2h.bounced`, consumes the event and releases its
-transferred references. That refusal lets controls behind it make progress.
-An admitted input later discarded gets a reserved `c2h.input_refused`;
-one processed to completion gets `c2h.input_completed`. Both preserve the
-originating h2c sequence independently of recording.
+**Work outside an input returns for a drain.** When the room isn't
+there, core does not consume the h2c record or event that would need it,
+and `ta_run` returns; the host drains c2h and calls `ta_run` again. Core
+may also return between completed phases, keeping only its slots'
+bounded continuations, to drain c2h before it reserves the next one.
+This holds for startup and for the records written outside a macrostep:
+[`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced),
+[`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed) and
+[`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake). When an event
+cannot be admitted because the pool or name area is full, core reserves a
+bounded `c2h.bounced`, consumes the event and releases its transferred
+references, so the controls behind it can make progress.
 
-Definition requests follow this rule too: core reserves their fixed
+Definition requests follow the same rule: core reserves their fixed
 [`c2h.definition_result`](../protocol/generated/MESSAGES.md#c2hdefinition_result)
-before consuming the request, compiling or changing definition state.
+before it consumes the request, compiles or changes definition state.
 They run between macrosteps without an envelope; compile diagnostics use
 a bounded host-owned buffer ([definitions.md](definitions.md)).
+
+Internal error storage is not on c2h. It is sized at compilation
+([envelope.md](envelope.md#the-internal-queue-is-not-in-the-pool)), since
+one spare error slot does not bound several failing executable blocks.
 
 ## One thread
 
