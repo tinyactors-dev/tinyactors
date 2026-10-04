@@ -2388,6 +2388,23 @@ TA_PRIVATE ta_result ta_address_table_intern(ta_address_table *table, const ta_a
                                   ta_address **out);
 
 /*
+ * ta_address_record_bytes stores in *bytes the size of an address record
+ * with these text lengths: the header, the family, a NUL, the name, a NUL.
+ * It is the one formula for the interned record, a detached copy and the
+ * offload bytes, computed with ta_layout, so a size that does not fit a
+ * size_t (possible on a 32-bit host, or with lengths read from an image) is
+ * TA_ERR_NOMEM and *bytes is not to be used. Never allocates.
+ */
+TA_PRIVATE ta_result ta_address_record_bytes(uint32_t family_len, uint32_t name_len, size_t *bytes);
+/*
+ * ta_address_bytes is the size of a record that exists (interned or
+ * detached): the formula above for its own lengths, which fitted when it was
+ * made. It is what a sized free and an offload write use.
+ */
+TA_PRIVATE size_t ta_address_bytes(const ta_address *address);
+/* Makes `copy`, a bitwise copy of a record, a detached one: no table, no session, not counted. */
+TA_PRIVATE void ta_address_detached_init(ta_address *copy);
+/*
  * A detached copy in `arena`: the same strings, no table, no counting.
  * Retain and release do nothing on it. Session images carry their addresses
  * this way, so an image does not depend on the system that captured it
@@ -6999,8 +7016,28 @@ static uint32_t ta_address_index(const ta_address_table *table, uint32_t hash) {
     return index < table->split ? hash & (2u * table->base - 1u) : index;
 }
 
-static size_t ta_address_bytes(uint32_t family_len, uint32_t name_len) {
-    return sizeof(ta_address) + (size_t)family_len + (size_t)name_len + 2u;
+TA_PRIVATE ta_result ta_address_record_bytes(uint32_t family_len, uint32_t name_len, size_t *bytes) {
+    ta_layout layout;
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_address), .alignment = _Alignof(ta_address), .count = 1u });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = family_len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = 2u });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = name_len });
+    return ta_layout_finish(&layout, bytes, NULL) == TA_OK ? TA_OK : TA_ERR_NOMEM;
+}
+
+TA_PRIVATE size_t ta_address_bytes(const ta_address *address) {
+    size_t bytes = 0;
+    /* A record that exists was allocated with this size, so the sum fits. */
+    (void)ta_address_record_bytes(address->family_len, address->name_len, &bytes);
+    return bytes;
+}
+
+TA_PRIVATE void ta_address_detached_init(ta_address *copy) {
+    copy->table = NULL;
+    copy->next = NULL;
+    copy->unloaded = NULL;
+    copy->references = 0;
 }
 
 /* Makes sure the page holding bucket `index` exists; false when it cannot. */
@@ -7058,7 +7095,7 @@ TA_PRIVATE void ta_address_table_init(ta_address_table *table, ta_allocator allo
 
 static void ta_address_free(ta_address_table *table, ta_address *address) {
     ta_mem_free(table->allocator, address,
-                &(ta_allocator_free_params){ .size = ta_address_bytes(address->family_len, address->name_len),
+                &(ta_allocator_free_params){ .size = ta_address_bytes(address),
                                              .alignment = _Alignof(ta_address) });
 }
 
@@ -7090,7 +7127,11 @@ static bool ta_address_matches(const ta_address *record, const ta_actor_address 
 static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_address *address, uint32_t hash) {
     uint32_t family_len = address->family.name.len;
     uint32_t name_len = address->name.len;
-    ta_address *record = ta_mem_alloc(allocator, ta_address_bytes(family_len, name_len), _Alignof(ta_address));
+    size_t bytes = 0;
+    if (ta_address_record_bytes(family_len, name_len, &bytes) != TA_OK) {
+        return NULL;
+    }
+    ta_address *record = ta_mem_alloc(allocator, bytes, _Alignof(ta_address));
     if (record == NULL) {
         return NULL;
     }
@@ -7143,16 +7184,13 @@ TA_PRIVATE ta_result ta_address_table_intern(ta_address_table *table, const ta_a
 }
 
 TA_PRIVATE ta_result ta_address_detach(ta_arena *arena, const ta_address *address, ta_address **out) {
-    size_t bytes = ta_address_bytes(address->family_len, address->name_len);
+    size_t bytes = ta_address_bytes(address);
     ta_address *copy = ta_arena_alloc(arena, bytes, _Alignof(ta_address));
     if (copy == NULL) {
         return TA_ERR_NOMEM;
     }
     ta_mem_copy(copy, address, bytes);
-    copy->table = NULL;
-    copy->next = NULL;
-    copy->unloaded = NULL;
-    copy->references = 0;
+    ta_address_detached_init(copy);
     *out = copy;
     return TA_OK;
 }
@@ -17325,8 +17363,7 @@ static size_t ta_image_measure(const ta_actor *actor) {
     total += (size_t)actor->definition->identity.family.name.len + 1u;
     total += (size_t)actor->definition->identity.revision.len + 1u;
     if (actor->record.self.kind == TA_ACTOR_REF_NAMED) {
-        ta_actor_address view = ta_address_view(actor->record.self.as.named);
-        total += sizeof(ta_address) + (size_t)view.family.name.len + (size_t)view.name.len + 2u;
+        total += ta_address_bytes(actor->record.self.as.named);
     }
     if (actor->event_block != NULL) {
         total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
@@ -18138,15 +18175,11 @@ static ta_value *ta_offload_slot(ta_session_image *image, ta_value *root, uint32
     return (index - 2u) % 2u == 0 ? &send->target : &send->data;
 }
 
-static size_t ta_offload_address_bytes(const ta_address *address) {
-    return sizeof(ta_address) + (size_t)address->family_len + (size_t)address->name_len + 2u;
-}
-
 /* A ref: the raw record, then a named one's address record. */
 static size_t ta_offload_ref_bytes(const ta_actor_ref *ref) {
     size_t bytes = sizeof(ta_actor_ref);
     if (ref->kind == TA_ACTOR_REF_NAMED && ref->as.named != NULL) {
-        bytes += sizeof(uint32_t) + ta_offload_address_bytes(ref->as.named);
+        bytes += sizeof(uint32_t) + ta_address_bytes(ref->as.named);
     }
     return bytes;
 }
@@ -18161,7 +18194,7 @@ static uint8_t *ta_offload_put(uint8_t *at, const void *source, size_t bytes) {
 static uint8_t *ta_offload_put_ref(uint8_t *at, const ta_actor_ref *ref) {
     at = ta_offload_put(at, ref, sizeof(ta_actor_ref));
     if (ref->kind == TA_ACTOR_REF_NAMED && ref->as.named != NULL) {
-        uint32_t bytes = (uint32_t)ta_offload_address_bytes(ref->as.named);
+        uint32_t bytes = (uint32_t)ta_address_bytes(ref->as.named);
         at = ta_offload_put(at, &bytes, sizeof bytes);
         at = ta_offload_put(at, ref->as.named, bytes);
     }
@@ -18475,14 +18508,12 @@ static ta_result ta_offload_take_ref(ta_offload_reader *reader, ta_arena *arena,
         return TA_ERR_NOMEM;
     }
     (void)ta_offload_take(reader, address, bytes);
-    if (ta_offload_address_bytes(address) != bytes) {
+    size_t expected = 0;
+    if (ta_address_record_bytes(address->family_len, address->name_len, &expected) != TA_OK || expected != bytes) {
         *ref = (ta_actor_ref){0};
         return TA_ERR_INVALID;
     }
-    address->table = NULL;
-    address->next = NULL;
-    address->unloaded = NULL;
-    address->references = 0;
+    ta_address_detached_init(address);
     ref->as.named = address;
     return TA_OK;
 }

@@ -25,8 +25,28 @@ static uint32_t ta_address_index(const ta_address_table *table, uint32_t hash) {
     return index < table->split ? hash & (2u * table->base - 1u) : index;
 }
 
-static size_t ta_address_bytes(uint32_t family_len, uint32_t name_len) {
-    return sizeof(ta_address) + (size_t)family_len + (size_t)name_len + 2u;
+ta_result ta_address_record_bytes(uint32_t family_len, uint32_t name_len, size_t *bytes) {
+    ta_layout layout;
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_address), .alignment = _Alignof(ta_address), .count = 1u });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = family_len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = 2u });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = name_len });
+    return ta_layout_finish(&layout, bytes, NULL) == TA_OK ? TA_OK : TA_ERR_NOMEM;
+}
+
+size_t ta_address_bytes(const ta_address *address) {
+    size_t bytes = 0;
+    /* A record that exists was allocated with this size, so the sum fits. */
+    (void)ta_address_record_bytes(address->family_len, address->name_len, &bytes);
+    return bytes;
+}
+
+void ta_address_detached_init(ta_address *copy) {
+    copy->table = NULL;
+    copy->next = NULL;
+    copy->unloaded = NULL;
+    copy->references = 0;
 }
 
 /* Makes sure the page holding bucket `index` exists; false when it cannot. */
@@ -84,7 +104,7 @@ void ta_address_table_init(ta_address_table *table, ta_allocator allocator) {
 
 static void ta_address_free(ta_address_table *table, ta_address *address) {
     ta_mem_free(table->allocator, address,
-                &(ta_allocator_free_params){ .size = ta_address_bytes(address->family_len, address->name_len),
+                &(ta_allocator_free_params){ .size = ta_address_bytes(address),
                                              .alignment = _Alignof(ta_address) });
 }
 
@@ -116,7 +136,11 @@ static bool ta_address_matches(const ta_address *record, const ta_actor_address 
 static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_address *address, uint32_t hash) {
     uint32_t family_len = address->family.name.len;
     uint32_t name_len = address->name.len;
-    ta_address *record = ta_mem_alloc(allocator, ta_address_bytes(family_len, name_len), _Alignof(ta_address));
+    size_t bytes = 0;
+    if (ta_address_record_bytes(family_len, name_len, &bytes) != TA_OK) {
+        return NULL;
+    }
+    ta_address *record = ta_mem_alloc(allocator, bytes, _Alignof(ta_address));
     if (record == NULL) {
         return NULL;
     }
@@ -169,16 +193,13 @@ ta_result ta_address_table_intern(ta_address_table *table, const ta_actor_addres
 }
 
 ta_result ta_address_detach(ta_arena *arena, const ta_address *address, ta_address **out) {
-    size_t bytes = ta_address_bytes(address->family_len, address->name_len);
+    size_t bytes = ta_address_bytes(address);
     ta_address *copy = ta_arena_alloc(arena, bytes, _Alignof(ta_address));
     if (copy == NULL) {
         return TA_ERR_NOMEM;
     }
     ta_mem_copy(copy, address, bytes);
-    copy->table = NULL;
-    copy->next = NULL;
-    copy->unloaded = NULL;
-    copy->references = 0;
+    ta_address_detached_init(copy);
     *out = copy;
     return TA_OK;
 }

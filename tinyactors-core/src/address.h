@@ -52,6 +52,23 @@ ta_result ta_address_table_intern(ta_address_table *table, const ta_actor_addres
                                   ta_address **out);
 
 /*
+ * ta_address_record_bytes stores in *bytes the size of an address record
+ * with these text lengths: the header, the family, a NUL, the name, a NUL.
+ * It is the one formula for the interned record, a detached copy and the
+ * offload bytes, computed with ta_layout, so a size that does not fit a
+ * size_t (possible on a 32-bit host, or with lengths read from an image) is
+ * TA_ERR_NOMEM and *bytes is not to be used. Never allocates.
+ */
+ta_result ta_address_record_bytes(uint32_t family_len, uint32_t name_len, size_t *bytes);
+/*
+ * ta_address_bytes is the size of a record that exists (interned or
+ * detached): the formula above for its own lengths, which fitted when it was
+ * made. It is what a sized free and an offload write use.
+ */
+size_t ta_address_bytes(const ta_address *address);
+/* Makes `copy`, a bitwise copy of a record, a detached one: no table, no session, not counted. */
+void ta_address_detached_init(ta_address *copy);
+/*
  * A detached copy in `arena`: the same strings, no table, no counting.
  * Retain and release do nothing on it. Session images carry their addresses
  * this way, so an image does not depend on the system that captured it

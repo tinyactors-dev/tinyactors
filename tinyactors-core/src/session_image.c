@@ -193,8 +193,7 @@ static size_t ta_image_measure(const ta_actor *actor) {
     total += (size_t)actor->definition->identity.family.name.len + 1u;
     total += (size_t)actor->definition->identity.revision.len + 1u;
     if (actor->record.self.kind == TA_ACTOR_REF_NAMED) {
-        ta_actor_address view = ta_address_view(actor->record.self.as.named);
-        total += sizeof(ta_address) + (size_t)view.family.name.len + (size_t)view.name.len + 2u;
+        total += ta_address_bytes(actor->record.self.as.named);
     }
     if (actor->event_block != NULL) {
         total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
@@ -1006,15 +1005,11 @@ static ta_value *ta_offload_slot(ta_session_image *image, ta_value *root, uint32
     return (index - 2u) % 2u == 0 ? &send->target : &send->data;
 }
 
-static size_t ta_offload_address_bytes(const ta_address *address) {
-    return sizeof(ta_address) + (size_t)address->family_len + (size_t)address->name_len + 2u;
-}
-
 /* A ref: the raw record, then a named one's address record. */
 static size_t ta_offload_ref_bytes(const ta_actor_ref *ref) {
     size_t bytes = sizeof(ta_actor_ref);
     if (ref->kind == TA_ACTOR_REF_NAMED && ref->as.named != NULL) {
-        bytes += sizeof(uint32_t) + ta_offload_address_bytes(ref->as.named);
+        bytes += sizeof(uint32_t) + ta_address_bytes(ref->as.named);
     }
     return bytes;
 }
@@ -1029,7 +1024,7 @@ static uint8_t *ta_offload_put(uint8_t *at, const void *source, size_t bytes) {
 static uint8_t *ta_offload_put_ref(uint8_t *at, const ta_actor_ref *ref) {
     at = ta_offload_put(at, ref, sizeof(ta_actor_ref));
     if (ref->kind == TA_ACTOR_REF_NAMED && ref->as.named != NULL) {
-        uint32_t bytes = (uint32_t)ta_offload_address_bytes(ref->as.named);
+        uint32_t bytes = (uint32_t)ta_address_bytes(ref->as.named);
         at = ta_offload_put(at, &bytes, sizeof bytes);
         at = ta_offload_put(at, ref->as.named, bytes);
     }
@@ -1343,14 +1338,12 @@ static ta_result ta_offload_take_ref(ta_offload_reader *reader, ta_arena *arena,
         return TA_ERR_NOMEM;
     }
     (void)ta_offload_take(reader, address, bytes);
-    if (ta_offload_address_bytes(address) != bytes) {
+    size_t expected = 0;
+    if (ta_address_record_bytes(address->family_len, address->name_len, &expected) != TA_OK || expected != bytes) {
         *ref = (ta_actor_ref){0};
         return TA_ERR_INVALID;
     }
-    address->table = NULL;
-    address->next = NULL;
-    address->unloaded = NULL;
-    address->references = 0;
+    ta_address_detached_init(address);
     ref->as.named = address;
     return TA_OK;
 }
