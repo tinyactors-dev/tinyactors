@@ -129,7 +129,7 @@ because a full one fails the chart's action.
 | [`internalQueueEvents`](#internalqueueevents) | 256 ordinary entries, plus compiler-sized mandatory storage | 0 ordinary entries | 65,536 ordinary entries | the chart (`.internal`) |
 | [`h2cBytes`](#h2cbytes) | 16,384 | `maxRecordBytes` | 2 GiB | the client (the host refuses) |
 | [`c2hBytes`](#c2hbytes) | 16,384 | 4 × `maxRecordBytes` | 2 GiB | nobody: the slot waits; the host (`TA_RUN_C2H_FULL`) |
-| [`telBytes`](#telbytes) | 16,384 | `maxRecordBytes` | 2 GiB | the operator (`tel.dropped`) |
+| [`telBytes`](#telbytes) | 16,384 | 0, or else `maxRecordBytes` | 2 GiB | the operator (`tel.dropped`) |
 | [`maxRecordBytes`](#maxrecordbytes) | 4,096 | 256 | `c2hBytes` / 4 | the chart (`.record`); the host (`c2h.bounced`) |
 | [`telemetryValueBytes`](#telemetryvaluebytes) | 1,024 | 0 | `maxRecordBytes` − 256 | the operator (`truncated`) |
 | [`maxPendingSends`](#maxpendingsends) (changed) | no quota | 0 | `poolEnvelopes` | the chart (`.pool`) |
@@ -370,8 +370,11 @@ because a full one fails the chart's action.
   writes several records of about 170 bytes. 16 KiB holds about 95 between
   drains, enough for a quiet turn or a sampled one. tel stays lossy: a host
   that traces every kind in a busy turn raises it, or sees `tel.dropped`.
-- **Minimum `maxRecordBytes`,** so the largest record fits. To turn tracing
-  off, set the kind masks to zero; the ring stays. **Maximum 2 GiB.**
+- **Minimum 0, or else `maxRecordBytes`,** so the largest record fits.
+  0 means no `tel` ring at all: the kind masks must be zero, and nothing
+  a host needs is lost, because every outcome also reaches c2h
+  ([telemetry.md](reference/telemetry.md#what-a-host-does-with-tel)).
+  **Maximum 2 GiB.**
 - **What it drives:** how much telemetry survives a slow exporter.
 - **How it surfaces:**
   - **operator:** `tel.dropped` with the count and the first missing seq;
@@ -430,7 +433,8 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 (ADR 0092):
 
 - `maxRecordBytes` ≤ `c2hBytes` / 4;
-- `maxRecordBytes` ≤ `h2cBytes`, `telBytes`, `nameAreaBytes`;
+- `maxRecordBytes` ≤ `h2cBytes`, `nameAreaBytes`, and `telBytes` unless it is 0;
+- `telBytes` 0 requires every trace kind mask to be zero;
 - `telemetryValueBytes` ≤ `maxRecordBytes` − 256;
 - `admissionWatermark` from 1 to 99;
 - `microstepLimit` from 1, never 0 or none.
