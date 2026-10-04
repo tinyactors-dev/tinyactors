@@ -1,6 +1,7 @@
 # An MCP server: connect an agent to a system
 
-**Status:** Proposed (2026-10-04)
+**Status:** Proposed (2026-10-04), **experimental**
+**Experimental:** the MCP server is an experimental feature. Its tools, resources and transcripts may change or be removed between releases without a deprecation period, and a host enables it explicitly.
 **Depends on:** [the ring protocol](ring-proto/README.md). Core talks to its host through three rings, and there is no host kernel.
 **Touches:** a new shared C library, `tinyactors-mcp`, beside `tinyactors-otlp`; tinyactors-napi and tinyactors-test (bind it). Core gains nothing beyond the ring protocol. The DAP adapters and tinyactors-vscode were removed on 2026-09-30, ahead of it.
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
