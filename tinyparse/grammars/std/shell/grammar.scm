@@ -160,7 +160,7 @@
   ; The delimiter is unknown until parse time, so it is captured with (defer …)
   ; into a per-command-line FIFO slot and the body drained with (parse-deferred …)
   ; once the newline has been consumed. The mechanism is the engine's deferred-slot
-  ; / parametrized-lexical-goal feature (see docs/lex-goal-implementation.md and
+  ; / parametrized-lexical-goal feature (see docs/archive/lex-goal-implementation.md and
   ; examples/heredoc/heredoc.scm); here the body is OPAQUE content lines (a heredoc
   ; body is data, not shell code), which is more POSIX-faithful than the demo.
   ;

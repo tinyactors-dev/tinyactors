@@ -238,7 +238,7 @@ static int tp_builder_add_extra(tp_grammar_builder *builder,
 ** (trivia X) / (skip X) / (error X) naming a token, optionally followed by an
 ** `attach: leading' or `attach: trailing' modifier (default trailing) that sets how a
 ** TRIVIA kind binds to the tree (leading = held and re-emitted ahead of the next
-** sibling; see docs/grammar.md). Entries append
+** sibling; see docs/reference/grammar.md). Entries append
 ** through the builder, so a module's extras merge after the importing grammar's own. */
 static int tp_compile_extras(tp_grammar_builder *builder,
                              const tp_form *extras_form, const char **error)

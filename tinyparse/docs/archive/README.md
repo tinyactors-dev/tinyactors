@@ -20,6 +20,8 @@ The names were rewritten mechanically (`pocketparse` to `tinyparse`, `pp_` to
 | [`codegen-transform.md`](codegen-transform.md) | The blueprint of the Phase 17 C emitter (`src/emitparser.c`). Its injection section describes `ax` coordination that never shipped. |
 | [`build-plan.md`](build-plan.md) | The workstream schedule and finish line pocketparse was built against in ax. |
 | [`explore-plan.md`](explore-plan.md) | The plan of the exploration whose results are in [`../peg-vs-glr.md`](../peg-vs-glr.md). |
+| [`tinyparse-design.md`](tinyparse-design.md) | The design specification written before the implementation. Its current parts are in [`../explanation/design.md`](../explanation/design.md) and the reference pages; its "Next Steps" section lists surface that was planned and not built. |
+| [`lex-goal-implementation.md`](lex-goal-implementation.md) | The finished implementation plan for deferred slots and parametrized lexical goals. Comments in `src/` cite it by name. |
 
 Links in these files were adjusted so they resolve from here. A link that
 pointed into ax (its `src/ax/ax-design.md`, `src/axr`, `ci/`) is now plain

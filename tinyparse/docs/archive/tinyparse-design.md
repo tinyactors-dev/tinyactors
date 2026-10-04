@@ -1040,7 +1040,7 @@ long-lived object. It is lowered to a flat array of bytecode instructions — se
 repeat, call, emit, and the rest — that a small virtual machine executes.
 The bytecode is compact and cache-friendly, which is what makes the parse
 fast. The analysis that chose the instruction set is archived in
-[`docs/archive/bytecode-vm.md`](docs/archive/bytecode-vm.md).
+[`docs/archive/bytecode-vm.md`](bytecode-vm.md).
 
 **Parsing** runs that bytecode over the buffered input:
 
@@ -1121,8 +1121,8 @@ pocketparse, the parse ran inside one `ax` actor: `tinyparse_push` posted an
 the whole VM. An earlier experiment with one actor per grammar rule had measured
 5 to 15 times slower than a plain loop. The one-actor design cost about 1%, but
 it tied the library to `ax`. The four-state machine keeps every behaviour the
-actor had and needs no runtime; [`HISTORY.md`](HISTORY.md) records the change,
-and [`docs/archive/ax-topologies.md`](docs/archive/ax-topologies.md) the
+actor had and needs no runtime; [`HISTORY.md`](../../HISTORY.md) records the change,
+and [`docs/archive/ax-topologies.md`](ax-topologies.md) the
 topologies that were weighed.
 
 ### Language injection

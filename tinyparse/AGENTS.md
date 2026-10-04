@@ -6,7 +6,7 @@ into a running parser, a concrete syntax tree and diagnostics, and its CLI
 and tool beside `tinyxml`: it depends on nothing else in this repository, and
 nothing here depends on it yet. It came from the `ax` repository, where it was
 called pocketparse; `HISTORY.md` tells how it moved. The design is in
-[tinyparse-design.md](tinyparse-design.md), the contributor's guide in
+[docs/explanation/design.md](docs/explanation/design.md), the contributor's guide in
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Hard constraints

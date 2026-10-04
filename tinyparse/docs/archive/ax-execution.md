@@ -8,12 +8,12 @@ that decides whether the whole idea is sound — how PEG ordered-choice
 backtracking survives on a forward-only statechart. It ends with a verdict the
 next work item (W58) can act on.
 
-The companion documents are [`architecture.md`](../architecture.md), which already
+The companion documents are [`architecture.md`](../explanation/architecture.md), which already
 claims this architecture as the intended one ("Grammar rules lower to `ax`
-machines"); [`performance.md`](../performance.md), which measured the residual this
+machines"); [`performance.md`](../explanation/performance.md), which measured the residual this
 re-architecture must not wreck; [`bytecode-vm.md`](bytecode-vm.md), the prior
 analysis of a flat bytecode VM, which this document deliberately contrasts; and
-the two design contracts, [`../tinyparse-design.md`](../../tinyparse-design.md)
+the two design contracts, [`../tinyparse-design.md`](tinyparse-design.md)
 and ax's `src/ax/ax-design.md`. Untagged code
 blocks below are illustrative; `mdc` extracts nothing from this file.
 
@@ -499,7 +499,7 @@ This phase buys architecture, not speed, and the regression is real. Here is
 where the cost goes and how large it is, in numbers of the right order.
 
 Today's residual, after W44–W46, is the irreducible recursive-descent walk: a C
-function call and a `switch` per IR node ([`performance.md`](../performance.md)
+function call and a `switch` per IR node ([`performance.md`](../explanation/performance.md)
 measures the corpus at 12 ms, 4.6× tree-sitter, 0.36 B instructions). The new
 architecture replaces each combinator step — what is a `switch` arm and a
 recursive call today — with an `ax` transition: an event match (prefix-compared

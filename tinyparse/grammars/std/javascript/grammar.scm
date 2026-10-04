@@ -81,7 +81,7 @@
   ; anyone queries, so holding it would be pure cost. The three comment kinds attach
   ; `leading': a comment is held and re-emitted at the next sibling boundary, so a
   ; doc comment lands ahead of what it documents (a sibling in the parent) instead of
-  ; being swept into the node that is closing (docs/grammar.md, "Extras").
+  ; being swept into the node that is closing (docs/reference/grammar.md, "Extras").
   ; std.typescript and std.tsx inherit this through (extends std.javascript).
   (extras
     (trivia Space)
