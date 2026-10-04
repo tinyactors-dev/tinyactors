@@ -62,7 +62,8 @@ steps.each do |name, command, chdir|
     output.each_line do |line|
       print line
       $stdout.flush
-      skipped << name if line.match?(own_skip)
+      # Matched as bytes: a step may print anything, and the skip line is ASCII.
+      skipped << name if line.b.match?(own_skip)
     end
     wait.value
   end
