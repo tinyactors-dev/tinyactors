@@ -12,6 +12,10 @@ note: |
 
   A helper that takes the caller's `ta_layout *` (ta_arena_fixed_add) adds
   to a layout it does not own and is exempt: its caller finishes it.
+  The rule matches literal `ta_layout_add(` calls only: an add made through
+  a macro that wraps it (TA_SCRATCH_TAKE in interpreter.c) is not seen, so a
+  function that adds only through such a macro is not checked.
+
   `mise run check-layout` in tinyactors-core scans its sources and tests.
 rule:
   kind: function_definition
