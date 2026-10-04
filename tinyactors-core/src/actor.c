@@ -86,14 +86,17 @@ static ta_result ta_actor_table_grow(ta_system *system, uint32_t *out) {
     return TA_OK;
 }
 
+/* ta_actor_id_slot returns the slot index an actor ID names, in the actor table (system lifetime). Pure; see ta_handle_slot. */
 uint32_t ta_actor_id_slot(ta_actor_id id) {
     return ta_handle_slot(id);
 }
 
+/* ta_actor_id_generation returns the generation the slot had when the ID was issued; a destroyed actor's ID no longer matches the slot. Pure; see ta_handle_generation. */
 uint32_t ta_actor_id_generation(ta_actor_id id) {
     return ta_handle_generation(id);
 }
 
+/* ta_actor_id_make packs a slot and the generation that slot holds into an actor ID (a call-lifetime value). Never allocates; see ta_handle_make. */
 ta_actor_id ta_actor_id_make(uint32_t slot, uint32_t generation) {
     return ta_handle_make(slot, generation);
 }

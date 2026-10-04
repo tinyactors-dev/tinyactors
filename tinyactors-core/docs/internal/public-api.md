@@ -6,9 +6,9 @@
 
 - `ta_atom` — interned ordinary string handle, process-local unless resolved through logical text by a higher layer.
 - `ta_event_name_id` — structured event-name handle.
-- `ta_definition_id` — runtime definition handle: slot in the low 32 bits, the slot's generation in the high 32 bits (ADR 0043). A freed definition's ID goes stale and never names another definition; zero is never valid.
+- `ta_definition_id` — runtime definition handle: a (generation, slot) handle whose layout `src/handle.h` defines (ADR 0043). A freed definition's ID goes stale and never names another definition; zero is never valid.
 - `ta_definition_identity` — logical definition family plus exact opaque revision fingerprint.
-- `ta_actor_id` — runtime actor handle: slot in the low 32 bits, the slot's generation in the high 32 bits (ADR 0059), split and joined with `ta_actor_id_slot`, `ta_actor_id_generation` and `ta_actor_id_make`. Zero is never valid and no slot is issued generation 0. A destroyed actor's ID goes stale; the slot's next occupant has a newer generation.
+- `ta_actor_id` — runtime actor handle: a (generation, slot) handle whose layout `src/handle.h` defines (ADR 0059), split and joined with `ta_actor_id_slot`, `ta_actor_id_generation` and `ta_actor_id_make`. Zero is never valid and no slot is issued generation 0. A destroyed actor's ID goes stale; the slot's next occupant has a newer generation.
 - `ta_actor_address` — logical named actor address scoped by definition family, as a host supplies it: two borrowed strings.
 - `ta_address` — the handle core holds for a named address (ADR 0065): one reference-counted record per distinct address in a system, so equal addresses are one pointer. `ta_address_intern`, `ta_address_retain`, `ta_address_release` and `ta_address_view`. A named `ta_actor_ref` holds one; directory callbacks receive one.
 - `ta_invoke_id`, `ta_send_id`, `ta_timer_id` — identities scoped by their semantic subsystem.
