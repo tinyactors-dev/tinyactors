@@ -4,14 +4,6 @@
 
 #define TA_SCXML_IO_URI "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
 
-static ta_str ta_cstr(const char *text) {
-    ta_str out = { .ptr = text, .len = 0 };
-    while (text[out.len] != '\0') {
-        out.len += 1;
-    }
-    return out;
-}
-
 /* ------------------------------------------------------------------------
  * System parameters (ADR 0092)
  */
@@ -51,11 +43,11 @@ ta_result ta_param_info_of(ta_param param, ta_param_info *out) {
         return TA_ERR_INVALID;
     }
     const ta_param_row *row = &ta_param_rows[param];
-    *out = (ta_param_info){ .name = ta_cstr(row->name),
+    *out = (ta_param_info){ .name = ta_str_from_cstr(row->name),
                             .default_value = row->default_value,
                             .min = row->min,
                             .max = row->max,
-                            .unit = ta_cstr(row->unit) };
+                            .unit = ta_str_from_cstr(row->unit) };
     return TA_OK;
 }
 
@@ -229,13 +221,13 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
         result = ta_system_arena_open(system);
     }
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, ta_cstr(TA_SCXML_IO_URI), &system->scxml_io_type);
+        result = ta_atom_intern(&system->atoms, ta_str_from_cstr(TA_SCXML_IO_URI), &system->scxml_io_type);
     }
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, ta_cstr("scxml"), &system->scxml_io_alias);
+        result = ta_atom_intern(&system->atoms, ta_str_from_cstr("scxml"), &system->scxml_io_alias);
     }
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, ta_cstr("http://www.w3.org/TR/scxml/"),
+        result = ta_atom_intern(&system->atoms, ta_str_from_cstr("http://www.w3.org/TR/scxml/"),
                                 &system->scxml_invoke_type);
     }
     if (result != TA_OK) {

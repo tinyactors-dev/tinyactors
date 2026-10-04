@@ -95,6 +95,12 @@ typedef struct {
     ta_str *out;
 } ta_text_render_params;
 ta_result ta_text_render(ta_allocator allocator, const ta_text_render_params *params);
+/*
+ * ta_str_from_cstr views a NUL-terminated string as a ta_str (block D6's
+ * cstr helper, kept beside the type it builds). It copies nothing and
+ * allocates nothing: the view lives as long as text does, and core uses it
+ * on string literals only. text must not be NULL.
+ */
 static inline ta_str ta_str_from_cstr(const char *text) {
     ta_str out = { .ptr = text, .len = 0 };
     while (text[out.len] != '\0') {
