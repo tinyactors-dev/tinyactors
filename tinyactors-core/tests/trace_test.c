@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures = 0;
 
@@ -31,37 +32,8 @@ static int failures = 0;
  * An allocator that counts calls and can refuse after a number of them
  */
 
-static long allocations = 0;
-static long live_allocations = 0;
-/* When positive, the allocation that brings `allocations` to it fails. */
-static long refuse_at = 0;
-
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (refuse_at > 0 && allocations + 1 == refuse_at) {
-        refuse_at = 0;
-        return NULL;
-    }
-    allocations += 1;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    void *memory = aligned_alloc(alignment, size == 0 ? alignment : size);
-    live_allocations += memory != NULL ? 1 : 0;
-    return memory;
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_allocations -= 1;
-    }
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator allocator = { .self = NULL, .v = &allocator_vtable };
+static ta_test_allocator heap;
+static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 /* ------------------------------------------------------------------------
  * A data model: conditions "t" and "f", "e" fails, and every value empty
@@ -467,14 +439,14 @@ static long whole_life(ta_trace_sink sink) {
     run r;
     start_system(&r);
     CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
-    long before = allocations;
+    long before = heap.stats.allocations;
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
     deliver(&r, "go", (ta_trace_parent){0});
     settle(&r);
     deliver(&r, "stop", (ta_trace_parent){0});
     settle(&r);
-    long made = allocations - before;
+    long made = heap.stats.allocations - before;
     CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
     finish(&r);
     return made;
@@ -732,10 +704,10 @@ static void test_records_are_written_once(void) {
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
     journal_reset();
-    long before = allocations;
+    long before = heap.stats.allocations;
     deliver(&r, "go", (ta_trace_parent){0});
     settle(&r);
-    long made = allocations - before;
+    long made = heap.stats.allocations - before;
     char baseline[sizeof(journal)];
     memcpy(baseline, journal, journal_length + 1u);
     finish(&r);
@@ -748,7 +720,7 @@ static void test_records_are_written_once(void) {
         settle(&r);
         journal_reset();
         ta_event event = event_named(&r, "go");
-        refuse_at = allocations + failing;
+        ta_test_allocator_fail_nth(&heap, failing);
         ta_result delivered = ta_actor_deliver(r.system,
                                                &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .event = &event });
         ta_run_status status = TA_RUN_ERROR;
@@ -760,7 +732,7 @@ static void test_records_are_written_once(void) {
         while (resume(&r, 1000, &status) == TA_ERR_NOMEM && attempts < 4u) {
             attempts += 1u;
         }
-        refuse_at = 0;
+        ta_test_allocator_disarm(&heap);
         CHECK(status == TA_RUN_STABLE);
         if (strcmp(journal, baseline) != 0) {
             fprintf(stderr, "allocation %ld failing changed the records\n  expected: %s\n  actual:   %s\n",
@@ -1051,7 +1023,7 @@ int main(void) {
     test_sampler();
     test_watched_detail();
     test_counters_and_occupancy();
-    CHECK(live_allocations == 0);
+    CHECK(heap.stats.live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "trace_test: %d failure(s)\n", failures);
         return 1;

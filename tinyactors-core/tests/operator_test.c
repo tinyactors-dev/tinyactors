@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures = 0;
 
@@ -32,36 +33,8 @@ static int failures = 0;
  * An allocator that counts what is live and can fail one allocation
  */
 
-static long live_allocations = 0;
-static unsigned long allocations = 0;
-/* When not zero, the allocation with this count fails, once. */
-static unsigned long fail_at = 0;
-
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    allocations += 1u;
-    if (fail_at != 0 && allocations == fail_at) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    void *memory = aligned_alloc(alignment, size == 0 ? alignment : size);
-    live_allocations += memory != NULL ? 1 : 0;
-    return memory;
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_allocations -= 1;
-    }
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator allocator = { .self = NULL, .v = &allocator_vtable };
+static ta_test_allocator heap;
+static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 /* ------------------------------------------------------------------------
  * <foreach> snapshots that count their references
@@ -485,7 +458,7 @@ static ta_actor_inspection inspect(run *r) {
 
 static void finish(run *r) {
     ta_system_destroy(r->system);
-    CHECK(live_allocations == 0);
+    CHECK(heap.stats.live_blocks == 0);
     CHECK(live_snapshots == 0);
 }
 
@@ -620,7 +593,7 @@ static void test_refusals(void) {
     run r;
     start(&r);
     CHECK(settle(&r, 0) == TA_RUN_STABLE);
-    long live = live_allocations;
+    size_t live = heap.stats.live_blocks;
     ta_state_id w1 = state(&r, "w1");
     ta_state_id w2 = state(&r, "w2");
     ta_state_id wh = state(&r, "wh");
@@ -644,7 +617,7 @@ static void test_refusals(void) {
     CHECK(jump(&r, TA_STATE_NONE, (ta_state_id[]){ r1a, r1b }, 2) == TA_ERR_INVALID);  /* one region */
 
     /* Nothing was retained: the actor is idle and takes the next event. */
-    CHECK(live_allocations == live);
+    CHECK(heap.stats.live_blocks == live);
     ta_actor_inspection inspection = inspect(&r);
     CHECK(!inspection.macrostep_in_progress);
     CHECK(inspection.current_event == NULL);
@@ -884,9 +857,9 @@ static void test_out_of_memory(void) {
     CHECK(settle(&r, 0) == TA_RUN_STABLE);
     clear_log();
     uint32_t first = record_count;
-    unsigned long before = allocations;
+    unsigned long before = heap.stats.attempts;
     jump_retrying(&r);
-    unsigned long used = allocations - before;
+    unsigned long used = heap.stats.attempts - before;
     char baseline_log[sizeof(script_log)];
     memcpy(baseline_log, script_log, script_length + 1u);
     char baseline_records[4096];
@@ -904,9 +877,9 @@ static void test_out_of_memory(void) {
         CHECK(settle(&r, 0) == TA_RUN_STABLE);
         clear_log();
         first = record_count;
-        fail_at = allocations + failing;
+        ta_test_allocator_fail_nth(&heap, failing);
         jump_retrying(&r);
-        fail_at = 0;
+        ta_test_allocator_disarm(&heap);
         CHECK(log_is(baseline_log));
         CHECK(active_is(&r, "work w1"));
         record_count -= first;
@@ -928,9 +901,9 @@ static void test_out_of_memory(void) {
         ta_run_status status = TA_RUN_ERROR;
         CHECK(resume_with(&r, 7, 0, &status) == TA_OK && status == TA_RUN_PAUSED);
         uint32_t waiting = inspect(&r).internal_count;
-        fail_at = allocations + failing;
+        ta_test_allocator_fail_nth(&heap, failing);
         ta_result result = ta_actor_abandon(r.system, r.actor);
-        fail_at = 0;
+        ta_test_allocator_disarm(&heap);
         if (result == TA_ERR_NOMEM) {
             ta_actor_inspection inspection = inspect(&r);
             CHECK(inspection.macrostep_in_progress && inspection.internal_count == waiting);

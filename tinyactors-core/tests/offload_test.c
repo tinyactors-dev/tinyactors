@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -23,32 +24,8 @@ static int failures;
 
 #define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
 
-/* An allocator that counts live blocks and can refuse the n-th allocation. */
-static long live_blocks;
-static long allocations;
-static long fail_at = -1;
-
-static void *count_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    (void)alignment;
-    if (fail_at >= 0 && allocations++ == fail_at) {
-        return NULL;
-    }
-    void *block = calloc(1, size == 0 ? 1 : size);
-    live_blocks += block != NULL ? 1 : 0;
-    return block;
-}
-
-static void count_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1;
-        free(params->ptr);
-    }
-}
-
-static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = count_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &count_vtable };
+static ta_test_allocator heap;
+static const ta_allocator test_allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 /* A one-address directory, enough for one named actor to unload and load. */
 typedef struct {
@@ -355,12 +332,11 @@ static void test_allocation_failures(void) {
         fixture f;
         start(&f);
         ta_actor_id actor = spawn(&f, &the_address);
-        allocations = 0;
-        fail_at = step;
+        ta_test_allocator_fail_nth(&heap, (uint64_t)step + 1u);
         ta_bytes bytes = {0};
         ta_result result = ta_actor_offload(f.system, &(ta_actor_offload_params){ .actor = actor, .arena = &f.arena,
                                                                                   .out = &bytes });
-        fail_at = -1;
+        ta_test_allocator_disarm(&heap);
         if (result == TA_OK) {
             finish(&f);
             break;
@@ -375,11 +351,10 @@ static void test_allocation_failures(void) {
         fixture f;
         start(&f);
         ta_bytes bytes = offload(&f, spawn(&f, &the_address));
-        allocations = 0;
-        fail_at = step;
+        ta_test_allocator_fail_nth(&heap, (uint64_t)step + 1u);
         ta_actor_id id = 0;
         ta_result result = ta_actor_load(f.system, &(ta_actor_load_params){ .bytes = bytes, .out = &id });
-        fail_at = -1;
+        ta_test_allocator_disarm(&heap);
         if (result == TA_OK) {
             finish(&f);
             break;
@@ -666,12 +641,11 @@ static void test_codec_allocation_failures(void) {
         start_blobs(&f);
         ta_actor_id actor = spawn(&f, &the_address);
         ta_value root = blob_make(3000, 5);
-        allocations = 0;
-        fail_at = step;
+        ta_test_allocator_fail_nth(&heap, (uint64_t)step + 1u);
         ta_bytes bytes = {0};
         ta_result result = ta_actor_offload(f.system, &(ta_actor_offload_params){ .actor = actor, .root = &root,
                                                                                   .arena = &f.arena, .out = &bytes });
-        fail_at = -1;
+        ta_test_allocator_disarm(&heap);
         if (result == TA_OK) {
             ta_value back = {0};
             ta_actor_id id = 0;
@@ -694,6 +668,7 @@ static void test_codec_allocation_failures(void) {
 }
 
 int main(void) {
+    ta_test_allocator_init(&heap, &(ta_test_allocator_config){ .zero_fill = true }); /* as calloc: tests read what core did not write */
     test_round_trip();
     test_history_survives();
     test_refusals();
@@ -703,7 +678,7 @@ int main(void) {
     test_streaming_codec();
     test_codec_refusal();
     test_codec_allocation_failures();
-    CHECK(live_blocks == 0);
+    CHECK(heap.stats.live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "offload_test: %d check(s) failed\n", failures);
         return 1;
