@@ -648,6 +648,134 @@ static void test_lossy_sum_identity(void) {
     fixture_down(&f);
 }
 
+/* ---- seeded model ---- */
+
+typedef struct model_entry {
+    uint64_t seq;
+    uint32_t size;
+    uint64_t pad; /* bytes of pad in front of it, own and any carried from a lone pad */
+    bool pad_released;
+} model_entry;
+
+#define MODEL_QUEUE 1024u
+
+typedef struct model {
+    uint64_t capacity, head, tail, next_seq, dropped, carry, last_seen;
+    uint32_t max;
+    bool lossy;
+    model_entry queue[MODEL_QUEUE];
+    uint32_t first, count;
+} model;
+
+static uint64_t xorshift(uint64_t *state) {
+    uint64_t x = *state;
+    x ^= x << 13, x ^= x >> 7, x ^= x << 17;
+    return *state = x;
+}
+
+/* One run of the reference model against one ring; `steps` random operations. */
+static void model_run(uint32_t capacity, uint32_t max, bool lossy, uint32_t steps, uint64_t seed) {
+    fixture f;
+    ta_rings_specs specs = specs_of(capacity, max, lossy ? TA_RING_LOSSY : TA_RING_LOSSLESS);
+    fixture_up(&f, &specs);
+    ta_ring *ring = &f.rings.ring[TA_RING_TEL];
+    model m = { .capacity = capacity, .max = max, .lossy = lossy, .next_seq = 1 };
+    uint64_t rng = seed;
+    bool open = false, peeked = false;
+    ta_ring_reservation res = { 0 };
+    uint32_t open_size = 0;
+    uint64_t open_pad = 0;
+    for (uint32_t step = 0; step < steps; step += 1) {
+        uint64_t r = xorshift(&rng);
+        uint32_t op = (uint32_t)(r % 10);
+        if (op < 4) { /* reserve */
+            uint32_t size = (uint32_t)((r >> 8) % (max + 17));
+            if ((r >> 60) == 0) size = UINT32_MAX - (uint32_t)((r >> 20) % 9);
+            ta_ring_reservation out = { 0 };
+            ta_ring_status status = ta_ring_reserve(ring, size, &out);
+            if (open) {
+                CHECK(status == TA_RING_BUSY);
+                continue;
+            }
+            uint32_t rounded = size > UINT32_MAX - 7 ? 0 : (size + 7) / 8 * 8;
+            if (size > UINT32_MAX - 7 || rounded < 16 || rounded > max) {
+                CHECK(status == TA_RING_TOO_BIG);
+            } else {
+                uint64_t position = m.head % capacity, to_end = capacity - position;
+                uint64_t pad = rounded > to_end ? to_end : 0;
+                if (pad + rounded <= capacity - (m.head - m.tail)) {
+                    CHECK(status == TA_RING_OK && out.seq == m.next_seq && out.size == rounded);
+                    open = true, res = out, open_size = rounded, open_pad = pad;
+                    CHECK((uint64_t)(out.bytes - ring->data) == (pad ? 0 : position));
+                } else {
+                    if (m.head == m.tail && pad != 0) { /* the lone pad */
+                        m.head += pad, m.carry += pad;
+                    }
+                    if (lossy) {
+                        CHECK(status == TA_RING_DROPPED && out.seq == m.next_seq);
+                        m.next_seq += 1, m.dropped += 1;
+                    } else {
+                        CHECK(status == TA_RING_FULL && out.seq == m.next_seq);
+                    }
+                }
+            }
+        } else if (op < 6) { /* commit or abandon */
+            if (!open) { ta_ring_commit(ring); ta_ring_abandon(ring); continue; }
+            if (op == 4) {
+                fill_record(res.bytes, open_size, (uint32_t)res.seq);
+                ta_ring_commit(ring);
+                CHECK(m.count < MODEL_QUEUE);
+                m.queue[(m.first + m.count) % MODEL_QUEUE] = (model_entry){ res.seq, open_size, open_pad + m.carry, false };
+                m.count += 1, m.carry = 0;
+                m.head += open_pad + open_size, m.next_seq += 1;
+            } else {
+                ta_ring_abandon(ring);
+            }
+            open = false;
+        } else if (op < 9) { /* peek */
+            ta_ring_record rec = { 0 };
+            ta_ring_status status = ta_ring_peek(ring, &rec);
+            if (m.count == 0) {
+                CHECK(status == TA_RING_EMPTY);
+                m.tail += m.carry, m.carry = 0; /* a lone pad is released by this peek */
+                continue;
+            }
+            model_entry *front = &m.queue[m.first];
+            if (!front->pad_released) m.tail += front->pad, front->pad_released = true;
+            CHECK(status == TA_RING_OK && rec.seq == front->seq && rec.size == front->size);
+            CHECK(rec.gap == (lossy ? front->seq - m.last_seen - 1 : 0));
+            CHECK(record_ok(rec.bytes, rec.size, (uint32_t)rec.seq));
+            peeked = true;
+        } else { /* release */
+            ta_ring_release(ring);
+            if (peeked) {
+                model_entry *front = &m.queue[m.first];
+                m.tail += front->size, m.last_seen = front->seq;
+                m.first = (m.first + 1) % MODEL_QUEUE, m.count -= 1;
+                peeked = false;
+            }
+        }
+        CHECK(ring->shared->head == m.head && ring->shared->tail == m.tail);
+        CHECK(ring->shared->next_seq == m.next_seq && ring->shared->dropped == m.dropped);
+        if (failures != 0) break; /* the first divergence is the useful one */
+    }
+    fixture_down(&f);
+}
+
+static void test_model(void) {
+    static const uint32_t shapes[][2] = { { 16, 16 }, { 24, 16 }, { 64, 32 }, { 72, 72 }, { 200, 56 } };
+    for (uint32_t i = 0; i < TA_ARRAY_COUNT(shapes); i += 1) {
+        for (uint32_t lossy = 0; lossy < 2; lossy += 1) {
+            model_run(shapes[i][0], shapes[i][1], lossy != 0, 2000, 0x9E3779B97F4A7C15ull + i * 2 + lossy);
+        }
+    }
+    /*
+     * A sweep of 2,000,000 steps over every capacity from 16 to 136 would be
+     * marked exhaustive once unit T1 has landed the marker option; until
+     * then this stays small so the whole program runs in well under a second.
+     */
+}
+
 int main(void) {
     test_layout();
     test_init();
@@ -663,6 +791,7 @@ int main(void) {
     test_lossy_drops();
     test_lossy_lone_pad();
     test_lossy_sum_identity();
+    test_model();
     if (failures != 0) {
         fprintf(stderr, "ring_test: %d check(s) failed\n", failures);
         return 1;
