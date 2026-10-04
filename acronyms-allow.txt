@@ -16,7 +16,7 @@ traceId        tinyactors-napi/docs/tracing.md                           # SDK e
 spanId         tinyactors-napi/docs/tracing.md                           # SDK example: SpanContext field
 
 # ast-grep's JSON output names a finding's rule `ruleId`.
-ruleId         mise/lib/build_scripts.rb                                 # ast-grep scan --json field
+ruleId         {mise/lib/build_scripts.rb,tinyactors-core/mise/tasks/check-layout}   # ast-grep scan --json field
 
 # REXML's class for a CDATA section (Ruby standard library).
 CData          tinyactors-test/ruby/**/*.rb                              # REXML::CData
