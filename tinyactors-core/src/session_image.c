@@ -1314,7 +1314,7 @@ static ta_result ta_offload_take_ref(ta_offload_reader *reader, ta_arena *arena,
     }
     ref->as.named = NULL;
     uint32_t bytes = 0;
-    if (!ta_offload_take(reader, &bytes, sizeof bytes) || bytes < sizeof(ta_address) ||
+    if (!ta_offload_take(reader, &bytes, sizeof bytes) || bytes < offsetof(ta_address, text) ||
         (size_t)(reader->end - reader->at) < bytes) {
         *ref = (ta_actor_ref){0};
         return TA_ERR_INVALID;

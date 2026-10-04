@@ -2352,7 +2352,7 @@ TA_PRIVATE bool ta_trie_under(const ta_atom_trie *trie, uint32_t node, uint32_t 
  * reference.
  *
  * How it is built. A record is one individually allocated block, variable in
- * size: a 32-byte header and the text. It cannot be an item of a pool, since
+ * size: a 28-byte header and the text. It cannot be an item of a pool, since
  * its address is the handle and the text is variable, so the pool holds
  * only the directory: the item at index i is a pointer to the record with
  * `index` i. The hash table maps hash(family, NUL, name) to that index. There
@@ -2417,8 +2417,8 @@ TA_PRIVATE bool ta_trie_under(const ta_atom_trie *trie, uint32_t node, uint32_t 
  * Invariants.
  *
  *   - Every interned record, and only those, has an item in the pool and an
- *     entry (record->hash, record->index) in the index; the item holds the
- *     record's pointer, and record->index is its index (never 0).
+ *     entry (hash of its text, record->index) in the index; the item holds
+ *     the record's pointer, and record->index is its index (never 0).
  *   - references of an interned record is at least 1; at 0 it is freed.
  *   - Equal (family, name) pairs have one record.
  *   - `unloaded` is 0, or the session pool index of the node in the session
@@ -2432,7 +2432,7 @@ TA_PRIVATE bool ta_trie_under(const ta_atom_trie *trie, uint32_t node, uint32_t 
  *
  * Complexity. Intern, find and release are O(1) expected plus the
  * comparison of the name; a grow or a doubled page is O(page) in a rare
- * call. Space: a named actor's address costs the 32-byte header and text,
+ * call. Space: a named actor's address costs the 28-byte header and text,
  * 8 bytes for its pool item and about 18 bytes of index slots (7/16 load).
  * Destroy is O(records).
  *
@@ -2456,10 +2456,13 @@ struct ta_address {
     uint32_t references;
     /* This record's index in the address pool: its name in the table. 0 when detached. */
     uint32_t index;
-    uint32_t hash;
     uint32_t family_len;
     uint32_t name_len;
-    /* The family, a NUL, the name, a NUL. */
+    /*
+     * The family, a NUL, the name, a NUL. The record keeps no copy of its
+     * hash: release recomputes it from the text (a few bytes of FNV-1a),
+     * which saves 4 bytes on every named actor.
+     */
     char text[];
 };
 
@@ -2495,7 +2498,7 @@ TA_PRIVATE ta_result ta_address_table_intern(ta_address_table *table, const ta_a
 
 /*
  * ta_address_record_bytes stores in *bytes the size of an address record
- * with these text lengths: the header, the family, a NUL, the name, a NUL.
+ * with these text lengths: the header (up to `text`), the family, a NUL, the name, a NUL.
  * It is the one formula for the interned record, a detached copy and the
  * offload bytes, computed with ta_layout, so a size that does not fit a
  * size_t (possible on a 32-bit host, or with lengths read from an image) is
@@ -7296,10 +7299,18 @@ static uint32_t ta_address_hash(const ta_actor_address *address) {
     return ta_fnv1a32(hash, address->name.ptr, address->name.len);
 }
 
+/*
+ * The same hash from a record's text, which already holds the separator
+ * (the NUL after the family): one pass over family, NUL and name.
+ */
+static uint32_t ta_address_record_hash(const ta_address *record) {
+    return ta_fnv1a32(TA_FNV1A32_BASIS, record->text, (size_t)record->family_len + 1u + record->name_len);
+}
+
 TA_PRIVATE ta_result ta_address_record_bytes(uint32_t family_len, uint32_t name_len, size_t *bytes) {
     ta_layout layout;
     ta_layout_init(&layout, 0);
-    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_address), .alignment = _Alignof(ta_address), .count = 1u });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = offsetof(ta_address, text), .alignment = _Alignof(ta_address), .count = 1u });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = family_len });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = 2u });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = name_len });
@@ -7347,10 +7358,11 @@ TA_PRIVATE void ta_address_table_destroy(ta_address_table *table) {
     *table = (ta_address_table){0};
 }
 
-static bool ta_address_matches(const ta_address *record, const ta_actor_address *address, uint32_t hash) {
+/* The index only offers records whose hash is equal, so the text is all that is left to compare. */
+static bool ta_address_matches(const ta_address *record, const ta_actor_address *address) {
     ta_str family = { .ptr = record->text, .len = record->family_len };
     ta_str name = { .ptr = record->text + record->family_len + 1u, .len = record->name_len };
-    return record->hash == hash && ta_str_equal(family, address->family.name) && ta_str_equal(name, address->name);
+    return ta_str_equal(family, address->family.name) && ta_str_equal(name, address->name);
 }
 
 /* The record of `address`, found through the index, or NULL. */
@@ -7360,7 +7372,7 @@ static ta_address *ta_address_find(const ta_address_table *table, const ta_actor
     ta_table_probe_start(&table->index, hash, &probe);
     while (ta_table_probe_next(&probe, &index)) {
         ta_address *record = ta_address_record_at(table, index);
-        if (ta_address_matches(record, address, hash)) {
+        if (ta_address_matches(record, address)) {
             return record;
         }
     }
@@ -7368,7 +7380,7 @@ static ta_address *ta_address_find(const ta_address_table *table, const ta_actor
 }
 
 /* A new record with one reference's worth of fields filled in; not yet in any table. NULL when memory is out. */
-static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_address *address, uint32_t hash) {
+static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_address *address) {
     uint32_t family_len = address->family.name.len;
     uint32_t name_len = address->name.len;
     size_t bytes = 0;
@@ -7383,7 +7395,6 @@ static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_addr
     record->unloaded = 0;
     record->references = 0;
     record->index = 0;
-    record->hash = hash;
     record->family_len = family_len;
     record->name_len = name_len;
     if (family_len != 0) {
@@ -7425,7 +7436,7 @@ TA_PRIVATE ta_result ta_address_table_intern(ta_address_table *table, const ta_a
         *out = record;
         return TA_OK;
     }
-    record = ta_address_record(table->allocator, address, hash);
+    record = ta_address_record(table->allocator, address);
     if (record == NULL) {
         return TA_ERR_NOMEM;
     }
@@ -7488,7 +7499,7 @@ TA_API void ta_address_release(ta_address *address) {
         return;
     }
     ta_address_table *table = record->table;
-    (void)ta_table_remove(&table->index, record->hash, record->index);
+    (void)ta_table_remove(&table->index, ta_address_record_hash(record), record->index);
     ta_pool_give(&table->records, record->index);
     ta_address_free(table, record);
 }
@@ -18714,7 +18725,7 @@ static ta_result ta_offload_take_ref(ta_offload_reader *reader, ta_arena *arena,
     }
     ref->as.named = NULL;
     uint32_t bytes = 0;
-    if (!ta_offload_take(reader, &bytes, sizeof bytes) || bytes < sizeof(ta_address) ||
+    if (!ta_offload_take(reader, &bytes, sizeof bytes) || bytes < offsetof(ta_address, text) ||
         (size_t)(reader->end - reader->at) < bytes) {
         *ref = (ta_actor_ref){0};
         return TA_ERR_INVALID;

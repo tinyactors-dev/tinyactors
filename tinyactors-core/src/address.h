@@ -18,7 +18,7 @@
  * reference.
  *
  * How it is built. A record is one individually allocated block, variable in
- * size: a 32-byte header and the text. It cannot be an item of a pool, since
+ * size: a 28-byte header and the text. It cannot be an item of a pool, since
  * its address is the handle and the text is variable, so the pool holds
  * only the directory: the item at index i is a pointer to the record with
  * `index` i. The hash table maps hash(family, NUL, name) to that index. There
@@ -83,8 +83,8 @@
  * Invariants.
  *
  *   - Every interned record, and only those, has an item in the pool and an
- *     entry (record->hash, record->index) in the index; the item holds the
- *     record's pointer, and record->index is its index (never 0).
+ *     entry (hash of its text, record->index) in the index; the item holds
+ *     the record's pointer, and record->index is its index (never 0).
  *   - references of an interned record is at least 1; at 0 it is freed.
  *   - Equal (family, name) pairs have one record.
  *   - `unloaded` is 0, or the session pool index of the node in the session
@@ -98,7 +98,7 @@
  *
  * Complexity. Intern, find and release are O(1) expected plus the
  * comparison of the name; a grow or a doubled page is O(page) in a rare
- * call. Space: a named actor's address costs the 32-byte header and text,
+ * call. Space: a named actor's address costs the 28-byte header and text,
  * 8 bytes for its pool item and about 18 bytes of index slots (7/16 load).
  * Destroy is O(records).
  *
@@ -122,10 +122,13 @@ struct ta_address {
     uint32_t references;
     /* This record's index in the address pool: its name in the table. 0 when detached. */
     uint32_t index;
-    uint32_t hash;
     uint32_t family_len;
     uint32_t name_len;
-    /* The family, a NUL, the name, a NUL. */
+    /*
+     * The family, a NUL, the name, a NUL. The record keeps no copy of its
+     * hash: release recomputes it from the text (a few bytes of FNV-1a),
+     * which saves 4 bytes on every named actor.
+     */
     char text[];
 };
 
@@ -161,7 +164,7 @@ ta_result ta_address_table_intern(ta_address_table *table, const ta_actor_addres
 
 /*
  * ta_address_record_bytes stores in *bytes the size of an address record
- * with these text lengths: the header, the family, a NUL, the name, a NUL.
+ * with these text lengths: the header (up to `text`), the family, a NUL, the name, a NUL.
  * It is the one formula for the interned record, a detached copy and the
  * offload bytes, computed with ta_layout, so a size that does not fit a
  * size_t (possible on a 32-bit host, or with lengths read from an image) is

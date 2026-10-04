@@ -37,10 +37,18 @@ static uint32_t ta_address_hash(const ta_actor_address *address) {
     return ta_fnv1a32(hash, address->name.ptr, address->name.len);
 }
 
+/*
+ * The same hash from a record's text, which already holds the separator
+ * (the NUL after the family): one pass over family, NUL and name.
+ */
+static uint32_t ta_address_record_hash(const ta_address *record) {
+    return ta_fnv1a32(TA_FNV1A32_BASIS, record->text, (size_t)record->family_len + 1u + record->name_len);
+}
+
 ta_result ta_address_record_bytes(uint32_t family_len, uint32_t name_len, size_t *bytes) {
     ta_layout layout;
     ta_layout_init(&layout, 0);
-    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_address), .alignment = _Alignof(ta_address), .count = 1u });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = offsetof(ta_address, text), .alignment = _Alignof(ta_address), .count = 1u });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = family_len });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = 2u });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = name_len });
@@ -88,10 +96,11 @@ void ta_address_table_destroy(ta_address_table *table) {
     *table = (ta_address_table){0};
 }
 
-static bool ta_address_matches(const ta_address *record, const ta_actor_address *address, uint32_t hash) {
+/* The index only offers records whose hash is equal, so the text is all that is left to compare. */
+static bool ta_address_matches(const ta_address *record, const ta_actor_address *address) {
     ta_str family = { .ptr = record->text, .len = record->family_len };
     ta_str name = { .ptr = record->text + record->family_len + 1u, .len = record->name_len };
-    return record->hash == hash && ta_str_equal(family, address->family.name) && ta_str_equal(name, address->name);
+    return ta_str_equal(family, address->family.name) && ta_str_equal(name, address->name);
 }
 
 /* The record of `address`, found through the index, or NULL. */
@@ -101,7 +110,7 @@ static ta_address *ta_address_find(const ta_address_table *table, const ta_actor
     ta_table_probe_start(&table->index, hash, &probe);
     while (ta_table_probe_next(&probe, &index)) {
         ta_address *record = ta_address_record_at(table, index);
-        if (ta_address_matches(record, address, hash)) {
+        if (ta_address_matches(record, address)) {
             return record;
         }
     }
@@ -109,7 +118,7 @@ static ta_address *ta_address_find(const ta_address_table *table, const ta_actor
 }
 
 /* A new record with one reference's worth of fields filled in; not yet in any table. NULL when memory is out. */
-static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_address *address, uint32_t hash) {
+static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_address *address) {
     uint32_t family_len = address->family.name.len;
     uint32_t name_len = address->name.len;
     size_t bytes = 0;
@@ -124,7 +133,6 @@ static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_addr
     record->unloaded = 0;
     record->references = 0;
     record->index = 0;
-    record->hash = hash;
     record->family_len = family_len;
     record->name_len = name_len;
     if (family_len != 0) {
@@ -166,7 +174,7 @@ ta_result ta_address_table_intern(ta_address_table *table, const ta_actor_addres
         *out = record;
         return TA_OK;
     }
-    record = ta_address_record(table->allocator, address, hash);
+    record = ta_address_record(table->allocator, address);
     if (record == NULL) {
         return TA_ERR_NOMEM;
     }
@@ -229,7 +237,7 @@ void ta_address_release(ta_address *address) {
         return;
     }
     ta_address_table *table = record->table;
-    (void)ta_table_remove(&table->index, record->hash, record->index);
+    (void)ta_table_remove(&table->index, ta_address_record_hash(record), record->index);
     ta_pool_give(&table->records, record->index);
     ta_address_free(table, record);
 }
