@@ -1,13 +1,14 @@
 export const meta = {
   name: 'ring-proto-wave',
   description: 'One wave of docs/proposals/ring-proto/IMPLEMENTATION.md: plan, implement and review C units in parallel, integrate onto ring-proto one at a time, then stop for human approval',
-  whenToUse: 'Run once per wave of the ring-proto plan. Pass args {wave, units:[{id,title,brief,full_test?}], max_rounds?}. Read the returned report and approve before running the next wave.',
+  whenToUse: 'Run once per wave of the ring-proto plan. Pass args {wave, prewave, units:[{id,title,brief,full_test?}], max_rounds?}. Read the returned report and approve before running the next wave.',
   phases: [
     { title: 'Plan', detail: 'one planner per unit: lifetimes, allocation, measurements' },
     { title: 'Implement', detail: 'one implementer per unit, each in its own worktree' },
     { title: 'Review', detail: 'lifetimes and allocation (Sonnet), docs and repo rules (Haiku)' },
     { title: 'Fix', detail: 'address blocking findings, then review again' },
     { title: 'Integrate', detail: 'one at a time: rebase onto ring-proto, mise run test, push' },
+    { title: 'Full test', detail: 'mise run test:full once, on a quiet machine; timing flakes classified against the pre-wave commit' },
     { title: 'Report', detail: 'wave summary and the proposed next wave, for human approval' },
   ],
 }
@@ -19,6 +20,7 @@ export const meta = {
 //   units       [{ id: "1.4", title: "A2 layout builder", brief: "...", full_test: false }]
 //   max_rounds  review rounds per unit before it is handed to a human (default 2)
 //   integrate   false to stop after review and leave the wip branches unmerged
+//   prewave     the commit ring-proto was at before the wave, for timing baselines
 //
 // The workflow never starts a second wave by itself. The human checkpoint is
 // the gap between runs: read the report, inspect the pushed commits, then run
@@ -31,6 +33,7 @@ const MAX_ROUNDS = (args && args.max_rounds) || 2
 const INTEGRATE = !(args && args.integrate === false)
 const REPO = '/home/user/tinyactors'
 const BASE = 'ring-proto'
+const PREWAVE = (args && args.prewave) || 'the commit before the wave (ask git: the parent of its first unit commit)'
 
 if (!UNITS.length) throw new Error('args.units is empty: pass the units of this wave')
 
@@ -286,8 +289,7 @@ Leave the worktree clean and finish with: git checkout --detach. Do not push.`,
 // Integration is serialized: each unit lands on top of the previous one, so
 // ring-proto stays linear and every pushed commit has passed mise run test.
 let gate = Promise.resolve()
-function integrateUnit(u, plan) {
-  const fullTest = !!(u.full_test || plan.full_test_needed)
+function integrateUnit(u) {
   const run = () => agent(`${CONTEXT.replace(/Do not run the repository-wide[^\n]*/, '')}
 
 ${unitHeader(u)}
@@ -298,9 +300,8 @@ You integrate this unit, in the main checkout ${REPO} (branch ${BASE}). Nobody e
    the resolution is mechanical (both sides kept, nothing lost); otherwise git rebase --abort and
    report status "conflict" with the files and why.
 3. Back on ${BASE}: git merge --ff-only ${wip(u)}. Never create a merge commit.
-4. Run mise run test (it runs what changed and prints a step-time table).${fullTest ? `
-   This unit touches allocation or per-actor costs: also run mise run test:full, and if it passes,
-   amend nothing; say in your notes that it passed so the report can cite it.` : ''}
+4. Run mise run test (it runs what changed and prints a step-time table). Do not run test:full:
+   it runs once for the whole wave, after the last unit lands, on a quiet machine.
 5. If a test fails: find whether the unit caused it. If a fix is small and clearly within the unit,
    make it as a separate scoped commit (same trailer lines as the unit's commits) and re-run. Otherwise
    git reset --hard to the commit before the unit (ORIG_HEAD of the merge) and report "tests_failed"
@@ -348,14 +349,41 @@ const results = await pipeline(
   async (r, u) => {
     if (!INTEGRATE) return { ...r, integration: { status: 'skipped' } }
     if (r.open.length) return { ...r, integration: { status: 'held', notes: 'blocking findings remain' } }
-    const integration = await integrateUnit(u, r.plan)
+    const integration = await integrateUnit(u)
     log(`${u.id}: ${integration ? integration.status : 'integration agent failed'}`)
     return { ...r, integration }
   },
 )
 
+// The full pass runs once, after every unit has landed, when no other agent
+// is using the CPUs: its scale tests compare timings. scale.js's ratio checks
+// were already flaky on this 4-CPU container before wave 1a (Bun failed 2 of 3
+// runs at 16450db), so a ratio failure is classified against the pre-wave
+// commit rather than taken as a verdict on the wave.
+phase('Full test')
+const wantFull = results.some((r, i) => r && r.integration && r.integration.status === 'pushed' &&
+  (UNITS[i].full_test || (r.plan && r.plan.full_test_needed)))
+const full = !wantFull ? 'not needed: no unit that touches allocation or per-actor costs landed' : await agent(`${CONTEXT.replace(/Do not run the repository-wide[^\n]*/, '')}
+
+Every unit of wave ${WAVE} has landed on ${BASE}. Nothing else runs now. In ${REPO}:
+1. Remove the wave's leftover worktrees: for each entry of git worktree list under .claude/worktrees/
+   whose HEAD is an ancestor of ${BASE} (git merge-base --is-ancestor), git worktree remove --force it.
+   List any you kept, and why.
+2. Run mise run test:full on ${BASE} (it can exceed 30 minutes; run it in the foreground with a long
+   timeout, or in pieces per project, but never in the background where it can be killed).
+3. If it fails only on a timing-ratio assertion in tinyactors-napi/test/scale.js, classify it: run
+   TAT_SCALE_MAX_POPULATION=1000000 <node|bun> test/scale.js three times on ${BASE}, then three times on
+   the pre-wave commit ${PREWAVE} in a temporary worktree (copy tinyactors-napi/node_modules into it,
+   mise trust -a, mise run build in tinyactors-napi), and remove that worktree afterwards. Report the
+   pass counts and the failing ratios for each side.
+4. Any other failure is real: report it with the output and the unit that most likely caused it.
+   Do not fix anything and do not push.
+Answer in markdown: the step-time table, what failed, the classification, and the per-actor figures
+(native B/actor) scale.js printed for both commits if you ran it.`,
+  { label: `full-test:${WAVE}`, phase: 'Full test', model: 'sonnet' })
+
 phase('Report')
-const summary = UNITS.map((u, i) => ({ unit: u, result: results[i] }))
+const summary = { full_test: full, units: UNITS.map((u, i) => ({ unit: u, result: results[i] })) }
 const report = await agent(`${CONTEXT}
 
 You write the report for wave ${WAVE} of the ring-proto plan. The maintainer reads it before approving
@@ -365,8 +393,8 @@ the next wave, so it must make inspection quick and honest. From ${REPO}, check 
 Data from the wave (null means a stage failed):
 ${JSON.stringify(summary, null, 2)}
 
-Write markdown with: a table of units (status, commits pushed, core lines before/after, tests, full
-test); for each unit, the lifetimes and allocation decisions in two or three lines, what it replaced,
+Write markdown with: the full-test result as the data gives it (do not soften a failure); a table of
+units (status, commits pushed, core lines before/after, tests); for each unit, the lifetimes and allocation decisions in two or three lines, what it replaced,
 review findings that were declined and why, anything still open; what a human should look at first
 (file:line); and the risks for the next wave. Then propose the next wave from IMPLEMENTATION.md: units
 that can run in parallel without editing the same files, each with a brief that names the blocks, the
