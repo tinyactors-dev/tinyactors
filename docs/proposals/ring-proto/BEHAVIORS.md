@@ -93,8 +93,8 @@ click, and the processor's content key.
 3. **Keep optional traffic out of essential blocks.** Clocking a big
    fanout by acknowledgements ([windowed chart](charts/campaign-windowed.scxml))
    is still good practice: it bounds the work in flight, the envelopes it
-   holds and how long its slot waits. A full c2h no longer fails a chart,
-   so the window is not needed to avoid errors from c2h.
+   holds and how long its slot waits. A full c2h does not fail a chart,
+   so the window bounds load; it does not prevent errors.
 4. **Resync derived state** instead of recording it
    ([S04.9](scenarios/S04-crash-campaign-recorded.md#restart), [S05.5](scenarios/S05-crash-both-recorded.md#per-session-replay)).
 5. **Treat every asynchronous reply as one that may never come.**
@@ -133,7 +133,7 @@ because a full one fails the chart's action.
 | [`telBytes`](#telbytes) | 16,384 | 0, or else `maxRecordBytes` | 2 GiB | the operator (`tel.dropped`) |
 | [`maxRecordBytes`](#maxrecordbytes) | 4,096 | 256 | `c2hBytes` / 5 | the chart (`.record`); the host (`c2h.bounced`) |
 | [`telemetryValueBytes`](#telemetryvaluebytes) | 1,024 | 0 | `maxRecordBytes` − 256 | the operator (`truncated`) |
-| [`maxPendingSends`](#maxpendingsends) (changed) | no quota | 0 | `poolEnvelopes` | the chart (`.pool`) |
+| [`maxPendingSends`](#maxpendingsends) (changed from today) | no quota | 0 | `poolEnvelopes` | the chart (`.pool`) |
 
 ### `poolEnvelopes`
 
@@ -351,7 +351,7 @@ because a full one fails the chart's action.
   so the formula uses parameters only. With the defaults it is 794,624
   bytes (776 KiB). With 1 KiB records it is 194 KiB. A test suite that
   sets `maxConcurrentInputs` 1 gets 20 KiB without choosing a number,
-  which answers ADR 0093's concern about many small systems.
+  so systems created many at a time stay small.
 - **An explicit value wins.** A value below the derived one means fewer
   slots hold reservations at once. A definition whose batch is larger
   (cancellations for active invocations, autoforwards) reserves more, with
@@ -391,7 +391,7 @@ because a full one fails the chart's action.
 - **Minimum 0, or else `maxRecordBytes`,** so the largest record fits.
   0 means no `tel` ring at all: the kind masks must be zero, and nothing
   a host needs is lost, because every outcome also reaches c2h
-  ([telemetry.md](reference/telemetry.md#what-a-host-does-with-tel)).
+  ([telemetry.md](reference/telemetry.md#a-system-without-tel)).
   **Maximum 2 GiB.**
 - **What it drives:** how much telemetry survives a slow exporter.
 - **How it surfaces:**
@@ -407,7 +407,7 @@ because a full one fails the chart's action.
 - **Default 4,096.** Event names, targets and origins in practice are well
   under 1 KiB. 4 KiB leaves room while keeping the reserve small. The
   derived `c2hBytes` scales with it, so it is never the limit.
-- **Minimum 256:** the largest fixed part (`tel.trace`, 216 bytes) plus a
+- **Minimum 256:** the largest fixed part (`tel.trace`, 224 bytes) plus a
   short name. **Maximum `c2hBytes` / 5,** the reserve constraint.
 - **What it drives:** the longest name, target or origin one record can
   carry.
@@ -434,9 +434,10 @@ because a full one fails the chart's action.
 
 An existing core parameter whose meaning changes.
 
-- **What it bounds:** today, the pending delayed sends of one actor. Now
-  it is a per-session quota inside the shared pool, so one session can't
-  take every envelope with timers. Unit: delayed sends.
+- **What it bounds:** the pending delayed sends of one session, as a
+  quota inside the shared pool, so one session can't take every envelope
+  with timers. Today it bounds the pending delayed sends of one actor.
+  Unit: delayed sends.
 - **Default: no quota** (today's `INT32_MAX`). The pool already bounds
   the total. The quota is for operators who run untrusted charts.
 - **Minimum 0:** the session may not schedule delayed sends. **Maximum
@@ -470,28 +471,31 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 | c2h: (3 × 64 + 2) × 4,096 | 794,624 |
 | **total before the mandatory floor** | **about 1,512 KiB** |
 
-The running workspace was already there as run to completion's single
-continuation, scratch and internal queue; earlier versions of this table
-counted only its internal queue. Concurrency adds the slot records and the
-park area, both on demand. With 64 slots all parked, a chart of 100 states
-costs about 64 KiB of continuations, plus whatever internal events they
-had pending; the derived ceiling bounds the worst case.
+The running workspace is run to completion's single continuation, scratch
+and internal queue, which core has today. Concurrency adds the slot
+records and the park area, both on demand. With 64 slots all parked, a
+chart of 100 states costs about 64 KiB of continuations, plus whatever
+internal events they had pending; the derived ceiling bounds the worst
+case.
 
-Most of that is c2h, and the pool and the name area at their bounds. napi uses
-roughly 1 MB per system today, which ADR 0093 judged too much for quiet
-systems and test suites that create many. So:
+**The trade-off.** At their bounds, the defaults come to about 1.5 MiB,
+more than the roughly 1 MB per system that ADR 0093 judged too much for
+quiet systems and for test suites that create many. Most of it is c2h,
+and the pool and the name area at their bounds. Two things keep the
+figure a system actually pays small:
 
 - **The pool and the name area fill on demand, up to their bounds**
   (ADR 0093's shape). They grow only between macrosteps: at admission and
-  after a macrostep end. A send inside a macrostep only takes what is already free,
-  so the macrostep invariant holds ([macrostep.md](reference/macrostep.md)).
-  A quiet system pays for its peak, not for the bound.
+  after a macrostep end. A send inside a macrostep only takes what is
+  already free, so the macrostep invariant holds
+  ([macrostep.md](reference/macrostep.md)). A quiet system pays for its
+  peak, not for the bound.
 - **The rings are fixed at creation,** because the host holds positions in
   them. h2c and tel are 16 KiB each by default, because their size is a
   throughput setting. c2h is derived from `maxConcurrentInputs` and
   `maxRecordBytes`, so every slot can hold its reserve: 776 KiB with the
   defaults, about 20 KiB with one slot. A busy server raises h2c and tel;
-  a quiet one lowers `maxConcurrentInputs`.
+  a quiet one, or a test suite, lowers `maxConcurrentInputs`.
 
 ### Changed parameters
 
@@ -510,7 +514,7 @@ systems and test suites that create many. So:
 |---|---|---|
 | `eventBlockCache` (ADR 0069/0093) | core | `poolEnvelopes`. The taken event stays in its envelope until the macrostep end. |
 | `valueBytes` (`TAH_PARAM_VALUE_BYTES`) | kernel | `telemetryValueBytes` |
-| `traceStagingBytes` | kernel | `telBytes`. The OTLP encoder's staging becomes a setting of that library ([telemetry.md](reference/telemetry.md)). |
+| `traceStagingBytes` | kernel | `telBytes` for the ring. The OTLP encoder's staging is a setting of `tinyactors-otlp` itself, not a core parameter ([telemetry.md](reference/telemetry.md#otlp-tinyactors-otlp)). |
 | `resumeBudget`, `actionBudget` | kernel | the budget arguments of `ta_run`, passed per call |
 | `resumesPerTurn`, `dueBudget`, `messageBudget` | kernel | `ta_run`'s budget, and `fairnessRatio` for the split between mail and admitted input |
 | `maxQueuedMessages`, `maxRetainedBytes` | kernel | `poolEnvelopes`, `nameAreaBytes`, `admissionWatermark`. Retained data is the data model's memory, which core does not count. |
