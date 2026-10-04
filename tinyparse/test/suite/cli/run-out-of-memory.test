@@ -1,0 +1,19 @@
+# `run` reports a parse that ran out of memory as an error. It once exited 0
+# with no tree and nothing on stderr, because it handled only a syntax error
+# and passed every other failing result through as success. A 20 MB JSON
+# document under a 100 MB address-space limit (ulimit -v, which Linux
+# enforces) cannot be parsed.
+<<<cmd
+set -e
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
+{ printf '['; yes '[1,2.5,"x"],' | head -c 20000000; printf '1]'; } > "$w/big.json"
+set +e
+( ulimit -v 100000; "$TP" run std.json --input "$w/big.json" --dump-tree > "$w/out" )
+echo "exit=$?"
+echo "tree-bytes=$(wc -c < "$w/out" | tr -d ' ')"
+<<<assert
+exit 0
+out-contains exit=1
+out-contains tree-bytes=0
+err-contains error: out of memory

@@ -1563,6 +1563,15 @@ static int command_run(int argc, char **argv)
         }
         return 1;
     }
+    /* Any other failure (the engine ran out of memory, or a push was dropped)
+    ** built no tree: report it, never exit 0 with an empty output. */
+    if (result != TINYPARSE_OK) {
+        if (result == TINYPARSE_OUT_OF_MEMORY)
+            fprintf(stderr, "error: out of memory\n");
+        else
+            fprintf(stderr, "error: parse failed (result %d)\n", (int)result);
+        return 1;
+    }
 
     if (dump_tree) {
         const tinyparse_tree *tree = tinyparse_parser_tree(parser);
