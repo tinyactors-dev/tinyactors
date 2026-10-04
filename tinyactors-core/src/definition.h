@@ -428,6 +428,7 @@ struct ta_definition {
     size_t actor_block_bytes;
     size_t actor_block_alignment;
     size_t actor_session_offset;
+    size_t actor_session_bytes; /* the session storage's size, stored with the layout; ta_actor_layout() */
     size_t actor_instance_offset;
     /* Resident actors whose `definition` points here; see ta_actor_free(). */
     uint32_t actor_count;
@@ -465,8 +466,14 @@ struct ta_definition {
 
 /* A registered definition, retired or not; NULL for an unknown or stale ID. */
 const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
-/* Bytes of one actor's session storage: two configurations and history; SIZE_MAX when the sum does not fit, which ta_actor_layout() reports as TA_ERR_NOMEM. */
-size_t ta_definition_session_bytes(const ta_definition *definition);
+/*
+ * ta_definition_session_bytes answers, in `*bytes`, the bytes of one actor's
+ * session storage: two configurations and the history. It answers
+ * TA_ERR_NOMEM, with `*bytes` untouched, when the sum does not fit in a
+ * size_t. It never allocates. Only ta_actor_layout calls it, at compile
+ * time, and stores the result in `actor_session_bytes` (definition lifetime).
+ */
+ta_result ta_definition_session_bytes(const ta_definition *definition, size_t *bytes);
 /*
  * Fills `action_places` from the sealed blocks, in the definition's arena.
  * Every action belongs to exactly one block, so one pass over the top-level

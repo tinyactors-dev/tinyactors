@@ -21,11 +21,18 @@
  * Lifetime: call. A ta_layout is a small value on the caller's stack. It
  * owns nothing, points at nothing and never allocates, so there is nothing
  * to free and no failure that leaves state behind. Only the numbers computed
- * from it (offsets, a total, an alignment) outlive it; they are as long-lived
- * as the thing they describe: a definition for the actor block (the offsets
- * are fixed at compile time and the sized free at ta_actor_destroy depends on
- * them), a system for its arena region, and a single call for a continuation
- * or a scratch figure, which are recomputed from counts when needed.
+ * from it (offsets, a total, an alignment) outlive it, and they are stored
+ * by the thing they describe, once, where it is allocated:
+ *   - the actor block: offsets in the definition (the offsets are fixed at
+ *     compile time and the sized free at ta_actor_destroy depends on them);
+ *   - a continuation: its array offsets and `bytes` in its header
+ *     (ta_continuation_bytes, called by ta_reserve_stop and the restore of
+ *     an image);
+ *   - an operator jump: `bytes` in its header (ta_operator_jump_bytes);
+ *   - a system's arena region: the total in the system, for the sized free
+ *     at ta_system_destroy.
+ * Nothing recomputes such a number later from counts, in a function that
+ * could not report that the layout failed.
  *
  * Contract:
  *   - Entries are placed in the order they are added. Each entry's offset is
@@ -54,9 +61,23 @@
  * alignment is zero, the layout is marked failed, and the mark is sticky:
  * later entries cannot clear it. ta_layout_add keeps returning a number so
  * that a caller can build all its offsets in straight-line code, but that
- * number must not be used until ta_layout_finish (or ta_layout_bytes) has
- * said the whole layout is sound. Checking once at the end is what makes a
- * long sequence of entries as easy to write as the unchecked arithmetic was.
+ * number must not be used until ta_layout_finish has answered TA_OK for the
+ * whole layout. Checking once at the end is what makes a long sequence of
+ * entries as easy to write as the unchecked arithmetic was.
+ *
+ * "Overflowed" is representable only as a ta_result. There is no function
+ * that answers a size with 0 or SIZE_MAX for failure: the only way to read a
+ * total from a layout is ta_layout_finish, which answers TA_ERR_NOMEM and
+ * writes nothing on failure. It is called where the allocation is made, a
+ * safe point that can fail cleanly, and its result is always used. The
+ * fields of a ta_layout are private to layout.c (their names start with
+ * `internal_`). `mise run check-layout` enforces this, with ast-grep rules
+ * (mise/ast-grep/rules/layout-*.yml):
+ *   - a function that calls ta_layout_add also calls ta_layout_finish;
+ *   - the result of ta_layout_finish is never discarded;
+ *   - no code outside layout.c reads or writes a ta_layout's fields;
+ *   - nothing is allocated, copied or freed between the adds and the finish
+ *     of a function, and ta_layout_add is not used as an operand.
  *
  * Allocation: none, ever. A function that builds a layout may therefore be
  * called at any point, including where allocation is forbidden. The
@@ -84,13 +105,15 @@
 
 /*
  * A running layout. Its fields are for layout.c: callers use the functions,
- * so that the checks cannot be skipped. It is a value, copyable, with no
- * pointer in it.
+ * so that the checks cannot be skipped, and the names are unique so that a
+ * static check can find any other use (see the package comment). It is a
+ * value, copyable (a caller may finish a copy to learn the size of a prefix
+ * and go on adding to the original), with no pointer in it.
  */
 typedef struct ta_layout {
-    size_t end;       /* bytes laid out so far, counted from the layout's origin */
-    size_t alignment; /* the strictest alignment any entry asked for; at least 1 */
-    bool overflowed;  /* a size computation did not fit, or an alignment was zero; sticky */
+    size_t internal_end;       /* bytes laid out so far, counted from the layout's origin */
+    size_t internal_alignment; /* the strictest alignment any entry asked for; at least 1 */
+    bool internal_overflowed;  /* a size computation did not fit, or an alignment was zero; sticky */
 } ta_layout;
 
 /*
@@ -116,8 +139,9 @@ void ta_layout_init(ta_layout *layout, size_t start);
  * the running end rounded up to the entry's alignment. It then moves the
  * end past `size * count` bytes and raises the layout's alignment to the
  * entry's if that is stricter. When any step does not fit in a size_t, or
- * the alignment is zero, it marks the layout failed and returns 0, and the
- * caller must not use an offset until ta_layout_finish has answered TA_OK.
+ * the alignment is zero, it marks the layout failed and returns 0; 0 is also
+ * a real offset, so the caller must not use any offset until
+ * ta_layout_finish has answered TA_OK.
  * It never allocates and never reads memory behind the entry.
  */
 size_t ta_layout_add(ta_layout *layout, const ta_layout_entry *entry);
@@ -127,21 +151,10 @@ size_t ta_layout_add(ta_layout *layout, const ta_layout_entry *entry);
  * alignment in `*alignment`; an output may be NULL if the caller has no use
  * for it. It answers TA_ERR_NOMEM and writes neither output if any step of
  * the layout failed, so a caller that propagates the result leaves no
- * half-built state: nothing was allocated, and nothing was written.
+ * half-built state: nothing was allocated, and nothing was written. The
+ * result must be used: it is the only place a failed layout shows.
  */
 ta_result ta_layout_finish(const ta_layout *layout, size_t *bytes, size_t *alignment);
-
-/*
- * ta_layout_bytes is the unpadded total for a caller that has no use for the
- * alignment and no way to report an error, such as a sized free that
- * recomputes a size or an estimate. It returns 0 when the layout failed.
- * Zero is never a real total, because every layout in core has a header of
- * at least one byte, so 0 is not ambiguous. A caller that allocates with a
- * size it got this way must refuse 0 before it allocates; a caller that
- * frees with one relies on the size having been accepted when the memory was
- * allocated, because the counts it is computed from do not change.
- */
-size_t ta_layout_bytes(const ta_layout *layout);
 
 /*
  * ta_checked_mul stores `a * b` in `*out` and answers true, or answers false

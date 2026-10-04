@@ -64,7 +64,6 @@ static void test_single_and_mixed(void) {
     CHECK(add(&layout, 1, 1, 1) == 8u);
     CHECK(ta_layout_finish(&layout, &bytes, &alignment) == TA_OK);
     CHECK(bytes == 9u && alignment == 8u);
-    CHECK(ta_layout_bytes(&layout) == 9u);
 }
 
 static void test_start_offset(void) {
@@ -102,39 +101,39 @@ static void test_overflow(void) {
     /* count * size wraps. */
     ta_layout_init(&layout, 0);
     add(&layout, SIZE_MAX / 2u + 1u, 1, 2);
-    CHECK(layout.overflowed);
+    CHECK(ta_layout_finish(&layout, NULL, NULL) == TA_ERR_NOMEM);
     CHECK(ta_layout_finish(&layout, &bytes, &alignment) == TA_ERR_NOMEM);
     CHECK(bytes == 77u && alignment == 77u); /* outputs untouched */
-    CHECK(ta_layout_bytes(&layout) == 0);
 
     /* The product fits but the sum with the end does not. */
     ta_layout_init(&layout, 0);
     add(&layout, 1, 1, SIZE_MAX);
-    CHECK(!layout.overflowed && layout.end == SIZE_MAX);
+    size_t whole = 0;
+    CHECK(ta_layout_finish(&layout, &whole, NULL) == TA_OK && whole == SIZE_MAX);
     add(&layout, 1, 1, 1);
-    CHECK(layout.overflowed);
+    CHECK(ta_layout_finish(&layout, NULL, NULL) == TA_ERR_NOMEM);
     CHECK(ta_layout_finish(&layout, &bytes, &alignment) == TA_ERR_NOMEM);
 
     /* Rounding up wraps: the end is SIZE_MAX - 1 and the next alignment is 16. */
     ta_layout_init(&layout, SIZE_MAX - 1u);
     add(&layout, 0, 16, 0);
-    CHECK(layout.overflowed);
+    CHECK(ta_layout_finish(&layout, NULL, NULL) == TA_ERR_NOMEM);
 
     /* An end that is already aligned near SIZE_MAX is not an overflow. */
     ta_layout_init(&layout, SIZE_MAX - (SIZE_MAX % 16u));
     CHECK(add(&layout, 0, 16, 1) == SIZE_MAX - (SIZE_MAX % 16u));
-    CHECK(!layout.overflowed);
+    CHECK(ta_layout_finish(&layout, NULL, NULL) == TA_OK);
 
     /* An alignment of zero is refused, not divided by. */
     ta_layout_init(&layout, 0);
     add(&layout, 4, 0, 1);
-    CHECK(layout.overflowed);
+    CHECK(ta_layout_finish(&layout, NULL, NULL) == TA_ERR_NOMEM);
 
     /* The failure is sticky: a later small entry does not clear it. */
     ta_layout_init(&layout, 0);
     add(&layout, SIZE_MAX, 1, 2);
     CHECK(add(&layout, 1, 1, 1) == 0);
-    CHECK(layout.overflowed);
+    CHECK(ta_layout_finish(&layout, NULL, NULL) == TA_ERR_NOMEM);
     CHECK(ta_layout_finish(&layout, &bytes, &alignment) == TA_ERR_NOMEM);
     CHECK(bytes == 77u && alignment == 77u);
 }

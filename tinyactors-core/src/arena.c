@@ -155,8 +155,12 @@ static const ta_allocator_vtable ta_arena_fixed_vtable = {
     .free = ta_arena_fixed_free,
 };
 
-size_t ta_arena_fixed_bytes(size_t capacity) {
-    return offsetof(ta_arena_block, data) + capacity;
+size_t ta_arena_fixed_add(ta_layout *layout, size_t capacity) {
+    size_t offset = ta_layout_add(layout, &(ta_layout_entry){ .size = offsetof(ta_arena_block, data),
+                                                              .alignment = _Alignof(ta_arena_block), .count = 1u });
+    /* The data follows the block header directly, as ta_arena_init_fixed lays it out. */
+    ta_layout_add(layout, &(ta_layout_entry){ .size = 1u, .alignment = 1u, .count = capacity });
+    return offset;
 }
 
 void ta_arena_init_fixed(ta_arena *arena, void *memory, size_t bytes) {

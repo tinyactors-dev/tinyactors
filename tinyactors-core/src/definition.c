@@ -422,14 +422,15 @@ void ta_definition_take_spans(ta_definition *live, ta_definition *definition) {
     definition->span_allocator = span_allocator;
 }
 
-size_t ta_definition_session_bytes(const ta_definition *definition) {
+ta_result ta_definition_session_bytes(const ta_definition *definition, size_t *bytes) {
     /* The configuration, the late-binding bits (sized like it), and history. */
-    size_t bytes;
-    if (!ta_checked_mul((size_t)definition->configuration.bytes, 2u, &bytes) ||
-        !ta_checked_add(bytes, (size_t)definition->history.storage_bytes, &bytes)) {
-        return SIZE_MAX; /* no allocation holds it: ta_actor_layout then answers TA_ERR_NOMEM */
+    size_t total;
+    if (!ta_checked_mul((size_t)definition->configuration.bytes, 2u, &total) ||
+        !ta_checked_add(total, (size_t)definition->history.storage_bytes, &total)) {
+        return TA_ERR_NOMEM;
     }
-    return bytes;
+    *bytes = total;
+    return TA_OK;
 }
 
 ta_result ta_definition_inspect(const ta_system *system,

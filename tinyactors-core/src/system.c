@@ -117,11 +117,14 @@ static ta_result ta_interpreter_region_layout(const uint32_t params[TA_PARAM_COU
     ta_layout layout;
     ta_region_layout region;
     ta_layout_init(&layout, 0);
-    ta_layout_add(&layout, &(ta_layout_entry){ .size = ta_arena_fixed_bytes(params[TA_PARAM_INTERPRETER_BYTES]),
-                                               .alignment = _Alignof(ta_arena_block), .count = 1u });
-    region.render = ta_layout_add(&layout, &(ta_layout_entry){ .size = ta_arena_fixed_bytes(params[TA_PARAM_RENDER_BYTES]),
-                                                               .alignment = _Alignof(ta_arena_block), .count = 1u });
-    region.bytes = ta_layout_bytes(&layout);
+    ta_arena_fixed_add(&layout, params[TA_PARAM_INTERPRETER_BYTES]);
+    region.render = ta_arena_fixed_add(&layout, params[TA_PARAM_RENDER_BYTES]);
+    /* One interpreter region is the two arenas; the layout is a value, so a
+     * copy finished here gives that size and the original goes on to the table. */
+    ta_layout arenas = layout;
+    if (ta_layout_finish(&arenas, &region.bytes, NULL) != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
     /* The table has one entry per nested interpreter; the first has region 0. */
     region.nested_table = ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_nested_region),
                                                                      .alignment = _Alignof(ta_nested_region),

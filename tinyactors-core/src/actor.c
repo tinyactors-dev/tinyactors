@@ -32,9 +32,13 @@ void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator) {
 
 ta_result ta_actor_layout(ta_definition *definition) {
     ta_layout layout;
+    size_t session_bytes = 0;
+    if (ta_definition_session_bytes(definition, &session_bytes) != TA_OK) {
+        return TA_ERR_NOMEM; /* the definition keeps its old (zero) layout */
+    }
     ta_layout_init(&layout, 0);
     ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_actor), .alignment = _Alignof(ta_actor), .count = 1u });
-    size_t session = ta_layout_add(&layout, &(ta_layout_entry){ .size = ta_definition_session_bytes(definition),
+    size_t session = ta_layout_add(&layout, &(ta_layout_entry){ .size = session_bytes,
                                                                 .alignment = _Alignof(uint64_t),
                                                                 .count = 1u });
     size_t instance = ta_layout_add(&layout, &(ta_layout_entry){ .size = definition->datamodel_instance_size,
@@ -47,6 +51,7 @@ ta_result ta_actor_layout(ta_definition *definition) {
         return result; /* the definition keeps its old (zero) layout */
     }
     definition->actor_session_offset = session;
+    definition->actor_session_bytes = session_bytes;
     definition->actor_instance_offset = instance;
     definition->actor_block_bytes = bytes;
     definition->actor_block_alignment = alignment;
@@ -471,7 +476,7 @@ ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **
     actor->host = (ta_dm_host){ .impl = &actor->host_impl };
 
     size_t config_bytes = definition->configuration.bytes;
-    actor->session_bytes = ta_definition_session_bytes(definition);
+    actor->session_bytes = definition->actor_session_bytes;
     actor->session_storage = block + definition->actor_session_offset;
     ta_mem_zero(actor->session_storage, actor->session_bytes);
     unsigned char *storage = actor->session_storage;
