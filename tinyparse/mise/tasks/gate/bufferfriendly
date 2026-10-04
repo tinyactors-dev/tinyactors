@@ -10,12 +10,15 @@
 # engine for streaming at any granularity, and is not tested here.)
 #
 # examples/bufferfriendly drives the generated s-expression parser (start
-# rule: a repeat of forms, then EOF). Fed the sample in chunks of 1, 2, 3,
-# 5, 8, 17, 64 and 1,000,000 bytes, every tree must equal the VM's tree of
-# the whole document, and feeding it a byte at a time must suspend at
-# least once, so the boundary is exercised and not bypassed.
+# rule: a repeat of forms, then EOF). Fed the sample, and a document of
+# top-level atoms (ATOMS), in chunks of 1, 2, 3, 5, 8, 17, 64 and 1,000,000
+# bytes, every tree must equal the VM's tree of the whole document, and
+# feeding it a byte at a time must suspend at least once, so the boundary is
+# exercised and not bypassed.
 
 require_relative '../../lib/gate'
+
+ATOMS = "alpha beta (gamma delta) epsilon123 ; a comment\nzeta\n(eta (theta)) iota kappalambda\nmu\n"
 
 Tinyparse::Gate.run('bufferfriendly', 'buffer-friendly generated parser') do |gate|
   example = Tinyparse::ROOT.join('examples/bufferfriendly')
@@ -25,19 +28,24 @@ Tinyparse::Gate.run('bufferfriendly', 'buffer-friendly generated parser') do |ga
 
   gate.check(built.join('sx.c').read.include?('sx_run_chunk'),
              'the generated parser has no sx_run_chunk: the item boundary was not emitted')
-  sample = example.join('sample.sx')
-  vm = gate.vm_tree(example.join('sexpr.scm'), sample, separate: true)
-  next gate.fail("the VM exits #{vm.code} on the sample:\n#{vm.err}") unless vm.success?
+  # sample.sx holds lists alone, which cannot grow once closed; ATOMS puts
+  # atoms at the top level, which a chunk boundary can split, so an item
+  # that reaches the end of the buffer must be rolled back, not committed.
+  inputs = { 'sample.sx' => example.join('sample.sx'), 'atoms.sx' => gate.write('atoms.sx', ATOMS) }
+  inputs.each do |label, sample|
+    vm = gate.vm_tree(example.join('sexpr.scm'), sample, separate: true)
+    next gate.fail("#{label}: the VM exits #{vm.code}:\n#{vm.err}") unless vm.success?
 
-  [1, 2, 3, 5, 8, 17, 64, 1_000_000].each do |size|
-    run = gate.execute([driver, sample, size], separate: true)
-    suspensions = run.err[/(\d+) TINYPARSE_MORE/, 1].to_i
-    next gate.fail("chunk=#{size}: exit #{run.code}\n#{run.err}") unless run.success?
-    next unless gate.compare("chunk=#{size}", vm.out, run.out)
+    [1, 2, 3, 5, 8, 17, 64, 1_000_000].each do |size|
+      run = gate.execute([driver, sample, size], separate: true)
+      suspensions = run.err[/(\d+) TINYPARSE_MORE/, 1].to_i
+      next gate.fail("#{label}, chunk=#{size}: exit #{run.code}\n#{run.err}") unless run.success?
+      next unless gate.compare("#{label}, chunk=#{size}", vm.out, run.out)
 
-    gate.check(size != 1 || suspensions.positive?,
-               'a byte at a time, the parser never returned TINYPARSE_MORE: the boundary was bypassed')
-    puts "  chunk=#{size}: the VM's tree (#{suspensions} TINYPARSE_MORE suspensions)"
+      gate.check(size != 1 || suspensions.positive?,
+                 "#{label}: a byte at a time, the parser never returned TINYPARSE_MORE: the boundary was bypassed")
+      puts "  #{label}, chunk=#{size}: the VM's tree (#{suspensions} TINYPARSE_MORE suspensions)"
+    end
   end
   gate.result
 end
