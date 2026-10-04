@@ -71,7 +71,10 @@ lists the ADRs this reverses.)
   - installing the clock function core stamps `tel` records with
     ([reference/telemetry.md](reference/telemetry.md#the-host-clock));
   - building definition specs with core's spec builder;
-  - value ownership and byte source/sink integrations.
+  - value ownership and byte source/sink integrations;
+  - read-only inspection with `ta_actor_inspect` whenever core has
+    returned, without stopping any actor
+    ([reference/debugging.md](reference/debugging.md#inspection-without-attaching)).
 - **Debugger commands stay outside the production protocol.** The host
   suspends its pump and transfers exclusive ownership of the whole system
   to a debugger at a point where core has yielded. Native primitives let
@@ -162,6 +165,8 @@ command. Refusal requires an explicit retry or application decision.
 1. **Edge.** The host posts [`h2c.event`](protocol/generated/MESSAGES.md#h2cevent).
    Its name is bytes and its data is a `vref`. If `h2c` is full, the host
    refuses here. ([S09](scenarios/S09-edge-backpressure.md))
+   A `traceparent` the host received becomes its trace fields, and the
+   envelope keeps them ([telemetry](reference/telemetry.md#trace-context-across-the-rings)).
 2. **Admission.** Core moves the record into an envelope while the pool is
    below `admissionWatermark` and its complete text fits. Its name bytes go
    to the name area. It is appended to the run queue, whose arrival order keeps each sender's
@@ -209,6 +214,10 @@ command. Refusal requires an explicit retry or application decision.
 | Anything, with a delay | an envelope in the deadline index | when `h2c.time` reaches its due time: mail is taken, an I/O send becomes `c2h.send` | as above | [envelope](reference/envelope.md) |
 | An unloaded session | an envelope that waits; `c2h.load_needed` | after `h2c.load` | as above; if the load fails, the envelope becomes `error.communication` for its sender | [unloading](reference/unloading.md) |
 | A session that doesn't exist | core cannot tell it from an unloaded one: an envelope that waits; `c2h.load_needed` | never: the host answers `h2c.load_failed`, and the envelope becomes `error.communication` for its sender | as above | [unloading](reference/unloading.md#no-directory-vtable-not-resident-means-ask) |
+
+Every send carries the sending step's trace context: on the record for
+`c2h.send`, in the envelope's text for mail and delayed sends
+([telemetry](reference/telemetry.md#trace-context-across-the-rings)).
 
 `<cancel>` removes an envelope from the deadline index. It is exact: a
 cancelled delayed send never arrives. ([S08](scenarios/S08-cancel-and-second-click.md))

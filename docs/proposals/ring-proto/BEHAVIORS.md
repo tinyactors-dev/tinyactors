@@ -166,7 +166,8 @@ because a full one fails the chart's action.
 ### `nameAreaBytes`
 
 - **What it bounds:** the bytes for text that has no ID: event names,
-  origins, unresolved addresses, invocation error reasons
+  origins, unresolved addresses, invocation error reasons, and the trace
+  parent of a traced envelope
   ([names.md](reference/names.md#the-name-area)). It is made of 64-byte
   chunks, 60 of them text.
 - **Default 262,144 (256 KiB), one chunk per envelope at the default pool.**
@@ -174,6 +175,12 @@ because a full one fails the chart's action.
   chunk. An area smaller than `poolEnvelopes` × 64 would run out before the
   pool does, and charts would see `.names` where `.pool` is the real limit.
   Raise it when external input carries long origins or names.
+- **A traced system needs more.** An envelope with a trace context holds
+  its trace parent as one more text field of 40 bytes
+  ([envelope.md](reference/envelope.md#the-trace-parent)). With a short name it
+  takes two chunks, not one. A system that traces most of its inputs and
+  mail sets `nameAreaBytes` to `poolEnvelopes` × 128 (512 KiB at the
+  default pool). An untraced envelope costs nothing extra.
 - **Minimum `maxRecordBytes`,** so the text of any one record fits.
 - **Maximum 1 GiB.** Chunk indexes are `u32`. Past that, the system is too
   big for one thread, as for the pool.
@@ -321,8 +328,8 @@ because a full one fails the chart's action.
 
 - **What it bounds:** the h2c ring ([ring.md](reference/ring.md)). Unit:
   bytes.
-- **Default 16,384 (16 KiB).** An `h2c.event` is 104 fixed bytes plus its
-  name and origin, about 128 bytes in all, so about 125 inputs fit. Every
+- **Default 16,384 (16 KiB).** An `h2c.event` is 128 fixed bytes plus its
+  name and origin, about 152 bytes in all, so about 107 inputs fit. Every
   `ta_run` moves h2c into the pool, so h2c only has to cover the inputs
   that arrive during one turn of the host's loop. A busy server that sees
   503s while the pool has room raises it.
@@ -356,8 +363,8 @@ because a full one fails the chart's action.
   slots hold reservations at once. A definition whose batch is larger
   (cancellations for active invocations, autoforwards) reserves more, with
   the same effect. Both cost throughput, not correctness.
-- **A full ring does not fail.** A `c2h.send` is 88 fixed bytes plus
-  sendid, type, target and name, about 150 bytes in all. A fanout bigger
+- **A full ring does not fail.** A `c2h.send` is 120 fixed bytes plus
+  sendid, type, target and name, about 184 bytes in all. A fanout bigger
   than the ring's free space waits while the host drains, and other slots
   go on ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)).
   During budget pauses the host may execute effects and release ring

@@ -211,10 +211,15 @@ typedef struct {
     trp_span invokeid;
     uint64_t invocation_seq;
     uint64_t data;
+    uint64_t trace_id_high;
+    uint64_t trace_id_low;
+    uint64_t parent_span_id;
     uint8_t type; /* trp_event_type */
-    uint8_t pad_end[7];
+    uint8_t trace_flags;
+    uint8_t trace_detail;
+    uint8_t pad_end[5];
 } trp_h2c_event;
-_Static_assert(sizeof(trp_h2c_event) == 104, "h2c.event");
+_Static_assert(sizeof(trp_h2c_event) == 128, "h2c.event");
 
 /* h2c.spawn: Create a session. */
 typedef struct {
@@ -225,8 +230,14 @@ typedef struct {
     uint64_t clock;
     uint64_t state;
     uint64_t request_seq;
+    uint64_t trace_id_high;
+    uint64_t trace_id_low;
+    uint64_t parent_span_id;
+    uint8_t trace_flags;
+    uint8_t trace_detail;
+    uint8_t pad_end[6];
 } trp_h2c_spawn;
-_Static_assert(sizeof(trp_h2c_spawn) == 80, "h2c.spawn");
+_Static_assert(sizeof(trp_h2c_spawn) == 112, "h2c.spawn");
 
 /* h2c.publish: End a replay and put the session on the route. */
 typedef struct {
@@ -277,11 +288,16 @@ typedef struct {
     uint64_t invocation_seq;
     trp_span reason;
     uint64_t data;
+    uint64_t trace_id_high;
+    uint64_t trace_id_low;
+    uint64_t parent_span_id;
     uint8_t kind; /* trp_invoke_report_kind */
     uint8_t ends;
-    uint8_t pad_end[6];
+    uint8_t trace_flags;
+    uint8_t trace_detail;
+    uint8_t pad_end[4];
 } trp_h2c_invoke_report;
-_Static_assert(sizeof(trp_h2c_invoke_report) == 72, "h2c.invoke_report");
+_Static_assert(sizeof(trp_h2c_invoke_report) == 96, "h2c.invoke_report");
 
 /* h2c.destroy: End a session now. */
 typedef struct {
@@ -352,16 +368,20 @@ typedef struct {
     trp_span origin_type;
     trp_span invokeid;
     uint64_t data;
+    uint64_t trace_id_high;
+    uint64_t trace_id_low;
+    uint64_t parent_span_id;
     uint8_t source; /* trp_input_source */
     uint8_t type; /* trp_event_type */
-    uint8_t pad11[2];
+    uint8_t trace_flags;
+    uint8_t trace_detail;
     trp_span report_invokeid;
     trp_span report_reason;
     uint8_t report_kind; /* trp_invoke_report_kind */
     uint8_t report_ends;
     uint8_t pad_end[2];
 } trp_c2h_input;
-_Static_assert(sizeof(trp_c2h_input) == 128, "c2h.input");
+_Static_assert(sizeof(trp_c2h_input) == 152, "c2h.input");
 
 /* c2h.send: A send for an I/O processor. */
 typedef struct {
@@ -373,8 +393,13 @@ typedef struct {
     trp_span name;
     uint64_t data;
     uint64_t content;
+    uint64_t trace_id_high;
+    uint64_t trace_id_low;
+    uint64_t span_id;
+    uint8_t trace_flags;
+    uint8_t pad_end[7];
 } trp_c2h_send;
-_Static_assert(sizeof(trp_c2h_send) == 88, "c2h.send");
+_Static_assert(sizeof(trp_c2h_send) == 120, "c2h.send");
 
 /* c2h.invoke: Start an invocation. */
 typedef struct {
@@ -385,10 +410,14 @@ typedef struct {
     trp_span src;
     uint64_t data;
     uint64_t content;
+    uint64_t trace_id_high;
+    uint64_t trace_id_low;
+    uint64_t span_id;
     uint8_t autoforward;
-    uint8_t pad_end[7];
+    uint8_t trace_flags;
+    uint8_t pad_end[6];
 } trp_c2h_invoke;
-_Static_assert(sizeof(trp_c2h_invoke) == 88, "c2h.invoke");
+_Static_assert(sizeof(trp_c2h_invoke) == 112, "c2h.invoke");
 
 /* c2h.invoke_cancel: Cancel an invocation. */
 typedef struct {
@@ -411,10 +440,14 @@ typedef struct {
     trp_span origin_type;
     trp_span event_invokeid;
     uint64_t data;
+    uint64_t trace_id_high;
+    uint64_t trace_id_low;
+    uint64_t span_id;
     uint8_t type; /* trp_event_type */
-    uint8_t pad_end[7];
+    uint8_t trace_flags;
+    uint8_t pad_end[6];
 } trp_c2h_invoke_forward;
-_Static_assert(sizeof(trp_c2h_invoke_forward) == 112, "c2h.invoke_forward");
+_Static_assert(sizeof(trp_c2h_invoke_forward) == 136, "c2h.invoke_forward");
 
 /* c2h.log: A <log>. */
 typedef struct {
@@ -422,8 +455,13 @@ typedef struct {
     uint64_t macrostep;
     trp_span label;
     uint64_t value;
+    uint64_t trace_id_high;
+    uint64_t trace_id_low;
+    uint64_t span_id;
+    uint8_t trace_flags;
+    uint8_t pad_end[7];
 } trp_c2h_log;
-_Static_assert(sizeof(trp_c2h_log) == 56, "c2h.log");
+_Static_assert(sizeof(trp_c2h_log) == 88, "c2h.log");
 
 /* c2h.macrostep_ended: A macrostep ended. */
 typedef struct {

@@ -300,8 +300,12 @@ A `tools/call` that carries `traceparent` and `tracestate` in `_meta`
 (2026-07-28 documents the keys) delivers its event under that trace parent
 (core ADR 0073). The macrostep it causes, and everything that macrostep
 causes, join the agent's trace. The result names the trace ID in
-`structuredContent`. This needs `h2c.event` to carry a trace parent
-([Open questions](#open-questions)).
+`structuredContent`. The binding parses `traceparent` with
+`ta_traceparent_parse` and fills the trace fields of the `send`'s
+[`h2c.event`](ring-proto/protocol/generated/MESSAGES.md#h2cevent)
+(`trace_id_high`, `trace_id_low`, `parent_span_id`, `trace_flags`), so
+the `send` joins the caller's trace
+([telemetry](ring-proto/reference/telemetry.md#trace-context-across-the-rings)).
 
 ## The MCP App (later)
 
@@ -530,33 +534,24 @@ the debugging primitives.
 
 # Open questions
 
-1. **A trace parent on `h2c.event`.** The record has no trace context
-   field, so an event cannot join the caller's trace (core ADR 0073). Every
-   host that accepts a `traceparent` (HTTP as well as MCP) needs it. It is
-   a change to the ring protocol's catalog.
-2. **Observing between `ta_run` calls.** [debugging.md](ring-proto/reference/debugging.md)
-   lists inspection among the primitives used while a debugger owns the
-   system. This proposal reads between `ta_run` calls without attaching,
-   which is ownership for the length of one native call. debugging.md
-   should say that read-only inspection works there too.
-3. **Following a send's causes.** `waitMs` is a fixed wait. Core could
+1. **Following a send's causes.** `waitMs` is a fixed wait. Core could
    instead report when everything an input caused, through mail to other
    sessions, has settled. That is a new record or a field on
    `c2h.input_completed`, which the database hosts would use too.
-4. **The URL of the MCP processor.** SCXML 6.2.5 names a processor by the
+2. **The URL of the MCP processor.** SCXML 6.2.5 names a processor by the
    URI of its description. The ring protocol's type registry holds names,
    and only core's own `scxml` has URI aliases. Whether a declared type may
    carry aliases decides whether `mcp` can also be selected by its URL.
-5. **Cancelling a delayed send and replacing a definition.** Withdrawing
+3. **Cancelling a delayed send and replacing a definition.** Withdrawing
    one pending delayed send (core ADR 0084) and hot-replacing an actor's
    revision (core ADR 0089) have no ring record or debugging primitive.
    The mapping leaves them out until one exists.
-6. **Operator transitions on recorded sessions.** How a replay represents
+4. **Operator transitions on recorded sessions.** How a replay represents
    a forced transition is open in the ring protocol. Until it is settled,
    a checkpoint after the transition is the only record replay can use.
-7. **JSON in C.** The library speaks JSON text. It needs a JSON reader and
+5. **JSON in C.** The library speaks JSON text. It needs a JSON reader and
    writer; the test host uses jq's, napi none yet.
-8. **The TypeScript SDK and 2026-07-28.** Whether the official SDK serves
+6. **The TypeScript SDK and 2026-07-28.** Whether the official SDK serves
    the stateless revision yet, and what napi does while it serves only
    2025-11-25.
 

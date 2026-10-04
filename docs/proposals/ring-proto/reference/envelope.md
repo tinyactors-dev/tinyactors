@@ -46,8 +46,42 @@ name, an origin URI, an unresolved address) are bytes in the name area
 | `invoke_instance` | 8 | the invocation-instance token for a child event, completion or stop, or 0 |
 | `send_id` | 8 | a local send's `ta_send_id` for owner-list cancellation; external send ID bytes are in `text` |
 | `source_seq` | 8 | the h2c seq it was admitted from, or 0 |
-| `text` | 8 | its text in the name area: the first chunk and total length ([names.md](names.md#the-name-area)). It holds the name, origin, origintype, invokeid, target address, I/O processor type and arbitrary external send ID, each prefixed by a `u16` length. Invocation reports also preserve their original report invokeid and reason. |
+| `text` | 8 | its text in the name area: the first chunk and total length ([names.md](names.md#the-name-area)). It holds the name, origin, origintype, invokeid, target address, I/O processor type and arbitrary external send ID, each prefixed by a `u16` length. Invocation reports also preserve their original report invokeid and reason. A traced envelope adds its [trace parent](#the-trace-parent) as the last field. |
 | | **88** | **estimate**, on a 64-bit host |
+
+### The trace parent
+
+An envelope carries the trace parent its receiver's macrostep runs under
+(core ADRs 0067, 0073). It is one more length-prefixed field in `text`,
+present only when the trace ID is not zero:
+
+| Part | Bytes | Meaning |
+|---|---|---|
+| length | 2 | 38, as for every text field |
+| context | 18 | trace ID high and low (16), W3C trace-flags (1), local detail (1) |
+| cause | 20 | the causing step's key: session (8), macrostep (8), microstep (4) |
+| | **40** | |
+
+- **An untraced envelope stays 88 bytes** and adds nothing to its text.
+- **A traced envelope takes 40 bytes more of the name area.** A short
+  name plus the trace parent exceeds one 60-byte chunk, so it usually
+  takes a second 64-byte chunk ([BEHAVIORS.md](../BEHAVIORS.md#nameareabytes)).
+- **What fills it:** an admitted
+  [`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent) or
+  [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report)
+  gives its trace fields, with the host cause `{session 0, macrostep
+  parent_span_id}`. Mail and a delayed send give the sending step's
+  context and its full step key.
+- **Where it goes:** when the envelope is taken, the macrostep runs under
+  it. A recorded session writes it in
+  [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput). A delayed
+  send to an I/O processor writes it in
+  [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend) when due. A
+  delayed send keeps it in session images and in
+  [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate), as today's
+  `ta_delayed_send_info.trace`.
+- **Recycling keeps it.** An envelope recycled as `error.communication`
+  for its sender runs under the same trace parent.
 
 The name is resolved to atoms when the envelope is **taken**, not stored as
 an ID. Session IDs and local `send_id` already survive images (core ADRs
@@ -78,6 +112,7 @@ measurements:
 | One envelope | 88 bytes, plus 4 for its slot in the deadline index |
 | Default pool, 4,096 envelopes | about 368 KiB |
 | Default name area | 256 KiB (`nameAreaBytes`, 262,144): one 64-byte chunk per envelope ([BEHAVIORS.md](../BEHAVIORS.md#nameareabytes)) |
+| A traced envelope | 40 more bytes of name area, usually a second 64-byte chunk; a traced system sets about 128 bytes of name area per envelope |
 | Default ordinary internal quota, 256 entries of about 48 bytes | about 12 KiB (`internalQueueEvents`), plus the compiler-sized mandatory floor |
 | Per actor | the head of its own pending delayed sends, and the head and tail of its deferred list: +12 bytes on today's 332 (ADR 0092: "an actor stays at 332 bytes") |
 | Today, for comparison | napi's event blocks prefilled at about 811 KB per system before ADR 0093, each queued event (`ta_queued_event`) 96 bytes, and the kernel's mailboxes on top |

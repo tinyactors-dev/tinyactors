@@ -130,6 +130,47 @@ per-actor bit, like the `recorded` bit
 selector, and read when the session takes an envelope. It replaces the
 watch list that today's kernel scheduler checks at each delivery.
 
+## Trace context across the rings
+
+A trace parent is a W3C trace context and the key of the step that
+caused it (core ADRs 0067, 0073). It travels on records, so no host
+calls into core to read or write one.
+
+- **In.** [`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent),
+  [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report) and
+  [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) carry `trace_id_high`, `trace_id_low`,
+  `parent_span_id`, `trace_flags` and `trace_detail`. A host parses an
+  incoming `traceparent` header with core's native
+  `ta_traceparent_parse` and fills them. An all-zero trace ID means no
+  context. The macrostep that takes the input runs under it, with the
+  host cause `{session 0, macrostep parent_span_id}`.
+- **Out.** [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend), [`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke),
+  [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward) and
+  [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog) carry the step's `trace_id_high`,
+  `trace_id_low`, `trace_flags` and `span_id`
+  (`ta_step_key_span_id` of the step). An I/O processor writes
+  `traceparent` as version `00`, the trace ID, `span_id` and the flags.
+  The local `detail` byte stays in the process.
+- **Recorded.** [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) carries the input's trace
+  parent in `h2c.event`'s form. For mail and timers, `parent_span_id` is
+  the sending step's span ID. A replay fed back as `h2c.event` runs
+  under the same trace ID and parent span.
+- **Local mail.** Mail between sessions never leaves core. The envelope
+  carries the sender's context and step key in its name-area text, from
+  the send to the receiver's take
+  ([envelope.md](envelope.md#the-trace-parent)). A delayed send keeps
+  it the same way, in the pool, in images and in `c2h.state`, and its
+  `c2h.send` names the step that sent it. A traced envelope costs 40
+  bytes of name area; an untraced one costs nothing.
+- **Loads.** A load writes its LOADED record under the trace parent of
+  the first envelope waiting for the address, so the load is in that
+  message's trace. A spawn that answers `c2h.load_needed` without trace
+  fields uses the same trace parent.
+
+`tel.trace` carries the trace ID, flags, detail and cause key of each
+record, so `tinyactors-otlp` links spans across sessions and to the
+host's spans with no other input.
+
 ## Replay: the `suppressed` flag
 
 A session prepared to replay crosses no border. The sends and invocations

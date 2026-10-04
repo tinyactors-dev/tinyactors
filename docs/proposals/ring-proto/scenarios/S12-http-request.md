@@ -73,12 +73,12 @@ server.on('request', async (req, res) => {
 | Step | Ring | Record | What happens |
 |---|---|---|---|
 | S12.2 | – | – | `GET /orders/42` arrives. `admitting` is true and the submission table has room. The processor stores `res` under `req:1`. |
-| S12.3 | h2c | [`h2c.event`][h2c.event] seq 41 `{target: "orders/42", name: "http.get", origin: "req:1", origin_type: "http", data: v7}` | The host retains its original for retry until a terminal record names `source_seq` 41. |
+| S12.3 | h2c | [`h2c.event`][h2c.event] seq 41 `{target: "orders/42", name: "http.get", origin: "req:1", origin_type: "http", data: v7}` | The host retains its original for retry until a terminal record names `source_seq` 41. A `traceparent` header on the request becomes the trace fields (`ta_traceparent_parse`), so s3's macrostep joins the client's trace ([telemetry](../reference/telemetry.md#trace-context-across-the-rings)). |
 | S12.4 | – | – | `ta_run` admits the event. Envelope e12 holds `http.get`, `req:1` and `http` in its text chain, and owns v7. |
 | S12.5 | – | – | e12 is taken. Its name resolves to the atoms `[http, get]` by lookup ([names](../reference/names.md#matching-without-interning)). |
 | S12.6 | – | – | The data model reads `_event.origin` and `_event.origintype` as text from the envelope (`req:1`, `http`). No processor code runs. |
 | S12.7 | – | – | The `<send>` evaluates `typeexpr` to `http`. `ta_atom_find` finds it in the type set, so the type is supported. Core reserves the record in c2h. |
-| S12.8 | c2h | [`c2h.send`][c2h.send] `{s3.m3, io_type: "http", target: "req:1", name: "http.response", data: v8}` | The pump may execute it at once: `http.send()` finds `req:1`, writes `200` and the body, and releases v8. |
+| S12.8 | c2h | [`c2h.send`][c2h.send] `{s3.m3, io_type: "http", target: "req:1", name: "http.response", data: v8}` | The pump may execute it at once: `http.send()` finds `req:1`, writes `200` and the body, and releases v8. The record's trace fields name the sending step; a processor that makes an outgoing request writes them as its `traceparent` header. |
 | S12.9 | c2h | [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s3.m3, stable}` | Reports the end. It does not gate the response, which may already be sent. |
 | S12.10 | c2h | [`c2h.input_completed`][c2h.input_completed] `{source_seq: 41, stable}` | `send()` resolves; `req:1` left `pending` when S12.8 answered it. The host drops its retained original. Core frees e12 and releases v7. |
 

@@ -560,7 +560,7 @@
       "code": 258,
       "ring": "h2c",
       "summary": "An external event for a session",
-      "doc": "Header `session` names a resident session, or is 0 and `target` gives an address. Admitted into the pool when the pool is below its watermark. An event for an unloaded address waits in the pool and core asks for the session with c2h.load_needed. A capacity refusal consumes and bounces the record, allowing later controls to progress.\n\nA live input runs at system time when taken; its header at does not advance that clock. A replay input moves its prepared session clock at take. Complete event metadata must also fit the expanded c2h.input. Service events carry invocation_seq, checked again at take. Zero means ordinary input, or an application-supplied replay seed.",
+      "doc": "Header `session` names a resident session, or is 0 and `target` gives an address. Admitted into the pool when the pool is below its watermark. An event for an unloaded address waits in the pool and core asks for the session with c2h.load_needed. A capacity refusal consumes and bounces the record, allowing later controls to progress.\n\nA live input runs at system time when taken; its header at does not advance that clock. A replay input moves its prepared session clock at take. Complete event metadata must also fit the expanded c2h.input. Service events carry invocation_seq, checked again at take. Zero means ordinary input, or an application-supplied replay seed.\n\nA trace parent travels with the event (core ADRs 0067, 0073). A host that receives a traceparent header parses it (core's native ta_traceparent_parse) and fills the trace fields. The macrostep that takes the event runs under that context, with the cause key {session 0, macrostep parent_span_id}. An all-zero trace ID means no context. The envelope keeps the trace parent until take (reference/envelope.md).",
       "fields": [
         {
           "name": "target",
@@ -611,10 +611,40 @@
           "offset": 88
         },
         {
+          "name": "trace_id_high",
+          "type": "u64",
+          "doc": "the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context",
+          "offset": 96
+        },
+        {
+          "name": "trace_id_low",
+          "type": "u64",
+          "doc": "the W3C trace ID, low 64 bits",
+          "offset": 104
+        },
+        {
+          "name": "parent_span_id",
+          "type": "u64",
+          "doc": "the W3C parent-id the macrostep runs under; 0 for none",
+          "offset": 112
+        },
+        {
           "name": "type",
           "type": "event_type",
           "doc": "almost always external",
-          "offset": 96
+          "offset": 120
+        },
+        {
+          "name": "trace_flags",
+          "type": "u8",
+          "doc": "the W3C trace-flags (sampled, random)",
+          "offset": 121
+        },
+        {
+          "name": "trace_detail",
+          "type": "u8",
+          "doc": "the local detail byte (watched); never W3C, never in a traceparent",
+          "offset": 122
         }
       ],
       "flags": [],
@@ -625,7 +655,7 @@
         "c2h.input_refused",
         "c2h.input_completed"
       ],
-      "fixed_size": 104,
+      "fixed_size": 128,
       "see": [
         "h2c.withdraw"
       ]
@@ -635,7 +665,7 @@
       "code": 259,
       "ring": "h2c",
       "summary": "Create a session",
-      "doc": "With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish. Inputs seed new configuration and data model values; exact restoration is not promised.\n\nWith `state`, the session is restored from a checkpoint (c2h.state, core ADR 0091) as a replaying session whose clock starts at the state's; the c2h.input records after the checkpoint follow. This is how a session survives a restart. h2c.load is not: it only pages a session back into memory within one process.",
+      "doc": "With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish. Inputs seed new configuration and data model values; exact restoration is not promised.\n\nWith `state`, the session is restored from a checkpoint (c2h.state, core ADR 0091) as a replaying session whose clock starts at the state's; the c2h.input records after the checkpoint follow. This is how a session survives a restart. h2c.load is not: it only pages a session back into memory within one process.\n\nThe trace fields are the trace parent the bootstrap macrostep runs under, as for h2c.event. When it answers c2h.load_needed and has none, the bootstrap runs under the trace parent of the first envelope waiting for the address.",
       "fields": [
         {
           "name": "address",
@@ -672,6 +702,36 @@
           "type": "seq",
           "doc": "c2h.load_needed seq when answering a virtual-family load; 0 for an unsolicited spawn",
           "offset": 72
+        },
+        {
+          "name": "trace_id_high",
+          "type": "u64",
+          "doc": "the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context",
+          "offset": 80
+        },
+        {
+          "name": "trace_id_low",
+          "type": "u64",
+          "doc": "the W3C trace ID, low 64 bits",
+          "offset": 88
+        },
+        {
+          "name": "parent_span_id",
+          "type": "u64",
+          "doc": "the W3C parent-id the macrostep runs under; 0 for none",
+          "offset": 96
+        },
+        {
+          "name": "trace_flags",
+          "type": "u8",
+          "doc": "the W3C trace-flags (sampled, random)",
+          "offset": 104
+        },
+        {
+          "name": "trace_detail",
+          "type": "u8",
+          "doc": "the local detail byte (watched); never W3C, never in a traceparent",
+          "offset": 105
         }
       ],
       "flags": [
@@ -686,7 +746,7 @@
         "c2h.bounced",
         "c2h.input_completed"
       ],
-      "fixed_size": 80,
+      "fixed_size": 112,
       "see": []
     },
     {
@@ -849,7 +909,7 @@
       "code": 265,
       "ring": "h2c",
       "summary": "An invoked service finished or failed",
-      "doc": "Header `session` is the invoking session.\n\nDone enters the external queue with invoke metadata for finalize; errors are platform/internal events without event invokeid. A stale live instance cannot change a later invocation with the same authored ID.",
+      "doc": "Header `session` is the invoking session. The trace fields are the trace parent the report's macrostep runs under, as for h2c.event; an invoker usually copies the context and span ID of its c2h.invoke.\n\nDone enters the external queue with invoke metadata for finalize; errors are platform/internal events without event invokeid. A stale live instance cannot change a later invocation with the same authored ID.",
       "fields": [
         {
           "name": "invokeid",
@@ -876,16 +936,46 @@
           "offset": 56
         },
         {
+          "name": "trace_id_high",
+          "type": "u64",
+          "doc": "the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context",
+          "offset": 64
+        },
+        {
+          "name": "trace_id_low",
+          "type": "u64",
+          "doc": "the W3C trace ID, low 64 bits",
+          "offset": 72
+        },
+        {
+          "name": "parent_span_id",
+          "type": "u64",
+          "doc": "the W3C parent-id the macrostep runs under; 0 for none",
+          "offset": 80
+        },
+        {
           "name": "kind",
           "type": "invoke_report_kind",
           "doc": "",
-          "offset": 64
+          "offset": 88
         },
         {
           "name": "ends",
           "type": "bool",
           "doc": "for error: retire the matching instance at take after validation and internal notification enqueue; false preserves it",
-          "offset": 65
+          "offset": 89
+        },
+        {
+          "name": "trace_flags",
+          "type": "u8",
+          "doc": "the W3C trace-flags (sampled, random)",
+          "offset": 90
+        },
+        {
+          "name": "trace_detail",
+          "type": "u8",
+          "doc": "the local detail byte (watched); never W3C, never in a traceparent",
+          "offset": 91
         }
       ],
       "flags": [],
@@ -895,7 +985,7 @@
         "c2h.input_refused",
         "c2h.input_completed"
       ],
-      "fixed_size": 72,
+      "fixed_size": 96,
       "see": [
         "h2c.withdraw"
       ]
@@ -1088,7 +1178,7 @@
       "code": 514,
       "ring": "c2h",
       "summary": "A recorded session took an input",
-      "doc": "Written when a recorded session takes an envelope, before any effect of the macrostep it starts. These observations, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), seed a new execution. Recording imposes no persistence-before-effects rule.\n\nNot written for an input a replaying session takes: that input is already in the log being replayed. A session restored from c2h.state and replayed starts writing c2h.input again after h2c.publish.\n\nData is a copy_out snapshot created before binding or running the input, including finalize and autoforward. Later chart mutations cannot change it.",
+      "doc": "Written when a recorded session takes an envelope, before any effect of the macrostep it starts. These observations, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), seed a new execution. Recording imposes no persistence-before-effects rule.\n\nNot written for an input a replaying session takes: that input is already in the log being replayed. A session restored from c2h.state and replayed starts writing c2h.input again after h2c.publish.\n\nData is a copy_out snapshot created before binding or running the input, including finalize and autoforward. Later chart mutations cannot change it.\n\nThe trace fields are the trace parent the macrostep runs under, in h2c.event's form, so a journal keeps it and a replay fed back as h2c.event runs under the same trace ID and parent span. For mail and timers, parent_span_id is the span ID of the sending step: the cause's step key becomes a host cause with the same span ID.",
       "fields": [
         {
           "name": "macrostep",
@@ -1145,45 +1235,75 @@
           "offset": 96
         },
         {
+          "name": "trace_id_high",
+          "type": "u64",
+          "doc": "the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context",
+          "offset": 104
+        },
+        {
+          "name": "trace_id_low",
+          "type": "u64",
+          "doc": "the W3C trace ID, low 64 bits",
+          "offset": 112
+        },
+        {
+          "name": "parent_span_id",
+          "type": "u64",
+          "doc": "the span ID of the cause (ta_step_key_span_id): the host's parent-id, or the sending step of mail and timers; 0 for none",
+          "offset": 120
+        },
+        {
           "name": "source",
           "type": "input_source",
           "doc": "",
-          "offset": 104
+          "offset": 128
         },
         {
           "name": "type",
           "type": "event_type",
           "doc": "",
-          "offset": 105
+          "offset": 129
+        },
+        {
+          "name": "trace_flags",
+          "type": "u8",
+          "doc": "the W3C trace-flags (sampled, random)",
+          "offset": 130
+        },
+        {
+          "name": "trace_detail",
+          "type": "u8",
+          "doc": "the local detail byte (watched); never W3C, never in a traceparent",
+          "offset": 131
         },
         {
           "name": "report_invokeid",
           "type": "text",
           "doc": "source invoke_report: original report invocation ID, separate from event invokeid",
-          "offset": 108
+          "offset": 132
         },
         {
           "name": "report_reason",
           "type": "text",
           "doc": "source invoke_report/error: original reason token",
-          "offset": 116
+          "offset": 140
         },
         {
           "name": "report_kind",
           "type": "invoke_report_kind",
           "doc": "source invoke_report only; otherwise ignored",
-          "offset": 124
+          "offset": 148
         },
         {
           "name": "report_ends",
           "type": "bool",
           "doc": "source invoke_report/error: original retirement decision",
-          "offset": 125
+          "offset": 149
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 128,
+      "fixed_size": 152,
       "see": []
     },
     {
@@ -1191,7 +1311,7 @@
       "code": 515,
       "ring": "c2h",
       "summary": "A send for an I/O processor",
-      "doc": "Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.macrostep_ended or persistence.\n\nA delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no end report follows, and the host may act on it at once. An end report would describe a macrostep that does not exist (reference/envelope.md, \"A due send to an I/O processor has no macrostep end\").",
+      "doc": "Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.macrostep_ended or persistence.\n\nA delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no end report follows, and the host may act on it at once. An end report would describe a macrostep that does not exist (reference/envelope.md, \"A due send to an I/O processor has no macrostep end\").\n\nThe trace fields are the sending step's trace context and span ID (core ADR 0067), so the processor writes a traceparent header (version 00, trace ID, span_id, trace_flags) without calling into core. A delayed send keeps them in its envelope and carries the step that sent it, not the h2c.time that made it due.",
       "fields": [
         {
           "name": "macrostep",
@@ -1234,11 +1354,35 @@
           "type": "vref",
           "doc": "<content>, or 0",
           "offset": 80
+        },
+        {
+          "name": "trace_id_high",
+          "type": "u64",
+          "doc": "the sending step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context",
+          "offset": 88
+        },
+        {
+          "name": "trace_id_low",
+          "type": "u64",
+          "doc": "the W3C trace ID, low 64 bits",
+          "offset": 96
+        },
+        {
+          "name": "span_id",
+          "type": "u64",
+          "doc": "the sending step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header",
+          "offset": 104
+        },
+        {
+          "name": "trace_flags",
+          "type": "u8",
+          "doc": "the W3C trace-flags",
+          "offset": 112
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 88,
+      "fixed_size": 120,
       "see": [
         "c2h.macrostep_ended"
       ]
@@ -1248,7 +1392,7 @@
       "code": 516,
       "ring": "c2h",
       "summary": "Start an invocation",
-      "doc": "Written in the post-macrostep startup phase. This record seq is the live service-instance token; authored invokeid remains the SCXML identity.",
+      "doc": "Written in the post-macrostep startup phase. This record seq is the live service-instance token; authored invokeid remains the SCXML identity.\n\nThe trace fields are the context and span ID of the step that started the invocation, as for c2h.send. The invoker carries them to the service and back on its h2c.event and h2c.invoke_report.",
       "fields": [
         {
           "name": "macrostep",
@@ -1287,10 +1431,34 @@
           "offset": 72
         },
         {
+          "name": "trace_id_high",
+          "type": "u64",
+          "doc": "the sending step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context",
+          "offset": 80
+        },
+        {
+          "name": "trace_id_low",
+          "type": "u64",
+          "doc": "the W3C trace ID, low 64 bits",
+          "offset": 88
+        },
+        {
+          "name": "span_id",
+          "type": "u64",
+          "doc": "the sending step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header",
+          "offset": 96
+        },
+        {
           "name": "autoforward",
           "type": "bool",
           "doc": "",
-          "offset": 80
+          "offset": 104
+        },
+        {
+          "name": "trace_flags",
+          "type": "u8",
+          "doc": "the W3C trace-flags",
+          "offset": 105
         }
       ],
       "flags": [],
@@ -1298,7 +1466,7 @@
         "h2c.invoke_report",
         "h2c.event"
       ],
-      "fixed_size": 88,
+      "fixed_size": 112,
       "see": []
     },
     {
@@ -1337,7 +1505,7 @@
       "code": 518,
       "ring": "c2h",
       "summary": "Autoforward an event to an invocation",
-      "doc": "Every event field is preserved at the autoforward point. Finalize runs first, as in the SCXML algorithm; each recipient then receives its own copy_out data before transition code runs. Record space is mandatory; a data-model copy failure remains error.execution.",
+      "doc": "Every event field is preserved at the autoforward point. Finalize runs first, as in the SCXML algorithm; each recipient then receives its own copy_out data before transition code runs. Record space is mandatory; a data-model copy failure remains error.execution.\n\nThe trace fields are the context and span ID of the forwarding step, as for c2h.send.",
       "fields": [
         {
           "name": "macrostep",
@@ -1394,15 +1562,39 @@
           "offset": 96
         },
         {
+          "name": "trace_id_high",
+          "type": "u64",
+          "doc": "the forwarding step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context",
+          "offset": 104
+        },
+        {
+          "name": "trace_id_low",
+          "type": "u64",
+          "doc": "the W3C trace ID, low 64 bits",
+          "offset": 112
+        },
+        {
+          "name": "span_id",
+          "type": "u64",
+          "doc": "the forwarding step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header",
+          "offset": 120
+        },
+        {
           "name": "type",
           "type": "event_type",
           "doc": "",
-          "offset": 104
+          "offset": 128
+        },
+        {
+          "name": "trace_flags",
+          "type": "u8",
+          "doc": "the W3C trace-flags",
+          "offset": 129
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 112,
+      "fixed_size": 136,
       "see": []
     },
     {
@@ -1410,7 +1602,7 @@
       "code": 519,
       "ring": "c2h",
       "summary": "A <log>",
-      "doc": "",
+      "doc": "The trace fields are the context and span ID of the step that ran the <log> (core ADR 0072), so a log lands next to the spans of its macrostep.",
       "fields": [
         {
           "name": "macrostep",
@@ -1429,11 +1621,35 @@
           "type": "vref",
           "doc": "",
           "offset": 48
+        },
+        {
+          "name": "trace_id_high",
+          "type": "u64",
+          "doc": "the logging step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context",
+          "offset": 56
+        },
+        {
+          "name": "trace_id_low",
+          "type": "u64",
+          "doc": "the W3C trace ID, low 64 bits",
+          "offset": 64
+        },
+        {
+          "name": "span_id",
+          "type": "u64",
+          "doc": "the logging step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header",
+          "offset": 72
+        },
+        {
+          "name": "trace_flags",
+          "type": "u8",
+          "doc": "the W3C trace-flags",
+          "offset": 80
         }
       ],
       "flags": [],
       "replies": [],
-      "fixed_size": 56,
+      "fixed_size": 88,
       "see": []
     },
     {

@@ -187,6 +187,13 @@ message 'h2c.event', code: 0x0102, summary: 'An external event for a session' do
       'at take. Complete event metadata must also fit the expanded c2h.input. ' \
       'Service events carry invocation_seq, checked again at take. Zero ' \
       'means ordinary input, or an application-supplied replay seed.'
+  doc 'A trace parent travels with the event (core ADRs 0067, 0073). A ' \
+      'host that receives a traceparent header parses it (core\'s native ' \
+      'ta_traceparent_parse) and fills the trace fields. The macrostep ' \
+      'that takes the event runs under that context, with the cause key ' \
+      '{session 0, macrostep parent_span_id}. An all-zero trace ID means ' \
+      'no context. The envelope keeps the trace parent until take ' \
+      '(reference/envelope.md).'
   field :target, :text, 'the address (family/name), when session is 0'
   field :name, :text, 'the dotted event name, as bytes (reference/names.md)'
   field :sendid, :text, '_event.sendid, or empty'
@@ -195,7 +202,12 @@ message 'h2c.event', code: 0x0102, summary: 'An external event for a session' do
   field :invokeid, :text, '_event.invokeid for an invoked service, or empty'
   field :invocation_seq, :seq, 'c2h.invoke seq for a live service instance; 0 for ordinary input or replay seeds'
   field :data, :vref, '_event.data'
+  field :trace_id_high, :u64, 'the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context'
+  field :trace_id_low, :u64, 'the W3C trace ID, low 64 bits'
+  field :parent_span_id, :u64, 'the W3C parent-id the macrostep runs under; 0 for none'
   field :type, :event_type, 'almost always external'
+  field :trace_flags, :u8, 'the W3C trace-flags (sampled, random)'
+  field :trace_detail, :u8, 'the local detail byte (watched); never W3C, never in a traceparent'
   replies_with 'c2h.input', 'c2h.bounced', 'c2h.load_needed', 'c2h.input_refused', 'c2h.input_completed'
   see 'h2c.withdraw'
 end
@@ -210,6 +222,10 @@ message 'h2c.spawn', code: 0x0103, summary: 'Create a session' do
       "state's; the c2h.input records after the checkpoint follow. This is " \
       'how a session survives a restart. h2c.load is not: it only pages ' \
       'a session back into memory within one process.'
+  doc 'The trace fields are the trace parent the bootstrap macrostep runs ' \
+      'under, as for h2c.event. When it answers c2h.load_needed and has ' \
+      'none, the bootstrap runs under the trace parent of the first ' \
+      'envelope waiting for the address.'
   flag :replaying_from_clock, 0, 'the session replays; `clock` is where its run began'
   field :address, :text, 'family/name'
   field :revision, :bytes, "the definition's revision hash"
@@ -217,6 +233,11 @@ message 'h2c.spawn', code: 0x0103, summary: 'Create a session' do
   field :clock, :time, 'with replaying_from_clock: the replayed run’s start'
   field :state, :blob, 'a checkpoint c2h.state wrote, to restore; 0 for none'
   field :request_seq, :seq, 'c2h.load_needed seq when answering a virtual-family load; 0 for an unsolicited spawn'
+  field :trace_id_high, :u64, 'the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context'
+  field :trace_id_low, :u64, 'the W3C trace ID, low 64 bits'
+  field :parent_span_id, :u64, 'the W3C parent-id the macrostep runs under; 0 for none'
+  field :trace_flags, :u8, 'the W3C trace-flags (sampled, random)'
+  field :trace_detail, :u8, 'the local detail byte (watched); never W3C, never in a traceparent'
   replies_with 'c2h.spawned', 'c2h.bounced', 'c2h.input_completed'
 end
 
@@ -281,13 +302,20 @@ message 'h2c.checkpoint', code: 0x0108, summary: "Ask for a recorded session's s
 end
 
 message 'h2c.invoke_report', code: 0x0109, summary: 'An invoked service finished or failed' do
-  doc 'Header `session` is the invoking session.'
+  doc 'Header `session` is the invoking session. The trace fields are the ' \
+      'trace parent the report\'s macrostep runs under, as for h2c.event; ' \
+      'an invoker usually copies the context and span ID of its c2h.invoke.'
   field :invokeid, :text
   field :invocation_seq, :seq, 'the c2h.invoke seq; checked at take, 0 only for replay seeds'
   field :reason, :text, 'for error: the reason segment'
   field :data, :vref, 'done data or error data'
+  field :trace_id_high, :u64, 'the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context'
+  field :trace_id_low, :u64, 'the W3C trace ID, low 64 bits'
+  field :parent_span_id, :u64, 'the W3C parent-id the macrostep runs under; 0 for none'
   field :kind, :invoke_report_kind
   field :ends, :bool, 'for error: retire the matching instance at take after validation and internal notification enqueue; false preserves it'
+  field :trace_flags, :u8, 'the W3C trace-flags (sampled, random)'
+  field :trace_detail, :u8, 'the local detail byte (watched); never W3C, never in a traceparent'
   doc 'Done enters the external queue with invoke metadata for finalize; ' \
       'errors are platform/internal events without event invokeid. A stale ' \
       'live instance cannot change a later invocation with the same authored ID.'
@@ -394,6 +422,11 @@ message 'c2h.input', code: 0x0202, summary: 'A recorded session took an input' d
       'and replayed starts writing c2h.input again after h2c.publish.'
   doc 'Data is a copy_out snapshot created before binding or running the input, ' \
       'including finalize and autoforward. Later chart mutations cannot change it.'
+  doc 'The trace fields are the trace parent the macrostep runs under, in ' \
+      'h2c.event\'s form, so a journal keeps it and a replay fed back as ' \
+      'h2c.event runs under the same trace ID and parent span. For mail ' \
+      'and timers, parent_span_id is the span ID of the sending step: the ' \
+      'cause\'s step key becomes a host cause with the same span ID.'
   field :macrostep, :macrostep
   field :source_seq, :seq, 'source h2c: the h2c seq'
   field :from_session, :session, 'source mail or timer: the sender'
@@ -403,8 +436,13 @@ message 'c2h.input', code: 0x0202, summary: 'A recorded session took an input' d
   field :origin_type, :text
   field :invokeid, :text
   field :data, :vref
+  field :trace_id_high, :u64, 'the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context'
+  field :trace_id_low, :u64, 'the W3C trace ID, low 64 bits'
+  field :parent_span_id, :u64, 'the span ID of the cause (ta_step_key_span_id): the host\'s parent-id, or the sending step of mail and timers; 0 for none'
   field :source, :input_source
   field :type, :event_type
+  field :trace_flags, :u8, 'the W3C trace-flags (sampled, random)'
+  field :trace_detail, :u8, 'the local detail byte (watched); never W3C, never in a traceparent'
   field :report_invokeid, :text, 'source invoke_report: original report invocation ID, separate from event invokeid'
   field :report_reason, :text, 'source invoke_report/error: original reason token'
   field :report_kind, :invoke_report_kind, 'source invoke_report only; otherwise ignored'
@@ -421,6 +459,11 @@ message 'c2h.send', code: 0x0203, summary: 'A send for an I/O processor' do
       'act on it at once. An end report would describe a macrostep ' \
       'that does not exist (reference/envelope.md, "A due send to an ' \
       'I/O processor has no macrostep end").'
+  doc 'The trace fields are the sending step\'s trace context and span ID ' \
+      '(core ADR 0067), so the processor writes a traceparent header ' \
+      '(version 00, trace ID, span_id, trace_flags) without calling into ' \
+      'core. A delayed send keeps them in its envelope and carries the ' \
+      'step that sent it, not the h2c.time that made it due.'
   field :macrostep, :macrostep, '0 for a delayed send that became due'
   field :sendid, :text
   field :io_type, :text
@@ -428,19 +471,30 @@ message 'c2h.send', code: 0x0203, summary: 'A send for an I/O processor' do
   field :name, :text
   field :data, :vref, 'the namelist and params, aggregated by the data model'
   field :content, :vref, '<content>, or 0'
+  field :trace_id_high, :u64, 'the sending step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context'
+  field :trace_id_low, :u64, 'the W3C trace ID, low 64 bits'
+  field :span_id, :u64, 'the sending step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header'
+  field :trace_flags, :u8, 'the W3C trace-flags'
   see 'c2h.macrostep_ended'
 end
 
 message 'c2h.invoke', code: 0x0204, summary: 'Start an invocation' do
   doc 'Written in the post-macrostep startup phase. This record seq is the ' \
       'live service-instance token; authored invokeid remains the SCXML identity.'
+  doc 'The trace fields are the context and span ID of the step that ' \
+      'started the invocation, as for c2h.send. The invoker carries them ' \
+      'to the service and back on its h2c.event and h2c.invoke_report.'
   field :macrostep, :macrostep, 'the stabilization macrostep that enabled this startup'
   field :invokeid, :text
   field :type, :text
   field :src, :text
   field :data, :vref
   field :content, :vref, 'evaluated content, or 0'
+  field :trace_id_high, :u64, 'the sending step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context'
+  field :trace_id_low, :u64, 'the W3C trace ID, low 64 bits'
+  field :span_id, :u64, 'the sending step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header'
   field :autoforward, :bool
+  field :trace_flags, :u8, 'the W3C trace-flags'
   replies_with 'h2c.invoke_report', 'h2c.event'
 end
 
@@ -462,17 +516,30 @@ message 'c2h.invoke_forward', code: 0x0206, summary: 'Autoforward an event to an
   field :origin_type, :text, 'the original event origintype'
   field :event_invokeid, :text, 'the original event invokeid'
   field :data, :vref
+  field :trace_id_high, :u64, 'the forwarding step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context'
+  field :trace_id_low, :u64, 'the W3C trace ID, low 64 bits'
+  field :span_id, :u64, 'the forwarding step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header'
   field :type, :event_type
+  field :trace_flags, :u8, 'the W3C trace-flags'
   doc 'Every event field is preserved at the autoforward point. Finalize runs ' \
       'first, as in the SCXML algorithm; each recipient then receives its own ' \
       'copy_out data before transition code runs. ' \
       'Record space is mandatory; a data-model copy failure remains error.execution.'
+  doc 'The trace fields are the context and span ID of the forwarding ' \
+      'step, as for c2h.send.'
 end
 
 message 'c2h.log', code: 0x0207, summary: 'A <log>' do
+  doc 'The trace fields are the context and span ID of the step that ran ' \
+      'the <log> (core ADR 0072), so a log lands next to the spans of its ' \
+      'macrostep.'
   field :macrostep, :macrostep
   field :label, :text
   field :value, :vref
+  field :trace_id_high, :u64, 'the logging step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context'
+  field :trace_id_low, :u64, 'the W3C trace ID, low 64 bits'
+  field :span_id, :u64, 'the logging step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header'
+  field :trace_flags, :u8, 'the W3C trace-flags'
 end
 
 message 'c2h.macrostep_ended', code: 0x0208, summary: 'A macrostep ended' do

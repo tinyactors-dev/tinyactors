@@ -20,14 +20,14 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | Code | Message | Summary | Fixed bytes |
 |---|---|---|---|
 | `0x0101` | [`h2c.time`](#h2ctime) | Move the system clock | 32 |
-| `0x0102` | [`h2c.event`](#h2cevent) | An external event for a session | 104 |
-| `0x0103` | [`h2c.spawn`](#h2cspawn) | Create a session | 80 |
+| `0x0102` | [`h2c.event`](#h2cevent) | An external event for a session | 128 |
+| `0x0103` | [`h2c.spawn`](#h2cspawn) | Create a session | 112 |
 | `0x0104` | [`h2c.publish`](#h2cpublish) | End a replay and put the session on the route | 48 |
 | `0x0105` | [`h2c.load`](#h2cload) | Bring an unloaded session back | 56 |
 | `0x0106` | [`h2c.load_failed`](#h2cload_failed) | The session cannot be loaded | 56 |
 | `0x0107` | [`h2c.unload`](#h2cunload) | Page a stable session out | 48 |
 | `0x0108` | [`h2c.checkpoint`](#h2ccheckpoint) | Ask for a recorded session's state | 48 |
-| `0x0109` | [`h2c.invoke_report`](#h2cinvoke_report) | An invoked service finished or failed | 72 |
+| `0x0109` | [`h2c.invoke_report`](#h2cinvoke_report) | An invoked service finished or failed | 96 |
 | `0x010A` | [`h2c.destroy`](#h2cdestroy) | End a session now | 40 |
 | `0x010B` | [`h2c.definition_register`](#h2cdefinition_register) | Compile and register a complete definition | 56 |
 | `0x010C` | [`h2c.definition_release`](#h2cdefinition_release) | Release one registration hold | 40 |
@@ -35,12 +35,12 @@ Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edi
 | `0x010E` | [`h2c.withdraw`](#h2cwithdraw) | Take back an admitted input that has not been taken | 40 |
 | `0x010F` | [`h2c.type_declare`](#h2ctype_declare) | Declare an I/O processor or invoker type | 48 |
 | `0x0201` | [`c2h.spawned`](#c2hspawned) | A session exists | 64 |
-| `0x0202` | [`c2h.input`](#c2hinput) | A recorded session took an input | 128 |
-| `0x0203` | [`c2h.send`](#c2hsend) | A send for an I/O processor | 88 |
-| `0x0204` | [`c2h.invoke`](#c2hinvoke) | Start an invocation | 88 |
+| `0x0202` | [`c2h.input`](#c2hinput) | A recorded session took an input | 152 |
+| `0x0203` | [`c2h.send`](#c2hsend) | A send for an I/O processor | 120 |
+| `0x0204` | [`c2h.invoke`](#c2hinvoke) | Start an invocation | 112 |
 | `0x0205` | [`c2h.invoke_cancel`](#c2hinvoke_cancel) | Cancel an invocation | 56 |
-| `0x0206` | [`c2h.invoke_forward`](#c2hinvoke_forward) | Autoforward an event to an invocation | 112 |
-| `0x0207` | [`c2h.log`](#c2hlog) | A <log> | 56 |
+| `0x0206` | [`c2h.invoke_forward`](#c2hinvoke_forward) | Autoforward an event to an invocation | 136 |
+| `0x0207` | [`c2h.log`](#c2hlog) | A <log> | 88 |
 | `0x0208` | [`c2h.macrostep_ended`](#c2hmacrostep_ended) | A macrostep ended | 72 |
 | `0x0209` | [`c2h.wake`](#c2hwake) | Call core back at this time | 40 |
 | `0x020A` | [`c2h.bounced`](#c2hbounced) | An h2c record was not run | 56 |
@@ -81,11 +81,13 @@ The header `at` is the new time. It never moves back. Delayed sends due by then 
 
 ## h2c.event
 
-`0x0102` on `h2c`, 104 fixed bytes. An external event for a session.
+`0x0102` on `h2c`, 128 fixed bytes. An external event for a session.
 
 Header `session` names a resident session, or is 0 and `target` gives an address. Admitted into the pool when the pool is below its watermark. An event for an unloaded address waits in the pool and core asks for the session with c2h.load_needed. A capacity refusal consumes and bounces the record, allowing later controls to progress.
 
 A live input runs at system time when taken; its header at does not advance that clock. A replay input moves its prepared session clock at take. Complete event metadata must also fit the expanded c2h.input. Service events carry invocation_seq, checked again at take. Zero means ordinary input, or an application-supplied replay seed.
+
+A trace parent travels with the event (core ADRs 0067, 0073). A host that receives a traceparent header parses it (core's native ta_traceparent_parse) and fills the trace fields. The macrostep that takes the event runs under that context, with the cause key {session 0, macrostep parent_span_id}. An all-zero trace ID means no context. The envelope keeps the trace parent until take (reference/envelope.md).
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -97,18 +99,25 @@ A live input runs at system time when taken; its header at does not advance that
 | 72 | `invokeid` | text | _event.invokeid for an invoked service, or empty |
 | 80 | `invocation_seq` | seq | c2h.invoke seq for a live service instance; 0 for ordinary input or replay seeds |
 | 88 | `data` | vref | _event.data |
-| 96 | `type` | event_type (u8) | almost always external |
+| 96 | `trace_id_high` | u64 | the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context |
+| 104 | `trace_id_low` | u64 | the W3C trace ID, low 64 bits |
+| 112 | `parent_span_id` | u64 | the W3C parent-id the macrostep runs under; 0 for none |
+| 120 | `type` | event_type (u8) | almost always external |
+| 121 | `trace_flags` | u8 | the W3C trace-flags (sampled, random) |
+| 122 | `trace_detail` | u8 | the local detail byte (watched); never W3C, never in a traceparent |
 
 - may be answered by: [`c2h.input`](#c2hinput), [`c2h.bounced`](#c2hbounced), [`c2h.load_needed`](#c2hload_needed), [`c2h.input_refused`](#c2hinput_refused), [`c2h.input_completed`](#c2hinput_completed)
 - see: [`h2c.withdraw`](#h2cwithdraw)
 
 ## h2c.spawn
 
-`0x0103` on `h2c`, 80 fixed bytes. Create a session.
+`0x0103` on `h2c`, 112 fixed bytes. Create a session.
 
 With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish. Inputs seed new configuration and data model values; exact restoration is not promised.
 
 With `state`, the session is restored from a checkpoint (c2h.state, core ADR 0091) as a replaying session whose clock starts at the state's; the c2h.input records after the checkpoint follow. This is how a session survives a restart. h2c.load is not: it only pages a session back into memory within one process.
+
+The trace fields are the trace parent the bootstrap macrostep runs under, as for h2c.event. When it answers c2h.load_needed and has none, the bootstrap runs under the trace parent of the first envelope waiting for the address.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -118,6 +127,11 @@ With `state`, the session is restored from a checkpoint (c2h.state, core ADR 009
 | 56 | `clock` | time | with replaying_from_clock: the replayed run’s start |
 | 64 | `state` | blob | a checkpoint c2h.state wrote, to restore; 0 for none |
 | 72 | `request_seq` | seq | c2h.load_needed seq when answering a virtual-family load; 0 for an unsolicited spawn |
+| 80 | `trace_id_high` | u64 | the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context |
+| 88 | `trace_id_low` | u64 | the W3C trace ID, low 64 bits |
+| 96 | `parent_span_id` | u64 | the W3C parent-id the macrostep runs under; 0 for none |
+| 104 | `trace_flags` | u8 | the W3C trace-flags (sampled, random) |
+| 105 | `trace_detail` | u8 | the local detail byte (watched); never W3C, never in a traceparent |
 
 - flag bit 0 `replaying_from_clock`: the session replays; `clock` is where its run began
 - may be answered by: [`c2h.spawned`](#c2hspawned), [`c2h.bounced`](#c2hbounced), [`c2h.input_completed`](#c2hinput_completed)
@@ -200,9 +214,9 @@ Refuses a session that holds a macrostep slot (bounce reason active).
 
 ## h2c.invoke_report
 
-`0x0109` on `h2c`, 72 fixed bytes. An invoked service finished or failed.
+`0x0109` on `h2c`, 96 fixed bytes. An invoked service finished or failed.
 
-Header `session` is the invoking session.
+Header `session` is the invoking session. The trace fields are the trace parent the report's macrostep runs under, as for h2c.event; an invoker usually copies the context and span ID of its c2h.invoke.
 
 Done enters the external queue with invoke metadata for finalize; errors are platform/internal events without event invokeid. A stale live instance cannot change a later invocation with the same authored ID.
 
@@ -212,8 +226,13 @@ Done enters the external queue with invoke metadata for finalize; errors are pla
 | 40 | `invocation_seq` | seq | the c2h.invoke seq; checked at take, 0 only for replay seeds |
 | 48 | `reason` | text | for error: the reason segment |
 | 56 | `data` | vref | done data or error data |
-| 64 | `kind` | invoke_report_kind (u8) |  |
-| 65 | `ends` | bool | for error: retire the matching instance at take after validation and internal notification enqueue; false preserves it |
+| 64 | `trace_id_high` | u64 | the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context |
+| 72 | `trace_id_low` | u64 | the W3C trace ID, low 64 bits |
+| 80 | `parent_span_id` | u64 | the W3C parent-id the macrostep runs under; 0 for none |
+| 88 | `kind` | invoke_report_kind (u8) |  |
+| 89 | `ends` | bool | for error: retire the matching instance at take after validation and internal notification enqueue; false preserves it |
+| 90 | `trace_flags` | u8 | the W3C trace-flags (sampled, random) |
+| 91 | `trace_detail` | u8 | the local detail byte (watched); never W3C, never in a traceparent |
 
 - may be answered by: [`c2h.input`](#c2hinput), [`c2h.bounced`](#c2hbounced), [`c2h.input_refused`](#c2hinput_refused), [`c2h.input_completed`](#c2hinput_completed)
 - see: [`h2c.withdraw`](#h2cwithdraw)
@@ -317,13 +336,15 @@ Creation does not imply bootstrap and invocation startup have settled. c2h.input
 
 ## c2h.input
 
-`0x0202` on `c2h`, 128 fixed bytes. A recorded session took an input.
+`0x0202` on `c2h`, 152 fixed bytes. A recorded session took an input.
 
 Written when a recorded session takes an envelope, before any effect of the macrostep it starts. These observations, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), seed a new execution. Recording imposes no persistence-before-effects rule.
 
 Not written for an input a replaying session takes: that input is already in the log being replayed. A session restored from c2h.state and replayed starts writing c2h.input again after h2c.publish.
 
 Data is a copy_out snapshot created before binding or running the input, including finalize and autoforward. Later chart mutations cannot change it.
+
+The trace fields are the trace parent the macrostep runs under, in h2c.event's form, so a journal keeps it and a replay fed back as h2c.event runs under the same trace ID and parent span. For mail and timers, parent_span_id is the span ID of the sending step: the cause's step key becomes a host cause with the same span ID.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -336,21 +357,28 @@ Data is a copy_out snapshot created before binding or running the input, includi
 | 80 | `origin_type` | text |  |
 | 88 | `invokeid` | text |  |
 | 96 | `data` | vref |  |
-| 104 | `source` | input_source (u8) |  |
-| 105 | `type` | event_type (u8) |  |
-| 108 | `report_invokeid` | text | source invoke_report: original report invocation ID, separate from event invokeid |
-| 116 | `report_reason` | text | source invoke_report/error: original reason token |
-| 124 | `report_kind` | invoke_report_kind (u8) | source invoke_report only; otherwise ignored |
-| 125 | `report_ends` | bool | source invoke_report/error: original retirement decision |
+| 104 | `trace_id_high` | u64 | the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context |
+| 112 | `trace_id_low` | u64 | the W3C trace ID, low 64 bits |
+| 120 | `parent_span_id` | u64 | the span ID of the cause (ta_step_key_span_id): the host's parent-id, or the sending step of mail and timers; 0 for none |
+| 128 | `source` | input_source (u8) |  |
+| 129 | `type` | event_type (u8) |  |
+| 130 | `trace_flags` | u8 | the W3C trace-flags (sampled, random) |
+| 131 | `trace_detail` | u8 | the local detail byte (watched); never W3C, never in a traceparent |
+| 132 | `report_invokeid` | text | source invoke_report: original report invocation ID, separate from event invokeid |
+| 140 | `report_reason` | text | source invoke_report/error: original reason token |
+| 148 | `report_kind` | invoke_report_kind (u8) | source invoke_report only; otherwise ignored |
+| 149 | `report_ends` | bool | source invoke_report/error: original retirement decision |
 
 
 ## c2h.send
 
-`0x0203` on `c2h`, 88 fixed bytes. A send for an I/O processor.
+`0x0203` on `c2h`, 120 fixed bytes. A send for an I/O processor.
 
 Mail to a local session never appears here: it is an envelope (reference/envelope.md). A delayed send to an I/O processor waits in the pool and is written when due. The host may execute the send on receipt, without waiting for c2h.macrostep_ended or persistence.
 
 A delayed send that becomes due on h2c.time is written outside any macrostep: its `macrostep` is 0, no end report follows, and the host may act on it at once. An end report would describe a macrostep that does not exist (reference/envelope.md, "A due send to an I/O processor has no macrostep end").
+
+The trace fields are the sending step's trace context and span ID (core ADR 0067), so the processor writes a traceparent header (version 00, trace ID, span_id, trace_flags) without calling into core. A delayed send keeps them in its envelope and carries the step that sent it, not the h2c.time that made it due.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -361,14 +389,20 @@ A delayed send that becomes due on h2c.time is written outside any macrostep: it
 | 64 | `name` | text |  |
 | 72 | `data` | vref | the namelist and params, aggregated by the data model |
 | 80 | `content` | vref | <content>, or 0 |
+| 88 | `trace_id_high` | u64 | the sending step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context |
+| 96 | `trace_id_low` | u64 | the W3C trace ID, low 64 bits |
+| 104 | `span_id` | u64 | the sending step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header |
+| 112 | `trace_flags` | u8 | the W3C trace-flags |
 
 - see: [`c2h.macrostep_ended`](#c2hmacrostep_ended)
 
 ## c2h.invoke
 
-`0x0204` on `c2h`, 88 fixed bytes. Start an invocation.
+`0x0204` on `c2h`, 112 fixed bytes. Start an invocation.
 
 Written in the post-macrostep startup phase. This record seq is the live service-instance token; authored invokeid remains the SCXML identity.
+
+The trace fields are the context and span ID of the step that started the invocation, as for c2h.send. The invoker carries them to the service and back on its h2c.event and h2c.invoke_report.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -378,7 +412,11 @@ Written in the post-macrostep startup phase. This record seq is the live service
 | 56 | `src` | text |  |
 | 64 | `data` | vref |  |
 | 72 | `content` | vref | evaluated content, or 0 |
-| 80 | `autoforward` | bool |  |
+| 80 | `trace_id_high` | u64 | the sending step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context |
+| 88 | `trace_id_low` | u64 | the W3C trace ID, low 64 bits |
+| 96 | `span_id` | u64 | the sending step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header |
+| 104 | `autoforward` | bool |  |
+| 105 | `trace_flags` | u8 | the W3C trace-flags |
 
 - may be answered by: [`h2c.invoke_report`](#h2cinvoke_report), [`h2c.event`](#h2cevent)
 
@@ -397,9 +435,11 @@ Mandatory state-exit output, reserved before execution. The host invalidates thi
 
 ## c2h.invoke_forward
 
-`0x0206` on `c2h`, 112 fixed bytes. Autoforward an event to an invocation.
+`0x0206` on `c2h`, 136 fixed bytes. Autoforward an event to an invocation.
 
 Every event field is preserved at the autoforward point. Finalize runs first, as in the SCXML algorithm; each recipient then receives its own copy_out data before transition code runs. Record space is mandatory; a data-model copy failure remains error.execution.
+
+The trace fields are the context and span ID of the forwarding step, as for c2h.send.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -412,18 +452,28 @@ Every event field is preserved at the autoforward point. Finalize runs first, as
 | 80 | `origin_type` | text | the original event origintype |
 | 88 | `event_invokeid` | text | the original event invokeid |
 | 96 | `data` | vref |  |
-| 104 | `type` | event_type (u8) |  |
+| 104 | `trace_id_high` | u64 | the forwarding step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context |
+| 112 | `trace_id_low` | u64 | the W3C trace ID, low 64 bits |
+| 120 | `span_id` | u64 | the forwarding step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header |
+| 128 | `type` | event_type (u8) |  |
+| 129 | `trace_flags` | u8 | the W3C trace-flags |
 
 
 ## c2h.log
 
-`0x0207` on `c2h`, 56 fixed bytes. A <log>.
+`0x0207` on `c2h`, 88 fixed bytes. A <log>.
+
+The trace fields are the context and span ID of the step that ran the <log> (core ADR 0072), so a log lands next to the spans of its macrostep.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 32 | `macrostep` | macrostep |  |
 | 40 | `label` | text |  |
 | 48 | `value` | vref |  |
+| 56 | `trace_id_high` | u64 | the logging step’s W3C trace ID, high 64 bits; all zero with trace_id_low when it has no trace context |
+| 64 | `trace_id_low` | u64 | the W3C trace ID, low 64 bits |
+| 72 | `span_id` | u64 | the logging step’s span ID (ta_step_key_span_id), the parent-id of a traceparent header |
+| 80 | `trace_flags` | u8 | the W3C trace-flags |
 
 
 ## c2h.macrostep_ended

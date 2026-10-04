@@ -156,7 +156,9 @@ It holds the text of every envelope:
 - the origin, origintype and invokeid of external input;
 - an unresolved target address;
 - a send ID that came from outside;
-- an invocation error's reason.
+- an invocation error's reason;
+- the trace parent of a traced envelope, 40 bytes
+  ([envelope.md](envelope.md#the-trace-parent)).
 
 **Layout: fixed chunks.** Envelopes are freed out of order (a timer outlives
 the mail around it), so a bump arena would fragment. Instead, the area is
@@ -166,7 +168,7 @@ holds its first chunk and the total length ([envelope.md](envelope.md)).
 
 - Taking and freeing are O(1), with no fragmentation.
 - Most envelopes need one chunk: `order.paid`, plus an empty origin, fits
-  easily.
+  easily. A traced envelope usually needs two.
 - The overhead is 4 bytes in 64, plus the unused end of the last chunk.
   This is an **estimate** to check against real traffic.
 
