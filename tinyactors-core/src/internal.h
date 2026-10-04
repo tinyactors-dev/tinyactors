@@ -13,6 +13,7 @@
 #include "generated/ring_codec.h"
 #include "tree.h"
 #include "atom.h"
+#include "names.h"
 #include "address.h"
 #include "io_origin.h"
 #include "session.h"
