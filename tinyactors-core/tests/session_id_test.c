@@ -558,6 +558,22 @@ static void test_a_step_key_names_its_family(void) {
     finish(&f);
 }
 
+/* The first session costs the 6 KiB node page and a 64 slot index, not a 24 KiB page and a 32 KiB index. */
+static void test_first_use_is_small(void) {
+    ta_session_table table;
+    ta_session_table_init(&table, test_allocator);
+    ta_test_allocator_reset_counts(&heap);
+    ta_actor stand_in;
+    uint32_t node = 0;
+    CHECK(ta_session_node_new(&table, &(ta_session_node_params){ .id = ta_actor_id_make(1u, 1u), .actor = &stand_in }, &node) == TA_OK);
+    ta_session_insert(&table, node);
+    printf("session id test: first session holds %zu bytes\n", heap.stats.live_bytes);
+    CHECK(heap.stats.live_bytes <= 8u * 1024u);
+    CHECK(heap.stats.largest_block <= 6u * 1024u + 512u);
+    ta_session_table_destroy(&table);
+    CHECK(heap.stats.live_blocks == 0);
+}
+
 int main(void) {
     test_a_step_key_names_its_family();
     test_an_unnamed_session_names_its_family();
@@ -571,6 +587,7 @@ int main(void) {
     test_equal_hash_session_ids_still_insert();
     test_node_new_then_insert_with_removals_between();
     test_node_new_allocation_failures();
+    test_first_use_is_small();
     if (failures != 0) {
         fprintf(stderr, "session id test: %d check(s) failed\n", failures);
         return 1;

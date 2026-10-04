@@ -3,8 +3,10 @@
 
 /* The package comment is in atom.h. */
 
-/* Slots per index page: 8 KiB, so the atom index grows in small, flat steps. */
+/* Slots per full index page: 8 KiB, so the atom index grows in small, flat steps. */
 #define TA_ATOM_PAGE_SLOTS 1024u
+/* Slots of the first page: 512 bytes. Most systems intern a few dozen names; ta_table_grow doubles the page to TA_ATOM_PAGE_SLOTS before it adds one. */
+#define TA_ATOM_FIRST_SLOTS 64u
 
 static uint32_t ta_atom_hash(ta_str text) {
     return ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);
@@ -34,7 +36,7 @@ ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator allocator) {
     ta_result result = ta_arena_init(&table->strings, allocator, 4096);
     if (result == TA_OK) {
         result = ta_table_init(&table->index, allocator,
-                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_ATOM_PAGE_SLOTS, .grow_sixteenths = 6 });
+                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_ATOM_PAGE_SLOTS, .first_slots = TA_ATOM_FIRST_SLOTS, .grow_sixteenths = 6 });
     }
     /* Atom 0 is the empty text, which no family is, so a zeroed family
      * atom names none (ADR 0088). */

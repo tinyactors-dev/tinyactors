@@ -5,13 +5,17 @@
 /* The package comment is in session.h. */
 
 /*
- * A page of the node pool holds 1024 nodes of 24 bytes (24 KiB), and a page
- * of the index 4096 slots of 8 bytes (32 KiB), so the largest block the
- * table asks for stays flat as sessions come and go. The index grows at 7/16
- * of its slots: sessions are few, and a denser index costs less than the
+ * A page of the node pool holds 256 nodes of 24 bytes (6 KiB), and a full
+ * page of the index 4096 slots of 8 bytes (32 KiB), so the largest block the
+ * table asks for stays flat as sessions come and go (the pool's page
+ * directory is 16 bytes per page: 64 KiB at a million sessions). The index
+ * starts at 64 slots (512 bytes) and ta_table_grow doubles it to 4096 before
+ * it adds a page, so the first session costs about 7 KiB. The index grows at
+ * 7/16 of its slots: sessions are few, and a denser index costs less than the
  * longer probes just before a round of splits ends.
  */
-#define TA_SESSION_PAGE_NODES 1024u
+#define TA_SESSION_PAGE_NODES 256u
+#define TA_SESSION_FIRST_SLOTS 64u
 #define TA_SESSION_PAGE_SLOTS 4096u
 #define TA_SESSION_GROW_SIXTEENTHS 7u
 
@@ -26,6 +30,7 @@ static const ta_pool_params TA_SESSION_POOL = {
 static const ta_table_params TA_SESSION_INDEX = {
     .mode = TA_TABLE_GROWING,
     .page_slots = TA_SESSION_PAGE_SLOTS,
+    .first_slots = TA_SESSION_FIRST_SLOTS,
     .grow_sixteenths = TA_SESSION_GROW_SIXTEENTHS,
 };
 

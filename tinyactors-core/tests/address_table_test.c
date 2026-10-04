@@ -417,7 +417,7 @@ static void test_honest_population(void) {
                                      .name = { .ptr = text, .len = (uint32_t)length } };
         CHECK(ta_address_table_intern(&table, &address, &addresses[index]) == TA_OK);
     }
-    /* A page of 4096 pointers or 4096 eight byte slots: 32 KiB; the records are far smaller. */
+    /* A full index page of 4096 eight byte slots (32 KiB) is the largest; a pool page of 1024 pointers is 8 KiB. */
     CHECK(plain_heap.stats.largest_block <= 4096u * sizeof(ta_table_slot));
     uint32_t found = 0;
     for (uint32_t index = 0; index < COUNT; index += 1u) {
@@ -437,6 +437,29 @@ static void test_honest_population(void) {
     CHECK(plain_heap.stats.live_blocks == 0);
 }
 
+/*
+ * The first address of a system costs a few KiB, not a full page of every
+ * table: a pool page of 1024 pointers and an index of 64 slots. A limit of
+ * 10 KiB (9.0 KiB measured) leaves room for the record and the directories; the first page of
+ * the index and pool at 4096 items would be over 64 KiB. This is the check
+ * that a table cannot silently put a large first page back.
+ */
+static void test_first_use_is_small(void) {
+    ta_address_table table;
+    ta_address_table_init(&table, ta_test_allocator_get(&plain_heap));
+    ta_test_allocator_reset_counts(&plain_heap);
+    CHECK(plain_heap.stats.live_bytes == 0);
+    ta_actor_address address = { .family = { .name = { .ptr = FAMILY, .len = 3u } }, .name = { .ptr = "first", .len = 5u } };
+    ta_address *first = NULL;
+    CHECK(ta_address_table_intern(&table, &address, &first) == TA_OK);
+    printf("address_table_test: first address holds %zu bytes\n", plain_heap.stats.live_bytes);
+    CHECK(plain_heap.stats.live_bytes <= 10u * 1024u);
+    CHECK(plain_heap.stats.largest_block <= 8u * 1024u);
+    ta_address_release(first);
+    ta_address_table_destroy(&table);
+    CHECK(plain_heap.stats.live_blocks == 0);
+}
+
 int main(void) {
     test_equal_hash_names();
     test_shared_low_bits();
@@ -444,6 +467,7 @@ int main(void) {
     test_identity_and_counting();
     test_destroy();
     test_honest_population();
+    test_first_use_is_small();
     if (failures != 0) {
         fprintf(stderr, "address_table_test: %d checks failed\n", failures);
         return 1;

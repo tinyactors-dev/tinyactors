@@ -69,8 +69,10 @@
 #define TA_TRIE_ROOT 0u
 /* TA_TRIE_MAX_DEPTH is the ceiling of max_depth; it sizes the arrays callers pass to ta_trie_segments. */
 #define TA_TRIE_MAX_DEPTH 64u
-/* Slots per index page: 8 KiB, so the index grows in small, flat steps. */
+/* Slots per full index page: 8 KiB, so the index grows in small, flat steps. */
 #define TA_TRIE_PAGE_SLOTS 1024u
+/* Slots of the first page: 512 bytes; ta_table_grow doubles it to TA_TRIE_PAGE_SLOTS before it adds a page. */
+#define TA_TRIE_FIRST_SLOTS 64u
 
 typedef struct ta_trie_node {
     uint32_t parent;

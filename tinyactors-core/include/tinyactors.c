@@ -2300,8 +2300,10 @@ TA_PRIVATE bool ta_atom_valid(const ta_atom_table *table, ta_atom atom);
 #define TA_TRIE_ROOT 0u
 /* TA_TRIE_MAX_DEPTH is the ceiling of max_depth; it sizes the arrays callers pass to ta_trie_segments. */
 #define TA_TRIE_MAX_DEPTH 64u
-/* Slots per index page: 8 KiB, so the index grows in small, flat steps. */
+/* Slots per full index page: 8 KiB, so the index grows in small, flat steps. */
 #define TA_TRIE_PAGE_SLOTS 1024u
+/* Slots of the first page: 512 bytes; ta_table_grow doubles it to TA_TRIE_PAGE_SLOTS before it adds a page. */
+#define TA_TRIE_FIRST_SLOTS 64u
 
 typedef struct ta_trie_node {
     uint32_t parent;
@@ -7087,8 +7089,10 @@ TA_PRIVATE size_t ta_table_bytes(const ta_table *table) {
 
 /* The package comment is in atom.h. */
 
-/* Slots per index page: 8 KiB, so the atom index grows in small, flat steps. */
+/* Slots per full index page: 8 KiB, so the atom index grows in small, flat steps. */
 #define TA_ATOM_PAGE_SLOTS 1024u
+/* Slots of the first page: 512 bytes. Most systems intern a few dozen names; ta_table_grow doubles the page to TA_ATOM_PAGE_SLOTS before it adds one. */
+#define TA_ATOM_FIRST_SLOTS 64u
 
 static uint32_t ta_atom_hash(ta_str text) {
     return ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);
@@ -7118,7 +7122,7 @@ TA_PRIVATE ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator alloc
     ta_result result = ta_arena_init(&table->strings, allocator, 4096);
     if (result == TA_OK) {
         result = ta_table_init(&table->index, allocator,
-                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_ATOM_PAGE_SLOTS, .grow_sixteenths = 6 });
+                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_ATOM_PAGE_SLOTS, .first_slots = TA_ATOM_FIRST_SLOTS, .grow_sixteenths = 6 });
     }
     /* Atom 0 is the empty text, which no family is, so a zeroed family
      * atom names none (ADR 0088). */
@@ -7236,7 +7240,7 @@ TA_PRIVATE ta_result ta_trie_init(ta_atom_trie *trie, ta_allocator allocator, ui
     ta_result result = ta_vec_push(&trie->nodes, &root);
     if (result == TA_OK) {
         result = ta_table_init(&trie->index, allocator,
-                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_TRIE_PAGE_SLOTS, .grow_sixteenths = 6 });
+                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_TRIE_PAGE_SLOTS, .first_slots = TA_TRIE_FIRST_SLOTS, .grow_sixteenths = 6 });
     }
     if (result != TA_OK) {
         ta_trie_destroy(trie);
@@ -7326,12 +7330,17 @@ TA_PRIVATE bool ta_trie_under(const ta_atom_trie *trie, uint32_t node, uint32_t 
 /* The package comment is in address.h. */
 
 /*
- * A page of the record directory holds 4096 pointers (32 KiB) and a page of
- * the index 4096 slots (32 KiB), so the largest block the table asks for
- * stays flat as names are added. The index grows at 7/16 of its slots, which
- * is about 18 bytes of slots per name.
+ * A page of the record directory holds 1024 pointers (8 KiB), and a full page
+ * of the index 4096 slots (32 KiB), so the largest block the table asks for
+ * stays flat as names are added: at four million names the pool's page
+ * directory is 64 KiB, as the actor pool's is. The index starts at 64 slots
+ * (512 bytes) and ta_table_grow doubles that page to 4096 before it adds one,
+ * so a system with a few named actors pays about 9 KiB for its first address
+ * and not 64 KiB. The index grows at 7/16 of its slots, which is about 18
+ * bytes of slots per name.
  */
-#define TA_ADDRESS_PAGE_ITEMS 4096u
+#define TA_ADDRESS_PAGE_ITEMS 1024u
+#define TA_ADDRESS_FIRST_SLOTS 64u
 #define TA_ADDRESS_PAGE_SLOTS 4096u
 #define TA_ADDRESS_GROW_SIXTEENTHS 7u
 
@@ -7346,6 +7355,7 @@ static const ta_pool_params TA_ADDRESS_POOL = {
 static const ta_table_params TA_ADDRESS_INDEX = {
     .mode = TA_TABLE_GROWING,
     .page_slots = TA_ADDRESS_PAGE_SLOTS,
+    .first_slots = TA_ADDRESS_FIRST_SLOTS,
     .grow_sixteenths = TA_ADDRESS_GROW_SIXTEENTHS,
 };
 
@@ -7763,13 +7773,17 @@ TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry) {
 /* The package comment is in session.h. */
 
 /*
- * A page of the node pool holds 1024 nodes of 24 bytes (24 KiB), and a page
- * of the index 4096 slots of 8 bytes (32 KiB), so the largest block the
- * table asks for stays flat as sessions come and go. The index grows at 7/16
- * of its slots: sessions are few, and a denser index costs less than the
+ * A page of the node pool holds 256 nodes of 24 bytes (6 KiB), and a full
+ * page of the index 4096 slots of 8 bytes (32 KiB), so the largest block the
+ * table asks for stays flat as sessions come and go (the pool's page
+ * directory is 16 bytes per page: 64 KiB at a million sessions). The index
+ * starts at 64 slots (512 bytes) and ta_table_grow doubles it to 4096 before
+ * it adds a page, so the first session costs about 7 KiB. The index grows at
+ * 7/16 of its slots: sessions are few, and a denser index costs less than the
  * longer probes just before a round of splits ends.
  */
-#define TA_SESSION_PAGE_NODES 1024u
+#define TA_SESSION_PAGE_NODES 256u
+#define TA_SESSION_FIRST_SLOTS 64u
 #define TA_SESSION_PAGE_SLOTS 4096u
 #define TA_SESSION_GROW_SIXTEENTHS 7u
 
@@ -7784,6 +7798,7 @@ static const ta_pool_params TA_SESSION_POOL = {
 static const ta_table_params TA_SESSION_INDEX = {
     .mode = TA_TABLE_GROWING,
     .page_slots = TA_SESSION_PAGE_SLOTS,
+    .first_slots = TA_SESSION_FIRST_SLOTS,
     .grow_sixteenths = TA_SESSION_GROW_SIXTEENTHS,
 };
 

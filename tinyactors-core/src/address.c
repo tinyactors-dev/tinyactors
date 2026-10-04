@@ -5,12 +5,17 @@
 /* The package comment is in address.h. */
 
 /*
- * A page of the record directory holds 4096 pointers (32 KiB) and a page of
- * the index 4096 slots (32 KiB), so the largest block the table asks for
- * stays flat as names are added. The index grows at 7/16 of its slots, which
- * is about 18 bytes of slots per name.
+ * A page of the record directory holds 1024 pointers (8 KiB), and a full page
+ * of the index 4096 slots (32 KiB), so the largest block the table asks for
+ * stays flat as names are added: at four million names the pool's page
+ * directory is 64 KiB, as the actor pool's is. The index starts at 64 slots
+ * (512 bytes) and ta_table_grow doubles that page to 4096 before it adds one,
+ * so a system with a few named actors pays about 9 KiB for its first address
+ * and not 64 KiB. The index grows at 7/16 of its slots, which is about 18
+ * bytes of slots per name.
  */
-#define TA_ADDRESS_PAGE_ITEMS 4096u
+#define TA_ADDRESS_PAGE_ITEMS 1024u
+#define TA_ADDRESS_FIRST_SLOTS 64u
 #define TA_ADDRESS_PAGE_SLOTS 4096u
 #define TA_ADDRESS_GROW_SIXTEENTHS 7u
 
@@ -25,6 +30,7 @@ static const ta_pool_params TA_ADDRESS_POOL = {
 static const ta_table_params TA_ADDRESS_INDEX = {
     .mode = TA_TABLE_GROWING,
     .page_slots = TA_ADDRESS_PAGE_SLOTS,
+    .first_slots = TA_ADDRESS_FIRST_SLOTS,
     .grow_sixteenths = TA_ADDRESS_GROW_SIXTEENTHS,
 };
 
