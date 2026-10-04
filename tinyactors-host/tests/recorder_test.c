@@ -155,7 +155,9 @@ typedef struct {
 
 static void text_into(char *buffer, size_t capacity, ta_str text) {
     size_t length = text.len < capacity - 1u ? text.len : capacity - 1u;
-    memcpy(buffer, text.ptr, length);
+    if (length > 0u) {
+        memcpy(buffer, text.ptr, length);
+    }
     buffer[length] = '\0';
 }
 
