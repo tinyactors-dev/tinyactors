@@ -5,6 +5,7 @@
 #include "handle.h"
 #include "format.h"
 #include "layout.h"
+#include "quota.h"
 #include "vec.h"
 #include "pool.h"
 #include "arena.h"
