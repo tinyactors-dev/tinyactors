@@ -1061,9 +1061,11 @@ typedef enum pp_parser_state {
 typedef pocketparse_result (*pp_parser_executor)(pocketparse_parser *parser);
 
 /* ** The finishing transition, shared by pocketparse_finish, a generated parser's
-** run entry, and an injected sub-parse. From DROPPED it moves to FAILED and
-** returns push_failed without running anything; otherwise it runs `execute' and
-** moves to FINISHED, returning the executor's result. Lives in parse.c. */
+** run entry, and an injected sub-parse. From DROPPED or FAILED it moves to (or
+** stays in) FAILED and returns push_failed without running anything; otherwise
+** it runs `execute' and moves to FINISHED, returning the executor's result. A
+** generated run entry called again on a FINISHED parser runs again, as it did
+** before the lifecycle existed. Lives in parse.c. */
 pocketparse_result pp_parser_run(pocketparse_parser *parser,
                                  pp_parser_executor execute);
 

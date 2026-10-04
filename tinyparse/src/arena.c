@@ -25,7 +25,8 @@
 **   - every hand-out is aligned to PP_ARENA_ALIGN bytes (offsets are rounded up
 **     relative to the block start, so the host's base should be aligned too);
 **   - pp_alloc returns zeroed bytes, pp_alloc_raw does not;
-**   - NULL is the single out-of-memory signal;
+**   - NULL is the single out-of-memory signal, also for a request too large to
+**     round up (which ax's allocator let wrap around to a tiny block);
 **   - an arena never reallocates, so growing an array means allocating a fresh,
 **     larger block and copying;
 **   - a request larger than the chunk floor gets a chunk of its own size;
@@ -87,7 +88,7 @@ static void *pp_pool_raw(pp_pool *pool, size_t need)
 {
     size_t offset = pp_align_up(pool->used);
 
-    if (offset + need > pool->capacity) {
+    if (offset > pool->capacity || need > pool->capacity - offset) {
         size_t want = need > pool->chunk_minimum ? need : pool->chunk_minimum;
         size_t got  = want;
         void  *block;
@@ -196,8 +197,15 @@ void pp_arena_reset(pp_arena *arena)
 ** chunk last carried, so only a caller that writes before it reads uses this. */
 void *pp_alloc_raw(pp_arena *arena, size_t n)
 {
-    size_t need = pp_align_up(n);
+    size_t need;
     void  *result;
+
+    /* A request that cannot be rounded up, or whose chunk header would not fit
+    ** beside it, can never be served: refuse it rather than let the size wrap
+    ** around to a tiny allocation (ax's allocator had that wrap). */
+    if (n > (size_t)-1 - PP_ARENA_ALIGN - pp_chunk_header())
+        return 0;
+    need = pp_align_up(n);
 
     if (arena->head == 0 || arena->head->capacity - arena->head->used < need) {
         size_t    want  = need > arena->pool->chunk_minimum
