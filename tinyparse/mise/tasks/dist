@@ -17,7 +17,10 @@
 # Then each file is checked (Toolchain::Binary): its architecture; that the
 # archive leaves undefined only the memory functions a compiler emits calls
 # to; that the shared library exports exactly the functions tinyparse.h
-# declares with TINYPARSE_API, and names itself by its versioned file.
+# declares with TINYPARSE_API, and names itself by its versioned file; and
+# that neither the shared library nor the CLI loads any library beside the
+# platform's runtime (none on Linux, where the CLI is static; libSystem on
+# macOS).
 
 require 'cache'
 require 'fileutils'
@@ -59,8 +62,8 @@ Tinyparse::RELEASE_TARGETS.each do |name|
 
   archive.must_be_for!(target).must_leave_undefined_only!(Tinyparse::MEMORY + archive.exports.to_a)
   shared.must_be_for!(target).must_export_exactly!(api).must_leave_undefined_only!(Tinyparse::MEMORY)
-        .must_be_named!(shared.basename)
-  cli.must_be_for!(target)
+        .must_be_named!(shared.basename).must_load_only!([])
+  cli.must_be_for!(target).must_load_only!([])
   puts "dist: #{name}: #{Tinyparse.relative(out)}: the shared library exports the #{api.size} API functions; " \
        'the library leaves undefined only the memory functions'
 end

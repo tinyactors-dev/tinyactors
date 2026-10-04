@@ -7,3 +7,5 @@ trap 'rm -rf "$w"' EXIT
 printf '(a (b c))' | "$w/tp_g"
 <<<assert
 exit 0
+out-contains List
+out-contains Atom

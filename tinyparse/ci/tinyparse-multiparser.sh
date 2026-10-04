@@ -70,7 +70,7 @@ fi
 
 # 4. Assert both parsers' distinct entries are present and no collision-prone
 #    default symbol survived (proof the --name prefix actually disjointed them).
-if true; then
+{
   SYMS="$("$TP_NM" "$BUILT/embed" 2>/dev/null || true)"
   for s in host_parser_load host_parser_run json_parser_load json_parser_run; do
     if ! printf '%s\n' "$SYMS" | grep -qE " T $s$"; then
@@ -85,7 +85,7 @@ if true; then
     exit 1
   fi
   echo "  both parsers' entries present; no default-name collision symbol"
-fi
+}
 
 echo "RESULT=1/1"
 echo "== multiparser: GREEN (two parsers, two trees, one binary) =="

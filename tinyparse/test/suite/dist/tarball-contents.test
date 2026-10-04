@@ -3,7 +3,7 @@
 set -e
 d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT
-tar xzf dist/release/tinyparse-0.1.0-x86_64-linux.tar.gz -C "$d"
+"$TP_GZIP" -dc dist/release/tinyparse-0.1.0-x86_64-linux.tar.gz | "$TP_TAR" -x -f - -C "$d"
 r="$d/tinyparse-0.1.0-x86_64-linux"
 test -x "$r/bin/tinyparse"
 test -f "$r/lib/libtinyparse.a"

@@ -1763,6 +1763,12 @@ static inline int tp_vm_extras(tp_vm_state *state, tp_vm_sink *sink)
     return tp_vm_consume_extras(state, sink);
 }
 
+/* The two rule-call helpers below serve only the parsers `tinyparse c`
+** generates, which include this header themselves; the library never calls them.
+** The amalgamation (one translation unit, where an unused static function is a
+** -Wunused-function warning) defines TINYPARSE_AMALGAMATION to leave them out. */
+#ifndef TINYPARSE_AMALGAMATION
+
 /* ** The per-rule CALL lifecycle for the GENERATED native parser (Phase 17
 ** de-packrat). The generated recursive-descent parser is the code a human would
 ** write by hand, and a hand-written RD parser carries NO packrat memo -- so these
@@ -1898,6 +1904,7 @@ static inline int tp_vm_exit(tp_vm_state *state, tp_vm_frame *fr, tp_vm_sink *si
         return TP_VM_OOM;
     return TP_VM_MATCH_OK;
 }
+#endif /* TINYPARSE_AMALGAMATION */
 
 /* ** Run one lowered program to completion on an explicit, arena-backed frame
 ** stack, building into `sink' with the given field/alias decoration (W14-6). This

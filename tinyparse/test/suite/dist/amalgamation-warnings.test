@@ -1,0 +1,13 @@
+# The amalgamation compiles standalone with the pinned clang under every
+# warning the library itself is held to (-Wall -Wextra -pedantic -Werror), both
+# the library translation unit and the CLI beside it, so a user who drops the
+# files into a strict build gets no warning.
+<<<cmd
+set -e
+a="$TP_AMALGAMATION"
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
+"$TP_CC" -std=c11 -Wall -Wextra -pedantic -Werror -I"$a" -c "$a/tinyparse.c" -o "$w/tinyparse.o"
+"$TP_CC" -std=c11 -Wall -Wextra -pedantic -Werror -I"$a" -c "$a/tinyparse_cli.c" -o "$w/tinyparse_cli.o"
+<<<assert
+exit 0

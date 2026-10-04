@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test tinyparse: the data-driven suite over the xfail ledger, and the gates in ci/ (all of them with --full)"
-#MISE sources=["include/**/*", "src/**/*", "test/**/*", "ci/**/*", "examples/**/*", "grammars/**/*", "bench/reclaim_test.c", "tinyparse.1", "INSTALL.md", "install.sh", "VERSION", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
+#MISE sources=["include/**/*", "src/**/*", "test/**/*", "ci/**/*", "examples/**/*", "grammars/**/*", "bench/reclaim_test.c", "tinyparse.1", "INSTALL.md", "install.sh", "VERSION", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise/tasks/test/_default", "../mise.toml"]
 #MISE outputs={auto=true}
 #MISE depends=["build", "amalgamate", "dist", "release"]
 #USAGE flag "--full" help="Also run the gates that take more than a few seconds: the engine and compiled-parser differentials, the export surface, nesting, reclaim and reuse"

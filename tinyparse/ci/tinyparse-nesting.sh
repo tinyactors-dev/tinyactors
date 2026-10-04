@@ -87,7 +87,7 @@ fi
 
 # 4. All three parsers' distinct generated entries are present in the linked
 #    binary (proof the prefixes disjointed three full parser symbol sets).
-if true; then
+{
   SYMS="$("$TP_NM" "$BUILT/nesting" 2>/dev/null || true)"
   for s in fence_host_load fence_host_run json_lang_load json_lang_run \
            js_lang_load js_lang_run; do
@@ -98,7 +98,7 @@ if true; then
     fi
   done
   echo "  all three parsers' entries present (no prefix collision)"
-fi
+}
 
 # 5. The export property for the nesting set: build a SHARED OBJECT of all three
 #    parsers over the amalgamated runtime behind a version script, and assert
@@ -106,7 +106,7 @@ fi
 #    library-internal tp_ symbols. A plain static executable always shows tp_ in
 #    its full symbol table; the exported surface of the embeddable artifact is
 #    what must be clean, and a host that nests these parsers ships that artifact.
-if true; then
+{
   SODIR="$(mktemp -d)"
   SO="$SODIR/libnesting.so"
   if ! ( cd "$TP_DIR/examples/embed" && \
@@ -133,7 +133,7 @@ if true; then
   done
   rm -rf "$SODIR"
   echo "  shared object exports the parsers + tinyparse_* and zero tp_ internals"
-fi
+}
 
 echo "RESULT=1/1"
 echo "== nesting: GREEN (generated host nests generated embedded, == VM) =="
