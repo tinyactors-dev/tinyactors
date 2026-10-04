@@ -10,8 +10,8 @@
 # std.javascript grammar (no module resolver needed), so it does not depend on the
 # gitignored React reference. Run from the repo root: bash ci/pocketparse-reclaim.sh
 set -uo pipefail
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$REPO"
 cd "$REPO" || exit 1
 PLAT=linux-x86_64
 case "$(uname -s)/$(uname -m)" in Darwin/arm64|Darwin/aarch64) PLAT=macos-arm64;; esac
@@ -21,7 +21,7 @@ log(){ printf '[reclaim] %s\n' "$*" >&2; }
 
 log "building pocketparse dist ..."
 ( cd "$PP" && bash build.sh all ) >/dev/null 2>&1
-[ -f "$DIST/libpocketparse.a" ] && [ -f "$DIST/libax.a" ] && [ -x "$CLI" ] || { log "FATAL: dist did not build"; exit 1; }
+[ -f "$DIST/libpocketparse.a" ] && [ -f ] && [ -x "$CLI" ] || { log "FATAL: dist did not build"; exit 1; }
 
 SCRATCH="$PP/bench/reclaim-scratch"; mkdir -p "$SCRATCH"
 PPG="$SCRATCH/std.javascript.ppg"
@@ -43,7 +43,7 @@ log "generated input: $BYTES bytes; will parse it $ITERS times in ONE engine"
 
 log "building reclaim harness ..."
 $CC -std=c11 -O2 -Wall -I "$PP/include" \
-    "$PP/bench/reclaim_test.c" "$DIST/libpocketparse.a" "$DIST/libax.a" \
+    "$PP/bench/reclaim_test.c" "$DIST/libpocketparse.a" \
     -o "$SCRATCH/reclaim_test" 2>/dev/null || { log "FATAL: harness did not compile"; exit 1; }
 
 log "running ($ITERS iterations, ceiling ${CEILING_KB} kb) ..."

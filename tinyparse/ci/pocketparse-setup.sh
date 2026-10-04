@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# scripts/pocketparse-setup.sh — provision pocketparse's Zig 0.15.1 toolchain.
+# ci/pocketparse-setup.sh — provision pocketparse's Zig 0.15.1 toolchain.
 #
-# pocketparse pins Zig 0.15.1 via tools/pocketparse/mise.toml, independent of
-# the repo's 0.16 freestanding toolchain. This SessionStart helper makes that
+# pocketparse pins Zig 0.15.1 via its own mise.toml, independent of
+# the monorepo's zig 0.16 pin. This SessionStart helper makes that
 # compiler reachable in the web sandbox. It is:
 #   - idempotent     (safe to re-run; skips work already done)
 #   - fault-tolerant (no network => warn and exit 0, never wedge the session)
 #   - asynchronous-friendly (does the slow fetch only when needed)
 #
 # Resolution order build.sh uses: $POCKETPARSE_ZIG, then mise, then a local
-# .toolchain/zig, then any `zig` on PATH, then the repo's freestanding zig.
+# .toolchain/zig, then any `zig` on PATH.
 set -uo pipefail
 
-ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$ROOT/tools/pocketparse"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$ROOT"
 ZIG_VERSION="${POCKETPARSE_ZIG_VERSION:-0.15.1}"
 TC="$PP/.toolchain"
 

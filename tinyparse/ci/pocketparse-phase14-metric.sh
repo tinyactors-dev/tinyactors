@@ -4,8 +4,8 @@
 # the standing gates hold. Cheap by default; RUN_GATE=1 also runs the behavioural
 # gates (conformance, differentials).
 set -uo pipefail
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$REPO"
 cd "$REPO" || exit 1
 pass=0; total=6
 row(){ printf '  [%s] %s\n' "$1" "$2"; }

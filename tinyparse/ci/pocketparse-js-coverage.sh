@@ -11,8 +11,8 @@
 # line. Run from the repo root:  bash ci/pocketparse-js-coverage.sh
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 CORPUS="$PP_DIR/reference/tree-sitter-javascript/test/corpus"
 
 platform() {

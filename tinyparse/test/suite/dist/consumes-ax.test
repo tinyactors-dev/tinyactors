@@ -1,4 +1,0 @@
-<<<cmd
-test -f dist/linux-x86_64/libax.a && test -f dist/linux-x86_64/.consumes-ax
-<<<assert
-exit 0

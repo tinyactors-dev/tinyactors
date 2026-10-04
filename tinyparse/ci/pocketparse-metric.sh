@@ -3,16 +3,16 @@
 #
 # It builds what it can, then runs the DATA-driven test harness over the seeded
 # suite and the xfail ledger, and prints PROGRESS=k/n. It exits 0 ONLY when
-# every test passes AND tools/pocketparse/test/xfail.list is empty.
+# every test passes AND test/xfail.list is empty.
 #
 # Fast by default (host build + harness). RUN_GATE=1 also cross-builds the full
 # dist matrix and forces the examples to build — the thorough proof.
 #
-# See tools/pocketparse/docs/build-plan.md.
+# See docs/build-plan.md.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"   # the pocketparse project root
+PP="$REPO"
 cd "$REPO" || exit 1
 
 platform() {
@@ -44,8 +44,8 @@ fi
 ( cd "$PP" && bash build.sh examples ) 2>&1 | sed 's/^/  /'
 
 # 3. The no-global-mutable-state guard: a hard precondition, not a test case.
-#    ax forbids global mutable state and pocketparse inherits the rule, so a
-#    static mutable variable creeping back into src/*.c fails the metric outright
+#    pocketparse forbids global mutable state (every engine is independent and
+#    reentrant), so a static mutable variable creeping back into src/*.c fails the metric outright
 #    (it is exactly the class of bug W64 fixed). Skipped only when ast-grep is
 #    absent, so a host without it still gets the behavioural metric.
 if command -v ast-grep >/dev/null 2>&1; then
@@ -60,11 +60,11 @@ fi
 
 # 4. Point the suite at the freshly built CLI and run it.
 export PP="$PP/dist/$PLAT/pocketparse"
-SUITE="$REPO/tools/pocketparse/test/suite"
-XFAIL="$REPO/tools/pocketparse/test/xfail.list"
+SUITE="$REPO/test/suite"
+XFAIL="$REPO/test/xfail.list"
 
 echo "== harness =="
-"$HARNESS" --suite "$SUITE" --xfail "$XFAIL" --cwd "$REPO/tools/pocketparse"
+"$HARNESS" --suite "$SUITE" --xfail "$XFAIL" --cwd "$REPO"
 rc=$?
 
 case "$rc" in

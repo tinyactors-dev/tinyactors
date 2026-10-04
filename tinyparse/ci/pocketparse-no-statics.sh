@@ -2,13 +2,13 @@
 # ci/pocketparse-no-statics.sh — the no-global-mutable-state guard for the
 # pocketparse library.
 #
-# ax forbids global mutable state, and pocketparse inherits the rule: a file
-# whose behaviour depends on a process-global written at runtime cannot be
-# re-opened cleanly (the classic bug W64 fixed when vmactor's `static int
-# defined` survived an engine re-open and silently dropped every later parse off
-# the actor path). So NO source file under tools/pocketparse/src may declare a
+# pocketparse forbids global mutable state: a file whose behaviour depends on a
+# process-global written at runtime cannot be re-opened cleanly, and two engines
+# in one process would share it (the classic bug W64 fixed, when a `static int
+# defined` survived an engine re-open and silently changed how every later parse
+# ran). So NO source file under tinyparse/src may declare a
 # `static` variable that is written at runtime: such state belongs on the engine
-# (a field of pocketparse_engine) or on the actor's data, not in file storage.
+# (a field of pocketparse_engine) or on the parser, not in file storage.
 #
 # Read-only tables are exempt and stay file-scoped, because they are ROM, not
 # mutable state: a `static const` declaration (the embedded grammar registry, the
@@ -26,8 +26,8 @@
 # Exit 0 only when zero static mutable variables remain.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-SRC="$REPO/tools/pocketparse/src"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+SRC="$REPO/src"
 cd "$REPO" || exit 1
 
 echo "== pocketparse no-statics guard =="
@@ -75,7 +75,7 @@ OUTPUT="$(ast-grep scan -r "$RULE" "${SOURCES[@]}" 2>&1)"
 COUNT="$(printf '%s\n' "$OUTPUT" | grep -c 'pocketparse-no-static-mutable')"
 
 if [ "$COUNT" -ne 0 ]; then
-  echo "FAIL: found $COUNT static mutable variable(s) in tools/pocketparse/src:"
+  echo "FAIL: found $COUNT static mutable variable(s) in tinyparse/src:"
   printf '%s\n' "$OUTPUT"
   echo "STATIC_MUTABLE=$COUNT"
   echo "== no-statics: RED =="

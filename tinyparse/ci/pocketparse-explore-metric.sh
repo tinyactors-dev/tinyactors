@@ -7,8 +7,8 @@
 # the full conformance/differential/perf gates (slower). Set BENCH=1 to require
 # the benchmark arms to actually run (needs node/go/network).
 set -uo pipefail
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$REPO"
 cd "$REPO" || exit 1
 
 pass=0; total=5

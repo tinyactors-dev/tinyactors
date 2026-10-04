@@ -20,8 +20,8 @@
 # Exit 0 only when the imported grammar compiles to C, builds, runs, and produces
 # the golden tree, identical to the VM.
 set -uo pipefail
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 platform() {
   case "$(uname -s)/$(uname -m)" in
     Linux/x86_64) echo linux-x86_64 ;;
@@ -32,7 +32,6 @@ platform() {
 PLAT="$(platform)"
 PP="$PP_DIR/dist/$PLAT/pocketparse"
 LIB="$PP_DIR/dist/$PLAT/libpocketparse.a"
-AXDIR="$REPO/dist/$PLAT"
 INC="$PP_DIR/include"
 SRC="$PP_DIR/src"
 CC="${CC:-cc}"
@@ -45,8 +44,8 @@ echo "== pocketparse import->C gate =="
 
 # 1. Build the CLI + the library archive (the generated parser links against it).
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f "$AXDIR/libax.a" ]; then
-  echo "FATAL: CLI ($PP), libpocketparse ($LIB) or libax not built"; exit 1
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+  echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"; exit 1
 fi
 for f in "$GRAMMAR" "$SAMPLE" "$GOLDEN"; do
   [ -f "$f" ] || { echo "FATAL: missing fixture $f"; exit 1; }
@@ -65,14 +64,14 @@ if ! "$PP" c "$GRAMMAR" --parser --out "$CFILE" 2>"$SCRATCH/gen.err"; then
 fi
 
 # 3. Build it.
-if ! "$CC" -std=c11 -O2 -I"$INC" -I"$AXDIR" -I"$SRC" \
-      "$CFILE" "$LIB" "$AXDIR/libax.a" -o "$BIN" 2>"$SCRATCH/cc.err"; then
+if ! "$CC" -std=c11 -O2 -I"$INC" -I"$SRC" \
+      "$CFILE" "$LIB" -o "$BIN" 2>"$SCRATCH/cc.err"; then
   echo "  CC FAIL:"; sed 's/^/      /' "$SCRATCH/cc.err" | head -20; exit 1
 fi
 
 # 4. Run it on the sample and compare to the golden AND the VM.
 "$BIN" < "$SAMPLE" > "$SCRATCH/got.tree" 2>&1; rc=$?
-POCKETPARSE_ENGINE=vm-ax "$PP" run "$GRAMMAR" --input "$SAMPLE" --dump-tree \
+"$PP" run "$GRAMMAR" --input "$SAMPLE" --dump-tree \
   > "$SCRATCH/vm.tree" 2>&1
 
 ok=1

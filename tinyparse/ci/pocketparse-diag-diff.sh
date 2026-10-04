@@ -11,7 +11,7 @@
 # (W17-2). The owner's explicit fear is that the rewrite quietly drops the
 # detailed error reporting that distinguishes pocketparse. This gate is the net
 # that keeps it honest: for every broken input it runs BOTH the bytecode VM
-# (POCKETPARSE_ENGINE=vm-ax, the differential oracle) and the freshly generated C
+# (`pocketparse run`, the differential oracle) and the freshly generated C
 # parser, and asserts that
 #
 #   - STDOUT (the --dump-tree output, including each MISSING node in its pre-order
@@ -34,8 +34,8 @@
 # Exit 0 only when stdout, stderr, and exit code matched for every broken input.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 cd "$REPO" || exit 1
 
 platform() {
@@ -48,7 +48,6 @@ platform() {
 PLAT="$(platform)"
 PP="$PP_DIR/dist/$PLAT/pocketparse"
 LIB="$PP_DIR/dist/$PLAT/libpocketparse.a"
-AXDIR="$REPO/dist/$PLAT"
 INC="$PP_DIR/include"
 SRC="$PP_DIR/src"
 
@@ -56,8 +55,8 @@ echo "== pocketparse diagnostics-parity differential (diag-diff) =="
 
 # 1. Build the CLI + the library archive (the generated parser links against it).
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f "$AXDIR/libax.a" ]; then
-  echo "FATAL: CLI ($PP), libpocketparse ($LIB) or libax not built"
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+  echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"
   echo "RESULT=0/0"
   exit 1
 fi
@@ -77,8 +76,8 @@ build_parser() { # grammar
     echo "  GEN FAIL ($g): $(head -1 "$SCRATCH/gen_$key.err")" >&2
     return 1
   fi
-  if ! "$CC" -std=c11 -O2 -I"$INC" -I"$AXDIR" -I"$SRC" \
-        "$cfile" "$LIB" "$AXDIR/libax.a" -o "$bin" 2>"$SCRATCH/cc_$key.err"; then
+  if ! "$CC" -std=c11 -O2 -I"$INC" -I"$SRC" \
+        "$cfile" "$LIB" -o "$bin" 2>"$SCRATCH/cc_$key.err"; then
     echo "  CC FAIL ($g):" >&2
     sed 's/^/      /' "$SCRATCH/cc_$key.err" | head -20 >&2
     return 1
@@ -98,7 +97,7 @@ diag_one() { # grammar parser-binary input-file
   local g="$1" bin="$2" f="$3"
   total=$((total + 1))
   "$bin" < "$f" > "$f.gen.out" 2> "$f.gen.err"; local rc1=$?
-  POCKETPARSE_ENGINE=vm-ax "$PP" run "$g" --input "$f" --dump-tree \
+  "$PP" run "$g" --input "$f" --dump-tree \
       > "$f.vm.out" 2> "$f.vm.err"; local rc2=$?
   local ok=1
   [ "$rc1" = "$rc2" ] || ok=0

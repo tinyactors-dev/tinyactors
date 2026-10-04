@@ -8,7 +8,7 @@
 # builds, for every input. This script proves it: for each target grammar it
 # generates the parser C, compiles it together with the pocketparse runtime,
 # parses every relevant corpus input, and asserts its --dump-tree output (and
-# exit code) is byte-identical to the VM's (POCKETPARSE_ENGINE=vm-ax). It is the
+# exit code) is byte-identical to the VM's (`pocketparse run`). It is the
 # new independent oracle W5 will use to delete pp_execute. Modelled on
 # ci/pocketparse-vm-diff.sh.
 #
@@ -22,8 +22,8 @@
 # Exit 0 only when every input matched for every covered grammar.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 cd "$REPO" || exit 1
 
 platform() {
@@ -36,7 +36,6 @@ platform() {
 PLAT="$(platform)"
 PP="$PP_DIR/dist/$PLAT/pocketparse"
 LIB="$PP_DIR/dist/$PLAT/libpocketparse.a"
-AXDIR="$REPO/dist/$PLAT"
 INC="$PP_DIR/include"
 SRC="$PP_DIR/src"
 
@@ -44,8 +43,8 @@ echo "== pocketparse compiled-parser differential (cc-diff) =="
 
 # 1. Build the CLI + the library archive (the generated parser links against it).
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f "$AXDIR/libax.a" ]; then
-  echo "FATAL: CLI ($PP), libpocketparse ($LIB) or libax not built"
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+  echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"
   echo "RESULT=0/0"
   exit 1
 fi
@@ -66,8 +65,8 @@ build_parser() { # grammar
     echo "  GEN FAIL ($g): $(head -1 "$SCRATCH/gen_$key.err")" >&2
     return 1
   fi
-  if ! "$CC" -std=c11 -O2 -I"$INC" -I"$AXDIR" -I"$SRC" \
-        "$cfile" "$LIB" "$AXDIR/libax.a" -o "$bin" 2>"$SCRATCH/cc_$key.err"; then
+  if ! "$CC" -std=c11 -O2 -I"$INC" -I"$SRC" \
+        "$cfile" "$LIB" -o "$bin" 2>"$SCRATCH/cc_$key.err"; then
     echo "  CC FAIL ($g):" >&2
     sed 's/^/      /' "$SCRATCH/cc_$key.err" | head -20 >&2
     return 1
@@ -84,7 +83,7 @@ diff_one() { # grammar rd-binary input-file
   local g="$1" bin="$2" f="$3"
   total=$((total + 1))
   "$bin" < "$f" > "$f.parser" 2>&1; local rc1=$?
-  POCKETPARSE_ENGINE=vm-ax "$PP" run "$g" --input "$f" --dump-tree > "$f.vm" 2>&1
+  "$PP" run "$g" --input "$f" --dump-tree > "$f.vm" 2>&1
   local rc2=$?
   if [ "$rc1" = "$rc2" ] && diff -q "$f.parser" "$f.vm" >/dev/null; then
     match=$((match + 1))

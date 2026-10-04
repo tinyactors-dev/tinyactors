@@ -21,7 +21,7 @@
 #                               timed). cc-diff proves arms 5 and 6 build the same
 #                               tree, so this is a like-for-like speed comparison.
 #
-# Corpus = tools/pocketparse/bench/react-corpus/MANIFEST.txt (the clean-parsing
+# Corpus = tinyparse/bench/react-corpus/MANIFEST.txt (the clean-parsing
 # React file set the react bench produces). Parse-only, warm, median of N, with
 # the one-time setup (engine open + grammar load) off the meter -- IDENTICAL to
 # how bench/react_pocketparse.c times the VM. Both pocketparse arms parse the same
@@ -40,8 +40,8 @@ if [ "${BENCH:-0}" != "1" ]; then
   exit 0
 fi
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$REPO"
 BENCHDIR="$PP/bench"
 cd "$REPO" || exit 1
 
@@ -59,7 +59,6 @@ platform() {
 }
 PLAT="$(platform)"
 DIST="$PP/dist/$PLAT"
-AXDIST="$REPO/dist/$PLAT"
 CLI="$DIST/pocketparse"
 CC="${CC:-cc}"
 
@@ -80,7 +79,7 @@ log "corpus: $CASES React files, $CORPUS_BYTES bytes"
 # --- 1. pocketparse dist + CLI ----------------------------------------------
 log "building pocketparse dist ..."
 ( cd "$PP" && bash build.sh all ) >/dev/null 2>&1
-if [ ! -f "$DIST/libpocketparse.a" ] || [ ! -f "$AXDIST/libax.a" ] || [ ! -x "$CLI" ]; then
+if [ ! -f "$DIST/libpocketparse.a" ] || [ ! -f ] || [ ! -x "$CLI" ]; then
   log "FATAL: pocketparse dist did not build ($DIST)"
   exit 1
 fi
@@ -122,7 +121,7 @@ GRAMMAR_PPG="$BENCHDIR/react-corpus/std.tsx.ppg"
 log "packing std.tsx -> $GRAMMAR_PPG ..."
 "$CLI" pack std.tsx --out "$GRAMMAR_PPG" || { log "FATAL: pack std.tsx"; exit 1; }
 $CC -std=c11 -O2 -Wall -Wextra -I "$PP/include" \
-    "$BENCHDIR/react_pocketparse.c" "$DIST/libpocketparse.a" "$AXDIST/libax.a" \
+    "$BENCHDIR/react_pocketparse.c" "$DIST/libpocketparse.a" \
     -o "$BENCHDIR/react_pocketparse" 2>/dev/null || {
   log "FATAL: pocketparse VM harness did not compile"; exit 1; }
 
@@ -136,8 +135,8 @@ log "emitting compiled parser (pocketparse c std.tsx --parser-lib) ..."
 "$CLI" c std.tsx --parser-lib --name pp_compiled_parser --out "$GEN_PARSER" || {
   log "FATAL: could not emit the compiled parser"; exit 1; }
 log "building the in-process compiled-parser harness ..."
-$CC -std=c11 -O2 -Wall -Wextra -I "$PP/include" -I "$AXDIST" -I "$PP/src" \
-    "$BENCHDIR/react_compiled.c" "$GEN_PARSER" "$DIST/libpocketparse.a" "$AXDIST/libax.a" \
+$CC -std=c11 -O2 -Wall -Wextra -I "$PP/include" -I "$PP/src" \
+    "$BENCHDIR/react_compiled.c" "$GEN_PARSER" "$DIST/libpocketparse.a" \
     -o "$BENCHDIR/react_compiled" 2>/dev/null || {
   log "FATAL: compiled-parser harness did not compile"; exit 1; }
 

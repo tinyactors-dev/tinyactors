@@ -11,7 +11,7 @@
 #             no checker, no module resolution.
 #
 # Both parse the identical bytes listed in
-#   tools/pocketparse/bench/react-corpus/MANIFEST.txt
+#   tinyparse/bench/react-corpus/MANIFEST.txt
 # (1070 React .js files, ~9.5 MB), the same manifest ci/pocketparse-react-bench.sh
 # produces, so the table reads pocketparse vs tree-sitter vs tsc vs tsgo over one
 # corpus. For context (measured elsewhere): tree-sitter ~1.10 s, pocketparse ~43 s
@@ -23,7 +23,7 @@
 #
 # Re-runnably:
 #   1. install typescript + @typescript/native-preview into a gitignored scratch
-#      dir (tools/pocketparse/bench/tsbench) if not already present;
+#      dir (tinyparse/bench/tsbench) if not already present;
 #   2. clone microsoft/typescript-go into a gitignored scratch dir and build the
 #      parse-only Go harness against its internal parser package;
 #   3. warm up, then time parsing the whole manifest, median over ITERS iters;
@@ -36,8 +36,8 @@ if [ "${BENCH:-0}" != "1" ]; then
   exit 0
 fi
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$REPO"
 BENCHDIR="$PP/bench"
 cd "$REPO" || exit 1
 

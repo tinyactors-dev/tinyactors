@@ -6,8 +6,8 @@
 # standing + new preservation gates hold, AND the headline goal (C-compiled >
 # tree-sitter, tagged W17-FASTER) is recorded. Cheap by default; RUN_GATE=1 runs gates.
 set -uo pipefail
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP="$REPO"
 cd "$REPO" || exit 1
 pass=0; total=4
 row(){ printf '  [%s] %s\n' "$1" "$2"; }
@@ -37,7 +37,7 @@ else row " " "GOAL C-compiled > tree-sitter (not yet recorded)"; fi
 
 gate_fail=0
 if [ "${RUN_GATE:-0}" = "1" ]; then
-  for g in metric cc-diff vm-diff no-statics vm-nocrash parser-nocrash multiparser hide-ax; do
+  for g in metric cc-diff vm-diff no-statics vm-nocrash parser-nocrash multiparser exports; do
     bash "$REPO/ci/pocketparse-$g.sh" >/dev/null 2>&1 || { echo "GATE: $g RED"; gate_fail=1; }
   done
   # new preservation gates (present once their workstream lands): the W17-1 net,

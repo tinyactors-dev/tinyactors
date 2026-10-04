@@ -1,0 +1,14 @@
+# The amalgamation is the library alone: no foreign header ships beside it, the
+# public header names nothing but pocketparse, and the single translation unit
+# carries no `ax_` identifier (the actor runtime pocketparse was born in is not
+# folded in any more).
+<<<cmd
+set -e
+bash amalgamate.sh >/dev/null 2>&1
+a=dist/amalgamation
+test ! -f "$a/ax.h"
+grep -qE 'ax\.h|ax_open|ax_sys' "$a/pocketparse.h" && exit 1
+grep -qE '(^|[^A-Za-z0-9_])ax_[A-Za-z_]' "$a/pocketparse.c" && exit 1
+exit 0
+<<<assert
+exit 0

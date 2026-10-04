@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# ci/pocketparse-reuse-regression.sh — the actor-path engine-reuse oracle.
+# ci/pocketparse-reuse-regression.sh — the engine-reuse oracle.
 #
-# A benchmark's byte-identical assertion caught a SILENT data-corruption bug on
-# the shipping default parse path (the actor-hosted bytecode VM, engine_use_vm_actor).
-# Reusing ONE engine across many parses of a large file silently corrupted the
-# parse once the arena pool had grown: an earlier pocketparse_push marshalled each
-# input chunk through ax_post, which copied the bytes into the FIXED system slice
-# pocketparse_open carves off the grant. The pool's first-fit free list let a tiny
-# allocation claim a freed file-sized chunk, so the slice fragmented across reused
-# parses until a chunk-sized allocation failed: ax_post returned AX_NOMEM, push
-# returned POCKETPARSE_INVALID — and finish/run STILL produced a one-node tree with
-# no fault. A 90 KB file that yields ~96k nodes collapsed to a 1-node root, silently.
+# A benchmark's byte-identical assertion once caught a SILENT data-corruption bug
+# on the default parse path. Back then the bytecode VM ran inside an actor of the
+# actor runtime pocketparse was born in, and pocketparse_push marshalled each input
+# chunk through that runtime's mailbox, which copied the bytes into a FIXED slice
+# pocketparse_open carved off the grant. Reusing ONE engine across many parses of a
+# large file fragmented that slice (its first-fit free list let a tiny allocation
+# claim a freed file-sized chunk) until a chunk-sized copy failed, push returned
+# POCKETPARSE_INVALID — and finish STILL produced a one-node tree with no fault. A
+# 90 KB file that yields ~96k nodes collapsed to a 1-node root, silently.
 #
-# The fix buffers each chunk straight into the parser's own arena (the growable
-# engine pool), so nothing large ever flows through the system slice, and makes a
-# failed push surface through finish/run instead of passing as a degenerate parse.
+# The actor and its slice are gone: a push buffers straight into the parser's own
+# arena (a child of the growable engine pool, reset by pocketparse_parser_free),
+# and the parser lifecycle (src/parse.c) moves a parser whose push failed to a
+# state from which finish/run return the failure instead of a degenerate tree.
 #
-# This gate is the standing oracle that the fix holds. It reuses ONE default
-# (actor-path) engine across enough parses of a pool-growing file to cross the grow
+# This gate is the standing oracle that both properties hold. It reuses ONE
+# default engine across enough parses of a pool-growing file to cross the grow
 # boundary many times over, and asserts every tree is byte-identical (node count +
 # structural fingerprint) to the FIRST parse, with no push silently failing. A
 # regression — a dropped chunk, a degenerate tree, an unsurfaced failure — turns it
@@ -30,8 +30,8 @@
 # Exit 0 only when every reused parse is byte-identical to a fresh parse.
 set -uo pipefail
 
-REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PP_DIR="$REPO/tools/pocketparse"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PP_DIR="$REPO"
 cd "$REPO" || exit 1
 
 platform() {
@@ -44,16 +44,15 @@ platform() {
 PLAT="$(platform)"
 PP="$PP_DIR/dist/$PLAT/pocketparse"
 LIB="$PP_DIR/dist/$PLAT/libpocketparse.a"
-AXDIR="$REPO/dist/$PLAT"
 INC="$PP_DIR/include"
 SRC="$PP_DIR/src"
 
-echo "== pocketparse actor-path engine-reuse regression =="
+echo "== pocketparse engine-reuse regression =="
 
 # 1. Build the CLI + the library archive (the generated parser links against it).
 ( cd "$PP_DIR" && bash build.sh cli ) 2>&1 | sed 's/^/  /'
-if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f "$AXDIR/libax.a" ]; then
-  echo "FATAL: CLI ($PP), libpocketparse ($LIB) or libax not built"
+if [ ! -x "$PP" ] || [ ! -f "$LIB" ] || [ ! -f ]; then
+  echo "FATAL: CLI ($PP) or libpocketparse ($LIB) not built"
   echo "RESULT=red"
   exit 1
 fi
@@ -78,10 +77,10 @@ awk 'BEGIN { for (i = 0; i < 1500; i++)
   printf "const x%d = [1, 2, 3].map((v) => v * %d + foo.bar(%d));\n", i, i, i }' > "$INPUT"
 echo "  generated input: $(wc -c < "$INPUT") bytes of valid .tsx"
 
-# 4. A harness that reuses ONE default (actor-path) engine across many parses and
-#    asserts every tree is byte-identical to the first, with no push silently
-#    failing. The 8 MB grant is deliberately small so its fixed system slice is the
-#    size where the old marshal-through-ax-post copy fragmented and failed.
+# 4. A harness that reuses ONE default engine across many parses and asserts every
+#    tree is byte-identical to the first, with no push silently failing. The 8 MB
+#    grant is deliberately small: it is the size at which the old mailbox copy
+#    fragmented and failed, and it forces the pool to grow and recycle chunks.
 HARNESS="$SCRATCH/reuse_harness.c"
 cat > "$HARNESS" <<'EOF'
 #include <stdio.h>
@@ -177,7 +176,7 @@ int main(int argc, char **argv)
     cfg.memory.base = block; cfg.memory.size = GRANT; cfg.memory.grow = grow;
     engine = pocketparse_open(cfg);
     if (engine == 0) { fprintf(stderr, "open failed\n"); return 2; }
-    /* The default engine_use_vm_actor is left ON — this is the shipping path. */
+    /* A plain pocketparse_open: the default configuration is the shipping path. */
     bind_class(engine, "alpha", class_alpha);
     bind_class(engine, "digit", class_digit);
     bind_class(engine, "alnum", class_alnum);
@@ -232,8 +231,8 @@ int main(int argc, char **argv)
 EOF
 
 BIN="$SCRATCH/reuse_harness"
-if ! "$CC" -std=c11 -O2 -I"$INC" -I"$AXDIR" -I"$SRC" \
-      "$HARNESS" "$GEN" "$LIB" "$AXDIR/libax.a" -o "$BIN" 2>"$SCRATCH/cc.err"; then
+if ! "$CC" -std=c11 -O2 -I"$INC" -I"$SRC" \
+      "$HARNESS" "$GEN" "$LIB" -o "$BIN" 2>"$SCRATCH/cc.err"; then
   echo "FATAL: harness did not compile"
   sed 's/^/  /' "$SCRATCH/cc.err" | head -20
   echo "RESULT=red"
