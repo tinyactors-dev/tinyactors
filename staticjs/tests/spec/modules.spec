@@ -452,7 +452,7 @@ import { default } from "dflt";
 === import as eval
 @module e
 import { inc as eval } from "dflt";
---- error syntax expected a name to import as
+--- error syntax cannot be bound
 
 === a namespace and a const of one name
 @module e
@@ -737,3 +737,531 @@ export const a = 1 export const b = 2
 @module e
 import { inc } from "dflt" export const x = 1
 --- error syntax
+
+=== a line break before ! ends a statement
+@module e
+export const a = 1
+!a
+--- error unsupported a staticjs module holds
+
+=== a line break before ~ ends export default
+@module e
+export default 1
+~0
+--- error unsupported a staticjs module holds
+
+=== a block comment that holds a line break ends a statement
+@module m3
+export const a = 1 /*
+*/ export const b = 2
+--- value
+{"a":1,"b":2}
+
+=== a block comment on one line does not
+@module e
+export const a = 1 /* */ export const b = 2
+--- error syntax
+
+=== export default goes on over a line break
+@module m7
+export default 1
+- 1
+--- value
+{"default":0}
+
+=== a concise arrow body goes on over a line break
+@module m5
+export const f = x => ({ g: () => 3 })
+.g()
+export const r = f(0)
+--- value
+{"f":<function>,"r":3}
+
+=== a parenthesized arrow function is called on the next line
+@module m12
+export const f = (x => { return x + 1 })
+(1)
+--- value
+{"f":2}
+
+=== a comma on the next line goes on after an arrow with a block
+@module m11
+export const f = x => {}
+, g = 1
+--- value
+{"f":<function>,"g":1}
+
+=== ( on the next line calls the value before
+@module e
+export const a = 1
+(2)
+--- fault
+
+=== ( on the next line after an arrow with a block starts a statement
+@module e
+export const f = x => {}
+(1)
+--- error unsupported a staticjs module holds
+
+# Tokens no statement starts with are not JavaScript.
+
+=== . after an arrow function with a block
+@module e
+export const f = x => {}
+.foo
+--- error syntax expected a statement
+
+=== ? after an arrow function with a block
+@module e
+export const f = x => {}
+? 1 : 2
+--- error syntax expected a statement
+
+=== instanceof after an arrow function with a block
+@module e
+export const f = () => {}
+instanceof Object
+--- error syntax expected a statement
+
+=== . after a declaration
+@module e
+export const a = 1;
+.foo
+--- error syntax expected a statement
+
+=== ) at the top level
+@module e
+export const a = 1;
+)
+--- error syntax expected a statement
+
+=== * at the top level
+@module e
+export const a = 1;
+* 2
+--- error syntax expected a statement
+
+=== return at the top level of a module
+@module e
+return 1;
+--- error syntax expected a statement
+
+=== break at the top level of a module
+@module e
+break;
+--- error syntax expected a statement
+
+=== a module is strict: no with statement
+@module e
+with ({}) {}
+--- error syntax expected a statement
+
+=== a let declaration is not staticjs
+@module e
+let a = 1;
+--- error unsupported a staticjs module holds
+
+=== a module is strict: let is no name
+@module e
+let;
+--- error syntax expected a statement
+
+=== await with no operand as a statement
+@module e
+await;
+--- error syntax expected a statement
+
+=== if with no condition
+@module e
+if;
+--- error syntax expected a statement
+
+=== throw with its value on the next line
+@module e
+throw
+1;
+--- error syntax expected a statement
+
+=== a statement of new with nothing to construct
+@module e
+new;
+--- error syntax expected a statement
+
+=== a decorator
+@module e
+@dec export const a = 1;
+--- error syntax expected a statement
+
+=== a #! line is not staticjs
+@module e
+#!/usr/bin/env node
+export const a = 1;
+--- error unsupported #!
+
+=== new.target is in no function of a module
+@module e
+export const f = () => new.target;
+--- error syntax new.target
+
+=== import.foo
+@module e
+import.foo;
+--- error syntax top level of a module
+
+# await, eval, arguments and strict reserved words in a module
+
+=== await is reserved in a module's functions
+@module e
+export const f = () => await;
+--- error syntax reserved
+
+=== await needs an operand
+@module e
+export default await;
+--- error syntax after await
+
+=== await with nothing after it
+@module e
+export const x = await;
+--- error syntax after await
+
+=== top-level await is not staticjs
+@module e
+export default await 1;
+--- error unsupported await
+
+=== await takes its operand from the next line
+@module e
+export const x = await
+1
+--- error unsupported await
+
+=== await as a statement
+@module e
+await 1;
+--- error unsupported a staticjs module holds
+
+=== await as a statement in a function
+@module e
+export const f = () => { await 1; return 1; };
+--- error syntax
+
+=== arguments cannot be a parameter in a module
+@module e
+export const f = arguments => 1;
+--- error syntax cannot be bound
+
+=== eval cannot be a parameter in a module
+@module e
+export const f = (eval) => 1;
+--- error syntax cannot be bound
+
+=== await cannot be a parameter in a module
+@module e
+const f = await => 1;
+--- error syntax cannot be bound
+
+=== yield cannot be a const in a module
+@module e
+const yield = 1;
+--- error syntax cannot be bound
+
+=== let cannot be imported as
+@module e
+import { inc as let } from "dflt";
+--- error syntax cannot be bound
+
+=== arguments cannot be a namespace
+@module e
+import * as arguments from "dflt";
+--- error syntax cannot be bound
+
+=== static cannot be a default import
+@module e
+import static from "dflt";
+--- error syntax cannot be bound
+
+=== await cannot be a shorthand property in a module
+@module e
+export const o = { await };
+--- error syntax cannot stand for a value
+
+=== eval can be read in a module
+@module e
+export const o = { eval };
+--- error unsupported does not have this
+
+=== async is a name staticjs does not bind
+@module e
+import { inc as async } from "dflt";
+--- error unsupported does not bind
+
+=== async as a default import
+@module e
+import async from "dflt";
+--- error unsupported does not bind
+
+=== async as a const
+@module e
+const async = 1;
+--- error unsupported does not bind
+
+# Import attributes
+
+=== import attributes are not staticjs
+@module e
+import { inc } from "dflt" with { type: "js" };
+--- error unsupported import attributes
+
+=== empty import attributes
+@module e
+import "dflt" with {};
+--- error unsupported import attributes
+
+=== import attributes of a re-export, after a line break, with a trailing comma
+@module e
+export * from "dflt"
+with { "type": "js", }
+--- error unsupported import attributes
+
+=== import attributes of an export list
+@module e
+export { inc } from "dflt" with { if: "x" };
+--- error unsupported import attributes
+
+=== an import attribute's key given twice
+@module e
+import "dflt" with { type: "a", "type": "b" };
+--- error syntax twice
+
+=== an import attribute's value is a string
+@module e
+import "dflt" with { type: js };
+--- error syntax a string
+
+=== an import attribute's key is a name or a string
+@module e
+import "dflt" with { 1: "x" };
+--- error syntax key
+
+=== a comma alone in import attributes
+@module e
+import "dflt" with { , };
+--- error syntax key
+
+=== import attributes then a statement on the same line
+@module e
+import "dflt" with {} export const x = 1;
+--- error syntax
+
+=== an export list without from takes no attributes
+@module e
+const x = 1; export { x } with {};
+--- error syntax
+
+=== import attributes need their braces
+@module e
+import "dflt" with;
+--- error syntax
+
+# Export names must be well-formed Unicode
+
+=== a lone surrogate in a re-exported name
+@module e
+export { inc as "\uD800" } from "dflt";
+--- error syntax lone surrogate
+
+=== a lone surrogate in an imported name
+@module e
+import { "\uD800" as z } from "dflt";
+--- error syntax lone surrogate
+
+=== a lone surrogate in an exported name
+@module e
+const x = 1; export { x as "\uD800" };
+--- error syntax lone surrogate
+
+=== export * as a lone surrogate
+@module e
+export * as "\uDC00" from "dflt";
+--- error syntax lone surrogate
+
+=== a lone surrogate in an import attribute is not staticjs
+@module e
+import "dflt" with { "\uD800": "x" };
+--- error unsupported lone surrogate
+
+# A name exported twice is found where the second export is
+
+=== a name exported twice, before what staticjs leaves out
+@module e
+const a = 1;
+export { a, a };
+const b = 2 ** 2;
+--- error syntax exported twice
+
+=== export default twice, the second of what staticjs leaves out
+@module e
+export const a = 1;
+export default 1;
+export default 2 ** 2;
+--- error syntax exported twice
+
+=== a list's default, then export default of what staticjs leaves out
+@module e
+const a = 1; export { a as default };
+export default 2 ** 2;
+--- error syntax exported twice
+
+=== export * as default, then export default
+@module e
+export * as default from "dflt";
+export default 2 ** 2;
+--- error syntax exported twice
+
+=== a string default and export default
+@module e
+const a = 1; export { a as "default" };
+export default 2 ** 2;
+--- error syntax exported twice
+
+# export *
+
+=== a module with a default and y
+@module dflt2
+export default 7;
+export const y = 2;
+--- value
+{"default":7,"y":2}
+
+=== a module that re-exports one's x
+@module tworeone
+export { x } from "one";
+--- value
+{"x":1}
+
+=== two export * that lead to one binding are refused too
+@module e
+export * from "one";
+export * from "tworeone";
+--- error unsupported export *
+
+=== two export * never conflict on default, which they leave out
+@module twodef
+export * from "dflt";
+export * from "dflt2";
+--- value
+{"inc":<function>,"y":2}
+
+=== a re-export settles two export *
+@module settled2
+export * from "one";
+export * from "two";
+export { x } from "two";
+--- value
+{"x":1}
+
+=== exporting the ambiguous name under another name does not settle it
+@module e
+export * from "one"; export * from "two"; const x = 3; export { x as y };
+--- error unsupported export *
+
+=== export * passes on a module's export * as
+@module starstar
+export * from "starns";
+--- value
+{"lib":{"default":42,"inc":<function>}}
+
+=== export * of one module many times
+@module manystars
+export * from "dflt"; export * from "dflt"; export * from "dflt";
+export * from "dflt"; export * from "dflt"; export * from "dflt";
+--- value
+{"inc":<function>}
+
+# Imports after what uses them
+
+=== an export list before the import it exports
+@module late3
+export { inc };
+import { inc } from "dflt";
+--- value
+{"inc":<function>}
+
+=== a namespace exported before its import
+@module late4
+export { ns };
+import * as ns from "dflt";
+--- value
+{"ns":{"default":42,"inc":<function>}}
+
+=== export default of a name before its import
+@module e
+export default answer;
+import answer from "dflt";
+--- error unsupported used before
+
+=== export default of a name before its declaration
+@module e
+export default a;
+const a = 1;
+--- error unsupported used before
+
+# The order of errors found at the end: syntax, then a name bound nowhere,
+# then what staticjs leaves out. An error found earlier stops the compiler
+# before the end.
+
+=== a name declared twice comes before a name bound nowhere
+@module e
+export default nothing;
+const a = 1; const a = 2;
+--- error syntax declared twice
+
+=== an export of an undeclared name comes before an ambiguous export *
+@module e
+export * from "one"; export * from "two";
+export { q };
+--- error syntax does not declare
+
+=== a name bound nowhere comes before an ambiguous export *
+@module e
+export * from "one"; export * from "two";
+export default nothing;
+--- error name not bound
+
+=== a name bound nowhere comes before a string export name
+@module e
+const a = 1; export { a as "x y" };
+export default nothing;
+--- error name not bound
+
+# Namespaces
+
+=== reading a namespace
+@module nvals
+import * as ns from "dflt2";
+export const v = [Object.values(ns), ns?.y, ns.nothing?.z, ns["y"], typeof ns, "nothing" in ns];
+--- value
+{"v":[[7,2],2,undefined,2,"object",false]}
+
+=== export * as is a namespace with no prototype too
+@module e
+import { lib } from "starns";
+export const t = lib.toString;
+--- fault no prototype
+
+=== an export name and a local binding of one name do not clash
+@module nsname
+import * as ns from "dflt";
+export * as ns from "one";
+export const k = Object.keys(ns);
+--- value
+{"k":["default","inc"],"ns":{"x":1}}
+
+=== one namespace imported twice
+@module nstwice
+import * as a from "dflt";
+import * as b from "dflt";
+export const keys = [Object.keys(a), Object.keys(b)];
+--- value
+{"keys":[["default","inc"],["default","inc"]]}

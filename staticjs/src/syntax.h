@@ -49,6 +49,7 @@ typedef struct {
     uint8_t punctuator;    /* sjs_punctuator */
     uint8_t keyword;       /* sjs_keyword */
     uint8_t newline_before;
+    uint8_t lone_surrogate; /* a string with a surrogate that has no partner; its text is not the string */
     sjs_position at;
     double number;
     sjs_str text;          /* the name, or the cooked string */
@@ -84,6 +85,7 @@ typedef struct {
     uint32_t escape_value;
     uint32_t escape_digits;
     uint32_t pending_high;  /* a high surrogate from \u, waiting for its pair */
+    bool lone_surrogate;    /* the string holds a surrogate with no partner */
     uint32_t radix;
     int32_t exponent;
     int32_t exponent_sign;

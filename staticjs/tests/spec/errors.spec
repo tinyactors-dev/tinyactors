@@ -14,6 +14,30 @@ def"]
 1 +
 --- error syntax ends inside an expression
 
+=== an operator with no operand before ]
+[typeof]
+--- error syntax expected an expression
+
+=== ! with no operand after a comma
+[1, !]
+--- error syntax expected an expression
+
+=== - with no operand before )
+String(-)
+--- error syntax expected an expression
+
+=== return of an operator with no operand
+(() => { return !; })
+--- error syntax expected an expression
+
+=== new with nothing to construct
+[new]
+--- error syntax what new constructs
+
+=== new of a unary operator
+new !x
+--- error syntax what new constructs
+
 === an unbalanced parenthesis
 (1 + 2
 --- error syntax expected )
@@ -83,6 +107,77 @@ this
 [let]
 --- error unsupported does not have this
 
+=== super is no expression outside a method
+super.x
+--- error syntax expected an expression
+
+=== a private name outside a class
+#x in {}
+--- error syntax expected an expression
+
+=== a private member outside a class
+({}).#x
+--- error syntax
+
+=== a decorator
+[@x]
+--- error syntax
+
+=== new.target in a script's expression, which is a function's body
+(() => new.target)
+--- error unsupported new.target
+
+=== new. is only new.target
+new.foo
+--- error syntax new.target
+
+# A script is sloppy: strict mode's reserved words, eval and arguments are
+# names there, which staticjs does not bind; let is not a const's name.
+
+=== eval as a parameter in a script
+(eval) => 1
+--- error unsupported does not bind
+
+=== yield as a parameter in a script
+(yield) => 1
+--- error unsupported does not bind
+
+=== let as a parameter in a script
+let => 1
+--- error unsupported does not bind
+
+=== await in a parameter's pattern in a script
+({ await }) => 1
+--- error unsupported does not bind
+
+=== yield as a const in a script
+(() => { const yield = 1; return yield; })()
+--- error unsupported does not bind
+
+=== let cannot be a const's name
+(() => { const let = 1; return 1; })()
+--- error syntax cannot be bound
+
+=== let cannot be a const's name in a pattern
+(() => { const [let] = [1]; return 1; })()
+--- error syntax cannot be bound
+
+=== async is a name staticjs does not bind
+(async) => 1
+--- error unsupported does not bind
+
+=== this cannot be a parameter
+(this) => 1
+--- error syntax cannot be bound
+
+=== eval in a shorthand property
+({ eval })
+--- error unsupported does not have this
+
+=== this cannot be a shorthand property
+({ this })
+--- error syntax cannot stand for a value
+
 === new of anything but Set
 new Map()
 --- error unsupported constructs only Set
@@ -123,6 +218,44 @@ String.raw`x`
 (x => { if (x) {} return 1; })
 --- error unsupported holds const declarations and one return
 
+=== a token no statement starts with, in a block
+(() => { const a = 1; .foo })()
+--- error syntax expected a statement
+
+=== a token no statement starts with, after a block's return
+(() => { return 1; ) })
+--- error syntax expected a statement
+
+=== break outside a loop
+(() => { break; })
+--- error syntax expected a statement
+
+=== if with no condition
+(() => { if; return 1; })
+--- error syntax expected a statement
+
+=== a statement of new with nothing to construct
+(() => { new; return 1; })
+--- error syntax expected a statement
+
+=== a statement of typeof with no operand
+(() => { typeof; return 1; })
+--- error syntax expected a statement
+
+=== let as a name in a script's block
+(() => { let; return 1; })
+--- error unsupported holds const declarations and one return
+
+=== a line break before ! ends a const in a block
+(() => { const a = 1
+!a; return a; })()
+--- error unsupported holds const declarations and one return
+
+=== a line break before ~ ends a const in a block
+(() => { const a = 1
+~a; return a; })()
+--- error unsupported holds const declarations and one return
+
 === code after return
 (x => { return 1; const y = 2; })
 --- error unsupported ends with its return
@@ -131,6 +264,11 @@ String.raw`x`
 (() => { return
 1; })
 --- error unsupported on the line of its return
+
+=== a token no statement starts with, on the line after return
+(() => { return
+.x })
+--- error syntax expected a statement
 
 === a default parameter
 ((a = 1) => a)
@@ -196,6 +334,24 @@ nope + 1
 === a lone surrogate escape
 "\uD800"
 --- error unsupported lone surrogate
+
+=== a lone low surrogate in an object's key
+({ "\uDC00": 1 })
+--- error unsupported lone surrogate
+
+=== a high surrogate before a line continuation is still alone
+"\uD800\
+x"
+--- error unsupported lone surrogate
+
+=== a high surrogate and a line continuation in a template
+`\uD800\
+x`
+--- error unsupported lone surrogate
+
+=== a string with a lone surrogate where an operator belongs
+x "\uD800"
+--- error syntax expected an operator
 
 === reading a property of undefined
 undefined.x

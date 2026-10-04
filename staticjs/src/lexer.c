@@ -466,8 +466,25 @@ static step number_byte(sjs_lexer *lexer, uint8_t c) {
 static step end_string(sjs_lexer *lexer, uint8_t kind) {
     sjs_token token = { 0 };
     token.kind = kind;
+    token.lone_surrogate = lexer->lone_surrogate ? 1u : 0u;
+    lexer->lone_surrogate = false;
     token.text = (sjs_str){ (const char *)lexer->text.ptr, lexer->text.length };
     return emit(lexer, &token);
+}
+
+/* A surrogate with no partner. A string records it, and the parser refuses
+ * the string: as unsupported, or as a syntax error where JavaScript requires
+ * well-formed text (a module export name). A template refuses it here. */
+static step note_lone_surrogate(sjs_lexer *lexer) {
+    if (lexer->state != L_STRING) return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs strings cannot hold a lone surrogate");
+    lexer->lone_surrogate = true;
+    return TAKEN;
+}
+
+/* Where text goes on after an escape: a high surrogate still waits for a
+ * low one across a line continuation. */
+static uint8_t after_escape(const sjs_lexer *lexer) {
+    return lexer->pending_high != 0 ? S_AFTER_HIGH : S_TEXT;
 }
 
 /* A code point from an escape; surrogates must come in pairs. */
@@ -476,19 +493,17 @@ static step escaped_point(sjs_lexer *lexer, uint32_t point) {
     if (lexer->pending_high != 0) {
         uint32_t high = lexer->pending_high;
         lexer->pending_high = 0;
-        if (point < 0xDC00u || point > 0xDFFFu) {
-            return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs strings cannot hold a lone surrogate");
+        if (point >= 0xDC00u && point <= 0xDFFFu) {
+            return text_append_point(lexer, 0x10000u + ((high - 0xD800u) << 10) + (point - 0xDC00u));
         }
-        return text_append_point(lexer, 0x10000u + ((high - 0xD800u) << 10) + (point - 0xDC00u));
+        if (note_lone_surrogate(lexer) == STOP) return STOP;
     }
     if (point >= 0xD800u && point <= 0xDBFFu) {
         lexer->pending_high = point;
         lexer->substate = S_AFTER_HIGH;
         return TAKEN;
     }
-    if (point >= 0xDC00u && point <= 0xDFFFu) {
-        return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs strings cannot hold a lone surrogate");
-    }
+    if (point >= 0xDC00u && point <= 0xDFFFu) return note_lone_surrogate(lexer);
     return text_append_point(lexer, point);
 }
 
@@ -514,7 +529,7 @@ static step escape_byte(sjs_lexer *lexer, uint8_t c) {
         lexer->escape_digits = 0;
         return TAKEN;
     case '\n':
-        lexer->substate = S_TEXT;
+        lexer->substate = after_escape(lexer);
         return TAKEN;
     case '\r':
         lexer->substate = S_ESCAPE_CR;
@@ -537,7 +552,7 @@ static step quoted_byte(sjs_lexer *lexer, uint8_t c) {
         if (escaped_point(lexer, 0) == STOP) return STOP;
         return AGAIN;
     case S_ESCAPE_CR:
-        lexer->substate = S_TEXT;
+        lexer->substate = after_escape(lexer);
         return c == '\n' ? TAKEN : AGAIN;
     case S_HEX: {
         int32_t v = hex_value(c);
@@ -573,7 +588,12 @@ static step quoted_byte(sjs_lexer *lexer, uint8_t c) {
         return TAKEN;
     }
     case S_AFTER_HIGH:
-        if (c != '\\') return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs strings cannot hold a lone surrogate");
+        if (c != '\\') {
+            lexer->pending_high = 0;
+            lexer->substate = S_TEXT;
+            if (note_lone_surrogate(lexer) == STOP) return STOP;
+            return AGAIN;
+        }
         lexer->substate = S_ESCAPE;
         return TAKEN;
     default:

@@ -348,8 +348,8 @@ typedef enum {
 /*
  * What an SJS_EV_IMPORT or SJS_EV_EXPORT_FROM takes from its module. One
  * import or re-export statement gives one event per specifier, in source
- * order, when its module's name is read; a statement that binds nothing
- * gives one SJS_IMPORT_MODULE event.
+ * order, when the statement ends; a statement that binds nothing gives one
+ * SJS_IMPORT_MODULE event.
  */
 typedef enum {
     SJS_IMPORT_NAME = 0,   /* alias: one export ("default" for a default import) */

@@ -1,7 +1,9 @@
 // The rule, checked against JavaScript itself: every spec case that
 // expects a value must give that value in Node too; every case staticjs
-// refuses as a syntax error must be one JavaScript refuses as well; and every
-// case it refuses as unsupported must be valid JavaScript.
+// refuses as a syntax error must be one JavaScript refuses as well; every
+// case it refuses as unsupported must be valid JavaScript; and every case it
+// refuses for a name (not bound, not exported, no such module) must throw in
+// JavaScript too, when it is parsed, linked or evaluated.
 //
 // A module's value is its namespace (module.namespace), whose keys
 // JavaScript sorts as staticjs does. A module registered under a name taken
@@ -81,10 +83,39 @@ function parses(c) {
   }
 }
 
+// Evaluate a case: a module (linked against the modules before it) or an
+// expression. Answers the module, or the expression's value.
+async function evaluate(c, modules) {
+  const globals = c.globals.map(([name, expression]) => [name, (0, eval)(`(${expression}\n)`)]);
+  if (c.module) {
+    const module = new vm.SourceTextModule(c.source, { identifier: c.module });
+    await module.link((specifier) => {
+      const found = modules.get(specifier);
+      if (!found) throw new Error(`no module ${specifier}`);
+      return found;
+    });
+    await module.evaluate();
+    return module;
+  }
+  const names = globals.map(([name]) => name);
+  return new Function(...names, `return (${c.source}\n);`)(...globals.map(([, v]) => v));
+}
+
 async function runFile(path) {
   const modules = new Map();
   for (const c of parseSpec(path)) {
     const where = `${path}:${c.line}: ${c.name}`;
+    if (c.kind === 'error' && c.code === 'name') {
+      checked++;
+      let threw = false;
+      try {
+        await evaluate(c, modules);
+      } catch {
+        threw = true;
+      }
+      if (!threw) failures.push(`${where}: staticjs says a name is wrong, but JavaScript runs it`);
+      continue;
+    }
     if (c.kind === 'error') {
       checked++;
       const ok = parses(c);
@@ -98,21 +129,10 @@ async function runFile(path) {
     }
     checked++;
     try {
-      const globals = c.globals.map(([name, expression]) => [name, (0, eval)(`(${expression}\n)`)]);
-      let value;
+      let value = await evaluate(c, modules);
       if (c.module) {
-        const module = new vm.SourceTextModule(c.source, { identifier: c.module });
-        await module.link((specifier) => {
-          const found = modules.get(specifier);
-          if (!found) throw new Error(`no module ${specifier}`);
-          return found;
-        });
-        await module.evaluate();
-        modules.set(c.module, module);
-        value = module.namespace;
-      } else {
-        const names = globals.map(([name]) => name);
-        value = new Function(...names, `return (${c.source}\n);`)(...globals.map(([, v]) => v));
+        modules.set(c.module, value);
+        value = value.namespace;
       }
       const got = show(value);
       if (got !== c.expected) failures.push(`${where}\n  spec:       ${c.expected}\n  JavaScript: ${got}`);
