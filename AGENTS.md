@@ -73,6 +73,8 @@ Do it at release time, not between releases.
   - `scale_test` up to four million actors (the fast pass stops at
     200,000);
   - napi's `scale.js` on Bun as well as Node, and up to a million actors;
+  - core's exhaustive test programs at their large sizes (`TA_TEST_FULL=1`,
+    below);
 
   Run it before a release, and before committing a change to core's
   allocation, pause and resume, offload and paging, or trace-writing paths,
@@ -107,6 +109,16 @@ Mark a test host scenario, or a whole group, `exhaustive: true`:
 TinyactorsTest.scenarios 'running out of memory', exhaustive: true do ... end
 scenario 'every record is written once when an allocation fails', exhaustive: true do ... end
 ```
+
+A core test program ends its first-line marker with `exhaustive`
+(`/* test: standalone asan exhaustive */`) and reads the environment
+variable `TA_TEST_FULL`: `mise run test --full` sets it to `1` for every
+program and for the sanitizer run, and the program picks its large sizes
+only then. The word and the variable are checked against each other when
+the build reads the markers (`tinyactors-core/mise/lib/test_programs.rb`).
+By hand: `TA_TEST_FULL=1 tinyactors-core/build/address_table_test`. Inside
+`tinyactors-core`, `mise run test --full` needs `--force` to rerun an
+unchanged task.
 
 Anything else that is exhaustive (a benchmark-style population, a
 program-level sweep) runs in its task's `--full` mode: give the task a
