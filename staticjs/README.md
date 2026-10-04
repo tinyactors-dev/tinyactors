@@ -183,7 +183,9 @@ staticjs does not bind; in a module they are syntax errors.
 Among the statements: loops, `switch`, `throw`, `try`, `let` and `var`,
 labels, function and class declarations, and expression statements, which
 can have no effect, are unsupported; `break` and `continue` are syntax
-errors, as staticjs has no loop or label for them to leave. A declaration
+errors, as staticjs has no loop for them to leave, but for `break name`
+inside the label `name`, which is unsupported with it. A label inside one
+of the same name is a syntax error, as in JavaScript. A declaration
 as the statement of an `if`, an `else` or a label is a syntax error, as in
 JavaScript (`if (x) const y = 1`). An `if` or a block at a module's top
 level is unsupported, as a module holds imports, `const` and exports; the
@@ -191,16 +193,17 @@ parser reads on through it, so a `return` in it is the syntax error
 JavaScript reports. A name read in a block, or in a function in it, and
 declared later in that block or in one around it, is refused as a use
 before its declaration, as at a function's top level. A name bound nowhere
-is refused even in a branch that never runs.
+is refused even in a branch that never runs or after a `return`, where
+JavaScript would throw only if it ran.
 
 After JavaScript staticjs leaves out, the parser reads on where it can,
 sending nothing more: past an assignment, the comma operator, an operator
 staticjs does not have, `this`, `new.target`, a method in an object
-literal, an expression statement, and an `if` or a block at a module's top
-level. So a program that is not JavaScript further on, such as `([a.b =
-1]) => 0`, `a = 1 = 2` or `x => { a b; }`, is a syntax error, not
-unsupported. It stops at the first refusal where it cannot read on: a loop,
-`switch`, `try` or another statement staticjs does not have, a label, a
+literal, an expression statement, a label, and an `if` or a block at a
+module's top level. So a program that is not JavaScript further on, such
+as `([a.b = 1]) => 0`, `a = 1 = 2` or `x => { a b; }`, is a syntax error,
+not unsupported. It stops at the first refusal where it cannot read on: a loop,
+`switch`, `try` or another statement staticjs does not have, a
 regular expression (where it reads ahead without parsing, a `/` that cannot
 divide is one, as after an `if`'s condition), a `/` in a method's body.
 

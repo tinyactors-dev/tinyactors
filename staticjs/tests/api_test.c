@@ -210,6 +210,30 @@ static void test_natives_and_globals(void) {
     sjs_context_destroy(context);
 }
 
+/* A name bound nowhere is refused even where it never runs: in a branch not
+ * taken, or after a return. JavaScript throws only if it runs, so the spec,
+ * which Node checks, cannot hold these. */
+static void test_unbound_where_it_never_runs(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    env e = { context, NULL, NULL, 0, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    char out[4096];
+    CHECK(evaluate(&e, "(x => { if (x) return 1; return 2; })(0)", out) == SJS_OK && strcmp(out, "2") == 0);
+    static const char *const never_runs[] = {
+        "(x => { if (x) return nope; return 1; })(0)",
+        "(x => { if (x) return 1; else { const y = nope; } return 2; })(1)",
+        "(x => { return 1; return nope; })(0)",
+        "(x => { return 1; { const y = nope; } })(0)",
+    };
+    for (size_t i = 0; i < sizeof never_runs / sizeof never_runs[0]; i++) {
+        CHECK(evaluate(&e, never_runs[i], out) == SJS_ERR_PROGRAM);
+        CHECK(strncmp(out, "error ", 6) == 0 && strstr(out, "not bound") != NULL);
+    }
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 typedef struct {
     sjs_value exports;
 } one_module;
@@ -535,6 +559,14 @@ static void test_statement_order(void) {
     compile_events(no_block, 4, out_of_order);
     const sjs_event block_in_expression[] = { { .kind = SJS_EV_BLOCK_STATEMENT_BEGIN } };
     compile_events(block_in_expression, 1, out_of_order);
+    /* A const as the statement of an if or an else: JavaScript has no such
+     * program, and its binding would outlive the branch that never set it. */
+    const sjs_event const_if[] = { body[0], body[1], body[2], { .kind = SJS_EV_TRUE }, { .kind = SJS_EV_IF },
+                                   { .kind = SJS_EV_CONST_BEGIN } };
+    compile_events(const_if, 6, out_of_order);
+    const sjs_event const_else[] = { body[0], body[1], body[2], { .kind = SJS_EV_TRUE }, { .kind = SJS_EV_IF },
+                                     { .kind = SJS_EV_RETURN }, { .kind = SJS_EV_ELSE }, { .kind = SJS_EV_CONST_BEGIN } };
+    compile_events(const_else, 8, out_of_order);
 }
 
 /* A sink of one's own: count the events, and see the tokens' positions. */
@@ -796,6 +828,7 @@ int main(int argc, char **argv) {
     bool full = argc > 1 && strcmp(argv[1], "--full") == 0;
     test_values();
     test_natives_and_globals();
+    test_unbound_where_it_never_runs();
     test_modules();
     test_embedder_namespaces();
     test_compile_costs();

@@ -1634,8 +1634,12 @@ static sjs_result compile_body_begin(sjs_compiler *c, const sjs_event *e) {
 }
 
 static sjs_result compile_const_begin(sjs_compiler *c, const sjs_event *e) {
-    /* In a function, a const is a statement of its block body. */
+    /* In a function, a const is a statement of its block body or of a block
+     * in it; never the single statement of an if or an else, which
+     * JavaScript refuses, and whose binding would outlive its branch. */
     if (scope_count(c) > 1 && !statement_level(c)) return out_of_order(c, e->at);
+    const construct *top = top_construct(c);
+    if (top != NULL && top->kind == K_IF) return out_of_order(c, e->at);
     construct k = { 0 };
     k.kind = K_CONST;
     k.exported = c->exporting ? 1u : 0u;
