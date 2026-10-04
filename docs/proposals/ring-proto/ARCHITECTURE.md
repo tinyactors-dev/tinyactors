@@ -15,7 +15,7 @@ details. Messages are cited by stable ID; all of them are in
 | **Binding** (napi, the test host) | Values, the data model, the pump, the public API, plus glue to the kernel | Values, the data model, and a loop that drives the rings ([below](#the-host-loop)) |
 | **Application** | Storage and policy | Storage and policy, unchanged: what to record, how to answer at the edge, I/O processors |
 
-The README's layer rule still holds: core decides what inputs mean. Mail
+The README's layer rule holds: core decides what inputs mean. Mail
 between sessions, its order, and whether a send can be accepted are meaning,
 so they belong in core. ([reference/migration.md](reference/migration.md)
 lists the ADRs this reverses.)
@@ -80,10 +80,9 @@ lists the ADRs this reverses.)
   ownership to the pump. There is no operator ring or operator command
   admission ([reference/debugging.md](reference/debugging.md)).
 
-The accepted definition boundary is in
-[reference/definitions.md](reference/definitions.md). A request carries a
-handle to a native spec; the protocol does not mirror individual C builder
-operations, and there is no byte layout of a spec.
+A definition request carries a handle to a native spec; the protocol does
+not mirror individual C builder operations, and a spec has no byte layout
+([reference/definitions.md](reference/definitions.md#a-native-spec-handle-not-a-byte-layout)).
 
 ## The host loop
 
@@ -110,10 +109,12 @@ loop:
     c2h.macrostep_ended → report how the macrostep ended
     c2h.input_completed → resolve source_seq; release the retained original
     c2h.input_refused   → reject source_seq; release or retry the retained original
-  c2h.wake            → (re)arm the one timer
-  c2h.load_needed     → fetch the image → h2c.load, or h2c.load_failed, echoing request_seq
-  c2h.unloaded        → store image and wake_at in the index of unloaded sessions
-  c2h.bounced         → reject source_seq; release or retry the retained original (policy)
+    c2h.wake          → (re)arm the one timer
+    c2h.load_needed   → fetch the image → h2c.load, or h2c.load_failed, echoing request_seq
+    c2h.unloaded      → store image and wake_at in the index of unloaded sessions
+    c2h.bounced       → reject source_seq; release or retry the retained original (policy)
+    (each record: take its value references, call the handler, release its ring space;
+     never await a handler before releasing)
   tel                 → tinyactors-otlp, when the exporter asks
   I/O results (acks, rejections, errors) → h2c.event / h2c.invoke_report if h2c has room,
                       else the host's bounded result buffer, else drop (policy)
@@ -152,8 +153,8 @@ queued, not necessarily completed before the next h2c command is read.
 A parked slot does not hold commands back: a control that
 needs a session outside a macrostep (`h2c.unload`, `h2c.checkpoint`) is
 bounced while that session holds a slot, and `h2c.destroy` abandons the
-slot first. A slot keeps the system time it took its input at. If the host needs an input's effects to precede a control
-command, it waits for that input's `c2h.input_completed` before posting the
+slot first. A slot keeps the system time it took its input at. If the host
+needs an input's effects to precede a control command, it waits for that input's `c2h.input_completed` before posting the
 command. Refusal requires an explicit retry or application decision.
 
 ## The life of an input
@@ -162,8 +163,8 @@ command. Refusal requires an explicit retry or application decision.
    Its name is bytes and its data is a `vref`. If `h2c` is full, the host
    refuses here. ([S09](scenarios/S09-edge-backpressure.md))
 2. **Admission.** Core moves the record into an envelope while the pool is
-   below `admissionWatermark` and its complete text fits. Its name bytes go to the name area. It is
-   appended to the run queue, whose arrival order keeps each sender's
+   below `admissionWatermark` and its complete text fits. Its name bytes go
+   to the name area. It is appended to the run queue, whose arrival order keeps each sender's
    messages to a receiver in order. If the target isn't loaded, it waits on
    that address's list, and core writes [`c2h.load_needed`](protocol/generated/MESSAGES.md#c2hload_needed).
    ([S07](scenarios/S07-unloaded-tracker.md))
@@ -175,20 +176,25 @@ command. Refusal requires an explicit retry or application decision.
    Records are never edited after commit.
 3. **Take.** When a macrostep slot is free, core picks the next runnable
    envelope whose session isn't active, mail before admission by
-   `fairnessRatio`. Mail for an active session waits on its deferred list. If the session is recorded, core writes
+   `fairnessRatio`. Mail for an active session waits on its deferred list
+   ([envelope](reference/envelope.md#mail-for-an-active-session)); when the
+   session's input completes, the first envelope on that list returns to the
+   run queue at its arrival position. If the session is recorded, core writes
    [`c2h.input`](protocol/generated/MESSAGES.md#c2hinput).
    The envelope stays owned through invocation startup and its internal follow-up.
 4. **Macrostep.** Data model calls go through the vtable. Each effect is
    either a `c2h` record or a new envelope (mail, delayed send). Nothing
    allocates. A full pool or name area fails the action as
-   `error.execution.capacity` ([S02](scenarios/S02-full-pool.md)). A full
-   c2h parks the slot before the action, which is checked before it
-   evaluates anything, until the host drains; the action then runs once ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)).
+   `error.execution.capacity` ([S02](scenarios/S02-full-pool.md)). c2h is
+   different: before an action that may write c2h evaluates anything, core
+   checks for room for the largest record. Without it, the slot parks before
+   the action until the host drains, and the action then runs once
+   ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)).
 5. **Macrostep end and startup.** Core writes [`c2h.macrostep_ended`](protocol/generated/MESSAGES.md#c2hmacrostep_ended),
    then starts surviving pending invocations. Resulting internal errors run
    before another external input. Once the chain and notification flushing
-   settle, core writes `c2h.input_completed` and frees the envelope. The host may already have executed effects
-   during a budget pause; recording and persistence follow application policy.
+   settle, core writes `c2h.input_completed` and frees the envelope. The
+   host may already have executed effects during a budget pause; recording and persistence follow application policy.
    An h2c input also receives `c2h.input_completed` with its `source_seq`,
    even for an unrecorded session. An admitted input refused before being
    taken receives `c2h.input_refused` instead.
@@ -198,7 +204,7 @@ command. Refusal requires an explicit retry or application decision.
 
 | `<send>` to | Becomes | Delivered | Full | Reference |
 |---|---|---|---|---|
-| An I/O processor, no delay | [`c2h.send`](protocol/generated/MESSAGES.md#c2hsend) | on receipt, by the host, including before the macrostep end | `c2h` has no room: the slot waits for the host to drain, then runs the `<send>` again; a record larger than `maxRecordBytes` fails as `error.execution.capacity.record` | [macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot) |
+| An I/O processor, no delay | [`c2h.send`](protocol/generated/MESSAGES.md#c2hsend) | on receipt, by the host, including before the macrostep end | `c2h` has no room for the largest record: the slot parks before the action, which evaluates nothing until the host drains and then runs once; a record larger than `maxRecordBytes` fails as `error.execution.capacity.record` | [macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot) |
 | A local session (`#_scxml_…`, an actor URI) | an envelope on the run queue, at the macrostep end | when core takes it | pool or name area is full: `error.execution.capacity` | [envelope](reference/envelope.md) |
 | Anything, with a delay | an envelope in the deadline index | when `h2c.time` reaches its due time: mail is taken, an I/O send becomes `c2h.send` | as above | [envelope](reference/envelope.md) |
 | An unloaded session | an envelope that waits; `c2h.load_needed` | after `h2c.load` | as above; if the load fails, the envelope becomes `error.communication` for its sender | [unloading](reference/unloading.md) |
