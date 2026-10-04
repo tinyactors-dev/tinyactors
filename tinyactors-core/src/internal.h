@@ -6,6 +6,7 @@
 #include "format.h"
 #include "layout.h"
 #include "quota.h"
+#include "fifo.h"
 #include "vec.h"
 #include "pool.h"
 #include "arena.h"
