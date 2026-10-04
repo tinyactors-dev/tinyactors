@@ -55,7 +55,7 @@
  * control block so the host reads them. One exception to "FULL changes
  * nothing" exists, and is invisible: when the ring holds no unreleased byte,
  * the head is at a nonzero offset and the record cannot fit with its pad
- * (capacity == max_record_bytes), reserve commits the pad alone and answers
+ * (a record over half the capacity, up to capacity == max_record_bytes), reserve commits the pad alone and answers
  * FULL (or DROPPED); the consumer's next peek releases it and the retry
  * succeeds. That is what guarantees progress, and it takes no seq.
  * A request over max_record_bytes is TA_RING_TOO_BIG, a caller error: it

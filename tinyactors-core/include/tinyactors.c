@@ -905,7 +905,7 @@ TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo);
  * control block so the host reads them. One exception to "FULL changes
  * nothing" exists, and is invisible: when the ring holds no unreleased byte,
  * the head is at a nonzero offset and the record cannot fit with its pad
- * (capacity == max_record_bytes), reserve commits the pad alone and answers
+ * (a record over half the capacity, up to capacity == max_record_bytes), reserve commits the pad alone and answers
  * FULL (or DROPPED); the consumer's next peek releases it and the retry
  * succeeds. That is what guarantees progress, and it takes no seq.
  * A request over max_record_bytes is TA_RING_TOO_BIG, a caller error: it
@@ -1144,7 +1144,7 @@ TA_PRIVATE ta_result ta_rings_init(ta_rings *rings, const ta_rings_init_params *
  * It never allocates and, except for DROPPED and the lone pad (see the
  * package comment), changes nothing on any answer other than OK.
  */
-ta_ring_status ta_ring_reserve(ta_ring *ring, uint32_t size, ta_ring_reservation *out);
+TA_PRIVATE ta_ring_status ta_ring_reserve(ta_ring *ring, uint32_t size, ta_ring_reservation *out);
 
 /*
  * ta_ring_commit (producer) publishes the open reservation: it writes size
@@ -1153,14 +1153,14 @@ ta_ring_status ta_ring_reserve(ta_ring *ring, uint32_t size, ta_ring_reservation
  * reservation's pointer is dead after it. With no open reservation it does
  * nothing.
  */
-void ta_ring_commit(ta_ring *ring);
+TA_PRIVATE void ta_ring_commit(ta_ring *ring);
 
 /*
  * ta_ring_abandon (producer) forgets the open reservation. No byte, counter
  * or seq changes, so the next reserve returns the same place and seq. It is
  * how a failed fill gives its space back. With none open it does nothing.
  */
-void ta_ring_abandon(ta_ring *ring);
+TA_PRIVATE void ta_ring_abandon(ta_ring *ring);
 
 /*
  * ta_ring_peek (consumer) shows the oldest committed record in place. It
@@ -6357,6 +6357,113 @@ TA_PRIVATE ta_result ta_rings_init(ta_rings *rings, const ta_rings_init_params *
                                     .mode = spec->mode };
     }
     return TA_OK;
+}
+
+/* Native-order stores of the header cells the ring writes. Records are 8-aligned, but a copy is the portable way to touch a field of bytes. */
+static void put_u32(unsigned char *at, uint32_t value) { ta_mem_copy(at, &value, sizeof value); }
+static void put_u64(unsigned char *at, uint64_t value) { ta_mem_copy(at, &value, sizeof value); }
+
+/*
+ * pad_write writes the 8-byte pad prefix (kind 0, flags 0, size = bytes to
+ * the end of the buffer) at buffer offset `at`. A pad is the only thing the
+ * ring writes besides size and seq, and it is written at commit, when the
+ * bytes are certainly free (reserve counted them in its need).
+ */
+static void pad_write(ta_ring *ring, uint64_t at, uint32_t bytes) {
+    ta_mem_zero(ring->data + at, 4);
+    put_u32(ring->data + at + 4, bytes);
+}
+
+/*
+ * refresh_peer_tail reads the consumer's tail from the control block. The
+ * host writes it on c2h and tel, so it is untrusted: it must not go back
+ * (counters only grow) and must not pass what has been committed. Only
+ * differences are compared (I1), so a counter that wrapped u64 in theory
+ * would still be judged by distance.
+ */
+static bool refresh_peer_tail(ta_ring *ring) {
+    uint64_t tail = ring->shared->tail;
+    if (tail - ring->peer_tail > ring->head - ring->peer_tail) {
+        return false; /* either behind what was seen, or ahead of head: unsigned distances catch both */
+    }
+    ring->peer_tail = tail;
+    return true;
+}
+
+/*
+ * refuse answers a reservation that does not fit. In a lossless ring it
+ * changes nothing; the caller retries after a release.
+ */
+static ta_ring_status refuse(ta_ring *ring, uint32_t size, ta_ring_reservation *out) {
+    *out = (ta_ring_reservation){ .bytes = NULL, .size = size, .seq = ring->next_seq };
+    return TA_RING_FULL;
+}
+
+/* ta_ring_reserve: see ring.h. */
+TA_PRIVATE ta_ring_status ta_ring_reserve(ta_ring *ring, uint32_t size, ta_ring_reservation *out) {
+    if (ring->pending_size != 0) {
+        return TA_RING_BUSY;
+    }
+    /* Round up to 8 without wrapping u32: a size within 7 of the top is too big in any ring. */
+    if (size > UINT32_MAX - (TA_RING_ALIGN - 1)) {
+        return TA_RING_TOO_BIG;
+    }
+    uint32_t rounded = (size + (TA_RING_ALIGN - 1)) & ~(TA_RING_ALIGN - 1);
+    if (rounded < TA_RING_MIN_RECORD || rounded > ring->max_record_bytes) {
+        return TA_RING_TOO_BIG;
+    }
+    if (!refresh_peer_tail(ring)) {
+        return TA_RING_CORRUPT;
+    }
+    uint64_t position = ring->head % ring->capacity;
+    uint64_t to_end = ring->capacity - position; /* at least 8: head is a multiple of 8 */
+    uint64_t pad = rounded > to_end ? to_end : 0;
+    uint64_t free_bytes = ring->capacity - (ring->head - ring->peer_tail);
+    if (pad + rounded > free_bytes) {
+        /*
+         * Does not fit. If nothing is unreleased and the record cannot fit
+         * even from offset 0 after the pad, the pad alone makes progress:
+         * commit it (it holds no seq) and let the consumer's next peek
+         * release it, after which the record starts at offset 0.
+         */
+        if (ring->head == ring->peer_tail && pad != 0) {
+            pad_write(ring, position, (uint32_t)pad);
+            ring->head += pad;
+            ring->shared->head = ring->head;
+        }
+        return refuse(ring, rounded, out);
+    }
+    ring->pending_size = rounded;
+    ring->pending_pad = (uint32_t)pad;
+    ring->pending_seq = ring->next_seq;
+    *out = (ta_ring_reservation){ .bytes = ring->data + (pad != 0 ? 0 : position), .size = rounded, .seq = ring->next_seq };
+    return TA_RING_OK;
+}
+
+/* ta_ring_commit: see ring.h. Bytes first, counters last, so a reader never sees a half-written record. */
+TA_PRIVATE void ta_ring_commit(ta_ring *ring) {
+    if (ring->pending_size == 0) {
+        return;
+    }
+    uint64_t position = ring->head % ring->capacity;
+    unsigned char *record = ring->data + (ring->pending_pad != 0 ? 0 : position);
+    if (ring->pending_pad != 0) {
+        pad_write(ring, position, ring->pending_pad);
+    }
+    put_u32(record + 4, ring->pending_size);
+    put_u64(record + 8, ring->pending_seq);
+    ring->head += (uint64_t)ring->pending_pad + ring->pending_size;
+    ring->next_seq = ring->pending_seq + 1;
+    ring->shared->head = ring->head;
+    ring->shared->next_seq = ring->next_seq;
+    ring->pending_size = 0;
+    ring->pending_pad = 0;
+}
+
+/* ta_ring_abandon: see ring.h. The reservation never wrote a byte or a counter, so forgetting it is all. */
+TA_PRIVATE void ta_ring_abandon(ta_ring *ring) {
+    ring->pending_size = 0;
+    ring->pending_pad = 0;
 }
 
 

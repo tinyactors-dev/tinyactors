@@ -174,10 +174,222 @@ static void test_region_failure_sweep(void) {
     finish_clean();
 }
 
+/* ---- producer ---- */
+
+/*
+ * A fixture: one region, one set of rings, torn down with the sized free.
+ * `at` puts one ring's counters at byte count `at` with nothing unreleased,
+ * which is a state the ring can reach only by committing and releasing, but
+ * not at every offset (records are at least 16 bytes), so the sweep sets it.
+ */
+typedef struct fixture {
+    region r;
+    ta_rings rings;
+} fixture;
+
+static void fixture_up(fixture *f, const ta_rings_specs *specs) {
+    CHECK(region_make(&f->r, specs));
+    CHECK(rings_up(&f->rings, &f->r, specs) == TA_OK);
+    memset(f->r.memory + f->r.plan.data_offset[0], CANARY, f->r.plan.bytes - f->r.plan.data_offset[0]);
+}
+
+static void fixture_down(fixture *f) {
+    region_free(&f->r);
+    finish_clean();
+}
+
+static void ring_at(ta_ring *ring, uint64_t at) {
+    ring->head = ring->peer_tail = ring->tail = ring->peer_head = at;
+    ring->shared->head = ring->shared->tail = at;
+}
+
+/* What a host consumer does with a ring it drains: store the tail. */
+static void host_release(ta_ring *ring, uint64_t bytes) { ring->shared->tail += bytes; }
+
+static void fill_record(unsigned char *bytes, uint32_t size, uint32_t tag) {
+    for (uint32_t i = 16; i < size; i += 1) bytes[i] = (unsigned char)(tag * 13u + i);
+}
+
+static bool record_ok(const unsigned char *bytes, uint32_t size, uint32_t tag) {
+    for (uint32_t i = 16; i < size; i += 1) if (bytes[i] != (unsigned char)(tag * 13u + i)) return false;
+    return true;
+}
+
+static uint32_t read32(const unsigned char *at) { uint32_t v; memcpy(&v, at, 4); return v; }
+static uint64_t read64(const unsigned char *at) { uint64_t v; memcpy(&v, at, 8); return v; }
+
+static void test_wrap_at_every_offset(void) {
+    static const uint32_t capacities[] = { 64, 72, 256 };
+    static const uint32_t sizes[] = { 16, 24, 32, 40, 56, 64 };
+    for (uint32_t ci = 0; ci < TA_ARRAY_COUNT(capacities); ci += 1) {
+        for (uint32_t si = 0; si < TA_ARRAY_COUNT(sizes); si += 1) {
+            uint32_t capacity = capacities[ci], size = sizes[si];
+            for (uint64_t off = 0; off < capacity; off += 8) {
+                fixture f;
+                ta_rings_specs specs = specs_of(capacity, size, TA_RING_LOSSLESS);
+                fixture_up(&f, &specs);
+                ta_ring *ring = &f.rings.ring[TA_RING_C2H];
+                ring_at(ring, off);
+                uint64_t pad = size > capacity - off ? capacity - off : 0;
+                uint64_t before = ring->shared->head;
+                uint64_t attempts = heap.stats.attempts;
+                ta_ring_reservation res;
+                ta_ring_status status = ta_ring_reserve(ring, size, &res);
+                if (pad + size > capacity) {
+                    /* An empty ring whose record cannot fit after its pad: the lone pad. */
+                    CHECK(off != 0 && status == TA_RING_FULL && res.bytes == NULL);
+                    CHECK(ring->shared->head == before + pad && ring->shared->next_seq == 1);
+                    CHECK(read32(ring->data + off) == 0 && read32(ring->data + off + 4) == pad);
+                    host_release(ring, pad);
+                    status = ta_ring_reserve(ring, size, &res);
+                    pad = 0;
+                    before = ring->shared->head;
+                }
+                CHECK(status == TA_RING_OK && res.size == size && res.seq == 1);
+                uint64_t start = (before + pad) % capacity;
+                CHECK(res.bytes == ring->data + start && start + size <= capacity);
+                CHECK(res.bytes - ring->data < (ptrdiff_t)capacity && (uintptr_t)res.bytes % 8 == 0);
+                CHECK(ring->shared->head == before); /* reserve publishes nothing */
+                fill_record(res.bytes, size, (uint32_t)off);
+                ta_ring_commit(ring);
+                CHECK(ring->shared->head == before + pad + size && ring->shared->next_seq == 2);
+                if (pad != 0) {
+                    CHECK(start == 0);
+                    CHECK(read32(ring->data + (before % capacity)) == 0 && read32(ring->data + (before % capacity) + 4) == pad);
+                }
+                CHECK(read32(ring->data + start + 4) == size && read64(ring->data + start + 8) == 1);
+                CHECK(record_ok(ring->data + start, size, (uint32_t)off));
+                host_release(ring, pad + size);
+                /* The next record continues where the last ended, wrapping to 0 exactly at the end. */
+                uint64_t next = (before + pad + size) % capacity;
+                CHECK(ta_ring_reserve(ring, 16, &res) == TA_RING_OK);
+                CHECK(res.bytes == ring->data + (16 > capacity - next ? 0 : next) && res.seq == 2);
+                CHECK(heap.stats.attempts == attempts); /* the ring never allocates */
+                fixture_down(&f);
+            }
+        }
+    }
+}
+
+static void test_exact_max_record(void) {
+    static const uint32_t capacities[] = { 64, 4096 };
+    for (uint32_t ci = 0; ci < TA_ARRAY_COUNT(capacities); ci += 1) {
+        uint32_t capacity = capacities[ci];
+        for (uint64_t off = 0; off < capacity; off += 8) {
+            fixture f;
+            ta_rings_specs specs = specs_of(capacity, capacity, TA_RING_LOSSLESS);
+            fixture_up(&f, &specs);
+            ta_ring *ring = &f.rings.ring[TA_RING_C2H];
+            ring_at(ring, off);
+            ta_ring_reservation res;
+            if (off != 0) {
+                /* The pad alone is committed; the consumer releases it; the retry succeeds. */
+                CHECK(ta_ring_reserve(ring, capacity, &res) == TA_RING_FULL);
+                CHECK(ring->shared->head - ring->shared->tail == capacity - off);
+                CHECK(ring->shared->next_seq == 1); /* a pad takes no seq */
+                CHECK(ta_ring_reserve(ring, capacity, &res) == TA_RING_FULL); /* still unreleased */
+                CHECK(ring->shared->head - ring->shared->tail == capacity - off);
+                host_release(ring, capacity - off);
+            }
+            CHECK(ta_ring_reserve(ring, capacity, &res) == TA_RING_OK);
+            CHECK(res.bytes == ring->data && res.size == capacity && res.seq == 1);
+            fill_record(res.bytes, capacity, 7);
+            ta_ring_commit(ring);
+            CHECK(ring->shared->head - ring->shared->tail == capacity);
+            CHECK(ta_ring_reserve(ring, 16, &res) == TA_RING_FULL && res.seq == 2);
+            fixture_down(&f);
+        }
+    }
+}
+
+static void test_sizes_busy_abandon(void) {
+    for (int lossy = 0; lossy < 2; lossy += 1) {
+        fixture f;
+        ta_rings_specs specs = specs_of(64, 32, lossy ? TA_RING_LOSSY : TA_RING_LOSSLESS);
+        fixture_up(&f, &specs);
+        ta_ring *ring = &f.rings.ring[TA_RING_C2H];
+        ta_ring_reservation res = { (unsigned char *)1, 99, 99 };
+        static const uint32_t bad[] = { 0, 1, 8, 40, 64, 72, UINT32_MAX - 7, UINT32_MAX - 6, UINT32_MAX };
+        unsigned char control[sizeof(ta_ring_control)];
+        memcpy(control, f.rings.control, sizeof control);
+        for (uint32_t i = 0; i < TA_ARRAY_COUNT(bad); i += 1) {
+            CHECK(ta_ring_reserve(ring, bad[i], &res) == TA_RING_TOO_BIG);
+            CHECK(res.bytes == (unsigned char *)1 && res.size == 99 && res.seq == 99); /* *out not written */
+            CHECK(memcmp(control, f.rings.control, sizeof control) == 0);
+            CHECK(ring->pending_size == 0);
+        }
+        /* Rounding: 12 and 17 round up to 16 and 24. */
+        CHECK(ta_ring_reserve(ring, 12, &res) == TA_RING_OK && res.size == 16);
+        ta_ring_abandon(ring);
+        CHECK(ta_ring_reserve(ring, 17, &res) == TA_RING_OK && res.size == 24);
+        unsigned char *first = res.bytes;
+        /* A second reserve while one is open is BUSY and keeps the first. */
+        ta_ring_reservation other = { 0 };
+        CHECK(ta_ring_reserve(ring, 16, &other) == TA_RING_BUSY && other.bytes == NULL);
+        CHECK(ring->pending_size == 24);
+        /* Abandon leaves the ring as it was, and the next reserve is the same place and seq. */
+        ta_ring_abandon(ring);
+        CHECK(memcmp(control, f.rings.control, sizeof control) == 0);
+        CHECK(ta_ring_reserve(ring, 24, &res) == TA_RING_OK && res.bytes == first && res.seq == 1);
+        ta_ring_commit(ring);
+        CHECK(ring->shared->next_seq == 2 && ring->shared->dropped == 0);
+        fixture_down(&f);
+    }
+}
+
+static void test_lossless_full(void) {
+    fixture f;
+    ta_rings_specs specs = specs_of(64, 32, TA_RING_LOSSLESS);
+    fixture_up(&f, &specs);
+    ta_ring *ring = &f.rings.ring[TA_RING_C2H];
+    ta_ring_reservation res;
+    for (uint32_t i = 1; i <= 2; i += 1) { /* two records of 32 fill the 64 bytes to the last */
+        CHECK(ta_ring_reserve(ring, 32, &res) == TA_RING_OK && res.seq == i);
+        fill_record(res.bytes, 32, i);
+        ta_ring_commit(ring);
+    }
+    unsigned char control[sizeof(ta_ring_control)], data[64];
+    memcpy(control, f.rings.control, sizeof control);
+    memcpy(data, ring->data, sizeof data);
+    for (uint32_t i = 0; i < 3; i += 1) {
+        CHECK(ta_ring_reserve(ring, 16, &res) == TA_RING_FULL && res.bytes == NULL && res.seq == 3);
+        CHECK(memcmp(control, f.rings.control, sizeof control) == 0 && memcmp(data, ring->data, sizeof data) == 0);
+    }
+    host_release(ring, 32);
+    CHECK(ta_ring_reserve(ring, 32, &res) == TA_RING_OK && res.seq == 3 && res.bytes == ring->data);
+    ta_ring_commit(ring);
+    CHECK(record_ok(ring->data + 32, 32, 2) && read64(ring->data + 8) == 3);
+    fixture_down(&f);
+}
+
+/* A corrupt peer tail is a protocol failure for the producer too: it moved back or past head. */
+static void test_producer_corrupt_tail(void) {
+    fixture f;
+    ta_rings_specs specs = specs_of(64, 32, TA_RING_LOSSLESS);
+    fixture_up(&f, &specs);
+    ta_ring *ring = &f.rings.ring[TA_RING_C2H];
+    ta_ring_reservation res;
+    CHECK(ta_ring_reserve(ring, 32, &res) == TA_RING_OK);
+    ta_ring_commit(ring);
+    ring->shared->tail = 40; /* past head (32) */
+    CHECK(ta_ring_reserve(ring, 16, &res) == TA_RING_CORRUPT);
+    ring->shared->tail = 32;
+    CHECK(ta_ring_reserve(ring, 16, &res) == TA_RING_OK);
+    ta_ring_commit(ring);
+    ring->shared->tail = 8; /* back from 32 */
+    CHECK(ta_ring_reserve(ring, 16, &res) == TA_RING_CORRUPT);
+    fixture_down(&f);
+}
+
 int main(void) {
     test_layout();
     test_init();
     test_region_failure_sweep();
+    test_wrap_at_every_offset();
+    test_exact_max_record();
+    test_sizes_busy_abandon();
+    test_lossless_full();
+    test_producer_corrupt_tail();
     if (failures != 0) {
         fprintf(stderr, "ring_test: %d check(s) failed\n", failures);
         return 1;
