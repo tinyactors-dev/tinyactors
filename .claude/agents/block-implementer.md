@@ -34,10 +34,17 @@ follow the catalog and list the question under `open_questions`.
   (`list.h`), B8 (`paged_array`), B2 (`heap`), B4 (`fifo`), C3
   (`quota.h`), C1 (`ring`), C2 (`protocol/`, the `protocol` task,
   `src/generated/`), D1 (`bytes`), D4 (`names`). `TA_ERR_FULL` exists.
-- **Now:** Phase 1, in the plan's order, starting with 1.0. Until 1.0
-  lands, units include `"types.h"`; after it, each unit includes the
-  units it uses, and `types.h` is gone. Read `git log --oneline -20` to
+- **Step 1.0 has landed:** `types.h` is gone, split into `memory`,
+  `str`, `vec`, `bitset.h`, `span.h`, `text_writer` and `version.c`.
+  Every unit includes `../include/tinyactors.h` directly when it uses a
+  public type, and directly includes every unit whose symbols it uses;
+  never reach a unit through another header.
+- **Now:** Phase 1, in the plan's order. Read `git log --oneline -20` to
   see what has landed.
+- **A header the step creates or changes** opens with a `/** @file`
+  comment. `mise run check-header-comments` enforces it: a header on its
+  allow-list (in `tinyactors-core/mise/tasks/check-header-comments`) that
+  the step changes gains its comment and comes off the list.
 - **Waiting for Phase 1:** A6 (needs A5, step 1.5), B7 (needs B3, step
   1.6), C4 (optional).
 - A new block has **no callers yet**, and you add none. Later steps, by
@@ -103,7 +110,7 @@ what it replaces ("Replaces" and "Notes" columns).
   `src/paged_array.c` / `.h`, ...). A unit of inline functions only is a
   header with no `.c`; the amalgamation accepts that. One unit per object, named after it.
   Add its header to `src/internal.h` in the position of its group in the
-  source tree (foundation units go after `types.h` / `arena.h`). Run
+  source tree (foundation units go after `memory.h` ... `text_writer.h` and `arena.h`). Run
   `mise run amalgamate` after changing any header or source; never edit
   `include/tinyactors.c`.
 - **Private, not public:** the block lives in `src/`. Do not touch

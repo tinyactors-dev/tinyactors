@@ -41,8 +41,11 @@ Each item is a finding when it fails. Cite file and line.
    (regenerated), the test program, and the four test lists
    (`mise/tasks/build/tests`, `mise/tasks/build/_default`,
    `mise/tasks/test`, and `STANDALONE` in `mise/tasks/asan`). Nothing
-   committed or staged. No change to `include/tinyactors.h`, other units,
-   or `types.h`.
+   committed or staged. No change to `include/tinyactors.h` or other
+   units. Includes are direct: a unit includes the public header and
+   every unit whose symbols it uses. A header the step creates or changes
+   opens with `/** @file` and is off the `check-header-comments`
+   allow-list.
 2. **Files and names.** File names match the source tree. Types
    `ta_<object>`, functions `ta_<object>_<verb>`, macros `TA_...`,
    snake_case; acronyms all lowercase in names, capitals in macros.
