@@ -1,0 +1,13 @@
+<<<cmd
+set -e
+bash release.sh tarballs >/dev/null 2>&1
+d=$(mktemp -d)
+tar xzf dist/release/pocketparse-0.1.0-linux-x86_64.tar.gz -C "$d"
+r="$d/pocketparse-0.1.0-linux-x86_64"
+test -x "$r/bin/pocketparse"
+test -f "$r/lib/libpocketparse.a"
+test -f "$r/lib/libpocketparse.so"
+test -f "$r/include/pocketparse.h"
+test -f "$r/share/man/man1/pocketparse.1"
+<<<assert
+exit 0

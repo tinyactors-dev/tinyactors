@@ -1,0 +1,7 @@
+<<<cmd
+printf 'hi there' | "$PP" linearize test/suite/family/fixtures/base.scm --input -
+<<<assert
+exit 0
+out-contains enter Source
+out-contains leaf Word
+out-contains exit Item

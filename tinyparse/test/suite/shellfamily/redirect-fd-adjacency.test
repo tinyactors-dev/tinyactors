@@ -1,0 +1,13 @@
+# IO_NUMBER adjacency: a digit run only counts as an fd when it abuts the
+# operator. In echo 2 >out the blank between 2 and > breaks the adjacency, so the
+# 2 is an ordinary argument Word and the redirect carries no fd.
+<<<cmd
+printf 'echo 2 >out\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 arg: Word
+out-count 1 redirect: Redirect
+out-absent fd: IoNumber
+out-order arg: Word ~ redirect: Redirect

@@ -1,0 +1,17 @@
+# A here-document whose FIRST body line has a LEADING SPACE (POSIX §2.7.4). The
+# body must begin EXACTLY at the byte after the command line's terminating newline,
+# so the first line ` hello` keeps its leading space and the heredoc closes only at
+# the real `EOF`. (Pre-fix the line-level drain ran under the command line's extras,
+# so the HeredocBody CALL ate the leading space — here the space is preserved and the
+# body is one content line that closes cleanly.) The content line starts at column 0
+# ([1,0]), proving no leading whitespace was stripped at the body boundary.
+<<<cmd
+printf 'cat <<EOF\n hello\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 HeredocBody [
+out-count 1 HeredocContentLine
+out-order HeredocContentLine [10-17] [1,0] ~ end: HeredocDelimLine
+out-contains end: HeredocDelimLine

@@ -1,0 +1,14 @@
+<<<cmd
+"$PP" run std.typescript --input test/suite/tsfamily/inputs/functions__10.ts --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+# The floated comment is a program-level sibling (two-space indent) ...
+out-regex ^  line_comment \[17-40\]
+# ... and the preceding function_signature's extent is TRIMMED back to its last real
+# token (ends at 17, the comment's start), not extended across the comment to 41. A
+# regression to span over-extension would print function_signature [0-41] and overlap
+# the comment as a sibling. See docs/comment-attachment.md.
+out-regex ^  function_signature \[0-17\]
+out-absent function_signature [0-41]

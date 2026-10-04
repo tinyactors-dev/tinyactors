@@ -1,0 +1,11 @@
+# A brace group: `{ list; }`. POSIX requires `{`/`}` to be delimited words and
+# the list to end with `;` (or a newline) before `}`. The body is a compound-list.
+<<<cmd
+printf '{ a; b; }\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains BraceGroup
+out-contains body: CompoundList
+out-count 2 SimpleCommand

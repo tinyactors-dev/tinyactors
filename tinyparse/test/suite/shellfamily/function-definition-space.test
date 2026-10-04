@@ -1,0 +1,12 @@
+# A function definition with a blank between the name and `()`: `foo () { … }`.
+# The inter-token Space is trivia, so this parses as the same FunctionDefinition
+# as `foo()`.
+<<<cmd
+printf 'foo () { echo hi; }\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains FunctionDefinition
+out-contains body: CompoundCommand
+out-contains BraceGroup

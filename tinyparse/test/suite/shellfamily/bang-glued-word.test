@@ -1,0 +1,11 @@
+# `!` is a reserved word only as a DELIMITED word. `!a` (no blank) is the single
+# command word `!a`, NOT a negation: there is no Pipeline bang and the command
+# name is `!a`.
+<<<cmd
+printf '!a\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-absent bang: Bang
+out-contains name: CommandName

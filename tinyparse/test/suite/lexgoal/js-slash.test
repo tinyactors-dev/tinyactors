@@ -1,0 +1,7 @@
+<<<cmd
+printf 'a = /ab/ ; b = c / d ;' | "$PP" run examples/lexgoal/mini-js.scm --input - --dump-tree
+<<<assert
+exit 0
+out-contains RegexLiteral
+out-contains Div
+out-order RegexLiteral ~ Div

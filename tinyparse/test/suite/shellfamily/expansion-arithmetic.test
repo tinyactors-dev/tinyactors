@@ -1,0 +1,9 @@
+# Arithmetic expansion `$((expression))` (POSIX §2.6.4): the content is balanced
+# text up to the outermost `))`.
+<<<cmd
+printf 'echo $((1 + 2))\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 ArithmeticExpansion

@@ -1,0 +1,10 @@
+# Corpus: four function definitions, including a brace-group body, a subshell
+# body, a single-line body, and a `name::name` function name. Four
+# FunctionDefinition nodes.
+<<<cmd
+"$PP" run std.shell --input test/suite/shellfamily/inputs/statements__18.sh --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 4 FunctionDefinition [

@@ -1,0 +1,8 @@
+<<<grammar
+examples/sexpr/sexpr.scm
+<<<input
+(a (b (c d)) e)
+<<<assert
+exit 0
+out-order Source ~ List ~ Atom
+out-count 3 List

@@ -1,0 +1,13 @@
+# Phase 6 -- slot rollback on backtrack (REPEAT). Each repeat iteration captures
+# a word via (defer s W) then requires "X". With input "aX bX c" the first two
+# iterations commit and the third captures "c" then fails at the missing "X".
+# The failed iteration's deferred item MUST NOT leak: the (parse-deferred s Body)
+# drain count equals the number of SUCCESSFUL iterations (2), never one more.
+<<<cmd
+printf 'aX bX c\nfoo\nbar\nbaz\n' | "$PP" run test/suite/lexgoal/slot-rollback-repeat.scm --input - --dump-tree
+<<<assert
+exit 0
+out-count 2 Body [
+out-count 1 Extra [
+out-contains tail: W
+out-absent ERROR

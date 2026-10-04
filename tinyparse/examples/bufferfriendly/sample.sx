@@ -1,0 +1,6 @@
+(define (square x) (* x x))
+(define pi 3.14159)
+; a line comment between top-level forms
+(list 1 2 3 (nested (deeper (deepest item))) 4)
+(another form with many atoms and    spaces)
+(final)

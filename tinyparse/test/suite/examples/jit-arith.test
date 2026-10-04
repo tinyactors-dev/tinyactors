@@ -1,0 +1,5 @@
+<<<cmd
+examples/jit/run.sh 'int f(int x){return x*x+1;}' f 7
+<<<assert
+exit 0
+out-contains 50

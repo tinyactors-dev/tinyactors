@@ -1,0 +1,13 @@
+<<<grammar
+examples/tcl/tcl.scm
+<<<input
+echo {*}"a b"${c}d[expr {1+1}]
+<<<assert
+exit 0
+out-contains Command
+out-order Expansion ~ QuotedWord ~ VariableSub ~ CommandSub
+out-contains VariableSub
+# the fused word still nests: [expr {1+1}] holds a Braces group inside the
+# CommandSub, so both forms appear and the brace group follows the command sub.
+out-order CommandSub ~ Braces
+out-contains Braces

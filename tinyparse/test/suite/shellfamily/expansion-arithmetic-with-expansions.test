@@ -1,0 +1,11 @@
+# Arithmetic expansion whose operands are themselves parameter expansions
+# `$(($a + $b))`: the inner `$a`/`$b` parse as SimpleExpansion inside the
+# arithmetic body.
+<<<cmd
+printf 'echo $(($a + $b))\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains ArithmeticExpansion
+out-count 2 SimpleExpansion

@@ -1,0 +1,30 @@
+# pocketparse parse-speed ceiling: median seconds to parse the JS corpus
+# (116 docs, 200 iterations) as measured by ci/pocketparse-bench.sh.
+#
+# The Phase 10 ratchet. Lower this as each optimization lands; the perf gate
+# (ci/pocketparse-perf-gate.sh) fails if the measured median exceeds it by >5%.
+# Starting point: the fair-methodology baseline, ~39x tree-sitter.
+# W14-5: the iterative bytecode VM is now the sole engine; measured ~5.6ms, so the
+# ceiling drops 10ms -> 7ms to lock in the gain (the ratchet only ever goes down).
+# W15-2: the compiled (jump-threaded) token lexer measures ~5.5ms here, on par with
+# the W14-5 baseline (the JS corpus files are tiny, so the lexer win lands on real
+# files, not these); ratchet 7 -> 6.5ms to lock in the small JS-corpus gain.
+# W16-1: the extras lead-byte fast path, raw (non-zeroing) hot allocations, and an
+# inlined choice predictor cut ~29% of parse instructions on real files; the JS
+# corpus now measures ~4.8ms, so ratchet 6.5 -> 5.5ms to lock the gain in (the
+# ratchet only ever goes down; the margin leaves room for noisier CI hardware).
+# W16-GOAL: lowering the not-guard tokens off pp_match_ir, dropping the token memo
+# from the hot path (it churned the cache faster than it saved re-matches on a clean
+# predictive parse), and fusing the identifier choice-leaf run lifted real-file
+# throughput sharply; the tiny JS corpus (setup-dominated) measures ~5.0ms, so
+# ratchet 5.5 -> 5.2ms to lock in the small remaining gain with CI-noise margin.
+# W17-GOAL: the bulk input-buffer memcpy (was a byte loop) and the lazily-allocated
+# rule + extras memos (no input-scaled zeroing on a clean parse) benefit the VM path
+# this gate measures too; the JS corpus now measures ~4.7ms, so ratchet 5.2 -> 5.0ms
+# to lock the gain in (the ratchet only ever goes down; the margin covers CI noise).
+# W17-FLAT: marking the expression-precedence-ladder and dispatch wrapper rules
+# HIDDEN collapses the ~57% of CST nodes that were single-child pass-throughs, so
+# the shared node-close pushes the surviving child in place of the wrapper -- fewer
+# sink pushes/closes per parse and a far smaller tree. The JS corpus now measures
+# ~3.7ms, so ratchet 5.0 -> 4.0ms to lock the gain in (margin covers CI noise).
+0.0040

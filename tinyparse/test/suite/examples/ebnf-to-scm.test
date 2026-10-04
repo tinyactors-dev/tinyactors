@@ -1,0 +1,6 @@
+<<<cmd
+examples/ebnf/run.sh examples/ebnf/uri.ebnf
+<<<assert
+exit 0
+out-contains (grammar
+out-contains (rule

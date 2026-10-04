@@ -1,0 +1,7 @@
+<<<grammar
+examples/sexpr/sexpr.scm
+<<<input
+(a (b c)
+<<<assert
+exit 1
+err-contains error

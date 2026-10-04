@@ -1,0 +1,11 @@
+# Redirections may sit among the arguments in the suffix: echo a >out b binds
+# echo as the command, a and b as arguments, and >out as a Redirect between them.
+<<<cmd
+printf 'echo a >out b\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 2 arg: Word
+out-count 1 redirect: Redirect
+out-order arg: Word ~ redirect: Redirect ~ arg: Word

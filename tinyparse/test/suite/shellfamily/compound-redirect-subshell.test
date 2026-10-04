@@ -1,0 +1,11 @@
+# A redirect on a subshell: `( a; b ) >out`. The Redirect attaches to the
+# CompoundCommand, after the Subshell.
+<<<cmd
+printf '( a; b ) >out\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains CompoundCommand
+out-contains Subshell
+out-count 1 redirect: Redirect

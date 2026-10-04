@@ -1,0 +1,10 @@
+# A leading "!" negates the pipeline. The Pipeline node carries a bang field
+# holding a Bang token (a delimited "!"), with the simple command after it.
+<<<cmd
+printf '! grep x file\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains bang: Bang
+out-contains command: SimpleCommand

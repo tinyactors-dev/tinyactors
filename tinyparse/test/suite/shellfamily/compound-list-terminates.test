@@ -1,0 +1,11 @@
+# A compound-list stops at a reserved terminator word: in `if c; then a; b; fi`
+# the body holds exactly the two commands `a` and `b` (plus the condition `c`)
+# and stops at `fi` — `fi` is not pulled in as a third command.
+<<<cmd
+printf 'if c; then a; b; fi\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains IfClause
+out-count 3 SimpleCommand

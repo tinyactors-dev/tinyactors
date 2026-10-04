@@ -1,0 +1,9 @@
+<<<grammar
+examples/sexpr/sexpr.scm
+<<<input
+(a ; a comment
+ b)
+<<<assert
+exit 0
+out-contains Comment
+out-order Atom ~ Comment ~ Atom

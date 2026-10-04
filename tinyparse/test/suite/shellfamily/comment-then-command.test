@@ -1,0 +1,8 @@
+# A comment line is trivia; the command on the next line still parses cleanly.
+<<<cmd
+printf '# c\necho x\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains SimpleCommand

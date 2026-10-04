@@ -1,0 +1,15 @@
+# The `<<-` here-document (POSIX §2.7.4): the operator parses as a HeredocRedirect
+# whose op is `<<-`, and its closing delimiter line may be preceded by tabs (the
+# parametrized goal pattern allows leading tabs). The tab-strip is a runtime
+# semantic, not done by the grammar; here the tab-indented `\tEOF` line still
+# matches the delimiter line so the body terminates cleanly.
+<<<cmd
+printf 'cat <<-EOF\n\thello\n\tEOF\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains HeredocRedirect
+out-contains <<-
+out-count 1 HeredocBody [
+out-contains end: HeredocDelimLine

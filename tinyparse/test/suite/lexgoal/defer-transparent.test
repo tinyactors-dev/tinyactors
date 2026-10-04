@@ -1,0 +1,7 @@
+<<<cmd
+printf 'foo bar' | "$PP" run test/suite/lexgoal/defer-exec.scm --input - --dump-tree
+<<<assert
+exit 0
+out-contains word: W
+out-count 2 word: W
+out-order Item ~ word: W ~ Item ~ word: W

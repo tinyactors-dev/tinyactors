@@ -1,0 +1,6 @@
+<<<cmd
+printf 'head one two\nalpha\nbravo\n' | "$PP" run test/suite/lexgoal/parse-deferred-drain.scm --input - --dump-tree
+<<<assert
+exit 0
+out-count 2 Body [
+out-order head: W ~ Body [13-19] ~ line: W [13-18] ~ Body [19-25] ~ line: W [19-24]

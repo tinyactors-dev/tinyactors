@@ -1,0 +1,30 @@
+# Pinned tree-sitter references for the pocketparse std.javascript / std.typescript ports.
+# These are BUILD-TIME PORTING REFERENCES ONLY: never linked, never shipped.
+# The clones themselves are gitignored; re-fetch with the commands below.
+# Their test/corpus is the source for our conformance tests and the Phase 9 benchmark.
+
+tree-sitter-javascript https://github.com/tree-sitter/tree-sitter-javascript 58404d8cf191d69f2674a8fd507bd5776f46cb11
+tree-sitter-typescript https://github.com/tree-sitter/tree-sitter-typescript 75b3874edb2dc714fb1fd77a32013d0f8699989f
+
+# Re-fetch:
+#   cd tools/pocketparse/reference
+#   git clone https://github.com/tree-sitter/tree-sitter-javascript && git -C tree-sitter-javascript checkout 58404d8c
+#   git clone https://github.com/tree-sitter/tree-sitter-typescript && git -C tree-sitter-typescript checkout 75b3874e
+
+# ReactJS codebase — Project B real-workload benchmark corpus (Flow-typed JS/JSX).
+# Same status: build-time reference data only, never linked or shipped. Gitignored.
+react https://github.com/facebook/react e92ecef2806692f34e9d535da77405eb28464625
+# Re-fetch:
+#   cd tools/pocketparse/reference
+#   git clone --depth 1 https://github.com/facebook/react   # (HEAD pin recorded above)
+
+# tree-sitter-bash — build-time porting reference for OUR std.shell (POSIX sh) grammar.
+# Build-time reference data ONLY: never linked, never shipped, gitignored. Its
+# test/corpus is the source for std.shell conformance inputs (POSIX-parseable
+# sections; bash-only constructs are out of scope for a POSIX sh port).
+tree-sitter-bash https://github.com/tree-sitter/tree-sitter-bash f8fb3274f72a30896075585b32b0c54cad65c086
+# Re-fetch (web env: codeload tarball, not git clone):
+#   cd tools/pocketparse/reference
+#   curl -sSL --cacert /root/.ccr/ca-bundle.crt -o bash.tar.gz \
+#     https://codeload.github.com/tree-sitter/tree-sitter-bash/tar.gz/f8fb3274f72a30896075585b32b0c54cad65c086
+#   tar -xzf bash.tar.gz && mv tree-sitter-bash-f8fb3274* tree-sitter-bash

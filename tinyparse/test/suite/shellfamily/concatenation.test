@@ -1,0 +1,13 @@
+# Adjacent parts with no blank between them form ONE word. abc'def'"ghi" is a
+# single argument word concatenating a RawWord, a SingleQuoted, and a
+# DoubleQuoted part.
+<<<cmd
+printf 'echo abc%sdef%s"ghi"\n' "'" "'" | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 arg: Word
+out-contains RawWord
+out-contains SingleQuoted
+out-contains DoubleQuoted

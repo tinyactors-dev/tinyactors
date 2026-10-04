@@ -1,0 +1,10 @@
+# A braced expansion inside double quotes `"${x:-d}"` parses with the
+# BracedExpansion live inside the DoubleQuoted string.
+<<<cmd
+printf 'echo "${x:-d}"\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains DoubleQuoted
+out-contains BracedExpansion

@@ -1,0 +1,10 @@
+# A "#" at a word boundary DOES begin a comment: in "echo # c" the "# c" is
+# trivia, so the command has only the name word and no argument word.
+<<<cmd
+printf 'echo # c\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 0 arg: Word
+out-contains Comment

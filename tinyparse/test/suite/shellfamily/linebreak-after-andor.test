@@ -1,0 +1,11 @@
+# A linebreak is permitted after "&&": `a &&\n b` is a single and-or list
+# spanning two lines. It parses with no recovery nodes.
+<<<cmd
+printf 'a &&\n b\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 AndOrList
+out-contains op: &&
+out-count 2 Pipeline

@@ -1,0 +1,4 @@
+/*
+ * @return {void}
+ */
+function foo() {}

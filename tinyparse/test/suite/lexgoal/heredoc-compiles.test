@@ -1,0 +1,6 @@
+<<<mode
+check
+<<<grammar
+examples/heredoc/heredoc.scm
+<<<assert
+exit 0

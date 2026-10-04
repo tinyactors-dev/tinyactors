@@ -1,0 +1,4 @@
+<<<cmd
+test -f dist/linux-x86_64/libpocketparse.a
+<<<assert
+exit 0

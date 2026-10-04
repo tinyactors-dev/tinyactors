@@ -1,0 +1,59 @@
+=== host tree (host.scm) ===
+Document
+  Fence
+    ```
+    lang: Info
+    
+
+    code: Body
+    
+
+    ```
+  Space
+  Fence
+    ```
+    lang: Info
+    
+
+    code: Body
+    
+
+    ```
+  Space
+=== embedded parses (std.json) ===
+--- embedded json parse of code span [8,24) ---
+    Document
+      Value
+        Object
+          open: {
+          Member
+            key: String
+            :
+            Space
+            value: Value
+              Array
+                open: [
+                Value
+                  Number
+                ,
+                Space
+                Value
+                  Number
+                ,
+                Space
+                Value
+                  Number
+                close: ]
+          close: }
+--- embedded json parse of code span [37,49) ---
+    Document
+      Value
+        Array
+          open: [
+          Value
+            True
+          ,
+          Space
+          Value
+            Null
+          close: ]

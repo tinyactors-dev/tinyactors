@@ -1,0 +1,7 @@
+<<<grammar
+examples/sexpr/sexpr.scm
+<<<input
+(a b c d e f g)
+<<<assert
+exit 0
+out-count 7 Atom

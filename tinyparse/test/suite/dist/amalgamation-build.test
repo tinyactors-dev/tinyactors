@@ -1,0 +1,12 @@
+<<<cmd
+set -e
+bash amalgamate.sh >/dev/null 2>&1
+a=dist/amalgamation
+cc -std=c11 -O2 -I"$a" "$a/pocketparse.c" "$a/pocketparse_cli.c" -o "$a/pocketparse"
+"$a/pocketparse" version
+printf '(a (b c))' | "$a/pocketparse" run examples/sexpr/sexpr.scm --input - --dump-tree
+<<<assert
+exit 0
+out-contains 0.1.0
+out-contains List
+out-contains Atom

@@ -1,0 +1,12 @@
+# A here-document in a pipeline: `cat <<EOF | grep x` opens a heredoc on the first
+# pipeline stage; the body follows the whole pipeline's terminating newline. The
+# HeredocRedirect is inside the first Pipeline stage; the body drains once.
+<<<cmd
+printf 'cat <<EOF | grep x\nx\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains Pipeline
+out-count 1 HeredocRedirect
+out-count 1 HeredocBody [

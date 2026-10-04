@@ -1,0 +1,11 @@
+# A multi-line here-document body: every line up to the closing delimiter is an
+# opaque HeredocContentLine; the delimiter line ends the body.
+<<<cmd
+printf 'cat <<EOF\nline1\nline2\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 HeredocBody [
+out-count 2 HeredocContentLine
+out-contains end: HeredocDelimLine

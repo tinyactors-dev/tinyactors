@@ -1,0 +1,8 @@
+<<<cmd
+printf 'cat <<A <<A\nxxx\nA\nyyy\nA\n' | "$PP" run examples/heredoc/heredoc.scm --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 2 HeredocBody [
+out-order HeredocBody [12-18 ~ HeredocBody [18-24

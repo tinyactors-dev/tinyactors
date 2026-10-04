@@ -1,0 +1,8 @@
+# POSIX requires `{` to be a complete, delimited reserved WORD to open a brace
+# group. `{a` glues the brace to the word, so `{a; }` is NOT a brace group — the
+# delimited `LBrace` token refuses to match `{` as a prefix of `{a`, and the input
+# is a syntax error (`{a` is an ordinary command word with no following command).
+<<<cmd
+printf '{a; }\n' | "$PP" run std.shell --input -
+<<<assert
+exit-not 0

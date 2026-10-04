@@ -1,0 +1,4 @@
+<<<cmd
+test -f dist/macos-arm64/libpocketparse.dylib
+<<<assert
+exit 0

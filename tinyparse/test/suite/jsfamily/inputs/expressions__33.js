@@ -1,0 +1,2 @@
+await asyncFunction();
+await asyncPromise;

@@ -1,0 +1,11 @@
+<<<grammar
+examples/tcl/tcl.scm
+<<<input
+set y {a {b} c}
+<<<assert
+exit 0
+out-contains Command
+# {a {b} c} nests: the inner {b} is a Braces group inside the outer Braces, so
+# the dump holds two Braces nodes (depth >= 2).
+out-count 2 Braces
+out-order Braces ~ Braces

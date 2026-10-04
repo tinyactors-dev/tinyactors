@@ -1,0 +1,11 @@
+# NAME=value is an assignment only in the prefix. After the command word it is
+# an ordinary argument: echo A=1 binds A=1 as an arg: Word, NOT an Assignment.
+<<<cmd
+printf 'echo A=1\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-absent Assignment
+out-count 1 arg: Word
+out-contains name: CommandName

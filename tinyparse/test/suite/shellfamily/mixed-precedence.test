@@ -1,0 +1,14 @@
+# Precedence: a pipeline binds tighter than "&&"/"||", which bind tighter than
+# ";". In `a | b && c; d` the pipeline `a | b` and the command `c` are the two
+# pipelines of one and-or list, and `d` is a separate and-or list after the ";".
+# The tree therefore nests Pipeline inside AndOrList inside CompleteCommand: the
+# "|" appears before the "&&", which appears before the ";".
+<<<cmd
+printf 'a | b && c; d\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 2 AndOrList
+out-count 3 Pipeline
+out-order | ~ op: && ~ sep: ;

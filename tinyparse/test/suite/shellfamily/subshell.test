@@ -1,0 +1,11 @@
+# A subshell: `( list )`. The parentheses are operators (no delimiting word
+# needed); the body is a compound-list of two commands.
+<<<cmd
+printf '(a; b)\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains Subshell
+out-contains body: CompoundList
+out-count 2 SimpleCommand

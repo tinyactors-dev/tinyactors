@@ -1,0 +1,6 @@
+<<<mode
+check
+<<<grammar
+examples/sexpr/sexpr.scm
+<<<assert
+exit 0

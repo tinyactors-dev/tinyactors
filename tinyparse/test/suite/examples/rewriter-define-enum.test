@@ -1,0 +1,7 @@
+<<<cmd
+examples/rewriter/run.sh examples/rewriter/sample.c
+<<<assert
+exit 0
+out-contains enum
+out-absent #define
+out-order enum ~ MAX_USERS

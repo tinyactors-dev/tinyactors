@@ -1,0 +1,9 @@
+<<<cmd
+set -e
+bash amalgamate.sh >/dev/null 2>&1
+a=dist/amalgamation
+test ! -f "$a/ax.h"
+grep -qE 'ax\.h|ax_open|ax_sys' "$a/pocketparse.h" && exit 1
+exit 0
+<<<assert
+exit 0

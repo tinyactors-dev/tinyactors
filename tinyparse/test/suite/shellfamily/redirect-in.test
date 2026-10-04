@@ -1,0 +1,11 @@
+# An input redirection: cat <in is a command cat with a Redirect using the <
+# operator to target in.
+<<<cmd
+printf 'cat <in\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 redirect: Redirect
+out-contains target: Word
+out-order RedirectOp ~ target: Word

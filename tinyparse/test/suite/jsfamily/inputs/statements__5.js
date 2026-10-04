@@ -1,0 +1,3 @@
+@injectable()
+export class Foo {
+}

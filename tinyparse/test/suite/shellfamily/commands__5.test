@@ -1,0 +1,11 @@
+# Corpus: commands with environment variable assignment prefixes. Three
+# assignment words sit ahead of the command names (one on the first line, two on
+# the second), each parsed as an Assignment, not swallowed into a word.
+<<<cmd
+"$PP" run std.shell --input test/suite/shellfamily/inputs/commands__5.sh --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 3 Assignment [
+out-count 2 SimpleCommand [

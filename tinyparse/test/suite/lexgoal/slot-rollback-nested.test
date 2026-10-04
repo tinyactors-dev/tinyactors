@@ -1,0 +1,14 @@
+# Phase 6 -- slot rollback on backtrack (NESTED speculation). A CHOICE inside a
+# CHOICE, each alternative deferring a word. With input "hello" (no "Y", no "X")
+# the inner first alt defers and fails, the inner second alt defers and fails,
+# the outer first alt fails, and the outer second alt (field a: W) matches. Both
+# nested deferred items MUST be discarded -- the nested sentinels pop in order
+# with no over- or under-restore -- so the drain invokes Body zero times.
+<<<cmd
+printf 'hello\nextra\n' | "$PP" run test/suite/lexgoal/slot-rollback-nested.scm --input - --dump-tree
+<<<assert
+exit 0
+out-count 0 Body [
+out-count 1 Extra [
+out-contains a: W
+out-absent ERROR

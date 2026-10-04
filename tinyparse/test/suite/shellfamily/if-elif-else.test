@@ -1,0 +1,12 @@
+# An if clause with an elif branch and an else branch. Each elif is an
+# ElifClause (its own condition+body); the trailing else is an ElseClause.
+<<<cmd
+printf 'if x; then a; elif y; then b; else c; fi\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains IfClause
+out-contains elif: ElifClause
+out-contains else: ElseClause
+out-order IfClause ~ elif: ElifClause ~ else: ElseClause

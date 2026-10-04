@@ -1,0 +1,21 @@
+<<<cmd
+"$PP" run std.typescript --input test/suite/tsfamily/inputs/attach_leading__1.ts --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+# Backtracking stress: each comment precedes a construct the parser must speculate
+# on and abandon an alternative for -- an arrow whose param list first parses as a
+# parenthesized expression, and a generic call that first looks like a comparison.
+# The held `attach: leading' comment must survive the rollback and land exactly once
+# as a program-level sibling (two-space indent, asserted by the anchored regex) ahead
+# of the statement it documents, never duplicated and never swept into the abandoned
+# alternative. A regression to child placement indents the comment four spaces, which
+# the ^  (exactly two leading spaces) regex no longer matches.
+out-count 2 line_comment
+out-regex ^  line_comment \[0-63\]
+out-regex ^  line_comment \[99-167\]
+# The documented statements are disjoint siblings that begin AFTER each comment ends
+# (64 > 63, 168 > 167) -- no sibling byte-range overlaps another.
+out-regex ^  lexical_declaration \[64-97\]
+out-regex ^  lexical_declaration \[168-191\]

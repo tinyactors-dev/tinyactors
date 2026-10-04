@@ -1,0 +1,6 @@
+# `forx` is the word `forx`, not `for` glued to `x`. The delimited `For` token
+# does not match `for` as a prefix, so `forx in a; do y; done` is rejected.
+<<<cmd
+printf 'forx in a; do y; done\n' | "$PP" run std.shell --input -
+<<<assert
+exit-not 0

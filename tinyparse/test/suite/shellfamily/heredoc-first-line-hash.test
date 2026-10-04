@@ -1,0 +1,17 @@
+# A here-document whose FIRST body line is `#notacomment` (POSIX §2.7.4). A here-doc
+# body is DATA, never shell, so a leading `#` is literal content, NOT a comment. The
+# body must begin at the byte after the command line's terminating newline with no
+# trivia skipping. (Pre-fix the line-level drain ran under the command line's extras,
+# whose Comment extra would consume `#notacomment` as a Comment node and drop it from
+# the body.) Here the `#notacomment\n` line is one HeredocContentLine and NO Comment
+# node appears inside the heredoc body.
+<<<cmd
+printf 'cat <<EOF\n#notacomment\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-absent Comment
+out-count 1 HeredocBody [
+out-count 1 HeredocContentLine
+out-order HeredocContentLine [10-23] [1,0] ~ end: HeredocDelimLine

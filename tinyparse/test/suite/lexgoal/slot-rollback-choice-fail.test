@@ -1,0 +1,14 @@
+# Phase 6 -- slot rollback on backtrack (CHOICE, failed branch). The first
+# choice alternative captures a word into slot s via (defer s W) then requires
+# "X"; with "X" absent it FAILS and the engine backtracks to the second
+# alternative. The deferred item from the failed branch MUST be discarded, so
+# the (parse-deferred s Body) drain finds the slot empty and invokes Body zero
+# times. This is the milestone-5 proof (failed branch discards).
+<<<cmd
+printf 'hello\nextra\n' | "$PP" run test/suite/lexgoal/slot-rollback-choice.scm --input - --dump-tree
+<<<assert
+exit 0
+out-count 0 Body [
+out-count 1 Extra [
+out-contains a: W
+out-absent ERROR

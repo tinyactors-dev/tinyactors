@@ -1,0 +1,11 @@
+# Several assignments may precede the command word: A=1 B=2 cmd has two
+# Assignment prefixes, then cmd as the command name.
+<<<cmd
+printf 'A=1 B=2 cmd\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 2 assignment: Assignment
+out-contains name: CommandName
+out-order assignment: Assignment ~ assignment: Assignment ~ name: CommandName

@@ -1,0 +1,13 @@
+# A variable assignment before the command word is an assignment prefix: VAR=x
+# binds as an Assignment (Name "VAR", value Word "x"), then echo is the command
+# and hi its argument.
+<<<cmd
+printf 'VAR=x echo hi\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains assignment: Assignment
+out-contains name: Name
+out-contains value: Word
+out-order assignment: Assignment ~ name: CommandName ~ arg: Word

@@ -1,0 +1,1 @@
+$(eval echo $`echo ${foo}`)

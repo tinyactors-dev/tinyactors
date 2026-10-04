@@ -1,0 +1,7 @@
+# Corpus: parameter substitution with nested expansions in strings.
+<<<cmd
+"$PP" run std.shell --input test/suite/shellfamily/inputs/literals__6.sh --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING

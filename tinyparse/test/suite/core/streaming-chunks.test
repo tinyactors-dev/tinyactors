@@ -1,0 +1,10 @@
+<<<grammar
+examples/sexpr/sexpr.scm
+<<<input
+(a (b c))
+<<<args
+--chunk 1
+<<<assert
+exit 0
+out-contains List
+out-absent ERROR

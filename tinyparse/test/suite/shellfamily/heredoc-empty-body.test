@@ -1,0 +1,11 @@
+# An empty here-document: `cat <<EOF` immediately followed by the delimiter line
+# has a HeredocBody with no content lines — just the end: delimiter line.
+<<<cmd
+printf 'cat <<EOF\nEOF\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-count 1 HeredocBody [
+out-absent HeredocContentLine
+out-contains end: HeredocDelimLine

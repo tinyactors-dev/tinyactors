@@ -1,0 +1,11 @@
+# Compound commands nest: an if clause whose body contains a for clause. The
+# inner ForClause sits under the IfClause's body compound-list.
+<<<cmd
+printf 'if c; then for i in x; do a; done; fi\n' | "$PP" run std.shell --input - --dump-tree
+<<<assert
+exit 0
+out-absent ERROR
+out-absent MISSING
+out-contains IfClause
+out-contains ForClause
+out-order IfClause ~ ForClause

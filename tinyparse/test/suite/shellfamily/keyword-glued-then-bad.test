@@ -1,0 +1,7 @@
+# A compound terminator carries the delimiter boundary too: `thenx` is the word
+# `thenx`, not `then` glued to `x`. The delimited `Then` token does not match
+# `then` as a prefix, so `if a; thenx b; fi` has no `then` and is rejected.
+<<<cmd
+printf 'if a; thenx b; fi\n' | "$PP" run std.shell --input -
+<<<assert
+exit-not 0
