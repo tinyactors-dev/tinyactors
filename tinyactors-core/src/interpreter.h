@@ -134,8 +134,13 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
 void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
                                     ta_bytes *bytes);
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
-/* The interpreter scratch a definition needs (ADR 0092 section 3). */
-size_t ta_interpreter_scratch_need(const ta_definition *definition);
+/*
+ * The interpreter scratch a definition needs (ADR 0092 section 3), in
+ * `*out`. A pure computation with call lifetime that never allocates; it
+ * answers TA_ERR_NOMEM, and leaves `*out` alone, when the figure does not
+ * fit in a size_t.
+ */
+ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 void ta_interpreter_render_fault(ta_fault *fault);
 /* ta_interpreter_block_cache_trim frees cached event blocks until the cache

@@ -2409,7 +2409,10 @@ static void ta_compile_rejected(ta_system *system, const ta_definition_compile_p
  */
 static ta_result ta_compile_check_scratch(ta_system *system, const ta_definition_compile_params *params) {
     ta_definition *definition = *params->out;
-    size_t need = ta_interpreter_scratch_need(definition);
+    size_t need;
+    if (ta_interpreter_scratch_need(definition, &need) != TA_OK) {
+        need = SIZE_MAX; /* more than any system has: the refusal below */
+    }
     uint32_t have = system->params[TA_PARAM_INTERPRETER_BYTES];
     if (need <= have) {
         return TA_OK;
