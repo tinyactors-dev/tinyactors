@@ -207,8 +207,51 @@ tp_rule_slot *tp_rule_memo_probe(tp_rule_memo *memo, uint32_t program,
     return 0;
 }
 
-/* ** Record a verdict at a probed empty slot, stopping past ~3/4 load so probe
-** chains stay short. For a success, snapshot/snap_count/end carry the subtree. */
+/* ** Double the rule memo's tables and re-insert every live key. The table is
+** first sized to the input, but the number of keys a parse produces is not bounded
+** by the input length: every rule program, under every field, alias and lexical
+** goal, can be tried at the same offset. A grammar with a thousand programs fills a
+** table sized for a short input almost at once, and a table that stops admitting
+** keys stops bounding the re-descent -- an unclosed `(' in std.typescript then
+** costs twice as much per byte. So the table grows like any hash table, out of
+** the parser arena; the old arrays are simply abandoned there (the arena frees
+** them with the parser), which keeps the total at most twice the final table.
+** Returns 1 on success, 0 if the new tables could not be allocated (the old
+** table is kept and simply stops admitting keys, as before). */
+static int tp_rule_memo_grow(tp_rule_memo *memo)
+{
+    tp_rule_memo   grown = *memo;
+    uint32_t       i;
+    if (memo->capacity > 0x7FFFFFFFu / 2u ||
+        (size_t)memo->capacity * 2u > ((size_t)-1) / sizeof *memo->slots)
+        return 0;
+    grown.capacity = memo->capacity * 2u;
+    grown.mask     = grown.capacity - 1u;
+    grown.count    = 0;
+    grown.slots = (tp_rule_slot *)tp_alloc_raw(memo->arena,
+                                               grown.capacity * sizeof *grown.slots);
+    grown.live  = (uint8_t *)tp_alloc(memo->arena, grown.capacity * sizeof *grown.live);
+    if (grown.slots == 0 || grown.live == 0)
+        return 0;
+    for (i = 0; i < memo->capacity; i++) {
+        const tp_rule_slot *old = &memo->slots[i];
+        tp_rule_slot       *slot;
+        if (!memo->live[i])
+            continue;
+        slot = tp_rule_memo_probe(&grown, old->program, old->offset, old->goal,
+                                  old->field, old->alias);
+        *slot = *old;
+        grown.live[(uint32_t)(slot - grown.slots)] = 1;
+        grown.count++;
+    }
+    *memo = grown;
+    return 1;
+}
+
+/* ** Record a verdict at a probed empty slot. Past ~3/4 load the table doubles
+** (tp_rule_memo_grow) so probe chains stay short and every key is still admitted;
+** only when the arena cannot supply the larger table does a key go unrecorded.
+** For a success, snapshot/snap_count/end carry the subtree. */
 void tp_rule_memo_store(tp_rule_memo *memo, tp_rule_slot *slot,
                         uint32_t program, uint32_t offset, uint32_t goal,
                         uint32_t field, uint32_t alias, uint8_t matched,
@@ -228,8 +271,11 @@ void tp_rule_memo_store(tp_rule_memo *memo, tp_rule_slot *slot,
         }
         return;
     }
-    if (memo->count >= memo->capacity - (memo->capacity >> 2))
-        return;
+    if (memo->count >= memo->capacity - (memo->capacity >> 2)) {
+        if (!tp_rule_memo_grow(memo))
+            return;
+        slot = tp_rule_memo_probe(memo, program, offset, goal, field, alias);
+    }
     slot->program    = program;
     slot->offset     = offset;
     slot->goal       = goal;

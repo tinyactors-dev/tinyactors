@@ -18,8 +18,11 @@
 # which std.shell's do not. --full also runs the JavaScript and TSX
 # parsers, whose expression ladders put the most C frames under each
 # nesting level (at the limit they need between 256 and 384 KiB) and which
-# take seconds each to compile. One input per parser under one bound is the
-# whole test (see the profiling skill): it does not sweep depths.
+# take seconds each to compile. TSX gets 200,000 unclosed `(`, the input
+# that once made its parenthesized expression re-parse every level twice; a
+# regression there would show as a run that never ends. One input per parser
+# under one bound is the whole test (see the profiling skill): it does not
+# sweep depths.
 
 require_relative '../../lib/gate'
 
@@ -27,7 +30,7 @@ STACK = 512 * 1024
 
 Tinyparse::Gate.run('parser-nocrash', 'compiled-parser crash bound') do |gate|
   cases = { 'std.json' => '[' * 200_000, 'std.shell' => '$(' * 100_000 }
-  cases.merge!('std.javascript' => '[' * 200_000, 'std.tsx' => '[' * 200_000) if gate.full?
+  cases.merge!('std.javascript' => '[' * 200_000, 'std.tsx' => '(' * 200_000) if gate.full?
   parsers = cases.keys.zip(gate.each_parallel(cases.keys) { |grammar| gate.parser(grammar) }).to_h
   cases.each do |grammar, bytes|
     next unless parsers[grammar]

@@ -1,0 +1,23 @@
+# Unclosed `(` costs std.typescript and std.tsx linear time. The TypeScript
+# parenthesized_expression once tried `(seq expression (optional type))` and
+# then `expression_sequence`, parsing the same expression twice whenever the
+# first arm failed, so each unclosed `(` doubled the work: 26 of them took
+# about a minute. 3,000 now take a fraction of a second; the CPU limit turns a
+# regression into a failure rather than a hung suite. Exit 1 is the syntax
+# error the input deserves, in both grammars and with the rule memo off,
+# adaptive and forced on.
+<<<cmd
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
+printf '%3000s' '' | tr ' ' '(' > "$w/in.ts"
+for grammar in std.typescript std.tsx; do
+  for memo in off adaptive always; do
+    if [ "$memo" = adaptive ]; then unset TINYPARSE_RULEMEMO; else export TINYPARSE_RULEMEMO="$memo"; fi
+    ( ulimit -t 20; "$TP" run "$grammar" --input "$w/in.ts" > /dev/null 2>&1 )
+    echo "$grammar memo=$memo exit=$?."
+  done
+done
+<<<assert
+exit 0
+out-count 6 exit=1.
+out-count 0 exit=0.

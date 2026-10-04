@@ -137,11 +137,20 @@
 
   ; A parenthesized expression may carry a type annotation on a single
   ; expression — `(document: any).selection` — or hold a comma sequence.
+  ;
+  ; LEFT-FACTORED: the contents are parsed ONCE, as an expression_sequence, and
+  ; the annotation is an optional tail. The earlier `(choice (seq expression
+  ; (optional type)) expression_sequence)` parsed the same expression twice
+  ; whenever the first arm failed, so every unclosed `(` doubled the work, and
+  ; because the first arm commits on `(a`, a comma sequence `(a, b)` never reached
+  ; the second arm and was a syntax error. expression_sequence is hidden and
+  ; collapses to its single child, so `(a)` and `(a: T)` keep their trees. The
+  ; grammar now also admits `(a, b: T)`, which TypeScript rejects; a parser that
+  ; accepts slightly more than the language is the price of parsing it once.
   (override (rule parenthesized_expression
     (seq "("
-         (choice
-           (seq expression (optional (field type: type_annotation)))
-           expression_sequence)
+         expression_sequence
+         (optional (field type: type_annotation))
          ")")))
 
   ; new with optional type arguments: `new C<T>(...)`.

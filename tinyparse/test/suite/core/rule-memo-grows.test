@@ -1,0 +1,31 @@
+# The rule memo admits every key, however many rules a grammar tries at one
+# offset. Its table is sized from the input length, and it used to stop
+# recording past three-quarters full; a grammar trying many rules per byte
+# filled it on a short input, and the unrecorded failures were re-parsed every
+# time. Here each Nest level tries its inner Nest twice through nine rules, so
+# 80 unclosed `(` are 720 keys against a 256-slot table: without growth the
+# parse is exponential, with it linear. The CPU limit turns a regression into
+# a failure; the memo is forced on so it is in use from the first call.
+<<<input grammar
+(tinyparse version: "0.1")
+(module test.memogrows)
+(grammar memogrows
+  start: Source
+  (rule Source (seq Nest EOF))
+  (rule Nest (choice (seq "(" W1 ")" "a") (seq "(" W1 ")" "b") "x"))
+  (rule W1 (choice W2 "1")) (rule W2 (choice W3 "2"))
+  (rule W3 (choice W4 "3")) (rule W4 (choice W5 "4"))
+  (rule W5 (choice W6 "5")) (rule W6 (choice W7 "6"))
+  (rule W7 (choice W8 "7")) (rule W8 (choice Nest "8")))
+<<<cmd
+w="$(mktemp -d)"
+trap 'rm -rf "$w"' EXIT
+printf '%80s' '' | tr ' ' '(' > "$w/in"
+( ulimit -t 20; TINYPARSE_RULEMEMO=always "$TP" run "$grammar" --input "$w/in" > /dev/null 2>&1 )
+echo "unclosed exit=$?."
+printf '((x)a)b' > "$w/ok"
+TINYPARSE_RULEMEMO=always "$TP" run "$grammar" --input "$w/ok" --dump-tree
+<<<assert
+exit 0
+out-contains unclosed exit=1.
+out-count 3 Nest

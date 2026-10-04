@@ -1,0 +1,16 @@
+# A comma sequence in parentheses parses in TypeScript, as it does in
+# JavaScript. The first arm of the old parenthesized_expression committed on
+# `(a` and its `)` then failed on the comma, so `(a, b)` was a syntax error.
+# A single expression and an annotated one keep their trees: the hidden
+# expression_sequence collapses to its one child.
+<<<grammar
+std.typescript
+<<<input
+x = (a, b);
+y = (a);
+z = (document: any).selection;
+<<<assert
+exit 0
+out-absent ERROR
+out-count 1 expression_sequence
+out-contains type: type_annotation
