@@ -7,7 +7,7 @@
 # computed. Renderers (render.rb) turn the model into Markdown, JSON or a C
 # header, so the catalog is the only place a record is defined.
 #
-# Layout rules (see ../reference/ring.md, "Records"):
+# Layout rules (README.md, "Layout rules"):
 # - every record starts with the common header (RingProto::HEADER);
 # - fixed fields follow in declaration order, each at its natural alignment;
 # - text and bytes are spans (u32 offset from the record's start, u32 length)

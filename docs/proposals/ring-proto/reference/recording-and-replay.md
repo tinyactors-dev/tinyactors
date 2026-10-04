@@ -34,7 +34,7 @@ at the time it is spawned or loaded:
 - core keeps one bit per actor, set when the session is created or loaded
   and never changed afterwards;
 - records about a recorded session carry the common flag `recorded`
-  ([MESSAGES.md, common header](../protocol/generated/MESSAGES.md#common-header-32-bytes)).
+  ([MESSAGES.md, common header](../../../../tinyactors-core/src/generated/MESSAGES.md#common-header-32-bytes)).
 
 This is napi's `setRecorder(recorder, { families })` (kernel ADR 0006
 section 2, `tinyactors-napi/index.d.ts`) moved into core as a per-actor
@@ -48,7 +48,7 @@ matches today's recorder, which records named actors only.
 ## Input observations are `c2h.input`
 
 When a recorded session takes an envelope, core writes
-[`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) before any
+[`c2h.input`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput) before any
 effect of the macrostep that envelope starts. The record has everything
 replay needs:
 
@@ -63,10 +63,10 @@ replay needs:
 
 A recorded session's log is:
 
-1. [`c2h.spawned`](../protocol/generated/MESSAGES.md#c2hspawned) (the
+1. [`c2h.spawned`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hspawned) (the
    address and the definition revision);
 2. its `c2h.input` records, in order;
-3. optionally [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate)
+3. optionally [`c2h.state`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hstate)
    records, which let the log be truncated (see [Checkpoints](#checkpoints)).
 
 It takes the place of today's kernel recorder
@@ -81,8 +81,8 @@ history:
 
 | | On h2c? | Did the session take it? |
 |---|---|---|
-| An `h2c.event` core [bounced](../protocol/generated/MESSAGES.md#c2hbounced) | yes | no |
-| An `h2c.event` that waits in the pool for a load, then is dropped by [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed) | yes | no |
+| An `h2c.event` core [bounced](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hbounced) | yes | no |
+| An `h2c.event` that waits in the pool for a load, then is dropped by [`h2c.load_failed`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload_failed) | yes | no |
 | Mail from another local session ([envelope.md](envelope.md)) | **no** | yes |
 | A delayed send that fell due | **no** | yes |
 | `error.communication` made from recycled mail | **no** | yes |
@@ -98,7 +98,7 @@ see.
 A recorded session's `c2h.input` precedes the effects of the macrostep it
 starts. The host may execute each effect on receipt, including when
 `ta_run` returns during a budget pause. It need not wait for
-[`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended), the recorder or
+[`c2h.macrostep_ended`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hmacrostep_ended), the recorder or
 storage. The same rule applies to unrecorded sessions.
 
 Core snapshots recorded input data synchronously with the data model's
@@ -139,7 +139,7 @@ by its h2c sequence: `c2h.bounced` before admission,
 `stable`, `done`, `runaway` or `abandoned`. These reports exist for recorded,
 unrecorded and replaying sessions alike. A refusal includes load failure,
 destruction before take, snapshot failure and withdrawal by the host
-([`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw)); lossy dead-letter telemetry
+([`h2c.withdraw`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cwithdraw)); lossy dead-letter telemetry
 does not replace it.
 
 `c2h.macrostep_ended` reports an individual macrostep. Input completion
@@ -167,7 +167,7 @@ h2c.invoke_report {...}                                          for source invo
 h2c.publish {address, at: <time chosen for the seeded session>}
 ```
 
-- [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) with the
+- [`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn) with the
   `replaying_from_clock` flag prepares the session. Its clock starts at
   `clock`, and moves with each input's header `at` (core ADR 0094).
 - **Every input is fed as h2c, whatever its source.** Mail, timers and
@@ -193,7 +193,7 @@ h2c.publish {address, at: <time chosen for the seeded session>}
 - **Its delayed sends are held in the pool, with their due times.** A
   held send due by an input's time is dropped. The supplied input stream
   determines what the new session processes during seeding.
-- [`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish) puts it
+- [`h2c.publish`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cpublish) puts it
   on the route:
   - every previously supplied seed input must have a terminal disposition;
     core refuses publication while any supplied seed input is outstanding,
@@ -201,7 +201,7 @@ h2c.publish {address, at: <time chosen for the seeded session>}
     and the rest stay in the pool;
   - active invocations are retired with
     `error.communication.invoke.<id>.unavailable` (ADR 0089);
-  - [`c2h.published`](../protocol/generated/MESSAGES.md#c2hpublished)
+  - [`c2h.published`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hpublished)
     reports the counts.
 
 Because timers are envelopes in the pool, replay derives pending timers
@@ -233,9 +233,9 @@ resync and retry where that matters. See
 
 ## Checkpoints
 
-[`h2c.checkpoint`](../protocol/generated/MESSAGES.md#h2ccheckpoint) asks
+[`h2c.checkpoint`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2ccheckpoint) asks
 for a stable recorded session's state. Core answers with
-[`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate) (core ADR 0091):
+[`c2h.state`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hstate) (core ADR 0091):
 
 - the image holds the configuration, history, active invocations, the
   data model root (through `value_write`), **and the session's delayed
@@ -243,9 +243,9 @@ for a stable recorded session's state. Core answers with
 - `input_seq` names the last `c2h.input` it includes.
 
 A checkpoint is one artifact. Replay from it is
-[`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) `{state: image}`
+[`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn) `{state: image}`
 as a replaying session, followed by selected inputs after `input_seq`, then
-[`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish).
+[`h2c.publish`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cpublish).
 
 The application decides when to checkpoint, for example every N inputs or
 when the log passes a size. It may then delete the log's inputs up to
@@ -279,7 +279,7 @@ mail may differ. Exact reconstruction is not the contract.
 4. **Choose a finite input cut.** Stop supplying seed inputs and wait for
    their terminal dispositions. Generated local mail need not be exhausted;
    a self-sending chart need not reach system-wide quiescence.
-5. **One [`h2c.publish`](../protocol/generated/MESSAGES.md#h2cpublish) with
+5. **One [`h2c.publish`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cpublish) with
    an empty address** ends the replay, and publishes every replaying
    session at once. Core refuses it while a supplied seed input remains
    outstanding. Generated mail still pending at the cut continues in live
@@ -306,8 +306,8 @@ mail may differ. Exact reconstruction is not the contract.
 an image never outlives its process
 ([unloading.md](unloading.md#unloading-bounds-memory-it-is-not-persistence)).
 For a whole-system seed that starts from an empty system, a recorded
-[`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) may refer to an image
-that an [`h2c.unload`](../protocol/generated/MESSAGES.md#h2cunload) earlier
+[`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload) may refer to an image
+that an [`h2c.unload`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cunload) earlier
 in the recording produced. The new execution runs that unload
 and produces its own image, which may differ from the old one. The recorded
 `h2c.load` holds a blob handle from the old process, which means nothing
@@ -353,5 +353,5 @@ Differences are expected when the new execution uses different conditions;
 they are not a replay contract violation. Core does nothing special for
 this comparison. Because `tel` is lossy, a check can
 only report a divergence when both streams are complete (no
-[`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) in either
+[`tel.dropped`](../../../../tinyactors-core/src/generated/MESSAGES.md#teldropped) in either
 stream). It is a debugging aid, not a guarantee.

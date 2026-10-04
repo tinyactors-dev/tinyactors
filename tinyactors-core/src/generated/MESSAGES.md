@@ -1,6 +1,6 @@
 # Ring protocol records
 
-Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edit.
+Generated from [`catalog.rb`](../../protocol/catalog.rb) by `mise run protocol` in tinyactors-core. Do not edit.
 
 - The data model is not on a ring. Core calls ta_datamodel_vtable synchronously, as today (reference/data-model.md). Only its results cross the rings, as value references.
 - Definition management uses request/result records. Native calls create and destroy the system, expose its rings, drive execution and install data model/value integrations. An attached debugger takes exclusive ownership of the whole system from the production pump. Inspection, abandonment and operator transitions use native primitives outside the production rings; no operator ring is added (reference/debugging.md).

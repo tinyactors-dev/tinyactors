@@ -1,26 +1,36 @@
 # The protocol's records
 
-**Status:** Sketch (2026-10-01), part of [the ring protocol proposal](../README.md)
+The design behind these records is
+[the ring protocol proposal](../../docs/proposals/ring-proto/README.md)
+(status: Sketch).
 
 Every record that crosses a ring is defined once, in [`catalog.rb`](catalog.rb),
 with a small Ruby DSL ([`dsl.rb`](dsl.rb)). Evaluating the catalog builds a
 model: rings, enums, scalar types and messages, with each message's byte layout
-computed. [`render.rb`](render.rb) turns the model into other formats:
+computed. [`render.rb`](render.rb) turns the model into the files of
+[`src/generated/`](../src/generated/), which are never edited by hand:
 
-| Command (in this directory) | Writes |
+| Command (in `tinyactors-core`) | Does |
 |---|---|
-| `mise run ring-proto:render` | all three files below, into `generated/` |
+| `mise run protocol` | writes every generated file, and deletes a file there it does not write |
+| `mise run protocol --check` | writes nothing, and fails naming each generated file that is missing, differs from what the catalog renders, or is not the renderer's |
 
-The generated files are [`MESSAGES.md`](generated/MESSAGES.md), the reference
-every document links to; [`messages.json`](generated/messages.json), for tools
-such as a test host's decoder; and [`ring_proto.h`](generated/ring_proto.h),
-C structs with `_Static_assert`s on their sizes, and one C enum per group of
-constants: message codes, common flags, each message's own flags and each
-catalog enum. Struct fields stay fixed-width integers, since the size of a C
-enum is up to the compiler; a comment names the enum a field holds.
+`mise run test` in `tinyactors-core` runs the check, so a catalog edit that
+was not rendered, or a hand edit of a generated file, fails the tests.
 
-The generated files are committed so the proposal can be read without running
-anything. After editing the catalog, render again.
+The generated files are [`MESSAGES.md`](../src/generated/MESSAGES.md), the
+reference every document links to; [`messages.json`](../src/generated/messages.json),
+for tools such as a test host's decoder; and
+[`ring_records.h`](../src/generated/ring_records.h), C structs with
+`_Static_assert`s on their sizes, and one C enum per group of constants:
+message codes, common flags, each message's own flags and each catalog enum.
+Struct fields stay fixed-width integers, since the size of a C enum is up to
+the compiler; a comment names the enum a field holds. None of them is part of
+the amalgamation or of `include/tinyactors.h`.
+
+The generated files are committed, so they can be read without running
+anything. After editing the catalog, render again; after a rebase that
+touches the catalog, render again rather than merging the generated files.
 
 ## Stable identifiers
 
@@ -47,9 +57,9 @@ scenario references move to the new name together.
   table. A `blob` names a byte buffer the host owns, read or written through a
   byte source or sink (core ADR 0090).
 
-How rings carry records is in [reference/ring.md](../reference/ring.md).
+How rings carry records is in [reference/ring.md](../../docs/proposals/ring-proto/reference/ring.md).
 Complete-spec requests and bounded structured compile diagnostics are in
-[reference/definitions.md](../reference/definitions.md). A request carries
+[reference/definitions.md](../../docs/proposals/ring-proto/reference/definitions.md). A request carries
 a process-local handle to a native spec and host-owned memory for the
 native compile-error struct, so their size does not determine the size of
 a ring record. There is no byte layout of a spec; native spec building,

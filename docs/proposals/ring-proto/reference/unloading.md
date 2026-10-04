@@ -20,11 +20,11 @@ paged back in when mail or a timer needs them.
   file, a table it empties at startup. The choice is about how much RAM to
   save, not about surviving a crash.
 - **Surviving a restart is a different mechanism:** a recorded session's
-  [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) log, and its
-  checkpoints, [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate),
-  restored with [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn)
+  [`c2h.input`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput) log, and its
+  checkpoints, [`c2h.state`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hstate),
+  restored with [`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn)
   and its `state` field ([recording-and-replay.md](recording-and-replay.md)).
-  [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) never restores
+  [`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload) never restores
   anything across a restart.
 
 So after a crash there are no unloaded sessions. The host's index of them
@@ -35,13 +35,13 @@ replay or a checkpoint.
 
 | Record | Direction | Meaning |
 |---|---|---|
-| [`h2c.unload`](../protocol/generated/MESSAGES.md#h2cunload) | host → core | page this stable session out |
-| [`c2h.unloaded`](../protocol/generated/MESSAGES.md#c2hunloaded) | core → host | here is its image, and when it next needs to run (`wake_at`) |
-| [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed) | core → host | envelopes wait for this unloaded address |
-| [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) | host → core | here is the image |
-| [`c2h.loaded`](../protocol/generated/MESSAGES.md#c2hloaded) | core → host | it is resident again |
-| [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed) | host → core | there is no image, or it cannot be read |
-| [`c2h.load_result`](../protocol/generated/MESSAGES.md#c2hload_result) | core → host | all consequences of a load failure have completed |
+| [`h2c.unload`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cunload) | host → core | page this stable session out |
+| [`c2h.unloaded`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hunloaded) | core → host | here is its image, and when it next needs to run (`wake_at`) |
+| [`c2h.load_needed`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hload_needed) | core → host | envelopes wait for this unloaded address |
+| [`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload) | host → core | here is the image |
+| [`c2h.loaded`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hloaded) | core → host | it is resident again |
+| [`h2c.load_failed`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload_failed) | host → core | there is no image, or it cannot be read |
+| [`c2h.load_result`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hload_result) | core → host | all consequences of a load failure have completed |
 
 ## Unloading
 
@@ -63,7 +63,7 @@ c2h.unloaded {cause_seq, address, image, image_bytes, wake_at: t0+30s, flags: ha
 - `wake_at` is the earliest of those delayed sends. Without the `has_wake`
   flag, the session has no timer and needs no wakeup.
 - Core frees the actor slot and the envelopes the delayed sends used.
-- [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced) with
+- [`c2h.bounced`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hbounced) with
   reason `has_mail` answers an `h2c.unload` for a session that has
   envelopes waiting. The host tries again later.
 - An actor that owns an active local invocation, or is an active local
@@ -86,7 +86,7 @@ due.
 
 | Host | Index |
 |---|---|
-| napi | a `Map` from address to `{image, wake_at}`, plus a min-heap by `wake_at`, plus **one** timer for the earliest. The timer for resident sessions is set by [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake). The host may merge the two into one `setTimeout`. |
+| napi | a `Map` from address to `{image, wake_at}`, plus a min-heap by `wake_at`, plus **one** timer for the earliest. The timer for resident sessions is set by [`c2h.wake`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hwake). The host may merge the two into one `setTimeout`. |
 | SQLite host | a temporary table, `CREATE TEMP TABLE unloaded(address TEXT PRIMARY KEY, image BLOB, wake_at INTEGER)`, with an index on `wake_at`. The next wakeup is `SELECT min(wake_at)`. It is temporary because the images end with the connection's system. |
 | PostgreSQL host | the same, as an unlogged table that the host empties when it starts |
 | test host | an ordered list. The tests move time explicitly. |
@@ -141,15 +141,15 @@ does not fail. It **waits in the pool**:
 2. More envelopes for the same address join the list, in order. Core
    writes nothing more.
 3. The host answers in one of three ways:
-   - [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload) with the
+   - [`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload) with the
      image and `request_seq` equal to the request's `seq`. The waiting
      envelopes become runnable, in order, before anything sent to the
      session later. Core writes `c2h.loaded`.
-   - [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) at the
+   - [`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn) at the
      address, for a virtual family where the first message creates the
      actor (napi ADR 0020, the loader's `{ spawn }` result), with the same
      `request_seq`. The waiting envelopes go to the new session.
-   - [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed)
+   - [`h2c.load_failed`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload_failed)
      with a reason and the same `request_seq`, for an address the host
      does not know or an image it cannot read. The waiting envelopes are
      recycled ([below](#recycling-on-h2cload_failed)).
@@ -238,7 +238,7 @@ Each waiting envelope is handled in place, with no new memory:
 | an `h2c.event` | dropped, and its vref released. `c2h.input_refused` identifies its `source_seq` and the delivery failure; a `tel.trace` of kind `DEAD_LETTER` also describes it. |
 | a timer that fell due | a resident sender's timer can target a different, unloaded actor. It becomes `error.communication` for its sender in the same envelope, just like local mail. An unloaded sender's own pending timers remain in its image. |
 
-[`c2h.destroyed`](../protocol/generated/MESSAGES.md#c2hdestroyed) recycles
+[`c2h.destroyed`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hdestroyed) recycles
 a destroyed session's waiting envelopes the same way.
 
 ### Mail for a session that has gone

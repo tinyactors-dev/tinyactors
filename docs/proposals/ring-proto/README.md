@@ -97,7 +97,7 @@ Put the queue in core, give it a fixed size, and those problems go away. See
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the pieces fit together, with links to each reference |
 | [BEHAVIORS.md](BEHAVIORS.md) | At a glance: who drops what, who is told, who retries, and the crash matrix |
-| [protocol/](protocol/README.md) | Every record, defined once in a Ruby DSL. [MESSAGES.md](protocol/generated/MESSAGES.md) is generated from it. |
+| [protocol/](../../../tinyactors-core/protocol/README.md) | Every record, defined once in a Ruby DSL. [MESSAGES.md](../../../tinyactors-core/src/generated/MESSAGES.md) is generated from it. |
 | [charts/](charts/README.md) | The stress-test charts: a notification campaign and its progress tracker |
 | [scenarios/](scenarios/README.md) | Step-by-step walkthroughs that cite messages by stable ID |
 | [IMPLEMENTATION.md](IMPLEMENTATION.md) | If adopted: how core's plumbing is replaced by building blocks, phase by phase, with every commit green |

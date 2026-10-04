@@ -120,11 +120,11 @@ server.on('request', async (req, res) => {
 | A second reply | the processor (S12.15) | nobody | – |
 | A reply delayed by a full c2h | nobody: it is late, not lost (S12.18) | – | the client after 504, if the host stopped draining |
 
-[h2c.event]: ../protocol/generated/MESSAGES.md#h2cevent
-[h2c.type_declare]: ../protocol/generated/MESSAGES.md#h2ctype_declare
-[h2c.withdraw]: ../protocol/generated/MESSAGES.md#h2cwithdraw
-[c2h.send]: ../protocol/generated/MESSAGES.md#c2hsend
-[c2h.macrostep_ended]: ../protocol/generated/MESSAGES.md#c2hmacrostep_ended
-[c2h.input_completed]: ../protocol/generated/MESSAGES.md#c2hinput_completed
-[c2h.input_refused]: ../protocol/generated/MESSAGES.md#c2hinput_refused
-[c2h.bounced]: ../protocol/generated/MESSAGES.md#c2hbounced
+[h2c.event]: ../../../../tinyactors-core/src/generated/MESSAGES.md#h2cevent
+[h2c.type_declare]: ../../../../tinyactors-core/src/generated/MESSAGES.md#h2ctype_declare
+[h2c.withdraw]: ../../../../tinyactors-core/src/generated/MESSAGES.md#h2cwithdraw
+[c2h.send]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hsend
+[c2h.macrostep_ended]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hmacrostep_ended
+[c2h.input_completed]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput_completed
+[c2h.input_refused]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput_refused
+[c2h.bounced]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hbounced

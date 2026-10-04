@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+#MISE description="Render the ring protocol's catalog (protocol/catalog.rb) into src/generated/, or check that it is rendered"
+#USAGE flag "--check" help="Write nothing; fail when a generated file is not what the catalog renders"
+# vim:ft=ruby
+
+# protocol/catalog.rb defines every record that crosses a ring, once.
+# protocol/render.rb turns it into the files of src/generated/: MESSAGES.md
+# (the reference), messages.json (the catalog as data) and ring_records.h
+# (the record structs, kinds, flags and enums, with size asserts). Those
+# files are never edited by hand: edit the catalog and render again.
+#
+#   mise run protocol           write every generated file
+#   mise run protocol --check   exit 1, naming each generated file that is
+#                               missing, stale or not rendered from the
+#                               catalog; `mise run test` runs this
+#
+# Rendering is plain Ruby with no tool and no host dependency, so every host
+# writes the same bytes.
+
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+require ROOT.join('protocol/render').to_s
+
+check = ENV['usage_check'] == 'true' || ARGV.include?('--check')
+generated = ROOT.join('src/generated')
+files = RingProto::Render.files(RingProto.load)
+
+# A file in src/generated/ the renderer does not write is stale too: it
+# would outlive the record or format it was rendered for.
+extra = generated.directory? ? generated.children.select(&:file?).map { |path| path.basename.to_s } - files.keys : []
+
+if check
+  missing, present = files.partition { |name, _text| !generated.join(name).file? }.map(&:to_h)
+  wrong = present.reject { |name, text| generated.join(name).binread == text.b }.keys
+  problems = missing.keys.map { |name| "src/generated/#{name} is missing" } +
+             wrong.map { |name| "src/generated/#{name} is not what protocol/catalog.rb renders" } +
+             extra.map { |name| "src/generated/#{name} is not written by protocol/render.rb" }
+  unless problems.empty?
+    problems.each { |problem| warn "protocol: #{problem}" }
+    abort 'protocol: run `mise run protocol` in tinyactors-core, and never edit src/generated/ by hand'
+  end
+  puts "protocol: src/generated/ matches protocol/catalog.rb (#{files.size} files)"
+else
+  generated.mkpath
+  files.each do |name, text|
+    path = generated.join(name)
+    path.binwrite(text) unless path.file? && path.binread == text.b
+  end
+  extra.each { |name| generated.join(name).delete }
+  puts "protocol: rendered #{files.size} files into src/generated/"
+end

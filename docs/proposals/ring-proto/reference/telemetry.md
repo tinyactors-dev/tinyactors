@@ -16,7 +16,7 @@ The rings are split by delivery guarantee, not by purpose:
 | Loss | none | drops when full |
 | When full | the slot parks before the action that would write, and the action runs once after the host drains; an input starts only with room for its reserve ([ring.md](ring.md#the-c2h-reserve)) | the record is dropped and counted |
 | Carries vrefs | yes, ownership passes to the host | never |
-| Used for replay | yes ([`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput)) | never |
+| Used for replay | yes ([`c2h.input`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput)) | never |
 
 If telemetry shared `c2h`, a slow OTLP exporter would hold up sends.
 If recording shared `tel`, a burst of traces would lose inputs. Both
@@ -25,7 +25,7 @@ host reads them with the same code.
 
 ## Records
 
-- [`tel.trace`](../protocol/generated/MESSAGES.md#teltrace) is one
+- [`tel.trace`](../../../../tinyactors-core/src/generated/MESSAGES.md#teltrace) is one
   `ta_trace_record`. Its `trace_kind` field is the `ta_trace_kind`, and
   only the fields that kind names are meaningful. The records mirror
   today's trace kinds one for one: lifecycle records, MACROSTEP_BEGIN and
@@ -33,7 +33,7 @@ host reads them with the same code.
   IGNORED, ACTION_FAILED, RUNAWAY and the rest. They are events, not
   spans. The encoder assembles spans after the ring
   ([below](#otlp-tinyactors-otlp)).
-- [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) says how
+- [`tel.dropped`](../../../../tinyactors-core/src/generated/MESSAGES.md#teldropped) says how
   many records were dropped since the last one, and the sequence number
   the first of them would have had. Core writes it as soon as the ring
   has room again, before the next `tel.trace`. The ring's sequence
@@ -89,7 +89,7 @@ integration, like the data model: a C function pointer that returns
 wall-clock nanoseconds since the Unix epoch. Core calls it once for every
 `tel` record it writes, and stamps the record's `wall_ns` with the
 result. `wall_ns` is separate from the header's logical `at`, the system
-clock that [`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime)
+clock that [`h2c.time`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2ctime)
 moves.
 
 - The clock is **optional.** A host that installs none gets `wall_ns` 0.
@@ -136,22 +136,22 @@ A trace parent is a W3C trace context and the key of the step that
 caused it (core ADRs 0067, 0073). It travels on records, so no host
 calls into core to read or write one.
 
-- **In.** [`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent),
-  [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report) and
-  [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) carry `trace_id_high`, `trace_id_low`,
+- **In.** [`h2c.event`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cevent),
+  [`h2c.invoke_report`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cinvoke_report) and
+  [`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn) carry `trace_id_high`, `trace_id_low`,
   `parent_span_id`, `trace_flags` and `trace_detail`. A host parses an
   incoming `traceparent` header with core's native
   `ta_traceparent_parse` and fills them. An all-zero trace ID means no
   context. The macrostep that takes the input runs under it, with the
   host cause `{session 0, macrostep parent_span_id}`.
-- **Out.** [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend), [`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke),
-  [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward) and
-  [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog) carry the step's `trace_id_high`,
+- **Out.** [`c2h.send`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hsend), [`c2h.invoke`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinvoke),
+  [`c2h.invoke_forward`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinvoke_forward) and
+  [`c2h.log`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hlog) carry the step's `trace_id_high`,
   `trace_id_low`, `trace_flags` and `span_id`
   (`ta_step_key_span_id` of the step). An I/O processor writes
   `traceparent` as version `00`, the trace ID, `span_id` and the flags.
   The local `detail` byte stays in the process.
-- **Recorded.** [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) carries the input's trace
+- **Recorded.** [`c2h.input`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput) carries the input's trace
   parent in `h2c.event`'s form. For mail and timers, `parent_span_id` is
   the sending step's span ID. A replay fed back as `h2c.event` runs
   under the same trace ID and parent span.
@@ -179,7 +179,7 @@ SENT or INVOKED with the `suppressed` flag. A `<log>` has no trace kind of
 its own (it goes to `ta_log_sink`), so a replay drops it without a
 record. The common flag `replaying` is set on every record about the
 session until
-[`c2h.published`](../protocol/generated/MESSAGES.md#c2hpublished).
+[`c2h.published`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hpublished).
 
 This lets an operator see what a replay did, and lets a host compare a
 replay against the original run
@@ -234,7 +234,7 @@ Why events on a ring, and a reader that builds spans:
 ### A drop ends the open spans
 
 When `tinyactors-otlp` reads a
-[`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped), it ends every
+[`tel.dropped`](../../../../tinyactors-core/src/generated/MESSAGES.md#teldropped), it ends every
 span still open at the wall-clock time of the last record it read, with
 error status and a `tinyactors.telemetry.dropped` attribute that carries the
 count, and adds the count to a counter. A later record for a span ended

@@ -1,5 +1,5 @@
-/* Generated from catalog.rb by render.rb. Do not edit. A sketch of the
- * layout; the real header would be part of tinyactors.h. */
+/* The ring protocol's records. Generated from protocol/catalog.rb by
+ * `mise run protocol` in tinyactors-core. Do not edit. */
 #pragma once
 #include <stdint.h>
 

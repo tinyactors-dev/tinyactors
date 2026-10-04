@@ -531,10 +531,10 @@ napi's own parameters (`registeredDatamodels`, `datamodelNameBytes`, and
 the rest of `tinyactors-napi/src/napi_params.c`) are unaffected. With the
 kernel gone, napi's `parameterInfo()` lists two owners, `core` and `napi`.
 
-[h2c.event]: protocol/generated/MESSAGES.md#h2cevent
-[h2c.load_failed]: protocol/generated/MESSAGES.md#h2cload_failed
-[h2c.withdraw]: protocol/generated/MESSAGES.md#h2cwithdraw
-[c2h.bounced]: protocol/generated/MESSAGES.md#c2hbounced
-[tel.trace]: protocol/generated/MESSAGES.md#teltrace
-[tel.dropped]: protocol/generated/MESSAGES.md#teldropped
-[c2h.macrostep_ended]: protocol/generated/MESSAGES.md#c2hmacrostep_ended
+[h2c.event]: ../../../tinyactors-core/src/generated/MESSAGES.md#h2cevent
+[h2c.load_failed]: ../../../tinyactors-core/src/generated/MESSAGES.md#h2cload_failed
+[h2c.withdraw]: ../../../tinyactors-core/src/generated/MESSAGES.md#h2cwithdraw
+[c2h.bounced]: ../../../tinyactors-core/src/generated/MESSAGES.md#c2hbounced
+[tel.trace]: ../../../tinyactors-core/src/generated/MESSAGES.md#teltrace
+[tel.dropped]: ../../../tinyactors-core/src/generated/MESSAGES.md#teldropped
+[c2h.macrostep_ended]: ../../../tinyactors-core/src/generated/MESSAGES.md#c2hmacrostep_ended

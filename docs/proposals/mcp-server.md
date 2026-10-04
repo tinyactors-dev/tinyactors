@@ -173,10 +173,10 @@ is a tool result with `isError: true` and a result name in
 | `inspect` | `system`, `actor`, `hold?` | the actor's resource, as a tool result: a model cannot always read resources itself | observe, readOnly | `ta_actor_inspect` |
 | `describe` | `system`, `actor` or `definition` | the states, the events the current configuration accepts, the data model's name | observe, readOnly | definition inspection (core ADRs 0042, 0071) |
 | `evaluate` | `system`, `actor`, `expression` | evaluates an expression in the actor's data model against a copy of its data; what it writes is discarded | observe, readOnly | the data model |
-| `send` | `system`, `actor`, `event`, `data?`, `waitMs?`, `timeoutMs?` | posts an event with an origin, and returns its disposition and the replies ([below](#replies)) | input, openWorld | [`h2c.event`](ring-proto/protocol/generated/MESSAGES.md#h2cevent) |
-| `withdraw` | `system`, `call` | takes back a `send` whose event has not been taken yet | input, idempotent | [`h2c.withdraw`](ring-proto/protocol/generated/MESSAGES.md#h2cwithdraw) |
-| `load` | `system`, `actor` | brings a named actor in without sending it anything | input, idempotent | the host's loader, [`h2c.load`](ring-proto/protocol/generated/MESSAGES.md#h2cload) |
-| `destroy` | `system`, `actor` | ends the actor | input, destructive | [`h2c.destroy`](ring-proto/protocol/generated/MESSAGES.md#h2cdestroy) |
+| `send` | `system`, `actor`, `event`, `data?`, `waitMs?`, `timeoutMs?` | posts an event with an origin, and returns its disposition and the replies ([below](#replies)) | input, openWorld | [`h2c.event`](../../tinyactors-core/src/generated/MESSAGES.md#h2cevent) |
+| `withdraw` | `system`, `call` | takes back a `send` whose event has not been taken yet | input, idempotent | [`h2c.withdraw`](../../tinyactors-core/src/generated/MESSAGES.md#h2cwithdraw) |
+| `load` | `system`, `actor` | brings a named actor in without sending it anything | input, idempotent | the host's loader, [`h2c.load`](../../tinyactors-core/src/generated/MESSAGES.md#h2cload) |
+| `destroy` | `system`, `actor` | ends the actor | input, destructive | [`h2c.destroy`](../../tinyactors-core/src/generated/MESSAGES.md#h2cdestroy) |
 | `attach` | `system`, `holdMs?` | suspends the pump and holds the system; answers a hold handle | intervene, destructive | debugger attachment |
 | `detach` | `hold` | returns the system to the pump | intervene, idempotent | |
 | `goto` | `system`, `actor`, `states`, `from?`, `event?`, `hold?` | an operator transition through the normal engine | intervene, destructive | core ADR 0082 |
@@ -191,11 +191,11 @@ is a tool result with `isError: true` and a result name in
   the way. The agent abandons it first, or waits for it to end. The tool
   never abandons anything it was not asked to.
 - **Recorded sessions keep their journal.** A `send` to a recorded session
-  appears as a [`c2h.input`](ring-proto/protocol/generated/MESSAGES.md#c2hinput)
+  appears as a [`c2h.input`](../../tinyactors-core/src/generated/MESSAGES.md#c2hinput)
   record, which the application journals like any other. An operator
   transition is not an input a replay can repeat: the binding records it
   in its audit trail, and the application should checkpoint the stable
-  result ([`h2c.checkpoint`](ring-proto/protocol/generated/MESSAGES.md#h2ccheckpoint)),
+  result ([`h2c.checkpoint`](../../tinyactors-core/src/generated/MESSAGES.md#h2ccheckpoint)),
   so that later replay starts from it
   ([recording and replay](ring-proto/reference/recording-and-replay.md)).
 - **No tool edits data.** The debugging design has no data writes, effect
@@ -219,7 +219,7 @@ target is still live ([S12](ring-proto/scenarios/S12-http-request.md),
 uses this like any other sender.
 
 - **Each served system declares the MCP I/O processor** with
-  [`h2c.type_declare`](ring-proto/protocol/generated/MESSAGES.md#h2ctype_declare)
+  [`h2c.type_declare`](../../tinyactors-core/src/generated/MESSAGES.md#h2ctype_declare)
   (registry `io`, type `mcp`). Core keeps only the name. The binding
   renders `_ioprocessors.mcp.location` for a session from its ID and
   address, as for every processor.
@@ -228,7 +228,7 @@ uses this like any other sender.
   across clients). The event goes out as `h2c.event` with `origin` set to
   that URI and `origin_type` set to `mcp`.
 - **The library collects replies.** Every
-  [`c2h.send`](ring-proto/protocol/generated/MESSAGES.md#c2hsend) of type
+  [`c2h.send`](../../tinyactors-core/src/generated/MESSAGES.md#c2hsend) of type
   `mcp` reaches it through the binding. One whose target is an open call
   is added to that call's replies. Any other is dropped: an asynchronous
   reply with nobody to go to, which the chart's timeout covers.
@@ -251,11 +251,11 @@ to the client is the response to a request in progress. So `send` keeps
 its call open and answers once:
 
 1. **the event's terminal record arrives:**
-   - [`c2h.input_completed`](ring-proto/protocol/generated/MESSAGES.md#c2hinput_completed),
+   - [`c2h.input_completed`](../../tinyactors-core/src/generated/MESSAGES.md#c2hinput_completed),
      with its status (`completed`, `runaway`, ...) and whether the event
      was `ignored`;
-   - [`c2h.input_refused`](ring-proto/protocol/generated/MESSAGES.md#c2hinput_refused)
-     or [`c2h.bounced`](ring-proto/protocol/generated/MESSAGES.md#c2hbounced),
+   - [`c2h.input_refused`](../../tinyactors-core/src/generated/MESSAGES.md#c2hinput_refused)
+     or [`c2h.bounced`](../../tinyactors-core/src/generated/MESSAGES.md#c2hbounced),
      which end the call with `isError` and the reason;
 2. **then `waitMs` passes** (default 0). Completion settles the event's own
    session, but a reply can come later through mail to other sessions.
@@ -279,8 +279,8 @@ protocol. The library returns every reply and does not guess.
 
 | Filter | Notification | When |
 |---|---|---|
-| `resourceSubscriptions: [actor URI]` | `notifications/resources/updated` | after each macrostep of the actor ([`c2h.macrostep_ended`](ring-proto/protocol/generated/MESSAGES.md#c2hmacrostep_ended)), coalesced; on `c2h.loaded`, `c2h.unloaded`, `c2h.finished` and `c2h.destroyed` |
-| `resourceSubscriptions: [system URI]` | `notifications/resources/updated` | a definition registered or retired ([`c2h.definition_result`](ring-proto/protocol/generated/MESSAGES.md#c2hdefinition_result)); resident counts changed (`c2h.spawned`, `c2h.destroyed`, `c2h.loaded`, `c2h.unloaded`), rate-limited |
+| `resourceSubscriptions: [actor URI]` | `notifications/resources/updated` | after each macrostep of the actor ([`c2h.macrostep_ended`](../../tinyactors-core/src/generated/MESSAGES.md#c2hmacrostep_ended)), coalesced; on `c2h.loaded`, `c2h.unloaded`, `c2h.finished` and `c2h.destroyed` |
+| `resourceSubscriptions: [system URI]` | `notifications/resources/updated` | a definition registered or retired ([`c2h.definition_result`](../../tinyactors-core/src/generated/MESSAGES.md#c2hdefinition_result)); resident counts changed (`c2h.spawned`, `c2h.destroyed`, `c2h.loaded`, `c2h.unloaded`), rate-limited |
 | `resourcesListChanged` | `notifications/resources/list_changed` | a system or a definition revision came or went |
 
 Notifications come from c2h records, which are never lost, so a
@@ -302,7 +302,7 @@ A `tools/call` that carries `traceparent` and `tracestate` in `_meta`
 causes, join the agent's trace. The result names the trace ID in
 `structuredContent`. The binding parses `traceparent` with
 `ta_traceparent_parse` and fills the trace fields of the `send`'s
-[`h2c.event`](ring-proto/protocol/generated/MESSAGES.md#h2cevent)
+[`h2c.event`](../../tinyactors-core/src/generated/MESSAGES.md#h2cevent)
 (`trace_id_high`, `trace_id_low`, `parent_span_id`, `trace_flags`), so
 the `send` joins the caller's trace
 ([telemetry](ring-proto/reference/telemetry.md#trace-context-across-the-rings)).
@@ -569,7 +569,7 @@ the debugging primitives.
 - The ring protocol: [architecture](ring-proto/ARCHITECTURE.md),
   [debugging](ring-proto/reference/debugging.md),
   [telemetry](ring-proto/reference/telemetry.md),
-  [the messages](ring-proto/protocol/generated/MESSAGES.md),
+  [the messages](../../tinyactors-core/src/generated/MESSAGES.md),
   [S12](ring-proto/scenarios/S12-http-request.md) and
   [S13](ring-proto/scenarios/S13-webhook-callback.md) for origins.
 - SCXML 1.0 (`tinyactors-core/docs/internal/scxml.md`): 6.2.4 (the target

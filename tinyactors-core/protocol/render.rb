@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
-# Renders the catalog: `ruby render.rb markdown|json|c [OUT]`.
-# `ruby render.rb all` writes generated/MESSAGES.md, generated/messages.json
-# and generated/ring_proto.h next to this file.
+# Renders the catalog's model into the files of src/generated/:
+# RingProto::Render.files(model) answers each file's name and text.
+# `mise run protocol` in tinyactors-core writes them, and
+# `mise run protocol --check` fails when one differs.
 require 'json'
 require_relative 'dsl'
 
@@ -20,7 +21,8 @@ module RingProto
 
     def markdown(model)
       out = +"# #{model.title}\n\n"
-      out << "Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edit.\n\n"
+      out << "Generated from [`catalog.rb`](../../protocol/catalog.rb) by `mise run protocol` in tinyactors-core. " \
+             "Do not edit.\n\n"
       model.notes.each { |n| out << "- #{n}\n" }
       out << "\n## Rings\n\n| Ring | Producer → consumer | Loss | When full |\n|---|---|---|---|\n"
       model.rings.each_value do |r|
@@ -102,8 +104,8 @@ module RingProto
     end
 
     def c_header(model)
-      out = +"/* Generated from catalog.rb by render.rb. Do not edit. A sketch of the\n"
-      out << " * layout; the real header would be part of tinyactors.h. */\n"
+      out = +"/* The ring protocol's records. Generated from protocol/catalog.rb by\n"
+      out << " * `mise run protocol` in tinyactors-core. Do not edit. */\n"
       out << "#pragma once\n#include <stdint.h>\n\n"
       out << "typedef struct { uint32_t offset; uint32_t length; } trp_span;\n\n"
       kinds = [['TRP_PAD', '0x0000']] + model.messages.map { |m| ["TRP_#{c_name(m.id).upcase}", hex(m.code)] }
@@ -141,26 +143,14 @@ module RingProto
       end
       out
     end
-  end
-end
 
-if $PROGRAM_NAME == __FILE__
-  model = RingProto.load
-  format, path = ARGV
-  outputs = {
-    'markdown' => ['MESSAGES.md', ->(m) { RingProto::Render.markdown(m) }],
-    'json' => ['messages.json', ->(m) { RingProto::Render.json(m) }],
-    'c' => ['ring_proto.h', ->(m) { RingProto::Render.c_header(m) }]
-  }
-  if format == 'all'
-    dir = File.join(__dir__, 'generated')
-    Dir.mkdir(dir) unless Dir.exist?(dir)
-    outputs.each_value { |file, render| File.write(File.join(dir, file), render.call(model)) }
-  elsif outputs.key?(format)
-    text = outputs[format][1].call(model)
-    path ? File.write(path, text) : $stdout.write(text)
-  else
-    warn 'usage: ruby render.rb markdown|json|c [OUT] | all'
-    exit 2
+    # The generated files, by name, as the catalog renders them.
+    def files(model)
+      {
+        'MESSAGES.md' => markdown(model),
+        'messages.json' => json(model),
+        'ring_records.h' => c_header(model)
+      }
+    end
   end
 end

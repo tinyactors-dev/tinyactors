@@ -35,6 +35,11 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 - `src/*.{c,h}` — canonical implementation modules. Their headers are private:
   they include `tinyactors.h` and add layouts and internal functions.
 - `include/tinyactors.c` — generated implementation amalgamation of `src/*.c`.
+- `protocol/` — the ring protocol's records, defined once in `catalog.rb`
+  (with `dsl.rb` and `render.rb`); see `protocol/README.md`.
+- `src/generated/` — what `mise run protocol` renders from the catalog:
+  `ring_records.h`, `MESSAGES.md` and `messages.json`. Never edited by hand;
+  `mise run test` checks it is current.
 - `include/tinyactors.api.json` — generated, checked-in description of the
   public API for binding generators (`mise run api`; see
   `docs/internal/api-ir.md`), in the format of
