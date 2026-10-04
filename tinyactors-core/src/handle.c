@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "handle.h"
 
 /*
  * Implementation of block E1 (handle). The contract, lifetime and usage are

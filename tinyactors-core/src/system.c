@@ -1,3 +1,4 @@
+#include "handle.h"
 #include "system.h"
 #include "trace.h"
 #include "layout.h"
@@ -295,7 +296,7 @@ void ta_system_destroy(ta_system *system) {
     for (uint32_t slot = 0; slot < system->actors.count; slot += 1) {
         ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {
-            (void)ta_actor_destroy(system, ta_actor_id_make(slot, entry->generation));
+            (void)ta_actor_destroy(system, ta_handle_make(slot, entry->generation));
         }
     }
     while (system->unregistered_definitions != NULL) {

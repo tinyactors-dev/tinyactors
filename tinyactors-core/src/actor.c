@@ -1,3 +1,4 @@
+#include "handle.h"
 #include "actor.h"
 #include "interpreter.h"
 
@@ -5,10 +6,8 @@ ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     if (system == NULL) {
         return NULL;
     }
-    uint32_t slot = ta_actor_id_slot(id);
-    uint32_t generation = ta_actor_id_generation(id);
-    const ta_actor_slot *entry = ta_actor_slot_at(system, slot);
-    return entry != NULL && entry->generation == generation ? entry->actor : NULL;
+    const ta_actor_slot *entry = ta_actor_slot_at(system, ta_handle_slot(id));
+    return entry != NULL && ta_handle_matches(id, entry->generation) ? entry->actor : NULL;
 }
 
 ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot) {
@@ -88,15 +87,15 @@ static ta_result ta_actor_table_grow(ta_system *system, uint32_t *out) {
 }
 
 uint32_t ta_actor_id_slot(ta_actor_id id) {
-    return (uint32_t)(id & 0xffffffffu);
+    return ta_handle_slot(id);
 }
 
 uint32_t ta_actor_id_generation(ta_actor_id id) {
-    return (uint32_t)(id >> 32);
+    return ta_handle_generation(id);
 }
 
 ta_actor_id ta_actor_id_make(uint32_t slot, uint32_t generation) {
-    return ((ta_actor_id)generation << 32) | slot;
+    return ta_handle_make(slot, generation);
 }
 
 ta_timer_list *ta_actor_timers(const ta_actor *actor) {
@@ -251,7 +250,7 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
     ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->actor = actor;
     entry->next_free = UINT32_MAX;
-    *out = ta_actor_id_make(slot, entry->generation);
+    *out = ta_handle_make(slot, entry->generation);
     return TA_OK;
 }
 
@@ -327,10 +326,10 @@ static ta_result ta_actor_claim_address(ta_system *system,
  * is never issued (ADR 0059): a wrap from UINT32_MAX goes to 1.
  */
 void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
-    uint32_t slot = ta_actor_id_slot(id);
+    uint32_t slot = ta_handle_slot(id);
     ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->actor = NULL;
-    entry->generation = entry->generation == UINT32_MAX ? 1u : entry->generation + 1u;
+    entry->generation = ta_handle_next_generation(entry->generation);
     entry->next_free = system->free_actor_slot;
     system->free_actor_slot = slot;
 }
