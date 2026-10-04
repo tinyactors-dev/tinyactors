@@ -2024,7 +2024,6 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
                                 TA_PHRASE("the chart has more states than a configuration can hold"));
     }
     definition->configuration = (ta_configuration_layout){
-        .kind = TA_CONFIG_WORDS,
         .bytes = (uint16_t)(words * 8u),
         .alignment = (uint16_t)_Alignof(uint64_t),
         .atomic_state_count = definition->state_count,
