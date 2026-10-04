@@ -210,12 +210,106 @@ static void test_columns_overflow(void) {
     CHECK(full.block == &full && full.capacity == 0x80000000u && heap.stats.attempts == 0);
 }
 
+/* ------------------------------------------------------------------------
+ * The invoke table end to end: nine <invoke>s in one state grow it from 0 to
+ * capacities 4, 8 and 16 as the macrostep ends. A refused allocation at any
+ * point of that macrostep must leave a state the next resume repairs (ADR
+ * 0070), and nothing may leak or be freed with a wrong size.
+ */
+#define INVOKES 9u
+
+static ta_op_status svc_start(void *self, const ta_invoker_start_params *params) {
+    (void)self;
+    *params->service_handle = 1u;
+    return TA_OP_OK;
+}
+static ta_op_status svc_cancel(void *self, uint64_t service, ta_fault *fault) {
+    (void)self, (void)service, (void)fault;
+    return TA_OP_OK;
+}
+static ta_op_status svc_forward(void *self, const ta_invoker_forward_params *params) {
+    (void)self, (void)params;
+    return TA_OP_OK;
+}
+static const ta_invoker_vtable svc_vtable = { .start = svc_start, .cancel = svc_cancel, .forward = svc_forward };
+
+#define SVC_INVOKE { .kind = TA_SCXML_INVOKE, .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = { "svc", 3 } } }
+
+/* Runs the chart once, refusing the nth allocation of the first resume
+ * (0: none). Answers how many allocations that resume attempted. */
+static uint64_t run_invokes(uint64_t nth) {
+    static const ta_scxml_invoke_spec invokes[INVOKES + 1u] = {
+        SVC_INVOKE, SVC_INVOKE, SVC_INVOKE, SVC_INVOKE, SVC_INVOKE, SVC_INVOKE, SVC_INVOKE, SVC_INVOKE, SVC_INVOKE, {0}
+    };
+    static const ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = { "s", 1 }, .invokes = invokes }, {0}
+    };
+    static const ta_scxml_spec spec = { .name = { "table", 5 }, .states = states };
+
+    ta_system *system = NULL;
+    ta_allocator allocator = ta_test_allocator_get(&heap);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
+    ta_atom type = 0;
+    CHECK(ta_system_intern_atom(system, (ta_str){ "svc", 3 }, &type) == TA_OK);
+    CHECK(ta_system_register_invoker(system, type, (ta_invoker){ .v = &svc_vtable }) == TA_OK);
+    ta_definition *definition = NULL;
+    ta_definition_id id = 0;
+    CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){ .spec = &spec,
+                                                                             .datamodel = ta_null_datamodel(),
+                                                                             .allocator = allocator,
+                                                                             .out = &definition }) == TA_OK);
+    CHECK(ta_system_register_definition(system, definition, &id) == TA_OK);
+    ta_actor_id actor = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
+
+    ta_test_allocator_reset_counts(&heap);
+    if (nth != 0) {
+        ta_test_allocator_fail_nth(&heap, nth);
+    }
+    ta_run_status status = TA_RUN_ERROR;
+    ta_result first = ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 1000,
+                                                                         .status = &status });
+    uint64_t attempts = heap.stats.attempts;
+    ta_test_allocator_disarm(&heap);
+    for (uint32_t retry = 0; retry < 3u && !(first == TA_OK && status == TA_RUN_STABLE); retry += 1u) {
+        first = ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 1000, .status = &status });
+    }
+    CHECK(first == TA_OK && status == TA_RUN_STABLE);
+    ta_actor_inspection inspection = {0};
+    CHECK(ta_actor_inspect(system, actor, &inspection) == TA_OK);
+    CHECK(inspection.invoke_count == INVOKES);
+    for (uint32_t index = 0; index < inspection.invoke_count && index < INVOKES; index += 1u) {
+        CHECK(inspection.invokes[index].active);
+    }
+    ta_system_destroy(system);
+    CHECK(heap.stats.bad_frees == 0);
+    CHECK(ta_test_allocator_finish(&heap) == 0);
+    return attempts;
+}
+
+static void test_invoke_table(void) {
+    uint64_t attempts = run_invokes(0);
+    CHECK(attempts >= 3u); /* at least the three growths */
+    for (uint64_t nth = 1; nth <= attempts; nth += 1u) {
+        run_invokes(nth);
+    }
+}
+
+/* The sparse state may only shrink: 176 bytes before the invoke table became
+ * a ta_columns (unit 1.7 of the ring-proto plan), 168 after. */
+static void test_sparse_size(void) {
+    CHECK(sizeof(ta_actor_sparse_state) <= 176u);
+    CHECK(sizeof(ta_columns) == 16u);
+}
+
 int main(void) {
     test_vec_sweep();
     test_vec_overflow();
     test_columns_layout();
     test_columns_sweep();
     test_columns_overflow();
+    test_invoke_table();
+    test_sparse_size();
     CHECK(heap.stats.bad_frees == 0);
     CHECK(ta_test_allocator_finish(&heap) == 0);
     if (failures != 0) {

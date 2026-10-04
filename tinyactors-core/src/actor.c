@@ -931,7 +931,7 @@ ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_params 
         if (sparse->invokes[index].active) {
             params->invokes[next_invoke++] = (ta_invoke_state){ .id = sparse->invokes[index].id,
                                                                 .type = sparse->invokes[index].type,
-                                                                .decl = sparse->invoke_meta[index].decl };
+                                                                .decl = ta_invoke_table_decl(&sparse->invoke_table, index) };
         }
     }
     ta_value root = { 0 };
@@ -1513,7 +1513,7 @@ static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
     if (sparse != NULL) {
         total += sizeof(ta_actor_sparse_state);
         total += ta_vec_bytes(&sparse->pending_invokes);
-        total += (size_t)sparse->invoke_capacity * (sizeof(ta_active_invoke) + sizeof(ta_invoke_meta));
+        total += ta_invoke_table_bytes(&sparse->invoke_table);
         if (sparse->activation_effects != NULL) {
             total += sizeof(ta_activation_effects);
             total += ta_vec_bytes(&sparse->activation_effects->entries);

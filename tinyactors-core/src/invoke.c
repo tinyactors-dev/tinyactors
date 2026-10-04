@@ -95,50 +95,52 @@ static int64_t ta_invoke_find(const ta_actor *actor, ta_invoke_id invoke) {
     return -1;
 }
 
+/*
+ * The invoke table is a ta_columns (vec.h) of two columns: the public
+ * ta_active_invoke records, at offset 0 of the block so that `invokes` and
+ * ta_actor_inspection.invokes stay a contiguous array, and the private
+ * ta_invoke_meta records parallel to them. Lifetime: session. It is created
+ * and grown only where an invoke is added (ta_invoke_start at the end of a
+ * macrostep, ta_invoke_restore while loading), never inside a unit of
+ * executable content, and freed by ta_invoke_release. Pointers into it are
+ * valid only until the next ta_invoke_grow, so a function keeps indices.
+ */
+static const ta_column ta_invoke_column_shapes[] = {
+    { sizeof(ta_active_invoke), _Alignof(ta_active_invoke) },
+    { sizeof(ta_invoke_meta), _Alignof(ta_invoke_meta) },
+};
+static const ta_columns_layout ta_invoke_columns = { ta_invoke_column_shapes, 2u, 4u };
+
+size_t ta_invoke_table_bytes(const ta_columns *table) {
+    return ta_columns_bytes(&ta_invoke_columns, table);
+}
+
+ta_invoke_decl_id ta_invoke_table_decl(const ta_columns *table, uint32_t index) {
+    const ta_invoke_meta *metas = ta_columns_at(&ta_invoke_columns, table, 1);
+    return metas[index].decl;
+}
+
+/* The private records, parallel to sparse->invokes; NULL while the table is empty. */
+static ta_invoke_meta *ta_invoke_metas(const ta_actor_sparse_state *sparse) {
+    return ta_columns_at(&ta_invoke_columns, &sparse->invoke_table, 1);
+}
+
+/* Makes room for one more invoke; on TA_ERR_NOMEM the table is unchanged. */
 static ta_result ta_invoke_grow(ta_system *system, ta_actor_sparse_state *sparse) {
-    if (sparse->invoke_count < sparse->invoke_capacity) {
-        return TA_OK;
-    }
-    uint32_t capacity = sparse->invoke_capacity == 0 ? 4u : sparse->invoke_capacity * 2u;
-    ta_active_invoke *invokes = ta_mem_alloc(system->allocator, capacity * sizeof(ta_active_invoke),
-                                             _Alignof(ta_active_invoke));
-    ta_invoke_meta *meta = ta_mem_alloc(system->allocator, capacity * sizeof(ta_invoke_meta),
-                                        _Alignof(ta_invoke_meta));
-    if (invokes == NULL || meta == NULL) {
-        ta_mem_free(system->allocator, invokes,
-                    &(ta_allocator_free_params){ .size = capacity * sizeof(ta_active_invoke),
-                                                 .alignment = _Alignof(ta_active_invoke) });
-        ta_mem_free(system->allocator, meta,
-                    &(ta_allocator_free_params){ .size = capacity * sizeof(ta_invoke_meta),
-                                                 .alignment = _Alignof(ta_invoke_meta) });
-        return TA_ERR_NOMEM;
-    }
-    if (sparse->invoke_count != 0) {
-        ta_mem_copy(invokes, sparse->invokes, sparse->invoke_count * sizeof(ta_active_invoke));
-        ta_mem_copy(meta, sparse->invoke_meta, sparse->invoke_count * sizeof(ta_invoke_meta));
-    }
-    ta_mem_free(system->allocator, sparse->invokes,
-                &(ta_allocator_free_params){ .size = sparse->invoke_capacity * sizeof(ta_active_invoke),
-                                             .alignment = _Alignof(ta_active_invoke) });
-    ta_mem_free(system->allocator, sparse->invoke_meta,
-                &(ta_allocator_free_params){ .size = sparse->invoke_capacity * sizeof(ta_invoke_meta),
-                                             .alignment = _Alignof(ta_invoke_meta) });
-    sparse->invokes = invokes;
-    sparse->invoke_meta = meta;
-    sparse->invoke_capacity = capacity;
-    return TA_OK;
+    return ta_columns_grow(system->allocator, &ta_invoke_columns, &sparse->invoke_table);
 }
 
 static void ta_invoke_remove_at(ta_actor_sparse_state *sparse, uint32_t index) {
+    ta_invoke_meta *metas = ta_invoke_metas(sparse);
     for (uint32_t at = index + 1u; at < sparse->invoke_count; at += 1) {
         sparse->invokes[at - 1u] = sparse->invokes[at];
-        sparse->invoke_meta[at - 1u] = sparse->invoke_meta[at];
+        metas[at - 1u] = metas[at];
     }
     sparse->invoke_count -= 1u;
 }
 
 static ta_invoke_taken ta_invoke_take_index(ta_actor_sparse_state *sparse, uint32_t index) {
-    ta_invoke_taken taken = { .active = sparse->invokes[index], .meta = sparse->invoke_meta[index] };
+    ta_invoke_taken taken = { .active = sparse->invokes[index], .meta = ta_invoke_metas(sparse)[index] };
     /* Remove first: the service may destroy a child that reports back reentrantly. */
     ta_invoke_remove_at(sparse, index);
     return taken;
@@ -241,7 +243,7 @@ bool ta_invoke_take(ta_actor *actor, ta_state_id state, uint32_t *cursor, ta_inv
         index = sparse->invoke_count;
     }
     for (; index > 0; index -= 1u) {
-        if (sparse->invoke_meta[index - 1u].state == state) {
+        if (ta_invoke_metas(sparse)[index - 1u].state == state) {
             *out = ta_invoke_take_index(sparse, index - 1u);
             *cursor = index - 1u;
             return true;
@@ -258,7 +260,7 @@ ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id state) {
     }
     ta_invoke_forget_pending(it->actor, state);
     for (uint32_t index = sparse->invoke_count; index > 0; index -= 1u) {
-        if (sparse->invoke_meta[index - 1u].state == state) {
+        if (ta_invoke_metas(sparse)[index - 1u].state == state) {
             ta_interpreter_trace_invoke(it, TA_TRACE_INVOKE_CANCELLED, sparse->invokes[index - 1u].id);
             ta_invoke_cancel_at(it->system, sparse, index - 1u);
         }
@@ -491,7 +493,7 @@ ta_result ta_invoke_restore(ta_system *system, ta_actor *actor, const ta_invoke_
     sparse->invokes[index] = (ta_active_invoke){
         .id = params->id, .type = params->type, .autoforward = decl->autoforward, .active = true,
     };
-    sparse->invoke_meta[index] = (ta_invoke_meta){
+    ta_invoke_metas(sparse)[index] = (ta_invoke_meta){
         .decl = params->decl, .state = decl->owner, .invoker = invoker != NULL ? *invoker : (ta_invoker){ 0 },
         .replayed = true,
     };
@@ -519,7 +521,7 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
     sparse->invokes[index] = (ta_active_invoke){
         .id = params->id, .type = params->type, .autoforward = decl->autoforward, .active = true,
     };
-    sparse->invoke_meta[index] = (ta_invoke_meta){
+    ta_invoke_metas(sparse)[index] = (ta_invoke_meta){
         .decl = params->decl, .state = decl->owner, .invoker = *params->invoker, .child = 0,
     };
     sparse->invoke_count += 1u;
@@ -551,7 +553,7 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
         /* A replay crosses no border (ADR 0089 section 3): the invocation is
          * active in core, under the ID the run being replayed gave it, and
          * no invoker hears of it. */
-        sparse->invoke_meta[index].replayed = true;
+        ta_invoke_metas(sparse)[index].replayed = true;
         return TA_OK;
     }
     ta_op_status status = invoker->v->start(invoker->self, &(ta_invoker_start_params){
@@ -744,10 +746,10 @@ bool ta_invoke_is_active(const ta_actor *actor, ta_invoke_id invoke) {
 
 bool ta_invoke_destination(const ta_actor *actor, ta_invoke_id invoke, ta_actor_ref *out) {
     int64_t index = ta_invoke_find(actor, invoke);
-    if (index < 0 || !actor->sparse->invoke_meta[index].has_child) {
+    if (index < 0 || !ta_invoke_metas(actor->sparse)[index].has_child) {
         return false;
     }
-    *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = actor->sparse->invoke_meta[index].child };
+    *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = ta_invoke_metas(actor->sparse)[index].child };
     return true;
 }
 
@@ -775,14 +777,14 @@ void ta_invoke_attach_child(ta_system *system, const ta_actor_parent *parent, ta
     ta_actor *actor = ta_actor_lookup(system, parent->actor);
     int64_t index = actor == NULL ? -1 : ta_invoke_find(actor, parent->invoke_id);
     if (index >= 0) {
-        actor->sparse->invoke_meta[index].child = child;
-        actor->sparse->invoke_meta[index].has_child = true;
+        ta_invoke_metas(actor->sparse)[index].child = child;
+        ta_invoke_metas(actor->sparse)[index].has_child = true;
     }
 }
 
 static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_event *event) {
     ta_actor_sparse_state *sparse = it->actor->sparse;
-    ta_invoke_meta meta = sparse->invoke_meta[index];
+    ta_invoke_meta meta = ta_invoke_metas(sparse)[index];
     if (meta.replayed) {
         return TA_OK; /* nothing runs behind it to forward to */
     }
@@ -864,7 +866,7 @@ bool ta_invoke_finalize_actions(const ta_actor *actor, const ta_event *event, ta
     if (index < 0) {
         return false;
     }
-    *out = actor->definition->invokes[actor->sparse->invoke_meta[index].decl].finalize_actions;
+    *out = actor->definition->invokes[ta_invoke_metas(actor->sparse)[index].decl].finalize_actions;
     return true;
 }
 
@@ -932,15 +934,7 @@ void ta_invoke_release(ta_system *system, ta_actor *actor) {
     while (sparse->invoke_count != 0) {
         ta_invoke_cancel_at(system, sparse, sparse->invoke_count - 1u);
     }
-    ta_mem_free(system->allocator, sparse->invokes,
-                &(ta_allocator_free_params){ .size = sparse->invoke_capacity * sizeof(ta_active_invoke),
-                                             .alignment = _Alignof(ta_active_invoke) });
-    ta_mem_free(system->allocator, sparse->invoke_meta,
-                &(ta_allocator_free_params){ .size = sparse->invoke_capacity * sizeof(ta_invoke_meta),
-                                             .alignment = _Alignof(ta_invoke_meta) });
-    sparse->invokes = NULL;
-    sparse->invoke_meta = NULL;
-    sparse->invoke_capacity = 0;
+    ta_columns_release(system->allocator, &ta_invoke_columns, &sparse->invoke_table);
     if (sparse->pending_invokes.element_size != 0) {
         ta_vec_destroy(&sparse->pending_invokes);
     }

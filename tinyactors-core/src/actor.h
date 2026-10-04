@@ -147,11 +147,18 @@ typedef struct ta_event_block {
 
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
-    ta_active_invoke *invokes;
-    uint32_t invoke_count;
-    uint32_t invoke_capacity;
-    /* Parallel to `invokes`; see invoke.h. */
-    ta_invoke_meta *invoke_meta;
+    /* The invoke table (session lifetime; see invoke.c and vec.h): one
+     * ta_columns block holding ta_active_invoke records and, parallel to
+     * them, ta_invoke_meta records (invoke.h). `invokes` is column 0, the
+     * start of the block, so readers keep the plain array view. */
+    union {
+        ta_columns invoke_table;
+        struct {
+            ta_active_invoke *invokes;
+            uint32_t invoke_count;
+            uint32_t invoke_capacity;
+        };
+    };
     /* States entered in this macrostep whose invokes start when it ends. */
     ta_vec pending_invokes;
     ta_activation_effects *activation_effects;

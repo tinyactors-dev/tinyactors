@@ -24,6 +24,20 @@ typedef struct {
     bool replayed;
 } ta_invoke_meta;
 
+/*
+ * ta_invoke_table_bytes is the size of the block behind an actor's invoke
+ * table (0 when it has none): the figure ta_actor_inspect adds to the
+ * actor's allocated bytes. It never allocates.
+ */
+size_t ta_invoke_table_bytes(const ta_columns *table);
+
+/*
+ * ta_invoke_table_decl is the declaration (index into the definition's
+ * invokes) of the invoke at `index`, which must be below the table's count.
+ * It never allocates.
+ */
+ta_invoke_decl_id ta_invoke_table_decl(const ta_columns *table, uint32_t index);
+
 /* The send ID of a child's queued done.invoke completion record. */
 #define TA_SEND_ID_COMPLETION (UINT64_MAX - 1u)
 
