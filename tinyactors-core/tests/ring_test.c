@@ -403,6 +403,13 @@ static void test_peek_release_basics(void) {
     CHECK(ta_ring_peek(ring, &rec) == TA_RING_OK && rec.size == 24 && rec.seq == 1 && rec.gap == 0);
     CHECK(record_ok(rec.bytes, 24, 1));
     CHECK(ta_ring_peek(ring, &again) == TA_RING_OK && again.bytes == rec.bytes && again.seq == 1); /* idempotent */
+    {   /* a producer rewriting the header in place cannot change the peeked record */
+        uint32_t forged = 8;
+        memcpy(ring->data + 4, &forged, 4);
+        CHECK(ta_ring_peek(ring, &again) == TA_RING_OK && again.size == 24 && again.seq == 1);
+        forged = 24;
+        memcpy(ring->data + 4, &forged, 4);
+    }
     CHECK(ring->shared->tail == 0);
     ta_ring_release(ring);
     CHECK(ring->shared->tail == 24);

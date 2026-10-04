@@ -963,9 +963,11 @@ TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo);
  *
  * Failure behaviour. Layout and init answer ta_result; init failure zeroes
  * the handles and writes nothing into the memory. Producer and consumer
- * calls answer ta_ring_status. On any non-OK answer the ring is unchanged,
- * with two documented exceptions: DROPPED (seq and `dropped` move) and the
- * lone pad above.
+ * calls answer ta_ring_status. On any non-OK answer of reserve the ring is
+ * unchanged, with two documented exceptions: DROPPED (seq and `dropped`
+ * move) and the lone pad above. A peek that answers EMPTY or CORRUPT may
+ * already have released one pad (and moved the tail) on its way; it never
+ * consumes a record.
  *
  * Usage. The system creates the region, then produces and consumes:
  *
@@ -6523,11 +6525,20 @@ static bool refresh_peer_head(ta_ring *ring) {
  * ta_ring_peek: see ring.h. Every length read from the ring is checked
  * against what is committed and the end of the buffer before it is used, so
  * a hostile h2c record can make peek answer CORRUPT but never read outside
- * the data area. While a record is peeked the head is not re-read, so a
- * second peek is the same record.
+ * the data area. While a record is peeked, a second peek rebuilds the answer
+ * from the size and seq the first peek validated and from the private tail,
+ * and does not read the header again: a producer that rewrites the header in
+ * place cannot change what release will skip.
  */
 TA_PRIVATE ta_ring_status ta_ring_peek(ta_ring *ring, ta_ring_record *out) {
-    if (ring->peeked_size == 0 && !refresh_peer_head(ring)) {
+    if (ring->peeked_size != 0) {
+        *out = (ta_ring_record){ .bytes = ring->data + ring->tail % ring->capacity,
+                                 .size = ring->peeked_size,
+                                 .seq = ring->peeked_seq,
+                                 .gap = ring->peeked_seq - ring->expected_seq };
+        return TA_RING_OK;
+    }
+    if (!refresh_peer_head(ring)) {
         return TA_RING_CORRUPT;
     }
     for (;;) {

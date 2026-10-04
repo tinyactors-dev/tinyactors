@@ -113,9 +113,11 @@
  *
  * Failure behaviour. Layout and init answer ta_result; init failure zeroes
  * the handles and writes nothing into the memory. Producer and consumer
- * calls answer ta_ring_status. On any non-OK answer the ring is unchanged,
- * with two documented exceptions: DROPPED (seq and `dropped` move) and the
- * lone pad above.
+ * calls answer ta_ring_status. On any non-OK answer of reserve the ring is
+ * unchanged, with two documented exceptions: DROPPED (seq and `dropped`
+ * move) and the lone pad above. A peek that answers EMPTY or CORRUPT may
+ * already have released one pad (and moved the tail) on its way; it never
+ * consumes a record.
  *
  * Usage. The system creates the region, then produces and consumes:
  *

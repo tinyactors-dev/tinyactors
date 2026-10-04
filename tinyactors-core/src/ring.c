@@ -228,11 +228,20 @@ static bool refresh_peer_head(ta_ring *ring) {
  * ta_ring_peek: see ring.h. Every length read from the ring is checked
  * against what is committed and the end of the buffer before it is used, so
  * a hostile h2c record can make peek answer CORRUPT but never read outside
- * the data area. While a record is peeked the head is not re-read, so a
- * second peek is the same record.
+ * the data area. While a record is peeked, a second peek rebuilds the answer
+ * from the size and seq the first peek validated and from the private tail,
+ * and does not read the header again: a producer that rewrites the header in
+ * place cannot change what release will skip.
  */
 ta_ring_status ta_ring_peek(ta_ring *ring, ta_ring_record *out) {
-    if (ring->peeked_size == 0 && !refresh_peer_head(ring)) {
+    if (ring->peeked_size != 0) {
+        *out = (ta_ring_record){ .bytes = ring->data + ring->tail % ring->capacity,
+                                 .size = ring->peeked_size,
+                                 .seq = ring->peeked_seq,
+                                 .gap = ring->peeked_seq - ring->expected_seq };
+        return TA_RING_OK;
+    }
+    if (!refresh_peer_head(ring)) {
         return TA_RING_CORRUPT;
     }
     for (;;) {
