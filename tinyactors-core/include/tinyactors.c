@@ -2715,7 +2715,7 @@ struct ta_system {
     ta_event_name_table event_names;
 
     /*
-     * ta_definition_slot; a definition ID is (generation << 32) | slot, as
+     * ta_definition_slot; a definition ID is a handle (handle.h), as
      * for actors. Freed slots form a list through `next_free`.
      */
     ta_vec definitions;
@@ -2726,7 +2726,7 @@ struct ta_system {
     uint64_t next_definition_serial;
 
     /*
-     * ta_actor_slot; an actor ID is ta_actor_id_make(slot, generation). Freed slots
+     * ta_actor_slot; an actor ID is a handle (handle.h). Freed slots
      * form a list through `next_free`, as definitions' do: a spawn takes the
      * head instead of scanning the table, so it costs the same against four
      * million actors as against four (invariant 17).

@@ -45,7 +45,7 @@ frees the definition there when it is retired. See
 
 The system keeps registered definitions in a slot table
 (`ta_definition_slot`: definition, generation, free-list link). An ID is
-`(generation << 32) | slot`; freeing a definition bumps its slot's generation
+a handle (`src/handle.h`: `(generation << 32) | slot`); freeing a definition bumps its slot's generation
 and pushes the slot on the free list, so `ta_definition_lookup()` rejects stale
 IDs. Because slots are reused, each definition also records a registration
 serial, and `ta_system_find_definition()` picks the newest match by serial.
