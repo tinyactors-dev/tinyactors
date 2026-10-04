@@ -47,3 +47,9 @@ zig = "0.16.0"
 # another task script as a child Ruby process (e.g. tinyxml/mise/tasks/generated)
 # still works, since the child inherits RUBYLIB from the parent's environment.
 RUBYLIB = "{{config_root}}/mise/lib"
+# Every task reads and writes UTF-8 (the sources, the tasks' own output, the
+# arrows check-acronyms prints), whatever the locale. Under the POSIX locale a
+# CI runner or a bare container starts with, Ruby takes US-ASCII as the
+# external encoding, and the first non-ASCII line a task reads raised
+# "invalid byte sequence in US-ASCII" instead of reporting what it found.
+RUBYOPT = "-EUTF-8"
