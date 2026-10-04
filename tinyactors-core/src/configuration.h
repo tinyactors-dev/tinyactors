@@ -44,7 +44,6 @@
  */
 typedef struct {
     uint16_t bytes;
-    uint16_t alignment;
     uint32_t atomic_state_count;
 } ta_configuration_layout;
 

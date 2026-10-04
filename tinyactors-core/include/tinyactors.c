@@ -634,7 +634,6 @@ TA_PRIVATE inline void ta_clock_set(ta_clock *clock, ta_time now) { clock->now =
  */
 typedef struct {
     uint16_t bytes;
-    uint16_t alignment;
     uint32_t atomic_state_count;
 } ta_configuration_layout;
 
@@ -9726,7 +9725,6 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
     }
     definition->configuration = (ta_configuration_layout){
         .bytes = (uint16_t)(words * 8u),
-        .alignment = (uint16_t)_Alignof(uint64_t),
         .atomic_state_count = definition->state_count,
     };
     for (uint32_t slot = 0; slot < definition->history.slot_count; slot += 1) {
