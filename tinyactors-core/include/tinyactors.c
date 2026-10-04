@@ -1362,29 +1362,85 @@ TA_PRIVATE size_t ta_table_bytes(const ta_table *table);
 
 
 
+/*
+ * Package atom interns text: every distinct string that core compares often
+ * (event name segments, family names, state and invoke IDs, URIs) gets one
+ * small number, an atom, and from then on two strings are equal when their
+ * atoms are. Atoms are dense, in the order the texts were first interned
+ * (the empty text is atom 0), and are persisted in traces and session
+ * images, so the numbering never changes.
+ *
+ * Lifetime: system. The table is created with the system and destroyed with
+ * it; an atom is never removed, so an atom and the text a ta_str returned by
+ * ta_atom_text points at live until the system is destroyed, and neither moves.
+ * Text lives in an arena (blocks that never move), the entries in a vector
+ * (so a pointer from ta_vec_at is good only until the next intern).
+ *
+ * The index from text to atom is a ta_table (block B3) holding (FNV-1a of
+ * the text, atom). The table only stores and moves slots; this unit
+ * compares the text, which it finds in its own entries.
+ *
+ * When it allocates. Looking an atom up (ta_atom_find, ta_atom_text,
+ * ta_atom_valid) and interning a text that is already an atom never
+ * allocate. Interning a new text allocates: a slot in the entry vector, the
+ * text in the arena and, when the index says it is due, one more index page
+ * (ta_table_grow). The growth is requested here, just before the insert,
+ * because today interning also happens in the middle of a macrostep (a
+ * computed send ID, an event expression, an invoke ID). Phase 4 (4.2) of the
+ * ring protocol removes run-time interning, after which new atoms are made
+ * only at registration, compile and load, and growth happens at those safe
+ * points alone. A grow that fails is only a postponement: the pages fill a
+ * little more, and the intern still succeeds.
+ *
+ * Failure. TA_ERR_NOMEM, or TA_ERR_INVALID for a null pointer with a
+ * length. The fallible steps (reserve the entry, copy the text, insert into
+ * the index) come before the infallible one (record the entry), so a failed
+ * intern leaves no atom; text already copied into the arena stays there
+ * until destroy, as an arena does not take single allocations back.
+ *
+ * Complexity: intern and find are O(length of the text) expected; text and
+ * valid are O(1).
+ *
+ * Example:
+ *
+ *     ta_atom atom;
+ *     ta_atom_intern(&system->atoms, (ta_str){ "error", 5 }, &atom);
+ *     ta_str text = ta_atom_text(&system->atoms, atom);   // "error", stable
+ */
+
 /* Atom text lives in arena blocks, so a returned ta_str never moves. */
 typedef struct {
-    uint32_t hash;
-    uint32_t next;
     ta_str text;
 } ta_atom_entry;
 
 typedef struct {
     ta_allocator allocator;
     ta_vec entries;
-    uint32_t *buckets;
-    uint32_t bucket_count;
+    ta_table index;
     ta_arena strings;
 } ta_atom_table;
 
 #define TA_ATOM_NONE UINT32_MAX
 
+/*
+ * ta_atom_table_init makes the table with the empty text as atom 0 (no
+ * family is empty, so a zeroed family atom names none, ADR 0088). Safe
+ * point: it allocates. On failure nothing is left allocated.
+ */
 TA_PRIVATE ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator allocator);
+/* ta_atom_table_destroy frees the index, the entries and the text; every ta_str it gave out is dead. */
 TA_PRIVATE void ta_atom_table_destroy(ta_atom_table *table);
+/*
+ * ta_atom_intern stores the atom of `text` in *out, making it if there is
+ * none yet. It allocates only for a new text (see the package comment), and
+ * a failure leaves the table without that atom.
+ */
 TA_PRIVATE ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *out);
+/* ta_atom_text is the text of `atom`, or an empty string for an invalid atom. It never allocates. */
 TA_PRIVATE ta_str ta_atom_text(const ta_atom_table *table, ta_atom atom);
-/* Looks text up without interning it; TA_ERR_NOT_FOUND when it is not an atom. */
+/* Looks text up without interning it; TA_ERR_NOT_FOUND when it is not an atom. Never allocates. */
 TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_atom *out);
+/* ta_atom_valid says whether `atom` names an interned text. */
 TA_PRIVATE bool ta_atom_valid(const ta_atom_table *table, ta_atom atom);
 
 
@@ -5081,27 +5137,26 @@ TA_PRIVATE size_t ta_table_bytes(const ta_table *table) {
 }
 
 
-static ta_result ta_atom_rehash(ta_atom_table *table, uint32_t bucket_count) {
-    uint32_t *buckets = ta_mem_alloc(table->allocator, bucket_count * sizeof(uint32_t),
-                                     _Alignof(uint32_t));
-    if (buckets == NULL) {
-        return TA_ERR_NOMEM;
+/* Slots per index page: 2 KiB, so the atom index grows in small, flat steps. */
+#define TA_ATOM_PAGE_SLOTS 256u
+
+static uint32_t ta_atom_hash(ta_str text) {
+    return ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);
+}
+
+/* The atom whose text is `text` among those stored under `hash`; false when there is none. */
+static bool ta_atom_lookup(const ta_atom_table *table, ta_str text, uint32_t hash, ta_atom *out) {
+    ta_table_probe probe;
+    uint32_t atom = 0;
+    ta_table_probe_start(&table->index, hash, &probe);
+    while (ta_table_probe_next(&probe, &atom)) {
+        const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
+        if (ta_str_equal(entry->text, text)) {
+            *out = atom;
+            return true;
+        }
     }
-    for (uint32_t index = 0; index < bucket_count; index += 1) {
-        buckets[index] = TA_ATOM_NONE;
-    }
-    for (uint32_t atom = 0; atom < table->entries.count; atom += 1) {
-        ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
-        uint32_t bucket = entry->hash & (bucket_count - 1u);
-        entry->next = buckets[bucket];
-        buckets[bucket] = atom;
-    }
-    ta_mem_free(table->allocator, table->buckets,
-                &(ta_allocator_free_params){ .size = table->bucket_count * sizeof(uint32_t),
-                                             .alignment = _Alignof(uint32_t) });
-    table->buckets = buckets;
-    table->bucket_count = bucket_count;
-    return TA_OK;
+    return false;
 }
 
 TA_PRIVATE ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator allocator) {
@@ -5109,7 +5164,8 @@ TA_PRIVATE ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator alloc
     ta_vec_init(&table->entries, allocator, TA_VEC_LAYOUT(ta_atom_entry));
     ta_result result = ta_arena_init(&table->strings, allocator, 4096);
     if (result == TA_OK) {
-        result = ta_atom_rehash(table, 64);
+        result = ta_table_init(&table->index, allocator,
+                               &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = TA_ATOM_PAGE_SLOTS });
     }
     /* Atom 0 is the empty text, which no family is, so a zeroed family
      * atom names none (ADR 0088). */
@@ -5125,47 +5181,42 @@ TA_PRIVATE ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator alloc
 
 TA_PRIVATE void ta_atom_table_destroy(ta_atom_table *table) {
     ta_vec_destroy(&table->entries);
-    ta_mem_free(table->allocator, table->buckets,
-                &(ta_allocator_free_params){ .size = table->bucket_count * sizeof(uint32_t),
-                                             .alignment = _Alignof(uint32_t) });
+    ta_table_destroy(&table->index);
     ta_arena_destroy(&table->strings);
-    table->buckets = NULL;
-    table->bucket_count = 0;
 }
 
 TA_PRIVATE ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *out) {
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);
-    for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
-        const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
-        if (entry->hash == hash && ta_str_equal(entry->text, text)) {
-            *out = atom;
-            return TA_OK;
-        }
-        atom = entry->next;
+    uint32_t hash = ta_atom_hash(text);
+    if (ta_atom_lookup(table, text, hash, out)) {
+        return TA_OK;
     }
     if (table->entries.count >= TA_ATOM_NONE - 1u) {
         return TA_ERR_NOMEM;
     }
-    ta_atom_entry entry = { .hash = hash };
-    ta_result result = ta_arena_copy_str(&table->strings, text, &entry.text);
+    ta_atom atom = table->entries.count;
+    ta_atom_entry entry;
+    ta_result result = ta_vec_reserve(&table->entries, atom + 1u);
+    if (result == TA_OK) {
+        result = ta_arena_copy_str(&table->strings, text, &entry.text);
+    }
     if (result != TA_OK) {
         return result;
     }
-    uint32_t atom = table->entries.count;
-    uint32_t bucket = hash & (table->bucket_count - 1u);
-    entry.next = table->buckets[bucket];
-    result = ta_vec_push(&table->entries, &entry);
+    /* Growth is asked for here, ahead of the insert, because interning still
+     * runs inside macrosteps; Phase 4 (4.2) removes that, and growth then
+     * happens only at the safe points that make atoms. A failed grow only
+     * postpones: the pages fill a little more. */
+    if (ta_table_wants_grow(&table->index)) {
+        (void)ta_table_grow(&table->index);
+    }
+    result = ta_table_insert(&table->index, hash, atom);
     if (result != TA_OK) {
         return result;
     }
-    table->buckets[bucket] = atom;
-    if (table->entries.count > table->bucket_count) {
-        /* A failed rehash leaves the old, still-correct buckets. */
-        (void)ta_atom_rehash(table, table->bucket_count * 2u);
-    }
+    (void)ta_vec_push(&table->entries, &entry); /* reserved above */
     *out = atom;
     return TA_OK;
 }
@@ -5186,16 +5237,7 @@ TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_at
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_fnv1a32(TA_FNV1A32_BASIS, text.ptr, text.len);
-    for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
-        const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
-        if (entry->hash == hash && ta_str_equal(entry->text, text)) {
-            *out = atom;
-            return TA_OK;
-        }
-        atom = entry->next;
-    }
-    return TA_ERR_NOT_FOUND;
+    return ta_atom_lookup(table, text, ta_atom_hash(text), out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
 
