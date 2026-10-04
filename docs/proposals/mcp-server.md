@@ -3,7 +3,7 @@
 **Status:** Proposed (2026-09-29)
 **Touches:** tinyactors-core (every I/O processor registers a URL and a short name); the host kernel (the mapping, implemented once); tinyactors-napi and tinyactors-test (bind it). The DAP adapters and tinyactors-vscode were removed on 2026-09-30, ahead of it.
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
-**To revisit:** [the ring protocol proposal](ring-proto/README.md) deletes the host kernel this places the mapping in. This proposal is revised against the ring protocol after its Phase 5: where the mapping lives, how `goto` fits a debugger that owns the whole system, and what replaces origin scopes ([ring-proto migration](ring-proto/reference/migration.md#open-questions)).
+**Depends on:** [the ring protocol proposal](ring-proto/README.md), which deletes the host kernel. This proposal is revised against it after its Phase 5 ([Part 2](#part-2-host-bindings) says what that settles).
 
 ## Goal
 
@@ -36,9 +36,10 @@ MCP:
   in terms of core (its ADRs and C API) and MCP, and names no host's
   language, API or library.
 - **[Part 2, host bindings](#part-2-host-bindings)** says where the mapping
-  is implemented (once, in the [host kernel](host-kernel.md)), and what is
-  left for a host: handing its MCP library the kernel's tools and
-  resources. Everything specific to Node, JavaScript or Ruby is there.
+  is implemented (once, in the [host kernel](host-kernel.md), a home the
+  ring protocol changes), and what is left for a host: handing its MCP
+  library the kernel's tools and resources. Everything specific to Node,
+  JavaScript or Ruby is there.
 - **[In this repository](#in-this-repository)** lists what the change
   adds, removes and keeps here.
 
@@ -292,6 +293,23 @@ the kernel, through each host's binding of it. They also catch a binding
 that drops or renames what the kernel offers.
 
 # Part 2: host bindings
+
+> **To be revised against the ring protocol.** This part places the
+> mapping in the host kernel, which [the ring protocol](ring-proto/README.md) deletes.
+> Nothing implements the mapping, so the ring protocol does not wait for
+> it. This proposal is revised after the ring protocol's Phase 5, when its
+> records exist, and settles three things
+> ([migration](ring-proto/reference/migration.md#open-questions)):
+>
+> - **Where the mapping lives.** A small shared C library beside
+>   `tinyactors-otlp` is the likely home. `send` posts `h2c.event` and
+>   waits for its `c2h.input_completed`; `load` uses the load records.
+> - **`goto`.** [Tools](#tools) queues an operator transition behind one
+>   actor's mail while the system runs. The ring protocol allows operator
+>   transitions only while a debugger owns the whole system
+>   ([debugging](ring-proto/reference/debugging.md)).
+> - **Origin scopes.** [Replies](#replies) opens one per `send` for the MCP
+>   I/O processor. The ring protocol removes origin scopes.
 
 ## The mapping lives in the host kernel
 
