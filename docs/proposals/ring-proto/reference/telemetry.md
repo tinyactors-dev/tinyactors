@@ -190,18 +190,20 @@ Why events on a ring, and a reader that builds spans:
 - Why not keep the trace sink vtable: it runs the encoder inside the
   macrostep, and lets a sink call back into core.
 
-**A drop closes the spans it may have cut.** When `tinyactors-otlp` reads a
+### A drop ends the open spans
+
+When `tinyactors-otlp` reads a
 [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped), it ends every
-span still open, at the wall-clock time of the last record it read, with
+span still open at the wall-clock time of the last record it read, with
 error status and a `tinyactors.telemetry.dropped` attribute that carries the
-count. It also adds the count to a counter. A record that arrives later for
-a span closed this way starts nothing: the encoder counts it and skips it.
-No span is left open with an end it can never see, so no span claims a
-duration it did not have. The price is that a drop under load marks spans
-as errors that may have been fine. A viewer tells them from real failures
-by the attribute. Marking open spans and leaving them open was the
-alternative; it was rejected because a span whose end was dropped stays
-open until the input completes and reports a wrong duration.
+count, and adds the count to a counter. A later record for a span ended
+this way starts nothing: the library counts it and skips it.
+
+So no span claims a duration it did not have. The price is that a drop
+under load marks as errors spans that may have been fine; a viewer tells
+them from real failures by the attribute. Why not mark the open spans and
+leave them open: a span whose end was dropped would stay open until its
+input completes, and report a wrong duration.
 
 ## What a host does with `tel`
 
@@ -212,17 +214,23 @@ open until the input completes and reports a wrong duration.
 | SQLite host (sketch) | at commit | an insert into a `trace` table, or nothing |
 | a host that does not trace | never | creates the system with `telBytes` 0 |
 
-**A system may have no `tel` ring.** With `telBytes` 0, core allocates no
-ring and the control block has no `tel` positions. The kind masks are
-forced to zero, and creation refuses a non-zero mask with `TA_ERR_INVALID`,
-naming the parameter. Nothing a host needs arrives only on `tel`: a runaway
-is `c2h.input_completed` with status `runaway`, a dead letter is
+### A system without `tel`
+
+`telBytes` may be 0. Core then allocates no `tel` ring, and the control
+block has no `tel` positions. The kind masks are forced to zero, and
+creation refuses a non-zero mask with `TA_ERR_INVALID`, naming the
+parameter.
+
+Nothing a host needs arrives only on `tel`: a runaway is
+`c2h.input_completed` with status `runaway`, a dead letter is
 `c2h.input_refused`, and an ignored event is the `ignored` flag on
-`c2h.input_completed`. Writers already test the masks before they build a
-record, so the hot path gains no branch. It saves the whole ring for test
-suites that create thousands of systems and for systems on small devices.
-The lossless extension below needs a ring; creation refuses `telBytes` 0
-with lossless mode.
+`c2h.input_completed`. Writers test the masks before they build a record,
+so the hot path has no branch for a missing ring. A system without `tel`
+saves the ring's memory, for test suites that create thousands of systems
+and for small devices.
+
+[Lossless mode](#possible-extension-lossless-telemetry) needs a ring:
+creation refuses `telBytes` 0 with lossless mode.
 
 ## Possible extension: lossless telemetry
 
