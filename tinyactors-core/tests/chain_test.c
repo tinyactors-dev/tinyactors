@@ -425,6 +425,100 @@ static void test_interleaved(uint32_t chunk_size) {
     finish_clean();
 }
 
+/* A seeded xorshift: the model test must not depend on the C library. */
+static uint32_t next_random(uint32_t *state) {
+    uint32_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return x;
+}
+
+#define MODEL_CHAINS 8u
+#define MODEL_LIMIT 1500u
+#define MODEL_STEPS 20000u
+
+/*
+ * The model is a plain byte array per chain. The pool has a ceiling of 24
+ * chunks, so the short-pool failure is common; the used count must equal the
+ * chunks the live chains need after every step.
+ */
+static void test_model(uint32_t chunk_size, uint32_t seed) {
+    ta_pool pool;
+    chunk_pool(&pool, chunk_size, 4, 24);
+    uint32_t payload = ta_chain_payload(&pool);
+    ta_chain chains[MODEL_CHAINS] = { { 0 } };
+    static unsigned char model[MODEL_CHAINS][MODEL_LIMIT];
+    uint32_t lengths[MODEL_CHAINS] = { 0 };
+    uint32_t state = seed;
+    uint32_t failures_seen = 0;
+    for (uint32_t step = 0; step < MODEL_STEPS; step++) {
+        uint32_t c = next_random(&state) % MODEL_CHAINS;
+        uint32_t choice = next_random(&state) % 16u;
+        if (choice < 9) {
+            uint32_t bytes = next_random(&state) % (3u * payload + 1u);
+            if (lengths[c] + bytes > MODEL_LIMIT) {
+                bytes = MODEL_LIMIT - lengths[c];
+            }
+            unsigned char data[MODEL_LIMIT];
+            for (uint32_t i = 0; i < bytes; i++) {
+                data[i] = (unsigned char)next_random(&state);
+            }
+            uint32_t need = ta_chain_need(&pool, &chains[c], bytes);
+            if (choice < 3 && counts_of(&pool).free < need) {
+                (void)ta_pool_refill(&pool, need); /* a safe point: may fail at the ceiling */
+            }
+            bool fits = counts_of(&pool).free >= need;
+            ta_chain before = chains[c];
+            ta_pool_counts counts = counts_of(&pool);
+            ta_result result = ta_chain_write(&pool, &chains[c], data, bytes);
+            CHECK(result == (fits ? TA_OK : TA_ERR_NOMEM));
+            if (result == TA_OK) {
+                ta_mem_copy(model[c] + lengths[c], data, bytes);
+                lengths[c] += bytes;
+                CHECK(counts_of(&pool).used - counts.used == need);
+            } else {
+                failures_seen += 1;
+                CHECK(chains[c].head == before.head && chains[c].tail == before.tail &&
+                      chains[c].length == before.length);
+                CHECK(counts_of(&pool).used == counts.used && counts_of(&pool).extent == counts.extent);
+            }
+        } else if (choice < 13) {
+            ta_chain_reader reader;
+            ta_chain_span span;
+            ta_chain_reader_init(&reader, &pool, &chains[c]);
+            uint32_t seen = 0;
+            while (ta_chain_reader_span(&reader, &span)) {
+                CHECK(span.length > 0 && span.length <= payload);
+                CHECK(seen + span.length <= lengths[c]);
+                for (uint32_t i = 0; i < span.length && seen + i < lengths[c]; i++) {
+                    CHECK(span.bytes[i] == model[c][seen + i]);
+                }
+                seen += span.length;
+            }
+            CHECK(seen == lengths[c]);
+        } else {
+            uint32_t own = (lengths[c] + payload - 1u) / payload;
+            CHECK(ta_chain_free(&pool, &chains[c]) == own);
+            lengths[c] = 0;
+        }
+        uint32_t expected = 0;
+        for (uint32_t k = 0; k < MODEL_CHAINS; k++) {
+            CHECK(chains[k].length == lengths[k]);
+            expected += (lengths[k] + payload - 1u) / payload;
+        }
+        CHECK(counts_of(&pool).used == expected);
+    }
+    CHECK(failures_seen > 50); /* the failure path was exercised often */
+    for (uint32_t k = 0; k < MODEL_CHAINS; k++) {
+        ta_chain_free(&pool, &chains[k]);
+    }
+    CHECK(counts_of(&pool).used == 0);
+    ta_pool_destroy(&pool);
+    finish_clean();
+}
+
 int main(void) {
     test_geometry();
     test_need_arithmetic();
@@ -439,6 +533,8 @@ int main(void) {
     test_reader(256);
     test_interleaved(64);
     test_interleaved(256);
+    test_model(64, 0x2545f491u);
+    test_model(256, 0x9e3779b9u);
     CHECK(heap.stats.bad_frees == 0);
     CHECK(ta_test_allocator_finish(&heap) == 0);
     if (failures != 0) {
