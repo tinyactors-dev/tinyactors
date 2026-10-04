@@ -44,9 +44,9 @@ const char *tp_parser_state_name(const tinyparse_parser *parser);
 
 /* ** Parse a package.scm manifest (defined in package.c) and bind its params:
 ** onto the engine as compile-time parameters before any --param override. */
-tinyparse_result tinyparse_apply_manifest(tinyparse_engine *engine,
-                                              tinyparse_source manifest,
-                                              tinyparse_manifest *out);
+tinyparse_result tp_apply_manifest(tinyparse_engine *engine,
+                                   tinyparse_source manifest,
+                                   tinyparse_manifest *out);
 
 /* ** The host memory grant for the engine. A few megabytes is ample for the
 ** grammars and inputs the CLI handles; the library never allocates outside it.
@@ -517,7 +517,7 @@ static tinyparse_result cli_apply_embedded(tinyparse_engine *engine,
     source.bytes.pointer = pkg->package_bytes;
     source.bytes.length  = (uint32_t)pkg->package_length;
 
-    result = tinyparse_apply_manifest(engine, source, &manifest);
+    result = tp_apply_manifest(engine, source, &manifest);
     if (result != TINYPARSE_OK) {
         tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
@@ -551,7 +551,7 @@ static tinyparse_result cli_apply_package(tinyparse_engine *engine,
     source.bytes.pointer = (const uint8_t *)bytes;
     source.bytes.length  = (uint32_t)length;
 
-    result = tinyparse_apply_manifest(engine, source, &manifest);
+    result = tp_apply_manifest(engine, source, &manifest);
     if (result != TINYPARSE_OK) {
         tinyparse_string fault = tinyparse_fault(engine);
         fprintf(stderr, "error: %.*s\n", (int)fault.length,
