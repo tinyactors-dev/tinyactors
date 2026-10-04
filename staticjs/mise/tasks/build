@@ -32,9 +32,9 @@ objects = StaticJS.sources.map do |source|
 end
 target.archive(objects.map(&:to_s), into: StaticJS.library.to_s)
 
-StaticJS.tests.each do |test|
+StaticJS::TESTS.each do |test, spec|
   object = StaticJS::OBJECTS.join("#{test}.o")
-  compile(test_command, Pathname.new("tests/#{test}.c"), object)
+  compile(test_command, Pathname.new(spec[:source]), object)
   target.program([object.to_s, StaticJS.library.to_s], into: StaticJS::BUILD.join(test).to_s)
 end
 puts "build: staticjs (#{objects.size} objects) and #{StaticJS.tests.size} test program(s)"

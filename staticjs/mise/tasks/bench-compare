@@ -1,0 +1,192 @@
+#!/usr/bin/env ruby
+#MISE description="Build another commit's staticjs beside the working tree and run both benchmarks alternately on this machine: throughput and memory, with changes past 5% flagged"
+#USAGE arg "<commit>" help="The commit to compare the working tree with"
+#USAGE arg "[filter]" help="Only cases whose name starts with this (compile, eval.array)"
+#USAGE flag "--runs <n>" default="3" help="Alternating runs per side"
+#USAGE flag "--quick" help="Fewer, shorter samples and the two smallest sizes"
+#USAGE flag "--store" help="Also append every run's records to bench/results/"
+# vim:ft=ruby
+
+# Absolute figures move between days on one machine, so builds are compared
+# side by side. The other commit is checked out in a temporary git
+# worktree, and both sides are built with this checkout's toolchain, flags
+# and bench/bench.c, so that only the library's source differs. Each
+# (case, n) then runs in a process of its own, --runs times per side, in
+# ABBA order (old then new, new then old, ...) to cancel drift. A row
+# compares the medians over the runs: throughput (+ is faster) flagged when
+# it is more than 5% slower, `?` when either side's spread is past 5%;
+# memory, which is deterministic, flagged on any increase; and a change in
+# fuel per op shown, as it changes what a caller's fuel budget buys. A case
+# one build cannot run (an older library refusing newer syntax) is reported
+# as such and the others are compared. The worktree is removed afterwards,
+# even on failure.
+
+require 'tmpdir'
+require_relative '../bench'
+
+Bench = StaticJS::Bench
+
+args = ARGV.dup
+runs = ENV['usage_runs']&.to_i
+if (at = args.index('--runs'))
+  runs = args[at + 1].to_i
+  args.slice!(at, 2)
+end
+args.reject! { |arg| arg.start_with?('--runs=') && (runs = arg.delete_prefix('--runs=').to_i) }
+runs = 3 if runs.nil? || runs < 1
+quick = ENV['usage_quick'] == 'true' || args.delete('--quick')
+store = ENV['usage_store'] == 'true' || args.delete('--store')
+positional = args.reject { |arg| arg.start_with?('--') }
+base = ENV['usage_commit'].to_s.empty? ? positional[0] : ENV['usage_commit']
+filter = ENV['usage_filter'].to_s.empty? ? positional[1] : ENV['usage_filter']
+abort 'usage: mise run bench-compare <commit> [filter] [--runs=3] [--quick] [--store]' if base.nil?
+
+repository = Bench.repository
+old_commit = Bench.git('rev-parse', '--short=7', "#{base}^{commit}") or abort "staticjs: unknown commit #{base}"
+abort "staticjs: no staticjs at #{old_commit}" unless system('git', 'cat-file', '-e', "#{old_commit}:staticjs/src",
+                                                             chdir: repository, err: File::NULL)
+new_commit = Bench.commit
+dirty = Bench.dirty?
+signature = Bench.signature
+
+# One process per (case, n): its records, or an error record when it
+# printed none (a crash).
+def measure(binary, name, n, quick)
+  before = Bench.conditions
+  result = Bench.run(binary, ["--only=#{name}", "--size=#{n}", *(quick ? ['--quick'] : [])])
+  after = Bench.conditions
+  if result['records'].empty?
+    result['records'] = [{ 'bench' => name, 'n' => n, 'error' => "exited with status #{result['status'].inspect}" }]
+  end
+  [result, before, after]
+end
+
+def median(values)
+  sorted = values.compact.sort
+  return nil if sorted.empty?
+
+  middle = sorted.length / 2
+  sorted.length.odd? ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2.0
+end
+
+MEMORY = [%w[peakBytes peak], %w[heldBytes held], %w[allocsPerOp allocs], %w[allocatedBytesPerOp allocated]].freeze
+
+def summary(records)
+  good = records.reject { |record| record['error'] }
+  return { error: records.first&.fetch('error', nil) || 'no record' } if good.empty?
+
+  ns = median(good.map { |record| record.dig('nsPerOp', 'median') })
+  units = good.first['unitsPerOp'].to_f
+  {
+    unit: good.first['unit'],
+    throughput: ns.to_f.positive? ? units / ns * 1e9 : nil,
+    spread: median(good.map { |record| record['spreadPercent'] }),
+    fuel: median(good.map { |record| record['fuelPerOp'] }),
+    memory: MEMORY.to_h { |key, _| [key, median(good.map { |record| record.dig('memory', key) })] }
+  }
+end
+
+def rate(side)
+  return '-' if side[:throughput].nil?
+
+  "#{Bench.short(side[:throughput] / 1e6)} #{Bench::UNITS.fetch(side[:unit], side[:unit])}"
+end
+
+ROW = '%-34s %7s  %-16s %-16s %8s  %-11s  %-22s %-14s %s'
+
+Dir.mktmpdir('staticjs-bench-compare') do |tmp|
+  worktree = File.join(tmp, 'base')
+  begin
+    _output, status = Open3.capture2e('git', 'worktree', 'add', '--detach', worktree, old_commit, chdir: repository)
+    abort "staticjs: git worktree add #{old_commit} failed" unless status.success?
+
+    old_root = File.join(worktree, 'staticjs')
+    old_build = File.join(tmp, 'old')
+    failure = Bench.build(source_root: StaticJS::ROOT, bench_source: Bench::PROGRAM, into: Bench::RELEASE_BUILD)
+    abort "staticjs: bench/bench.c does not build:\n#{failure}" if failure
+
+    failure = Bench.build(source_root: old_root, bench_source: Bench::PROGRAM, into: old_build)
+    old_program = File.join(old_root, 'bench', 'bench.c')
+    if failure && File.exist?(old_program)
+      warn "staticjs: today's bench/bench.c does not build against #{old_commit}'s staticjs.h; using #{old_commit}'s"
+      failure = Bench.build(source_root: old_root, bench_source: old_program, into: old_build)
+    end
+    if failure
+      abort "staticjs: bench.c does not build against #{old_commit}'s staticjs.h (the API changed); " \
+            "compare from a commit after that change:\n#{failure.lines.first(20).join}"
+    end
+
+    binaries = { old: File.join(old_build, 'bench'), new: Bench::RELEASE_BUILD.join('bench').to_s }
+    list_args = [*(filter ? ["--filter=#{filter}"] : []), *(quick ? ['--quick'] : [])]
+    lists = binaries.transform_values { |binary| Bench.list(binary, list_args) || {} }
+    names = (lists[:old].keys + lists[:new].keys).uniq
+    abort "staticjs: no case matches #{filter.inspect}" if names.empty?
+
+    puts "staticjs bench-compare: #{old_commit} -> #{new_commit}#{dirty ? ' (dirty)' : ''}, #{Bench.describe(signature)}, " \
+         "#{runs} alternating run#{runs == 1 ? '' : 's'} each (ABBA), medians#{quick ? ', --quick' : ''}"
+    puts format(ROW, 'benchmark', 'n', 'old', 'new', 'change', 'spread o/n', 'peak B old->new', 'allocs/op o->n',
+                '').rstrip
+    counts = Hash.new(0)
+    names.each do |name|
+      sizes = ((lists[:old][name] || []) + (lists[:new][name] || [])).uniq
+      sizes.each do |n|
+        sides = %i[old new].select { |side| lists[side][name]&.include?(n) }
+        if sides.length == 1
+          counts[:one_side] += 1
+          puts format('%-34s %7s  only in %s', name, Bench.num(n), sides.first)
+          next
+        end
+        collected = { old: [], new: [] }
+        runs.times do |at|
+          (at.even? ? %i[old new] : %i[new old]).each do |side|
+            result, before, after = measure(binaries[side], name, n, quick)
+            records = Bench.records(result, signature: signature, commit: side == :old ? old_commit : new_commit,
+                                            dirty: side == :new && dirty, before: before, after: after)
+            Bench.store(records, signature) if store
+            collected[side].concat(records)
+          end
+        end
+        old_side = summary(collected[:old])
+        new_side = summary(collected[:new])
+        if old_side[:error] || new_side[:error]
+          counts[:could_not_run] += 1
+          which = old_side[:error] ? 'old' : 'new'
+          problem = (old_side[:error] || new_side[:error]).to_s
+          problem = "#{problem[0, 90]}..." if problem.length > 93
+          rates = [old_side, new_side].map { |side| side[:error] ? '-' : rate(side) }
+          puts format('%-34s %7s  %-16s %-16s  %s could not run (%s)', name, Bench.num(n), *rates, which, problem)
+          next
+        end
+
+        change = (new_side[:throughput] - old_side[:throughput]) / old_side[:throughput] * 100
+        notes = []
+        if change < -5
+          notes << 'slower than 5%'
+          counts[:slower] += 1
+        end
+        grew = MEMORY.select { |key, _| new_side[:memory][key].to_f > old_side[:memory][key].to_f }
+        unless grew.empty?
+          notes << "more memory (#{grew.map(&:last).join(', ')})"
+          counts[:memory] += 1
+        end
+        notes << "fuel #{Bench.num(old_side[:fuel])}->#{Bench.num(new_side[:fuel])}" if old_side[:fuel] != new_side[:fuel]
+        noisy = [old_side[:spread], new_side[:spread]].compact.any? { |spread| spread > 5 }
+        counts[:noisy] += 1 if noisy
+        puts format(ROW, name, Bench.num(n), rate(old_side), rate(new_side),
+                    format('%+.1f%%%s', change, noisy ? '?' : ''),
+                    format('%.1f/%.1f%%', old_side[:spread].to_f, new_side[:spread].to_f),
+                    "#{Bench.num(old_side[:memory]['peakBytes'])}->#{Bench.num(new_side[:memory]['peakBytes'])}",
+                    "#{Bench.num(old_side[:memory]['allocsPerOp'])}->#{Bench.num(new_side[:memory]['allocsPerOp'])}",
+                    notes.empty? ? '' : "<- #{notes.join(', ')}").rstrip
+        $stdout.flush
+      end
+    end
+    puts "#{counts[:slower]} slower than 5%, #{counts[:memory]} with more memory, " \
+         "#{counts[:could_not_run]} one build could not run, #{counts[:one_side]} only on one side" \
+         "#{counts[:noisy].positive? ? ", #{counts[:noisy]} noisy (?: a spread past 5%; rerun with --runs=5)" : ''}"
+    puts "stored in #{Bench::RESULTS.join(signature['hash']).relative_path_from(StaticJS::ROOT)}/" if store
+  ensure
+    system('git', 'worktree', 'remove', '--force', worktree, chdir: repository, out: File::NULL, err: File::NULL)
+    system('git', 'worktree', 'prune', chdir: repository, out: File::NULL, err: File::NULL)
+  end
+end

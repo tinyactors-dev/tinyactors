@@ -1,0 +1,48 @@
+#!/usr/bin/env ruby
+#MISE description="Build staticjs optimized and run its benchmarks: throughput and memory, stored by machine signature"
+#USAGE arg "[filter]" help="Only cases whose name starts with this (compile, eval.array)"
+#USAGE flag "--quick" help="Fewer, shorter samples and the two smallest sizes"
+#USAGE flag "--no-store" help="Do not append the records to bench/results/"
+# vim:ft=ruby
+
+# Builds the library and bench/bench.c optimized into build/release/, runs
+# the benchmarks alone (never beside the tests), prints throughput and
+# memory side by side and appends the records to
+# bench/results/<machine signature>/<commit>.jsonl (bench/results/README.md).
+# Not part of `mise run test`, which runs only `bench --smoke` from the
+# debug build. To compare two builds, run `mise run bench-compare <commit>`:
+# never compare with numbers from another day or another machine.
+
+require_relative '../bench'
+
+args = ARGV.dup
+quick = ENV['usage_quick'] == 'true' || args.delete('--quick')
+no_store = ENV['usage_no_store'] == 'true' || args.delete('--no-store')
+filter = ENV['usage_filter'].to_s.empty? ? args.find { |arg| !arg.start_with?('--') } : ENV['usage_filter']
+
+failure = StaticJS::Bench.build(source_root: StaticJS::ROOT, bench_source: StaticJS::Bench::PROGRAM,
+                                into: StaticJS::Bench::RELEASE_BUILD)
+abort "staticjs: bench/bench.c does not build:\n#{failure}" if failure
+
+signature = StaticJS::Bench.signature
+commit = StaticJS::Bench.commit
+dirty = StaticJS::Bench.dirty?
+options = [*(filter ? ["--filter=#{filter}"] : []), *(quick ? ['--quick'] : [])]
+before = StaticJS::Bench.conditions
+result = StaticJS::Bench.run(StaticJS::Bench::RELEASE_BUILD.join('bench'), options)
+after = StaticJS::Bench.conditions
+abort "staticjs: bench printed nothing (exit #{result['status']})" if result['meta'].nil?
+
+records = StaticJS::Bench.records(result, signature: signature, commit: commit, dirty: dirty, before: before,
+                                          after: after)
+meta = result['meta']
+puts "staticjs bench: #{commit}#{dirty ? ' (dirty)' : ''}, #{StaticJS::Bench.describe(signature)}"
+puts "#{meta['samples']} samples of >= #{meta['sampleMs']} ms after #{meta['warmupMs']} ms warm-up; " \
+     "median, spread = IQR/median; load #{before['loadAverage']&.join(' ')}"
+puts StaticJS::Bench.table(records)
+unless no_store
+  dir = StaticJS::Bench.store(records, signature)
+  puts "stored in #{dir.relative_path_from(StaticJS::ROOT)}/#{commit}.jsonl"
+end
+failed = records.count { |record| record['error'] }
+abort "staticjs: #{failed} case(s) failed" unless result['status'].zero?

@@ -18,13 +18,17 @@ module StaticJS
   FREESTANDING = %w[-ffreestanding -nostdlibinc].freeze
   # The compiler may still emit calls to these for aggregate copies.
   MEMORY = %w[memcpy memset memmove memcmp bcmp].freeze
-  # Each test program, with the arguments of the fast pass and of --full
-  # (mise run test:full). The full pass also fails every allocation of every
-  # spec case, and of a larger program in api_test.
+  # Each test program, its source, and the arguments of the fast pass and of
+  # --full (mise run test:full). The full pass also fails every allocation of
+  # every spec case, and of a larger program in api_test. `bench --smoke`
+  # runs every benchmark once at its smoke size, checking its value and for
+  # leaks, and times nothing, so it may run beside the tests; the timed runs
+  # are `mise run bench`'s, never the tests'.
   TESTS = {
-    'number_test' => { fast: [], full: [] },
-    'api_test' => { fast: [], full: ['--full'] },
-    'spec_test' => { fast: ['tests/spec'], full: ['--full', 'tests/spec'] }
+    'number_test' => { source: 'tests/number_test.c', fast: [], full: [] },
+    'api_test' => { source: 'tests/api_test.c', fast: [], full: ['--full'] },
+    'spec_test' => { source: 'tests/spec_test.c', fast: ['tests/spec'], full: ['--full', 'tests/spec'] },
+    'bench' => { source: 'bench/bench.c', fast: ['--smoke'], full: ['--smoke'] }
   }.freeze
 
   module_function
