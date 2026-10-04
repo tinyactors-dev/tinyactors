@@ -12,7 +12,7 @@
  * refused an insert into a full page could be made to fail every spawn. This
  * test builds such sets and checks the table grows instead:
  *
- *   1. 3 x 4096 names with ONE 32-bit hash: every intern is TA_OK, find and
+ *   1. More than two pages' worth of names with ONE 32-bit hash: every intern is TA_OK, find and
  *      re-intern answer the same pointers, release in any order empties the
  *      table, and every free matches its allocation (strict allocator).
  *   2. Names that share only the low 12 bits of the hash (so they stay
@@ -59,9 +59,6 @@ static int failures = 0;
 
 /* TA_TEST_FULL=1 asks for the large sizes; read once at the top of main, never changed after. */
 static bool full_run = false;
-#ifndef FP
-#define FP 3072u
-#endif
 
 /* pick answers the fast size, or the full one when TA_TEST_FULL asked for it. It only chooses sizes, never an asserted value. */
 static uint32_t pick(uint32_t fast, uint32_t full) {
@@ -215,9 +212,11 @@ static void check_set(const name *names, uint32_t count, uint32_t stride, ta_tes
 }
 
 /*
- * 1. More than two pages' worth of names with one 32-bit hash: the 4097th
- * doubles the page and the 8193rd doubles it again (so three pages' worth
- * of slots are in play). The cost is quadratic by nature, which is what
+ * 1. Many names with one 32-bit hash. Full mode uses 2 * 4096 + 1 names: the
+ * 4097th doubles the page and the 8193rd doubles it again (so three pages'
+ * worth of slots are in play). Fast mode uses 900 names, which all fit in
+ * one page, so no doubling happens there; the checks (identity, counts,
+ * release in any order) are the same in both. The cost is quadratic by nature, which is what
  * the attacker pays too, so the set is no larger than that. A smaller set
  * runs on the strict allocator as well.
  */
