@@ -458,7 +458,7 @@ exception to "remove what nothing uses".
 
 | Step | Block | Notes |
 |---|---|---|
-| 2.1 | B1 intrusive index list | Two link fields per item (`next`, `owner_next`). Has `insert_after`, `splice` and `unlink`. |
+| 2.1 | B1 intrusive index list | Two link fields per item (`next`, `owner_next`). Has `insert_after`, `splice`, `remove_after` and `unlink`. |
 | 2.2 | B8 paged array, B2 indexed min-heap | B8: dense positions in power-of-two pages, `grow` and `shrink` at safe points. B2 on B8: keyed by `(due, order)`, with a back-index stored in the item, and `remove(i)`. The pool's refill grows it and the pool's `trim` shrinks it. |
 | 2.3 | B4 fixed-entry FIFO, C3 quota with reservations | The internal queue is B4 plus two C3 quotas. |
 | 2.4 | A6 chunk chain, over A5 | Parametrized by chunk size (64 bytes for names, 256 for parking). Has `need(n)` for preflight. |

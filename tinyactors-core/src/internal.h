@@ -2,6 +2,7 @@
 
 #include "types.h"
 #include "arena.h"
+#include "list.h"
 #include "tree.h"
 #include "atom.h"
 #include "address.h"

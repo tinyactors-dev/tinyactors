@@ -65,7 +65,9 @@ modules.each do |name|
   errors << "src/internal.h lists #{name}.h, a platform file; platform files are not modules" unless PlatformFiles.portable?("#{name}.c")
 end
 headers = modules.map { |name| read_module(root, name, 'h') }
-sources = modules.map { |name| read_module(root, name, 'c') }
+# A module may be a header alone, of inline functions (list.h): it has no
+# source to append.
+sources = modules.select { |name| root.join('src', "#{name}.c").file? }.map { |name| read_module(root, name, 'c') }
 platform_sources = PLATFORM_OUTPUTS.keys.to_h do |suffix|
   files = Dir[root.join("src/*_#{suffix}.c").to_s].sort.select { |path| PlatformFiles.platform(path) == suffix }
   [suffix, files.map { |path| Pathname.new(path) }.map { |path| [path, path.read] }]
