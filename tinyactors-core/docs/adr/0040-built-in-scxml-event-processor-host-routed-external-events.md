@@ -1,6 +1,6 @@
 # ADR 0040: Built-in SCXML event processor; host-routed external events
 
-**Status:** Accepted  
+**Status:** Superseded in part by ADR 0099 (2026-10-04, implementation pending): mail between local sessions stays in core, and the external-event router goes; core remains the SCXML Event I/O Processor. Accepted.  
 **Date:** 2026-09-17
 
 ## Context

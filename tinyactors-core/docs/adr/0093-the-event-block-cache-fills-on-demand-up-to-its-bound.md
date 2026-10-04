@@ -1,6 +1,6 @@
 # ADR 0093: The event-block cache fills on demand up to its bound
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Amends ADR 0092 (the event-block cache is created up front) and refine ADR 0069 (event blocks) and ADR 0064 (the cache of blocks lent to running actors).
+**Status:** Superseded by ADR 0099 (2026-10-04, implementation pending): the event-block cache goes; the pool and the name area fill on demand up to their bounds in the same way. Accepted and implemented (2026-09-29); see the implementation notes. Amends ADR 0092 (the event-block cache is created up front) and refine ADR 0069 (event blocks) and ADR 0064 (the cache of blocks lent to running actors).
 **Date:** 2026-09-29
 
 ## Context

@@ -1,6 +1,6 @@
 # ADR 0064: An internal queue is lent to a running actor
 
-**Status:** Accepted and implemented; refines ADR 0018, applies ADR 0047 and ADR 0061. See the implementation notes for where the code differs from the text. Refined by ADR 0069 (the queue becomes the event block, lent from delivery; the host sizes its cache).
+**Status:** Superseded by ADR 0099 (2026-10-04, implementation pending): one live internal queue in the running workspace, no queue lent per actor and no cache; made fixed with two quotas by ADR 0102. Accepted and implemented; refines ADR 0018, applies ADR 0047 and ADR 0061. See the implementation notes for where the code differs from the text. Refined by ADR 0069 (the queue becomes the event block, lent from delivery; the host sizes its cache).
 **Date:** 2026-09-23
 
 ## Context

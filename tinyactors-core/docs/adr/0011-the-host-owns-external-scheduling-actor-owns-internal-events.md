@@ -1,6 +1,6 @@
 # ADR 0011: The host owns external scheduling; actor owns internal events
 
-**Status:** Accepted  
+**Status:** Superseded by ADR 0099 (2026-10-04, implementation pending): core schedules every pending input in its pool, and delivery to a busy actor is no longer refused; the actor still owns its internal events, and the host still chooses the order its inputs enter. Accepted.  
 **Date:** 2026-09-15
 
 ## Context

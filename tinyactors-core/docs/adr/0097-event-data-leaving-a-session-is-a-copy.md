@@ -1,6 +1,6 @@
 # ADR 0097: Event data leaving a session is a copy
 
-**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Refines ADR 0050: envelope data is still shared by retain, but a value leaving a session is first replaced by the data model's copy of it.
+**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Refines ADR 0050: envelope data is still shared by retain, but a value leaving a session is first replaced by the data model's copy of it. Section 4 refined by ADR 0102 (2026-10-04, implementation pending): `TA_OP_NOMEM` goes; `copy_out` answers `TA_OP_OK` or `TA_OP_ERROR`.
 **Date:** 2026-09-30
 
 ## Context

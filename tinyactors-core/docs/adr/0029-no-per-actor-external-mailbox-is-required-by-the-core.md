@@ -1,6 +1,6 @@
 # ADR 0029: No per-actor external mailbox is required by the core
 
-**Status:** Accepted  
+**Status:** Superseded by ADR 0099 (2026-10-04, implementation pending): core keeps pending inputs in one pool per system; there is still no mailbox object per actor, only list heads. Accepted.  
 **Date:** 2026-09-15
 
 ## Context

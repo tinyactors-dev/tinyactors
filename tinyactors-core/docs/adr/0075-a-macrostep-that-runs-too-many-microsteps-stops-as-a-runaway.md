@@ -1,6 +1,6 @@
 # ADR 0075: A macrostep that runs too many microsteps stops as a runaway
 
-**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Amended by ADR 0092: the system's limit is the `microstepLimit` parameter, fixed at creation. Applies ADR 0067 (the step counters), ADR 0070 (commits and retries) and ADR 0072 (counters, logs as records); napi's part applies napi ADRs 0007, 0008 and 0017.
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Amended by ADR 0092: the system's limit is the `microstepLimit` parameter, fixed at creation. Applies ADR 0067 (the step counters), ADR 0070 (commits and retries) and ADR 0072 (counters, logs as records); napi's part applies napi ADRs 0007, 0008 and 0017. Refined by ADR 0103 (2026-10-04, implementation pending): the limit counts an input's whole chain, cannot be turned off, and abandons the input with status runaway; `no_microstep_limit` and `TA_ERR_RUNAWAY` go (ADR 0099).
 **Date:** 2026-09-25
 
 ## Context

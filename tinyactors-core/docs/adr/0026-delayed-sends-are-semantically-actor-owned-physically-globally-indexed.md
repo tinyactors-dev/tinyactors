@@ -1,6 +1,6 @@
 # ADR 0026: Delayed sends are semantically actor-owned, physically globally indexed
 
-**Status:** Accepted; durability details refined by ADR 0038  
+**Status:** Accepted; durability details refined by ADR 0038. Refined by ADR 0101 (2026-10-04, implementation pending): a delayed send is an envelope in the pool, in a deadline index and on its owner's list.  
 **Date:** 2026-09-15
 
 ## Context

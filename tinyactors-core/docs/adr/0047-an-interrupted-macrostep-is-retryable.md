@@ -1,6 +1,6 @@
 # ADR 0047: An allocation failure inside a macrostep is retryable
 
-**Status:** Accepted; applies ADR 0009 and ADR 0023; refined by ADR 0069 (a retry restores where `_event` was instead of moving the event back); refined by ADR 0070 (how core meets the obligation: every phase can stop, and plugins can answer TA_OP_NOMEM)
+**Status:** Superseded by ADR 0102 (2026-10-04, implementation pending): a macrostep never allocates core memory, and a data model out of memory answers TA_OP_ERROR, so nothing interrupts a macrostep for memory. Accepted; applies ADR 0009 and ADR 0023; refined by ADR 0069 (a retry restores where `_event` was instead of moving the event back); refined by ADR 0070 (how core meets the obligation: every phase can stop, and plugins can answer TA_OP_NOMEM).
 **Date:** 2026-09-20
 
 ## Context

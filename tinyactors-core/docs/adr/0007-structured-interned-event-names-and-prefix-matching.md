@@ -1,6 +1,6 @@
 # ADR 0007: Structured interned event names and prefix matching
 
-**Status:** Accepted  
+**Status:** Accepted. Refined by ADR 0100 (2026-10-04, implementation pending): only authored names are interned; run-time names are bytes, matched by lookup.  
 **Date:** 2026-09-15
 
 ## Context

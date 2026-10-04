@@ -1,6 +1,6 @@
 # ADR 0070: A run that runs out of memory stops where it stands
 
-**Status:** Accepted and implemented; refines ADR 0047, ADR 0061 (section 3 superseded: saving a pause cannot fail) and ADR 0069 (its open point on transition selection is closed). Adds `TA_OP_NOMEM` to the plugin contract. See the implementation notes. Open point 7 fixed in napi by 9ff6637 (a failed rendering throws and fails the call as `error.execution`; open point 1 remains).
+**Status:** Superseded for core's memory by ADR 0102 (2026-10-04, implementation pending): a macrostep never allocates, capacity is error.execution.capacity, and TA_OP_NOMEM goes; the resumable phases and the continuation stay for pausing and parking. Accepted and implemented; refines ADR 0047, ADR 0061 (section 3 superseded: saving a pause cannot fail) and ADR 0069 (its open point on transition selection is closed). Adds `TA_OP_NOMEM` to the plugin contract. See the implementation notes. Open point 7 fixed in napi by 9ff6637 (a failed rendering throws and fails the call as `error.execution`; open point 1 remains).
 **Date:** 2026-09-24
 
 ## Context

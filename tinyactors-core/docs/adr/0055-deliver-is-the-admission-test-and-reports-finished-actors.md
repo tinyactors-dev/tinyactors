@@ -1,6 +1,6 @@
 # ADR 0055: `ta_actor_deliver` is the admission test and reports finished actors
 
-**Status:** Accepted and implemented; refines ADR 0011, ADR 0014 and ADR 0029. See the implementation notes for where the code differs from the text. Refined by ADR 0069 (deliver can return `TA_ERR_NOMEM`).
+**Status:** Superseded in part by ADR 0099 (2026-10-04, implementation pending): delivery admits into the pool and never answers TA_ERR_BUSY; TA_ERR_DONE and the caller-error meaning of TA_ERR_INVALID stay. Refined by ADR 0103: mail for an active session waits on its deferred list. Accepted and implemented; refines ADR 0011, ADR 0014 and ADR 0029. See the implementation notes for where the code differs from the text. Refined by ADR 0069 (deliver can return `TA_ERR_NOMEM`).
 **Date:** 2026-09-23
 
 ## Context
