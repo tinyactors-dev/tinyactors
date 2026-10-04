@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layout.h"
+#include "pool.h"
 #include "continuation.h"
 #include "definition.h"
 #include "invoke.h"
@@ -224,30 +225,33 @@ struct ta_actor {
     const uint64_t *live_active;
 };
 
+/*
+ * One slot of the actor table. The slot is an item of an index pool (pool.h,
+ * block A5), so it lives from the system's first spawn into its page to the
+ * system's destroy: a spawn takes it, a destroy gives it back with a new
+ * generation, and no pointer to it is ever dangling.
+ */
 typedef struct {
     ta_actor *actor;
     uint32_t generation;
-    /* While free: the next free slot, or UINT32_MAX. Fits the padding the
-     * generation already left, so the table costs no more per actor. */
+    /* The pool's free-list link: meaningful only while the slot is free (then the
+     * next free slot's pool index, 0 for none), zero while it is in use. It sits
+     * in the padding the generation left, so the table costs no more per actor. */
     uint32_t next_free;
 } ta_actor_slot;
 
 /*
- * The actor table (ADR 0063): slots live in fixed pages of
- * TA_ACTOR_PAGE_SLOTS, found through a page directory. Slot `s` is in page
- * `s / TA_ACTOR_PAGE_SLOTS`. A page is allocated only when the last one is
- * full, and pages never move, so no spawn copies the table; only the
- * directory of page pointers doubles. Pages live as long as the system.
+ * The actor table (ADR 0063): slots live in pool pages of TA_ACTOR_PAGE_SLOTS
+ * (ta_pool, lifetime: system). Slot `s` is pool index `s + 1`; the ID bits are
+ * unchanged by the move to the pool. A page is allocated only when the last
+ * one is full, at a spawn, and pages never move, so no spawn copies the table.
  */
 #define TA_ACTOR_PAGE_SLOTS 4096u
-typedef struct {
-    ta_vec pages;   /* ta_actor_slot *, one per page */
-    uint32_t count; /* slots issued so far */
-} ta_actor_table;
 
-/* The entry for `slot`, or NULL when that slot was never issued. */
+/* The entry for `slot`, or NULL when that slot was never issued. Never allocates. */
 ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
-void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
+/* Prepares the actor table over `allocator`; allocates nothing. See actor.c. */
+ta_result ta_actor_table_init(ta_pool *table, ta_allocator allocator);
 /*
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the
  * ta_actor record, then the session storage, then the data-model instance,

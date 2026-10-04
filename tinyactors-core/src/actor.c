@@ -10,23 +10,32 @@ ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     return entry != NULL && ta_handle_matches(id, entry->generation) ? entry->actor : NULL;
 }
 
+/*
+ * ta_actor_slot_at returns the slot numbered `slot` (0-based, the number an
+ * actor ID carries), or NULL when that slot was never issued. The pool counts
+ * from 1, so this is the one place the actor table adds the 1; UINT32_MAX
+ * wraps to 0, which the pool answers with NULL. It never allocates.
+ */
 ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot) {
-    if (slot >= system->actors.count) {
-        return NULL;
-    }
-    ta_actor_slot *const *pages = system->actors.pages.items;
-    return &pages[slot / TA_ACTOR_PAGE_SLOTS][slot % TA_ACTOR_PAGE_SLOTS];
+    return ta_pool_at(&system->actors, slot + 1u);
 }
 
-void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator) {
-    ta_actor_slot **pages = table->pages.items;
-    for (uint32_t page = 0; page < table->pages.count; page += 1u) {
-        ta_mem_free(allocator, pages[page],
-                    &(ta_allocator_free_params){ .size = TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
-                                                 .alignment = _Alignof(ta_actor_slot) });
-    }
-    ta_vec_destroy(&table->pages);
-    table->count = 0;
+/* A slot that has never been issued: generation 1 (0 is never issued, ADR 0059) and no actor. */
+static const ta_actor_slot ta_actor_slot_fresh = { .generation = 1 };
+
+/*
+ * ta_actor_table_init prepares the actor table (lifetime: system) over
+ * `allocator`. It allocates nothing: the first page comes from the first
+ * spawn's refill. Slots are recycled with a new generation and never freed
+ * before the system's destroy, so a pointer to a slot stays valid.
+ */
+ta_result ta_actor_table_init(ta_pool *table, ta_allocator allocator) {
+    return ta_pool_init(table, allocator,
+                        &(ta_pool_params){ .item_size = sizeof(ta_actor_slot),
+                                           .item_alignment = _Alignof(ta_actor_slot),
+                                           .link_offset = offsetof(ta_actor_slot, next_free),
+                                           .page_items = TA_ACTOR_PAGE_SLOTS,
+                                           .fresh = &ta_actor_slot_fresh });
 }
 
 ta_result ta_actor_layout(ta_definition *definition) {
@@ -54,35 +63,6 @@ ta_result ta_actor_layout(ta_definition *definition) {
     definition->actor_instance_offset = instance;
     definition->actor_block_bytes = bytes;
     definition->actor_block_alignment = alignment;
-    return TA_OK;
-}
-
-/*
- * Issues the next slot, allocating a page when the last one is full. Pages
- * never move, so this never copies the table (ADR 0063).
- */
-static ta_result ta_actor_table_grow(ta_system *system, uint32_t *out) {
-    ta_actor_table *table = &system->actors;
-    if (table->count == UINT32_MAX) {
-        return TA_ERR_NOMEM; /* UINT32_MAX is no slot: it ends the free list and a walk */
-    }
-    if ((uint64_t)table->count == (uint64_t)table->pages.count * TA_ACTOR_PAGE_SLOTS) {
-        ta_actor_slot *page = ta_mem_alloc(system->allocator, TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
-                                           _Alignof(ta_actor_slot));
-        if (page == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        ta_result result = ta_vec_push(&table->pages, &page);
-        if (result != TA_OK) {
-            ta_mem_free(system->allocator, page,
-                        &(ta_allocator_free_params){ .size = TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
-                                                     .alignment = _Alignof(ta_actor_slot) });
-            return result;
-        }
-    }
-    *out = table->count;
-    table->count += 1u;
-    *ta_actor_slot_at(system, *out) = (ta_actor_slot){ .generation = 1, .next_free = UINT32_MAX };
     return TA_OK;
 }
 
@@ -241,19 +221,18 @@ void ta_actor_exit_invoked(ta_system *system, ta_actor_id id) {
  * child of a four-million-actor system must not pay for its siblings.
  */
 static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_actor_id *out) {
-    uint32_t slot = system->free_actor_slot;
-    if (slot == UINT32_MAX) {
-        ta_result result = ta_actor_table_grow(system, &slot);
+    uint32_t index = ta_pool_take(&system->actors);
+    if (index == 0) {
+        /* Full: this is a spawn, a safe point, so the table may grow. */
+        ta_result result = ta_pool_refill(&system->actors, 1u);
         if (result != TA_OK) {
             return result;
         }
-    } else {
-        system->free_actor_slot = ta_actor_slot_at(system, slot)->next_free;
+        index = ta_pool_take(&system->actors);
     }
-    ta_actor_slot *entry = ta_actor_slot_at(system, slot);
+    ta_actor_slot *entry = ta_pool_at(&system->actors, index);
     entry->actor = actor;
-    entry->next_free = UINT32_MAX;
-    *out = ta_handle_make(slot, entry->generation);
+    *out = ta_handle_make(index - 1u, entry->generation);
     return TA_OK;
 }
 
@@ -333,8 +312,7 @@ void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
     ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->actor = NULL;
     entry->generation = ta_handle_next_generation(entry->generation);
-    entry->next_free = system->free_actor_slot;
-    system->free_actor_slot = slot;
+    ta_pool_give(&system->actors, slot + 1u);
 }
 
 /*
@@ -1621,7 +1599,7 @@ ta_result ta_system_visit_actors(ta_system *system, const ta_actor_visit_params 
     }
     uint32_t visited = 0;
     uint32_t slot = params->from;
-    for (; slot < system->actors.count; slot += 1u) {
+    for (; slot < ta_pool_extent(&system->actors); slot += 1u) {
         if (params->limit != 0 && visited == params->limit) {
             break;
         }
@@ -1641,7 +1619,7 @@ ta_result ta_system_visit_actors(ta_system *system, const ta_actor_visit_params 
         }
         visited += 1u;
     }
-    *next = slot >= system->actors.count ? TA_ACTOR_VISIT_END : slot;
+    *next = slot >= ta_pool_extent(&system->actors) ? TA_ACTOR_VISIT_END : slot;
     return TA_OK;
 }
 

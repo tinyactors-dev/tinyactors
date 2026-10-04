@@ -55,13 +55,12 @@ struct ta_system {
     uint64_t next_definition_serial;
 
     /*
-     * ta_actor_slot; an actor ID is a handle (handle.h). Freed slots
-     * form a list through `next_free`, as definitions' do: a spawn takes the
-     * head instead of scanning the table, so it costs the same against four
-     * million actors as against four (invariant 17).
+     * ta_actor_slot; an actor ID is a handle (handle.h). An index pool
+     * (pool.h; lifetime: system): freed slots form a free list, so a spawn
+     * takes the head instead of scanning the table and costs the same against
+     * four million actors as against four (invariant 17).
      */
-    ta_actor_table actors;
-    uint32_t free_actor_slot;
+    ta_pool actors;
 
     ta_timer_heap timers;
 

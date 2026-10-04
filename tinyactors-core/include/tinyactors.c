@@ -2824,30 +2824,33 @@ struct ta_actor {
     const uint64_t *live_active;
 };
 
+/*
+ * One slot of the actor table. The slot is an item of an index pool (pool.h,
+ * block A5), so it lives from the system's first spawn into its page to the
+ * system's destroy: a spawn takes it, a destroy gives it back with a new
+ * generation, and no pointer to it is ever dangling.
+ */
 typedef struct {
     ta_actor *actor;
     uint32_t generation;
-    /* While free: the next free slot, or UINT32_MAX. Fits the padding the
-     * generation already left, so the table costs no more per actor. */
+    /* The pool's free-list link: meaningful only while the slot is free (then the
+     * next free slot's pool index, 0 for none), zero while it is in use. It sits
+     * in the padding the generation left, so the table costs no more per actor. */
     uint32_t next_free;
 } ta_actor_slot;
 
 /*
- * The actor table (ADR 0063): slots live in fixed pages of
- * TA_ACTOR_PAGE_SLOTS, found through a page directory. Slot `s` is in page
- * `s / TA_ACTOR_PAGE_SLOTS`. A page is allocated only when the last one is
- * full, and pages never move, so no spawn copies the table; only the
- * directory of page pointers doubles. Pages live as long as the system.
+ * The actor table (ADR 0063): slots live in pool pages of TA_ACTOR_PAGE_SLOTS
+ * (ta_pool, lifetime: system). Slot `s` is pool index `s + 1`; the ID bits are
+ * unchanged by the move to the pool. A page is allocated only when the last
+ * one is full, at a spawn, and pages never move, so no spawn copies the table.
  */
 #define TA_ACTOR_PAGE_SLOTS 4096u
-typedef struct {
-    ta_vec pages;   /* ta_actor_slot *, one per page */
-    uint32_t count; /* slots issued so far */
-} ta_actor_table;
 
-/* The entry for `slot`, or NULL when that slot was never issued. */
+/* The entry for `slot`, or NULL when that slot was never issued. Never allocates. */
 TA_PRIVATE ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
-TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
+/* Prepares the actor table over `allocator`; allocates nothing. See actor.c. */
+TA_PRIVATE ta_result ta_actor_table_init(ta_pool *table, ta_allocator allocator);
 /*
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the
  * ta_actor record, then the session storage, then the data-model instance,
@@ -2981,13 +2984,12 @@ struct ta_system {
     uint64_t next_definition_serial;
 
     /*
-     * ta_actor_slot; an actor ID is a handle (handle.h). Freed slots
-     * form a list through `next_free`, as definitions' do: a spawn takes the
-     * head instead of scanning the table, so it costs the same against four
-     * million actors as against four (invariant 17).
+     * ta_actor_slot; an actor ID is a handle (handle.h). An index pool
+     * (pool.h; lifetime: system): freed slots form a free list, so a spawn
+     * takes the head instead of scanning the table and costs the same against
+     * four million actors as against four (invariant 17).
      */
-    ta_actor_table actors;
-    uint32_t free_actor_slot;
+    ta_pool actors;
 
     ta_timer_heap timers;
 
@@ -13202,23 +13204,32 @@ TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     return entry != NULL && ta_handle_matches(id, entry->generation) ? entry->actor : NULL;
 }
 
+/*
+ * ta_actor_slot_at returns the slot numbered `slot` (0-based, the number an
+ * actor ID carries), or NULL when that slot was never issued. The pool counts
+ * from 1, so this is the one place the actor table adds the 1; UINT32_MAX
+ * wraps to 0, which the pool answers with NULL. It never allocates.
+ */
 TA_PRIVATE ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot) {
-    if (slot >= system->actors.count) {
-        return NULL;
-    }
-    ta_actor_slot *const *pages = system->actors.pages.items;
-    return &pages[slot / TA_ACTOR_PAGE_SLOTS][slot % TA_ACTOR_PAGE_SLOTS];
+    return ta_pool_at(&system->actors, slot + 1u);
 }
 
-TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator) {
-    ta_actor_slot **pages = table->pages.items;
-    for (uint32_t page = 0; page < table->pages.count; page += 1u) {
-        ta_mem_free(allocator, pages[page],
-                    &(ta_allocator_free_params){ .size = TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
-                                                 .alignment = _Alignof(ta_actor_slot) });
-    }
-    ta_vec_destroy(&table->pages);
-    table->count = 0;
+/* A slot that has never been issued: generation 1 (0 is never issued, ADR 0059) and no actor. */
+static const ta_actor_slot ta_actor_slot_fresh = { .generation = 1 };
+
+/*
+ * ta_actor_table_init prepares the actor table (lifetime: system) over
+ * `allocator`. It allocates nothing: the first page comes from the first
+ * spawn's refill. Slots are recycled with a new generation and never freed
+ * before the system's destroy, so a pointer to a slot stays valid.
+ */
+TA_PRIVATE ta_result ta_actor_table_init(ta_pool *table, ta_allocator allocator) {
+    return ta_pool_init(table, allocator,
+                        &(ta_pool_params){ .item_size = sizeof(ta_actor_slot),
+                                           .item_alignment = _Alignof(ta_actor_slot),
+                                           .link_offset = offsetof(ta_actor_slot, next_free),
+                                           .page_items = TA_ACTOR_PAGE_SLOTS,
+                                           .fresh = &ta_actor_slot_fresh });
 }
 
 TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition) {
@@ -13246,35 +13257,6 @@ TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition) {
     definition->actor_instance_offset = instance;
     definition->actor_block_bytes = bytes;
     definition->actor_block_alignment = alignment;
-    return TA_OK;
-}
-
-/*
- * Issues the next slot, allocating a page when the last one is full. Pages
- * never move, so this never copies the table (ADR 0063).
- */
-static ta_result ta_actor_table_grow(ta_system *system, uint32_t *out) {
-    ta_actor_table *table = &system->actors;
-    if (table->count == UINT32_MAX) {
-        return TA_ERR_NOMEM; /* UINT32_MAX is no slot: it ends the free list and a walk */
-    }
-    if ((uint64_t)table->count == (uint64_t)table->pages.count * TA_ACTOR_PAGE_SLOTS) {
-        ta_actor_slot *page = ta_mem_alloc(system->allocator, TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
-                                           _Alignof(ta_actor_slot));
-        if (page == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        ta_result result = ta_vec_push(&table->pages, &page);
-        if (result != TA_OK) {
-            ta_mem_free(system->allocator, page,
-                        &(ta_allocator_free_params){ .size = TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
-                                                     .alignment = _Alignof(ta_actor_slot) });
-            return result;
-        }
-    }
-    *out = table->count;
-    table->count += 1u;
-    *ta_actor_slot_at(system, *out) = (ta_actor_slot){ .generation = 1, .next_free = UINT32_MAX };
     return TA_OK;
 }
 
@@ -13433,19 +13415,18 @@ TA_PRIVATE void ta_actor_exit_invoked(ta_system *system, ta_actor_id id) {
  * child of a four-million-actor system must not pay for its siblings.
  */
 static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_actor_id *out) {
-    uint32_t slot = system->free_actor_slot;
-    if (slot == UINT32_MAX) {
-        ta_result result = ta_actor_table_grow(system, &slot);
+    uint32_t index = ta_pool_take(&system->actors);
+    if (index == 0) {
+        /* Full: this is a spawn, a safe point, so the table may grow. */
+        ta_result result = ta_pool_refill(&system->actors, 1u);
         if (result != TA_OK) {
             return result;
         }
-    } else {
-        system->free_actor_slot = ta_actor_slot_at(system, slot)->next_free;
+        index = ta_pool_take(&system->actors);
     }
-    ta_actor_slot *entry = ta_actor_slot_at(system, slot);
+    ta_actor_slot *entry = ta_pool_at(&system->actors, index);
     entry->actor = actor;
-    entry->next_free = UINT32_MAX;
-    *out = ta_handle_make(slot, entry->generation);
+    *out = ta_handle_make(index - 1u, entry->generation);
     return TA_OK;
 }
 
@@ -13525,8 +13506,7 @@ TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
     ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->actor = NULL;
     entry->generation = ta_handle_next_generation(entry->generation);
-    entry->next_free = system->free_actor_slot;
-    system->free_actor_slot = slot;
+    ta_pool_give(&system->actors, slot + 1u);
 }
 
 /*
@@ -14813,7 +14793,7 @@ TA_API ta_result ta_system_visit_actors(ta_system *system, const ta_actor_visit_
     }
     uint32_t visited = 0;
     uint32_t slot = params->from;
-    for (; slot < system->actors.count; slot += 1u) {
+    for (; slot < ta_pool_extent(&system->actors); slot += 1u) {
         if (params->limit != 0 && visited == params->limit) {
             break;
         }
@@ -14833,7 +14813,7 @@ TA_API ta_result ta_system_visit_actors(ta_system *system, const ta_actor_visit_
         }
         visited += 1u;
     }
-    *next = slot >= system->actors.count ? TA_ACTOR_VISIT_END : slot;
+    *next = slot >= ta_pool_extent(&system->actors) ? TA_ACTOR_VISIT_END : slot;
     return TA_OK;
 }
 
@@ -16773,8 +16753,12 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
-    ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
-    system->free_actor_slot = UINT32_MAX;
+    ta_result table_result = ta_actor_table_init(&system->actors, config->allocator);
+    if (table_result != TA_OK) {
+        ta_mem_free(config->allocator, system,
+                    &(ta_allocator_free_params){ .size = sizeof(ta_system), .alignment = _Alignof(ta_system) });
+        return table_result; /* only a bad constant can fail here: the pool allocates nothing */
+    }
     ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
     system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
@@ -16824,7 +16808,7 @@ TA_API void ta_system_destroy(ta_system *system) {
     }
     /* Teardown releases submitted sends instead of keeping them as orphans. */
     system->timers.closing = true;
-    for (uint32_t slot = 0; slot < system->actors.count; slot += 1) {
+    for (uint32_t slot = 0; slot < ta_pool_extent(&system->actors); slot += 1) {
         ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {
             (void)ta_actor_destroy(system, ta_handle_make(slot, entry->generation));
@@ -16845,7 +16829,7 @@ TA_API void ta_system_destroy(ta_system *system) {
     }
     ta_vec_destroy(&system->definitions);
     ta_timer_heap_destroy(&system->timers);
-    ta_actor_table_destroy(&system->actors, system->allocator);
+    ta_pool_destroy(&system->actors);
     /* After the actors: their held events released their MESSAGE origins. */
     ta_io_origin_table_destroy(&system->io_scopes);
     ta_io_origin_table_destroy(&system->io_messages);
