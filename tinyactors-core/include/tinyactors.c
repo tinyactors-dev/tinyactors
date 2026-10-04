@@ -1166,7 +1166,16 @@ typedef struct ta_continuation {
     uint32_t frame_count;
 } ta_continuation;
 
-/* The bytes a continuation of this shape takes; `shape` has the counts set. */
+/*
+ * The bytes a continuation of this shape takes; `shape` has the counts set.
+ * It answers 0, which is never a real size because the header is not empty,
+ * when the shape does not fit in a size_t. The caller that allocates must
+ * refuse 0 before it allocates (ta_reserve_stop does, at the safe point
+ * before a run starts); the accessors below rely on every continuation
+ * having passed it. The allocation has the parked lifetime: the actor or
+ * the system's spare owns it and frees it with its `bytes` and
+ * TA_CONTINUATION_ALIGN. Never allocates.
+ */
 TA_PRIVATE size_t ta_continuation_bytes(const ta_continuation *shape);
 /* Whether the phase is one of a microstep's (START, EXIT, TRANSITIONS, ENTER). */
 TA_PRIVATE bool ta_run_phase_in_microstep(ta_run_phase phase);
@@ -5220,7 +5229,11 @@ TA_PRIVATE uint64_t *ta_history_slot_words(const ta_history_state *history, uint
 }
 
 
-/* Offsets of the arrays that follow a continuation's header, in order. */
+/*
+ * Offsets of the arrays that follow a continuation's header, in order, from
+ * the start of the allocation. `end` is the unpadded end of the frames, which
+ * is the number of bytes the shape needs.
+ */
 typedef struct {
     size_t sets;
     size_t decls;
@@ -5230,41 +5243,66 @@ typedef struct {
     size_t end;
 } ta_continuation_layout;
 
-static ta_continuation_layout ta_continuation_offsets(const ta_continuation *shape) {
-    ta_continuation_layout layout;
-    layout.sets = ta_align_up(sizeof(ta_continuation), _Alignof(uint64_t));
-    layout.decls = layout.sets + (size_t)shape->words * 4u * sizeof(uint64_t);
-    layout.history = ta_align_up(layout.decls + (size_t)shape->decl_words * sizeof(uint64_t), _Alignof(ta_state_id));
-    layout.enabled = ta_align_up(layout.history + (size_t)shape->state_count * sizeof(ta_state_id),
-                                 _Alignof(ta_transition_id));
-    layout.frames = ta_align_up(layout.enabled + (size_t)shape->enabled_count * sizeof(ta_transition_id),
-                                _Alignof(ta_exec_frame));
-    layout.end = layout.frames + (size_t)shape->frame_count * sizeof(ta_exec_frame);
-    return layout;
+/*
+ * Lays out the shape's arrays after the header, each at its own alignment.
+ * The layout has call lifetime and nothing is stored: it is recomputed from
+ * the header's counts on every use, so a continuation carries no offsets
+ * that could disagree with them. It answers TA_ERR_NOMEM, and fills nothing
+ * in `*out`, when the shape does not fit in a size_t.
+ */
+static ta_result ta_continuation_offsets(const ta_continuation *shape, ta_continuation_layout *out) {
+    ta_layout layout;
+    ta_continuation_layout offsets;
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ sizeof(ta_continuation), _Alignof(ta_continuation), 1u });
+    /* Four sets of `words` 64-bit words each. */
+    offsets.sets = ta_layout_add(&layout, &(ta_layout_entry){ 4u * sizeof(uint64_t), _Alignof(uint64_t), shape->words });
+    offsets.decls = ta_layout_add(&layout, &(ta_layout_entry){ sizeof(uint64_t), _Alignof(uint64_t), shape->decl_words });
+    offsets.history = ta_layout_add(&layout, &(ta_layout_entry){ sizeof(ta_state_id), _Alignof(ta_state_id), shape->state_count });
+    offsets.enabled = ta_layout_add(&layout, &(ta_layout_entry){ sizeof(ta_transition_id), _Alignof(ta_transition_id),
+                                                                 shape->enabled_count });
+    offsets.frames = ta_layout_add(&layout, &(ta_layout_entry){ sizeof(ta_exec_frame), _Alignof(ta_exec_frame), shape->frame_count });
+    ta_result result = ta_layout_finish(&layout, &offsets.end, NULL);
+    if (result == TA_OK) {
+        *out = offsets;
+    }
+    return result;
 }
 
 TA_PRIVATE size_t ta_continuation_bytes(const ta_continuation *shape) {
-    return ta_continuation_offsets(shape).end;
+    ta_continuation_layout offsets;
+    return ta_continuation_offsets(shape, &offsets) == TA_OK ? offsets.end : 0;
+}
+
+/*
+ * The offsets of a continuation that exists. Its counts passed
+ * ta_continuation_bytes when it was allocated (the one place that refuses an
+ * overflowing shape), so this cannot fail.
+ */
+static ta_continuation_layout ta_continuation_existing(const ta_continuation *continuation) {
+    ta_continuation_layout offsets = { 0 };
+    (void)ta_continuation_offsets(continuation, &offsets);
+    return offsets;
 }
 
 TA_PRIVATE uint64_t *ta_continuation_sets(ta_continuation *continuation) {
-    return (uint64_t *)((unsigned char *)continuation + ta_continuation_offsets(continuation).sets);
+    return (uint64_t *)((unsigned char *)continuation + ta_continuation_existing(continuation).sets);
 }
 
 TA_PRIVATE uint64_t *ta_continuation_decls(ta_continuation *continuation) {
-    return (uint64_t *)((unsigned char *)continuation + ta_continuation_offsets(continuation).decls);
+    return (uint64_t *)((unsigned char *)continuation + ta_continuation_existing(continuation).decls);
 }
 
 TA_PRIVATE ta_state_id *ta_continuation_history(ta_continuation *continuation) {
-    return (ta_state_id *)((unsigned char *)continuation + ta_continuation_offsets(continuation).history);
+    return (ta_state_id *)((unsigned char *)continuation + ta_continuation_existing(continuation).history);
 }
 
 TA_PRIVATE ta_transition_id *ta_continuation_enabled(ta_continuation *continuation) {
-    return (ta_transition_id *)((unsigned char *)continuation + ta_continuation_offsets(continuation).enabled);
+    return (ta_transition_id *)((unsigned char *)continuation + ta_continuation_existing(continuation).enabled);
 }
 
 TA_PRIVATE ta_exec_frame *ta_continuation_frames(ta_continuation *continuation) {
-    return (ta_exec_frame *)((unsigned char *)continuation + ta_continuation_offsets(continuation).frames);
+    return (ta_exec_frame *)((unsigned char *)continuation + ta_continuation_existing(continuation).frames);
 }
 
 TA_PRIVATE void ta_continuation_retain(ta_continuation *continuation) {
@@ -20173,7 +20211,8 @@ static uint32_t ta_decl_words(const ta_definition *definition) {
 }
 
 /* The largest continuation a run of this definition can save: every set,
- * every enabled transition, and every frame the executor can open. */
+ * every enabled transition, and every frame the executor can open. 0 when
+ * that does not fit in a size_t (ta_continuation_bytes). */
 static size_t ta_continuation_capacity(const ta_definition *definition) {
     ta_continuation shape = {
         .words = ta_bits_words(definition->state_count),
@@ -20230,6 +20269,9 @@ static ta_result ta_reserve_stop(ta_system *system, ta_actor *actor) {
         return TA_OK;
     }
     size_t bytes = ta_continuation_capacity(actor->definition);
+    if (bytes == 0) {
+        return TA_ERR_NOMEM;
+    }
     ta_continuation *spare = system->spare_continuation;
     if (spare == NULL || spare->bytes < bytes) {
         ta_continuation *grown = ta_mem_alloc(system->allocator, bytes, TA_CONTINUATION_ALIGN);

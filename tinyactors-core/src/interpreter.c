@@ -3858,7 +3858,8 @@ static uint32_t ta_decl_words(const ta_definition *definition) {
 }
 
 /* The largest continuation a run of this definition can save: every set,
- * every enabled transition, and every frame the executor can open. */
+ * every enabled transition, and every frame the executor can open. 0 when
+ * that does not fit in a size_t (ta_continuation_bytes). */
 static size_t ta_continuation_capacity(const ta_definition *definition) {
     ta_continuation shape = {
         .words = ta_bits_words(definition->state_count),
@@ -3915,6 +3916,9 @@ static ta_result ta_reserve_stop(ta_system *system, ta_actor *actor) {
         return TA_OK;
     }
     size_t bytes = ta_continuation_capacity(actor->definition);
+    if (bytes == 0) {
+        return TA_ERR_NOMEM;
+    }
     ta_continuation *spare = system->spare_continuation;
     if (spare == NULL || spare->bytes < bytes) {
         ta_continuation *grown = ta_mem_alloc(system->allocator, bytes, TA_CONTINUATION_ALIGN);

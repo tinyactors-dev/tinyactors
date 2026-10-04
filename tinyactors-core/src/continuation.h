@@ -127,7 +127,16 @@ typedef struct ta_continuation {
     uint32_t frame_count;
 } ta_continuation;
 
-/* The bytes a continuation of this shape takes; `shape` has the counts set. */
+/*
+ * The bytes a continuation of this shape takes; `shape` has the counts set.
+ * It answers 0, which is never a real size because the header is not empty,
+ * when the shape does not fit in a size_t. The caller that allocates must
+ * refuse 0 before it allocates (ta_reserve_stop does, at the safe point
+ * before a run starts); the accessors below rely on every continuation
+ * having passed it. The allocation has the parked lifetime: the actor or
+ * the system's spare owns it and frees it with its `bytes` and
+ * TA_CONTINUATION_ALIGN. Never allocates.
+ */
 size_t ta_continuation_bytes(const ta_continuation *shape);
 /* Whether the phase is one of a microstep's (START, EXIT, TRANSITIONS, ENTER). */
 bool ta_run_phase_in_microstep(ta_run_phase phase);
