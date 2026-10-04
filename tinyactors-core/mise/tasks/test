@@ -2,16 +2,23 @@
 #MISE description="Test core: ta_layout used only through its functions, no recursion, the lifetime tests under AddressSanitizer, every test program, and the API description"
 #MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml", "../mise/ast-grep/rules/layout-*.yml", "../sgconfig.yml"]
 #MISE outputs={auto=true}
+#USAGE flag "--full" help="Run the exhaustive programs at their large sizes (sets TA_TEST_FULL=1, also for the sanitizer run); needs --force to rerun when nothing changed"
 # vim:ft=ruby
 
 # mise skips this task while none of its sources changed since it last
 # passed (sources, outputs above); `mise run --force test` runs it anyway.
 # It expects core built (`mise run build` at the repo root).
+#
+# --full sets TA_TEST_FULL=1 for the sanitizer run and every program: those
+# marked `exhaustive` (mise/lib/test_programs.rb) then run their large sets.
+# Without it they run the small version of the same property.
 
 require 'etc'
 require 'pathname'
 require_relative '../lib/test_programs'
 
+FULL = ENV['usage_full'] == 'true' || ARGV.include?('--full')
+ENV['TA_TEST_FULL'] = FULL ? '1' : nil
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 
 def run(*command)
@@ -52,3 +59,6 @@ end.each(&:join)
 abort "tinyactors-core: failed: #{Array.new(failed.size) { failed.pop }.sort.join(', ')}" unless failed.empty?
 
 run('mise', 'run', 'api-test')
+
+exhaustive = TestPrograms.exhaustive
+puts "tinyactors-core: #{exhaustive.size} exhaustive programs (#{exhaustive.join(', ')}) ran at #{FULL ? 'full size' : 'fast size (--full runs them large)'}"

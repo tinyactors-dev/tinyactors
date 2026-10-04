@@ -29,7 +29,8 @@ steps = [
   ['portability', ['mise', 'run', *(all ? ['--force'] : []), 'check-portability'], root],
   ['toolchain', ['mise', 'run', *(all ? ['--force'] : []), 'toolchain-test'], root],
   ['build', %w[mise run build], root],
-  ['core', ['mise', 'run', *flags.call], root.join('tinyactors-core')],
+  # --full: the exhaustive programs at their large sizes (TA_TEST_FULL=1).
+  ['core', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyactors-core')],
   # --full: replay's out-of-memory sweep at every allocation.
   ['host kernel', ['mise', 'run', *flags.call], root.join('tinyactors-host')],
   ['tinyxml', ['mise', 'run', *flags.call], root.join('tinyxml')],
