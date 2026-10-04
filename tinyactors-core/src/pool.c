@@ -23,11 +23,22 @@ static uint32_t *ta_pool_link(const ta_pool *pool, unsigned char *item) {
     return (uint32_t *)(void *)(item + pool->link_offset);
 }
 
+/*
+ * ta_pool_free_page gives one page back with the size and alignment it was
+ * allocated with (page_bytes, page_alignment, both fixed at init), so the
+ * sized free always matches the allocation. It never fails.
+ */
 static void ta_pool_free_page(const ta_pool *pool, void *base) {
     ta_mem_free(pool->allocator, base,
                 &(ta_allocator_free_params){ .size = pool->page_bytes, .alignment = pool->page_alignment });
 }
 
+/*
+ * ta_pool_free_directory gives a page directory back. The caller passes the
+ * byte size the directory was allocated with (the pool's directory_bytes, or
+ * the size of a replaced directory), because directories grow and the sized
+ * free must match the allocation. It never fails.
+ */
 static void ta_pool_free_directory(const ta_pool *pool, ta_pool_page *directory, size_t bytes) {
     ta_mem_free(pool->allocator, directory,
                 &(ta_allocator_free_params){ .size = bytes, .alignment = _Alignof(ta_pool_page) });
