@@ -1,277 +1,964 @@
 .Dd October 4, 2026
 .Dt TINYPARSE 1
-.Os tinyactors
+.Os tinyparse
 .Sh NAME
 .Nm tinyparse
-.Nd compile grammar data into running parsers at runtime
+.Nd compile grammars and parse input from the command line
 .Sh SYNOPSIS
 .Nm
 .Cm check
 .Ar GRAMMAR
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
 .Nm
 .Cm run
 .Ar GRAMMAR
-.Fl \-input
-.Ar FILE
-.Oo
-.Fl \-dump-tree
-.Oc
-.Oo
-.Fl \-chunk
-.Ar N
-.Oc
-.Oo
-.Fl \-trace
-.Oc
+.Fl \-input Ar FILE
+.Op Fl \-dump\-tree
+.Op Fl \-chunk Ar N
+.Op Fl \-trace
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
 .Nm
 .Cm pack
 .Ar GRAMMAR
-.Fl \-out
-.Ar FILE
+.Fl \-out Ar FILE
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
 .Nm
 .Cm c
 .Ar GRAMMAR
-.Fl \-out
-.Ar FILE
-.Oo
-.Fl \-bundle|--parser|--parser-lib
-.Oc
-.Oo
-.Fl \-name
-.Ar PREFIX
-.Oc
+.Fl \-out Ar FILE
+.Op Fl \-bundle | \-parser | \-parser\-lib
+.Op Fl \-name Ar PREFIX
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
 .Nm
 .Cm linearize
 .Ar GRAMMAR
-.Fl \-input
-.Ar FILE
+.Fl \-input Ar FILE
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
 .Nm
 .Cm query
 .Ar GRAMMAR
 .Ar QUERY
-.Fl \-input
-.Ar FILE
+.Fl \-input Ar FILE
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
 .Nm
-.Cm node-types
+.Cm node\-types
 .Ar GRAMMAR
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
 .Nm
 .Cm init
 .Ar DIR
-.Oo
-.Fl \-amalgamation|--lib
-.Oc
-.Oo
-.Fl \-grammar
-.Ar NAME
-.Oc
+.Op Fl \-amalgamation | \-lib
+.Op Fl \-grammar Ar NAME
 .Nm
 .Cm vendor
 .Ar DIR
-.Oo
-.Fl \-amalgamation|--lib
-.Oc
+.Op Fl \-amalgamation | \-lib
 .Nm
 .Cm grammars
 .Nm
 .Cm man
 .Nm
-.Cm version
+.Cm version | Fl \-version
 .Nm
-.Fl \-help
+.Op Cm help | Fl \-help | Fl h
 .Sh DESCRIPTION
-tinyparse is a small, embeddable C library that compiles grammar data
-into running parsers at runtime.
-It is a pocket knife for C programs that
-need parsing without adopting a generator\-heavy toolchain, a scripting
-runtime, libc, malloc, a filesystem, or OS assumptions.
+The tinyparse library compiles a grammar, written as S-expression data in a
+.Pa .scm
+file, into a parser at run time.
+The parser turns input bytes into a concrete syntax tree (CST) and a list of
+diagnostics.
+The library performs no I/O and allocates memory only from the memory grant its
+host program gives it: a block of memory and, optionally, a callback that
+supplies more.
 .Pp
-The core promise is simple: give tinyparse grammar bytes and input
-bytes, and it gives back a streaming parser, a concrete syntax tree, and
-structured diagnostics.
-The library itself is freestanding — no libc, no
-IO, no allocation outside a host\-granted memory pool.
-This program is the
-hosted command\-line
-shell around that library: it reads files, renders diagnostics, and prints.
+The
+.Nm
+command is a host program for that library.
+It reads grammar and input files, parses, and prints the tree, the
+diagnostics, query captures or the node types of a grammar.
+It also writes packed grammars, C source generated from a grammar, and
+starter projects.
+The first argument names the command and the positional arguments follow it;
+options come after the positional arguments, in any order.
+.Sh GRAMMAR ARGUMENTS
+Every command that takes
+.Ar GRAMMAR
+resolves it in this order:
+.Bl -enum
+.It
+A path to a file named
+.Pa package.scm ,
+or to a directory that contains
+.Pa package.scm ,
+names a grammar package.
+The command reads the manifest, sets each entry of its
+.Li params\&:
+as a parameter, and compiles
+.Pa grammar.scm
+from the same directory.
+.It
+Otherwise, a path to a readable file names a grammar file.
+Relative paths are relative to the working directory.
+A directory without
+.Pa package.scm
+is read as an empty file and fails with
+.Ql error: grammar form not found .
+.It
+Otherwise,
+.Ar GRAMMAR
+is looked up by name among the standard grammars built into the program,
+such as
+.Ql std.json ;
+.Nm Cm grammars
+lists them.
+A built-in grammar is used with the parameters of its own manifest.
+.It
+Otherwise, the command prints
+.Ql tinyparse: error: cannot read grammar 'GRAMMAR'
+and exits with status 1.
+.El
 .Pp
-The native grammar surface is Scheme\-shaped data, the \fB.scm\fR format.
-It is
-data, not executable Scheme: lists, symbols, keyword symbols ending in a
-colon, strings, integers, byte and hex literals, and line comments.
-A
-grammar declares tokens, extras, and rules built from the combinators
-\fBseq\fR, \fBchoice\fR, \fBrepeat\fR, \fBoptional\fR, and \fBfield\fR.
-.Sh COMMANDS
+A file in the working directory therefore takes the place of a built-in
+grammar of the same name.
+.Pp
+.Cm run ,
+.Cm linearize ,
+.Cm query
+and
+.Cm pack
+also accept a packed grammar written by
+.Cm pack :
+a file whose name ends in
+.Pa .tpg ,
+or whose first four bytes are
+.Ql TPG1 ,
+is loaded instead of compiled.
+.Cm check ,
+.Cm node\-types
+and
+.Cm c
+read every file as
+.Pa .scm
+source; see
+.Sx BUGS .
+.Pp
+A grammar can name other grammars with
+.Li (import NAME) ,
+.Li (extends NAME)
+and
+.Li (inject grammar: NAME ...) .
+The command resolves
+.Ar NAME
+by replacing each
+.Ql \&.
+with
+.Ql / ,
+appending
+.Pa .scm ,
+and reading that path relative to the directory of the grammar named on the
+command line (for a built-in grammar, the working directory).
+.Ql words
+resolves to
+.Pa DIR/words.scm
+and
+.Ql lib.words
+to
+.Pa DIR/lib/words.scm ,
+also from inside an imported file.
+If no such file exists,
+.Ar NAME
+is looked up among the built-in standard grammars.
+A grammar reached this way is compiled without its manifest.
+.Sh PARAMETERS
+.Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+sets a parameter, which the grammar's
+.Li (when NAME: ...)
+forms test.
+It is accepted by every command that compiles a grammar and may be repeated;
+for the same
+.Ar NAME
+the last one wins.
+Parameters from a package manifest are set first, so
+.Fl \-param
+overrides them.
 .Bl -tag -width Ds
-.It Cm check Ar GRAMMAR Oo Fl \-param Cm NAME[=VALUE Oc Oc
-Read and validate a grammar without parsing any input.
-Report malformed
-grammar as a diagnostic on standard error and exit non\-zero; a valid
-grammar exits zero.
-.It Cm run Ar GRAMMAR Fl \-input Ar FILE Oo Fl \-dump-tree Oc Oo Fl \-chunk Ar N Oc Oo Fl \-trace Oc Oo Fl \-param Cm NAME[=VALUE Oc Oc
-Compile a grammar, parse the bytes of the input file against it, and,
-with \-\-dump\-tree, print the resulting concrete syntax tree to standard
-output \-\- one node per line, indented by depth, each line ending with the
-node's span as a byte range and a 0\-based [line, column] range, tree\-sitter
-style.
-Diagnostics are rendered to standard error.
-FILE \- reads standard input.
-\-\-chunk N feeds the input to the parser N bytes at a time; the tree
-does not depend on how the input was split.
-\-\-trace prints the parser's trace events to standard error.
-GRAMMAR may also be a packed grammar written by pack.
-\-\-param sets a compile\-time grammar parameter, the value the (when NAME:
-X) combinator gates a production on: a bare \-\-param NAME sets it truthy,
-\-\-param NAME=0 clears it.
-The flag may be repeated to set several
-parameters.
-A grammar that extends a base with (extends NAME) and gates
-productions on parameters compiles differently for each set of \-\-param
-values.
-When GRAMMAR names a directory (or a package.scm file), it is read as a
-grammar package: the package.scm manifest is parsed, its params: are
-bound as compile\-time parameters, and the sibling grammar.scm is compiled
-with those parameters in scope.
-A \-\-param on the command line overrides a
-manifest default. check accepts a package the same way.
-A GRAMMAR may also be a bare package name, such as std.json.
-When no
-filesystem search path resolves the name, tinyparse falls back to the
-registry of standard grammars embedded in the binary, so a standard
-grammar parses with no package on disk.
-A filesystem package of the same
-name found first shadows the embedded copy.
-The same fallback applies to a
-base named by (extends NAME) or a module named by (import NAME): the
-resolver tries the filesystem first and, failing that, looks the name up in
-the embedded registry, so an embedded package such as std.jsonc resolves
-its (extends std.json) base with no files at all.
-.It Cm pack Ar GRAMMAR Fl \-out Ar FILE Oo Fl \-param Cm NAME[=VALUE Oc Oc
-Compile a grammar, with its imports and base resolved, and write it to FILE
-as a packed binary grammar (conventionally \fB.tpg\fR).
-A host loads it with
-tinyparse_load_binary_grammar, and run accepts it in place of a \fB.scm\fR
-grammar, without reading grammar source.
-.It Cm c Ar GRAMMAR Fl \-out Ar FILE Oo Fl \-bundle|--parser|--parser-lib Oc Oo Fl \-name Ar PREFIX Oc
-Emit the grammar as C source.
-With no mode flag the file holds the packed
-grammar as a byte array and an accessor, to be loaded and run by the
-library.
-\-\-bundle adds a main that parses standard input and dumps the tree.
-\-\-parser emits a recursive\-descent parser generated from the grammar, with a
-main; \-\-parser\-lib emits the same parser as a library, with PREFIX_load, PREFIX_run and
-PREFIX_run_chunk entry points.
-\-\-name PREFIX prefixes every emitted symbol, so two
-generated parsers link into one program.
+.It Fl \-param Ar NAME
+sets
+.Ar NAME .
+.It Fl \-param Ar NAME Ns = No and Fl \-param Ar NAME Ns =0
+clear
+.Ar NAME .
+.It Fl \-param Ar NAME Ns = Ns Ar VALUE
+sets
+.Ar NAME
+for any other
+.Ar VALUE ,
+including
+.Ql false
+and
+.Ql 00 .
+.El
+.Sh COMMANDS
+.Ss check
+.Nm
+.Cm check
+.Ar GRAMMAR
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
+.Pp
+Compiles
+.Ar GRAMMAR
+and prints nothing when it compiles.
+When it does not, prints
+.Ql error:\~
+followed by the fault text to standard error and exits with status 1.
+The fault text has no line or column; see
+.Sx DIAGNOSTICS .
+.Ss run
+.Nm
+.Cm run
+.Ar GRAMMAR
+.Fl \-input Ar FILE
+.Op Fl \-dump\-tree
+.Op Fl \-chunk Ar N
+.Op Fl \-trace
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
+.Pp
+Compiles or loads
+.Ar GRAMMAR
+and parses the bytes of
+.Ar FILE .
+Without
+.Fl \-dump\-tree
+a successful parse prints nothing.
+.Bl -tag -width Ds
+.It Fl \-input Ar FILE
+The input to parse.
+.Ql \-
+reads standard input.
+Required.
+.It Fl \-dump\-tree
+Prints the tree to standard output in the format under
+.Sx Tree dump .
+.It Fl \-chunk Ar N
+Hands the input to the parser
+.Ar N
+bytes at a time.
+The parse runs once the last chunk has arrived, and the tree is the same for
+every
+.Ar N .
+.Ar N
+is read as a decimal integer, as
+.Xr strtol 3
+reads it; when that gives 0 or less, the whole input is handed over at once.
+.It Fl \-trace
+Prints one line per parser event to standard error, as
+.Ql trace: EVENT NAME .
+The start rule produces no events.
+.Ar EVENT
+is one of:
+.Bl -tag -width Ds
+.It Li rule.enter
+A rule named
+.Ar NAME
+is tried.
+.It Li rule.exit
+The rule
+.Ar NAME
+matched.
+A rule that fails produces no
+.Li rule.exit .
+.It Li token
+A token matched and became a leaf.
+A literal token's
+.Ar NAME
+is its text.
+Extras produce no event.
+.It Li rule.memo\-on
+The rule memo switched on while entering
+.Ar NAME
+(see
+.Ev TINYPARSE_RULEMEMO ) .
+.It Li rule.replay
+The result of
+.Ar NAME
+at this position was copied from the rule memo instead of parsed again.
+.El
+.El
+.Pp
+After the parse,
+.Cm run
+prints its diagnostics to standard error, after the tree when there is one.
+It exits with status 1 when the parse fails or when any diagnostic has error
+severity, including a parse that recovered and printed a tree.
+A failed parse prints no tree; when it recorded no diagnostics,
+.Cm run
+prints
+.Ql error: parse failed .
+A parse that runs out of memory prints
+.Ql error: out of memory ,
+and any other failure prints
+.Ql error: parse failed (result N) ,
+where N is the number of the
+.Vt tinyparse_result .
+.Ss pack
+.Nm
+.Cm pack
+.Ar GRAMMAR
+.Fl \-out Ar FILE
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
+.Pp
+Compiles
+.Ar GRAMMAR ,
+with its imports and base grammar resolved and its parameters applied, and
+writes it to
+.Ar FILE
+as a packed grammar, conventionally named with
+.Pa .tpg .
+A packed grammar loads without its
+.Pa .scm
+sources:
+.Cm run ,
+.Cm linearize
+and
+.Cm query
+accept it as
+.Ar GRAMMAR ,
+and a host program loads it with
+.Fn tinyparse_load_binary_grammar .
+.Fl \-out
+is required.
+.Ss c
+.Nm
+.Cm c
+.Ar GRAMMAR
+.Fl \-out Ar FILE
+.Op Fl \-bundle | \-parser | \-parser\-lib
+.Op Fl \-name Ar PREFIX
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
+.Pp
+Compiles
+.Ar GRAMMAR
+and writes C source to
+.Ar FILE .
+.Fl \-out
+is required.
+The mode flag selects what
+.Ar FILE
+contains; with several,
+.Fl \-parser\-lib
+wins over
+.Fl \-parser ,
+and both win over
+.Fl \-bundle .
+.Bl -tag -width Ds
+.It (no mode flag)
+A generated module: the packed grammar as a byte array and the function
+.Ft tinyparse_string
+.Fn tinyparse_embedded_grammar void ,
+which returns it for
+.Fn tinyparse_load_binary_grammar .
+Parsing runs in the library's VM.
+.It Fl \-bundle
+The generated module plus a
+.Fn main
+that parses standard input and prints one node kind per line, indented by
+depth, without fields or byte ranges.
+On a failed parse it prints each diagnostic's message and exits with status 1.
+A recovered parse prints its inserted nodes like any other node, without
+.Li MISSING ,
+prints no diagnostics and exits with status 0.
+.It Fl \-parser
+A generated parser: one C function per rule and token, plus a
+.Fn main
+that parses standard input, prints the tree in the
+.Sx Tree dump
+format and the diagnostics like
+.Cm run ,
+and exits with status 1 when the parse fails or any diagnostic has error
+severity.
+.It Fl \-parser\-lib
+The generated parser without
+.Fn main .
+It defines
+.Ft tinyparse_result
+.Fn PREFIX_load "tinyparse_engine *" "tinyparse_grammar **"
+and
+.Ft tinyparse_result
+.Fn PREFIX_run "tinyparse_parser *" .
+When the start rule's body is
+.Li (repeat ITEM) ,
+.Li (seq (repeat ITEM))
+or
+.Li (seq (repeat ITEM) EOF) ,
+it also defines
+.Ft tinyparse_result
+.Fn PREFIX_run_chunk "tinyparse_parser *"
+for an input buffer that is still growing.
+.It Fl \-name Ar PREFIX
+Sets the prefix of every file-scope symbol in a generated parser.
+The default prefix is the grammar's name, the symbol after
+.Li (grammar ,
+so two grammars with different names link into one program without
+.Fl \-name .
+A module or bundle ignores it.
+.El
+.Pp
 Every mode links against
-libtinyparse or the amalgamation.
-.It Cm linearize Ar GRAMMAR Fl \-input Ar FILE Oo Fl \-param Cm NAME[=VALUE Oc Oc
-Compile a grammar, parse the input file against it, and print the parse
-tree's linearization to standard output: one ENTER/LEAF/EXIT token per line.
-An internal node prints as \fBenter KIND\fR then, after its children, \fBexit KIND\fR;
-a leaf (token) node prints as \fBleaf KIND TEXT\fR.
-This is the flattened stream a
-query parses — a query matches a pattern by parsing this token stream — and the
-command is the debugging view of it.
-GRAMMAR is resolved exactly as for run.
-.It Cm query Ar GRAMMAR Ar QUERY Fl \-input Ar FILE Oo Fl \-param Cm NAME[=VALUE Oc Oc
-Compile a grammar, parse the input file against it, then run the QUERY file
-(a \fB.scm\fR query) over the resulting tree and print one line per capture as
-\fB@NAME START\-END TEXT\fR.
-A query is a parser over the linearized tree: a
-pattern such as \fB(Item word: (Word) @w)\fR matches by parsing the ENTER/LEAF/EXIT
-stream the linearize command prints.
-A pattern matches at any depth (descendant
-matching skips one balanced subtree); a \fB.\fR anchor between two children forbids
-that skip, requiring them adjacent; \fB_\fR is the wildcard node; a \fBfield:\fR keyword
-binds a child through its field; \fB@name\fR captures the node it follows.
-A
-wrapping list pairs a pattern with predicates: \fB(#eq? @c "text")\fR keeps a match
-only when the capture's bytes equal the text, and \fB(#match? @c "regex")\fR only
-when the engine's regex matches them.
-Both predicates are built in and need no
-host binding.
-GRAMMAR is resolved exactly as for run.
-.It Cm node-types Ar GRAMMAR Oo Fl \-param Cm NAME[=VALUE Oc Oc
-Compile a grammar and print its node\-types schema to standard output as a
-JSON document, the typed surface tools read.
-The schema follows
-tree\-sitter's node\-types.json shape: a JSON array of node entries, one per
-named rule and named token.
-Each entry carries its "type" name, a "named"
-flag, and a "fields" object mapping each field name to the named types that
-field may hold; a rule with unnamed positional children also carries a
-"children" object.
-A rule with no fields still emits an empty "fields"
-object, so the key is always present.
-GRAMMAR is resolved exactly as for
-check and run, so a package directory or an embedded grammar name works too.
-.It Cm init Ar DIR Oo Fl \-amalgamation|--lib Oc Oo Fl \-grammar Ar NAME Oc
-Seed a new project in DIR.
-In \-\-amalgamation mode, the default, it drops
-the whole engine as two files — tinyparse.c and tinyparse.h —
-alongside a starter grammar.scm,
-a main.c that compiles that grammar at runtime and dumps the parse of
-standard input, and a one\-line build.sh.
-The seeded project then builds
-with a single \fBcc main.c tinyparse.c \-o app\fR and needs no tinyparse
-tooling on the path.
-The embedded engine source is baked into the program
-at build time, like the manual page and the grammar registry, so init needs
-no install prefix and no network.
-In \-\-lib mode it writes the same main.c
-and grammar.scm but copies no engine source, leaving the project to link an
-installed libtinyparse.
-With \-\-grammar NAME the starter grammar is the
-named standard grammar (for example std.json) instead of the built\-in hello
-grammar.
-.It Cm vendor Ar DIR Oo Fl \-amalgamation|--lib Oc
-Drop or refresh just the engine source in an existing project DIR, writing
-no scaffold.
-In \-\-amalgamation mode it writes tinyparse.c and
-tinyparse.h; in \-\-lib mode it writes only tinyparse.h, for a project
-that links an installed libtinyparse.
-.It Cm grammars
-List the standard grammar packages embedded in the binary, one name per
+.Pa libtinyparse
+or the amalgamation.
+A generated parser
+.Pf ( Fl \-parser ,
+.Fl \-parser\-lib )
+also includes the library's private header
+.Pa internal.h ,
+which only a source tree provides, so compile it from the
+.Pa tinyparse
+directory with
+.Fl I Ar include Fl I Ar src .
+The C API reference describes the generated symbols; see
+.Sx SEE ALSO .
+.Ss linearize
+.Nm
+.Cm linearize
+.Ar GRAMMAR
+.Fl \-input Ar FILE
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
+.Pp
+Parses
+.Ar FILE
+and prints the tree as the token stream a query matches against, in the
+format under
+.Sx Linearized tree .
+.Fl \-input
+is required;
+.Ql \-
+reads standard input.
+A parse that fails prints its diagnostics and exits with status 1.
+A parse that recovers prints the stream, prints no diagnostics and exits with
+status 0.
+.Ss query
+.Nm
+.Cm query
+.Ar GRAMMAR
+.Ar QUERY
+.Fl \-input Ar FILE
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
+.Pp
+Parses
+.Ar FILE ,
+runs the query in the file
+.Ar QUERY
+over the tree, and prints one line per capture in the format under
+.Sx Query captures .
+The query language is described in the query language reference; see
+.Sx SEE ALSO .
+A query the library rejects prints
+.Ql tinyparse: error: invalid query
+and exits with status 1, after any captures of the forms before the rejected
+one.
+Parse failures and recovered parses are handled as by
+.Cm linearize .
+.Ss node-types
+.Nm
+.Cm node\-types
+.Ar GRAMMAR
+.Op Fl \-param Ar NAME Ns Op = Ns Ar VALUE
+.No ...
+.Pp
+Compiles
+.Ar GRAMMAR
+and prints its node types to standard output as JSON, in the format under
+.Sx Node types .
+.Ss init
+.Nm
+.Cm init
+.Ar DIR
+.Op Fl \-amalgamation | \-lib
+.Op Fl \-grammar Ar NAME
+.Pp
+Creates
+.Ar DIR ,
+if it does not exist, and writes a starter project into it, replacing files of
+the same names:
+.Bl -tag -width Ds
+.It Pa grammar.scm
+A grammar for a greeting such as
+.Ql hello world ,
+or with
+.Fl \-grammar Ar NAME
+the
+.Pa grammar.scm
+of the built-in standard grammar
+.Ar NAME .
+.It Pa main.c
+A program that reads
+.Pa grammar.scm
+from the working directory, compiles it, parses standard input and prints one
+node kind per line.
+It does not install a module resolver, class bindings or parameters, and
+gives the engine a fixed 8 MiB block.
+.It Pa build.sh
+.Ql cc main.c tinyparse.c -o app ,
+or with
+.Fl \-lib
+.Ql cc main.c -ltinyparse -o app .
+.It Pa tinyparse.c , Pa tinyparse.h
+The amalgamation, copied from the program.
+.Fl \-amalgamation
+is the default;
+.Fl \-lib
+writes neither file.
+.El
+.Pp
+Because
+.Pa main.c
+provides no module resolver and no parameters, a project made with
+.Fl \-grammar
+builds and parses only for
+.Ql std.json
+and
+.Ql std.shell .
+For the other standard grammars
+.Pa ./app
+exits with status 1 and prints
+.Ql error: extends requires a module resolver
+.Pf ( Ql std.json5 ,
+.Ql std.jsonc ,
+.Ql std.typescript ,
+.Ql std.tsx ) ,
+.Ql error: inject requires a module resolver to find the embedded grammar
+.Pf ( Ql std.fence )
+or
+.Ql error: out of memory reading string
+.Pf ( Ql std.javascript ) .
+.Pp
+.Cm init
+rejects any other argument that begins with
+.Ql \-
+with
+.Ql tinyparse: error: init: unknown option 'OPTION' ,
+and an unknown
+.Fl \-grammar
+.Ar NAME
+with
+.Ql tinyparse: error: unknown grammar 'NAME' ;
+both exit with status 1 before writing anything.
+.Ss vendor
+.Nm
+.Cm vendor
+.Ar DIR
+.Op Fl \-amalgamation | \-lib
+.Pp
+Creates
+.Ar DIR ,
+if it does not exist, and writes the amalgamation into it:
+.Pa tinyparse.c
+and
+.Pa tinyparse.h ,
+or with
+.Fl \-lib
+only
+.Pa tinyparse.h .
+Existing files of the same names are replaced.
+Any other argument that begins with
+.Ql \-
+is rejected with
+.Ql tinyparse: error: vendor: unknown option 'OPTION'
+and exit status 1, before anything is written.
+.Ss grammars
+.Nm
+.Cm grammars
+.Pp
+Prints the names of the standard grammars built into the program, one per
 line.
-These are the grammars resolvable by name with no filesystem present
-(for example std.json); the registry is baked into the program at build
-time, like the manual page.
-.It Cm man
-Print this manual page, in mdoc form, to standard output.
-The page is
-embedded in the program at build time, so it is available with no
-filesystem lookup.
-.It Cm version
-Print the program name and version, then exit zero.
-.It Fl \-help
-Print a short usage summary and exit zero.
-Running tinyparse with no
-arguments prints the same usage summary.
+.Ss man
+.Nm
+.Cm man
+.Pp
+Prints this manual page in mdoc format to standard output.
+.Ss version
+.Nm
+.Cm version ,
+.Nm
+.Fl \-version
+.Pp
+Prints
+.Ql tinyparse ,
+a space and the version, then a newline.
+.Ss help
+.Nm
+.Cm help ,
+.Nm
+.Fl \-help ,
+.Nm
+.Fl h ,
+.Nm
+.Pp
+Prints a usage summary to standard output and exits with status 0.
+.Sh HOST SERVICES
+Before it compiles a grammar, every command gives the library:
+.Bl -bullet
+.It
+a memory grant of 16 MiB whose grow callback takes more memory from
+.Xr malloc 3
+when a parse needs it;
+.It
+the module resolver described under
+.Sx GRAMMAR ARGUMENTS ;
+.It
+four character classes for
+.Li (class NAME) ,
+each matching ASCII bytes only:
+.Ql alpha
+.Pf ( Ql A\-Z ,
+.Ql a\-z ) ,
+.Ql digit
+.Pf ( Ql 0\-9 ) ,
+.Ql alnum
+.Pf ( Ql alpha
+or
+.Ql digit )
+and
+.Ql space
+(space, tab, newline, carriage return).
+.El
+.Pp
+A
+.Li (class NAME)
+with any other
+.Ar NAME
+compiles and matches no byte.
+.Sh OUTPUT FORMATS
+.Ss Tree dump
+.Cm run Fl \-dump\-tree
+and the
+.Fn main
+of a
+.Fl \-parser
+program print the tree in pre-order, one node per line.
+This line is a
+.Ql close
+field holding a
+.Ql \&)
+token at byte 8:
+.Bd -literal -offset indent
+      close: ) [8-9] [0,8]-[0,9]
+.Ed
+.Pp
+A line holds, in this order:
+.Bl -tag -width Ds
+.It Indentation
+Two spaces per level below the root.
+.It Ql MISSING\~
+Present when recovery inserted the node: a zero-width node for input that is
+not there.
+.It Ql FIELD:\~
+Present when the node is bound to a field of its parent.
+.It Ar KIND
+The name of the rule or token.
+A literal token's kind is its text, printed as is, so a literal newline token
+ends the line early.
+.It Ql \~[LANGUAGE]
+Present on every node of an injected region: the name of the grammar that
+parsed it, such as
+.Ql [std.json] .
+.It Ql \~[START-END]
+The byte range: 0-based, end-exclusive.
+.It Ql \~[ROW,COLUMN]-[ROW,COLUMN]
+The start and end points: 0-based rows, and columns counted in bytes from the
+start of the row.
+.El
+.Pp
+Trivia and error extras appear in place as nodes of their token kind.
+Skipped extras and
+.Li EOF
+produce no node.
+.Ss Linearized tree
+.Cm linearize
+prints one line per event of a depth-first walk:
+.Bl -tag -width Ds
+.It Li enter Ar KIND
+A node with children starts.
+.It Li leaf Ar KIND TEXT
+A node without children, followed by its bytes as they appear in the input.
+The text of a
+.Ql MISSING
+node is empty.
+.It Li exit Ar KIND
+The node of the matching
+.Li enter
+ends.
+.El
+.Pp
+Fields and language tags are not printed.
+.Ss Query captures
+.Cm query
+prints one line per capture, in the order the query reports them:
+.Bd -literal -offset indent
+@NAME START-END TEXT
+.Ed
+.Pp
+.Ar NAME
+is the capture name,
+.Ar START-END
+the captured node's byte range (0-based, end-exclusive), and
+.Ar TEXT
+the captured bytes, printed as they are, including any newlines.
+.Ss Node types
+.Cm node\-types
+prints a JSON array with one object per rule, hidden rules included, then one
+per named token.
+Literal tokens are not listed.
+Each object has:
+.Bl -tag -width Ds
+.It Li \(dqtype\(dq
+The node kind.
+.It Li \(dqnamed\(dq
+Always
+.Li true .
+.It Li \(dqfields\(dq
+An object with one member per field the rule uses.
+Each member is
+.Li { \(dqtypes\(dq: [...] } ,
+listing
+.Li { \(dqtype\(dq: KIND, \(dqnamed\(dq: true }
+for every named kind the field can hold; a field that holds only literal
+tokens has an empty list.
+Tokens have an empty object.
+.It Li \(dqchildren\(dq
+Present on a rule with named children outside any field:
+.Li { \(dqmultiple\(dq: BOOL, \(dqrequired\(dq: false, \(dqtypes\(dq: [...] } .
+.Li \(dqmultiple\(dq
+is
+.Li true
+when more than one kind can appear there.
+.El
+.Pp
+The layout follows tree-sitter's
+.Pa node-types.json ,
+but the meanings differ: tree-sitter's
+.Li \(dqmultiple\(dq
+says whether more than one child can appear, its
+.Li \(dqrequired\(dq
+is computed, and its field members carry
+.Li \(dqmultiple\(dq
+and
+.Li \(dqrequired\(dq
+and list unnamed types.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev TINYPARSE_RULEMEMO
+Controls the rule memo, which records each rule's result at each position so a
+backtracking parse does not parse it again.
+.Ql always
+turns it on from the start of every parse;
+.Ql off
+turns it off.
+Unset or set to any other value, it switches on once a parse has made more
+than 32 \(mu L + 65,536 rule calls, where L is the input length in bytes.
+Every command that compiles a grammar reads it.
+The tree is the same in every mode; the setting exists to test the memo.
+.It Ev TINYPARSE_TRACE_LIFECYCLE
+When set and not empty,
+.Cm run
+prints
+.Ql lifecycle: STATE
+to standard error after the parse, before the tree and the diagnostics.
+.Ar STATE
+is
+.Ql finished
+when the parser ran over the whole input, whether or not the input matched,
+and
+.Ql failed
+when a chunk was dropped before the parse.
+Other commands ignore it.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa package.scm
+The manifest of a grammar package; see
+.Sx GRAMMAR ARGUMENTS .
+.It Pa grammar.scm
+The grammar of a package, in the same directory as
+.Pa package.scm .
+.It Pa *.tpg
+A packed grammar written by
+.Cm pack .
+Its first four bytes are
+.Ql TPG1 .
+.It Pa DIR/grammar.scm , DIR/main.c , DIR/build.sh , DIR/tinyparse.c , DIR/tinyparse.h
+The files
+.Cm init
+and
+.Cm vendor
+write.
 .El
 .Sh EXIT STATUS
-tinyparse exits 0 on success.
-It exits 1 when a grammar fails to validate,
-an input fails to parse, a file cannot be read, a required option is missing,
-or a parse runs out of memory, and 2 on an unknown command.
+.Bl -tag -width Ds
+.It 0
+Success, including
+.Cm help ,
+.Cm version ,
+.Cm man
+and
+.Cm grammars ,
+and a
+.Cm linearize
+or
+.Cm query
+whose parse recovered.
+.It 1
+A grammar that does not compile, a parse that fails, a
+.Cm run
+with any error-severity diagnostic, an unreadable file, a missing required
+option, a rejected query, an unknown option for
+.Cm init
+or
+.Cm vendor ,
+an unknown
+.Fl \-grammar
+name for
+.Cm init ,
+and running out of memory.
+.It 2
+An unknown command.
+The usage summary goes to standard error.
+.El
+.Pp
+Commands other than
+.Cm init
+and
+.Cm vendor
+ignore options they do not know and extra arguments.
 .Sh EXAMPLES
-Validate a grammar:
+Parse JSON with the built-in
+.Ql std.json
+grammar:
 .Bd -literal -offset indent
-tinyparse check examples/sexpr/sexpr.scm
+printf '{"a": [1, 2]}' > in.json
+tinyparse run std.json --input in.json --dump-tree
 .Ed
 .Pp
-Parse an input file and dump its tree:
+Parse standard input in 1-byte chunks:
 .Bd -literal -offset indent
-tinyparse run examples/sexpr/sexpr.scm \-\-input sample.txt \-\-dump\-tree
+printf '(a (b c))' | tinyparse run examples/sexpr/sexpr.scm \e
+    --input - --chunk 1 --dump-tree
 .Ed
 .Pp
-Read this manual:
+Pack a grammar once and parse with the packed file:
 .Bd -literal -offset indent
-tinyparse man | mandoc
+tinyparse pack std.json --out json.tpg
+tinyparse run json.tpg --input in.json --dump-tree
 .Ed
+.Pp
+Print the first item of every list:
+.Bd -literal -offset indent
+printf '(a (b c))' > input.txt
+printf '%s\en' '(List open: (_) . (Form) @first)' > first.scm
+tinyparse query examples/sexpr/sexpr.scm first.scm --input input.txt
+.Ed
+.Pp
+Generate a parser library with the prefix
+.Ql sexpr
+and compile it from the
+.Pa tinyparse
+directory:
+.Bd -literal -offset indent
+tinyparse c examples/sexpr/sexpr.scm --out sexpr_parser.c --parser-lib
+cc -std=c99 -I include -I src -c sexpr_parser.c
+.Ed
+.Pp
+Start a project that builds with one C compiler:
+.Bd -literal -offset indent
+tinyparse init hello
+cd hello && sh build.sh && echo 'hello world' | ./app
+.Ed
+.Pp
+Read this page in a terminal:
+.Bd -literal -offset indent
+tinyparse man | mandoc -a
+.Ed
+.Sh DIAGNOSTICS
+Errors from the command itself are printed as
+.Ql tinyparse: error: MESSAGE .
+A grammar that fails to compile or load prints
+.Ql error: FAULT ,
+the text the library reports, with no position.
+A parse prints each diagnostic as
+.Bd -literal -offset indent
+MESSAGE [CODE]
+  help: HELP
+.Ed
+.Pp
+The help line appears only when the diagnostic has help text.
+The library's own messages begin with
+.Ql error:\~ ,
+as in
+.Ql error: unexpected input [parse.syntax] ;
+a message from a grammar's
+.Li recover
+form is printed as the grammar wrote it.
+Labels, notes and positions are not printed.
+Diagnostics of an injected region are not reported.
+The codes and fields are listed in the diagnostics reference; see
+.Sx SEE ALSO .
 .Sh SEE ALSO
 .Xr cc 1 ,
 .Xr mandoc 1
+.Pp
+The references in the
+.Pa tinyparse
+directory of the source repository,
+.Lk https://github.com/dhamidi/tinyactors :
+.Bl -tag -width Ds
+.It Pa docs/reference/grammar.md
+the grammar language and
+.Pa package.scm
+.It Pa docs/reference/query-language.md
+the query language
+.It Pa docs/reference/diagnostics.md
+diagnostic codes and faults
+.It Pa docs/reference/c-api.md
+the C API and the symbols of generated C
+.It Pa docs/reference/std-grammars.md
+the standard grammars
+.El
 .Sh AUTHORS
-.An -nosplit
-.An The tinyactors project
+.An Dario Hamidi
+.Sh BUGS
+.Cm check ,
+.Cm node\-types
+and
+.Cm c
+read a packed grammar as
+.Pa .scm
+source and use memory until an allocation fails.
+.Pp
+A diagnostic from an
+.Li (error NAME)
+extra is recorded again each time the parser backtracks over the same bytes,
+so one error node can have several
+.Ql extra.error
+diagnostics.
+A
+.Li recover
+form that applies at several nesting levels at the end of the input reports
+its diagnostic more than once:
+.Pa examples/recover/list.scm
+reports it 3 times for
+.Ql ((a
+and 7 times for
+.Ql (((a .
