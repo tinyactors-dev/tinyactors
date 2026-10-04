@@ -258,8 +258,8 @@ static void test_equal_addresses_are_one_handle(void) {
     CHECK(first == second);
     ta_address_release(first);
     ta_address_release(second);
-    CHECK(heap.stats.live_blocks == before + 2); /* the record is gone; the first page and its directory stay */
-    /* Many addresses: the table grows a bucket at a time and finds them all. */
+    CHECK(heap.stats.live_blocks == before + 4); /* the record is gone; the pool's and the index's first page and directory stay */
+    /* Many addresses: the index grows a page at a time and finds them all. */
     enum { MANY = 20000 };
     static ta_address *many[MANY];
     char name[16];

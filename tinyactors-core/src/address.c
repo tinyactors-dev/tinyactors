@@ -2,6 +2,32 @@
 #include "hash.h"
 #include "system.h"
 
+/* The package comment is in address.h. */
+
+/*
+ * A page of the record directory holds 4096 pointers (32 KiB) and a page of
+ * the index 4096 slots (32 KiB), so the largest block the table asks for
+ * stays flat as names are added. The index grows at 7/16 of its slots, which
+ * is about 18 bytes of slots per name.
+ */
+#define TA_ADDRESS_PAGE_ITEMS 4096u
+#define TA_ADDRESS_PAGE_SLOTS 4096u
+#define TA_ADDRESS_GROW_SIXTEENTHS 7u
+
+/* The free-list link lives in the low half of the pointer, which means nothing while the item is free. */
+static const ta_pool_params TA_ADDRESS_POOL = {
+    .item_size = sizeof(ta_address *),
+    .item_alignment = _Alignof(ta_address *),
+    .link_offset = 0,
+    .page_items = TA_ADDRESS_PAGE_ITEMS,
+};
+
+static const ta_table_params TA_ADDRESS_INDEX = {
+    .mode = TA_TABLE_GROWING,
+    .page_slots = TA_ADDRESS_PAGE_SLOTS,
+    .grow_sixteenths = TA_ADDRESS_GROW_SIXTEENTHS,
+};
+
 /* The hash chains family, a NUL separator and name through one running FNV-1a
  * state, so ("a", "bc") and ("ab", "c") differ. */
 static uint32_t ta_address_hash(const ta_actor_address *address) {
@@ -9,20 +35,6 @@ static uint32_t ta_address_hash(const ta_actor_address *address) {
     uint32_t hash = ta_fnv1a32(TA_FNV1A32_BASIS, address->family.name.ptr, address->family.name.len);
     hash = ta_fnv1a32(hash, &separator, 1);
     return ta_fnv1a32(hash, address->name.ptr, address->name.len);
-}
-
-static uint32_t ta_address_bucket_count(const ta_address_table *table) {
-    return table->base + table->split;
-}
-
-static ta_address **ta_address_bucket(const ta_address_table *table, uint32_t index) {
-    ta_address **page = *(ta_address ***)ta_vec_at(&table->pages, index / TA_ADDRESS_PAGE_BUCKETS);
-    return &page[index % TA_ADDRESS_PAGE_BUCKETS];
-}
-
-static uint32_t ta_address_index(const ta_address_table *table, uint32_t hash) {
-    uint32_t index = hash & (table->base - 1u);
-    return index < table->split ? hash & (2u * table->base - 1u) : index;
 }
 
 ta_result ta_address_record_bytes(uint32_t family_len, uint32_t name_len, size_t *bytes) {
@@ -44,86 +56,35 @@ size_t ta_address_bytes(const ta_address *address) {
 
 void ta_address_detached_init(ta_address *copy) {
     copy->table = NULL;
-    copy->next = NULL;
     copy->unloaded = 0;
     copy->references = 0;
-}
-
-/* Makes sure the page holding bucket `index` exists; false when it cannot. */
-static bool ta_address_page_for(ta_address_table *table, uint32_t index) {
-    uint32_t page_index = index / TA_ADDRESS_PAGE_BUCKETS;
-    if (page_index < table->pages.count) {
-        return true;
-    }
-    ta_address **page = ta_mem_alloc(table->allocator, TA_ADDRESS_PAGE_BUCKETS * sizeof(ta_address *),
-                                     _Alignof(ta_address *));
-    if (page == NULL) {
-        return false;
-    }
-    for (uint32_t bucket = 0; bucket < TA_ADDRESS_PAGE_BUCKETS; bucket += 1u) {
-        page[bucket] = NULL;
-    }
-    if (ta_vec_push(&table->pages, &page) != TA_OK) {
-        ta_mem_free(table->allocator, page,
-                    &(ta_allocator_free_params){ .size = TA_ADDRESS_PAGE_BUCKETS * sizeof(ta_address *),
-                                                 .alignment = _Alignof(ta_address *) });
-        return false;
-    }
-    return true;
-}
-
-/* Splits one bucket when the table is fuller than one record per bucket. */
-static void ta_address_grow(ta_address_table *table) {
-    uint32_t added = ta_address_bucket_count(table);
-    if (table->count <= added || added == UINT32_MAX || !ta_address_page_for(table, added)) {
-        return; /* a failed page only postpones the split */
-    }
-    uint32_t wide = 2u * table->base - 1u;
-    ta_address **from = ta_address_bucket(table, table->split);
-    ta_address **to = ta_address_bucket(table, added);
-    ta_address *chain = *from;
-    *from = NULL;
-    while (chain != NULL) {
-        ta_address *next = chain->next;
-        ta_address **home = (chain->hash & wide) == table->split ? from : to;
-        chain->next = *home;
-        *home = chain;
-        chain = next;
-    }
-    table->split += 1u;
-    if (table->split == table->base) {
-        table->base *= 2u;
-        table->split = 0;
-    }
+    copy->index = 0;
 }
 
 void ta_address_table_init(ta_address_table *table, ta_allocator allocator) {
-    *table = (ta_address_table){ .allocator = allocator, .base = TA_ADDRESS_INITIAL_BUCKETS };
-    ta_vec_init(&table->pages, allocator, TA_VEC_LAYOUT(ta_address **));
+    *table = (ta_address_table){ .allocator = allocator };
+    /* The parameters are constants that make a pool; init only validates them. */
+    (void)ta_pool_init(&table->records, allocator, &TA_ADDRESS_POOL);
 }
 
-static void ta_address_free(ta_address_table *table, ta_address *address) {
+static ta_address *ta_address_record_at(const ta_address_table *table, uint32_t index) {
+    return *(ta_address **)ta_pool_at(&table->records, index);
+}
+
+static void ta_address_free(const ta_address_table *table, ta_address *address) {
     ta_mem_free(table->allocator, address,
-                &(ta_allocator_free_params){ .size = ta_address_bytes(address),
-                                             .alignment = _Alignof(ta_address) });
+                &(ta_allocator_free_params){ .size = ta_address_bytes(address), .alignment = _Alignof(ta_address) });
 }
 
 void ta_address_table_destroy(ta_address_table *table) {
-    uint32_t buckets = table->pages.count == 0 ? 0u : ta_address_bucket_count(table);
-    for (uint32_t index = 0; index < buckets; index += 1u) {
-        ta_address *chain = *ta_address_bucket(table, index);
-        while (chain != NULL) {
-            ta_address *next = chain->next;
-            ta_address_free(table, chain);
-            chain = next;
-        }
+    ta_table_cursor cursor = {0};
+    uint32_t hash = 0;
+    uint32_t index = 0;
+    while (ta_table_next(&table->index, &cursor, &hash, &index)) {
+        ta_address_free(table, ta_address_record_at(table, index));
     }
-    for (uint32_t page = 0; page < table->pages.count; page += 1u) {
-        ta_mem_free(table->allocator, *(ta_address ***)ta_vec_at(&table->pages, page),
-                    &(ta_allocator_free_params){ .size = TA_ADDRESS_PAGE_BUCKETS * sizeof(ta_address *),
-                                                 .alignment = _Alignof(ta_address *) });
-    }
-    ta_vec_destroy(&table->pages);
+    ta_table_destroy(&table->index);
+    ta_pool_destroy(&table->records);
     *table = (ta_address_table){0};
 }
 
@@ -133,6 +94,21 @@ static bool ta_address_matches(const ta_address *record, const ta_actor_address 
     return record->hash == hash && ta_str_equal(family, address->family.name) && ta_str_equal(name, address->name);
 }
 
+/* The record of `address`, found through the index, or NULL. */
+static ta_address *ta_address_find(const ta_address_table *table, const ta_actor_address *address, uint32_t hash) {
+    ta_table_probe probe;
+    uint32_t index = 0;
+    ta_table_probe_start(&table->index, hash, &probe);
+    while (ta_table_probe_next(&probe, &index)) {
+        ta_address *record = ta_address_record_at(table, index);
+        if (ta_address_matches(record, address, hash)) {
+            return record;
+        }
+    }
+    return NULL;
+}
+
+/* A new record with one reference's worth of fields filled in; not yet in any table. NULL when memory is out. */
 static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_address *address, uint32_t hash) {
     uint32_t family_len = address->family.name.len;
     uint32_t name_len = address->name.len;
@@ -145,9 +121,9 @@ static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_addr
         return NULL;
     }
     record->table = NULL;
-    record->next = NULL;
     record->unloaded = 0;
     record->references = 0;
+    record->index = 0;
     record->hash = hash;
     record->family_len = family_len;
     record->name_len = name_len;
@@ -162,32 +138,48 @@ static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_addr
     return record;
 }
 
-ta_result ta_address_table_intern(ta_address_table *table, const ta_actor_address *address,
-                                  ta_address **out) {
-    uint32_t hash = ta_address_hash(address);
-    if (table->pages.count != 0) {
-        for (ta_address *record = *ta_address_bucket(table, ta_address_index(table, hash)); record != NULL;
-             record = record->next) {
-            if (ta_address_matches(record, address, hash)) {
-                record->references += 1u;
-                *out = record;
-                return TA_OK;
-            }
-        }
-    } else if (!ta_address_page_for(table, 0)) {
-        return TA_ERR_NOMEM;
+/*
+ * Makes room for one more record: a free pool item, the index (created at
+ * the first intern), and a free slot in the page `hash` selects, growing the
+ * index first when it is due. A failed grow only postpones; a failed prepare,
+ * refill or first page is TA_ERR_NOMEM. Nothing is taken from the pool.
+ */
+static ta_result ta_address_reserve(ta_address_table *table, uint32_t hash) {
+    ta_result result = ta_pool_refill(&table->records, 1u);
+    if (result == TA_OK && table->index.page_slots == 0) {
+        result = ta_table_init(&table->index, table->allocator, &TA_ADDRESS_INDEX);
     }
-    ta_address *record = ta_address_record(table->allocator, address, hash);
+    if (result != TA_OK) {
+        return result;
+    }
+    if (ta_table_wants_grow(&table->index)) {
+        (void)ta_table_grow(&table->index);
+    }
+    return ta_table_prepare(&table->index, hash);
+}
+
+ta_result ta_address_table_intern(ta_address_table *table, const ta_actor_address *address, ta_address **out) {
+    uint32_t hash = ta_address_hash(address);
+    ta_address *record = ta_address_find(table, address, hash);
+    if (record != NULL) {
+        record->references += 1u;
+        *out = record;
+        return TA_OK;
+    }
+    record = ta_address_record(table->allocator, address, hash);
     if (record == NULL) {
         return TA_ERR_NOMEM;
     }
+    if (ta_address_reserve(table, hash) != TA_OK) {
+        ta_address_free(table, record);
+        return TA_ERR_NOMEM;
+    }
+    uint32_t index = ta_pool_take(&table->records); /* reserved above */
+    *(ta_address **)ta_pool_at(&table->records, index) = record;
     record->table = table;
     record->references = 1;
-    ta_address **bucket = ta_address_bucket(table, ta_address_index(table, hash));
-    record->next = *bucket;
-    *bucket = record;
-    table->count += 1u;
-    ta_address_grow(table);
+    record->index = index;
+    (void)ta_table_insert(&table->index, hash, index); /* room was prepared, and nothing inserted since */
     *out = record;
     return TA_OK;
 }
@@ -237,14 +229,8 @@ void ta_address_release(ta_address *address) {
         return;
     }
     ta_address_table *table = record->table;
-    for (ta_address **link = ta_address_bucket(table, ta_address_index(table, record->hash)); *link != NULL;
-         link = &(*link)->next) {
-        if (*link == record) {
-            *link = record->next;
-            break;
-        }
-    }
-    table->count -= 1u;
+    (void)ta_table_remove(&table->index, record->hash, record->index);
+    ta_pool_give(&table->records, record->index);
     ta_address_free(table, record);
 }
 
