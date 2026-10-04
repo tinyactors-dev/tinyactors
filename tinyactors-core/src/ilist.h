@@ -55,8 +55,9 @@
  * only taken items. The link of the tail is 0. An item that is on no list of
  * a kind has 0 in that kind's field: ta_pool_take zeroes the pool's own
  * link_offset field, the owner's fresh template keeps its other link fields
- * 0, and pop, unlink and splice leave every item they remove with link 0, so
- * an item can be pushed again at once.
+ * 0, and pop and unlink leave the item they remove with link 0, so it can be
+ * pushed again at once. Splice removes no item: it relinks the tail of one
+ * list to the head of the other and keeps the links of every item it moves.
  *
  * Complexity. push_back, push_front, pop_front, splice, is_empty and next
  * are O(1). unlink walks from the head and is O(n) for a list of n items,

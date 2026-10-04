@@ -1398,8 +1398,9 @@ TA_PRIVATE uint32_t ta_pool_trim(ta_pool *pool);
  * only taken items. The link of the tail is 0. An item that is on no list of
  * a kind has 0 in that kind's field: ta_pool_take zeroes the pool's own
  * link_offset field, the owner's fresh template keeps its other link fields
- * 0, and pop, unlink and splice leave every item they remove with link 0, so
- * an item can be pushed again at once.
+ * 0, and pop and unlink leave the item they remove with link 0, so it can be
+ * pushed again at once. Splice removes no item: it relinks the tail of one
+ * list to the head of the other and keeps the links of every item it moves.
  *
  * Complexity. push_back, push_front, pop_front, splice, is_empty and next
  * are O(1). unlink walks from the head and is O(n) for a list of n items,
@@ -5297,6 +5298,36 @@ TA_PRIVATE uint32_t ta_pool_trim(ta_pool *pool) {
     pool->capacity = capacity;
     return freed;
 }
+
+/*
+ * Implementation of block B1 (ilist). The contract, lifetime and usage are in
+ * ilist.h; this comment records what the code relies on.
+ *
+ * Lifetime and allocation. Nothing here allocates, frees or keeps a pointer
+ * across calls: a ta_ilink is read during the call and a ta_ilist is only two
+ * indexes owned by the caller. No function takes an allocator, so none can
+ * fail for lack of memory.
+ *
+ * Reaching a link field. ta_ilist_slot turns an index into the address of the
+ * item's uint32_t link: ta_pool_at gives the item (A5 addressing, no
+ * allocation), and the descriptor's byte offset selects the field. The
+ * offset is validated once, in ta_ilink_init, against the pool's item_size
+ * (read directly from the pool: offset is a multiple of 4 and at most
+ * item_size - 4), so the per-call path does no arithmetic that can overflow
+ * and no check; the offset is within the item and aligned because the item
+ * is aligned to at least the pool's item_alignment and item_size is a
+ * multiple of it.
+ *
+ * Termination. Only ta_ilist_unlink walks. It stops after
+ * ta_pool_extent(pool) steps, the most items a list over the pool can hold,
+ * so a corrupted cyclic list ends with "not found" instead of looping.
+ *
+ * Failure. No operation leaves partial state: each updates at most the two
+ * list ends and the links of the items it names, and unlink changes nothing
+ * unless it finds the item.
+ *
+ * Complexity. All O(1) except unlink, which is O(n) in the list length.
+ */
 
 
 /* ta_ilist_slot returns the link field of item `index`. `index` must be a taken item (never 0). */
