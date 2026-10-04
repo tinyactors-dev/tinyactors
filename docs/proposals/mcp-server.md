@@ -3,6 +3,7 @@
 **Status:** Proposed (2026-09-29)
 **Touches:** tinyactors-core (every I/O processor registers a URL and a short name); the host kernel (the mapping, implemented once); tinyactors-napi and tinyactors-test (bind it). The DAP adapters and tinyactors-vscode were removed on 2026-09-30, ahead of it.
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
+**To revisit:** [the ring protocol proposal](ring-proto/README.md) deletes the host kernel this places the mapping in. This proposal is revised against the ring protocol after its Phase 5: where the mapping lives, how `goto` fits a debugger that owns the whole system, and what replaces origin scopes ([ring-proto migration](ring-proto/reference/migration.md#open-questions)).
 
 ## Goal
 

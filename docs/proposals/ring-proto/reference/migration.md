@@ -314,9 +314,18 @@ when h2c and c2h arrive, not at the end.
   default to 16 KiB each. What remains is measuring them in step 4.2.
 - **The MCP server proposal** ([mcp-server.md](../../mcp-server.md))
   places its mapping in the host kernel, "implemented once". With the
-  kernel gone, it needs a new home. Candidates: a small C library beside
-  the OTLP reader, or core itself for the parts that are only reads of
-  core state. Its live views could read `tel` and c2h.
+  kernel gone, it needs a new home. **Not on this plan's critical path:**
+  nothing implements the mapping, so deleting the kernel (Phase 6) breaks
+  nothing. The MCP proposal is revised against the ring protocol after
+  Phase 5, when its records exist. It then settles three things:
+  - its home. A small C library beside the OTLP reader is the likely
+    answer: `send` becomes `h2c.event` and waits for its
+    `c2h.input_completed`, and `load` becomes the load records;
+  - `goto`. The MCP proposal queues an operator transition behind one
+    actor's mail while the system runs. This proposal allows operator
+    transitions only while a debugger owns the whole system
+    ([debugging.md](debugging.md));
+  - its I/O processor's origin scopes, which this proposal removes.
 - **The SQLite and PostgreSQL sketches** ([sqlite-host.md](../../sqlite-host.md),
   [postgres-host.md](../../postgres-host.md)) keep a `ta_mailbox` table
   and drain it into core. With the pool in core, the table holds only

@@ -375,7 +375,7 @@ Questions that must be answered before the phase that depends on them:
 | Fairness: is a ratio enough? **Answered:** yes. One run queue in arrival order and `fairnessRatio`; deferred mail returns to the run queue at its arrival position; no round robin across targets ([envelope.md](reference/envelope.md#mail-for-an-active-session)) | 4.2 |
 | Default sizes for the pool, the name area and the rings. **Answered in part:** a full c2h pauses the writing slot instead of failing the action, so a ring's size is a throughput setting. The rings default to 16 KiB each; the pool (4,096 envelopes) and the name area (256 KiB) keep their bounds ([BEHAVIORS.md](BEHAVIORS.md#parameters)). **Open:** measuring the ring defaults with napi's suites, `scale.js` and the IRP suite, recorded in the pool ADR | 4.2 |
 | The exact encoding of definition specs and diagnostics. **Answered:** no encoding. A request carries a handle to a native `ta_scxml_spec` built with core's spec builder, and core writes ADR 0058's native compile-error struct into host memory ([definitions.md](reference/definitions.md#decided-a-native-spec-handle-not-a-byte-layout)) | 5.4 |
-| A home for the MCP server mapping, now that the kernel goes | 6 |
+| A home for the MCP server mapping, now that the kernel goes. **Answered:** it does not block Phase 6. Nothing implements the mapping, so the MCP proposal is revised after Phase 5: its home, `goto` against exclusive debugger ownership, and origin scopes ([migration.md](reference/migration.md#open-questions)) | – |
 
 ## Phase 1: turn the duplicates into blocks
 
