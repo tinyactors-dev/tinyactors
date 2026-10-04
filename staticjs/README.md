@@ -259,16 +259,29 @@ different amounts of fuel), `tests/api_test.c` and `tests/number_test.c`.
 - **vm** and **values**: a fresh evaluator, a kept one, abandoning one,
   running on little fuel at a time, and building values through the API.
 
-Each case gives its throughput (median of 15 samples, with the spread
-between the quartiles) and its memory: the bytes its inputs take, the
-op's peak, what its result holds, allocations per op, and bytes left
-behind, which must be none. `mise run bench` builds with the pinned clang at
-`-O2`, prints a table, and stores the records under
+Each case gives its throughput (median of 15 samples of at least 8 ops,
+with the spread between the quartiles) and its memory: the bytes its
+inputs take, the op's peak, what its result holds, allocations per op, and
+bytes left behind, which must be none. `mise run bench` builds with the
+pinned clang at `-O2`, prints a table, and stores the records under
 `bench/results/<machine signature>/` (see its README). `mise run
 bench-compare <commit>` builds that commit's library beside this tree's,
-with the same bench program, and runs both alternately, flagging a
-throughput more than 5% slower and any memory increase; a case the older
-build cannot run is reported as such.
+with the same bench program (or, when today's does not compile against
+the older `staticjs.h`, that commit's own, with a warning: those rows then
+compare two programs as well), and runs both alternately, 4 processes a
+side in ABBA order. It flags a throughput more than 5% slower in every run
+and any memory increase; a case the older build cannot run is reported as
+such.
+
+**Noise.** Identical code does not measure the same twice: on machine
+`92727593a59b` (a 4-core cloud VM), `mise run bench-compare HEAD` with
+nothing changed moved half the rows by more than 1%, one in ten by more
+than 3.5%, and three of 78 by more than 5% (one by 31%), while each side's
+four runs spanned 4.5% for the median row. So a row gives each side's
+range over its runs (`runs o/n`), a change past 5% inside that range is
+reported as within the noise, not as slower, and `?` marks a row whose
+runs or samples vary past 5%, which cannot resolve a 5% change; rerun
+those cases with `--runs=8` before reading anything into them.
 
 **Reporting.** Give throughput and memory together, name the machine
 signature, and compare builds side by side with `bench-compare`, never

@@ -2,7 +2,7 @@
 #MISE description="Build another commit's staticjs beside the working tree and run both benchmarks alternately on this machine: throughput and memory, with changes past 5% flagged"
 #USAGE arg "<commit>" help="The commit to compare the working tree with"
 #USAGE arg "[filter]" help="Only cases whose name starts with this (compile, eval.array)"
-#USAGE flag "--runs <n>" default="3" help="Alternating runs per side"
+#USAGE flag "--runs <n>" default="4" help="Alternating runs per side, rounded up to an even number"
 #USAGE flag "--quick" help="Fewer, shorter samples and the two smallest sizes"
 #USAGE flag "--store" help="Also append every run's records to bench/results/"
 # vim:ft=ruby
@@ -10,16 +10,28 @@
 # Absolute figures move between days on one machine, so builds are compared
 # side by side. The other commit is checked out in a temporary git
 # worktree, and both sides are built with this checkout's toolchain, flags
-# and bench/bench.c, so that only the library's source differs. Each
-# (case, n) then runs in a process of its own, --runs times per side, in
-# ABBA order (old then new, new then old, ...) to cancel drift. A row
-# compares the medians over the runs: throughput (+ is faster) flagged when
-# it is more than 5% slower, `?` when either side's spread is past 5%;
-# memory, which is deterministic, flagged on any increase; and a change in
-# fuel per op shown, as it changes what a caller's fuel budget buys. A case
-# one build cannot run (an older library refusing newer syntax) is reported
-# as such and the others are compared. The worktree is removed afterwards,
-# even on failure.
+# and bench/bench.c, so that only the library's source differs. When
+# today's bench.c does not compile against the old staticjs.h, the old side
+# falls back to the old commit's own bench/bench.c, if it has one, with a
+# warning: its rows then compare two bench programs as well as two
+# libraries. Each (case, n) runs in a process of its own, --runs times per
+# side (an even number), in ABBA order (old then new, new then old, ...) so
+# that each side runs first equally often and drift cancels.
+#
+# A row compares the medians over the runs, each run counting its
+# throughput with the old side's units per op (the bytes a write case
+# produced, which a change to the writer can alter: a note shows it).
+# Identical code measured twice moves by several percent from one process
+# to the next, so a row also gives each side's range over its runs, and is
+# flagged as more than 5% slower only when every new run was slower than
+# every old run; a change past 5% inside that range is reported as within
+# the noise. `?` marks a row that cannot resolve 5%: either side's runs, or
+# the samples inside a run, vary by more than that. Memory, which is
+# deterministic, is flagged on any increase, and a change in fuel per op is
+# shown, as it changes what a caller's fuel budget buys. A case one build
+# cannot run (an older library refusing newer syntax) is reported as such
+# and the others are compared; a build whose `--list` fails stops the
+# comparison. The worktree is removed afterwards, even on failure.
 
 require 'tmpdir'
 require_relative '../bench'
@@ -33,13 +45,17 @@ if (at = args.index('--runs'))
   args.slice!(at, 2)
 end
 args.reject! { |arg| arg.start_with?('--runs=') && (runs = arg.delete_prefix('--runs=').to_i) }
-runs = 3 if runs.nil? || runs < 1
+runs = 4 if runs.nil? || runs < 1
+if runs.odd?
+  warn "staticjs: --runs=#{runs} rounded up to #{runs + 1}, so that each side runs first equally often"
+  runs += 1
+end
 quick = ENV['usage_quick'] == 'true' || args.delete('--quick')
 store = ENV['usage_store'] == 'true' || args.delete('--store')
 positional = args.reject { |arg| arg.start_with?('--') }
 base = ENV['usage_commit'].to_s.empty? ? positional[0] : ENV['usage_commit']
 filter = ENV['usage_filter'].to_s.empty? ? positional[1] : ENV['usage_filter']
-abort 'usage: mise run bench-compare <commit> [filter] [--runs=3] [--quick] [--store]' if base.nil?
+abort 'usage: mise run bench-compare <commit> [filter] [--runs=4] [--quick] [--store]' if base.nil?
 
 repository = Bench.repository
 old_commit = Bench.git('rev-parse', '--short=7', "#{base}^{commit}") or abort "staticjs: unknown commit #{base}"
@@ -71,15 +87,24 @@ end
 
 MEMORY = [%w[peakBytes peak], %w[heldBytes held], %w[allocsPerOp allocs], %w[allocatedBytesPerOp allocated]].freeze
 
-def summary(records)
-  good = records.reject { |record| record['error'] }
-  return { error: records.first&.fetch('error', nil) || 'no record' } if good.empty?
+# One side's runs: each run's throughput, counted with `units` per op (the
+# old side's, so that both sides measure the same work), their median and
+# their range, as a percentage of the median.
+def summary(records, units = nil)
+  good = records.reject { |record| record['error'] || !record.dig('nsPerOp', 'median').to_f.positive? }
+  return { error: records.find { |record| record['error'] }&.fetch('error') || 'no record' } if good.empty?
 
-  ns = median(good.map { |record| record.dig('nsPerOp', 'median') })
-  units = good.first['unitsPerOp'].to_f
+  own_units = good.first['unitsPerOp'].to_f
+  units ||= own_units
+  throughputs = good.map { |record| units / record.dig('nsPerOp', 'median') * 1e9 }
+  throughput = median(throughputs)
   {
     unit: good.first['unit'],
-    throughput: ns.to_f.positive? ? units / ns * 1e9 : nil,
+    units: units,
+    own_units: own_units,
+    runs: throughputs,
+    throughput: throughput,
+    range: throughput.positive? ? (throughputs.max - throughputs.min) / throughput * 100 : 0,
     spread: median(good.map { |record| record['spreadPercent'] }),
     fuel: median(good.map { |record| record['fuelPerOp'] }),
     memory: MEMORY.to_h { |key, _| [key, median(good.map { |record| record.dig('memory', key) })] }
@@ -92,7 +117,7 @@ def rate(side)
   "#{Bench.short(side[:throughput] / 1e6)} #{Bench::UNITS.fetch(side[:unit], side[:unit])}"
 end
 
-ROW = '%-34s %7s  %-16s %-16s %8s  %-11s  %-22s %-14s %s'
+ROW = '%-34s %7s  %-16s %-16s %8s  %-11s  %-11s  %-22s %-14s %s'
 
 Dir.mktmpdir('staticjs-bench-compare') do |tmp|
   worktree = File.join(tmp, 'base')
@@ -118,14 +143,19 @@ Dir.mktmpdir('staticjs-bench-compare') do |tmp|
 
     binaries = { old: File.join(old_build, 'bench'), new: Bench::RELEASE_BUILD.join('bench').to_s }
     list_args = [*(filter ? ["--filter=#{filter}"] : []), *(quick ? ['--quick'] : [])]
-    lists = binaries.transform_values { |binary| Bench.list(binary, list_args) || {} }
+    lists = binaries.to_h do |side, binary|
+      list = Bench.list(binary, list_args)
+      abort "staticjs: the #{side} build (#{side == :old ? old_commit : new_commit}) failed `bench --list`" if list.nil?
+
+      [side, list]
+    end
     names = (lists[:old].keys + lists[:new].keys).uniq
     abort "staticjs: no case matches #{filter.inspect}" if names.empty?
 
     puts "staticjs bench-compare: #{old_commit} -> #{new_commit}#{dirty ? ' (dirty)' : ''}, #{Bench.describe(signature)}, " \
          "#{runs} alternating run#{runs == 1 ? '' : 's'} each (ABBA), medians#{quick ? ', --quick' : ''}"
-    puts format(ROW, 'benchmark', 'n', 'old', 'new', 'change', 'spread o/n', 'peak B old->new', 'allocs/op o->n',
-                '').rstrip
+    puts format(ROW, 'benchmark', 'n', 'old', 'new', 'change', 'runs o/n', 'spread o/n', 'peak B old->new',
+                'allocs/op o->n', '').rstrip
     counts = Hash.new(0)
     names.each do |name|
       sizes = ((lists[:old][name] || []) + (lists[:new][name] || [])).uniq
@@ -147,7 +177,7 @@ Dir.mktmpdir('staticjs-bench-compare') do |tmp|
           end
         end
         old_side = summary(collected[:old])
-        new_side = summary(collected[:new])
+        new_side = summary(collected[:new], old_side[:units])
         if old_side[:error] || new_side[:error]
           counts[:could_not_run] += 1
           which = old_side[:error] ? 'old' : 'new'
@@ -160,9 +190,12 @@ Dir.mktmpdir('staticjs-bench-compare') do |tmp|
 
         change = (new_side[:throughput] - old_side[:throughput]) / old_side[:throughput] * 100
         notes = []
-        if change < -5
+        if change < -5 && new_side[:runs].max < old_side[:runs].min
           notes << 'slower than 5%'
           counts[:slower] += 1
+        elsif change < -5
+          notes << 'slower than 5%, within the noise'
+          counts[:within_noise] += 1
         end
         grew = MEMORY.select { |key, _| new_side[:memory][key].to_f > old_side[:memory][key].to_f }
         unless grew.empty?
@@ -170,10 +203,14 @@ Dir.mktmpdir('staticjs-bench-compare') do |tmp|
           counts[:memory] += 1
         end
         notes << "fuel #{Bench.num(old_side[:fuel])}->#{Bench.num(new_side[:fuel])}" if old_side[:fuel] != new_side[:fuel]
-        noisy = [old_side[:spread], new_side[:spread]].compact.any? { |spread| spread > 5 }
+        if new_side[:own_units] != old_side[:units]
+          notes << "#{old_side[:unit]}s/op #{Bench.num(old_side[:units])}->#{Bench.num(new_side[:own_units])}"
+        end
+        noisy = [old_side[:range], new_side[:range], old_side[:spread], new_side[:spread]].compact.any? { |v| v > 5 }
         counts[:noisy] += 1 if noisy
         puts format(ROW, name, Bench.num(n), rate(old_side), rate(new_side),
                     format('%+.1f%%%s', change, noisy ? '?' : ''),
+                    format('%.1f/%.1f%%', old_side[:range], new_side[:range]),
                     format('%.1f/%.1f%%', old_side[:spread].to_f, new_side[:spread].to_f),
                     "#{Bench.num(old_side[:memory]['peakBytes'])}->#{Bench.num(new_side[:memory]['peakBytes'])}",
                     "#{Bench.num(old_side[:memory]['allocsPerOp'])}->#{Bench.num(new_side[:memory]['allocsPerOp'])}",
@@ -181,9 +218,11 @@ Dir.mktmpdir('staticjs-bench-compare') do |tmp|
         $stdout.flush
       end
     end
-    puts "#{counts[:slower]} slower than 5%, #{counts[:memory]} with more memory, " \
-         "#{counts[:could_not_run]} one build could not run, #{counts[:one_side]} only on one side" \
-         "#{counts[:noisy].positive? ? ", #{counts[:noisy]} noisy (?: a spread past 5%; rerun with --runs=5)" : ''}"
+    puts "#{counts[:slower]} slower than 5% in every run, #{counts[:within_noise]} slower than 5% within the noise, " \
+         "#{counts[:memory]} with more memory, #{counts[:could_not_run]} one build could not run, " \
+         "#{counts[:one_side]} only on one side" \
+         "#{counts[:noisy].positive? ? ", #{counts[:noisy]} noisy (?: runs or samples vary past 5%; " \
+                                       "rerun those with --runs=8)" : ''}"
     puts "stored in #{Bench::RESULTS.join(signature['hash']).relative_path_from(StaticJS::ROOT)}/" if store
   ensure
     system('git', 'worktree', 'remove', '--force', worktree, chdir: repository, out: File::NULL, err: File::NULL)

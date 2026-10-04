@@ -59,7 +59,10 @@ JavaScript does, or a fault. Never a different value.
 - Before committing a change to `vm.c`, `value.c`, `builtins.c`,
   `memory.c`, or the hot paths of the parser and the compiler, run
   `mise run bench-compare <commit before it>` and quote its table, with
-  the machine hash, in the commit body.
+  the machine hash, in the commit body. Claim only what it flags: a
+  change within the runs' noise, or marked `?`, is not evidence either
+  way (README.md, "Benchmarks", says how far a build compared with itself
+  moves).
 - A new case in `bench/bench.c` gets a name (`group.subject[.variant]`),
   a unit, its sizes (L for linear work; Q for work that is quadratic today,
   capped at 10,000, or smaller when it is worse) and the value it gives at

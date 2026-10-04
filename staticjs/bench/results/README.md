@@ -23,7 +23,7 @@ Never compare with numbers from another day or another machine.
 
 | Field | Meaning |
 |---|---|
-| `machine`, `commit`, `dirty` | the signature, the build (short hash), and whether `staticjs/src`, `include`, `bench/bench.c` or `bench/modules` had changes |
+| `machine`, `commit`, `dirty` | the signature, the build (short hash of `HEAD`), and whether `staticjs/src`, `include`, `bench/bench.c` or `bench/modules` had changes. A `dirty` record measured `commit` plus uncommitted changes, which nobody can rebuild: its `commit` is the parent of what it measured |
 | `time`, `compiler`, `flags`, `version` | when (UTC), the compiler and flags, the library's `sjs_version()` |
 | `conditionsBefore`, `conditionsAfter` | `loadAverage` (1, 5, 15 min) and macOS `cpuSpeedLimit` around the run; not part of the signature |
 | `bench`, `n`, `unit`, `unitsPerOp` | the case (`bench/bench.c` lists them), its size, and its unit: `byte`, `eval`, `element` or `op` |
@@ -44,7 +44,7 @@ Memory is counted by the bench's allocator, under both the context and the
 parser, in one untimed op; allocation is deterministic, so it has no
 spread.
 
-Read a folder with `jq`, for example the median ns per element of every
-`eval.array` case of each commit:
+Read a folder with `jq`, leaving out dirty records, for example the median
+ns per element of every `eval.array` case of each commit:
 
-    jq -c 'select(.bench | startswith("eval.array")) | [.commit, .bench, .n, .nsPerOp.median / .unitsPerOp, .memory.peakBytes]' 92727593a59b/*.jsonl
+    jq -c 'select((.dirty | not) and (.bench | startswith("eval.array"))) | [.commit, .bench, .n, .nsPerOp.median / .unitsPerOp, .memory.peakBytes]' 92727593a59b/*.jsonl
