@@ -210,14 +210,6 @@ static void category_free(void *self, const ta_allocator_free_params *params) {
 
 static const ta_allocator_vtable category_vtable = { .alloc = category_alloc, .free = category_free };
 
-void ta_test_allocator_init(ta_test_allocator *heap, const ta_test_allocator_config *config) {
-    *heap = (ta_test_allocator){ 0 };
-    if (config != NULL) {
-        heap->zero_fill = config->zero_fill;
-        heap->strict = config->strict;
-    }
-}
-
 size_t ta_test_allocator_finish(ta_test_allocator *heap) {
     size_t leaked = 0;
     for (const ta_test_allocator_header *block = heap->blocks; block != NULL; block = block->next) {

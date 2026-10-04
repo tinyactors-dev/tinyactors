@@ -24,7 +24,8 @@ static int failures;
 
 #define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
 
-static ta_test_allocator heap;
+/* zero_fill: as calloc, which these tests were written against */
+static ta_test_allocator heap = { .zero_fill = true };
 static const ta_allocator test_allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 /* A one-address directory, enough for one named actor to unload and load. */
@@ -668,7 +669,6 @@ static void test_codec_allocation_failures(void) {
 }
 
 int main(void) {
-    ta_test_allocator_init(&heap, &(ta_test_allocator_config){ .zero_fill = true }); /* as calloc: tests read what core did not write */
     test_round_trip();
     test_history_survives();
     test_refusals();

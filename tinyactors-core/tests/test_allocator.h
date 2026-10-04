@@ -42,7 +42,9 @@
  * until after the last of those has been destroyed. Its storage is the
  * caller's: it never allocates for its own state, and it needs no destroy
  * call. A zero-initialized value is valid and means "libc memory, no policy,
- * not strict"; ta_test_allocator_init() is only for the two modes below.
+ * not strict". The two modes (zero_fill and strict) are chosen in the
+ * initializer and never change: `static ta_test_allocator heap = { .strict =
+ * true };`.
  *
  * Every block it hands to the library belongs to whatever library lifetime
  * asked for it. The library gives it back through the allocator's free entry.
@@ -174,13 +176,25 @@ typedef struct {
 } ta_test_allocator_lane_state;
 
 /*
- * ta_test_allocator is the allocator. Everything below the counters is
- * private: a test arms policies and reads facts through the functions and the
- * counters, and never through the private fields.
+ * ta_test_allocator is the allocator. A test reads the counters directly and
+ * chooses the two modes in the initializer; everything below "private" is the
+ * helper's, and a test arms policies and reads facts through the functions.
  */
 struct ta_test_allocator {
     ta_test_allocator_counters stats;
     ta_test_allocator_counters by_category[TA_TEST_ALLOCATOR_CATEGORIES];
+
+    /* zero_fill hands out zeroed memory, as calloc does. The tests that were
+     * written against calloc (offload, session ID) keep it: they read memory
+     * the library did not write. Set it in the initializer; it must not change
+     * while blocks are live. */
+    bool zero_fill;
+    /* strict checks each free against its allocation: the size and alignment
+     * must be the ones asked for, and the pointer must be live. A violation
+     * writes a line to stderr and counts in bad_frees. It costs O(live_blocks)
+     * a free, so it suits tests of tens or hundreds of blocks. Set it in the
+     * initializer; it must not change while blocks are live. */
+    bool strict;
 
     /* private */
     uint64_t fail_nth_remaining;  /* 0: disarmed; else attempts left up to and including the refused one */
@@ -188,25 +202,9 @@ struct ta_test_allocator {
     size_t refuse_size;           /* 0: none; else refuse sizes at least this */
     size_t large_threshold;       /* 0: none; else the size a large allocation has at least */
     bool refuse_every;
-    bool zero_fill;
-    bool strict;
     ta_test_allocator_header *blocks;
     ta_test_allocator_lane_state lanes[TA_TEST_ALLOCATOR_CATEGORIES];
 };
-
-/*
- * ta_test_allocator_config selects the two modes fixed for an allocator's
- * life. The zero value is the default.
- */
-typedef struct {
-    /* zero_fill hands out zeroed memory, as calloc does. The tests that
-     * migrated from calloc (offload, session ID) keep it: they read memory
-     * the library did not write. */
-    bool zero_fill;
-    /* strict checks each free against the allocation: the size and
-     * alignment must be the ones asked for, and the pointer must be live. */
-    bool strict;
-} ta_test_allocator_config;
 
 /* ta_test_allocator_vtable is the entry table of the plain allocator and its
  * lanes; ta_test_allocator_get and TA_TEST_ALLOCATOR_STATIC refer to it. */
@@ -216,15 +214,6 @@ extern const ta_allocator_vtable ta_test_allocator_vtable;
  * object with static storage duration that names the plain allocator (lane 0)
  * of the static ta_test_allocator at heap_pointer. */
 #define TA_TEST_ALLOCATOR_STATIC(heap_pointer) { .self = (heap_pointer), .v = &ta_test_allocator_vtable }
-
-/*
- * ta_test_allocator_init resets heap to its initial state with the given
- * modes: no blocks, all counters zero, no policy armed. It must not be called
- * while blocks are live, or they become unreachable. A null config means the
- * default modes. A zero-initialized heap is already initialized with them, so
- * a test that needs nothing else need not call this. It never allocates.
- */
-void ta_test_allocator_init(ta_test_allocator *heap, const ta_test_allocator_config *config);
 
 /*
  * ta_test_allocator_finish returns the number of blocks still live and writes

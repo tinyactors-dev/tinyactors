@@ -192,8 +192,7 @@ static void test_lanes(void) {
 }
 
 static void test_memory(void) {
-    ta_test_allocator heap;
-    ta_test_allocator_init(&heap, &(ta_test_allocator_config){ .zero_fill = true });
+    ta_test_allocator heap = { .zero_fill = true };
     ta_allocator allocator = ta_test_allocator_get(&heap);
     static const size_t alignments[] = { 1, 8, 16, 64, 4096 };
     for (size_t index = 0; index < sizeof(alignments) / sizeof(alignments[0]); index += 1u) {
@@ -219,8 +218,7 @@ static void test_memory(void) {
 }
 
 static void test_strict(void) {
-    ta_test_allocator heap;
-    ta_test_allocator_init(&heap, &(ta_test_allocator_config){ .strict = true });
+    ta_test_allocator heap = { .strict = true };
     ta_allocator allocator = ta_test_allocator_get(&heap);
     void *block = take(allocator, 50, 16);
     CHECK(block != NULL);
