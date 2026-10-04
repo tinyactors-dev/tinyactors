@@ -319,19 +319,19 @@ changed something.
 
 **The running workspace** is the interpreter scratch (`interpreterBytes`),
 the internal queue with its ordinary quota and its compiler-sized
-mandatory storage, and the frame stack. There is one per system, as there
-was under run to completion, sized for the largest registered definition.
-The system allocates it at creation, and registration grows it when a
-larger definition arrives. Its mandatory storage, a floor of one round
-of every phase ([below](#sizing-mandatory-storage)), is paid once per
-system, not once per slot.
+mandatory storage, and the frame stack. A system has one, sized for the
+largest registered definition. The system allocates it at creation, and
+registration grows it when a larger definition arrives. Its mandatory
+storage, a floor of one round of every phase
+([below](#sizing-mandatory-storage)), is paid once per system, not once
+per slot, and does not grow with the chain limit.
 
 **A parked execution** is what a slot needs to continue later:
 
 - its continuation, at the size its own definition needs: the state sets,
   history, enabled transitions and the frames actually open
-  (`ta_continuation_capacity()` in core bounds it today; about 1 KiB for a
-  chart of 100 states);
+  (`ta_continuation_capacity()` bounds it; about 1 KiB for a chart of 100
+  states);
 - the internal events actually pending, about 48 bytes each, in order;
 - its counters: chain count, slice position, trace keys.
 
@@ -346,65 +346,60 @@ A larger chart takes more chunks, not a larger block, so the area never
 fragments and no size has to be chosen in advance. The copy is a few
 hundred bytes to a few kilobytes, once per slice.
 
-**Growth happens between macrosteps only.** A rotation happens in the
+**The park area grows between macrosteps only.** A rotation happens in the
 middle of a macrostep, which must not allocate, so parking takes only
 chunks already on the free list. After each macrostep end and at
-admission, core tops the free list up to a reserve, enough for one
-parked execution of the largest registered definition, allocating up to
-the area's ceiling. If the allocator refuses, nothing changes but how much
-can be parked.
+admission, core tops the free list up to a reserve of one parked
+execution of the largest registered definition, allocating up to the
+area's ceiling. If the allocator refuses, only the amount that can be
+parked changes. A system whose macrosteps all finish within one slice
+never parks; it holds only the reserve, allocated at the first macrostep
+end that needs it.
 
-**Parking can fail, and nothing breaks when it does.** Correctness never
-depends on it, only isolation. A slot that finds too few free chunks at
-the end of its slice does not rotate. It keeps the thread for another
-slice, and core tries again at its next slice end. That is run to
-completion for this macrostep.
-
-**The ceiling is derived, not chosen.** A parked execution is at most the
-largest registered definition's continuation plus a full internal queue.
-So the area can never need more than
+**The ceiling is derived.** A parked execution is at most the largest
+registered definition's continuation plus a full internal queue, so the
+area never needs more than
 
 `maxConcurrentInputs × (largest continuation + full internal queue)`
 
 rounded up to whole chunks. Core computes this at registration, so the
-storage stays bounded by parameters and compiled requirements (invariant
-2) without a byte parameter anyone must set. `parkAreaBytes` is an
-optional lower cap ([BEHAVIORS.md](../BEHAVIORS.md#parkareabytes)); 0
-disables parking, which leaves plain run to completion.
+storage is bounded by parameters and compiled requirements (invariant 2)
+without a byte parameter anyone must set. `parkAreaBytes` is an optional
+lower cap ([BEHAVIORS.md](../BEHAVIORS.md#parkareabytes)); 0 disables
+parking, which leaves plain run to completion.
 
-**It looks unlimited, with two limits.** Chunks taken during a burst of
+**Parking can fail without harm.** Correctness never depends on it, only
+isolation. A slot that finds too few free chunks at the end of its slice
+does not rotate: it keeps the thread for another slice, and core tries
+again at its next slice end. Because chunks taken during a burst of
 rotations come back only when those executions resume, and new chunks
-arrive only at the next macrostep end, so a burst can briefly cost
-isolation. And chunks return to the free list, not to the allocator, so
-after a burst the area stays at its high-water mark until the host trims
-it.
-
-**The host trims; core does not.** `ta_system_trim(system, keep)` is a
-native call that the host makes between `ta_run` calls, when its own
-policy says so: when idle, on a timer, under memory pressure. It frees
-every whole page that is free and above its structure's reserve, or above
-`keep`, in the pool, the name area and the park area. It is written once,
-in the index pool (A5), so all three get it. Core never trims on its own:
-when to give memory back is policy, and a heuristic in core would free and
-refill in a loop. A page goes back only when every item on it is free.
-Items never move, because envelope indices must stay stable, so a burst
-can leave pages that are partly used and cannot be freed.
-
-**What you don't pay for.** A system whose macrosteps all finish within
-one slice never parks and holds only the reserve, which is itself
-allocated at the first macrostep end that needs it. The running
-workspace's mandatory floor is one round of every phase. It does not grow
-with the chain limit.
-**Possible:** the compiler could derive a lower `microstepLimit` for a
-chart whose internal transitions (eventless transitions, `<raise>`,
-`done.state`) form no cycle, since such a chart takes a bounded number of
-steps before it needs external input. It could also give such a chart an
-exact floor for its whole chain, so that the chart never overflows.
+arrive only at the next macrostep end, a burst can briefly cost
+isolation.
 
 **Parking happens only between top-level units.** A child's exit handlers,
 run in a nested interpreter while the parent cancels an invocation, finish
 inside the unit that started them and never park. They are finite, but a
 long one keeps the thread.
+
+**Giving memory back is the host's decision.** Chunks return to the free
+list, not to the allocator, so after a burst the area stays at its
+high-water mark. `ta_system_trim(system, keep)` is a native call the host
+makes between `ta_run` calls, by its own policy: when idle, on a timer,
+under memory pressure. It frees every whole free page above its
+structure's reserve, or above `keep`, in the pool, the name area and the
+park area. It is written once, in the index pool (A5), so all three get
+it. A page goes back only when every item on it is free. Items never move,
+because envelope indices stay stable, so a burst can leave partly used
+pages that cannot be freed.
+
+Why core does not trim on its own: when to give memory back is policy, and
+a heuristic in core would free and refill in a loop.
+
+**Possible:** the compiler could derive a lower `microstepLimit` for a
+chart whose internal transitions (eventless transitions, `<raise>`,
+`done.state`) form no cycle, since such a chart takes a bounded number of
+steps before it needs external input. It could also give such a chart an
+exact floor for its whole chain, so that the chart never overflows.
 
 ## The macrostep end
 
@@ -514,9 +509,8 @@ executable content:
 - **The chart decides what to do next:** retry later with a delayed send to
   itself, send less (ack-clocked sending), or give up and report.
 
-Errors use compiler-sized mandatory internal storage, separate from the quota
-for ordinary raises. Beyond that floor they use free ordinary entries; an
-error that fits in neither is a runaway (below).
+The error itself is queued in the internal queue's mandatory storage
+([below](#the-internal-queue-compiler-sized-mandatory-storage)).
 
 **Why the resource is the last segment of the name,** and not only a field
 of `_event.data`:
