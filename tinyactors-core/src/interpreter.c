@@ -4016,10 +4016,10 @@ static void ta_stop_drop(ta_interpreter *it) {
 }
 
 /* One allocation of ta_interpreter_init, added to a layout the way an
- * arena lays it out: `count` items of `size` bytes at `alignment`. */
-static void ta_scratch_take(ta_layout *layout, size_t size, size_t alignment, size_t count) {
-    ta_layout_add(layout, &(ta_layout_entry){ .size = size, .alignment = alignment, .count = count });
-}
+ * arena lays it out: `count` items of `type`, at its alignment. */
+#define TA_SCRATCH_TAKE(layout, type, items)                                                      \
+    ta_layout_add((layout), &(ta_layout_entry){ .size = sizeof(type), .alignment = _Alignof(type), \
+                                                .count = (items) })
 
 /*
  * The bytes of interpreter scratch a definition needs (ADR 0092 section 3):
@@ -4044,23 +4044,23 @@ ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *o
     ta_layout_init(&layout, start);
     uint32_t words = ta_bits_words(definition->state_count);
     for (uint32_t index = 0; index < 11u; index += 1u) {
-        ta_scratch_take(&layout, sizeof(uint64_t), _Alignof(uint64_t), words);
+        TA_SCRATCH_TAKE(&layout, uint64_t, words);
     }
     size_t capacity = (size_t)definition->state_count + 1u;
-    ta_scratch_take(&layout, sizeof(ta_state_id), _Alignof(ta_state_id), capacity);
-    ta_scratch_take(&layout, sizeof(ta_transition_id), _Alignof(ta_transition_id), capacity);
-    ta_scratch_take(&layout, sizeof(ta_transition_id), _Alignof(ta_transition_id), capacity);
-    ta_scratch_take(&layout, sizeof(bool), _Alignof(bool), capacity);
-    ta_scratch_take(&layout, sizeof(struct ta_entry_frame), _Alignof(struct ta_entry_frame),
-                    ta_entry_capacity(definition));
-    ta_scratch_take(&layout, sizeof(ta_state_id), _Alignof(ta_state_id), (size_t)definition->history.slot_count + 1u);
-    ta_scratch_take(&layout, sizeof(ta_exec_frame), _Alignof(ta_exec_frame), ta_exec_capacity(definition));
-    ta_scratch_take(&layout, sizeof(uint64_t), _Alignof(uint64_t), ta_decl_words(definition));
-    /* 3 * state_count + 1 items, as two entries so that no count wraps: same alignment, no gap between. */
-    ta_scratch_take(&layout, 3u * sizeof(ta_state_id), _Alignof(ta_state_id), definition->state_count);
-    ta_scratch_take(&layout, sizeof(ta_state_id), _Alignof(ta_state_id), 1u);
-    ta_scratch_take(&layout, sizeof(struct ta_trace_condition), _Alignof(struct ta_trace_condition),
-                    (size_t)ta_trace_guard_capacity(definition) + 1u);
+    TA_SCRATCH_TAKE(&layout, ta_state_id, capacity);
+    TA_SCRATCH_TAKE(&layout, ta_transition_id, capacity);
+    TA_SCRATCH_TAKE(&layout, ta_transition_id, capacity);
+    TA_SCRATCH_TAKE(&layout, bool, capacity);
+    TA_SCRATCH_TAKE(&layout, struct ta_entry_frame, ta_entry_capacity(definition));
+    TA_SCRATCH_TAKE(&layout, ta_state_id, (size_t)definition->history.slot_count + 1u);
+    TA_SCRATCH_TAKE(&layout, ta_exec_frame, ta_exec_capacity(definition));
+    TA_SCRATCH_TAKE(&layout, uint64_t, ta_decl_words(definition));
+    /* 3 * state_count + 1 items, as four entries so that no count wraps: same alignment, no gap between. */
+    for (uint32_t index = 0; index < 3u; index += 1u) {
+        TA_SCRATCH_TAKE(&layout, ta_state_id, definition->state_count);
+    }
+    TA_SCRATCH_TAKE(&layout, ta_state_id, 1u);
+    TA_SCRATCH_TAKE(&layout, struct ta_trace_condition, (size_t)ta_trace_guard_capacity(definition) + 1u);
     size_t end;
     ta_result result = ta_layout_finish(&layout, &end, NULL);
     if (result == TA_OK) {

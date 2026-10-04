@@ -1,4 +1,5 @@
 #include "definition.h"
+#include "layout.h"
 #include "interpreter.h"
 #include "system.h"
 
@@ -423,7 +424,12 @@ void ta_definition_take_spans(ta_definition *live, ta_definition *definition) {
 
 size_t ta_definition_session_bytes(const ta_definition *definition) {
     /* The configuration, the late-binding bits (sized like it), and history. */
-    return definition->configuration.bytes * 2u + definition->history.storage_bytes;
+    size_t bytes;
+    if (!ta_checked_mul((size_t)definition->configuration.bytes, 2u, &bytes) ||
+        !ta_checked_add(bytes, (size_t)definition->history.storage_bytes, &bytes)) {
+        return SIZE_MAX; /* no allocation holds it: ta_actor_layout then answers TA_ERR_NOMEM */
+    }
+    return bytes;
 }
 
 ta_result ta_definition_inspect(const ta_system *system,

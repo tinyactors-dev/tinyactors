@@ -133,10 +133,13 @@ static ta_result ta_interpreter_region_layout(const uint32_t params[TA_PARAM_COU
     return result;
 }
 
-/* Lays a region's two fixed arenas over its memory. */
-static void ta_interpreter_region_open(const ta_region_layout *layout, void *memory, ta_arena *scratch,
-                                       ta_arena *render) {
+/* Lays a region's structural arena over the start of its memory. */
+static void ta_interpreter_region_open_scratch(const ta_region_layout *layout, void *memory, ta_arena *scratch) {
     ta_arena_init_fixed(scratch, memory, layout->render);
+}
+
+/* Lays a region's render arena over the rest of its memory. */
+static void ta_interpreter_region_open_render(const ta_region_layout *layout, void *memory, ta_arena *render) {
     ta_arena_init_fixed(render, (unsigned char *)memory + layout->render, layout->bytes - layout->render);
 }
 
@@ -157,7 +160,8 @@ ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *s
         }
         region->bytes = layout.bytes;
     }
-    ta_interpreter_region_open(&layout, region->memory, scratch, render);
+    ta_interpreter_region_open_scratch(&layout, region->memory, scratch);
+    ta_interpreter_region_open_render(&layout, region->memory, render);
     return TA_OK;
 }
 
@@ -177,7 +181,8 @@ static ta_result ta_system_arena_open(ta_system *system) {
         return TA_ERR_NOMEM;
     }
     system->arena_bytes = layout.total;
-    ta_interpreter_region_open(&layout, system->arena_memory, &system->scratch, &system->render);
+    ta_interpreter_region_open_scratch(&layout, system->arena_memory, &system->scratch);
+    ta_interpreter_region_open_render(&layout, system->arena_memory, &system->render);
     system->nested = (ta_nested_region *)((unsigned char *)system->arena_memory + layout.nested_table);
     for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
         system->nested[index] = (ta_nested_region){ 0 };

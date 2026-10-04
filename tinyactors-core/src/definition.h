@@ -465,7 +465,7 @@ struct ta_definition {
 
 /* A registered definition, retired or not; NULL for an unknown or stale ID. */
 const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
-/* Bytes of one actor's session storage: two configurations and history. */
+/* Bytes of one actor's session storage: two configurations and history; SIZE_MAX when the sum does not fit, which ta_actor_layout() reports as TA_ERR_NOMEM. */
 size_t ta_definition_session_bytes(const ta_definition *definition);
 /*
  * Fills `action_places` from the sealed blocks, in the definition's arena.
