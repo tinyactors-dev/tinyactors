@@ -1503,10 +1503,6 @@ uint32_t ta_actor_waiting_internal(const ta_actor *actor) {
     return block->count - (block->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
 }
 
-static size_t ta_vec_bytes(const ta_vec *vec) {
-    return (size_t)vec->capacity * vec->element_size;
-}
-
 /* Everything the core allocates for the actor now; see ta_actor_inspection. */
 static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
     size_t total = actor->definition->actor_block_bytes;

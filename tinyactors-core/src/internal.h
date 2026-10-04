@@ -4,6 +4,7 @@
 #include "hash.h"
 #include "format.h"
 #include "layout.h"
+#include "vec.h"
 #include "arena.h"
 #include "tree.h"
 #include "atom.h"
