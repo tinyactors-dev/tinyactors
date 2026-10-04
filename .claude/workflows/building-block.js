@@ -89,7 +89,7 @@ phase('Implement')
 let impl = await run('implementer',
   FIX
     ? `Building block ${block} is already implemented in the working tree, uncommitted. Apply the maintainer's corrections below, rerun the commands and report as for an implementation. Change nothing else.\n${FIX}`
-    : `Implement building block ${block} of the ring protocol plan in tinyactors-core, with its header documentation and its own test program, as your instructions describe. Leave everything uncommitted.${NOTES}`,
+    : `Carry out ${block} of the ring protocol plan in tinyactors-core, with its header documentation and its tests, as your instructions describe. Leave everything uncommitted.${NOTES}`,
   { schema: IMPL, label: FIX ? `correct ${block}` : `implement ${block}` },
 )
 if (!impl) throw new Error(`the implementer for ${block} returned nothing`)

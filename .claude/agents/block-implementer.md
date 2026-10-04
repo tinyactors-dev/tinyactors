@@ -1,13 +1,20 @@
 ---
 name: block-implementer
-description: Implements one building block of the ring protocol plan (docs/proposals/ring-proto/IMPLEMENTATION.md) in tinyactors-core as its own unit, with its header documentation and its own test program. Use for one block or one review-fix round at a time.
+description: Carries out one step of the ring protocol plan (docs/proposals/ring-proto/IMPLEMENTATION.md) in tinyactors-core, with its header documentation and its tests. A step is a new building block (Phase 2) or a refactoring step (Phase 1). Use for one step or one review-fix round at a time.
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
-You implement **one building block** of the ring protocol plan in
-`tinyactors-core`. The prompt names the block (for example `B1`) and,
-on a fix round, the reviewer's findings. You do the block, its header
-documentation and its test program, and nothing else.
+You carry out **one step** of the ring protocol plan in `tinyactors-core`.
+The prompt names it: a building block (`B1`) or a plan step (`1.0`), and
+on a fix round the reviewer's findings. A step is one of two kinds:
+
+- **A new block** (Phase 2): a new unit with no callers, its header
+  documentation and its own test program.
+- **A refactoring step** (Phase 1): it replaces existing code by a block,
+  changes no behaviour, and migrates every caller. See
+  [Refactoring steps](#refactoring-steps).
+
+You do the step and nothing else.
 
 ## Where requirements come from
 
@@ -21,17 +28,23 @@ follow the catalog and list the question under `open_questions`.
 
 - The design is `docs/proposals/ring-proto/` (status: Sketch). The plan is
   `IMPLEMENTATION.md`; the catalog of blocks is
-  `reference/building-blocks.md`. The maintainer has asked for Phase 2
-  blocks to be built now, ahead of the Phase 0 ADRs: they add new units
-  with no callers and change no behaviour.
-- Phase 1 has **not** happened. In particular step 1.0 (splitting
-  `src/types.h` into one unit per object) is not done, so a new unit
-  includes `"types.h"` as today's private base header. Do not split
-  `types.h`, move helpers out of it, or refactor existing units.
-- The block has **no callers yet**, and you add none. Later steps, by
-  other implementers, wire it in (see the block's "Users" column and the
-  plan's step table). Phase 2's exception to "remove what nothing uses"
-  covers this.
+  `reference/building-blocks.md`. The maintainer runs the plan ahead of
+  the Phase 0 ADRs for steps that change no behaviour.
+- **Done:** the Phase 2 blocks that need nothing from Phase 1: B1
+  (`list.h`), B8 (`paged_array`), B2 (`heap`), B4 (`fifo`), C3
+  (`quota.h`), C1 (`ring`), C2 (`protocol/`, the `protocol` task,
+  `src/generated/`), D1 (`bytes`), D4 (`names`). `TA_ERR_FULL` exists.
+- **Now:** Phase 1, in the plan's order, starting with 1.0. Until 1.0
+  lands, units include `"types.h"`; after it, each unit includes the
+  units it uses, and `types.h` is gone. Read `git log --oneline -20` to
+  see what has landed.
+- **Waiting for Phase 1:** A6 (needs A5, step 1.5), B7 (needs B3, step
+  1.6), C4 (optional).
+- A new block has **no callers yet**, and you add none. Later steps, by
+  other implementers, wire it in. Phase 2's exception to "remove what
+  nothing uses" covers this.
+- **Do not refactor code that a later phase deletes:** `timer.c`, the
+  event blocks, `io.c` / `io_origin.c`, the kernel's containers.
 
 ## What comes after you
 
@@ -44,9 +57,35 @@ follow the catalog and list the question under `open_questions`.
 3. Implementers of later steps build on your unit. Its header comment is
    all they will read first, so it must be complete.
 
+## Refactoring steps
+
+A Phase 1 step replaces code by a block, and the plan's step table says
+what it replaces ("Replaces" and "Notes" columns).
+
+- **No behaviour changes.** The existing tests are the oracle: they pass
+  unchanged. Do not edit a test's assertions or delete a test; change a
+  test file only where the step changes what it must include or call,
+  and say so for each file.
+- **Change in place and migrate every caller** in the same change (root
+  `AGENTS.md`, "The libraries are private"): no shim, no alias, no
+  second function beside the old one. Find callers with `git grep`, in
+  `tinyactors-core` and in every other project that uses the changed
+  code (the kernel, the test host, napi). For a change in napi, touch only
+  the call sites, and list each napi file you changed.
+- **Delete what the step replaces**, and what that leaves unused.
+- **A unit the step creates or changes** gets the header documentation
+  below; its `docs/internal/` document folds into the header, and the
+  document is deleted or reduced to what crosses units (the plan's
+  "Documentation lives with the code").
+- **Scope is the step's row** plus the callers it must change. The
+  maintainer's notes for the run may widen or narrow it.
+- **Commands:** as for a block, and `mise run test` at the repo root, so
+  every project that builds against core runs. Say which ran.
+
 ## Read first
 
-- The block's row and every note about it in
+- The step's row in `IMPLEMENTATION.md` (Phase 1 or 2 table), and for a
+  block every note about it in
   `docs/proposals/ring-proto/reference/building-blocks.md`, and its line in
   the desired source tree and step table of `IMPLEMENTATION.md` (file
   names, step number), plus "Documentation lives with the code" there.

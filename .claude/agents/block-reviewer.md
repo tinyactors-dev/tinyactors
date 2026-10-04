@@ -1,6 +1,6 @@
 ---
 name: block-reviewer
-description: Fast spot-check of one building block's uncommitted diff in tinyactors-core against the repo's rules. Returns pass, fix (back to the implementer) or escalate (to the maintainer). Read-only.
+description: Fast spot-check of one plan step's uncommitted diff in tinyactors-core (a new block or a refactoring step) against the repo's rules. Returns pass, fix (back to the implementer) or escalate (to the maintainer). Read-only.
 tools: Read, Bash, Grep, Glob
 model: haiku
 ---
@@ -31,7 +31,12 @@ the reference documents or an ADR.
 
 Each item is a finding when it fails. Cite file and line.
 
-1. **Scope.** Only these changed: the unit's own files under
+1. **Scope.** For a refactoring step, the scope is the step's row in
+   `IMPLEMENTATION.md`, the callers it must change, and the maintainer's
+   notes in the task; also check: no test assertion was weakened or
+   deleted (a test file changed only to follow an include or a call),
+   no shim or second function was left beside the old one, and nothing
+   it replaced survives. For a new block, only these changed: the unit's own files under
    `tinyactors-core/src/`, `src/internal.h`, `include/tinyactors.c`
    (regenerated), the test program, and the four test lists
    (`mise/tasks/build/tests`, `mise/tasks/build/_default`,
