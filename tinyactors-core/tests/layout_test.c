@@ -153,7 +153,100 @@ static void test_checked_primitives(void) {
     CHECK(!ta_checked_add(1, SIZE_MAX, &out) && out == 5u);
 }
 
+/* ------------------------------------------------------------------------
+ * Golden figures, recorded from the hand-written calculators before unit 1.4
+ * replaced them (x86_64 Linux). The layout must reproduce them exactly: a
+ * block that grew would cost every actor, and a continuation or scratch
+ * figure that changed would break a sized free or let a chart register with
+ * too little scratch.
+ */
+
+static void *test_alloc(void *self, size_t size, size_t alignment) {
+    (void)self;
+    if (alignment < sizeof(void *)) {
+        alignment = sizeof(void *);
+    }
+    size = (size + alignment - 1u) / alignment * alignment;
+    return aligned_alloc(alignment, size == 0 ? alignment : size);
+}
+
+static void test_free(void *self, const ta_allocator_free_params *params) {
+    (void)self;
+    free(params->ptr);
+}
+
+static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
+static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+
+typedef struct {
+    uint32_t states;
+    size_t block_bytes;
+    size_t instance_offset;
+    size_t continuation_bytes;
+    size_t scratch_need;
+} golden;
+
+/* A chart of `states` atomic states with one transition, compiled for the null data model. */
+static void check_chart(ta_system *system, golden expected) {
+    uint32_t n = expected.states;
+    ta_scxml_state_spec *states = calloc(n + 1u, sizeof *states);
+    ta_str *ids = calloc(n + 1u, sizeof *ids);
+    char(*names)[16] = calloc(n + 1u, 16);
+    ta_scxml_transition_spec transitions[2] = { 0 };
+    ta_str targets[2] = { 0 };
+    for (uint32_t index = 0; index < n; index += 1u) {
+        snprintf(names[index], 16, "s%u", index);
+        ids[index] = (ta_str){ .ptr = names[index], .len = (uint32_t)strlen(names[index]) };
+        states[index] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = ids[index] };
+    }
+    targets[0] = ids[n - 1u];
+    transitions[0] = (ta_scxml_transition_spec){ .kind = TA_SCXML_TRANSITION_EXTERNAL,
+                                                 .event = { .ptr = "go", .len = 2 },
+                                                 .targets = targets };
+    states[0].transitions = transitions;
+    ta_scxml_spec spec = { .name = { .ptr = "golden", .len = 6 }, .states = states };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){ .spec = &spec,
+                                                                              .datamodel = ta_null_datamodel(),
+                                                                              .allocator = test_allocator,
+                                                                              .out = &definition }) == TA_OK);
+    if (definition != NULL) {
+        ta_continuation shape = { .words = ta_bits_words(n), .decl_words = 2, .state_count = n,
+                                  .enabled_count = n + 1u, .frame_count = 3 };
+        size_t need = 0;
+        CHECK(definition->actor_block_bytes == expected.block_bytes);
+        CHECK(definition->actor_session_offset == 232u);
+        CHECK(definition->actor_instance_offset == expected.instance_offset);
+        CHECK(definition->actor_block_alignment == 8u);
+        CHECK(ta_continuation_bytes(&shape) == expected.continuation_bytes);
+        CHECK(ta_interpreter_scratch_need(definition, &need) == TA_OK && need == expected.scratch_need);
+        ta_definition_destroy(definition);
+    }
+    free(states);
+    free(ids);
+    free(names);
+}
+
+static void test_golden_figures(void) {
+    ta_system *system = NULL;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system) == TA_OK);
+    if (system == NULL) {
+        return;
+    }
+    check_chart(system, (golden){ 2, 248, 248, 240, 652 });
+    check_chart(system, (golden){ 7, 248, 248, 280, 776 });
+    check_chart(system, (golden){ 70, 264, 264, 816, 2444 });
+    check_chart(system, (golden){ 700, 408, 408, 6144, 18988 });
+    /* The default system's arena: one region (interpreterBytes and renderBytes) and the nested table. */
+    CHECK(system->arena_bytes == 82048u);
+    CHECK(ta_operator_jump_bytes(3) == 20u);
+    CHECK(ta_operator_jump_bytes(0) == 8u);
+    CHECK(ta_operator_jump_bytes(UINT32_MAX) == (sizeof(size_t) > 4 ? 8u + (size_t)UINT32_MAX * 4u : 0u));
+    ta_system_destroy(system);
+}
+
 int main(void) {
+    test_golden_figures();
     test_empty();
     test_single_and_mixed();
     test_start_offset();

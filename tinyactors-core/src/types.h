@@ -4,7 +4,6 @@
 #include "../include/tinyactors.h"
 
 #define TA_ARRAY_COUNT(a) ((uint32_t)(sizeof(a) / sizeof((a)[0])))
-#define TA_ALIGN_UP(v, a) (((v) + ((a) - 1u)) & ~((a) - 1u))
 
 typedef struct {
     uint32_t offset;
@@ -43,11 +42,6 @@ ta_result ta_vec_reserve(ta_vec *vec, uint32_t count);
 ta_result ta_vec_extend(ta_vec *vec, uint32_t count, uint32_t *out);
 ta_result ta_vec_push(ta_vec *vec, const void *element);
 void *ta_vec_at(const ta_vec *vec, uint32_t index);
-
-/* `value` rounded up to a multiple of `alignment`, which is never zero. */
-static inline size_t ta_align_up(size_t value, size_t alignment) {
-    return (value + alignment - 1u) / alignment * alignment;
-}
 
 /* Bitsets of 64-bit words, used for state sets. */
 static inline uint32_t ta_bits_words(uint32_t bits) { return (bits + 63u) / 64u; }
