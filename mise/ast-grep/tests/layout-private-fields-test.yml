@@ -1,0 +1,11 @@
+id: layout-private-fields
+valid:
+  - "size_t f(ta_layout_entry *entry) { return entry->alignment; }"
+  - "size_t f(ta_continuation_offsets offsets) { return offsets.end; }"
+  - "void f(void) { ta_layout layout; ta_layout_init(&layout, 0); }"
+  - "size_t f(void) { return internal_end; }"
+invalid:
+  - "bool f(const ta_layout *layout) { return layout->internal_overflowed; }"
+  - "size_t f(ta_layout layout) { return layout.internal_alignment; }"
+  - "void f(void) { ta_layout layout = { .internal_end = 0 }; }"
+  - "void f(ta_layout *layout) { layout->internal_end = 8; }"

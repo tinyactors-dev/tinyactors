@@ -1,0 +1,80 @@
+id: layout-no-use-before-finish
+valid:
+  # The usual shape: add, add, finish, then allocate.
+  - |
+    ta_result f(ta_allocator allocator) {
+        ta_layout layout;
+        ta_layout_init(&layout, 0);
+        size_t a = ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 });
+        size_t b;
+        b = ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 });
+        size_t bytes, alignment;
+        if (ta_layout_finish(&layout, &bytes, &alignment) != TA_OK) {
+            return TA_ERR_NOMEM;
+        }
+        unsigned char *block = ta_mem_alloc(allocator, bytes, alignment);
+        ta_mem_zero(block + a, 4);
+        ta_mem_copy(block + b, block, 4);
+        return TA_OK;
+    }
+  # An allocation with no layout at all.
+  - |
+    void g(ta_allocator allocator) {
+        void *p = ta_mem_alloc(allocator, 8, 8);
+        ta_mem_free(allocator, p, NULL);
+    }
+  # An allocation before the layout is started.
+  - |
+    ta_result h(ta_allocator allocator) {
+        void *p = ta_mem_alloc(allocator, 8, 8);
+        ta_layout layout;
+        ta_layout_init(&layout, 0);
+        ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 });
+        return ta_layout_finish(&layout, NULL, NULL);
+    }
+invalid:
+  - |
+    ta_result f(ta_allocator allocator) {
+        ta_layout layout;
+        ta_layout_init(&layout, 0);
+        size_t a = ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 });
+        unsigned char *block = ta_mem_alloc(allocator, 16, 8);
+        size_t bytes;
+        if (ta_layout_finish(&layout, &bytes, NULL) != TA_OK) {
+            return TA_ERR_NOMEM;
+        }
+        return a == 0 ? TA_OK : TA_ERR_INVALID;
+    }
+  - |
+    ta_result f(ta_arena *arena, unsigned char *from) {
+        ta_layout layout;
+        ta_layout_init(&layout, 0);
+        ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 });
+        ta_mem_copy(from, from + 1, 4);
+        return ta_layout_finish(&layout, NULL, NULL);
+    }
+  - |
+    ta_result f(ta_arena *arena) {
+        ta_layout layout;
+        ta_layout_init(&layout, 0);
+        size_t a = ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 });
+        if (a == 0) {
+            ta_arena_alloc(arena, 8, 8);
+        }
+        return ta_layout_finish(&layout, NULL, NULL);
+    }
+  - |
+    void f(unsigned char *block) {
+        ta_layout layout;
+        block[ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 })] = 0;
+    }
+  - |
+    void f(void) {
+        ta_layout layout;
+        use(ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 }));
+    }
+  - |
+    size_t f(void) {
+        ta_layout layout;
+        return ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 }) + 1u;
+    }

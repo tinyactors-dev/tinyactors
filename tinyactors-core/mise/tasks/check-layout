@@ -1,0 +1,39 @@
+#!/usr/bin/env ruby
+#MISE description="Fail on a misuse of ta_layout in core: an add without a finish, a discarded finish, a use of its fields or of an offset before the finish (src/layout.h)"
+# vim:ft=ruby
+
+# "Size overflowed" is representable only as a ta_result: the one total a
+# layout gives is ta_layout_finish's, called where the allocation is made
+# and never discarded. The rules are in the root's mise/ast-grep/
+# (layout-*.yml), each with its reason and what it cannot see; `mise run
+# check-portability` runs their tests. This scans src/ and tests/ with them,
+# except layout.c and layout.h, which define the fields.
+#
+#   mise run check-layout   exit 1 and print each finding when there is one
+
+require 'json'
+require 'pathname'
+require 'toolchain'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+RULES = Dir[ROOT.join('../mise/ast-grep/rules/layout-*.yml').to_s].sort
+abort 'check-layout: no rules in mise/ast-grep/rules/layout-*.yml' if RULES.empty?
+
+findings = RULES.flat_map do |rule|
+  out, err, status = Toolchain::Tool[:ast_grep].capture('scan', '--rule', rule, '--json=compact',
+                                                        '--globs', '!src/layout.c', '--globs', '!src/layout.h',
+                                                        'src', 'tests', chdir: ROOT.to_s)
+  abort "check-layout: ast-grep scan failed:\n#{err}" if out.strip.empty? && !status.success?
+
+  JSON.parse(out)
+end
+
+findings.each do |match|
+  line = match.fetch('range').fetch('start').fetch('line') + 1
+  puts "check-layout: #{match.fetch('file')}:#{line}: #{match.fetch('ruleId')}: #{match.fetch('message')}\n    " \
+       "#{match.fetch('text').lines.first.strip}"
+end
+abort "check-layout: #{findings.size} misuse(s) of ta_layout; see the rule's note in mise/ast-grep/rules/" unless findings.empty?
+
+files = Dir[ROOT.join('{src,tests}/*.{c,h}').to_s].size - 2
+puts "check-layout: #{files} files use ta_layout through ta_layout_add and ta_layout_finish only (#{RULES.size} rules)"

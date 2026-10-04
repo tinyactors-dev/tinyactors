@@ -1,0 +1,67 @@
+id: layout-no-use-before-finish
+language: c
+severity: error
+message: An offset from ta_layout_add is not valid until ta_layout_finish answered TA_OK; do not allocate, copy or free between the adds and the finish, and do not use ta_layout_add as an operand.
+note: |
+  ta_layout_add keeps returning a number after a layout overflowed (0, which
+  is also a real offset), so an offset is meaningless until ta_layout_finish
+  has answered TA_OK for the whole layout (src/layout.h, "Failure"). Two
+  shapes of use before the check are forbidden here:
+
+    1. A statement that calls ta_mem_alloc, ta_arena_alloc, ta_mem_copy,
+       ta_mem_zero or ta_mem_free, in the same block as, after a
+       ta_layout_add and before the ta_layout_finish. An allocation or a
+       write made there is sized or placed by an unchecked number.
+    2. ta_layout_add(...) itself used as an argument, an operand, an index,
+       a condition or a cast operand. It may only be a statement, an
+       initializer or the right side of an assignment, and the variable is
+       then read after the finish.
+
+  What this cannot do: ast-grep has no dataflow, so it cannot tie a
+  variable initialised from ta_layout_add to a later read of that variable,
+  and a plain read of it (`x = offset + 1;`) before the finish is not
+  caught. Rule 1 approximates "before the finish" by statements that
+  allocate or write memory, which is where an unchecked offset does harm,
+  and rule 2 by the shapes in which the result is consumed on the spot.
+  Review a function that reads an offset between the add and the finish by
+  hand; the fix is to move the finish up, directly after the last add.
+rule:
+  any:
+    # 1. An allocation, copy or free between an add and the finish.
+    - any:
+        - kind: expression_statement
+        - kind: declaration
+        - kind: if_statement
+        - kind: for_statement
+        - kind: while_statement
+        - kind: return_statement
+      has:
+        stopBy: end
+        kind: call_expression
+        regex: ^(ta_mem_alloc|ta_arena_alloc|ta_mem_copy|ta_mem_zero|ta_mem_free)\s*\(
+      follows:
+        stopBy: end
+        has:
+          stopBy: end
+          kind: call_expression
+          regex: ^ta_layout_add\s*\(
+      precedes:
+        stopBy: end
+        has:
+          stopBy: end
+          kind: call_expression
+          regex: ^ta_layout_finish\s*\(
+    # 2. ta_layout_add(...) consumed on the spot.
+    - kind: call_expression
+      regex: ^ta_layout_add\s*\(
+      inside:
+        any:
+          - kind: argument_list
+          - kind: binary_expression
+          - kind: unary_expression
+          - kind: parenthesized_expression
+          - kind: subscript_expression
+          - kind: conditional_expression
+          - kind: cast_expression
+          - kind: if_statement
+          - kind: field_expression

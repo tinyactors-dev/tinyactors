@@ -74,6 +74,16 @@ What to do instead, by kind of walk:
 `mise run check-recursion` builds core's call graph and fails on any cycle.
 It is part of `mise run test`.
 
+## Sizes: "overflowed" is a ta_result
+
+A size an input can influence is computed with `ta_layout`
+(`src/layout.h`), and the only total a layout gives is `ta_layout_finish`,
+which answers a `ta_result`. No size function answers 0 or SIZE_MAX for
+failure. Finish the layout where the allocation is made, use its result,
+and store what is needed afterwards (offsets, a size) in the thing's own
+header. `mise run check-layout` enforces this with ast-grep rules
+(`mise/ast-grep/rules/layout-*.yml`); it is part of `mise run test`.
+
 ## ADRs are an append-only record
 
 `docs/adr/` is the history of the design. A reader must be able to go

@@ -1,0 +1,24 @@
+id: layout-finish-result-used
+language: c
+severity: error
+message: The result of ta_layout_finish must be used; discarding it hides that the layout overflowed.
+note: |
+  ta_layout_finish is the only way to learn that a layout did not fit
+  (src/layout.h): it answers TA_ERR_NOMEM and writes no total. Calling it as
+  a statement, or casting its result to void, throws that answer away and
+  leaves the caller with offsets and a size that may have wrapped. Assign
+  the result, test it, or return it.
+
+  This catches a discarded call; it cannot see a result that is stored in a
+  variable and then never read (ast-grep has no dataflow), which the
+  compiler's unused-variable warning, an error in the build, does.
+rule:
+  any:
+    # ta_layout_finish(&layout, &bytes, NULL);
+    - kind: expression_statement
+      has:
+        kind: call_expression
+        regex: ^ta_layout_finish\s*\(
+    # (void)ta_layout_finish(&layout, &bytes, NULL);
+    - kind: cast_expression
+      regex: ^\(\s*void\s*\)\s*ta_layout_finish\s*\(

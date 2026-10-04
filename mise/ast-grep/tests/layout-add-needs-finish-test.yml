@@ -1,0 +1,42 @@
+id: layout-add-needs-finish
+valid:
+  - |
+    ta_result f(void) {
+        ta_layout layout;
+        ta_layout_init(&layout, 0);
+        size_t a = ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 });
+        size_t bytes;
+        if (ta_layout_finish(&layout, &bytes, NULL) != TA_OK) {
+            return TA_ERR_NOMEM;
+        }
+        return a == 0 ? TA_OK : TA_ERR_INVALID;
+    }
+  - |
+    void g(void) {
+        ta_layout layout;
+        ta_layout_init(&layout, 0);
+    }
+  - |
+    size_t ta_arena_fixed_add(ta_layout *layout, size_t capacity) {
+        size_t offset = ta_layout_add(layout, &(ta_layout_entry){ 8, 8, 1 });
+        ta_layout_add(layout, &(ta_layout_entry){ 1, 1, capacity });
+        return offset;
+    }
+invalid:
+  - |
+    size_t f(void) {
+        ta_layout layout;
+        ta_layout_init(&layout, 0);
+        size_t a = ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 });
+        return a;
+    }
+  - |
+    size_t f(void) {
+        ta_layout layout;
+        ta_layout_init(&layout, 0);
+        ta_layout_add(&layout, &(ta_layout_entry){ 4, 4, 1 });
+        return 0;
+    }
+    ta_result g(const ta_layout *layout) {
+        return ta_layout_finish(layout, NULL, NULL);
+    }

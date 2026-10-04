@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-#MISE description="Test core: no recursion, the lifetime tests under AddressSanitizer, every test program, and the API description"
-#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
+#MISE description="Test core: ta_layout used only through its functions, no recursion, the lifetime tests under AddressSanitizer, every test program, and the API description"
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml", "../mise/ast-grep/rules/layout-*.yml", "../sgconfig.yml"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -19,6 +19,7 @@ def run(*command)
   exit(status.exitstatus || 1) unless status.success?
 end
 
+run('mise', 'run', 'check-layout')
 run('mise', 'run', 'check-recursion')
 # The lifetime tests under AddressSanitizer: a use-after-free is undefined
 # behaviour an ordinary run may survive (ADR 0065).

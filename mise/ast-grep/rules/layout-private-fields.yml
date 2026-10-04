@@ -1,0 +1,18 @@
+id: layout-private-fields
+language: c
+severity: error
+message: A ta_layout's fields belong to layout.c; use ta_layout_add and ta_layout_finish.
+note: |
+  The fields of a ta_layout are named internal_end, internal_alignment and
+  internal_overflowed, so that this rule can find any use of them by name
+  (a plain `end` or `alignment` is also a field of other types). Reading
+  one outside layout.c lets a caller see a total without the check that
+  ta_layout_finish makes, which is how a size that overflowed would be
+  represented as a plain number. The only total is ta_layout_finish's
+  (src/layout.h, "Failure").
+
+  `mise run check-layout` scans everything in tinyactors-core/src and
+  tests except layout.c and layout.h, where the fields are defined.
+rule:
+  kind: field_identifier
+  regex: ^internal_(end|alignment|overflowed)$

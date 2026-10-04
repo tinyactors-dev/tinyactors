@@ -1,0 +1,11 @@
+id: layout-finish-result-used
+valid:
+  - "void f(void) { ta_result result = ta_layout_finish(&layout, &bytes, NULL); (void)result; }"
+  - "void f(void) { if (ta_layout_finish(&layout, &bytes, NULL) != TA_OK) { return; } }"
+  - "ta_result f(void) { return ta_layout_finish(&layout, &bytes, NULL); }"
+  - "void f(void) { CHECK(ta_layout_finish(&layout, &bytes, NULL) == TA_OK); }"
+  - "void f(void) { (void)ta_layout_add(&layout, &entry); }"
+invalid:
+  - "void f(void) { ta_layout_finish(&layout, &bytes, NULL); }"
+  - "void f(void) { (void)ta_layout_finish(&layout, &bytes, NULL); }"
+  - "void f(void) { (void) ta_layout_finish(&layout, NULL, NULL); }"

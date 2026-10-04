@@ -1,0 +1,33 @@
+id: layout-add-needs-finish
+language: c
+severity: error
+message: A function that calls ta_layout_add must also call ta_layout_finish, at the point where it allocates.
+note: |
+  A ta_layout is only arithmetic until ta_layout_finish answers whether it
+  fitted (src/layout.h, "Failure"): every offset ta_layout_add returned is
+  meaningless until then, and "overflowed" exists only as that ta_result.
+  A function that adds entries and never finishes the layout would use
+  offsets that may have wrapped. Finish the layout where the allocation is
+  made, a safe point that can fail cleanly, and store what is needed later.
+
+  A helper that takes the caller's `ta_layout *` (ta_arena_fixed_add) adds
+  to a layout it does not own and is exempt: its caller finishes it.
+  `mise run check-layout` in tinyactors-core scans its sources and tests.
+rule:
+  kind: function_definition
+  has:
+    stopBy: end
+    kind: call_expression
+    regex: ^ta_layout_add\s*\(
+  not:
+    any:
+      - has:
+          stopBy: end
+          kind: call_expression
+          regex: ^ta_layout_finish\s*\(
+      # A helper that adds to the caller's layout.
+      - has:
+          field: declarator
+          stopBy: end
+          kind: parameter_declaration
+          regex: \bta_layout\s*\*
