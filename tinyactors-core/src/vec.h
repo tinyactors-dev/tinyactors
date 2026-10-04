@@ -10,7 +10,7 @@
  *
  * Why two. A ta_vec is a 48-byte value (allocator, pointer, count, capacity,
  * element size and alignment). That is the right price for a handful of
- * tables per system (the page tables, the definitions list, the atom table)
+ * tables per system (the page tables of the session and address tables, the atom table)
  * and for a per-actor table that is allocated only by an uncommon facility,
  * but it is the wrong price for a table a per-actor record carries twice.
  * A ta_columns is 16 bytes (block, count, capacity): the allocator comes
@@ -35,9 +35,9 @@
  *     at the first <invoke>, grows only when an invoke starts, and is
  *     released with the session's sparse state (ta_invoke_release);
  *   - pending_invokes and the activation effects (ta_vec): session;
- *   - the page tables of the session, actor and address tables, the atom
- *     table and the definitions list (ta_vec): system, freed by the system's
- *     destroy;
+ *   - the page tables of the session and address tables and the atom
+ *     table (ta_vec): system, freed by the system's destroy; the actor and
+ *     definition slot tables are index pools (pool.h), not ta_vec;
  *   - the exit frames of the interpreter (ta_vec): call.
  * A table never outlives its owner, and nothing but its owner frees it.
  *

@@ -50,7 +50,11 @@ production, where short-lived actors are spawned and destroyed against a large
 resident population and would each pay for all of it.
 
 The table itself is paged (ADR 0063): slots live in fixed pages of 4,096,
-found through a small directory of page pointers. A page is allocated only when
+found through a small directory of page pointers. Since block A5 the table is
+an index pool (`src/pool.h`): the free list, the pages and the directory are
+the pool's, a slot is pool index `slot + 1`, and the directory entry is 16
+bytes a page (it also counts the page's taken slots, which lets `trim` find
+whole free pages). A page is allocated only when
 the last one is full and never moves, so no spawn copies the table. The largest
 block a spawn allocates is one 64 KiB page at any population; before paging,
 the spawn that crossed 2,097,152 actors copied a 32 MB table.
