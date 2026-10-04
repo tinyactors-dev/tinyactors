@@ -7,8 +7,14 @@
  * Names are resolved when they are read. A function captures the values of
  * the names it uses from enclosing functions when it is created: every
  * binding is const, so a copy is the same as a reference. A name may not be
- * used before its const declaration, which also makes a function unable to
- * refer to itself.
+ * used before its const declaration or import, which also makes a function
+ * unable to refer to itself. A name bound nowhere is reported at the end, so
+ * that a syntax error after it comes first, as in JavaScript.
+ *
+ * A module's value is its namespace: an object of every export, with keys in
+ * the order JavaScript sorts a namespace's (by UTF-16 code unit). Exports are
+ * collected as they arrive and resolved, checked and sorted at the end, since
+ * `export { a }` may come before `const a`.
  */
 #include "internal.h"
 
@@ -21,13 +27,11 @@ typedef struct {
     uint32_t scope;
     uint32_t index;        /* local slot, or constant */
     uint8_t kind;
-    uint8_t exported;
 } binding;
 
 typedef struct {
     uint32_t function;
     uint32_t bindings_base;
-    uint32_t refs_base;
     uint32_t jump_over;    /* operand of the jump around the body */
     uint16_t params;
     uint16_t slots;
@@ -79,6 +83,36 @@ typedef struct {
 
 enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY };
 
+/* An export: resolved when it arrives, or at the end of the module. */
+enum { XE_RESOLVED = 0, XE_LOCAL, XE_STAR };
+
+typedef struct {
+    uint32_t name_offset;  /* the exported name, in names */
+    uint32_t name_length;
+    uint32_t local_offset; /* XE_LOCAL: the name to resolve at the end */
+    uint32_t local_length;
+    uint8_t state;         /* XE_* */
+    uint8_t kind;          /* B_LOCAL or B_CONSTANT, once resolved */
+    uint8_t string_name;   /* the exported name was a string literal */
+    uint32_t index;        /* slot or constant; XE_STAR: its star_source */
+    sjs_position at;
+} export_entry;
+
+/* The module of an `export *`: borrowed, as find() lends it while the
+ * compiler runs. */
+typedef struct {
+    sjs_value exports;
+    uint32_t module_offset; /* its name, in names */
+    uint32_t module_length;
+} star_source;
+
+/* Names to sort as a namespace sorts its keys; rank and index break ties. */
+typedef struct {
+    sjs_str name;
+    uint32_t rank;
+    uint32_t index;
+} sort_item;
+
 struct sjs_compiler {
     sjs_context *context;
     sjs_goal goal;
@@ -121,6 +155,15 @@ struct sjs_compiler {
     sjs_position space_at;
     /* Export the names the next const binds. */
     bool exporting;
+    /* A module's exports, its export * sources, and room to sort names. */
+    sjs_buf exports;
+    sjs_buf stars;
+    sjs_buf sorting;
+    /* The first name read that is bound nowhere, reported at the end. */
+    bool unbound;
+    uint32_t unbound_offset;
+    uint32_t unbound_length;
+    sjs_position unbound_at;
 };
 
 static const sjs_allocator *alloc(sjs_compiler *c) {
@@ -308,7 +351,6 @@ static sjs_result open_scope(sjs_compiler *c, sjs_position at) {
     scope s = { 0 };
     s.function = SJS_BUF_COUNT(c->functions, sjs_function_info);
     s.bindings_base = SJS_BUF_COUNT(c->bindings, binding);
-    s.refs_base = SJS_BUF_COUNT(c->refs, outer_ref);
     s.at = at;
     info.code = here(c);
     sjs_result r = buf_add(c, &c->functions, bytes_of(&info, sizeof info));
@@ -327,6 +369,15 @@ typedef struct {
     uint32_t index;
 } target;
 
+static sjs_result add_export(sjs_compiler *c, const export_entry *entry, sjs_str name) {
+    export_entry x = *entry;
+    x.name_offset = c->names.length;
+    x.name_length = name.length;
+    sjs_result r = buf_add(c, &c->names, bytes_of(name.ptr, name.length));
+    if (r == SJS_OK) r = buf_add(c, &c->exports, bytes_of(&x, sizeof x));
+    return r == SJS_OK ? SJS_OK : fail_result(c, r, entry->at);
+}
+
 /* Bind `e->text` in the current scope. */
 static sjs_result declare(sjs_compiler *c, const sjs_event *e, target to) {
     uint8_t kind = to.kind;
@@ -339,13 +390,15 @@ static sjs_result declare(sjs_compiler *c, const sjs_event *e, target to) {
         binding *b = &SJS_BUF_AT(c->bindings, binding, i);
         if (sjs_str_equal(binding_name(c, b), e->text)) return fail_name(c, e, (sjs_problem){ SJS_ERROR_SYNTAX, "this name is declared twice" });
     }
+    /* A name read in this scope before now, here or in a function it holds,
+     * meant something else then: JavaScript would find this binding. */
     uint32_t refs = SJS_BUF_COUNT(c->refs, outer_ref);
-    for (uint32_t i = s->refs_base; i < refs; i++) {
+    for (uint32_t i = 0; i < refs; i++) {
         outer_ref *ref = &SJS_BUF_AT(c->refs, outer_ref, i);
         sjs_str name = { (const char *)c->names.ptr + ref->name_offset, ref->name_length };
         if (ref->scope == scope_index && sjs_str_equal(name, e->text)) {
-            return fail_name(c, e,
-                             (sjs_problem){ SJS_ERROR_UNSUPPORTED, "this name is used before its const declaration; staticjs functions cannot call themselves" });
+            return fail_name(c, e, (sjs_problem){ SJS_ERROR_UNSUPPORTED,
+                                                  "this name is used before its declaration or import; staticjs functions cannot call themselves" });
         }
     }
     binding b = { 0 };
@@ -354,12 +407,20 @@ static sjs_result declare(sjs_compiler *c, const sjs_event *e, target to) {
     b.scope = scope_index;
     b.index = index;
     b.kind = kind;
-    uint32_t open = SJS_BUF_COUNT(c->constructs, construct);
-    const construct *k = open == 0 ? NULL : &SJS_BUF_AT(c->constructs, construct, open - 1);
-    b.exported = (k != NULL && k->kind == K_CONST && k->exported) ? 1u : 0u;
     sjs_result r = buf_add(c, &c->names, bytes_of(e->text.ptr, e->text.length));
     if (r == SJS_OK) r = buf_add(c, &c->bindings, bytes_of(&b, sizeof b));
-    return r == SJS_OK ? SJS_OK : fail_result(c, r, e->at);
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    uint32_t open = SJS_BUF_COUNT(c->constructs, construct);
+    const construct *k = open == 0 ? NULL : &SJS_BUF_AT(c->constructs, construct, open - 1);
+    if (k != NULL && k->kind == K_CONST && k->exported && scope_index == 0) {
+        export_entry x = { 0 };
+        x.state = XE_RESOLVED;
+        x.kind = kind;
+        x.index = index;
+        x.at = e->at;
+        return add_export(c, &x, e->text);
+    }
+    return SJS_OK;
 }
 
 static sjs_result new_slot(sjs_compiler *c, sjs_position at, uint32_t *slot) {
@@ -370,6 +431,12 @@ static sjs_result new_slot(sjs_compiler *c, sjs_position at, uint32_t *slot) {
 }
 
 static sjs_result note_outer_ref(sjs_compiler *c, uint32_t scope_index, const sjs_event *e) {
+    uint32_t n = SJS_BUF_COUNT(c->refs, outer_ref);
+    for (uint32_t i = 0; i < n; i++) {
+        const outer_ref *seen = &SJS_BUF_AT(c->refs, outer_ref, i);
+        sjs_str name = { (const char *)c->names.ptr + seen->name_offset, seen->name_length };
+        if (seen->scope == scope_index && sjs_str_equal(name, e->text)) return SJS_OK;
+    }
     outer_ref ref = { scope_index, c->names.length, e->text.length, e->at };
     sjs_result r = buf_add(c, &c->names, bytes_of(e->text.ptr, e->text.length));
     if (r == SJS_OK) r = buf_add(c, &c->refs, bytes_of(&ref, sizeof ref));
@@ -448,7 +515,22 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
         if (value_constant(c, sjs_builtin_value(id), &index) != SJS_OK) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
         return op32(c, ins(SJS_OP_CONSTANT, index, e->at));
     }
-    return fail_name(c, e, (sjs_problem){ SJS_ERROR_NAME, "this name is not bound (a const is visible after its declaration)" });
+    /* Bound nowhere: reported at the end, after any syntax error. */
+    if (!c->unbound) {
+        c->unbound = true;
+        c->unbound_offset = c->names.length;
+        c->unbound_length = e->text.length;
+        c->unbound_at = e->at;
+        sjs_result r = buf_add(c, &c->names, bytes_of(e->text.ptr, e->text.length));
+        if (r != SJS_OK) return fail_result(c, r, e->at);
+    }
+    return op(c, SJS_OP_UNDEFINED_, e->at);
+}
+
+static sjs_result fail_unbound(sjs_compiler *c) {
+    compile_fail(c, c->unbound_at, (sjs_problem){ SJS_ERROR_NAME, "this name is not bound (a const is visible after its declaration)" });
+    sjs_error_subject(&c->error, (sjs_str){ (const char *)c->names.ptr + c->unbound_offset, c->unbound_length });
+    return SJS_ERR_PROGRAM;
 }
 
 /* `Math.PI`, `Number.MAX_SAFE_INTEGER`, `Math.max`. */
@@ -558,7 +640,16 @@ static sjs_result close_scope(sjs_compiler *c, sjs_position at) {
     }
     c->pending_captures.length = kept * (uint32_t)sizeof(capture);
     c->bindings.length = s.bindings_base * (uint32_t)sizeof(binding);
-    c->refs.length = s.refs_base * (uint32_t)sizeof(outer_ref);
+    /* Drop this scope's refs. The refs it noted for enclosing scopes stay:
+     * a later declaration there would change what this function read. */
+    uint32_t refs = SJS_BUF_COUNT(c->refs, outer_ref);
+    kept = 0;
+    for (uint32_t i = 0; i < refs; i++) {
+        outer_ref ref = SJS_BUF_AT(c->refs, outer_ref, i);
+        if (ref.scope >= scope_index) continue;
+        SJS_BUF_AT(c->refs, outer_ref, kept++) = ref;
+    }
+    c->refs.length = kept * (uint32_t)sizeof(outer_ref);
     c->scopes.length -= (uint32_t)sizeof(scope);
     return SJS_OK;
 }
@@ -665,14 +756,117 @@ static sjs_result end_params(sjs_compiler *c, sjs_position at) {
  * Modules
  */
 
-static sjs_result import(sjs_compiler *c, const sjs_event *e) {
+static bool at_module_level(sjs_compiler *c, const sjs_event *e) {
+    if (c->goal == SJS_GOAL_MODULE && scope_count(c) == 1 && SJS_BUF_COUNT(c->constructs, construct) == 0) return true;
+    compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_SYNTAX, "the events are out of order" });
+    return false;
+}
+
+/* The exports of the module `e->text`. */
+static sjs_result module_exports(sjs_compiler *c, const sjs_event *e, sjs_value *exports) {
     if (c->modules.v == NULL || c->modules.v->find == NULL) {
         return fail_name(c, e, (sjs_problem){ SJS_ERROR_NAME, "there are no modules to import from" });
     }
-    sjs_value exports;
-    if (c->modules.v->find(c->modules.self, e->text, &exports) != SJS_OK || exports.kind != SJS_OBJECT) {
+    if (c->modules.v->find(c->modules.self, e->text, exports) != SJS_OK || exports->kind != SJS_OBJECT || exports->internal != 0) {
         return fail_name(c, e, (sjs_problem){ SJS_ERROR_NAME, "there is no module of this name" });
     }
+    return SJS_OK;
+}
+
+static sjs_str entry_key(const sjs_object *o, uint32_t i) {
+    return sjs_string_view(o->entries[i].key);
+}
+
+/* A namespace orders its keys as strings, which an object cannot do for
+ * array indices; and an object cannot hold __proto__. */
+static sjs_result namespace_keys(sjs_compiler *c, const sjs_event *e, sjs_value exports) {
+    const sjs_object *o = SJS_AS_OBJECT(exports);
+    for (uint32_t i = 0; i < o->count; i++) {
+        if ((o->entries[i].key->h.flags & SJS_STRING_INDEX) != 0 || sjs_str_equal(entry_key(o, i), SJS_STR("__proto__"))) {
+            return fail_name(c, e, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "a namespace cannot hold this module's keys in order: one is an array index" });
+        }
+    }
+    return SJS_OK;
+}
+
+/* Does `a` come before `b`? By UTF-16 code units, then rank, then index. */
+static bool sorts_before(const sort_item *a, const sort_item *b) {
+    int32_t order = sjs_utf16_compare(a->name, b->name);
+    if (order != 0) return order < 0;
+    if (a->rank != b->rank) return a->rank < b->rank;
+    return a->index < b->index;
+}
+
+static void sift_down(sort_item *items, uint32_t root, uint32_t count) {
+    for (;;) {
+        uint32_t child = 2u * root + 1u;
+        if (child >= count) return;
+        if (child + 1u < count && sorts_before(&items[child], &items[child + 1u])) child++;
+        if (!sorts_before(&items[root], &items[child])) return;
+        sort_item swap = items[root];
+        items[root] = items[child];
+        items[child] = swap;
+        root = child;
+    }
+}
+
+/* Heap sort: in place, without recursion, and total, so deterministic. */
+static void sort_names(sort_item *items, uint32_t count) {
+    for (uint32_t i = count / 2u; i-- > 0;) sift_down(items, i, count);
+    for (uint32_t end = count; end-- > 1u;) {
+        sort_item swap = items[0];
+        items[0] = items[end];
+        items[end] = swap;
+        sift_down(items, 0, end);
+    }
+}
+
+static sjs_result add_sort_item(sjs_compiler *c, sort_item item) {
+    return buf_add(c, &c->sorting, bytes_of(&item, sizeof item));
+}
+
+/* The module's exports as a namespace: the same object when its keys are in
+ * order already, as every staticjs module's are; a sorted copy if not. */
+static sjs_result namespace_constant(sjs_compiler *c, const sjs_event *e, uint32_t *index) {
+    sjs_value exports;
+    if (module_exports(c, e, &exports) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (namespace_keys(c, e, exports) != SJS_OK) return SJS_ERR_PROGRAM;
+    const sjs_object *o = SJS_AS_OBJECT(exports);
+    bool sorted = true;
+    for (uint32_t i = 1; i < o->count && sorted; i++) sorted = sjs_utf16_compare(entry_key(o, i - 1), entry_key(o, i)) < 0;
+    sjs_result r = SJS_OK;
+    if (sorted) {
+        sjs_retain(exports);
+        r = value_constant(c, exports, index);
+        return r == SJS_OK ? SJS_OK : fail_result(c, r, e->at);
+    }
+    c->sorting.length = 0;
+    for (uint32_t i = 0; i < o->count && r == SJS_OK; i++) r = add_sort_item(c, (sort_item){ entry_key(o, i), 0, i });
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    sort_item *items = (sort_item *)(void *)c->sorting.ptr;
+    sort_names(items, o->count);
+    sjs_object *copy;
+    r = sjs_object_make(c->context, o->count, &copy);
+    for (uint32_t i = 0; i < o->count && r == SJS_OK; i++) {
+        const sjs_entry *entry = &o->entries[items[i].index];
+        sjs_value key = sjs_heap_value(SJS_STRING, &entry->key->h);
+        sjs_retain(key);
+        sjs_retain(entry->value);
+        r = sjs_object_put_key(c->context, &copy, (sjs_put){ entry->key, entry->value });
+        if (r != SJS_OK) {
+            sjs_release(c->context, key);
+            sjs_release(c->context, entry->value);
+            sjs_release(c->context, sjs_heap_value(SJS_OBJECT, &copy->h));
+        }
+    }
+    if (r == SJS_OK) r = value_constant(c, sjs_heap_value(SJS_OBJECT, &copy->h), index);
+    return r == SJS_OK ? SJS_OK : fail_result(c, r, e->at);
+}
+
+/* The value of the export `e->alias` of the module `e->text`, as a constant. */
+static sjs_result export_constant(sjs_compiler *c, const sjs_event *e, uint32_t *index) {
+    sjs_value exports;
+    if (module_exports(c, e, &exports) != SJS_OK) return SJS_ERR_PROGRAM;
     sjs_value value;
     if (sjs_object_get(exports, e->alias, &value) != SJS_OK) {
         sjs_event named = *e;
@@ -680,31 +874,249 @@ static sjs_result import(sjs_compiler *c, const sjs_event *e) {
         return fail_name(c, &named, (sjs_problem){ SJS_ERROR_NAME, "the module does not export this name" });
     }
     sjs_retain(value);
-    uint32_t index;
-    if (value_constant(c, value, &index) != SJS_OK) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
-    sjs_event local = *e;
-    local.text = e->name;
-    return declare(c, &local, (target){ B_CONSTANT, index });
+    if (value_constant(c, value, index) != SJS_OK) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
+    return SJS_OK;
 }
 
-/* A module's value: an object of its exports, in the order declared. */
-static sjs_result module_end(sjs_compiler *c, sjs_position at) {
-    if (op(c, SJS_OP_OBJECT_NEW, at) != SJS_OK) return SJS_ERR_PROGRAM;
-    uint32_t n = SJS_BUF_COUNT(c->bindings, binding);
+static sjs_result import(sjs_compiler *c, const sjs_event *e) {
+    if (!at_module_level(c, e)) return SJS_ERR_PROGRAM;
+    sjs_event local = *e;
+    local.text = e->name;
+    uint32_t index;
+    switch (e->count) {
+    case SJS_IMPORT_NAME:
+        if (export_constant(c, e, &index) != SJS_OK) return SJS_ERR_PROGRAM;
+        return declare(c, &local, (target){ B_CONSTANT, index });
+    case SJS_IMPORT_NAMESPACE:
+        if (namespace_constant(c, e, &index) != SJS_OK) return SJS_ERR_PROGRAM;
+        return declare(c, &local, (target){ B_CONSTANT, index });
+    case SJS_IMPORT_MODULE: {
+        sjs_value exports;
+        return module_exports(c, e, &exports);
+    }
+    default:
+        return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_SYNTAX, "the events are out of order" });
+    }
+}
+
+/* `export * from`: every export but default, unless an explicit export of
+ * the same name hides it (decided at the end). */
+static sjs_result export_star(sjs_compiler *c, const sjs_event *e) {
+    sjs_value exports;
+    if (module_exports(c, e, &exports) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (namespace_keys(c, e, exports) != SJS_OK) return SJS_ERR_PROGRAM;
+    star_source source = { exports, c->names.length, e->text.length };
+    sjs_result r = buf_add(c, &c->names, bytes_of(e->text.ptr, e->text.length));
+    if (r == SJS_OK) r = buf_add(c, &c->stars, bytes_of(&source, sizeof source));
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    export_entry x = { 0 };
+    x.state = XE_STAR;
+    x.index = SJS_BUF_COUNT(c->stars, star_source) - 1u;
+    x.at = e->at;
+    const sjs_object *o = SJS_AS_OBJECT(exports);
+    for (uint32_t i = 0; i < o->count; i++) {
+        if (sjs_str_equal(entry_key(o, i), SJS_STR("default"))) continue;
+        if (add_export(c, &x, entry_key(o, i)) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    return SJS_OK;
+}
+
+static sjs_result export_from(sjs_compiler *c, const sjs_event *e) {
+    if (!at_module_level(c, e)) return SJS_ERR_PROGRAM;
+    export_entry x = { 0 };
+    x.state = XE_RESOLVED;
+    x.kind = B_CONSTANT;
+    x.at = e->at;
+    switch (e->count) {
+    case SJS_IMPORT_NAME:
+        if (export_constant(c, e, &x.index) != SJS_OK) return SJS_ERR_PROGRAM;
+        return add_export(c, &x, e->name);
+    case SJS_IMPORT_NAMESPACE:
+        if (namespace_constant(c, e, &x.index) != SJS_OK) return SJS_ERR_PROGRAM;
+        return add_export(c, &x, e->name);
+    case SJS_IMPORT_STAR:
+        return export_star(c, e);
+    case SJS_IMPORT_MODULE: {
+        sjs_value exports;
+        return module_exports(c, e, &exports);
+    }
+    default:
+        return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_SYNTAX, "the events are out of order" });
+    }
+}
+
+/* `export { alias as name }`: resolved at the end, as `alias` may be declared later. */
+static sjs_result export_local(sjs_compiler *c, const sjs_event *e) {
+    if (!at_module_level(c, e)) return SJS_ERR_PROGRAM;
+    export_entry x = { 0 };
+    x.state = XE_LOCAL;
+    x.string_name = e->count != 0 ? 1u : 0u;
+    x.local_offset = c->names.length;
+    x.local_length = e->alias.length;
+    x.at = e->at;
+    sjs_result r = buf_add(c, &c->names, bytes_of(e->alias.ptr, e->alias.length));
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    return add_export(c, &x, e->name);
+}
+
+/* `export default value`: the value goes in a slot of its own. */
+static sjs_result export_default(sjs_compiler *c, const sjs_event *e) {
+    if (!at_module_level(c, e)) return SJS_ERR_PROGRAM;
+    export_entry x = { 0 };
+    x.state = XE_RESOLVED;
+    x.kind = B_LOCAL;
+    x.at = e->at;
+    if (new_slot(c, e->at, &x.index) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (op16(c, ins(SJS_OP_SET_LOCAL, x.index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    return add_export(c, &x, SJS_STR("default"));
+}
+
+static sjs_str names_at(const sjs_compiler *c, uint32_t offset, uint32_t length) {
+    return (sjs_str){ (const char *)c->names.ptr + offset, length };
+}
+
+static export_entry *export_at(sjs_compiler *c, uint32_t i) {
+    return &SJS_BUF_AT(c->exports, export_entry, i);
+}
+
+/* Resolve `export { a }` against the module's own declarations and imports;
+ * never a global or a built-in. */
+static sjs_result resolve_locals(sjs_compiler *c) {
+    uint32_t n = SJS_BUF_COUNT(c->exports, export_entry);
+    uint32_t count = SJS_BUF_COUNT(c->bindings, binding);
     for (uint32_t i = 0; i < n; i++) {
-        binding b = SJS_BUF_AT(c->bindings, binding, i);
-        if (!b.exported || b.scope != 0) continue;
-        uint32_t index;
-        sjs_event name = { 0 };
-        name.text = binding_name(c, &b);
-        name.at = at;
-        if (string_constant(c, &name, &index) != SJS_OK) return SJS_ERR_PROGRAM;
-        if (op32(c, ins(SJS_OP_CONSTANT, index, at)) != SJS_OK) return SJS_ERR_PROGRAM;
-        if (b.kind == B_CONSTANT) {
-            if (op32(c, ins(SJS_OP_CONSTANT, b.index, at)) != SJS_OK) return SJS_ERR_PROGRAM;
-        } else if (op16(c, ins(SJS_OP_LOCAL, b.index, at)) != SJS_OK) {
+        export_entry *x = export_at(c, i);
+        if (x->state != XE_LOCAL) continue;
+        sjs_str local = names_at(c, x->local_offset, x->local_length);
+        uint32_t found = count;
+        for (uint32_t k = 0; k < count && found == count; k++) {
+            const binding *b = &SJS_BUF_AT(c->bindings, binding, k);
+            if (b->scope == 0 && sjs_str_equal(binding_name(c, b), local)) found = k;
+        }
+        if (found == count) {
+            compile_fail(c, x->at, (sjs_problem){ SJS_ERROR_SYNTAX, "this name is exported but the module does not declare it" });
+            sjs_error_subject(&c->error, local);
             return SJS_ERR_PROGRAM;
         }
+        const binding *b = &SJS_BUF_AT(c->bindings, binding, found);
+        x->state = XE_RESOLVED;
+        x->kind = b->kind;
+        x->index = b->index;
+    }
+    return SJS_OK;
+}
+
+/* A refusal decided before the module's value is built. */
+typedef struct {
+    bool found;
+    sjs_position at;
+    const char *message;
+    sjs_str subject;
+} deferred;
+
+static void defer(deferred *d, const export_entry *x, const char *message) {
+    if (d->found) return;
+    d->found = true;
+    d->at = x->at;
+    d->message = message;
+}
+
+/* Sort the exports by name and keep one per name: an explicit export hides
+ * export * ones; two explicit exports of one name are a syntax error. Leaves
+ * the kept ones in `sorting`, and answers how many. */
+static sjs_result settle_exports(sjs_compiler *c, deferred *ambiguous, uint32_t *kept) {
+    uint32_t n = SJS_BUF_COUNT(c->exports, export_entry);
+    c->sorting.length = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const export_entry *x = export_at(c, i);
+        sort_item item = { names_at(c, x->name_offset, x->name_length), x->state == XE_STAR ? 1u : 0u, i };
+        sjs_result r = add_sort_item(c, item);
+        if (r != SJS_OK) return fail_result(c, r, x->at);
+    }
+    sort_item *items = (sort_item *)(void *)c->sorting.ptr;
+    sort_names(items, n);
+    *kept = 0;
+    for (uint32_t start = 0, end = 0; start < n; start = end) {
+        uint32_t named = 0;
+        for (end = start; end < n && sjs_str_equal(items[end].name, items[start].name); end++) {
+            if (items[end].rank == 0) named++;
+        }
+        if (named >= 2) {
+            compile_fail(c, export_at(c, items[start + 1].index)->at, (sjs_problem){ SJS_ERROR_SYNTAX, "this name is exported twice" });
+            sjs_error_subject(&c->error, items[start].name);
+            return SJS_ERR_PROGRAM;
+        }
+        if (named == 0 && !ambiguous->found) {
+            /* Only export * gives it: one module's export is one binding. */
+            const star_source *first = &SJS_BUF_AT(c->stars, star_source, export_at(c, items[start].index)->index);
+            for (uint32_t i = start + 1; i < end; i++) {
+                const star_source *other = &SJS_BUF_AT(c->stars, star_source, export_at(c, items[i].index)->index);
+                if (!sjs_str_equal(names_at(c, first->module_offset, first->module_length),
+                                   names_at(c, other->module_offset, other->module_length)) &&
+                    !ambiguous->found) {
+                    ambiguous->subject = items[start].name;
+                    defer(ambiguous, export_at(c, items[i].index), "two export * give this name; staticjs cannot tell whether they are one binding");
+                }
+            }
+        }
+        items[(*kept)++] = items[start];
+    }
+    return SJS_OK;
+}
+
+static sjs_result fail_deferred(sjs_compiler *c, const deferred *d) {
+    compile_fail(c, d->at, (sjs_problem){ SJS_ERROR_UNSUPPORTED, d->message });
+    sjs_error_subject(&c->error, d->subject);
+    return SJS_ERR_PROGRAM;
+}
+
+/* Push the value of a kept export. */
+static sjs_result export_value(sjs_compiler *c, const sort_item *item, sjs_position at) {
+    const export_entry *x = export_at(c, item->index);
+    if (x->state == XE_STAR) {
+        const star_source *source = &SJS_BUF_AT(c->stars, star_source, x->index);
+        sjs_value value;
+        if (sjs_object_get(source->exports, item->name, &value) != SJS_OK) {
+            return compile_fail(c, at, (sjs_problem){ SJS_ERROR_NAME, "the module does not export this name" });
+        }
+        sjs_retain(value);
+        uint32_t index;
+        if (value_constant(c, value, &index) != SJS_OK) return compile_fail(c, at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
+        return op32(c, ins(SJS_OP_CONSTANT, index, at));
+    }
+    if (x->kind == B_CONSTANT) return op32(c, ins(SJS_OP_CONSTANT, x->index, at));
+    return op16(c, ins(SJS_OP_LOCAL, x->index, at));
+}
+
+/* A module's value: its namespace. Syntax errors come first, as JavaScript
+ * finds them when it parses; then a name bound nowhere; then what staticjs
+ * leaves out. */
+static sjs_result module_end(sjs_compiler *c, sjs_position at) {
+    if (resolve_locals(c) != SJS_OK) return SJS_ERR_PROGRAM;
+    deferred refused = { 0 };
+    uint32_t kept;
+    if (settle_exports(c, &refused, &kept) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (c->unbound) return fail_unbound(c);
+    const sort_item *items = (const sort_item *)(const void *)c->sorting.ptr;
+    deferred names = { 0 };
+    for (uint32_t i = 0; i < kept && !names.found; i++) {
+        const export_entry *x = export_at(c, items[i].index);
+        names.subject = items[i].name;
+        if (x->string_name) defer(&names, x, "staticjs names exports with names, not strings");
+        else if (sjs_str_equal(items[i].name, SJS_STR("__proto__"))) defer(&names, x, "staticjs objects have no prototype, so __proto__ cannot be exported");
+    }
+    if (names.found) return fail_deferred(c, &names);
+    if (refused.found) return fail_deferred(c, &refused);
+    if (op(c, SJS_OP_OBJECT_NEW, at) != SJS_OK) return SJS_ERR_PROGRAM;
+    for (uint32_t i = 0; i < kept; i++) {
+        /* `sorting` does not move: nothing below appends to it. */
+        sjs_event name = { 0 };
+        name.text = items[i].name;
+        name.at = at;
+        uint32_t index;
+        if (string_constant(c, &name, &index) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (op32(c, ins(SJS_OP_CONSTANT, index, at)) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (export_value(c, &items[i], at) != SJS_OK) return SJS_ERR_PROGRAM;
         if (op(c, SJS_OP_OBJECT_PUT, at) != SJS_OK) return SJS_ERR_PROGRAM;
     }
     return op(c, SJS_OP_RETURN, at);
@@ -795,7 +1207,10 @@ static sjs_result end(sjs_compiler *c, const sjs_event *e) {
     if (SJS_BUF_COUNT(c->constructs, construct) != 0 || scope_count(c) != 1) {
         return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_SYNTAX, "the events are out of order" });
     }
-    sjs_result r = c->goal == SJS_GOAL_MODULE ? module_end(c, e->at) : op(c, SJS_OP_RETURN, e->at);
+    sjs_result r;
+    if (c->goal == SJS_GOAL_MODULE) r = module_end(c, e->at);
+    else if (c->unbound) r = fail_unbound(c);
+    else r = op(c, SJS_OP_RETURN, e->at);
     if (r != SJS_OK) return SJS_ERR_PROGRAM;
     if (close_scope(c, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     c->ended = true;
@@ -944,6 +1359,12 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         return SJS_OK;
     case SJS_EV_IMPORT:
         return import(c, e);
+    case SJS_EV_EXPORT_DEFAULT:
+        return export_default(c, e);
+    case SJS_EV_EXPORT_NAME:
+        return export_local(c, e);
+    case SJS_EV_EXPORT_FROM:
+        return export_from(c, e);
     case SJS_EV_END:
         return end(c, e);
     default:
@@ -1061,7 +1482,8 @@ void sjs_compiler_destroy(sjs_compiler *compiler) {
     for (uint32_t i = 0; i < n; i++) sjs_release(c->context, SJS_BUF_AT(c->constants, sjs_value, i));
     sjs_buf *bufs[] = { &c->code, &c->numbers, &c->constants, &c->functions, &c->captures, &c->lines,
                         &c->scopes, &c->bindings, &c->names, &c->pending_captures, &c->refs,
-                        &c->constructs, &c->jumps, &c->params, &c->params_text };
+                        &c->constructs, &c->jumps, &c->params, &c->params_text, &c->exports, &c->stars,
+                        &c->sorting };
     for (uint32_t i = 0; i < sizeof bufs / sizeof bufs[0]; i++) sjs_buf_free(a, bufs[i]);
     sjs_mem_free(a, c, sizeof *c);
 }

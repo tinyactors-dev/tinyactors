@@ -60,7 +60,12 @@ The rule has three consequences:
   declarations ending in one `return`. Parameters and `const` take
   identifiers and array and object patterns.
 - Calls, with spread arguments. `new Set(...)`.
-- Modules: `import { a, b as c } from "name";`, `const` and `export const`.
+- Modules: `const`, and the static module syntax around it: default,
+  named and namespace imports (`import x, { a, b as c } from "name"`,
+  `import * as ns from "name"`), `export const`, `export default`, export
+  lists (`export { a, b as c }`) and re-exports (`export { a } from`,
+  `export * from`, `export * as ns from`). A module's value is its
+  namespace, keys sorted as JavaScript sorts them.
 - The built-ins listed in [`staticjs/README.md`](../../staticjs/README.md):
   the methods of arrays that do not change them (`map`, `filter`, `reduce`,
   `toSorted`, `with`, ...), of strings, of `Set` (including `union` and
@@ -71,12 +76,14 @@ The rule has three consequences:
 | Left out | Protects |
 |---|---|
 | `let`, `var`, assignment, `++`, `delete` | no side effects |
+| `export let`, `export function`, `export class` | no side effects |
 | `push`, `sort`, `splice`, `Set.prototype.add` and every other mutating method | no side effects |
 | statements other than `const` and `return`: `if`, `for`, `while`, `try`, `throw` | every evaluation ends |
 | a function that refers to itself, or to a `const` declared after it | every evaluation ends |
 | `this`, `class`, `function`, getters, `new` other than `new Set` | a small, closed set of values |
 | `async`, `await`, generators, `import()`, `eval` | evaluation is a step function |
 | `==` and `!=` | no coercions to remember |
+| strings as export names (`export { a as "x-y" }`), and two `export *` that give one name | never a different value: an object cannot keep a namespace's order for every string, nor tell whether two exports are one binding |
 | every host object (`globalThis`, `Date`, `Math.random`, `console`) | sandboxed and deterministic |
 
 ### Values
@@ -150,7 +157,7 @@ bytes ──push──▶ parser ──events──▶ compiler ──▶ progra
 | `cond` | an expression, true if JavaScript would find it truthy |
 | `expr` | an expression |
 | `location` | a path of names, `.name` and `[expr]`. `<assign>` writes a new version of the value along the path: the same result as JavaScript's assignment, without changing anything shared |
-| `<script>` | only at the top of the document, and only a module: `import` and `const`. A `<script>` in executable content is refused when the chart is compiled (SCXML A.1.4, 5.9.4) |
+| `<script>` | only at the top of the document, and only a module: imports, `const` and exports. A `<script>` in executable content is refused when the chart is compiled (SCXML A.1.4, 5.9.4) |
 | `<foreach>` | over an array or a set; the snapshot is a reference count |
 | `_event`, `_sessionid`, `_name`, `_ioprocessors` | names bound for each evaluation; they cannot be assigned |
 | `In(id)` | a function the data model provides |

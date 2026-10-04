@@ -77,9 +77,18 @@ and spread arguments, with `?.`; arrow functions with an expression body,
 or a block of `const` declarations ending in one `return`; array and object
 patterns in parameters and `const`.
 
-Modules: `import { a, b as c } from "name";`, `const`, `export const`.
-A module's value is an object of its exports, which a later program
-imports by name through an `sjs_modules` adapter.
+Modules: `const` declarations, `import x from "m"`, `import { a, b as c }
+from "m"`, `import * as ns from "m"`, `import x, { y }` and `import x, *
+as ns`, `import "m"`; `export const`, `export default` of an expression,
+`export { a, b as c }` (also of names declared later, and `a as default`),
+and the re-exports `export { a, b as c } from "m"`, `export * from "m"`
+and `export * as ns from "m"`. A line break ends a statement where
+JavaScript inserts a semicolon. Imports may come anywhere at the top level,
+but a name is bound only from its import on. A module's value is its
+namespace: an object of every export, with keys sorted by UTF-16 code units
+as JavaScript sorts a namespace's. A later program imports it by name
+through an `sjs_modules` adapter, and only a module already evaluated can
+be imported, so imports cannot form a cycle.
 
 Built-ins:
 
@@ -102,11 +111,25 @@ compare identities, or find something on a prototype.
 - `===` on two objects (identity); `+` of a string and an object; arithmetic
   or `<` on values that are not both numbers (or, for `<`, both strings).
 - A property JavaScript finds on `Object.prototype` (`toString`,
-  `__proto__`); reading a method without calling it.
+  `__proto__`); reading a method without calling it. A namespace
+  (`import * as ns`) is an object too: `ns.toString` and `"valueOf" in ns`
+  fault where JavaScript finds nothing, and so does turning a namespace into
+  a string.
 - `toSorted()` without a compare function; `toLowerCase()` of a string
   that is not ASCII; slicing a string through the middle of a surrogate pair.
 - A number literal outside Clinger's fast path (digits worth more than
   2^53, or a power of ten past 10^22) is refused when compiled.
+
+## Refused when compiled
+
+JavaScript staticjs leaves out is refused as `unsupported`, never given a
+different meaning. Among the module forms: `export let`, `export function`,
+`export class` and `export default function`; a string as an exported or
+imported name (`export { a as "x-y" }`), as an object cannot keep the order
+a namespace gives it; `import()` and `import.meta`; two `export *` that
+give one name from different modules, unless an explicit export settles it,
+as staticjs cannot tell whether they are one binding; and a name used
+before its import or declaration, even in an earlier function.
 
 ## Status
 
