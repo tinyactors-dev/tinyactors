@@ -70,9 +70,24 @@ typedef struct ta_operator_jump {
     ta_state_id targets[];
 } ta_operator_jump;
 
-/* The bytes an operator transition with `count` targets takes. */
+/*
+ * The bytes an operator transition with `count` targets takes: the header
+ * and then `count` state IDs. It never allocates. It answers 0, which is
+ * never a real size because the header is not empty, when the size does not
+ * fit in a size_t.
+ *
+ * The jump has the lifetime of the event block that carries it (input, until
+ * the macrostep takes the event). A site that allocates one must refuse 0
+ * first; a site that frees one recomputes the size from the block's own
+ * `target_count`, which does not change after allocation, so it gets the
+ * size it was allocated with and the sized free matches.
+ */
 static inline size_t ta_operator_jump_bytes(uint32_t count) {
-    return offsetof(ta_operator_jump, targets) + (size_t)count * sizeof(ta_state_id);
+    ta_layout layout;
+    ta_layout_init(&layout, offsetof(ta_operator_jump, targets));
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
+                                               .count = count });
+    return ta_layout_bytes(&layout);
 }
 
 /*

@@ -1304,8 +1304,11 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
      * they change nothing when they do. */
     ta_operator_jump *jump = NULL;
     if (transition != NULL) {
-        jump = ta_mem_alloc(system->allocator, ta_operator_jump_bytes(transition->target_count),
-                            _Alignof(ta_operator_jump));
+        size_t jump_bytes = ta_operator_jump_bytes(transition->target_count);
+        if (jump_bytes == 0) {
+            return TA_ERR_NOMEM; /* the count does not fit; nothing was allocated */
+        }
+        jump = ta_mem_alloc(system->allocator, jump_bytes, _Alignof(ta_operator_jump));
         if (jump == NULL) {
             return TA_ERR_NOMEM;
         }
