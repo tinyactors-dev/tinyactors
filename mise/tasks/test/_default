@@ -32,7 +32,7 @@ steps = [
   # --full: every torture scenario and the cross builds.
   ['core', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('tinyactors-core')],
   ['tinyxml', ['mise', 'run', *flags.call], root.join('tinyxml')],
-  # Depends on nothing else here. --full: every gate in ci/, the differentials too.
+  # Depends on nothing else here. --full: each gate's exhaustive version (tinyparse/mise/tasks/gate/).
   ['tinyparse', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('tinyparse')]
   # tinyactors-scxml and tinyactors-otlp are parked until they are ported to
   # the current core (mise/tasks/build).
