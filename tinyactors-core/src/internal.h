@@ -16,6 +16,7 @@
 #include "tree.h"
 #include "table.h"
 #include "atom.h"
+#include "type_registry.h"
 #include "trie.h"
 #include "address.h"
 #include "io_origin.h"
