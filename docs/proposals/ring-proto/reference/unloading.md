@@ -186,10 +186,16 @@ holds pool capacity:
   `error.execution.capacity` once the pool is full.
 
 This replaces napi's per-family `maxWaiting` and the `waiting-full` dead
-letters. **Open:** whether a per-address cap is still worth having, so
-that one slow load cannot take the whole pool. It would be one more
-parameter (`maxWaitingPerAddress`), and the envelope's address list would
-need a count.
+letters. **There is no per-address cap.** The pool bounds the waiting
+lists, and the host bounds how long they wait: it answers `h2c.load_failed`
+at once for an address it does not know, and times out a slow load
+itself. `c2h.load_needed` tells it how many envelopes wait. The price is
+that isolation depends on the host answering promptly: mail to one slow or
+unknown address can use the pool's headroom for mail, and other charts'
+local sends then fail as `error.execution.capacity.pool`. A cap per
+address (`maxWaitingPerAddress`) was considered and left out: it adds a
+parameter and refuses bursts to a popular actor that is slow to load even
+when the pool has room.
 
 ### Recycling on `h2c.load_failed`
 
