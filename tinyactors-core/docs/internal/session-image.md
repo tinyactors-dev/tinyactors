@@ -24,7 +24,7 @@ are also preserved. An unpublished prepared replacement cannot be captured:
 its held activation effects belong to an incomplete replacement transaction,
 so capture returns `TA_ERR_BUSY` until activation.
 
-The image is not a byte blob. Host values held directly by interpreter structures are retained using `ta_value` lifetime semantics.
+The image is not a byte blob. Host values held directly by interpreter structures are retained using `ta_value` lifetime semantics. Offloading turns it into bytes through a `ta_byte_sink` and back through a `ta_byte_source`; core's own arena sink and memory source, and their contracts, are in `src/bytes.h`.
 
 The image also records the source actor ID and session epoch. These are local
 freshness metadata, not portable identity. `ta_actor_unload()` rejects an image

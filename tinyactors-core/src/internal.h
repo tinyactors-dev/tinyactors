@@ -7,6 +7,7 @@
 #include "heap.h"
 #include "fifo.h"
 #include "quota.h"
+#include "bytes.h"
 #include "ring.h"
 #include "generated/ring_records.h"
 #include "generated/ring_codec.h"
