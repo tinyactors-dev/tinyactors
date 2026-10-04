@@ -1279,6 +1279,8 @@ int tp_vm_call_enter(tp_vm_state *state, tp_vm_frame *fr,
     ** first activation (W17-GOAL), so a clean parse never builds or zeroes them. */
     if (!state->memo_active && ++state->call_attempts > state->memo_threshold) {
         state->memo_active = 1;
+        /* Traced so gate:vm-diff can see the adaptive memo woke mid-parse. */
+        tp_vm_trace_symbol(state, "rule.memo-on", fr->kind);
         tp_rule_memo_ensure(&state->rule_memo);
         tp_extras_memo_ensure(&state->extras_memo);
     }
@@ -1304,6 +1306,10 @@ int tp_vm_call_enter(tp_vm_state *state, tp_vm_frame *fr,
             if (hit->matched == TP_RULE_FAIL) { *resolved = TP_VM_FAIL; return 0; }
             if (hit->matched == TP_RULE_SUCCESS) {
                 if (!tp_vm_consume_extras(state, sink)) { *resolved = TP_VM_OOM; return 0; }
+                /* Traced so gate:vm-diff can see the replay path ran: success
+                ** replays are rare (a third attempt at one key), and a corpus
+                ** that never reaches one would hold nothing to the memo-off tree. */
+                tp_vm_trace_symbol(state, "rule.replay", fr->kind);
                 if (!tp_vm_replay_success(state, sink, hit)) { *resolved = TP_VM_OOM; return 0; }
                 *resolved = TP_VM_MATCH_OK; return 0;
             }
