@@ -131,6 +131,8 @@ typedef struct {
     uint32_t max_nesting;       /* open brackets, operators and functions at once */
     uint32_t max_lookahead;     /* tokens held to tell `(a, b = 1) =>` from `(a, b)`: an arrow
                                  * function's parameter list, defaults included, must fit */
+    uint32_t max_held_events;   /* events the parser holds to send in evaluation order: a const's
+                                 * pattern, its default values included, waits for its value */
     uint32_t max_stack;         /* evaluator value slots */
     uint32_t max_frames;        /* evaluator frames: calls and looping built-ins */
     uint32_t max_value_items;   /* elements of one array, object or set */
@@ -143,6 +145,7 @@ typedef struct {
         .max_token_bytes = 64u * 1024u,        \
         .max_nesting = 256u,                   \
         .max_lookahead = 256u,                 \
+        .max_held_events = 64u * 1024u,        \
         .max_stack = 4096u,                    \
         .max_frames = 256u,                    \
         .max_value_items = 1024u * 1024u,      \

@@ -111,6 +111,46 @@
 [1].map
 --- fault calls methods
 
+=== reading a string method staticjs does not have
+"x".at
+--- fault calls methods
+
+=== typeof a string method staticjs does not have
+typeof "x".padStart
+--- fault calls methods
+
+=== reading an array method staticjs does not have
+[1].forEach
+--- fault calls methods
+
+=== reading a set method staticjs does not have
+new Set([1]).isDisjointFrom
+--- fault calls methods
+
+=== in finds an array method staticjs does not have
+"forEach" in []
+--- fault no prototype
+
+=== in finds a mutating array method
+"push" in [1]
+--- fault no prototype
+
+=== a pattern default is not taken for a string method
+(({at = 1}) => at)("x")
+--- fault calls methods
+
+=== a computed pattern key that names a string method
+((k) => (({[k]: m = 1}) => m)("x"))("at")
+--- fault calls methods
+
+=== a const pattern over an array method
+(xs => { const {forEach = 0} = xs; return forEach; })([])
+--- fault calls methods
+
+=== a pattern reading a set method
+(({entries}) => typeof entries)(new Set())
+--- fault calls methods
+
 === string methods
 ["hello".startsWith("he"), "hello".endsWith("lo"), "hello".includes("ell"), "héllo".indexOf("l"), "x".indexOf("y")]
 --- value
