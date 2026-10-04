@@ -65,10 +65,18 @@ This causes two problems.
 The atom tables therefore grow only when a definition is registered. Their
 size is bounded by the definitions an operator registers, not by traffic.
 
-**Open point.** Today atoms are never freed, even when a definition is
-(ADR 0080). Counting references per definition would let `DEFINITION_FREED`
-release them. That is optional: what can grow without bound is the run-time
-names, and they no longer reach the tables.
+**Atoms are never freed,** even when their definition is (ADR 0080). The
+tables grow with every distinct name ever authored, so a system that churns
+definitions (hot reload, charts generated per tenant) keeps the names of
+every version it registered. That is accepted: what grew with traffic was
+the run-time names, and they no longer reach the tables. Atom IDs are
+never reused, so nothing that keeps an ID (a parked continuation, an
+internal-queue entry, a trace record) can find it naming something else. A
+host that churns definitions without limit creates a new system from time
+to time. Counting references per atom and freeing them at
+`DEFINITION_FREED` was considered and left out: it costs four bytes per
+atom, removal from the trie, and an audit of every place that keeps an
+atom ID, for a growth that only the operator's registrations cause.
 
 ## Matching without interning
 
