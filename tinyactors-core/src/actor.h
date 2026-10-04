@@ -248,9 +248,9 @@ typedef struct {
  */
 #define TA_ACTOR_PAGE_SLOTS 4096u
 
-/* The entry for `slot`, or NULL when that slot was never issued. Never allocates. */
+/* ta_actor_slot_at returns the entry numbered `slot` (0-based), or NULL when that slot was never issued. Never allocates. */
 ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
-/* Prepares the actor table over `allocator`; allocates nothing. See actor.c. */
+/* ta_actor_table_init prepares the actor table over `allocator`; allocates nothing. See actor.c. */
 ta_result ta_actor_table_init(ta_pool *table, ta_allocator allocator);
 /*
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the

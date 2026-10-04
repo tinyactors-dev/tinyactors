@@ -132,7 +132,7 @@ struct ta_system {
  * unknown or stale ID.
  */
 ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
-/* The definition slot numbered `slot`, or NULL when it was never issued. Never allocates. */
+/* ta_system_definition_slot returns the definition slot numbered `slot` (0-based), or NULL when it was never issued. Never allocates. */
 ta_definition_slot *ta_system_definition_slot(const ta_system *system, uint32_t slot);
 /*
  * A nested interpreter's two arenas (ADR 0092 section 3): region `depth`,

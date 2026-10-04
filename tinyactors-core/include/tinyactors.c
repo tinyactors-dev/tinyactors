@@ -2847,9 +2847,9 @@ typedef struct {
  */
 #define TA_ACTOR_PAGE_SLOTS 4096u
 
-/* The entry for `slot`, or NULL when that slot was never issued. Never allocates. */
+/* ta_actor_slot_at returns the entry numbered `slot` (0-based), or NULL when that slot was never issued. Never allocates. */
 TA_PRIVATE ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
-/* Prepares the actor table over `allocator`; allocates nothing. See actor.c. */
+/* ta_actor_table_init prepares the actor table over `allocator`; allocates nothing. See actor.c. */
 TA_PRIVATE ta_result ta_actor_table_init(ta_pool *table, ta_allocator allocator);
 /*
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the
@@ -3061,7 +3061,7 @@ struct ta_system {
  * unknown or stale ID.
  */
 TA_PRIVATE ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
-/* The definition slot numbered `slot`, or NULL when it was never issued. Never allocates. */
+/* ta_system_definition_slot returns the definition slot numbered `slot` (0-based), or NULL when it was never issued. Never allocates. */
 TA_PRIVATE ta_definition_slot *ta_system_definition_slot(const ta_system *system, uint32_t slot);
 /*
  * A nested interpreter's two arenas (ADR 0092 section 3): region `depth`,
