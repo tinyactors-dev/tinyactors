@@ -340,8 +340,8 @@ tinyactors-host/                 -       with the package; its ADRs stay as hist
   `timer.c`, the event blocks, `io.c` / `io_origin.c` and the kernel's
   containers. Phase 1 leaves them alone.
 - **Scope commits by component:** `refactor(core)`, `feat(core,host,napi)`,
-  `refactor(core,napi)!`. A breaking change's body says what a caller does
-  now. The changelogs are written from these subjects at release time,
+  `refactor(core,napi)!`. A breaking change's body says what a caller does.
+  The changelogs are written from these subjects at release time,
   not between releases.
 - **Benchmarks at phase boundaries.** Run `mise run bench-compare <commit>`
   in `tinyactors-napi` against the commit before the phase. Report
@@ -360,23 +360,15 @@ Nothing below starts until these exist:
    pool; delayed sends as envelopes; only authored names interned; input
    observations on c2h; telemetry as a lossy ring; macrostep slots. Add
    one more: **the I/O and invoker type registries are declared through
-   h2c** (refines ADRs 0016 and 0068). Each ADR can be written just
-   before the phase that needs it, not all up front.
+   h2c** (refines ADRs 0016 and 0068). The list says which ADR records
+   which of the proposal's design questions: the mandatory internal-event
+   floor, fairness, ring and pool sizes, definition specs. Each ADR can be
+   written just before the phase that needs it, not all up front.
 2. **The repository ADR** that removes `tinyactors-host`, and the **napi
    ADR** that makes napi a binding over rings, before Phase 6.
 3. **The proposal's status** changes to *Adopted → links*. The decisions
    then live in the ADRs, and the steps below move into the root
    `ROADMAP.md`.
-
-Questions that must be answered before the phase that depends on them:
-
-| Open question | Blocks |
-|---|---|
-| Size of the mandatory internal-event arena. **Answered:** a compiler-sized floor of one round of every phase, `B + E + C + V + F` entries; accumulation beyond it uses free entries of the ordinary `internalQueueEvents` quota; a mandatory event that fits in neither ends the input as a runaway, with `runaway_cause` `internal_queue` ([macrostep.md](reference/macrostep.md#sizing-mandatory-storage)) | 4.4 |
-| Fairness: is a ratio enough? **Answered:** yes. One run queue in arrival order and `fairnessRatio`; deferred mail returns to the run queue at its arrival position; no round robin across targets ([envelope.md](reference/envelope.md#mail-for-an-active-session)) | 4.2 |
-| Default sizes for the pool, the name area and the rings. **Answered in part:** a full c2h pauses the writing slot instead of failing the action, so a ring's size is a throughput setting. h2c and tel default to 16 KiB each; c2h is derived, `(3 × maxConcurrentInputs + 2) × maxRecordBytes`, 776 KiB with the defaults; the pool (4,096 envelopes) and the name area (256 KiB) keep their bounds ([BEHAVIORS.md](BEHAVIORS.md#parameters)). **Open:** measuring the h2c and tel defaults, and checking the derived c2h, with napi's suites, `scale.js` and the IRP suite, recorded in the pool ADR | 4.2 |
-| The exact encoding of definition specs and diagnostics. **Answered:** no encoding. A request carries a handle to a native `ta_scxml_spec` built with core's spec builder, and core writes ADR 0058's native compile-error struct into host memory ([definitions.md](reference/definitions.md#decided-a-native-spec-handle-not-a-byte-layout)) | 5.4 |
-| A home for the MCP server mapping, now that the kernel goes. **Answered:** it does not block Phase 6. Nothing implements the mapping, so the MCP proposal is revised after Phase 5: its home, `goto` against exclusive debugger ownership, and origin scopes ([migration.md](reference/migration.md#open-questions)) | – |
 
 ## Phase 1: turn the duplicates into blocks
 
@@ -409,7 +401,7 @@ exception to "remove what nothing uses".
 
 | Step | Block | Notes |
 |---|---|---|
-| 2.1 | B1 intrusive index list | Two link fields per item (`next`, `owner_next`). Has `splice` and `unlink`. |
+| 2.1 | B1 intrusive index list | Two link fields per item (`next`, `owner_next`). Has `insert_after`, `splice` and `unlink`. |
 | 2.2 | B2 indexed min-heap | Keyed by `(due, order)`, with a back-index stored in the item, and `remove(i)`. |
 | 2.3 | B4 fixed-entry FIFO, C3 quota with reservations | The internal queue is B4 plus two C3 quotas. |
 | 2.4 | A6 chunk chain, over A5 | Parametrized by chunk size (64 bytes for names, 256 for parking). Has `need(n)` for preflight. |
@@ -427,7 +419,7 @@ task's sources include them.
 
 [names.md](reference/names.md) splits names into authored names, interned
 at registration, and run-time names, kept as bytes. **Matching** can
-change on its own now. **Storing** run-time names as bytes needs the name
+change on its own. **Storing** run-time names as bytes needs the name
 area, so it lands in 4.2.
 
 | Step | Change |
@@ -446,8 +438,8 @@ ones; run `mise run test:full` before each commit.
 
 | Step | Change | Deletes | ADR |
 |---|---|---|---|
-| 4.1 | **`tel`.** Allocate the control block and the `tel` ring at system creation. Trace records become self-contained `tel.trace` records, names and lists as text, and core stamps each with the clock the host installs at creation. The kernel's OTLP encoder drains `tel`; it stops calling back into core and reading the host's clock. This is the smallest real user of a ring. | The trace sink vtable and `ta_null_trace_sink` | telemetry is a lossy ring |
-| 4.2 | **The pool and `ta_run`, with one slot.** Envelopes (A5), the run queue and the outgoing list (B1), the name area (A5 + A6), the admission watermark and the macrostep reserve (C3). Local mail becomes envelopes. `ta_actor_deliver` becomes admission into the pool, changed in place. `ta_run` replaces `ta_actor_resume`. Run-time names become bytes in the name area, completing Phase 3. Recycling turns undeliverable mail into `error.communication`. | The router vtable, `TA_ERR_BUSY`, the event blocks and their cache (`TA_PARAM_EVENT_BLOCK_CACHE`), run-time interning (`ta_send_id_intern`, `ta_system_intern_invoke_id`, the `eventexpr` and `typeexpr` sites, `invoke.c`'s error names) | pool; only authored names interned |
+| 4.1 | **`tel`.** Allocate the control block and the `tel` ring at system creation; with `telBytes` 0 there is no `tel` ring. Trace records become self-contained `tel.trace` records, names and lists as text, and core stamps each with the clock the host installs at creation. The kernel's OTLP encoder drains `tel`; it stops calling back into core and reading the host's clock. This is the smallest real user of a ring. | The trace sink vtable and `ta_null_trace_sink` | telemetry is a lossy ring |
+| 4.2 | **The pool and `ta_run`, with one slot.** Envelopes (A5), the run queue and the outgoing list (B1), the name area (A5 + A6), the admission watermark and the macrostep reserve (C3). Local mail becomes envelopes. `ta_actor_deliver` becomes admission into the pool, changed in place. `ta_run` replaces `ta_actor_resume`. Run-time names become bytes in the name area, completing Phase 3. Recycling turns undeliverable mail into `error.communication`. Measure the h2c and `tel` defaults (16 KiB each) and check the derived `c2hBytes`, `(3 × maxConcurrentInputs + 2) × maxRecordBytes`, with napi's suites, `scale.js` and the IRP suite ([BEHAVIORS.md](BEHAVIORS.md#parameters)). | The router vtable, `TA_ERR_BUSY`, the event blocks and their cache (`TA_PARAM_EVENT_BLOCK_CACHE`), run-time interning (`ta_send_id_intern`, `ta_system_intern_invoke_id`, the `eventexpr` and `typeexpr` sites, `invoke.c`'s error names) | pool; only authored names interned |
 | 4.3 | **Delayed sends as envelopes.** The deadline index (B2) and the owner lists (B1). `ta_run` reports the next due time; that value becomes `c2h.wake` in 5.1. `<cancel>` walks the owner list. | `timer.c` / `timer.h` (634 lines), sparse state, `ta_system_dispatch_due` | delayed sends as envelopes |
 | 4.4 | **No allocation in a macrostep.** The internal queue becomes B4 with an ordinary and a mandatory quota (C3). The compiler sizes the mandatory floor for one round of every phase; a mandatory event beyond it takes a free ordinary entry, and an overflow abandons the input as a runaway. Invocation startup moves after the macrostep, with the local child's lifetime token. Capacity failures become `error.execution.capacity.<resource>`. Data models answer `TA_OP_ERROR` instead of `TA_OP_NOMEM`, which changes the test host's jq and quickjs data models and napi's data model. A core test asserts that an allocator which refuses every request after a macrostep starts never sees a call. | The out-of-memory stop machinery: the NOMEM branch, `ta_reserve_stop` / `ta_stop*` where only out-of-memory uses them, the spare continuation and spare sparse state, queue mark/truncate, `TA_OP_NOMEM` | no allocation in a macrostep |
 | 4.5 | **Macrostep slots.** Slot records (A5), deferred lists (B1), `slotSlice`, the chain limit, and parking into the park area (A5 + A6 + D1 + D2). Start with parking disabled (`parkAreaBytes` 0, plain run to completion), then enable it in its own commit. | napi's quarantine, `release()` and the `.quarantined` event (napi call sites only) | macrostep slots |
@@ -458,6 +450,8 @@ ones; run `mise run test:full` before each commit.
 - `mise run test:full` passes.
 - `bench-compare` against the commit before 4.2 is recorded in the 4.5
   commit or its ADR, including the per-actor bytes, before and after.
+- The pool ADR records the measured h2c and `tel` defaults and the check
+  of the derived `c2hBytes` (4.2).
 
 ## Phase 5: rings replace the vtables
 
@@ -467,10 +461,10 @@ on its scenarios check the protocol directly.
 
 | Step | Change | Deletes | ADR |
 |---|---|---|---|
-| 5.1 | **h2c and c2h for inputs.** `h2c.event`, `h2c.time`, `h2c.spawn`, `h2c.destroy` and `h2c.withdraw`. On c2h, `c2h.bounced`, `c2h.input_refused`, `c2h.input_completed` (with `ignored`), `c2h.spawned`, `c2h.macrostep_ended`, `c2h.wake`, `c2h.finished` and `c2h.destroyed`. Core reserves room for mandatory records before taking an input, leaving room for one record of `maxRecordBytes`. **The test host becomes a ring driver**: `hosted.post`, `hosted.turn`, `hosted.batches`, decoded with `messages.json`. Add the E3 ring script driver to core's tests. | `ta_actor_deliver`, the native spawn, time and destroy entry points; the kernel's admission code | three rings |
-| 5.2 | **Effects on c2h.** `c2h.send`, `c2h.invoke`, `c2h.invoke_cancel`, `c2h.invoke_forward`, `c2h.log`, and `h2c.invoke_report` coming back. An action whose record does not fit parks its slot before the action and runs it again after a drain; `ta_run` answers `TA_RUN_C2H_FULL` when nothing else can run ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)). Two B7 registries, filled by `h2c.type_declare`. Bindings render `_ioprocessors` locations themselves, and origins are text. | The I/O, invoker and log vtables; `ta_system_register_io`, `ta_system_find_io`, `ta_system_register_invoker`; `io.c`, `io_origin.c`, the scope API, `TA_DM_TEXT_IO_*`; the kernel's adapters and effects queue | type registries through h2c |
+| 5.1 | **h2c and c2h for inputs.** `h2c.event`, `h2c.time`, `h2c.spawn`, `h2c.destroy` and `h2c.withdraw`. On c2h, `c2h.bounced`, `c2h.input_refused`, `c2h.input_completed` (with `ignored`), `c2h.spawned`, `c2h.macrostep_ended`, `c2h.wake`, `c2h.finished` and `c2h.destroyed`. Core reserves room for mandatory records, one pad per record, before taking an input, and takes it only if 2 × `maxRecordBytes` of headroom stays unreserved ([ring](reference/ring.md#the-c2h-reserve)). **The test host becomes a ring driver**: `hosted.post`, `hosted.turn`, `hosted.batches`, decoded with `messages.json`. Add the E3 ring script driver to core's tests. | `ta_actor_deliver`, the native spawn, time and destroy entry points; the kernel's admission code | three rings |
+| 5.2 | **Effects on c2h.** `c2h.send`, `c2h.invoke`, `c2h.invoke_cancel`, `c2h.invoke_forward`, `c2h.log`, and `h2c.invoke_report` coming back. An action that may write c2h checks for room before it evaluates anything; without room its slot parks before the action, and the action runs once, after a drain; `ta_run` answers `TA_RUN_C2H_FULL` when nothing else can run ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)). Two B7 registries, filled by `h2c.type_declare`. Bindings render `_ioprocessors` locations themselves, and origins are text. | The I/O, invoker and log vtables; `ta_system_register_io`, `ta_system_find_io`, `ta_system_register_invoker`; `io.c`, `io_origin.c`, the scope API, `TA_DM_TEXT_IO_*`; the kernel's adapters and effects queue | type registries through h2c |
 | 5.3 | **Unloading and loading.** Waiting lists keyed by address (B3 fixed → B1), `c2h.load_needed`, `h2c.load`, `h2c.load_failed`, `c2h.load_result`, `h2c.unload`, `c2h.unloaded`, `c2h.loaded`. Images go through D1 and D2 into host blobs. | The directory vtable; the kernel's loads, offloads and directory | – (refines 0037) |
-| 5.4 | **Definitions through h2c.** `h2c.definition_register`, `h2c.definition_release`, `h2c.definition_retire`, `c2h.definition_result`, with bounded diagnostics. The request carries a native spec handle built with `tree.c`'s builder; core writes the native compile-error struct into host memory, or answers `capacity` if it does not fit. | The native definition-management entry points that bindings no longer need; `ta_definition_sink` if nothing uses it | – (refines 0058, 0077, 0079) |
+| 5.4 | **Definitions through h2c.** `h2c.definition_register`, `h2c.definition_release`, `h2c.definition_retire`, `c2h.definition_result`, with bounded diagnostics. The request carries a native spec handle built with `tree.c`'s builder; core writes the native compile-error struct into host memory, or answers `capacity` if it does not fit ([definitions.md](reference/definitions.md#a-native-spec-handle-not-a-byte-layout)). | The native definition-management entry points that bindings do not need; `ta_definition_sink` if nothing uses it | – (refines 0058, 0077, 0079) |
 | 5.5 | **Recording and replay.** The `recorded` bit, `c2h.input`, `h2c.spawn` with the replaying flag, `h2c.publish`, `h2c.checkpoint`, `c2h.state`. | Held effects (`ta_activation_effects`, about 300 lines); the kernel's recorder and replay | input observations on c2h |
 
 **Exit:**
@@ -485,7 +479,7 @@ on its scenarios check the protocol directly.
 |---|---|
 | 6.1 | napi drives core's rings directly: the pump loop in [ARCHITECTURE.md](ARCHITECTURE.md#the-host-loop). Its `index.d.ts` changes as [migration.md](reference/migration.md#napi) lists, with `// status:` markers where the implementation lags. Coordinate with the napi rewrite. |
 | 6.2 | Move OTLP into `tinyactors-otlp`, a small C library that reads `tel` ([telemetry.md](reference/telemetry.md#otlp-tinyactors-otlp)). napi and the test host link it, and `TAH_PARAM_TRACE_STAGING_BYTES` becomes its own setting. Move the counting allocator, metrics and definitions helpers into napi. Delete what napi does not use. |
-| 6.3 | Delete `tinyactors-host`: its sources, tests, mise tasks, the root `mise.toml` entries, and the rows in AGENTS.md's test table. Mark kernel ADRs 0001 to 0006 superseded. |
+| 6.3 | Delete `tinyactors-host`: its sources, tests, mise tasks, the root `mise.toml` entries, and the rows in AGENTS.md's test table. Mark kernel ADRs 0001 to 0006 superseded. The MCP server mapping is not part of this plan: nothing implements it, and its proposal is revised after Phase 5 ([migration.md](reference/migration.md#open-questions)). |
 
 **Exit:** `mise run test --all` and `mise run test:full` pass with no
 kernel. The napi suites listed in migration.md are rewritten against the
