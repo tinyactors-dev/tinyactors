@@ -1,5 +1,6 @@
 #include "routing.h"
 #include "scxml_uri.h"
+#include "format.h"
 
 #include "interpreter.h"
 #include "system.h"
@@ -68,7 +69,6 @@ static bool ta_uri_keeps(uint8_t byte) {
 }
 
 static void ta_uri_put_part(ta_text_writer *writer, ta_str part) {
-    static const char hex[] = "0123456789ABCDEF";
     if (part.len == 0) {
         return;
     }
@@ -79,7 +79,7 @@ static void ta_uri_put_part(ta_text_writer *writer, ta_str part) {
             continue;
         }
         ta_text_put(writer, (ta_str){ .ptr = part.ptr + run, .len = index - run });
-        char escape[3] = { '%', hex[byte >> 4u], hex[byte & 0x0fu] };
+        char escape[3] = { '%', ta_hex_digit(byte >> 4u, true), ta_hex_digit(byte, true) };
         ta_text_put(writer, (ta_str){ .ptr = escape, .len = 3 });
         run = index + 1u;
     }
@@ -91,20 +91,6 @@ void ta_actor_uri_write(ta_text_writer *writer, const ta_actor_address *address)
     ta_uri_put_part(writer, address->family.name);
     ta_text_put(writer, (ta_str){ .ptr = "/", .len = 1 });
     ta_uri_put_part(writer, address->name);
-}
-
-/* The value of a hex digit, or -1. */
-static int ta_uri_hex(char digit) {
-    if (digit >= '0' && digit <= '9') {
-        return digit - '0';
-    }
-    if (digit >= 'a' && digit <= 'f') {
-        return digit - 'a' + 10;
-    }
-    if (digit >= 'A' && digit <= 'F') {
-        return digit - 'A' + 10;
-    }
-    return -1;
 }
 
 /*
@@ -121,8 +107,8 @@ static bool ta_uri_decode(ta_str part, char *out, uint32_t *length) {
             if (index + 2u >= part.len) {
                 return false;
             }
-            int high = ta_uri_hex(part.ptr[index + 1u]);
-            int low = ta_uri_hex(part.ptr[index + 2u]);
+            int high = ta_hex_digit_value(part.ptr[index + 1u]);
+            int low = ta_hex_digit_value(part.ptr[index + 2u]);
             if (high < 0 || low < 0) {
                 return false;
             }

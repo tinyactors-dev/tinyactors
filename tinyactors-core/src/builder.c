@@ -1914,7 +1914,6 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     const ta_scxml_spec *spec = compiler->spec;
     ta_str family = spec->name;
     ta_bytes revision = {0};
-    static const char hex[] = "0123456789abcdef";
     char fingerprint[16];
     /* An identity with an empty revision names only the family: the
      * revision is still the fingerprint (ADR 0077). */
@@ -1930,9 +1929,7 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     if (explicit_revision) {
         revision = spec->identity->revision;
     } else {
-        for (uint32_t index = 0; index < 16; index += 1) {
-            fingerprint[index] = hex[(compiler->hash >> (60u - index * 4u)) & 0xfu];
-        }
+        ta_hex_write(fingerprint, compiler->hash, 16u);
         revision = (ta_bytes){ .ptr = (const uint8_t *)fingerprint, .len = 16 };
     }
     if (family.ptr == NULL || family.len == 0) {
@@ -2556,7 +2553,6 @@ static uint32_t ta_utf8_unit(ta_str text, uint32_t at) {
  * quoted field, the quotes. */
 static uint32_t ta_text_escape(ta_str text, uint32_t at, uint32_t unit, bool quoted, char out[4]) {
     unsigned char byte = (unsigned char)text.ptr[at];
-    static const char hex[] = "0123456789abcdef";
     if (unit == 1u && (byte < 0x20u || byte == 0x7Fu || byte >= 0x80u)) {
         if (byte == '\n' || byte == '\t' || byte == '\r') {
             out[0] = '\\';
@@ -2565,8 +2561,8 @@ static uint32_t ta_text_escape(ta_str text, uint32_t at, uint32_t unit, bool quo
         }
         out[0] = '\\';
         out[1] = 'x';
-        out[2] = hex[byte >> 4];
-        out[3] = hex[byte & 0xFu];
+        out[2] = ta_hex_digit(byte >> 4, false);
+        out[3] = ta_hex_digit(byte, false);
         return 4u;
     }
     if (quoted && unit == 1u && (byte == '"' || byte == '\\')) {

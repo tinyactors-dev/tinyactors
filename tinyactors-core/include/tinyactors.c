@@ -4552,7 +4552,6 @@ static bool ta_uri_keeps(uint8_t byte) {
 }
 
 static void ta_uri_put_part(ta_text_writer *writer, ta_str part) {
-    static const char hex[] = "0123456789ABCDEF";
     if (part.len == 0) {
         return;
     }
@@ -4563,7 +4562,7 @@ static void ta_uri_put_part(ta_text_writer *writer, ta_str part) {
             continue;
         }
         ta_text_put(writer, (ta_str){ .ptr = part.ptr + run, .len = index - run });
-        char escape[3] = { '%', hex[byte >> 4u], hex[byte & 0x0fu] };
+        char escape[3] = { '%', ta_hex_digit(byte >> 4u, true), ta_hex_digit(byte, true) };
         ta_text_put(writer, (ta_str){ .ptr = escape, .len = 3 });
         run = index + 1u;
     }
@@ -4575,20 +4574,6 @@ TA_PRIVATE void ta_actor_uri_write(ta_text_writer *writer, const ta_actor_addres
     ta_uri_put_part(writer, address->family.name);
     ta_text_put(writer, (ta_str){ .ptr = "/", .len = 1 });
     ta_uri_put_part(writer, address->name);
-}
-
-/* The value of a hex digit, or -1. */
-static int ta_uri_hex(char digit) {
-    if (digit >= '0' && digit <= '9') {
-        return digit - '0';
-    }
-    if (digit >= 'a' && digit <= 'f') {
-        return digit - 'a' + 10;
-    }
-    if (digit >= 'A' && digit <= 'F') {
-        return digit - 'A' + 10;
-    }
-    return -1;
 }
 
 /*
@@ -4605,8 +4590,8 @@ static bool ta_uri_decode(ta_str part, char *out, uint32_t *length) {
             if (index + 2u >= part.len) {
                 return false;
             }
-            int high = ta_uri_hex(part.ptr[index + 1u]);
-            int low = ta_uri_hex(part.ptr[index + 2u]);
+            int high = ta_hex_digit_value(part.ptr[index + 1u]);
+            int low = ta_hex_digit_value(part.ptr[index + 2u]);
             if (high < 0 || low < 0) {
                 return false;
             }
@@ -9837,7 +9822,6 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     const ta_scxml_spec *spec = compiler->spec;
     ta_str family = spec->name;
     ta_bytes revision = {0};
-    static const char hex[] = "0123456789abcdef";
     char fingerprint[16];
     /* An identity with an empty revision names only the family: the
      * revision is still the fingerprint (ADR 0077). */
@@ -9853,9 +9837,7 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     if (explicit_revision) {
         revision = spec->identity->revision;
     } else {
-        for (uint32_t index = 0; index < 16; index += 1) {
-            fingerprint[index] = hex[(compiler->hash >> (60u - index * 4u)) & 0xfu];
-        }
+        ta_hex_write(fingerprint, compiler->hash, 16u);
         revision = (ta_bytes){ .ptr = (const uint8_t *)fingerprint, .len = 16 };
     }
     if (family.ptr == NULL || family.len == 0) {
@@ -10479,7 +10461,6 @@ static uint32_t ta_utf8_unit(ta_str text, uint32_t at) {
  * quoted field, the quotes. */
 static uint32_t ta_text_escape(ta_str text, uint32_t at, uint32_t unit, bool quoted, char out[4]) {
     unsigned char byte = (unsigned char)text.ptr[at];
-    static const char hex[] = "0123456789abcdef";
     if (unit == 1u && (byte < 0x20u || byte == 0x7Fu || byte >= 0x80u)) {
         if (byte == '\n' || byte == '\t' || byte == '\r') {
             out[0] = '\\';
@@ -10488,8 +10469,8 @@ static uint32_t ta_text_escape(ta_str text, uint32_t at, uint32_t unit, bool quo
         }
         out[0] = '\\';
         out[1] = 'x';
-        out[2] = hex[byte >> 4];
-        out[3] = hex[byte & 0xFu];
+        out[2] = ta_hex_digit(byte >> 4, false);
+        out[3] = ta_hex_digit(byte, false);
         return 4u;
     }
     if (quoted && unit == 1u && (byte == '"' || byte == '\\')) {
