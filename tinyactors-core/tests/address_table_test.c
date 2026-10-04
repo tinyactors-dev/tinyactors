@@ -1,4 +1,4 @@
-/* test: standalone asan */
+/* test: standalone asan exhaustive */
 /*
  * The address table (src/address.h) on the pool and the hash table, and
  * what a caller who chooses the names can do to it.
@@ -27,6 +27,14 @@
  *   5. Destroy frees records still held, and a table never used.
  *   6. 200,000 honest names: no block larger than one page, all found.
  *
+ * Sizes. Items 1 to 3 are quadratic by nature (an equal-hash set costs a
+ * scan per intern), so the program has two sizes. By default it runs the
+ * small one: item 1 with 900 names (the page still doubles from 64 slots up
+ * to the 4096 cap, at 897), item 2 with 700 names, item 3 with 449 equal-hash
+ * names. With TA_TEST_FULL=1 (`mise run test --full`) it runs the sizes
+ * above, which add the 4096-slot page cap, its directory and the sweep over
+ * a full page. Every check holds at both sizes; only counts change.
+ *
  * Includes the amalgamation, because the table is private to core.
  */
 #include "../include/tinyactors.c"
@@ -46,6 +54,14 @@ static int failures = 0;
             failures += 1; \
         } \
     } while (0)
+
+/* TA_TEST_FULL=1 asks for the large sizes; read once at the top of main, never changed after. */
+static bool full_run = false;
+
+/* pick answers the fast size, or the full one when TA_TEST_FULL asked for it. It only chooses sizes, never an asserted value. */
+static uint32_t pick(uint32_t fast, uint32_t full) {
+    return full_run ? full : fast;
+}
 
 static ta_test_allocator strict_heap = { .strict = true };
 static ta_test_allocator plain_heap = { 0 };
@@ -202,24 +218,25 @@ static void check_set(const name *names, uint32_t count, uint32_t stride, ta_tes
  */
 static void test_equal_hash_names(void) {
     prepare_stages();
-    enum { COUNT = 2 * 4096 + 1, SMALL = 600 };
-    name *names = calloc(COUNT, sizeof(*names));
-    for (uint32_t mask = 0; mask < COUNT; mask += 1u) {
+    enum { SMALL = 600 };
+    const uint32_t count = pick(900u, 2u * 4096u + 1u);
+    name *names = calloc(count, sizeof(*names));
+    for (uint32_t mask = 0; mask < count; mask += 1u) {
         equal_hash_name(mask, &names[mask]);
         CHECK(hash_of(&names[mask]) == hash_of(&names[0]));
     }
-    check_set(names, COUNT, 97u, &plain_heap);
+    check_set(names, count, 97u, &plain_heap);
     check_set(names, SMALL, 1u, &strict_heap);
     free(names);
 }
 
 /* 2. Names sharing the low 12 bits of the hash but not all 32: they stay in one page through every split. */
 static void test_shared_low_bits(void) {
-    enum { COUNT = 4300 };
-    name *names = calloc(COUNT, sizeof(*names));
+    const uint32_t count = pick(700u, 4300u);
+    name *names = calloc(count, sizeof(*names));
     uint32_t found = 0;
     uint32_t state = name_state();
-    for (uint32_t number = 0; found < COUNT; number += 1u) {
+    for (uint32_t number = 0; found < count; number += 1u) {
         /* "k" and the decimal digits, hashed by hand: tens of millions of tries must be cheap. */
         char text[16];
         uint32_t length = 0;
@@ -240,7 +257,7 @@ static void test_shared_low_bits(void) {
             found += 1u;
         }
     }
-    check_set(names, COUNT, 53u, &plain_heap);
+    check_set(names, count, 53u, &plain_heap);
     check_set(names, 700u, 1u, &strict_heap);
     free(names);
 }
@@ -283,20 +300,33 @@ static void test_allocation_failures(void) {
      * refused grow was only a postponement; and the retry always works.
      */
     prepare_stages();
-    enum { FULL = 4096 };
+    /*
+     * Full: 4096 names fill the largest page, so the 4097th intern makes
+     * three allocations (the record, the pool's next page, the doubled
+     * page) and each is refused in turn. Fast: 449 names are the point where
+     * the small first page doubles (2048 slots), which makes two (the record
+     * and the page); a third needs the pool's next page to fall on the same
+     * intern, which happens only at a multiple of 1024 names, and no growth
+     * is due at one below 4096. So the fast sweep expects two allocations. Its
+     * grow is only postponed when refused (the page still has free slots), so
+     * only the record is refused with NOMEM there; with a full page, all three are.
+     */
+    const uint32_t full_page = pick(449u, 4096u);
+    const uint64_t min_allocations = full_run ? 3u : 2u;
+    const uint32_t min_refused = full_run ? 3u : 1u;
     uint64_t total = 0;
     uint32_t refused = 0;
     for (uint64_t nth = 0; nth <= total; nth += 1u) {
         ta_address_table_init(&table, ta_test_allocator_get(&strict_heap));
-        ta_address **held = calloc(FULL, sizeof(*held));
-        for (uint32_t mask = 0; mask < FULL; mask += 1u) {
+        ta_address **held = calloc(full_page, sizeof(*held));
+        for (uint32_t mask = 0; mask < full_page; mask += 1u) {
             name entry;
             equal_hash_name(mask, &entry);
             ta_actor_address held_address = address_of(&entry);
             CHECK(ta_address_table_intern(&table, &held_address, &held[mask]) == TA_OK);
         }
         name extra;
-        equal_hash_name(FULL, &extra);
+        equal_hash_name(full_page, &extra);
         ta_actor_address extra_address = address_of(&extra);
         ta_test_allocator_reset_counts(&strict_heap);
         if (nth != 0) {
@@ -308,26 +338,26 @@ static void test_allocation_failures(void) {
         ta_test_allocator_disarm(&strict_heap);
         if (nth == 0) {
             total = strict_heap.stats.allocations;
-            CHECK(result == TA_OK && total >= 3u && ta_table_count(&table.index) == FULL + 1u);
+            CHECK(result == TA_OK && total >= min_allocations && ta_table_count(&table.index) == full_page + 1u);
             CHECK(ta_table_bytes(&table.index) > bytes_before); /* a page was doubled */
             ta_address_release(added);
         } else if (result == TA_ERR_NOMEM) {
             refused += 1u;
-            CHECK(added == NULL && ta_table_count(&table.index) == FULL && table.records.used == FULL);
+            CHECK(added == NULL && ta_table_count(&table.index) == full_page && table.records.used == full_page);
             CHECK(ta_address_table_intern(&table, &extra_address, &added) == TA_OK); /* the retry works */
-            CHECK(ta_table_count(&table.index) == FULL + 1u);
+            CHECK(ta_table_count(&table.index) == full_page + 1u);
             ta_address_release(added);
         } else {
-            CHECK(result == TA_OK && ta_table_count(&table.index) == FULL + 1u);
+            CHECK(result == TA_OK && ta_table_count(&table.index) == full_page + 1u);
             ta_address_release(added);
         }
-        release_scrambled(held, FULL);
+        release_scrambled(held, full_page);
         free(held);
         CHECK(table_is_empty(&table));
         ta_address_table_destroy(&table);
         CHECK(strict_heap.stats.bad_frees == 0 && ta_test_allocator_finish(&strict_heap) == 0);
     }
-    CHECK(refused >= 3u);
+    CHECK(refused >= min_refused);
 }
 
 /* 4. Pointer identity and reference counting; detached copies and other tables. */
@@ -461,6 +491,8 @@ static void test_first_use_is_small(void) {
 }
 
 int main(void) {
+    const char *requested = getenv("TA_TEST_FULL");
+    full_run = requested != NULL && requested[0] != '\0' && strcmp(requested, "0") != 0;
     test_equal_hash_names();
     test_shared_low_bits();
     test_allocation_failures();
