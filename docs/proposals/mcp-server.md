@@ -1,58 +1,54 @@
 # An MCP server: connect an agent to a system
 
-**Status:** Proposed (2026-09-29)
-**Touches:** tinyactors-core (every I/O processor registers a URL and a short name); the host kernel (the mapping, implemented once); tinyactors-napi and tinyactors-test (bind it). The DAP adapters and tinyactors-vscode were removed on 2026-09-30, ahead of it.
+**Status:** Proposed (2026-10-04)
+**Depends on:** [the ring protocol](ring-proto/README.md). Core talks to its host through three rings, and there is no host kernel.
+**Touches:** a new shared C library, `tinyactors-mcp`, beside `tinyactors-otlp`; tinyactors-napi and tinyactors-test (bind it). Core gains nothing beyond the ring protocol. The DAP adapters and tinyactors-vscode were removed on 2026-09-30, ahead of it.
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
-**Depends on:** [the ring protocol proposal](ring-proto/README.md), which deletes the host kernel. This proposal is revised against it after its Phase 5 ([Part 2](#part-2-host-bindings) says what that settles).
 
 ## Goal
 
 Connect an agent to a running system, and it can do things there: list the
 actors, read their configuration and data, send them events and read their
-replies, load them, move a wedged one out of its state. It is a debugger
-for an agent, over the Model Context Protocol (MCP), revision 2026-07-28.
+replies, load them, and move a wedged one out of its state. It is a
+debugger for an agent, over the Model Context Protocol (MCP), revision
+2026-07-28.
 
-This replaces the Debug Adapter Protocol (DAP) adapters, which were
-removed on 2026-09-30 ahead of it. Building them
-found the core interfaces a debugger needs, and those stay (see
-[In this repository](#in-this-repository)). DAP itself is less useful than
-MCP:
+It replaces the Debug Adapter Protocol (DAP) adapters, removed on
+2026-09-30. Building them found the core interfaces a debugger needs, and
+those stay ([In this repository](#in-this-repository)). MCP suits the job
+better than DAP:
 
-- it is shaped for a human in an editor: frames, scopes, variable
+- DAP is shaped for a human in an editor: frames, scopes, variable
   references, a console that answers in prose;
 - its pokes (`send`, `goto`, `cancel`) go through `evaluate` as text, and
   their results are English a program has to parse;
-- a session is one actor or one workbench, and there is no discovery;
-- its clients are editors. MCP's clients are agents (Claude, Copilot,
+- a DAP session is one actor or one workbench, with no discovery;
+- DAP's clients are editors. MCP's clients are agents (Claude, Copilot,
   Cursor, ChatGPT, Goose), plus generic tools such as MCP Inspector.
 
 ## How this proposal is split
 
 - **[Part 1, the mapping](#part-1-the-mapping)** says what MCP means for
-  tinyactors: the addresses, resources, tools, replies, streams and traces.
-  It is the same in every host: napi, the test host, and hosts to come,
-  such as a Python binding or the database hosts
-  ([SQLite](sqlite-host.md), [PostgreSQL](postgres-host.md)). It is written
-  in terms of core (its ADRs and C API) and MCP, and names no host's
-  language, API or library.
-- **[Part 2, host bindings](#part-2-host-bindings)** says where the mapping
-  is implemented (once, in the [host kernel](host-kernel.md), a home the
-  ring protocol changes), and what is left for a host: handing its MCP
-  library the kernel's tools and resources. Everything specific to Node,
-  JavaScript or Ruby is there.
-- **[In this repository](#in-this-repository)** lists what the change
-  adds, removes and keeps here.
+  tinyactors: addresses, resources, tools, replies, streams and traces. It
+  is written in terms of core, its rings and MCP, and names no host's
+  language, API or library. It is the same in every host.
+- **[Part 2, the library and its bindings](#part-2-the-library-and-its-bindings)**
+  says where the mapping is implemented (once, in `tinyactors-mcp`) and
+  what is left for a host: feeding the library ring records and handing
+  its MCP library the tools and resources.
+- **[In this repository](#in-this-repository)** lists what the change adds
+  and keeps here.
 
-A host may add to the mapping (tools of its own, fields under `host` in a
-resource, options when the tools are set up). It must not change what the
-mapping defines. The shared transcripts
-([Conformance](#conformance)) check it.
+A host may add to the mapping: tools of its own, fields under `host` in a
+resource, options when the tools are set up. It must not change what the
+mapping defines. The shared transcripts ([Conformance](#conformance))
+check it.
 
 # Part 1: the mapping
 
 ## Addresses
 
-A system is the top level: actor names are unique within a system, not
+A system is the top level. Actor names are unique within a system, not
 across systems, and an application may run several (granary runs two).
 Every URI names its system.
 
@@ -64,10 +60,10 @@ Every URI names its system.
 | `tinyactors://{system}/definitions/{family}/{revision}` | one definition revision |
 | `ui://tinyactors/chart` | the MCP App |
 
-- **`{system}` is a name the host binding gives each system it serves**,
-  unique within one server. Core knows a system only by its incarnation,
-  which changes when the host says so; the name is what an agent keeps.
-- **Charts are unchanged.** Inside a chart an actor is still
+- **`{system}` is a name the binding gives each system it serves**, unique
+  within one server. Core knows a system only by its incarnation, which
+  changes when the host says so. The name is what an agent keeps.
+- **Charts are unaffected.** Inside a chart an actor is
   `#_actor_<family>/<name>` or `#_scxml_<session id>`. Converting between
   the two forms uses core's target grammar (core ADR 0044), in both
   directions.
@@ -81,97 +77,160 @@ Every URI names its system.
   paged. It does not list actors:
   - residency changes all the time, and each change would be a
     list-changed notification;
-  - an unloaded named actor exists, but the directory that knows it
-    belongs to the host (core ADR 0037) and cannot be walked.
+  - core knows only resident sessions. Unloaded ones are in the host's
+    index ([unloading](ring-proto/reference/unloading.md#no-directory-vtable-not-resident-means-ask)),
+    which the mapping cannot walk.
 - `resources/templates/list` lists the actor, session and definition
   templates above.
 - The live population comes from the `list_actors` tool, paged over core's
   walk of resident actors (`ta_system_visit_actors`, core ADR 0062).
 
+## Observing and intervening
+
+A `ta_system` has one owner at a time, on one thread
+([ring.md](ring-proto/reference/ring.md#one-thread)). Normally the owner is
+the host's pump, which posts to h2c, calls `ta_run` and drains c2h and
+tel. The mapping works within that rule in two ways.
+
+**Observing runs between `ta_run` calls.** A read-only tool or resource
+read is a native call that the binding makes on the system's thread after
+`ta_run` returns and before it is called again. Nothing executes while it
+reads, and it changes nothing, so the pump goes on at once. It sees every
+slot where it stands, including a macrostep paused at a budget or parked
+for its turn (core ADR 0083). It never admits an input, runs a step or
+loads an actor.
+
+**Intervening attaches a debugger.** `goto` and `abandon` change an
+actor's execution, which the ring protocol allows only while a debugger
+owns the whole system ([debugging](ring-proto/reference/debugging.md)):
+
+1. the binding suspends its pump after `ta_run` returns;
+2. ownership passes to the library, which uses core's native debugging
+   primitives: inspect, reach a microstep boundary, abandon, transition;
+3. the library drains c2h and tel by the normal rules while it drives
+   core, so effects and macrostep ends reach the host as usual;
+4. the library returns ownership, and the pump resumes from where it
+   stood. Nothing is rolled back.
+
+**Every actor in the system stops while it is attached.** Pending inputs
+stay pending, timers do not fire, and replies from the outside wait at the
+host under its bounded admission policy. Other systems keep running. So an
+intervention is short by design:
+
+- **by default, an intervening tool attaches for its own call only:** it
+  attaches, acts and detaches before it answers. An agent cannot leave a
+  system frozen by forgetting a step.
+- **`attach` holds the system across calls,** for a recovery that must see
+  a configuration that does not change while the operator checks something
+  outside (the recovery session in
+  [debugging](ring-proto/reference/debugging.md#a-recovery-session)). It
+  answers a hold handle (MCP 2026-07-28's stateful tools) with a lease,
+  `holdMs`, capped by the binding. Tools given the handle act under it;
+  `detach`, the lease running out or the client going away returns the
+  system to the pump.
+
+Tool annotations say which kind a tool is. A client can show an
+intervening tool's cost before it runs: it stops the system, not one
+actor.
+
 ## Resources
 
 `resources/read` answers JSON (`application/json`), except where noted.
 Every field comes from core. A host may add fields under a `host` key, and
-nothing else.
+nothing else. A read is an observation ([above](#observing-and-intervening)).
 
 | Resource | Contents | Core source | `ttlMs`, `cacheScope` |
 |---|---|---|---|
-| system | name, incarnation, logical time, parameters, families with resident counts, metrics counters, definition links | core ADRs 0088, 0092, 0072; definition inspection | short, private |
-| actor or session | address, session ID, residency (`resident`, `unloaded`, `finished`, `unknown`), active configuration, data, internal queue, pending delayed sends by send ID, invocations (links to the children), paused position, definition link | `ta_actor_inspect` (core ADRs 0083, 0048), `ta_actor_find` and the directory (core ADR 0037) | `0`, private |
+| system | name, incarnation, logical time, parameters, families with resident counts, ring and pool counters from the control block, definition links | core ADRs 0088, 0092; the control block ([ring.md](ring-proto/reference/ring.md)); definition inspection | short, private |
+| actor or session | address, session ID, residency (`resident`, `finished`, or `not_resident`), whether it is recorded, active configuration, data, internal queue, pending delayed sends by send ID, invocations (links to the children), the position of a macrostep in progress, definition link | `ta_actor_inspect` (core ADRs 0083, 0048) | `0`, private |
 | definition revision | two contents: the spec as JSON, and the SCXML the codec encodes (`application/scxml+xml`), with source spans | core ADRs 0042, 0085 | long, private |
 
 - **Data is the data model's JSON encoding**, the same form values cross
   between data models in. A value with no JSON form is shown as a
   placeholder naming its kind, never dropped silently.
-- **Reading never loads an actor.** An unloaded actor answers `residency:
-  "unloaded"`. Loading is the `load` tool.
-- **An unknown system, actor or definition** answers `-32602`, which is
-  what 2026-07-28 uses for a resource that is not found.
+- **`not_resident` covers unloaded and unknown alike.** Only the host's
+  index can tell them apart. A binding that keeps one may say which under
+  `host`.
+- **Reading never loads an actor.** Loading is the `load` tool.
+- **An unknown system or definition**, or a session ID core does not know,
+  answers `-32602`, which is what 2026-07-28 uses for a resource that is
+  not found.
 
 ## Tools
 
 Every tool takes `system`. `actor` is `{ family, name }` or a session ID.
 Each result has `structuredContent` that matches the tool's `outputSchema`,
 a short text summary, and a `resource_link` to what it touched. A failure
-is a tool result with `isError: true` and core's result name in
-`structuredContent` (`not_found`, `unloaded`, `busy`, `unsupported`, ...),
-not a protocol error.
+is a tool result with `isError: true` and a result name in
+`structuredContent` (`not_found`, `not_resident`, `refused`, `bounced`,
+`busy`, ...), not a protocol error.
 
-| Tool | Arguments | Does | Annotations | Core |
+| Tool | Arguments | Does | Kind, annotations | Core |
 |---|---|---|---|---|
-| `list_systems` | | the systems, with resident counts | readOnly | |
-| `list_actors` | `system`, `family?`, `cursor?` | the resident actors, paged | readOnly | `ta_system_visit_actors` |
-| `inspect` | `system`, `actor` | the actor's resource, as a tool result: a model cannot always read resources itself | readOnly | `ta_actor_inspect` |
-| `describe` | `system`, `actor` or `definition` | the states, the events the current configuration accepts, the data model's name | readOnly | definition inspection (core ADRs 0042, 0071) |
-| `evaluate` | `system`, `actor`, `expression` | evaluates an expression in the actor's data model, against a copy of its data; what it writes is discarded | readOnly | the data model |
-| `send` | `system`, `actor`, `event`, `data?`, `timeoutMs?` | delivers an event with an origin, and returns the replies ([below](#replies)) | openWorld | delivery through the external-event router |
-| `load` | `system`, `actor` | brings a named actor in without sending it anything, through the same path mail for that address would take | idempotent | `ta_actor_load` (core ADRs 0051, 0089) |
-| `goto` | `system`, `actor`, `states`, `from?` | an operator transition, queued behind the actor's mail | destructive | core ADR 0082 |
-| `abandon` | `system`, `actor` | abandons a macrostep that never ends | destructive | core ADR 0082 |
-| `cancel` | `system`, `actor`, `sendID` | withdraws one pending delayed send | destructive, idempotent | `ta_actor_withdraw_send` (core ADR 0084) |
-| `set` | `system`, `actor`, `location`, `value` | writes a data-model location; refused for a logged actor | destructive | the data model; capture and reload where there is no direct write (core ADR 0038) |
-| `replace` | `system`, `actor`, `revision` | hot-replaces the actor with a registered revision | destructive | prepare and publish (core ADR 0089) |
-| `destroy` | `system`, `actor` | ends the actor | destructive | `ta_actor_destroy` |
+| `list_systems` | | the systems, with resident counts | observe, readOnly | |
+| `list_actors` | `system`, `family?`, `cursor?` | the resident actors, paged | observe, readOnly | `ta_system_visit_actors` |
+| `inspect` | `system`, `actor`, `hold?` | the actor's resource, as a tool result: a model cannot always read resources itself | observe, readOnly | `ta_actor_inspect` |
+| `describe` | `system`, `actor` or `definition` | the states, the events the current configuration accepts, the data model's name | observe, readOnly | definition inspection (core ADRs 0042, 0071) |
+| `evaluate` | `system`, `actor`, `expression` | evaluates an expression in the actor's data model against a copy of its data; what it writes is discarded | observe, readOnly | the data model |
+| `send` | `system`, `actor`, `event`, `data?`, `waitMs?`, `timeoutMs?` | posts an event with an origin, and returns its disposition and the replies ([below](#replies)) | input, openWorld | [`h2c.event`](ring-proto/protocol/generated/MESSAGES.md#h2cevent) |
+| `withdraw` | `system`, `call` | takes back a `send` whose event has not been taken yet | input, idempotent | [`h2c.withdraw`](ring-proto/protocol/generated/MESSAGES.md#h2cwithdraw) |
+| `load` | `system`, `actor` | brings a named actor in without sending it anything | input, idempotent | the host's loader, [`h2c.load`](ring-proto/protocol/generated/MESSAGES.md#h2cload) |
+| `destroy` | `system`, `actor` | ends the actor | input, destructive | [`h2c.destroy`](ring-proto/protocol/generated/MESSAGES.md#h2cdestroy) |
+| `attach` | `system`, `holdMs?` | suspends the pump and holds the system; answers a hold handle | intervene, destructive | debugger attachment |
+| `detach` | `hold` | returns the system to the pump | intervene, idempotent | |
+| `goto` | `system`, `actor`, `states`, `from?`, `event?`, `hold?` | an operator transition through the normal engine | intervene, destructive | core ADR 0082 |
+| `abandon` | `system`, `actor`, `hold?` | abandons the actor's macrostep in progress at its next microstep boundary | intervene, destructive | core ADR 0082 |
 
-- **Logged actors stay replayable.** Every poke of an actor whose family
-  is logged (core ADR 0090) is an input the log records, or a replay no
-  longer arrives where the actor was:
-  - `send` is an `event` record, `goto` a `jump`, `abandon` an
-    `abandoned`, `cancel` a `withdrawn`, `destroy` a `destroyed`;
-  - a data write has no record, so `set` answers `unsupported` for a
-    logged actor and names `send` and `goto` instead;
-  - `evaluate` never writes, for any actor, so an agent can try an
-    expression without changing anything.
-- **Nothing stops or steps an actor.** There are no breakpoints: what an
-  actor did is in its trace, and `inspect` shows where it stands.
-- **The tool list is static.** `toolsListChanged` is never sent. A host
-  may add tools of its own, and may prefix these names when it is set up
-  beside an application's tools; transcripts play without a prefix.
+- **Input tools post h2c records and wait for their c2h answers**, like any
+  host input. They go through the host's bounded submission table: when it
+  or h2c is full, the tool answers `busy` at once. A tool never makes the
+  host's drain wait for h2c ([the host loop](ring-proto/ARCHITECTURE.md#the-host-loop)).
+- **`goto` needs a free slot for its actor.** If the actor holds a slot, or
+  every slot is busy, the tool answers `busy` and names the macrostep in
+  the way. The agent abandons it first, or waits for it to end. The tool
+  never abandons anything it was not asked to.
+- **Recorded sessions keep their journal.** A `send` to a recorded session
+  appears as a [`c2h.input`](ring-proto/protocol/generated/MESSAGES.md#c2hinput)
+  record, which the application journals like any other. An operator
+  transition is not an input a replay can repeat: the binding records it
+  in its audit trail, and the application should checkpoint the stable
+  result ([`h2c.checkpoint`](ring-proto/protocol/generated/MESSAGES.md#h2ccheckpoint)),
+  so that later replay starts from it
+  ([recording and replay](ring-proto/reference/recording-and-replay.md)).
+- **No tool edits data.** The debugging design has no data writes, effect
+  substitution or rewind. A recovery changes data through a transition's
+  handlers (`goto` with an `event`) or by sending the actor an event it
+  handles. `evaluate` never writes, so an agent can try an expression
+  without changing anything.
+- **Nothing steps an actor or sets a breakpoint.** What an actor did is in
+  its trace, and `inspect` shows where it stands.
+- **The tool list is static.** `toolsListChanged` is never sent. A host may
+  add tools of its own, and may prefix these names when it is set up beside
+  an application's tools; transcripts play without a prefix.
 
 ## Replies
 
 A chart replies to whoever sent its event, with `_event.origin` and
-`_event.origintype` (SCXML C.1). Core makes every origin answerable
-through its I/O processor registry and origin scopes (core ADR 0068). An
-agent's `send` uses them like any other sender:
+`_event.origintype` (SCXML C.1). Origins are text that core keeps without
+interpreting; the I/O processor that receives a reply decides whether its
+target is still live ([S12](ring-proto/scenarios/S12-http-request.md),
+[S13](ring-proto/scenarios/S13-webhook-callback.md)). An agent's `send`
+uses this like any other sender.
 
-- **Each served system has the MCP I/O processor**, registered in core's
-  I/O processor registry (core ADR 0068) with a URL and a short name, as
-  every processor is ([Changes in core](#in-this-repository)):
-  - the URL is the permanent URL of this mapping's documentation, as
-    SCXML 6.2.5 asks ("the URI of the description of the relevant Event
-    I/O Processor"), fixed when the documentation has a home;
-  - the short name is `mcp`, as `scxml` is the built-in processor's.
-
-  Both select it in `<send type>`. `_ioprocessors` and
-  `_event.origintype` carry the URL. A reply never needs the short name:
-  it uses `_event.origintype`.
-- **Each `send` call opens an origin scope** for that processor, with the
-  URI `mcp:call/<id>`, where `<id>` is minted by the server (MCP request
-  IDs are the client's and can repeat across clients). The event is
-  delivered with that origin.
-- **The processor collects** every event sent to the scope while the call
-  is open, and the scope is closed when the call ends.
+- **Each served system declares the MCP I/O processor** with
+  [`h2c.type_declare`](ring-proto/protocol/generated/MESSAGES.md#h2ctype_declare)
+  (registry `io`, type `mcp`). Core keeps only the name. The binding
+  renders `_ioprocessors.mcp.location` for a session from its ID and
+  address, as for every processor.
+- **Each `send` call mints a reply URI**, `mcp:call/<id>`, where `<id>` is
+  minted by the library (MCP request IDs are the client's and can repeat
+  across clients). The event goes out as `h2c.event` with `origin` set to
+  that URI and `origin_type` set to `mcp`.
+- **The library collects replies.** Every
+  [`c2h.send`](ring-proto/protocol/generated/MESSAGES.md#c2hsend) of type
+  `mcp` reaches it through the binding. One whose target is an open call
+  is added to that call's replies. Any other is dropped: an asynchronous
+  reply with nobody to go to, which the chart's timeout covers.
 
 **The chart does not know it is talking to an agent.** It answers the way
 it answers any sender:
@@ -182,27 +241,36 @@ it answers any sender:
 </transition>
 ```
 
-The same transition answers an HTTP request, a WebSocket connection, or an
-agent. A chart that never replies is fine too: the agent gets the result
-of the delivery, and reads the actor with `inspect`.
+The same transition answers an HTTP request, a WebSocket connection or an
+agent. A chart that never replies is fine too: the agent gets the
+disposition of its event, and reads the actor with `inspect`.
 
-- **The reply goes back in the tool result.** 2026-07-28 has no
-  connection, and the only way to the client is the response to a request
-  in progress. So `send` keeps its call open and returns what reached its
-  origin: a text block per reply for the model, and `structuredContent`
-  with each reply's event name, data and sender.
-- **How long a call stays open:** until nothing the send caused is
-  runnable or due at the current time, or until `timeoutMs`. What the send
-  caused is followed through the records' causes (core ADR 0067), not
-  through the whole system, which a live host never sees idle. What
-  counts as "the" reply is the application's protocol; the server returns
-  every reply and does not guess.
-- **A reply after the call ended** has no one to go to. The scope is
-  closed, the send fails, and the chart gets `error.communication`, as for
-  any sender that went away (SCXML C.1). Nothing waits in an inbox.
+**How long a call stays open.** 2026-07-28 has no connection: the only way
+to the client is the response to a request in progress. So `send` keeps
+its call open and answers once:
+
+1. **the event's terminal record arrives:**
+   - [`c2h.input_completed`](ring-proto/protocol/generated/MESSAGES.md#c2hinput_completed),
+     with its status (`completed`, `runaway`, ...) and whether the event
+     was `ignored`;
+   - [`c2h.input_refused`](ring-proto/protocol/generated/MESSAGES.md#c2hinput_refused)
+     or [`c2h.bounced`](ring-proto/protocol/generated/MESSAGES.md#c2hbounced),
+     which end the call with `isError` and the reason;
+2. **then `waitMs` passes** (default 0). Completion settles the event's own
+   session, but a reply can come later through mail to other sessions.
+   `waitMs` keeps collecting for that long;
+3. **or `timeoutMs` passes first,** and the call answers with what it has.
+
+The result has a text block per reply for the model, and
+`structuredContent` with the disposition and each reply's event name,
+data and sender. What counts as "the" reply is the application's
+protocol. The library returns every reply and does not guess.
+
+- **A reply after the call ended** is dropped, as above. Nothing waits in
+  an inbox.
 - **A wait longer than a request should be** is a task, where the client
   supports the Tasks extension: `send` answers a task handle, and
-  `tasks/get` answers the replies once the wait ends.
+  `tasks/get` answers the result once the call ends.
 
 ## Streams
 
@@ -210,61 +278,71 @@ of the delivery, and reads the actor with `inspect`.
 
 | Filter | Notification | When |
 |---|---|---|
-| `resourceSubscriptions: [actor URI]` | `notifications/resources/updated` | after each macrostep of the actor, coalesced; on load, unload, finish and destroy |
-| `resourceSubscriptions: [system URI]` | `notifications/resources/updated` | a definition registered or retired (core ADR 0079); resident counts changed, rate-limited |
+| `resourceSubscriptions: [actor URI]` | `notifications/resources/updated` | after each macrostep of the actor ([`c2h.macrostep_ended`](ring-proto/protocol/generated/MESSAGES.md#c2hmacrostep_ended)), coalesced; on `c2h.loaded`, `c2h.unloaded`, `c2h.finished` and `c2h.destroyed` |
+| `resourceSubscriptions: [system URI]` | `notifications/resources/updated` | a definition registered or retired ([`c2h.definition_result`](ring-proto/protocol/generated/MESSAGES.md#c2hdefinition_result)); resident counts changed (`c2h.spawned`, `c2h.destroyed`, `c2h.loaded`, `c2h.unloaded`), rate-limited |
 | `resourcesListChanged` | `notifications/resources/list_changed` | a system or a definition revision came or went |
 
-The events come from core's records (core ADRs 0067, 0080). A notification
-names the URI, and the client reads the resource again: it is a live view,
-not a stream of records. The records themselves go to the host's trace
-sink, and on from there as the host exports them. MCP's Logging is
-deprecated in 2026-07-28 in favour of OpenTelemetry, and the mapping does
-not use it.
+Notifications come from c2h records, which are never lost, so a
+subscription never misses a change. A notification names the URI, and the
+client reads the resource again: it is a live view, not a stream of
+records.
+
+The trace records themselves are on `tel` ([telemetry](ring-proto/reference/telemetry.md)).
+The binding drains `tel` once and hands each record to `tinyactors-otlp`
+for export. The mapping does not stream them: MCP's Logging is deprecated
+in 2026-07-28 in favour of OpenTelemetry, and the agent's trace is
+available through the application's exporter ([Traces](#traces)).
 
 ## Traces
 
 A `tools/call` that carries `traceparent` and `tracestate` in `_meta`
-(2026-07-28 documents the keys) delivers its event, jump or other input
-under that trace parent (core ADR 0073). The macrostep it causes, and
-everything that macrostep causes, join the agent's trace. The result names
-the trace ID in `structuredContent`.
+(2026-07-28 documents the keys) delivers its event under that trace parent
+(core ADR 0073). The macrostep it causes, and everything that macrostep
+causes, join the agent's trace. The result names the trace ID in
+`structuredContent`. This needs `h2c.event` to carry a trace parent
+([Open questions](#open-questions)).
 
 ## The MCP App (later)
 
 `inspect` and `describe` declare `_meta.ui.resourceUri:
 "ui://tinyactors/chart"`. The page draws the chart from the definition's
 spec, marks the active configuration, and lists the pending delayed sends.
-It uses nothing but the tools: its controls call `send`, `goto` and
-`cancel`, and it calls `inspect` again to refresh. So it is one page,
-served unchanged by every host.
+It uses nothing but the tools: its controls call `send` and `goto`, and it
+calls `inspect` again to refresh. So it is one page, served unchanged by
+every host. A control that intervenes says that it stops the system.
 
-It is a later step, not the first: a developer's first client is usually
-a coding agent in a terminal, which does not render Apps. The clients that
-do are Claude (web and desktop), VS Code Copilot, Cursor, ChatGPT, Goose,
-Postman and MCPJam. The tools and resources are complete without it.
+It is a later step: a developer's first client is usually a coding agent
+in a terminal, which does not render Apps. The clients that do are Claude
+(web and desktop), VS Code Copilot, Cursor, ChatGPT, Goose, Postman and
+MCPJam. The tools and resources are complete without it.
 
 ## Access
 
 The tools give full access to everything they serve. Authorization,
 auditing and limits belong to the application's MCP server, or to an MCP
-proxy in front of it, not to the mapping. `evaluate` cannot change an
-actor, but a data model with a general-purpose language runs the agent's
-code in the host's process, and every destructive tool acts at once. Each
-host's documentation says so where it shows how to serve the tools.
+proxy in front of it, not to the mapping. Three things deserve a gate:
+
+- an intervening tool stops every actor in the system while it runs, and
+  `attach` stops them until its lease ends;
+- every destructive tool acts at once;
+- `evaluate` cannot change an actor, but a data model with a
+  general-purpose language runs the agent's code in the host's process.
+
+Each host's documentation says so where it shows how to serve the tools.
 
 ## Protocol revisions
 
-The mapping targets MCP 2026-07-28, the current revision. MCP will have
-new revisions over the life of the project, so the mapping keeps what
-depends on one revision in one place:
+The mapping targets MCP 2026-07-28, the current revision. MCP will have new
+revisions over the life of the project, so the mapping keeps what depends
+on one revision in one place:
 
 - **Stable across revisions:** what the tools and resources are, their
   arguments and results, how a send's replies are collected, and which
-  core records make an update. This is the mapping.
+  ring records make an update. This is the mapping.
 - **Specific to 2026-07-28:** `subscriptions/listen` (it replaced
-  `resources/subscribe`), `resultType`, `ttlMs` and `cacheScope`,
-  `-32602` for a resource not found, the `_meta` keys for trace context,
-  and the Tasks and Apps extensions.
+  `resources/subscribe`), `resultType`, `ttlMs` and `cacheScope`, `-32602`
+  for a resource not found, the `_meta` keys for trace context, stateful
+  tools and handles (`attach`), and the Tasks and Apps extensions.
 - **Not the mapping's concern:** transport, JSON-RPC framing, version
   negotiation (`server/discover`, the protocol version in `_meta`) and
   capability exchange. An MCP library does these, in every language.
@@ -275,62 +353,50 @@ it, and names the revision it targets at the top of this section.
 ## Conformance
 
 Shared transcripts define the mapping, and every host plays them in its
-test task, as the DAP transcripts did for two hosts:
+test task:
 
 - **A transcript** is a chart, the MCP requests a client sends, and the
-  results and notifications it must get, with the same matchers as before
-  (`$capture`, `$var`, `$prefix`, `$some`, ...).
+  results and notifications it must get, with matchers (`$capture`, `$var`,
+  `$prefix`, `$some`, ...).
 - **Charts are SCXML documents,** which every host imports, not a host's
   own authoring form.
 - **What differs is keyed by data model, not by host:** `$expr` has a form
   per data model (`jq`, `ecmascript`, `null`, ...), so a new host with a
   data model already covered plays the transcripts unchanged.
-- **Setup is a host's own,** and ends in a system named `transcripts`
-  that holds the transcript's actors.
+- **Setup is a host's own,** and ends in a system named `transcripts` that
+  holds the transcript's actors.
 
-Since the kernel implements the mapping once, the transcripts mostly test
-the kernel, through each host's binding of it. They also catch a binding
-that drops or renames what the kernel offers.
+The library implements the mapping once, so the transcripts mostly test
+`tinyactors-mcp`, through each host's binding of it. They also catch a
+binding that drops or renames what the library offers, or feeds it records
+out of order.
 
-# Part 2: host bindings
+# Part 2: the library and its bindings
 
-> **To be revised against the ring protocol.** This part places the
-> mapping in the host kernel, which [the ring protocol](ring-proto/README.md) deletes.
-> Nothing implements the mapping, so the ring protocol does not wait for
-> it. This proposal is revised after the ring protocol's Phase 5, when its
-> records exist, and settles three things
-> ([migration](ring-proto/reference/migration.md#open-questions)):
->
-> - **Where the mapping lives.** A small shared C library beside
->   `tinyactors-otlp` is the likely home. `send` posts `h2c.event` and
->   waits for its `c2h.input_completed`; `load` uses the load records.
-> - **`goto`.** [Tools](#tools) queues an operator transition behind one
->   actor's mail while the system runs. The ring protocol allows operator
->   transitions only while a debugger owns the whole system
->   ([debugging](ring-proto/reference/debugging.md)).
-> - **Origin scopes.** [Replies](#replies) opens one per `send` for the MCP
->   I/O processor. The ring protocol removes origin scopes.
-
-## The mapping lives in the host kernel
+## The mapping lives in `tinyactors-mcp`
 
 A host's language already has an MCP library (an official SDK or another)
 that does the transport, the JSON-RPC framing, version negotiation and
 tool registration. A host should not implement the mapping as well. It
-should hand the library what one shared implementation offers.
+hands its MCP library what one shared implementation offers.
 
-That implementation is a module of the [host kernel](host-kernel.md), the
-C library on top of core that the kernel proposal extracts from napi. It
-fits there because the mapping needs what the kernel already holds:
+That implementation is `tinyactors-mcp`, a small C library beside
+`tinyactors-otlp`. Like it, it is free of any language's API and works
+from ring records, so it serves every binding. It never drives a system on
+its own: the binding owns the pump and calls into the library at defined
+points.
 
-| The mapping needs | The kernel has |
+| The mapping needs | It comes from |
 |---|---|
-| following what a send caused, to know when to answer | the scheduler, its queues and turn state, and core's records |
-| loading an actor no mail asked for | the directory and the loader hooks |
-| delivering with an origin and a trace parent | the router and effects |
-| the MCP I/O processor and its origin scopes | the I/O adapters (`adapters/io.c`) |
-| resident actors, definitions, metrics | enumeration, and core's inspection |
+| whether an event was taken, and how it ended | `c2h.input_completed`, `c2h.input_refused`, `c2h.bounced`, correlated by the h2c seq the library posted |
+| the replies to a call | `c2h.send` records of type `mcp` |
+| updates for subscriptions | `c2h.macrostep_ended`, `c2h.loaded`, `c2h.unloaded`, `c2h.finished`, `c2h.spawned`, `c2h.destroyed`, `c2h.definition_result` |
+| delivering an event, a withdrawal, a destroy | the binding's h2c writer |
+| loading an actor no mail asked for | the binding's loader, which posts `h2c.load` |
+| resident actors, configuration, data, definitions | core's read-only inspection, between `ta_run` calls |
+| inspecting, abandoning and transitions under ownership | core's native debugging primitives, while attached |
 
-### What the kernel's MCP module offers a host
+### What the library offers a host
 
 In C, with JSON text in and out, so any language can pass it straight to
 its MCP library:
@@ -338,50 +404,55 @@ its MCP library:
 - **the catalogue:** every tool (name, description, input and output
   schemas, annotations) and every resource template, as JSON;
 - **`call`:** a tool name, its arguments and the request's `_meta` in; a
-  result out. A `send` answers later, when its replies are in, through
-  the same completion the host's pump already drives;
+  result out. A `send` answers later, when its terminal record and replies
+  are in;
 - **`read` and `list`:** a resource by URI, and the resource list by
   cursor;
-- **`listen`:** the URIs a client subscribed to in; a callback per
-  update, with the URI to put in `notifications/resources/updated`;
-- **`add_system` and `remove_system`:** the systems the module serves,
-  under the names the application gives them.
+- **`listen`:** the URIs a client subscribed to in; a callback per update,
+  with the URI to put in `notifications/resources/updated`;
+- **`add_system` and `remove_system`:** the systems it serves, under the
+  names the application gives them.
+
+### What the library asks of a host
+
+- **`feed`:** the binding hands it every c2h record it drains, after its
+  own handlers, and before releasing the record's ring space. The library
+  reads what it needs and returns at once. It never holds the record.
+- **`post`:** a function that writes one h2c record, or answers that h2c
+  or the submission table is full. The library answers `busy` then; it
+  never waits.
+- **`observe`:** a way to run a read-only call on the system's thread
+  between `ta_run` calls. The binding runs it at its next yield.
+- **`attach` and `detach`:** suspend the pump and pass ownership, and give
+  it back.
+- **`load`:** ask the binding's loader to bring an address in, as it does
+  for `c2h.load_needed`.
+- **`evaluate`:** for data models whose values live in the host's language
+  (napi's JavaScript values), evaluation against a copy of an actor's
+  data. The library does it for data models in C (jq, null).
 
 ### What a host still writes
 
 - a few dozen lines that register the catalogue with its MCP library and
-  forward calls, reads and subscriptions to the module;
-- the evaluation against a copy of an actor's data, for data models whose
-  values live in the host's language (napi's JavaScript values); the
-  kernel does it for data models in C (jq, null);
+  forward calls, reads and subscriptions to the library;
+- the hooks above, which are short because the pump already has each of
+  them;
 - its documentation of how an application serves the tools.
 
-### Hosts without the kernel
+## Database hosts
 
-The kernel holds actors in memory. The database hosts keep mailboxes,
-the directory and timers in tables (the kernel proposal leaves them out),
-so the MCP module depends on the kernel only through a small interface:
-
-- the scheduling questions: is anything a send caused still runnable or
-  due, and wake me when that changes;
-- loading an actor by address.
-
-A database host answers them from its tables, and uses the rest of the
-module unchanged. Its MCP server runs beside the database and calls the
-host's SQL functions; a `send` is one transaction, and its replies are
-returned once it commits.
-
-### When
-
-The kernel proposal waits for a second language host before it
-extracts anything. The MCP module need not wait: it is written in napi's
-Node-free C (`tinyactors-napi/src/`, beside `scheduler.c` and
-`router.c`), under the kernel's rules, and moves with them when the
-kernel is extracted.
+The [SQLite](sqlite-host.md) and [PostgreSQL](postgres-host.md) sketches
+drive core through the same rings. Their tables hold only what the host
+has not yet posted to h2c, and session images there bound memory; they are
+not persistence ([migration](ring-proto/reference/migration.md#open-questions)).
+A database host binds `tinyactors-mcp` as any other host does. Its MCP
+server runs beside the database: a `send` posts its event in one
+transaction, and answers once the event's terminal record has been read
+and the transaction has committed.
 
 ## napi
 
-napi adds the module's tools to the application's own MCP server rather
+napi adds the library's tools to the application's own MCP server rather
 than running a second one:
 
 ```js
@@ -397,8 +468,12 @@ server.registerTool('restock', /* the application's own tool */);
 - **The application chooses the transport.** A running application serves
   Streamable HTTP on a route of its own. stdio suits a process the client
   starts, which a long-running application is not.
-- **Options:** `systems` (names to systems), and `prefix` for the tool
-  names (default none), for an application whose own tools would clash.
+- **Options:** `systems` (names to systems); `prefix` for the tool names
+  (default none), for an application whose own tools would clash; and
+  `maxHoldMs`, the cap on an `attach` lease.
+- **The pump feeds the library.** `registerMCPTools` declares the `mcp`
+  processor on each system, as `registerIO` does, and adds the library to
+  the pump's c2h handlers.
 - **The SDK is an optional peer dependency** of `@tinyactors/node`, loaded
   only by `@tinyactors/node/mcp`.
 - **`evaluate`** on napi's JavaScript data model evaluates against a
@@ -409,82 +484,78 @@ server.registerTool('restock', /* the application's own tool */);
 
 ## The test host
 
-The test host is the verification host: it links core and drives it from
-Ruby, and its Scheduler is in Ruby, not in the kernel. It links the
-kernel's MCP module into the C host and binds it through its host
-protocol, like any other C API, with the Ruby Scheduler behind the
-module's scheduling questions. So the transcripts test the module, not a
-second implementation in Ruby.
+The test host is the verification host. It drives core as a ring driver
+(`hosted.post`, `hosted.turn`, `hosted.batches`). It links
+`tinyactors-mcp` into its C host and binds it through its host protocol,
+like any other C API, with the Ruby driver feeding it c2h records. So the
+transcripts test the library, not a second implementation in Ruby.
 
 `bin/mcp` serves a workbench directory's system, named after the
 directory, over stdio. A developer starts it from an MCP client's
-configuration. The workbench's charts reload when their files change, as
-they do now.
+configuration. The workbench's charts reload when their files change.
 
 # In this repository
 
-**Changes in core:** core already keeps the I/O processor registry
-(`ta_system_register_io`, core ADR 0068), but a registration names its
-type with one atom, and the only short form is the built-in processor's
-`scxml`, hard-coded in `system.c`. SCXML 6.2.5 asks for a URL per
-processor and allows short forms as an authoring convenience, so every
-registration takes both:
+**Adds:** the `tinyactors-mcp` package, with its own mise tasks, tests and
+changelog; the shared transcripts as `tinyactors-test/mcp/`; napi's
+`@tinyactors/node/mcp` entry point; the test host's `bin/mcp`.
 
-- `ta_io_registration_params` takes the type's URL and a short name,
-  and `<send type>` (literal or `typeexpr`) selects a processor by either;
-- the built-in processor becomes an ordinary entry at index 0, with its
-  URL and the short name `scxml`, and the special case goes;
-- `_ioprocessors` and `origintype` carry the URL; a data model may also
-  offer the short name as a key, as ADR 0068 leaves to it;
-- every caller moves in the same change: napi's `registerIO` takes a URL
-  and a short name, and so do the test host's adapters.
-
-This is a change to the registry, not to MCP: an application's own
-processors (an `http`, a `ws`) get short names the same way. It needs a
-core ADR of its own.
+**Core gains nothing for MCP** beyond the ring protocol: the MCP processor
+is a declared type, replies are `c2h.send` records, and intervention uses
+the debugging primitives.
 
 **Stays**, because it is core API that any host uses:
 
-| Was needed by | Core feature |
+| Used by | Core feature |
 |---|---|
-| C1 | the paused position in `ta_actor_inspection` (core ADR 0083) |
-| C2 | operator transitions and abandoning a macrostep (core ADR 0082) |
-| C3 | withdrawing one delayed send (core ADR 0084) |
-| C5 | source spans on decode and encode (core ADR 0085) |
-| C6 | a resume that stops before a microstep's first unit (core ADR 0086) |
+| `inspect` | the position of a macrostep in progress in `ta_actor_inspection` (core ADR 0083) |
+| `goto`, `abandon` | operator transitions and abandoning a macrostep (core ADR 0082) |
+| definition resources | source spans on decode and encode (core ADR 0085) |
+| `abandon` | a resume that stops before a microstep's first unit (core ADR 0086), to reach a microstep boundary |
 
-**Gone** (removed on 2026-09-30, ahead of the MCP servers):
+**Gone** (removed on 2026-09-30):
 
 - napi: `createDebugSession`, `lib/debug.js`, `lib/debug/`, `DAPReader`,
   `encodeDAPMessage`, the `dap-server` task, `test/debug.js`,
-  `test/dap-transcripts.js`, and their declarations in `index.d.ts`;
-  the DAP permissions (`allow`) and audit hook went with them, and napi
-  ADR 0026's status says so;
+  `test/dap-transcripts.js`, and their declarations in `index.d.ts`; the
+  DAP permissions (`allow`) and audit hook went with them, and napi ADR
+  0026's status says so;
 - the test host: `ruby/dap/`, `ruby/dap.rb`, `bin/dap`,
-  `ruby/dap_selftest.rb`, `ruby/dap_client.rb`, `ruby/dap_transcripts.rb`,
-  and `dap/`; the MCP transcripts will take its place as
-  `tinyactors-test/mcp/`;
-- whatever of the Scheduler only the debugger used: `hold`, `stop!`, the
-  monitor;
+  `ruby/dap_selftest.rb`, `ruby/dap_client.rb`, `ruby/dap_transcripts.rb`
+  and `dap/`;
 - `tinyactors-vscode`, whose purpose was testing the DAP adapters;
 - `docs/debug-adapter.md`, and the AGENTS.md section on the VS Code
   extension. `docs/proposals/debug-adapter.md` stays as history.
 
-Core's stepping hooks (`pause_at_microstep_start`, action budgets) stay:
-the pausing and operator scenarios use them.
-
 # Open questions
 
-1. **The URL of the MCP processor.** The rule is settled (the permanent
-   URL of this mapping's documentation, short name `mcp`); the URL waits
-   for the documentation to have a home.
-2. **Following a send's causes.** Whether the kernel follows the records'
-   causes itself, or core gains a call that answers "is anything this
-   input caused still runnable or due", which the database hosts would
-   use too.
-3. **JSON in C.** The module speaks JSON text. The kernel needs a JSON
-   reader and writer; the test host uses jq's, napi none yet.
-4. **The TypeScript SDK and 2026-07-28.** Whether the official SDK serves
+1. **A trace parent on `h2c.event`.** The record has no trace context
+   field, so an event cannot join the caller's trace (core ADR 0073). Every
+   host that accepts a `traceparent` (HTTP as well as MCP) needs it. It is
+   a change to the ring protocol's catalog.
+2. **Observing between `ta_run` calls.** [debugging.md](ring-proto/reference/debugging.md)
+   lists inspection among the primitives used while a debugger owns the
+   system. This proposal reads between `ta_run` calls without attaching,
+   which is ownership for the length of one native call. debugging.md
+   should say that read-only inspection works there too.
+3. **Following a send's causes.** `waitMs` is a fixed wait. Core could
+   instead report when everything an input caused, through mail to other
+   sessions, has settled. That is a new record or a field on
+   `c2h.input_completed`, which the database hosts would use too.
+4. **The URL of the MCP processor.** SCXML 6.2.5 names a processor by the
+   URI of its description. The ring protocol's type registry holds names,
+   and only core's own `scxml` has URI aliases. Whether a declared type may
+   carry aliases decides whether `mcp` can also be selected by its URL.
+5. **Cancelling a delayed send and replacing a definition.** Withdrawing
+   one pending delayed send (core ADR 0084) and hot-replacing an actor's
+   revision (core ADR 0089) have no ring record or debugging primitive.
+   The mapping leaves them out until one exists.
+6. **Operator transitions on recorded sessions.** How a replay represents
+   a forced transition is open in the ring protocol. Until it is settled,
+   a checkpoint after the transition is the only record replay can use.
+7. **JSON in C.** The library speaks JSON text. It needs a JSON reader and
+   writer; the test host uses jq's, napi none yet.
+8. **The TypeScript SDK and 2026-07-28.** Whether the official SDK serves
    the stateless revision yet, and what napi does while it serves only
    2025-11-25.
 
@@ -499,9 +570,16 @@ the pausing and operator scenarios use them.
 - Extensions: [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview),
   [Tasks](https://modelcontextprotocol.io/extensions/tasks/overview),
   [client support](https://modelcontextprotocol.io/extensions/client-matrix).
+- The ring protocol: [architecture](ring-proto/ARCHITECTURE.md),
+  [debugging](ring-proto/reference/debugging.md),
+  [telemetry](ring-proto/reference/telemetry.md),
+  [the messages](ring-proto/protocol/generated/MESSAGES.md),
+  [S12](ring-proto/scenarios/S12-http-request.md) and
+  [S13](ring-proto/scenarios/S13-webhook-callback.md) for origins.
 - SCXML 1.0 (`tinyactors-core/docs/internal/scxml.md`): 6.2.4 (the target
-  of a send), C.1 (the SCXML Event I/O Processor and its `#_` targets),
-  5.10 (names beginning with `_` are reserved).
+  of a send), 6.2.5 (I/O processor types), C.1 (the SCXML Event I/O
+  Processor and its `#_` targets), 5.10 (names beginning with `_` are
+  reserved).
 - What it replaces: [the debug adapter proposal](debug-adapter.md), napi
   ADR 0026; the status of every DAP message was `docs/debug-adapter.md`,
   in the history before its removal.
