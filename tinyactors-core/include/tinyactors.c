@@ -2361,8 +2361,8 @@ struct ta_address {
     /* Null for a detached record: a session image's own copy (see below). */
     ta_address_table *table;
     struct ta_address *next;
-    /* The unloaded session at this address (ADR 0066), or null. */
-    struct ta_session_node *unloaded;
+    /* The session pool index of the unloaded session at this address (ADR 0066), or 0. */
+    uint32_t unloaded;
     uint32_t references;
     uint32_t hash;
     uint32_t family_len;
@@ -2490,48 +2490,199 @@ TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry);
 
 
 /*
- * Sessions whose ID is not a resident actor's runtime ID (ADR 0066). A
- * session's ID is the runtime ID it was spawned with, so a never-paged
- * session is found through the actor table and has no entry here. An entry
- * is either a reloaded resident session (`actor` set) or an unloaded named
- * one (`actor` null, `address` held). Lookups prefer a resident entry.
+ * Package session is the session table (ADR 0066), built on the index pool
+ * (pool.h, block A5) and the hash table (table.h, block B3).
  *
- * The table is a linear hash table over fixed pages, like the address table
- * (ADR 0065): each insert splits at most one bucket, growing never copies
- * the table, and a failed page allocation only postpones a split. Its first
- * page is allocated at init, so inserting never fails.
+ * What it is for. A session's ID is the runtime ID of the actor it was
+ * spawned as, so a never-paged session is found through the actor table and
+ * has no entry here. This table holds the other two kinds, the sessions whose
+ * ID is not a resident actor's runtime ID:
+ *
+ *   - a reloaded resident session: its image was loaded into a new actor, which
+ *     has a new runtime ID but keeps the session's ID (`actor` is set); and
+ *   - an unloaded named session: its actor is gone, an image holds it, and
+ *     the entry keeps it findable by ID and routable by address (`actor` is
+ *     NULL, `address` is held).
+ *
+ * A lookup by ID prefers a resident entry to an unloaded one, so a session
+ * that was unloaded and loaded again is never seen as two.
+ *
+ * How it is built. A node is a 24-byte item of an index pool, found by a u32
+ * index that never changes while the node lives and that 0 never names. The
+ * hash table maps hash(ID) to that index (the table stores only the pair of
+ * 32-bit numbers; the ID is compared in the node). There are no pointer
+ * chains. Before this unit the table was a second copy of the address table's
+ * paged linear hashing; both now share the table block.
+ *
+ * Lifetimes. There are four things, and each has exactly one lifetime.
+ *
+ *   - The control block ta_session_table (with its pool and its index) is
+ *     system lifetime: embedded in the system, initialised by
+ *     ta_session_table_init (which allocates nothing) and destroyed by
+ *     ta_session_table_destroy in ta_system_destroy, before the address
+ *     table, because unloaded nodes hold addresses.
+ *   - The pool pages and the index pages are system lifetime too: they are
+ *     allocated by the first node (the pool by the first refill, the index
+ *     by the first ta_session_node_new) and freed only by destroy. They never
+ *     shrink. A system that never reloads or unloads a session pays nothing.
+ *   - A node lives from ta_session_node_new to ta_session_drop or destroy,
+ *     in one of two lifetimes. While it holds a reloaded resident session it
+ *     is session lifetime: from the load to the unload or to the actor's
+ *     free. While it holds an unloaded session it is parked: from the unload
+ *     to the next load at its address, the removal of the name, the
+ *     replacement by another unload, or destroy. The holder of a node's index
+ *     is the actor (ta_actor.session_node, until the actor is freed) or the
+ *     address (ta_address.unloaded, until the node is dropped). Nobody else
+ *     may keep an index.
+ *   - A pointer returned by ta_session_find or ta_session_node_at is
+ *     call lifetime: valid until the node is dropped. Nodes do not move.
+ *
+ * When it allocates. Only ta_session_node_new allocates (an index pool
+ * refill, the index's first page, a grow of the index, a prepare of the page
+ * the ID hashes to), and it is called at safe points: reconstruct (load) and
+ * unload, both before they change any other state. ta_session_insert,
+ * ta_session_park, ta_session_drop, ta_session_drop_unloaded,
+ * ta_session_node_free, ta_session_node_at, ta_session_find,
+ * ta_session_resident, ta_session_id_of and ta_session_route never
+ * allocate (an address release can free, never allocate).
+ *
+ * Crafted IDs. A host can supply the session ID of an image it loads, and
+ * the table hashes it to 32 bits, so a host could choose IDs that all share
+ * a hash. Linear hashing never separates equal hashes. The table therefore
+ * answers growth, not refusal: ta_session_node_new calls ta_table_prepare,
+ * which doubles the one page those hashes fill, at this safe point, so
+ * ta_session_insert always has a slot. Such a set costs the sender probe
+ * length (lookups of those IDs are linear in their number) and memory, and
+ * never a refused load while memory allows.
+ *
+ * Invariants.
+ *
+ *   - Every node that is in the index has a non-zero index, and a node
+ *     that has been taken but not yet inserted is in no table.
+ *   - A node holds a reference to its address if and only if its `address`
+ *     is set (it is then an unloaded node, `actor` NULL); that reference
+ *     outlives address->unloaded, which names this node or is 0.
+ *   - Between ta_session_node_new and the ta_session_insert or
+ *     ta_session_park of the same node there is no other insert into this
+ *     table (only removals): the room prepare made is that one slot's.
+ *
+ * Failure. ta_session_node_new answers TA_ERR_NOMEM and takes no node. The
+ * pool or the index may be larger than before (a refill or a first page
+ * that succeeded stays); nothing else has changed. Everything else is
+ * infallible.
+ *
+ * Complexity. All O(1) expected; ta_session_node_new is O(page) in the
+ * rare call that grows the index or doubles a page. Space: 24 bytes per
+ * node plus 8 bytes per slot at a load of 7/16 (about 18 bytes), and
+ * no per-node allocation.
+ *
+ * Example, a load that continues a session and an unload that parks it:
+ *
+ *     uint32_t index;                                     // safe point: may allocate
+ *     if (ta_session_node_new(&system->sessions,
+ *             &(ta_session_node_params){ .id = id, .actor = actor }, &index) != TA_OK) {
+ *         return TA_ERR_NOMEM;                            // nothing changed
+ *     }
+ *     ta_session_insert(&system->sessions, index);        // resident
+ *     actor->session_node = index;
+ *     ...
+ *     ta_session_drop(&system->sessions, actor->session_node);   // actor freed
  */
-
-#define TA_SESSION_PAGE_BUCKETS 1024u
-#define TA_SESSION_INITIAL_BUCKETS 16u
 
 typedef struct ta_session_node {
     uint64_t id;
-    struct ta_session_node *next;
-    /* The resident actor holding the session, or null when it is unloaded. */
+    /*
+     * The resident actor holding the session, or NULL when it is unloaded.
+     * While the node is free its pool link overlays the low half of this field.
+     */
     struct ta_actor *actor;
-    /* An unloaded session's address, one reference held; null otherwise. */
+    /* An unloaded session's address, one reference held; NULL otherwise. */
     ta_address *address;
 } ta_session_node;
 
-typedef struct {
+/*
+ * ta_session_table is the control block, embedded in the system (system
+ * lifetime). Its fields are private to session.c.
+ */
+typedef struct ta_session_table {
     ta_allocator allocator;
-    ta_vec pages; /* ta_session_node ** pages of TA_SESSION_PAGE_BUCKETS buckets */
-    uint32_t base;
-    uint32_t split;
-    uint32_t count;
+    ta_pool nodes;
+    ta_table index;
 } ta_session_table;
 
-TA_PRIVATE ta_result ta_session_table_init(ta_session_table *table, ta_allocator allocator);
-/* Frees every entry left, releasing the addresses unloaded entries hold. */
+/*
+ * ta_session_table_init makes an empty table. It allocates nothing (the pool
+ * and the index get their first pages with the first node), so it cannot
+ * fail and needs no safe point.
+ */
+TA_PRIVATE void ta_session_table_init(ta_session_table *table, ta_allocator allocator);
+
+/*
+ * ta_session_table_destroy releases the address every unloaded node holds,
+ * then frees the index and the pool with sized frees, and zeroes *table.
+ * It must run before ta_address_table_destroy. Idempotent on a zeroed table.
+ */
 TA_PRIVATE void ta_session_table_destroy(ta_session_table *table);
 
-TA_PRIVATE ta_result ta_session_node_new(ta_session_table *table, ta_session_node **out);
-/* Frees an entry that is not in the table, releasing its address. */
-TA_PRIVATE void ta_session_node_free(ta_session_table *table, ta_session_node *node);
-TA_PRIVATE void ta_session_insert(ta_session_table *table, ta_session_node *node);
-TA_PRIVATE void ta_session_remove(ta_session_table *table, ta_session_node *node);
-/* The entry for `id`: a resident one if there is one, else an unloaded one. */
+/* ta_session_node_params is what a node starts with: the session's ID and its resident actor, if any. */
+typedef struct ta_session_node_params {
+    uint64_t id;
+    struct ta_actor *actor;
+} ta_session_node_params;
+
+/*
+ * ta_session_node_new takes a node for `params`, stores its index in
+ * *out, and makes room in the index for exactly one insert of its ID's hash.
+ * The node is not in the index yet: call ta_session_insert (a resident
+ * session) or ta_session_park (an unloaded one) before the next safe point,
+ * or ta_session_node_free to give it up. It is the only allocating function,
+ * for safe points only. TA_ERR_NOMEM takes no node.
+ */
+TA_PRIVATE ta_result ta_session_node_new(ta_session_table *table, const ta_session_node_params *params, uint32_t *out);
+
+/*
+ * ta_session_insert puts a node made by ta_session_node_new into the index,
+ * so that ta_session_find sees it. It never fails and never allocates (see
+ * the invariant on inserts in between).
+ */
+TA_PRIVATE void ta_session_insert(ta_session_table *table, uint32_t index);
+
+/*
+ * ta_session_park turns a node made by ta_session_node_new into the unloaded
+ * session at `address`: it drops the session already parked there, if any,
+ * retains `address` for the node, points address->unloaded at the node and
+ * inserts it. Never allocates.
+ */
+TA_PRIVATE void ta_session_park(ta_session_table *table, uint32_t index, ta_address *address);
+
+/*
+ * ta_session_drop removes a node that is in the index and frees it: it
+ * leaves the index, clears address->unloaded if that names it, releases its
+ * address (which may free the address) and gives the item back. Never
+ * allocates. The index is dead afterwards.
+ */
+TA_PRIVATE void ta_session_drop(ta_session_table *table, uint32_t index);
+
+/*
+ * ta_session_drop_unloaded drops the session parked at `address`, if there
+ * is one. It replaces the four places that did this by hand.
+ */
+TA_PRIVATE void ta_session_drop_unloaded(ta_session_table *table, ta_address *address);
+
+/*
+ * ta_session_node_free gives up a node that is not in the index (taken by
+ * ta_session_node_new and never inserted). Never allocates.
+ */
+TA_PRIVATE void ta_session_node_free(ta_session_table *table, uint32_t index);
+
+/* ta_session_node_at is the node of an index, or NULL for 0. Valid until the node is dropped. */
+TA_PRIVATE ta_session_node *ta_session_node_at(const ta_session_table *table, uint32_t index);
+
+/*
+ * ta_session_find answers the entry for `id`: a resident one if there is
+ * one, else an unloaded one, else NULL. The pointer is valid until the node is
+ * dropped. Never allocates.
+ */
 TA_PRIVATE const ta_session_node *ta_session_find(const ta_session_table *table, uint64_t id);
 
 /* Whether a resident session holds `id`: a never-paged actor or a reloaded one. */
@@ -4042,9 +4193,10 @@ struct ta_actor {
     ta_event_block *event_block;
     ta_actor_id replacement_of;
     /* The session this actor holds (ADR 0066), and its entry in the session
-     * table when that ID is not this actor's runtime ID. */
+     * table (a pool index, 0 for none) when that ID is not this actor's
+     * runtime ID. */
     uint64_t session_id;
-    ta_session_node *session_node;
+    uint32_t session_node;
     uint64_t session_epoch;
     bool published;
     /* Lifecycle records written for this session, from 1 (ADR 0067; napi
@@ -7036,7 +7188,7 @@ TA_PRIVATE size_t ta_address_bytes(const ta_address *address) {
 TA_PRIVATE void ta_address_detached_init(ta_address *copy) {
     copy->table = NULL;
     copy->next = NULL;
-    copy->unloaded = NULL;
+    copy->unloaded = 0;
     copy->references = 0;
 }
 
@@ -7137,7 +7289,7 @@ static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_addr
     }
     record->table = NULL;
     record->next = NULL;
-    record->unloaded = NULL;
+    record->unloaded = 0;
     record->references = 0;
     record->hash = hash;
     record->family_len = family_len;
@@ -7436,151 +7588,132 @@ TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry) {
 }
 
 
-/* Runtime IDs differ mostly in their low slot bits, so the bucket hash is the
+/* The package comment is in session.h. */
+
+/*
+ * A page of the node pool holds 1024 nodes of 24 bytes (24 KiB), and a page
+ * of the index 4096 slots of 8 bytes (32 KiB), so the largest block the
+ * table asks for stays flat as sessions come and go. The index grows at 7/16
+ * of its slots: sessions are few, and a denser index costs less than the
+ * longer probes just before a round of splits ends.
+ */
+#define TA_SESSION_PAGE_NODES 1024u
+#define TA_SESSION_PAGE_SLOTS 4096u
+#define TA_SESSION_GROW_SIXTEENTHS 7u
+
+/* The free-list link lives in the low half of `actor`, which means nothing while the node is free. */
+static const ta_pool_params TA_SESSION_POOL = {
+    .item_size = sizeof(ta_session_node),
+    .item_alignment = _Alignof(ta_session_node),
+    .link_offset = offsetof(ta_session_node, actor),
+    .page_items = TA_SESSION_PAGE_NODES,
+};
+
+static const ta_table_params TA_SESSION_INDEX = {
+    .mode = TA_TABLE_GROWING,
+    .page_slots = TA_SESSION_PAGE_SLOTS,
+    .grow_sixteenths = TA_SESSION_GROW_SIXTEENTHS,
+};
+
+/* Runtime IDs differ mostly in their low slot bits, so the hash is the
  * 64-bit finalizer (D5) cut to 32 bits. */
 static uint32_t ta_session_hash(uint64_t id) {
     return (uint32_t)ta_mix64(id);
 }
 
-static uint32_t ta_session_bucket_count(const ta_session_table *table) {
-    return table->base + table->split;
+TA_PRIVATE void ta_session_table_init(ta_session_table *table, ta_allocator allocator) {
+    *table = (ta_session_table){ .allocator = allocator };
+    /* The parameters are constants that make a pool; init only validates them. */
+    (void)ta_pool_init(&table->nodes, allocator, &TA_SESSION_POOL);
 }
 
-static ta_session_node **ta_session_bucket(const ta_session_table *table, uint32_t index) {
-    ta_session_node **page = *(ta_session_node ***)ta_vec_at(&table->pages, index / TA_SESSION_PAGE_BUCKETS);
-    return &page[index % TA_SESSION_PAGE_BUCKETS];
+TA_PRIVATE ta_session_node *ta_session_node_at(const ta_session_table *table, uint32_t index) {
+    return ta_pool_at(&table->nodes, index);
 }
 
-static uint32_t ta_session_index(const ta_session_table *table, uint32_t hash) {
-    uint32_t index = hash & (table->base - 1u);
-    return index < table->split ? hash & (2u * table->base - 1u) : index;
-}
-
-static void ta_session_page_free(ta_allocator allocator, ta_session_node **page) {
-    ta_mem_free(allocator, page,
-                &(ta_allocator_free_params){ .size = TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *),
-                                             .alignment = _Alignof(ta_session_node *) });
-}
-
-/* Makes sure the page holding bucket `index` exists; false when it cannot. */
-static bool ta_session_page_for(ta_session_table *table, uint32_t index) {
-    if (index / TA_SESSION_PAGE_BUCKETS < table->pages.count) {
-        return true;
+/* The address of an unloaded node lets go of this node, then the reference is returned. */
+static void ta_session_release_address(ta_session_node *node, uint32_t index) {
+    ta_address *address = node->address;
+    if (address != NULL) {
+        if (address->unloaded == index) {
+            address->unloaded = 0;
+        }
+        node->address = NULL;
+        ta_address_release(address);
     }
-    ta_session_node **page = ta_mem_alloc(table->allocator, TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *),
-                                          _Alignof(ta_session_node *));
-    if (page == NULL) {
-        return false;
-    }
-    for (uint32_t bucket = 0; bucket < TA_SESSION_PAGE_BUCKETS; bucket += 1u) {
-        page[bucket] = NULL;
-    }
-    if (ta_vec_push(&table->pages, &page) != TA_OK) {
-        ta_session_page_free(table->allocator, page);
-        return false;
-    }
-    return true;
-}
-
-/* Splits one bucket when the table holds more than one entry per bucket. */
-static void ta_session_grow(ta_session_table *table) {
-    uint32_t added = ta_session_bucket_count(table);
-    if (table->count <= added || added == UINT32_MAX || !ta_session_page_for(table, added)) {
-        return; /* a failed page only postpones the split */
-    }
-    uint32_t wide = 2u * table->base - 1u;
-    ta_session_node **from = ta_session_bucket(table, table->split);
-    ta_session_node **to = ta_session_bucket(table, added);
-    ta_session_node *chain = *from;
-    *from = NULL;
-    while (chain != NULL) {
-        ta_session_node *next = chain->next;
-        ta_session_node **home = (ta_session_hash(chain->id) & wide) == table->split ? from : to;
-        chain->next = *home;
-        *home = chain;
-        chain = next;
-    }
-    table->split += 1u;
-    if (table->split == table->base) {
-        table->base *= 2u;
-        table->split = 0;
-    }
-}
-
-TA_PRIVATE ta_result ta_session_table_init(ta_session_table *table, ta_allocator allocator) {
-    *table = (ta_session_table){ .allocator = allocator, .base = TA_SESSION_INITIAL_BUCKETS };
-    ta_vec_init(&table->pages, allocator, TA_VEC_LAYOUT(ta_session_node **));
-    return ta_session_page_for(table, 0) ? TA_OK : TA_ERR_NOMEM;
 }
 
 TA_PRIVATE void ta_session_table_destroy(ta_session_table *table) {
-    uint32_t buckets = table->pages.count == 0 ? 0u : ta_session_bucket_count(table);
-    for (uint32_t index = 0; index < buckets; index += 1u) {
-        ta_session_node *chain = *ta_session_bucket(table, index);
-        while (chain != NULL) {
-            ta_session_node *next = chain->next;
-            ta_session_node_free(table, chain);
-            chain = next;
-        }
+    ta_table_cursor cursor = {0};
+    uint32_t hash = 0;
+    uint32_t index = 0;
+    while (ta_table_next(&table->index, &cursor, &hash, &index)) {
+        ta_session_release_address(ta_session_node_at(table, index), index);
     }
-    for (uint32_t page = 0; page < table->pages.count; page += 1u) {
-        ta_session_page_free(table->allocator, *(ta_session_node ***)ta_vec_at(&table->pages, page));
-    }
-    ta_vec_destroy(&table->pages);
+    ta_table_destroy(&table->index);
+    ta_pool_destroy(&table->nodes);
     *table = (ta_session_table){0};
 }
 
-TA_PRIVATE ta_result ta_session_node_new(ta_session_table *table, ta_session_node **out) {
-    ta_session_node *node = ta_mem_alloc(table->allocator, sizeof(ta_session_node), _Alignof(ta_session_node));
-    if (node == NULL) {
+TA_PRIVATE ta_result ta_session_node_new(ta_session_table *table, const ta_session_node_params *params, uint32_t *out) {
+    if (ta_pool_refill(&table->nodes, 1u) != TA_OK) {
         return TA_ERR_NOMEM;
     }
-    *node = (ta_session_node){0};
-    *out = node;
+    if (table->index.page_slots == 0) {
+        ta_result result = ta_table_init(&table->index, table->allocator, &TA_SESSION_INDEX);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    uint32_t hash = ta_session_hash(params->id);
+    if (ta_table_wants_grow(&table->index)) {
+        (void)ta_table_grow(&table->index); /* a failure only postpones the split */
+    }
+    if (ta_table_prepare(&table->index, hash) != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
+    uint32_t index = ta_pool_take(&table->nodes); /* refilled above, and nothing took it since */
+    *ta_session_node_at(table, index) = (ta_session_node){ .id = params->id, .actor = params->actor };
+    *out = index;
     return TA_OK;
 }
 
-TA_PRIVATE void ta_session_node_free(ta_session_table *table, ta_session_node *node) {
-    if (node == NULL) {
-        return;
-    }
-    if (node->address != NULL) {
-        if (node->address->unloaded == node) {
-            node->address->unloaded = NULL;
-        }
-        ta_address_release(node->address);
-    }
-    ta_mem_free(table->allocator, node,
-                &(ta_allocator_free_params){ .size = sizeof(ta_session_node), .alignment = _Alignof(ta_session_node) });
+TA_PRIVATE void ta_session_insert(ta_session_table *table, uint32_t index) {
+    /* Room was made by ta_session_node_new, and no insert came between. */
+    (void)ta_table_insert(&table->index, ta_session_hash(ta_session_node_at(table, index)->id), index);
 }
 
-TA_PRIVATE void ta_session_insert(ta_session_table *table, ta_session_node *node) {
-    ta_session_node **bucket = ta_session_bucket(table, ta_session_index(table, ta_session_hash(node->id)));
-    node->next = *bucket;
-    *bucket = node;
-    table->count += 1u;
-    ta_session_grow(table);
+TA_PRIVATE void ta_session_node_free(ta_session_table *table, uint32_t index) {
+    ta_session_release_address(ta_session_node_at(table, index), index);
+    ta_pool_give(&table->nodes, index);
 }
 
-TA_PRIVATE void ta_session_remove(ta_session_table *table, ta_session_node *node) {
-    for (ta_session_node **link = ta_session_bucket(table, ta_session_index(table, ta_session_hash(node->id)));
-         *link != NULL; link = &(*link)->next) {
-        if (*link == node) {
-            *link = node->next;
-            node->next = NULL;
-            table->count -= 1u;
-            return;
-        }
+TA_PRIVATE void ta_session_drop(ta_session_table *table, uint32_t index) {
+    (void)ta_table_remove(&table->index, ta_session_hash(ta_session_node_at(table, index)->id), index);
+    ta_session_node_free(table, index);
+}
+
+TA_PRIVATE void ta_session_drop_unloaded(ta_session_table *table, ta_address *address) {
+    if (address->unloaded != 0) {
+        ta_session_drop(table, address->unloaded);
     }
+}
+
+TA_PRIVATE void ta_session_park(ta_session_table *table, uint32_t index, ta_address *address) {
+    ta_address_retain(address); /* before the old node lets go of its own reference */
+    ta_session_drop_unloaded(table, address);
+    ta_session_node_at(table, index)->address = address;
+    address->unloaded = index;
+    ta_session_insert(table, index);
 }
 
 TA_PRIVATE const ta_session_node *ta_session_find(const ta_session_table *table, uint64_t id) {
-    if (table->pages.count == 0) {
-        return NULL;
-    }
     const ta_session_node *unloaded = NULL;
-    for (const ta_session_node *node = *ta_session_bucket(table, ta_session_index(table, ta_session_hash(id)));
-         node != NULL; node = node->next) {
+    ta_table_probe probe;
+    uint32_t index = 0;
+    ta_table_probe_start(&table->index, ta_session_hash(id), &probe);
+    while (ta_table_probe_next(&probe, &index)) {
+        const ta_session_node *node = ta_session_node_at(table, index);
         if (node->id != id) {
             continue;
         }
@@ -15720,9 +15853,8 @@ TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
     /* A named actor holds a reference to its address; a runtime ref holds nothing. */
     ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
-    if (actor->session_node != NULL) {
-        ta_session_remove(&system->sessions, actor->session_node);
-        ta_session_node_free(&system->sessions, actor->session_node);
+    if (actor->session_node != 0) {
+        ta_session_drop(&system->sessions, actor->session_node);
     }
     /* The record, the session storage and the instance are one block (ADR 0063). */
     ta_mem_free(system->allocator, actor,
@@ -15860,10 +15992,8 @@ TA_API ta_result ta_actor_remove_unloaded(ta_system *system, const ta_actor_remo
             .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
         });
     /* The unloaded session ends with its name (ADR 0066). */
-    if (result == TA_OK && address->unloaded != NULL) {
-        ta_session_node *parked = address->unloaded;
-        ta_session_remove(&system->sessions, parked);
-        ta_session_node_free(&system->sessions, parked);
+    if (result == TA_OK) {
+        ta_session_drop_unloaded(&system->sessions, address);
     }
     ta_address_release(address);
     return result;
@@ -16591,10 +16721,8 @@ static ta_result ta_actor_publish_route(ta_system *system, ta_actor *actor, ta_a
     if (result == TA_ERR_STALE) {
         return TA_ERR_BUSY;
     }
-    if (result == TA_OK && address->unloaded != NULL) {
-        ta_session_node *parked = address->unloaded;
-        ta_session_remove(&system->sessions, parked);
-        ta_session_node_free(&system->sessions, parked);
+    if (result == TA_OK) {
+        ta_session_drop_unloaded(&system->sessions, address);
     }
     return result;
 }
@@ -17812,15 +17940,14 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
      * this actor's runtime ID, so the session table finds it.
      */
     if (image->session_id != 0 && !ta_session_resident(system, image->session_id)) {
-        ta_session_node *node = NULL;
-        result = ta_session_node_new(&system->sessions, &node);
+        uint32_t node = 0;
+        result = ta_session_node_new(&system->sessions,
+                                     &(ta_session_node_params){ .id = image->session_id, .actor = actor }, &node);
         if (result != TA_OK) {
             ta_actor_release_slot(system, id);
             ta_actor_free(system, actor);
             return result;
         }
-        node->id = image->session_id;
-        node->actor = actor;
         ta_session_insert(&system->sessions, node);
         actor->session_id = image->session_id;
         actor->session_node = node;
@@ -18010,8 +18137,8 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
         return result;
     }
     /* And the entry that keeps the session findable while it is out (ADR 0066). */
-    ta_session_node *parked = NULL;
-    result = ta_session_node_new(&system->sessions, &parked);
+    uint32_t parked = 0;
+    result = ta_session_node_new(&system->sessions, &(ta_session_node_params){ .id = actor->session_id }, &parked);
     if (result != TA_OK) {
         return result;
     }
@@ -18039,19 +18166,11 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
      * whatever session loads here next (ADR 0066).
      */
     ta_address *address = actor->record.self.as.named;
-    parked->id = actor->session_id;
-    parked->address = address;
-    ta_address_retain(address);
+    ta_session_park(&system->sessions, parked, address); /* retains the address past the actor's own reference */
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_UNLOADED, NULL);
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
-    if (address->unloaded != NULL) {
-        ta_session_remove(&system->sessions, address->unloaded);
-        ta_session_node_free(&system->sessions, address->unloaded);
-    }
-    address->unloaded = parked;
-    ta_session_insert(&system->sessions, parked);
     return TA_OK;
 }
 
@@ -18106,11 +18225,7 @@ static ta_result ta_image_load(ta_system *system, const ta_image_load_params *pa
     /* The session is resident again: its parked entry goes (ADR 0066). */
     ta_actor *loaded = ta_actor_lookup(system, id);
     ta_address *address = loaded->record.self.as.named;
-    if (address->unloaded != NULL) {
-        ta_session_node *parked = address->unloaded;
-        ta_session_remove(&system->sessions, parked);
-        ta_session_node_free(&system->sessions, parked);
-    }
+    ta_session_drop_unloaded(&system->sessions, address);
     ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, params->trace);
     *params->out = id;
     return TA_OK;
@@ -19057,10 +19172,8 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     ta_address_table_init(&system->addresses, config->allocator);
     ta_io_origin_table_init(&system->io_scopes, config->allocator, true);
     ta_io_origin_table_init(&system->io_messages, config->allocator, false);
-    ta_result result = ta_session_table_init(&system->sessions, config->allocator);
-    if (result == TA_OK) {
-        result = ta_atom_table_init(&system->atoms, config->allocator);
-    }
+    ta_session_table_init(&system->sessions, config->allocator);
+    ta_result result = ta_atom_table_init(&system->atoms, config->allocator);
     if (result != TA_OK) {
         ta_session_table_destroy(&system->sessions);
         ta_mem_free(config->allocator, system,

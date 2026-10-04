@@ -179,7 +179,7 @@ static void test_load_keeps_the_session(void) {
         current = loaded;
     }
     /* One entry: the resident reloaded session; the parked entries are gone. */
-    CHECK(f.system->sessions.count == 1);
+    CHECK(ta_table_count(&f.system->sessions.index) == 1);
     finish(&f);
 }
 
@@ -272,10 +272,10 @@ static void test_remove_unloaded_ends_the_session(void) {
     start(&f);
     ta_actor_id actor = spawn(&f, &the_address);
     ta_session_image *image = unload(&f, actor);
-    CHECK(f.system->sessions.count == 1);
+    CHECK(ta_table_count(&f.system->sessions.index) == 1);
     CHECK(ta_actor_remove_unloaded(f.system, &(ta_actor_remove_unloaded_params){ .address = &the_address }) ==
           TA_OK);
-    CHECK(f.system->sessions.count == 0);
+    CHECK(ta_table_count(&f.system->sessions.index) == 0);
     bool named = false;
     ta_actor_ref out = route(&f, actor, &named);
     CHECK(!named && out.kind == TA_ACTOR_REF_RUNTIME && out.as.runtime == actor); /* stale, as before */
@@ -292,50 +292,169 @@ static void test_destroy_frees_a_parked_session(void) {
     finish(&f);
 }
 
+/* Inverse of an odd 64-bit constant modulo 2^64, by Newton's iteration. */
+static uint64_t inverse64(uint64_t odd) {
+    uint64_t inverse = odd;
+    for (int step = 0; step < 6; step += 1) {
+        inverse *= 2u - odd * inverse;
+    }
+    return inverse;
+}
+
+/* The inverse of ta_mix64 (a bijection): lets a test choose the hash a session ID has. */
+static uint64_t unmix64(uint64_t value) {
+    value ^= value >> 33;
+    value *= inverse64(0xc4ceb9fe1a85ec53ull);
+    value ^= value >> 33;
+    value *= inverse64(0xff51afd7ed558ccdull);
+    value ^= value >> 33;
+    return value;
+}
+
+/* Bytes of one page of the table's index, and of its node pool: the bound of every block it asks for. */
+#define SESSION_INDEX_PAGE_BYTES (4096u * sizeof(ta_table_slot))
+
 /*
  * The table at scale: 200,000 sessions. Growth never copies it (no block
- * larger than one page of buckets), every entry is found, a resident entry
- * shadows an unloaded one with the same ID, and removal empties it.
+ * larger than one page of the index or the pool), every entry is found, a
+ * resident entry shadows an unloaded one with the same ID, and removal
+ * empties it.
  */
 static void test_the_table_grows_without_copying(void) {
     enum { COUNT = 200000 };
     ta_session_table table;
-    CHECK(ta_session_table_init(&table, test_allocator) == TA_OK);
-    ta_session_node **nodes = calloc(COUNT, sizeof(*nodes));
+    ta_session_table_init(&table, test_allocator);
+    uint32_t *nodes = calloc(COUNT, sizeof(*nodes));
     ta_actor stand_in;
     ta_test_allocator_reset_counts(&heap);
     for (uint32_t index = 0; index < COUNT; index += 1u) {
-        CHECK(ta_session_node_new(&table, &nodes[index]) == TA_OK);
-        nodes[index]->id = ta_actor_id_make(index, 1u + index % 7u);
-        nodes[index]->actor = index % 2u == 0 ? &stand_in : NULL;
+        CHECK(ta_session_node_new(&table,
+                                  &(ta_session_node_params){ .id = ta_actor_id_make(index, 1u + index % 7u),
+                                                             .actor = index % 2u == 0 ? &stand_in : NULL },
+                                  &nodes[index]) == TA_OK);
         ta_session_insert(&table, nodes[index]);
     }
-    CHECK(heap.stats.largest_block <= TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *));
-    CHECK(table.count == COUNT);
+    CHECK(heap.stats.largest_block <= SESSION_INDEX_PAGE_BYTES);
+    CHECK(ta_table_count(&table.index) == COUNT);
     uint32_t found = 0;
     for (uint32_t index = 0; index < COUNT; index += 1u) {
-        found += ta_session_find(&table, nodes[index]->id) == nodes[index] ? 1u : 0u;
+        found += ta_session_find(&table, ta_session_node_at(&table, nodes[index])->id) ==
+                         ta_session_node_at(&table, nodes[index])
+                     ? 1u
+                     : 0u;
     }
     CHECK(found == COUNT);
     CHECK(ta_session_find(&table, ta_actor_id_make(COUNT + 1u, 1u)) == NULL);
     /* A resident entry wins over an unloaded one with the same ID. */
-    ta_session_node *resident = NULL;
-    CHECK(ta_session_node_new(&table, &resident) == TA_OK);
-    resident->id = nodes[1]->id; /* nodes[1] is unloaded */
-    resident->actor = &stand_in;
+    uint32_t resident = 0;
+    uint64_t shared = ta_session_node_at(&table, nodes[1])->id; /* nodes[1] is unloaded */
+    CHECK(ta_session_node_new(&table, &(ta_session_node_params){ .id = shared, .actor = &stand_in }, &resident) == TA_OK);
     ta_session_insert(&table, resident);
-    CHECK(ta_session_find(&table, resident->id) == resident);
-    ta_session_remove(&table, resident);
-    ta_session_node_free(&table, resident);
-    CHECK(ta_session_find(&table, nodes[1]->id) == nodes[1]);
+    CHECK(ta_session_find(&table, shared) == ta_session_node_at(&table, resident));
+    ta_session_drop(&table, resident);
+    CHECK(ta_session_find(&table, shared) == ta_session_node_at(&table, nodes[1]));
     for (uint32_t index = 0; index < COUNT; index += 1u) {
-        ta_session_remove(&table, nodes[index]);
-        ta_session_node_free(&table, nodes[index]);
+        ta_session_drop(&table, nodes[index]);
     }
-    CHECK(table.count == 0);
+    CHECK(ta_table_count(&table.index) == 0);
     ta_session_table_destroy(&table);
     free(nodes);
     CHECK(heap.stats.live_blocks == 0);
+}
+
+/*
+ * Session IDs come from the host (the image a load is given), and the hash
+ * is 32 bits of an invertible mix, so a host can choose IDs that all share
+ * one hash. Three pages' worth of them must all be insertable (the index
+ * doubles the page they fill) and findable, and removal in any order
+ * empties the table and frees every block with its size.
+ */
+static void test_equal_hash_session_ids_still_insert(void) {
+    enum { COUNT = 3 * 4096 };
+    ta_session_table table;
+    ta_session_table_init(&table, test_allocator);
+    uint32_t *nodes = calloc(COUNT, sizeof(*nodes));
+    uint64_t *ids = calloc(COUNT, sizeof(*ids));
+    ta_actor stand_in;
+    ta_test_allocator_reset_counts(&heap);
+    for (uint32_t index = 0; index < COUNT; index += 1u) {
+        ids[index] = unmix64(((uint64_t)(index + 1u) << 32) | 0x12345678ull);
+        CHECK((uint32_t)ta_mix64(ids[index]) == 0x12345678u);
+        CHECK(ta_session_node_new(&table, &(ta_session_node_params){ .id = ids[index], .actor = &stand_in },
+                                  &nodes[index]) == TA_OK);
+        ta_session_insert(&table, nodes[index]);
+    }
+    CHECK(ta_table_count(&table.index) == COUNT);
+    for (uint32_t index = 0; index < COUNT; index += 1u) {
+        CHECK(ta_session_find(&table, ids[index]) == ta_session_node_at(&table, nodes[index]));
+    }
+    /* Other IDs are unaffected: the page those hashes fill is the only slow one. */
+    CHECK(ta_session_find(&table, ta_actor_id_make(7u, 1u)) == NULL);
+    for (uint32_t step = 0; step < COUNT; step += 1u) {
+        uint32_t index = (step * 7919u) % COUNT; /* 7919 is prime: every index once, in a scrambled order */
+        ta_session_drop(&table, nodes[index]);
+        CHECK(ta_session_find(&table, ids[index]) == NULL);
+    }
+    CHECK(ta_table_count(&table.index) == 0);
+    ta_session_table_destroy(&table);
+    free(nodes);
+    free(ids);
+    CHECK(heap.stats.live_blocks == 0);
+}
+
+/* Between ta_session_node_new and ta_session_insert only removals may happen: the room stays. */
+static void test_node_new_then_insert_with_removals_between(void) {
+    ta_session_table table;
+    ta_session_table_init(&table, test_allocator);
+    ta_actor stand_in;
+    uint32_t others[64];
+    for (uint32_t index = 0; index < 64u; index += 1u) {
+        CHECK(ta_session_node_new(&table, &(ta_session_node_params){ .id = 1000u + index, .actor = &stand_in },
+                                  &others[index]) == TA_OK);
+        ta_session_insert(&table, others[index]);
+    }
+    uint32_t held = 0;
+    CHECK(ta_session_node_new(&table, &(ta_session_node_params){ .id = 5u, .actor = &stand_in }, &held) == TA_OK);
+    for (uint32_t index = 0; index < 64u; index += 2u) {
+        ta_session_drop(&table, others[index]);
+    }
+    ta_session_insert(&table, held);
+    CHECK(ta_session_find(&table, 5u) == ta_session_node_at(&table, held));
+    CHECK(ta_table_count(&table.index) == 33u);
+    /* A node taken and given up leaves nothing behind. */
+    uint32_t unused = 0;
+    CHECK(ta_session_node_new(&table, &(ta_session_node_params){ .id = 6u }, &unused) == TA_OK);
+    ta_session_node_free(&table, unused);
+    CHECK(ta_session_find(&table, 6u) == NULL && ta_table_count(&table.index) == 33u);
+    ta_session_table_destroy(&table);
+    ta_session_table_destroy(&table); /* idempotent */
+}
+
+/* Every allocation a node costs refused in turn: NOMEM, no node taken, a retry works, nothing leaks. */
+static void test_node_new_allocation_failures(void) {
+    ta_session_table table;
+    ta_session_table_init(&table, test_allocator);
+    ta_test_allocator_reset_counts(&heap);
+    uint32_t node = 0;
+    CHECK(ta_session_node_new(&table, &(ta_session_node_params){ .id = 1u }, &node) == TA_OK);
+    uint64_t first_costs = heap.stats.allocations; /* directory, page, index directory, index page */
+    ta_session_node_free(&table, node);
+    ta_session_table_destroy(&table);
+    CHECK(first_costs >= 2u && heap.stats.live_blocks == 0);
+    for (uint64_t nth = 1; nth <= first_costs; nth += 1u) {
+        ta_session_table_init(&table, test_allocator);
+        ta_test_allocator_reset_counts(&heap);
+        ta_test_allocator_fail_nth(&heap, nth);
+        CHECK(ta_session_node_new(&table, &(ta_session_node_params){ .id = 1u }, &node) == TA_ERR_NOMEM);
+        ta_test_allocator_disarm(&heap);
+        CHECK(ta_table_count(&table.index) == 0 && table.nodes.used == 0);
+        CHECK(ta_session_find(&table, 1u) == NULL);
+        CHECK(ta_session_node_new(&table, &(ta_session_node_params){ .id = 1u }, &node) == TA_OK);
+        ta_session_insert(&table, node);
+        CHECK(ta_session_find(&table, 1u) == ta_session_node_at(&table, node));
+        ta_session_table_destroy(&table);
+        CHECK(heap.stats.live_blocks == 0);
+    }
 }
 
 static const char *uri_of(fixture *f, ta_actor_ref ref, char *buffer, uint32_t capacity) {
@@ -449,6 +568,9 @@ int main(void) {
     test_remove_unloaded_ends_the_session();
     test_destroy_frees_a_parked_session();
     test_the_table_grows_without_copying();
+    test_equal_hash_session_ids_still_insert();
+    test_node_new_then_insert_with_removals_between();
+    test_node_new_allocation_failures();
     if (failures != 0) {
         fprintf(stderr, "session id test: %d check(s) failed\n", failures);
         return 1;

@@ -250,9 +250,8 @@ void ta_actor_free(ta_system *system, ta_actor *actor) {
     /* A named actor holds a reference to its address; a runtime ref holds nothing. */
     ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
-    if (actor->session_node != NULL) {
-        ta_session_remove(&system->sessions, actor->session_node);
-        ta_session_node_free(&system->sessions, actor->session_node);
+    if (actor->session_node != 0) {
+        ta_session_drop(&system->sessions, actor->session_node);
     }
     /* The record, the session storage and the instance are one block (ADR 0063). */
     ta_mem_free(system->allocator, actor,
@@ -390,10 +389,8 @@ ta_result ta_actor_remove_unloaded(ta_system *system, const ta_actor_remove_unlo
             .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
         });
     /* The unloaded session ends with its name (ADR 0066). */
-    if (result == TA_OK && address->unloaded != NULL) {
-        ta_session_node *parked = address->unloaded;
-        ta_session_remove(&system->sessions, parked);
-        ta_session_node_free(&system->sessions, parked);
+    if (result == TA_OK) {
+        ta_session_drop_unloaded(&system->sessions, address);
     }
     ta_address_release(address);
     return result;
@@ -1121,10 +1118,8 @@ static ta_result ta_actor_publish_route(ta_system *system, ta_actor *actor, ta_a
     if (result == TA_ERR_STALE) {
         return TA_ERR_BUSY;
     }
-    if (result == TA_OK && address->unloaded != NULL) {
-        ta_session_node *parked = address->unloaded;
-        ta_session_remove(&system->sessions, parked);
-        ta_session_node_free(&system->sessions, parked);
+    if (result == TA_OK) {
+        ta_session_drop_unloaded(&system->sessions, address);
     }
     return result;
 }

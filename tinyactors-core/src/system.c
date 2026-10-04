@@ -277,10 +277,8 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     ta_address_table_init(&system->addresses, config->allocator);
     ta_io_origin_table_init(&system->io_scopes, config->allocator, true);
     ta_io_origin_table_init(&system->io_messages, config->allocator, false);
-    ta_result result = ta_session_table_init(&system->sessions, config->allocator);
-    if (result == TA_OK) {
-        result = ta_atom_table_init(&system->atoms, config->allocator);
-    }
+    ta_session_table_init(&system->sessions, config->allocator);
+    ta_result result = ta_atom_table_init(&system->atoms, config->allocator);
     if (result != TA_OK) {
         ta_session_table_destroy(&system->sessions);
         ta_mem_free(config->allocator, system,

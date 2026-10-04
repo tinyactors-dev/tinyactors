@@ -2,151 +2,132 @@
 #include "hash.h"
 #include "system.h"
 
-/* Runtime IDs differ mostly in their low slot bits, so the bucket hash is the
+/* The package comment is in session.h. */
+
+/*
+ * A page of the node pool holds 1024 nodes of 24 bytes (24 KiB), and a page
+ * of the index 4096 slots of 8 bytes (32 KiB), so the largest block the
+ * table asks for stays flat as sessions come and go. The index grows at 7/16
+ * of its slots: sessions are few, and a denser index costs less than the
+ * longer probes just before a round of splits ends.
+ */
+#define TA_SESSION_PAGE_NODES 1024u
+#define TA_SESSION_PAGE_SLOTS 4096u
+#define TA_SESSION_GROW_SIXTEENTHS 7u
+
+/* The free-list link lives in the low half of `actor`, which means nothing while the node is free. */
+static const ta_pool_params TA_SESSION_POOL = {
+    .item_size = sizeof(ta_session_node),
+    .item_alignment = _Alignof(ta_session_node),
+    .link_offset = offsetof(ta_session_node, actor),
+    .page_items = TA_SESSION_PAGE_NODES,
+};
+
+static const ta_table_params TA_SESSION_INDEX = {
+    .mode = TA_TABLE_GROWING,
+    .page_slots = TA_SESSION_PAGE_SLOTS,
+    .grow_sixteenths = TA_SESSION_GROW_SIXTEENTHS,
+};
+
+/* Runtime IDs differ mostly in their low slot bits, so the hash is the
  * 64-bit finalizer (D5) cut to 32 bits. */
 static uint32_t ta_session_hash(uint64_t id) {
     return (uint32_t)ta_mix64(id);
 }
 
-static uint32_t ta_session_bucket_count(const ta_session_table *table) {
-    return table->base + table->split;
+void ta_session_table_init(ta_session_table *table, ta_allocator allocator) {
+    *table = (ta_session_table){ .allocator = allocator };
+    /* The parameters are constants that make a pool; init only validates them. */
+    (void)ta_pool_init(&table->nodes, allocator, &TA_SESSION_POOL);
 }
 
-static ta_session_node **ta_session_bucket(const ta_session_table *table, uint32_t index) {
-    ta_session_node **page = *(ta_session_node ***)ta_vec_at(&table->pages, index / TA_SESSION_PAGE_BUCKETS);
-    return &page[index % TA_SESSION_PAGE_BUCKETS];
+ta_session_node *ta_session_node_at(const ta_session_table *table, uint32_t index) {
+    return ta_pool_at(&table->nodes, index);
 }
 
-static uint32_t ta_session_index(const ta_session_table *table, uint32_t hash) {
-    uint32_t index = hash & (table->base - 1u);
-    return index < table->split ? hash & (2u * table->base - 1u) : index;
-}
-
-static void ta_session_page_free(ta_allocator allocator, ta_session_node **page) {
-    ta_mem_free(allocator, page,
-                &(ta_allocator_free_params){ .size = TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *),
-                                             .alignment = _Alignof(ta_session_node *) });
-}
-
-/* Makes sure the page holding bucket `index` exists; false when it cannot. */
-static bool ta_session_page_for(ta_session_table *table, uint32_t index) {
-    if (index / TA_SESSION_PAGE_BUCKETS < table->pages.count) {
-        return true;
+/* The address of an unloaded node lets go of this node, then the reference is returned. */
+static void ta_session_release_address(ta_session_node *node, uint32_t index) {
+    ta_address *address = node->address;
+    if (address != NULL) {
+        if (address->unloaded == index) {
+            address->unloaded = 0;
+        }
+        node->address = NULL;
+        ta_address_release(address);
     }
-    ta_session_node **page = ta_mem_alloc(table->allocator, TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *),
-                                          _Alignof(ta_session_node *));
-    if (page == NULL) {
-        return false;
-    }
-    for (uint32_t bucket = 0; bucket < TA_SESSION_PAGE_BUCKETS; bucket += 1u) {
-        page[bucket] = NULL;
-    }
-    if (ta_vec_push(&table->pages, &page) != TA_OK) {
-        ta_session_page_free(table->allocator, page);
-        return false;
-    }
-    return true;
-}
-
-/* Splits one bucket when the table holds more than one entry per bucket. */
-static void ta_session_grow(ta_session_table *table) {
-    uint32_t added = ta_session_bucket_count(table);
-    if (table->count <= added || added == UINT32_MAX || !ta_session_page_for(table, added)) {
-        return; /* a failed page only postpones the split */
-    }
-    uint32_t wide = 2u * table->base - 1u;
-    ta_session_node **from = ta_session_bucket(table, table->split);
-    ta_session_node **to = ta_session_bucket(table, added);
-    ta_session_node *chain = *from;
-    *from = NULL;
-    while (chain != NULL) {
-        ta_session_node *next = chain->next;
-        ta_session_node **home = (ta_session_hash(chain->id) & wide) == table->split ? from : to;
-        chain->next = *home;
-        *home = chain;
-        chain = next;
-    }
-    table->split += 1u;
-    if (table->split == table->base) {
-        table->base *= 2u;
-        table->split = 0;
-    }
-}
-
-ta_result ta_session_table_init(ta_session_table *table, ta_allocator allocator) {
-    *table = (ta_session_table){ .allocator = allocator, .base = TA_SESSION_INITIAL_BUCKETS };
-    ta_vec_init(&table->pages, allocator, TA_VEC_LAYOUT(ta_session_node **));
-    return ta_session_page_for(table, 0) ? TA_OK : TA_ERR_NOMEM;
 }
 
 void ta_session_table_destroy(ta_session_table *table) {
-    uint32_t buckets = table->pages.count == 0 ? 0u : ta_session_bucket_count(table);
-    for (uint32_t index = 0; index < buckets; index += 1u) {
-        ta_session_node *chain = *ta_session_bucket(table, index);
-        while (chain != NULL) {
-            ta_session_node *next = chain->next;
-            ta_session_node_free(table, chain);
-            chain = next;
-        }
+    ta_table_cursor cursor = {0};
+    uint32_t hash = 0;
+    uint32_t index = 0;
+    while (ta_table_next(&table->index, &cursor, &hash, &index)) {
+        ta_session_release_address(ta_session_node_at(table, index), index);
     }
-    for (uint32_t page = 0; page < table->pages.count; page += 1u) {
-        ta_session_page_free(table->allocator, *(ta_session_node ***)ta_vec_at(&table->pages, page));
-    }
-    ta_vec_destroy(&table->pages);
+    ta_table_destroy(&table->index);
+    ta_pool_destroy(&table->nodes);
     *table = (ta_session_table){0};
 }
 
-ta_result ta_session_node_new(ta_session_table *table, ta_session_node **out) {
-    ta_session_node *node = ta_mem_alloc(table->allocator, sizeof(ta_session_node), _Alignof(ta_session_node));
-    if (node == NULL) {
+ta_result ta_session_node_new(ta_session_table *table, const ta_session_node_params *params, uint32_t *out) {
+    if (ta_pool_refill(&table->nodes, 1u) != TA_OK) {
         return TA_ERR_NOMEM;
     }
-    *node = (ta_session_node){0};
-    *out = node;
+    if (table->index.page_slots == 0) {
+        ta_result result = ta_table_init(&table->index, table->allocator, &TA_SESSION_INDEX);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    uint32_t hash = ta_session_hash(params->id);
+    if (ta_table_wants_grow(&table->index)) {
+        (void)ta_table_grow(&table->index); /* a failure only postpones the split */
+    }
+    if (ta_table_prepare(&table->index, hash) != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
+    uint32_t index = ta_pool_take(&table->nodes); /* refilled above, and nothing took it since */
+    *ta_session_node_at(table, index) = (ta_session_node){ .id = params->id, .actor = params->actor };
+    *out = index;
     return TA_OK;
 }
 
-void ta_session_node_free(ta_session_table *table, ta_session_node *node) {
-    if (node == NULL) {
-        return;
-    }
-    if (node->address != NULL) {
-        if (node->address->unloaded == node) {
-            node->address->unloaded = NULL;
-        }
-        ta_address_release(node->address);
-    }
-    ta_mem_free(table->allocator, node,
-                &(ta_allocator_free_params){ .size = sizeof(ta_session_node), .alignment = _Alignof(ta_session_node) });
+void ta_session_insert(ta_session_table *table, uint32_t index) {
+    /* Room was made by ta_session_node_new, and no insert came between. */
+    (void)ta_table_insert(&table->index, ta_session_hash(ta_session_node_at(table, index)->id), index);
 }
 
-void ta_session_insert(ta_session_table *table, ta_session_node *node) {
-    ta_session_node **bucket = ta_session_bucket(table, ta_session_index(table, ta_session_hash(node->id)));
-    node->next = *bucket;
-    *bucket = node;
-    table->count += 1u;
-    ta_session_grow(table);
+void ta_session_node_free(ta_session_table *table, uint32_t index) {
+    ta_session_release_address(ta_session_node_at(table, index), index);
+    ta_pool_give(&table->nodes, index);
 }
 
-void ta_session_remove(ta_session_table *table, ta_session_node *node) {
-    for (ta_session_node **link = ta_session_bucket(table, ta_session_index(table, ta_session_hash(node->id)));
-         *link != NULL; link = &(*link)->next) {
-        if (*link == node) {
-            *link = node->next;
-            node->next = NULL;
-            table->count -= 1u;
-            return;
-        }
+void ta_session_drop(ta_session_table *table, uint32_t index) {
+    (void)ta_table_remove(&table->index, ta_session_hash(ta_session_node_at(table, index)->id), index);
+    ta_session_node_free(table, index);
+}
+
+void ta_session_drop_unloaded(ta_session_table *table, ta_address *address) {
+    if (address->unloaded != 0) {
+        ta_session_drop(table, address->unloaded);
     }
+}
+
+void ta_session_park(ta_session_table *table, uint32_t index, ta_address *address) {
+    ta_address_retain(address); /* before the old node lets go of its own reference */
+    ta_session_drop_unloaded(table, address);
+    ta_session_node_at(table, index)->address = address;
+    address->unloaded = index;
+    ta_session_insert(table, index);
 }
 
 const ta_session_node *ta_session_find(const ta_session_table *table, uint64_t id) {
-    if (table->pages.count == 0) {
-        return NULL;
-    }
     const ta_session_node *unloaded = NULL;
-    for (const ta_session_node *node = *ta_session_bucket(table, ta_session_index(table, ta_session_hash(id)));
-         node != NULL; node = node->next) {
+    ta_table_probe probe;
+    uint32_t index = 0;
+    ta_table_probe_start(&table->index, ta_session_hash(id), &probe);
+    while (ta_table_probe_next(&probe, &index)) {
+        const ta_session_node *node = ta_session_node_at(table, index);
         if (node->id != id) {
             continue;
         }

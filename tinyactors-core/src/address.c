@@ -45,7 +45,7 @@ size_t ta_address_bytes(const ta_address *address) {
 void ta_address_detached_init(ta_address *copy) {
     copy->table = NULL;
     copy->next = NULL;
-    copy->unloaded = NULL;
+    copy->unloaded = 0;
     copy->references = 0;
 }
 
@@ -146,7 +146,7 @@ static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_addr
     }
     record->table = NULL;
     record->next = NULL;
-    record->unloaded = NULL;
+    record->unloaded = 0;
     record->references = 0;
     record->hash = hash;
     record->family_len = family_len;

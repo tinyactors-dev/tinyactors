@@ -642,15 +642,14 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
      * this actor's runtime ID, so the session table finds it.
      */
     if (image->session_id != 0 && !ta_session_resident(system, image->session_id)) {
-        ta_session_node *node = NULL;
-        result = ta_session_node_new(&system->sessions, &node);
+        uint32_t node = 0;
+        result = ta_session_node_new(&system->sessions,
+                                     &(ta_session_node_params){ .id = image->session_id, .actor = actor }, &node);
         if (result != TA_OK) {
             ta_actor_release_slot(system, id);
             ta_actor_free(system, actor);
             return result;
         }
-        node->id = image->session_id;
-        node->actor = actor;
         ta_session_insert(&system->sessions, node);
         actor->session_id = image->session_id;
         actor->session_node = node;
@@ -840,8 +839,8 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
         return result;
     }
     /* And the entry that keeps the session findable while it is out (ADR 0066). */
-    ta_session_node *parked = NULL;
-    result = ta_session_node_new(&system->sessions, &parked);
+    uint32_t parked = 0;
+    result = ta_session_node_new(&system->sessions, &(ta_session_node_params){ .id = actor->session_id }, &parked);
     if (result != TA_OK) {
         return result;
     }
@@ -869,19 +868,11 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
      * whatever session loads here next (ADR 0066).
      */
     ta_address *address = actor->record.self.as.named;
-    parked->id = actor->session_id;
-    parked->address = address;
-    ta_address_retain(address);
+    ta_session_park(&system->sessions, parked, address); /* retains the address past the actor's own reference */
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_UNLOADED, NULL);
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
-    if (address->unloaded != NULL) {
-        ta_session_remove(&system->sessions, address->unloaded);
-        ta_session_node_free(&system->sessions, address->unloaded);
-    }
-    address->unloaded = parked;
-    ta_session_insert(&system->sessions, parked);
     return TA_OK;
 }
 
@@ -936,11 +927,7 @@ static ta_result ta_image_load(ta_system *system, const ta_image_load_params *pa
     /* The session is resident again: its parked entry goes (ADR 0066). */
     ta_actor *loaded = ta_actor_lookup(system, id);
     ta_address *address = loaded->record.self.as.named;
-    if (address->unloaded != NULL) {
-        ta_session_node *parked = address->unloaded;
-        ta_session_remove(&system->sessions, parked);
-        ta_session_node_free(&system->sessions, parked);
-    }
+    ta_session_drop_unloaded(&system->sessions, address);
     ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, params->trace);
     *params->out = id;
     return TA_OK;
