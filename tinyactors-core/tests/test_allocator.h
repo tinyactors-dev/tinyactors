@@ -192,7 +192,9 @@ struct ta_test_allocator {
     /* strict checks each free against its allocation: the size and alignment
      * must be the ones asked for, and the pointer must be live. A violation
      * writes a line to stderr and counts in bad_frees. It costs O(live_blocks)
-     * a free, so it suits tests of tens or hundreds of blocks. Set it in the
+     * a free, so it suits tests of tens or hundreds of blocks: with it on, the
+     * session ID test takes 244 s instead of 0.1 s, and the delayed send test
+     * (thousands of live blocks) does not finish in two minutes. Set it in the
      * initializer; it must not change while blocks are live. */
     bool strict;
 
