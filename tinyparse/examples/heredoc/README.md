@@ -1,295 +1,144 @@
-# examples/heredoc — deferred-slot and parametrized lexical goal
+# heredoc: nested here-documents with deferred slots
 
-This example is the primary iteration vehicle for the **deferred-slot /
-parametrized-goal** feature (see `docs/lex-goal-implementation.md`). It
-implements a minimal shell grammar that parses POSIX-style heredocs
-correctly, including nested heredocs inside command substitutions.
+`heredoc.scm` parses shell command lines with `<<WORD` here-documents,
+including a here-document inside a `$( … )` command substitution that is
+itself inside another here-document's body. The input chooses each closing
+line, and a body starts on the line after the command that opened it, so the
+grammar queues each delimiter with
+[deferred slots](../../docs/reference/grammar.md#deferred-slots) and matches the
+closing line with a
+[parametrized goal](../../docs/reference/grammar.md#parametrized-goals). It also
+uses [`not`](../../docs/reference/grammar.md#not) with a rule and the
+`extras:` rule modifier ([Rules](../../docs/reference/grammar.md#rules)).
+[Lex tokens that depend on context](../../docs/how-to/context-sensitive-lexing.md)
+walks through the same forms step by step.
 
-## What the grammar covers
+## Prerequisites
 
+Run the commands from the `tinyparse/` directory with `tinyparse` on your
+`PATH`, as [Examples](../README.md) describes.
+
+## Run it
+
+Parse a here-document whose body runs a command substitution that opens a
+second here-document:
+
+```sh
+printf 'cat <<EOF\necho Hello\necho $(\n  cat <<NESTED\nworld\nNESTED\n)\nEOF\n' | tinyparse run examples/heredoc/heredoc.scm --input - --dump-tree
 ```
-cat <<EOF
-echo Hello
-echo $(
-  cat <<NESTED
-world
-NESTED
-)
-EOF
+
+The outer `HeredocBody` covers bytes 10 to 63 and ends with the `EOF` line at
+bytes 59 to 63. The inner one, under the `CommandSubstitution`, covers bytes 44
+to 57 and ends with the `NESTED` line at bytes 50 to 57:
+
+```text
+Program [0-63] [0,0]-[8,0]
+  CompleteCommand [0-63] [0,0]-[8,0]
+    command: Pipeline [0-9] [0,0]-[0,9]
+      SimpleCommand [0-9] [0,0]-[0,9]
+        name: Word [0-3] [0,0]-[0,3]
+        Space [3-4] [0,3]-[0,4]
+        redirect: Redirect [4-9] [0,4]-[0,9]
+          HeredocOp [4-6] [0,4]-[0,6]
+          word: Word [6-9] [0,6]-[0,9]
+    Newline [9-10] [0,9]-[1,0]
+    HeredocBody [10-63] [1,0]-[8,0]
+      BodyCommand [10-21] [1,0]-[2,0]
+        command: Pipeline [10-20] [1,0]-[1,10]
+          SimpleCommand [10-20] [1,0]-[1,10]
+            name: Word [10-14] [1,0]-[1,4]
+            Space [14-15] [1,4]-[1,5]
+            arg: Argument [15-20] [1,5]-[1,10]
+              Word [15-20] [1,5]-[1,10]
+        Newline [20-21] [1,10]-[2,0]
+      BodyCommand [21-59] [2,0]-[7,0]
+        command: Pipeline [21-58] [2,0]-[6,1]
+          SimpleCommand [21-58] [2,0]-[6,1]
+            name: Word [21-25] [2,0]-[2,4]
+            Space [25-26] [2,4]-[2,5]
+            arg: Argument [26-58] [2,5]-[6,1]
+              CommandSubstitution [26-58] [2,5]-[6,1]
+                DollarParen [26-28] [2,5]-[2,7]
+                Newline [28-29] [2,7]-[3,0]
+                BodyCommand [29-57] [3,0]-[6,0]
+                  Space [29-31] [3,0]-[3,2]
+                  command: Pipeline [31-43] [3,2]-[3,14]
+                    SimpleCommand [31-43] [3,2]-[3,14]
+                      name: Word [31-34] [3,2]-[3,5]
+                      Space [34-35] [3,5]-[3,6]
+                      redirect: Redirect [35-43] [3,6]-[3,14]
+                        HeredocOp [35-37] [3,6]-[3,8]
+                        word: Word [37-43] [3,8]-[3,14]
+                  Newline [43-44] [3,14]-[4,0]
+                  HeredocBody [44-57] [4,0]-[6,0]
+                    BodyCommand [44-50] [4,0]-[5,0]
+                      command: Pipeline [44-49] [4,0]-[4,5]
+                        SimpleCommand [44-49] [4,0]-[4,5]
+                          name: Word [44-49] [4,0]-[4,5]
+                      Newline [49-50] [4,5]-[5,0]
+                    end: HeredocDelimLine [50-57] [5,0]-[6,0]
+                CloseParen [57-58] [6,0]-[6,1]
+        Newline [58-59] [6,1]-[7,0]
+      end: HeredocDelimLine [59-63] [7,0]-[8,0]
 ```
 
-Heredocs are context-sensitive in two ways that make them hard to parse
-with context-free rules:
+## How it works
 
-1. **The closing delimiter is determined at match time**, not at compile
-   time. After `<<EOF` the grammar must remember "EOF" and match a line
-   that begins with exactly that text.
-
-2. **Heredoc bodies appear after the command line**, not inline. The `<<`
-   operator appears on the command line; the body is the text that follows
-   the terminating newline of that line.
-
-Both problems are solved without special-casing in the engine, using three
-grammar primitives and one parametrized lexical goal.
-
-## The three deferred-slot primitives
-
-### `(deferred-slot NAME)` — per-invocation FIFO slot
-
-Declares a named slot scoped to the current rule invocation. Every time a
-rule containing `(deferred-slot NAME)` is entered, a fresh slot instance
-is created. Nested invocations of the same rule each get their own
-instance, so inner and outer heredoc queues never share state.
+The grammar follows the steps in
+[Match a closing delimiter the input chose](../../docs/how-to/context-sensitive-lexing.md#match-a-closing-delimiter-the-input-chose):
+`Redirect` queues each delimiter with `defer`, and `CompleteCommand` drains the
+queue with `parse-deferred` after its newline. The body rule reads command
+lines until the closing line:
 
 ```scheme
-(rule CompleteCommand
-  (seq
-    (deferred-slot heredoc-bodies)   ; fresh slot for this invocation
-    ...))
+(rule HeredocBody extras: none
+  (goal heredoc-body-mode
+    (seq
+      (repeat (not HeredocDelimLine BodyCommand))
+      (field end: HeredocDelimLine))))
 ```
 
-### `(defer SLOT PATTERN)` — match and enqueue
+`parse-deferred` calls `HeredocBody` once per queued word, in order, so
+`cat <<A <<B` reads the body that ends at `A` and then the body that ends at
+`B`. For each call it pushes the pattern `(seq delimiter "\n")`, with
+`delimiter` replaced by the queued bytes, as the pattern of `HeredocDelimLine`
+in the goal `heredoc-body-mode`, and pops it when the call returns.
 
-Matches PATTERN, captures the matched byte span in the current
-invocation's SLOT, and returns the CST node produced by the match. It is
-composable with `(field ...)`:
+The patterns form a stack. While the inner body runs, the outer call has not
+returned, so `NESTED\n` sits on top of `EOF\n`, and `EOF\n` is active again
+when the inner body returns. Two nested `EOF` bodies therefore end at the first
+and the second `EOF` line. `BodyCommand` has the shape of `CompleteCommand`
+with its own `heredoc-bodies` queue, and each call gets a new, empty queue, so
+`NESTED` is queued for the line `cat <<NESTED` and its body is read before the
+`)` line.
 
-```scheme
-(rule Redirect
-  (seq HeredocOp
-       (field word: (defer heredoc-bodies Word))))
-```
+## Limits
 
-This produces the same CST as `(field word: Word)` and additionally
-enqueues the delimiter text ("EOF", "NESTED", …) onto `heredoc-bodies`.
+- A body line is parsed as a command. An empty line, or a line with a `(` or a
+  `<` that is not `<<`, fails with `error: unexpected input [parse.syntax]` and
+  exit status 1.
+- `|` is read as a word, so `echo a | wc` parses with exit status 0 as one
+  command with the arguments `a`, `|` and `wc`.
+- The closing line is the delimiter followed by a line feed. A line `EOF  `
+  does not close an `EOF` body, and neither does `  EOF` after a body line; the
+  body then has no closing line. A line `  EOF` directly after the command
+  closes the body, because the spaces after the command's newline are trivia of
+  the command.
+- A body with no closing line does not fail. The queued delimiter is dropped
+  without a diagnostic, and the lines after the command parse as top-level
+  commands, with exit status 0.
+- A closing line at the end of the input with no line feed fails with
+  `error: unexpected input [parse.syntax]` and exit status 1.
+- Quoted delimiters and `<<-` are not supported. In `cat <<'EOF'` the delimiter
+  is the word `'EOF'`, quotes included, and in `cat <<-EOF` it is `-EOF`; a
+  closing line `EOF` closes neither, so they parse as a body with no closing
+  line.
 
-### `(parse-deferred SLOT RULE)` — drain and parse
+## Files
 
-Drains the slot FIFO in order, invoking RULE once per item. Before each
-invocation it installs the captured text as the active parametrized
-pattern; after the invocation it uninstalls it. An empty slot is a no-op
-(commands with no redirects drain nothing).
+| File | Contents |
+|------|----------|
+| `heredoc.scm` | the grammar |
 
-```scheme
-(rule CompleteCommand
-  (seq
-    (deferred-slot heredoc-bodies)
-    (field command: Pipeline)
-    Newline
-    (parse-deferred heredoc-bodies HeredocBody)))
-```
-
-POSIX ordering falls out naturally: multiple heredocs on one command line
-(`cat <<A <<B`) enqueue `[A, B]` left-to-right; the drain processes them
-in the same order, matching the bodies `A-body … A … B-body … B` as POSIX
-requires.
-
-## The parametrized lexical goal
-
-```scheme
-(token HeredocDelimLine)
-
-(lex-goal heredoc-body-mode
-  HeredocDelimLine: (param delimiter (seq delimiter "\n")))
-```
-
-`HeredocDelimLine` is a **parametrized token**: it has no static pattern.
-The `(param delimiter ...)` form declares `delimiter` as the name for the
-captured bytes inside the pattern body. The body `(seq delimiter "\n")` is
-written in the grammar's own pattern language — the same forms available
-everywhere else in the grammar.
-
-When `parse-deferred` processes an item with captured text `T`, it
-instantiates the body by substituting `delimiter` with a
-`TP_OP_LITERAL(T, len(T))` node, producing a concrete pattern, and pushes
-it onto `heredoc-body-mode`'s `HeredocDelimLine` stack. The lexer, while
-`heredoc-body-mode` is active, reads the top of that stack to resolve
-`HeredocDelimLine`. When `HeredocBody` returns, `parse-deferred` pops the
-pattern, restoring whatever was beneath (the enclosing delimiter, or nothing
-if this is the outermost heredoc).
-
-A grammar that needed to match the delimiter surrounded by optional
-whitespace, or case-insensitively, would write a different body — no engine
-change required.
-
-### Why a stack, not a single slot
-
-Consider the nested case:
-
-```
-cat <<EOF          ← outer, delimiter EOF
-echo $(
-  cat <<NESTED     ← inner, delimiter NESTED
-world
-NESTED             ← inner delimiter line; outer EOF pattern must survive this
-)
-EOF                ← outer delimiter line
-```
-
-When parsing the inner `HeredocBody` (delimiter `NESTED`), the outer
-`HeredocBody` (delimiter `EOF`) is still active on the call stack. If the
-goal-table entry were a single slot, installing `NESTED` would overwrite
-`EOF`. The stack ensures:
-
-- outer `parse-deferred` pushes `EOF` pattern
-- inner `parse-deferred` pushes `NESTED` pattern on top
-- inner `HeredocBody` sees `NESTED\n` and stops correctly
-- inner `parse-deferred` pops `NESTED`; outer `EOF` is restored
-- outer `HeredocBody` sees `EOF\n` and stops correctly
-
-### Why separate deferred-slot instances handle nesting
-
-The `BodyCommand` rule (used inside both `HeredocBody` and
-`CommandSubstitution`) declares its own `(deferred-slot heredoc-bodies)`.
-When `cat <<NESTED` is parsed inside a `CommandSubstitution` inside the
-outer `HeredocBody`, the `BodyCommand` invocation gets a fresh
-`heredoc-bodies` slot. The `(defer heredoc-bodies Word)` in its `Redirect`
-writes `NESTED` into that fresh slot, not the outer `CompleteCommand`'s
-slot (which already contains `EOF` and has been drained). The two slot
-instances are completely independent.
-
-## Parse trace
-
-Input:
-```
-cat <<EOF
-echo Hello
-echo $(
-  cat <<NESTED
-world
-NESTED
-)
-EOF
-```
-
-The trace shows rule activations, slot state, and goal-stack transitions.
-`slot[X]` is the current content of the named slot; `goal-stack` is the
-pattern stack for `HeredocDelimLine` in `heredoc-body-mode`.
-
-```
-Program @0
-  CompleteCommand @0
-    slot heredoc-bodies = []
-    Pipeline @0
-      SimpleCommand @0
-        Word("cat") @0..3
-        Redirect @4
-          HeredocOp("<<") @4..5
-          defer(heredoc-bodies) Word("EOF") @6..8
-            slot heredoc-bodies = [{delim:"EOF"}]
-    Newline("\n") @9
-    parse-deferred(heredoc-bodies):
-      pop {delim:"EOF"}
-      goal-stack[HeredocDelimLine]: push pattern(EOF\n)
-      → HeredocBody @10
-
-      HeredocBody @10        [goal:heredoc-body-mode, top=EOF\n]
-        repeat (not HeredocDelimLine BodyCommand):
-
-          iter 1 @10:
-            try HeredocDelimLine: "echo Hello\n" ≠ "EOF\n" → no match → proceed
-            BodyCommand @10
-              slot heredoc-bodies = []
-              Pipeline @10
-                SimpleCommand @10
-                  Word("echo") @10..13
-                  Argument: Word("Hello") @15..19
-              Newline("\n") @20
-              parse-deferred: slot empty → no-op
-
-          iter 2 @21:
-            try HeredocDelimLine: "echo $(\n" ≠ "EOF\n" → no match → proceed
-            BodyCommand @21
-              slot heredoc-bodies = []
-              Pipeline @21
-                SimpleCommand @21
-                  Word("echo") @21..24
-                  Argument: CommandSubstitution @26
-
-                  CommandSubstitution @26   [extras:none]
-                    DollarParen("$(") @26..27
-                    repeat Newline: Newline("\n") @28
-                    repeat BodyCommand:
-
-                      iter 1 @29:
-                        BodyCommand @29
-                          slot heredoc-bodies = []
-                          Pipeline @29         [extras:all within BodyCommand]
-                            SimpleCommand @29
-                              Word("cat") @31..33   [Space @29..30 as trivia]
-                              Redirect @34
-                                HeredocOp("<<") @34..35
-                                defer(heredoc-bodies) Word("NESTED") @36..41
-                                  slot heredoc-bodies = [{delim:"NESTED"}]
-                          Newline("\n") @42
-                          parse-deferred(heredoc-bodies):
-                            pop {delim:"NESTED"}
-                            goal-stack[HeredocDelimLine]: push pattern(NESTED\n)
-                                                          [EOF\n saved beneath]
-                            → HeredocBody @43
-
-                            HeredocBody @43  [goal:heredoc-body-mode, top=NESTED\n]
-                              repeat (not HeredocDelimLine BodyCommand):
-
-                                iter 1 @43:
-                                  try HeredocDelimLine: "world\n" ≠ "NESTED\n" → proceed
-                                  BodyCommand @43
-                                    slot heredoc-bodies = []
-                                    Pipeline @43
-                                      SimpleCommand @43
-                                        Word("world") @43..47
-                                    Newline("\n") @48
-                                    parse-deferred: slot empty → no-op
-
-                                iter 2 @49:
-                                  try HeredocDelimLine: "NESTED\n" = "NESTED\n" → MATCH
-                                  → stop repeat
-
-                              field end: HeredocDelimLine("NESTED\n") @49..55
-
-                            goal-stack[HeredocDelimLine]: pop NESTED\n → restore EOF\n
-
-                      iter 2 @56:
-                        try BodyCommand: Pipeline → Word → ")" not Word → fail
-                        → stop repeat
-
-                    CloseParen(")") @56
-
-              Newline("\n") @57
-              parse-deferred: slot empty → no-op
-
-          iter 3 @58:
-            try HeredocDelimLine: "EOF\n" = "EOF\n" → MATCH → stop repeat
-
-        field end: HeredocDelimLine("EOF\n") @58..61
-
-      goal-stack[HeredocDelimLine]: pop EOF\n → stack empty
-
-  EOF @62
-```
-
-## Why inner delimiter = outer delimiter still works
-
-If the input were:
-
-```
-cat <<EOF
-cat <<EOF
-inner
-EOF
-outer
-EOF
-```
-
-The outer `CompleteCommand` defers `EOF` into its slot. After the outer
-newline, the outer drain pushes `EOF\n` onto the goal-stack and enters the
-outer `HeredocBody`. Inside, `BodyCommand` parses `cat <<EOF\n`: the inner
-`BodyCommand`'s slot gets `{delim:"EOF"}`, its drain pushes another
-`EOF\n` on top of the goal-stack, and the inner `HeredocBody` starts.
-`"inner\n"` does not match `EOF\n`, so it is parsed as a BodyCommand.
-`"EOF\n"` matches: inner HeredocBody stops, inner drain pops the stack.
-Back in the outer HeredocBody, `"outer\n"` does not match `EOF\n` (now
-restored as the top), so it is parsed as another BodyCommand. `"EOF\n"`
-matches: outer HeredocBody stops.
-
-The stacked delimiter correctly scopes each body to its own matching line.
+The tests `test/suite/lexgoal/heredoc-*.test` parse the nested, repeated and
+same-delimiter cases with this grammar.

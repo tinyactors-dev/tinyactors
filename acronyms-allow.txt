@@ -50,6 +50,11 @@ CpuType        mise/lib/c_release/build.rb                               # llvm-
 # profiles tinyparse's research notes quote.
 Ir             tinyparse/docs/peg-vs-glr.md                              # callgrind event name Ir
 
+# The rule name examples/ebnf/ebnf2scm.c generates from the EBNF rule `uri`:
+# the converter capitalizes rule names and keeps all-capital names as tokens,
+# so `URI` would change the grammar. The READMEs quote the generated grammar.
+Uri            tinyparse/examples/{ebnf,uri}/README.md                   # generated rule name
+
 # A JSX test input of tinyparse's JavaScript grammar, copied in from
 # tree-sitter-javascript's corpus: other people's code, kept byte for byte.
 userId         tinyparse/test/suite/jsfamily/inputs/expressions__56.js   # tree-sitter-javascript corpus input

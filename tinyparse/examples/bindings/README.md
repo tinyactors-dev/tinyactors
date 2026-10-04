@@ -1,32 +1,54 @@
-# Host class bindings — `(class NAME)`
+# bindings: match characters with a host class
 
-This example shows the `(class NAME)` token primitive and the host *CLASS
-bindings* it resolves against.
+`ident.scm` reads identifiers built from `(class alpha)` and `(class alnum)`,
+character classes whose bytes come from the program that runs the parser. The
+`tinyparse` command supplies four classes. The example uses the
+`(class NAME)` form described under
+[Classes](../../docs/reference/grammar.md#classes) and the function behind it,
+[`tinyparse_bind`](../../docs/reference/c-api.md#tinyparse_bind).
 
-A `(class NAME)` form matches exactly **one** input byte, and only if the host
-has installed a CLASS binding named `NAME` that accepts that byte. The binding is
-an ordinary host C function — `tinyparse_class_fn`, `int fn(void *user,
-uint32_t byte)`, returning nonzero when the byte is in the class — registered on
-the engine with `tinyparse_bind`. The freestanding core never hard-codes a
-character class beyond the small regex subset; richer or host-specific classes
-(Unicode categories, identifier policy) come in this way.
+## Prerequisites
 
-## The built-in classes
+Run the commands from the `tinyparse/` directory with `tinyparse` on your
+`PATH`, as [Examples](../README.md) describes.
 
-The `tinyparse` CLI installs four ASCII classes before it compiles or parses a
-grammar, for both `check` and `run`:
+## Run it
 
-| name    | accepts                          |
-|---------|----------------------------------|
-| `alpha` | `A`–`Z`, `a`–`z`                 |
-| `digit` | `0`–`9`                          |
-| `alnum` | `alpha` or `digit`               |
-| `space` | space, tab, newline, return      |
+Parse three identifiers:
 
-## The grammar
+```sh
+printf 'foo bar123 x' | tinyparse run examples/bindings/ident.scm --input - --dump-tree
+```
 
-[`ident.scm`](ident.scm) defines an identifier as an alphabetic byte followed by
-zero or more alphanumerics, with whitespace as trivia:
+Each `Ident` covers one identifier, and the spaces between them are trivia:
+
+```text
+Source [0-12] [0,0]-[0,12]
+  Item [0-3] [0,0]-[0,3]
+    Ident [0-3] [0,0]-[0,3]
+  Space [3-4] [0,3]-[0,4]
+  Item [4-10] [0,4]-[0,10]
+    Ident [4-10] [0,4]-[0,10]
+  Space [10-11] [0,10]-[0,11]
+  Item [11-12] [0,11]-[0,12]
+    Ident [11-12] [0,11]-[0,12]
+```
+
+An identifier must start with a letter:
+
+```sh
+printf '9lives' | tinyparse run examples/bindings/ident.scm --input - --dump-tree
+```
+
+The command prints a diagnostic, no tree, and exits with status 1:
+
+```text
+error: unexpected input [parse.syntax]
+```
+
+## How it works
+
+The `Ident` token is the only place the grammar uses a class:
 
 ```scheme
 (token Ident
@@ -35,41 +57,34 @@ zero or more alphanumerics, with whitespace as trivia:
     (repeat (class alnum))))
 ```
 
-## Running it
+- `(class alpha)` matches one input byte when the function bound to the name
+  `alpha` accepts it. `(repeat (class alnum))` matches as many bytes as the
+  `alnum` function accepts in a row.
+- The grammar does not say which bytes those are. The `tinyparse` command binds
+  `alpha`, `digit`, `alnum` and `space` before every command that compiles a
+  grammar; their bytes are listed under
+  [Classes](../../docs/reference/grammar.md#classes).
+- A C program has no classes until it binds them with `tinyparse_bind`.
+  [Supply imports, classes and parameters from a C host](../../docs/how-to/host-services.md)
+  binds the same four and a class of its own.
+- The parser looks a class up by name each time it needs one, so a binding
+  made after the grammar compiled still applies.
 
-```sh
-printf 'foo bar123 x' | tinyparse run examples/bindings/ident.scm \
-    --input - --dump-tree
-```
+## Limits
 
-dumps a `Source` of three `Ident` nodes and reports no error:
+- The four classes are ASCII only. `printf 'café'` fails with
+  `error: unexpected input [parse.syntax]` at the first byte of `é`, and the
+  command exits with status 1.
+- A class that nothing binds matches no byte and raises no compile fault. A
+  grammar that uses `(class xid-start)` passes `tinyparse check` with status 0,
+  and every input that needs the class then fails with `parse.syntax`.
+- The programs that `tinyparse c --parser` and `tinyparse c --bundle` write
+  from `ident.scm` bind no class: run on `foo`, each prints
+  `error: unexpected input` and exits with status 1. A program that runs this
+  grammar outside the `tinyparse` command binds the classes itself.
 
-```
-Source
-  Item
-    Ident
-  Space
-  Item
-    Ident
-  Space
-  Item
-    Ident
-```
+## Files
 
-## Binding your own class
-
-Any host can register its own CLASS binding the same way the CLI does:
-
-```c
-static int is_xid_start(void *user, uint32_t byte) { /* ... */ }
-
-tinyparse_binding binding;
-binding.name     = /* "xid-start" as a tinyparse_string */;
-binding.kind     = TINYPARSE_BIND_CLASS;
-binding.function = (void *)is_xid_start;
-binding.user     = NULL;
-tinyparse_bind(engine, &binding);
-```
-
-A grammar can then write `(class xid-start)` and the matcher will call the host
-function for each candidate byte.
+| File | Contents |
+|------|----------|
+| `ident.scm` | the grammar; `test/suite/bindings/class-builtin.test` runs it |

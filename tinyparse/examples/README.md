@@ -1,83 +1,69 @@
-# tinyparse examples
+# Examples
 
-Each subdirectory is a worked example of one tinyparse capability: a
-grammar, sometimes a host program that consumes the tree it produces, and a
-README that shows the thing running. This file records what every example
-owes the reader, and indexes them by the single lesson each one teaches.
+This index is for a developer looking for a worked example of one tinyparse
+technique. Each directory under `examples/` holds a grammar, sometimes a C
+host program that reads the tree, and a README that runs it on real input
+and states its limits.
 
-## What an example owes the reader
+## Prerequisites
 
-An example is documentation that compiles. The bar is higher than "it
-parses something", and these are the rules a new or revised example follows.
+- Run the commands from the `tinyparse/` directory of a source checkout.
+- `mise run build` builds the library, the `tinyparse` command at
+  `build/bin/tinyparse` and the example programs. Put the command on your
+  `PATH`:
 
-**Teach one thing.** Every example names its single lesson in the first
-sentence of its README, and no two examples teach the same lesson. If you
-cannot say what an example shows that the others do not, it does not belong.
+  ```sh
+  mise run build
+  export PATH="$PWD/build/bin:$PATH"
+  ```
 
-**Parse nesting as nesting.** When the language nests — brackets inside
-brackets, an expression inside an expression — the grammar matches it with
-recursive rules. A flat token that scans to the next closing delimiter is
-not a parser, and an example that ships one teaches the wrong habit. None of
-these grammars carries a "does not nest" disclaimer, because none of them
-needs one.
+  [Install tinyparse](../docs/how-to/install.md) covers the other ways to
+  get the command; the examples that run with the command alone work with
+  any of them.
+- `mise run examples` builds the C host programs alone, each into
+  `build/examples/<name>/`. No `run.sh` builds anything: those of the C
+  examples run the program `mise run examples` built, and
+  `examples/tcl/run.sh` runs the `tinyparse` command.
+- The `jit` example emits x86-64 machine code, and its program builds and
+  runs only on an x86-64 host. On another host `mise run examples`, and with
+  it `mise run build`, stops with an error at `examples/jit/jit.c`.
 
-**Read the tree.** A host program walks the concrete syntax tree through
-the cursor API and works from what the tree already records: node kinds,
-field names, and byte spans. It never re-scans the source text.
+## Grammars you run with the command
 
-> A program that consumes the tree MUST NOT build a parallel AST of its own.
-> The CST is the data structure. Codegen recurses over the cursor, a
-> rewriter copies the spans the tree hands it, a pretty-printer reads the
-> fields. If you find yourself defining a struct that mirrors the grammar's
-> node types, the example has lost the plot.
+These need only the `tinyparse` command. Each README feeds input to
+`tinyparse run` and prints the tree.
 
-**Keep tokens lexical.** Tokens match regular lexemes; structure lives in
-rules; fields and `extras` carry the parts a consumer cares about. A greedy
-mega-token standing in for a rule hides the structure the example exists to
-show.
+| Example | Lesson |
+|---------|--------|
+| [sexpr](sexpr/README.md) | a recursive grammar: lists inside lists, with fields and trivia |
+| [tcl](tcl/README.md) | nested command substitutions and brace groups, and words joined from several parts |
+| [bindings](bindings/README.md) | a character class whose bytes the host program supplies |
+| [lexgoal](lexgoal/README.md) | one byte, `/`, read as a regular-expression literal or a division depending on the parser's position |
+| [import](import/README.md) | a grammar that takes its tokens from another file |
+| [recover](recover/README.md) | a tree and a diagnostic when the input ends inside an open list |
+| [heredoc](heredoc/README.md) | here-documents whose closing line the input chooses, nested inside each other |
 
-**Tell the truth in the README.** Show real input and the real output it
-produces, then state the genuine limits of the grammar. Honest scope is not
-an apology, and a limit worth naming is one a reader would otherwise trip
-over.
+## C host programs
 
-**Stay green.** Every example is pinned by a test under `test/suite/` that
-exercises its lesson, including the nested case where the lesson is
-recursion. `mise run test` runs them all.
+These link `build/lib/libtinyparse.a` and walk the tree with the cursor
+functions. Each runs from `build/examples/<name>/` after
+`mise run examples`, directly or through the `run.sh` in its directory.
 
-## Grammars you run with the CLI
+| Example | Lesson | How it runs |
+|---------|--------|-------------|
+| [ebnf](ebnf/README.md) | read a tree and print text: convert EBNF to a tinyparse grammar | `examples/ebnf/run.sh FILE.ebnf` |
+| [uri](uri/README.md) | read named fields from a tree | `examples/uri/run.sh URL` |
+| [rewriter](rewriter/README.md) | rewrite source by copying the byte ranges the tree records | `examples/rewriter/run.sh FILE.c` |
+| [jit](jit/README.md) | generate x86-64 code by recursing over the tree | `examples/jit/run.sh SOURCE FUNCTION ARGUMENT` |
+| [embed](embed/README.md) | link two generated parsers into one program | `build/examples/embed/embed FILE` |
+| [nesting](nesting/README.md) | generated parsers for the regions another grammar injects | `build/examples/nesting/nesting FILE` |
+| [bufferfriendly](bufferfriendly/README.md) | feed a generated parser a buffer that grows | `build/examples/bufferfriendly/bufferfriendly FILE [CHUNK]` |
 
-These need only the `tinyparse` binary. Feed input on stdin and dump the
-tree:
+`ebnf` writes the grammar that `uri` reads: `examples/ebnf/run.sh` converts
+`examples/ebnf/uri.ebnf` and saves the result as `examples/uri/uri.scm`,
+and `examples/uri/run.sh` runs that conversion first when
+`examples/uri/uri.scm` is missing.
 
-```sh
-printf '(a (b c))' | tinyparse run examples/sexpr/sexpr.scm --input - --dump-tree
-```
-
-| Example | The lesson |
-|---------|------------|
-| [`sexpr`](sexpr/)     | The canonical recursive grammar: `List` holds `Form`s and a `Form` resolves back to a `List`, with fields and `extras` trivia along for the ride. |
-| [`tcl`](tcl/)         | Recursive command substitution and brace groups that nest to any depth, alongside the fused-word lexing trick that keeps five substitution forms in one word. |
-| [`bindings`](bindings/) | Character classes the host installs at runtime, so `(class alpha)` in a grammar resolves to C code. |
-| [`lexgoal`](lexgoal/) | Parser-directed lexing: the same `/` byte scans as a regex literal in value position and as division in operator position, chosen by the active lexical goal. |
-| [`import`](import/)   | One grammar pulling tokens and rules from another with `(import …)` at compile time. |
-| [`recover`](recover/) | Grammar-authored error recovery: a missing `)` at end of input is repaired with a zero-width node and a diagnostic. |
-
-## Programs that consume the tree
-
-These link the library archive and walk the CST through the cursor API.
-`mise run examples` builds each into `build/examples/<name>/` (an example that
-embeds a generated parser runs `tinyparse c` first); those with a `run.sh` run
-the built program.
-
-| Example | The lesson |
-|---------|------------|
-| [`ebnf`](ebnf/)         | A meta-grammar: tinyparse parses an EBNF document, and the program walks that tree to emit an equivalent `.scm` grammar. |
-| [`uri`](uri/)           | Reading named components straight off the tree's fields, never re-scanning the input, using the grammar `ebnf` generated. |
-| [`rewriter`](rewriter/) | A codemod that rebuilds its output from the byte spans the tree records, copying every untouched byte through verbatim. |
-| [`jit`](jit/)           | Native x86-64 emitted by recursing over the cursor, with no intermediate AST between the parse tree and the machine code. |
-| [`embed`](embed/)       | Two separately compiled parsers in one binary: a host fenced-block grammar locates code spans and a second generated parser (std.json) parses the bytes inside each fence, linked without symbol collision via `c --parser-lib --name`. |
-
-The `ebnf` → `uri` pair is one pipeline: `ebnf/run.sh` regenerates
-`uri/uri.scm` from `ebnf/uri.ebnf`, and the `uri` program then parses URLs
-with it.
+Each example is checked by a case under `test/suite/` or by a gate under
+`mise/tasks/gate/`, and `mise run test` runs both.
+[Developing tinyparse](../DEVELOPMENT.md) describes how to add an example.

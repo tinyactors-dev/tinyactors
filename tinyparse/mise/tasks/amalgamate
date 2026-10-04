@@ -26,33 +26,38 @@ Cache.gate('amalgamate', inputs: [*Tinyparse.generated_inputs, *Cache.files('bui
 
 version = Tinyparse.version
 readme = <<~MARKDOWN
-  # tinyparse #{version} — single-file amalgamation
+  # tinyparse #{version} amalgamation
 
-  This directory is the single-file distribution of tinyparse. Drop the two
-  sources and the header into your project; they need only a C11 compiler and the
-  freestanding headers `<stddef.h>` and `<stdint.h>`.
+  This directory holds tinyparse #{version} in three C files. Copy them into
+  your project and compile them with a C11 compiler.
 
-  | File | Role |
-  |------|------|
-  | `tinyparse.h` | the public header — the only interface you include |
-  | `tinyparse.c` | the whole library in one translation unit |
-  | `tinyparse_cli.c` | the optional command-line front end, with its manual page embedded |
+  | File | Contents |
+  |------|----------|
+  | `tinyparse.h` | The public header, the only one your program includes. |
+  | `tinyparse.c` | The library in one translation unit. It includes only `<stddef.h>` and `<stdint.h>`, and calls no C library function but the memory functions a compiler emits calls to, such as `memcpy` and `memset`. |
+  | `tinyparse_cli.c` | The `tinyparse` command, with its manual page and the standard grammars compiled in. It needs a hosted C library. |
 
   ## Build
 
   ```sh
-  # the library object
+  # the library object, tinyparse.o
   cc -c tinyparse.c
 
-  # the command-line tool
+  # the tinyparse command
   cc tinyparse.c tinyparse_cli.c -o tinyparse
 
-  # a shared library exporting the public tinyparse_* API
+  # a shared library; it exports the tinyparse_* functions and the
+  # library's internal tp_* functions
   cc -shared -fPIC -fvisibility=hidden tinyparse.c -o libtinyparse.so
   ```
 
-  Include `tinyparse.h` from your own code and link against the object, the
-  shared library, or `tinyparse.c` directly.
+  Include `tinyparse.h` in your program, and compile the program with
+  `tinyparse.c` or link it with `tinyparse.o` or the shared library.
+  `tinyparse.c` is C11: it has an anonymous union, which
+  `-std=c99 -pedantic-errors` rejects.
+
+  The documentation, the C API reference among it, is in the `tinyparse/docs/`
+  directory of https://github.com/dhamidi/tinyactors.
 MARKDOWN
 
 outputs = {
