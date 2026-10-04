@@ -1535,6 +1535,212 @@ TA_PRIVATE uint32_t ta_ilist_next(const ta_ilink *link, uint32_t index);
 
 
 
+/*
+ * Package index_heap is the indexed min-heap (building block B2 of docs/
+ * proposals/ring-proto): a priority queue of 32-bit item indices, ordered by
+ * a key each item carries, in which any member can be removed in O(log n)
+ * because every member knows its own position.
+ *
+ * What it is for. Delayed sends and timers fire in time order, and a
+ * <cancel> takes one out of the middle. A plain heap cannot find the item to
+ * remove without a search, so the position is kept in the item itself, in a
+ * field `heap_index`. The items are the records of an index pool (block A5,
+ * pool.h); the heap adds no node of its own. Its only memory is one array of
+ * 4 bytes per item, which is what the byte budget of the proposal assumes.
+ *
+ * Keys. An item has a `due` (a uint64_t time, the primary key, smaller
+ * first) and an `order` (a uint64_t, the tie-breaker, smaller first), so
+ * items with the same deadline come out in the order they were sent. The
+ * owner assigns `order` (a send counter of the system): the heap never
+ * invents it, which lets a session that is reloaded rejoin the heap with its
+ * original order. `order` must be unique among the items in the heap; two
+ * equal (due, order) pairs do not corrupt the heap, they only leave the
+ * order between those two unspecified.
+ *
+ * How the heap reads an item. It holds the pool and three byte offsets (of
+ * `due`, `order` and `heap_index` inside an item) and reaches a field as
+ * (unsigned char *)ta_pool_at(pool, index) + offset. There is no callback,
+ * no wrapper struct and no per-item cost beyond those three fields, which
+ * the item's owner declares anyway. The heap only ever writes `heap_index`.
+ * `heap_index` is 0 when the item is not in the heap and otherwise its
+ * 1-based position: array[heap_index - 1] == index.
+ *
+ * Lifetime. The ta_index_heap control struct and its array have the
+ * lifetime system: one deadline index per system, embedded in its owner (a
+ * test's frame today). The array lives from the ta_index_heap_reserve that
+ * allocated it to ta_index_heap_destroy, or until a later reserve replaces
+ * it. The items have the lifetime of their own block (the envelope, once the
+ * deadline index is wired in): the heap holds an item's u32 index only while
+ * its heap_index is non-zero, and never holds a pointer between calls, so it
+ * is safe across pool refills. An item must leave the heap (remove or
+ * pop_min, which set heap_index to 0) before its owner gives it back to the
+ * pool. Items in the heap are taken, and a taken item's page is never
+ * trimmed, so every ta_pool_at the heap does is valid.
+ *
+ * When it allocates. Only ta_index_heap_reserve allocates, and only its
+ * owner's safe points may call it (admission of a delayed send, spawn, load,
+ * or right after the pool's refill). ta_index_heap_init allocates nothing.
+ * insert, peek_min, pop_min, remove, count and capacity never allocate, so
+ * nothing in a macrostep allocates for the heap: once capacity covers the
+ * pool's capacity, insert cannot fail. Insert answers TA_ERR_NOMEM only when
+ * the owner forgot to reserve; that is a checked answer, not an out-of-bounds
+ * write. The array is sized with ta_layout, finished where it is allocated,
+ * and its byte size is stored and reused for the sized free, so a strict
+ * allocator sees frees that match their allocations.
+ *
+ * Growth. Reserve grows the array geometrically (16 entries first, then
+ * doubling, clamped to the ceiling `max_items`). The pool adds one page at a
+ * time; an exact-fit array would be copied at every page, which is quadratic
+ * over a pool's life. At the ceiling the array is exactly 4 bytes per item;
+ * below it, up to twice the used capacity may be reserved for a while.
+ *
+ * Ceiling. `max_items` bounds the capacity, as ta_pool_params.max_items does
+ * for the pool; 0 means as many as a u32 position can name. A reserve past
+ * it answers TA_ERR_NOMEM.
+ *
+ * Failure. Reserve is all or nothing: size the new array, allocate it, copy
+ * the live entries (cannot fail), free the old array, commit. On any failure
+ * (size overflow, request over the ceiling, refused allocation) it returns
+ * TA_ERR_NOMEM and the heap is exactly as it was. Insert changes the heap
+ * only on TA_OK.
+ *
+ * Invariants. count <= capacity <= max_capacity; array[p - 1] == i implies
+ * item(i).heap_index == p; each of the first `count` entries of the array has
+ * heap_index != 0 and appears once; no child is before its parent by (due,
+ * order).
+ *
+ * Complexity. insert, pop_min and remove are O(log n) with no recursion (the
+ * sifts are loops); peek_min, count and capacity are O(1); reserve is O(n)
+ * when it grows, amortised O(1) per item across a pool's growth.
+ *
+ * Why no update. A delayed send never changes its due, and <cancel> is a
+ * remove. A reloaded session inserts again with the same (due, order).
+ *
+ * Misuse that is not checked, because checking would cost more than the
+ * operation: changing `due` or `order` of an item while it is in the heap;
+ * giving an item to the pool while it is in the heap; offsets that are not
+ * those of real fields (the pool does not tell the heap its item size).
+ *
+ * Usage, with a 24-byte item:
+ *
+ *	typedef struct { uint64_t due; uint64_t order; uint32_t heap_index; uint32_t next; } item;
+ *	ta_pool pool;       // an A5 pool of `item`, link at offsetof(item, next)
+ *	ta_index_heap heap;
+ *	ta_index_heap_init(&heap, allocator, &(ta_index_heap_params){
+ *		.pool = &pool, .due_offset = offsetof(item, due), .order_offset = offsetof(item, order),
+ *		.heap_index_offset = offsetof(item, heap_index) });
+ *	// at a safe point, after the pool has room:
+ *	if (ta_index_heap_reserve(&heap, capacity_of_pool) != TA_OK) { return TA_ERR_NOMEM; }
+ *	// anywhere:
+ *	uint32_t index = ta_pool_take(&pool);
+ *	item *it = ta_pool_at(&pool, index);
+ *	it->due = 100; it->order = sequence++;
+ *	ta_index_heap_insert(&heap, index);
+ *	for (uint32_t head = ta_index_heap_peek_min(&heap);
+ *	     head != 0 && ((item *)ta_pool_at(&pool, head))->due <= now;
+ *	     head = ta_index_heap_peek_min(&heap)) {
+ *		uint32_t fired = ta_index_heap_pop_min(&heap);
+ *		... deliver it ...
+ *		ta_pool_give(&pool, fired);
+ *	}
+ *	ta_index_heap_destroy(&heap);
+ */
+
+/*
+ * ta_index_heap_params says where an item keeps its key and its position. It
+ * is read by ta_index_heap_init and not kept.
+ */
+typedef struct ta_index_heap_params {
+    ta_pool *pool;            /* items live here; must outlive the heap; items in the heap must be taken */
+    size_t due_offset;        /* offsetof(item, due): a uint64_t, the primary key, smaller first */
+    size_t order_offset;      /* offsetof(item, order): a uint64_t, breaks ties, unique among items in the heap */
+    size_t heap_index_offset; /* offsetof(item, heap_index): a uint32_t, 0 = not in the heap, else the 1-based position */
+    uint32_t max_items;       /* ceiling on the capacity, in items; 0 means as many as a u32 position can name */
+} ta_index_heap_params;
+
+/*
+ * ta_index_heap is the control struct of one heap (lifetime: system, owned by
+ * whatever embeds it). Its fields are for index_heap.c: use the functions. A
+ * zeroed ta_index_heap is a destroyed heap.
+ */
+typedef struct ta_index_heap {
+    ta_allocator allocator;
+    ta_pool *pool;
+    size_t due_offset;
+    size_t order_offset;
+    size_t heap_index_offset;
+    uint32_t *array;     /* capacity entries; array[p - 1] is the item at position p */
+    size_t array_bytes;  /* finished once per allocation, reused for the sized free; 0 with no array */
+    uint32_t count;
+    uint32_t capacity;
+    uint32_t max_capacity;
+} ta_index_heap;
+
+/*
+ * ta_index_heap_init validates `params` and stores them, and allocates
+ * nothing: no safe point is needed and nothing is left to free. It answers
+ * TA_ERR_INVALID for a NULL pool or params, an offset that is not aligned
+ * for its type, or two fields that overlap. On failure the heap is left
+ * zeroed. Whether an offset lies inside the item is the caller's contract.
+ */
+TA_PRIVATE ta_result ta_index_heap_init(ta_index_heap *heap, ta_allocator allocator, const ta_index_heap_params *params);
+
+/*
+ * ta_index_heap_destroy frees the array with the size it was allocated with
+ * and zeroes the heap. Items still in the heap keep a stale heap_index: their
+ * owner (the pool) is dropped with them. It is idempotent and safe on a heap
+ * that never reserved.
+ */
+TA_PRIVATE void ta_index_heap_destroy(ta_index_heap *heap);
+
+/*
+ * ta_index_heap_reserve makes the capacity at least `items`, growing
+ * geometrically and clamped to the ceiling. It is the only function of the
+ * heap that allocates: call it only at a safe point. It allocates nothing
+ * when `items` is 0 or already fits. It is all or nothing: TA_ERR_NOMEM
+ * (size overflow, `items` over the ceiling, or a refused allocation) leaves
+ * the heap exactly as it was.
+ */
+TA_PRIVATE ta_result ta_index_heap_reserve(ta_index_heap *heap, uint32_t items);
+
+/*
+ * ta_index_heap_insert adds item `index`, which the caller took from the
+ * pool and whose heap_index is 0, at the (due, order) it holds now. It never
+ * allocates. O(log n). TA_ERR_NOMEM when count == capacity (the owner did not
+ * reserve), TA_ERR_INVALID for 0, an index beyond the pool's extent or an
+ * item that is already in the heap. The heap changes only on TA_OK.
+ */
+TA_PRIVATE ta_result ta_index_heap_insert(ta_index_heap *heap, uint32_t index);
+
+/*
+ * ta_index_heap_peek_min returns the item with the smallest (due, order), or
+ * 0 when the heap is empty. It does not change the heap. O(1).
+ */
+TA_PRIVATE uint32_t ta_index_heap_peek_min(const ta_index_heap *heap);
+
+/*
+ * ta_index_heap_pop_min removes and returns the item with the smallest (due,
+ * order) and sets its heap_index to 0, or returns 0 when the heap is empty.
+ * It never allocates. O(log n).
+ */
+TA_PRIVATE uint32_t ta_index_heap_pop_min(ta_index_heap *heap);
+
+/*
+ * ta_index_heap_remove takes item `index` out of the heap wherever it is (a
+ * <cancel>) and sets its heap_index to 0. It returns false and changes
+ * nothing when the item is not in the heap (or is 0 or beyond the extent).
+ * It never allocates. O(log n).
+ */
+TA_PRIVATE bool ta_index_heap_remove(ta_index_heap *heap, uint32_t index);
+
+/* ta_index_heap_count returns the number of items in the heap. O(1). */
+TA_PRIVATE uint32_t ta_index_heap_count(const ta_index_heap *heap);
+
+/* ta_index_heap_capacity returns the number of items the array can hold now. O(1). */
+TA_PRIVATE uint32_t ta_index_heap_capacity(const ta_index_heap *heap);
+
+
+
 struct ta_arena_block {
     struct ta_arena_block *next;
     size_t allocation_size;
@@ -5442,6 +5648,251 @@ TA_PRIVATE bool ta_ilist_unlink(ta_ilist *list, const ta_ilink *link, uint32_t i
 /* ta_ilist_next: see ilist.h. */
 TA_PRIVATE uint32_t ta_ilist_next(const ta_ilink *link, uint32_t index) {
     return index == 0 ? 0 : *ta_ilist_slot(link, index);
+}
+
+
+/* The first array holds this many entries and doubles from there. */
+#define TA_INDEX_HEAP_FIRST_CAPACITY 16u
+
+/* ta_index_heap_field returns the address of the field at `offset` of item `index`, or NULL beyond the extent. */
+static unsigned char *ta_index_heap_field(const ta_index_heap *heap, uint32_t index, size_t offset) {
+    unsigned char *item = ta_pool_at(heap->pool, index);
+    return item == NULL ? NULL : item + offset;
+}
+
+/* ta_index_heap_due reads the primary key of an item. The caller has checked the index is in the extent. */
+static uint64_t ta_index_heap_due(const ta_index_heap *heap, uint32_t index) {
+    uint64_t value;
+    ta_mem_copy(&value, ta_index_heap_field(heap, index, heap->due_offset), sizeof value);
+    return value;
+}
+
+/* ta_index_heap_order reads the tie-breaker of an item. The caller has checked the index is in the extent. */
+static uint64_t ta_index_heap_order(const ta_index_heap *heap, uint32_t index) {
+    uint64_t value;
+    ta_mem_copy(&value, ta_index_heap_field(heap, index, heap->order_offset), sizeof value);
+    return value;
+}
+
+/* ta_index_heap_back reads the position field of an item. The caller has checked the index is in the extent. */
+static uint32_t ta_index_heap_back(const ta_index_heap *heap, uint32_t index) {
+    uint32_t value;
+    ta_mem_copy(&value, ta_index_heap_field(heap, index, heap->heap_index_offset), sizeof value);
+    return value;
+}
+
+/* ta_index_heap_set_back writes the position of an item: the only field of an item the heap writes. */
+static void ta_index_heap_set_back(const ta_index_heap *heap, uint32_t index, uint32_t position) {
+    ta_mem_copy(ta_index_heap_field(heap, index, heap->heap_index_offset), &position, sizeof position);
+}
+
+/* ta_index_heap_before says whether item a is due strictly before item b by (due, order). */
+static bool ta_index_heap_before(const ta_index_heap *heap, uint32_t a, uint32_t b) {
+    uint64_t due_a = ta_index_heap_due(heap, a);
+    uint64_t due_b = ta_index_heap_due(heap, b);
+    if (due_a != due_b) {
+        return due_a < due_b;
+    }
+    return ta_index_heap_order(heap, a) < ta_index_heap_order(heap, b);
+}
+
+/* ta_index_heap_place stores `index` at 1-based `position` and records the position in the item. */
+static void ta_index_heap_place(ta_index_heap *heap, uint32_t position, uint32_t index) {
+    heap->array[position - 1u] = index;
+    ta_index_heap_set_back(heap, index, position);
+}
+
+/* ta_index_heap_sift_up moves the item at `position` toward the root while it is before its parent. Iterative. */
+static void ta_index_heap_sift_up(ta_index_heap *heap, uint32_t position) {
+    uint32_t index = heap->array[position - 1u];
+    while (position > 1u) {
+        uint32_t parent = position / 2u;
+        uint32_t parent_index = heap->array[parent - 1u];
+        if (!ta_index_heap_before(heap, index, parent_index)) {
+            break;
+        }
+        ta_index_heap_place(heap, position, parent_index);
+        position = parent;
+    }
+    ta_index_heap_place(heap, position, index);
+}
+
+/* ta_index_heap_sift_down moves the item at `position` toward the leaves while a child is before it. Iterative. */
+static void ta_index_heap_sift_down(ta_index_heap *heap, uint32_t position) {
+    uint32_t index = heap->array[position - 1u];
+    uint32_t count = heap->count;
+    for (;;) {
+        uint64_t left = (uint64_t)position * 2u;
+        if (left > count) {
+            break;
+        }
+        uint32_t child = (uint32_t)left;
+        if (child < count && ta_index_heap_before(heap, heap->array[child], heap->array[child - 1u])) {
+            child += 1u;
+        }
+        uint32_t child_index = heap->array[child - 1u];
+        if (!ta_index_heap_before(heap, child_index, index)) {
+            break;
+        }
+        ta_index_heap_place(heap, position, child_index);
+        position = child;
+    }
+    ta_index_heap_place(heap, position, index);
+}
+
+/* ta_index_heap_overlap says whether the fields [a, a+a_size) and [b, b+b_size) share a byte. */
+static bool ta_index_heap_overlap(size_t a, size_t a_size, size_t b, size_t b_size) {
+    return a < b + b_size && b < a + a_size;
+}
+
+/* ta_index_heap_init: see index_heap.h. */
+TA_PRIVATE ta_result ta_index_heap_init(ta_index_heap *heap, ta_allocator allocator, const ta_index_heap_params *params) {
+    if (heap == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(heap, sizeof *heap);
+    if (params == NULL || params->pool == NULL || params->due_offset % _Alignof(uint64_t) != 0 ||
+        params->order_offset % _Alignof(uint64_t) != 0 || params->heap_index_offset % _Alignof(uint32_t) != 0 ||
+        ta_index_heap_overlap(params->due_offset, sizeof(uint64_t), params->order_offset, sizeof(uint64_t)) ||
+        ta_index_heap_overlap(params->due_offset, sizeof(uint64_t), params->heap_index_offset, sizeof(uint32_t)) ||
+        ta_index_heap_overlap(params->order_offset, sizeof(uint64_t), params->heap_index_offset, sizeof(uint32_t))) {
+        return TA_ERR_INVALID;
+    }
+    heap->allocator = allocator;
+    heap->pool = params->pool;
+    heap->due_offset = params->due_offset;
+    heap->order_offset = params->order_offset;
+    heap->heap_index_offset = params->heap_index_offset;
+    heap->max_capacity = params->max_items == 0 ? UINT32_MAX : params->max_items;
+    return TA_OK;
+}
+
+/* ta_index_heap_destroy: see index_heap.h. The sized free uses the size the allocation stored. */
+TA_PRIVATE void ta_index_heap_destroy(ta_index_heap *heap) {
+    if (heap == NULL) {
+        return;
+    }
+    if (heap->array != NULL) {
+        ta_mem_free(heap->allocator, heap->array,
+                    &(ta_allocator_free_params){ .size = heap->array_bytes, .alignment = _Alignof(uint32_t) });
+    }
+    ta_mem_zero(heap, sizeof *heap);
+}
+
+/* ta_index_heap_reserve: see index_heap.h. Allocate, then copy, free the old array and commit; nothing after the allocation fails. */
+TA_PRIVATE ta_result ta_index_heap_reserve(ta_index_heap *heap, uint32_t items) {
+    if (items <= heap->capacity) {
+        return TA_OK;
+    }
+    if (items > heap->max_capacity) {
+        return TA_ERR_NOMEM;
+    }
+    uint64_t grown = heap->capacity == 0 ? TA_INDEX_HEAP_FIRST_CAPACITY : (uint64_t)heap->capacity * 2u;
+    while (grown < items) {
+        grown *= 2u;
+    }
+    if (grown > heap->max_capacity) {
+        grown = heap->max_capacity; /* items <= max_capacity, so the clamp still covers the request */
+    }
+    if (grown > SIZE_MAX) {
+        return TA_ERR_NOMEM; /* a 32-bit size_t cannot count them */
+    }
+    ta_layout layout;
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = sizeof(uint32_t),
+                                               .alignment = _Alignof(uint32_t),
+                                               .count = (size_t)grown });
+    size_t bytes;
+    ta_result result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    uint32_t *array = ta_mem_alloc(heap->allocator, bytes, _Alignof(uint32_t));
+    if (array == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    /* Commit: nothing below allocates or fails. */
+    if (heap->array != NULL) {
+        ta_mem_copy(array, heap->array, (size_t)heap->count * sizeof(uint32_t));
+        ta_mem_free(heap->allocator, heap->array,
+                    &(ta_allocator_free_params){ .size = heap->array_bytes, .alignment = _Alignof(uint32_t) });
+    }
+    heap->array = array;
+    heap->array_bytes = bytes;
+    heap->capacity = (uint32_t)grown;
+    return TA_OK;
+}
+
+/* ta_index_heap_insert: see index_heap.h. Validate first, then append at the end and sift up; nothing changes on failure. */
+TA_PRIVATE ta_result ta_index_heap_insert(ta_index_heap *heap, uint32_t index) {
+    if (index == 0 || ta_pool_at(heap->pool, index) == NULL || ta_index_heap_back(heap, index) != 0) {
+        return TA_ERR_INVALID;
+    }
+    if (heap->count == heap->capacity) {
+        return TA_ERR_NOMEM;
+    }
+    heap->count += 1u;
+    ta_index_heap_place(heap, heap->count, index);
+    ta_index_heap_sift_up(heap, heap->count);
+    return TA_OK;
+}
+
+/* ta_index_heap_peek_min: see index_heap.h. */
+TA_PRIVATE uint32_t ta_index_heap_peek_min(const ta_index_heap *heap) {
+    return heap->count == 0 ? 0 : heap->array[0];
+}
+
+/*
+ * ta_index_heap_remove_at takes the entry at 1-based `position` out of a
+ * non-empty heap. The last entry fills the hole and then moves up or down,
+ * whichever restores the order: up is needed when the last entry belongs to
+ * another subtree and is before the hole's parent, down otherwise. Only one
+ * of the two sifts moves it.
+ */
+static void ta_index_heap_remove_at(ta_index_heap *heap, uint32_t position) {
+    uint32_t removed = heap->array[position - 1u];
+    uint32_t last = heap->array[heap->count - 1u];
+    heap->count -= 1u;
+    ta_index_heap_set_back(heap, removed, 0);
+    if (position == heap->count + 1u) {
+        return; /* the removed entry was the last one */
+    }
+    ta_index_heap_place(heap, position, last);
+    ta_index_heap_sift_up(heap, position);
+    ta_index_heap_sift_down(heap, ta_index_heap_back(heap, last));
+}
+
+/* ta_index_heap_pop_min: see index_heap.h. */
+TA_PRIVATE uint32_t ta_index_heap_pop_min(ta_index_heap *heap) {
+    if (heap->count == 0) {
+        return 0;
+    }
+    uint32_t index = heap->array[0];
+    ta_index_heap_remove_at(heap, 1u);
+    return index;
+}
+
+/* ta_index_heap_remove: see index_heap.h. The item's own position makes this O(log n). */
+TA_PRIVATE bool ta_index_heap_remove(ta_index_heap *heap, uint32_t index) {
+    if (index == 0 || ta_pool_at(heap->pool, index) == NULL) {
+        return false;
+    }
+    uint32_t position = ta_index_heap_back(heap, index);
+    if (position == 0 || position > heap->count || heap->array[position - 1u] != index) {
+        return false;
+    }
+    ta_index_heap_remove_at(heap, position);
+    return true;
+}
+
+/* ta_index_heap_count: see index_heap.h. */
+TA_PRIVATE uint32_t ta_index_heap_count(const ta_index_heap *heap) {
+    return heap->count;
+}
+
+/* ta_index_heap_capacity: see index_heap.h. */
+TA_PRIVATE uint32_t ta_index_heap_capacity(const ta_index_heap *heap) {
+    return heap->capacity;
 }
 
 
