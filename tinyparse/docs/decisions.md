@@ -3,6 +3,21 @@
 A running record of load-bearing decisions and their rationale, so they are not
 re-litigated. Newest at the bottom of each section.
 
+> **Reading this record after the migration.** Entries up to Phase 18 were
+> written while tinyparse was pocketparse inside the `ax` repository, and they
+> are left as written. The names in them map to today's as follows; the change
+> is told in [`../HISTORY.md`](../HISTORY.md).
+>
+> | Then | Now |
+> |------|-----|
+> | `ci/tinyparse-metric.sh`, "the metric" | `mise run test` |
+> | `ci/tinyparse-<gate>.sh` (vm-diff, cc-diff, nocrash, reclaim, ...) | `mise run gate:<gate>` |
+> | `ci/tinyparse-hide-ax.sh` | `mise run gate:exports` |
+> | `ci/tinyparse-bench.sh`, `-bench5.sh`, `-react-bench.sh`, `-tsc-bench.sh` | `mise run bench:javascript`, `bench:parsers`, `bench:react`, `bench:tsc` |
+> | `build.sh`, `amalgamate.sh`, `release.sh` | `mise run build`, `amalgamate`, `release` |
+> | `ax_alloc`, `ax_alloc_raw`, the ax arena | `tp_alloc`, `tp_alloc_raw`, `src/arena.c` |
+> | the parser actor, `TINYPARSE_ENGINE=vm-ax` | the parser lifecycle in `src/parse.c`; the variable is ignored |
+
 ## Grammar / language
 - **extends collisions require explicit `(override …)`** — new names merge; a
   bare redefinition of a base name is a compile error. Prevents a typo silently
@@ -1650,3 +1665,46 @@ grammar's terminals (the longest-match rule a hand-lexer encodes is not free to 
 is recorded as future work. The deliverable of Phase 18 is the shipped W18-EXTRAS win, the three
 declines with their lessons, the corruption fix with its regression gate, and the re-validated
 standing at parity-or-better with tsc.
+
+## Migration out of ax (2026-10, branch `tinyparse`)
+
+pocketparse left the `ax` repository (commit `8fa0c2bf`) and became tinyparse,
+a base library in the tinyactors monorepo. [`../HISTORY.md`](../HISTORY.md)
+tells the whole story; these are the decisions a later change should not
+reopen without a reason.
+
+- **The library owns its arena.** `src/arena.c` reproduces ax's allocator
+  semantics (16-byte alignment, a 4096-byte chunk floor, fresh blocks from
+  `grow`, first-fit reuse from a free list, child arenas reset as a whole), so
+  every tree and every gate stayed byte-identical. One flaw carried over from
+  ax was fixed: a request near `SIZE_MAX` wrapped and returned a zero-byte
+  block; it now returns NULL.
+- **No actor, no runtime.** The parser actor became the four-state lifecycle
+  in `src/parse.c` (`ACCEPTING`, `DROPPED`, `FINISHED`, `FAILED`), with one
+  finishing transition, `tp_parser_run`, shared by `tinyparse_finish`,
+  generated parsers and injection. Rejected: keeping an actor-shaped dispatch
+  on tinyactors, since tinyparse must depend on neither ax nor tinyactors, and
+  the actor did nothing a state field cannot. The engine selectors that chose
+  between the in-process VM and the actor-hosted one were deleted; every
+  `TINYPARSE_ENGINE` value now runs the one VM.
+- **A failed parser stays failed.** A generated `<prefix>_run` called again on
+  a parser whose push failed returns the failure instead of parsing the
+  truncated buffer, and the generated standalone `main` exits 2 with
+  `error: out of memory` instead of parsing one. `tinyparse run` exits 1 on
+  running out of memory instead of 0.
+- **Rename everything.** `pocketparse` to `tinyparse` and `pp_` to `tp_`
+  everywhere, including the packed format (`.ppg`/`PPG1` became `.tpg`/`TPG1`;
+  an image packed by pocketparse is refused).
+- **C11, warnings as errors.** The library and tools build with
+  `-std=c11 -Wall -Wextra -pedantic -Werror` under clang 22 (the old build was
+  `-std=c99` without `-pedantic`); `internal.h`'s anonymous union is C11.
+- **Every public function is `TINYPARSE_API`.** A shared library exports
+  exactly those 48 functions, checked by `mise run dist` and `gate:exports`.
+- **Gates are mise tasks.** The 13 `ci/` gates became `gate:*` Ruby tasks that
+  `mise run test` depends on, each with a fast form and, where one exists, a
+  `--full` form. The gates review found four of them could not fail on the
+  bug they exist for, and gave each an input or a check that makes it fail.
+- **The manual page is committed rendered.** `tinyparse.1` was rendered by
+  ax's literate tool `mdc`, which the monorepo does not have; it is committed
+  beside `tinyparse.1.md`, and the two are edited together until a renderer
+  exists.
