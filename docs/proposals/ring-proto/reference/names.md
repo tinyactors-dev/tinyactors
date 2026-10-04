@@ -6,7 +6,7 @@ Core deals with several kinds of names: event names, send IDs, invocation
 IDs, I/O processor types and actor addresses. Today all of them are
 interned into tables that only grow. This document splits them in two:
 
-- **Authored names** are interned once, when a definition is compiled.
+- **Authored names** are interned once, when a definition is registered.
 - **Run-time names** stay bytes. They live in the **name area**, and core
   looks them up but never adds them.
 
@@ -52,7 +52,7 @@ This causes two problems.
 | Name | Kind | Stored as |
 |---|---|---|
 | Every event descriptor in a definition's transitions (`order.paid`, `error.*`, `done.invoke.payment`) | authored | atoms, interned when the definition is registered |
-| The generated prefixes core itself names (`done.state`, `done.invoke`, `error.execution`, `error.communication`, `error.platform`, and the `invoke` segment of `error.communication.invoke`) | authored by core | atoms interned at system creation. Today's `TA_EVENT_NAME_*` cover all but `invoke`, which `ta_invoke_error_name` (`src/invoke.c`) interns at run time; it would join them. |
+| The generated prefixes core itself names (`done.state`, `done.invoke`, `error.execution`, `error.communication`, `error.platform`, and the `invoke` segment of `error.communication.invoke`) | authored by core | atoms interned at system creation, `invoke` among them. (Today's `TA_EVENT_NAME_*` cover all but `invoke`, which `ta_invoke_error_name` in `src/invoke.c` interns at run time.) |
 | `<send event>`, `<raise event>`, a literal `<send id>`, `<invoke id>`, `<send type>` | authored | atoms, interned at registration |
 | The value of `eventexpr`, `typeexpr`, `targetexpr`, `idlocation` text, `sendidexpr` | run time | bytes in the name area |
 | Names and IDs in external input ([`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent): `name`, `sendid`, `origin`, `origin_type`, `invokeid`) | run time | bytes in the name area |
@@ -62,21 +62,29 @@ This causes two problems.
 | The address of a resident session | run time, but bounded by residents | a counted handle (ADR 0065), taken at spawn or load, outside any macrostep |
 | The address of a session that is not resident | run time | bytes in the name area, on the waiting envelope ([envelope.md](envelope.md)) |
 
-The atom tables therefore grow only when a definition is registered. Their
-size is bounded by the definitions an operator registers, not by traffic.
+So the atom tables grow only at system creation and when a definition is
+registered. Run-time names never reach them.
 
-**Atoms are never freed,** even when their definition is (ADR 0080). The
-tables grow with every distinct name ever authored, so a system that churns
-definitions (hot reload, charts generated per tenant) keeps the names of
-every version it registered. That is accepted: what grew with traffic was
-the run-time names, and they no longer reach the tables. Atom IDs are
-never reused, so nothing that keeps an ID (a parked continuation, an
-internal-queue entry, a trace record) can find it naming something else. A
-host that churns definitions without limit creates a new system from time
-to time. Counting references per atom and freeing them at
-`DEFINITION_FREED` was considered and left out: it costs four bytes per
-atom, removal from the trie, and an audit of every place that keeps an
-atom ID, for a growth that only the operator's registrations cause.
+### Atoms are never freed
+
+An atom lives as long as the system, even after its definition is freed
+(ADR 0080).
+
+- **Atom IDs are never reused.** Nothing that keeps an ID (a parked
+  continuation, an internal-queue entry, a trace record) can find it naming
+  something else.
+- **The tables grow with every distinct name ever authored.** A system that
+  churns definitions (hot reload, charts generated per tenant) keeps the
+  names of every version it registered.
+- **Growth is bounded by what operators register, not by traffic.** What
+  grows with traffic is run-time names, and they stay bytes.
+- **A host that churns definitions without limit** creates a new system
+  from time to time.
+
+Atoms are not reference-counted. Freeing them at `DEFINITION_FREED` would
+cost four bytes per atom, removal from the trie, and an audit of every
+place that keeps an atom ID, to bound a growth that only registrations
+cause.
 
 ## Matching without interning
 
@@ -171,20 +179,24 @@ holds its first chunk and the total length ([envelope.md](envelope.md)).
 
 [envelope.md](envelope.md#running-out) covers both.
 
-Before reserving envelope text, core also checks the complete aligned
-`c2h.input` size with all event and source metadata. This applies even to
-unrecorded and replaying inputs. A fitting h2c record need not fit its
-larger observation. External oversize inputs are bounced as `invalid`;
-chart-produced ones fail as `error.execution.capacity.record` before
-committing a send. Definition registration checks representability of
-platform events, including generated-name bounds.
+Before core reserves envelope text, it checks that the complete aligned
+`c2h.input` record, with all event and source metadata, fits. It checks
+this for unrecorded and replaying inputs too: an h2c record that fits does
+not guarantee that its larger observation fits.
+
+- An external input that is too large is bounced as `invalid`.
+- A chart-produced one fails as `error.execution.capacity.record`, before
+  the send is committed.
+- Registration checks that the definition's platform events are
+  representable, including the bounds on generated names.
 
 **Text leaves through rings as spans,** and is copied into a record's tail
 when written: [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput),
 [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend),
 [`tel.trace`](../protocol/generated/MESSAGES.md#teltrace). Images and logs
-store text, so ADR 0007's caveat goes away: "persisted data must not assume
-process-local event-name IDs remain stable". No ID was persisted.
+store text, so ADR 0007's caveat ("persisted data must not assume
+process-local event-name IDs remain stable") does not apply. No ID is
+persisted.
 
 ## IDs, one by one
 
@@ -216,14 +228,15 @@ process-local event-name IDs remain stable". No ID was persisted.
   resolves `done`, `invoke`, `error`, `communication` and authored IDs to
   atoms, and the rest to UNKNOWN.
 - **[`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report)**
-  carries both its SCXML invocation text and `invocation_seq`, the sequence
-  of the `c2h.invoke` that started this instance. Service events carry both
-  too. Core rejects a stale instance at take before applying a report or
-  selecting `<finalize>`; reusing an authored ID cannot make an old reply
-  belong to its replacement. The sequence is an integer, not interned text.
-  Core parses the generated form, or
-  looks up an authored ID, and doesn't intern either. `ta_system_intern_invoke_id`
-  and `ta_send_id_intern` are no longer needed: a replayed
+  and service events carry the invocation ID as text and `invocation_seq`,
+  the sequence of the `c2h.invoke` that started this instance. The sequence
+  is an integer, not interned text. When it takes one of them, core rejects
+  a stale instance before applying a report or selecting `<finalize>`, so
+  reusing an authored ID cannot make an old reply belong to its
+  replacement. Core parses a generated ID or looks up an authored one, and
+  interns neither.
+- **No public interning call for IDs.** `ta_system_intern_invoke_id` and
+  `ta_send_id_intern` are removed: a replayed
   [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) record carries
   text, and the session's own definition knows the literals.
 
@@ -255,7 +268,7 @@ so it is `error.execution`, as SCXML says. Nothing is interned.
   `ta_event_name_format`. The ECMAScript and JSON data models want text
   anyway ([data-model.md](data-model.md)).
 - **The host never interns.** [`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent)
-  carries the name as bytes. `ta_event_name_intern` stays only for the
-  compiler and for tools that build descriptors.
+  carries the name as bytes. Only the compiler and tools that build
+  descriptors call `ta_event_name_intern`.
 - **Trace records** already carry a `ta_str name`
   ([telemetry.md](telemetry.md)).
