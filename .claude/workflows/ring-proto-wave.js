@@ -290,6 +290,37 @@ commits' hashes in the answer. Leave the worktree clean and finish with: git che
     { label: `fix:${u.id}#${round}`, phase: 'Fix', schema: FIX, model: 'sonnet', isolation: 'worktree' })
 }
 
+const VERDICTS = {
+  type: 'object',
+  properties: {
+    verdicts: { type: 'array', items: { type: 'object', properties: {
+      index: { type: 'integer' }, real: { type: 'boolean' }, why: { type: 'string' } },
+      required: ['index', 'real', 'why'] } },
+  },
+  required: ['verdicts'],
+}
+
+function verifyFindings(findings, u) {
+  return agent(`${CONTEXT}
+
+${unitHeader(u)}
+
+After the last review round these findings are still marked blocking, and the unit will be held from
+integration because of them. Do not edit files. For each one, check it against the code at ${wip(u)}
+(git show ${wip(u)}:<path>, and how the file is built: which headers a test can see, what the build
+links). A finding is real only if it is a defect or a broken repository rule AND fixing it as described
+is possible. Say why in one or two sentences either way.
+
+${findings.map((f, i) => `${i}. [${f.lens}] ${f.file}:${f.line || ''} ${f.issue}\n   fix proposed: ${f.fix}`).join('\n')}`,
+    { label: `verify:${u.id}`, phase: 'Review', schema: VERDICTS, model: 'sonnet' })
+    .then(r => {
+      if (!r) return findings
+      const real = new Set(r.verdicts.filter(v => v.real).map(v => v.index))
+      r.verdicts.filter(v => !v.real).forEach(v => log(`${u.id}: finding ${v.index} refuted: ${v.why}`))
+      return findings.filter((_, i) => real.has(i))
+    })
+}
+
 // Integration is serialized: each unit lands on top of the previous one, so
 // ring-proto stays linear and every pushed commit has passed mise run test.
 let gate = Promise.resolve()
@@ -344,7 +375,10 @@ const results = await pipeline(
         // The last fix was not reviewed: one more look, blocking findings only.
         const last = (await reviewUnit(plan, impl, u, round + 1)).filter(f => f.severity === 'blocking')
         rounds.push({ round: round + 1, findings: last, fix: null })
-        open = last
+        // A unit is held only for findings a second reader confirms against the
+        // code: in wave 1b a checklist reviewer held unit 1.2 for asking a test
+        // that sees only the public header to call private functions.
+        open = last.length ? await verifyFindings(last, u) : []
       }
     }
     log(`${u.id}: ${open.length ? open.length + ' blocking finding(s) left for a human' : 'review clean'}`)
