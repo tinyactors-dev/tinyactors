@@ -197,7 +197,7 @@ from the timed loop.
 The tree-sitter side links the official runtime and the generated grammar
 (`tree-sitter-javascript` or `tree-sitter-typescript` TSX) plus its hand-written
 scanner, and parses with `ts_parser_parse_string`. The tinyparse side links
-`libtinyparse.a` and `libax.a`, compiles the `.scm` grammar once, then for each
+`libtinyparse.a`, compiles the `.scm` grammar once, then for each
 document creates a parser, pushes the whole input, and calls `tinyparse_finish`.
 The generated-C arm links the unit `tinyparse c --parser-lib` emits and calls
 its entry point. The governing rule is that **both sides do the same job**: parse

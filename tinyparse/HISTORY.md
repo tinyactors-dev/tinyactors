@@ -56,8 +56,9 @@ separate commit so every later change shows as a diff against the original.
 Commits `1945317` (the library), `e93cb52` (the build), `0307dc0` (tests and
 gates). Names stayed `pocketparse`/`pp_` until step 3.
 
-**The arena.** ax was used for 109 `ax_alloc` calls, 9 `ax_alloc_raw`, 74
-`ax_arena` uses, and arena open, child and reset. The new `src/arena.c`
+**The arena.** `src/` named `ax_alloc` 109 times (103 calls), `ax_alloc_raw` 9
+times (8 calls) and the `ax_arena` type 74 times, and used arena open, child and
+reset. The new `src/arena.c`
 (`pp_pool`, `pp_chunk`, `pp_arena`) copies ax's semantics exactly, read from
 ax's `ax.c`: 16-byte alignment, a 4096-byte chunk floor (or `chunk_minimum`), a
 fresh block from `grow` and never a `realloc`, first-fit reuse from the pool's
@@ -387,8 +388,8 @@ a bug:
   now counts the regions each registered parser parsed, and the gate requires
   both counts to be positive.
 - **parser-nocrash and no-statics** (`88b1f3b`). parser-nocrash ran only
-  std.json, whose stack frames are tiny; the fast pass adds std.shell, and
-  `--full` adds std.javascript and std.tsx. Its header no longer claims the
+  std.json, whose stack frames are tiny; the fast pass adds std.shell, and a
+  new `--full` form (the seventh gate with one) adds std.javascript and std.tsx. Its header no longer claims the
   generated parser is iterative: it recurses, under a depth limit. no-statics
   never looked at generated code; it now compiles the std.json, std.fence and
   std.shell parser libraries and requires no writable data in them.
@@ -407,7 +408,7 @@ After the review: `PROGRESS=497/497`, `mise run test` about 20s, `--full` 56s.
 
 ## Step 6: the documentation
 
-Commits `fbb3b57` and `14a1b1a`, and this file.
+Commits `fbb3b57` and `14a1b1a`, and this file (`2b6cc98`).
 
 - **Archived.** `ax-execution.md`, `ax-topologies.md`, `bytecode-vm.md`,
   `codegen-transform.md`, `build-plan.md` and `explore-plan.md` moved to
@@ -460,12 +461,15 @@ all, anchors included.
 | `88b1f3b` | 5 (review) | hold the generated parsers to the crash bound and no-statics |
 | `fbb3b57` | 6 | move the ax-era design documents to docs/archive/ |
 | `14a1b1a` | 6 | make the user docs describe tinyparse as it is now |
+| `2b6cc98` | 6 | HISTORY.md, the story of the move out of ax |
+
+A final end-to-end check followed (see "The final check" below).
 
 Outside `tinyparse/`, the branch touches only the monorepo's wiring: the root
 `mise.toml` (`config_roots`), `mise/tasks/test/_default` (the tinyparse step),
 `AGENTS.md` and `README.md` (one row and one line), `acronyms-allow.txt` (three
-names tinyparse does not own: callgrind's `Ir`, and `userId`/`creatorId` in a
-JSX input copied from tree-sitter-javascript), and the no-statics ast-grep rule
+names tinyparse does not own: callgrind's instructions-read event, and two
+mixed-case identifiers in a JSX input copied from tree-sitter-javascript), and the no-statics ast-grep rule
 and its test under `mise/ast-grep/`.
 
 ## What the reviews caught
@@ -519,7 +523,35 @@ Every fix came with a test that fails without it.
   `tinyactors-host`, so this fails on `main` too. The other projects, tinyparse
   included, pass when run one by one. The core's amalgamate step and the shared
   `mise/lib/cache.rb` also need a UTF-8 locale (`LANG=C.UTF-8`); tinyparse's own
-  build no longer does.
+  build no longer does. So does the root `mise/tasks/test/_default`: under the
+  POSIX locale it raises `invalid byte sequence in US-ASCII` reading a step's
+  output when that output is not ASCII (check-acronyms prints `→` when it
+  finds something), instead of reporting the failed step.
+
+## The final check
+
+From `git clean -xfd tinyparse`, with `LANG=C.UTF-8`:
+
+- the root `mise run test` passed acronyms, changelog, portability and build,
+  then stopped at the host kernel's sanitizer failure above (490s);
+- `tinyactors-test` and `tinyactors-napi`, forced one by one, passed (the test
+  host: `449 scenarios: 449 passed`);
+- `cd tinyparse && mise run test`: `PROGRESS=497/497  PASS=497  xfail=0  XPASS=0
+  FAIL=0  xfail-ledger=0`, `test: GREEN` (suite 18.9s);
+- `mise run test --full`: GREEN in 53s, with `RESULT=340/340` (cc-diff) and
+  `RESULT[memo-adaptive]=354/354  RESULT[memo-always]=354/354` (vm-diff).
+
+The check compared the suite with the import commit: every one of its 494 cases
+is still there under the new name, except the three `dist/` cases step 2
+rewrote and the one step 4 rewrote (`dist/ci-wiring`), and three new cases
+(`core/lifecycle`, `dist/amalgamation-warnings`, `cli/run-out-of-memory`) bring
+it to 497. Of the
+mechanical-rename diffs, 16 files differ in more than names, each a change
+recorded above (temporary directories, the new `dist/` layout, `$TP_CC` instead
+of `cc`, the restored and added assertions). It also found this file
+contradicting the acronym check (it spelled the allowed names out), and a
+current-state sentence in `docs/performance.md` that still had the benchmark
+link `libax.a`; both were fixed.
 
 ## Next steps
 
