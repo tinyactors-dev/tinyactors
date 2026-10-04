@@ -100,9 +100,12 @@ static bool decide_refusal(ta_test_allocator *heap, size_t size) {
 }
 
 /* lane_alloc is the alloc entry of every lane: it takes `size` bytes aligned
- * to `alignment` from libc, counts them in the lane's category and in the
- * totals, or returns NULL and counts the refusal. */
-static void *lane_alloc(ta_test_allocator *heap, uint32_t category, size_t size, size_t alignment) {
+ * to `alignment` from libc (the lane is passed as its state, which names the
+ * allocator and the category, to keep the parameters at three), counts them
+ * in the lane's category and in the totals, or returns NULL and counts the refusal. */
+static void *lane_alloc(const ta_test_allocator_lane_state *state, size_t size, size_t alignment) {
+    ta_test_allocator *heap = state->heap;
+    uint32_t category = state->category;
     ta_test_allocator_counters *lane = &heap->by_category[category];
     size_t align = alignment < MINIMUM_ALIGNMENT ? MINIMUM_ALIGNMENT : alignment;
     size_t offset = 0;
@@ -162,7 +165,7 @@ static void lane_free(ta_test_allocator *heap, const ta_allocator_free_params *p
     }
     if (heap->strict && !is_live(heap, params->ptr)) {
         fprintf(stderr, "free of %p, which this allocator never handed out\n", params->ptr);
-        heap->stats.bad_frees += 1u;
+        heap->stats.bad_frees += 1u; /* no header, so no category: stats only */
         return;
     }
     ta_test_allocator_header *header = (ta_test_allocator_header *)params->ptr - 1;
@@ -187,7 +190,8 @@ static void lane_free(ta_test_allocator *heap, const ta_allocator_free_params *p
 
 /* plain_alloc and plain_free are lane 0: self is the allocator itself. */
 static void *plain_alloc(void *self, size_t size, size_t alignment) {
-    return lane_alloc(self, 0, size, alignment);
+    const ta_test_allocator_lane_state state = { .heap = self, .category = 0 };
+    return lane_alloc(&state, size, alignment);
 }
 
 static void plain_free(void *self, const ta_allocator_free_params *params) {
@@ -200,7 +204,7 @@ const ta_allocator_vtable ta_test_allocator_vtable = { .alloc = plain_alloc, .fr
  * state, which names the allocator and the category. */
 static void *category_alloc(void *self, size_t size, size_t alignment) {
     const ta_test_allocator_lane_state *lane = self;
-    return lane_alloc(lane->heap, lane->category, size, alignment);
+    return lane_alloc(lane, size, alignment);
 }
 
 static void category_free(void *self, const ta_allocator_free_params *params) {

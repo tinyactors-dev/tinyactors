@@ -63,8 +63,8 @@
  * (the size and alignment asked for, the category, and the links of the live
  * list). A request is refused, never wrapped, when its size plus the header
  * overflows size_t, or when its alignment is not a power of two. A refused
- * request returns NULL and changes nothing but attempts, refused and the
- * per-category copies of them, so a failure path under test finds no partial
+ * request returns NULL and changes nothing but attempts, refused, the
+ * per-category copies of them and the armed countdowns, so a failure path under test finds no partial
  * state in the helper.
  *
  * # Categories
@@ -86,7 +86,9 @@
  *
  * A block is counted in the category it was allocated in, whichever lane
  * frees it. For each additive counter, the sum over by_category equals the
- * same counter in stats; peak_bytes and largest_block are maxima, not sums.
+ * same counter in stats, except bad_frees: a free of a pointer the allocator
+ * never handed out has no header to name a category, so it counts in stats
+ * only. peak_bytes and largest_block are maxima, not sums.
  * reset_counts restarts the event counters but keeps the two live_ facts, so
  * the invariants hold across it.
  *
