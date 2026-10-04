@@ -113,9 +113,10 @@ typedef struct ta_index_heap_span {
     size_t size;
 } ta_index_heap_span;
 
-/* ta_index_heap_overlap says whether two fields of an item share a byte. */
+/* ta_index_heap_overlap says whether two fields of an item share a byte. It compares the distance between the
+ * offsets with the size of the lower field instead of adding, so no offset can wrap the arithmetic. */
 static bool ta_index_heap_overlap(ta_index_heap_span a, ta_index_heap_span b) {
-    return a.offset < b.offset + b.size && b.offset < a.offset + a.size;
+    return a.offset < b.offset ? b.offset - a.offset < a.size : a.offset - b.offset < b.size;
 }
 
 /* ta_index_heap_init: see index_heap.h. */
