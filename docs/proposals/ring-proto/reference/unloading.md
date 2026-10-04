@@ -213,13 +213,39 @@ is that text in the name area ([names.md](names.md)), and
 `c2h.load_needed.address` carries it. The host's index maps it to an
 image as before.
 
+## No directory vtable: not resident means ask
+
+Core keeps the directory of resident sessions and nothing else. It has no
+`ta_actor_directory_vtable` and no other way to ask the host whether an
+address exists. Mail, a timer or an external event for an address that is
+not resident waits on that address's list, and core writes
+`c2h.load_needed`. The host answers from its own index: `h2c.load`,
+`h2c.spawn` for a family whose first message creates the actor, or
+`h2c.load_failed` for an address it does not know.
+
+- **One source of truth on each side.** Core knows the resident sessions;
+  the host knows the unloaded ones. Nothing keeps a second copy.
+- **No call out of a macrostep.** `resolve` was a synchronous host call in
+  the middle of a `<send>`, which may do I/O. A miss now only puts the
+  envelope on a waiting list.
+- **A send to an address that never existed costs a round trip.** It holds
+  its envelope until the host answers `h2c.load_failed`, and then becomes
+  `error.communication` for its sender, as for any failed load. A host
+  that knows an address cannot exist answers at once. Declaring loadable
+  address families, so that a miss elsewhere fails without asking, was
+  considered and left out: it adds a declaration and a table for a case
+  the host already answers.
+- **A chart that floods mail to addresses that do not exist** holds pool
+  capacity until the host answers. The pool bounds it, as for any slow
+  load ([above](#waiting-envelopes-count-against-the-pool)).
+
 ## What this replaces
 
 | Today | In this design |
 |---|---|
 | `tinyactors-host/include/tinyactors_host/loads.h`, `src/loads.c` (about 530 lines): load records, waiting mailboxes, `max_waiting`, the wakeup min-heap, load outcomes | waiting lists in core's pool; `c2h.load_needed` / `h2c.load` / `h2c.spawn` / `h2c.load_failed`; the wakeup index is the host's (a `Map` and a heap, or a SQL index) |
 | `tinyactors-host/include/tinyactors_host/offloads.h`, `src/offloads.c`: the bytes of offloaded actors, kept per address | the host keeps the `blob` from `c2h.unloaded` wherever it likes |
-| `tinyactors-host/src/directory.c`: the in-memory directory and its unloaded entries | core's directory of resident sessions. Unloaded addresses are the host's index. **Open:** whether core still needs a directory vtable (`ta_actor_directory_vtable`), or whether "not resident" simply means "ask with `c2h.load_needed`" |
+| `tinyactors-host/src/directory.c`: the in-memory directory and its unloaded entries | core's directory of resident sessions. Unloaded addresses are the host's index. `ta_actor_directory_vtable` goes: "not resident" means "ask with `c2h.load_needed`" ([below](#no-directory-vtable-not-resident-means-ask)) |
 | `tinyactors-napi/src/napi_loads.c` (about 550 lines): JavaScript loaders, timeouts, results | the loader stays in JavaScript, and calls `h2c.load`, `h2c.spawn` or `h2c.load_failed` |
 | napi's dead letters `waiting-full`, `not-found`, `rejected`, `load-failed` | recycled `error.communication` to senders, or dropped external events reported on `tel` |
 

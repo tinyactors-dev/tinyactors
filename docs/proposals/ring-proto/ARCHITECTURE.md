@@ -202,7 +202,7 @@ command. Refusal requires an explicit retry or application decision.
 | A local session (`#_scxml_…`, an actor URI) | an envelope on the run queue, at the macrostep end | when core takes it | pool or name area is full: `error.execution.capacity` | [envelope](reference/envelope.md) |
 | Anything, with a delay | an envelope in the deadline index | when `h2c.time` reaches its due time: mail is taken, an I/O send becomes `c2h.send` | as above | [envelope](reference/envelope.md) |
 | An unloaded session | an envelope that waits; `c2h.load_needed` | after `h2c.load` | as above; if the load fails, the envelope becomes `error.communication` for its sender | [unloading](reference/unloading.md) |
-| A session that doesn't exist | `error.communication` for the sender, in the same envelope | — | — | [envelope](reference/envelope.md) |
+| A session that doesn't exist | core cannot tell it from an unloaded one: an envelope that waits; `c2h.load_needed` | never: the host answers `h2c.load_failed`, and the envelope becomes `error.communication` for its sender | as above | [unloading](reference/unloading.md#no-directory-vtable-not-resident-means-ask) |
 
 `<cancel>` removes an envelope from the deadline index. It is exact: a
 cancelled delayed send never arrives. ([S08](scenarios/S08-cancel-and-second-click.md))
