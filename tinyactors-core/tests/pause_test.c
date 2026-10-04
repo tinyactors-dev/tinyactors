@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures = 0;
 
@@ -30,37 +31,15 @@ static int failures = 0;
  * An allocator that counts what is live and can refuse everything
  */
 
-static long live_allocations = 0;
+/* Whether the script `x1` has turned refusal on; the allocator itself refuses. */
 static int refuse_all = 0;
 /* Set: the next script `x1` starts refusing, inside the microstep, after its
  * queue slot is reserved (ADR 0070), so every pause after it must save
  * without allocating. */
 static int refuse_from_x1 = 0;
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (refuse_all) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    void *memory = aligned_alloc(alignment, size == 0 ? alignment : size);
-    live_allocations += memory != NULL ? 1 : 0;
-    return memory;
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_allocations -= 1;
-    }
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator allocator = { .self = NULL, .v = &allocator_vtable };
+static ta_test_allocator heap;
+static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 /* ------------------------------------------------------------------------
  * <foreach> snapshots that count their references
@@ -134,6 +113,7 @@ static ta_op_status dm_execute_script(void *self, const ta_datamodel_execute_scr
     note("script", text);
     if (refuse_from_x1 && text.len == 2 && memcmp(text.ptr, "x1", 2) == 0) {
         refuse_all = 1;
+        ta_test_allocator_refuse_all(&heap, true);
     }
     return TA_OP_OK;
 }
@@ -559,6 +539,7 @@ static void test_pause_needs_no_allocation(void) {
         pauses += 1u;
     }
     refuse_all = 0;
+    ta_test_allocator_refuse_all(&heap, false);
     CHECK(pauses > 10u);
     CHECK(status == TA_RUN_STABLE);
     note_configuration(&r);
@@ -674,7 +655,7 @@ int main(void) {
     test_pause_needs_no_allocation();
     test_position_names_the_next_unit();
     test_position_between_microsteps();
-    CHECK(live_allocations == 0);
+    CHECK(heap.stats.live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "pause test: %d check(s) failed\n", failures);
         return 1;

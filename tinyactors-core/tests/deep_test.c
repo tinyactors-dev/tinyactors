@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures = 0;
 
@@ -31,27 +32,8 @@ enum { DEPTH = 10000 };
  * An allocator that can refuse large allocations
  */
 
-static size_t refuse_from = 0; /* refuse allocations of at least this size; 0: none */
-
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (refuse_from != 0 && size >= refuse_from) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator allocator = { .self = NULL, .v = &allocator_vtable };
+static ta_test_allocator heap;
+static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
 
 /* ------------------------------------------------------------------------
  * A data model whose conditions are true and whose arrays have one item,
@@ -326,9 +308,9 @@ static void frames_are_sized_at_creation(void) {
     ta_arena_destroy(&arena);
     ta_system_destroy(system);
 
-    refuse_from = (size_t)need; /* the region is at least this large */
+    ta_test_allocator_refuse_from(&heap, (size_t)need); /* the region is at least this large */
     CHECK(deep_system(need) == NULL);
-    refuse_from = 0;
+    ta_test_allocator_refuse_from(&heap, 0);
 
     system = deep_system(need);
     CHECK(system != NULL);
