@@ -242,8 +242,10 @@ bool ta_invoke_take(ta_actor *actor, ta_state_id state, uint32_t *cursor, ta_inv
     if (sparse != NULL && index > sparse->invoke_count) {
         index = sparse->invoke_count;
     }
+    /* Nothing in this loop grows the table, so the column is read once. */
+    const ta_invoke_meta *metas = sparse == NULL ? NULL : ta_invoke_metas(sparse);
     for (; index > 0; index -= 1u) {
-        if (ta_invoke_metas(sparse)[index - 1u].state == state) {
+        if (metas[index - 1u].state == state) {
             *out = ta_invoke_take_index(sparse, index - 1u);
             *cursor = index - 1u;
             return true;
@@ -259,10 +261,13 @@ ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id state) {
         return TA_OK;
     }
     ta_invoke_forget_pending(it->actor, state);
+    const ta_invoke_meta *metas = ta_invoke_metas(sparse);
     for (uint32_t index = sparse->invoke_count; index > 0; index -= 1u) {
-        if (ta_invoke_metas(sparse)[index - 1u].state == state) {
+        if (metas[index - 1u].state == state) {
             ta_interpreter_trace_invoke(it, TA_TRACE_INVOKE_CANCELLED, sparse->invokes[index - 1u].id);
             ta_invoke_cancel_at(it->system, sparse, index - 1u);
+            /* Cancelling calls out (a child's exit); re-derive rather than assume the block stayed. */
+            metas = ta_invoke_metas(sparse);
         }
     }
     return TA_OK;
