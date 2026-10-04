@@ -80,7 +80,7 @@ server.on('request', async (req, res) => {
 | S12.7 | – | – | The `<send>` evaluates `typeexpr` to `http`. `ta_atom_find` finds it in the type set, so the type is supported. Core reserves the record in c2h. |
 | S12.8 | c2h | [`c2h.send`][c2h.send] `{s3.m3, io_type: "http", target: "req:1", name: "http.response", data: v8}` | The pump may execute it at once: `http.send()` finds `req:1`, writes `200` and the body, and releases v8. |
 | S12.9 | c2h | [`c2h.macrostep_ended`][c2h.macrostep_ended] `{s3.m3, stable}` | Reports the end. It does not gate the response, which may already be sent. |
-| S12.10 | c2h | [`c2h.input_completed`][c2h.input_completed] `{source_seq: 41, stable}` | `send()` resolves; `pending` no longer has `req:1`. The host drops its retained original. Core frees e12 and releases v7. |
+| S12.10 | c2h | [`c2h.input_completed`][c2h.input_completed] `{source_seq: 41, stable}` | `send()` resolves; `req:1` left `pending` when S12.8 answered it. The host drops its retained original. Core frees e12 and releases v7. |
 
 ## When it goes wrong
 
@@ -93,7 +93,7 @@ server.on('request', async (req, res) => {
 | S12.15 | The chart replies twice | two `c2h.send` records to `req:1` | the second finds nothing: drop |
 | S12.16 | No transition matches `http.get` | `c2h.input_completed {flags: ignored}` | answers 404 at once, not after the timeout |
 | S12.17 | The chart writes `type="htp"` | `error.execution` in the chart's own block, during its macrostep, because `htp` is not in the type set | – |
-| S12.18 | c2h is full at the `<send>` | the slot parks before the `<send>` and runs it again after the host drains ([macrostep](../reference/macrostep.md#a-full-c2h-pauses-the-slot)); the chart sees nothing | answers when the record arrives; answers 504 only if its timeout removed `req:1` first, because the host stopped draining |
+| S12.18 | c2h is full at the `<send>` | the slot parks before the `<send>` evaluates anything, and runs it once after the host drains ([macrostep](../reference/macrostep.md#a-full-c2h-pauses-the-slot)); the chart sees nothing | answers when the record arrives; answers 504 only if its timeout removed `req:1` first, because the host stopped draining |
 | S12.19 | The chart loops | `c2h.input_completed {runaway}` ([macrostep](../reference/macrostep.md#runaways-the-chain-limit)) | answers 500 |
 | S12.20 | The chart replies after calling another service | `c2h.input_completed` first, `c2h.send` later | the reply finds `req:1` until the timeout removes it |
 

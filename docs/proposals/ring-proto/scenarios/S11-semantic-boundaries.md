@@ -1,6 +1,6 @@
 # S11: Semantic boundaries at capacity limits
 
-**Status:** Accepted proposal refinements (2026-10-02), part of
+**Status:** Sketch (2026-10-02), part of
 [the ring protocol proposal](../README.md). These are implementation acceptance
 scenarios, not a claim that the current runtime implements the protocol.
 

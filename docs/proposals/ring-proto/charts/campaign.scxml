@@ -7,7 +7,7 @@
   Reliability lives here, not in the protocol:
   - the attempt timeout `t` is scheduled when an attempt starts, before the
     fanout, so a capacity error inside the fanout cannot lose it;
-  - a capacity error parks the fanout in `throttled`, which resumes on the
+  - a capacity error moves the fanout to `throttled`, which resumes on the
     next acknowledgement or after a short delay;
   - a timeout, or a second click, sends every notification still pending
     again; the notify I/O processor removes duplicates by its own key.
@@ -94,7 +94,7 @@
           <cancel sendid="t"/>
         </onexit>
 
-        <!-- Any capacity error during the fanout parks it. -->
+        <!-- Any capacity error during the fanout moves it to throttled. -->
         <transition event="error.execution.capacity" target="throttled"/>
 
         <state id="sending">

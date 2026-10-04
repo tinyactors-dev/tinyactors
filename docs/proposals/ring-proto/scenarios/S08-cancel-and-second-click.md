@@ -20,8 +20,8 @@ open.
 | S08.1 | h2c | [`h2c.time`][h2c.time] `{t0+29.9s}`, then [`h2c.event`][h2c.event] `{campaign/42, send.requested, origin: http:req/c4}`, seq `q` | The user clicks again. The explicit time update supplies the live clock for the click. |
 | S08.2 | host | – | The wake timer fires at t0+30s. The host retains that time but does not post it until input `q` completes. |
 | S08.3 | – | – | Core admits the click. **pool 2/64.** Older runnable work may precede it. When it is taken, its macrostep time is t0+29.9s and stays fixed through any budget pause. |
-| S08.4 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.macrostep_ended`][c2h.macrostep_ended], [`c2h.wake`][c2h.wake] `{t0+59.9s}`, [`c2h.input_completed`][c2h.input_completed] `{source_seq: q}` | `send.requested` re-enters `attempt`. Its `<cancel sendid="t">` removes all matching pending timers. Its entry schedules a new `t`, due t0+59.9s. **pool 1/64.** The host now knows the click completed. |
-| S08.5 | h2c | [`h2c.time`][h2c.time] `{t0+30s}` | The host posts the retained time. Nothing is due. The old `t` no longer exists. |
+| S08.4 | c2h | [`c2h.send`][c2h.send] `{x-notify, n5}`, [`c2h.macrostep_ended`][c2h.macrostep_ended], [`c2h.wake`][c2h.wake] `{t0+59.9s}`, [`c2h.input_completed`][c2h.input_completed] `{source_seq: q}` | `send.requested` re-enters `attempt`. Its `<cancel sendid="t">` removes all matching pending timers. Its entry schedules a new `t`, due t0+59.9s. **pool 1/64.** With this record the host knows the click completed. |
+| S08.5 | h2c | [`h2c.time`][h2c.time] `{t0+30s}` | The host posts the retained time. Nothing is due: S08.4 removed the old `t`. |
 
 ## Order B: the clock before the click
 
@@ -53,8 +53,8 @@ host must retry the click or explicitly decide to advance time without it.
 
 ## The two open requests
 
-The first click's request `9f` is never answered, because `replyTo` now
-names `c4`. The host closes `9f` with its own HTTP timeout. A chart that
+The first click's request `9f` is never answered, because the second click set
+`replyTo` to `c4`. The host closes `9f` with its own HTTP timeout. A chart that
 wants to be polite can reply `superseded` to the old `replyTo` before
 overwriting it. That is a change to the chart, not to the protocol.
 
