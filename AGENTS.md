@@ -61,6 +61,7 @@ Do it at release time, not between releases.
   | `tinyxml`, `tinyactors-scxml`       | that one, the scxml codec, test host, napi |
   | `tinyactors-test`                   | test host, and napi when the IRP importer changed |
   | `tinyactors-napi`                   | napi                                     |
+  | `tinyparse`                         | tinyparse                                |
   | root `mise/lib`, `mise.toml`        | all of them                              |
   | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
 
@@ -73,6 +74,8 @@ Do it at release time, not between releases.
   - `scale_test` up to four million actors (the fast pass stops at
     200,000);
   - napi's `scale.js` on Bun as well as Node, and up to a million actors;
+  - tinyparse's exhaustive gates: every corpus input through the VM and
+    the generated parsers, and the larger reuse and reclaim workloads;
 
   Run it before a release, and before committing a change to core's
   allocation, pause and resume, offload and paging, or trace-writing paths,
@@ -87,6 +90,8 @@ Do it at release time, not between releases.
     'PATTERN'` (matches `group: name`; `--fast` skips the exhaustive ones,
     `--timings 10` lists the slowest, `--jobs N` limits the workers);
   - one napi suite: `node tinyactors-napi/test/<suite>.js`, then `bun`;
+  - one tinyparse gate: `mise run //tinyparse:gate:cc-diff` (`--full` for
+    its exhaustive version);
   - one project's whole suite: `mise run test` inside it.
 - Do not skip, weaken or delete a check to make the fast pass faster. Make
   it cheaper, or move it to the full pass as below.
