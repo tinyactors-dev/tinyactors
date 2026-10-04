@@ -3,7 +3,7 @@
 #
 # Builds the rewriter on first use (or when stale), then runs it on the
 # given file and prints the rewritten source to stdout. Works regardless of
-# the caller's cwd (the test harness invokes it from tools/pocketparse):
+# the caller's cwd (the test harness invokes it from tinyparse/):
 # every path is resolved from this script's own location.
 set -uo pipefail
 

@@ -7,7 +7,8 @@
 # driver registers the two embedded GENERATED parsers on the engine's language
 # registry; the GENERATED host parser's baked inject sites resolve them by name at
 # runtime and drive them over each fence's content. This is the proof that a
-# generated host parser nests generated embedded parsers, coordinated by ax.
+# generated host parser nests generated embedded parsers, coordinated by the
+# engine's language registry.
 #
 # Invoked by examples/build.sh with PP_ROOT/PP_DIST/PP_INC/PP_CLI in the
 # environment, or run directly: it derives those from its own location.
@@ -34,7 +35,6 @@ case "$(uname -s)/$(uname -m)" in
   Darwin/arm64|Darwin/aarch64) PLAT=macos-arm64 ;;
   *) PLAT=linux-x86_64 ;;
 esac
-AXDIR="$(cd "$PP_ROOT/../.." && pwd)/dist/$PLAT"
 
 CC="${CC:-cc}"
 
@@ -55,5 +55,5 @@ CC="${CC:-cc}"
   "$HERE/nesting.c" -I"$PP_INC" || exit 1
 "$CC" -std=c11 -O2 -o "$HERE/nesting" \
   "$HERE/nesting.o" "$HERE/fence_host.c" "$HERE/json_lang.c" "$HERE/js_lang.c" \
-  -I"$PP_INC" -I"$SRC" -I"$AXDIR" \
-  "$PP_DIST/libpocketparse.a" "$AXDIR/libax.a"
+  -I"$PP_INC" -I"$SRC" \
+  "$PP_DIST/libpocketparse.a"

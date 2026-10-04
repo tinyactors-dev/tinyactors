@@ -15,9 +15,6 @@
 #include "bench_common.h"
 #include "pocketparse.h"
 
-void pp_engine_select_vm(pocketparse_engine *engine, int use_vm);
-void pp_engine_select_vm_actor(pocketparse_engine *engine, int use_vm_actor);
-
 #define GRANT (8u * 1024u * 1024u)
 static void  **blocks; static size_t nblocks, capblocks;
 static void track(void *p){ if(!p)return; if(nblocks==capblocks){size_t nc=capblocks?capblocks*2:256; void**g=realloc(blocks,nc*sizeof*g); if(!g)return; blocks=g; capblocks=nc;} blocks[nblocks++]=p; }

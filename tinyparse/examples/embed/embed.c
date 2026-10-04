@@ -17,7 +17,7 @@
 ** (pp_compiled_parser_load / _run) and every emitted file-scope symbol would
 ** collide at link time; with `--name host_parser' and `--name json_parser' they
 ** become host_parser_load / json_parser_load and link cleanly. build.sh
-** generates both and links them with this driver against libpocketparse + libax.
+** generates both and links them with this driver against libpocketparse.
 **
 ** This is host dev-tool code: libc is fine.
 **

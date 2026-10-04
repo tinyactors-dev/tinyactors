@@ -4,7 +4,7 @@
 # Builds the driver if needed, then JITs the named function from the C source,
 # calls it with the integer argument, and prints the integer result.
 #
-# Designed to run with cwd = tools/pocketparse (as the test harness does) but
+# Designed to run with cwd = tinyparse/ (as the test harness does) but
 # also works from anywhere: paths default from this script's own location.
 set -uo pipefail
 

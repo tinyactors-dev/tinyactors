@@ -4,17 +4,19 @@ name: pocketparse
 #
 # pocketparse is cross-built for BOTH platforms from a single Linux host with
 # Zig 0.15.1 — the decision is cross-from-Linux, so there is no macOS runner.
-# This workflow is scoped to tools/pocketparse/**; it never runs for changes
-# elsewhere in the repo (the core ax library has its own workflows).
+# This workflow is scoped to tinyparse/**; it never runs for changes elsewhere
+# in the monorepo. It is kept here, under tinyparse/.github/, until it is wired
+# into the monorepo's own .github/workflows/; its paths are already written
+# relative to the monorepo root.
 #
 # What runs, and when:
-#   - push / pull_request under tools/pocketparse/**  -> BUILD GATE only.
+#   - push / pull_request under tinyparse/**          -> BUILD GATE only.
 #   - push of a tag matching pocketparse-v*           -> gate + GitHub Release.
 #   - workflow_dispatch (manual)                      -> gate + GitHub Release.
 #
 # The gate is ci/pocketparse-metric.sh; a non-zero (any FAIL) result fails the
 # job, so a tag build cannot ship a red tree. release.sh assembles the three
-# release tarballs into tools/pocketparse/dist/release/; internally it calls
+# release tarballs into tinyparse/dist/release/; internally it calls
 # amalgamate.sh to produce the single-file amalgamation that goes into the
 # amalgamation tarball. Every run uploads those tarballs as build artifacts;
 # only a pocketparse-v* tag (or a manual dispatch) attaches them to a Release.
@@ -28,10 +30,10 @@ on:
       - 'pocketparse-v*'
     # ...and a normal push under the project runs the gate only.
     paths:
-      - 'tools/pocketparse/**'
+      - 'tinyparse/**'
   pull_request:
     paths:
-      - 'tools/pocketparse/**'
+      - 'tinyparse/**'
 
 # One in-flight run per ref; a newer push supersedes an older one, except on
 # tags, where every release build must complete.
@@ -61,22 +63,21 @@ jobs:
       # Provision the pinned Zig 0.15.1 with the repo's own setup script, for
       # fidelity with what the metric proves locally. POCKETPARSE_SETUP=1 forces
       # the fetch in CI; the script installs to
-      # tools/pocketparse/.toolchain/zig/zig, which build.sh discovers.
+      # tinyparse/.toolchain/zig/zig, which build.sh discovers.
       - name: Provision Zig 0.15.1
-        run: POCKETPARSE_SETUP=1 bash scripts/pocketparse-setup.sh
+        run: POCKETPARSE_SETUP=1 bash tinyparse/ci/pocketparse-setup.sh
 
       # The gate. It builds the dist matrix and runs the data-driven suite over
       # the xfail ledger, exiting non-zero on any FAIL — which fails this job,
       # so a tag build never ships a red tree.
       - name: Run the build gate
-        run: bash ci/pocketparse-metric.sh
+        run: bash tinyparse/ci/pocketparse-metric.sh
 
-      # Assemble the three release tarballs into
-      # tools/pocketparse/dist/release/. release.sh invokes amalgamate.sh to
-      # fold ax.c into the single-file pocketparse.c for the amalgamation
-      # tarball.
+      # Assemble the three release tarballs into tinyparse/dist/release/.
+      # release.sh invokes amalgamate.sh to fold the library into the
+      # single-file pocketparse.c for the amalgamation tarball.
       - name: Build release tarballs
-        run: bash tools/pocketparse/release.sh tarballs
+        run: bash tinyparse/release.sh tarballs
 
       # Keep the packaged artifacts on every run, including PRs, so a reviewer
       # can download exactly what a release would ship.
@@ -84,7 +85,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pocketparse-release
-          path: tools/pocketparse/dist/release/*
+          path: tinyparse/dist/release/*
           if-no-files-found: error
 
       # Publish only on a pocketparse-v* tag or a manual dispatch. Attaches the
@@ -93,6 +94,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/pocketparse-v') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          files: tools/pocketparse/dist/release/*
+          files: tinyparse/dist/release/*
         env:
           GITHUB_TOKEN: ${{ github.token }}

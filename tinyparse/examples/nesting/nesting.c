@@ -2,7 +2,7 @@
 ** nesting.c -- the W17-3 NATIVE NESTING driver.
 **
 ** ONE LESSON: a GENERATED host parser nests GENERATED embedded parsers, in one
-** binary, coordinated by ax's language registry -- and the composite tree is
+** binary, coordinated by the engine's language registry -- and the composite tree is
 ** byte-identical to the VM's.
 **
 ** This is the inject hook the codegen blueprint describes. The host grammar
@@ -20,11 +20,11 @@
 ** constant) but is NOT linked against their parsers directly. The wiring happens
 ** at RUNTIME: the driver registers each embedded language on the engine with
 ** pocketparse_register_language(engine, "std.json", {grammar, json_lang_run}).
-** When the generated host parser reaches an inject site, ax's inject runtime
+** When the generated host parser reaches an inject site, the inject runtime
 ** resolves the language by name in that registry and drives the registered
 ** generated parser over the region, sharing the host arena so the subtree splices
 ** in place. A bare function-pointer table could not do the by-name, separately-
-** compiled composition; ax can, on the same session that owns the arena.
+** compiled composition; the registry can, on the engine that owns the arena.
 **
 ** The point of the gate around this driver: the tree this prints must match,
 ** byte for byte, what the VM prints for the SAME std.fence grammar on the SAME
@@ -313,7 +313,7 @@ int main(int argc, char **argv)
     doc_bytes.length  = (uint32_t)doc_length;
     pocketparse_push(parser, doc_bytes);
 
-    /* Run the GENERATED host parser. Its baked inject sites call ax's inject
+    /* Run the GENERATED host parser. Its baked inject sites call the inject
     ** runtime, which resolves each fence's language in the registry and drives the
     ** GENERATED embedded parser over the fence content, splicing the subtree in
     ** place -- native nesting, no VM in the loop. */

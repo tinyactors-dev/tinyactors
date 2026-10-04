@@ -26,5 +26,4 @@ After installing, `pocketparse --help` prints the usage summary and
 
     cc myprog.c -lpocketparse        # add -L/-I if not in a default prefix
 
-Include only `pocketparse.h`; the ax engine that powers the library is an
-internal detail and exports no symbols of its own.
+Include only `pocketparse.h`; the library has no dependencies of its own.

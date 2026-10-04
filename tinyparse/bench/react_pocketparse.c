@@ -22,27 +22,9 @@
 #include "bench_common.h"
 #include "pocketparse.h"
 
-/* ** Library-private engine selectors (see bench_pocketparse.c): honour
-** POCKETPARSE_ENGINE so the same binary can measure the actor VM default, the
-** in-process "vm", and the "recursive" opt-out. */
-void pp_engine_select_vm(pocketparse_engine *engine, int use_vm);
-void pp_engine_select_vm_actor(pocketparse_engine *engine, int use_vm_actor);
+/* ** Library-private rule-memo override (defined in src/engine.c, NOT in the
+** public header). */
 void pp_engine_force_rule_memo(pocketparse_engine *engine, int mode);
-
-static void bench_select_engine(pocketparse_engine *engine)
-{
-    const char *which = getenv("POCKETPARSE_ENGINE");
-    if (engine == NULL)
-        return;
-    if (which != NULL && strcmp(which, "recursive") == 0) {
-        pp_engine_select_vm_actor(engine, 0);
-    } else if (which != NULL && strcmp(which, "vm") == 0) {
-        pp_engine_select_vm_actor(engine, 0);
-        pp_engine_select_vm(engine, 1);
-    } else {
-        pp_engine_select_vm_actor(engine, 1);
-    }
-}
 
 /* ** The initial grant. pocketparse's arena does not reclaim on parser_free, so
 ** parsing a whole codebase into ONE engine accretes every file's tree (and the
@@ -142,7 +124,6 @@ static pocketparse_engine *open_and_compile(const char *grammar_src,
     engine = pocketparse_open(cfg);
     if (engine == NULL)
         return NULL;
-    bench_select_engine(engine);
     {   /* Optional: force the W67 rule memo on/off to measure its full effect. */
         const char *rm = getenv("POCKETPARSE_RULEMEMO");
         if (rm != NULL && strcmp(rm, "always") == 0)

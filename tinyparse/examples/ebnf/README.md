@@ -44,7 +44,7 @@ the grammar's start rule.
 ## Use
 
 ```sh
-# from tools/pocketparse
+# from tinyparse/
 examples/ebnf/run.sh examples/ebnf/uri.ebnf
 ```
 

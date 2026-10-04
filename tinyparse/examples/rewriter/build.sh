@@ -23,7 +23,7 @@ platform() {
 CC="${CC:-cc}"
 
 if [ ! -f "$PP_DIST/pocketparse.h" ] || [ ! -f "$PP_DIST/libpocketparse.a" ]; then
-  echo "rewriter: missing dist at $PP_DIST (run: cd tools/pocketparse && bash build.sh dist)" >&2
+  echo "rewriter: missing dist at $PP_DIST (run: cd tinyparse && bash build.sh dist)" >&2
   exit 1
 fi
 
@@ -51,6 +51,6 @@ gen_header
   -I"$PP_DIST" -I"$HERE" \
   -o "$HERE/rewriter" \
   "$HERE/rewriter.c" \
-  "$PP_DIST/libpocketparse.a" "$PP_DIST/libax.a"
+  "$PP_DIST/libpocketparse.a"
 
 echo "rewriter: built $HERE/rewriter"

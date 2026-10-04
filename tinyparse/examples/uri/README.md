@@ -22,7 +22,7 @@ sub-rule.
 ## Use
 
 ```sh
-# from tools/pocketparse
+# from tinyparse/
 examples/uri/run.sh 'https://user@example.com:8080/a/b?x=1#frag'
 ```
 

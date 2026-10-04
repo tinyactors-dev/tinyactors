@@ -8,7 +8,6 @@
 /src/manpage_data.h
 /src/grammars_data.h
 /src/amalgamation_data.h
-/pocketparse.1
 # tree-sitter porting references (build-time only; see reference/PINS.txt)
 /reference/tree-sitter-javascript/
 /reference/tree-sitter-typescript/

@@ -1,7 +1,7 @@
 /*
 ** bench_pocketparse.c -- the pocketparse side of the Phase 9 benchmark.
 **
-** It links libpocketparse.a + libax.a, compiles the std.javascript grammar
+** It links libpocketparse.a, compiles the std.javascript grammar
 ** ONCE from its .scm source (the one-time cost the task asks us to exclude),
 ** then for every corpus document creates a parser, pushes the whole input, and
 ** finishes. pocketparse_finish builds the whole contiguous CST eagerly (node
@@ -45,48 +45,12 @@
 #include "bench_common.h"
 #include "pocketparse.h"
 
-/* ** Library-private engine selectors (defined in src/engine.c, NOT in the public
-** header). The actor-hosted bytecode VM is the library default as of W64, so a
-** plain pocketparse_open already measures it; these let the harness honour
-** POCKETPARSE_ENGINE so the same binary can also measure the "vm" in-process
-** opt-out for a side-by-side table, exactly as the CLI's open_engine does. */
-void pp_engine_select_vm(pocketparse_engine *engine, int use_vm);
-void pp_engine_select_vm_actor(pocketparse_engine *engine, int use_vm_actor);
-
-/* ** Apply POCKETPARSE_ENGINE to a freshly opened engine, mirroring the CLI:
-** "vm" selects the in-process bytecode VM, and anything else (including unset)
-** leaves the actor-hosted VM default in place. W14-5 retired the recursive IR
-** interpreter, so "recursive" is accepted as a deprecated alias for the in-process
-** VM (matching the CLI). This is the only place the harness reads the
-** environment. */
-static void bench_select_engine(pocketparse_engine *engine)
-{
-    const char *which = getenv("POCKETPARSE_ENGINE");
-    if (engine == NULL)
-        return;
-    if (which != NULL &&
-        (strcmp(which, "vm") == 0 || strcmp(which, "recursive") == 0)) {
-        pp_engine_select_vm_actor(engine, 0);
-        pp_engine_select_vm(engine, 1);
-    } else {
-        pp_engine_select_vm_actor(engine, 1);
-    }
-}
-
 /* ** The initial grant. We re-open the engine each iteration (so each pass starts
 ** from a clean arena) and supply a grow callback as the real allocator; the base
-** holds the ax system slice plus the arena bookkeeping before the first grow.
-**
-** W64: this is sized so pocketparse_open can carve an ax SYSTEM out of the grant,
-** because the actor-hosted bytecode VM is now the library default and the system
-** is what hosts the parser actor -- with a sub-megabyte grant pocketparse_open
-** opens no system and the parse silently falls back off the actor path, so the
-** harness would no longer measure the default engine. pocketparse_open reserves
-** min(size/4, 16 MiB) for the system and needs at least 1 MiB on each side of the
-** split, so a 4 MiB base yields a 1 MiB system and a 3 MiB arena -- enough to host
-** the actor while still forcing the bulk of each parse through the tracked grow
-** callback, so the high-water footprint stays measured, not assumed. Set
-** POCKETPARSE_ENGINE=vm to measure the in-process opt-out instead. */
+** holds the arena bookkeeping and the first chunks before the first grow. A
+** 4 MiB base (the size this harness has always used) still forces the bulk of
+** each parse through the tracked grow callback, so the high-water footprint stays
+** measured, not assumed. */
 #define BENCH_GRANT (4u * 1024u * 1024u)
 
 /* ** A registry of blocks the engine owns this iteration: the base grant plus
@@ -224,7 +188,6 @@ static pocketparse_engine *open_and_compile(const char *grammar_src,
     engine = pocketparse_open(cfg);
     if (engine == NULL)
         return NULL;
-    bench_select_engine(engine);
     bind_class(engine, "alpha", cls_alpha);
     bind_class(engine, "digit", cls_digit);
     bind_class(engine, "alnum", cls_alnum);

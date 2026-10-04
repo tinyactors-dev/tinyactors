@@ -32,7 +32,6 @@ case "$(uname -s)/$(uname -m)" in
   Darwin/arm64|Darwin/aarch64) PLAT=macos-arm64 ;;
   *) PLAT=linux-x86_64 ;;
 esac
-AXDIR="$(cd "$PP_ROOT/../.." && pwd)/dist/$PLAT"
 
 CC="${CC:-cc}"
 
@@ -46,8 +45,8 @@ CC="${CC:-cc}"
 #    machine output (and #includes the engine's internal.h), so it builds at -O2
 #    without -Wall -Wextra, exactly as the cc-diff / nesting gates do.
 "$CC" -std=c11 -O2 -Wall -Wextra -c -o "$HERE/bufferfriendly.o" \
-  "$HERE/bufferfriendly.c" -I"$PP_INC" -I"$SRC" -I"$AXDIR" || exit 1
+  "$HERE/bufferfriendly.c" -I"$PP_INC" -I"$SRC" || exit 1
 "$CC" -std=c11 -O2 -o "$HERE/bufferfriendly" \
   "$HERE/bufferfriendly.o" "$HERE/sx.c" \
-  -I"$PP_INC" -I"$SRC" -I"$AXDIR" \
-  "$PP_DIST/libpocketparse.a" "$AXDIR/libax.a"
+  -I"$PP_INC" -I"$SRC" \
+  "$PP_DIST/libpocketparse.a"

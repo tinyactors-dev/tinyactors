@@ -22,4 +22,4 @@ CC="${CC:-cc}"
 "$CC" -std=c99 -O2 -Wall -Wextra -o "$HERE/uri" \
   "$HERE/uri.c" \
   -I"$PP_DIST" \
-  "$PP_DIST/libpocketparse.a" "$PP_DIST/libax.a"
+  "$PP_DIST/libpocketparse.a"

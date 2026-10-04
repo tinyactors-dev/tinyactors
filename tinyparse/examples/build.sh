@@ -7,10 +7,10 @@
 # simply stay red/xfail).
 #
 # Each example/<name>/build.sh is invoked with these environment variables:
-#   PP_ROOT   absolute path of tools/pocketparse
-#   PP_DIST   absolute path of the host-platform dist dir (libpocketparse.a,
-#             libax.a, pocketparse.h all live here)
-#   PP_INC    absolute path of tools/pocketparse/include
+#   PP_ROOT   absolute path of the pocketparse project root
+#   PP_DIST   absolute path of the host-platform dist dir (libpocketparse.a and
+#             pocketparse.h live here)
+#   PP_INC    absolute path of the pocketparse include directory
 #   PP_CLI    absolute path of the built pocketparse CLI
 # An example links the host dist archives and includes $PP_DIST/pocketparse.h.
 set -uo pipefail
