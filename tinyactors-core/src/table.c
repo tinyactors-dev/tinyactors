@@ -142,6 +142,30 @@ static ta_table_slot *ta_table_page_alloc(const ta_table *table, uint32_t count)
     return slots;
 }
 
+/*
+ * Replaces the page of `entry` by a cleared page of `slots` slots (more than
+ * it has), rehashes its entries into it and frees the old page with its
+ * recorded size. One allocation; on failure nothing has changed. The new
+ * page has room for every entry, so the rehash cannot fail. Safe points only.
+ */
+static ta_result ta_table_page_resize(ta_table *table, ta_table_page_entry *entry, uint32_t slots) {
+    ta_table_slot *grown = ta_table_page_alloc(table, slots);
+    if (grown == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_table_page to = { .slots = grown, .count = slots };
+    for (uint32_t index = 0; index < entry->count; index += 1u) {
+        if (entry->slots[index].value != TA_TABLE_NONE) {
+            (void)ta_table_page_insert(&to, &entry->slots[index]); /* the new page has more slots than the old has entries */
+        }
+    }
+    ta_table_page_free(table, entry->slots, entry->count);
+    table->slots += slots - entry->count;
+    entry->slots = grown;
+    entry->count = slots;
+    return TA_OK;
+}
+
 /* Does the work of ta_table_init; the caller zeroes *table when this fails. */
 static ta_result ta_table_setup(ta_table *table, ta_allocator allocator, const ta_table_params *params) {
     *table = (ta_table){ .allocator = allocator, .mode = params->mode };
@@ -161,7 +185,10 @@ static ta_result ta_table_setup(ta_table *table, ta_allocator allocator, const t
             params->grow_sixteenths == 0 || params->grow_sixteenths > TA_TABLE_MAX_GROW_SIXTEENTHS) {
             return TA_ERR_INVALID;
         }
-        slots = params->page_slots;
+        slots = params->first_slots == 0 ? params->page_slots : params->first_slots;
+        if (slots < TA_TABLE_MIN_PAGE_SLOTS || slots > params->page_slots) {
+            return TA_ERR_INVALID;
+        }
         table->grow_sixteenths = params->grow_sixteenths;
     } else {
         return TA_ERR_INVALID;
@@ -170,19 +197,20 @@ static ta_result ta_table_setup(ta_table *table, ta_allocator allocator, const t
     if (!ta_table_page_bytes((uint32_t)slots, &bytes)) {
         return TA_ERR_NOMEM;
     }
-    table->page_slots = (uint32_t)slots;
+    /* FIXED has one page of its whole size; GROWING's target page size is page_slots, and its first page may be smaller. */
+    table->page_slots = params->mode == TA_TABLE_GROWING ? params->page_slots : (uint32_t)slots;
     table->base = 1u;
     ta_vec_init(&table->pages, allocator, TA_VEC_LAYOUT(ta_table_page_entry));
     ta_table_slot *first = NULL;
     if (ta_vec_reserve(&table->pages, 1u) == TA_OK) {
-        first = ta_table_page_alloc(table, table->page_slots);
+        first = ta_table_page_alloc(table, (uint32_t)slots);
     }
     if (first == NULL) {
         ta_vec_destroy(&table->pages);
         return TA_ERR_NOMEM;
     }
-    (void)ta_vec_push(&table->pages, &(ta_table_page_entry){ .slots = first, .count = table->page_slots }); /* reserved above */
-    table->slots = table->page_slots;
+    (void)ta_vec_push(&table->pages, &(ta_table_page_entry){ .slots = first, .count = (uint32_t)slots }); /* reserved above */
+    table->slots = slots;
     return TA_OK;
 }
 
@@ -252,20 +280,7 @@ ta_result ta_table_prepare(ta_table *table, uint32_t hash) {
     if (home->count > TA_TABLE_MAX_PAGE_SLOTS_TOTAL / 2u) {
         return TA_ERR_NOMEM;
     }
-    uint32_t doubled = home->count * 2u;
-    ta_table_slot *slots = ta_table_page_alloc(table, doubled);
-    if (slots == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    ta_table_page to = { .slots = slots, .count = doubled };
-    for (uint32_t index = 0; index < home->count; index += 1u) {
-        (void)ta_table_page_insert(&to, &home->slots[index]); /* twice the slots of a page whose every slot is full */
-    }
-    ta_table_page_free(table, home->slots, home->count);
-    table->slots += home->count;
-    home->slots = slots;
-    home->count = doubled;
-    return TA_OK;
+    return ta_table_page_resize(table, home, home->count * 2u);
 }
 
 void ta_table_probe_start(const ta_table *table, uint32_t hash, ta_table_probe *probe) {
@@ -353,6 +368,14 @@ ta_result ta_table_grow(ta_table *table) {
     }
     if (table->base >= TA_TABLE_MAX_BASE) {
         return TA_ERR_NOMEM;
+    }
+    if (table->pages.count == 1u) {
+        ta_table_page_entry *lone = ta_table_entry_at(table, 0);
+        if (lone->count < table->page_slots) {
+            /* A small first page: double it instead of splitting, so a small table never pays for a full page. */
+            uint32_t doubled = lone->count > table->page_slots / 2u ? table->page_slots : lone->count * 2u;
+            return ta_table_page_resize(table, lone, doubled);
+        }
     }
     ta_result result = ta_vec_reserve(&table->pages, table->base + table->split + 1u);
     if (result != TA_OK) {

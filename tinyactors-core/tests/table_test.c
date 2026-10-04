@@ -13,7 +13,7 @@
  * and grow, prepare (a full page of equal hashes doubles instead of
  * refusing, a refused prepare changes nothing, a split of an enlarged page,
  * the two grow triggers, the walk over pages of different sizes), a zeroed
- * table, and the strict allocator's verdict on every free (size and
+ * table, a small first page doubled in place, and the strict allocator's verdict on every free (size and
  * alignment must be those of the allocation).
  *
  * Includes the amalgamation, because the unit is private to core.
@@ -597,6 +597,96 @@ static void test_allocation_failures(void) {
     }
 }
 
+/*
+ * A small first page (first_slots) is doubled in place by ta_table_grow until
+ * it is page_slots, then pages are added. Checked: the parameter's bounds, the
+ * sizes 32, 64, 128 with one page and no directory change, every entry
+ * found after each doubling, the split once the page is full size, a refused
+ * allocation that leaves the page as it was, and ta_table_prepare doubling a
+ * full small page with the same helper.
+ */
+static void test_first_page(void) {
+    ta_test_allocator_reset_counts(&heap);
+    ta_allocator allocator = ta_test_allocator_get(&heap);
+    ta_table table;
+    CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 128u, .first_slots = 8u, .grow_sixteenths = 6 }) ==
+          TA_ERR_INVALID);
+    CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 128u, .first_slots = 129u, .grow_sixteenths = 6 }) ==
+          TA_ERR_INVALID);
+    CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = TA_TABLE_FIXED, .max_entries = 10u, .first_slots = 3u }) == TA_OK);
+    ta_table_destroy(&table);
+    /* first_slots equal to page_slots is the old behaviour: no doubling, a split at once. */
+    CHECK(ta_table_init(&table, allocator, &(ta_table_params){ .mode = TA_TABLE_GROWING, .page_slots = 32u, .first_slots = 32u, .grow_sixteenths = 6 }) == TA_OK);
+    CHECK(ta_table_grow(&table) == TA_OK && table.pages.count == 2u);
+    ta_table_destroy(&table);
+
+    ta_table_params params = { .mode = TA_TABLE_GROWING, .page_slots = 128u, .first_slots = 16u, .grow_sixteenths = 6 };
+    CHECK(ta_table_init(&table, allocator, &params) == TA_OK);
+    CHECK(table.pages.count == 1u && table.slots == 16u && table.page_slots == 128u);
+    CHECK(ta_table_bytes(&table) == 16u * sizeof(ta_table_slot) + ta_vec_bytes(&table.pages));
+    uint32_t hashes[200];
+    uint32_t inserted = 0;
+    for (uint32_t expect = 32u; expect <= 128u; expect *= 2u) {
+        while (!ta_table_wants_grow(&table)) {
+            hashes[inserted] = random32();
+            CHECK(ta_table_insert(&table, hashes[inserted], inserted) == TA_OK);
+            inserted += 1u;
+        }
+        size_t directory = ta_vec_bytes(&table.pages);
+        uint64_t before = heap.stats.allocations;
+        CHECK(ta_table_grow(&table) == TA_OK);
+        CHECK(heap.stats.allocations - before == 1u);
+        CHECK(table.pages.count == 1u && table.slots == expect && ta_vec_bytes(&table.pages) == directory);
+        CHECK(ta_table_count(&table) == inserted);
+        for (uint32_t index = 0; index < inserted; index += 1u) {
+            CHECK(contains(&table, hashes[index], index));
+        }
+        CHECK(no_gaps(&table) && max_page_fill_percent(&table) < 100u);
+    }
+    while (!ta_table_wants_grow(&table)) {
+        hashes[inserted] = random32();
+        CHECK(ta_table_insert(&table, hashes[inserted], inserted) == TA_OK);
+        inserted += 1u;
+    }
+    CHECK(ta_table_grow(&table) == TA_OK && table.pages.count == 2u && table.slots == 256u);
+    for (uint32_t index = 0; index < inserted; index += 1u) {
+        CHECK(contains(&table, hashes[index], index));
+    }
+    ta_table_destroy(&table);
+    CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
+
+    /* A refused allocation of the doubling changes nothing, and a retry works. */
+    ta_test_allocator_reset_counts(&heap);
+    CHECK(ta_table_init(&table, allocator, &params) == TA_OK);
+    for (uint32_t index = 0; index < 8u; index += 1u) {
+        hashes[index] = random32();
+        CHECK(ta_table_insert(&table, hashes[index], index) == TA_OK);
+    }
+    ta_test_allocator_fail_nth(&heap, 1u);
+    CHECK(ta_table_grow(&table) == TA_ERR_NOMEM);
+    ta_test_allocator_disarm(&heap);
+    CHECK(table.slots == 16u && table.pages.count == 1u && ta_table_count(&table) == 8u && no_gaps(&table));
+    for (uint32_t index = 0; index < 8u; index += 1u) {
+        CHECK(contains(&table, hashes[index], index));
+    }
+    CHECK(ta_table_grow(&table) == TA_OK && table.slots == 32u);
+    ta_table_destroy(&table);
+    CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
+
+    /* Prepare on a full small page: equal hashes fill it, prepare doubles it, the insert then succeeds. */
+    ta_test_allocator_reset_counts(&heap);
+    CHECK(ta_table_init(&table, allocator, &params) == TA_OK);
+    for (uint32_t index = 0; index < 16u; index += 1u) {
+        CHECK(ta_table_prepare(&table, 77u) == TA_OK);
+        CHECK(ta_table_insert(&table, 77u, index) == TA_OK);
+    }
+    CHECK(table.slots == 16u);
+    CHECK(ta_table_prepare(&table, 77u) == TA_OK && table.slots == 32u);
+    CHECK(ta_table_insert(&table, 77u, 16u) == TA_OK && candidates(&table, 77u) == 17u);
+    ta_table_destroy(&table);
+    CHECK(heap.stats.bad_frees == 0 && ta_test_allocator_finish(&heap) == 0);
+}
+
 int main(void) {
     test_fixed();
     test_reserved_and_params();
@@ -610,6 +700,7 @@ int main(void) {
     test_triggers_and_walk();
     test_random(300000u);
     test_allocation_failures();
+    test_first_page();
     if (failures != 0) {
         fprintf(stderr, "table_test: %d checks failed\n", failures);
         return 1;

@@ -36,8 +36,14 @@
  *     nothing to grow. For tables whose bound is a configured number
  *     (waiting lists bounded by poolEnvelopes).
  *
- *   TA_TABLE_GROWING starts with one page of page_slots slots and gains one
- *     page per ta_table_grow. It is linear hashing (Litwin) over fixed pages:
+ *   TA_TABLE_GROWING starts with one page of first_slots slots (page_slots
+ *     when first_slots is 0) and, while that lone page is smaller than
+ *     page_slots, ta_table_grow doubles it in place (one allocation of twice
+ *     the slots, a rehash, a sized free of the old page; at most
+ *     log2(page_slots / first_slots) times in the table's life). A small
+ *     system therefore pays for a small first page, not for the page the
+ *     large system will use. From the first full page on, each grow adds one
+ *     page. It is linear hashing (Litwin) over fixed pages:
  *     the pages are found through a directory, a grow adds one page at the
  *     end and splits one existing page into itself and the new one, and so
  *     one grow costs O(page_slots) and allocates one page (plus a directory
@@ -88,7 +94,8 @@
  * ta_table_probe is a call-lifetime cursor (below).
  *
  * Allocation. The only functions that allocate are ta_table_init (the first
- * page and the directory), ta_table_grow (one page, and a directory block
+ * page, first_slots slots, and the directory), ta_table_grow (one page, or
+ * the doubled replacement of a small lone first page, and a directory block
  * when the directory is full) and ta_table_prepare (one page of twice the
  * size, when the home page is full). All three are for safe points.
  * ta_table_insert, ta_table_remove, the probe functions, ta_table_next,
@@ -125,7 +132,7 @@
  * Complexity. Insert, remove and a probe are O(1) expected: a run of
  * occupied slots in a page that is at most about 3/4 full (7/8 for the
  * 7/16 trigger), and usually around half that. ta_table_grow is O(page
- * slots) (it splits one page); ta_table_prepare is O(1) when the page has
+ * slots) (it splits one page or doubles the small first one); ta_table_prepare is O(1) when the page has
  * room and O(page slots) when it doubles it. ta_table_destroy and a walk
  * with ta_table_next are O(pages + slots). Equal hashes cost probe length.
  *
@@ -140,7 +147,7 @@
  *
  *     ta_table index;
  *     ta_table_init(&index, allocator, &(ta_table_params){
- *         .mode = TA_TABLE_GROWING, .page_slots = 1024, .grow_sixteenths = 6 });
+ *         .mode = TA_TABLE_GROWING, .page_slots = 1024, .first_slots = 64, .grow_sixteenths = 6 });
  *
  *     uint32_t hash = ta_fnv1a32(TA_FNV1A32_BASIS, name.ptr, name.len);
  *     ta_table_probe probe;
@@ -170,7 +177,11 @@ typedef enum ta_table_mode { TA_TABLE_FIXED, TA_TABLE_GROWING } ta_table_mode;
  * ta_table_params says what table to make. For TA_TABLE_FIXED, max_entries
  * (at least 1) is the most entries the table will ever hold and page_slots is
  * ignored. For TA_TABLE_GROWING, page_slots (at least 16, at most 2^20) is the
- * number of slots in each page and max_entries is ignored; grow_sixteenths
+ * number of slots in each page once the table is a full page and max_entries
+ * is ignored; first_slots (0, or 16 up to page_slots) is the size of the
+ * first page, and 0 means page_slots: a table that is usually small sets it
+ * low and ta_table_grow doubles that page until it is page_slots, after which
+ * pages are added. FIXED ignores it. grow_sixteenths
  * (1 to 14) is the load, in sixteenths of the slots, above which
  * ta_table_wants_grow answers true: 6 is 3/8, 7 is 7/16. A higher trigger
  * costs less memory per entry and longer probes just before a round of
@@ -181,6 +192,7 @@ typedef struct ta_table_params {
     ta_table_mode mode;
     uint32_t max_entries;
     uint32_t page_slots;
+    uint32_t first_slots;
     uint32_t grow_sixteenths;
 } ta_table_params;
 
@@ -235,8 +247,8 @@ typedef struct ta_table_probe {
 } ta_table_probe;
 
 /*
- * ta_table_init makes an empty table and allocates its first page and its
- * directory; this is the only allocation of a FIXED table. A safe point.
+ * ta_table_init makes an empty table and allocates its first page (first_slots
+ * slots) and its directory; this is the only allocation of a FIXED table. A safe point.
  * TA_ERR_INVALID for parameters that make no table, TA_ERR_NOMEM when a size
  * does not fit or an allocation fails; *table is then zeroed and owns
  * nothing, and ta_table_destroy on it is a no-op.
@@ -311,7 +323,10 @@ bool ta_table_wants_grow(const ta_table *table);
 /*
  * ta_table_grow adds one page and splits one page between itself and the new
  * one: O(page_slots), one page-sized allocation, plus a directory block
- * when the directory is full. Safe points only. TA_ERR_NOMEM (a size that
+ * when the directory is full. When the table is still one page smaller than
+ * page_slots it instead replaces that page by one of twice the slots (at
+ * most page_slots): O(slots of the page), one allocation, no directory
+ * change. Safe points only. TA_ERR_NOMEM (a size that
  * does not fit, or an allocation that failed) leaves the table's pages and
  * entries as they were, and is only a postponement (a directory block that
  * was already enlarged is kept; the next try needs it). TA_ERR_INVALID for a

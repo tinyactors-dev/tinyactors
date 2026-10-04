@@ -1839,8 +1839,14 @@ typedef struct {
  *     nothing to grow. For tables whose bound is a configured number
  *     (waiting lists bounded by poolEnvelopes).
  *
- *   TA_TABLE_GROWING starts with one page of page_slots slots and gains one
- *     page per ta_table_grow. It is linear hashing (Litwin) over fixed pages:
+ *   TA_TABLE_GROWING starts with one page of first_slots slots (page_slots
+ *     when first_slots is 0) and, while that lone page is smaller than
+ *     page_slots, ta_table_grow doubles it in place (one allocation of twice
+ *     the slots, a rehash, a sized free of the old page; at most
+ *     log2(page_slots / first_slots) times in the table's life). A small
+ *     system therefore pays for a small first page, not for the page the
+ *     large system will use. From the first full page on, each grow adds one
+ *     page. It is linear hashing (Litwin) over fixed pages:
  *     the pages are found through a directory, a grow adds one page at the
  *     end and splits one existing page into itself and the new one, and so
  *     one grow costs O(page_slots) and allocates one page (plus a directory
@@ -1891,7 +1897,8 @@ typedef struct {
  * ta_table_probe is a call-lifetime cursor (below).
  *
  * Allocation. The only functions that allocate are ta_table_init (the first
- * page and the directory), ta_table_grow (one page, and a directory block
+ * page, first_slots slots, and the directory), ta_table_grow (one page, or
+ * the doubled replacement of a small lone first page, and a directory block
  * when the directory is full) and ta_table_prepare (one page of twice the
  * size, when the home page is full). All three are for safe points.
  * ta_table_insert, ta_table_remove, the probe functions, ta_table_next,
@@ -1928,7 +1935,7 @@ typedef struct {
  * Complexity. Insert, remove and a probe are O(1) expected: a run of
  * occupied slots in a page that is at most about 3/4 full (7/8 for the
  * 7/16 trigger), and usually around half that. ta_table_grow is O(page
- * slots) (it splits one page); ta_table_prepare is O(1) when the page has
+ * slots) (it splits one page or doubles the small first one); ta_table_prepare is O(1) when the page has
  * room and O(page slots) when it doubles it. ta_table_destroy and a walk
  * with ta_table_next are O(pages + slots). Equal hashes cost probe length.
  *
@@ -1943,7 +1950,7 @@ typedef struct {
  *
  *     ta_table index;
  *     ta_table_init(&index, allocator, &(ta_table_params){
- *         .mode = TA_TABLE_GROWING, .page_slots = 1024, .grow_sixteenths = 6 });
+ *         .mode = TA_TABLE_GROWING, .page_slots = 1024, .first_slots = 64, .grow_sixteenths = 6 });
  *
  *     uint32_t hash = ta_fnv1a32(TA_FNV1A32_BASIS, name.ptr, name.len);
  *     ta_table_probe probe;
@@ -1973,7 +1980,11 @@ typedef enum ta_table_mode { TA_TABLE_FIXED, TA_TABLE_GROWING } ta_table_mode;
  * ta_table_params says what table to make. For TA_TABLE_FIXED, max_entries
  * (at least 1) is the most entries the table will ever hold and page_slots is
  * ignored. For TA_TABLE_GROWING, page_slots (at least 16, at most 2^20) is the
- * number of slots in each page and max_entries is ignored; grow_sixteenths
+ * number of slots in each page once the table is a full page and max_entries
+ * is ignored; first_slots (0, or 16 up to page_slots) is the size of the
+ * first page, and 0 means page_slots: a table that is usually small sets it
+ * low and ta_table_grow doubles that page until it is page_slots, after which
+ * pages are added. FIXED ignores it. grow_sixteenths
  * (1 to 14) is the load, in sixteenths of the slots, above which
  * ta_table_wants_grow answers true: 6 is 3/8, 7 is 7/16. A higher trigger
  * costs less memory per entry and longer probes just before a round of
@@ -1984,6 +1995,7 @@ typedef struct ta_table_params {
     ta_table_mode mode;
     uint32_t max_entries;
     uint32_t page_slots;
+    uint32_t first_slots;
     uint32_t grow_sixteenths;
 } ta_table_params;
 
@@ -2038,8 +2050,8 @@ typedef struct ta_table_probe {
 } ta_table_probe;
 
 /*
- * ta_table_init makes an empty table and allocates its first page and its
- * directory; this is the only allocation of a FIXED table. A safe point.
+ * ta_table_init makes an empty table and allocates its first page (first_slots
+ * slots) and its directory; this is the only allocation of a FIXED table. A safe point.
  * TA_ERR_INVALID for parameters that make no table, TA_ERR_NOMEM when a size
  * does not fit or an allocation fails; *table is then zeroed and owns
  * nothing, and ta_table_destroy on it is a no-op.
@@ -2114,7 +2126,10 @@ TA_PRIVATE bool ta_table_wants_grow(const ta_table *table);
 /*
  * ta_table_grow adds one page and splits one page between itself and the new
  * one: O(page_slots), one page-sized allocation, plus a directory block
- * when the directory is full. Safe points only. TA_ERR_NOMEM (a size that
+ * when the directory is full. When the table is still one page smaller than
+ * page_slots it instead replaces that page by one of twice the slots (at
+ * most page_slots): O(slots of the page), one allocation, no directory
+ * change. Safe points only. TA_ERR_NOMEM (a size that
  * does not fit, or an allocation that failed) leaves the table's pages and
  * entries as they were, and is only a postponement (a directory block that
  * was already enlarged is kept; the next try needs it). TA_ERR_INVALID for a
@@ -6802,6 +6817,30 @@ static ta_table_slot *ta_table_page_alloc(const ta_table *table, uint32_t count)
     return slots;
 }
 
+/*
+ * Replaces the page of `entry` by a cleared page of `slots` slots (more than
+ * it has), rehashes its entries into it and frees the old page with its
+ * recorded size. One allocation; on failure nothing has changed. The new
+ * page has room for every entry, so the rehash cannot fail. Safe points only.
+ */
+static ta_result ta_table_page_resize(ta_table *table, ta_table_page_entry *entry, uint32_t slots) {
+    ta_table_slot *grown = ta_table_page_alloc(table, slots);
+    if (grown == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_table_page to = { .slots = grown, .count = slots };
+    for (uint32_t index = 0; index < entry->count; index += 1u) {
+        if (entry->slots[index].value != TA_TABLE_NONE) {
+            (void)ta_table_page_insert(&to, &entry->slots[index]); /* the new page has more slots than the old has entries */
+        }
+    }
+    ta_table_page_free(table, entry->slots, entry->count);
+    table->slots += slots - entry->count;
+    entry->slots = grown;
+    entry->count = slots;
+    return TA_OK;
+}
+
 /* Does the work of ta_table_init; the caller zeroes *table when this fails. */
 static ta_result ta_table_setup(ta_table *table, ta_allocator allocator, const ta_table_params *params) {
     *table = (ta_table){ .allocator = allocator, .mode = params->mode };
@@ -6821,7 +6860,10 @@ static ta_result ta_table_setup(ta_table *table, ta_allocator allocator, const t
             params->grow_sixteenths == 0 || params->grow_sixteenths > TA_TABLE_MAX_GROW_SIXTEENTHS) {
             return TA_ERR_INVALID;
         }
-        slots = params->page_slots;
+        slots = params->first_slots == 0 ? params->page_slots : params->first_slots;
+        if (slots < TA_TABLE_MIN_PAGE_SLOTS || slots > params->page_slots) {
+            return TA_ERR_INVALID;
+        }
         table->grow_sixteenths = params->grow_sixteenths;
     } else {
         return TA_ERR_INVALID;
@@ -6830,19 +6872,20 @@ static ta_result ta_table_setup(ta_table *table, ta_allocator allocator, const t
     if (!ta_table_page_bytes((uint32_t)slots, &bytes)) {
         return TA_ERR_NOMEM;
     }
-    table->page_slots = (uint32_t)slots;
+    /* FIXED has one page of its whole size; GROWING's target page size is page_slots, and its first page may be smaller. */
+    table->page_slots = params->mode == TA_TABLE_GROWING ? params->page_slots : (uint32_t)slots;
     table->base = 1u;
     ta_vec_init(&table->pages, allocator, TA_VEC_LAYOUT(ta_table_page_entry));
     ta_table_slot *first = NULL;
     if (ta_vec_reserve(&table->pages, 1u) == TA_OK) {
-        first = ta_table_page_alloc(table, table->page_slots);
+        first = ta_table_page_alloc(table, (uint32_t)slots);
     }
     if (first == NULL) {
         ta_vec_destroy(&table->pages);
         return TA_ERR_NOMEM;
     }
-    (void)ta_vec_push(&table->pages, &(ta_table_page_entry){ .slots = first, .count = table->page_slots }); /* reserved above */
-    table->slots = table->page_slots;
+    (void)ta_vec_push(&table->pages, &(ta_table_page_entry){ .slots = first, .count = (uint32_t)slots }); /* reserved above */
+    table->slots = slots;
     return TA_OK;
 }
 
@@ -6912,20 +6955,7 @@ TA_PRIVATE ta_result ta_table_prepare(ta_table *table, uint32_t hash) {
     if (home->count > TA_TABLE_MAX_PAGE_SLOTS_TOTAL / 2u) {
         return TA_ERR_NOMEM;
     }
-    uint32_t doubled = home->count * 2u;
-    ta_table_slot *slots = ta_table_page_alloc(table, doubled);
-    if (slots == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    ta_table_page to = { .slots = slots, .count = doubled };
-    for (uint32_t index = 0; index < home->count; index += 1u) {
-        (void)ta_table_page_insert(&to, &home->slots[index]); /* twice the slots of a page whose every slot is full */
-    }
-    ta_table_page_free(table, home->slots, home->count);
-    table->slots += home->count;
-    home->slots = slots;
-    home->count = doubled;
-    return TA_OK;
+    return ta_table_page_resize(table, home, home->count * 2u);
 }
 
 TA_PRIVATE void ta_table_probe_start(const ta_table *table, uint32_t hash, ta_table_probe *probe) {
@@ -7013,6 +7043,14 @@ TA_PRIVATE ta_result ta_table_grow(ta_table *table) {
     }
     if (table->base >= TA_TABLE_MAX_BASE) {
         return TA_ERR_NOMEM;
+    }
+    if (table->pages.count == 1u) {
+        ta_table_page_entry *lone = ta_table_entry_at(table, 0);
+        if (lone->count < table->page_slots) {
+            /* A small first page: double it instead of splitting, so a small table never pays for a full page. */
+            uint32_t doubled = lone->count > table->page_slots / 2u ? table->page_slots : lone->count * 2u;
+            return ta_table_page_resize(table, lone, doubled);
+        }
     }
     ta_result result = ta_vec_reserve(&table->pages, table->base + table->split + 1u);
     if (result != TA_OK) {
