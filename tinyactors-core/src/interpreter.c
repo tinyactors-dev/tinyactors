@@ -712,7 +712,7 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
  */
 
 /* The first capacity of a block's queue, which is also the largest a block
- * the system caches may have: the cache holds small blocks only. */
+ * the system keeps as its workspace may have: it keeps a small block only. */
 #define TA_EVENT_BLOCK_QUEUE_INITIAL 8u
 
 size_t ta_event_block_bytes(uint32_t capacity) {
@@ -725,13 +725,12 @@ static void ta_block_free(ta_system *system, ta_event_block *block) {
                                              .alignment = _Alignof(ta_event_block) });
 }
 
-/* An empty block: the newest cached one, else a new one with room for
+/* An empty block: the system's workspace, else a new one with room for
  * `capacity` events. Null when there is no memory for one. */
 static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
-    ta_event_block *block = system->block_cache;
+    ta_event_block *block = system->workspace;
     if (block != NULL) {
-        system->block_cache = block->next_cached;
-        system->block_cache_count -= 1u;
+        system->workspace = NULL;
     } else {
         block = ta_mem_alloc(system->allocator, ta_event_block_bytes(capacity), _Alignof(ta_event_block));
         if (block == NULL) {
@@ -740,7 +739,6 @@ static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
         block->capacity = capacity;
     }
     block->count = 0;
-    block->next_cached = NULL;
     block->slots = (ta_event_slots){0};
     return block;
 }
@@ -759,9 +757,9 @@ ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor) {
 
 /*
  * Makes sure the actor holds a block with room for one more internal event:
- * its own, else one from the system's cache, else a new one; a full queue
- * doubles. TA_ERR_NOMEM leaves the actor as it was, apart from a block
- * taken from the cache, which it may keep.
+ * its own, else the system's workspace, else a new one; a full queue
+ * doubles. TA_ERR_NOMEM leaves the actor as it was, apart from a workspace
+ * it took, which it may keep.
  */
 static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
@@ -794,8 +792,8 @@ static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
 /*
  * Gives an actor's block back when the actor no longer needs it: it holds
  * no event, no microstep is paused, and no running macrostep's trace parent
- * (ADR 0067). It goes to the system's cache, or is freed when the cache is
- * full or the block grew past the first capacity. Cannot fail.
+ * (ADR 0067). It becomes the system's workspace, or is freed when there is
+ * one already or the block grew past the first capacity. Cannot fail.
  */
 static void ta_block_settle(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
@@ -804,21 +802,18 @@ static void ta_block_settle(ta_system *system, ta_actor *actor) {
         return;
     }
     actor->event_block = NULL;
-    if (system->block_cache_count < system->block_cache_limit && block->capacity <= TA_EVENT_BLOCK_QUEUE_INITIAL) {
-        block->next_cached = system->block_cache;
-        system->block_cache = block;
-        system->block_cache_count += 1u;
+    if (system->workspace == NULL && block->capacity <= TA_EVENT_BLOCK_QUEUE_INITIAL) {
+        system->workspace = block;
         return;
     }
     ta_block_free(system, block);
 }
 
-void ta_interpreter_block_cache_trim(ta_system *system) {
-    while (system->block_cache_count > system->block_cache_limit) {
-        ta_event_block *block = system->block_cache;
-        system->block_cache = block->next_cached;
-        system->block_cache_count -= 1u;
-        ta_block_free(system, block);
+/* ta_interpreter_workspace_free: see interpreter.h. */
+void ta_interpreter_workspace_free(ta_system *system) {
+    if (system->workspace != NULL) {
+        ta_block_free(system, system->workspace);
+        system->workspace = NULL;
     }
 }
 

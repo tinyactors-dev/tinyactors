@@ -264,21 +264,10 @@ static ta_state_id state(run *r, const char *id) {
 }
 
 
-/* Parameters for the next system a helper creates (ADR 0092: they are fixed
- * at creation), then back to the defaults. */
-static ta_param_value next_params[4];
-static uint32_t next_param_count;
-static void next_param(ta_param param, uint64_t value) {
-    next_params[next_param_count++] = (ta_param_value){ .param = param, .value = value };
-}
-
 /* A system with the chart and the sink; no actor yet. */
 static void open_system(run *r) {
     *r = (run){0};
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = next_params,
-                                                .param_count = next_param_count },
-                           &r->system) == TA_OK);
-    next_param_count = 0;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &r->system) == TA_OK);
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(r->system, &(ta_definition_compile_params){ .spec = &chart,
                                                                                  .datamodel = { .v = &dm_vtable },
@@ -659,7 +648,6 @@ static void run_retrying(run *r, uint32_t first, char *configurations) {
 
 static void test_out_of_memory(void) {
     run r;
-    next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
     start(&r);
     clear_log();
     char baseline_configurations[256];
@@ -672,7 +660,6 @@ static void test_out_of_memory(void) {
     CHECK(used >= CASE_COUNT);
 
     for (unsigned long failing = 1; failing <= used; failing += 1u) {
-        next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
         start(&r);
         clear_log();
         char configurations[256];

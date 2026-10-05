@@ -4086,7 +4086,7 @@ TA_API ta_result ta_tel_decode(TA_IN const ta_ring_record *record, TA_OUT TA_LIF
  * System parameters (ADR 0092): each is set once, when the system is
  * created, and never changes. A parameter bounds a limit or a buffer; the
  * buffers every run needs are allocated at creation (interpreter region 0,
- * the render area, the event-block cache), the ones only nested
+ * the render area), the ones only nested
  * interpreters need on first use, up to their bound. ta_param_info_of()
  * gives each one's name, default, bounds and unit; names are lowerCamelCase,
  * for hosts to use as they are.
@@ -4096,7 +4096,6 @@ typedef enum {
     TA_PARAM_POOL_ENVELOPES,       /* envelopes the pool may hold: the bound on pending inputs (ADR 0099), rounded down to whole pages */
     TA_PARAM_ADMISSION_WATERMARK,  /* percent of poolEnvelopes in use above which host input is refused (ADR 0099) */
     TA_PARAM_MACROSTEP_RESERVE,    /* envelopes one input's execution may take for the mail it sends, at most poolEnvelopes (ADR 0099) */
-    TA_PARAM_EVENT_BLOCK_CACHE,    /* empty event blocks kept for reuse (ADR 0069), made on demand (ADR 0093) */
     TA_PARAM_EVENT_NAME_DEPTH,     /* segments an event name may have; at most 64 */
     TA_PARAM_COMPILE_MESSAGE_BYTES,/* bytes kept of a data model's rejection message (ADR 0058) */
     TA_PARAM_COMPILE_TEXT_BYTES,   /* bytes of a compile error formatted as a line (ta_compile_error_format) */
@@ -4120,7 +4119,6 @@ enum TA_CONSTANTS_OF(ta_param_default, "TA_PARAM_DEFAULT_") {
     TA_PARAM_DEFAULT_POOL_ENVELOPES = 4096,
     TA_PARAM_DEFAULT_ADMISSION_WATERMARK = 50,
     TA_PARAM_DEFAULT_MACROSTEP_RESERVE = 1024,
-    TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE = 1024,
     TA_PARAM_DEFAULT_EVENT_NAME_DEPTH = 64,
     TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES = 256,
     TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES = 1024,

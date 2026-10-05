@@ -1202,17 +1202,14 @@ static double batch_allocations(ta_system *system, const ta_actor_id *actors, co
     return (double)counts->alloc_calls / (2.0 * DELIVERY_ROUNDS * DELIVERY_BATCH);
 }
 
-/* A system whose block cache keeps at most `cache` blocks (core ADR 0093),
- * with DELIVERY_BATCH actors of the batched chart; allocator calls per
- * delivered event. `created_bytes` is what creation allocated. */
-static double batched_system(uint32_t cache, size_t *created_bytes) {
+/* A system with DELIVERY_BATCH actors of the batched chart; allocator calls
+ * per delivered event once it is warm. `created_bytes` is what creation
+ * allocated. */
+static double batched_system(size_t *created_bytes) {
     counting_allocator counts = {.backing = tat_libc_allocator()};
     ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
     ta_system *system = NULL;
-    ta_param_value params[] = {{.param = TA_PARAM_EVENT_BLOCK_CACHE, .value = cache}};
-    require(ta_system_create(&(ta_system_config){.allocator = allocator, .params = params, .param_count = 1},
-                             &system) == TA_OK,
-            "system creation");
+    require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
     *created_bytes = counts.live_bytes;
     ta_definition_id simple = register_revision(system, allocator, &(revision_spec){"batched", "v2", STATES_V2});
     ta_actor_id actors[DELIVERY_BATCH];
@@ -1228,23 +1225,13 @@ static double batched_system(uint32_t cache, size_t *created_bytes) {
 }
 
 static void check_batched_delivery_allocations(void) {
-    size_t default_bytes = 0;
-    size_t small_bytes = 0;
-    size_t empty_bytes = 0;
-    double default_cache = batched_system(TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, &default_bytes);
-    double small_cache = batched_system(4u, &small_bytes);
-    (void)batched_system(0, &empty_bytes);
-    printf("allocator calls per event delivered in batches of %u: %.2f with the default block cache (%u), %.2f with "
-           "a cache of 4; creation allocated %zu bytes with either bound, %zu with none\n",
-           DELIVERY_BATCH, default_cache, (unsigned)TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, small_cache, default_bytes,
-           empty_bytes);
-    require(default_cache == 0.0, "a warm system with the default cache calls no allocator (ADR 0093)");
-    /* Before ADR 0099 each delivery of a batch held an event block until its actor ran, so a batch larger than the
-     * cache took a block per delivery (ADR 0069). Core now queues the batch as envelopes in the pool and runs the
-     * inputs one at a time, so one cached block serves them all. */
-    require(small_cache == 0.0, "a batch larger than the cache calls no allocator once the pool is warm (ADR 0099)");
-    require(default_bytes == empty_bytes && small_bytes == empty_bytes,
-            "creation makes no event block, whatever the bound (ADR 0093)");
+    size_t created_bytes = 0;
+    double calls = batched_system(&created_bytes);
+    printf("allocator calls per event delivered in batches of %u: %.2f; creation allocated %zu bytes\n",
+           DELIVERY_BATCH, calls, created_bytes);
+    /* Core queues a batch as envelopes in the pool and runs the inputs one at a time (ADR 0099), so the one
+     * workspace block serves them all: a warm system calls no allocator, whatever the batch. */
+    require(calls == 0.0, "a warm system calls no allocator for a batch of deliveries (ADR 0099)");
 }
 
 /* ------------------------------------------------------------------------

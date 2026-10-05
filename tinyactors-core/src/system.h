@@ -142,13 +142,16 @@ struct ta_system {
     ta_tel_state tel;
     /* The trace masks (ADR 0098 section 5): all zero at creation, so nothing is written. */
     ta_trace_masks trace_masks;
-    /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
-     * newest first, linked through `next_cached`; at most `block_cache_limit`
-     * of them (ADR 0069). Empty at creation: a block is made when a delivery
-     * finds none, and kept when released while there is room (ADR 0093). */
-    ta_event_block *block_cache;
-    uint32_t block_cache_count;
-    uint32_t block_cache_limit;
+    /*
+     * The workspace (ADR 0099 section 8): the one empty event block the
+     * running input's session hands back when its macrostep ends, for the
+     * next input to take. A run has one slot, so one block is all the reuse
+     * it needs, and it replaces the cache of blocks and its parameter.
+     * Lifetime: the system's; null at creation and while an actor holds it.
+     * It is made by the first input that finds none, never has room for more
+     * than the first queue (interpreter.c), and ta_system_destroy frees it.
+     */
+    ta_event_block *workspace;
     /*
      * What a run that stops inside a phase takes (ADR 0070): a continuation
      * at least as large as the running definition needs, and a sparse state

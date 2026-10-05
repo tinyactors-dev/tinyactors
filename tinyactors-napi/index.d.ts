@@ -245,14 +245,6 @@ export interface SystemParameters {
    * `poolEnvelopes` (a default larger than a small pool is cut to the pool).
    */
   macrostepReserve?: number;
-  /**
-   * Event blocks core keeps for reuse (core ADR 0069): none at creation, one
-   * made when a delivery finds none, kept when released while fewer than
-   * this many are kept (core ADR 0093); default 1024, at most 65536. A warm
-   * system allocates nothing per message while no more actors than this hold
-   * an event at once; each kept block is about 792 bytes.
-   */
-  eventBlockCache?: number;
   /** Segments an event name may have; default 64, from 8 to 64. */
   eventNameDepth?: number;
   /** Bytes kept of a data model's refusal message; default 256, from 16 to 65536. */

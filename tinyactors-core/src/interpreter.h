@@ -208,11 +208,10 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 void ta_interpreter_render_fault(ta_fault *fault);
-/* ta_interpreter_block_cache_trim frees cached event blocks until the cache
- * holds no more than the system's block_cache_limit (ADR 0069); with a limit
- * of 0 it empties the cache, which is what ta_system_destroy does. The cache
- * fills on demand, never at creation (ADR 0093). It never allocates. */
-void ta_interpreter_block_cache_trim(ta_system *system);
+/* ta_interpreter_workspace_free frees the system's spare event block (its
+ * `workspace`, ADR 0099 section 8), which ta_system_destroy does. It never
+ * allocates. */
+void ta_interpreter_workspace_free(ta_system *system);
 /* The largest continuation a run of the definition can save: its shape with
  * the offsets of its arrays, and its size; TA_ERR_NOMEM, outputs untouched,
  * when that does not fit. Never allocates. */

@@ -10072,13 +10072,12 @@ typedef struct {
  * lent to an actor from ta_actor_deliver(), or the first internal event,
  * until the macrostep ends; an actor keeps it longer only while events are
  * queued, a microstep is paused, or it keeps an event. An idle actor that
- * nobody invoked holds none, so it carries no event.
+ * nobody invoked holds none, so it carries no event. An empty small block is
+ * handed back to the system's one workspace (system.h) instead of freed.
  */
 typedef struct ta_event_block {
     uint32_t count;
     uint32_t capacity; /* 0 for a header only, which grows with the first internal event */
-    /* While the block is in the system's cache, the next cached block. */
-    struct ta_event_block *next_cached;
     ta_event_slots slots;
     ta_queued_event events[];
 } ta_event_block;
@@ -10420,13 +10419,16 @@ struct ta_system {
     ta_tel_state tel;
     /* The trace masks (ADR 0098 section 5): all zero at creation, so nothing is written. */
     ta_trace_masks trace_masks;
-    /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
-     * newest first, linked through `next_cached`; at most `block_cache_limit`
-     * of them (ADR 0069). Empty at creation: a block is made when a delivery
-     * finds none, and kept when released while there is room (ADR 0093). */
-    ta_event_block *block_cache;
-    uint32_t block_cache_count;
-    uint32_t block_cache_limit;
+    /*
+     * The workspace (ADR 0099 section 8): the one empty event block the
+     * running input's session hands back when its macrostep ends, for the
+     * next input to take. A run has one slot, so one block is all the reuse
+     * it needs, and it replaces the cache of blocks and its parameter.
+     * Lifetime: the system's; null at creation and while an actor holds it.
+     * It is made by the first input that finds none, never has room for more
+     * than the first queue (interpreter.c), and ta_system_destroy frees it.
+     */
+    ta_event_block *workspace;
     /*
      * What a run that stops inside a phase takes (ADR 0070): a continuation
      * at least as large as the running definition needs, and a sparse state
@@ -11047,11 +11049,10 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
 TA_PRIVATE ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 TA_PRIVATE void ta_interpreter_render_fault(ta_fault *fault);
-/* ta_interpreter_block_cache_trim frees cached event blocks until the cache
- * holds no more than the system's block_cache_limit (ADR 0069); with a limit
- * of 0 it empties the cache, which is what ta_system_destroy does. The cache
- * fills on demand, never at creation (ADR 0093). It never allocates. */
-TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system);
+/* ta_interpreter_workspace_free frees the system's spare event block (its
+ * `workspace`, ADR 0099 section 8), which ta_system_destroy does. It never
+ * allocates. */
+TA_PRIVATE void ta_interpreter_workspace_free(ta_system *system);
 /* The largest continuation a run of the definition can save: its shape with
  * the offsets of its arrays, and its size; TA_ERR_NOMEM, outputs untouched,
  * when that does not fit. Never allocates. */
@@ -30719,7 +30720,6 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_POOL_ENVELOPES] = { "poolEnvelopes", "envelopes", TA_PARAM_DEFAULT_POOL_ENVELOPES, 8, 16777216u },
     [TA_PARAM_ADMISSION_WATERMARK] = { "admissionWatermark", "percent", TA_PARAM_DEFAULT_ADMISSION_WATERMARK, 1, 99u },
     [TA_PARAM_MACROSTEP_RESERVE] = { "macrostepReserve", "envelopes", TA_PARAM_DEFAULT_MACROSTEP_RESERVE, 1, 16777216u },
-    [TA_PARAM_EVENT_BLOCK_CACHE] = { "eventBlockCache", "blocks", TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, 0, 65536u },
     [TA_PARAM_EVENT_NAME_DEPTH] = { "eventNameDepth", "segments", TA_PARAM_DEFAULT_EVENT_NAME_DEPTH, 8,
                                     TA_EVENT_NAME_MAX_DEPTH },
     [TA_PARAM_COMPILE_MESSAGE_BYTES] = { "compileMessageBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES, 16,
@@ -31107,7 +31107,6 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
-                           .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
@@ -31212,8 +31211,7 @@ TA_API void ta_system_destroy(ta_system *system) {
     ta_io_origin_table_destroy(&system->io_messages);
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
-    system->block_cache_limit = 0;
-    ta_interpreter_block_cache_trim(system);
+    ta_interpreter_workspace_free(system);
     ta_system_arena_close(system);
     ta_interpreter_release_spares(system);
     /* Unloaded sessions hold addresses; give them back before the table goes. */
@@ -33151,7 +33149,7 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
  */
 
 /* The first capacity of a block's queue, which is also the largest a block
- * the system caches may have: the cache holds small blocks only. */
+ * the system keeps as its workspace may have: it keeps a small block only. */
 #define TA_EVENT_BLOCK_QUEUE_INITIAL 8u
 
 TA_PRIVATE size_t ta_event_block_bytes(uint32_t capacity) {
@@ -33164,13 +33162,12 @@ static void ta_block_free(ta_system *system, ta_event_block *block) {
                                              .alignment = _Alignof(ta_event_block) });
 }
 
-/* An empty block: the newest cached one, else a new one with room for
+/* An empty block: the system's workspace, else a new one with room for
  * `capacity` events. Null when there is no memory for one. */
 static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
-    ta_event_block *block = system->block_cache;
+    ta_event_block *block = system->workspace;
     if (block != NULL) {
-        system->block_cache = block->next_cached;
-        system->block_cache_count -= 1u;
+        system->workspace = NULL;
     } else {
         block = ta_mem_alloc(system->allocator, ta_event_block_bytes(capacity), _Alignof(ta_event_block));
         if (block == NULL) {
@@ -33179,7 +33176,6 @@ static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
         block->capacity = capacity;
     }
     block->count = 0;
-    block->next_cached = NULL;
     block->slots = (ta_event_slots){0};
     return block;
 }
@@ -33198,9 +33194,9 @@ TA_PRIVATE ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *acto
 
 /*
  * Makes sure the actor holds a block with room for one more internal event:
- * its own, else one from the system's cache, else a new one; a full queue
- * doubles. TA_ERR_NOMEM leaves the actor as it was, apart from a block
- * taken from the cache, which it may keep.
+ * its own, else the system's workspace, else a new one; a full queue
+ * doubles. TA_ERR_NOMEM leaves the actor as it was, apart from a workspace
+ * it took, which it may keep.
  */
 static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
@@ -33233,8 +33229,8 @@ static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
 /*
  * Gives an actor's block back when the actor no longer needs it: it holds
  * no event, no microstep is paused, and no running macrostep's trace parent
- * (ADR 0067). It goes to the system's cache, or is freed when the cache is
- * full or the block grew past the first capacity. Cannot fail.
+ * (ADR 0067). It becomes the system's workspace, or is freed when there is
+ * one already or the block grew past the first capacity. Cannot fail.
  */
 static void ta_block_settle(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
@@ -33243,21 +33239,18 @@ static void ta_block_settle(ta_system *system, ta_actor *actor) {
         return;
     }
     actor->event_block = NULL;
-    if (system->block_cache_count < system->block_cache_limit && block->capacity <= TA_EVENT_BLOCK_QUEUE_INITIAL) {
-        block->next_cached = system->block_cache;
-        system->block_cache = block;
-        system->block_cache_count += 1u;
+    if (system->workspace == NULL && block->capacity <= TA_EVENT_BLOCK_QUEUE_INITIAL) {
+        system->workspace = block;
         return;
     }
     ta_block_free(system, block);
 }
 
-TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system) {
-    while (system->block_cache_count > system->block_cache_limit) {
-        ta_event_block *block = system->block_cache;
-        system->block_cache = block->next_cached;
-        system->block_cache_count -= 1u;
-        ta_block_free(system, block);
+/* ta_interpreter_workspace_free: see interpreter.h. */
+TA_PRIVATE void ta_interpreter_workspace_free(ta_system *system) {
+    if (system->workspace != NULL) {
+        ta_block_free(system, system->workspace);
+        system->workspace = NULL;
     }
 }
 

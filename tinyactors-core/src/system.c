@@ -39,7 +39,6 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_POOL_ENVELOPES] = { "poolEnvelopes", "envelopes", TA_PARAM_DEFAULT_POOL_ENVELOPES, 8, 16777216u },
     [TA_PARAM_ADMISSION_WATERMARK] = { "admissionWatermark", "percent", TA_PARAM_DEFAULT_ADMISSION_WATERMARK, 1, 99u },
     [TA_PARAM_MACROSTEP_RESERVE] = { "macrostepReserve", "envelopes", TA_PARAM_DEFAULT_MACROSTEP_RESERVE, 1, 16777216u },
-    [TA_PARAM_EVENT_BLOCK_CACHE] = { "eventBlockCache", "blocks", TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, 0, 65536u },
     [TA_PARAM_EVENT_NAME_DEPTH] = { "eventNameDepth", "segments", TA_PARAM_DEFAULT_EVENT_NAME_DEPTH, 8,
                                     TA_EVENT_NAME_MAX_DEPTH },
     [TA_PARAM_COMPILE_MESSAGE_BYTES] = { "compileMessageBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES, 16,
@@ -427,7 +426,6 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     }
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
-                           .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
@@ -532,8 +530,7 @@ void ta_system_destroy(ta_system *system) {
     ta_io_origin_table_destroy(&system->io_messages);
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
-    system->block_cache_limit = 0;
-    ta_interpreter_block_cache_trim(system);
+    ta_interpreter_workspace_free(system);
     ta_system_arena_close(system);
     ta_interpreter_release_spares(system);
     /* Unloaded sessions hold addresses; give them back before the table goes. */

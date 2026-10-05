@@ -893,9 +893,10 @@ static void jump_retrying(run *r) {
 
 static void test_out_of_memory(void) {
     run r;
-    /* No cached event blocks: the jump's event takes a new one, which grows
-     * inside the jump's microstep, before its first unit (ADR 0070). */
-    next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
+    /* The jump's event takes the system's workspace block (ADR 0099 section
+     * 8), which the bootstrap handed back, so only the operator transition
+     * itself allocates; a failure of it must leave the actor as it was
+     * (ADR 0070). */
     start(&r);
     CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     clear_log();
@@ -911,11 +912,10 @@ static void test_out_of_memory(void) {
     records_text(baseline_records, sizeof(baseline_records));
     CHECK(active_is(&r, "work w1"));
     finish(&r);
-    CHECK(used >= 3u); /* the operator transition, the event block, and its growth */
+    CHECK(used >= 1u); /* the operator transition */
 
     char text[4096];
     for (unsigned long failing = 1; failing <= used; failing += 1u) {
-        next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
         start(&r);
         CHECK(settle(&r, 0) == TEST_RUN_STABLE);
         clear_log();

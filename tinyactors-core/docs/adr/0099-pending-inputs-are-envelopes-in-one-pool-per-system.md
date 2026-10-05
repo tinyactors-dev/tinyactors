@@ -501,3 +501,19 @@ beyond it:
   hook stays an interim kernel hook that goes in Phase 6. `waiting-full`
   (a family's `maxWaiting`) cannot apply to chart mail, which the pool bounds;
   it still limits host posts.
+- **The event-block cache is gone (4.2d).** A run has one slot, so at most one
+  session is inside a macrostep, and the reuse the cache gave is one block.
+  `system->workspace` is that block: the empty block the running session hands
+  back when its macrostep ends (at most the first queue's capacity, 8 events),
+  for the next input to take; a block that grew, or a second empty one, is
+  freed. It is made by the first input that finds none and freed by
+  `ta_system_destroy`; a warm system allocates nothing per input, whatever the
+  batch (`scale_test`, `params_test`). `TA_PARAM_EVENT_BLOCK_CACHE`
+  (`eventBlockCache`) and its default are deleted with their callers.
+  **Not done:** the block itself stays. The pre-run state of a session that is
+  not in the slot (a traced spawn's parent, the internal events of a restored
+  image, a publish's retirement, an invoke error report to an idle session)
+  and the kept event of an invoked session still live in it, and the taken
+  external event is still copied into its slots from the envelope; moving them
+  to a start record in the sparse state and reading the envelope in place
+  changes the session-image format and is left for a later unit.

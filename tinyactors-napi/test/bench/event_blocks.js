@@ -13,9 +13,9 @@
 //   messageBudget of the whole population, one pump turn delivers `go` to
 //   every actor and resumes only one, so every other actor holds an event
 //   block from delivery until its macrostep ends.
-// - cached: core bytes per actor after the flush, beyond `idle`. napi sizes
-//   core's block cache to messageBudget, so here the cache keeps a block for
-//   every actor; at the default messageBudget it keeps at most 1,024.
+// - kept: core bytes per actor after the flush, beyond `idle`: what core
+//   keeps after a burst, the envelopes of its pool (core ADR 0099) and its
+//   one spare event block, the workspace.
 // - throughput: `ping` posted to every actor and flushed, default options,
 //   the median and best of five rounds.
 
@@ -60,7 +60,7 @@ async function memory() {
     idle: idle / population,
     delivered: (delivered - idle) / population,
     messages,
-    cached: (after - idle) / population,
+    kept: (after - idle) / population,
   };
 }
 
@@ -87,7 +87,7 @@ async function throughput() {
   const m = await memory();
   console.log(`event_blocks population ${population}: core bytes per actor idle ${m.idle.toFixed(1)}, ` +
     `+${m.delivered.toFixed(1)} holding a delivered event (${m.messages} delivered), ` +
-    `+${m.cached.toFixed(1)} in the block cache after the flush`);
+    `+${m.kept.toFixed(1)} kept after the flush`);
   const t = await throughput();
   console.log(`event_blocks throughput ${population}: median ${(t.median / 1e6).toFixed(2)} M events/s, ` +
     `best ${(t.best / 1e6).toFixed(2)} M events/s`);

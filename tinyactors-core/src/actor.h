@@ -135,13 +135,12 @@ typedef struct {
  * lent to an actor from ta_actor_deliver(), or the first internal event,
  * until the macrostep ends; an actor keeps it longer only while events are
  * queued, a microstep is paused, or it keeps an event. An idle actor that
- * nobody invoked holds none, so it carries no event.
+ * nobody invoked holds none, so it carries no event. An empty small block is
+ * handed back to the system's one workspace (system.h) instead of freed.
  */
 typedef struct ta_event_block {
     uint32_t count;
     uint32_t capacity; /* 0 for a header only, which grows with the first internal event */
-    /* While the block is in the system's cache, the next cached block. */
-    struct ta_event_block *next_cached;
     ta_event_slots slots;
     ta_queued_event events[];
 } ta_event_block;

@@ -212,7 +212,7 @@ static void test_validation(void) {
                                                 .rejected = &rejected },
                            &none) == TA_ERR_INVALID);
     CHECK(none == NULL && rejected == TA_PARAM_INTERPRETER_BYTES);
-    ta_param_value twice[] = { { TA_PARAM_MAX_ACTORS, 5 }, { TA_PARAM_EVENT_BLOCK_CACHE, 1 }, { TA_PARAM_MAX_ACTORS, 6 } };
+    ta_param_value twice[] = { { TA_PARAM_MAX_ACTORS, 5 }, { TA_PARAM_MAX_PENDING_SENDS, 1 }, { TA_PARAM_MAX_ACTORS, 6 } };
     rejected = TA_PARAM_COUNT;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = twice, .param_count = 3,
                                                 .rejected = &rejected },
@@ -360,12 +360,12 @@ static void test_ordinary_run_allocates_nothing(void) {
 }
 
 /* ------------------------------------------------------------------------
- * The event-block cache fills on demand up to its bound (ADR 0093). Inputs run
- * one at a time (ADR 0099), so a batch admitted at once needs one block, not one
- * per session.
+ * The workspace (ADR 0099 section 8): the one spare event block fills on
+ * demand. Inputs run one at a time, so a batch admitted at once needs one
+ * block, not one per session, and there is no parameter for it.
  */
 
-enum { CACHE_ACTORS = 5, CACHE_BOUND = 3 };
+enum { WORKSPACE_ACTORS = 5 };
 
 /* Delivers "go" to the first `count` actors, then runs them: all `count` inputs are admitted before the first runs. */
 static void go_round(ta_system *system, const ta_actor_id *actors, uint32_t count) {
@@ -377,59 +377,36 @@ static void go_round(ta_system *system, const ta_actor_id *actors, uint32_t coun
     }
 }
 
-static void test_block_cache_on_demand(void) {
-    /* Creation makes no block, whatever the bound. */
+static void test_workspace_on_demand(void) {
+    /* Creation makes no block: two systems made one after the other cost the same. */
     unsigned long before = heap.stats.attempts;
-    ta_param_value none[] = { { TA_PARAM_EVENT_BLOCK_CACHE, 0 } };
-    ta_system *empty = create(none, 1);
-    CHECK(empty != NULL);
-    unsigned long empty_allocations = heap.stats.attempts - before;
-    ta_system_destroy(empty);
+    ta_system *first = create(NULL, 0);
+    CHECK(first != NULL);
+    unsigned long created = heap.stats.attempts - before;
     before = heap.stats.attempts;
-    ta_param_value bound[] = { { TA_PARAM_EVENT_BLOCK_CACHE, CACHE_BOUND } };
-    ta_system *system = create(bound, 1);
+    ta_system *system = create(NULL, 0);
     CHECK(system != NULL);
-    CHECK(heap.stats.attempts - before == empty_allocations);
-    before = heap.stats.attempts;
-    ta_system *defaults = create(NULL, 0);
-    CHECK(defaults != NULL);
-    CHECK(heap.stats.attempts - before == empty_allocations);
-    ta_system_destroy(defaults);
+    CHECK(heap.stats.attempts - before == created);
+    ta_system_destroy(first);
 
     ta_definition_id id = define(system, &toggle);
-    ta_actor_id actors[CACHE_ACTORS];
-    for (uint32_t index = 0; index < CACHE_ACTORS; index += 1u) {
+    ta_actor_id actors[WORKSPACE_ACTORS];
+    for (uint32_t index = 0; index < WORKSPACE_ACTORS; index += 1u) {
         actors[index] = spawn(system, id);
         CHECK(resume(system, actors[index]) == TEST_RUN_STABLE);
     }
     (void)event_name(system, "go");
 
     /* The first batch fills the pool and makes one block; later batches, of any size, allocate nothing. */
-    go_round(system, actors, CACHE_ACTORS);
+    go_round(system, actors, WORKSPACE_ACTORS);
     before = heap.stats.attempts;
-    go_round(system, actors, CACHE_ACTORS);
+    go_round(system, actors, WORKSPACE_ACTORS);
     go_round(system, actors, 2);
     CHECK(heap.stats.attempts == before);
     ta_system_destroy(system);
 
-    /* A system that keeps no block takes one for every input and gives it back. */
-    ta_system *bare = create(none, 1);
-    CHECK(bare != NULL);
-    ta_definition_id bare_id = define(bare, &toggle);
-    for (uint32_t index = 0; index < CACHE_ACTORS; index += 1u) {
-        actors[index] = spawn(bare, bare_id);
-        CHECK(resume(bare, actors[index]) == TEST_RUN_STABLE);
-    }
-    (void)event_name(bare, "go");
-    go_round(bare, actors, CACHE_ACTORS);
-    before = heap.stats.attempts;
-    unsigned long frees_before = heap.stats.frees;
-    go_round(bare, actors, CACHE_ACTORS);
-    CHECK(heap.stats.attempts - before == CACHE_ACTORS);
-    CHECK(heap.stats.frees - frees_before == CACHE_ACTORS);
-
     /* Out of memory on admission (the pool's first page): TA_ERR_NOMEM, nothing retained (ADR 0099 section 5). */
-    ta_system *fresh = create(none, 1);
+    ta_system *fresh = create(NULL, 0);
     CHECK(fresh != NULL);
     ta_definition_id fresh_id = define(fresh, &toggle);
     /* The session is spawned and not yet run: the pool is empty until the first admission or take (ADR 0099 section 2). */
@@ -448,7 +425,6 @@ static void test_block_cache_on_demand(void) {
     CHECK(resume(fresh, actor) == TEST_RUN_STABLE);
     CHECK(in_state(fresh, actor, "b"));
     ta_system_destroy(fresh);
-    ta_system_destroy(bare);
 }
 
 /* ------------------------------------------------------------------------
@@ -916,7 +892,7 @@ int main(void) {
     test_pool_params();
     test_creation_out_of_memory();
     test_ordinary_run_allocates_nothing();
-    test_block_cache_on_demand();
+    test_workspace_on_demand();
     test_render_overflow();
     test_event_name_depth();
     test_nested_regions();
