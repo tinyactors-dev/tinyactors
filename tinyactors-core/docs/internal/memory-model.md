@@ -49,11 +49,11 @@ scanning for a hole: a scan is invisible in a unit test and fatal in
 production, where short-lived actors are spawned and destroyed against a large
 resident population and would each pay for all of it.
 
-The table itself is paged (ADR 0063): slots live in fixed pages of 4,096,
-found through a small directory of page pointers. A page is allocated only when
-the last one is full and never moves, so no spawn copies the table. The largest
-block a spawn allocates is one 64 KiB page at any population; before paging,
-the spawn that crossed 2,097,152 actors copied a 32 MB table.
+The table itself is paged (ADR 0063): it is an index pool
+([`src/index_pool.h`](../../src/index_pool.h)) of 16-byte slots in pages of
+4,096 that never move, so no spawn copies the table, and the largest block a
+spawn allocates is one 64 KiB page at any population. How slots are issued
+and reused is in the file comment of [`src/actor.h`](../../src/actor.h).
 
 `tinyactors-test/tests/scale_test.c` measures spawn, upgrade, and ephemeral
 churn at populations up to four million, sized to the memory available, and

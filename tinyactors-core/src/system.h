@@ -1,3 +1,80 @@
+/**
+ * @file system.h
+ *
+ * # The system
+ *
+ * `ta_system` is the in-process container for the runtime state every
+ * actor shares: the injected allocator and the buffers each run needs,
+ * the logical clock, atom and event-name interning, the registered
+ * immutable definitions, the resident actors and their runtime IDs, the
+ * address and session tables, delayed-send state, the built-in SCXML
+ * Event I/O Processor and its host event router, the registered I/O
+ * processors and invokers, and the host's actor directory, trace and log
+ * sinks.
+ *
+ * ## What it is not
+ *
+ * The system creates no threads, decides no cross-actor scheduling order,
+ * owns no socket or event loop, reads no wall-clock time, needs no
+ * filesystem, and hides no host concurrency behind locks. It has no
+ * persistence adapter and no concrete index of named addresses: the host
+ * installs `ta_actor_directory` operations for claim, resolution,
+ * replacement and removal, backed by whatever it likes (a hash table, a
+ * database, a shard router). Core keeps only resident runtime state; the
+ * host keeps the images of evicted actors for the life of the process and
+ * indexes their deadlines. Eviction bounds memory; it is not persistence.
+ *
+ * ## Contract and invariants
+ *
+ * - **Directory entries** tell a resident runtime ID from an unloaded
+ *   logical actor. The host's replace and remove callbacks receive the
+ *   entry the caller expects and behave as atomic compare-and-swaps;
+ *   replacement, unloading, loading and destruction rely on that, so a
+ *   stale runtime actor never overwrites or removes a newer route.
+ * - **Definitions** live in a slot table: a definition ID is a generation
+ *   handle (`handle.h`) of its slot, and freed slots form a list through
+ *   `next_free`, so registering never scans.
+ * - **Actors** live in the actor table (`actor.h`), an index pool whose
+ *   free list a spawn takes from, so a spawn costs the same against four
+ *   million actors as against four (invariant 17).
+ * - `ta_system_set_external_event_router` installs the host's router for
+ *   normalized SCXML-session events; core's standard processor and an
+ *   invoked child's completion submit through it. The SCXML I/O type
+ *   atom is interned at creation, and registering an I/O processor cannot
+ *   replace it.
+ * - The parameters (ADR 0092) are fixed at creation and bound every
+ *   buffer; `maxActors` and `maxDefinitions` are counted against
+ *   `live_actors` and `live_definitions`.
+ *
+ * ## Memory
+ *
+ * The system owns everything it holds, from the allocator in its config,
+ * until `ta_system_destroy`, which destroys every actor and definition
+ * first. Creation allocates the system, the first storage of the tables
+ * that start with some (sessions, atoms, event names), and the run
+ * buffers (ADR 0092 section 3); the actor table starts empty. Afterwards it allocates where a
+ * caller adds something (a spawn, a registration, an interned address), a
+ * nested interpreter's region the first time an invocation is cancelled
+ * at that depth, and the event blocks it caches; never in the middle of a
+ * macrostep, where room is reserved before the run (ADR 0070).
+ *
+ * ## Complexity
+ *
+ * Looking up a definition or an actor by ID is O(1); so are the quota
+ * checks. Teardown walks every slot ever issued.
+ *
+ * ## Failure
+ *
+ * Creation answers `TA_ERR_INVALID` for a config without an allocator,
+ * the parameters' own answers, and `TA_ERR_NOMEM`, freeing what it made.
+ * A full quota answers as an allocator that ran out (ADR 0092 section 4).
+ *
+ * ## Users
+ *
+ * Every unit that runs: the public API's entry points, the interpreter,
+ * actors, session images, timers, invocations and I/O. ADRs 0043, 0063,
+ * 0066, 0067, 0068, 0072, 0079, 0092.
+ */
 #pragma once
 
 #include "actor.h"
@@ -59,13 +136,12 @@ struct ta_system {
     uint64_t next_definition_serial;
 
     /*
-     * ta_actor_slot; an actor ID is ta_actor_id_make(slot, generation). Freed slots
-     * form a list through `next_free`, as definitions' do: a spawn takes the
-     * head instead of scanning the table, so it costs the same against four
-     * million actors as against four (invariant 17).
+     * The actor table (actor.h); an actor ID is ta_actor_id_make(slot,
+     * generation). A spawn takes the head of its pool's free list instead
+     * of scanning the table, so it costs the same against four million
+     * actors as against four (invariant 17).
      */
     ta_actor_table actors;
-    uint32_t free_actor_slot;
 
     ta_timer_heap timers;
 

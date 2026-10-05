@@ -52,7 +52,7 @@
  * - `ta_paged_array_shrink` and `ta_paged_array_destroy` only free. Shrink
  *   gives back the directory too when no page remains; while pages remain
  *   the directory keeps its size. Shrink runs only at a safe point: when
- *   the host calls `ta_system_trim`, never on core's own initiative.
+ *   the host asks core to give memory back, never on core's own initiative.
  * - `ta_paged_array_at`, `ta_paged_array_get`, `ta_paged_array_set` and
  *   `ta_paged_array_capacity` never allocate, and may run inside a
  *   macrostep.
@@ -86,8 +86,8 @@
  * The **deadline index** keeps its heap positions here, one `uint32_t`
  * envelope index per position. The envelope pool's refill grows it
  * together with the pool, so inserting a delayed send never allocates, and
- * `ta_system_trim` shrinks it to the pages the pending delayed sends
- * occupy, as it trims the pool's free pages.
+ * the host's request to give memory back shrinks it to the pages the
+ * pending delayed sends occupy, as it trims the pool's free pages.
  */
 #pragma once
 
@@ -156,7 +156,7 @@ ta_result ta_paged_array_grow(ta_paged_array *array, uint32_t count);
  * is freed too. A `count` at or above the capacity changes nothing.
  *
  * Only frees, and never fails. It runs at a safe point, when the host asks
- * core to give memory back (`ta_system_trim`).
+ * core to give memory back.
  */
 void ta_paged_array_shrink(ta_paged_array *array, uint32_t count);
 

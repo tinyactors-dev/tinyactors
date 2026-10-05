@@ -16,6 +16,7 @@ are private and hold layouts and internal functions.
 | `layout.h` | the layout builder: several regions in one block, with checked offsets and total |
 | `store.h` | empty compatibility boundary; durability is not a core store API |
 | `arena.h` | transient allocation |
+| `index_pool.h` | fixed-size items addressed by `u32` index in pages that never move: take, give, refill up to a ceiling, trim |
 | `atom.h` | ordinary string interning |
 | `event_name.h` | structured dot-token event-name interning/matching |
 | `value.h` | host value ownership helpers |
@@ -36,7 +37,7 @@ are private and hold layouts and internal functions.
 | `export.h` | rebuilds a compiled definition's authoring spec (`ta_definition_export`) |
 | `actor.h` | named actor protocol, resident session state, operational inspection |
 | `session_image.h` | in-memory interpreter capture/reconstruction |
-| `system.h` | shared runtime container/registries |
+| `system.h` | the shared runtime container: tables, registries, run buffers (see its file comment) |
 | `interpreter.h` | SCXML execution engine |
 | `internal.h` | implementation umbrella include |
 

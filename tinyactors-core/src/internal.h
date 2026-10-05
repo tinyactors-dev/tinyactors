@@ -11,6 +11,7 @@
 #include "layout.h"
 #include "arena.h"
 #include "list.h"
+#include "index_pool.h"
 #include "paged_array.h"
 #include "heap.h"
 #include "fifo.h"

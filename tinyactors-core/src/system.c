@@ -254,8 +254,6 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
-    ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
-    system->free_actor_slot = UINT32_MAX;
     ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
     system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
@@ -263,7 +261,10 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     ta_address_table_init(&system->addresses, config->allocator);
     ta_io_origin_table_init(&system->io_scopes, config->allocator, true);
     ta_io_origin_table_init(&system->io_messages, config->allocator, false);
-    ta_result result = ta_session_table_init(&system->sessions, config->allocator);
+    ta_result result = ta_actor_table_init(&system->actors, config->allocator);
+    if (result == TA_OK) {
+        result = ta_session_table_init(&system->sessions, config->allocator);
+    }
     if (result == TA_OK) {
         result = ta_atom_table_init(&system->atoms, config->allocator);
     }
@@ -305,7 +306,7 @@ void ta_system_destroy(ta_system *system) {
     }
     /* Teardown releases submitted sends instead of keeping them as orphans. */
     system->timers.closing = true;
-    for (uint32_t slot = 0; slot < system->actors.count; slot += 1) {
+    for (uint32_t slot = 0; slot < ta_actor_table_issued(&system->actors); slot += 1) {
         ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {
             (void)ta_actor_destroy(system, ta_handle_make(slot, entry->generation));
@@ -326,7 +327,7 @@ void ta_system_destroy(ta_system *system) {
     }
     ta_vec_destroy(&system->definitions);
     ta_timer_heap_destroy(&system->timers);
-    ta_actor_table_destroy(&system->actors, system->allocator);
+    ta_actor_table_destroy(&system->actors);
     /* After the actors: their held events released their MESSAGE origins. */
     ta_io_origin_table_destroy(&system->io_scopes);
     ta_io_origin_table_destroy(&system->io_messages);

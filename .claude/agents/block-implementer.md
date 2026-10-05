@@ -165,7 +165,9 @@ in Markdown prose:
 **Comments describe the code as it stands, never the migration.** No
 block IDs (`B1`, `A5`), step or phase numbers, "later steps", "not used
 yet", "the proposal", "the plan", or paths under `docs/proposals/`, in the
-header, the source or the test. The same holds for the test's comments.
+header, the source or the test. Do not name a function, type or file that
+does not exist yet; describe what it does instead ("when the host asks
+core to give memory back"). The same holds for the test's comments.
 
 Each function gets a `/** ... */` comment: what it does, what it borrows
 or takes over, whether it may run inside a macrostep, and what it

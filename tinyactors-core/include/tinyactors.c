@@ -207,7 +207,7 @@ TA_PRIVATE inline ta_str ta_str_from_cstr(const char *text) {
  * ## Users
  *
  * The atom table, the event-name trie, the page directories of addresses,
- * sessions, I/O origins, timers and the actor table (ADR 0063), an
+ * sessions, I/O origins, timers and index pools (the actor table's), an
  * actor's activation effects and pending invokes, the system's
  * definitions and registrations, the builder's state lists and the
  * compiler's frames (ADR 0060), the internal queue (ADR 0064), and the
@@ -1149,6 +1149,285 @@ TA_PRIVATE inline ta_result ta_list_unlink(ta_list *list, const ta_list_links *l
 }
 
 /**
+ * @file index_pool.h
+ *
+ * # Index pool
+ *
+ * `ta_index_pool` hands out fixed-size items addressed by `uint32_t`
+ * index, `0` meaning none. Items live in pages of a power-of-two number of
+ * items that never move, and the items that are free form an intrusive
+ * free list (`list.h`) linked through a `uint32_t` field of the item the
+ * caller chooses. Taking and giving an item are O(1) and never allocate;
+ * pages are added only by an explicit `ta_index_pool_refill` at a safe
+ * point, up to a ceiling, and given back only by an explicit
+ * `ta_index_pool_trim`.
+ *
+ * Pages rather than one array: indices stay stable and nothing is copied
+ * when the pool grows, where one reallocated array would move every item
+ * and need one contiguous block.
+ *
+ * ## Indices and positions
+ *
+ * Index `i` (from 1) is position `i - 1`. With `2^k` items per page,
+ * position `p` lives in page `p >> k` at item `p & (2^k - 1)`. Index 0 is
+ * never issued, so a link or a field holding 0 names no item. A user that
+ * numbers its slots from 0 maps slot `s` to index `s + 1`: the actor table
+ * does, so actor IDs keep slot 0 for the first actor.
+ *
+ * ## Contract and invariants
+ *
+ * - Every item of an allocated page, up to the ceiling, is either taken
+ *   (`used`) or on the free list (`free`): `used + free` is the number of
+ *   items the pool holds. An index above the ceiling is never issued, even
+ *   when the last page has room for it.
+ * - **Order.** `take` answers the head of the free list. `give` puts an
+ *   item at the head, so the item given last is taken first. `refill`
+ *   appends a new page's items at the tail, lowest index first. So an
+ *   item given back is always taken before an item that was never taken,
+ *   and items that were never taken go out in ascending order, lowest
+ *   page first.
+ * - **Items keep their bytes.** The pool writes only an item's link
+ *   field, and only while the item is free. `take` leaves the item as it
+ *   was when it was given back, its link set to 0; an item of a page that
+ *   `refill` just added reads as zero bytes apart from its link. A user
+ *   can therefore keep state in a free item, such as a slot's generation.
+ * - **Items never move.** The address `ta_index_pool_at` answers for an
+ *   index stays valid until `trim` frees its page or the pool is
+ *   destroyed; refill does not move it. Users still keep indices, not
+ *   addresses, and look an address up again in each call.
+ * - `trim` frees a page only when every item on it is free, so an item
+ *   that is taken never loses its page, and a burst can leave partly used
+ *   pages that cannot be freed. Its indices come back with a later refill,
+ *   which fills such a hole before it adds a page at the end. A trimmed
+ *   page loses what its free items held: a user that keeps state in free
+ *   items (generations) does not trim.
+ * - `high_water` is the highest index taken since the pool was set up.
+ *   Every index above it has never been taken; a walk over every item that
+ *   was ever taken stops there. Because fresh items go out in ascending
+ *   order only after every given item, it is also the most items that
+ *   were in use at once, as long as no trim has left a hole.
+ *
+ * ## The directory
+ *
+ * The pages are found through a directory, a `ta_vec` of one
+ * `ta_index_pool_page` (address and count of taken items) per page.
+ * Nothing keeps an address into it, so it may move when `refill` grows
+ * it; it is one entry per page, a few kilobytes for millions of items,
+ * so one array is simpler than a paged array here and costs one
+ * indirection less on every access. A page that `trim` freed leaves a
+ * null entry, a hole, unless it was at the end, where the directory
+ * shrinks.
+ *
+ * ## Memory
+ *
+ * The pool owns its pages and its directory, allocated from the
+ * `ta_allocator` given to `ta_index_pool_init`, which it borrows and which
+ * must outlive it. The items' contents belong to the user. The
+ * `ta_index_pool` itself is embedded where its user likes (the actor
+ * table).
+ *
+ * - `ta_index_pool_init`, `take`, `give`, `at`, `item` and `links` never
+ *   allocate, and may run inside a macrostep.
+ * - `ta_index_pool_refill` allocates pages and, when it is full, a larger
+ *   directory. It runs only at a safe point, never inside a macrostep: a
+ *   user refills before it takes, at the point where it may allocate.
+ * - `ta_index_pool_trim` and `ta_index_pool_destroy` only free. Trim runs
+ *   only at a safe point, when the host asks core to give memory back.
+ *   Core never trims on its own: when to give memory back is policy, and
+ *   a heuristic in core would free and refill in a loop.
+ *
+ * ## Complexity
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | `ta_index_pool_take`, `_give`, `_at`, `_item` | O(1): a shift, a mask and one indirection |
+ * | `ta_index_pool_refill(min_free)` | O(1) when `free >= min_free`; otherwise one allocation and one zeroing pass per page added, plus one for the directory when it is full, and a walk of the directory when trim left holes |
+ * | `ta_index_pool_trim(keep)` | walks the directory and the free list once; one free per page freed |
+ * | `ta_index_pool_init` | O(1) |
+ * | `ta_index_pool_destroy` | one free per page, and the directory |
+ *
+ * ## Failure
+ *
+ * - `ta_index_pool_init` answers `TA_ERR_INVALID` for parameters that
+ *   break a rule of `ta_index_pool_params`, and leaves `*pool` untouched.
+ * - `ta_index_pool_take` answers `TA_ERR_FULL` when no item is free; the
+ *   user refills at its next safe point.
+ * - `ta_index_pool_refill` answers `TA_ERR_FULL` when `min_free` free
+ *   items would pass the ceiling, and `TA_ERR_NOMEM` when an allocation
+ *   fails. Either way it changes nothing: it frees what it allocated, and
+ *   the pages, the directory, the free list and the counters stay as they
+ *   were.
+ * - Nothing else fails. Giving an index that is 0, not taken, or not this
+ *   pool's is a programmer error, not checked: it corrupts the free list.
+ *
+ * ## Users
+ *
+ * The **actor table** keeps its slots here, one item per actor, with each
+ * slot's generation kept in the item while it is free (ADR 0063, ADR
+ * 0059). The envelope pool, the name area's and the park area's chunks,
+ * and the macrostep's slot records are pools of this kind with a ceiling,
+ * and the host has their free pages trimmed when it asks core to give
+ * memory back.
+ */
+
+
+/** What `ta_index_pool_init` needs. */
+typedef struct {
+    /** Where pages and the directory come from; borrowed, and must outlive
+     * the pool. */
+    ta_allocator allocator;
+    /** Bytes per item: not 0, a multiple of `item_alignment`, as `sizeof`
+     * of a type always is. */
+    size_t item_size;
+    /** Alignment of each item: a power of two. */
+    size_t item_alignment;
+    /** Byte offset of the item's `uint32_t` link field, which the pool uses
+     * while the item is free (`offsetof(T, link)`): a multiple of 4, and
+     * the field lies inside the item. */
+    size_t link_offset;
+    /** Each page holds `1 << page_shift` items; at most 31, and a page is
+     * at least as large as a pointer (refill chains the pages it is about
+     * to add through their first bytes). */
+    uint32_t page_shift;
+    /** The most items the pool may hold, and so its highest index: from 1
+     * to `UINT32_MAX`. */
+    uint32_t ceiling;
+} ta_index_pool_params;
+
+/** One directory entry: a page and how many of its items are taken. */
+typedef struct {
+    /** The page's items, or NULL for a page that trim gave back. */
+    unsigned char *items;
+    uint32_t used;
+} ta_index_pool_page;
+
+/**
+ * A pool of fixed-size items in pages; see the file comment. `used`,
+ * `free` and `high_water` are the pool's counters, for reading only.
+ */
+typedef struct {
+    ta_allocator allocator;
+    /** The directory: one ta_index_pool_page per page. */
+    ta_vec pages;
+    /** The free items, linked through `link_offset`. */
+    ta_list free_list;
+    size_t item_size;
+    size_t item_alignment;
+    size_t link_offset;
+    uint32_t page_shift;
+    /** `(1 << page_shift) - 1`. */
+    uint32_t page_mask;
+    uint32_t ceiling;
+    /** Directory entries that trim left NULL below the last page. */
+    uint32_t holes;
+    /** Items taken and not given back. */
+    uint32_t used;
+    /** Items on the free list. */
+    uint32_t free;
+    /** The highest index taken so far, 0 before the first take. */
+    uint32_t high_water;
+} ta_index_pool;
+
+/**
+ * Sets up an empty pool, with no page, for items described by `params`.
+ * Allocates nothing; may run anywhere. Answers `TA_ERR_INVALID`, leaving
+ * `*pool` untouched, when `params` breaks a rule of
+ * `ta_index_pool_params` or a page's size in bytes does not fit in
+ * `size_t`.
+ */
+TA_PRIVATE ta_result ta_index_pool_init(ta_index_pool *pool, const ta_index_pool_params *params);
+
+/**
+ * Frees every page and the directory and leaves an empty pool that
+ * allocates nothing until it is set up again. Every index the pool issued
+ * is gone, taken or not. Only frees; never fails.
+ */
+TA_PRIVATE void ta_index_pool_destroy(ta_index_pool *pool);
+
+/**
+ * Makes at least `min_free` items free. When fewer are, it allocates
+ * zeroed pages, filling the holes trim left before adding pages at the
+ * end, and appends their items to the tail of the free list in ascending
+ * order; a page that the ceiling cuts short contributes only the items up
+ * to the ceiling. When `min_free` items are already free it changes
+ * nothing and allocates nothing.
+ *
+ * Allocates, so it runs only at a safe point, never inside a macrostep.
+ * Answers `TA_ERR_FULL` when `used + min_free` would pass the ceiling,
+ * and `TA_ERR_NOMEM` when an allocation fails; either way the pool is
+ * exactly as before.
+ */
+TA_PRIVATE ta_result ta_index_pool_refill(ta_index_pool *pool, uint32_t min_free);
+
+/**
+ * Takes the head of the free list and answers its index in `*out`. The
+ * item keeps its bytes (see the file comment), its link set to 0. O(1).
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_FULL`,
+ * changing nothing and leaving `*out` alone, when no item is free.
+ */
+TA_PRIVATE ta_result ta_index_pool_take(ta_index_pool *pool, uint32_t *out);
+
+/**
+ * Gives back `index`, which is taken, to the head of the free list, so it
+ * is the next item taken. Writes only the item's link field. O(1). Never
+ * allocates; may run inside a macrostep. Cannot fail; an index that is 0
+ * or not taken is a programmer error.
+ */
+TA_PRIVATE void ta_index_pool_give(ta_index_pool *pool, uint32_t index);
+
+/**
+ * Frees every page whose items are all free, from the last page down, as
+ * long as at least `keep` items stay free, and takes their items off the
+ * free list. Pages partly in use stay. A freed page at the end shrinks the
+ * directory; one below the last page kept leaves a hole that refill fills
+ * first. With no page left the directory is freed too. `high_water` stays.
+ *
+ * Only frees, and never fails. It runs at a safe point, only when the host
+ * asks core to give memory back; never inside a
+ * macrostep and never on core's own initiative.
+ */
+TA_PRIVATE void ta_index_pool_trim(ta_index_pool *pool, uint32_t keep);
+
+/**
+ * The address of item `index`, or NULL for 0, an index above the ceiling,
+ * or one whose page is not allocated (never added, or freed by trim). The
+ * address stays valid until trim frees the page or the pool is destroyed.
+ * O(1). Never allocates; may run inside a macrostep.
+ */
+TA_PRIVATE inline void *ta_index_pool_at(const ta_index_pool *pool, uint32_t index) {
+    if (index == 0u || index > pool->ceiling) {
+        return NULL;
+    }
+    uint32_t position = index - 1u;
+    uint32_t page = position >> pool->page_shift;
+    if (page >= pool->pages.count) {
+        return NULL;
+    }
+    const ta_index_pool_page *entry = (const ta_index_pool_page *)pool->pages.items + page;
+    if (entry->items == NULL) {
+        return NULL;
+    }
+    return entry->items + (size_t)(position & pool->page_mask) * pool->item_size;
+}
+
+/**
+ * `ta_index_pool_at` in the shape a `ta_list_links` asks for: `pool` is
+ * the `ta_index_pool`. Never allocates; may run inside a macrostep.
+ */
+TA_PRIVATE void *ta_index_pool_item(void *pool, uint32_t index);
+
+/**
+ * The links of a list over this pool's items, linked through the
+ * `uint32_t` field at byte `offset` of each item. The pool's own free list
+ * uses its `link_offset`; a user's lists use other fields (or the same
+ * one, for items that are taken). Never allocates; may run inside a
+ * macrostep.
+ */
+TA_PRIVATE inline ta_list_links ta_index_pool_links(ta_index_pool *pool, size_t offset) {
+    return (ta_list_links){ .item = ta_index_pool_item, .items = pool, .offset = offset };
+}
+
+/**
  * @file paged_array.h
  *
  * # Paged array
@@ -1202,7 +1481,7 @@ TA_PRIVATE inline ta_result ta_list_unlink(ta_list *list, const ta_list_links *l
  * - `ta_paged_array_shrink` and `ta_paged_array_destroy` only free. Shrink
  *   gives back the directory too when no page remains; while pages remain
  *   the directory keeps its size. Shrink runs only at a safe point: when
- *   the host calls `ta_system_trim`, never on core's own initiative.
+ *   the host asks core to give memory back, never on core's own initiative.
  * - `ta_paged_array_at`, `ta_paged_array_get`, `ta_paged_array_set` and
  *   `ta_paged_array_capacity` never allocate, and may run inside a
  *   macrostep.
@@ -1236,8 +1515,8 @@ TA_PRIVATE inline ta_result ta_list_unlink(ta_list *list, const ta_list_links *l
  * The **deadline index** keeps its heap positions here, one `uint32_t`
  * envelope index per position. The envelope pool's refill grows it
  * together with the pool, so inserting a delayed send never allocates, and
- * `ta_system_trim` shrinks it to the pages the pending delayed sends
- * occupy, as it trims the pool's free pages.
+ * the host's request to give memory back shrinks it to the pages the
+ * pending delayed sends occupy, as it trims the pool's free pages.
  */
 
 
@@ -1303,7 +1582,7 @@ TA_PRIVATE ta_result ta_paged_array_grow(ta_paged_array *array, uint32_t count);
  * is freed too. A `count` at or above the capacity changes nothing.
  *
  * Only frees, and never fails. It runs at a safe point, when the host asks
- * core to give memory back (`ta_system_trim`).
+ * core to give memory back.
  */
 TA_PRIVATE void ta_paged_array_shrink(ta_paged_array *array, uint32_t count);
 
@@ -1406,7 +1685,7 @@ TA_PRIVATE inline void ta_paged_array_set(ta_paged_array *array, uint32_t positi
  *   the heap's capacity is never below the number of envelopes that can be
  *   delayed sends.
  * - `ta_heap_shrink` and `ta_heap_destroy` only free. Shrink runs at a
- *   safe point too, when the host calls `ta_system_trim`, never on core's
+ *   safe point too, when the host asks core to give memory back, never on core's
  *   own initiative.
  * - `ta_heap_insert`, `ta_heap_pop`, `ta_heap_remove`, `ta_heap_head`,
  *   `ta_heap_length` and `ta_heap_capacity` never allocate, and may run
@@ -1525,7 +1804,7 @@ TA_PRIVATE ta_result ta_heap_grow(ta_heap *heap, uint32_t count);
  * that changes nothing.
  *
  * Only frees, and never fails. It runs at a safe point, when the host
- * asks core to give memory back (`ta_system_trim`).
+ * asks core to give memory back.
  */
 TA_PRIVATE void ta_heap_shrink(ta_heap *heap, uint32_t keep);
 
@@ -7142,11 +7421,18 @@ TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_req
  *   delayed sends, a paused continuation) lives in a sparse state
  *   allocated only for an actor that uses it, so an ordinary actor costs
  *   its block and its slot.
- * - **The actor table** issues slots in fixed pages of
- *   `TA_ACTOR_PAGE_SLOTS`; pages never move, so a pointer to a slot stays
- *   valid for the life of the system. A runtime ID is a slot and a
- *   generation; a freed slot's generation moves on, so an old ID finds
- *   nothing.
+ * - **The actor table** is an index pool of slots (`index_pool.h`) in
+ *   fixed pages of 4,096 (`TA_ACTOR_PAGE_SHIFT`); pages never move, so a
+ *   pointer to a slot stays valid for the life of the system. A runtime
+ *   ID is a slot and a generation (`handle.h`), and slot `s` is pool index
+ *   `s + 1`, so the first actor of a system is slot 0, generation 1,
+ *   `0x100000000`. A freed slot's generation moves on, so an old ID finds
+ *   nothing; the slot keeps its generation while free, which is why the
+ *   table never trims its pool.
+ * - **Slot order.** A spawn takes the slot freed last, else the lowest
+ *   slot never issued, never scanning for a hole (invariant 17): the
+ *   pool's free list gives exactly that order. `ta_actor_table_issued`
+ *   bounds a walk over the table.
  * - **An operator transition** is one allocation: its header, then its
  *   targets (`ta_operator_jump_bytes`). The event block owns it from
  *   delivery until the macrostep that takes the event frees it.
@@ -7157,7 +7443,8 @@ TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_req
  * ## Memory
  *
  * The system owns its actors and the table's pages, from its allocator.
- * `ta_actor_new` allocates the block (and may allocate a table page);
+ * `ta_actor_new` allocates the block, and refills the table's pool by one
+ * page when no slot is free, at the point where it allocates the block;
  * `ta_actor_free` releases what the actor holds (its sparse state, its
  * event block, its session entry) and frees the block.
  * The definition outlives each of its actors: it counts them in
@@ -7170,15 +7457,16 @@ TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_req
  * ## Complexity
  *
  * `ta_actor_lookup` and `ta_actor_slot_at` are O(1). `ta_actor_layout` and
- * `ta_operator_jump_bytes` are O(1). Issuing a slot is O(1), and
- * allocates a page once per `TA_ACTOR_PAGE_SLOTS` slots.
+ * `ta_operator_jump_bytes` are O(1). Issuing and freeing a slot are O(1);
+ * issuing allocates a 64 KiB page once per 4,096 slots never issued
+ * before, and zeroes it.
  *
  * ## Failure
  *
- * Allocation failure and the `maxActors` quota answer `TA_ERR_NOMEM`, and
- * change nothing. A layout or an operator transition whose size would
- * exceed `SIZE_MAX` answers `TA_ERR_NOMEM` too, before anything is
- * allocated.
+ * Allocation failure, the `maxActors` quota and a table that has issued
+ * all `UINT32_MAX` slots answer `TA_ERR_NOMEM`, and change nothing. A
+ * layout or an operator transition whose size would exceed `SIZE_MAX`
+ * answers `TA_ERR_NOMEM` too, before anything is allocated.
  *
  * ## Users
  *
@@ -7386,30 +7674,53 @@ struct ta_actor {
     const uint64_t *live_active;
 };
 
+/*
+ * One slot of the actor table, an item of its index pool. Slot `s` is pool
+ * index `s + 1`, so the first actor's slot is 0 and its ID is
+ * `ta_handle_make(0, 1)`. The slot keeps its generation while it is free:
+ * the pool writes only `link`, and only while the slot is free.
+ */
 typedef struct {
     ta_actor *actor;
+    /* 0 for a slot never taken, whose page refill just zeroed; taking it
+     * makes it 1, so no actor ID has generation 0. */
     uint32_t generation;
-    /* While free: the next free slot, or UINT32_MAX. Fits the padding the
-     * generation already left, so the table costs no more per actor. */
-    uint32_t next_free;
+    /* The pool's free-list link while the slot is free. Fits the padding
+     * the generation already left, so the table costs no more per actor. */
+    uint32_t link;
 } ta_actor_slot;
 
+/* Slots per page of the actor table, as a power of two: 4,096 slots, 64 KiB. */
+#define TA_ACTOR_PAGE_SHIFT 12u
+
 /*
- * The actor table (ADR 0063): slots live in fixed pages of
- * TA_ACTOR_PAGE_SLOTS, found through a page directory. Slot `s` is in page
- * `s / TA_ACTOR_PAGE_SLOTS`. A page is allocated only when the last one is
- * full, and pages never move, so no spawn copies the table; only the
- * directory of page pointers doubles. Pages live as long as the system.
+ * The actor table (ADR 0063): an index pool of ta_actor_slot (index_pool.h)
+ * in pages of 2^TA_ACTOR_PAGE_SHIFT, up to UINT32_MAX slots. It never
+ * trims: a free slot keeps the generation of the IDs once issued there.
  */
-#define TA_ACTOR_PAGE_SLOTS 4096u
 typedef struct {
-    ta_vec pages;   /* ta_actor_slot *, one per page */
-    uint32_t count; /* slots issued so far */
+    ta_index_pool slots;
 } ta_actor_table;
 
-/* The entry for `slot`, or NULL when that slot was never issued. */
+/**
+ * Sets up an empty table over `allocator`. Allocates nothing; cannot fail
+ * for the table's fixed parameters, and answers what `ta_index_pool_init`
+ * answers.
+ */
+TA_PRIVATE ta_result ta_actor_table_init(ta_actor_table *table, ta_allocator allocator);
+/** Frees the table's pages and directory. The actors must be gone. Only frees. */
+TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table);
+/**
+ * Slots issued so far: every slot below it has been taken at least once,
+ * and none at or above it has. Walks over the table stop here. O(1).
+ */
+TA_PRIVATE inline uint32_t ta_actor_table_issued(const ta_actor_table *table) { return table->slots.high_water; }
+/**
+ * The entry for `slot`, or NULL when that slot was never issued. The
+ * entry never moves while the system lives. O(1); never allocates; may
+ * run inside a macrostep.
+ */
 TA_PRIVATE ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
-TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
 /**
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the
  * ta_actor record, then the session storage, then the data-model instance,
@@ -7503,6 +7814,83 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
  * sourcing, and storage adapters live in optional higher-level components.
  */
 
+/**
+ * @file system.h
+ *
+ * # The system
+ *
+ * `ta_system` is the in-process container for the runtime state every
+ * actor shares: the injected allocator and the buffers each run needs,
+ * the logical clock, atom and event-name interning, the registered
+ * immutable definitions, the resident actors and their runtime IDs, the
+ * address and session tables, delayed-send state, the built-in SCXML
+ * Event I/O Processor and its host event router, the registered I/O
+ * processors and invokers, and the host's actor directory, trace and log
+ * sinks.
+ *
+ * ## What it is not
+ *
+ * The system creates no threads, decides no cross-actor scheduling order,
+ * owns no socket or event loop, reads no wall-clock time, needs no
+ * filesystem, and hides no host concurrency behind locks. It has no
+ * persistence adapter and no concrete index of named addresses: the host
+ * installs `ta_actor_directory` operations for claim, resolution,
+ * replacement and removal, backed by whatever it likes (a hash table, a
+ * database, a shard router). Core keeps only resident runtime state; the
+ * host keeps the images of evicted actors for the life of the process and
+ * indexes their deadlines. Eviction bounds memory; it is not persistence.
+ *
+ * ## Contract and invariants
+ *
+ * - **Directory entries** tell a resident runtime ID from an unloaded
+ *   logical actor. The host's replace and remove callbacks receive the
+ *   entry the caller expects and behave as atomic compare-and-swaps;
+ *   replacement, unloading, loading and destruction rely on that, so a
+ *   stale runtime actor never overwrites or removes a newer route.
+ * - **Definitions** live in a slot table: a definition ID is a generation
+ *   handle (`handle.h`) of its slot, and freed slots form a list through
+ *   `next_free`, so registering never scans.
+ * - **Actors** live in the actor table (`actor.h`), an index pool whose
+ *   free list a spawn takes from, so a spawn costs the same against four
+ *   million actors as against four (invariant 17).
+ * - `ta_system_set_external_event_router` installs the host's router for
+ *   normalized SCXML-session events; core's standard processor and an
+ *   invoked child's completion submit through it. The SCXML I/O type
+ *   atom is interned at creation, and registering an I/O processor cannot
+ *   replace it.
+ * - The parameters (ADR 0092) are fixed at creation and bound every
+ *   buffer; `maxActors` and `maxDefinitions` are counted against
+ *   `live_actors` and `live_definitions`.
+ *
+ * ## Memory
+ *
+ * The system owns everything it holds, from the allocator in its config,
+ * until `ta_system_destroy`, which destroys every actor and definition
+ * first. Creation allocates the system, the first storage of the tables
+ * that start with some (sessions, atoms, event names), and the run
+ * buffers (ADR 0092 section 3); the actor table starts empty. Afterwards it allocates where a
+ * caller adds something (a spawn, a registration, an interned address), a
+ * nested interpreter's region the first time an invocation is cancelled
+ * at that depth, and the event blocks it caches; never in the middle of a
+ * macrostep, where room is reserved before the run (ADR 0070).
+ *
+ * ## Complexity
+ *
+ * Looking up a definition or an actor by ID is O(1); so are the quota
+ * checks. Teardown walks every slot ever issued.
+ *
+ * ## Failure
+ *
+ * Creation answers `TA_ERR_INVALID` for a config without an allocator,
+ * the parameters' own answers, and `TA_ERR_NOMEM`, freeing what it made.
+ * A full quota answers as an allocator that ran out (ADR 0092 section 4).
+ *
+ * ## Users
+ *
+ * Every unit that runs: the public API's entry points, the interpreter,
+ * actors, session images, timers, invocations and I/O. ADRs 0043, 0063,
+ * 0066, 0067, 0068, 0072, 0079, 0092.
+ */
 
 
 /*
@@ -7546,13 +7934,12 @@ struct ta_system {
     uint64_t next_definition_serial;
 
     /*
-     * ta_actor_slot; an actor ID is ta_actor_id_make(slot, generation). Freed slots
-     * form a list through `next_free`, as definitions' do: a spawn takes the
-     * head instead of scanning the table, so it costs the same against four
-     * million actors as against four (invariant 17).
+     * The actor table (actor.h); an actor ID is ta_actor_id_make(slot,
+     * generation). A spawn takes the head of its pool's free list instead
+     * of scanning the table, so it costs the same against four million
+     * actors as against four (invariant 17).
      */
     ta_actor_table actors;
-    uint32_t free_actor_slot;
 
     ta_timer_heap timers;
 
@@ -8382,6 +8769,233 @@ TA_PRIVATE void ta_arena_init_fixed(ta_arena *arena, void *memory, size_t bytes)
     };
     /* block_size is never used to grow: the backing refuses. */
     *arena = (ta_arena){ .backing = { .self = NULL, .v = &ta_arena_fixed_vtable }, .head = block, .block_size = 1 };
+}
+
+
+/* A page freed by trim is marked with this count while trim unlinks its items. */
+#define TA_INDEX_POOL_FREEING UINT32_MAX
+
+static size_t ta_index_pool_page_bytes(const ta_index_pool *pool) {
+    return pool->item_size << pool->page_shift;
+}
+
+static ta_index_pool_page *ta_index_pool_entry(const ta_index_pool *pool, uint32_t page) {
+    return (ta_index_pool_page *)pool->pages.items + page;
+}
+
+/* Items page `page` holds below the ceiling: a whole page, except the one the ceiling cuts. */
+static uint32_t ta_index_pool_page_items(const ta_index_pool *pool, uint32_t page) {
+    uint64_t first = (uint64_t)page << pool->page_shift;
+    uint64_t whole = (uint64_t)1u << pool->page_shift;
+    uint64_t left = first >= pool->ceiling ? 0u : (uint64_t)pool->ceiling - first;
+    return (uint32_t)(left < whole ? left : whole);
+}
+
+/* Pages that indices 1 to the ceiling occupy. */
+static uint32_t ta_index_pool_page_limit(const ta_index_pool *pool) {
+    return (uint32_t)((((uint64_t)pool->ceiling - 1u) >> pool->page_shift) + 1u);
+}
+
+/* The first page at or after `page` that refill may allocate: a hole, or
+ * any page at or past the end of the directory. */
+static uint32_t ta_index_pool_next_vacant(const ta_index_pool *pool, uint32_t page) {
+    if (pool->holes != 0) {
+        while (page < pool->pages.count && ta_index_pool_entry(pool, page)->items != NULL) {
+            page += 1u;
+        }
+        return page;
+    }
+    return page > pool->pages.count ? page : pool->pages.count;
+}
+
+static void ta_index_pool_free_page(const ta_index_pool *pool, unsigned char *items) {
+    ta_mem_free(pool->allocator, items,
+                &(ta_allocator_free_params){ .size = ta_index_pool_page_bytes(pool), .alignment = pool->item_alignment });
+}
+
+TA_PRIVATE ta_result ta_index_pool_init(ta_index_pool *pool, const ta_index_pool_params *params) {
+    size_t alignment = params->item_alignment;
+    if (params->item_size == 0 || alignment == 0 || (alignment & (alignment - 1u)) != 0 ||
+        params->item_size % alignment != 0 || params->page_shift > 31u ||
+        params->item_size > (SIZE_MAX >> params->page_shift) || params->item_size < sizeof(uint32_t) ||
+        params->link_offset % sizeof(uint32_t) != 0 || params->link_offset > params->item_size - sizeof(uint32_t) ||
+        (params->item_size << params->page_shift) < sizeof(void *) || params->ceiling == 0) {
+        return TA_ERR_INVALID;
+    }
+    *pool = (ta_index_pool){
+        .allocator = params->allocator,
+        .free_list = TA_LIST_EMPTY,
+        .item_size = params->item_size,
+        .item_alignment = alignment,
+        .link_offset = params->link_offset,
+        .page_shift = params->page_shift,
+        .page_mask = (uint32_t)((UINT64_C(1) << params->page_shift) - 1u),
+        .ceiling = params->ceiling,
+    };
+    ta_vec_init(&pool->pages, params->allocator, TA_VEC_LAYOUT(ta_index_pool_page));
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_index_pool_destroy(ta_index_pool *pool) {
+    for (uint32_t page = 0; page < pool->pages.count; page += 1u) {
+        unsigned char *items = ta_index_pool_entry(pool, page)->items;
+        if (items != NULL) {
+            ta_index_pool_free_page(pool, items);
+        }
+    }
+    ta_vec_destroy(&pool->pages);
+    *pool = (ta_index_pool){0};
+}
+
+TA_PRIVATE void *ta_index_pool_item(void *pool, uint32_t index) {
+    return ta_index_pool_at(pool, index);
+}
+
+/*
+ * Refill runs in two passes over the same plan, the vacant pages in
+ * ascending order. The first allocates every page the plan needs and
+ * chains them through their own first bytes, so nothing in the pool
+ * changes until every allocation, the directory's last, has succeeded.
+ * The second puts each page in its entry and threads its items.
+ */
+TA_PRIVATE ta_result ta_index_pool_refill(ta_index_pool *pool, uint32_t min_free) {
+    if (pool->free >= min_free) {
+        return TA_OK;
+    }
+    if ((uint64_t)pool->used + min_free > pool->ceiling) {
+        return TA_ERR_FULL;
+    }
+    uint32_t needed = min_free - pool->free;
+    size_t page_bytes = ta_index_pool_page_bytes(pool);
+
+    unsigned char *chain = NULL;
+    unsigned char **chain_end = &chain;
+    uint32_t gained = 0;
+    uint32_t end = pool->pages.count; /* the directory's count once the plan is in */
+    uint32_t page = ta_index_pool_next_vacant(pool, 0);
+    uint32_t limit = ta_index_pool_page_limit(pool);
+    ta_result result = TA_OK;
+    while (gained < needed && page < limit) {
+        unsigned char *items = ta_mem_alloc(pool->allocator, page_bytes, pool->item_alignment);
+        if (items == NULL) {
+            result = TA_ERR_NOMEM;
+            break;
+        }
+        *(unsigned char **)(void *)items = NULL;
+        *chain_end = items;
+        chain_end = (unsigned char **)(void *)items;
+        gained += ta_index_pool_page_items(pool, page);
+        end = page + 1u > end ? page + 1u : end;
+        page = ta_index_pool_next_vacant(pool, page + 1u);
+    }
+    if (result == TA_OK) {
+        result = ta_vec_reserve(&pool->pages, end);
+    }
+    if (result != TA_OK) {
+        while (chain != NULL) {
+            unsigned char *next = *(unsigned char **)(void *)chain;
+            ta_index_pool_free_page(pool, chain);
+            chain = next;
+        }
+        return result;
+    }
+
+    ta_list_links links = ta_index_pool_links(pool, pool->link_offset);
+    page = ta_index_pool_next_vacant(pool, 0);
+    while (chain != NULL) {
+        unsigned char *items = chain;
+        chain = *(unsigned char **)(void *)items;
+        ta_mem_zero(items, page_bytes);
+        if (page < pool->pages.count) {
+            pool->holes -= 1u;
+        } else {
+            /* Reserved above, so this cannot fail. */
+            (void)ta_vec_push(&pool->pages, &(ta_index_pool_page){0});
+        }
+        *ta_index_pool_entry(pool, page) = (ta_index_pool_page){ .items = items, .used = 0 };
+        uint32_t count = ta_index_pool_page_items(pool, page);
+        uint32_t first = (page << pool->page_shift) + 1u;
+        for (uint32_t item = 0; item < count; item += 1u) {
+            ta_list_push_back(&pool->free_list, &links, first + item);
+        }
+        pool->free += count;
+        page = ta_index_pool_next_vacant(pool, page + 1u);
+    }
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_index_pool_take(ta_index_pool *pool, uint32_t *out) {
+    ta_list_links links = ta_index_pool_links(pool, pool->link_offset);
+    uint32_t index = ta_list_pop_front(&pool->free_list, &links);
+    if (index == 0u) {
+        return TA_ERR_FULL;
+    }
+    ta_index_pool_entry(pool, (index - 1u) >> pool->page_shift)->used += 1u;
+    pool->used += 1u;
+    pool->free -= 1u;
+    if (index > pool->high_water) {
+        pool->high_water = index;
+    }
+    *out = index;
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_index_pool_give(ta_index_pool *pool, uint32_t index) {
+    ta_list_links links = ta_index_pool_links(pool, pool->link_offset);
+    ta_list_push_front(&pool->free_list, &links, index);
+    ta_index_pool_entry(pool, (index - 1u) >> pool->page_shift)->used -= 1u;
+    pool->used -= 1u;
+    pool->free += 1u;
+}
+
+TA_PRIVATE void ta_index_pool_trim(ta_index_pool *pool, uint32_t keep) {
+    /* Mark the pages to free, from the last down, while `keep` items stay free. */
+    uint32_t free = pool->free;
+    uint32_t marked = 0;
+    for (uint32_t page = pool->pages.count; page > 0; page -= 1u) {
+        ta_index_pool_page *entry = ta_index_pool_entry(pool, page - 1u);
+        uint32_t count = ta_index_pool_page_items(pool, page - 1u);
+        if (entry->items != NULL && entry->used == 0 && free >= count && free - count >= keep) {
+            entry->used = TA_INDEX_POOL_FREEING;
+            free -= count;
+            marked += 1u;
+        }
+    }
+    if (marked == 0) {
+        return;
+    }
+
+    /* Take the marked pages' items off the free list, in one walk. */
+    ta_list_links links = ta_index_pool_links(pool, pool->link_offset);
+    uint32_t previous = 0;
+    uint32_t current = ta_list_head(&pool->free_list);
+    while (current != 0) {
+        uint32_t next = ta_list_next(&links, current);
+        if (ta_index_pool_entry(pool, (current - 1u) >> pool->page_shift)->used == TA_INDEX_POOL_FREEING) {
+            (void)ta_list_remove_after(&pool->free_list, &links, previous);
+        } else {
+            previous = current;
+        }
+        current = next;
+    }
+    pool->free = free;
+
+    /* Free them; the directory keeps a hole below the last page kept. */
+    for (uint32_t page = 0; page < pool->pages.count; page += 1u) {
+        ta_index_pool_page *entry = ta_index_pool_entry(pool, page);
+        if (entry->items != NULL && entry->used == TA_INDEX_POOL_FREEING) {
+            ta_index_pool_free_page(pool, entry->items);
+            *entry = (ta_index_pool_page){0};
+            pool->holes += 1u;
+        }
+    }
+    while (pool->pages.count > 0 && ta_index_pool_entry(pool, pool->pages.count - 1u)->items == NULL) {
+        pool->pages.count -= 1u;
+        pool->holes -= 1u;
+    }
+    if (pool->pages.count == 0) {
+        ta_vec_destroy(&pool->pages);
+    }
 }
 
 
@@ -19037,22 +19651,25 @@ TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
 }
 
 TA_PRIVATE ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot) {
-    if (slot >= system->actors.count) {
+    if (slot >= ta_actor_table_issued(&system->actors)) {
         return NULL;
     }
-    ta_actor_slot *const *pages = system->actors.pages.items;
-    return &pages[slot / TA_ACTOR_PAGE_SLOTS][slot % TA_ACTOR_PAGE_SLOTS];
+    return ta_index_pool_at(&system->actors.slots, slot + 1u);
 }
 
-TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator) {
-    ta_actor_slot **pages = table->pages.items;
-    for (uint32_t page = 0; page < table->pages.count; page += 1u) {
-        ta_mem_free(allocator, pages[page],
-                    &(ta_allocator_free_params){ .size = TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
-                                                 .alignment = _Alignof(ta_actor_slot) });
-    }
-    ta_vec_destroy(&table->pages);
-    table->count = 0;
+TA_PRIVATE ta_result ta_actor_table_init(ta_actor_table *table, ta_allocator allocator) {
+    return ta_index_pool_init(&table->slots, &(ta_index_pool_params){
+                                                 .allocator = allocator,
+                                                 .item_size = sizeof(ta_actor_slot),
+                                                 .item_alignment = _Alignof(ta_actor_slot),
+                                                 .link_offset = offsetof(ta_actor_slot, link),
+                                                 .page_shift = TA_ACTOR_PAGE_SHIFT,
+                                                 .ceiling = UINT32_MAX,
+                                             });
+}
+
+TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table) {
+    ta_index_pool_destroy(&table->slots);
 }
 
 TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition) {
@@ -19098,35 +19715,6 @@ TA_PRIVATE ta_result ta_operator_jump_bytes(uint32_t count, size_t *out) {
         *out = layout.bytes;
     }
     return result;
-}
-
-/*
- * Issues the next slot, allocating a page when the last one is full. Pages
- * never move, so this never copies the table (ADR 0063).
- */
-static ta_result ta_actor_table_grow(ta_system *system, uint32_t *out) {
-    ta_actor_table *table = &system->actors;
-    if (table->count == UINT32_MAX) {
-        return TA_ERR_NOMEM; /* UINT32_MAX is no slot: it ends the free list and a walk */
-    }
-    if ((uint64_t)table->count == (uint64_t)table->pages.count * TA_ACTOR_PAGE_SLOTS) {
-        ta_actor_slot *page = ta_mem_alloc(system->allocator, TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
-                                           _Alignof(ta_actor_slot));
-        if (page == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        ta_result result = ta_vec_push(&table->pages, &page);
-        if (result != TA_OK) {
-            ta_mem_free(system->allocator, page,
-                        &(ta_allocator_free_params){ .size = TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
-                                                     .alignment = _Alignof(ta_actor_slot) });
-            return result;
-        }
-    }
-    *out = table->count;
-    table->count += 1u;
-    *ta_actor_slot_at(system, *out) = (ta_actor_slot){ .generation = 1, .next_free = UINT32_MAX };
-    return TA_OK;
 }
 
 TA_API uint32_t ta_actor_id_slot(ta_actor_id id) {
@@ -19275,25 +19863,30 @@ TA_PRIVATE void ta_actor_exit_invoked(ta_system *system, ta_actor_id id) {
 }
 
 /*
- * Takes the head of the free list, or grows the table when it is empty.
- * Scanning the table for a hole instead would make every spawn cost a walk
- * over the live population, which is what invariant 17 forbids: an ephemeral
- * child of a four-million-actor system must not pay for its siblings.
+ * Takes the head of the table's free list, refilling the pool by a page
+ * when no slot is free; pages never move, so this never copies the table
+ * (ADR 0063). Scanning the table for a hole instead would make every spawn
+ * cost a walk over the live population, which is what invariant 17
+ * forbids: an ephemeral child of a four-million-actor system must not pay
+ * for its siblings. A table that has issued every slot answers
+ * TA_ERR_NOMEM, as an allocator that ran out.
  */
 static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_actor_id *out) {
-    uint32_t slot = system->free_actor_slot;
-    if (slot == UINT32_MAX) {
-        ta_result result = ta_actor_table_grow(system, &slot);
-        if (result != TA_OK) {
-            return result;
-        }
-    } else {
-        system->free_actor_slot = ta_actor_slot_at(system, slot)->next_free;
+    ta_index_pool *slots = &system->actors.slots;
+    ta_result result = ta_index_pool_refill(slots, 1u);
+    uint32_t index = 0;
+    if (result == TA_OK) {
+        result = ta_index_pool_take(slots, &index);
     }
-    ta_actor_slot *entry = ta_actor_slot_at(system, slot);
+    if (result != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
+    ta_actor_slot *entry = ta_index_pool_at(slots, index);
     entry->actor = actor;
-    entry->next_free = UINT32_MAX;
-    *out = ta_handle_make(slot, entry->generation);
+    if (entry->generation == 0) {
+        entry->generation = 1u;
+    }
+    *out = ta_handle_make(index - 1u, entry->generation);
     return TA_OK;
 }
 
@@ -19373,8 +19966,7 @@ TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
     ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->actor = NULL;
     entry->generation = entry->generation == UINT32_MAX ? 1u : entry->generation + 1u;
-    entry->next_free = system->free_actor_slot;
-    system->free_actor_slot = slot;
+    ta_index_pool_give(&system->actors.slots, slot + 1u);
 }
 
 /*
@@ -20651,7 +21243,7 @@ TA_API ta_result ta_system_visit_actors(ta_system *system, const ta_actor_visit_
     }
     uint32_t visited = 0;
     uint32_t slot = params->from;
-    for (; slot < system->actors.count; slot += 1u) {
+    for (; slot < ta_actor_table_issued(&system->actors); slot += 1u) {
         if (params->limit != 0 && visited == params->limit) {
             break;
         }
@@ -20671,7 +21263,7 @@ TA_API ta_result ta_system_visit_actors(ta_system *system, const ta_actor_visit_
         }
         visited += 1u;
     }
-    *next = slot >= system->actors.count ? TA_ACTOR_VISIT_END : slot;
+    *next = slot >= ta_actor_table_issued(&system->actors) ? TA_ACTOR_VISIT_END : slot;
     return TA_OK;
 }
 
@@ -22515,8 +23107,6 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
-    ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
-    system->free_actor_slot = UINT32_MAX;
     ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
     system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
@@ -22524,7 +23114,10 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     ta_address_table_init(&system->addresses, config->allocator);
     ta_io_origin_table_init(&system->io_scopes, config->allocator, true);
     ta_io_origin_table_init(&system->io_messages, config->allocator, false);
-    ta_result result = ta_session_table_init(&system->sessions, config->allocator);
+    ta_result result = ta_actor_table_init(&system->actors, config->allocator);
+    if (result == TA_OK) {
+        result = ta_session_table_init(&system->sessions, config->allocator);
+    }
     if (result == TA_OK) {
         result = ta_atom_table_init(&system->atoms, config->allocator);
     }
@@ -22566,7 +23159,7 @@ TA_API void ta_system_destroy(ta_system *system) {
     }
     /* Teardown releases submitted sends instead of keeping them as orphans. */
     system->timers.closing = true;
-    for (uint32_t slot = 0; slot < system->actors.count; slot += 1) {
+    for (uint32_t slot = 0; slot < ta_actor_table_issued(&system->actors); slot += 1) {
         ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {
             (void)ta_actor_destroy(system, ta_handle_make(slot, entry->generation));
@@ -22587,7 +23180,7 @@ TA_API void ta_system_destroy(ta_system *system) {
     }
     ta_vec_destroy(&system->definitions);
     ta_timer_heap_destroy(&system->timers);
-    ta_actor_table_destroy(&system->actors, system->allocator);
+    ta_actor_table_destroy(&system->actors);
     /* After the actors: their held events released their MESSAGE origins. */
     ta_io_origin_table_destroy(&system->io_scopes);
     ta_io_origin_table_destroy(&system->io_messages);

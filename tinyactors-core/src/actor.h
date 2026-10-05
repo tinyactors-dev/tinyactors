@@ -29,11 +29,18 @@
  *   delayed sends, a paused continuation) lives in a sparse state
  *   allocated only for an actor that uses it, so an ordinary actor costs
  *   its block and its slot.
- * - **The actor table** issues slots in fixed pages of
- *   `TA_ACTOR_PAGE_SLOTS`; pages never move, so a pointer to a slot stays
- *   valid for the life of the system. A runtime ID is a slot and a
- *   generation; a freed slot's generation moves on, so an old ID finds
- *   nothing.
+ * - **The actor table** is an index pool of slots (`index_pool.h`) in
+ *   fixed pages of 4,096 (`TA_ACTOR_PAGE_SHIFT`); pages never move, so a
+ *   pointer to a slot stays valid for the life of the system. A runtime
+ *   ID is a slot and a generation (`handle.h`), and slot `s` is pool index
+ *   `s + 1`, so the first actor of a system is slot 0, generation 1,
+ *   `0x100000000`. A freed slot's generation moves on, so an old ID finds
+ *   nothing; the slot keeps its generation while free, which is why the
+ *   table never trims its pool.
+ * - **Slot order.** A spawn takes the slot freed last, else the lowest
+ *   slot never issued, never scanning for a hole (invariant 17): the
+ *   pool's free list gives exactly that order. `ta_actor_table_issued`
+ *   bounds a walk over the table.
  * - **An operator transition** is one allocation: its header, then its
  *   targets (`ta_operator_jump_bytes`). The event block owns it from
  *   delivery until the macrostep that takes the event frees it.
@@ -44,7 +51,8 @@
  * ## Memory
  *
  * The system owns its actors and the table's pages, from its allocator.
- * `ta_actor_new` allocates the block (and may allocate a table page);
+ * `ta_actor_new` allocates the block, and refills the table's pool by one
+ * page when no slot is free, at the point where it allocates the block;
  * `ta_actor_free` releases what the actor holds (its sparse state, its
  * event block, its session entry) and frees the block.
  * The definition outlives each of its actors: it counts them in
@@ -57,15 +65,16 @@
  * ## Complexity
  *
  * `ta_actor_lookup` and `ta_actor_slot_at` are O(1). `ta_actor_layout` and
- * `ta_operator_jump_bytes` are O(1). Issuing a slot is O(1), and
- * allocates a page once per `TA_ACTOR_PAGE_SLOTS` slots.
+ * `ta_operator_jump_bytes` are O(1). Issuing and freeing a slot are O(1);
+ * issuing allocates a 64 KiB page once per 4,096 slots never issued
+ * before, and zeroes it.
  *
  * ## Failure
  *
- * Allocation failure and the `maxActors` quota answer `TA_ERR_NOMEM`, and
- * change nothing. A layout or an operator transition whose size would
- * exceed `SIZE_MAX` answers `TA_ERR_NOMEM` too, before anything is
- * allocated.
+ * Allocation failure, the `maxActors` quota and a table that has issued
+ * all `UINT32_MAX` slots answer `TA_ERR_NOMEM`, and change nothing. A
+ * layout or an operator transition whose size would exceed `SIZE_MAX`
+ * answers `TA_ERR_NOMEM` too, before anything is allocated.
  *
  * ## Users
  *
@@ -76,6 +85,7 @@
 
 #include "continuation.h"
 #include "definition.h"
+#include "index_pool.h"
 #include "invoke.h"
 #include "timer.h"
 #include "session.h"
@@ -284,30 +294,53 @@ struct ta_actor {
     const uint64_t *live_active;
 };
 
+/*
+ * One slot of the actor table, an item of its index pool. Slot `s` is pool
+ * index `s + 1`, so the first actor's slot is 0 and its ID is
+ * `ta_handle_make(0, 1)`. The slot keeps its generation while it is free:
+ * the pool writes only `link`, and only while the slot is free.
+ */
 typedef struct {
     ta_actor *actor;
+    /* 0 for a slot never taken, whose page refill just zeroed; taking it
+     * makes it 1, so no actor ID has generation 0. */
     uint32_t generation;
-    /* While free: the next free slot, or UINT32_MAX. Fits the padding the
-     * generation already left, so the table costs no more per actor. */
-    uint32_t next_free;
+    /* The pool's free-list link while the slot is free. Fits the padding
+     * the generation already left, so the table costs no more per actor. */
+    uint32_t link;
 } ta_actor_slot;
 
+/* Slots per page of the actor table, as a power of two: 4,096 slots, 64 KiB. */
+#define TA_ACTOR_PAGE_SHIFT 12u
+
 /*
- * The actor table (ADR 0063): slots live in fixed pages of
- * TA_ACTOR_PAGE_SLOTS, found through a page directory. Slot `s` is in page
- * `s / TA_ACTOR_PAGE_SLOTS`. A page is allocated only when the last one is
- * full, and pages never move, so no spawn copies the table; only the
- * directory of page pointers doubles. Pages live as long as the system.
+ * The actor table (ADR 0063): an index pool of ta_actor_slot (index_pool.h)
+ * in pages of 2^TA_ACTOR_PAGE_SHIFT, up to UINT32_MAX slots. It never
+ * trims: a free slot keeps the generation of the IDs once issued there.
  */
-#define TA_ACTOR_PAGE_SLOTS 4096u
 typedef struct {
-    ta_vec pages;   /* ta_actor_slot *, one per page */
-    uint32_t count; /* slots issued so far */
+    ta_index_pool slots;
 } ta_actor_table;
 
-/* The entry for `slot`, or NULL when that slot was never issued. */
+/**
+ * Sets up an empty table over `allocator`. Allocates nothing; cannot fail
+ * for the table's fixed parameters, and answers what `ta_index_pool_init`
+ * answers.
+ */
+ta_result ta_actor_table_init(ta_actor_table *table, ta_allocator allocator);
+/** Frees the table's pages and directory. The actors must be gone. Only frees. */
+void ta_actor_table_destroy(ta_actor_table *table);
+/**
+ * Slots issued so far: every slot below it has been taken at least once,
+ * and none at or above it has. Walks over the table stop here. O(1).
+ */
+static inline uint32_t ta_actor_table_issued(const ta_actor_table *table) { return table->slots.high_water; }
+/**
+ * The entry for `slot`, or NULL when that slot was never issued. The
+ * entry never moves while the system lives. O(1); never allocates; may
+ * run inside a macrostep.
+ */
 ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
-void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
 /**
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the
  * ta_actor record, then the session storage, then the data-model instance,

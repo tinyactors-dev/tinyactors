@@ -65,7 +65,7 @@
  *   the heap's capacity is never below the number of envelopes that can be
  *   delayed sends.
  * - `ta_heap_shrink` and `ta_heap_destroy` only free. Shrink runs at a
- *   safe point too, when the host calls `ta_system_trim`, never on core's
+ *   safe point too, when the host asks core to give memory back, never on core's
  *   own initiative.
  * - `ta_heap_insert`, `ta_heap_pop`, `ta_heap_remove`, `ta_heap_head`,
  *   `ta_heap_length` and `ta_heap_capacity` never allocate, and may run
@@ -187,7 +187,7 @@ ta_result ta_heap_grow(ta_heap *heap, uint32_t count);
  * that changes nothing.
  *
  * Only frees, and never fails. It runs at a safe point, when the host
- * asks core to give memory back (`ta_system_trim`).
+ * asks core to give memory back.
  */
 void ta_heap_shrink(ta_heap *heap, uint32_t keep);
 
