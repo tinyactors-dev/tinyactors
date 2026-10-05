@@ -49,6 +49,11 @@ JavaScript does, or a fault. Never a different value.
   at a time and in chunks, and must free everything it allocated.
 - `tests/api_test.c`: the public API, natives, modules, sinks, fuel,
   limits, and running out of memory.
+- `tests/matcher_test.c`: the shape matcher (`docs/matcher.md`), on every
+  spec source. `@shapes` in a spec case says which functions it tags.
+  Changing `src/shapes.rules`: run `mise run shapes` and commit the
+  headers it writes; `mise run test` fails while they are stale, and runs
+  the generator's tests (`mise run shapes-test`).
 - `tests/number_test.c`: number formatting, remainder and rounding.
 - `mise run test --full` also fails every allocation of every spec case
   (`spec_test --full`), and of a larger program (`api_test --full`).

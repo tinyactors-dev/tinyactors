@@ -81,7 +81,7 @@ typedef struct {
 static sjs_result evaluate(const env *e, const char *source, char *out) {
     sjs_program *program;
     sjs_error error = { 0 };
-    sjs_compile_params params = { { e->context, e->goal, e->globals, e->count, e->modules },
+    sjs_compile_params params = { { e->context, e->goal, e->globals, e->count, e->modules, false },
                                   { source, (uint32_t)strlen(source) }, &error };
     sjs_result r = sjs_compile(&params, &program);
     if (r == SJS_ERR_NOMEM) {
@@ -325,7 +325,7 @@ static void test_modules(void) {
     /* Compile and evaluate the module; its value is its exports. */
     const char *source = "export const inc = x => x + 1;\nexport const two = inc(1);\n";
     sjs_program *program;
-    sjs_compile_params params = { { context, SJS_GOAL_MODULE, NULL, 0, { NULL, NULL } },
+    sjs_compile_params params = { { context, SJS_GOAL_MODULE, NULL, 0, { NULL, NULL }, false },
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
@@ -425,7 +425,7 @@ static void test_compile_costs(void) {
         CHECK(sjs_object_put(context, &o, &property) == SJS_OK);
     }
     one_module m = { o };
-    sjs_compiler_config config = { context, SJS_GOAL_MODULE, NULL, 0, { &m, &find_vtable } };
+    sjs_compiler_config config = { context, SJS_GOAL_MODULE, NULL, 0, { &m, &find_vtable }, false };
     static char source[STATEMENTS * 32];
     const char *const forms[] = { "export * from \"lib\";\n", "import * as n%d from \"lib\";\n" };
     for (int form = 0; form < 2; form++) {
@@ -632,7 +632,7 @@ static void compile_events(const sjs_event *events, int count, const char *want)
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
     sjs_compiler *compiler;
-    sjs_compiler_config config = { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL } };
+    sjs_compiler_config config = { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false };
     CHECK(sjs_compiler_init(&compiler, &config) == SJS_OK);
     sjs_sink sink = sjs_compiler_sink(compiler);
     sjs_result r = SJS_OK;
@@ -813,7 +813,7 @@ static void test_writer_resumes(void) {
     CHECK(evaluate(&e, source, whole) == SJS_OK);
     /* The same value, written a byte at a time. */
     sjs_program *program;
-    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL } },
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
@@ -856,7 +856,7 @@ static void test_fuel_pinned(sjs_context *context) {
     const char *source = "[1, 2, 3, 4].map(x => [x, x * 2]).map(([a, b]) => `${a}:${b}`)"
                          ".reduce((s, t) => s + t + Math.max(t.length, 3), '') + ((f) => f(f(2)))(y => y * 3)";
     sjs_program *program;
-    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL } },
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
@@ -885,7 +885,7 @@ static void test_set_fuel_linear(sjs_context *context) {
     static const sjs_str names[2] = { { "a", 1 }, { "b", 1 } };
     const char *source = "[a.intersection(b).size, a.union(b).size, a.difference(b).size, a.has(1999)]";
     sjs_program *program;
-    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, names, 2, { NULL, NULL } },
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, names, 2, { NULL, NULL }, false },
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_value sets[2];
@@ -918,7 +918,7 @@ static void test_fuel_and_reset(void) {
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
     const char *source = "[1, 2, 3, 4, 5, 6, 7, 8].map(x => x * x).filter(x => x % 2 === 0).reduce((a, b) => a + b, 0)";
     sjs_program *program;
-    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL } },
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
@@ -1080,7 +1080,7 @@ typedef struct {
 } loop_run;
 
 static bool loop_open(loop_run *l, sjs_context *context, const char *source) {
-    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL } },
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
                                   { source, (uint32_t)strlen(source) }, NULL };
     l->context = context;
     if (sjs_compile(&params, &l->program) != SJS_OK) return false;
@@ -1288,7 +1288,7 @@ static void test_reuse_leaves_others_alone(void) {
     sjs_str global_names[2] = { SJS_STR("g"), SJS_STR("xs") };
     const char *source = "[{ ...g, b: 2 }, [...xs, 3], xs.concat(4), xs.with(0, 9), xs.toSorted((a, b) => b - a)]";
     sjs_program *program;
-    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, global_names, 2, { NULL, NULL } },
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, global_names, 2, { NULL, NULL }, false },
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
@@ -1317,7 +1317,7 @@ static void test_reuse_leaves_others_alone(void) {
     one_module m;
     env module_env = { context, NULL, NULL, 0, { NULL, NULL }, SJS_GOAL_MODULE };
     const char *module = "export const o = {a: 1};\nexport const xs = [1, 2];\n";
-    sjs_compile_params module_params = { { context, SJS_GOAL_MODULE, NULL, 0, { NULL, NULL } },
+    sjs_compile_params module_params = { { context, SJS_GOAL_MODULE, NULL, 0, { NULL, NULL }, false },
                                          { module, (uint32_t)strlen(module) }, NULL };
     CHECK(sjs_compile(&module_params, &program) == SJS_OK);
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
@@ -1348,6 +1348,49 @@ static void test_reuse_leaves_others_alone(void) {
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
     CHECK(c.live == 0);
+}
+
+/* The off switch (docs/matcher.md, section 8): with no_shapes the compiler
+ * makes no matcher, so it does not allocate the matcher's records, and the
+ * program gives the same value. A config that leaves the field out
+ * matches. */
+typedef struct {
+    long allocations;
+    char out[256];
+} compiled;
+
+static compiled compile_counting(sjs_compiler_config config, const char *source) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    config.context = context;
+    compiled result = { 0, "" };
+    long before = c.allocations;
+    sjs_program *program;
+    sjs_compile_params params = { config, { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    result.allocations = c.allocations - before;
+    sjs_program_release(program);
+    env e = { context, NULL, NULL, 0, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&e, source, result.out) == SJS_OK);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+    return result;
+}
+
+static void test_no_shapes(void) {
+    const char *source = "[{k: 2}, {k: 1}].toSorted((a, b) => a.k - b.k).map(x => x.k)";
+    sjs_compiler_config on = { NULL, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false };
+    sjs_compiler_config off = on;
+    off.no_shapes = true;
+    sjs_compiler_config unsaid = { .goal = SJS_GOAL_EXPRESSION };
+    compiled with = compile_counting(on, source);
+    compiled without = compile_counting(off, source);
+    compiled by_default = compile_counting(unsaid, source);
+    CHECK(strcmp(with.out, "[1,2]") == 0 && strcmp(without.out, with.out) == 0);
+    /* The matcher's records: one allocation. Its text fits in itself. */
+    CHECK(with.allocations == without.allocations + 1);
+    CHECK(by_default.allocations == with.allocations);
 }
 
 /* Fail every allocation in turn: each run ends with an error, never a
@@ -1403,7 +1446,12 @@ int main(int argc, char **argv) {
     test_limits();
     test_loop_callbacks();
     test_reuse_leaves_others_alone();
+    test_no_shapes();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
+    /* Functions the matcher tags: its records and text, and the shapes'
+     * arguments, fail too. */
+    test_out_of_memory("[{k: 2, n: \"b\"}, {k: 1, n: \"a\"}].toSorted((a, b) => { return b.k - a.k; }).map(r => r.n)",
+                       SJS_GOAL_EXPRESSION);
     /* Values updated in place: a moved accumulator, literals that take over
      * a spread, concat, with and toSorted on an array nothing else holds.
      * Small enough for every run. */

@@ -1,0 +1,39 @@
+#!/usr/bin/env ruby
+#MISE description="Write src/shapes.h and src/shapes_table.h from src/shapes.rules, or with --check fail when they are stale"
+#USAGE flag "--check" help="Write nothing; fail if either header differs from what it would write"
+# vim:ft=ruby
+
+# The matcher's rules are compiled to C tables (docs/matcher.md, section 4)
+# by mise/shapes.rb, which reads src/shapes.rules and the event and operator
+# names of include/staticjs.h. The headers are checked in; `mise run test`
+# runs this with --check, so a stale one fails the suite instead of being
+# quietly rewritten. `--root DIR` reads and writes under DIR instead of
+# staticjs/ (shapes-test runs it on a copy).
+
+require 'pathname'
+require_relative '../shapes'
+
+args = ARGV.dup
+flagged = !args.delete('--check').nil?
+check = flagged || ENV['usage_check'] == 'true'
+root = Pathname.new(__dir__).join('../..').expand_path
+if (at = args.index('--root'))
+  root = Pathname.new(args[at + 1]).expand_path
+  args.slice!(at, 2)
+end
+abort 'usage: mise run shapes [--check]' unless args.empty?
+
+begin
+  files = StaticJS::Shapes.generate(root.join('src/shapes.rules').read, root.join('include/staticjs.h').read)
+rescue StaticJS::Shapes::Error => e
+  abort "shapes: #{e.message}"
+end
+
+stale = files.reject { |path, text| root.join(path).file? && root.join(path).read == text }.keys
+if check
+  abort "shapes: #{stale.join(' and ')} #{stale.size == 1 ? 'is' : 'are'} out of date; run `mise run shapes` and commit the result" unless stale.empty?
+  puts 'shapes: src/shapes.h and src/shapes_table.h are current'
+else
+  stale.each { |path| root.join(path).write(files[path]) }
+  puts stale.empty? ? 'shapes: unchanged' : "shapes: wrote #{stale.join(' and ')}"
+end

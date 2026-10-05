@@ -48,6 +48,9 @@ function parseSpec(path) {
       current.globals.push([name, rest.join(' = ')]);
       return;
     }
+    if (where === 'source' && current.source.length === 0 && line.startsWith('@shapes ')) {
+      return; // which functions staticjs tags: nothing to compare with Node
+    }
     if (where === 'source' && current.source.length === 0 && line.startsWith('@module ')) {
       current.module = line.slice(8).trim();
       return;

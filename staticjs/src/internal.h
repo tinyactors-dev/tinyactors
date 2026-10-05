@@ -5,6 +5,7 @@
 #pragma once
 
 #include "staticjs.h"
+#include "shapes.h"
 
 #define SJS_UNUSED(x) ((void)(x))
 
@@ -474,6 +475,9 @@ typedef enum {
 
 /* sjs_function_info flags. */
 #define SJS_FUNCTION_REST 1u  /* the last parameter takes the rest of the arguments, as an array */
+/* sjs_function_info.flags is 8 bits: every SJS_FUNCTION_* flag must fit. */
+#define SJS_FUNCTION_FLAGS SJS_FUNCTION_REST
+_Static_assert(SJS_FUNCTION_FLAGS <= UINT8_MAX, "SJS_FUNCTION_* flags must fit sjs_function_info.flags");
 
 typedef struct {
     uint32_t code;          /* offset of the first instruction */
@@ -481,7 +485,14 @@ typedef struct {
     uint16_t params;        /* a rest parameter included */
     uint16_t locals;        /* slots, the parameters included */
     uint16_t capture_count;
-    uint16_t flags;         /* SJS_FUNCTION_* */
+    uint8_t flags;          /* SJS_FUNCTION_* */
+    /* The sjs_shape the matcher found the function computes, or
+     * SJS_SHAPE_NONE (docs/matcher.md). It only tags: the code is the same. */
+    uint8_t shape;
+    /* The shape's arguments, by sjs_shape_arg_kind(shape, i): a text's string
+     * constant (an index into the program's constants: interned, NAMED, the
+     * same constant GET_MEMBER reads that key with), a flag, a count. */
+    uint32_t shape_args[SJS_SHAPE_ARGS];
 } sjs_function_info;
 
 typedef struct {

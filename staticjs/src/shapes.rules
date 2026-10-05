@@ -1,0 +1,119 @@
+# src/shapes.rules: the trees the matcher looks for in the parser's events
+# (docs/matcher.md). `mise run shapes` writes src/shapes.h and
+# src/shapes_table.h from it; `mise run test` fails when they are stale.
+
+# ---------------------------------------------------------------------------
+# The event language: how each event of include/staticjs.h builds the tree.
+# Every sjs_event_kind is declared once; the generator checks the header.
+#
+#   leaf            a node of its own, with no children
+#   postfix N       a node of its own over the N nodes before it
+#   postfix count   postfix 1 when its count is 1, a leaf when it is 0
+#   open N CLOSE    a bracket: its children follow until CLOSE, and the N
+#                   nodes before it are its first children
+#   inner           a separator of the bracket it is in
+#   close           ends the bracket it is in
+#   item            its node is always a whole child of its bracket
+#
+# An event that carries the node id of the innermost open bracket belongs to
+# that bracket, whatever is declared here: a template's STRING pieces and an
+# else-if's second IF are separators.
+
+event NUMBER leaf value: number;
+event STRING leaf value: text;          # a template's pieces are the template's own events
+event TRUE leaf;
+event FALSE leaf;
+event NULL leaf;
+event NAME leaf name: read;
+event TEMPLATE_BEGIN open 0 TEMPLATE_END;
+event TEMPLATE_END close parts: count;
+event ARRAY_BEGIN open 0 ARRAY_END;
+event ELEMENT inner;
+event SPREAD_ELEMENT inner;
+event ARRAY_END close;
+event OBJECT_BEGIN open 0 OBJECT_END;
+event KEY inner key: text;
+event COMPUTED_KEY inner;
+event PROPERTY inner;
+event SPREAD_PROPERTY inner;
+event OBJECT_END close;
+event MEMBER postfix 1 key: text;
+event INDEX postfix 2;
+event OPTIONAL postfix 1 depth: count;
+event CHAIN_END postfix 1 depth: count;
+event CALL_BEGIN open 1 CALL_END;       # the callee is its first child
+event ARGUMENT inner;
+event SPREAD_ARGUMENT inner;
+event CALL_END close arguments: count;
+event NEW_BEGIN open 0 NEW_END constructor: text;
+event NEW_END close arguments: count;
+event UNARY postfix 1 op: operator;
+event BINARY postfix 2 op: operator;
+event LOGICAL open 1 LOGICAL_END op: operator;
+event LOGICAL_END close op: operator;
+event CONDITIONAL open 1 CONDITIONAL_END;
+event CONDITIONAL_ELSE inner;
+event CONDITIONAL_END close;
+event ARROW_BEGIN open 0 ARROW_END params: count;
+event PARAM inner index: count;
+event REST_PARAM inner index: count;
+event PARAMS_END inner;
+event BLOCK_BEGIN inner;                # a block body's statements are the arrow's children
+event RETURN postfix count item;
+event BLOCK_END inner;
+event ARROW_END close;
+event BLOCK_STATEMENT_BEGIN open 0 BLOCK_STATEMENT_END item;
+event BLOCK_STATEMENT_END close;
+event IF open 1 IF_END item;            # the test is its first child; an else-if's IF is its own event
+event ELSE inner chain: count;
+event IF_END close;
+event BIND leaf item name: name;
+event ARRAY_PATTERN_BEGIN open 0 ARRAY_PATTERN_END item;
+event PATTERN_INDEX inner index: count;
+event ARRAY_PATTERN_END close;
+event OBJECT_PATTERN_BEGIN open 0 OBJECT_PATTERN_END item;
+event PATTERN_KEY inner key: text;
+event PATTERN_COMPUTED_KEY inner;
+event PATTERN_REST inner index: count;
+event OBJECT_PATTERN_END close;
+event DEFAULT open 0 DEFAULT_END item;
+event DEFAULT_END close;
+event CONST_BEGIN open 0 CONST_END item;
+event CONST_END close;
+event EXPORT leaf item;
+event IMPORT leaf item module: text;
+event EXPORT_DEFAULT postfix 1 item;
+event EXPORT_NAME leaf item;
+event EXPORT_FROM leaf item module: text;
+event END close;                        # closes the program (node 0)
+
+# ---------------------------------------------------------------------------
+# Callback shapes. The compiler records a shape on the function it matched
+# (docs/matcher.md, section 6); nothing reads one yet.
+
+shape PLUCK(key: text);                              # x => x.key
+shape COMPARE_BY_KEY(key: text, descending: flag);   # (a, b) => a.key - b.key, or b.key - a.key
+
+nonterminal key_of(object: read, key: text);         # object.key, the object a name
+
+key_of(x, k) <- MEMBER{key: k}(NAME{name: x});
+
+# x => x.k, and x => { return x.k; }: x is parameter 0, the only one, a plain name.
+PLUCK(k) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                   key_of(x, k));
+PLUCK(k) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                   BLOCK_BEGIN, RETURN(key_of(x, k)), BLOCK_END);
+
+# (a, b) => a.k - b.k ascending; (a, b) => b.k - a.k descending. One key, both sides.
+COMPARE_BY_KEY(k, false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                   PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                   BINARY{op: SUBTRACT}(key_of(a, k), key_of(b, k)));
+COMPARE_BY_KEY(k, true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                  PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                  BINARY{op: SUBTRACT}(key_of(b, k), key_of(a, k)));
+COMPARE_BY_KEY(k, false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                   PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                   BLOCK_BEGIN, RETURN(BINARY{op: SUBTRACT}(key_of(a, k), key_of(b, k))), BLOCK_END);
+COMPARE_BY_KEY(k, true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                  PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                  BLOCK_BEGIN, RETURN(BINARY{op: SUBTRACT}(key_of(b, k), key_of(a, k))), BLOCK_END);

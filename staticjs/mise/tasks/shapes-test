@@ -1,0 +1,184 @@
+#!/usr/bin/env ruby
+#MISE description="Self-test for the shapes generator: the C it writes for a small rules file, each check's message and line, shapes --check on stale and fresh headers, and the real rules"
+# vim:ft=ruby
+
+# docs/matcher.md, 4.6. The small rules file and the C it must produce are
+# in mise/shapes-test/; the checks' snippets are below. shapes --check runs
+# on a copy in a temporary directory, never on src/.
+
+require 'open3'
+require 'pathname'
+require 'rbconfig'
+require 'tmpdir'
+require_relative '../shapes'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+FIXTURES = ROOT.join('mise/shapes-test')
+Shapes = StaticJS::Shapes
+
+failures = []
+check = lambda do |description, actual, expected|
+  failures << "#{description}: expected #{expected.inspect}, got #{actual.inspect}" unless actual == expected
+end
+
+header = FIXTURES.join('small.h').read
+small = FIXTURES.join('small.rules').read
+
+# The C a small rules file gives: shapes.h whole, and the table's sizes and
+# data (its typedefs are fixed text).
+files = Shapes.generate(small, header)
+table = files[Shapes::TABLE]
+data = "#{table[/^#define SHAPE_NONTERMINALS.*?\n(?=\nenum)/m]}\n#{table[/^static const shape_event.*\z/m]}"
+check.call('the small shapes.h', files[Shapes::HEADER], FIXTURES.join('small_shapes.h').read)
+check.call('the small table', data, FIXTURES.join('small_table.txt').read)
+check.call('two generations give the same bytes', Shapes.generate(small, header), files)
+
+# Every check fails with its message, at its line.
+EVENTS = <<~RULES
+  event NUMBER leaf value: number;
+  event NAME leaf name: read;
+  event MEMBER postfix 1 key: text;
+  event BINARY postfix 2 op: operator;
+  event ARROW_BEGIN open 0 ARROW_END params: count;
+  event PARAM inner index: count;
+  event PARAMS_END inner;
+  event ARROW_END close;
+  event BIND leaf item name: name;
+  event END close;
+RULES
+DECLARATIONS = <<~RULES
+  shape GET(key: text);
+  nonterminal key_of(object: read, key: text);
+RULES
+BASE = EVENTS + DECLARATIONS
+KEY_OF = 'key_of(x, k) <- MEMBER{key: k}(NAME{name: x});'
+GET = 'GET(k) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END, key_of(x, k));'
+
+def error_of(rules, header)
+  Shapes.generate(rules, header)
+  nil
+rescue Shapes::Error => e
+  e.message
+end
+
+# [what, rules text, line, words of the message]
+event_line = ->(kind) { EVENTS.lines.index { |l| l.start_with?("event #{kind} ") } + 1 }
+replace = ->(kind, with) { EVENTS.sub(/^event #{kind} .*\n/, "#{with}\n") + DECLARATIONS + "#{KEY_OF}\n#{GET}\n" }
+rule_line = BASE.lines.size + 1
+errors = [
+  ['a kind staticjs.h lacks', "#{EVENTS}event FOO leaf;\n", 11, 'FOO is not an sjs_event_kind of staticjs.h'],
+  ['a kind declared twice', "#{EVENTS}event NUMBER leaf;\n", 11, 'NUMBER is declared twice'],
+  ['a kind not declared', EVENTS.sub(/^event NUMBER .*\n/, ''), 9, 'NUMBER not declared'],
+  ['two fields of one name', replace.call('NUMBER', 'event NUMBER leaf value: number, value: count;'), 1,
+   'NUMBER has two fields value'],
+  ['an open closed by a kind not declared close', replace.call('ARROW_END', 'event ARROW_END leaf;'),
+   event_line.call('ARROW_BEGIN'), 'ARROW_BEGIN is closed by ARROW_END, which is not declared close'],
+  ['a close that closes nothing', replace.call('BIND', 'event BIND close;'), event_line.call('BIND'),
+   'BIND closes no open kind'],
+  ['a close of two open kinds', replace.call('NAME', 'event NAME open 0 ARROW_END;'), event_line.call('ARROW_END'),
+   'ARROW_END closes NAME and ARROW_BEGIN'],
+  ['END not a close', replace.call('END', 'event END leaf;'), event_line.call('END'), 'END must be declared close'],
+  ['a rule on an open that takes the nodes before it',
+   replace.call('ARROW_BEGIN', 'event ARROW_BEGIN open 1 ARROW_END params: count;'), BASE.lines.size + 2,
+   'ARROW_BEGIN takes the 1 node(s) before it as its first children, which the matcher does not keep'],
+  ['an unknown action', "#{EVENTS}event FOO sideways;\n", 11, 'unknown action "sideways"'],
+  ['an unknown type', "#{EVENTS}shape BAD(key: string);\n", 11, '"string" is not one of text, flag, count, number'],
+  ['a missing semicolon', "#{BASE}#{KEY_OF.delete_suffix(';')}\n#{GET}\n", rule_line + 1, 'expected ";", found "GET"'],
+  ['an unknown event in a pattern', "#{BASE}key_of(x, k) <- FOO(NAME{name: x});\n", rule_line, 'FOO is not an event kind'],
+  ['too many operands', "#{BASE}key_of(x, k) <- MEMBER{key: k}(NAME{name: x}, NAME{name: x});\n", rule_line,
+   'MEMBER takes 1 child pattern(s), not 2'],
+  ['a leaf with children', "#{BASE}key_of(x, k) <- MEMBER{key: k}(NAME{name: x}(NUMBER));\n", rule_line,
+   'NAME has no children'],
+  ['an open without its children', "#{BASE}GET(k) <- ARROW_BEGIN{params: 1};\n", rule_line,
+   'ARROW_BEGIN opens a bracket: list its children in parentheses'],
+  ['a separator outside a bracket', "#{BASE}key_of(x, k) <- MEMBER{key: k}(PARAMS_END);\n", rule_line,
+   "PARAMS_END is a separator: it is only in a bracket's child list"],
+  ['a close in a pattern', "#{BASE}GET(k) <- ARROW_BEGIN(ARROW_END);\n", rule_line,
+   'ARROW_END closes a bracket and is never in a pattern'],
+  ['a field the event lacks', "#{BASE}key_of(x, k) <- MEMBER{name: k}(NAME{name: x});\n", rule_line,
+   'MEMBER has no field name'],
+  ['a constant of the wrong type', "#{BASE}key_of(x, k) <- MEMBER{key: 1}(NAME{name: x});\n", rule_line,
+   "MEMBER's key is a text, not 1"],
+  ['an unknown operator', "#{BASE}key_of(x, k) <- BINARY{op: POWER}(MEMBER{key: k}(NAME{name: x}), NUMBER);\n",
+   rule_line, 'POWER is not an sjs_operator'],
+  ['an undeclared head', "#{BASE}value(x) <- NAME{name: x};\n", rule_line, 'value is not a declared nonterminal'],
+  ['a head of the wrong size', "#{BASE}key_of(x) <- NAME{name: x};\n", rule_line, 'key_of has 2 attribute(s), not 1'],
+  ['a head variable the pattern does not bind', "#{BASE}key_of(x, j) <- MEMBER{key: k}(NAME{name: x});\n", rule_line,
+   'j is not bound by the pattern'],
+  ['a variable of two types',
+   "#{BASE}GET(k) <- ARROW_BEGIN{params: k}(PARAM{index: 0}, BIND{name: x}, PARAMS_END, key_of(x, j));\n",
+   rule_line, 'k is a text here and a count at line'],
+  ['a text constant in a head', "#{BASE}GET(\"k\") <- ARROW_BEGIN{params: 1}(PARAMS_END);\n", rule_line,
+   "a head's text comes from its pattern"],
+  ['a shape that reads a captured name',
+   "#{BASE}#{KEY_OF}\nGET(k) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END, key_of(y, k));\n",
+   rule_line + 1, 'GET reads y, which no BIND in it binds: it could be a captured name'],
+  ['a nonterminal that hides a read name',
+   "#{BASE}nonterminal keyed(key: text);\nkeyed(k) <- MEMBER{key: k}(NAME{name: y});\n", rule_line + 1,
+   'keyed reads y without binding it or handing it up as a read attribute'],
+  ['a read name handed up as text',
+   "#{BASE}nonterminal keyed(object: text, key: text);\nkeyed(y, k) <- MEMBER{key: k}(NAME{name: y});\n",
+   rule_line + 1, 'keyed reads y without binding it or handing it up as a read attribute'],
+  ['a shape on something other than a function', "#{BASE}GET(k) <- MEMBER{key: k}(NAME{name: x});\n", rule_line,
+   'the pattern of shape GET is an ARROW_BEGIN'],
+  ['a shape as a child', "#{BASE}key_of(x, k) <- MEMBER{key: k}(GET(x));\n", rule_line,
+   'a shape (GET) cannot be a child'],
+  ['chain rules in a cycle',
+   "#{BASE}nonterminal a(key: text);\nnonterminal b(key: text);\n#{KEY_OF}\n#{GET}\na(k) <- b(k);\nb(k) <- a(k);\n",
+   rule_line + 5, 'chain rules form a cycle: a <- b <- a'],
+  ['a shape with no rule', "#{BASE}#{KEY_OF}\n", BASE.lines.index { |l| l.start_with?('shape GET') } + 1,
+   'shape GET has no rule'],
+  ['a nonterminal never used', "#{BASE}nonterminal spare(key: text);\n#{KEY_OF}\n#{GET}\nspare(k) <- MEMBER{key: k}(NUMBER);\n",
+   rule_line, 'nonterminal spare is never used'],
+  ['a cost too high', "#{BASE}#{KEY_OF}\n#{GET.delete_suffix(';')} cost 70000;\n", rule_line + 1,
+   'a cost is at most 65534'],
+  ['more bracket rules than the alive mask holds', "#{BASE}#{KEY_OF}\n#{"#{GET}\n" * 33}", nil,
+   'ARROW_BEGIN has 33 bracket rules; the table holds 32 per open kind']
+]
+errors.each do |what, rules, line, words|
+  message = error_of(rules, header)
+  if message.nil?
+    failures << "#{what}: no error"
+  elsif (line && !message.start_with?("shapes.rules:#{line}: ")) || !message.include?(words)
+    failures << "#{what}: expected shapes.rules:#{line}: ...#{words}..., got #{message}"
+  end
+end
+missing = error_of(small, header.sub(/typedef enum \{ SJS_OP_ADD.*\n/, ''))
+check.call('a header without sjs_operator', missing, 'staticjs.h: no sjs_operator')
+
+# shapes --check fails on a stale header and passes on a fresh one.
+Dir.mktmpdir('shapes-test') do |dir|
+  root = Pathname.new(dir)
+  root.join('src').mkpath
+  root.join('include').mkpath
+  root.join('src/shapes.rules').write(small)
+  root.join('include/staticjs.h').write(header)
+  task = ->(*args) { Open3.capture2e(RbConfig.ruby, ROOT.join('mise/tasks/shapes').to_s, '--root', dir, *args) }
+  output, status = task.call('--check')
+  check.call('--check with no headers fails', status.success?, false)
+  check.call('--check names what to run', output.include?('run `mise run shapes`'), true)
+  _output, status = task.call
+  check.call('shapes writes the headers', status.success? && root.join(Shapes::TABLE).read == table, true)
+  _output, status = task.call('--check')
+  check.call('--check on fresh headers passes', status.success?, true)
+  root.join(Shapes::TABLE).write(table.sub('SHAPE_SLOTS', 'SHAPE_SLOTS_STALE'))
+  output, status = task.call('--check')
+  check.call('--check on a stale header fails', status.success?, false)
+  check.call('--check names the stale header', output.include?('src/shapes_table.h is out of date'), true)
+end
+
+# The real rules generate: every declaration is used and every shape has a
+# rule, or generating fails.
+begin
+  real = Shapes.generate(ROOT.join('src/shapes.rules').read, ROOT.join('include/staticjs.h').read)
+  check.call('the real rules give both headers', real.keys.sort, [Shapes::HEADER, Shapes::TABLE].sort)
+rescue Shapes::Error => e
+  failures << "the real rules: #{e.message}"
+end
+
+if failures.empty?
+  puts "shapes-test passed (#{errors.size + 1} checks' messages, the small table, --check)"
+else
+  failures.each { |failure| puts "shapes-test: #{failure}" }
+  abort "shapes-test: #{failures.size} failure(s)"
+end

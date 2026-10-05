@@ -54,7 +54,8 @@ too; and 100,000 doubles must format as `String(x)` does.
 ```c
 /* Bytes in, events out: the compiler is a sink of the parser's events. */
 sjs_compiler *compiler;
-sjs_compiler_config cc = { context, SJS_GOAL_EXPRESSION, globals, global_count, modules };
+sjs_compiler_config cc = { .context = context, .goal = SJS_GOAL_EXPRESSION, .globals = globals,
+                           .global_count = global_count, .modules = modules };
 sjs_compiler_init(&compiler, &cc);
 sjs_parser *parser;
 sjs_parser_config pc = { allocator, SJS_LIMITS_DEFAULT, SJS_GOAL_EXPRESSION, sjs_compiler_sink(compiler) };
@@ -86,10 +87,17 @@ that node's source starts (`sjs_event.start`). Every event of a bracketed
 node, from its BEGIN through its separators to its END, and an operator's
 markers and its last event, share one id; every other event is a node of
 its own. So a sink can tell which subtree an event closes, and where that
-subtree began, without counting events. The compiler ignores both; they
-are there for the shape matcher `docs/matcher.md` plans, and for any other
-sink that wants them. The start of an operator, a member, an index or a
-call is its first operand's.
+subtree began, without counting events. The start of an operator, a
+member, an index or a call is its first operand's. Any sink may use them;
+the compiler's shape matcher does.
+
+**Shapes.** The compiler passes each event through a matcher first
+(`docs/matcher.md`): a bottom-up tree automaton, built from the rules in
+`src/shapes.rules`, that recognises functions of a known shape, such as
+`x => x.key` or `(a, b) => a.key - b.key`, and tags them. A tag never
+changes the code a function compiles to; a built-in may later use it to
+run a callback in C, giving the same values and faults on less fuel.
+`sjs_compiler_config.no_shapes` turns the matcher off.
 
 ## The language
 
@@ -250,6 +258,8 @@ beyond the fast path.
 mise run build              # the library (freestanding) and the test programs
 mise run test               # everything below, the way `mise run test` at the root runs it
 mise run test --full        # also fail every allocation of every spec case
+mise run shapes [--check]   # write src/shapes.h and src/shapes_table.h from src/shapes.rules, or check them
+mise run shapes-test        # the shapes generator's own tests
 mise run check-parameters   # at most three parameters per function
 mise run check-recursion    # no cycle in the call graph
 mise run check-freestanding # builds for wasm32-freestanding with no C library
@@ -261,7 +271,11 @@ mise run bench-compare <commit> [--runs=3] [--store] # this tree against another
 
 The tests are `tests/spec/*.spec` (read by `tests/spec_test.c`, which runs
 each case with the source pushed whole, a byte at a time and in chunks, on
-different amounts of fuel), `tests/api_test.c` and `tests/number_test.c`.
+different amounts of fuel, and once more with shapes off, which must give
+the same program but for its tags, the same outcome and no less fuel),
+`tests/api_test.c`, `tests/matcher_test.c` (the shape matcher on every
+spec source, the deepest and widest programs, unreadable streams and
+running out of memory) and `tests/number_test.c`.
 `mise run test` also runs `bench --smoke` (below), which times nothing.
 
 ## Benchmarks

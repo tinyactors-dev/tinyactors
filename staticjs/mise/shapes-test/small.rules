@@ -1,0 +1,34 @@
+# A small rules file for shapes-test: every rule form (leaf, postfix,
+# bracket, chain), nested patterns made nonterminals and merged when equal,
+# two chain rules written before the order they run in, costs, and a number
+# and a text constant. Its tables are small_shapes.h and small_table.txt.
+
+event NUMBER leaf value: number;
+event NAME leaf name: read;
+event MEMBER postfix 1 key: text;
+event BINARY postfix 2 op: operator;
+event ARROW_BEGIN open 0 ARROW_END params: count;
+event PARAM inner index: count;
+event PARAMS_END inner;
+event ARROW_END close;
+event BIND leaf item name: name;
+event END close;
+
+shape GET(key: text);
+shape TWICE(key: text, wide: flag);
+nonterminal key_of(object: read, key: text);
+nonterminal value(object: read, key: text);
+nonterminal operand(object: read, key: text);
+nonterminal length_of(object: read);
+
+operand(o, k) <- value(o, k);
+value(o, k) <- key_of(o, k) cost 1;
+key_of(x, k) <- MEMBER{key: k}(NAME{name: x});
+length_of(x) <- MEMBER{key: "length"}(NAME{name: x});
+GET(k) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END, operand(x, k));
+TWICE(k, true) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                          BINARY{op: ADD}(key_of(x, k), key_of(x, k)));
+TWICE(k, false) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: y}, PARAMS_END,
+                                           BINARY{op: ADD}(key_of(y, k), NUMBER{value: 2})) cost 2;
+TWICE(k, false) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                           BINARY{op: SUBTRACT}(key_of(x, k), length_of(x)));

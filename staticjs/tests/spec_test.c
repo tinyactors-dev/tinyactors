@@ -9,7 +9,13 @@
  * After each case, every byte the case allocated must have been freed.
  *
  * Every compile passes the parser's events through a check of their nodes
- * (node_check, below), and the three runs must send the same nodes.
+ * (node_check, below), and the three runs must send the same nodes and tag
+ * the same functions with the same shapes.
+ *
+ * Each case also runs once more whole with matching off (no_shapes,
+ * docs/matcher.md): it must compile to the same program but for the shapes,
+ * give the same outcome, tag no function, and use no less fuel than the run
+ * with shapes.
  *
  * With --full, each case is also run once for every allocation it makes,
  * with that allocation failing: each such run must end with an out-of-memory
@@ -22,6 +28,9 @@
  *   === the case's name
  *   @global name = expression      (optional: bind a global for the case)
  *   @module name                   (optional: the source is a module, named)
+ *   @shapes PLUCK(k) - ...         (optional: each function's shape, in function
+ *                                   index order, the main program excluded;
+ *                                   `-` for none)
  *   source lines
  *   --- value
  *   what sjs_writer writes for the result
@@ -41,7 +50,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "staticjs.h"
+#include "internal.h"
 
 static void *heap_alloc(void *self, size_t size, size_t alignment) {
     (void)self;
@@ -96,6 +105,8 @@ typedef struct {
     int global_count;
     char global_names[MAX_GLOBALS][64];
     char global_sources[MAX_GLOBALS][1024];
+    int has_shapes;
+    char shapes[1024];
 } spec_case;
 
 typedef struct {
@@ -161,6 +172,9 @@ static const sjs_modules_vtable modules_vtable = { find_module };
 typedef struct {
     char text[MAX_TEXT];
     uint64_t events;        /* the hash of the compile's events */
+    char shapes[4096];      /* each function's shape, as @shapes writes them */
+    uint64_t fuel;          /* the evaluation's */
+    uint64_t program;       /* the hash of the program, its functions' shapes left out */
 } outcome;
 
 typedef struct {
@@ -175,6 +189,7 @@ typedef struct {
 typedef struct {
     uint32_t chunk;
     uint64_t fuel;
+    bool no_shapes;
 } mode;
 
 static const char *code_name(sjs_error_code code) {
@@ -370,11 +385,12 @@ static uint64_t last_events_hash = 0;
 
 /* Parse and compile `source`, pushing it `chunk` bytes at a time. A stream
  * whose nodes break the rules above is SJS_ERR_INVALID, after a message. */
-static sjs_result compile(const environment *env, const char *source, sjs_goal goal, uint32_t chunk, sjs_program **program,
+static sjs_result compile(const environment *env, const char *source, sjs_goal goal, mode m, sjs_program **program,
                           sjs_error *error) {
+    uint32_t chunk = m.chunk;
     sjs_compiler *compiler;
     sjs_compiler_config config = { env->context, goal, env->global_names, env->global_count,
-                                   { env->modules, &modules_vtable } };
+                                   { env->modules, &modules_vtable }, m.no_shapes };
     sjs_result r = sjs_compiler_init(&compiler, &config);
     if (r != SJS_OK) return r;
     static node_check check;
@@ -409,6 +425,9 @@ static sjs_result compile(const environment *env, const char *source, sjs_goal g
     return r;
 }
 
+/* The fuel the last evaluation used. */
+static uint64_t last_fuel = 0;
+
 /* Run a program to its end; the result is the caller's. */
 static sjs_result evaluate(const environment *env, sjs_program *program, uint64_t fuel, sjs_value *result, sjs_error *error) {
     sjs_vm *vm;
@@ -429,15 +448,82 @@ static sjs_result evaluate(const environment *env, sjs_program *program, uint64_
             r = SJS_ERR_PROGRAM;
         }
     }
+    last_fuel = sjs_vm_fuel_used(vm);
     sjs_vm_destroy(vm);
     return r;
+}
+
+static uint64_t hash_bytes(uint64_t hash, const void *bytes, size_t length) {
+    const uint8_t *p = bytes;
+    for (size_t i = 0; i < length; i++) hash = (hash ^ p[i]) * 1099511628211ull;
+    return hash;
+}
+
+/* The program's code, numbers, constants' kinds, functions but for their
+ * shapes, captures and lines: what a match must not change. */
+static uint64_t hash_program(const sjs_program *program) {
+    uint64_t h = 14695981039346656037ull;
+    h = hash_bytes(h, program->code, program->code_length);
+    h = hash_bytes(h, program->numbers, program->number_count * sizeof(double));
+    for (uint32_t i = 0; i < program->constant_count; i++) {
+        sjs_value k = program->constants[i];
+        h = hash_bytes(h, &k.kind, 1);
+        if (k.kind == SJS_STRING) h = hash_bytes(h, SJS_AS_STRING(k)->bytes, SJS_AS_STRING(k)->length);
+        else if (k.kind == SJS_NUMBER) h = hash_bytes(h, &k.as.number, sizeof k.as.number);
+    }
+    for (uint32_t i = 0; i < program->function_count; i++) {
+        const sjs_function_info *f = &program->functions[i];
+        uint32_t fields[6] = { f->code, f->captures, f->params, f->locals, f->capture_count, f->flags };
+        h = hash_bytes(h, fields, sizeof fields);
+    }
+    h = hash_bytes(h, program->captures, program->capture_count * sizeof(sjs_capture_info));
+    h = hash_bytes(h, program->lines, program->line_count * sizeof(sjs_line));
+    return h;
+}
+
+/* Each function's shape, as @shapes writes them: `-`, or the shape's name
+ * and its arguments, a text as the constant's text and a flag as true or
+ * false. */
+static void describe_shapes(const sjs_program *program, char *out, size_t capacity) {
+    size_t used = 0;
+    out[0] = '\0';
+    for (uint32_t i = 1; i < program->function_count && used < capacity; i++) {
+        const sjs_function_info *f = &program->functions[i];
+        used += (size_t)snprintf(out + used, capacity - used, "%s", i > 1 ? " " : "");
+        if (used >= capacity) break;
+        if (f->shape == SJS_SHAPE_NONE) {
+            used += (size_t)snprintf(out + used, capacity - used, "-");
+            continue;
+        }
+        used += (size_t)snprintf(out + used, capacity - used, "%s(", sjs_shape_name(f->shape));
+        for (uint32_t a = 0; a < SJS_SHAPE_ARGS && sjs_shape_arg_kind(f->shape, a) != SJS_SHAPE_ARG_NONE && used < capacity; a++) {
+            const char *comma = a > 0 ? ", " : "";
+            switch (sjs_shape_arg_kind(f->shape, a)) {
+            case SJS_SHAPE_ARG_TEXT: {
+                const sjs_string *key = SJS_AS_STRING(program->constants[f->shape_args[a]]);
+                used += (size_t)snprintf(out + used, capacity - used, "%s%.*s", comma, (int)key->length, key->bytes);
+                break;
+            }
+            case SJS_SHAPE_ARG_FLAG:
+                used += (size_t)snprintf(out + used, capacity - used, "%s%s", comma, f->shape_args[a] ? "true" : "false");
+                break;
+            default:
+                used += (size_t)snprintf(out + used, capacity - used, "%s%u", comma, f->shape_args[a]);
+                break;
+            }
+        }
+        if (used < capacity) used += (size_t)snprintf(out + used, capacity - used, ")");
+    }
 }
 
 static void run_case(const environment *env, const spec_case *c, mode m, outcome *out) {
     sjs_program *program = NULL;
     sjs_error error = { 0 };
-    sjs_result r = compile(env, c->source, c->is_module ? SJS_GOAL_MODULE : SJS_GOAL_EXPRESSION, m.chunk, &program, &error);
+    sjs_result r = compile(env, c->source, c->is_module ? SJS_GOAL_MODULE : SJS_GOAL_EXPRESSION, m, &program, &error);
     out->events = last_events_hash;
+    out->shapes[0] = '\0';
+    out->fuel = 0;
+    out->program = 0;
     if (r != SJS_OK) {
         if (r == SJS_ERR_PROGRAM) {
             snprintf(out->text, sizeof out->text, "error %s %u:%u %.*s", code_name(error.code), error.at.line,
@@ -447,8 +533,11 @@ static void run_case(const environment *env, const spec_case *c, mode m, outcome
         }
         return;
     }
+    describe_shapes(program, out->shapes, sizeof out->shapes);
+    out->program = hash_program(program);
     sjs_value value;
     r = evaluate(env, program, m.fuel, &value, &error);
+    out->fuel = last_fuel;
     sjs_program_release(program);
     if (r != SJS_OK && r != SJS_ERR_PROGRAM) {
         snprintf(out->text, sizeof out->text, "error result %d", r);
@@ -525,7 +614,7 @@ static int load_modules(const environment *env, const registry *from, registry *
         sjs_program *program;
         sjs_error error = { 0 };
         sjs_value exports;
-        if (compile(env, from->entries[i].source, SJS_GOAL_MODULE, 4096, &program, &error) != SJS_OK) return 0;
+        if (compile(env, from->entries[i].source, SJS_GOAL_MODULE, (mode){ 4096, 0, false }, &program, &error) != SJS_OK) return 0;
         sjs_result r = evaluate(env, program, UINT64_MAX, &exports, &error);
         sjs_program_release(program);
         if (r != SJS_OK || !register_module(env->context, into, from->entries[i].name, from->entries[i].source, exports)) return 0;
@@ -560,7 +649,7 @@ static int sweep(const spec_case *c, const outcome *expected, const char *file, 
             names[i] = (sjs_str){ c->global_names[i], (uint32_t)strlen(c->global_names[i]) };
             sjs_program *program;
             sjs_error error = { 0 };
-            if (compile(&env, c->global_sources[i], SJS_GOAL_EXPRESSION, 4096, &program, &error) != SJS_OK) {
+            if (compile(&env, c->global_sources[i], SJS_GOAL_EXPRESSION, (mode){ 4096, 0, false }, &program, &error) != SJS_OK) {
                 ok = 0;
                 break;
             }
@@ -574,7 +663,7 @@ static int sweep(const spec_case *c, const outcome *expected, const char *file, 
             with.global_names = names;
             with.globals = values;
             with.global_count = (uint32_t)c->global_count;
-            run_case(&with, c, (mode){ 1u << 30, UINT64_MAX }, &got);
+            run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, false }, &got);
             if (strcmp(got.text, expected->text) == 0) {
                 done = 1;
             } else if (!is_memory_failure(got.text)) {
@@ -615,7 +704,7 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
         names[i] = (sjs_str){ c->global_names[i], (uint32_t)strlen(c->global_names[i]) };
         sjs_program *program;
         sjs_error error = { 0 };
-        if (compile(&plain, c->global_sources[i], SJS_GOAL_EXPRESSION, 4096, &program, &error) != SJS_OK ||
+        if (compile(&plain, c->global_sources[i], SJS_GOAL_EXPRESSION, (mode){ 4096, 0, false }, &program, &error) != SJS_OK ||
             evaluate(&plain, program, UINT64_MAX, &values[i], &error) != SJS_OK) {
             fprintf(stderr, "%s:%d: %s: @global %s does not evaluate\n", file, c->line, c->name, c->global_names[i]);
             t->failed++;
@@ -630,10 +719,39 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
     static outcome whole;
     static outcome bytes;
     static outcome chunks;
-    run_case(&with, c, (mode){ 1u << 30, UINT64_MAX }, &whole);
-    run_case(&with, c, (mode){ 1, 1 }, &bytes);
-    run_case(&with, c, (mode){ 7, 13 }, &chunks);
+    static outcome plain_run;
+    run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, false }, &whole);
+    run_case(&with, c, (mode){ 1, 1, false }, &bytes);
+    run_case(&with, c, (mode){ 7, 13, false }, &chunks);
+    run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, true }, &plain_run);
     int ok = check(c, &whole, file);
+    if (ok && c->has_shapes && strcmp(whole.shapes, c->shapes) != 0) {
+        fprintf(stderr, "%s:%d: %s: shapes\n  expected: %s\n  got:      %s\n", file, c->line, c->name, c->shapes, whole.shapes);
+        ok = 0;
+    }
+    if (ok && (strcmp(whole.shapes, bytes.shapes) != 0 || strcmp(whole.shapes, chunks.shapes) != 0)) {
+        fprintf(stderr, "%s:%d: %s: the shapes differ between push modes\n  whole:  %s\n  bytes:  %s\n  chunks: %s\n", file,
+                c->line, c->name, whole.shapes, bytes.shapes, chunks.shapes);
+        ok = 0;
+    }
+    if (ok && whole.program != plain_run.program) {
+        fprintf(stderr, "%s:%d: %s: compiles to another program without shapes\n", file, c->line, c->name);
+        ok = 0;
+    }
+    if (ok && strcmp(whole.text, plain_run.text) != 0) {
+        fprintf(stderr, "%s:%d: %s: without shapes\n  with:    %s\n  without: %s\n", file, c->line, c->name, whole.text,
+                plain_run.text);
+        ok = 0;
+    }
+    if (ok && strspn(plain_run.shapes, "- ") != strlen(plain_run.shapes)) {
+        fprintf(stderr, "%s:%d: %s: tagged without shapes: %s\n", file, c->line, c->name, plain_run.shapes);
+        ok = 0;
+    }
+    if (ok && whole.fuel > plain_run.fuel) {
+        fprintf(stderr, "%s:%d: %s: more fuel with shapes (%llu) than without (%llu)\n", file, c->line, c->name,
+                (unsigned long long)whole.fuel, (unsigned long long)plain_run.fuel);
+        ok = 0;
+    }
     if (ok && strcmp(whole.text, bytes.text) != 0) {
         fprintf(stderr, "%s:%d: %s: pushed a byte at a time\n  whole: %s\n  bytes: %s\n", file, c->line, c->name, whole.text, bytes.text);
         ok = 0;
@@ -653,7 +771,7 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
         sjs_program *program;
         sjs_error error = { 0 };
         sjs_value exports;
-        if (compile(env, c->source, SJS_GOAL_MODULE, 4096, &program, &error) == SJS_OK) {
+        if (compile(env, c->source, SJS_GOAL_MODULE, (mode){ 4096, 0, false }, &program, &error) == SJS_OK) {
             if (evaluate(env, program, UINT64_MAX, &exports, &error) == SJS_OK &&
                 register_module(env->context, env->modules, c->module_name, c->source, exports)) {
                 /* registered */
@@ -716,6 +834,12 @@ static void run_file(sjs_context *context, const char *path, tally *t) {
                 trim_end(c.global_sources[c.global_count]);
                 c.global_count++;
             }
+            continue;
+        }
+        if (where == SOURCE && c.source[0] == '\0' && strncmp(line, "@shapes ", 8) == 0) {
+            c.has_shapes = 1;
+            snprintf(c.shapes, sizeof c.shapes, "%s", line + 8);
+            trim_end(c.shapes);
             continue;
         }
         if (where == SOURCE && c.source[0] == '\0' && strncmp(line, "@module ", 8) == 0) {
