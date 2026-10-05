@@ -576,6 +576,33 @@ typedef struct {
 
 
 /* ========================================================================
+ * Watching the inputs of chosen sessions
+ */
+
+/*
+ * A host's policy for tracing the inputs of the sessions it watches. Mail
+ * between sessions never passes through the host (ADR 0099 section 4), so
+ * the host cannot mark the trace parent of an input it did not admit. Core
+ * calls `mark` instead, as it takes an input that came from another session
+ * (mail, or the error.communication a failed send became): `trace` is the
+ * parent the input's macrostep will run under, and `mark` may change it, for
+ * example to start a sampled trace for a watched session
+ * (TA_TRACE_DETAIL_WATCHED). It is called inside ta_run() at the point where
+ * an input is taken: it must not call a function that changes the system, and
+ * it must be quick. Inputs the host admitted itself (ta_actor_deliver()) are
+ * the host's to mark before it admits them, and are not offered.
+ */
+typedef struct ta_input_watch_vtable {
+    void (*mark)(void *self, ta_actor_id actor, TA_INOUT ta_trace_parent *trace);
+} ta_input_watch_vtable TA_VTABLE;
+
+typedef struct {
+    void *self;
+    /* Null uninstalls the watch. */
+    TA_OPTIONAL const ta_input_watch_vtable *v;
+} ta_input_watch TA_ADAPTER;
+
+/* ========================================================================
  * Expressions and definition identity
  */
 
@@ -2771,11 +2798,23 @@ typedef enum { TA_NOTICE_INPUT_COMPLETED = 0, TA_NOTICE_INPUT_REFUSED = 1, TA_NO
  * time is no longer valid for it (INVALID).
  */
 typedef enum { TA_REFUSED_DESTROYED = 0, TA_REFUSED_DONE = 1, TA_REFUSED_INVALID = 2 } ta_refusal_reason TA_SYMBOLS("TA_REFUSED_");
+/*
+ * Where an input came from (ADR 0099 sections 1 and 7), so a host settles
+ * only what it asked for and records what it must. HOST: ta_actor_deliver().
+ * TRANSITION: ta_actor_transition(), an operator's event. MAIL: another
+ * session's <send>, queued in core. ERROR: the data-free error.communication
+ * a session hears when its mail could not be delivered (ADR 0099 section 6).
+ * START: a macrostep that began with no event to take: a bootstrap, a
+ * restored macrostep, an error raised for an idle session.
+ */
+typedef enum { TA_SOURCE_HOST = 0, TA_SOURCE_TRANSITION = 1, TA_SOURCE_MAIL = 2, TA_SOURCE_ERROR = 3, TA_SOURCE_START = 4 } ta_input_source TA_SYMBOLS("TA_SOURCE_");
 typedef struct {
     ta_run_notice_kind kind;
     ta_actor_id actor;
-    /* The token ta_actor_deliver() or ta_actor_transition() gave, or 0. */
+    /* The token ta_actor_deliver() or ta_actor_transition() gave, or 0 for every other source. */
     uint64_t input;
+    /* COMPLETED, TAKEN, REFUSED: where the input came from. */
+    ta_input_source source;
     /* COMPLETED. */
     ta_input_status status;
     /*
@@ -3158,12 +3197,21 @@ TA_API ta_result ta_actor_transition(ta_system *system, TA_IN const ta_actor_tra
  */
 TA_API ta_result ta_run(ta_system *system, TA_IN const ta_run_params *params);
 /*
+ * Whether ta_run() has something to do: an input waits on the run queue
+ * (mail a macrostep sent included), a session has begun a macrostep that no
+ * input is running, an input is paused inside a macrostep, or an abandoned
+ * input waits to be reported. A host calls it to decide whether it is quiet
+ * and whether to call ta_run() again. It never allocates and costs O(1).
+ */
+TA_API bool ta_run_pending(const ta_system *system);
+/*
  * Abandons the actor's macrostep, one that may never end (ADR 0082): its
  * continuation, its internal queue and its external event are discarded,
  * and the actor is idle with the configuration after its last completed
- * microstep. What the macrostep already did stays done: its sends, its
- * invocations, its data. An ABANDONED record, then MACROSTEP_END, is
- * written. If the actor's input was the running one, the next ta_run()
+ * microstep. What the macrostep already did stays done: its invocations,
+ * its data; the mail it sent is not (ADR 0099 section 4): it was waiting for
+ * the macrostep to end, and is freed unseen. An ABANDONED record, then
+ * MACROSTEP_END, is written. If the actor's input was the running one, the next ta_run()
  * reports it as COMPLETED with status ABANDONED. The results:
  * - TA_OK: abandoned.
  * - TA_ERR_BUSY: the actor is paused or stopped inside a microstep
@@ -4138,6 +4186,12 @@ TA_API ta_result ta_ring_peek(ta_system *system, ta_ring_id ring,
  */
 TA_API void ta_ring_release(ta_system *system, ta_ring_id ring, uint32_t size);
 /* Installs the scheduler for normalized external SCXML-session events. */
+/*
+ * Installs, replaces or removes (a null `v`) the host's watch of inputs from
+ * other sessions. TA_ERR_INVALID for a null system or a watch with no `mark`.
+ * It never allocates and may be called at any time but inside ta_run().
+ */
+TA_API ta_result ta_system_set_input_watch(ta_system *system, ta_input_watch watch);
 TA_API ta_result ta_system_set_external_event_router(ta_system *system,
                                                       ta_external_event_router router);
 /*

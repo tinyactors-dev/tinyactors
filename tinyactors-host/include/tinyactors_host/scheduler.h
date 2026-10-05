@@ -250,7 +250,10 @@ typedef enum {
     TAH_NOTE_REPORTED,   /* ta_actor_report_invoke() took the report `message` */
     TAH_NOTE_FINISHED,   /* `actor` reached a top-level final state */
     TAH_NOTE_SETTLED,    /* `actor` ended a macrostep and is stable: its pending sends may have changed */
-    TAH_NOTE_ENDED       /* `actor`'s macrostep ended: stable, finished, or stopped by a fault (before SETTLED or FINISHED) */
+    TAH_NOTE_ENDED,      /* `actor`'s macrostep ended: stable, finished, or stopped by a fault (before SETTLED or FINISHED) */
+    /* Mail between sessions never passes through this scheduler: core queues it (core ADR 0099 section 4). When an
+     * observer is installed, core says when it takes such an input; `event` is borrowed until the next ta_run(). */
+    TAH_NOTE_MAIL_TAKEN  /* `actor` took the event of mail (or of a recycled error) from another session */
 } tah_note_kind;
 
 typedef struct {
@@ -259,6 +262,7 @@ typedef struct {
     ta_address *address;
     uint32_t envelope;
     const tah_envelope *message;
+    const ta_event *event; /* MAIL_TAKEN */
 } tah_sched_note;
 
 typedef struct {

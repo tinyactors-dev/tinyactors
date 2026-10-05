@@ -77,6 +77,21 @@ static const ta_scxml_state_spec quiet_states[] = {
     END,
 };
 
+/* Family "mailer", not recorded: m0 sends ping to the recorded actor ping/p1 on entry, and ends in m1. */
+static const ta_scxml_state_spec mailer_states[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("m0"),
+      .onentry = (const ta_scxml_handler_spec[]){
+          { .actions = (const ta_scxml_action_spec[]){
+                { .kind = TA_SCXML_ACTION_SEND,
+                  .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR("ping") },
+                               .target = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("#_actor_ping/p1") } } },
+                END } },
+          END },
+      .transitions = (const ta_scxml_transition_spec[]){ ALWAYS("m1"), END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("m1") },
+    END,
+};
+
 static const ta_actor_address ping_address = { .family = { .name = STR("ping") }, .name = STR("p1") };
 static const ta_actor_address quiet_address = { .family = { .name = STR("quiet") }, .name = STR("q") };
 
@@ -316,6 +331,25 @@ static void wakes(void) {
     finish_world(&w);
 }
 
+/*
+ * Mail between sessions never passes through the scheduler (core ADR 0099): core
+ * queues it and runs it. The recorder still hears of it, from core's notice
+ * that the recorded actor took the input, and records it in the turn its
+ * macrostep ends, with the sender as its origin.
+ */
+static void records_mail(void) {
+    world w = make_world();
+    (void)spawn(&w, w.ping, &ping_address);
+    ta_definition_id mailer = define(w.system, "mailer", mailer_states);
+    (void)spawn(&w, mailer, NULL);
+    batch b = { 0 };
+    CHECK(run(&w, &b) == 1);
+    CHECK(strcmp(b.names[0], "ping") == 0 && strcmp(b.addresses[0], "p1") == 0);
+    CHECK(strncmp(b.origins[0], "#_scxml_", 8) == 0); /* the anonymous sender's session URI */
+    CHECK(w.system->sched.delivered == 1u);           /* counted as delivered, though the scheduler never saw it */
+    finish_world(&w);
+}
+
 /* Records the binding never took are freed when the system closes. */
 static void close_with_records(void) {
     world w = make_world();
@@ -346,6 +380,7 @@ int main(void) {
     records_a_delivery();
     records_at_the_end();
     records_nothing_else();
+    records_mail();
     wakes();
     close_with_records();
     off();

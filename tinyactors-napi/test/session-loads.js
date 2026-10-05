@@ -83,7 +83,8 @@ async function withoutALoader() {
   const s = system.spawn(server(system), { address: { family: 'server', name: 's' } });
   system.spawn(requester(system));
   await until(system, () => s.inspect().data.failure !== null, 'the refusal');
-  assert.equal(s.inspect().data.failure.reason, 'not-found');
+  // The server replies in the macrostep after the requester's, which finished and is not destroyed yet.
+  assert.equal(s.inspect().data.failure.reason, 'done');
   system.close();
 }
 

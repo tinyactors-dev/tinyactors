@@ -90,6 +90,8 @@ struct ta_system {
 
     ta_actor_directory directory;
     ta_external_event_router external_events;
+    /* The host's policy for tracing the inputs it did not admit: mail (mail.h). Lifetime: system. */
+    ta_input_watch input_watch;
     ta_log_sink log_sink;
     /* Never null: ta_null_definition_sink() when the host installed none (ADR 0079). */
     ta_definition_sink definition_sink;

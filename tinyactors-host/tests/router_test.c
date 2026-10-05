@@ -131,10 +131,21 @@ static bool in_state(tah_system *system, ta_actor_id actor, const char *id) {
     return text_is(info.id, id);
 }
 
+/* Runs core for one input only: ta_run stops between inputs when its array cannot hold another input's notices. */
+static void run_one_input(tah_system *system) {
+    ta_run_status status = TA_RUN_IDLE;
+    ta_run_notice notices[3];
+    uint32_t count = 0;
+    CHECK(ta_run(system->core, &(ta_run_params){ .budget = 1000, .status = &status, .notices = notices,
+                                                 .notice_capacity = 3, .notice_count = &count }) == TA_OK);
+}
+
 /*
- * A named sender finishes and is destroyed while its message waits in the
- * receiver's mailbox: the envelope's origin is the sender's interned
- * address, and it stays readable (AddressSanitizer would catch a freed one).
+ * A named sender finishes and is destroyed while its mail waits on core's run
+ * queue: the envelope's event holds the sender's interned address, and it
+ * stays readable (AddressSanitizer would catch a freed one). Mail between
+ * sessions never passes through the scheduler's mailboxes (core ADR 0099
+ * section 4), so core is driven one input at a time here.
  */
 static void named_origin_outlives_its_sender(void) {
     tah_system *system = make_system();
@@ -143,33 +154,36 @@ static void named_origin_outlives_its_sender(void) {
     ta_actor_id receiver = spawn(system, define_receiver(system), &receiver_name);
     ta_actor_id sender = spawn(system, define_sender(system, S("#_actor_r/recv")), &sender_name);
 
-    /* One turn with no deliveries: both bootstrap, the sender sends and finishes. */
-    uint32_t messages = system->budgets.messages;
-    system->budgets.messages = 0;
-    tah_system_turn(system);
-    bool done = false;
-    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-        CHECK(record->kind != TAH_RECORD_FAULT);
-        done = done || (record->kind == TAH_RECORD_DONE && record->actor == sender);
-    }
-    CHECK(done);
-    tah_system_end_turn(system);
-    system->budgets.messages = messages;
-    CHECK(tah_sched_mailbox_count(&system->sched, receiver) == 1u);
+    /* The receiver bootstraps, then the sender, which sends and finishes; the mail waits for the receiver. */
+    run_one_input(system);
+    run_one_input(system);
+    CHECK(tah_sched_mailbox_count(&system->sched, receiver) == 0u);
+    CHECK(ta_run_pending(system->core));
 
     destroy(system, sender); /* what finished: "destroy" does after the done hook */
 
-    const tah_sched_entry *entry = tah_sched_lookup(&system->sched, receiver);
-    const tah_envelope *envelope = tah_sched_envelope(&system->sched, entry->first);
-    CHECK(envelope->event.origin.kind == TA_ORIGIN_ACTOR);
-    CHECK(envelope->event.origin.as.actor.kind == TA_ACTOR_REF_NAMED);
-    ta_actor_address origin = ta_address_view(envelope->event.origin.as.actor.as.named);
-    CHECK(text_is(origin.family.name, "snd"));
-    CHECK(text_is(origin.name, "s1"));
+    ta_run_notice notices[16];
+    uint32_t count = 0;
+    ta_run_status status = TA_RUN_IDLE;
+    CHECK(ta_run(system->core, &(ta_run_params){ .budget = 1000, .report_taken = true, .status = &status,
+                                                 .notices = notices, .notice_capacity = 16, .notice_count = &count }) ==
+          TA_OK);
+    bool read = false;
+    for (uint32_t index = 0; index < count; index += 1u) {
+        if (notices[index].kind == TA_NOTICE_INPUT_TAKEN && notices[index].source == TA_SOURCE_MAIL) {
+            const ta_origin *origin = &notices[index].event->origin;
+            CHECK(origin->kind == TA_ORIGIN_ACTOR && origin->as.actor.kind == TA_ACTOR_REF_NAMED);
+            ta_actor_address held = ta_address_view(origin->as.actor.as.named);
+            CHECK(text_is(held.family.name, "snd"));
+            CHECK(text_is(held.name, "s1"));
+            read = true;
+        }
+    }
+    CHECK(read);
 
     CHECK(settle(system) == 0u);
     CHECK(in_state(system, receiver, "got"));
-    CHECK(system->sched.delivered == 1u);
+    CHECK(system->sched.delivered == 0u); /* the scheduler delivered nothing: core ran the mail */
     finish_system(system);
 }
 

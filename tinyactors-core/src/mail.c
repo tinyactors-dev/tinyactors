@@ -21,12 +21,12 @@
 #include "internal.h"
 
 /*
- * ta_mail_receiver answers the resident, unfinished session `destination`
- * names, or NULL. A runtime reference names it by its ID; a named reference
- * is resolved through the host's directory, whose answer is the session that
- * holds the address now. Neither interns, retains nor allocates, so it is
- * safe in a macrostep. A session that has finished is not a receiver: its
- * mail is undeliverable.
+ * ta_mail_receiver answers the resident session `destination` names, or NULL.
+ * A runtime reference names it by its ID; a named reference is resolved
+ * through the host's directory, whose answer is the session that holds the
+ * address now. Neither interns, retains nor allocates, so it is safe in a
+ * macrostep. The session may have finished: ta_mail_send decides what that
+ * means.
  */
 static ta_actor *ta_mail_receiver(const ta_system *system, const ta_actor_ref *destination) {
     ta_actor_id id = 0;
@@ -43,8 +43,7 @@ static ta_actor *ta_mail_receiver(const ta_system *system, const ta_actor_ref *d
         }
         id = entry.actor;
     }
-    ta_actor *actor = id != 0 ? ta_actor_lookup(system, id) : NULL;
-    return actor != NULL && !actor->finished ? actor : NULL;
+    return id != 0 ? ta_actor_lookup(system, id) : NULL;
 }
 
 /* ta_mail_send: see mail.h. */
@@ -57,10 +56,20 @@ ta_mail_status ta_mail_send(ta_system *system, const ta_mail_params *params) {
     if (receiver == NULL) {
         return TA_MAIL_ROUTER;
     }
+    if (receiver->finished) {
+        /*
+         * A name that a finished session still holds is undeliverable now. A
+         * session ID is not: its family may have a loader that starts a new
+         * instance for the mail (napi ADR 0032 section 2), which only the
+         * router knows until core owns waiting lists for sessions.
+         */
+        return params->destination.kind == TA_ACTOR_REF_NAMED ? TA_MAIL_UNDELIVERABLE : TA_MAIL_ROUTER;
+    }
     if (receiver->queued == UINT16_MAX) {
         return TA_MAIL_FULL;
     }
-    uint32_t index = ta_envelope_make(&system->envelopes, &slot->claim, TA_ENVELOPE_RUNNABLE);
+    uint32_t index = ta_envelope_make(&system->envelopes, &slot->claim,
+                                      TA_ENVELOPE_RUNNABLE);
     if (index == 0) {
         return TA_MAIL_FULL;
     }
@@ -119,4 +128,36 @@ void ta_mail_recycle(ta_system *system, uint32_t index, ta_recycle_reason reason
     sender->queued += 1u;
     ta_interpreter_count_error(system, sender, TA_EVENT_NAME_ERROR_COMMUNICATION);
     ta_envelopes_run_push(&system->envelopes, index);
+}
+
+/* ta_mail_outgoing_to: see mail.h. */
+uint32_t ta_mail_outgoing_to(const ta_system *system, ta_actor_id actor) {
+    const ta_run_slot *slot = &system->runner.slot;
+    uint32_t count = 0;
+    if (!slot->occupied || slot->actor != actor) {
+        return 0;
+    }
+    const ta_ilink *link = ta_envelopes_link(&system->envelopes);
+    for (uint32_t index = slot->outgoing.head; index != 0; index = ta_ilist_next(link, index)) {
+        count += ta_envelope_at(&system->envelopes, index)->target == actor ? 1u : 0u;
+    }
+    return count;
+}
+
+/* ta_mail_follow: see mail.h. */
+ta_actor *ta_mail_follow(ta_system *system, uint32_t index) {
+    ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+    ta_actor_ref routed;
+    ta_actor_ref session = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = envelope->target };
+    if (ta_session_route(system, &session, &routed)) {
+        ta_actor_ref_release(&routed); /* the session is out: a named address, which only a load answers */
+        return NULL;
+    }
+    ta_actor *receiver = routed.kind == TA_ACTOR_REF_RUNTIME ? ta_actor_lookup(system, routed.as.runtime) : NULL;
+    if (receiver == NULL || receiver->queued == UINT16_MAX) {
+        return NULL;
+    }
+    envelope->target = receiver->record.id;
+    receiver->queued += 1u;
+    return receiver;
 }

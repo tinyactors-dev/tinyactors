@@ -1,6 +1,7 @@
 #include "invoke.h"
 #include "format.h"
 #include "interpreter.h"
+#include "mail.h"
 
 /*
  * SCXML <invoke>: starting services at the end of a macrostep, cancelling
@@ -685,12 +686,18 @@ typedef struct {
     ta_actor_ref destination;
     ta_event event;
     ta_trace_parent trace;
+    /* True inside the sender's macrostep, where mail may take an envelope from the running input's claim (mail.h). */
+    bool in_run;
 } ta_invoke_delivery;
 
 /*
- * Offers an event to another session through the router. When the router
- * accepts nothing, the event waits in the deadline index, due now, owned by
- * the sender, so ta_system_dispatch_due() offers it again.
+ * Offers an event to another session. Inside the sender's macrostep it
+ * becomes an envelope on the input's outgoing list when the destination is a
+ * resident session (mail.h); a completion or a forwarded event is never
+ * dropped for want of an envelope, so a refusal falls back to the router like
+ * every other destination. When the router accepts nothing, the event waits
+ * in the deadline index, due now, owned by the sender, so
+ * ta_system_dispatch_due() offers it again.
  */
 static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *delivery) {
     const ta_actor_sparse_state *sender_sparse = delivery->sender->sparse;
@@ -704,6 +711,13 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
              * child emits while running onexit are discarded. */
             return TA_OK;
         }
+    }
+    if (delivery->in_run &&
+        ta_mail_send(system, &(ta_mail_params){ .sender = delivery->sender->record.id,
+                                                .destination = delivery->destination,
+                                                .event = delivery->event,
+                                                .trace = delivery->trace }) == TA_MAIL_QUEUED) {
+        return TA_OK;
     }
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
     ta_fault fault = {0};
@@ -821,6 +835,7 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
                                                   .destination = ta_actor_runtime_ref(it->system, meta.child),
                                                   .event = copy,
                                                   .trace = ta_interpreter_trace_here(it),
+                                                  .in_run = true,
                                               });
     } else {
         (void)meta.invoker.v->forward(meta.invoker.self, &(ta_invoker_forward_params){
@@ -888,10 +903,15 @@ ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *event, uint3
     return TA_OK;
 }
 
+typedef struct {
+    ta_trace_parent trace;
+    bool in_run; /* inside the finishing session's macrostep */
+} ta_invoke_publish_params;
+
 /* Sends done.invoke.<id> with the completion data to the invoking parent,
  * under `trace`, the finishing step's, or none when the host publishes it
  * again after a refusal. */
-static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_parent trace) {
+static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, const ta_invoke_publish_params *params) {
     ta_actor_sparse_state *sparse = actor->sparse;
     ta_event_name_id name = 0;
     ta_result result = ta_invoke_done_name(system, sparse->parent.invoke_id, &name);
@@ -910,7 +930,8 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_
                                         .sender = actor,
                                         .destination = ta_actor_runtime_ref(system, sparse->parent.actor),
                                         .event = event,
-                                        .trace = trace,
+                                        .trace = params->trace,
+                                        .in_run = params->in_run,
                                     });
 }
 
@@ -928,7 +949,8 @@ ta_result ta_invoke_finished(ta_interpreter *it) {
         return TA_OK;
     }
     sparse->completion_pending = true;
-    return ta_invoke_publish(it->system, it->actor, ta_interpreter_trace_here(it));
+    return ta_invoke_publish(it->system, it->actor,
+                             &(ta_invoke_publish_params){ .trace = ta_interpreter_trace_here(it), .in_run = true });
 }
 
 void ta_invoke_release(ta_system *system, ta_actor *actor) {
@@ -1181,7 +1203,7 @@ ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) {
     if (ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
         return TA_OK; /* already delivered */
     }
-    return ta_invoke_publish(system, actor, (ta_trace_parent){0});
+    return ta_invoke_publish(system, actor, &(ta_invoke_publish_params){0});
 }
 
 /* ------------------------------------------------------------------------

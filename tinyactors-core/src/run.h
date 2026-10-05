@@ -24,11 +24,12 @@ typedef struct ta_actor ta_actor;
  * What runs, and where it waits.
  *
  *   - An *input* is an admitted event: an envelope on the run queue, from
- *     ta_actor_deliver (the host's, or another session's mail through the
- *     router) or from an event report of ta_actor_report_invoke. It is
- *     named by a token ta_run reports it by. An operator's event with a
- *     transition (ta_actor_transition) is an input that skips the queue and
- *     fills the slot.
+ *     ta_actor_deliver (the host's), from the mail another session's
+ *     macrostep sent (package mail: it joins the queue when that macrostep
+ *     ends), or from an event report of ta_actor_report_invoke. A host input
+ *     is named by a token ta_run reports it by; mail has none. An operator's
+ *     event with a transition (ta_actor_transition) is an input that skips
+ *     the queue and fills the slot.
  *   - A *started macrostep* is a session that began a macrostep with no event
  *     to take: a bootstrap (ta_actor_spawn, ta_actor_prepare), a restored
  *     macrostep (ta_actor_load), an error raised for an idle session. It is
@@ -49,7 +50,12 @@ typedef struct ta_actor ta_actor;
  *     inside a macrostep.
  *   - input: the slot, from take until the input's COMPLETED notice. An
  *     input that a budget pauses keeps the slot, so nothing else is taken
- *     before it ends. The slot's envelope lives as long.
+ *     before it ends. The slot's envelope lives as long, and so do the
+ *     macrostep reserve (a claim on the envelope quota) and the outgoing list
+ *     of the mail the input sends (package mail), which the slot holds: the
+ *     reserve is taken when the input is taken and given back when it ends,
+ *     the list is spliced onto the run queue when it ends, or freed unseen
+ *     when it is abandoned.
  *   - call: the notice array the caller gives ta_run, and the events its
  *     notices borrow. An envelope whose event a notice lent goes on `lent`
  *     and is released at the start of the next ta_run (or at destroy).
@@ -57,9 +63,11 @@ typedef struct ta_actor ta_actor;
  * When it allocates. ta_actor_deliver and ta_actor_transition allocate only
  * through the envelope pool's refill, at their own call (the admission safe
  * point), and ta_actor_transition also allocates its jump. ta_run allocates
- * only before an input is taken, in the event block its macrostep needs, and
- * as a macrostep always has (the interpreter, ADR 0070); a failure
- * (TA_ERR_NOMEM) leaves the input where it stands. ta_run_reserve_start
+ * before an input is taken: the pool refill that backs the macrostep reserve
+ * (so a send never fails because the pool had not grown yet) and the event
+ * block its macrostep needs; and as a macrostep always has (the interpreter,
+ * ADR 0070). A failure (TA_ERR_NOMEM) leaves the input where it stands and
+ * changes nothing. ta_run_reserve_start
  * allocates; ta_run_start, ta_run_actor_gone and ta_run_abandoned never do.
  *
  * Invariants.
@@ -68,9 +76,11 @@ typedef struct ta_actor ta_actor;
  *   I2: an envelope is on the run queue, in the slot, on `lent`, on
  *       `abandoned`, or released; never two of these. A started session id is in `started`
  *       at most once while `actor->started` is true.
- *   I3: for every session, `queued` is the number of envelopes on the run
- *       queue whose target it is. A session with `queued != 0` is busy for
- *       unload and export (its inputs would be refused if it went).
+ *   I3: for every session, `queued` is the number of envelopes addressed to
+ *       it that wait: on the run queue, or on the outgoing list of the input
+ *       in the slot (package mail). A session with `queued != 0` is busy for
+ *       unload and export (its inputs would be refused if it went); the mail
+ *       its own paused macrostep sent itself is the one exception.
  *   I4: every notice ta_run writes is complete in the array; the count is
  *       set on every result.
  *
@@ -181,6 +191,15 @@ void ta_run_start(ta_system *system, ta_actor *actor);
  * Called from ta_actor_free. Never allocates. O(1).
  */
 void ta_run_actor_gone(ta_system *system, const ta_actor *actor);
+
+/*
+ * ta_run_unloaded tells the runner that `actor` is leaving residency (ta_actor_unload):
+ * as for ta_run_actor_gone, the slot is freed if the session holds it, but
+ * the mail its macrostep had sent is made visible instead of freed, because
+ * an unload moves the session out and abandons nothing (ADR 0014). Never
+ * allocates. O(1).
+ */
+void ta_run_unloaded(ta_system *system, const ta_actor *actor);
 
 /*
  * ta_run_abandoned tells the runner that ta_actor_abandon ended the macrostep

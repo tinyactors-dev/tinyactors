@@ -33,15 +33,14 @@ end
 
 TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # A send to a logical address needs no named sender. Core parses the
-  # address and hands the destination to the external-event router, because
-  # the host owns location and residency; here that is the router instrument
-  # resolving it through the directory.
+  # address, asks the host's directory which session holds it (the host owns
+  # location and residency), and queues the mail for that session (core ADR
+  # 0099 section 4); here the directory is the memory_directory instrument.
   #
   # Catches: a named target that is dropped, delivered to the wrong actor,
-  # or resolved by core instead of handed to the router.
+  # or resolved by core instead of by the directory.
   scenario 'a send to a logical address is routed through the host directory' do
     directory = memory_directory
-    router = recording_router(directory: true)
     sender = spawn :messenger, binding: { peer: '#_actor_messenger/m2' }
     receiver = spawn :messenger
     directory.put(family: 'messenger', name: 'm1', kind: :resident, actor: sender.handle)
@@ -53,12 +52,10 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     assert_equal [{ event: 'hello', from: sender.session_uri }], receiver.data('.inbox'),
                  'the named target is resolved and delivered'
     assert_equal [{ event: 'ack', from: receiver.session_uri }], sender.data('.inbox')
-    # The hello goes to the address, which the router resolves; the reply
+    # The hello goes to the address, which the directory resolves; the reply
     # goes to the sender's session URI, which needs no resolution.
-    assert_equal [[{ kind: 'named', family: { name: 'messenger' }, name: 'm2' },
-                   { kind: 'resident', actor: receiver.handle }, 'accepted'],
-                  [{ kind: 'runtime', runtime: sender.handle }, nil, 'accepted']],
-                 router.entries('submit').map { |entry| entry.values_at(:destination, :resolved, :status) }
+    assert_equal [['m2', 'resident', receiver.handle]],
+                 directory.entries('resolve').map { |entry| [entry[:name], entry.dig(:out, :kind), entry.dig(:out, :actor)] }
   end
 
   # The same routing without a routing instrument. router.direct resolves a
@@ -211,7 +208,7 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # The address URI is the one the host's data models parse,
   # #_actor_<family>/<name>, so `to: $_event.origin` is a reply.
   scenario 'named actors exchange events by address, and reply to the origin' do
-    router = recording_router(directory: true)
+    directory = memory_directory
     sender = spawn :messenger, name: 'm1', binding: { peer: '#_actor_messenger/m2' }
     receiver = spawn :messenger, name: 'm2'
     sender.deliver 'greet'
@@ -219,11 +216,8 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     assert_equal [{ event: 'hello', from: '#_actor_messenger/m1' }], receiver.data('.inbox')
     assert_equal [{ event: 'ack', from: '#_actor_messenger/m2' }], sender.data('.inbox'),
                  'the reply went to the address the hello came from'
-    assert_equal [[{ kind: 'named', family: { name: 'messenger' }, name: 'm2' },
-                   { kind: 'resident', actor: receiver.handle }, 'accepted'],
-                  [{ kind: 'named', family: { name: 'messenger' }, name: 'm1' },
-                   { kind: 'resident', actor: sender.handle }, 'accepted']],
-                 router.entries('submit').map { |entry| entry.values_at(:destination, :resolved, :status) }
+    assert_equal [['m2', receiver.handle], ['m1', sender.handle]],
+                 directory.entries('resolve').map { |entry| [entry[:name], entry.dig(:out, :actor)] }
   end
 
   # Catches: a send to an unloaded actor that is silently dropped or

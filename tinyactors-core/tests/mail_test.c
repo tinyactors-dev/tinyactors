@@ -23,6 +23,11 @@
  *      sender that is gone has it freed. Every case ends with an empty pool.
  *   6. No allocation: a round of mail between two sessions makes no allocator
  *      call once the pool has grown.
+ *   7. Through the interpreter: the <send> of a chart is an envelope that
+ *      waits for the end of its macrostep; a fanout that spends the macrostep
+ *      reserve is error.execution at exactly the send after it, on a cold and
+ *      on a warm system; a send to a name a finished session holds is
+ *      error.communication in the sender's own macrostep.
  *
  * Includes the amalgamation, because the package is private to core.
  */
@@ -331,9 +336,9 @@ static void test_destinations(void) {
     pause_in_macrostep(&w, sender);
     uint64_t used = w.system->envelopes.pool.used;
 
-    /* An ID no session has, a finished session, and the ID of a destroyed one are not placed. */
+    /* An ID no session has, the ID of a destroyed one and the ID of a finished one are not placed here. */
     CHECK(send_to(&w, sender, runtime_ref(0), w.e1, 0) == TA_MAIL_ROUTER);
-    CHECK(send_to(&w, sender, runtime_ref(done), w.e1, 0) == TA_MAIL_ROUTER);
+    CHECK(send_to(&w, sender, runtime_ref(done), w.e1, 0) == TA_MAIL_ROUTER); /* its family may have a loader */
     CHECK(send_to(&w, sender, runtime_ref(destroyed), w.e1, 0) == TA_MAIL_ROUTER);
     CHECK(w.system->envelopes.pool.used == used);
     CHECK(ta_ilist_is_empty(&w.system->runner.slot.outgoing));
@@ -346,8 +351,8 @@ static void test_destinations(void) {
     CHECK(send_to(&w, sender, named, w.e1, 0) == TA_MAIL_ROUTER); /* the directory knows no one yet */
     w.directory.resident = receiver;
     CHECK(send_to(&w, sender, named, w.e1, 0) == TA_MAIL_QUEUED);
-    w.directory.resident = done; /* a finished session is not a receiver */
-    CHECK(send_to(&w, sender, named, w.e2, 0) == TA_MAIL_ROUTER);
+    w.directory.resident = done; /* a name that a finished session holds is known to be undeliverable */
+    CHECK(send_to(&w, sender, named, w.e2, 0) == TA_MAIL_UNDELIVERABLE);
     w.directory.resident = 0;
     ta_address_release(address);
 
@@ -573,7 +578,141 @@ static void test_no_allocation(void) {
     world_close(&w);
 }
 
+/* ------------------------------------------------------------------------
+ * 7. Through the interpreter
+ */
+
+enum { MAX_SENDS = 8 };
+
+/*
+ * Defines a chart that, on entry, sends `sends` events (e1, e2, e3, then e1
+ * again) to `target`, and goes to `refused` on error.execution and to `failed`
+ * on error.communication.
+ */
+static ta_definition_id define_sender(world *w, const char *target, uint32_t sends, const char *delay) {
+    static const char *const names[MAX_SENDS] = { "e1", "e2", "e3", "e1", "e1", "e1", "e1", "e1" };
+    ta_scxml_action_spec actions[MAX_SENDS + 1];
+    memset(actions, 0, sizeof actions);
+    for (uint32_t index = 0; index < sends && index < MAX_SENDS; index += 1u) {
+        actions[index] = (ta_scxml_action_spec){
+            .kind = TA_SCXML_ACTION_SEND,
+            .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME,
+                                    .as.name = { .ptr = names[index], .len = (uint32_t)strlen(names[index]) } },
+                         .target = { .kind = TA_SCXML_STRING_LITERAL,
+                                     .as.literal = { .ptr = target, .len = (uint32_t)strlen(target) } },
+                         .delay = delay == NULL ? (ta_scxml_string_spec){0}
+                                                : (ta_scxml_string_spec){ .kind = TA_SCXML_STRING_LITERAL,
+                                                                          .as.literal = { .ptr = delay,
+                                                                                          .len = (uint32_t)strlen(delay) } } },
+        };
+    }
+    ta_scxml_handler_spec onentry[] = { { .actions = actions }, END };
+    ta_scxml_transition_spec transitions[] = {
+        ON("error.execution", "refused"),
+        ON("error.communication", "failed"),
+        END,
+    };
+    ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("start"), .onentry = onentry, .transitions = transitions },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("refused") },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("failed") },
+        END,
+    };
+    return define(w->system, &(ta_scxml_spec){ .name = STR("sender"), .states = states });
+}
+
+/* The session text of `actor`, as a <send> target: "#_scxml_" and the number the session ID formats to. */
+static void session_target(world *w, ta_actor_id actor, char *out, size_t capacity) {
+    char text[64];
+    uint32_t needed = 0;
+    ta_actor_inspection view = {0};
+    CHECK(ta_actor_inspect(w->system, actor, &view) == TA_OK);
+    CHECK(ta_session_id_format(w->system, &(ta_session_id_format_params){ .session = actor,
+                                                                         .family = view.definition.family.name,
+                                                                         .buffer = text,
+                                                                         .capacity = sizeof text,
+                                                                         .needed = &needed }) == TA_OK);
+    snprintf(out, capacity, "#_scxml_%s", text);
+}
+
+/* A chart's sends wait for the end of its macrostep, arrive in order, and need no router. */
+static void test_interpreter_mail(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id receiver = spawn(&w, w.chain);
+    char target[96];
+    session_target(&w, receiver, target, sizeof target);
+    ta_definition_id sender_chart = define_sender(&w, target, 3, NULL);
+    settle(&w);
+    CHECK(in_state(&w, receiver, "s0"));
+    ta_actor_id sender = spawn(&w, sender_chart);
+
+    CHECK(test_run_input(w.system) == TA_OK); /* the sender's bootstrap: three sends */
+    CHECK(in_state(&w, receiver, "s0"));
+    CHECK(ta_run_pending(w.system));
+    CHECK(queued_of(&w, receiver) == 3u);
+    CHECK(in_state(&w, sender, "start"));
+    settle(&w);
+    CHECK(in_state(&w, receiver, "s3"));
+    CHECK(queued_of(&w, receiver) == 0u);
+    quiescent(&w);
+    world_close(&w);
+}
+
+/*
+ * A fanout that spends its reserve: with macrostepReserve 3, the fourth send
+ * of one input finds no envelope and is error.execution, counted as a quota
+ * refusal, in the same macrostep. A warm system fails at the same send.
+ */
+static void test_reserve_exhausted(void) {
+    ta_param_value params[] = { { TA_PARAM_MACROSTEP_RESERVE, 3 } };
+    for (uint32_t round = 0; round < 2u; round += 1u) {
+        world w;
+        world_init(&w, params, 1);
+        ta_actor_id receiver = spawn(&w, w.chain);
+        char target[96];
+        session_target(&w, receiver, target, sizeof target);
+        ta_definition_id sender_chart = define_sender(&w, target, 4, NULL);
+        settle(&w);
+        if (round == 1u) {
+            /* Warm: the pool has served other inputs first. */
+            ta_actor_id warmer = spawn(&w, w.talker);
+            settle(&w);
+            CHECK(post(&w, warmer, w.go) == TA_OK);
+            settle(&w);
+        }
+        uint64_t before = w.system->counters.quota_refusals;
+        ta_actor_id sender = spawn(&w, sender_chart);
+        settle(&w);
+        CHECK(w.system->counters.quota_refusals == before + 1u);
+        CHECK(in_state(&w, sender, "refused"));
+        CHECK(in_state(&w, receiver, "s3")); /* the three sends that fitted arrived, in order */
+        quiescent(&w);
+        world_close(&w);
+    }
+}
+
+/* A name that a finished session holds is undeliverable: the sender hears error.communication at once. */
+static void test_finished_name(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id done = spawn(&w, w.finisher);
+    ta_definition_id sender_chart = define_sender(&w, "#_actor_finisher/f", 1, NULL);
+    settle(&w);
+    CHECK(post(&w, done, w.end) == TA_OK);
+    settle(&w);
+    w.directory.resident = done;
+    ta_actor_id sender = spawn(&w, sender_chart);
+    settle(&w);
+    CHECK(in_state(&w, sender, "failed"));
+    quiescent(&w);
+    world_close(&w);
+}
+
 int main(void) {
+    test_interpreter_mail();
+    test_reserve_exhausted();
+    test_finished_name();
     test_order_and_visibility();
     test_destinations();
     test_claim();

@@ -155,6 +155,15 @@ void ta_run_actor_gone(ta_system *system, const ta_actor *actor) {
     }
 }
 
+/* ta_run_unloaded: see run.h. */
+void ta_run_unloaded(ta_system *system, const ta_actor *actor) {
+    const ta_run_slot *slot = &system->runner.slot;
+    if (slot->occupied && slot->actor == actor->record.id) {
+        ta_mail_macrostep_ended(system);
+    }
+    ta_run_actor_gone(system, actor);
+}
+
 /* ta_run_abandoned: see run.h. */
 void ta_run_abandoned(ta_system *system, const ta_actor *actor) {
     ta_run_actor_gone(system, actor);
@@ -305,6 +314,7 @@ static void ta_run_refuse(ta_system *system, uint32_t index, ta_refusal_reason r
     ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_INPUT_REFUSED,
                                              .actor = envelope->target,
                                              .input = envelope->input,
+                                             .source = (ta_input_source)envelope->source,
                                              .reason = reason,
                                              .event = &envelope->event });
     ta_ilist_push_back(&system->runner.lent, ta_envelopes_link(&system->envelopes), index);
@@ -320,6 +330,9 @@ static ta_result ta_run_take(ta_system *system, uint32_t index, ta_run_notices *
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
     ta_actor *actor = ta_actor_lookup(system, envelope->target);
     *occupied = false;
+    if (actor == NULL && (envelope->source == TA_SOURCE_MAIL || envelope->source == TA_SOURCE_ERROR)) {
+        actor = ta_mail_follow(system, index); /* its session may have been unloaded and loaded again meanwhile */
+    }
     if (actor == NULL) {
         ta_run_refuse(system, index, TA_REFUSED_DESTROYED, out);
         return TA_OK;
@@ -340,6 +353,10 @@ static ta_result ta_run_take(ta_system *system, uint32_t index, ta_run_notices *
         return result;
     }
     actor->queued -= 1u;
+    if ((envelope->source == TA_SOURCE_MAIL || envelope->source == TA_SOURCE_ERROR) && system->input_watch.v != NULL) {
+        /* The host never saw this input, so it marks its trace parent here (tinyactors.h, ta_input_watch). */
+        system->input_watch.v->mark(system->input_watch.self, actor->record.id, &envelope->trace);
+    }
     ta_run_install(actor, envelope, NULL);
     envelope->state = TA_ENVELOPE_TAKEN;
     system->runner.slot = (ta_run_slot){ .actor = actor->record.id, .envelope = index, .occupied = true };
@@ -500,6 +517,7 @@ static bool ta_run_report_abandoned(ta_system *system, ta_run_notices *out) {
         ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_INPUT_COMPLETED,
                                                  .actor = envelope->target,
                                                  .input = envelope->input,
+                                                 .source = (ta_input_source)envelope->source,
                                                  .status = TA_INPUT_ABANDONED });
         ta_envelope_release(&system->envelopes, index);
     }
@@ -517,16 +535,20 @@ static void ta_run_complete(ta_system *system, ta_input_status status, bool igno
     ta_run_slot *slot = &system->runner.slot;
     uint32_t index = slot->envelope;
     uint64_t token = 0;
+    ta_input_source source = TA_SOURCE_START;
     if (index != 0) {
         token = ta_envelope_at(&system->envelopes, index)->input;
+        source = (ta_input_source)ta_envelope_at(&system->envelopes, index)->source;
     }
     ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_INPUT_COMPLETED,
                                              .actor = slot->actor,
                                              .input = token,
+                                             .source = source,
                                              .status = status,
                                              .ignored = ignored });
     if (status == TA_INPUT_DONE) {
-        ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_FINISHED, .actor = slot->actor, .input = token });
+        ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_FINISHED, .actor = slot->actor, .input = token,
+                                                 .source = source });
     }
     /* The macrostep's mail becomes visible now, all at once; an abandoned macrostep's never does. */
     if (status == TA_INPUT_RUNAWAY || status == TA_INPUT_ABANDONED) {
@@ -603,6 +625,13 @@ static bool ta_run_check(const ta_system *system, const ta_run_params *params) {
            params->notices != NULL && params->notice_count != NULL && params->notice_capacity >= 3u;
 }
 
+/* ta_run_pending: see tinyactors.h. */
+bool ta_run_pending(const ta_system *system) {
+    const ta_runner *runner = &system->runner;
+    return runner->slot.occupied || runner->started_first != 0 || !ta_ilist_is_empty(&system->envelopes.run) ||
+           !ta_ilist_is_empty(&runner->abandoned);
+}
+
 ta_result ta_run(ta_system *system, const ta_run_params *params) {
     if (!ta_run_check(system, params)) {
         if (params != NULL && params->status != NULL) {
@@ -664,6 +693,8 @@ ta_result ta_run(ta_system *system, const ta_run_params *params) {
                                             .kind = TA_NOTICE_INPUT_TAKEN,
                                             .actor = runner->slot.actor,
                                             .input = ta_envelope_at(&system->envelopes, runner->slot.envelope)->input,
+                                            .source = (ta_input_source)ta_envelope_at(&system->envelopes,
+                                                                                      runner->slot.envelope)->source,
                                             .event = &ta_envelope_at(&system->envelopes, runner->slot.envelope)->event });
             }
             continue;

@@ -1058,6 +1058,62 @@ static void tah_sched_completed(tah_sched *sched, const tah_turn_params *params,
 }
 
 /*
+ * Whether the kernel waits for this input to end: a message it delivered, an
+ * operator's event, or the bootstrap of an actor it just added (an entry that
+ * is RUNNABLE is waiting for one). Mail, a recycled error, and a macrostep core
+ * began on its own for an idle session (an error for a failed send) are not.
+ */
+static bool tah_sched_awaited(const tah_sched_entry *entry, const ta_run_notice *notice) {
+    switch (notice->source) {
+    case TA_SOURCE_HOST:
+    case TA_SOURCE_TRANSITION:
+        return true;
+    case TA_SOURCE_START:
+        return entry != NULL && entry->state == TAH_SCHED_RUNNABLE;
+    default:
+        return false;
+    }
+}
+
+/*
+ * A session ended an input it took from the run queue that no host message
+ * asked for: mail another session sent, or the error.communication a failed
+ * send became (core ADR 0099 sections 4 and 6). No send() waits for it and
+ * no mailbox entry was delivered for it, so the entry's state stays what it
+ * was; what the host must still learn is that the session finished, that it
+ * ran away, and that a macrostep ended (the recorder's close).
+ */
+static void tah_sched_mail_completed(tah_sched *sched, const tah_turn_params *params, const ta_run_notice *notice) {
+    ta_actor_id actor = notice->actor;
+    tah_sched_entry *entry = tah_sched_lookup(sched, actor);
+    if (notice->status != TA_INPUT_ABANDONED && notice->source == TA_SOURCE_MAIL) {
+        sched->delivered += 1u; /* mail counts as delivered once its receiver ran it, as a posted message does */
+    }
+    if (entry == NULL || notice->status == TA_INPUT_ABANDONED) {
+        return;
+    }
+    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
+    if (notice->status == TA_INPUT_DONE) {
+        if (entry->state != TAH_SCHED_RUNNABLE) {
+            entry->state = TAH_SCHED_IDLE;
+        }
+        tah_sched_bury(sched, entry, TAH_DEAD_DONE);
+        if ((entry->flags & TAH_SCHED_FINISHED) == 0) {
+            entry->flags |= TAH_SCHED_FINISHED;
+            tah_sched_record(sched, params, (tah_turn_record){ .kind = TAH_RECORD_DONE, .actor = actor });
+            tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_FINISHED, .actor = actor });
+        }
+        return;
+    }
+    if (notice->status == TA_INPUT_RUNAWAY) {
+        sched->faults[TAH_FAULT_RUNAWAY] += 1u;
+        tah_sched_record(sched, params, (tah_turn_record){ .kind = TAH_RECORD_FAULT, .actor = actor,
+                                                           .operation = "run", .runaway = true });
+    }
+    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_SETTLED, .actor = actor });
+}
+
+/*
  * An admitted message core could not take (a REFUSED notice): the target went
  * or finished after core admitted it. It is a dead letter, as if
  * ta_actor_deliver() had said so, and the actor, if the table still knows it,
@@ -1111,6 +1167,7 @@ ta_result tah_sched_run(tah_sched *sched, const tah_turn_params *params, tah_run
         sched->run_calls_total += 1u;
         result = ta_run(params->core, &(ta_run_params){ .budget = budget,
                                                         .action_budget = params->budgets.actions,
+                                                        .report_taken = sched->observer.self != NULL,
                                                         .status = status,
                                                         .notices = notices,
                                                         .notice_capacity = capacity,
@@ -1130,6 +1187,13 @@ ta_result tah_sched_run(tah_sched *sched, const tah_turn_params *params, tah_run
                 watch->ignored = watch->ignored || notice->ignored;
             } else if (replayed) {
                 continue; /* the replay settles it itself */
+            } else if (notice->kind == TA_NOTICE_INPUT_TAKEN) {
+                if (notice->source == TA_SOURCE_MAIL || notice->source == TA_SOURCE_ERROR) {
+                    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_MAIL_TAKEN, .actor = notice->actor,
+                                                               .event = notice->event });
+                }
+            } else if (notice->kind == TA_NOTICE_INPUT_COMPLETED && !tah_sched_awaited(entry, notice)) {
+                tah_sched_mail_completed(sched, params, notice);
             } else if (notice->kind == TA_NOTICE_INPUT_COMPLETED) {
                 tah_sched_completed(sched, params, notice);
             } else if (notice->kind == TA_NOTICE_INPUT_REFUSED) {
@@ -1564,6 +1628,18 @@ void tah_sched_turn(tah_sched *sched, const tah_turn_params *params) {
         if (params->stop != NULL && params->stop(params->stop_context)) {
             sched->turn_bounded = false;
             return;
+        }
+    }
+    /* Mail between sessions waits in core, with no entry of its own: what the loop above did not reach (a budget
+     * ended its call, or no actor was runnable) runs here, within the turn's bound on inputs. */
+    while (sched->turn_left > 0 && ta_run_pending(params->core)) {
+        ta_run_status status = TA_RUN_IDLE;
+        ta_result result = tah_sched_run(sched, params, NULL, &status);
+        if (status == TA_RUN_PAUSED) {
+            sched->turn_left = 0; /* a budget stopped an input inside its macrostep: the next turn continues it */
+        }
+        if (result != TA_OK || status == TA_RUN_IDLE || (params->stop != NULL && params->stop(params->stop_context))) {
+            break;
         }
     }
     sched->turn_bounded = false;

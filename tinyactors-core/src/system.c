@@ -3,6 +3,7 @@
 #include "trace.h"
 #include "layout.h"
 #include "interpreter.h"
+#include "mail.h"
 
 #define TA_SCXML_IO_URI "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
 
@@ -617,6 +618,14 @@ void ta_system_tell_definition(ta_system *system, const ta_definition *definitio
     }
     ta_definition_event event = { .kind = kind, .definition = definition->id, .identity = definition->identity };
     system->definition_sink.v->notify(system->definition_sink.self, &event);
+}
+
+ta_result ta_system_set_input_watch(ta_system *system, ta_input_watch watch) {
+    if (system == NULL || (watch.v != NULL && watch.v->mark == NULL)) {
+        return TA_ERR_INVALID;
+    }
+    system->input_watch = watch;
+    return TA_OK;
 }
 
 ta_result ta_system_set_external_event_router(ta_system *system, ta_external_event_router router) {

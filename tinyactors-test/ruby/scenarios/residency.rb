@@ -18,7 +18,7 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
   # steals its address back from a replacement. A later send to the logical
   # address must still resolve to the replacement.
   scenario 'reconstructing a captured incumbent leaves its replacement routed' do
-    router = recording_router(directory: true)
+    directory = memory_directory
     incumbent = spawn :freezer, name: 'x'
     incumbent.deliver 'arm'
     image = capture(incumbent)
@@ -47,10 +47,10 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
                  'route-neutral reconstruction does not replace the current actor'
 
     sender = spawn :messenger, binding: { peer: '#_actor_freezer/x' }
-    submits_before = router.entries('submit').length
+    resolves_before = directory.entries('resolve').length
     sender.deliver 'greet'
-    submits = router.entries('submit').drop(submits_before)
-    assert_equal replacement_id, submits.last.dig(:resolved, :actor),
+    resolves = directory.entries('resolve').drop(resolves_before)
+    assert_equal replacement_id, resolves.last.dig(:out, :actor),
                  'a send to the logical address follows the replacement route'
 
     core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: reconstructed))
@@ -76,19 +76,15 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
   # event or the internal queue, so the macrostep restarts, repeats a
   # microstep, or skips `counted`.
   #
-  # The held `ping` is deliberately not asserted. The relay sends it to
-  # itself, which is a delivery to *this* session and so names a runtime ID
-  # (see ta_send_destination); the router accepted it before the capture, so
-  # it belongs to the host, and ADR 0014 makes fencing inbound events across
-  # a residency change the host's job — not core's, which cannot know what
-  # the host is holding. Hold mode keeps it out of the log so the assertions
-  # below see only what the residency change itself carries. A *delayed*
-  # self-send does survive, because the image carries it and load rebinds it;
+  # The relay sends `ping` to itself while it is paused. That mail is
+  # waiting for its macrostep to end (core ADR 0099 section 4), and the unload
+  # makes it visible, as the session leaves: it names the session, which keeps
+  # its ID across the unload (ADR 0066), so once the session is loaded again
+  # the mail finds it and runs after the finished macrostep. A *delayed*
+  # self-send survives too, because the image carries it and load rebinds it;
   # `named actors: an unloaded actor keeps its address and its timer` covers
-  # that. Do not re-add a release-and-assert tail here: it would be asserting
-  # that this router re-fences, which no contract asks of it.
+  # that.
   scenario 'a macrostep captured while paused continues where it paused' do
-    recording_router(mode: :hold)
     relay = spawn :relay, name: 'r1'
     relay.post('go')
     3.times { assert_equal 'paused', relay.resume(budget: 1) }
@@ -101,7 +97,8 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
     assert_equal 'paused', relay.resume(budget: 1)
     assert_equal 3, relay.data('.n'), 'the next resume runs the next microstep'
     run_system('finish the macrostep')
-    assert_equal ['go', 'n=5', 'counted'], relay.data('.log')
+    assert_equal ['go', 'n=5', 'counted', 'ping'], relay.data('.log'),
+                 'the macrostep ended, and then the mail it had sent itself arrived'
   end
 
   # Catches: restoration that restarts invocations (a duplicate external

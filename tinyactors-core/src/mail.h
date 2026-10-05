@@ -5,6 +5,8 @@
 #include "routing.h"
 #include "trace.h"
 
+typedef struct ta_actor ta_actor;
+
 /*
  * Package mail turns a <send> to a local session into an envelope, and
  * decides what happens to that envelope until its receiver takes it (ADR 0099
@@ -88,7 +90,8 @@
  *	ta_mail_params mail = { .sender = actor->record.id, .destination = destination,
  *	                        .event = event, .trace = trace };
  *	switch (ta_mail_send(system, &mail)) {
- *	case TA_MAIL_QUEUED: break;                     // visible to the receiver when this macrostep ends
+ *	case TA_MAIL_QUEUED: break;                      // visible to the receiver when this macrostep ends
+ *	case TA_MAIL_UNDELIVERABLE: raise_communication_error(); break;
  *	case TA_MAIL_FULL:   raise_execution_error(); break;
  *	case TA_MAIL_ROUTER: offer_to_router(); break;  // transitional
  *	}
@@ -98,9 +101,10 @@
 
 /* ta_mail_status is the answer of ta_mail_send. */
 typedef enum ta_mail_status {
-    TA_MAIL_QUEUED = 0, /* an envelope is on the running input's outgoing list */
-    TA_MAIL_FULL,       /* no envelope: the claim is spent, the pool is at its bound, or the receiver has too many; nothing retained */
-    TA_MAIL_ROUTER      /* not placed here (no input is running, or the receiver is not a resident session); nothing retained */
+    TA_MAIL_QUEUED = 0,   /* an envelope is on the running input's outgoing list */
+    TA_MAIL_UNDELIVERABLE,/* the receiver is a name that a finished session holds: the sender hears error.communication in this macrostep (SCXML 6.2.4); nothing retained */
+    TA_MAIL_FULL,         /* no envelope: the claim is spent, the pool is at its bound, or the receiver has too many; nothing retained */
+    TA_MAIL_ROUTER        /* not placed here (no input is running, or the receiver is not a resident session); nothing retained */
 } ta_mail_status;
 
 /*
@@ -118,10 +122,17 @@ typedef struct ta_mail_params {
 
 /*
  * ta_mail_send makes an envelope for `params->event` and appends it to the
- * running input's outgoing list, if a resident, unfinished session is the
- * destination. It is for use inside a macrostep: it answers TA_MAIL_ROUTER
- * when no input is running. The receiver's `queued` count includes the mail
+ * running input's outgoing list, if a resident session is the destination. It
+ * is for use inside a macrostep: it answers TA_MAIL_ROUTER when no input is
+ * running. The receiver's `queued` count includes the mail
  * from now on, so the session is busy for unload and export (actor.h).
+ *
+ * A named receiver that is a resident session which has finished is
+ * undeliverable now, and known to be: the answer is TA_MAIL_UNDELIVERABLE, and
+ * the caller
+ * raises error.communication in the sender's own queue, in this macrostep, as
+ * SCXML 6.2.4 asks. Mail that waits and finds its receiver gone or finished
+ * when it is taken is recycled instead (ta_mail_recycle).
  *
  * It never allocates. TA_MAIL_FULL says the claim is spent, or the pool has
  * no free envelope or no quota, or the receiver already has UINT16_MAX inputs
@@ -165,3 +176,25 @@ typedef enum ta_recycle_reason {
  * the envelope is freed instead. Never allocates, never fails. O(1).
  */
 void ta_mail_recycle(ta_system *system, uint32_t index, ta_recycle_reason reason);
+
+/*
+ * ta_mail_outgoing_to answers how many envelopes on the running input's
+ * outgoing list are addressed to `actor`, when `actor` is the session running
+ * that input; 0 otherwise. An unload of a session paused inside its macrostep
+ * does not wait for the mail that macrostep sent to itself: the list is made
+ * visible when the session leaves, and that mail finds its receiver gone and
+ * comes back to its sender, who is the same session, so it is freed. It never
+ * allocates. O(outgoing envelopes), and only for the session in the slot.
+ */
+uint32_t ta_mail_outgoing_to(const ta_system *system, ta_actor_id actor);
+
+/*
+ * ta_mail_follow finds the session that holds the receiver's session now,
+ * for an envelope whose target runtime ID names no resident session: a session
+ * keeps its ID across unload and load (ADR 0066), so mail that waited while its
+ * receiver was out and back in follows it to its new runtime ID. On success
+ * the envelope's target is the new ID and the receiver's `queued` count
+ * includes it. Answers NULL when the session is gone or not resident (the
+ * caller recycles the envelope). It never allocates. O(1).
+ */
+ta_actor *ta_mail_follow(ta_system *system, uint32_t index);

@@ -94,6 +94,25 @@ static inline ta_result test_resume(ta_system *system, const test_resume_params 
 }
 
 /*
+ * test_run_input runs at most one input and stops before the next is taken:
+ * ta_run stops between inputs when the caller's array cannot hold another
+ * input's notices (three), so an array of three holds one input's COMPLETED
+ * notice and no more. A test that needs to act between two inputs (mail that a
+ * macrostep sent and nobody has taken yet) uses it. A started macrostep (a
+ * bootstrap) counts as an input. Answers ta_run's result.
+ */
+static inline ta_result test_run_input(ta_system *system) {
+    ta_run_status stopped = TA_RUN_IDLE;
+    ta_run_notice notices[3];
+    uint32_t count = 0;
+    return ta_run(system, &(ta_run_params){ .budget = 1000000u,
+                                            .status = &stopped,
+                                            .notices = notices,
+                                            .notice_capacity = 3,
+                                            .notice_count = &count });
+}
+
+/*
  * test_run_idle runs the system until nothing is runnable or paused, with a
  * budget no test reaches, and answers the last result. A test that only needs
  * "everything admitted has run" calls this.

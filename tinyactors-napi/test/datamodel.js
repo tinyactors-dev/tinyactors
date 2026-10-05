@@ -363,9 +363,10 @@ async function pingPong() {
 }
 
 // A receiver reads _event.origin of a message whose named sender finished
-// and was destroyed before delivery, and replies to it (core ADR 0065): the
-// sender's name has no actor now, so the receiver gets error.communication
-// with the reason and the target (napi ADR 0022), and no dead letter.
+// before delivery, and replies to it (core ADR 0065): a session that has
+// finished is undeliverable, so the receiver gets error.communication (a
+// data-free error: core ADR 0099 section 6 replaces napi ADR 0022's reason
+// and target), and no dead letter.
 async function originOfADestroyedSender() {
   const dead = [];
   const system = createSystem({ parameters: { messageBudget: 1 }, deadLetter: (record) => dead.push(record) });
@@ -373,12 +374,12 @@ async function originOfADestroyedSender() {
     system.define(
       statechart({ family: 'receiver', revision: 'v1' })
         .data('origin', null)
-        .data('failure', null)
+        .data('failure', false)
         .state('idle', (s) => {
           s.on('hello', (t) =>
             t.assign('origin', ({ event }) => event.origin).send('reply', (send) => send.to(({ event }) => event.origin)),
           );
-          s.on('error.communication', (t) => t.assign('failure', ({ event }) => event.data));
+          s.on('error.communication', (t) => t.assign('failure', true));
         }),
     ),
     { name: 'b' },
@@ -400,7 +401,7 @@ async function originOfADestroyedSender() {
   await system.flush();
   assert.equal(system.exists(sender), false, 'the sender finished and was destroyed');
   assert.equal(receiver.inspect().data.origin, '#_actor_sender/a');
-  assert.deepEqual(receiver.inspect().data.failure, { reason: 'not-found', target: { family: 'sender', name: 'a' } });
+  assert.equal(receiver.inspect().data.failure, true, 'the reply to the finished sender was refused');
   assert.equal(dead.find((record) => record.event === 'reply'), undefined, 'the reply is not a dead letter');
   system.close();
 }

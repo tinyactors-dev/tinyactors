@@ -166,7 +166,7 @@ static const ta_datamodel_vtable copying = { .name = STR("copying"), DM_MEMBERS,
 static const ta_datamodel_vtable sharing = { .name = STR("sharing"), DM_MEMBERS };
 
 /* ------------------------------------------------------------------------
- * A router and an invoker that keep what reaches them
+ * An invoker that keeps what reaches it, and the mail a session sends itself
  */
 
 enum { KEPT = 8 };
@@ -176,7 +176,7 @@ typedef struct {
     uint32_t count;
 } kept_values;
 
-static kept_values routed;    /* event data the router was offered */
+static kept_values routed;    /* data of the mail a session sent itself, as its input was taken */
 static kept_values started;   /* an invocation's params, then its data */
 static kept_values forwarded; /* autoforwarded event data */
 
@@ -195,14 +195,6 @@ static void forget(kept_values *kept) {
     }
     *kept = (kept_values){0};
 }
-
-static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
-    (void)self;
-    keep(&routed, &params->delivery->event.data);
-    return TA_EXTERNAL_EVENT_ACCEPTED;
-}
-
-static const ta_external_event_router_vtable router_vtable = { .submit = route };
 
 static ta_op_status invoker_start(void *self, const ta_invoker_start_params *params) {
     (void)self;
@@ -233,8 +225,6 @@ static const ta_invoker_vtable invoker_vtable = { .start = invoker_start, .cance
 static ta_system *create(void) {
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
-    CHECK(ta_system_set_external_event_router(system, (ta_external_event_router){ .v = &router_vtable }) ==
-          TA_OK);
     ta_atom type = 0;
     CHECK(ta_system_intern_atom(system, STR("svc"), &type) == TA_OK);
     CHECK(ta_system_register_invoker(system, type, (ta_invoker){ .v = &invoker_vtable }) == TA_OK);
@@ -254,9 +244,38 @@ static ta_actor_id start(ta_system *system, const ta_scxml_spec *spec, const ta_
     return actor;
 }
 
+/*
+ * Runs the system until nothing is runnable. The mail a chart sends itself
+ * (<send event="out">) is an envelope that waits for its macrostep to end and
+ * is then taken like any input; its data is kept as it is taken, which is
+ * where a test sees what the receiver got. Answers ta_run's first failure.
+ */
 static ta_result resume(ta_system *system, ta_actor_id actor) {
-    test_run_status status = TEST_RUN_ERROR;
-    return test_resume(system, &(test_resume_params){ .actor = actor, .budget = 1000, .status = &status });
+    (void)actor;
+    ta_atom atom = 0;
+    ta_event_name_id out = 0;
+    CHECK(ta_system_intern_atom(system, STR("out"), &atom) == TA_OK);
+    CHECK(ta_event_name_intern(system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &out) == TA_OK);
+    ta_run_status stopped = TA_RUN_MORE;
+    while (stopped != TA_RUN_IDLE) {
+        ta_run_notice notices[16];
+        uint32_t count = 0;
+        ta_result result = ta_run(system, &(ta_run_params){ .budget = 1000,
+                                                            .report_taken = true,
+                                                            .status = &stopped,
+                                                            .notices = notices,
+                                                            .notice_capacity = 16,
+                                                            .notice_count = &count });
+        for (uint32_t index = 0; index < count; index += 1u) {
+            if (notices[index].kind == TA_NOTICE_INPUT_TAKEN && notices[index].event->name == out) {
+                keep(&routed, &notices[index].event->data);
+            }
+        }
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    return TA_OK;
 }
 
 static bool in_state(ta_system *system, ta_actor_id actor, const char *id) {

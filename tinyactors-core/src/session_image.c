@@ -2,6 +2,7 @@
 #include "byte_io.h"
 #include "interpreter.h"
 #include "timer.h"
+#include "mail.h"
 
 /*
  * A session image owns one arena, and every core-owned byte it keeps lives
@@ -831,8 +832,12 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     if (actor->record.self.kind != TA_ACTOR_REF_NAMED) {
         return TA_ERR_INVALID;
     }
-    /* Inputs admitted for it would be refused when they came up (ADR 0099 section 5): the host waits. */
-    if (actor->queued != 0) {
+    /*
+     * Inputs admitted for it, and mail waiting for it, would be refused when
+     * they came up (ADR 0099 section 5): the host waits. The mail its own
+     * paused macrostep sent itself is not waited for: it is not visible yet.
+     */
+    if (actor->queued != ta_mail_outgoing_to(system, actor->record.id)) {
         return TA_ERR_BUSY;
     }
     const ta_session_image *image = params->image;
@@ -883,6 +888,7 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     ta_session_park(&system->sessions, parked, address); /* retains the address past the actor's own reference */
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_UNLOADED, NULL);
+    ta_run_unloaded(system, actor);
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
     return TA_OK;

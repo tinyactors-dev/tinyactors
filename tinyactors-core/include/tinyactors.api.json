@@ -11238,6 +11238,47 @@
         }
       }
     },
+    "ta_input_source": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SOURCE_HOST",
+          "value": 0,
+          "symbol": "host"
+        },
+        {
+          "name": "TA_SOURCE_TRANSITION",
+          "value": 1,
+          "symbol": "transition"
+        },
+        {
+          "name": "TA_SOURCE_MAIL",
+          "value": 2,
+          "symbol": "mail"
+        },
+        {
+          "name": "TA_SOURCE_ERROR",
+          "value": 3,
+          "symbol": "error"
+        },
+        {
+          "name": "TA_SOURCE_START",
+          "value": 4,
+          "symbol": "start"
+        }
+      ],
+      "doc": "Where an input came from (ADR 0099 sections 1 and 7), so a host settles only what it asked for and records what it must. HOST: ta_actor_deliver(). TRANSITION: ta_actor_transition(), an operator's event. MAIL: another session's <send >, queued in core. ERROR: the data-free error.communication a session hears when its mail could not be delivered (ADR 0099 section 6). START: a macrostep that began with no event to take: a bootstrap, a restored macrostep, an error raised for an idle session.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
     "ta_input_status": {
       "kind": "enum",
       "constants": [
@@ -11271,6 +11312,120 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
+        }
+      }
+    },
+    "ta_input_watch": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_input_watch_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in",
+          "optional": true,
+          "doc": "Null uninstalls the watch."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_input_watch_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "A host's policy for tracing the inputs of the sessions it watches. Mail between sessions never passes through the host (ADR 0099 section 4), so the host cannot mark the trace parent of an input it did not admit. Core calls `mark` instead, as it takes an input that came from another session (mail, or the error.communication a failed send became): `trace` is the parent the input's macrostep will run under, and `mark` may change it, for example to start a sampled trace for a watched session (TA_TRACE_DETAIL_WATCHED). It is called inside ta_run() at the point where an input is taken: it must not call a function that changes the system, and it must be quick. Inputs the host admitted itself (ta_actor_deliver()) are the host's to mark before it admits them, and are not offered.",
+      "fields": [
+        {
+          "name": "mark",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "builtin": "void"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "actor",
+                    "type": {
+                      "type": "ta_actor_id"
+                    }
+                  },
+                  {
+                    "name": "trace",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_trace_parent"
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "inout"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "mark": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "mark": 0
+          }
         }
       }
     },
@@ -13993,7 +14148,14 @@
           "type": {
             "builtin": "uint64_t"
           },
-          "doc": "The token ta_actor_deliver() or ta_actor_transition() gave, or 0."
+          "doc": "The token ta_actor_deliver() or ta_actor_transition() gave, or 0 for every other source."
+        },
+        {
+          "name": "source",
+          "type": {
+            "type": "ta_input_source"
+          },
+          "doc": "COMPLETED, TAKEN, REFUSED: where the input came from."
         },
         {
           "name": "status",
@@ -14038,23 +14200,25 @@
             "kind": 0,
             "actor": 8,
             "input": 16,
-            "status": 24,
-            "ignored": 28,
-            "reason": 32,
+            "source": 24,
+            "status": 28,
+            "ignored": 32,
+            "reason": 36,
             "event": 40
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 40,
+          "size": 48,
           "align": 8,
           "offsets": {
             "kind": 0,
             "actor": 8,
             "input": 16,
-            "status": 24,
-            "ignored": 28,
-            "reason": 32,
-            "event": 36
+            "source": 24,
+            "status": 28,
+            "ignored": 32,
+            "reason": 36,
+            "event": 40
           }
         }
       }
@@ -21222,8 +21386,33 @@
       ]
     },
     {
+      "name": "ta_run_pending",
+      "doc": "Whether ta_run() has something to do: an input waits on the run queue (mail a macrostep sent included), a session has begun a macrostep that no input is running, an input is paused inside a macrostep, or an abandoned input waits to be reported. A host calls it to decide whether it is quiet and whether to call ta_run() again. It never allocates and costs O(1).",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "bool"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
       "name": "ta_actor_abandon",
-      "doc": "Abandons the actor's macrostep, one that may never end (ADR 0082): its continuation, its internal queue and its external event are discarded, and the actor is idle with the configuration after its last completed microstep. What the macrostep already did stays done: its sends, its invocations, its data. An ABANDONED record, then MACROSTEP_END, is written. If the actor's input was the running one, the next ta_run() reports it as COMPLETED with status ABANDONED. The results: - TA_OK: abandoned. - TA_ERR_BUSY: the actor is paused or stopped inside a microstep (`microstep_in_progress`), or has not completed its bootstrap's microstep; call ta_run() with a budget of 1 and no action budget to finish that microstep, then abandon. - TA_ERR_INVALID: no macrostep is in progress; there is nothing to abandon. - TA_ERR_DONE: the actor has reached a top-level final state. - TA_ERR_NOT_FOUND: no resident actor has this ID. - TA_ERR_NOMEM: no scratch memory to write the records; nothing changed.",
+      "doc": "Abandons the actor's macrostep, one that may never end (ADR 0082): its continuation, its internal queue and its external event are discarded, and the actor is idle with the configuration after its last completed microstep. What the macrostep already did stays done: its invocations, its data; the mail it sent is not (ADR 0099 section 4): it was waiting for the macrostep to end, and is freed unseen. An ABANDONED record, then MACROSTEP_END, is written. If the actor's input was the running one, the next ta_run() reports it as COMPLETED with status ABANDONED. The results: - TA_OK: abandoned. - TA_ERR_BUSY: the actor is paused or stopped inside a microstep (`microstep_in_progress`), or has not completed its bootstrap's microstep; call ta_run() with a budget of 1 and no action budget to finish that microstep, then abandon. - TA_ERR_INVALID: no macrostep is in progress; there is nothing to abandon. - TA_ERR_DONE: the actor has reached a top-level final state. - TA_ERR_NOT_FOUND: no resident actor has this ID. - TA_ERR_NOMEM: no scratch memory to write the records; nothing changed.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -22699,8 +22888,38 @@
       ]
     },
     {
+      "name": "ta_system_set_input_watch",
+      "doc": "Installs the scheduler for normalized external SCXML-session events.\n\nInstalls, replaces or removes (a null `v`) the host's watch of inputs from other sessions. TA_ERR_INVALID for a null system or a watch with no `mark`. It never allocates and may be called at any time but inside ta_run().",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "watch",
+          "type": {
+            "type": "ta_input_watch"
+          }
+        }
+      ]
+    },
+    {
       "name": "ta_system_set_external_event_router",
-      "doc": "Installs the scheduler for normalized external SCXML-session events.",
       "public": true,
       "static_inline": false,
       "implemented": true,

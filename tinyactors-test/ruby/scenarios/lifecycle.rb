@@ -88,15 +88,12 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
   # admitted the send while the actor was paused (ADR 0099) and discards it
   # with a REFUSED notice when the actor is destroyed.
   scenario 'destroying a paused actor releases it and the input queued behind it' do
-    router = recording_router
     relay = spawn :relay
     bystander = spawn :relay
     relay.post('go')
     3.times { assert_equal 'paused', relay.resume(budget: 1) }
     relay.destroy
 
-    submits = router.entries('submit').map { |entry| entry.values_at(:status, :result) }
-    assert_equal [%w[accepted ok]], submits
     run_system('discard the queued input')
     assert_equal [bystander.handle], rpc('system.actors', system: system_handle)
     bystander.deliver 'go'

@@ -166,8 +166,9 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
 
     assert_equal ['go', 'n=5', 'counted'], relay_log.first(3)
     run_system('the inputs queued behind the macrostep')
-    assert_equal ['go', 'n=5', 'counted', 'ping', 'extra'], relay.data('.log'),
-                 'the inputs ran in the order they were admitted, after the macrostep'
+    assert_equal ['go', 'n=5', 'counted', 'extra', 'ping'], relay.data('.log'),
+                 'the event admitted during the macrostep ran before the mail the macrostep sent, which became ' \
+                 'visible when it ended (core ADR 0099 section 4)'
   end
 
   # Catches: inspection that loses (or misreports) the macrostep's external
@@ -191,12 +192,9 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
   # Catches: an external self-send delivered into the sender's own
   # macrostep, ahead of the internal event raised after it (invariant 6).
   scenario 'an external self-send waits until the internal events are done' do
-    router = recording_router
     relay = spawn
     relay.deliver 'go'
     assert_equal ['go', 'n=5', 'counted', 'ping'], relay.data('.log')
-    assert_equal [%w[accepted ok]],
-                 router.entries('submit').map { |entry| entry.values_at(:status, :result) }
   end
 
   # Catches: interpreter state that lives on the C stack or in scratch

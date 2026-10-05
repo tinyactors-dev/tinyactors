@@ -124,9 +124,11 @@ module HostedRelay
 end
 
 module HostedOverflow
-  # hosted_ping/a sends `ping` to hosted_pong/p while the queue is full
-  # (maxQueuedMessages 1, taken by the application's `noise` for p): the
-  # router accepts it into p's overflow (kernel ADR 0003). Both families
+  # hosted_ping/a sends `ping` to hosted_pong/p while p's kernel queue is
+  # full (maxQueuedMessages 1, taken by the application's `noise` for p). Mail
+  # between actors waits in core (ADR 0099 section 4), outside the kernel's
+  # mailboxes and their limits, so the full queue does not stand in its way:
+  # nothing overflows (kernel ADR 0003 no longer applies to it). Both families
   # are recorded. Answers [hosted, ping, pong].
   def self.start(context, incarnation: 1)
     hosted = context.hosted_system(incarnation: incarnation, max_queued_messages: 1)
@@ -140,8 +142,7 @@ module HostedOverflow
     context.assert_equal 'err_busy', context.hosted_post(hosted, pong, 'noise'), "the application's mail is refused"
     context.hosted_run(hosted, limit: 1) # a sends `ping`; p takes `noise`
     boxes = context.hosted_mailboxes(hosted, pong)
-    context.assert_equal 1, boxes[:overflow]
-    context.assert_equal %w[ping], boxes[:mailboxes].first[:events]
+    context.assert_equal 0, boxes[:overflow], 'mail between actors never overflows a kernel queue'
     [hosted, ping, pong]
   end
 end
@@ -208,35 +209,35 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: a full queue that refuses mail between actors (kernel ADR
-  # 0003); overflow that is delivered before there is room, or never.
-  scenario 'mail between actors waits in the overflow of a full queue, and is delivered once' do
+  # Catches: mail between actors held back by a full kernel queue. Kernel ADR
+  # 0003 held it as overflow until there was room; since core ADR 0099 it waits
+  # in core, outside the kernel's mailboxes and their limits, and runs at once.
+  scenario 'a full kernel queue does not hold back mail between actors' do
     hosted, _ping, pong = HostedOverflow.start(self)
-    assert_equal [:waiting], hosted_states(hosted, pong)
-    assert hosted_run(hosted)[:quiet]
     assert_equal [:pinged], hosted_states(hosted, pong)
+    assert hosted_run(hosted)[:quiet]
     boxes = hosted_mailboxes(hosted, pong)
     assert_equal [0, 0], [boxes[:queued], boxes[:overflow]]
     assert_equal 0, close_hosted(hosted)
   end
 
-  # What a crash costs is explicit (kernel ADR 0006 section 5): mail p had
-  # not taken is in no journal, and a's rebuild does not send it again, so
-  # delivery is at most once where nothing retries. Catches: a rebuild that
-  # resends what a replayed macrostep sent.
-  scenario 'mail in the overflow at a crash is lost unless its sender retries' do
+  # What a crash costs is explicit (kernel ADR 0006 section 5): where nothing
+  # retries, delivery is at most once. Catches: a rebuild that resends what a
+  # replayed macrostep sent, which would journal a second `ping` for p.
+  scenario 'a rebuild does not send again the mail its replayed macrostep sent' do
     hosted, = HostedOverflow.start(self)
     store = hosted_store(hosted)
     close_hosted(hosted) # a crash: nothing more is recorded
     assert_equal %w[go], store.journals['hosted_ping/a'].map { |entry| entry[:event][:name] }
-    assert_equal [], store.journals['hosted_pong/p'], "p's `noise` was delivered, but its macrostep had not ended"
+    assert_equal %w[ping], store.journals['hosted_pong/p'].map { |entry| entry[:event][:name] }
 
     again = hosted_system(incarnation: 2)
     ping = hosted_restore(again, hosted_define(again, :hosted_ping), 'hosted_ping', 'a', store.journals['hosted_ping/a'])
     pong = hosted_restore(again, hosted_define(again, :hosted_pong), 'hosted_pong', 'p', store.journals['hosted_pong/p'])
     hosted_run(again)
     assert_equal [:sent], hosted_states(again, ping)
-    assert_equal [:waiting], hosted_states(again, pong), 'the ping is not sent again'
+    assert_equal [:pinged], hosted_states(again, pong), 'p was rebuilt from its journal'
+    assert_equal [], hosted_store(again).journals.values.flatten, 'the ping is not sent again'
     assert_equal 0, close_hosted(again)
   end
 

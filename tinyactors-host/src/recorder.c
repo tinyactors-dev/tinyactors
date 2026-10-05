@@ -287,6 +287,29 @@ static void tah_recorder_ended(tah_system *system, ta_actor_id actor) {
     }
 }
 
+/*
+ * Core took the event of mail from another session (or of a recycled
+ * error): its macrostep is open now, and ends with the ENDED note of the same
+ * actor. Mail never passes through the scheduler's offer, so the event is
+ * read from the notice, which borrows it until the next ta_run().
+ */
+static void tah_recorder_mail_taken(tah_system *system, const tah_sched_note *note) {
+    tah_recorder *recorder = &system->recorder;
+    uint64_t session = 0;
+    ta_address *address = tah_recorder_address_of(system, note->actor, &session);
+    if (address == NULL || note->event == NULL) {
+        return;
+    }
+    tah_recorded recorded = { .actor = note->actor, .address = address, .at = ta_system_time(system->core),
+                              .session = session };
+    ta_event_retain(note->event, &recorded.event);
+    ta_address_retain(address);
+    if (tah_vec_push(&recorder->open, &recorded) != TA_OK) {
+        recorder->lost += 1u;
+        tah_recorded_release(&recorded);
+    }
+}
+
 void tah_recorder_note(tah_system *system, const tah_sched_note *note) {
     tah_recorder *recorder = &system->recorder;
     if (!recorder->enabled) {
@@ -300,6 +323,9 @@ void tah_recorder_note(tah_system *system, const tah_sched_note *note) {
     case TAH_NOTE_DELIVERED:
     case TAH_NOTE_REPORTED:
         tah_recorder_taken(recorder);
+        return;
+    case TAH_NOTE_MAIL_TAKEN:
+        tah_recorder_mail_taken(system, note);
         return;
     case TAH_NOTE_UNDELIVERED:
         if (recorder->offering) {

@@ -1,5 +1,6 @@
 #include "interpreter.h"
 #include "layout.h"
+#include "mail.h"
 
 /*
  * SCXML execution following the W3C algorithm (Appendix D). The actor's
@@ -1395,6 +1396,7 @@ ta_result ta_send_id_format(const ta_system *system, const ta_send_id_format_par
 }
 
 typedef struct {
+    ta_actor_id sender;
     ta_actor_ref origin;
     ta_invoke_id invoke_id;
     ta_actor_ref destination;
@@ -1404,12 +1406,19 @@ typedef struct {
     ta_fault *fault;
     ta_trace_parent trace;
     ta_time due;
+    /* True inside the sender's macrostep: mail takes an envelope from the running input's claim (mail.h). */
+    bool in_run;
+    /* Set when mail found no envelope for it (TA_MAIL_FULL): the send failed for want of quota, not of a route. */
+    bool *refused;
 } ta_submit_params;
 
+/*
+ * Hands an event to another session. Inside the sender's macrostep, mail to a
+ * resident session becomes an envelope on the input's outgoing list (mail.h);
+ * every other destination, and every send outside a macrostep, still goes to
+ * the external event router until the rest of unit 4.2c replaces it.
+ */
 static ta_external_event_submit_status ta_submit_external(ta_system *system, const ta_submit_params *params) {
-    if (system->external_events.v == NULL) {
-        return TA_EXTERNAL_EVENT_ERROR;
-    }
     /* A session ID that is not a resident runtime ID resolves here (ADR 0066). */
     ta_actor_ref destination;
     bool routed_by_name = ta_session_route(system, &params->destination, &destination);
@@ -1426,12 +1435,28 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
         .trace = params->trace,
         .due = params->due,
     };
-    ta_external_event_submit_status status =
-        system->external_events.v->submit(system->external_events.self,
-                                          &(ta_external_event_submit_params){
-                                              .delivery = &delivery,
-                                              .fault = params->fault,
-                                          });
+    ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
+    /* Outside a macrostep (a send that fell due, an activation send) the router still takes the send. */
+    ta_mail_status mailed = !params->in_run ? TA_MAIL_ROUTER
+                                            : ta_mail_send(system, &(ta_mail_params){ .sender = params->sender,
+                                                                                      .destination = destination,
+                                                                                      .event = delivery.event,
+                                                                                      .trace = params->trace });
+    if (mailed == TA_MAIL_QUEUED) {
+        status = TA_EXTERNAL_EVENT_ACCEPTED;
+    } else if (mailed == TA_MAIL_UNDELIVERABLE) {
+        status = TA_EXTERNAL_EVENT_ERROR; /* the sender hears error.communication, with no data (ADR 0099 section 6) */
+    } else if (mailed == TA_MAIL_FULL) {
+        if (params->refused != NULL) {
+            *params->refused = true;
+        }
+    } else if (system->external_events.v != NULL) {
+        status = system->external_events.v->submit(system->external_events.self,
+                                                   &(ta_external_event_submit_params){
+                                                       .delivery = &delivery,
+                                                       .fault = params->fault,
+                                                   });
+    }
     if (routed_by_name) {
         ta_actor_ref_release(&destination);
     }
@@ -1515,6 +1540,7 @@ void ta_interpreter_literal_content(const ta_definition *definition, ta_content_
 ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, bool in_run) {
     ta_actor *sender = ta_actor_lookup(system, send->owner);
     ta_fault fault = {0};
+    bool refused = false;
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
     /*
      * A submitted send was already sent: it is logically in the receiver's
@@ -1532,6 +1558,7 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
         status = TA_EXTERNAL_EVENT_ACCEPTED;
     } else if (ta_system_is_scxml_io(system, send->io_type)) {
         status = ta_submit_external(system, &(ta_submit_params){
+                                                .sender = send->owner,
                                                 .origin = origin,
                                                 .invoke_id = invoke_id,
                                                 .destination = send->destination,
@@ -1541,6 +1568,8 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
                                                 .fault = &fault,
                                                 .trace = send->trace,
                                                 .due = send->due,
+                                                .in_run = in_run && sender != NULL,
+                                                .refused = &refused,
                                             });
     } else {
         const ta_io *io = ta_system_io_of(system, send->io_type);
@@ -1591,7 +1620,15 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
         ta_value_release(&fault.data);
         return status;
     }
-    if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL) {
+    if (refused && in_run && sender != NULL) {
+        /* No envelope was left in the input's claim or in the pool: a quota refusal like maxPendingSends, heard as
+         * an execution error in the sender's own queue (ADR 0099 section 3). */
+        static const char text[] = "no envelope is left for this mail (macrostepReserve, poolEnvelopes)";
+        ta_fault refusal = { .code = TA_ERR_NOMEM, .message = { .ptr = text, .len = (uint32_t)(sizeof text - 1u) } };
+        system->counters.quota_refusals += 1u;
+        (void)ta_raise_error(system, sender, &(ta_error_params){ .name = TA_EVENT_NAME_ERROR_EXECUTION,
+                                                                 .fault = &refusal });
+    } else if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL) {
         (void)ta_communication_error(system, sender,
                                      &(ta_error_params){ .send_id = send->send_id, .fault = &fault,
                                                          .trace = in_run ? NULL : &send->trace });

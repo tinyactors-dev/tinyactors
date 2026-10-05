@@ -16,6 +16,17 @@ static void tah_system_release_record(tah_system *system) {
                                                                     .alignment = _Alignof(tah_system) });
 }
 
+/*
+ * Core offers the trace parent of mail it runs for the sessions the host
+ * watches (watch.h): the same mark a delivery gets before it is admitted.
+ */
+static void tah_system_mark_input(void *self, ta_actor_id actor, ta_trace_parent *trace) {
+    tah_system *system = self;
+    tah_trace_watch_mark(&system->trace_watch, system->core, actor, trace);
+}
+
+static const ta_input_watch_vtable tah_system_input_watch = { .mark = tah_system_mark_input };
+
 ta_result tah_system_create(const tah_system_create_params *params, tah_system **out) {
     if (params == NULL || out == NULL) {
         return TA_ERR_INVALID;
@@ -88,6 +99,7 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
     }
     (void)ta_system_set_actor_directory(system->core, tah_directory_adapter(&system->directory));
     (void)ta_system_set_external_event_router(system->core, tah_router_adapter(system));
+    (void)ta_system_set_input_watch(system->core, (ta_input_watch){ .self = system, .v = &tah_system_input_watch });
     result = tah_scxml_invoker_register(system);
     if (result != TA_OK) {
         ta_system_destroy(system->core);
@@ -111,6 +123,7 @@ void tah_system_close(tah_system *system) {
      * envelope, an address in the directory) goes back first (ADR 0012).
      */
     (void)ta_system_set_external_event_router(system->core, (ta_external_event_router){0});
+    (void)ta_system_set_input_watch(system->core, (ta_input_watch){0});
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     /* A hook may close the system while the turn's records still own data. */
     tah_sched_release_records(&system->sched);
@@ -280,7 +293,8 @@ static bool tah_system_due_now(const tah_system *system) {
 }
 
 bool tah_system_quiet(const tah_system *system) {
-    return tah_sched_quiet(&system->sched) && system->effects.count == 0 &&
+    return tah_sched_quiet(&system->sched) && (system->core == NULL || !ta_run_pending(system->core)) &&
+           system->effects.count == 0 &&
            system->recorder.records.count == 0 && system->recorder.touched.count == 0 &&
            system->quarantine_reports.count == 0 &&
            tah_loads_pending_requests(&system->loads) == 0 &&
