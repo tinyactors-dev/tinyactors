@@ -3,8 +3,8 @@
  * circular array (src/fifo.h) that holds the internal queue.
  *
  * The test includes the amalgamation so it reaches the private unit; it
- * uses the C library, the core does not. Memory comes from a counting
- * allocator local to this test, which can fail after a number of
+ * uses the C library, the core does not. Memory comes from the test
+ * allocator (test_allocator.h), which can fail after a number of
  * allocations and records the size of every request.
  *
  * Claims proven here, in order:
@@ -47,6 +47,7 @@
  *     agrees with a plain array model at every step.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -63,72 +64,6 @@ static int failures = 0;
         } \
     } while (0)
 
-/* ------------------------------------------------------------------------
- * An allocator that counts, can fail, and refuses any request above
- * `largest` bytes (when set) without allocating it.
- */
-
-#define MAX_BLOCKS 64u
-
-typedef struct {
-    void *ptrs[MAX_BLOCKS];
-    size_t sizes[MAX_BLOCKS];
-    uint32_t live;
-    uint32_t attempts;
-    /* The attempt, counting from 1, from which every allocation fails; 0
-     * never fails. */
-    uint32_t fail_from;
-    size_t largest;
-    size_t last_size;
-    size_t last_alignment;
-} counting_allocator;
-
-static void *counting_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *heap = self;
-    heap->attempts += 1u;
-    heap->last_size = size;
-    heap->last_alignment = alignment;
-    if ((heap->fail_from != 0 && heap->attempts >= heap->fail_from) || heap->live == MAX_BLOCKS ||
-        (heap->largest != 0 && size > heap->largest)) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size_t rounded = (size + alignment - 1u) / alignment * alignment;
-    void *ptr = aligned_alloc(alignment, rounded);
-    if (ptr != NULL) {
-        memset(ptr, 0xA5, rounded);
-        heap->sizes[heap->live] = size;
-        heap->ptrs[heap->live++] = ptr;
-    }
-    return ptr;
-}
-
-static void counting_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *heap = self;
-    for (uint32_t index = 0; index < heap->live; index += 1u) {
-        if (heap->ptrs[index] == params->ptr) {
-            if (heap->sizes[index] != params->size) {
-                fprintf(stderr, "free of %zu bytes, allocated as %zu\n", params->size, heap->sizes[index]);
-                failures += 1;
-            }
-            heap->live -= 1u;
-            heap->ptrs[index] = heap->ptrs[heap->live];
-            heap->sizes[index] = heap->sizes[heap->live];
-            free(params->ptr);
-            return;
-        }
-    }
-    fprintf(stderr, "free of %p, which this allocator never handed out\n", params->ptr);
-    failures += 1;
-}
-
-static const ta_allocator_vtable counting_vtable = { .alloc = counting_alloc, .free = counting_free };
-
-static ta_allocator allocator_of(counting_allocator *heap) {
-    return (ta_allocator){ .self = heap, .v = &counting_vtable };
-}
 
 /* Entries of 16 bytes aligned to 8. */
 typedef struct {
@@ -137,9 +72,9 @@ typedef struct {
     uint32_t spare;
 } entry;
 
-static ta_fifo_params entry_params(counting_allocator *heap) {
+static ta_fifo_params entry_params(test_allocator *heap) {
     return (ta_fifo_params){
-        .allocator = allocator_of(heap),
+        .allocator = test_allocator_of(heap),
         .entry_size = sizeof(entry),
         .entry_alignment = _Alignof(entry),
     };
@@ -167,7 +102,7 @@ static bool pops(ta_fifo *fifo, uint32_t n) {
     return ta_fifo_pop(fifo, &value) == TA_OK && is(&value, n);
 }
 
-static ta_fifo new_fifo(counting_allocator *heap, uint32_t capacity) {
+static ta_fifo new_fifo(test_allocator *heap, uint32_t capacity) {
     ta_fifo fifo;
     ta_fifo_params params = entry_params(heap);
     CHECK(ta_fifo_init(&fifo, &params) == TA_OK);
@@ -203,7 +138,7 @@ static bool unchanged(const ta_fifo *fifo, const snapshot *shot) {
 
 /* 1 */
 static void test_init(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo_params good = entry_params(&heap);
     ta_fifo_params bad[] = { good, good, good, good };
     bad[0].entry_size = 0;
@@ -230,11 +165,12 @@ static void test_init(void) {
     CHECK(ta_fifo_count(&fifo) == 0 && fifo.entries == NULL);
     ta_fifo_destroy(&fifo);
     CHECK(heap.attempts == 0 && heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 2 */
 static void test_reserve(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo;
     ta_fifo_params params = entry_params(&heap);
     CHECK(ta_fifo_init(&fifo, &params) == TA_OK);
@@ -260,11 +196,12 @@ static void test_reserve(void) {
 
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 3 */
 static void test_order(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 8);
 
     /* One entry. */
@@ -297,11 +234,12 @@ static void test_order(void) {
     CHECK(ta_fifo_count(&fifo) == 0);
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 4 */
 static void test_wrap(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 5);
     for (uint32_t n = 0; n < 4; n += 1u) {
         CHECK(push(&fifo, n) == TA_OK);
@@ -330,11 +268,12 @@ static void test_wrap(void) {
     CHECK(ta_fifo_count(&fifo) == 0);
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 5 */
 static void test_full(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 4);
     for (uint32_t n = 0; n < 4; n += 1u) {
         CHECK(push(&fifo, n) == TA_OK);
@@ -368,11 +307,12 @@ static void test_full(void) {
     }
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 6 */
 static void test_empty(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 3);
     snapshot shot;
     take_snapshot(&fifo, &shot);
@@ -396,11 +336,12 @@ static void test_empty(void) {
     CHECK(unchanged(&fifo, &shot));
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 7 */
 static void test_reserve_moves_in_order(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 4);
     for (uint32_t n = 0; n < 4; n += 1u) {
         CHECK(push(&fifo, n) == TA_OK);
@@ -438,11 +379,12 @@ static void test_reserve_moves_in_order(void) {
     CHECK(fifo.head == 0 && ta_fifo_count(&fifo) == 0 && ta_fifo_capacity(&fifo) == 9);
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 8 */
 static void test_failed_reserve(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 4);
     for (uint32_t n = 0; n < 4; n += 1u) {
         CHECK(push(&fifo, n) == TA_OK);
@@ -451,21 +393,21 @@ static void test_failed_reserve(void) {
 
     snapshot shot;
     take_snapshot(&fifo, &shot);
-    heap.fail_from = heap.attempts + 1u;
+    heap.policy.fail_from = heap.attempts + 1u;
     CHECK(ta_fifo_reserve(&fifo, 10) == TA_ERR_NOMEM);
     CHECK(unchanged(&fifo, &shot));
     CHECK(heap.live == 1);
-    heap.fail_from = 0;
+    heap.policy.fail_from = 0;
 
     /* The largest capacity asks for its whole size, and is refused. */
-    heap.largest = 1024;
+    heap.policy.largest = 1024;
     uint32_t attempts = heap.attempts;
     CHECK(ta_fifo_reserve(&fifo, UINT32_MAX) == TA_ERR_NOMEM);
     CHECK(heap.attempts == attempts + 1u);
     CHECK(heap.last_size == (size_t)UINT32_MAX * sizeof(entry));
     CHECK(unchanged(&fifo, &shot));
     CHECK(heap.live == 1);
-    heap.largest = 0;
+    heap.policy.largest = 0;
 
     for (uint32_t n = 1; n < 5; n += 1u) {
         CHECK(pops(&fifo, n));
@@ -476,7 +418,7 @@ static void test_failed_reserve(void) {
     /* A size that does not fit in size_t is refused before the allocator
      * is asked. */
     ta_fifo_params params = {
-        .allocator = allocator_of(&heap),
+        .allocator = test_allocator_of(&heap),
         .entry_size = SIZE_MAX / 2u + 1u,
         .entry_alignment = 1,
     };
@@ -488,11 +430,12 @@ static void test_failed_reserve(void) {
     CHECK(unchanged(&fifo, &shot));
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 9 */
 static void test_clear(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 4);
     for (uint32_t n = 0; n < 4; n += 1u) {
         CHECK(push(&fifo, n) == TA_OK);
@@ -521,14 +464,15 @@ static void test_clear(void) {
     CHECK(ta_fifo_count(&fifo) == 0);
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 10 */
 static void test_never_allocates(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 3);
     uint32_t attempts = heap.attempts;
-    heap.fail_from = attempts + 1u;
+    heap.policy.fail_from = attempts + 1u;
     for (uint32_t round = 0; round < 10; round += 1u) {
         CHECK(push(&fifo, round) == TA_OK);
         CHECK(push(&fifo, round + 100u) == TA_OK);
@@ -546,14 +490,15 @@ static void test_never_allocates(void) {
         CHECK(ta_fifo_pop(&fifo, NULL) == TA_ERR_NOT_FOUND);
     }
     CHECK(heap.attempts == attempts);
-    heap.fail_from = 0;
+    heap.policy.fail_from = 0;
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 11 */
 static void test_destroy(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 6);
     CHECK(push(&fifo, 1) == TA_OK && push(&fifo, 2) == TA_OK);
     CHECK(heap.live == 1);
@@ -570,6 +515,7 @@ static void test_destroy(void) {
     CHECK(push(&fifo, 4) == TA_OK && pops(&fifo, 4));
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 12 */
@@ -583,7 +529,7 @@ static uint32_t random_below(uint32_t bound) {
 }
 
 static void test_random(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_fifo fifo = new_fifo(&heap, 3);
     uint32_t model[64];
     uint32_t length = 0;
@@ -634,6 +580,7 @@ static void test_random(void) {
     CHECK(heap.live == 1);
     ta_fifo_destroy(&fifo);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 int main(void) {

@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "tinyactors.h"
+#include "test_allocator.h"
 
 static uint32_t failures;
 
@@ -19,19 +20,6 @@ static void check(bool condition, const char *what) {
         failures += 1;
     }
 }
-
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    (void)alignment;
-    return malloc(size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable ALLOCATOR_VTABLE = { .alloc = test_alloc, .free = test_free };
 
 static ta_str str(const char *text) {
     return (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) };
@@ -64,7 +52,8 @@ static void round_trips(const ta_system *system, const char *text) {
 
 int main(void) {
     ta_system *system = NULL;
-    ta_allocator allocator = { .self = NULL, .v = &ALLOCATOR_VTABLE };
+    test_allocator heap = {0};
+    ta_allocator allocator = test_allocator_of(&heap);
     if (ta_system_create(&(ta_system_config){ .allocator = allocator, .initial_time = 0 }, &system) != TA_OK) {
         printf("send id test: could not create a system\n");
         return 1;
@@ -158,6 +147,7 @@ int main(void) {
     check(ta_system_intern_invoke_id(system, str(""), &same) == TA_ERR_INVALID, "empty text is no invoke ID");
 
     ta_system_destroy(system);
+    check(test_allocator_finish(&heap) == 0, "every block came back, as it was allocated");
 
     if (failures != 0) {
         printf("send id test: %u checks failed\n", failures);

@@ -4,8 +4,8 @@
  * the sink and reads it back from the source.
  *
  * The test includes the amalgamation so it reaches the private unit; it
- * uses the C library, the core does not. Memory comes from a counting
- * allocator local to this test behind an arena of small blocks, so every
+ * uses the C library, the core does not. Memory comes from the test
+ * allocator (test_allocator.h) behind an arena of small blocks, so every
  * run the sink takes is one request to the allocator; the allocator can
  * fail from a given attempt on, and refuses requests above a size.
  *
@@ -40,6 +40,7 @@
  *    a data model is given.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -56,70 +57,11 @@ static int failures = 0;
         } \
     } while (0)
 
-/* ------------------------------------------------------------------------
- * An allocator that counts, can fail, and refuses any request above
- * `largest` bytes (when set) without allocating it.
- */
-
-#define MAX_BLOCKS 64u
-
-typedef struct {
-    void *ptrs[MAX_BLOCKS];
-    size_t sizes[MAX_BLOCKS];
-    uint32_t live;
-    uint32_t attempts;
-    /* The attempt, counting from 1, from which every allocation fails; 0
-     * never fails. */
-    uint32_t fail_from;
-    size_t largest;
-} counting_allocator;
-
-static void *counting_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *heap = self;
-    heap->attempts += 1u;
-    if ((heap->fail_from != 0 && heap->attempts >= heap->fail_from) || heap->live == MAX_BLOCKS ||
-        (heap->largest != 0 && size > heap->largest)) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size_t rounded = (size + alignment - 1u) / alignment * alignment;
-    void *ptr = aligned_alloc(alignment, rounded);
-    if (ptr != NULL) {
-        memset(ptr, 0xA5, rounded);
-        heap->sizes[heap->live] = size;
-        heap->ptrs[heap->live++] = ptr;
-    }
-    return ptr;
-}
-
-static void counting_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *heap = self;
-    for (uint32_t index = 0; index < heap->live; index += 1u) {
-        if (heap->ptrs[index] == params->ptr) {
-            if (heap->sizes[index] != params->size) {
-                fprintf(stderr, "free of %zu bytes, allocated as %zu\n", params->size, heap->sizes[index]);
-                failures += 1;
-            }
-            heap->live -= 1u;
-            heap->ptrs[index] = heap->ptrs[heap->live];
-            heap->sizes[index] = heap->sizes[heap->live];
-            free(params->ptr);
-            return;
-        }
-    }
-    fprintf(stderr, "free of %p, which this allocator never handed out\n", params->ptr);
-    failures += 1;
-}
-
-static const ta_allocator_vtable counting_vtable = { .alloc = counting_alloc, .free = counting_free };
-
 /* An arena over `heap` whose blocks are as small as can be, so every run
  * the sink takes is its own request. */
-static ta_arena arena_over(counting_allocator *heap) {
+static ta_arena arena_over(test_allocator *heap) {
     ta_arena arena;
-    ta_result result = ta_arena_init(&arena, (ta_allocator){ .self = heap, .v = &counting_vtable }, 1u);
+    ta_result result = ta_arena_init(&arena, test_allocator_of(heap), 1u);
     CHECK(result == TA_OK);
     return arena;
 }
@@ -155,7 +97,7 @@ static ta_op_status write_pattern(ta_byte_sink sink, size_t count, size_t from) 
  * Claim 1: an empty sink and empty writes allocate nothing.
  */
 static void test_empty_sink(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_arena arena = arena_over(&heap);
     ta_arena_sink state;
     ta_arena_sink_init(&state, &arena);
@@ -172,13 +114,14 @@ static void test_empty_sink(void) {
     CHECK(heap.attempts == 0);
     ta_arena_destroy(&arena);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* ------------------------------------------------------------------------
  * Claim 2: pieces are gathered in order into one aligned run.
  */
 static void test_pieces_in_order(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_arena arena = arena_over(&heap);
     ta_arena_sink state;
     ta_arena_sink_init(&state, &arena);
@@ -202,13 +145,14 @@ static void test_pieces_in_order(void) {
     CHECK(((uintptr_t)state.ptr % _Alignof(uint64_t)) == 0);
     ta_arena_destroy(&arena);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* ------------------------------------------------------------------------
  * Claim 3: the run starts at 64 bytes and doubles.
  */
 static void test_growth(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_arena arena = arena_over(&heap);
     ta_arena_sink state;
     ta_arena_sink_init(&state, &arena);
@@ -240,13 +184,14 @@ static void test_growth(void) {
     other.v->end(other.self, true);
     ta_arena_destroy(&arena);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* ------------------------------------------------------------------------
  * Claim 4: a discarded unit keeps the run for the next one.
  */
 static void test_discard_keeps_run(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_arena arena = arena_over(&heap);
     ta_arena_sink state;
     ta_arena_sink_init(&state, &arena);
@@ -273,20 +218,21 @@ static void test_discard_keeps_run(void) {
     CHECK(state.len == 10 && holds_pattern(state.ptr, 10) && heap.attempts == attempts);
     ta_arena_destroy(&arena);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* ------------------------------------------------------------------------
  * Claim 5: a refused write changes nothing and leaks nothing.
  */
 static void test_failed_write(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_arena arena = arena_over(&heap);
     ta_arena_sink state;
     ta_arena_sink_init(&state, &arena);
     ta_byte_sink sink = ta_arena_sink_as_byte_sink(&state);
 
     /* Refused at the first run: still no run. */
-    heap.fail_from = 1;
+    heap.policy.fail_from = 1;
     CHECK(sink.v->begin(sink.self) == TA_OP_OK);
     CHECK(write_pattern(sink, 10, 0) == TA_OP_NOMEM);
     CHECK(state.ptr == NULL && state.len == 0 && state.cap == 0);
@@ -294,14 +240,14 @@ static void test_failed_write(void) {
     CHECK(heap.live == 0);
 
     /* Refused while growing: the same run, length, capacity and bytes. */
-    heap.fail_from = 0;
+    heap.policy.fail_from = 0;
     heap.attempts = 0;
     CHECK(sink.v->begin(sink.self) == TA_OP_OK);
     CHECK(write_pattern(sink, 60, 0) == TA_OP_OK);
     uint8_t *run = state.ptr;
     uint8_t before[64];
     memcpy(before, state.ptr, sizeof before);
-    heap.fail_from = heap.attempts + 1u;
+    heap.policy.fail_from = heap.attempts + 1u;
     CHECK(write_pattern(sink, 5, 60) == TA_OP_NOMEM);
     CHECK(state.ptr == run && state.len == 60 && state.cap == 64);
     CHECK(memcmp(before, state.ptr, sizeof before) == 0);
@@ -327,13 +273,14 @@ static void test_failed_write(void) {
     CHECK(bounded.ptr == kept && bounded.len == 64 && bounded.cap == 64 && holds_pattern(bounded.ptr, 64));
     small.v->end(small.self, false);
     ta_arena_destroy(&fixed);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* ------------------------------------------------------------------------
  * Claim 6: sizes beyond size_t answer TA_OP_NOMEM and return.
  */
 static void test_size_overflow(void) {
-    counting_allocator heap = { .largest = 4096 };
+    test_allocator heap = { .policy.largest = 4096 };
     ta_arena arena = arena_over(&heap);
     uint8_t stand_in[8] = {0};
     uint8_t piece[32] = {0};
@@ -352,6 +299,7 @@ static void test_size_overflow(void) {
     CHECK(state.ptr == stand_in && state.len == SIZE_MAX / 2u + 1u && state.cap == SIZE_MAX / 2u + 1u);
     ta_arena_destroy(&arena);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* ------------------------------------------------------------------------
@@ -422,7 +370,7 @@ static void test_memory_source(void) {
  * Claim 8: a unit round-trips from an arena sink through a memory source.
  */
 static void test_round_trip(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_arena arena = arena_over(&heap);
     ta_arena_sink written;
     ta_arena_sink_init(&written, &arena);
@@ -452,6 +400,7 @@ static void test_round_trip(void) {
     CHECK(heap.attempts == attempts);
     ta_arena_destroy(&arena);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 int main(void) {

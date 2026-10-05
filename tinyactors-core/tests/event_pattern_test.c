@@ -8,6 +8,7 @@
  * the core does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,22 +25,8 @@ static int failures = 0;
         } \
     } while (0)
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 static ta_system *system_under_test;
 
@@ -62,7 +49,7 @@ static bool matches(const char *descriptor, const char *event) {
                                                     &(ta_definition_compile_params){
                                                         .spec = &spec,
                                                         .datamodel = ta_null_datamodel(),
-                                                        .allocator = test_allocator,
+                                                        .allocator = allocator,
                                                         .out = &definition,
                                                     });
     CHECK(compiled == TA_OK);
@@ -163,7 +150,7 @@ static void test_many_stars(void) {
 }
 
 int main(void) {
-    if (ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system_under_test) != TA_OK) {
+    if (ta_system_create(&(ta_system_config){ .allocator = allocator }, &system_under_test) != TA_OK) {
         fprintf(stderr, "cannot create a system\n");
         return 1;
     }
@@ -172,6 +159,7 @@ int main(void) {
     test_partial_stars_are_ordinary();
     test_many_stars();
     ta_system_destroy(system_under_test);
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "event pattern test: %d check(s) failed\n", failures);
         return 1;

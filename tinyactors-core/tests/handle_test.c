@@ -24,6 +24,7 @@
  * uses the C library, the core does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,25 +42,11 @@ static int failures = 0;
 #define S(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
 
 /* ------------------------------------------------------------------------
- * An allocator over the C library, for the system in claim 5.
+ * A test allocator, for the system in claim 5.
  */
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* A slot and a generation, with the handle core issued for them. */
 typedef struct {
@@ -138,7 +125,7 @@ static ta_definition_id register_chart(ta_system *system, ta_str name) {
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){ .spec = &spec,
                                                                            .datamodel = ta_null_datamodel(),
-                                                                           .allocator = test_allocator,
+                                                                           .allocator = allocator,
                                                                            .out = &definition }) == TA_OK);
     ta_definition_id id = 0;
     CHECK(ta_system_register_definition(system, definition, &id) == TA_OK);
@@ -154,7 +141,7 @@ static ta_actor_id spawn(ta_system *system, ta_definition_id definition) {
 /* Claim 5. */
 static void test_system_issues_pinned_ids(void) {
     ta_system *system = NULL;
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
 
     ta_definition_id first = register_chart(system, S("first"));
     ta_definition_id second = register_chart(system, S("second"));
@@ -188,6 +175,7 @@ int main(void) {
     test_valid();
     test_public_actor_ids_agree();
     test_system_issues_pinned_ids();
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "handle_test: %d check(s) failed\n", failures);
         return 1;

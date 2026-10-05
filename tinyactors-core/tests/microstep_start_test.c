@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures = 0;
 
@@ -31,39 +32,11 @@ static int failures = 0;
 #define EXPR(text) ((ta_expression){ .kind = TA_EXPRESSION_SOURCE, .as.source = STR(text) })
 
 /* ------------------------------------------------------------------------
- * An allocator that counts what is live and can fail one allocation
+ * A test allocator, which counts what is live and can fail one allocation
  */
 
-static long live_allocations = 0;
-static unsigned long allocations = 0;
-/* When not zero, the allocation with this count fails, once. */
-static unsigned long fail_at = 0;
-
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    allocations += 1u;
-    if (fail_at != 0 && allocations == fail_at) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    void *memory = aligned_alloc(alignment, size == 0 ? alignment : size);
-    live_allocations += memory != NULL ? 1 : 0;
-    return memory;
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_allocations -= 1;
-    }
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator allocator = { .self = NULL, .v = &allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* ------------------------------------------------------------------------
  * A data model that writes every script and guard to a log
@@ -385,7 +358,7 @@ static int log_is(const char *expected) {
 
 static void finish(run *r) {
     ta_system_destroy(r->system);
-    CHECK(live_allocations == 0);
+    CHECK(heap.live == 0);
 }
 
 /* The expected start of a microstep: where it stands, the block its first
@@ -675,9 +648,9 @@ static void test_out_of_memory(void) {
     start(&r);
     clear_log();
     char baseline_configurations[256];
-    unsigned long before = allocations;
+    unsigned long before = heap.attempts;
     run_retrying(&r, 0, baseline_configurations);
-    unsigned long used = allocations - before;
+    unsigned long used = heap.attempts - before;
     char baseline[sizeof(script_log)];
     memcpy(baseline, script_log, script_length + 1u);
     finish(&r);
@@ -688,9 +661,9 @@ static void test_out_of_memory(void) {
         start(&r);
         clear_log();
         char configurations[256];
-        fail_at = allocations + failing;
+        heap.policy.fail_at = heap.attempts + failing;
         run_retrying(&r, 0, configurations);
-        fail_at = 0;
+        heap.policy.fail_at = 0;
         if (!log_is(baseline) || strcmp(configurations, baseline_configurations) != 0) {
             fprintf(stderr, "allocation %lu failing\n", failing);
             failures += 1;
@@ -709,6 +682,7 @@ int main(void) {
     test_microstep_budget();
     test_capture_at_the_start();
     test_out_of_memory();
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "microstep start test: %d failures\n", failures);
         return 1;

@@ -3,8 +3,8 @@
  * that holds the deadline index's heap positions.
  *
  * The test includes the amalgamation so it reaches the private unit; it
- * uses the C library, the core does not. Memory comes from a counting
- * allocator local to this test, which can fail after a number of
+ * uses the C library, the core does not. Memory comes from the test
+ * allocator (test_allocator.h), which can fail after a number of
  * allocations and records the size of every request.
  *
  * Claims proven here, in order:
@@ -40,6 +40,7 @@
  *    holds nothing.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -56,72 +57,6 @@ static int failures = 0;
         } \
     } while (0)
 
-/* ------------------------------------------------------------------------
- * An allocator that counts, can fail, and refuses any request above
- * `largest` bytes (when set) without allocating it.
- */
-
-#define MAX_BLOCKS 256u
-
-typedef struct {
-    void *ptrs[MAX_BLOCKS];
-    size_t sizes[MAX_BLOCKS];
-    uint32_t live;
-    uint32_t attempts;
-    /* The attempt, counting from 1, from which every allocation fails; 0
-     * never fails. */
-    uint32_t fail_from;
-    size_t largest;
-    size_t requested[MAX_BLOCKS];
-} counting_allocator;
-
-static void *counting_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *heap = self;
-    if (heap->attempts < MAX_BLOCKS) {
-        heap->requested[heap->attempts] = size;
-    }
-    heap->attempts += 1u;
-    if ((heap->fail_from != 0 && heap->attempts >= heap->fail_from) || heap->live == MAX_BLOCKS ||
-        (heap->largest != 0 && size > heap->largest)) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size_t rounded = (size + alignment - 1u) / alignment * alignment;
-    void *ptr = aligned_alloc(alignment, rounded);
-    if (ptr != NULL) {
-        memset(ptr, 0xA5, rounded);
-        heap->sizes[heap->live] = size;
-        heap->ptrs[heap->live++] = ptr;
-    }
-    return ptr;
-}
-
-static void counting_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *heap = self;
-    for (uint32_t index = 0; index < heap->live; index += 1u) {
-        if (heap->ptrs[index] == params->ptr) {
-            if (heap->sizes[index] != params->size) {
-                fprintf(stderr, "free of %zu bytes, allocated as %zu\n", params->size, heap->sizes[index]);
-                failures += 1;
-            }
-            heap->live -= 1u;
-            heap->ptrs[index] = heap->ptrs[heap->live];
-            heap->sizes[index] = heap->sizes[heap->live];
-            free(params->ptr);
-            return;
-        }
-    }
-    fprintf(stderr, "free of %p, which this allocator never handed out\n", params->ptr);
-    failures += 1;
-}
-
-static const ta_allocator_vtable counting_vtable = { .alloc = counting_alloc, .free = counting_free };
-
-static ta_allocator allocator_of(counting_allocator *heap) {
-    return (ta_allocator){ .self = heap, .v = &counting_vtable };
-}
 
 /* Entries of 16 bytes aligned to 8, four to a page. */
 typedef struct {
@@ -130,9 +65,9 @@ typedef struct {
     uint32_t spare;
 } entry;
 
-static ta_paged_array_params entry_params(counting_allocator *heap) {
+static ta_paged_array_params entry_params(test_allocator *heap) {
     return (ta_paged_array_params){
-        .allocator = allocator_of(heap),
+        .allocator = test_allocator_of(heap),
         .entry_size = sizeof(entry),
         .entry_alignment = _Alignof(entry),
         .page_shift = 2,
@@ -157,7 +92,7 @@ static bool zero_at(const ta_paged_array *array, uint32_t position) {
 
 /* 1 */
 static void test_init(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_paged_array_params good = entry_params(&heap);
     ta_paged_array_params bad[] = { good, good, good, good, good, good };
     bad[0].entry_size = 0;
@@ -190,11 +125,12 @@ static void test_init(void) {
     good.entry_size = 8;
     CHECK(ta_paged_array_init(&array, &good) == TA_OK);
     CHECK(array.page_mask == 0x7FFFFFFFu);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 2 */
 static void test_grow_rounds_to_pages(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_paged_array array;
     ta_paged_array_params params = entry_params(&heap);
     CHECK(ta_paged_array_init(&array, &params) == TA_OK);
@@ -217,11 +153,12 @@ static void test_grow_rounds_to_pages(void) {
 
     ta_paged_array_destroy(&array);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 3 */
 static void test_positions(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_paged_array array;
     ta_paged_array_params params = entry_params(&heap);
     CHECK(ta_paged_array_init(&array, &params) == TA_OK);
@@ -250,10 +187,10 @@ static void test_positions(void) {
     CHECK(out.key == 7 && out.value == 77);
 
     /* uint32_t entries, as the deadline index keeps them, one per page. */
-    counting_allocator words_heap = {0};
+    test_allocator words_heap = {0};
     ta_paged_array words;
     CHECK(ta_paged_array_init(&words, &(ta_paged_array_params){
-                                          .allocator = allocator_of(&words_heap),
+                                          .allocator = test_allocator_of(&words_heap),
                                           .entry_size = sizeof(uint32_t),
                                           .entry_alignment = _Alignof(uint32_t),
                                           .page_shift = 0,
@@ -273,11 +210,13 @@ static void test_positions(void) {
     ta_paged_array_destroy(&words);
     ta_paged_array_destroy(&array);
     CHECK(heap.live == 0 && words_heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
+    CHECK(test_allocator_finish(&words_heap) == 0);
 }
 
 /* 4 */
 static void test_grow_copies_nothing(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_paged_array array;
     ta_paged_array_params params = entry_params(&heap);
     CHECK(ta_paged_array_init(&array, &params) == TA_OK);
@@ -325,11 +264,12 @@ static void test_grow_copies_nothing(void) {
 
     ta_paged_array_destroy(&array);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 5 */
 static void test_shrink(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_paged_array array;
     ta_paged_array_params params = entry_params(&heap);
     CHECK(ta_paged_array_init(&array, &params) == TA_OK);
@@ -376,6 +316,7 @@ static void test_shrink(void) {
     CHECK(zero_at(&array, 0) && heap.live == 2);
     ta_paged_array_destroy(&array);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 6 */
@@ -383,7 +324,7 @@ static void test_shrink(void) {
  * grow to `to` in turn. */
 static void check_failed_grow(uint32_t from, uint32_t keep, uint32_t to) {
     for (uint32_t failing = 1;; failing += 1u) {
-        counting_allocator heap = {0};
+        test_allocator heap = {0};
         ta_paged_array array;
         ta_paged_array_params params = entry_params(&heap);
     CHECK(ta_paged_array_init(&array, &params) == TA_OK);
@@ -400,13 +341,14 @@ static void check_failed_grow(uint32_t from, uint32_t keep, uint32_t to) {
         }
         uint32_t live = heap.live;
 
-        heap.fail_from = heap.attempts + failing;
+        heap.policy.fail_from = heap.attempts + failing;
         ta_result result = ta_paged_array_grow(&array, to);
         if (result == TA_OK) {
             /* Every allocation of the grow has been failed once. */
             CHECK(failing > 1u);
             ta_paged_array_destroy(&array);
             CHECK(heap.live == 0);
+            CHECK(test_allocator_finish(&heap) == 0);
             return;
         }
         CHECK(result == TA_ERR_NOMEM);
@@ -418,9 +360,10 @@ static void check_failed_grow(uint32_t from, uint32_t keep, uint32_t to) {
         for (uint32_t position = 0; position < keep; position += 1u) {
             CHECK(holds(&array, position));
         }
-        heap.fail_from = 0;
+        heap.policy.fail_from = 0;
         ta_paged_array_destroy(&array);
         CHECK(heap.live == 0);
+        CHECK(test_allocator_finish(&heap) == 0);
     }
 }
 
@@ -432,10 +375,10 @@ static void test_failed_grow(void) {
 
 /* 7 */
 static void test_largest_count(void) {
-    counting_allocator heap = { .largest = 4096 };
+    test_allocator heap = { .policy.largest = 4096 };
     ta_paged_array array;
     CHECK(ta_paged_array_init(&array, &(ta_paged_array_params){
-                                          .allocator = allocator_of(&heap),
+                                          .allocator = test_allocator_of(&heap),
                                           .entry_size = 1,
                                           .entry_alignment = 1,
                                           .page_shift = 31,
@@ -450,7 +393,7 @@ static void test_largest_count(void) {
     /* With one entry per page, the largest count needs a directory of
      * 2^32 - 1 page addresses, asked for before any page. */
     CHECK(ta_paged_array_init(&array, &(ta_paged_array_params){
-                                          .allocator = allocator_of(&heap),
+                                          .allocator = test_allocator_of(&heap),
                                           .entry_size = 1,
                                           .entry_alignment = 1,
                                           .page_shift = 0,
@@ -466,17 +409,18 @@ static void test_largest_count(void) {
     full.page_shift = 31;
     full.page_count = 2;
     CHECK(ta_paged_array_capacity(&full) == UINT64_C(1) << 32);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 8 */
 static void test_access_never_allocates(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_paged_array array;
     ta_paged_array_params params = entry_params(&heap);
     CHECK(ta_paged_array_init(&array, &params) == TA_OK);
     CHECK(ta_paged_array_grow(&array, 8) == TA_OK);
     uint32_t attempts = heap.attempts;
-    heap.fail_from = attempts + 1u; /* any allocation from here on fails */
+    heap.policy.fail_from = attempts + 1u; /* any allocation from here on fails */
     for (uint32_t position = 0; position < 8; position += 1u) {
         put(&array, position);
         CHECK(holds(&array, position));
@@ -484,13 +428,14 @@ static void test_access_never_allocates(void) {
     }
     CHECK(ta_paged_array_capacity(&array) == 8);
     CHECK(heap.attempts == attempts);
-    heap.fail_from = 0;
+    heap.policy.fail_from = 0;
     ta_paged_array_destroy(&array);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 9 */
 static void test_destroy(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_paged_array array;
     ta_paged_array_params params = entry_params(&heap);
     CHECK(ta_paged_array_init(&array, &params) == TA_OK);
@@ -502,6 +447,7 @@ static void test_destroy(void) {
     CHECK(ta_paged_array_capacity(&array) == 0);
     ta_paged_array_destroy(&array);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 int main(void) {

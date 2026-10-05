@@ -3,8 +3,8 @@
  * behind h2c, c2h and tel.
  *
  * The test includes the amalgamation so it reaches the private unit; it
- * uses the C library, the core does not. Memory comes from a counting
- * allocator local to this test, which can fail after a number of
+ * uses the C library, the core does not. Memory comes from the test
+ * allocator (test_allocator.h), which can fail after a number of
  * allocations and records the size of every request.
  *
  * Claims proven here, in order:
@@ -54,6 +54,7 @@
  *     step, and keep tail <= head <= write <= tail + capacity.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -70,69 +71,6 @@ static int failures = 0;
         } \
     } while (0)
 
-/* ------------------------------------------------------------------------
- * An allocator that counts and can fail.
- */
-
-#define MAX_BLOCKS 16u
-
-typedef struct {
-    void *ptrs[MAX_BLOCKS];
-    size_t sizes[MAX_BLOCKS];
-    uint32_t live;
-    uint32_t attempts;
-    /* The attempt, counting from 1, from which every allocation fails; 0
-     * never fails. */
-    uint32_t fail_from;
-    size_t last_size;
-    size_t last_alignment;
-} counting_allocator;
-
-static void *counting_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *heap = self;
-    heap->attempts += 1u;
-    heap->last_size = size;
-    heap->last_alignment = alignment;
-    if ((heap->fail_from != 0 && heap->attempts >= heap->fail_from) || heap->live == MAX_BLOCKS) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size_t rounded = (size + alignment - 1u) / alignment * alignment;
-    void *ptr = aligned_alloc(alignment, rounded);
-    if (ptr != NULL) {
-        memset(ptr, 0xA5, rounded);
-        heap->sizes[heap->live] = size;
-        heap->ptrs[heap->live++] = ptr;
-    }
-    return ptr;
-}
-
-static void counting_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *heap = self;
-    for (uint32_t index = 0; index < heap->live; index += 1u) {
-        if (heap->ptrs[index] == params->ptr) {
-            if (heap->sizes[index] != params->size) {
-                fprintf(stderr, "free of %zu bytes, allocated as %zu\n", params->size, heap->sizes[index]);
-                failures += 1;
-            }
-            heap->live -= 1u;
-            heap->ptrs[index] = heap->ptrs[heap->live];
-            heap->sizes[index] = heap->sizes[heap->live];
-            free(params->ptr);
-            return;
-        }
-    }
-    fprintf(stderr, "free of %p, which this allocator never handed out\n", params->ptr);
-    failures += 1;
-}
-
-static const ta_allocator_vtable counting_vtable = { .alloc = counting_alloc, .free = counting_free };
-
-static ta_allocator allocator_of(counting_allocator *heap) {
-    return (ta_allocator){ .self = heap, .v = &counting_vtable };
-}
 
 /* ------------------------------------------------------------------------
  * Helpers.
@@ -140,14 +78,14 @@ static ta_allocator allocator_of(counting_allocator *heap) {
 
 #define KIND 0x0201u
 
-static ta_ring_params params_of(counting_allocator *heap, uint32_t capacity, uint32_t max_record,
+static ta_ring_params params_of(test_allocator *heap, uint32_t capacity, uint32_t max_record,
                                 ta_ring_mode mode) {
     return (ta_ring_params){
-        .allocator = allocator_of(heap), .capacity = capacity, .max_record_bytes = max_record, .mode = mode
+        .allocator = test_allocator_of(heap), .capacity = capacity, .max_record_bytes = max_record, .mode = mode
     };
 }
 
-static ta_ring new_ring(counting_allocator *heap, uint32_t capacity, uint32_t max_record, ta_ring_mode mode) {
+static ta_ring new_ring(test_allocator *heap, uint32_t capacity, uint32_t max_record, ta_ring_mode mode) {
     ta_ring ring;
     ta_ring_params params = params_of(heap, capacity, max_record, mode);
     CHECK(ta_ring_init(&ring, &params) == TA_OK);
@@ -257,7 +195,7 @@ static bool counters_hold(const ta_ring *ring) {
 
 /* 1 */
 static void test_init(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_ring_params good = params_of(&heap, 128, 64, TA_RING_LOSSLESS);
     ta_ring_params bad[] = { good, good, good, good, good, good };
     bad[0].mode = (ta_ring_mode)2;
@@ -276,14 +214,14 @@ static void test_init(void) {
     }
     CHECK(heap.attempts == 0);
 
-    heap.fail_from = 1;
+    heap.policy.fail_from = 1;
     ta_ring ring;
     memset(&ring, 0x5A, sizeof(ring));
     ta_ring before;
     memcpy(&before, &ring, sizeof(ring));
     CHECK(ta_ring_init(&ring, &good) == TA_ERR_NOMEM);
     CHECK(memcmp(&ring, &before, sizeof(ring)) == 0 && heap.live == 0);
-    heap.fail_from = 0;
+    heap.policy.fail_from = 0;
 
     heap.attempts = 0;
     CHECK(ta_ring_init(&ring, &good) == TA_OK);
@@ -302,11 +240,12 @@ static void test_init(void) {
     ta_ring_destroy(&small);
     ta_ring_destroy(&ring);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 2 */
 static void test_reserve_commit_read(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_ring ring = new_ring(&heap, 256, 64, TA_RING_LOSSLESS);
 
     ta_ring_record first;
@@ -347,11 +286,12 @@ static void test_reserve_commit_read(void) {
     CHECK(ta_ring_peek(&ring, &seen) == TA_ERR_NOT_FOUND);
     CHECK(ring.next_seq == 4 && ring.read_seq == 3);
     ta_ring_destroy(&ring);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 3 */
 static void test_reserve_size_bounds(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_ring ring = new_ring(&heap, 128, 64, TA_RING_LOSSY);
     CHECK(put(&ring, 16, NULL) == TA_OK);
     uint32_t sizes[] = { 0, 1, 8, 15, 65, 72, UINT32_MAX };
@@ -364,11 +304,12 @@ static void test_reserve_size_bounds(void) {
     }
     CHECK(put(&ring, 57, NULL) == TA_OK); /* rounds to 64, the largest */
     ta_ring_destroy(&ring);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 4 */
 static void test_wrap_at_every_offset(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     const uint32_t capacity = 128;
     uint64_t bases[] = { 0, (uint64_t)1 << 40 };
     for (uint32_t base = 0; base < TA_ARRAY_COUNT(bases); base += 1u) {
@@ -414,11 +355,12 @@ static void test_wrap_at_every_offset(void) {
         }
     }
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 5 */
 static void test_lossless_full(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_ring ring = new_ring(&heap, 128, 64, TA_RING_LOSSLESS);
     CHECK(put(&ring, 64, NULL) == TA_OK);
     CHECK(put(&ring, 48, NULL) == TA_OK);
@@ -440,11 +382,12 @@ static void test_lossless_full(void) {
     CHECK(takes(&ring, 3, 16));
     CHECK(takes(&ring, 4, 64));
     ta_ring_destroy(&ring);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 6 */
 static void test_ring_of_one_record(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     for (uint32_t mode = 0; mode < 2u; mode += 1u) {
         for (uint32_t start = 0; start < 64; start += 8u) {
             ta_ring ring = new_ring(&heap, 64, 64, (ta_ring_mode)mode);
@@ -492,11 +435,12 @@ static void test_ring_of_one_record(void) {
     CHECK(unchanged(&ring, &shot));
     ta_ring_destroy(&ring);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 7 */
 static void test_lossy(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_ring ring = new_ring(&heap, 64, 32, TA_RING_LOSSY);
     CHECK(put(&ring, 32, NULL) == TA_OK);
     CHECK(put(&ring, 32, NULL) == TA_OK);
@@ -521,6 +465,7 @@ static void test_lossy(void) {
     CHECK(put(&ring, 16, &record) == TA_OK && record.seq == 7);
     CHECK(takes(&ring, 7, 16));
     ta_ring_destroy(&ring);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 8: the record at the tail is tampered with in each way, and peek and
@@ -536,7 +481,7 @@ static void expect_corrupt(ta_ring *ring) {
 }
 
 static void test_corrupt(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     for (uint32_t mode = 0; mode < 2u; mode += 1u) {
         /* Two records of 64 in a ring of 256 with max 64; the first is
          * tampered with. */
@@ -626,11 +571,12 @@ static void test_corrupt(void) {
         ta_ring_destroy(&ring);
     }
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 9 */
 static void test_release(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_ring ring = new_ring(&heap, 128, 64, TA_RING_LOSSLESS);
     CHECK(ta_ring_release(&ring) == TA_ERR_NOT_FOUND);
     start_at(&ring, 96);
@@ -645,11 +591,12 @@ static void test_release(void) {
     CHECK(ta_ring_release(&ring) == TA_OK && ta_ring_used(&ring) == 0 && ring.read_seq == 3);
     CHECK(ta_ring_release(&ring) == TA_ERR_NOT_FOUND);
     ta_ring_destroy(&ring);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 10 */
 static void test_never_allocates(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_ring ring = new_ring(&heap, 64, 32, TA_RING_LOSSY);
     uint32_t attempts = heap.attempts;
     ta_ring_record record;
@@ -668,16 +615,18 @@ static void test_never_allocates(void) {
     CHECK(ring.dropped != 0);
     CHECK(heap.attempts == attempts);
     ta_ring_destroy(&ring);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 11 */
 static void test_destroy(void) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     ta_ring ring = new_ring(&heap, 64, 32, TA_RING_LOSSLESS);
     CHECK(put(&ring, 16, NULL) == TA_OK);
     CHECK(heap.live == 1);
     ta_ring_destroy(&ring);
     CHECK(heap.live == 0 && ring.bytes == NULL && ring.capacity == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 /* 12 */
@@ -698,7 +647,7 @@ typedef struct {
 } model_record;
 
 static void test_random(ta_ring_mode mode) {
-    counting_allocator heap = {0};
+    test_allocator heap = {0};
     const uint32_t max_record = 64;
     ta_ring ring = new_ring(&heap, 128, max_record, mode);
     /* Committed and not released, then reserved and not committed. */
@@ -798,6 +747,7 @@ static void test_random(ta_ring_mode mode) {
     CHECK(ta_ring_peek(&ring, &none) == TA_ERR_NOT_FOUND);
     ta_ring_destroy(&ring);
     CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 int main(void) {

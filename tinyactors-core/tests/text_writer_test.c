@@ -26,6 +26,7 @@
  * uses the C library, the core does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,45 +43,6 @@ static int failures = 0;
     } while (0)
 
 #define S(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
-
-/* ------------------------------------------------------------------------
- * A counting allocator that fails on request.
- */
-
-typedef struct {
-    uint32_t live;
-    uint32_t allocations;
-    size_t last_size;
-    bool fail;
-} counting_allocator;
-
-static void *counting_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *counter = self;
-    if (counter->fail) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size_t rounded = (size + alignment - 1u) / alignment * alignment;
-    void *ptr = aligned_alloc(alignment, rounded == 0 ? alignment : rounded);
-    if (ptr != NULL) {
-        counter->live += 1;
-        counter->allocations += 1;
-        counter->last_size = size;
-    }
-    return ptr;
-}
-
-static void counting_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *counter = self;
-    if (params->ptr != NULL) {
-        counter->live -= 1;
-        free(params->ptr);
-    }
-}
-
-static const ta_allocator_vtable counting_vtable = { .alloc = counting_alloc, .free = counting_free };
 
 /* ------------------------------------------------------------------------
  * Claim 1: decimal.
@@ -241,18 +203,18 @@ static bool write_nothing(const void *context, ta_text_writer *writer) {
 }
 
 static void test_render(void) {
-    counting_allocator counter = {0};
-    ta_allocator allocator = { .self = &counter, .v = &counting_vtable };
+    test_allocator counter = {0};
+    ta_allocator allocator = test_allocator_of(&counter);
     uint64_t number = 1234;
     ta_str out = S("untouched");
 
-    counter.fail = true;
+    counter.policy.refuse = true;
     CHECK(ta_text_render(allocator, &(ta_text_render_params){ .write = write_number, .context = &number,
                                                               .out = &out }) == TA_ERR_NOMEM);
     CHECK(out.len == 9 && memcmp(out.ptr, "untouched", 9) == 0);
     CHECK(counter.live == 0 && counter.allocations == 0);
 
-    counter.fail = false;
+    counter.policy.refuse = false;
     CHECK(ta_text_render(allocator, &(ta_text_render_params){ .write = write_nothing, .context = NULL,
                                                               .out = &out }) == TA_ERR_NOT_FOUND);
     CHECK(out.len == 9 && counter.allocations == 0);
@@ -263,6 +225,7 @@ static void test_render(void) {
     CHECK(counter.live == 1 && counter.last_size == 8);
     ta_mem_free(allocator, (void *)out.ptr, &(ta_allocator_free_params){ .size = out.len + 1u, .alignment = 1 });
     CHECK(counter.live == 0);
+    CHECK(test_allocator_finish(&counter) == 0);
 }
 
 int main(void) {

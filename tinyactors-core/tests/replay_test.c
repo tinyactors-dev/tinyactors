@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -37,39 +38,11 @@ static int failures;
 #define END {0}
 
 /* ------------------------------------------------------------------------
- * A counting allocator that can refuse the n-th allocation from now.
+ * A test allocator, which counts and can refuse the n-th allocation from now.
  */
 
-static long live_blocks;
-static long alloc_calls;
-static long fail_countdown = -1;
-
-static void *count_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    (void)alignment;
-    if (fail_countdown == 0) {
-        fail_countdown = -1;
-        return NULL;
-    }
-    if (fail_countdown > 0) {
-        fail_countdown -= 1;
-    }
-    void *block = malloc(size);
-    live_blocks += block != NULL ? 1 : 0;
-    alloc_calls += 1;
-    return block;
-}
-
-static void count_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1;
-        free(params->ptr);
-    }
-}
-
-static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = count_free };
-static const ta_allocator allocator = { .self = NULL, .v = &count_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* ------------------------------------------------------------------------
  * Adapters that count every call: a replaying actor must make none.
@@ -756,9 +729,9 @@ static void test_publish_out_of_memory(void) {
         ta_system *system = create_system();
         ta_definition_id definition = define(system, "jobs", invoking);
         ta_actor_id replay = prepare_replaying(system, definition, &address_job, 0);
-        fail_countdown = countdown;
+        heap.policy.fail_at = heap.attempts + (uint32_t)countdown + 1u;
         ta_result result = publish(system, replay);
-        fail_countdown = -1;
+        heap.policy.fail_at = 0;
         CHECK(result == TA_OK || result == TA_ERR_NOMEM);
         if (result == TA_ERR_NOMEM) {
             refused += 1;
@@ -842,9 +815,9 @@ static void test_export_restores(void) {
     CHECK(states == 1 && history == 1 && invokes == 0); /* off; h recorded a3 */
 
     exported out;
-    long before = alloc_calls;
+    long before = heap.allocations;
     CHECK(export_into(system, live, &out) == TA_OK);
-    CHECK(alloc_calls == before); /* the null data model has no root to build */
+    CHECK(heap.allocations == before); /* the null data model has no root to build */
     CHECK(out.state.active_count == 1 && out.state.active[0] == state_of(system, live, "off"));
     CHECK(out.state.history_count == 1 && out.state.history[0].history == state_of(system, live, "h") &&
           out.state.history[0].state == state_of(system, live, "a3"));
@@ -993,7 +966,8 @@ int main(void) {
     test_export_restores_invocations();
     test_export_leaves_submitted();
     test_export_result_codes();
-    CHECK(live_blocks == 0);
+    CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "replay_test: %d failure(s)\n", failures);
         return 1;

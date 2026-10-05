@@ -6,7 +6,7 @@
  * uses the C library, the core does not. Items live in small pages that
  * are not one array, as an index pool's do, and carry a due time, an
  * order and a position field among other fields. Memory for the heap
- * comes from a counting allocator local to this test, which can fail
+ * comes from the test allocator (test_allocator.h), which can fail
  * from a given allocation on.
  *
  * Claims proven here, in order:
@@ -50,6 +50,7 @@
  *    after a pop there is room again.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -66,65 +67,6 @@ static int failures = 0;
         } \
     } while (0)
 
-/* ------------------------------------------------------------------------
- * An allocator that counts and can fail from a given attempt on.
- */
-
-#define MAX_BLOCKS 256u
-
-typedef struct {
-    void *ptrs[MAX_BLOCKS];
-    size_t sizes[MAX_BLOCKS];
-    uint32_t live;
-    uint32_t attempts;
-    /* The attempt, counting from 1, from which every allocation fails; 0
-     * never fails. */
-    uint32_t fail_from;
-} counting_allocator;
-
-static void *counting_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *heap = self;
-    heap->attempts += 1u;
-    if ((heap->fail_from != 0 && heap->attempts >= heap->fail_from) || heap->live == MAX_BLOCKS) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size_t rounded = (size + alignment - 1u) / alignment * alignment;
-    void *ptr = aligned_alloc(alignment, rounded);
-    if (ptr != NULL) {
-        memset(ptr, 0xA5, rounded);
-        heap->sizes[heap->live] = size;
-        heap->ptrs[heap->live++] = ptr;
-    }
-    return ptr;
-}
-
-static void counting_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *heap = self;
-    for (uint32_t index = 0; index < heap->live; index += 1u) {
-        if (heap->ptrs[index] == params->ptr) {
-            if (heap->sizes[index] != params->size) {
-                fprintf(stderr, "free of %zu bytes, allocated as %zu\n", params->size, heap->sizes[index]);
-                failures += 1;
-            }
-            heap->live -= 1u;
-            heap->ptrs[index] = heap->ptrs[heap->live];
-            heap->sizes[index] = heap->sizes[heap->live];
-            free(params->ptr);
-            return;
-        }
-    }
-    fprintf(stderr, "free of %p, which this allocator never handed out\n", params->ptr);
-    failures += 1;
-}
-
-static const ta_allocator_vtable counting_vtable = { .alloc = counting_alloc, .free = counting_free };
-
-static ta_allocator allocator_of(counting_allocator *heap) {
-    return (ta_allocator){ .self = heap, .v = &counting_vtable };
-}
 
 /* ------------------------------------------------------------------------
  * Items in pages of eight, with a directory of page pointers, so items
@@ -228,13 +170,13 @@ static bool well_formed(const ta_heap *heap, storage *s) {
 }
 
 /* A heap over the test's allocator with pages of four positions. */
-static void heap_setup(ta_heap *heap, counting_allocator *memory) {
-    CHECK(ta_heap_init(heap, &(ta_heap_params){ .allocator = allocator_of(memory), .page_shift = 2 }) == TA_OK);
+static void heap_setup(ta_heap *heap, test_allocator *memory) {
+    CHECK(ta_heap_init(heap, &(ta_heap_params){ .allocator = test_allocator_of(memory), .page_shift = 2 }) == TA_OK);
 }
 
 /* 1 */
 static void test_init(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -243,7 +185,7 @@ static void test_init(void) {
     memset(&heap, 0x5A, sizeof(heap));
     ta_heap before;
     memcpy(&before, &heap, sizeof(heap));
-    CHECK(ta_heap_init(&heap, &(ta_heap_params){ .allocator = allocator_of(&memory), .page_shift = 32 }) ==
+    CHECK(ta_heap_init(&heap, &(ta_heap_params){ .allocator = test_allocator_of(&memory), .page_shift = 32 }) ==
           TA_ERR_INVALID);
     CHECK(memcmp(&heap, &before, sizeof(heap)) == 0);
 
@@ -261,14 +203,15 @@ static void test_init(void) {
     CHECK(memory.attempts == 0 && memory.live == 0);
 
     /* The widest page shift is accepted. */
-    CHECK(ta_heap_init(&heap, &(ta_heap_params){ .allocator = allocator_of(&memory), .page_shift = 31 }) == TA_OK);
+    CHECK(ta_heap_init(&heap, &(ta_heap_params){ .allocator = test_allocator_of(&memory), .page_shift = 31 }) == TA_OK);
     CHECK(memory.attempts == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 2 */
 static void test_grow(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     ta_heap heap;
     heap_setup(&heap, &memory);
     CHECK(ta_heap_grow(&heap, 0) == TA_OK && memory.attempts == 0);
@@ -283,7 +226,7 @@ static void test_grow(void) {
     /* A heap of 6 items grown to 40 positions, failing each allocation in
      * turn. */
     for (uint32_t failing = 1;; failing += 1u) {
-        counting_allocator failing_memory = {0};
+        test_allocator failing_memory = {0};
         storage s;
         storage_init(&s);
         ta_heap_items items = items_of(&s);
@@ -303,15 +246,16 @@ static void test_grow(void) {
         }
         uint32_t live = failing_memory.live;
 
-        failing_memory.fail_from = failing_memory.attempts + failing;
+        failing_memory.policy.fail_from = failing_memory.attempts + failing;
         ta_result result = ta_heap_grow(&heap, 40);
-        failing_memory.fail_from = 0;
+        failing_memory.policy.fail_from = 0;
         if (result == TA_OK) {
             CHECK(failing > 1u);
             CHECK(ta_heap_capacity(&heap) == 40 && ta_heap_length(&heap) == 6);
             CHECK(well_formed(&heap, &s));
             ta_heap_destroy(&heap);
             CHECK(failing_memory.live == 0);
+            CHECK(test_allocator_finish(&failing_memory) == 0);
             storage_destroy(&s);
             break;
         }
@@ -325,13 +269,15 @@ static void test_grow(void) {
         CHECK(well_formed(&heap, &s));
         ta_heap_destroy(&heap);
         CHECK(failing_memory.live == 0);
+        CHECK(test_allocator_finish(&failing_memory) == 0);
         storage_destroy(&s);
     }
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 3 */
 static void test_one_item(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -357,11 +303,12 @@ static void test_one_item(void) {
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 4 */
 static void test_order(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -421,6 +368,7 @@ static void test_order(void) {
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* Fills the heap with items 1..7 keyed 1, 10, 2, 11, 12, 3, 4, inserted
@@ -449,7 +397,7 @@ static void drain_in_order(ta_heap *heap, storage *s, const ta_heap_items *items
 
 /* 5 */
 static void test_remove(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -540,11 +488,12 @@ static void test_remove(void) {
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 6 */
 static void test_writes_only_position(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -596,11 +545,12 @@ static void test_writes_only_position(void) {
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 7 */
 static void test_storage_moves(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -636,11 +586,12 @@ static void test_storage_moves(void) {
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 8 */
 static void test_never_allocates(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -649,7 +600,7 @@ static void test_never_allocates(void) {
     CHECK(ta_heap_grow(&heap, 24) == TA_OK);
     uint32_t attempts = memory.attempts;
     uint32_t live = memory.live;
-    memory.fail_from = attempts + 1u; /* any allocation from here on fails */
+    memory.policy.fail_from = attempts + 1u; /* any allocation from here on fails */
 
     for (uint32_t index = 1; index <= 24; index += 1u) {
         set_key(&s, index, 30u - index, 0);
@@ -662,15 +613,16 @@ static void test_never_allocates(void) {
     drain_in_order(&heap, &s, &items);
     CHECK(memory.attempts == attempts && memory.live == live);
 
-    memory.fail_from = 0;
+    memory.policy.fail_from = 0;
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 9 */
 static void test_shrink(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -720,11 +672,12 @@ static void test_shrink(void) {
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 10 */
 static void test_destroy(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -745,6 +698,7 @@ static void test_destroy(void) {
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 11 */
@@ -754,7 +708,7 @@ static uint32_t next_random(uint64_t *state) {
 }
 
 static void test_random(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -807,11 +761,12 @@ static void test_random(void) {
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 /* 12 */
 static void test_full(void) {
-    counting_allocator memory = {0};
+    test_allocator memory = {0};
     storage s;
     storage_init(&s);
     ta_heap_items items = items_of(&s);
@@ -854,6 +809,7 @@ static void test_full(void) {
     ta_heap_destroy(&heap);
     CHECK(memory.live == 0);
     storage_destroy(&s);
+    CHECK(test_allocator_finish(&memory) == 0);
 }
 
 int main(void) {

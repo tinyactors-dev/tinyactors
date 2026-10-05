@@ -44,8 +44,10 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
 # read and written at the exact ends of their bytes (hash_test,
 # text_writer_test), and actor and definition IDs whose slots are freed
 # and reused (handle_test). The codec, export, compile
-# error and event pattern tests exercise pure functions.
-STANDALONE = %w[actor_id_test session_id_test offload_test span_test list_test paged_array_test heap_test fifo_test quota_test bytes_test names_test ring_test ring_codec_test hash_test handle_test text_writer_test].freeze
+# error and event pattern tests exercise pure functions. The test
+# allocator's own test (test_allocator_test) is self-contained and runs
+# too: every other test's verdict on leaks and frees rests on it.
+STANDALONE = %w[actor_id_test session_id_test offload_test span_test list_test paged_array_test heap_test fifo_test quota_test bytes_test names_test ring_test ring_codec_test hash_test handle_test text_writer_test test_allocator_test].freeze
 
 # A binary is rebuilt only when one of its inputs is newer: its test, the
 # amalgamation or a header. Tests build and run in parallel, one per CPU.

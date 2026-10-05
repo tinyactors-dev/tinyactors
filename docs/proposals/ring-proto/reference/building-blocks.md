@@ -97,7 +97,7 @@ Verdicts:
 | # | Block | Contract | Today | Proposal uses it for | Verdict |
 |---|---|---|---|---|---|
 | E1 | **Generation handle** | `(generation << 32) | slot` with `make`, `slot`, `generation` and `valid`. | `ta_actor_id_make` (`actor.c:78`); definition IDs repeat the same packing by hand (`system.c:456`); `ta_io_scope` has its own scheme | sessions and definitions, as today. Envelopes do not need one, because withdrawal goes by `source_seq`. | **generalize** |
-| E2 | **Failing, counting test allocator** | Refuses from the Nth allocation; counts bytes per category. | Hand-rolled in nine core test files (`params_test.c:36`, `deep_test.c:34`, `span_test.c:43`, ...); the kernel has `tah_allocator_refuse_from` | the shrunken out-of-memory sweep: creation, registration, spawn, load, refill | **generalize** into one core test helper |
+| E2 | **Failing, counting test allocator** | Refuses from the Nth allocation, at one attempt, everything, or above a size; counts attempts, served blocks, live blocks and bytes, and blocks at or above a size; reports leaks and bad frees. | Hand-rolled in 36 core test programs, now `tests/test_allocator.h`; the kernel has `tah_allocator_refuse_from` | the shrunken out-of-memory sweep: creation, registration, spawn, load, refill | **generalize** into one core test helper |
 | E3 | **Ring script driver** | A C test helper. It posts h2c records (using the C2 writers), calls `ta_run`, and checks the c2h sequence against an expectation. | none (the test host's JSON-RPC protocol does the same job over a socket) | core tests for scenarios S01 to S11, without a binding | **nice** |
 
 ## Assembly: each proposal structure from blocks

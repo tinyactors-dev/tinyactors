@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -26,26 +27,8 @@ static int failures;
 
 #define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
 
-static long live_blocks;
-
-static void *count_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    (void)alignment;
-    void *block = malloc(size);
-    live_blocks += block != NULL ? 1 : 0;
-    return block;
-}
-
-static void count_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1;
-        free(params->ptr);
-    }
-}
-
-static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = count_free };
-static const ta_allocator allocator = { .self = NULL, .v = &count_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* ------------------------------------------------------------------------
  * A router that keeps what it accepts, as an asynchronous router would.
@@ -263,7 +246,7 @@ static void test_equal_addresses_are_one_handle(void) {
     router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
     one_directory dir = {0};
     ta_system *system = create_system(&router, &dir);
-    long before = live_blocks;
+    long before = heap.live;
     ta_actor_address text = { .family = { STR("f") }, .name = STR("n") };
     ta_address *first = NULL;
     ta_address *second = NULL;
@@ -274,7 +257,7 @@ static void test_equal_addresses_are_one_handle(void) {
     CHECK(first == second);
     ta_address_release(first);
     ta_address_release(second);
-    CHECK(live_blocks == before + 2); /* the record is gone; the first page and its directory stay */
+    CHECK(heap.live == before + 2); /* the record is gone; the first page and its directory stay */
     /* Many addresses: the table grows a bucket at a time and finds them all. */
     enum { MANY = 20000 };
     static ta_address *many[MANY];
@@ -302,7 +285,8 @@ int main(void) {
     test_submitted_send_outlives_its_sender();
     test_delivered_origin_outlives_the_host_reference();
     test_equal_addresses_are_one_handle();
-    CHECK(live_blocks == 0);
+    CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "address_test: %d check(s) failed\n", failures);
         return 1;

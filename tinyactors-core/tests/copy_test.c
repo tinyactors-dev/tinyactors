@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures = 0;
 
@@ -27,22 +28,8 @@ static int failures = 0;
 #define SOURCE(text) ((ta_expression){ .kind = TA_EXPRESSION_SOURCE, .as.source = STR(text) })
 #define END {0}
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator allocator = { .self = NULL, .v = &allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* ------------------------------------------------------------------------
  * Mutable values: a reference-counted box holding a number
@@ -460,6 +447,7 @@ int main(void) {
     test_copy_out_of_memory_runs_again();
     test_invoke_copies();
     test_refused_invoke_copy_fails_the_invocation();
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "copy test: %d check(s) failed\n", failures);
         return 1;

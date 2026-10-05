@@ -8,6 +8,7 @@
  * the core does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,22 +31,8 @@ static int failures = 0;
  * Fixtures
  */
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* A data model that accepts everything, or refuses `refuse` when set. */
 typedef struct {
@@ -122,14 +109,14 @@ typedef struct {
 static void compile_with(const ta_scxml_spec *spec, test_model *model, bool with_arena, outcome *out) {
     *out = (outcome){0};
     if (with_arena) {
-        CHECK(ta_arena_init(&out->arena, test_allocator, 256) == TA_OK);
+        CHECK(ta_arena_init(&out->arena, allocator, 256) == TA_OK);
     }
     ta_definition *definition = NULL;
     out->result = ta_definition_compile_spec(system_under_test,
                                              &(ta_definition_compile_params){
                                                  .spec = spec,
                                                  .datamodel = { .self = model, .v = &model_vtable },
-                                                 .allocator = test_allocator,
+                                                 .allocator = allocator,
                                                  .out = &definition,
                                                  .error = &out->error,
                                                  .error_arena = with_arena ? &out->arena : NULL,
@@ -153,7 +140,7 @@ static const char *path_text(const ta_compile_error *error) {
     ta_arena arena;
     ta_str formatted = {0};
     text[0] = 0;
-    if (ta_arena_init(&arena, test_allocator, 256) != TA_OK) {
+    if (ta_arena_init(&arena, allocator, 256) != TA_OK) {
         return text;
     }
     ta_compile_error path_only = { .path = error->path, .path_length = error->path_length, .message = S("x") };
@@ -228,13 +215,13 @@ static void test_many_states_resolve(void) {
     CHECK(ta_definition_compile_spec(system_under_test,
                                      &(ta_definition_compile_params){ .spec = &spec,
                                                                       .datamodel = { .v = &model_vtable },
-                                                                      .allocator = test_allocator,
+                                                                      .allocator = allocator,
                                                                       .out = &definition,
                                                                       .error = &error }) == TA_OK);
     ta_definition_id id = {0};
     CHECK(definition != NULL && ta_system_register_definition(system_under_test, definition, &id) == TA_OK);
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, test_allocator, 4096) == TA_OK);
+    CHECK(ta_arena_init(&arena, allocator, 4096) == TA_OK);
     const ta_scxml_spec *exported = NULL;
     CHECK(ta_definition_export(system_under_test, &(ta_definition_export_params){ .definition = id, .arena = &arena,
                                                                                   .out = &exported }) == TA_OK);
@@ -655,14 +642,14 @@ static void test_success_costs_nothing(void) {
     ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a") }, END };
     ta_scxml_spec spec = { .name = S("c"), .states = states };
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, test_allocator, 256) == TA_OK);
+    CHECK(ta_arena_init(&arena, allocator, 256) == TA_OK);
     ta_arena before = arena;
     ta_compile_error error = { .code = TA_COMPILE_ERROR_LIMIT };
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(system_under_test,
                                      &(ta_definition_compile_params){ .spec = &spec,
                                                                       .datamodel = { .v = &model_vtable },
-                                                                      .allocator = test_allocator,
+                                                                      .allocator = allocator,
                                                                       .out = &definition,
                                                                       .error = &error,
                                                                       .error_arena = &arena }) == TA_OK);
@@ -981,7 +968,7 @@ static void test_history_default_chains(void) {
     CHECK(ta_definition_compile_spec(system_under_test,
                                      &(ta_definition_compile_params){ .spec = &spec,
                                                                       .datamodel = { .v = &model_vtable },
-                                                                      .allocator = test_allocator,
+                                                                      .allocator = allocator,
                                                                       .out = &definition,
                                                                       .error = &error }) == TA_OK);
     CHECK(error.code == TA_COMPILE_ERROR_NONE);
@@ -1038,12 +1025,12 @@ static void test_text_bytes(void) {
     for (uint32_t which = 0; which < 3u; which += 1u) {
         ta_system *system = NULL;
         ta_param_value param = { .param = TA_PARAM_COMPILE_TEXT_BYTES, .value = sizes[which] };
-        CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator, .params = &param, .param_count = 1 },
+        CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = &param, .param_count = 1 },
                                &system) == TA_OK);
         uint64_t read = 0;
         CHECK(ta_system_param(system, TA_PARAM_COMPILE_TEXT_BYTES, &read) == TA_OK && read == sizes[which]);
         ta_arena arena;
-        CHECK(ta_arena_init(&arena, test_allocator, 256) == TA_OK);
+        CHECK(ta_arena_init(&arena, allocator, 256) == TA_OK);
         ta_str line = { 0 };
         CHECK(ta_compile_error_format(&(ta_compile_error_format_params){
                                           .error = &error, .arena = &arena, .out = &line, .system = system }) == TA_OK);
@@ -1064,7 +1051,7 @@ static void test_text_bytes(void) {
     }
     /* Without a system: the default, 1024. */
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, test_allocator, 256) == TA_OK);
+    CHECK(ta_arena_init(&arena, allocator, 256) == TA_OK);
     ta_str line = { 0 };
     CHECK(ta_compile_error_format(&(ta_compile_error_format_params){ .error = &error, .arena = &arena, .out = &line }) ==
           TA_OK);
@@ -1074,14 +1061,14 @@ static void test_text_bytes(void) {
     ta_system *refused = NULL;
     ta_param rejected = TA_PARAM_COUNT;
     ta_param_value small = { .param = TA_PARAM_COMPILE_TEXT_BYTES, .value = 255u };
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator, .params = &small, .param_count = 1,
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = &small, .param_count = 1,
                                                 .rejected = &rejected },
                            &refused) == TA_ERR_INVALID);
     CHECK(rejected == TA_PARAM_COMPILE_TEXT_BYTES);
 }
 
 int main(void) {
-    if (ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system_under_test) != TA_OK) {
+    if (ta_system_create(&(ta_system_config){ .allocator = allocator }, &system_under_test) != TA_OK) {
         fprintf(stderr, "cannot create a system\n");
         return 1;
     }
@@ -1103,6 +1090,7 @@ int main(void) {
     test_history_default_loops();
     test_history_default_chains();
     ta_system_destroy(system_under_test);
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "compile error test: %d check(s) failed\n", failures);
         return 1;

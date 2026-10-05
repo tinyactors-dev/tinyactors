@@ -10,6 +10,7 @@
  * does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,32 +27,11 @@ static int failures = 0;
     } while (0)
 
 /* ------------------------------------------------------------------------
- * Host fixtures: a counting libc allocator.
+ * Host fixtures: a test allocator, so teardown can prove nothing leaked.
  */
 
-static size_t live_blocks = 0;
-
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    void *block = aligned_alloc(alignment, size == 0 ? alignment : size);
-    live_blocks += block != NULL ? 1u : 0u;
-    return block;
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1u;
-    }
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 
 #define S(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
@@ -93,7 +73,7 @@ static ta_definition *compile(ta_system *system, const ta_scxml_spec *spec) {
     ta_result result = ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                               .spec = spec,
                                                               .datamodel = ta_null_datamodel(),
-                                                              .allocator = test_allocator,
+                                                              .allocator = allocator,
                                                               .out = &definition,
                                                           });
     CHECK(result == TA_OK);
@@ -123,7 +103,7 @@ static void test_media_type(ta_system *system) {
     ta_definition_id id = 0;
     CHECK(ta_system_register_definition(system, b, &id) == TA_OK);
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, test_allocator, 256) == TA_OK);
+    CHECK(ta_arena_init(&arena, allocator, 256) == TA_OK);
     const ta_scxml_spec *exported = NULL;
     CHECK(ta_definition_export(system, &(ta_definition_export_params){ .definition = id, .arena = &arena,
                                                                         .out = &exported }) == TA_OK);
@@ -211,7 +191,7 @@ static ta_result import(ta_system *system, stub_codec *codec, ta_arena *arena, t
                                             .identity = identity,
                                             .datamodels = (ta_datamodel[]){ ta_null_datamodel() },
                                             .datamodel_count = 1,
-                                            .allocator = test_allocator,
+                                            .allocator = allocator,
                                             .out = out,
                                             .error = error,
                                         });
@@ -224,7 +204,7 @@ static ta_result import(ta_system *system, stub_codec *codec, ta_arena *arena, t
 static void test_import(ta_system *system) {
     stub_codec codec = {0};
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, test_allocator, 128) == TA_OK);
+    CHECK(ta_arena_init(&arena, allocator, 128) == TA_OK);
     char input[] = "running";
     ta_definition_id id = 0;
     ta_import_error error = { .stage = TA_IMPORT_STAGE_COMPILE };
@@ -247,7 +227,7 @@ static void test_import(ta_system *system) {
 static void test_import_errors(ta_system *system) {
     stub_codec codec = {0};
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, test_allocator, 128) == TA_OK);
+    CHECK(ta_arena_init(&arena, allocator, 128) == TA_OK);
     ta_definition_id id = 0;
     ta_import_error error = {0};
 
@@ -271,7 +251,7 @@ static void test_import_errors(ta_system *system) {
                                            .arena = &arena,
                                            .datamodels = (ta_datamodel[]){ ta_null_datamodel() },
                                            .datamodel_count = 1,
-                                           .allocator = test_allocator,
+                                           .allocator = allocator,
                                            .out = &id,
                                        }) == TA_ERR_UNSUPPORTED);
     /* Missing required arguments. */
@@ -280,7 +260,7 @@ static void test_import_errors(ta_system *system) {
                                            .arena = &arena,
                                            .datamodels = (ta_datamodel[]){ ta_null_datamodel() },
                                            .datamodel_count = 1,
-                                           .allocator = test_allocator,
+                                           .allocator = allocator,
                                        }) == TA_ERR_INVALID);
     ta_arena_destroy(&arena);
 }
@@ -292,7 +272,7 @@ static void test_import_errors(ta_system *system) {
 static void test_encode_round_trip(ta_system *system) {
     stub_codec codec = {0};
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, test_allocator, 128) == TA_OK);
+    CHECK(ta_arena_init(&arena, allocator, 128) == TA_OK);
     const ta_definition_identity explicit_identity = {
         .family = { .name = S("stub-family") },
         .revision = { .ptr = (const uint8_t *)"r1", .len = 2 },
@@ -377,33 +357,33 @@ static void test_durations(void) {
 
 static void test_arena_allocator(void) {
     ta_arena arena;
-    CHECK(ta_arena_init(&arena, test_allocator, 64) == TA_OK);
-    ta_allocator allocator = ta_arena_allocator(&arena);
-    CHECK(allocator.v != NULL && allocator.v->alloc != NULL && allocator.v->free != NULL);
+    CHECK(ta_arena_init(&arena, allocator, 64) == TA_OK);
+    ta_allocator arena_allocator = ta_arena_allocator(&arena);
+    CHECK(arena_allocator.v != NULL && arena_allocator.v->alloc != NULL && arena_allocator.v->free != NULL);
 
     /* Allocations are aligned, distinct, and outlive free(). */
-    uint64_t *first = allocator.v->alloc(allocator.self, sizeof(uint64_t), _Alignof(uint64_t));
-    char *second = allocator.v->alloc(allocator.self, 200, 1);
+    uint64_t *first = arena_allocator.v->alloc(arena_allocator.self, sizeof(uint64_t), _Alignof(uint64_t));
+    char *second = arena_allocator.v->alloc(arena_allocator.self, 200, 1);
     CHECK(first != NULL && second != NULL);
     CHECK(((uintptr_t)first % _Alignof(uint64_t)) == 0);
     *first = 42;
     memset(second, 'x', 200);
-    allocator.v->free(allocator.self, &(ta_allocator_free_params){ .ptr = first, .size = sizeof(uint64_t),
-                                                                     .alignment = _Alignof(uint64_t) });
+    arena_allocator.v->free(arena_allocator.self, &(ta_allocator_free_params){ .ptr = first, .size = sizeof(uint64_t),
+                                                                           .alignment = _Alignof(uint64_t) });
     CHECK(*first == 42);
     CHECK(second[199] == 'x');
 
     /* Everything goes back to the backing allocator with the arena. */
-    CHECK(live_blocks > 0);
+    CHECK(heap.live > 0);
     ta_arena_destroy(&arena);
-    CHECK(live_blocks == 0);
+    CHECK(heap.live == 0);
 }
 
 int main(void) {
     test_arena_allocator();
     test_durations();
     ta_system *system = NULL;
-    if (ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system) != TA_OK) {
+    if (ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) != TA_OK) {
         fprintf(stderr, "cannot create a system\n");
         return 1;
     }
@@ -412,6 +392,7 @@ int main(void) {
     test_import_errors(system);
     test_encode_round_trip(system);
     ta_system_destroy(system);
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "codec test: %d check(s) failed\n", failures);
         return 1;

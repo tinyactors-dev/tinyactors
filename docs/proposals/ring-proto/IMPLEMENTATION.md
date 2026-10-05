@@ -437,7 +437,7 @@ gets its own test program in `tinyactors-core/tests/`.
 | 1.0 | – | `types.c` / `types.h` | Split into `memory`, `str`, `vec`, `bitset.h`, `span.h`, `text_writer` and `version.c`. Delete `ta_actor_key`, which nothing uses. Every module includes what it uses instead of `types.h`. Add the ast-grep rule that a header opens with a file comment, with today's headers on its allow-list; each new unit from the split gets its comment. |
 | 1.1 | D5 hash functions, D6 formatters | The Murmur finalizer duplicated in `session.c:4` and `trace.c:34`; FNV-1a in 32-bit and 64-bit forms; three decimal formatters, four hex helpers, two `cstr` helpers | One header. Trace and span IDs must stay identical: `span_test` covers them. |
 | 1.2 | E1 generation handles | The hand-packed definition IDs (`system.c:456`), and `ta_actor_id_make` as the only shared helper | |
-| 1.3 | E2 failing, counting test allocator | Nine hand-rolled copies in core's tests | It lives with the tests and is never amalgamated into the library. |
+| 1.3 | E2 failing, counting test allocator | The hand-rolled copies in core's tests (36) | It lives with the tests and is never amalgamated into the library. |
 | 1.4 | A2 layout builder | Six layout calculators | Checked arithmetic. Phase 4's workspace sizing depends on it. |
 | 1.5 | A5 index pool | The paged directories of the actor, address and session tables | Not the timer heap or `io_origin`: they are deleted later. A5 needs `refill(min_free)` and a ceiling from the start, even though only the pool uses the ceiling. |
 | 1.6 | B3 hash table, D7 trie of atoms | The atom table, the event-name trie, and the address and session tables | Two modes: fixed, and growing on an explicit call. The trie becomes a named block on B3. |

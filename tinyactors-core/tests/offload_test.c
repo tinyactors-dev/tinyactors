@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -23,32 +24,9 @@ static int failures;
 
 #define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
 
-/* An allocator that counts live blocks and can refuse the n-th allocation. */
-static long live_blocks;
-static long allocations;
-static long fail_at = -1;
-
-static void *count_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    (void)alignment;
-    if (fail_at >= 0 && allocations++ == fail_at) {
-        return NULL;
-    }
-    void *block = calloc(1, size == 0 ? 1 : size);
-    live_blocks += block != NULL ? 1 : 0;
-    return block;
-}
-
-static void count_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1;
-        free(params->ptr);
-    }
-}
-
-static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = count_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &count_vtable };
+/* A test allocator, which counts live blocks and can refuse the n-th allocation. */
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* A one-address directory, enough for one named actor to unload and load. */
 typedef struct {
@@ -166,7 +144,7 @@ static const ta_actor_address the_address = { .family = { STR("timed") }, .name 
 
 static void start(fixture *f) {
     *f = (fixture){0};
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &f->system) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &f->system) == TA_OK);
     CHECK(ta_system_set_actor_directory(f->system, (ta_actor_directory){ .self = &f->dir, .v = &dir_vtable }) ==
           TA_OK);
     ta_definition_identity identity = {
@@ -179,11 +157,11 @@ static void start(fixture *f) {
                              .spec = &(ta_scxml_spec){ .datamodel = STR("null"), .identity = &identity,
                                                        .states = timed_chart },
                              .datamodel = ta_null_datamodel(),
-                             .allocator = test_allocator,
+                             .allocator = allocator,
                              .out = &definition,
                          }) == TA_OK);
     CHECK(ta_system_register_definition(f->system, definition, &f->definition) == TA_OK);
-    CHECK(ta_arena_init(&f->arena, test_allocator, 256) == TA_OK);
+    CHECK(ta_arena_init(&f->arena, allocator, 256) == TA_OK);
 }
 
 static void finish(fixture *f) {
@@ -355,12 +333,11 @@ static void test_allocation_failures(void) {
         fixture f;
         start(&f);
         ta_actor_id actor = spawn(&f, &the_address);
-        allocations = 0;
-        fail_at = step;
+        heap.policy.fail_at = heap.attempts + (uint32_t)step + 1u;
         ta_bytes bytes = {0};
         ta_result result = ta_actor_offload(f.system, &(ta_actor_offload_params){ .actor = actor, .arena = &f.arena,
                                                                                   .out = &bytes });
-        fail_at = -1;
+        heap.policy.fail_at = 0;
         if (result == TA_OK) {
             finish(&f);
             break;
@@ -375,11 +352,10 @@ static void test_allocation_failures(void) {
         fixture f;
         start(&f);
         ta_bytes bytes = offload(&f, spawn(&f, &the_address));
-        allocations = 0;
-        fail_at = step;
+        heap.policy.fail_at = heap.attempts + (uint32_t)step + 1u;
         ta_actor_id id = 0;
         ta_result result = ta_actor_load(f.system, &(ta_actor_load_params){ .bytes = bytes, .out = &id });
-        fail_at = -1;
+        heap.policy.fail_at = 0;
         if (result == TA_OK) {
             finish(&f);
             break;
@@ -591,7 +567,7 @@ static void start_blobs(fixture *f) {
     blob_model_vtable.value_write = blob_write;
     blob_model_vtable.value_read = blob_read;
     blob_model_vtable.init_instance = blob_init_instance;
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &f->system) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &f->system) == TA_OK);
     CHECK(ta_system_set_actor_directory(f->system, (ta_actor_directory){ .self = &f->dir, .v = &dir_vtable }) ==
           TA_OK);
     ta_definition_identity identity = {
@@ -604,11 +580,11 @@ static void start_blobs(fixture *f) {
                              .spec = &(ta_scxml_spec){ .datamodel = STR("null"), .identity = &identity,
                                                        .states = timed_chart },
                              .datamodel = { .self = NULL, .v = &blob_model_vtable },
-                             .allocator = test_allocator,
+                             .allocator = allocator,
                              .out = &definition,
                          }) == TA_OK);
     CHECK(ta_system_register_definition(f->system, definition, &f->definition) == TA_OK);
-    CHECK(ta_arena_init(&f->arena, test_allocator, 256) == TA_OK);
+    CHECK(ta_arena_init(&f->arena, allocator, 256) == TA_OK);
 }
 
 /* A root of 10,000 bytes goes out and comes back whole, for every split. */
@@ -666,12 +642,11 @@ static void test_codec_allocation_failures(void) {
         start_blobs(&f);
         ta_actor_id actor = spawn(&f, &the_address);
         ta_value root = blob_make(3000, 5);
-        allocations = 0;
-        fail_at = step;
+        heap.policy.fail_at = heap.attempts + (uint32_t)step + 1u;
         ta_bytes bytes = {0};
         ta_result result = ta_actor_offload(f.system, &(ta_actor_offload_params){ .actor = actor, .root = &root,
                                                                                   .arena = &f.arena, .out = &bytes });
-        fail_at = -1;
+        heap.policy.fail_at = 0;
         if (result == TA_OK) {
             ta_value back = {0};
             ta_actor_id id = 0;
@@ -703,7 +678,8 @@ int main(void) {
     test_streaming_codec();
     test_codec_refusal();
     test_codec_allocation_failures();
-    CHECK(live_blocks == 0);
+    CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "offload_test: %d check(s) failed\n", failures);
         return 1;

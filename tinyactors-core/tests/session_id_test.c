@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -25,28 +26,8 @@ static int failures;
 
 #define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
 
-static long live_blocks;
-static size_t largest_block;
-
-static void *count_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    (void)alignment;
-    void *block = calloc(1, size);
-    largest_block = size > largest_block ? size : largest_block;
-    live_blocks += block != NULL ? 1 : 0;
-    return block;
-}
-
-static void count_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    if (params->ptr != NULL) {
-        live_blocks -= 1;
-        free(params->ptr);
-    }
-}
-
-static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = count_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &count_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* A one-address directory, enough for one named actor to unload and load. */
 typedef struct {
@@ -109,7 +90,7 @@ typedef struct {
 
 static void start_in(fixture *f, uint64_t incarnation) {
     *f = (fixture){0};
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator, .incarnation = incarnation },
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .incarnation = incarnation },
                            &f->system) == TA_OK);
     CHECK(ta_system_set_actor_directory(f->system, (ta_actor_directory){ .self = &f->dir, .v = &dir_vtable }) ==
           TA_OK);
@@ -123,7 +104,7 @@ static void start_in(fixture *f, uint64_t incarnation) {
                              .spec = &(ta_scxml_spec){ .datamodel = STR("null"), .identity = &identity,
                                                        .states = idle_chart },
                              .datamodel = ta_null_datamodel(),
-                             .allocator = test_allocator,
+                             .allocator = allocator,
                              .out = &definition,
                          }) == TA_OK);
     CHECK(ta_system_register_definition(f->system, definition, &f->definition) == TA_OK);
@@ -171,7 +152,7 @@ static ta_actor_ref route(fixture *f, uint64_t id, bool *named) {
 
 static void finish(fixture *f) {
     ta_system_destroy(f->system);
-    CHECK(live_blocks == 0);
+    CHECK(heap.live == 0);
 }
 
 /* The session ID is the first runtime ID, across any number of reloads. */
@@ -317,17 +298,17 @@ static void test_destroy_frees_a_parked_session(void) {
 static void test_the_table_grows_without_copying(void) {
     enum { COUNT = 200000 };
     ta_session_table table;
-    CHECK(ta_session_table_init(&table, test_allocator) == TA_OK);
+    CHECK(ta_session_table_init(&table, allocator) == TA_OK);
     ta_session_node **nodes = calloc(COUNT, sizeof(*nodes));
     ta_actor stand_in;
-    largest_block = 0;
+    heap.largest_request = 0;
     for (uint32_t index = 0; index < COUNT; index += 1u) {
         CHECK(ta_session_node_new(&table, &nodes[index]) == TA_OK);
         nodes[index]->id = ta_actor_id_make(index, 1u + index % 7u);
         nodes[index]->actor = index % 2u == 0 ? &stand_in : NULL;
         ta_session_insert(&table, nodes[index]);
     }
-    CHECK(largest_block <= TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *));
+    CHECK(heap.largest_request <= TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *));
     CHECK(table.count == COUNT);
     uint32_t found = 0;
     for (uint32_t index = 0; index < COUNT; index += 1u) {
@@ -352,7 +333,7 @@ static void test_the_table_grows_without_copying(void) {
     CHECK(table.count == 0);
     ta_session_table_destroy(&table);
     free(nodes);
-    CHECK(live_blocks == 0);
+    CHECK(heap.live == 0);
 }
 
 static const char *uri_of(fixture *f, ta_actor_ref ref, char *buffer, uint32_t capacity) {
@@ -466,6 +447,7 @@ int main(void) {
     test_remove_unloaded_ends_the_session();
     test_destroy_frees_a_parked_session();
     test_the_table_grows_without_copying();
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "session id test: %d check(s) failed\n", failures);
         return 1;

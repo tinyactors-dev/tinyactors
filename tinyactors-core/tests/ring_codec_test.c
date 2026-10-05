@@ -51,6 +51,7 @@
  *    refused by ta_ring_peek with TA_ERR_CORRUPT before the codec sees it.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -749,18 +750,6 @@ static void test_read_refused(void) {
  * Claim 7: seq end to end through a ring.
  */
 
-static void *plain_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    return aligned_alloc(alignment < sizeof(void *) ? sizeof(void *) : alignment, (size + 7u) & ~(size_t)7u);
-}
-
-static void plain_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable plain_vtable = { .alloc = plain_alloc, .free = plain_free };
-
 static void post_destroy(ta_ring *ring, uint64_t session, const char *address) {
     ta_h2c_destroy_texts texts = { .address = ta_str_from_cstr(address) };
     uint32_t size = 0;
@@ -774,9 +763,10 @@ static void post_destroy(ta_ring *ring, uint64_t session, const char *address) {
 }
 
 static void test_seq_through_ring(void) {
+    test_allocator heap = {0};
     ta_ring ring;
     ta_ring_params params = {
-        .allocator = { .self = NULL, .v = &plain_vtable },
+        .allocator = test_allocator_of(&heap),
         .capacity = 512u,
         .max_record_bytes = 128u,
         .mode = TA_RING_LOSSLESS,
@@ -826,6 +816,7 @@ static void test_seq_through_ring(void) {
     ta_record_view view;
     CHECK(read_as(record.bytes, record.size, TA_RECORD_RING_H2C, &view) == TA_OK);
     ta_ring_destroy(&ring);
+    CHECK(test_allocator_finish(&heap) == 0);
 }
 
 int main(void) {

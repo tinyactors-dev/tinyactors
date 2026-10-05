@@ -7,6 +7,7 @@
  * identity before registration; it uses the C library, the core does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,25 +38,11 @@ static int failures = 0;
     } while (0)
 
 /* ------------------------------------------------------------------------
- * Host fixtures: a libc allocator and a data model that evaluates nothing.
+ * Host fixtures: a test allocator and a data model that evaluates nothing.
  */
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 static ta_result null_prepare(void *self, const ta_datamodel_prepare_definition_params *params) {
     (void)self;
@@ -110,7 +97,7 @@ static ta_definition *compile(ta_system *system, const ta_scxml_spec *spec) {
     ta_result result = ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                               .spec = spec,
                                                               .datamodel = null_datamodel,
-                                                              .allocator = test_allocator,
+                                                              .allocator = allocator,
                                                               .out = &definition,
                                                           });
     CHECK(result == TA_OK);
@@ -612,13 +599,13 @@ static void test_errors(roundtrip *trip) {
 
 int main(void) {
     ta_system *system = NULL;
-    if (ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system) != TA_OK) {
+    if (ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) != TA_OK) {
         fprintf(stderr, "cannot create a system\n");
         return 1;
     }
     ta_arena arena;
     /* A small block size makes export span many arena blocks. */
-    if (ta_arena_init(&arena, test_allocator, 256) != TA_OK) {
+    if (ta_arena_init(&arena, allocator, 256) != TA_OK) {
         fprintf(stderr, "cannot create an arena\n");
         return 1;
     }
@@ -631,6 +618,7 @@ int main(void) {
     test_errors(&trip);
     ta_arena_destroy(&arena);
     ta_system_destroy(system);
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "export test: %d check(s) failed\n", failures);
         return 1;

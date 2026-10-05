@@ -8,6 +8,7 @@
  * UINT32_MAX directly instead of reusing one slot four billion times.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,22 +26,8 @@ static int failures = 0;
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 static void test_split_and_join(void) {
     ta_actor_id id = ta_actor_id_make(7u, 3u);
@@ -66,13 +53,13 @@ static bool resident(ta_system *system, ta_actor_id id) {
 
 static void test_generation_skips_zero(void) {
     ta_system *system = NULL;
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
     ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle") }, { 0 } };
     ta_scxml_spec spec = { .name = S("ids"), .states = states };
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){ .spec = &spec,
                                                                            .datamodel = ta_null_datamodel(),
-                                                                           .allocator = test_allocator,
+                                                                           .allocator = allocator,
                                                                            .out = &definition }) == TA_OK);
     ta_definition_id chart = 0;
     CHECK(ta_system_register_definition(system, definition, &chart) == TA_OK);
@@ -119,6 +106,7 @@ static void test_generation_skips_zero(void) {
 int main(void) {
     test_split_and_join();
     test_generation_skips_zero();
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "actor id test: %d check(s) failed\n", failures);
         return 1;

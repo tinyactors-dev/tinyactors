@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -18,29 +19,11 @@ static int failures;
     } while (0)
 
 /* ------------------------------------------------------------------------
- * A bump allocator over static storage; nothing is returned to it.
+ * A test allocator: the system returns every block to it.
  */
 
-static _Alignas(16) unsigned char heap[1u << 20];
-static size_t heap_used;
-
-static void *bump_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    size_t at = (heap_used + alignment - 1u) & ~(alignment - 1u);
-    if (at + size > sizeof(heap)) {
-        return NULL;
-    }
-    heap_used = at + size;
-    return heap + at;
-}
-
-static void bump_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    (void)params;
-}
-
-static const ta_allocator_vtable bump_vtable = { .alloc = bump_alloc, .free = bump_free };
-static const ta_allocator allocator = { .self = NULL, .v = &bump_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* ------------------------------------------------------------------------
  * A data model that counts calls to `inspect` and releases of its root.
@@ -815,6 +798,7 @@ int main(void) {
     test_reading_identities_back(system, &model);
     test_elements_by_id(system, &model);
     ta_system_destroy(system);
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "inspection test: %d check(s) failed\n", failures);
         return 1;

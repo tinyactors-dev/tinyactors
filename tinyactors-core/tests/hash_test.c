@@ -24,6 +24,7 @@
  * uses the C library, the core does not.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,25 +43,11 @@ static int failures = 0;
 #define S(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
 
 /* ------------------------------------------------------------------------
- * An allocator over the C library, for the tables and the compiler.
+ * A test allocator, for the tables and the compiler.
  */
 
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* ------------------------------------------------------------------------
  * Claim 1: FNV-1a 32, the published vectors.
@@ -179,7 +166,7 @@ static void test_derived_values(void) {
 
     /* The atom table: FNV-1a 32 of the text, kept in the entry. */
     ta_atom_table atoms;
-    CHECK(ta_atom_table_init(&atoms, test_allocator) == TA_OK);
+    CHECK(ta_atom_table_init(&atoms, allocator) == TA_OK);
     ta_atom atom = TA_ATOM_NONE;
     CHECK(ta_atom_intern(&atoms, S("foobar"), &atom) == TA_OK);
     const ta_atom_entry *entry = ta_vec_at(&atoms.entries, atom);
@@ -195,7 +182,7 @@ static void test_derived_values(void) {
 
 static void test_fingerprint(void) {
     ta_system *system = NULL;
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
     if (system == NULL) {
         return;
     }
@@ -211,7 +198,7 @@ static void test_fingerprint(void) {
     CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                  .spec = &spec,
                                                  .datamodel = ta_null_datamodel(),
-                                                 .allocator = test_allocator,
+                                                 .allocator = allocator,
                                                  .out = &definition,
                                              }) == TA_OK);
     if (definition != NULL) {
@@ -236,6 +223,7 @@ int main(void) {
     test_mixer();
     test_derived_values();
     test_fingerprint();
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "hash test: %d check(s) failed\n", failures);
         return 1;

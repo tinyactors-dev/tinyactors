@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures;
 
@@ -21,41 +22,6 @@ static int failures;
     } while (0)
 
 #define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
-
-/* ------------------------------------------------------------------------
- * An allocator that counts live allocations and bytes.
- */
-
-typedef struct {
-    long live_blocks;
-    long live_bytes;
-} counting_allocator;
-
-static void *counted_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *counts = self;
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size_t rounded = (size + alignment - 1u) / alignment * alignment;
-    void *block = aligned_alloc(alignment, rounded == 0 ? alignment : rounded);
-    if (block != NULL) {
-        counts->live_blocks += 1;
-        counts->live_bytes += (long)size;
-    }
-    return block;
-}
-
-static void counted_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *counts = self;
-    if (params->ptr == NULL) {
-        return;
-    }
-    counts->live_blocks -= 1;
-    counts->live_bytes -= (long)params->size;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable counted_vtable = { .alloc = counted_alloc, .free = counted_free };
 
 /* ------------------------------------------------------------------------
  * A data model that counts its definition and instance lifecycles.
@@ -141,7 +107,7 @@ static const ta_scxml_state_spec two_states[] = {
 };
 
 typedef struct {
-    counting_allocator counts;
+    test_allocator counts;
     counting_model model;
     ta_allocator allocator;
     ta_system *system;
@@ -149,7 +115,7 @@ typedef struct {
 
 static void fixture_init(fixture *f) {
     *f = (fixture){0};
-    f->allocator = (ta_allocator){ .self = &f->counts, .v = &counted_vtable };
+    f->allocator = test_allocator_of(&f->counts);
     if (ta_system_create(&(ta_system_config){ .allocator = f->allocator }, &f->system) != TA_OK) {
         fprintf(stderr, "retirement test: ta_system_create failed\n");
         exit(1);
@@ -298,7 +264,8 @@ static void test_ids(void) {
     CHECK(ta_system_retire_definition(f.system, first + ((ta_definition_id)1 << 32)) == TA_ERR_NOT_FOUND);
     CHECK(ta_system_retire_definition(NULL, first) == TA_ERR_INVALID);
     ta_system_destroy(f.system);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 static void test_retire_without_actors(void) {
@@ -306,8 +273,8 @@ static void test_retire_without_actors(void) {
     fixture_init(&f);
     /* Warm up: interns the chart's atoms and grows the slot table once. */
     CHECK(ta_system_retire_definition(f.system, register_chart(&f, "warm")) == TA_OK);
-    long blocks = f.counts.live_blocks;
-    long bytes = f.counts.live_bytes;
+    uint32_t blocks = f.counts.live;
+    size_t bytes = f.counts.live_bytes;
     int destroyed = f.model.destroyed;
 
     ta_definition_id id = register_chart(&f, "warm");
@@ -315,7 +282,7 @@ static void test_retire_without_actors(void) {
     CHECK(ta_system_retire_definition(f.system, id) == TA_OK);
     /* Freed at once: the adapter released it and every byte came back. */
     CHECK(f.model.destroyed == destroyed + 1);
-    CHECK(f.counts.live_blocks == blocks);
+    CHECK(f.counts.live == blocks);
     CHECK(f.counts.live_bytes == bytes);
     check_gone(&f, id);
     ta_definition_id found = 0;
@@ -337,7 +304,8 @@ static void test_retire_without_actors(void) {
 
     ta_system_destroy(f.system);
     CHECK(f.model.destroyed == f.model.prepared);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 static void test_retire_with_actors(void) {
@@ -361,8 +329,8 @@ static void test_retire_with_actors(void) {
     CHECK(ta_system_retire_definition(f.system, warm) == TA_OK);
     CHECK(ta_actor_destroy(f.system, warm_actors[0]) == TA_OK);
     CHECK(ta_actor_destroy(f.system, warm_actors[1]) == TA_OK);
-    long blocks = f.counts.live_blocks;
-    long bytes = f.counts.live_bytes;
+    uint32_t blocks = f.counts.live;
+    size_t bytes = f.counts.live_bytes;
 
     ta_definition_id id = register_chart(&f, "warm");
     ta_actor_id first = 0;
@@ -409,14 +377,15 @@ static void test_retire_with_actors(void) {
     CHECK(ta_actor_destroy(f.system, second) == TA_OK);
     CHECK(f.model.destroyed == destroyed + 1);
     CHECK(!f.model.destroyed_early);
-    CHECK(f.counts.live_blocks == blocks);
+    CHECK(f.counts.live == blocks);
     CHECK(f.counts.live_bytes == bytes);
     check_gone(&f, id);
     CHECK(ta_system_retire_definition(f.system, id) == TA_OK);
 
     ta_system_destroy(f.system);
     CHECK(f.model.destroyed == f.model.prepared);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 static void test_find_after_retire(void) {
@@ -443,7 +412,8 @@ static void test_find_after_retire(void) {
 
     ta_system_destroy(f.system);
     CHECK(f.model.destroyed == f.model.prepared);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 /* ADR 0077 rule 1: registering a live identity again answers the same definition. */
@@ -451,12 +421,12 @@ static void test_register_is_idempotent(void) {
     fixture f;
     fixture_init(&f);
     ta_definition_id first = register_chart(&f, "same");
-    long blocks = f.counts.live_blocks;
+    uint32_t blocks = f.counts.live;
     ta_definition_id again = register_chart(&f, "same");
     CHECK(again == first);
     CHECK(holds_of(&f, first) == 2);
     /* The second compile was destroyed: nothing new is kept. */
-    CHECK(f.counts.live_blocks == blocks);
+    CHECK(f.counts.live == blocks);
 
     /* The same explicit revision for other content is refused, not answered. */
     ta_definition_id other = 0;
@@ -465,7 +435,8 @@ static void test_register_is_idempotent(void) {
 
     ta_system_destroy(f.system);
     CHECK(f.model.destroyed == f.model.prepared);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 /* ------------------------------------------------------------------------
@@ -574,10 +545,10 @@ static void test_handles(void) {
 
     /* The same handles answer the live definition, which gains a hold. */
     CHECK(register_hosted(&f, &(hosted_chart){ "v1", host(&interned_vtable, &handle_a), false }, &first) == TA_OK);
-    long blocks = f.counts.live_blocks;
+    uint32_t blocks = f.counts.live;
     CHECK(register_hosted(&f, &(hosted_chart){ "v1", host(&interned_vtable, &handle_a), false }, &again) == TA_OK);
     CHECK(again == first && holds_of(&f, first) == 2);
-    CHECK(f.counts.live_blocks == blocks);
+    CHECK(f.counts.live == blocks);
     CHECK(interned_holds == 1u); /* the answered compile released its handle */
 
     /* Another handle registers beside; a third with its handle is answered by it. */
@@ -641,7 +612,8 @@ static void test_handles(void) {
 
     ta_system_destroy(f.system);
     CHECK(f.model.destroyed == f.model.prepared);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
     CHECK(interned_holds == 0u);
 }
 
@@ -683,7 +655,8 @@ static void test_nesting(void) {
 
     ta_system_destroy(f.system);
     CHECK(f.model.destroyed == f.model.prepared);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 /* ADR 0077 rule 2: a definition nothing holds is freed after its last actor. */
@@ -715,7 +688,8 @@ static void test_release(void) {
 
     ta_system_destroy(f.system);
     CHECK(f.model.destroyed == f.model.prepared);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 /* Walks every held definition, `page` IDs at a time (ADR 0078). */
@@ -808,7 +782,8 @@ static void test_walk(void) {
     CHECK(info.nested == child);
 
     ta_system_destroy(f.system);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 static void test_system_destroy(void) {
@@ -832,7 +807,8 @@ static void test_system_destroy(void) {
     CHECK(f.model.destroyed == 4);
     CHECK(!f.model.destroyed_early);
     CHECK(f.model.instances == 0);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 /* ------------------------------------------------------------------------
@@ -950,7 +926,8 @@ static void test_definition_sink(void) {
     CHECK(sink.count == before + 2u);
     CHECK(sink.intact);
     CHECK(f.model.destroyed == f.model.prepared);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 }
 
 /* ------------------------------------------------------------------------
@@ -1112,7 +1089,8 @@ static void test_definition_records(void) {
     }
     CHECK(destroyed == 2 && freed == 2);
     CHECK(last_destroyed < first_freed);
-    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
+    CHECK(test_allocator_finish(&f.counts) == 0);
 
     /* No definition key is an actor's: no runtime ID ends in slot UINT32_MAX. */
     CHECK((TA_TRACE_DEFINITIONS_SESSION & 0xffffffffu) == 0xffffffffu);

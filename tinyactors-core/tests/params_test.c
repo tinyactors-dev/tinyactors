@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "test_allocator.h"
 
 static int failures = 0;
 
@@ -25,40 +26,12 @@ static int failures = 0;
 #define SOURCE(text) ((ta_expression){ .kind = TA_EXPRESSION_SOURCE, .as.source = STR(text) })
 
 /* ------------------------------------------------------------------------
- * A counting allocator: how many allocations, how many at least `large`
+ * A test allocator: how many allocations, how many at least `large`
  * bytes, and one it can refuse
  */
 
-static unsigned long allocations = 0;
-static unsigned long frees = 0;
-static unsigned long large_allocations = 0;
-static size_t large = SIZE_MAX;
-static unsigned long fail_at = 0; /* refuse allocation number `fail_at`; 0: none */
-
-static void *test_alloc(void *self, size_t size, size_t alignment) {
-    (void)self;
-    allocations += 1u;
-    if (fail_at != 0 && allocations == fail_at) {
-        return NULL;
-    }
-    if (size >= large) {
-        large_allocations += 1u;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = (size + alignment - 1u) / alignment * alignment;
-    return aligned_alloc(alignment, size == 0 ? alignment : size);
-}
-
-static void test_free(void *self, const ta_allocator_free_params *params) {
-    (void)self;
-    frees += 1u;
-    free(params->ptr);
-}
-
-static const ta_allocator_vtable allocator_vtable = { .alloc = test_alloc, .free = test_free };
-static const ta_allocator allocator = { .self = NULL, .v = &allocator_vtable };
+static test_allocator heap;
+static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* ------------------------------------------------------------------------
  * A data model whose conditions are true, whose values are empty, and
@@ -256,21 +229,21 @@ static void test_validation(void) {
 /* Creation allocates what every run needs; each allocation it makes can fail
  * and leaves nothing behind. */
 static void test_creation_out_of_memory(void) {
-    unsigned long before = allocations;
+    unsigned long before = heap.attempts;
     ta_system *system = create(NULL, 0);
     CHECK(system != NULL);
-    unsigned long used = allocations - before;
+    unsigned long used = heap.attempts - before;
     ta_system_destroy(system);
     CHECK(used > 0);
     for (unsigned long failing = 1; failing <= used; failing += 1u) {
-        unsigned long start_allocations = allocations;
-        unsigned long start_frees = frees;
-        fail_at = allocations + failing;
+        unsigned long start_allocations = heap.attempts;
+        unsigned long start_frees = heap.frees;
+        heap.policy.fail_at = heap.attempts + failing;
         ta_system *failed = create(NULL, 0);
-        fail_at = 0;
+        heap.policy.fail_at = 0;
         CHECK(failed == NULL);
         /* every allocation that succeeded was given back; the refused one never existed */
-        CHECK(allocations - start_allocations - 1u == frees - start_frees);
+        CHECK(heap.attempts - start_allocations - 1u == heap.frees - start_frees);
     }
 }
 
@@ -305,12 +278,12 @@ static void test_ordinary_run_allocates_nothing(void) {
     ta_actor_id actor = spawn(system, id);
     CHECK(resume(system, actor) == TA_RUN_STABLE);
     (void)event_name(system, "go"); /* interned once, outside the measure */
-    unsigned long before = allocations;
+    unsigned long before = heap.attempts;
     for (int round = 0; round < 4; round += 1) {
         deliver(system, actor, "go");
         CHECK(resume(system, actor) == TA_RUN_STABLE);
     }
-    CHECK(allocations == before);
+    CHECK(heap.attempts == before);
     CHECK(in_state(system, actor, "a"));
     ta_system_destroy(system);
 }
@@ -334,21 +307,21 @@ static void go_round(ta_system *system, const ta_actor_id *actors, uint32_t coun
 
 static void test_block_cache_on_demand(void) {
     /* Creation makes no block, whatever the bound. */
-    unsigned long before = allocations;
+    unsigned long before = heap.attempts;
     ta_param_value none[] = { { TA_PARAM_EVENT_BLOCK_CACHE, 0 } };
     ta_system *empty = create(none, 1);
     CHECK(empty != NULL);
-    unsigned long empty_allocations = allocations - before;
+    unsigned long empty_allocations = heap.attempts - before;
     ta_system_destroy(empty);
-    before = allocations;
+    before = heap.attempts;
     ta_param_value bound[] = { { TA_PARAM_EVENT_BLOCK_CACHE, CACHE_BOUND } };
     ta_system *system = create(bound, 1);
     CHECK(system != NULL);
-    CHECK(allocations - before == empty_allocations);
-    before = allocations;
+    CHECK(heap.attempts - before == empty_allocations);
+    before = heap.attempts;
     ta_system *defaults = create(NULL, 0);
     CHECK(defaults != NULL);
-    CHECK(allocations - before == empty_allocations);
+    CHECK(heap.attempts - before == empty_allocations);
     ta_system_destroy(defaults);
 
     ta_definition_id id = define(system, &toggle);
@@ -361,27 +334,27 @@ static void test_block_cache_on_demand(void) {
 
     /* Concurrency rising to 2 makes blocks for 2 at most, then none. */
     go_round(system, actors, 2);
-    before = allocations;
+    before = heap.attempts;
     go_round(system, actors, 2);
-    CHECK(allocations == before);
+    CHECK(heap.attempts == before);
 
     /* Rising to 5 makes 3 more; beyond the bound of 3, released blocks are freed. */
-    before = allocations;
-    unsigned long frees_before = frees;
+    before = heap.attempts;
+    unsigned long frees_before = heap.frees;
     go_round(system, actors, CACHE_ACTORS);
-    CHECK(allocations - before == CACHE_ACTORS - 2u);
-    CHECK(frees - frees_before == CACHE_ACTORS - CACHE_BOUND);
+    CHECK(heap.attempts - before == CACHE_ACTORS - 2u);
+    CHECK(heap.frees - frees_before == CACHE_ACTORS - CACHE_BOUND);
 
     /* Steady state within the bound allocates nothing. */
-    before = allocations;
+    before = heap.attempts;
     go_round(system, actors, CACHE_BOUND);
     go_round(system, actors, CACHE_BOUND);
-    CHECK(allocations == before);
+    CHECK(heap.attempts == before);
 
     /* Above the bound, every delivery past it takes a block and frees it again. */
-    before = allocations;
+    before = heap.attempts;
     go_round(system, actors, CACHE_ACTORS);
-    CHECK(allocations - before == CACHE_ACTORS - CACHE_BOUND);
+    CHECK(heap.attempts - before == CACHE_ACTORS - CACHE_BOUND);
     ta_system_destroy(system);
 
     /* Out of memory on the on-demand path: TA_ERR_NOMEM, nothing taken (ADR 0069). */
@@ -391,9 +364,9 @@ static void test_block_cache_on_demand(void) {
     ta_actor_id actor = spawn(bare, bare_id);
     CHECK(resume(bare, actor) == TA_RUN_STABLE);
     ta_event event = { .name = event_name(bare, "go"), .type = TA_EVENT_EXTERNAL };
-    fail_at = allocations + 1u;
+    heap.policy.fail_at = heap.attempts + 1u;
     CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .time = ta_system_time(bare), .actor = actor, .event = &event }) == TA_ERR_NOMEM);
-    fail_at = 0;
+    heap.policy.fail_at = 0;
     CHECK(in_state(bare, actor, "a"));
     CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .time = ta_system_time(bare), .actor = actor, .event = &event }) == TA_OK);
     CHECK(resume(bare, actor) == TA_RUN_STABLE);
@@ -575,7 +548,7 @@ static void test_nested_regions(void) {
     ta_system *system = nesting_system(3, &parent_definition);
     uint64_t interpreter_bytes = 0;
     CHECK(ta_system_param(system, TA_PARAM_INTERPRETER_BYTES, &interpreter_bytes) == TA_OK);
-    large = (size_t)interpreter_bytes;
+    heap.policy.large = (size_t)interpreter_bytes;
     spawned_count = 0;
     ta_actor_id parent = spawn(system, parent_definition);
     CHECK(resume(system, parent) == TA_RUN_STABLE); /* starts the child */
@@ -585,10 +558,10 @@ static void test_nested_regions(void) {
 
     /* The first cancel exits the child in region 1 and the grandchild in
      * region 2, allocating each once. */
-    unsigned long before = large_allocations;
+    unsigned long before = heap.large_allocations;
     deliver(system, parent, "stop");
     CHECK(resume(system, parent) == TA_RUN_STABLE);
-    CHECK(large_allocations - before == 2u);
+    CHECK(heap.large_allocations - before == 2u);
 
     /* The second finds both regions kept. */
     uint32_t mark = spawned_count;
@@ -596,11 +569,11 @@ static void test_nested_regions(void) {
     CHECK(resume(system, parent) == TA_RUN_STABLE);
     resume_spawned(system, mark);
     resume_spawned(system, mark + 1u);
-    before = large_allocations;
+    before = heap.large_allocations;
     deliver(system, parent, "stop");
     CHECK(resume(system, parent) == TA_RUN_STABLE);
-    CHECK(large_allocations == before);
-    large = SIZE_MAX;
+    CHECK(heap.large_allocations == before);
+    heap.policy.large = 0;
     ta_system_destroy(system);
 
     /* With two interpreters, a grandchild would need a third: its spawn is
@@ -795,6 +768,7 @@ int main(void) {
     test_nested_regions();
     test_quotas();
     test_scratch_need_exact();
+    CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "params test: %d check(s) failed\n", failures);
         return 1;

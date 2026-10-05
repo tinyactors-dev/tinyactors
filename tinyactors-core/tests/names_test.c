@@ -43,6 +43,7 @@
  *     never inserts.
  */
 #include "../include/tinyactors.c"
+#include "test_allocator.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,57 +59,6 @@ static int failures = 0;
         } \
     } while (0)
 
-/* ------------------------------------------------------------------------
- * An allocator that counts and can refuse.
- */
-
-#define MAX_BLOCKS 256u
-
-typedef struct {
-    void *ptrs[MAX_BLOCKS];
-    uint32_t live;
-    uint32_t attempts;
-    /* When true, every allocation is refused. */
-    bool refuse;
-} counting_allocator;
-
-static void *counting_alloc(void *self, size_t size, size_t alignment) {
-    counting_allocator *heap = self;
-    heap->attempts += 1u;
-    if (heap->refuse || heap->live == MAX_BLOCKS) {
-        return NULL;
-    }
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
-    size = size == 0 ? alignment : (size + alignment - 1u) / alignment * alignment;
-    void *ptr = aligned_alloc(alignment, size);
-    if (ptr != NULL) {
-        heap->ptrs[heap->live++] = ptr;
-    }
-    return ptr;
-}
-
-static void counting_free(void *self, const ta_allocator_free_params *params) {
-    counting_allocator *heap = self;
-    for (uint32_t index = 0; params->ptr != NULL && index < heap->live; index += 1u) {
-        if (heap->ptrs[index] == params->ptr) {
-            heap->ptrs[index] = heap->ptrs[--heap->live];
-            free(params->ptr);
-            return;
-        }
-    }
-    if (params->ptr != NULL) {
-        fprintf(stderr, "free of %p, which this allocator never handed out\n", params->ptr);
-        failures += 1;
-    }
-}
-
-static const ta_allocator_vtable counting_vtable = { .alloc = counting_alloc, .free = counting_free };
-
-static ta_allocator allocator_of(counting_allocator *heap) {
-    return (ta_allocator){ .self = heap, .v = &counting_vtable };
-}
 
 /* ------------------------------------------------------------------------
  * Fixtures: the worked examples' definition, and a scratch on the heap
@@ -128,7 +78,7 @@ static ta_atom intern(ta_atom_table *table, const char *cstr) {
 }
 
 typedef struct {
-    counting_allocator heap;
+    test_allocator heap;
     ta_atom_table table;
     ta_atom *scratch;
     uint32_t capacity;
@@ -148,7 +98,7 @@ static void fixture_scratch_fill(fixture *f) {
  * paid, error, communication, invoke and payment. */
 static void fixture_init(fixture *f, uint32_t capacity) {
     memset(f, 0, sizeof *f);
-    CHECK(ta_atom_table_init(&f->table, allocator_of(&f->heap)) == TA_OK);
+    CHECK(ta_atom_table_init(&f->table, test_allocator_of(&f->heap)) == TA_OK);
     f->order = intern(&f->table, "order");
     f->paid = intern(&f->table, "paid");
     f->error = intern(&f->table, "error");
@@ -165,6 +115,7 @@ static void fixture_destroy(fixture *f) {
     free(f->scratch);
     ta_atom_table_destroy(&f->table);
     CHECK(f->heap.live == 0);
+    CHECK(test_allocator_finish(&f->heap) == 0);
 }
 
 static bool scratch_is(const fixture *f, const ta_atom *expected, uint32_t count) {
@@ -456,7 +407,7 @@ static void test_never_inserts_or_allocates(void) {
     uint32_t atoms = f.table.entries.count;
     uint32_t live = f.heap.live;
     uint32_t attempts = f.heap.attempts;
-    f.heap.refuse = true;
+    f.heap.policy.refuse = true;
     static const char *const names[] = {
         "order.paid", "order.123.paid", "x9f2.qq.zz", "a.b.c.d.e.f.g.h", "error.communication.invoke.s3.7.unavailable",
     };
@@ -489,7 +440,7 @@ static void test_never_inserts_or_allocates(void) {
     CHECK(f.heap.attempts == attempts);
     CHECK(f.heap.live == live);
     CHECK(f.table.entries.count == atoms);
-    f.heap.refuse = false;
+    f.heap.policy.refuse = false;
     fixture_destroy(&f);
 }
 
