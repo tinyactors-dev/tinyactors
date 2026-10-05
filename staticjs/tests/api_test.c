@@ -954,6 +954,139 @@ static void test_limits(void) {
     sjs_context_destroy(context);
 }
 
+/* A program with a vm of its own, for the loop tests: compiled once,
+ * started as often as a test needs. */
+typedef struct {
+    sjs_context *context;
+    sjs_program *program;
+    sjs_vm *vm;
+} loop_run;
+
+static bool loop_open(loop_run *l, sjs_context *context, const char *source) {
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL } },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    l->context = context;
+    if (sjs_compile(&params, &l->program) != SJS_OK) return false;
+    sjs_vm_config config = { context };
+    return sjs_vm_init(&l->vm, &config) == SJS_OK;
+}
+
+static void loop_close(loop_run *l) {
+    sjs_vm_destroy(l->vm);
+    sjs_program_release(l->program);
+}
+
+/* Run to the end, `per_run` units at a time; the result's text or the
+ * fault's position as "fault LINE:COLUMN message". */
+static sjs_run loop_finish(loop_run *l, uint64_t per_run, char *out) {
+    sjs_run_params run = { l->program, NULL, 0 };
+    CHECK(sjs_vm_start(l->vm, &run) == SJS_OK);
+    sjs_run status;
+    while ((status = sjs_vm_run(l->vm, per_run)) == SJS_RUN_PAUSED) continue;
+    if (status == SJS_RUN_DONE) {
+        sjs_value v;
+        CHECK(sjs_vm_take_result(l->vm, &v) == SJS_OK);
+        write_text(l->context, v, out, 4096);
+        sjs_release(l->context, v);
+    } else {
+        sjs_error error;
+        CHECK(sjs_vm_error(l->vm, &error) == SJS_OK);
+        snprintf(out, 256, "fault %u:%u %.*s", error.at.line, error.at.column, (int)error.message.length, error.message.ptr);
+    }
+    return status;
+}
+
+/* A loop's callback runs in one frame kept for the whole loop (vm.c,
+ * sjs_vm_call_back). Faults in it report where they were, the limits fall
+ * where they did, an evaluation stopped at any unit frees everything, and
+ * reduce's accumulator keeps one holder. */
+static void test_loop_callbacks(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char out[4096];
+    char again[4096];
+    loop_run l;
+
+    /* A fault on the third element, at the instruction that faulted, whole
+     * and one unit at a time. */
+    CHECK(loop_open(&l, context, "[1, 2, 3, 4].map(x => {\n  const y = x * 2;\n  return x === 3 ? y.k.j : y;\n})"));
+    CHECK(loop_finish(&l, UINT64_MAX, out) == SJS_RUN_FAULT);
+    CHECK(strncmp(out, "fault 3:22 ", 11) == 0);
+    CHECK(loop_finish(&l, 1, out) == SJS_RUN_FAULT);
+    CHECK(strncmp(out, "fault 3:22 ", 11) == 0);
+    loop_close(&l);
+
+    /* Captures, a rest parameter, nested loops, reduce with an object
+     * accumulator and toSorted with a default parameter. Stopped and reset
+     * after any unit, it frees all it took; paused after every unit, it
+     * gives the same value for the same fuel. */
+    CHECK(loop_open(&l, context,
+                    "[3, 1, 2].toSorted((a, b, d = a - b) => d)\n"
+                    "  .map((x, ...r) => [x, r.length, [x, x + 1].map(y => () => y + x)])\n"
+                    "  .reduce((acc, [x, n, fs]) => ({ ...acc, [`k${x}`]: fs.map(f => f()).concat([n]) }), {})"));
+    size_t baseline = sjs_context_live_bytes(context);
+    CHECK(loop_finish(&l, UINT64_MAX, out) == SJS_RUN_DONE);
+    CHECK(strcmp(out, "{\"k1\":[2,3,2],\"k2\":[4,5,2],\"k3\":[6,7,2]}") == 0);
+    uint64_t total = sjs_vm_fuel_used(l.vm);
+    CHECK(loop_finish(&l, 1, again) == SJS_RUN_DONE);
+    CHECK(strcmp(again, out) == 0 && sjs_vm_fuel_used(l.vm) == total);
+    sjs_run_params run = { l.program, NULL, 0 };
+    for (uint64_t stop = 1; stop < total; stop++) {
+        CHECK(sjs_vm_start(l.vm, &run) == SJS_OK);
+        CHECK(sjs_vm_run(l.vm, stop) == SJS_RUN_PAUSED);
+        sjs_vm_reset(l.vm);
+        CHECK(sjs_context_live_bytes(context) == baseline);
+    }
+    loop_close(&l);
+
+    /* The accumulator moves into the callback and back, so [...acc, y]
+     * grows it in place: 77 allocations, where copying it for each of the
+     * 64 elements takes more than 250. */
+    char source[1024];
+    char *at = source;
+    at += sprintf(at, "[");
+    for (int i = 1; i <= 64; i++) at += sprintf(at, i == 1 ? "%d" : ", %d", i);
+    sprintf(at, "].reduce((acc, x) => { const y = x; return [...acc, y]; }, []).length");
+    CHECK(loop_open(&l, context, source));
+    long before = c.allocations;
+    CHECK(loop_finish(&l, UINT64_MAX, out) == SJS_RUN_DONE && strcmp(out, "64") == 0);
+    CHECK(c.allocations - before <= 90);
+    loop_close(&l);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+
+    /* max_frames: a loop and its callback take a frame each, once per loop. */
+    sjs_limits limits = SJS_LIMITS_DEFAULT;
+    limits.max_frames = 3;
+    context = new_context(&c, limits);
+    CHECK(loop_open(&l, context, "[1, 2].map(x => x)"));
+    CHECK(loop_finish(&l, UINT64_MAX, out) == SJS_RUN_DONE && strcmp(out, "[1,2]") == 0);
+    loop_close(&l);
+    CHECK(loop_open(&l, context, "[1].map(x =>\n [2].map(y => y))"));
+    CHECK(loop_finish(&l, UINT64_MAX, out) == SJS_RUN_FAULT);
+    CHECK(strcmp(out, "fault 2:9 the evaluation needs more than max_frames frames") == 0);
+    loop_close(&l);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+
+    /* max_stack: this callback, with its six slots, needed 14 when it was
+     * called with its callee and arguments pushed; in its kept frame it
+     * needs 13, and faults with 12. */
+    for (uint32_t max_stack = 12; max_stack <= 13; max_stack++) {
+        limits = SJS_LIMITS_DEFAULT;
+        limits.max_stack = max_stack;
+        context = new_context(&c, limits);
+        CHECK(loop_open(&l, context, "[1, 2].map((x, i) => { const a = x; const b = a + i; const c = b; const d = c; return [d, a]; })"));
+        sjs_run status = loop_finish(&l, UINT64_MAX, out);
+        if (max_stack == 13) CHECK(status == SJS_RUN_DONE && strcmp(out, "[[1,1],[3,2]]") == 0);
+        else CHECK(status == SJS_RUN_FAULT && strstr(out, "max_stack") != NULL);
+        loop_close(&l);
+        CHECK(sjs_context_live_bytes(context) == 0);
+        sjs_context_destroy(context);
+    }
+    CHECK(c.live == 0);
+}
+
 /* Natives for test_reuse_leaves_others_alone: `keep` retains each value it
  * is given, `held` gives a retained copy of a value the embedder holds. */
 typedef struct {
@@ -1150,13 +1283,21 @@ int main(int argc, char **argv) {
     test_writer_resumes();
     test_fuel_and_reset();
     test_limits();
+    test_loop_callbacks();
     test_reuse_leaves_others_alone();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Values updated in place: a moved accumulator, literals that take over
      * a spread, concat, with and toSorted on an array nothing else holds.
      * Small enough for every run. */
     test_out_of_memory(reuse_module, SJS_GOAL_MODULE);
+    /* A loop's callback with a rest parameter, and reduce destructuring. */
+    test_out_of_memory("[1, 2, 3].map((x, ...r) => [x, r]).reduce((acc, [x, r]) => ({...acc, [x]: r.length}), {})",
+                       SJS_GOAL_EXPRESSION);
     if (full) {
+        test_out_of_memory("const pairs = [[2, \"b\"], [1, \"a\"]].toSorted(([p], [q], d = p - q) => d);\n"
+                           "export const nested = pairs.map(([n, k]) => [n, n + 1].map(m => { const f = () => `${k}${m}`; return f; }));\n"
+                           "export default nested.flatMap(fs => fs.map(f => f()));\n",
+                           SJS_GOAL_MODULE);
         test_out_of_memory("export const f = (xs) => xs.toSorted((a, b) => b - a).flatMap(x => [x, [x]]);\n"
                            "export const g = new Set(f([3, 1, 2]).flat()).union(new Set([9]));\n"
                            "export const h = Object.fromEntries(Object.entries({a: 1, b: 2}).map(([k, v]) => [k, `${v}`]));\n",
