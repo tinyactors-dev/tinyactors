@@ -25,7 +25,8 @@ decisions are core ADRs 0098 to 0105, repository ADR 0003 and napi ADR
   registry. The claim set (2.10) waits for a user.
 - [x] **Phase 3, names are matched by lookup:** the matcher runs over a
   name's atoms; `typeexpr` lookups no longer intern.
-- [ ] **Phase 4, core gains its queue:** `tel` and the host clock (4.1),
+- [ ] **Phase 4, core gains its queue:** `tel` and the host clock (4.1, done:
+  untraced cost unchanged, tracing +13 to 22% per event, ADR 0098's notes),
   the pool and `ta_run` with one slot (4.2), delayed sends as envelopes
   (4.3), no allocation in a macrostep (4.4), macrostep slots (4.5).
 - [ ] **Phase 5, rings replace the vtables:** inputs (5.1), effects (5.2),

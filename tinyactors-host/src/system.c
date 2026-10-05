@@ -9,6 +9,119 @@
 #include "tinyactors_host/router.h"
 #include "system_private.h"
 
+/* Core's wall clock (core ADR 0098): the platform's, so every tel record
+ * carries the time it was written. */
+static uint64_t tah_system_core_wall_ns(void *self) {
+    const tah_system *system = self;
+    return system->platform.v->wall_ns(system->platform.self);
+}
+
+static const ta_wall_clock_vtable tah_system_core_clock = { .wall_ns = tah_system_core_wall_ns };
+
+/*
+ * The records one microstep writes at the most detail, for sizing tel: the
+ * microstep, a guard, an action, and the event it raises.
+ */
+#define TAH_TEL_RECORDS_PER_MICROSTEP 4u
+/* The records a resume writes besides its microsteps: a macrostep's begin and end. */
+#define TAH_TEL_RECORDS_PER_RESUME 2u
+/* Records of maxRecordBytes any ring holds when valueBytes makes records
+ * larger than core's default: a macrostep writes the event's data twice
+ * (MACROSTEP_BEGIN, MICROSTEP). */
+#define TAH_TEL_LARGEST_RECORDS 4u
+/* telBytes' bound in core (ta_param_info_of). */
+#define TAH_TEL_BYTES_MAX 2147483648u
+
+/* Core's parameters as the kernel passes them: at most one of each. */
+typedef struct {
+    ta_param_value values[TA_PARAM_COUNT];
+    uint32_t count;
+} tah_core_params;
+
+/* Where `param` is in `out`, added with core's default when it is not there;
+ * UINT32_MAX when there is no room (a list with repeats, which core refuses). */
+static uint32_t tah_core_param_at(tah_core_params *out, ta_param param, uint64_t default_value) {
+    for (uint32_t at = 0; at < out->count; at += 1u) {
+        if (out->values[at].param == param) {
+            return at;
+        }
+    }
+    if (out->count == (uint32_t)TA_PARAM_COUNT) {
+        return UINT32_MAX;
+    }
+    out->values[out->count] = (ta_param_value){ .param = param, .value = default_value };
+    out->count += 1u;
+    return out->count - 1u;
+}
+
+/*
+ * Core's parameters as the binding gave them, with the trace sizes the
+ * kernel's own parameters ask for (core ADR 0098). Each of the three
+ * follows the kernel while it is unset or at core's default; one set to
+ * anything else stays as given. A binding may pass every parameter,
+ * defaults included (napi does), so a value equal to the default counts as
+ * unset: an explicit telemetryValueBytes of 1,024 follows valueBytes too.
+ *
+ * - telemetryValueBytes is valueBytes.
+ * - maxRecordBytes leaves that value room beside the rest of a record: at
+ *   least telemetryValueBytes + 512.
+ * - When the binding may turn the encoder on (`traced`), telBytes holds
+ *   one resume's records, since the kernel reads tel only between resumes
+ *   (tah_system_staging_full): resumeBudget microsteps of
+ *   TAH_TEL_RECORDS_PER_MICROSTEP records, and a macrostep's begin and end,
+ *   each of maxRecordBytes, at most core's bound. The encoder is turned on
+ *   after creation, if at all, and core sizes its ring at creation, so
+ *   such a system gets that ring whether or not it traces; its pages are
+ *   touched only as records are written. A system that is not `traced`
+ *   keeps core's 16 KiB, for whoever reads tel some other way, or four of
+ *   the largest records when valueBytes makes them larger than core's
+ *   default, so that telBytes stays at least maxRecordBytes.
+ *
+ * Answers the list to give core: `out`'s, or the binding's own list when it
+ * is longer than any list core accepts, which core then refuses.
+ */
+static const ta_param_value *tah_system_core_params(const tah_system_create_params *params, const tah_params *hosting,
+                                                    tah_core_params *out) {
+    out->count = params->param_count;
+    if (params->param_count > (uint32_t)TA_PARAM_COUNT || (params->param_count != 0 && params->params == NULL)) {
+        return params->params;
+    }
+    for (uint32_t at = 0; at < params->param_count; at += 1u) {
+        out->values[at] = params->params[at];
+    }
+    uint32_t value_at = tah_core_param_at(out, TA_PARAM_TELEMETRY_VALUE_BYTES, TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES);
+    uint32_t record_at = tah_core_param_at(out, TA_PARAM_MAX_RECORD_BYTES, TA_PARAM_DEFAULT_MAX_RECORD_BYTES);
+    uint32_t ring_at = tah_core_param_at(out, TA_PARAM_TEL_BYTES, TA_PARAM_DEFAULT_TEL_BYTES);
+    if (value_at == UINT32_MAX || record_at == UINT32_MAX || ring_at == UINT32_MAX) {
+        return out->values; /* a list with repeats, which core refuses as it is */
+    }
+    ta_param_value *value = &out->values[value_at];
+    ta_param_value *record = &out->values[record_at];
+    ta_param_value *ring = &out->values[ring_at];
+    if (value->value == TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES) {
+        value->value = hosting->values[TAH_PARAM_VALUE_BYTES];
+    }
+    uint64_t wanted = (value->value + 512u + 7u) & ~(uint64_t)7u;
+    if (record->value == TA_PARAM_DEFAULT_MAX_RECORD_BYTES && wanted > record->value) {
+        record->value = wanted;
+    }
+    uint64_t record_bytes = record->value & ~(uint64_t)7u;
+    uint64_t ring_bytes = 0;
+    if (record_bytes > TA_PARAM_DEFAULT_MAX_RECORD_BYTES) {
+        ring_bytes = TAH_TEL_LARGEST_RECORDS * record_bytes;
+    }
+    if (params->traced) {
+        uint64_t records = hosting->values[TAH_PARAM_RESUME_BUDGET] * TAH_TEL_RECORDS_PER_MICROSTEP +
+                           TAH_TEL_RECORDS_PER_RESUME;
+        ring_bytes = records * record_bytes > ring_bytes ? records * record_bytes : ring_bytes;
+    }
+    ring_bytes = ring_bytes > TAH_TEL_BYTES_MAX ? TAH_TEL_BYTES_MAX : ring_bytes;
+    if (ring->value == TA_PARAM_DEFAULT_TEL_BYTES && ring_bytes > ring->value) {
+        ring->value = ring_bytes;
+    }
+    return out->values;
+}
+
 /* Gives the record back to the platform's allocator it came from. */
 static void tah_system_release_record(tah_system *system) {
     ta_allocator allocator = system->platform.allocator;
@@ -72,12 +185,14 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
         return result;
     }
     tah_effects_init(&system->effects, &system->scratch.turn);
+    tah_core_params core_params;
+    const ta_param_value *given = tah_system_core_params(params, &napi, &core_params);
     ta_system_config config = {
         .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
         .initial_time = 0,
         .incarnation = params->incarnation,
-        .params = params->params,
-        .param_count = params->param_count,
+        .params = given,
+        .param_count = core_params.count,
         .rejected = params->rejected,
     };
     result = ta_system_create(&config, &system->core);
@@ -86,6 +201,7 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
         tah_system_release_record(system);
         return result;
     }
+    (void)ta_system_set_wall_clock(system->core, (ta_wall_clock){ .self = system, .v = &tah_system_core_clock });
     (void)ta_system_set_actor_directory(system->core, tah_directory_adapter(&system->directory));
     (void)ta_system_set_external_event_router(system->core, tah_router_adapter(system));
     result = tah_scxml_invoker_register(system);
@@ -212,6 +328,7 @@ void tah_system_enter_core(tah_system *system) {
 
 void tah_system_leave_core(tah_system *system) {
     system->inside_core = false;
+    tah_system_drain_telemetry(system);
 }
 
 bool tah_system_tracing(const tah_system *system) {
@@ -278,21 +395,35 @@ static bool tah_system_due_now(const tah_system *system) {
            deadline <= ta_system_time(system->core);
 }
 
+/* Whether core's tel ring holds nothing the encoder has not read. */
+static bool tah_system_tel_empty(const tah_system *system) {
+    ta_tel_status status = { 0 };
+    return system->core == NULL || ta_system_tel_status(system->core, &status) != TA_OK || status.used == 0;
+}
+
 bool tah_system_quiet(const tah_system *system) {
     return tah_sched_quiet(&system->sched) && system->effects.count == 0 &&
            system->recorder.records.count == 0 && system->recorder.touched.count == 0 &&
            system->quarantine_reports.count == 0 &&
            tah_loads_pending_requests(&system->loads) == 0 &&
-           (!system->tracing || system->otlp.span_count == 0) &&
+           (!system->tracing || (system->otlp.span_count == 0 && tah_system_tel_empty(system))) &&
            !tah_system_due_now(system);
 }
 
-void tah_system_trace(tah_system *system, const ta_trace_record *record) {
-    if (!system->tracing) {
+void tah_system_drain_telemetry(tah_system *system) {
+    if (system == NULL || system->core == NULL || !system->tracing) {
         return;
     }
     uint32_t before = system->otlp.span_count;
-    tah_otlp_write(&system->otlp, record);
+    ta_tel_record record;
+    while (ta_system_tel_peek(system->core, &record) == TA_OK) {
+        if (record.kind == TA_TEL_TRACE) {
+            tah_otlp_write(&system->otlp, &record.trace);
+        } else {
+            tah_otlp_dropped(&system->otlp, record.dropped);
+        }
+        (void)ta_system_tel_release(system->core);
+    }
     if (system->otlp.span_count != before) {
         tah_system_want_turn(system);
     }
@@ -575,6 +706,7 @@ bool tah_system_dispatch_due(tah_system *system) {
                                                });
     system->dispatching_due = false;
     system->inside_core = false;
+    tah_system_drain_telemetry(system);
     return more_due;
 }
 
@@ -586,6 +718,7 @@ bool tah_system_dispatch_due(tah_system *system) {
  */
 static bool tah_system_staging_full(void *context) {
     tah_system *system = context;
+    tah_system_drain_telemetry(system); /* what the resume before wrote */
     return system->tracing && tah_otlp_traces_size(&system->otlp) + tah_otlp_logs_size(&system->otlp) >=
                                   system->params.values[TAH_PARAM_TRACE_STAGING_BYTES];
 }
@@ -605,6 +738,7 @@ void tah_system_turn(tah_system *system) {
                                        .stop = tah_system_staging_full,
                                        .stop_context = system,
                                    });
+    tah_system_drain_telemetry(system);
     tah_quarantine_reports_retry(system);
     tah_quarantine_reports_make(system);
     /* Unloaded actors whose own timers are due wake through their loader
@@ -669,6 +803,7 @@ ta_result tah_system_withdraw_send(tah_system *system, ta_actor_id actor, ta_sen
     system->inside_core = true;
     ta_result result = ta_actor_withdraw_send(system->core, actor, send);
     system->inside_core = false;
+    tah_system_drain_telemetry(system);
     if (result == TA_OK) {
         /* Its wake may move (kernel ADR 0006 section 2). */
         ta_actor_inspection view;
@@ -683,5 +818,6 @@ ta_result tah_system_abandon(tah_system *system, ta_actor_id actor) {
     system->inside_core = true;
     ta_result result = ta_actor_abandon(system->core, actor);
     system->inside_core = false;
+    tah_system_drain_telemetry(system);
     return result == TA_OK ? tah_hook_actor_abandoned(system, actor) : result;
 }

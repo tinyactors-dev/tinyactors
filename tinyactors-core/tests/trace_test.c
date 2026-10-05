@@ -1,8 +1,9 @@
 /*
- * Tracing (ADR 0067): the null sink a system starts with, the mask that
+ * Tracing (ADR 0067): the empty masks a system starts with, the mask that
  * keeps core from building records nobody wants, sampling, exact record
  * sequences for small charts, step keys and their span IDs, and counters
- * and trace parents that survive a session image.
+ * and trace parents that survive a session image. Records are read from the
+ * system's tel ring after each call (ADR 0098), as a host reads them.
  *
  * Uses the C library; the core does not.
  */
@@ -13,6 +14,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "tel_reader.h"
 
 static int failures = 0;
 
@@ -147,17 +149,13 @@ static void put(const char *format, ...) {
     }
 }
 
-static void put_event(const ta_event *event) {
-    if (event == NULL) {
+static void put_event(const ta_trace_record *record) {
+    if (!record->has_event) {
         put(" -");
         return;
     }
-    char name[64];
-    uint32_t needed = 0;
-    ta_result result = ta_event_name_format(traced_system, &(ta_event_name_format_params){
-                                                               .name = event->name, .buffer = name,
-                                                               .capacity = sizeof(name) - 1u, .needed = &needed });
-    put(" %.*s", result == TA_OK ? (int)needed : 1, result == TA_OK ? name : "?");
+    ta_str name = ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_NAME);
+    put(" %.*s", (int)name.len, name.ptr);
 }
 
 static void put_states(const char *label, const ta_state_id *states, uint32_t count) {
@@ -196,13 +194,13 @@ static void record_write(void *self, const ta_trace_record *record) {
     }
     switch (record->kind) {
         case TA_TRACE_MACROSTEP_BEGIN:
-            put_event(record->event);
+            put_event(record);
             break;
         case TA_TRACE_MACROSTEP_END:
             put_states("in", record->states, record->state_count);
             break;
         case TA_TRACE_MICROSTEP:
-            put_event(record->event);
+            put_event(record);
             put_states("t", record->transitions, record->transition_count);
             put_states("x", record->exited, record->exited_count);
             put_states("e", record->entered, record->entered_count);
@@ -214,17 +212,18 @@ static void record_write(void *self, const ta_trace_record *record) {
             if (record->position.transition != TA_TRANSITION_NONE) {
                 put(" t%u", (unsigned)record->position.transition);
             }
-            put(record->has_fault ? " !%d" : " =%d", record->has_fault ? record->fault.code : (int)record->result);
+            put(record->has_fault ? " !%d" : " =%d", record->has_fault ? record->fault_code : (int)record->result);
             break;
         case TA_TRACE_RAISED:
-            put_event(record->event);
+            put_event(record);
             break;
         case TA_TRACE_DATA_INIT:
-            put(" %.*s", (int)record->name.len, record->name.ptr);
+            put(" %.*s", (int)ta_trace_record_text(record, TA_TRACE_TEXT_NAME).len,
+                ta_trace_record_text(record, TA_TRACE_TEXT_NAME).ptr);
             break;
         case TA_TRACE_SCRIPT:
             if (record->has_fault) {
-                put(" !%d", record->fault.code);
+                put(" !%d", record->fault_code);
             }
             break;
         case TA_TRACE_FOREACH:
@@ -234,7 +233,7 @@ static void record_write(void *self, const ta_trace_record *record) {
             put(" a%u", (unsigned)record->action);
             break;
         case TA_TRACE_SENT:
-            put_event(record->event);
+            put_event(record);
             break;
         case TA_TRACE_FINISHED:
             put(" s%u", (unsigned)record->state);
@@ -245,10 +244,35 @@ static void record_write(void *self, const ta_trace_record *record) {
     put("; ");
 }
 
-static const ta_trace_sink_vtable record_vtable = { .write = record_write };
+/* What a test reads tel into, and the masks it sets. */
+typedef struct {
+    tel_write_fn write;
+    ta_trace_masks masks;
+} sink;
 
-static ta_trace_sink recording_sink(uint32_t kinds) {
-    return (ta_trace_sink){ .self = NULL, .v = &record_vtable, .kinds = kinds };
+static sink recording_sink(uint32_t kinds) {
+    return (sink){ .write = record_write, .masks = { .kinds = kinds } };
+}
+
+/* The sink whose records the run reads, set by use(). */
+static sink current = { 0 };
+
+/* Sets the sink's masks and reads its records from here on. */
+static ta_result use(ta_system *system, sink chosen) {
+    current = chosen;
+    return ta_system_set_trace_masks(system, &chosen.masks);
+}
+
+/* Reads what the system wrote to tel since the last read. */
+static void read_tel(ta_system *system) {
+    if (current.write != NULL) {
+        tel_drain(system, current.write, NULL);
+    } else {
+        ta_tel_record record;
+        while (ta_system_tel_peek(system, &record) == TA_OK) {
+            (void)ta_system_tel_release(system);
+        }
+    }
 }
 
 #define ALL_KINDS UINT32_MAX
@@ -260,6 +284,9 @@ static void journal_reset(void) {
 }
 
 static void expect_journal(const char *expected) {
+    if (traced_system != NULL) {
+        read_tel(traced_system);
+    }
     if (strcmp(journal, expected) != 0) {
         fprintf(stderr, "journal differs\n  expected: %s\n  actual:   %s\n", expected, journal);
         failures += 1;
@@ -367,11 +394,14 @@ static void start_system(run *r) {
 static void spawn(run *r, ta_trace_parent trace) {
     CHECK(ta_actor_spawn(r->system, &(ta_actor_spawn_params){ .definition = r->definition, .out = &r->actor,
                                                               .trace = trace }) == TA_OK);
+    read_tel(r->system);
 }
 
 static ta_result resume(run *r, uint32_t budget, ta_run_status *status) {
-    return ta_actor_resume(r->system,
-                           &(ta_actor_resume_params){ .actor = r->actor, .budget = budget, .status = status });
+    ta_result result = ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = budget,
+                                                                             .status = status });
+    read_tel(r->system);
+    return result;
 }
 
 static void settle(run *r) {
@@ -405,9 +435,12 @@ static void deliver(run *r, const char *name, ta_trace_parent trace) {
     ta_event event = event_named(r, name);
     CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &event,
                                                                   .trace = trace }) == TA_OK);
+    read_tel(r->system);
 }
 
 static void finish(run *r) {
+    read_tel(r->system);
+    current = (sink){ 0 };
     ta_system_destroy(r->system);
     traced_system = NULL;
 }
@@ -416,29 +449,33 @@ static void finish(run *r) {
  * Tests
  */
 
-/* A system starts with the null sink; a sink without operations is refused. */
+/* A system starts with every mask zero, so it writes nothing; masks without a
+ * system or a system without masks are refused. */
 static void test_null_sink(void) {
-    ta_trace_sink null = ta_null_trace_sink();
-    CHECK(null.self == NULL && null.v != NULL && null.v->write != NULL);
-    CHECK(null.kinds == 0 && null.watched_kinds == 0 && null.unsampled_kinds == 0);
-    null.v->write(NULL, NULL); /* writes nothing, reads nothing */
-
     run r;
     start_system(&r);
-    CHECK(ta_system_set_trace_sink(r.system, (ta_trace_sink){ .v = NULL, .kinds = ALL_KINDS }) == TA_ERR_INVALID);
-    static const ta_trace_sink_vtable no_write = {0};
-    CHECK(ta_system_set_trace_sink(r.system, (ta_trace_sink){ .v = &no_write, .kinds = ALL_KINDS }) ==
-          TA_ERR_INVALID);
-    CHECK(ta_system_set_trace_sink(NULL, ta_null_trace_sink()) == TA_ERR_INVALID);
-    CHECK(ta_system_set_trace_sink(r.system, ta_null_trace_sink()) == TA_OK);
+    spawn(&r, (ta_trace_parent){0});
+    settle(&r);
+    ta_tel_status status;
+    CHECK(ta_system_tel_status(r.system, &status) == TA_OK);
+    CHECK(status.capacity != 0 && status.used == 0 && status.next_seq == 1); /* nothing was written */
+    ta_trace_masks none = { 0 };
+    CHECK(ta_system_set_trace_masks(NULL, &none) == TA_ERR_INVALID);
+    CHECK(ta_system_set_trace_masks(r.system, NULL) == TA_ERR_INVALID);
+    CHECK(ta_system_set_trace_masks(r.system, &none) == TA_OK);
     finish(&r);
 }
 
+/* The sink that wants nothing and writes nothing. */
+static sink null_sink(void) {
+    return (sink){ 0 };
+}
+
 /* Runs the chart's whole life and returns the allocations it made. */
-static long whole_life(ta_trace_sink sink) {
+static long whole_life(sink chosen) {
     run r;
     start_system(&r);
-    CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
+    CHECK(use(r.system, chosen) == TA_OK);
     long before = heap.allocations;
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
@@ -456,7 +493,7 @@ static long whole_life(ta_trace_sink sink) {
  * and costs nothing more than no sink at all. */
 static void test_mask_suppresses_construction(void) {
     journal_reset();
-    long untraced = whole_life(ta_null_trace_sink());
+    long untraced = whole_life(null_sink());
     long masked = whole_life(recording_sink(0));
     CHECK(records == 0);
     CHECK(masked == untraced);
@@ -477,7 +514,7 @@ static void test_exact_sequence(void) {
     journal_reset();
     run r;
     start_system(&r);
-    CHECK(ta_system_set_trace_sink(r.system, recording_sink(ALL_KINDS)) == TA_OK);
+    CHECK(use(r.system, recording_sink(ALL_KINDS)) == TA_OK);
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
     expect_journal("spawned 0.1; begin 1.0 -; data 1.0 @boot x; micro 1.1 - t[] x[] e[0]; "
@@ -510,7 +547,7 @@ static void test_ignored_event(void) {
     start_system(&r);
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
-    CHECK(ta_system_set_trace_sink(r.system, recording_sink(ALL_KINDS)) == TA_OK);
+    CHECK(use(r.system, recording_sink(ALL_KINDS)) == TA_OK);
     journal_reset();
     deliver(&r, "unknown", (ta_trace_parent){0});
     settle(&r);
@@ -528,9 +565,8 @@ static void test_pause_and_resume(void) {
     start_system(&r);
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
-    CHECK(ta_system_set_trace_sink(r.system, recording_sink(TA_TRACE_BIT(TA_TRACE_PAUSED) |
-                                                            TA_TRACE_BIT(TA_TRACE_RESUMED) |
-                                                            TA_TRACE_BIT(TA_TRACE_MICROSTEP))) == TA_OK);
+    CHECK(use(r.system, recording_sink(TA_TRACE_BIT(TA_TRACE_PAUSED) | TA_TRACE_BIT(TA_TRACE_RESUMED) |
+                                       TA_TRACE_BIT(TA_TRACE_MICROSTEP))) == TA_OK);
     journal_reset();
     deliver(&r, "go", (ta_trace_parent){0});
     ta_run_status status = TA_RUN_ERROR;
@@ -558,15 +594,14 @@ static void context_write(void *self, const ta_trace_record *record) {
         seen_cause = record->cause;
     }
 }
-static const ta_trace_sink_vtable context_vtable = { .write = context_write };
 
 /* Sampling: an unsampled context builds only lifecycle records, unless the
  * sink asks for unsampled ones; a sampled one, or none, builds all. */
 static void test_sampling(void) {
     run r;
     start_system(&r);
-    ta_trace_sink sink = { .v = &context_vtable, .kinds = ALL_KINDS };
-    CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
+    sink chosen = { .write = context_write, .masks = { .kinds = ALL_KINDS } };
+    CHECK(use(r.system, chosen) == TA_OK);
     spawn(&r, parent_of(1, 2, 0, 99));
     seen_records = 0;
     settle(&r);
@@ -580,8 +615,8 @@ static void test_sampling(void) {
     CHECK(seen_cause.session == 0 && seen_cause.macrostep == 77);
 
     seen_records = 0;
-    sink.unsampled_kinds = sink.kinds;
-    CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
+    chosen.masks.unsampled_kinds = chosen.masks.kinds;
+    CHECK(use(r.system, chosen) == TA_OK);
     deliver(&r, "stop", parent_of(5, 6, 0, 55));
     settle(&r);
     CHECK(seen_records > 0);
@@ -680,12 +715,13 @@ static void test_counters_and_parents_survive_an_image(void) {
     CHECK(delivered_trace.cause.macrostep == 2 && delivered_trace.cause.microstep == 1);
 
     /* The counters go on: the next macrostep of the session is 3. */
-    CHECK(ta_system_set_trace_sink(system, recording_sink(TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN))) == TA_OK);
+    CHECK(use(system, recording_sink(TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN))) == TA_OK);
     journal_reset();
     r.actor = restored;
     deliver(&r, "go", (ta_trace_parent){0});
     settle(&r);
     expect_journal("begin 3.0 go; ");
+    current = (sink){ 0 };
     ta_system_destroy(system);
     traced_system = NULL;
 }
@@ -700,7 +736,7 @@ static void test_records_are_written_once(void) {
     /* The run that fails nothing, and how many allocations it makes. */
     run r;
     start_system(&r);
-    CHECK(ta_system_set_trace_sink(r.system, recording_sink(ALL_KINDS)) == TA_OK);
+    CHECK(use(r.system, recording_sink(ALL_KINDS)) == TA_OK);
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
     journal_reset();
@@ -715,7 +751,7 @@ static void test_records_are_written_once(void) {
 
     for (long failing = 1; failing <= made; failing += 1) {
         start_system(&r);
-        CHECK(ta_system_set_trace_sink(r.system, recording_sink(ALL_KINDS)) == TA_OK);
+        CHECK(use(r.system, recording_sink(ALL_KINDS)) == TA_OK);
         spawn(&r, (ta_trace_parent){0});
         settle(&r);
         journal_reset();
@@ -723,10 +759,12 @@ static void test_records_are_written_once(void) {
         heap.policy.fail_at = heap.attempts + failing;
         ta_result delivered = ta_actor_deliver(r.system,
                                                &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .event = &event });
+        read_tel(r.system);
         ta_run_status status = TA_RUN_ERROR;
         uint32_t attempts = 0;
         if (delivered == TA_ERR_NOMEM) {
             delivered = ta_actor_deliver(r.system, &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .event = &event });
+            read_tel(r.system);
         }
         CHECK(delivered == TA_OK);
         while (resume(&r, 1000, &status) == TA_ERR_NOMEM && attempts < 4u) {
@@ -734,6 +772,7 @@ static void test_records_are_written_once(void) {
         }
         heap.policy.fail_at = 0;
         CHECK(status == TA_RUN_STABLE);
+        read_tel(r.system);
         if (strcmp(journal, baseline) != 0) {
             fprintf(stderr, "allocation %ld failing changed the records\n  expected: %s\n  actual:   %s\n",
                     failing, baseline, journal);
@@ -758,14 +797,13 @@ static void lifecycle_write(void *self, const ta_trace_record *record) {
         lifecycle_spans[lifecycle_count++] = ta_step_key_span_id(record->key);
     }
 }
-static const ta_trace_sink_vtable lifecycle_vtable = { .write = lifecycle_write };
 
 static void test_lifecycle_keys(void) {
     run r;
     start_system(&r);
     uint32_t kinds = TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_LOADED) |
                      TA_TRACE_BIT(TA_TRACE_UNLOADED) | TA_TRACE_BIT(TA_TRACE_DESTROYED);
-    CHECK(ta_system_set_trace_sink(r.system, (ta_trace_sink){ .v = &lifecycle_vtable, .kinds = kinds }) == TA_OK);
+    CHECK(use(r.system, (sink){ .write = lifecycle_write, .masks = { .kinds = kinds } }) == TA_OK);
     journal_reset();
     lifecycle_count = 0;
     spawn(&r, (ta_trace_parent){0});
@@ -931,9 +969,9 @@ static void test_sampler(void) {
 static long watched_run(uint8_t detail) {
     run r;
     start_system(&r);
-    ta_trace_sink sink = { .v = &context_vtable, .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN),
-                           .watched_kinds = ALL_KINDS };
-    CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
+    sink chosen = { .write = context_write,
+                    .masks = { .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN), .watched_kinds = ALL_KINDS } };
+    CHECK(use(r.system, chosen) == TA_OK);
     spawn(&r, parent_of(1, 2, TA_TRACE_FLAG_SAMPLED, 9));
     settle(&r);
     ta_trace_parent parent = parent_of(3, 4, TA_TRACE_FLAG_SAMPLED, 7);

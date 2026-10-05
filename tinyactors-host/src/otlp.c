@@ -319,12 +319,18 @@ static bool tah_kv_int_array(tah_otlp_buf *buf, uint32_t field, ta_str key, cons
 }
 
 /* ------------------------------------------------------------------------
- * Names (core ADR 0071), cached per definition
+ * The cache: a definition's facts, and event names for host logs
+ *
+ * A trace record names everything it refers to (core ADR 0098), so the
+ * encoder looks nothing up in core for a record. What it keeps is what only
+ * some records carry: a definition's family, revision, document name and
+ * source, which come on the records that open a run and name the scope of
+ * every span of that definition. Event names a host log names (not a
+ * record) are formatted by core once and cached under definition 0, which
+ * core never frees, since it never frees an interned event name.
  */
-
-/* Event names are system-wide: they are cached under definition 0, which
- * core never frees, since it never frees an interned event name. */
-enum { NAME_STATE = 0u, NAME_TRANSITION = 1u, NAME_ACTION = 2u, NAME_EVENT = 3u };
+enum { NAME_FACT = 0u, NAME_EVENT = 3u };
+enum { FACT_FAMILY = 0u, FACT_REVISION = 1u, FACT_DOCUMENT = 2u, FACT_SOURCE = 3u };
 #define NAME_TAG(kind, id) (((uint32_t)(kind) << 30) | ((uint32_t)(id) & 0x3fffffffu))
 
 static uint64_t tah_name_hash(uint64_t definition, uint32_t tag) {
@@ -464,165 +470,44 @@ static bool tah_label_add(tah_otlp *otlp, ta_str text) {
     return true;
 }
 
-static bool tah_label_number(tah_otlp *otlp, const char *prefix, uint32_t value) {
-    char digits[16];
-    int at = (int)sizeof digits;
-    do {
-        digits[--at] = (char)('0' + value % 10u);
-        value /= 10u;
-    } while (value != 0);
-    return tah_label_add(otlp, (ta_str){ prefix, (uint32_t)tah_str_length(prefix) }) &&
-           tah_label_add(otlp, (ta_str){ digits + at, (uint32_t)(sizeof digits - (size_t)at) });
+/* Caches a definition's facts from a record that carries them, once. */
+static void tah_facts_keep(tah_otlp *otlp, const ta_trace_record *record) {
+    ta_str family = ta_trace_record_text(record, TA_TRACE_TEXT_FAMILY);
+    if (family.len == 0 || tah_name_find(otlp, record->definition, NAME_TAG(NAME_FACT, FACT_FAMILY)) != NULL) {
+        return;
+    }
+    const ta_str facts[] = {
+        [FACT_FAMILY] = family,
+        [FACT_REVISION] = { (const char *)record->revision.ptr, record->revision.len },
+        [FACT_DOCUMENT] = ta_trace_record_text(record, TA_TRACE_TEXT_DOCUMENT_NAME),
+        [FACT_SOURCE] = ta_trace_record_text(record, TA_TRACE_TEXT_SOURCE),
+    };
+    /* The family last: it says the others are there. */
+    for (uint32_t fact = 4u; fact > 0; fact -= 1u) {
+        if (tah_name_find(otlp, record->definition, NAME_TAG(NAME_FACT, fact - 1u)) != NULL) {
+            continue; /* kept by a record whose family did not fit */
+        }
+        otlp->label.len = 0;
+        if (!tah_label_add(otlp, facts[fact - 1u])) {
+            return;
+        }
+        (void)tah_name_keep(otlp, record->definition, NAME_TAG(NAME_FACT, fact - 1u));
+    }
 }
 
-/* A state's author ID, or "s<id>" when its definition is gone. Not cached:
- * core's lookup is a read of the definition. */
-static ta_str tah_state_name(tah_otlp *otlp, uint64_t definition, ta_state_id state) {
-    ta_state_info info = { 0 };
-    if (ta_definition_state(otlp->config.core, &(ta_definition_state_params){ .definition = definition, .state = state,
-                                                                               .out = &info }) == TA_OK) {
-        return info.id;
+/* A cached fact of a definition; false when the encoder never saw it. */
+static bool tah_fact(const tah_otlp *otlp, uint64_t definition, uint32_t fact, ta_str *out) {
+    const tah_otlp_name *cached = tah_name_find(otlp, definition, NAME_TAG(NAME_FACT, fact));
+    if (cached == NULL || tah_name_find(otlp, definition, NAME_TAG(NAME_FACT, FACT_FAMILY)) == NULL) {
+        return false;
     }
-    otlp->label.len = 0;
-    const tah_otlp_name *cached = tah_name_find(otlp, definition, NAME_TAG(NAME_STATE, state));
-    if (cached != NULL) {
-        return tah_name_text(otlp, cached);
-    }
-    return tah_label_number(otlp, "s", state) ? tah_name_keep(otlp, definition, NAME_TAG(NAME_STATE, state))
-                                              : LIT("?");
-}
-
-/* Appends a state's name to the label being built. */
-static bool tah_label_state(tah_otlp *otlp, uint64_t definition, ta_state_id state) {
-    ta_state_info info = { 0 };
-    if (ta_definition_state(otlp->config.core, &(ta_definition_state_params){ .definition = definition, .state = state,
-                                                                               .out = &info }) == TA_OK) {
-        return tah_label_add(otlp, info.id);
-    }
-    return tah_label_number(otlp, "s", state);
-}
-
-/* Appends a transition's label: "idle → busy on order.placed [guarded]",
- * "initial of p → a", "busy on poke (internal)", or "t7" once it is gone. */
-static bool tah_label_transition(tah_otlp *otlp, uint64_t definition, ta_transition_id transition) {
-    ta_transition_info info = { 0 };
-    if (ta_definition_transition(otlp->config.core,
-                                 &(ta_definition_transition_params){ .definition = definition,
-                                                                     .transition = transition,
-                                                                     .out = &info }) != TA_OK) {
-        return tah_label_number(otlp, "t", transition);
-    }
-    bool ok = true;
-    if (info.origin != TA_TRANSITION_AUTHORED) {
-        ok = tah_label_add(otlp, LIT("initial of "));
-        ok = ok && (info.origin == TA_TRANSITION_BOOTSTRAP ? tah_label_add(otlp, LIT("the document"))
-                                                           : tah_label_state(otlp, definition, info.source));
-        ok = ok && tah_label_add(otlp, LIT(" \xe2\x86\x92"));
-        for (uint32_t at = 0; ok && at < info.target_count; at += 1u) {
-            ok = tah_label_add(otlp, LIT(" ")) && tah_label_state(otlp, definition, info.targets[at]);
-        }
-        return ok;
-    }
-    ok = tah_label_state(otlp, definition, info.source);
-    if (ok && info.target_count != 0) {
-        ok = tah_label_add(otlp, LIT(" \xe2\x86\x92"));
-        for (uint32_t at = 0; ok && at < info.target_count; at += 1u) {
-            ok = tah_label_add(otlp, LIT(" ")) && tah_label_state(otlp, definition, info.targets[at]);
-        }
-    }
-    if (ok && info.event.len != 0) {
-        ok = tah_label_add(otlp, LIT(" on ")) && tah_label_add(otlp, info.event);
-    }
-    if (ok && info.condition != TA_EXPR_ID_NONE) {
-        ok = tah_label_add(otlp, LIT(" [guarded]"));
-    }
-    if (ok && info.type == TA_SCXML_TRANSITION_INTERNAL) {
-        ok = tah_label_add(otlp, LIT(" (internal)"));
-    }
-    return ok;
-}
-
-static ta_str tah_transition_name(tah_otlp *otlp, uint64_t definition, ta_transition_id transition) {
-    uint32_t tag = NAME_TAG(NAME_TRANSITION, transition);
-    const tah_otlp_name *cached = tah_name_find(otlp, definition, tag);
-    if (cached != NULL) {
-        return tah_name_text(otlp, cached);
-    }
-    otlp->label.len = 0;
-    return tah_label_transition(otlp, definition, transition) ? tah_name_keep(otlp, definition, tag) : LIT("?");
-}
-
-static const char *const tah_action_elements[] = {
-    "<?>", "<raise>", "<send>", "<cancel>", "<assign>", "<script>", "<log>", "<if>", "<foreach>", "<invoke>",
-};
-
-/* An action's label: "<assign> in onentry of busy", "<raise> in then of
- * <if> in onexit of idle", "<log> in finalize of <invoke> #2 in a". It
- * walks up from the action to its block's owner, one level at a time. */
-static ta_str tah_action_name(tah_otlp *otlp, uint64_t definition, ta_action_id action) {
-    uint32_t tag = NAME_TAG(NAME_ACTION, action);
-    const tah_otlp_name *cached = tah_name_find(otlp, definition, tag);
-    if (cached != NULL) {
-        return tah_name_text(otlp, cached);
-    }
-    otlp->label.len = 0;
-    bool ok = true;
-    ta_action_id id = action;
-    for (;;) {
-        ta_action_info info = { 0 };
-        if (ta_definition_action(otlp->config.core, &(ta_definition_action_params){ .definition = definition,
-                                                                                    .action = id,
-                                                                                    .out = &info }) != TA_OK) {
-            otlp->label.len = 0;
-            ok = tah_label_number(otlp, "a", action);
-            break;
-        }
-        const char *element = tah_action_elements[(uint32_t)info.kind < 10u ? (uint32_t)info.kind : 0u];
-        ok = ok && tah_label_add(otlp, (ta_str){ element, (uint32_t)tah_str_length(element) });
-        if (info.block == TA_ACTION_IN_THEN || info.block == TA_ACTION_IN_ELSE || info.block == TA_ACTION_IN_FOREACH) {
-            ok = ok && tah_label_add(otlp, info.block == TA_ACTION_IN_THEN   ? LIT(" in then of ")
-                                           : info.block == TA_ACTION_IN_ELSE ? LIT(" in else of ")
-                                                                             : LIT(" in the body of "));
-            id = info.owner;
-            if (!ok) {
-                break;
-            }
-            continue;
-        }
-        switch (info.block) {
-            case TA_ACTION_IN_ONENTRY:
-            case TA_ACTION_IN_ONEXIT:
-                ok = ok && tah_label_add(otlp, info.block == TA_ACTION_IN_ONENTRY ? LIT(" in onentry") : LIT(" in onexit"));
-                if (ok && info.block_index > 0) {
-                    ok = tah_label_number(otlp, " #", info.block_index + 1u);
-                }
-                ok = ok && tah_label_add(otlp, LIT(" of ")) && tah_label_state(otlp, definition, info.owner);
-                break;
-            case TA_ACTION_IN_TRANSITION:
-                ok = ok && tah_label_add(otlp, LIT(" in ")) && tah_label_transition(otlp, definition, info.owner);
-                break;
-            case TA_ACTION_IN_FINALIZE:
-                ok = ok && tah_label_add(otlp, LIT(" in finalize of <invoke>"));
-                if (ok && info.block_index > 0) {
-                    ok = tah_label_number(otlp, " #", info.block_index + 1u);
-                }
-                ok = ok && tah_label_add(otlp, LIT(" in ")) && tah_label_state(otlp, definition, info.owner);
-                break;
-            default:
-                ok = ok && tah_label_add(otlp, LIT(" in the document's <script>"));
-                break;
-        }
-        break;
-    }
-    return ok ? tah_name_keep(otlp, definition, tag) : LIT("?");
+    *out = tah_name_text(otlp, cached);
+    return true;
 }
 
 /* ------------------------------------------------------------------------
- * Text core formats: event names, send IDs, invoke IDs
+ * Text core formats for a host log: event names
  */
-
-static bool tah_label_add(tah_otlp *otlp, ta_str text);
-static ta_str tah_fault_text(tah_otlp *otlp, const ta_value *data, ta_str message);
 
 /* An event name's dotted text, formatted once and then cached. The text is
  * valid until the next name is cached: use it before naming anything else. */
@@ -651,25 +536,6 @@ static ta_str tah_event_name(tah_otlp *otlp, ta_event_name_id name) {
     ta_str text = { (const char *)otlp->text.data, needed > 0 ? needed - 1u : 0u };
     otlp->label.len = 0;
     return tah_label_add(otlp, text) ? tah_name_keep(otlp, 0, tag) : text;
-}
-
-/* A send ID's text into `out` (at most 128 bytes), or empty for none. */
-static ta_str tah_send_text(tah_otlp *otlp, ta_send_id send, char out[128]) {
-    uint32_t needed = 0;
-    if (send == 0 || ta_send_id_format(otlp->config.core, &(ta_send_id_format_params){ .send_id = send, .buffer = out,
-                                                                                         .capacity = 128,
-                                                                                         .needed = &needed }) != TA_OK) {
-        return (ta_str){ NULL, 0 };
-    }
-    return (ta_str){ out, needed > 0 ? needed - 1u : 0u };
-}
-
-static ta_str tah_invoke_text(tah_otlp *otlp, ta_invoke_id invoke) {
-    ta_str text = { NULL, 0 };
-    if (invoke == TA_INVOKE_ID_NONE || ta_system_invoke_id_text(otlp->config.core, invoke, &text) != TA_OK) {
-        return (ta_str){ NULL, 0 };
-    }
-    return text;
 }
 
 /* Decimal text for a u64 into `out` (at least 21 bytes). */
@@ -1075,8 +941,9 @@ static void tah_definition_facts(const tah_otlp *otlp, ta_definition_id definiti
 
 /*
  * Encodes a run's InstrumentationScope into `scopes`: the name and version
- * every scope carries, and the definition's identity as attributes. A
- * definition core no longer has is named by its ID alone.
+ * every scope carries, and the definition's identity as attributes, from the
+ * facts the records that open a run carry. A definition whose facts the
+ * encoder never saw is named by its ID alone.
  */
 static bool tah_scope_encode(tah_otlp *otlp, tah_otlp_run *run) {
     tah_otlp_buf *out = &otlp->scopes;
@@ -1093,20 +960,24 @@ static bool tah_scope_encode(tah_otlp *otlp, tah_otlp_run *run) {
             tah_put_bytes(out, version.ptr, version.len);
         }
     }
-    ta_definition_inspection view;
-    if (ok && ta_definition_inspect(otlp->config.core, run->definition, &view) == TA_OK) {
-        ta_bytes revision = view.identity.revision;
-        ok = tah_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.family"), view.identity.family.name) &&
-             (tah_valid_utf8(revision.ptr, revision.len)
-                  ? tah_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.revision"),
-                                  (ta_str){ (const char *)revision.ptr, revision.len })
-                  : tah_kv_bytes(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.revision"), revision));
+    ta_str family = { 0 };
+    ta_str revision = { 0 };
+    bool known = tah_fact(otlp, run->definition, FACT_FAMILY, &family) &&
+                 tah_fact(otlp, run->definition, FACT_REVISION, &revision);
+    if (ok && known) {
+        const uint8_t *bytes = (const uint8_t *)revision.ptr;
+        ok = tah_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.family"), family) &&
+             (tah_valid_utf8(bytes, revision.len)
+                  ? tah_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.revision"), revision)
+                  : tah_kv_bytes(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.revision"),
+                                 (ta_bytes){ bytes, revision.len }));
     }
     ok = ok && tah_kv_int(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.id"), (int64_t)run->definition);
-    if (ok) {
+    if (ok && known) {
         ta_str document = { 0 };
         ta_str source = { 0 };
-        tah_definition_facts(otlp, run->definition, &document, &source);
+        (void)tah_fact(otlp, run->definition, FACT_DOCUMENT, &document);
+        (void)tah_fact(otlp, run->definition, FACT_SOURCE, &source);
         ok = (document.len == 0 || tah_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.name"), document)) &&
              (source.len == 0 || tah_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.source"), source));
     }
@@ -1260,42 +1131,83 @@ static bool tah_span_name(tah_otlp_span *span, ta_str prefix, ta_str rest) {
     return true;
 }
 
+/* The time of a record: the host clock core stamped it with (core ADR
+ * 0098), or, without one, the system's logical time. */
+static uint64_t tah_record_time(const ta_trace_record *record) {
+    return record->wall_ns != 0 ? record->wall_ns : (uint64_t)record->now;
+}
+
+/* Walks the names of a record's lists, in list order: transitions, exited,
+ * entered, history, states, each a u32 length and its bytes. */
+typedef struct {
+    const uint8_t *at;
+    const uint8_t *end;
+} tah_list_names;
+
+/* The next entry's name; "?" when the record has no more names. */
+static ta_str tah_list_name(tah_list_names *names) {
+    uint32_t len = 0;
+    if (names->end - names->at < 4) {
+        return LIT("?");
+    }
+    tah_mem_copy(&len, names->at, sizeof len);
+    if ((size_t)(names->end - names->at) - 4u < len) {
+        names->at = names->end;
+        return LIT("?");
+    }
+    ta_str name = { (const char *)names->at + 4, len };
+    names->at += 4u + len;
+    return name;
+}
+
+/* The names of a record's lists from the first entry of list `skip` lists in. */
+static tah_list_names tah_list_names_at(const ta_trace_record *record, uint32_t skip) {
+    tah_list_names names = { record->list_names.ptr, record->list_names.ptr + record->list_names.len };
+    const uint32_t counts[] = { record->transition_count, record->exited_count, record->entered_count,
+                                record->history_count, record->state_count };
+    for (uint32_t list = 0; list < skip; list += 1u) {
+        for (uint32_t index = 0; index < counts[list]; index += 1u) {
+            (void)tah_list_name(&names);
+        }
+    }
+    return names;
+}
+
+enum { LIST_TRANSITIONS = 0u, LIST_EXITED = 1u, LIST_ENTERED = 2u, LIST_HISTORY = 3u, LIST_STATES = 4u };
+
 /* Attributes every span and span event may carry about the record's event. */
-static bool tah_event_attributes(tah_otlp *otlp, tah_otlp_buf *buf, uint32_t field, const ta_event *event) {
-    if (event == NULL) {
+static bool tah_event_attributes(tah_otlp *otlp, tah_otlp_buf *buf, uint32_t field, const ta_trace_record *record) {
+    if (!record->has_event) {
         return true;
     }
-    char send[128];
-    ta_str sendid = tah_send_text(otlp, event->send_id, send);
-    ta_str invokeid = tah_invoke_text(otlp, event->invoke_id);
-    bool ok = tah_kv_string(buf, field, LIT("scxml.event.name"), tah_event_name(otlp, event->name)) &&
+    ta_event_type type = record->event_type;
+    bool ok = tah_kv_string(buf, field, LIT("scxml.event.name"), ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_NAME)) &&
               tah_kv_string(buf, field, LIT("scxml.event.type"),
-                            tah_cstr(tah_event_types[event->type <= TA_EVENT_PLATFORM ? event->type : 0]));
-    if (ok && sendid.len != 0) {
-        ok = tah_kv_string(buf, field, LIT("scxml.event.sendid"), sendid);
+                            tah_cstr(tah_event_types[type <= TA_EVENT_PLATFORM ? type : 0]));
+    ta_str send_id = ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_SEND_ID);
+    if (ok && send_id.len != 0) {
+        ok = tah_kv_string(buf, field, LIT("scxml.event.sendid"), send_id);
     }
-    if (ok && invokeid.len != 0) {
-        ok = tah_kv_string(buf, field, LIT("scxml.event.invokeid"), invokeid);
+    ta_str invoke_id = ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_INVOKE_ID);
+    if (ok && invoke_id.len != 0) {
+        ok = tah_kv_string(buf, field, LIT("scxml.event.invokeid"), invoke_id);
     }
-    if (ok && otlp->config.values && event->data.v != NULL && otlp->config.host.value_text != NULL) {
-        ta_str text = { NULL, 0 };
-        bool cut = false;
-        if (otlp->config.host.value_text(otlp->config.host.self, &event->data, &text, &cut)) {
-            ok = tah_kv_string(buf, field, LIT("scxml.event.data"), text) &&
-                 (!cut || tah_kv_bool(buf, field, LIT("scxml.event.data.truncated"), true));
-        }
+    ta_str data = otlp->config.values ? ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_DATA) : (ta_str){ 0 };
+    if (ok && data.len != 0) {
+        ok = tah_kv_string(buf, field, LIT("scxml.event.data"), data) &&
+             (!record->event_data_cut || tah_kv_bool(buf, field, LIT("scxml.event.data.truncated"), true));
     }
     return ok;
 }
 
 /* The attributes of a step's span: the session, step and actor. */
-static bool tah_step_attributes(tah_otlp *otlp, tah_otlp_buf *buf, const ta_trace_record *record) {
-    char session[TAH_SESSION_TEXT];
+static bool tah_step_attributes(tah_otlp_buf *buf, const ta_trace_record *record) {
     char actor[48];
     ta_str slot = tah_decimal(ta_actor_id_slot(record->actor), actor);
     actor[slot.len] = ':';
     ta_str generation = tah_decimal(ta_actor_id_generation(record->actor), actor + slot.len + 1u);
-    return tah_kv_string(buf, F_SPAN_ATTRIBUTES, LIT("scxml.session_id"), tah_key_session(otlp, &record->key, session)) &&
+    return tah_kv_string(buf, F_SPAN_ATTRIBUTES, LIT("scxml.session_id"),
+                         ta_trace_record_text(record, TA_TRACE_TEXT_SESSION_ID)) &&
            tah_kv_int(buf, F_SPAN_ATTRIBUTES, LIT("scxml.macrostep"), (int64_t)record->key.macrostep) &&
            tah_kv_string(buf, F_SPAN_ATTRIBUTES, LIT("scxml.actor"),
                          (ta_str){ actor, slot.len + 1u + generation.len }) &&
@@ -1304,45 +1216,55 @@ static bool tah_step_attributes(tah_otlp *otlp, tah_otlp_buf *buf, const ta_trac
 }
 
 /* A cause, as three attributes (the span parent says the same, lossily). */
-static bool tah_cause_attributes(const tah_otlp *otlp, tah_otlp_buf *buf, uint32_t field, const ta_step_key *cause) {
+static bool tah_cause_attributes(tah_otlp_buf *buf, uint32_t field, const ta_trace_record *record) {
+    const ta_step_key *cause = &record->cause;
     if (tah_key_empty(cause)) {
         return true;
     }
-    char session[TAH_SESSION_TEXT];
-    return tah_kv_string(buf, field, LIT("scxml.cause.session_id"), tah_key_session(otlp, cause, session)) &&
+    return tah_kv_string(buf, field, LIT("scxml.cause.session_id"),
+                         ta_trace_record_text(record, TA_TRACE_TEXT_CAUSE_SESSION_ID)) &&
            tah_kv_int(buf, field, LIT("scxml.cause.macrostep"), (int64_t)cause->macrostep) &&
            tah_kv_int(buf, field, LIT("scxml.cause.microstep"), (int64_t)cause->microstep);
 }
 
-/* A list of states: names, and IDs (names are unique within a chart, but a
- * gone definition answers with numbers). */
-static bool tah_states_attribute(tah_otlp *otlp, tah_otlp_buf *buf, ta_str key, ta_str id_key,
-                                 const ta_trace_record *record, const ta_state_id *states, uint32_t count) {
+/* A list of a record's states: names, and IDs (names are unique within a chart). */
+typedef struct {
+    ta_str key;
+    ta_str id_key;
+    uint32_t list;
+    const ta_state_id *states;
+    uint32_t count;
+} tah_states_params;
+
+static bool tah_states_attribute(tah_otlp_buf *buf, const ta_trace_record *record, const tah_states_params *params) {
     /* Two passes over the names: sizes first, then bytes. */
     size_t array = 0;
-    for (uint32_t at = 0; at < count; at += 1u) {
-        ta_str name = tah_state_name(otlp, record->definition, states[at]);
+    tah_list_names names = tah_list_names_at(record, params->list);
+    for (uint32_t at = 0; at < params->count; at += 1u) {
+        ta_str name = tah_list_name(&names);
         array += tah_len_field_size(F_ARRAY_VALUES, tah_any_string_size(name.len));
     }
     size_t any = tah_len_field_size(F_ANY_ARRAY, array);
-    if (!tah_buf_room(buf, tah_len_field_size(F_SPAN_ATTRIBUTES, tah_kv_size(key, any)))) {
+    if (!tah_buf_room(buf, tah_len_field_size(F_SPAN_ATTRIBUTES, tah_kv_size(params->key, any)))) {
         return false;
     }
-    tah_put_kv_head(buf, F_SPAN_ATTRIBUTES, key, any);
+    tah_put_kv_head(buf, F_SPAN_ATTRIBUTES, params->key, any);
     tah_put_len_header(buf, F_ANY_ARRAY, array);
-    for (uint32_t at = 0; at < count; at += 1u) {
-        ta_str name = tah_state_name(otlp, record->definition, states[at]);
+    names = tah_list_names_at(record, params->list);
+    for (uint32_t at = 0; at < params->count; at += 1u) {
+        ta_str name = tah_list_name(&names);
         tah_put_len_header(buf, F_ARRAY_VALUES, tah_any_string_size(name.len));
         tah_put_len_header(buf, F_ANY_STRING, name.len);
         tah_put_bytes(buf, name.ptr, name.len);
     }
-    return tah_kv_int_array(buf, F_SPAN_ATTRIBUTES, id_key, states, count);
+    return tah_kv_int_array(buf, F_SPAN_ATTRIBUTES, params->id_key, params->states, params->count);
 }
 
-static bool tah_transitions_attribute(tah_otlp *otlp, tah_otlp_buf *buf, const ta_trace_record *record) {
+static bool tah_transitions_attribute(tah_otlp_buf *buf, const ta_trace_record *record) {
     size_t array = 0;
+    tah_list_names names = tah_list_names_at(record, LIST_TRANSITIONS);
     for (uint32_t at = 0; at < record->transition_count; at += 1u) {
-        ta_str name = tah_transition_name(otlp, record->definition, record->transitions[at]);
+        ta_str name = tah_list_name(&names);
         array += tah_len_field_size(F_ARRAY_VALUES, tah_any_string_size(name.len));
     }
     size_t any = tah_len_field_size(F_ANY_ARRAY, array);
@@ -1352,8 +1274,9 @@ static bool tah_transitions_attribute(tah_otlp *otlp, tah_otlp_buf *buf, const t
     }
     tah_put_kv_head(buf, F_SPAN_ATTRIBUTES, key, any);
     tah_put_len_header(buf, F_ANY_ARRAY, array);
+    names = tah_list_names_at(record, LIST_TRANSITIONS);
     for (uint32_t at = 0; at < record->transition_count; at += 1u) {
-        ta_str name = tah_transition_name(otlp, record->definition, record->transitions[at]);
+        ta_str name = tah_list_name(&names);
         tah_put_len_header(buf, F_ARRAY_VALUES, tah_any_string_size(name.len));
         tah_put_len_header(buf, F_ANY_STRING, name.len);
         tah_put_bytes(buf, name.ptr, name.len);
@@ -1363,17 +1286,18 @@ static bool tah_transitions_attribute(tah_otlp *otlp, tah_otlp_buf *buf, const t
 }
 
 /* Opens `span` for a record's step. */
-static bool tah_span_open(tah_otlp *otlp, tah_otlp_span *span, const ta_trace_record *record, uint64_t now) {
+static bool tah_span_open(tah_otlp *otlp, tah_otlp_span *span, const ta_trace_record *record, ta_step_key key,
+                          uint64_t now) {
     tah_span_reset(span);
     tah_trace_id_of(otlp, &record->context, span->trace_id);
-    span->span_id = ta_step_key_span_id(record->key);
+    span->span_id = ta_step_key_span_id(key);
     span->definition = record->definition;
     span->start = now;
     if (record->kind == TA_TRACE_MACROSTEP_BEGIN) {
         otlp->last_macrostep = tah_exemplar_of(&record->context, span->span_id, now);
     }
-    span->microstep = record->key.microstep;
-    return tah_step_attributes(otlp, &span->attributes, record);
+    span->microstep = key.microstep;
+    return tah_step_attributes(&span->attributes, record);
 }
 
 /* Parents `span` under its cause, or links it there. */
@@ -1393,16 +1317,34 @@ static void tah_span_parent(tah_otlp *otlp, tah_otlp_span *span, const ta_step_k
     }
 }
 
-/* Ends a session's open spans, marked incomplete when `incomplete`. */
-static bool tah_open_end(tah_otlp *otlp, tah_otlp_open *open, uint64_t now, bool incomplete) {
+/* What ending a session's open spans marks on them. */
+typedef struct {
+    uint64_t now;
+    bool incomplete;
+    /* Records lost to a full tel ring (core ADR 0098): 0, or the count, which
+     * also marks the spans as errors. */
+    uint64_t dropped;
+} tah_open_end_params;
+
+/* One span's marks, then its end. */
+static bool tah_span_finish(tah_otlp *otlp, tah_otlp_span *span, const tah_open_end_params *params) {
+    if (params->dropped != 0) {
+        span->error = true;
+    }
+    return (!params->incomplete || tah_kv_bool(&span->attributes, F_SPAN_ATTRIBUTES, LIT("scxml.incomplete"), true)) &&
+           (params->dropped == 0 || tah_kv_int(&span->attributes, F_SPAN_ATTRIBUTES,
+                                               LIT("tinyactors.telemetry.dropped"), (int64_t)params->dropped)) &&
+           tah_span_end(otlp, span, params->now);
+}
+
+/* Ends a session's open spans, marked as `params` says. */
+static bool tah_open_end(tah_otlp *otlp, tah_otlp_open *open, const tah_open_end_params *params) {
     bool ok = true;
     if (open->has_micro) {
-        ok = (!incomplete || tah_kv_bool(&open->micro.attributes, F_SPAN_ATTRIBUTES, LIT("scxml.incomplete"), true)) &&
-             tah_span_end(otlp, &open->micro, now);
+        ok = tah_span_finish(otlp, &open->micro, params);
         open->has_micro = false;
     }
-    ok = ok && (!incomplete || tah_kv_bool(&open->macro.attributes, F_SPAN_ATTRIBUTES, LIT("scxml.incomplete"), true)) &&
-         tah_span_end(otlp, &open->macro, now);
+    ok = ok && tah_span_finish(otlp, &open->macro, params);
     tah_open_remove(otlp, open);
     return ok;
 }
@@ -1419,9 +1361,10 @@ static tah_otlp_open *tah_open_for(tah_otlp *otlp, const ta_trace_record *record
     if (open == NULL) {
         return NULL;
     }
-    ta_trace_record begin = *record;
-    begin.key.microstep = 0;
-    if (!tah_span_open(otlp, &open->macro, &begin, now) ||
+    open->macrostep = record->key.macrostep;
+    ta_step_key begin = record->key;
+    begin.microstep = 0;
+    if (!tah_span_open(otlp, &open->macro, record, begin, now) ||
         !tah_span_name(&open->macro, LIT("scxml.macrostep"), LIT(" (continued)")) ||
         !tah_kv_bool(&open->macro.attributes, F_SPAN_ATTRIBUTES, LIT("scxml.continued"), true)) {
         tah_open_remove(otlp, open);
@@ -1432,20 +1375,22 @@ static tah_otlp_open *tah_open_for(tah_otlp *otlp, const ta_trace_record *record
 
 static bool tah_begin(tah_otlp *otlp, const ta_trace_record *record, uint64_t now) {
     tah_otlp_open *open = tah_open_find(otlp, record->key.session);
-    if (open != NULL && !tah_open_end(otlp, open, now, true)) {
+    if (open != NULL && !tah_open_end(otlp, open, &(tah_open_end_params){ .now = now, .incomplete = true })) {
         return false;
     }
     open = tah_open_add(otlp, record->key.session);
     if (open == NULL) {
         return false;
     }
+    open->macrostep = record->key.macrostep;
     tah_otlp_span *span = &open->macro;
-    ta_str what = record->event != NULL ? tah_event_name(otlp, record->event->name)
+    ta_str what = record->has_event          ? ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_NAME)
                   : record->key.macrostep == 1 ? LIT("bootstrap")
                                                : LIT("(no event)");
-    bool ok = tah_span_open(otlp, span, record, now) && tah_span_name(span, LIT("scxml.macrostep "), what) &&
-              tah_event_attributes(otlp, &span->attributes, F_SPAN_ATTRIBUTES, record->event) &&
-              tah_cause_attributes(otlp, &span->attributes, F_SPAN_ATTRIBUTES, &record->cause) &&
+    bool ok = tah_span_open(otlp, span, record, record->key, now) &&
+              tah_span_name(span, LIT("scxml.macrostep "), what) &&
+              tah_event_attributes(otlp, &span->attributes, F_SPAN_ATTRIBUTES, record) &&
+              tah_cause_attributes(&span->attributes, F_SPAN_ATTRIBUTES, record) &&
               tah_kv_int(&span->attributes, F_SPAN_ATTRIBUTES, LIT("scxml.trace.flags"), record->context.flags);
     if (!ok) {
         tah_open_remove(otlp, open);
@@ -1467,18 +1412,28 @@ static bool tah_microstep(tah_otlp *otlp, const ta_trace_record *record, uint64_
         open->has_micro = false;
     }
     tah_otlp_span *span = &open->micro;
-    ta_str what = record->event != NULL ? tah_event_name(otlp, record->event->name) : LIT("(eventless)");
-    bool ok = tah_span_open(otlp, span, record, now) && tah_span_name(span, LIT("scxml.microstep "), what) &&
+    ta_str what = record->has_event ? ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_NAME) : LIT("(eventless)");
+    bool ok = tah_span_open(otlp, span, record, record->key, now) &&
+              tah_span_name(span, LIT("scxml.microstep "), what) &&
               tah_kv_int(&span->attributes, F_SPAN_ATTRIBUTES, LIT("scxml.microstep"), record->key.microstep) &&
-              tah_event_attributes(otlp, &span->attributes, F_SPAN_ATTRIBUTES, record->event) &&
-              tah_transitions_attribute(otlp, &span->attributes, record) &&
-              tah_states_attribute(otlp, &span->attributes, LIT("scxml.state.exited"), LIT("scxml.state.exited.id"),
-                                   record, record->exited, record->exited_count) &&
-              tah_states_attribute(otlp, &span->attributes, LIT("scxml.state.entered"), LIT("scxml.state.entered.id"),
-                                   record, record->entered, record->entered_count) &&
+              tah_event_attributes(otlp, &span->attributes, F_SPAN_ATTRIBUTES, record) &&
+              tah_transitions_attribute(&span->attributes, record) &&
+              tah_states_attribute(&span->attributes, record,
+                                   &(tah_states_params){ .key = LIT("scxml.state.exited"),
+                                                         .id_key = LIT("scxml.state.exited.id"),
+                                                         .list = LIST_EXITED, .states = record->exited,
+                                                         .count = record->exited_count }) &&
+              tah_states_attribute(&span->attributes, record,
+                                   &(tah_states_params){ .key = LIT("scxml.state.entered"),
+                                                         .id_key = LIT("scxml.state.entered.id"),
+                                                         .list = LIST_ENTERED, .states = record->entered,
+                                                         .count = record->entered_count }) &&
               (record->history_count == 0 ||
-               tah_states_attribute(otlp, &span->attributes, LIT("scxml.state.history"),
-                                    LIT("scxml.state.history.id"), record, record->history, record->history_count));
+               tah_states_attribute(&span->attributes, record,
+                                    &(tah_states_params){ .key = LIT("scxml.state.history"),
+                                                          .id_key = LIT("scxml.state.history.id"),
+                                                          .list = LIST_HISTORY, .states = record->history,
+                                                          .count = record->history_count }));
     if (!ok) {
         return false;
     }
@@ -1493,15 +1448,17 @@ static bool tah_end(tah_otlp *otlp, const ta_trace_record *record, uint64_t now)
     if (open == NULL) {
         return false;
     }
-    if (!tah_states_attribute(otlp, &open->macro.attributes, LIT("scxml.state"), LIT("scxml.state.id"), record,
-                              record->states, record->state_count)) {
+    if (!tah_states_attribute(&open->macro.attributes, record,
+                              &(tah_states_params){ .key = LIT("scxml.state"), .id_key = LIT("scxml.state.id"),
+                                                    .list = LIST_STATES, .states = record->states,
+                                                    .count = record->state_count })) {
         return false;
     }
-    return tah_open_end(otlp, open, now, false);
+    return tah_open_end(otlp, open, &(tah_open_end_params){ .now = now });
 }
 
 /* Where in the macrostep a record was written. */
-static bool tah_position_attributes(tah_otlp *otlp, tah_otlp_buf *buf, const ta_trace_record *record) {
+static bool tah_position_attributes(tah_otlp_buf *buf, const ta_trace_record *record) {
     const ta_trace_position *at = &record->position;
     bool ok = true;
     if (at->at != TA_TRACE_AT_NONE) {
@@ -1510,17 +1467,17 @@ static bool tah_position_attributes(tah_otlp *otlp, tah_otlp_buf *buf, const ta_
     }
     if (ok && at->state != TA_STATE_NONE) {
         ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.state"),
-                           tah_state_name(otlp, record->definition, at->state)) &&
+                           ta_trace_record_text(record, TA_TRACE_TEXT_POSITION_STATE)) &&
              tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.state.id"), at->state);
     }
     if (ok && at->transition != TA_TRANSITION_NONE) {
         ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.transition"),
-                           tah_transition_name(otlp, record->definition, at->transition)) &&
+                           ta_trace_record_text(record, TA_TRACE_TEXT_POSITION_TRANSITION)) &&
              tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.transition.id"), at->transition);
     }
     if (ok && at->action != TA_ACTION_NONE) {
         ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.action"),
-                           tah_action_name(otlp, record->definition, at->action)) &&
+                           ta_trace_record_text(record, TA_TRACE_TEXT_POSITION_ACTION)) &&
              tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.action.id"), at->action);
     }
     if (ok && (at->iteration != 0 || record->kind == TA_TRACE_FOREACH)) {
@@ -1529,68 +1486,73 @@ static bool tah_position_attributes(tah_otlp *otlp, tah_otlp_buf *buf, const ta_
     return ok;
 }
 
+/*
+ * What went wrong, in words: the text of the value the failure carries
+ * (for napi, a thrown Error as "Error: message"), else the fault's own
+ * message. Written whatever `values` says: at 3am the reason is the one
+ * value an operator cannot do without. Core cut it at telemetryValueBytes.
+ */
+static ta_str tah_fault_text(const ta_trace_record *record) {
+    ta_str data = ta_trace_record_text(record, TA_TRACE_TEXT_FAULT_DATA);
+    return data.len != 0 ? data : ta_trace_record_text(record, TA_TRACE_TEXT_FAULT_MESSAGE);
+}
+
 /* The fields of a record that becomes a span event. */
 static bool tah_record_attributes(tah_otlp *otlp, tah_otlp_buf *buf, const ta_trace_record *record) {
-    bool ok = tah_position_attributes(otlp, buf, record) &&
+    bool ok = tah_position_attributes(buf, record) &&
               tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.microstep"), record->key.microstep) &&
               tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.time"), (int64_t)record->now) &&
-              tah_event_attributes(otlp, buf, F_EVENT_ATTRIBUTES, record->event);
+              tah_event_attributes(otlp, buf, F_EVENT_ATTRIBUTES, record);
     if (ok && record->expr != TA_EXPR_ID_NONE) {
         ok = tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.expression.id"), record->expr);
     }
     if (ok && record->kind == TA_TRACE_CONDITION && !record->has_fault) {
         ok = tah_kv_bool(buf, F_EVENT_ATTRIBUTES, LIT("scxml.result"), record->result);
     }
-    if (ok && record->name.len != 0) {
-        ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.data.name"), record->name);
+    ta_str name = ta_trace_record_text(record, TA_TRACE_TEXT_NAME);
+    if (ok && name.len != 0) {
+        ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.data.name"), name);
     }
     if (ok && record->action != TA_ACTION_NONE && record->action != record->position.action) {
         ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.action"),
-                           tah_action_name(otlp, record->definition, record->action)) &&
+                           ta_trace_record_text(record, TA_TRACE_TEXT_ACTION)) &&
              tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.action.id"), record->action);
     }
     if (ok && record->iteration != 0 && record->iteration != record->position.iteration) {
         ok = tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.iteration"), record->iteration);
     }
-    if (ok && record->send != 0) {
-        char send[128];
-        ta_str text = tah_send_text(otlp, record->send, send);
-        if (text.len != 0) {
-            ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.send_id"), text);
-        }
+    ta_str send_id = ta_trace_record_text(record, TA_TRACE_TEXT_SEND_ID);
+    if (ok && send_id.len != 0) {
+        ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.send_id"), send_id);
     }
-    if (ok && record->invoke != TA_INVOKE_ID_NONE) {
-        ta_str text = tah_invoke_text(otlp, record->invoke);
-        if (text.len != 0) {
-            ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.invoke_id"), text);
-        }
+    ta_str invoke_id = ta_trace_record_text(record, TA_TRACE_TEXT_INVOKE_ID);
+    if (ok && invoke_id.len != 0) {
+        ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.invoke_id"), invoke_id);
     }
     if (ok && record->has_fault) {
-        ok = tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.fault.code"), record->fault.code);
-        if (ok && record->fault.detail != 0) {
-            ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.fault.detail"),
-                               tah_event_name(otlp, record->fault.detail));
+        ok = tah_kv_int(buf, F_EVENT_ATTRIBUTES, LIT("scxml.fault.code"), record->fault_code);
+        ta_str detail = ta_trace_record_text(record, TA_TRACE_TEXT_FAULT_DETAIL);
+        if (ok && detail.len != 0) {
+            ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.fault.detail"), detail);
         }
         /* What went wrong, as the failure's log says it: a debugger shows it
          * where the fault stopped the actor. */
-        ta_str reason = ok ? tah_fault_text(otlp, &record->fault.data, record->fault.message) : (ta_str){ 0 };
+        ta_str reason = tah_fault_text(record);
         if (ok && reason.len != 0) {
             ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.fault.message"), reason);
         }
     }
-    if (ok && otlp->config.values && record->has_value && otlp->config.host.value_text != NULL) {
-        ta_str text = { NULL, 0 };
-        bool cut = false;
-        if (otlp->config.host.value_text(otlp->config.host.self, &record->value, &text, &cut)) {
-            ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.value"), text) &&
-                 (!cut || tah_kv_bool(buf, F_EVENT_ATTRIBUTES, LIT("scxml.value.truncated"), true));
-        }
+    ta_str value = otlp->config.values && record->has_value ? ta_trace_record_text(record, TA_TRACE_TEXT_VALUE)
+                                                             : (ta_str){ 0 };
+    if (ok && value.len != 0) {
+        ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.value"), value) &&
+             (!record->value_cut || tah_kv_bool(buf, F_EVENT_ATTRIBUTES, LIT("scxml.value.truncated"), true));
     }
     if (ok && record->state != TA_STATE_NONE) {
         ok = tah_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.final_state"),
-                           tah_state_name(otlp, record->definition, record->state));
+                           ta_trace_record_text(record, TA_TRACE_TEXT_STATE));
     }
-    return ok && tah_cause_attributes(otlp, buf, F_EVENT_ATTRIBUTES, &record->cause);
+    return ok && tah_cause_attributes(buf, F_EVENT_ATTRIBUTES, record);
 }
 
 /* A record inside a macrostep: a span event on the step it happened in. */
@@ -1631,7 +1593,7 @@ static bool tah_span_event(tah_otlp *otlp, const ta_trace_record *record, uint64
 static bool tah_lifecycle(tah_otlp *otlp, const ta_trace_record *record, uint64_t now) {
     if (record->kind == TA_TRACE_UNLOADED || record->kind == TA_TRACE_DESTROYED) {
         tah_otlp_open *open = tah_open_find(otlp, record->key.session);
-        if (open != NULL && !tah_open_end(otlp, open, now, true)) {
+        if (open != NULL && !tah_open_end(otlp, open, &(tah_open_end_params){ .now = now, .incomplete = true })) {
             return false;
         }
     }
@@ -1642,12 +1604,12 @@ static bool tah_lifecycle(tah_otlp *otlp, const ta_trace_record *record, uint64_
     }
     tah_otlp_span *span = &otlp->lifecycle;
     tah_span_reset(span);
-    bool ok = tah_span_open(otlp, span, record, now) &&
+    bool ok = tah_span_open(otlp, span, record, record->key, now) &&
               tah_span_name(span, LIT("scxml."), tah_cstr(tah_kind_names[record->kind])) &&
-              tah_cause_attributes(otlp, &span->attributes, F_SPAN_ATTRIBUTES, &record->cause) &&
+              tah_cause_attributes(&span->attributes, F_SPAN_ATTRIBUTES, record) &&
               (record->state == TA_STATE_NONE ||
                tah_kv_string(&span->attributes, F_SPAN_ATTRIBUTES, LIT("scxml.final_state"),
-                             tah_state_name(otlp, record->definition, record->state)));
+                             ta_trace_record_text(record, TA_TRACE_TEXT_STATE)));
     if (ok) {
         tah_span_parent(otlp, span, &record->cause);
         ok = tah_span_end(otlp, span, now);
@@ -1758,59 +1720,47 @@ static bool tah_log_append(tah_otlp *otlp, const tah_log_line *line) {
 static bool tah_log_attributes(tah_otlp *otlp, const ta_trace_record *record) {
     tah_otlp_buf *buf = &otlp->scratch;
     buf->len = 0;
-    char decimal[TAH_SESSION_TEXT];
     bool ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.session_id"),
-                            tah_key_session(otlp, &record->key, decimal)) &&
+                            ta_trace_record_text(record, TA_TRACE_TEXT_SESSION_ID)) &&
               tah_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.macrostep"), (int64_t)record->key.macrostep) &&
               tah_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.microstep"), record->key.microstep);
-    ta_definition_inspection view;
-    if (ok && ta_definition_inspect(otlp->config.core, record->definition, &view) == TA_OK) {
-        ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.family"), view.identity.family.name) &&
-             tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.revision"),
-                           (ta_str){ (const char *)view.identity.revision.ptr, view.identity.revision.len });
+    ta_str family = { 0 };
+    ta_str revision = { 0 };
+    if (ok && tah_fact(otlp, record->definition, FACT_FAMILY, &family) &&
+        tah_fact(otlp, record->definition, FACT_REVISION, &revision)) {
+        ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.family"), family) &&
+             tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.revision"), revision);
     }
     if (ok && record->position.state != TA_STATE_NONE) {
         ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.state"),
-                           tah_state_name(otlp, record->definition, record->position.state));
+                           ta_trace_record_text(record, TA_TRACE_TEXT_POSITION_STATE));
     }
-    ta_action_id action = record->action != TA_ACTION_NONE ? record->action : record->position.action;
+    bool own_action = record->action != TA_ACTION_NONE;
+    ta_action_id action = own_action ? record->action : record->position.action;
     if (ok && action != TA_ACTION_NONE) {
-        ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.action"), tah_action_name(otlp, record->definition, action)) &&
+        ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.action"),
+                           ta_trace_record_text(record, own_action ? TA_TRACE_TEXT_ACTION
+                                                                   : TA_TRACE_TEXT_POSITION_ACTION)) &&
              tah_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.action.id"), (int64_t)action);
     }
     /* A long or runaway macrostep (core ADR 0075): where the actor was, and
      * the transition it was looping through. */
     if (ok && record->state_count != 0 && record->position.state == TA_STATE_NONE) {
-        ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.state"),
-                           tah_state_name(otlp, record->definition, record->states[0]));
+        tah_list_names names = tah_list_names_at(record, LIST_STATES);
+        ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.state"), tah_list_name(&names));
     }
     if (ok && record->transition_count != 0 &&
         (record->kind == TA_TRACE_LONG_MACROSTEP || record->kind == TA_TRACE_RUNAWAY)) {
-        ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.transition"),
-                           tah_transition_name(otlp, record->definition, record->transitions[0])) &&
+        tah_list_names names = tah_list_names_at(record, LIST_TRANSITIONS);
+        ok = tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.transition"), tah_list_name(&names)) &&
              tah_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.transition.id"), (int64_t)record->transitions[0]);
     }
     if (ok && record->has_fault) {
-        ok = tah_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.fault.code"), (int64_t)record->fault.code) &&
-             (record->fault.message.len == 0 ||
-              tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.fault.message"), record->fault.message));
+        ta_str message = ta_trace_record_text(record, TA_TRACE_TEXT_FAULT_MESSAGE);
+        ok = tah_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.fault.code"), (int64_t)record->fault_code) &&
+             (message.len == 0 || tah_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.fault.message"), message));
     }
     return ok;
-}
-
-/*
- * What went wrong, in words: the text of the value the failure carries
- * (for napi, a thrown Error as "Error: message"), else the fault's own
- * message. Written whatever `values` says: at 3am the reason is the one
- * value an operator cannot do without. The host cuts it to its limit.
- */
-static ta_str tah_fault_text(tah_otlp *otlp, const ta_value *data, ta_str message) {
-    ta_str text = { 0 };
-    if (data != NULL && data->v != NULL && otlp->config.host.value_text != NULL &&
-        otlp->config.host.value_text(otlp->config.host.self, data, &text, &(bool){ false }) && text.len != 0) {
-        return text;
-    }
-    return message;
 }
 
 /* `log_body` = "<prefix>: <reason>", or the prefix alone when there is no reason. */
@@ -1852,10 +1802,8 @@ static bool tah_log_failure(tah_otlp *otlp, const ta_trace_record *record, uint6
     switch (record->kind) {
     case TA_TRACE_ACTION_FAILED: {
         line.event_name = LIT("tinyactors.action.failed");
-        reason = tah_fault_text(otlp, record->has_fault ? &record->fault.data : NULL,
-                                record->has_fault ? record->fault.message : (ta_str){ 0 });
-        /* The reason lives in the host's buffer, which naming the action may not touch. */
-        ta_str what = record->action != TA_ACTION_NONE ? tah_action_name(otlp, record->definition, record->action)
+        reason = record->has_fault ? tah_fault_text(record) : (ta_str){ 0 };
+        ta_str what = record->action != TA_ACTION_NONE ? ta_trace_record_text(record, TA_TRACE_TEXT_ACTION)
                                                        : LIT("an action");
         otlp->log_body.len = 0;
         ok = tah_buf_room(&otlp->log_body, what.len + 9u + reason.len);
@@ -1881,9 +1829,8 @@ static bool tah_log_failure(tah_otlp *otlp, const ta_trace_record *record, uint6
         char digits[24];
         ta_str count = tah_decimal(record->key.microstep, digits);
         ta_str intro = LIT(" microsteps in one macrostep, the last through ");
-        ta_str through = record->transition_count != 0
-                             ? tah_transition_name(otlp, record->definition, record->transitions[0])
-                             : LIT("the initial transition");
+        tah_list_names names = tah_list_names_at(record, LIST_TRANSITIONS);
+        ta_str through = record->transition_count != 0 ? tah_list_name(&names) : LIT("the initial transition");
         ta_str outro = runaway ? LIT(": the microstep limit, so the run stopped") : LIT(": a tenth of the microstep limit");
         otlp->log_body.len = 0;
         ok = tah_buf_room(&otlp->log_body, count.len + intro.len + through.len + outro.len);
@@ -1896,21 +1843,20 @@ static bool tah_log_failure(tah_otlp *otlp, const ta_trace_record *record, uint6
         break;
     }
     case TA_TRACE_RAISED: {
-        if (record->event == NULL) {
+        if (!record->has_event) {
             return true;
         }
-        ta_str name = tah_event_name(otlp, record->event->name);
+        ta_str name = ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_NAME);
         if (!tah_starts_with(name, LIT("error."))) {
             return true;
         }
         line.event_name = LIT("tinyactors.error.raised");
-        /* The name is in `text`, which the reason does not use: copy both. */
         otlp->log_body.len = 0;
         ok = tah_buf_room(&otlp->log_body, name.len);
         if (ok) {
             tah_put_bytes(&otlp->log_body, name.ptr, name.len);
             name_len = name.len;
-            reason = tah_fault_text(otlp, &record->event->data, (ta_str){ 0 });
+            reason = ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_DATA);
             ok = tah_buf_room(&otlp->log_body, 2u + reason.len);
             if (ok && reason.len != 0) {
                 tah_put_bytes(&otlp->log_body, ": ", 2);
@@ -2132,11 +2078,15 @@ size_t tah_otlp_put_logs(tah_otlp *otlp, uint8_t *out, size_t size) {
     return view.len;
 }
 
+static bool tah_skipped(tah_otlp *otlp, const ta_trace_record *record);
+
 void tah_otlp_write(tah_otlp *otlp, const ta_trace_record *record) {
     if ((uint32_t)record->kind > (uint32_t)TA_TRACE_WITHDRAWN) {
         otlp->dropped += 1u;
         return;
     }
+    /* The records that open a run name the definition's scope from here on. */
+    tah_facts_keep(otlp, record);
     /* Definition records (core ADR 0080) have one OTLP path already: the
      * definition sink writes them as the tinyactors.definition.* logs (napi
      * ADR 0017 section 7), with the origin core does not know. A sink that
@@ -2144,14 +2094,14 @@ void tah_otlp_write(tah_otlp *otlp, const ta_trace_record *record) {
     if (record->kind >= TA_TRACE_DEFINITION_REGISTERED && record->kind <= TA_TRACE_DEFINITION_FREED) {
         return;
     }
-    /* The clock is read at span boundaries only; span events use that reading. */
-    uint64_t now = otlp->last_now;
-    if (record->kind <= TA_TRACE_MICROSTEP && record->kind != TA_TRACE_CONDITION) {
-        now = otlp->config.host.now(otlp->config.host.self);
-        otlp->last_now = now;
-    }
+    /* Every record carries its own time (core ADR 0098); the encoder reads no clock for it. */
+    uint64_t now = tah_record_time(record);
+    otlp->last_now = now;
     if (otlp->config.log_limit != 0 && !tah_log_failure(otlp, record, now)) {
         otlp->dropped += 1u;
+    }
+    if (tah_skipped(otlp, record)) {
+        return;
     }
     /* A record of an unsampled trace came for its log only, and a kind the
      * user did not ask for was asked of core for logs or for ending spans. */
@@ -2198,6 +2148,50 @@ void tah_otlp_write(tah_otlp *otlp, const ta_trace_record *record) {
         tah_runs_rollback(otlp, entries_before, runs_before, scopes_before);
         otlp->dropped += 1u;
     }
+}
+
+/*
+ * Records were dropped on tel (core ADR 0098 section 9): every open span
+ * ends at the time of the last record read, as an error, with the count as
+ * `tinyactors.telemetry.dropped`, so none claims a duration it did not
+ * have. The rest of each of their macrosteps is skipped (tah_skipped).
+ */
+void tah_otlp_dropped(tah_otlp *otlp, uint64_t count) {
+    otlp->telemetry_dropped += count;
+    while (otlp->open_count != 0) {
+        tah_otlp_open *open = &otlp->open[otlp->open_count - 1u];
+        if (tah_array_room(otlp->config.allocator, (void **)&otlp->skips, &otlp->skip_capacity, otlp->skip_count,
+                           sizeof *otlp->skips, _Alignof(tah_otlp_skip), otlp->skip_count + 1u)) {
+            otlp->skips[otlp->skip_count++] = (tah_otlp_skip){ .session = open->session,
+                                                                .macrostep = open->macrostep };
+        }
+        if (!tah_open_end(otlp, open, &(tah_open_end_params){ .now = otlp->last_now, .dropped = count })) {
+            otlp->dropped += 1u;
+        }
+    }
+}
+
+/* Whether `record` belongs to a macrostep a drop ended: it starts nothing,
+ * and is counted. Its session's next macrostep, or a lifecycle record, ends
+ * the skipping. */
+static bool tah_skipped(tah_otlp *otlp, const ta_trace_record *record) {
+    for (uint32_t at = 0; at < otlp->skip_count; at += 1u) {
+        tah_otlp_skip *skip = &otlp->skips[at];
+        if (skip->session != record->key.session) {
+            continue;
+        }
+        bool same = record->key.macrostep == skip->macrostep && record->kind != TA_TRACE_MACROSTEP_BEGIN &&
+                    record->key.macrostep != 0;
+        if (!same || record->kind == TA_TRACE_MACROSTEP_END) {
+            otlp->skips[at] = otlp->skips[otlp->skip_count - 1u];
+            otlp->skip_count -= 1u;
+        }
+        if (same) {
+            otlp->skipped += 1u;
+        }
+        return same;
+    }
+    return false;
 }
 
 /* The size of a whole trace request: its resource, then a ScopeSpans per run. */
@@ -2276,7 +2270,8 @@ void tah_otlp_end_turn(tah_otlp *otlp) {
 void tah_otlp_end_all(tah_otlp *otlp) {
     uint64_t now = otlp->config.host.now(otlp->config.host.self);
     while (otlp->open_count != 0) {
-        if (!tah_open_end(otlp, &otlp->open[otlp->open_count - 1u], now, true)) {
+        if (!tah_open_end(otlp, &otlp->open[otlp->open_count - 1u],
+                          &(tah_open_end_params){ .now = now, .incomplete = true })) {
             otlp->dropped += 1u;
         }
     }
@@ -2312,6 +2307,8 @@ void tah_otlp_destroy(tah_otlp *otlp) {
     tah_array_free(allocator, (void **)&otlp->runs, &otlp->run_capacity, sizeof *otlp->runs, _Alignof(tah_otlp_run));
     tah_array_free(allocator, (void **)&otlp->run_index, &otlp->run_index_capacity, sizeof *otlp->run_index,
                    _Alignof(uint32_t));
+    tah_array_free(allocator, (void **)&otlp->skips, &otlp->skip_capacity, sizeof *otlp->skips,
+                   _Alignof(tah_otlp_skip));
     tah_buf_free(&otlp->scopes);
     tah_buf_free(&otlp->scratch);
     tah_buf_free(&otlp->label);
@@ -2319,7 +2316,7 @@ void tah_otlp_destroy(tah_otlp *otlp) {
     *otlp = (tah_otlp){ 0 };
 }
 
-void tah_otlp_set_wanted(tah_otlp *otlp, const tah_trace_masks *masks) {
+void tah_otlp_set_wanted(tah_otlp *otlp, const ta_trace_masks *masks) {
     otlp->config.wanted_kinds = masks->kinds;
     otlp->config.wanted_watched_kinds = masks->watched_kinds;
     otlp->config.wanted_unsampled_kinds = masks->unsampled_kinds;
@@ -2331,4 +2328,8 @@ uint32_t tah_otlp_staged_records(const tah_otlp *otlp) {
 
 bool tah_otlp_logs_enabled(const tah_otlp *otlp) {
     return otlp->config.log_limit != 0;
+}
+
+bool tah_otlp_values(const tah_otlp *otlp) {
+    return otlp->config.values;
 }

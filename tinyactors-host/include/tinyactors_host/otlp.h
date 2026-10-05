@@ -2,12 +2,21 @@
 /*
  * Trace records to OTLP protobuf (napi ADR 0016).
  *
- * The encoder is a core trace sink's back end: it takes the records core
- * writes (core ADR 0067), maps them to OpenTelemetry spans, keeps the
- * spans still open between turns, and writes the spans that ended as one
- * `ExportTraceServiceRequest` (opentelemetry-proto, trace/v1), which an
- * OTLP/HTTP `/v1/traces` endpoint accepts as it is. It exports nothing:
- * where the bytes go is the host's business.
+ * The encoder reads the records core writes to its `tel` ring (core ADRs
+ * 0067 and 0098), as the host drains them between core calls, maps them to
+ * OpenTelemetry spans, keeps the spans still open between turns, and writes
+ * the spans that ended as one `ExportTraceServiceRequest`
+ * (opentelemetry-proto, trace/v1), which an OTLP/HTTP `/v1/traces` endpoint
+ * accepts as it is. It exports nothing: where the bytes go is the host's
+ * business.
+ *
+ * A record names everything it refers to, so the encoder never calls into
+ * core for a record: names, values and the fault are the record's text, and
+ * times are the `wall_ns` core stamped it with, or its logical time without
+ * a clock. The facts that name a definition's scope come only on the
+ * records that open a run; the encoder keeps them per definition until
+ * tah_otlp_forget_definition(). When core reports records it dropped,
+ * tah_otlp_dropped() ends the open spans (core ADR 0098 section 9).
  *
  * Portability: it uses only core's public header and the host interface
  * below. It has no Node-API in it (the NODE_API_SOURCES check keeps it
@@ -37,34 +46,36 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "adapter_trace.h"
 #include "host_metrics.h"
 #include "tinyactors.h"
 
 /* What the encoder asks of its host. */
 typedef struct {
     void *self;
-    /* Wall-clock time, in nanoseconds since the Unix epoch (core has only
-     * logical time). */
+    /* Wall-clock time, in nanoseconds since the Unix epoch, for what is not a
+     * trace record and so carries no time of its own: <log> records, host
+     * logs, definition logs, and the spans tah_otlp_end_all() ends. */
     uint64_t (*now)(void *self);
     /* A new trace ID, for a span whose record carries none. 16 bytes. */
     void (*trace_id)(void *self, uint8_t out[16]);
-    /* Optional: text for a value (event data, an assigned value), valid until
-     * the next call; false when there is none. Used only with `values`. */
-    /* `*cut`: the text was cut at the host's limit (napi ADR 0035). */
+    /* Optional: text for a <log> record's value, valid until the next call;
+     * false when there is none. A trace record's values are text already
+     * (core ADR 0098). `*cut`: the text was cut at the host's limit. */
     bool (*value_text)(void *self, const ta_value *value, ta_str *out, bool *cut);
 } tah_otlp_host;
 
 typedef struct {
-    /* The system whose records these are: names come from its definitions
-     * (core ADR 0071) and its interned event names. */
+    /* The system whose logs these are: a <log> record, a host log and a
+     * definition log name what they refer to by ID, and the encoder asks
+     * core for the names. Trace records never need it. */
     const ta_system *core;
     ta_allocator allocator;
     tah_otlp_host host;
     /* Parent a macrostep under its cause (false), or make it a root and
      * link it to its cause (true). */
     bool link_parents;
-    /* Put values (event data, assigned values) in attributes. */
+    /* Put values (event data, assigned values) in attributes, as core
+     * rendered them (telemetryValueBytes). */
     bool values;
     /* The instrumentation scope's version. */
     ta_str version;
@@ -100,8 +111,13 @@ typedef struct {
 /* Sets the resource attributes (`service.name`, ...) every request carries. */
 ta_result tah_otlp_set_resource(tah_otlp *otlp, const tah_otlp_attribute *attributes, uint32_t count);
 
-/* Takes one record, as a trace sink's `write` does. Cannot fail. */
+/* Takes one record read from tel; borrows it for the call. Cannot fail: a
+ * record the encoder has no memory for is counted in `dropped`. */
 void tah_otlp_write(tah_otlp *otlp, const ta_trace_record *record);
+/* Takes a report that core dropped `count` records on tel: every open span
+ * ends, as an error marked with the count, and the rest of its macrostep is
+ * skipped (core ADR 0098 section 9). */
+void tah_otlp_dropped(tah_otlp *otlp, uint64_t count);
 
 /*
  * The size in bytes of the ExportTraceServiceRequest the spans that ended
@@ -174,10 +190,14 @@ void tah_otlp_end_turn(tah_otlp *otlp);
 void tah_otlp_end_all(tah_otlp *otlp);
 
 /* Changes the kinds the user asked for (configureTraces). */
-void tah_otlp_set_wanted(tah_otlp *otlp, const tah_trace_masks *masks);
+void tah_otlp_set_wanted(tah_otlp *otlp, const ta_trace_masks *masks);
 /* Spans and log records staged since the last tah_otlp_end_turn(). */
 uint32_t tah_otlp_staged_records(const tah_otlp *otlp);
 /* Whether the encoder keeps log records (its config's log_limit is not 0). */
 bool tah_otlp_logs_enabled(const tah_otlp *otlp);
+/* Whether the encoder puts values in attributes (its config's `values`):
+ * when it does not, a binding asks core for no value text, so core renders
+ * none (ta_trace_masks.value_bytes 0, core ADR 0098). */
+bool tah_otlp_values(const tah_otlp *otlp);
 
 void tah_otlp_destroy(tah_otlp *otlp);

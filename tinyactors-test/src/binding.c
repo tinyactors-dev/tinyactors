@@ -1,5 +1,6 @@
 #include "binding.h"
 
+#include "instruments.h"
 #include "rpc.h"
 #include "value_codec.h"
 
@@ -625,6 +626,7 @@ jv tat_handle_encode(tat_bind *bind, const char *type, const void *ptr) {
 }
 
 void tat_handle_retire(tat_bind *bind, const void *ptr) {
+    tat_trace_forget_system(ptr);
     for (size_t index = 0; index < bind->handle_count; index += 1) {
         if (bind->handles[index].ptr == ptr && !bind->handles[index].fixture) {
             bind->handles[index].live = false;

@@ -17,6 +17,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "tel_reader.h"
 
 static int failures = 0;
 
@@ -223,7 +224,6 @@ static void sink_write(void *self, const ta_trace_record *record) {
         last_control_position = record->position;
     }
 }
-static const ta_trace_sink_vtable sink_vtable = { .write = sink_write };
 
 /* ------------------------------------------------------------------------
  * Driving it
@@ -275,15 +275,18 @@ static void open_system(run *r) {
                                                                                  .allocator = allocator,
                                                                                  .out = &definition }) == TA_OK);
     CHECK(ta_system_register_definition(r->system, definition, &r->definition) == TA_OK);
-    CHECK(ta_system_set_trace_sink(r->system, (ta_trace_sink){ .v = &sink_vtable, .kinds = UINT32_MAX,
-                                                               .watched_kinds = UINT32_MAX,
-                                                               .unsampled_kinds = UINT32_MAX }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(r->system, &(ta_trace_masks){ .kinds = UINT32_MAX,
+                                                                  .watched_kinds = UINT32_MAX,
+                                                                  .unsampled_kinds = UINT32_MAX }) == TA_OK);
 }
 
 static ta_result resume_with(run *r, uint32_t action_budget, bool at_start, ta_run_status *status) {
-    return ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000,
-                                                                .status = status, .action_budget = action_budget,
-                                                                .pause_at_microstep_start = at_start });
+    ta_result result = ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000,
+                                                                             .status = status,
+                                                                             .action_budget = action_budget,
+                                                                             .pause_at_microstep_start = at_start });
+    tel_drain(r->system, sink_write, NULL);
+    return result;
 }
 
 static ta_run_status resume(run *r, uint32_t action_budget, bool at_start) {
@@ -298,6 +301,7 @@ static void start(run *r) {
     open_system(r);
     CHECK(ta_actor_spawn(r->system, &(ta_actor_spawn_params){ .definition = r->definition, .out = &r->actor }) ==
           TA_OK);
+    tel_drain(r->system, sink_write, NULL);
     long paused = paused_records;
     CHECK(resume(r, 0, true) == TA_RUN_STABLE);
     CHECK(paused_records == paused);
@@ -318,6 +322,7 @@ static void deliver(run *r, const char *name, const char *target) {
         result = ta_actor_deliver(r->system, &params);
     }
     CHECK(result == TA_OK);
+    tel_drain(r->system, sink_write, NULL);
 }
 
 static void offer(run *r, const char *name) {
@@ -561,6 +566,7 @@ static void test_microstep_budget(void) {
     ta_run_status status = TA_RUN_ERROR;
     CHECK(ta_actor_resume(r.system, &(ta_actor_resume_params){ .actor = r.actor, .budget = 1, .status = &status,
                                                               .pause_at_microstep_start = true }) == TA_OK);
+    tel_drain(r.system, sink_write, NULL);
     CHECK(status == TA_RUN_PAUSED);
     CHECK(log_is("pi "));
     ta_actor_inspection inspection = inspect(&r);

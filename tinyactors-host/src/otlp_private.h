@@ -33,6 +33,7 @@ typedef struct tah_otlp_span {
 /* A session's open macrostep, and its open microstep. */
 typedef struct tah_otlp_open {
     uint64_t session;
+    uint64_t macrostep;
     bool has_micro;
     tah_otlp_span macro;
     tah_otlp_span micro;
@@ -59,6 +60,12 @@ typedef struct tah_otlp_run {
     uint32_t last;
 } tah_otlp_run;
 
+/* A macrostep whose spans a drop ended (core ADR 0098): its later records start nothing. */
+typedef struct tah_otlp_skip {
+    uint64_t session;
+    uint64_t macrostep;
+} tah_otlp_skip;
+
 typedef struct tah_otlp_name {
     uint64_t definition;
     uint32_t tag; /* what is named: kind in the top two bits, the ID below */
@@ -74,7 +81,7 @@ struct tah_otlp {
     uint32_t open_capacity;
     uint32_t *open_index;      /* open addressing by session: index + 1 into `open`, 0 empty */
     uint32_t open_index_capacity; /* a power of two, at least twice `open_capacity` */
-    uint64_t last_now;         /* the clock at the last span boundary: span events use it */
+    uint64_t last_now;         /* the time of the last record read: a drop ends open spans at it */
     tah_otlp_span lifecycle;   /* a lifecycle span while it is built */
     tah_otlp_buf logs;         /* encoded ScopeLogs.log_records entries */
     tah_otlp_buf log_body;     /* a log's body while its attributes are built */
@@ -89,7 +96,7 @@ struct tah_otlp {
     tah_otlp_name *name_slots; /* open addressing, a power of two */
     uint32_t name_capacity;
     uint32_t name_count;
-    tah_otlp_buf names;        /* the cached labels' text */
+    tah_otlp_buf names;        /* the cached facts' and event names' text */
     tah_otlp_buf resource;     /* encoded Resource.attributes entries */
     /* Encoded ScopeSpans.spans entries that ended since the last put, in
      * the order they ended; `entries` says where each is and chains each
@@ -123,6 +130,13 @@ struct tah_otlp {
      * (host_metrics.h); the host clears `set` when it takes it. */
     tah_exemplar last_macrostep;
     uint64_t dropped;          /* records lost to a failed allocation */
+    /* Records core dropped on tel, as its reports said (core ADR 0098), and
+     * the records the encoder skipped because a drop ended their spans. */
+    uint64_t telemetry_dropped;
+    uint64_t skipped;
+    tah_otlp_skip *skips;
+    uint32_t skip_count;
+    uint32_t skip_capacity;
 };
 
 /* Spans still open (for tests). */

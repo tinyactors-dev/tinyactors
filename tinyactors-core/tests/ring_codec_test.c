@@ -48,7 +48,11 @@
  * 7. end to end through a lossless ta_ring: records written into
  *    reservations keep the ring's gap-free seq and read back through
  *    ta_ring_peek and ta_record_read; a record whose seq skips one is
- *    refused by ta_ring_peek with TA_ERR_CORRUPT before the codec sees it.
+ *    refused by ta_ring_peek with TA_ERR_CORRUPT before the codec sees it;
+ * 8. where the texts lie does not change the record: texts that lie end to
+ *    end in one buffer, as a producer that composes them in order lays
+ *    them, with empty texts between them and a text given twice, write
+ *    every kind byte for byte as texts in buffers of their own do.
  */
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
@@ -191,7 +195,7 @@ static const kind_case CASES[] = {
 };
 
 #define CASE_COUNT (sizeof(CASES) / sizeof(CASES[0]))
-#define MAX_SPANS 16u
+#define MAX_SPANS 32u
 
 /* The ring a code names: 0x01xx h2c, 0x02xx c2h, 0x03xx tel. */
 static ta_record_ring ring_of(uint16_t kind) { return (ta_record_ring)(kind >> 8); }
@@ -494,8 +498,8 @@ static void test_typed_send(void) {
 }
 
 static void test_typed_trace(void) {
-    static const uint8_t transitions[] = { 1, 0, 0, 0, 9, 0, 0, 0, 2, 0, 0, 0, 't', '1' };
-    static const uint8_t states[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    static const uint8_t transitions[] = { 9, 0, 0, 0 };
+    static const uint8_t states[] = { 2, 0, 0, 0, 't', '1' };
     ta_tel_trace fixed = { 0 };
     fixed.macrostep = 9u;
     fixed.microstep = 2u;
@@ -504,8 +508,8 @@ static void test_typed_trace(void) {
     ta_tel_trace_texts texts = { 0 };
     texts.address = ta_str_from_cstr("orders/42");
     texts.state_name = ta_str_from_cstr("open");
-    texts.transitions = (ta_bytes){ transitions, sizeof(transitions) };
-    texts.states = (ta_bytes){ states, sizeof(states) };
+    texts.list_ids = (ta_bytes){ transitions, sizeof(transitions) };
+    texts.list_names = (ta_bytes){ states, sizeof(states) };
     uint32_t size = 0;
     CHECK(ta_tel_trace_size(&texts, &size) == TA_OK);
     unsigned char *bytes = new_buffer(size);
@@ -522,9 +526,9 @@ static void test_typed_trace(void) {
         CHECK(text_is(ta_record_view_text(&view, trace->address), "orders/42"));
         CHECK(text_is(ta_record_view_text(&view, trace->state_name), "open"));
         CHECK(text_is(ta_record_view_text(&view, trace->fault_message), ""));
-        ta_bytes got = ta_record_view_bytes(&view, trace->transitions);
+        ta_bytes got = ta_record_view_bytes(&view, trace->list_ids);
         CHECK(got.len == sizeof(transitions) && memcmp(got.ptr, transitions, got.len) == 0);
-        got = ta_record_view_bytes(&view, trace->states);
+        got = ta_record_view_bytes(&view, trace->list_names);
         CHECK(got.len == sizeof(states) && memcmp(got.ptr, states, got.len) == 0);
     }
     free(bytes);
@@ -819,6 +823,62 @@ static void test_seq_through_ring(void) {
     CHECK(test_allocator_finish(&heap) == 0);
 }
 
+/* ------------------------------------------------------------------------
+ * Claim 8: texts end to end in one buffer write the same record.
+ */
+
+static void same_record_from_one_buffer(const kind_case *c) {
+    if (c->span_count == 0) {
+        return;
+    }
+    char joined[MAX_SPANS * 8];
+    for (size_t at = 0; at < sizeof joined; at += 1) {
+        joined[at] = (char)('a' + at % 26u);
+    }
+    ta_bytes adjacent[MAX_SPANS];
+    ta_bytes apart[MAX_SPANS];
+    char *copies[MAX_SPANS];
+    memset(adjacent, 0, sizeof adjacent);
+    memset(apart, 0, sizeof apart);
+    uint32_t cursor = 0;
+    for (uint32_t span = 0; span < c->span_count; span += 1u) {
+        /* Every fourth text is empty, every fifth repeats the first. */
+        uint32_t len = span % 4u == 3u ? 0u : 1u + span % 7u;
+        if (span % 5u == 4u) {
+            adjacent[span] = adjacent[0];
+        } else {
+            adjacent[span] = (ta_bytes){ len == 0 ? NULL : (const uint8_t *)joined + cursor, len };
+            cursor += len;
+        }
+        copies[span] = malloc(adjacent[span].len + 1u);
+        CHECK(copies[span] != NULL);
+        memcpy(copies[span], adjacent[span].ptr == NULL ? "" : (const char *)adjacent[span].ptr, adjacent[span].len);
+        apart[span] = (ta_bytes){ adjacent[span].len == 0 ? NULL : (const uint8_t *)copies[span], adjacent[span].len };
+    }
+    uint32_t size = 0;
+    CHECK(c->size(adjacent, &size) == TA_OK);
+    unsigned char *fixed = patterned_fixed(c, 3u);
+    unsigned char *one = new_buffer(size);
+    unsigned char *other = new_buffer(size);
+    put_seq(one, 9u);
+    put_seq(other, 9u);
+    CHECK(c->write((ta_record_buffer){ one, size }, fixed, adjacent) == TA_OK);
+    CHECK(c->write((ta_record_buffer){ other, size }, fixed, apart) == TA_OK);
+    CHECK(memcmp(one, other, size) == 0);
+    for (uint32_t span = 0; span < c->span_count; span += 1u) {
+        free(copies[span]);
+    }
+    free(other);
+    free(one);
+    free(fixed);
+}
+
+static void test_texts_in_one_buffer(void) {
+    for (size_t index = 0; index < CASE_COUNT; index += 1) {
+        same_record_from_one_buffer(&CASES[index]);
+    }
+}
+
 int main(void) {
     test_kinds();
     test_round_trip();
@@ -829,6 +889,7 @@ int main(void) {
     test_write_refused();
     test_read_refused();
     test_seq_through_ring();
+    test_texts_in_one_buffer();
     if (failures != 0) {
         fprintf(stderr, "ring_codec_test: %d checks failed\n", failures);
         return 1;

@@ -3,13 +3,23 @@
 #include "../include/tinyactors.h"
 
 void ta_text_put(ta_text_writer *writer, ta_str text) {
-    for (uint32_t index = 0; index < text.len; index += 1) {
-        if (writer->buffer != NULL && writer->length >= writer->skip &&
-            writer->length - writer->skip < writer->capacity) {
-            writer->buffer[writer->length - writer->skip] = text.ptr[index];
+    /* The text's bytes [length, length + len) that fall in the window
+     * [skip, skip + capacity) are stored, in one copy. */
+    uint64_t first = writer->length;
+    uint64_t end = first + text.len;
+    uint64_t window = writer->skip;
+    uint64_t window_end = window + writer->capacity;
+    uint64_t from = first > window ? first : window;
+    uint64_t to = end < window_end ? end : window_end;
+    if (writer->buffer != NULL && from < to) {
+        char *out = writer->buffer + (from - window);
+        const char *in = text.ptr + (from - first);
+        uint32_t count = (uint32_t)(to - from);
+        for (uint32_t index = 0; index < count; index += 1u) {
+            out[index] = in[index];
         }
-        writer->length += 1;
     }
+    writer->length += text.len;
 }
 
 uint32_t ta_text_format_u64(char out[TA_TEXT_U64_DIGITS], uint64_t value) {

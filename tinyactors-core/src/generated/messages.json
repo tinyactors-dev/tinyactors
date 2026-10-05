@@ -2133,7 +2133,7 @@
       "code": 769,
       "ring": "tel",
       "summary": "One trace record (core ADR 0067)",
-      "doc": "One ta_trace_record, kind for kind; only the fields its kind names are meaningful. The record is self-contained: names, values and the fault are text in its tail, and the state and transition lists are bytes in its tail holding u32 IDs with their names, so a reader needs no live system (docs/proposals/ring-proto/reference/telemetry.md). Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `at` is logical time; wall_ns is when it happened.\n\nThe step key is header `session`, `macrostep` and `microstep`. There is no span ID field: a span ID is a fixed 64-bit mix of the step key (core ADR 0067, ta_step_key_span_id), the same in every reader.",
+      "doc": "One ta_trace_record, kind for kind; only the fields its kind names are meaningful, and the rest are 0, or UINT32_MAX for a state, transition, action or expression that is none. The record is self-contained (core ADR 0098): names, values and the fault are text in its tail, beside the IDs they name, so a reader needs no live system. Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `session` and `at` are the step key's session and the logical time; wall_ns is when it happened.\n\nThe step key is header `session`, `macrostep` and `microstep`. There is no span ID field: a span ID is a fixed 64-bit mix of the step key (core ADR 0067, ta_step_key_span_id), the same in every reader.\n\nThe lists are two spans: list_ids holds the u32 IDs of the transitions, then the exited, entered and history states, then the states the kind names, back to back, as many as the five counts say; list_names holds, in the same order, each entry's name as a u32 length and its UTF-8 bytes. list_ids comes first in the tail, so its IDs are 4-byte aligned and a reader can use them in place. When the record would not fit maxRecordBytes, core keeps the lists whole from the first and cuts the last list first; the counts say how many entries are there, not how many there were.",
       "fields": [
         {
           "name": "wall_ns",
@@ -2172,176 +2172,362 @@
           "offset": 72
         },
         {
+          "name": "actor",
+          "type": "u64",
+          "doc": "the session's runtime actor ID, or 0",
+          "offset": 80
+        },
+        {
+          "name": "definition",
+          "type": "u64",
+          "doc": "the definition's ID",
+          "offset": 88
+        },
+        {
+          "name": "send",
+          "type": "u64",
+          "doc": "the send ID's handle, for SENT and its kin; send_id is its text",
+          "offset": 96
+        },
+        {
+          "name": "invoke",
+          "type": "u64",
+          "doc": "the invocation's handle, for INVOKED and its kin; invoke_id is its text",
+          "offset": 104
+        },
+        {
           "name": "microstep",
           "type": "u32",
           "doc": "from 1 per macrostep; 0 for the macrostep itself",
-          "offset": 80
+          "offset": 112
         },
         {
           "name": "cause_microstep",
           "type": "u32",
           "doc": "the microstep of the causing step; with cause_session and cause_macrostep, the cause's step key, whose span ID is the parent span",
-          "offset": 84
+          "offset": 116
         },
         {
           "name": "state",
           "type": "u32",
-          "doc": "",
-          "offset": 88
+          "doc": "the state at the record's position",
+          "offset": 120
         },
         {
           "name": "transition",
           "type": "u32",
-          "doc": "",
-          "offset": 92
+          "doc": "the transition at the record's position",
+          "offset": 124
         },
         {
           "name": "action",
           "type": "u32",
-          "doc": "",
-          "offset": 96
+          "doc": "the action at the record's position",
+          "offset": 128
         },
         {
           "name": "iteration",
           "type": "u32",
-          "doc": "",
-          "offset": 100
+          "doc": "the <foreach> iteration at the record's position; on FOREACH, the iteration it names",
+          "offset": 132
+        },
+        {
+          "name": "subject_state",
+          "type": "u32",
+          "doc": "the state the kind names: a final state, a guard's source, a <data>'s owner, an operator transition's source",
+          "offset": 136
+        },
+        {
+          "name": "subject_action",
+          "type": "u32",
+          "doc": "the action the kind names: ACTION_FAILED's",
+          "offset": 140
+        },
+        {
+          "name": "expr",
+          "type": "u32",
+          "doc": "the expression the kind names",
+          "offset": 144
+        },
+        {
+          "name": "dropped",
+          "type": "u32",
+          "doc": "ABANDONED: the internal events it discarded",
+          "offset": 148
         },
         {
           "name": "fault_code",
           "type": "i32",
           "doc": "the fault’s code, with fault_detail",
-          "offset": 104
+          "offset": 152
+        },
+        {
+          "name": "transition_count",
+          "type": "u32",
+          "doc": "transitions in list_ids",
+          "offset": 156
+        },
+        {
+          "name": "exited_count",
+          "type": "u32",
+          "doc": "exited states in list_ids",
+          "offset": 160
+        },
+        {
+          "name": "entered_count",
+          "type": "u32",
+          "doc": "entered states in list_ids",
+          "offset": 164
+        },
+        {
+          "name": "history_count",
+          "type": "u32",
+          "doc": "history states in list_ids",
+          "offset": 168
+        },
+        {
+          "name": "state_count",
+          "type": "u32",
+          "doc": "states the kind names in list_ids: a configuration, or an operator transition's targets",
+          "offset": 172
         },
         {
           "name": "trace_kind",
           "type": "u16",
           "doc": "ta_trace_kind",
-          "offset": 108
+          "offset": 176
         },
         {
           "name": "position",
           "type": "u8",
           "doc": "ta_trace_at",
-          "offset": 110
+          "offset": 178
         },
         {
           "name": "result",
           "type": "bool",
           "doc": "",
-          "offset": 111
+          "offset": 179
         },
         {
           "name": "trace_flags",
           "type": "u8",
           "doc": "the trace context’s flags (sampled)",
-          "offset": 112
+          "offset": 180
         },
         {
           "name": "trace_detail",
           "type": "u8",
           "doc": "the trace context’s detail (watched)",
-          "offset": 113
+          "offset": 181
         },
         {
           "name": "runaway_cause",
           "type": "runaway_cause",
           "doc": "RUNAWAY only: what stopped the input",
-          "offset": 114
+          "offset": 182
+        },
+        {
+          "name": "event_type",
+          "type": "event_type",
+          "doc": "the event's type",
+          "offset": 183
+        },
+        {
+          "name": "list_ids",
+          "type": "bytes",
+          "doc": "the u32 IDs of the lists, back to back (see above)",
+          "offset": 184
+        },
+        {
+          "name": "session_id",
+          "type": "text",
+          "doc": "the session's ID as text, as _sessionid holds it",
+          "offset": 192
+        },
+        {
+          "name": "cause_session_id",
+          "type": "text",
+          "doc": "the causing session's ID as text; empty when there is no cause",
+          "offset": 200
         },
         {
           "name": "address",
           "type": "text",
-          "doc": "the session’s family/name",
-          "offset": 116
+          "doc": "the session’s family/name, when it has a named address",
+          "offset": 208
         },
         {
-          "name": "definition",
+          "name": "family_name",
           "type": "text",
-          "doc": "the definition’s document name and source, on the kinds that open a run",
-          "offset": 124
+          "doc": "the definition's family, on the kinds that open a run",
+          "offset": 216
+        },
+        {
+          "name": "revision",
+          "type": "bytes",
+          "doc": "the definition's revision, on the kinds that open a run",
+          "offset": 224
+        },
+        {
+          "name": "document_name",
+          "type": "text",
+          "doc": "the definition's document name, on the kinds that open a run",
+          "offset": 232
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "doc": "where the definition's first state was written, on the kinds that open a run",
+          "offset": 240
         },
         {
           "name": "state_name",
           "type": "text",
           "doc": "the name of `state`",
-          "offset": 132
+          "offset": 248
         },
         {
           "name": "transition_name",
           "type": "text",
           "doc": "the name of `transition`",
-          "offset": 140
+          "offset": 256
         },
         {
           "name": "action_name",
           "type": "text",
           "doc": "the name of `action`",
-          "offset": 148
+          "offset": 264
+        },
+        {
+          "name": "subject_state_name",
+          "type": "text",
+          "doc": "the name of `subject_state`",
+          "offset": 272
+        },
+        {
+          "name": "subject_action_name",
+          "type": "text",
+          "doc": "the name of `subject_action`",
+          "offset": 280
         },
         {
           "name": "name",
           "type": "text",
-          "doc": "the event name, or the name the kind carries",
-          "offset": 156
+          "doc": "the name the kind carries: a <data>'s",
+          "offset": 288
+        },
+        {
+          "name": "event_name",
+          "type": "text",
+          "doc": "the event's dotted name",
+          "offset": 296
+        },
+        {
+          "name": "event_send_id",
+          "type": "text",
+          "doc": "the event's sendid",
+          "offset": 304
+        },
+        {
+          "name": "event_invoke_id",
+          "type": "text",
+          "doc": "the event's invokeid",
+          "offset": 312
+        },
+        {
+          "name": "event_data",
+          "type": "text",
+          "doc": "the event's data as text, cut at telemetryValueBytes",
+          "offset": 320
         },
         {
           "name": "send_id",
           "type": "text",
           "doc": "the send ID, for SENT and its kin",
-          "offset": 164
+          "offset": 328
         },
         {
           "name": "invoke_id",
           "type": "text",
           "doc": "the invoke ID, for INVOKED and its kin",
-          "offset": 172
+          "offset": 336
         },
         {
           "name": "value_text",
           "type": "text",
-          "doc": "",
-          "offset": 180
+          "doc": "the kind's value as text, cut at telemetryValueBytes",
+          "offset": 344
         },
         {
           "name": "fault_detail",
           "type": "text",
           "doc": "the fault’s error event name",
-          "offset": 188
+          "offset": 352
         },
         {
           "name": "fault_message",
           "type": "text",
           "doc": "",
-          "offset": 196
+          "offset": 360
         },
         {
-          "name": "transitions",
-          "type": "bytes",
-          "doc": "the microstep’s transitions: a u32 count, then per transition its u32 ID, then its name as a u32 length and UTF-8 bytes",
-          "offset": 204
+          "name": "fault_data",
+          "type": "text",
+          "doc": "the fault's data as text, cut at telemetryValueBytes",
+          "offset": 368
         },
         {
-          "name": "states",
+          "name": "list_names",
           "type": "bytes",
-          "doc": "exited, entered, history, states: per list a u32 count, then per state its u32 ID, then its name as a u32 length and UTF-8 bytes",
-          "offset": 212
+          "doc": "the names of the list entries (see above)",
+          "offset": 376
         }
       ],
       "flags": [
         {
           "name": "truncated",
           "bit": 0,
-          "doc": "value_text was cut, or a list in the tail was cut to fit maxRecordBytes"
+          "doc": "something was cut: a value, the event's data, a list, or a name, to fit telemetryValueBytes or maxRecordBytes"
         },
         {
           "name": "suppressed",
           "bit": 1,
           "doc": "an effect a replaying session did not perform"
+        },
+        {
+          "name": "event",
+          "bit": 2,
+          "doc": "the event_* fields hold the event the kind names"
+        },
+        {
+          "name": "value",
+          "bit": 3,
+          "doc": "the kind carries a value; value_text holds its text unless telemetryValueBytes is 0"
+        },
+        {
+          "name": "fault",
+          "bit": 4,
+          "doc": "the fault_* fields hold the kind's fault"
+        },
+        {
+          "name": "value_cut",
+          "bit": 5,
+          "doc": "value_text was cut"
+        },
+        {
+          "name": "event_data_cut",
+          "bit": 6,
+          "doc": "event_data was cut"
+        },
+        {
+          "name": "lists_cut",
+          "bit": 7,
+          "doc": "a list was cut to fit maxRecordBytes"
         }
       ],
       "replies": [],
-      "fixed_size": 224,
+      "fixed_size": 384,
       "see": []
     },
     {

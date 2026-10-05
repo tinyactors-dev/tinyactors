@@ -1606,7 +1606,7 @@
           "type": {
             "type": "ta_step_key"
           },
-          "doc": "Where the paused macrostep stands (ADR 0083): the key and position of the PAUSED or STOPPED record its last run wrote, whether or not a sink wanted it. Between microsteps `position.at` is TA_TRACE_AT_NONE and `step.microstep` counts the microsteps done. Inside a microstep, `position` names the phase and state (and, in transition content, the transition), and `action` the unit it runs next: the next action of the innermost open block, in `iteration` of the innermost <foreach > whose body that is, or a <foreach > itself when its next iteration is next, with `iteration` the one it binds. At a microstep's start (ADR 0086) it names the first unit the microstep runs, or, when it runs none, its first transition with no action. Outside a macrostep, `step` is (session_id, 0, 0) and `position` is at NONE with every ID NONE."
+          "doc": "Where the paused macrostep stands (ADR 0083): the key and position of the PAUSED or STOPPED record its last run wrote, whether or not the trace masks wanted it. Between microsteps `position.at` is TA_TRACE_AT_NONE and `step.microstep` counts the microsteps done. Inside a microstep, `position` names the phase and state (and, in transition content, the transition), and `action` the unit it runs next: the next action of the innermost open block, in `iteration` of the innermost <foreach > whose body that is, or a <foreach > itself when its next iteration is next, with `iteration` the one it binds. At a microstep's start (ADR 0086) it names the first unit the microstep runs, or, when it runs none, its first transition with no action. Outside a macrostep, `step` is (session_id, 0, 0) and `position` is at NONE with every ID NONE."
         },
         {
           "name": "position",
@@ -7076,7 +7076,7 @@
     },
     "ta_datamodel_value_text_params": {
       "kind": "struct",
-      "doc": "Conversions the SCXML `*expr` attribute forms need. value_text reads an evaluated value as text (eventexpr, typeexpr, sendidexpr, srcexpr, delayexpr, targetexpr); `*out` is borrowed from `value` and valid while it is retained, so core can parse a target URI out of it and keep the named address a send needs (ADR 0044). text_value makes a value from text, e.g. a generated send or invoke ID stored through idlocation.",
+      "doc": "Conversions the SCXML `*expr` attribute forms need. value_text reads an evaluated value as text (eventexpr, typeexpr, sendidexpr, srcexpr, delayexpr, targetexpr); `*out` is borrowed from `value` and valid while it is retained, so core can parse a target URI out of it and keep the named address a send needs (ADR 0044).\n\n`trace_bytes` is 0 for those conversions. Otherwise core is putting the text in a trace record (ADR 0098), cut at `trace_bytes`: a data model may then render the value for people rather than as a conversion would (JSON, for example), and it may stop once it has given more than `trace_bytes` bytes, which tells core the text was cut. Such text needs to stay valid only until the data model is called again: core copies it before it asks for the next, so a data model may render every value into one buffer. Core asks only for what ta_trace_masks' `value_bytes` keeps, and for the reason a failure gives. Core never asks for it with TA_OP_NOMEM in mind: a trace text that cannot be had is left out. text_value makes a value from text, e.g. a generated send or invoke ID stored through idlocation.",
       "fields": [
         {
           "name": "shared",
@@ -7143,11 +7143,17 @@
           "direction": "out",
           "valid_on": "TA_OP_ERROR",
           "lifetime": "call"
+        },
+        {
+          "name": "trace_bytes",
+          "type": {
+            "builtin": "uint32_t"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 48,
+          "size": 56,
           "align": 8,
           "offsets": {
             "shared": 0,
@@ -7155,11 +7161,12 @@
             "value": 16,
             "host": 24,
             "out": 32,
-            "fault": 40
+            "fault": 40,
+            "trace_bytes": 48
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 28,
           "align": 4,
           "offsets": {
             "shared": 0,
@@ -7167,7 +7174,8 @@
             "value": 8,
             "host": 12,
             "out": 16,
-            "fault": 20
+            "fault": 20,
+            "trace_bytes": 24
           }
         }
       }
@@ -13060,12 +13068,30 @@
           "doc": "quota: live definitions"
         },
         {
-          "name": "TA_PARAM_COUNT",
+          "name": "TA_PARAM_TEL_BYTES",
           "value": 12,
+          "symbol": "tel_bytes",
+          "doc": "the tel ring (ADR 0098); 0: none, so no tracing; else at least maxRecordBytes"
+        },
+        {
+          "name": "TA_PARAM_MAX_RECORD_BYTES",
+          "value": 13,
+          "symbol": "max_record_bytes",
+          "doc": "the largest record on a ring, header and tail included"
+        },
+        {
+          "name": "TA_PARAM_TELEMETRY_VALUE_BYTES",
+          "value": 14,
+          "symbol": "telemetry_value_bytes",
+          "doc": "text kept of a value in a trace record; at most maxRecordBytes - 512"
+        },
+        {
+          "name": "TA_PARAM_COUNT",
+          "value": 15,
           "symbol": "count"
         }
       ],
-      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\nSystem parameters (ADR 0092): each is set once, when the system is created, and never changes. A parameter bounds a limit or a buffer; the buffers every run needs are allocated at creation (interpreter region 0, the render area, the event-block cache), the ones only nested interpreters need on first use, up to their bound. ta_param_info_of() gives each one's name, default, bounds and unit; names are lowerCamelCase, for hosts to use as they are.",
+      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\nSystem parameters (ADR 0092): each is set once, when the system is created, and never changes. A parameter bounds a limit or a buffer; the buffers every run needs are allocated at creation (interpreter region 0, the render area, the event-block cache, the tel ring), the ones only nested interpreters need on first use, up to their bound. ta_param_info_of() gives each one's name, default, bounds and unit; names are lowerCamelCase, for hosts to use as they are. Creation also checks the bounds between them (ADR 0098): telBytes is 0 or at least maxRecordBytes, and telemetryValueBytes is at most maxRecordBytes - 512, the room a trace record's fixed part and its names take; it names the one at fault.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -13142,6 +13168,21 @@
           "name": "TA_PARAM_DEFAULT_MAX_DEFINITIONS",
           "value": 2147483647,
           "symbol": "max_definitions"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_TEL_BYTES",
+          "value": 16384,
+          "symbol": "tel_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_MAX_RECORD_BYTES",
+          "value": 4096,
+          "symbol": "max_record_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES",
+          "value": 1024,
+          "symbol": "telemetry_value_bytes"
         }
       ],
       "doc": "The built-in defaults (ADR 0092 rule 4); ta_param_info_of() reports them too.",
@@ -16342,7 +16383,7 @@
     },
     "ta_step_key": {
       "kind": "struct",
-      "doc": "Trace context and cause (ADR 0067). They travel next to an event, not in it: an SCXML event has no such field, so data models never see them, and internal queue entries do not carry them.\n\nA step key names one step of one session: macrostep `macrostep` of session `session` (ADR 0066), and microstep `microstep` within it, where 0 is the macrostep itself. Macrosteps count from 1 per session, and 0 is outside a macrostep. The counters run whether or not a trace sink is installed, so keys are the same with tracing on or off. A cause with `session` 0 is the host's: `macrostep` holds its parent span ID, or 0 for none. A lifecycle record (SPAWNED, LOADED, UNLOADED, FINISHED, DESTROYED) is outside every macrostep: its key is (session, 0, n), where n counts the session's lifecycle records from 1 across residency, so each has its own span ID. FINISHED names the step that finished as its `cause`. `family` is the session's definition family (ADR 0088), so a host renders the session's text (ta_session_id_format) from a key alone, even once the session is gone; it is 0 for the host's causes and for definition records. It fills padding, so a key is 24 bytes, and it is not part of a span ID.",
+      "doc": "Trace context and cause (ADR 0067). They travel next to an event, not in it: an SCXML event has no such field, so data models never see them, and internal queue entries do not carry them.\n\nA step key names one step of one session: macrostep `macrostep` of session `session` (ADR 0066), and microstep `microstep` within it, where 0 is the macrostep itself. Macrosteps count from 1 per session, and 0 is outside a macrostep. The counters run whether or not anything is traced, so keys are the same with tracing on or off. A cause with `session` 0 is the host's: `macrostep` holds its parent span ID, or 0 for none. A lifecycle record (SPAWNED, LOADED, UNLOADED, FINISHED, DESTROYED) is outside every macrostep: its key is (session, 0, n), where n counts the session's lifecycle records from 1 across residency, so each has its own span ID. FINISHED names the step that finished as its `cause`. `family` is the session's definition family (ADR 0088), so a host renders the session's text (ta_session_id_format) from a key alone, even once the session is gone; it is 0 for the host's causes and for definition records. It fills padding, so a key is 24 bytes, and it is not part of a span ID.",
       "fields": [
         {
           "name": "session",
@@ -16610,6 +16651,144 @@
         }
       }
     },
+    "ta_tel_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_TEL_TRACE",
+          "value": 0,
+          "symbol": "trace"
+        },
+        {
+          "name": "TA_TEL_DROPPED",
+          "value": 1,
+          "symbol": "dropped"
+        }
+      ],
+      "doc": "What a tel record is: a trace record, or a report of records dropped.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_tel_record": {
+      "kind": "struct",
+      "doc": "One record read from tel. `seq` numbers it in the ring, from 1; a record that was dropped still took its number, so the numbers have a gap exactly where a TA_TEL_DROPPED says there is one. TA_TEL_TRACE: `trace`. TA_TEL_DROPPED: `dropped` records were lost since the last report, the first of them with seq `first_dropped`; core writes it as soon as the ring has room again, before the next trace record.",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_tel_kind"
+          }
+        },
+        {
+          "name": "seq",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_record"
+          }
+        },
+        {
+          "name": "dropped",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "first_dropped",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 360,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "seq": 8,
+            "trace": 16,
+            "dropped": 344,
+            "first_dropped": 352
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 296,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "seq": 8,
+            "trace": 16,
+            "dropped": 280,
+            "first_dropped": 288
+          }
+        }
+      }
+    },
+    "ta_tel_status": {
+      "kind": "struct",
+      "doc": "The tel ring's state: its bytes (0 when there is none), the bytes written and not yet released, the seq the next record takes, and the records dropped since creation.",
+      "fields": [
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "used",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "next_seq",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "dropped",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "capacity": 0,
+            "used": 4,
+            "next_seq": 8,
+            "dropped": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "capacity": 0,
+            "used": 4,
+            "next_seq": 8,
+            "dropped": 16
+          }
+        }
+      }
+    },
     "ta_time": {
       "kind": "alias",
       "doc": "Monotonic logical time in milliseconds, supplied by the embedder.",
@@ -16709,7 +16888,7 @@
     },
     "ta_trace_context": {
       "kind": "struct",
-      "doc": "A W3C trace context: the trace-id is `trace_id_high` then `trace_id_low`, each big-endian, and all zero means none; `flags` are the W3C trace-flags. Core copies a context to everything a step produces, reads only its sampled flag and `detail`, and creates one only when a host asks (ta_system_new_trace, ADR 0073).\n\n`detail` is local, not W3C: it never appears in traceparent text, so it does not leave the process. TA_TRACE_DETAIL_WATCHED makes a sampled macrostep build the sink's `watched_kinds` instead of its `kinds`.",
+      "doc": "A W3C trace context: the trace-id is `trace_id_high` then `trace_id_low`, each big-endian, and all zero means none; `flags` are the W3C trace-flags. Core copies a context to everything a step produces, reads only its sampled flag and `detail`, and creates one only when a host asks (ta_system_new_trace, ADR 0073).\n\n`detail` is local, not W3C: it never appears in traceparent text, so it does not leave the process. TA_TRACE_DETAIL_WATCHED makes a sampled macrostep build the masks' `watched_kinds` instead of their `kinds`.",
       "fields": [
         {
           "name": "trace_id_high",
@@ -17012,7 +17191,7 @@
           "doc": "`send`: ta_actor_withdraw_send() removed it"
         }
       ],
-      "doc": "======================================================================== Tracing (ADR 0067)\n\nCore reports its decisions and the data they changed to one trace sink per system, as flat records. A record is written once, when the step that produced it has committed: a step that runs out of memory and runs again (ADR 0070) writes its records on the run that commits, and the step counters move only then, so an interrupted run and an uninterrupted one write the same records apart from PAUSED, RESUMED and STOPPED.",
+      "doc": "======================================================================== Tracing (ADR 0067, ADR 0098)\n\nCore reports its decisions and the data they changed as flat records on the system's `tel` ring, a lossy ring core allocates at creation (telBytes; 0 makes none). The host reads them between calls with ta_system_tel_peek() and ta_system_tel_release(); a full ring drops a record and counts it, and the next thing the host reads is a TA_TEL_DROPPED report. A record is written once, when the step that produced it has committed: a step that runs out of memory and runs again (ADR 0070) writes its records on the run that commits, and the step counters move only then, so an interrupted run and an uninterrupted one write the same records apart from PAUSED, RESUMED and STOPPED.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -17021,6 +17200,58 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
+        }
+      }
+    },
+    "ta_trace_masks": {
+      "kind": "struct",
+      "doc": "Three masks of TA_TRACE_BIT(kind) (ADR 0073): core builds no record whose bit the macrostep's mask lacks. A macrostep picks its mask at MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is sampled, `watched_kinds` when it is sampled and marked TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled. Lifecycle records are outside macrosteps and never sampled: their bit is looked up in `watched_kinds` when their context is watched, else in `kinds`. A system starts with every mask zero, and builds nothing.\n\n`value_bytes` is the text kept of each value a record carries (a value, the data of an event a chart takes, raises or sends), at most telemetryValueBytes: core keeps the smaller. With 0, core renders none of them and calls no data model's value_text for them, and their texts are empty. The reason a failure gives, a fault's data and the data of an error event core raises (TA_EVENT_PLATFORM), is kept at telemetryValueBytes whatever `value_bytes` says: it is what a log of the failure says, and failures are rare.",
+      "fields": [
+        {
+          "name": "kinds",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "watched_kinds",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "unsampled_kinds",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "value_bytes",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "kinds": 0,
+            "watched_kinds": 4,
+            "unsampled_kinds": 8,
+            "value_bytes": 12
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "kinds": 0,
+            "watched_kinds": 4,
+            "unsampled_kinds": 8,
+            "value_bytes": 12
+          }
         }
       }
     },
@@ -17122,7 +17353,7 @@
     },
     "ta_trace_record": {
       "kind": "struct",
-      "doc": "One record. Only the fields its kind names are meaningful; the rest are zero, or NONE for IDs. Everything is borrowed for the call: retain a value to keep it (ADR 0006). `context` is the running macrostep's; `cause`, for MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. A fault carries its `detail`, `code` and `message`. Its data went into the error.execution event of the RAISED record that follows; ACTION_FAILED also borrows it, so a sink can say why an action failed from one record. A sink never releases a record's fault data. A MICROSTEP that carries `states` was an operator transition's (ADR 0082), which a chart's never does: `states` are the targets the operator named, history states included, `state` the source (TA_STATE_NONE: the root), and there are no `transitions`. `exited`, `entered` and `history` are as for any microstep.",
+      "doc": "One `tel.trace` record, as ta_system_tel_peek() reads it (ADR 0098): its IDs, numbers and flags, and the record itself, whose texts a reader takes with ta_trace_record_text(), in place, only when it uses them. Only the fields its kind names are meaningful; the rest are zero, empty, or NONE for IDs. A record is self-contained: beside every ID is its name as text, so a reader needs no live system and never calls back into core. The record, its texts, its lists and `revision` are borrowed from the ring until ta_system_tel_release(); a reader copies what it keeps.\n\n`context` is the running macrostep's; `cause`, for MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. The `family` of `key` and of `cause` is 0: an atom means nothing outside the process, and a record names its sessions by the texts SESSION_ID and CAUSE_SESSION_ID. `iteration` is FOREACH's, the same as `position.iteration`, and 0 for any other kind. `now` is the system's logical time and `wall_ns` the host clock's, 0 without one (ta_system_set_wall_clock). `revision` is the definition's revision on the kinds that open a run, empty on the others. `has_event` says the record names an event, of type `event_type`; `has_fault` that it carries a fault, with code `fault_code`.\n\nA MICROSTEP that carries `states` was an operator transition's (ADR 0082), which a chart's never does: `states` are the targets the operator named, history states included, `state` the source (TA_STATE_NONE: the root), and there are no `transitions`. `exited`, `entered` and `history` are as for any microstep. `list_names` holds the name of every entry of the five lists, in their order (transitions, exited, entered, history, states), each as a u32 length in this machine's byte order and its UTF-8 bytes. A list cut to fit maxRecordBytes sets `lists_cut`, a value cut at the masks' `value_bytes` `value_cut` (the event's data `event_data_cut`), and any of them, or any other text cut to fit, `truncated`.\n\n`bytes` is the record as it lies in the ring. Its layout is core's: read it only through this struct and ta_trace_record_text().",
       "fields": [
         {
           "name": "kind",
@@ -17167,29 +17398,34 @@
           }
         },
         {
-          "name": "identity",
-          "type": {
-            "type": "ta_definition_identity"
-          },
-          "doc": "The definition's identity, for the DEFINITION_* kinds; borrowed."
-        },
-        {
           "name": "now",
           "type": {
             "type": "ta_time"
           }
         },
         {
-          "name": "event",
+          "name": "wall_ns",
           "type": {
-            "pointer": {
-              "type": "ta_event",
-              "const": true
-            }
-          },
-          "shape": "single",
-          "direction": "in",
-          "optional": true
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "has_event",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "event_type",
+          "type": {
+            "type": "ta_event_type"
+          }
+        },
+        {
+          "name": "event_data_cut",
+          "type": {
+            "builtin": "bool"
+          }
         },
         {
           "name": "state",
@@ -17201,12 +17437,6 @@
           "name": "expr",
           "type": {
             "type": "ta_expr_id"
-          }
-        },
-        {
-          "name": "name",
-          "type": {
-            "type": "ta_str"
           }
         },
         {
@@ -17246,9 +17476,9 @@
           }
         },
         {
-          "name": "value",
+          "name": "value_cut",
           "type": {
-            "type": "ta_value"
+            "builtin": "bool"
           }
         },
         {
@@ -17258,15 +17488,40 @@
           }
         },
         {
-          "name": "fault",
+          "name": "fault_code",
           "type": {
-            "type": "ta_fault"
+            "builtin": "int32_t"
           }
         },
         {
           "name": "dropped",
           "type": {
             "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "runaway_cause",
+          "type": {
+            "builtin": "uint8_t"
+          },
+          "doc": "RUNAWAY: 1 when the chain limit stopped the input."
+        },
+        {
+          "name": "suppressed",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "truncated",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "lists_cut",
+          "type": {
+            "builtin": "bool"
           }
         },
         {
@@ -17363,11 +17618,29 @@
             "builtin": "uint32_t"
           },
           "count_of": "states"
+        },
+        {
+          "name": "list_names",
+          "type": {
+            "type": "ta_bytes"
+          }
+        },
+        {
+          "name": "revision",
+          "type": {
+            "type": "ta_bytes"
+          }
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "type": "ta_bytes"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 376,
+          "size": 328,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -17377,204 +17650,214 @@
             "cause": 80,
             "actor": 104,
             "definition": 112,
-            "identity": 120,
-            "now": 152,
-            "event": 160,
-            "state": 168,
-            "expr": 172,
-            "name": 176,
-            "action": 192,
-            "iteration": 196,
-            "send": 200,
-            "invoke": 208,
-            "result": 216,
-            "has_value": 217,
-            "value": 224,
-            "has_fault": 240,
-            "fault": 248,
-            "dropped": 288,
-            "transitions": 296,
-            "transition_count": 304,
-            "exited": 312,
-            "exited_count": 320,
-            "entered": 328,
-            "entered_count": 336,
-            "history": 344,
-            "history_count": 352,
-            "states": 360,
-            "state_count": 368
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 280,
-          "align": 8,
-          "offsets": {
-            "kind": 0,
-            "key": 8,
-            "position": 32,
-            "context": 56,
-            "cause": 80,
-            "actor": 104,
-            "definition": 112,
-            "identity": 120,
-            "now": 136,
-            "event": 144,
+            "now": 120,
+            "wall_ns": 128,
+            "has_event": 136,
+            "event_type": 140,
+            "event_data_cut": 144,
             "state": 148,
             "expr": 152,
-            "name": 156,
-            "action": 164,
-            "iteration": 168,
-            "send": 176,
-            "invoke": 184,
-            "result": 192,
-            "has_value": 193,
-            "value": 196,
-            "has_fault": 204,
-            "fault": 208,
-            "dropped": 232,
-            "transitions": 236,
-            "transition_count": 240,
-            "exited": 244,
-            "exited_count": 248,
-            "entered": 252,
-            "entered_count": 256,
-            "history": 260,
-            "history_count": 264,
-            "states": 268,
-            "state_count": 272
-          }
-        }
-      }
-    },
-    "ta_trace_sink": {
-      "kind": "struct",
-      "semantic": "adapter",
-      "doc": "Three masks of TA_TRACE_BIT(kind) (ADR 0073): core builds no record whose bit the macrostep's mask lacks. A macrostep picks its mask at MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is sampled, `watched_kinds` when it is sampled and marked TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled. Lifecycle records are outside macrosteps and never sampled: their bit is looked up in `watched_kinds` when their context is watched, else in `kinds`.",
-      "fields": [
-        {
-          "name": "self",
-          "type": {
-            "pointer": {
-              "builtin": "void"
-            }
-          },
-          "shape": "raw",
-          "direction": "in"
-        },
-        {
-          "name": "v",
-          "type": {
-            "pointer": {
-              "type": "ta_trace_sink_vtable",
-              "const": true
-            }
-          },
-          "shape": "vtable",
-          "direction": "in"
-        },
-        {
-          "name": "kinds",
-          "type": {
-            "builtin": "uint32_t"
-          }
-        },
-        {
-          "name": "watched_kinds",
-          "type": {
-            "builtin": "uint32_t"
-          }
-        },
-        {
-          "name": "unsampled_kinds",
-          "type": {
-            "builtin": "uint32_t"
-          }
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "self": 0,
-            "v": 8,
-            "kinds": 16,
-            "watched_kinds": 20,
-            "unsampled_kinds": 24
+            "action": 156,
+            "iteration": 160,
+            "send": 168,
+            "invoke": 176,
+            "result": 184,
+            "has_value": 185,
+            "value_cut": 186,
+            "has_fault": 187,
+            "fault_code": 188,
+            "dropped": 192,
+            "runaway_cause": 196,
+            "suppressed": 197,
+            "truncated": 198,
+            "lists_cut": 199,
+            "transitions": 200,
+            "transition_count": 208,
+            "exited": 216,
+            "exited_count": 224,
+            "entered": 232,
+            "entered_count": 240,
+            "history": 248,
+            "history_count": 256,
+            "states": 264,
+            "state_count": 272,
+            "list_names": 280,
+            "revision": 296,
+            "bytes": 312
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 20,
-          "align": 4,
+          "size": 264,
+          "align": 8,
           "offsets": {
-            "self": 0,
-            "v": 4,
-            "kinds": 8,
-            "watched_kinds": 12,
-            "unsampled_kinds": 16
+            "kind": 0,
+            "key": 8,
+            "position": 32,
+            "context": 56,
+            "cause": 80,
+            "actor": 104,
+            "definition": 112,
+            "now": 120,
+            "wall_ns": 128,
+            "has_event": 136,
+            "event_type": 140,
+            "event_data_cut": 144,
+            "state": 148,
+            "expr": 152,
+            "action": 156,
+            "iteration": 160,
+            "send": 168,
+            "invoke": 176,
+            "result": 184,
+            "has_value": 185,
+            "value_cut": 186,
+            "has_fault": 187,
+            "fault_code": 188,
+            "dropped": 192,
+            "runaway_cause": 196,
+            "suppressed": 197,
+            "truncated": 198,
+            "lists_cut": 199,
+            "transitions": 200,
+            "transition_count": 204,
+            "exited": 208,
+            "exited_count": 212,
+            "entered": 216,
+            "entered_count": 220,
+            "history": 224,
+            "history_count": 228,
+            "states": 232,
+            "state_count": 236,
+            "list_names": 240,
+            "revision": 248,
+            "bytes": 256
           }
         }
       }
     },
-    "ta_trace_sink_vtable": {
-      "kind": "struct",
-      "semantic": "vtable",
-      "doc": "Writing a record cannot fail and cannot change the run. A sink must not call back into the system for the actor that is running; it may read the record, retain values it keeps, and inspect other actors.",
-      "fields": [
+    "ta_trace_text": {
+      "kind": "enum",
+      "constants": [
         {
-          "name": "write",
-          "type": {
-            "pointer": {
-              "function": {
-                "returns": {
-                  "type": {
-                    "builtin": "void"
-                  }
-                },
-                "params": [
-                  {
-                    "name": "self",
-                    "type": {
-                      "pointer": {
-                        "builtin": "void"
-                      }
-                    },
-                    "shape": "raw",
-                    "direction": "in"
-                  },
-                  {
-                    "name": "record",
-                    "type": {
-                      "pointer": {
-                        "type": "ta_trace_record",
-                        "const": true
-                      }
-                    },
-                    "shape": "single",
-                    "direction": "in"
-                  }
-                ]
-              }
-            }
-          },
-          "shape": "callback",
-          "direction": "in"
+          "name": "TA_TRACE_TEXT_SESSION_ID",
+          "value": 0,
+          "symbol": "session_id"
+        },
+        {
+          "name": "TA_TRACE_TEXT_CAUSE_SESSION_ID",
+          "value": 1,
+          "symbol": "cause_session_id"
+        },
+        {
+          "name": "TA_TRACE_TEXT_ADDRESS",
+          "value": 2,
+          "symbol": "address"
+        },
+        {
+          "name": "TA_TRACE_TEXT_FAMILY",
+          "value": 3,
+          "symbol": "family"
+        },
+        {
+          "name": "TA_TRACE_TEXT_DOCUMENT_NAME",
+          "value": 4,
+          "symbol": "document_name"
+        },
+        {
+          "name": "TA_TRACE_TEXT_SOURCE",
+          "value": 5,
+          "symbol": "source"
+        },
+        {
+          "name": "TA_TRACE_TEXT_POSITION_STATE",
+          "value": 6,
+          "symbol": "position_state"
+        },
+        {
+          "name": "TA_TRACE_TEXT_POSITION_TRANSITION",
+          "value": 7,
+          "symbol": "position_transition"
+        },
+        {
+          "name": "TA_TRACE_TEXT_POSITION_ACTION",
+          "value": 8,
+          "symbol": "position_action"
+        },
+        {
+          "name": "TA_TRACE_TEXT_STATE",
+          "value": 9,
+          "symbol": "state"
+        },
+        {
+          "name": "TA_TRACE_TEXT_ACTION",
+          "value": 10,
+          "symbol": "action"
+        },
+        {
+          "name": "TA_TRACE_TEXT_NAME",
+          "value": 11,
+          "symbol": "name"
+        },
+        {
+          "name": "TA_TRACE_TEXT_EVENT_NAME",
+          "value": 12,
+          "symbol": "event_name"
+        },
+        {
+          "name": "TA_TRACE_TEXT_EVENT_SEND_ID",
+          "value": 13,
+          "symbol": "event_send_id"
+        },
+        {
+          "name": "TA_TRACE_TEXT_EVENT_INVOKE_ID",
+          "value": 14,
+          "symbol": "event_invoke_id"
+        },
+        {
+          "name": "TA_TRACE_TEXT_EVENT_DATA",
+          "value": 15,
+          "symbol": "event_data"
+        },
+        {
+          "name": "TA_TRACE_TEXT_SEND_ID",
+          "value": 16,
+          "symbol": "send_id"
+        },
+        {
+          "name": "TA_TRACE_TEXT_INVOKE_ID",
+          "value": 17,
+          "symbol": "invoke_id"
+        },
+        {
+          "name": "TA_TRACE_TEXT_VALUE",
+          "value": 18,
+          "symbol": "value"
+        },
+        {
+          "name": "TA_TRACE_TEXT_FAULT_DETAIL",
+          "value": 19,
+          "symbol": "fault_detail"
+        },
+        {
+          "name": "TA_TRACE_TEXT_FAULT_MESSAGE",
+          "value": 20,
+          "symbol": "fault_message"
+        },
+        {
+          "name": "TA_TRACE_TEXT_FAULT_DATA",
+          "value": 21,
+          "symbol": "fault_data"
         }
       ],
+      "doc": "The texts of a `tel.trace` record, read in place with ta_trace_record_text(). Each names what a field of ta_trace_record holds as an ID, or what the record carries only as text:\n\n- SESSION_ID, CAUSE_SESSION_ID: the sessions of `key` and `cause` as ` <incarnation >. <session >. <family >`, as `_sessionid` holds it, or the decimal session when its family is unknown (empty for no cause); ADDRESS: the session's family/name when it has a named address. - FAMILY, DOCUMENT_NAME, SOURCE: on the kinds that open a run (SPAWNED, LOADED, MACROSTEP_BEGIN and the DEFINITION_* kinds), the definition's family, document name and the source its first state was written in; its revision is `revision`. - POSITION_STATE, POSITION_TRANSITION, POSITION_ACTION: the names of `position`'s state, transition and action; STATE and ACTION: of the `state` and `action` the kind names. A state's name is its author ID, a transition's its label (\"idle → busy on go [guarded]\"), an action's its element and block (\"<assign> in onentry of busy\"). - NAME: the <data >'s name. - EVENT_NAME, EVENT_SEND_ID, EVENT_INVOKE_ID, EVENT_DATA: the event's dotted name, its sendid and invokeid, and its data as the data model renders it for a trace, cut at the masks' `value_bytes` (`event_data_cut`). - SEND_ID, INVOKE_ID: the `send` and `invoke` IDs as text. - VALUE: the value as text, cut at the masks' `value_bytes` (`value_cut`). - FAULT_DETAIL, FAULT_MESSAGE, FAULT_DATA: the fault's error event name, its message, and its data as text. Its data went into the error.execution event of the RAISED record that follows; ACTION_FAILED carries it too, so a reader can say why an action failed from one record.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 8,
-          "align": 8,
-          "offsets": {
-            "write": 0
-          }
+          "size": 4,
+          "align": 4
         },
         "wasm32-unknown-unknown": {
           "size": 4,
-          "align": 4,
-          "offsets": {
-            "write": 0
-          }
+          "align": 4
         }
       }
     },
@@ -18110,6 +18393,104 @@
           "offsets": {
             "retain": 0,
             "release": 4
+          }
+        }
+      }
+    },
+    "ta_wall_clock": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_wall_clock_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in",
+          "optional": true,
+          "doc": "Null uninstalls the clock: records then carry wall_ns 0."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_wall_clock_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "The host's wall clock (ADR 0098): `wall_ns` answers nanoseconds since the Unix epoch. Core calls it once for each record it writes to tel, inside the macrostep, and stamps the record's `wall_ns`; a kind that is off, or a record that is dropped, costs no call. It must not call into the system.",
+      "fields": [
+        {
+          "name": "wall_ns",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "builtin": "uint64_t"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "wall_ns": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "wall_ns": 0
           }
         }
       }
@@ -19482,17 +19863,200 @@
       ]
     },
     {
-      "name": "ta_null_trace_sink",
-      "doc": "The sink a system starts with: it wants nothing and writes nothing.",
+      "name": "ta_trace_record_text",
+      "doc": "The text `text` of `record`, read in place from its bytes: borrowed from the ring until ta_system_tel_release(). Empty when the record does not carry it, and for a `text` that is not a ta_trace_text or a record that ta_system_tel_peek() did not answer. O(1); never allocates, never fails.",
       "public": true,
       "static_inline": false,
       "implemented": true,
       "returns": {
         "type": {
-          "type": "ta_trace_sink"
+          "type": "ta_str"
         }
       },
-      "params": []
+      "params": [
+        {
+          "name": "record",
+          "type": {
+            "pointer": {
+              "type": "ta_trace_record",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "ta_trace_text"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_set_trace_masks",
+      "doc": "Sets the masks (ADR 0098), between calls that run the system. Writing a record cannot fail and cannot change the run: a record the ring has no room for is dropped and counted. ta_system_destroy() sets every mask to zero first, so tearing a system down writes no record. TA_ERR_INVALID for a null argument, or for a mask that is not zero on a system created with telBytes 0, which has no ring to write to. Never allocates.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "masks",
+          "type": {
+            "pointer": {
+              "type": "ta_trace_masks",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_set_wall_clock",
+      "doc": "Installs the clock; optional. TA_ERR_INVALID for a null system, or a `v` without `wall_ns`.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "clock",
+          "type": {
+            "type": "ta_wall_clock"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_tel_peek",
+      "doc": "Reads the oldest record on tel without releasing it (ADR 0098, ADR 0104). Its texts and lists point into the ring and stay valid until ta_system_tel_release(); reading again answers the same record. Never allocates. TA_ERR_NOT_FOUND when nothing is left to read or the system has no tel ring; TA_ERR_CORRUPT when the ring's bytes are not records core wrote, and then nothing more can be read; TA_ERR_INVALID for a null argument.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_tel_record"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "system"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_tel_release",
+      "doc": "Releases the record ta_system_tel_peek() answers, making room for core; answers as it does.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_tel_status",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_tel_status"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ]
     },
     {
       "name": "ta_null_definition_sink",
@@ -21868,37 +22432,6 @@
           "name": "sink",
           "type": {
             "type": "ta_log_sink"
-          }
-        }
-      ]
-    },
-    {
-      "name": "ta_system_set_trace_sink",
-      "doc": "Installs the trace sink (ADR 0067); ta_null_trace_sink() stops tracing. TA_ERR_INVALID for a sink whose `v` or `v->write` is null.",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "system",
-          "type": {
-            "pointer": {
-              "type": "ta_system"
-            }
-          },
-          "shape": "handle",
-          "direction": "in"
-        },
-        {
-          "name": "sink",
-          "type": {
-            "type": "ta_trace_sink"
           }
         }
       ]

@@ -486,10 +486,10 @@ static round_cost measure(size_t population) {
     ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
     ta_system *system = NULL;
     require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
-    /* Measured with the null trace sink, which a system starts with, so the
+    /* Measured with every trace mask zero, which a system starts with, so the
      * per-actor figures include what tracing costs every actor untraced:
      * the step counters (ADR 0067). */
-    require(ta_system_set_trace_sink(system, ta_null_trace_sink()) == TA_OK, "the null trace sink");
+    require(ta_system_set_trace_masks(system, &(ta_trace_masks){ 0 }) == TA_OK, "no trace kinds");
 
     directory dir;
     directory_init(&dir, population);

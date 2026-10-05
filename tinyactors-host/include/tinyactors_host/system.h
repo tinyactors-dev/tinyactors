@@ -58,7 +58,6 @@
 #include "effects.h"
 #include "loads.h"
 #include "offloads.h"
-#include "adapter_trace.h"
 #include "otlp.h"
 #include "params.h"
 #include "scheduler.h"
@@ -191,6 +190,14 @@ typedef struct {
     const tah_params *hosting;
     /* Set to the core parameter a TA_ERR_INVALID refers to; may be null. */
     ta_param *rejected;
+    /*
+     * The binding may turn the trace encoder on (tah_system_set_tracing).
+     * The kernel reads core's tel ring only between resumes, and core sizes
+     * the ring at creation, so the kernel then sizes it for one resume's
+     * records, unless the binding set telBytes (core ADR 0098). False keeps
+     * core's ring as the parameters say.
+     */
+    bool traced;
 } tah_system_create_params;
 ta_result tah_system_create(const tah_system_create_params *params, tah_system **out);
 void tah_system_close(tah_system *system);
@@ -222,12 +229,15 @@ const tah_params *tah_system_params(const tah_system *system);
  */
 bool tah_system_inside_core(const tah_system *system);
 void tah_system_enter_core(tah_system *system);
+/* Leaving core also reads what it wrote to tel (tah_system_drain_telemetry). */
 void tah_system_leave_core(tah_system *system);
 
 /*
  * The trace encoder is on (napi ADR 0016): the binding sets it up with
  * tah_otlp_init() on tah_system_otlp() and says so here, and says so again
- * after tah_otlp_destroy(). <log> records then go to it as well.
+ * after tah_otlp_destroy(). <log> records then go to it as well, and the
+ * kernel reads core's tel ring into it (tah_system_drain_telemetry). The
+ * binding sets the kind masks it asks core for with ta_system_set_trace_masks.
  */
 bool tah_system_tracing(const tah_system *system);
 void tah_system_set_tracing(tah_system *system, bool tracing);
@@ -265,8 +275,16 @@ ta_result tah_system_post(tah_system *system, const tah_message *message);
  */
 bool tah_system_effect(tah_system *system, const tah_effect *effect);
 
-/* Encodes a trace record (otlp.h) and asks for a turn. */
-void tah_system_trace(tah_system *system, const ta_trace_record *record);
+/*
+ * Reads every record core wrote to its tel ring (core ADR 0098) into the
+ * trace encoder, releasing each, and asks for a turn when a span ended. The
+ * kernel calls it whenever core returns to it (tah_system_leave_core, the
+ * turn, the calls it makes itself), and before it writes a <log> record, so
+ * records and logs keep core's order; a binding calls it before it takes
+ * the encoder's requests and before it forgets a definition. Does nothing
+ * unless the encoder is on: the ring then stays for whoever else reads it.
+ */
+void tah_system_drain_telemetry(tah_system *system);
 /* Wall-clock time in nanoseconds since the Unix epoch, from the platform. */
 uint64_t tah_system_wall_ns(const tah_system *system);
 /* The platform's monotonic clock, in nanoseconds. */

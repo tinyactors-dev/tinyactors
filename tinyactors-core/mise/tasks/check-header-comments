@@ -25,7 +25,7 @@ ALLOWED = %w[
   src/event.h src/export.h
   src/history.h src/io_origin.h src/null_datamodel.h
   src/scxml_uri.h src/session.h src/session_image.h src/timer.h
-  src/trace.h src/tree.h
+  src/tree.h
 ].freeze
 
 out, err, status = Toolchain::Tool[:ast_grep].capture('scan', '--rule', RULE.to_s, '--json=compact',

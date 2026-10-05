@@ -262,11 +262,25 @@ static jv tat_event_record(const tat_instrument *instrument, const ta_event *eve
     return jv_object_set(record, jv_string("name_text"), tat_event_name_text(instrument->system, event->name));
 }
 
-static void tat_journal(tat_instrument *instrument, const char *op, jv entry) {
+/* Appends one entry, numbered by the counter every instrument shares. */
+static void tat_journal_append(tat_instrument *instrument, const char *op, jv entry) {
     tat_journal_sequence += 1;
     entry = jv_object_set(entry, jv_string("seq"), tat_u64(tat_journal_sequence));
     entry = jv_object_set(entry, jv_string("op"), jv_string(op));
     instrument->journal = jv_array_append(instrument->journal, entry);
+}
+
+/*
+ * Journals one entry, after the trace records core wrote before the call
+ * that brought it here, so the journals keep core's order. An allocator's
+ * entries do not wait for them: core allocates and frees while its rings
+ * are made and taken apart.
+ */
+static void tat_journal(tat_instrument *instrument, const char *op, jv entry) {
+    if (instrument->kind != TAT_INSTRUMENT_ALLOCATOR) {
+        tat_trace_drain_all();
+    }
+    tat_journal_append(instrument, op, entry);
 }
 
 /*
@@ -1271,25 +1285,111 @@ bool tat_make_recording_log(tat_bind *bind, jv config, void *out) {
 /* ------------------------------------------------------------------------
  * trace.recording
  *
- * The system's trace sink (ADR 0067). It journals each record as the
- * generated codec encodes ta_trace_record (op "trace"), with the dotted
- * name of its event as event.name_text. Config: {"name", "system",
- * "kinds"?: [kind symbols] (default: every kind), "unsampled"?: bool}.
- * Writing a record cannot fail, so it has no commands.
+ * Reads a system's tel ring (core ADR 0098) into the journal: each trace
+ * record as the generated codec encodes ta_trace_record, with its texts
+ * read in place beside what they name (op "trace", tat_trace_entry),
+ * without wall_ns, which the test host leaves unset, so runs compare equal
+ * (a Trace relabels the session numbers in session_id and
+ * cause_session_id as it does key.session); each drop report as op
+ * "dropped". Created by the "attach" command, {"system": <handle>,
+ * "kinds"?: [kind symbols] (default: every kind), "unsampled"?: bool},
+ * which sets the system's masks, with every value rendered as far as
+ * telemetryValueBytes allows.
  */
 
-static void tat_recording_trace(void *self, const ta_trace_record *record) {
-    tat_instrument *instrument = self;
-    jv entry = tat_encode_ta_trace_record(instrument->bind, record);
-    if (record->event != NULL) {
-        jv event = jv_object_get(jv_copy(entry), jv_string("event"));
-        event = jv_object_set(event, jv_string("name_text"), tat_event_name_text(instrument->system, record->event->name));
-        entry = jv_object_set(entry, jv_string("event"), event);
-    }
-    tat_journal(instrument, "trace", entry);
+/* Sets `key` of `object` to the text `text` of `record`, read in place. */
+static jv tat_trace_text(jv object, const char *key, const ta_trace_record *record, ta_trace_text text) {
+    ta_str value = ta_trace_record_text(record, text);
+    return jv_object_set(object, jv_string(key), tat_encode_ta_str(NULL, &value));
 }
 
-static const ta_trace_sink_vtable TAT_RECORDING_TRACE = {.write = tat_recording_trace};
+/*
+ * A trace record as the journal keeps it: its fields, and its texts beside
+ * what they name. The texts of the position are `position_names`; the
+ * event's name, type, IDs and data are `event` (null when it has none, and
+ * its name also as `name_text`); the fault's code and texts are `fault`; the
+ * definition's family and revision are `identity`. The record's bytes and
+ * the clock, which differ between runs that do the same work, are left out.
+ */
+static jv tat_trace_entry(tat_bind *bind, const ta_trace_record *record) {
+    jv entry = tat_encode_ta_trace_record(bind, record);
+    const char *const folded[] = { "wall_ns", "bytes", "revision", "event_type", "event_data_cut", "fault_code" };
+    for (size_t index = 0; index < sizeof folded / sizeof folded[0]; index += 1) {
+        entry = jv_object_delete(entry, jv_string(folded[index]));
+    }
+    jv position = jv_object();
+    position = tat_trace_text(position, "state", record, TA_TRACE_TEXT_POSITION_STATE);
+    position = tat_trace_text(position, "transition", record, TA_TRACE_TEXT_POSITION_TRANSITION);
+    position = tat_trace_text(position, "action", record, TA_TRACE_TEXT_POSITION_ACTION);
+    entry = jv_object_set(entry, jv_string("position_names"), position);
+    entry = tat_trace_text(entry, "session_id", record, TA_TRACE_TEXT_SESSION_ID);
+    entry = tat_trace_text(entry, "cause_session_id", record, TA_TRACE_TEXT_CAUSE_SESSION_ID);
+    entry = tat_trace_text(entry, "address", record, TA_TRACE_TEXT_ADDRESS);
+    jv family = tat_trace_text(jv_object(), "name", record, TA_TRACE_TEXT_FAMILY);
+    jv identity = jv_object_set(jv_object(), jv_string("family"), family);
+    identity = jv_object_set(identity, jv_string("revision"), tat_encode_ta_bytes(bind, &record->revision));
+    entry = jv_object_set(entry, jv_string("identity"), identity);
+    entry = tat_trace_text(entry, "document_name", record, TA_TRACE_TEXT_DOCUMENT_NAME);
+    entry = tat_trace_text(entry, "source", record, TA_TRACE_TEXT_SOURCE);
+    if (record->has_event) {
+        jv event = tat_trace_text(jv_object(), "name", record, TA_TRACE_TEXT_EVENT_NAME);
+        event = jv_object_set(event, jv_string("type"), tat_encode_ta_event_type(bind, &record->event_type));
+        event = tat_trace_text(event, "send_id", record, TA_TRACE_TEXT_EVENT_SEND_ID);
+        event = tat_trace_text(event, "invoke_id", record, TA_TRACE_TEXT_EVENT_INVOKE_ID);
+        event = tat_trace_text(event, "data", record, TA_TRACE_TEXT_EVENT_DATA);
+        event = jv_object_set(event, jv_string("data_cut"), jv_bool(record->event_data_cut));
+        event = jv_object_set(event, jv_string("name_text"),
+                              tat_text(ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_NAME)));
+        entry = jv_object_set(entry, jv_string("event"), event);
+    } else {
+        entry = jv_object_set(entry, jv_string("event"), jv_null());
+    }
+    entry = tat_trace_text(entry, "state_name", record, TA_TRACE_TEXT_STATE);
+    entry = tat_trace_text(entry, "name", record, TA_TRACE_TEXT_NAME);
+    entry = tat_trace_text(entry, "action_name", record, TA_TRACE_TEXT_ACTION);
+    entry = tat_trace_text(entry, "send_id", record, TA_TRACE_TEXT_SEND_ID);
+    entry = tat_trace_text(entry, "invoke_id", record, TA_TRACE_TEXT_INVOKE_ID);
+    entry = tat_trace_text(entry, "value", record, TA_TRACE_TEXT_VALUE);
+    jv fault = jv_object_set(jv_object(), jv_string("code"), tat_encode_i32(bind, &record->fault_code));
+    fault = tat_trace_text(fault, "detail", record, TA_TRACE_TEXT_FAULT_DETAIL);
+    fault = tat_trace_text(fault, "message", record, TA_TRACE_TEXT_FAULT_MESSAGE);
+    fault = tat_trace_text(fault, "data", record, TA_TRACE_TEXT_FAULT_DATA);
+    return jv_object_set(entry, jv_string("fault"), fault);
+}
+
+/* Reads what `instrument`'s system wrote to tel since the last read. */
+static void tat_trace_drain(tat_instrument *instrument) {
+    if (instrument->system == NULL) {
+        return;
+    }
+    ta_tel_record record;
+    while (ta_system_tel_peek(instrument->system, &record) == TA_OK) {
+        if (record.kind == TA_TEL_TRACE) {
+            tat_journal_append(instrument, "trace", tat_trace_entry(instrument->bind, &record.trace));
+        } else {
+            jv entry = jv_object_set(jv_object(), jv_string("count"), tat_u64(record.dropped));
+            entry = jv_object_set(entry, jv_string("first_seq"), tat_u64(record.first_dropped));
+            tat_journal_append(instrument, "dropped", entry);
+        }
+        (void)ta_system_tel_release(instrument->system);
+    }
+}
+
+void tat_trace_drain_all(void) {
+    for (size_t index = 0; index < tat_instrument_count; index += 1) {
+        if (tat_instruments[index]->kind == TAT_INSTRUMENT_TRACE) {
+            tat_trace_drain(tat_instruments[index]);
+        }
+    }
+}
+
+void tat_trace_forget_system(const void *system) {
+    for (size_t index = 0; index < tat_instrument_count; index += 1) {
+        if (tat_instruments[index]->kind == TAT_INSTRUMENT_TRACE && tat_instruments[index]->system == system) {
+            tat_instruments[index]->system = NULL;
+        }
+    }
+}
 
 /* The mask config.kinds names; every kind when it is absent. */
 static bool tat_trace_kinds(tat_bind *bind, jv config, uint32_t *out) {
@@ -1317,26 +1417,36 @@ static bool tat_trace_kinds(tat_bind *bind, jv config, uint32_t *out) {
     return true;
 }
 
-bool tat_make_recording_trace(tat_bind *bind, jv config, void *out) {
-    static const char *const keys[] = {"kinds", "unsampled", NULL};
-    bool created = false;
-    tat_instrument *instrument = tat_instrument_resolve(bind, config, TAT_INSTRUMENT_TRACE, keys, true, &created);
-    if (instrument == NULL) {
-        return false;
+static jv tat_invalid(int *error_code, jv message);
+
+/* "attach": reads `system`'s tel from here on, and sets its masks. */
+static jv tat_control_trace(tat_instrument *instrument, const char *command, jv args, int *error_code) {
+    if (strcmp(command, "attach") != 0) {
+        return tat_invalid(error_code, jv_string("trace.recording: the command is attach {system, kinds?, unsampled?}"));
     }
-    if (created) {
-        if (!tat_trace_kinds(bind, config, &instrument->trace_kinds)) {
-            return false;
-        }
-        jv unsampled = jv_object_get(jv_copy(config), jv_string("unsampled"));
-        instrument->trace_unsampled = jv_get_kind(unsampled) == JV_KIND_TRUE;
-        jv_free(unsampled);
+    tat_bind *bind = instrument->bind;
+    jv handle = jv_object_get(jv_copy(args), jv_string("system"));
+    void *system = NULL;
+    bool ok = tat_handle_resolve(bind, handle, "system", &system);
+    jv_free(handle);
+    if (ok) {
+        ok = tat_trace_kinds(bind, args, &instrument->trace_kinds);
     }
-    *(ta_trace_sink *)out = (ta_trace_sink){.self = instrument, .v = &TAT_RECORDING_TRACE,
-                                            .kinds = instrument->trace_kinds,
-                                            .watched_kinds = instrument->trace_kinds,
-                                            .unsampled_kinds = instrument->trace_unsampled ? instrument->trace_kinds : 0u};
-    return true;
+    if (!ok) {
+        return tat_bind_take_error(bind, error_code);
+    }
+    jv unsampled = jv_object_get(jv_copy(args), jv_string("unsampled"));
+    instrument->trace_unsampled = jv_get_kind(unsampled) == JV_KIND_TRUE;
+    jv_free(unsampled);
+    instrument->system = system;
+    ta_trace_masks masks = { .kinds = instrument->trace_kinds, .watched_kinds = instrument->trace_kinds,
+                             .unsampled_kinds = instrument->trace_unsampled ? instrument->trace_kinds : 0u,
+                             .value_bytes = UINT32_MAX };
+    ta_result result = ta_system_set_trace_masks(system, &masks);
+    if (result != TA_OK) {
+        return tat_invalid(error_code, jv_string("trace.recording: core refused the masks"));
+    }
+    return jv_object();
 }
 
 /* ------------------------------------------------------------------------
@@ -1423,7 +1533,7 @@ static jv tat_invalid(int *error_code, jv message) {
  */
 static bool tat_kind_creatable(tat_instrument_kind kind) {
     return kind == TAT_INSTRUMENT_ALLOCATOR || kind == TAT_INSTRUMENT_DIRECTORY ||
-           kind == TAT_INSTRUMENT_INSPECTOR;
+           kind == TAT_INSTRUMENT_INSPECTOR || kind == TAT_INSTRUMENT_TRACE;
 }
 
 static bool tat_kind_parse(const char *name, tat_instrument_kind *out) {
@@ -1718,9 +1828,7 @@ static jv tat_control_invoker(tat_instrument *instrument, const char *command, j
 static jv tat_control_log(tat_instrument *instrument, const char *command, jv args, int *error_code) {
     (void)command;
     (void)args;
-    const char *name = instrument->kind == TAT_INSTRUMENT_TRACE        ? "trace.recording"
-                       : instrument->kind == TAT_INSTRUMENT_DEFINITION ? "definition.recording"
-                                                                       : "log.recording";
+    const char *name = instrument->kind == TAT_INSTRUMENT_DEFINITION ? "definition.recording" : "log.recording";
     char message[128];
     snprintf(message, sizeof message, "%s has no commands; read its journal with instrument.journal", name);
     return tat_invalid(error_code, jv_string(message));
@@ -2034,8 +2142,10 @@ jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
         case TAT_INSTRUMENT_INVOKER:
             result = tat_control_invoker(instrument, jv_string_value(command), args, error_code);
             break;
-        case TAT_INSTRUMENT_LOG:
         case TAT_INSTRUMENT_TRACE:
+            result = tat_control_trace(instrument, jv_string_value(command), args, error_code);
+            break;
+        case TAT_INSTRUMENT_LOG:
         case TAT_INSTRUMENT_DEFINITION:
             result = tat_control_log(instrument, jv_string_value(command), args, error_code);
             break;

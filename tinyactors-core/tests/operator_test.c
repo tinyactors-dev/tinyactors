@@ -15,6 +15,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "tel_reader.h"
 
 static int failures = 0;
 
@@ -254,7 +255,7 @@ typedef struct {
     ta_trace_kind kind;
     ta_step_key key;
     bool has_event;
-    ta_event_name_id event;
+    char event[48];
     uint32_t transition_count;
     ta_state_id state;
     uint32_t state_count;
@@ -274,11 +275,14 @@ static void sink_write(void *self, const ta_trace_record *record) {
         return;
     }
     kept_record *kept = &records[record_count++];
-    *kept = (kept_record){ .kind = record->kind, .key = record->key, .has_event = record->event != NULL,
-                           .event = record->event != NULL ? record->event->name : 0,
+    *kept = (kept_record){ .kind = record->kind, .key = record->key, .has_event = record->has_event,
                            .transition_count = record->transition_count, .state = record->state,
                            .state_count = record->state_count, .exited_count = record->exited_count,
                            .entered_count = record->entered_count, .dropped = record->dropped };
+    ta_str event_name = ta_trace_record_text(record, TA_TRACE_TEXT_EVENT_NAME);
+    if (record->has_event && event_name.len < sizeof kept->event) {
+        memcpy(kept->event, event_name.ptr, event_name.len);
+    }
     for (uint32_t index = 0; index < record->state_count && index < 8u; index += 1u) {
         kept->states[index] = record->states[index];
     }
@@ -287,7 +291,18 @@ static void sink_write(void *self, const ta_trace_record *record) {
     }
 }
 
-static const ta_trace_sink_vtable sink_vtable = { .write = sink_write };
+/* The system whose records `records` keeps. */
+static ta_system *recorded_system = NULL;
+
+/* Whether a kept record's event is `name`, read as text. */
+static bool kept_event_is(const kept_record *kept, ta_event_name_id name) {
+    char text[48];
+    uint32_t needed = 0;
+    return ta_event_name_format(recorded_system, &(ta_event_name_format_params){ .name = name, .buffer = text,
+                                                                                 .capacity = sizeof text,
+                                                                                 .needed = &needed }) == TA_OK &&
+           strcmp(kept->event, text) == 0;
+}
 
 /* The index of the first record of `kind` from `from` on, or record_count. */
 static uint32_t find_record(ta_trace_kind kind, uint32_t from) {
@@ -355,6 +370,8 @@ static void next_param(ta_param param, uint64_t value) {
  * bootstrapped. */
 static void start(run *r) {
     *r = (run){0};
+    /* Room on tel for every record of a runaway's fifty microsteps. */
+    next_param(TA_PARAM_TEL_BYTES, 1u << 20);
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = next_params,
                                                 .param_count = next_param_count },
                            &r->system) == TA_OK);
@@ -365,19 +382,38 @@ static void start(run *r) {
                                                                                  .allocator = allocator,
                                                                                  .out = &definition }) == TA_OK);
     CHECK(ta_system_register_definition(r->system, definition, &r->definition) == TA_OK);
-    CHECK(ta_system_set_trace_sink(r->system, (ta_trace_sink){ .v = &sink_vtable, .kinds = UINT32_MAX,
-                                                               .watched_kinds = UINT32_MAX,
-                                                               .unsampled_kinds = UINT32_MAX }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(r->system, &(ta_trace_masks){ .kinds = UINT32_MAX,
+                                                                  .watched_kinds = UINT32_MAX,
+                                                                  .unsampled_kinds = UINT32_MAX }) == TA_OK);
+    recorded_system = r->system;
     jump_name = event_name(r, "operator.goto");
     go_name = event_name(r, "go");
     record_count = 0;
     CHECK(ta_actor_spawn(r->system, &(ta_actor_spawn_params){ .definition = r->definition, .out = &r->actor }) ==
           TA_OK);
+    tel_drain(r->system, sink_write, NULL);
 }
 
 static ta_result resume_with(run *r, uint32_t budget, uint32_t action_budget, ta_run_status *status) {
-    return ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = budget,
-                                                                .status = status, .action_budget = action_budget });
+    ta_result result = ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = budget,
+                                                                             .status = status,
+                                                                             .action_budget = action_budget });
+    tel_drain(r->system, sink_write, NULL);
+    return result;
+}
+
+/* Abandons the actor's macrostep (ADR 0082) and reads what it wrote. */
+static ta_result abandon(run *r) {
+    ta_result result = ta_actor_abandon(r->system, r->actor);
+    tel_drain(r->system, sink_write, NULL);
+    return result;
+}
+
+/* Destroys the actor and reads what it wrote. */
+static ta_result destroy(run *r) {
+    ta_result result = ta_actor_destroy(r->system, r->actor);
+    tel_drain(r->system, sink_write, NULL);
+    return result;
 }
 
 static ta_run_status resume(run *r, uint32_t action_budget) {
@@ -400,8 +436,11 @@ static ta_run_status settle(run *r, uint32_t action_budget) {
 
 static ta_result offer(run *r, const char *name, const ta_operator_transition *transition) {
     ta_event event = { .name = event_name(r, name), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    return ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &event,
-                                                                  .transition = transition });
+    ta_result result = ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system),
+                                                                               .actor = r->actor, .event = &event,
+                                                                               .transition = transition });
+    tel_drain(r->system, sink_write, NULL);
+    return result;
 }
 
 /* Delivers the operator's event with a jump from `source` to `targets`. */
@@ -481,12 +520,12 @@ static void test_jump_runs_the_engine(void) {
     CHECK(log_is("e.work@J e.w2@J "));
 
     uint32_t begin = find_record(TA_TRACE_MACROSTEP_BEGIN, first);
-    CHECK(begin < record_count && records[begin].has_event && records[begin].event == jump_name);
+    CHECK(begin < record_count && records[begin].has_event && kept_event_is(&records[begin], jump_name));
     uint32_t micro = find_record(TA_TRACE_MICROSTEP, first);
     CHECK(micro < record_count);
     if (micro < record_count) {
         const kept_record *m = &records[micro];
-        CHECK(m->has_event && m->event == jump_name);
+        CHECK(m->has_event && kept_event_is(m, jump_name));
         CHECK(m->transition_count == 0);
         CHECK(m->state == TA_STATE_NONE);
         CHECK(m->state_count == 1 && m->states[0] == w2);
@@ -585,7 +624,7 @@ static void test_final_target(void) {
     /* A finished actor: done, after a malformed jump is refused as one. */
     CHECK(jump(&r, TA_STATE_NONE, &end, 1) == TA_ERR_DONE);
     CHECK(jump(&r, TA_STATE_NONE, &end, 0) == TA_ERR_INVALID);
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_ERR_DONE);
+    CHECK(abandon(&r) == TA_ERR_DONE);
     finish(&r);
 }
 
@@ -663,7 +702,7 @@ static void jump_into_w1(run *r, uint32_t action_budget, int capture_at) {
         /* Before it is taken: the image carries the operator transition. */
         ta_session_image *image = NULL;
         CHECK(ta_actor_capture(r->system, &(ta_actor_capture_params){ .actor = r->actor, .out = &image }) == TA_OK);
-        CHECK(ta_actor_destroy(r->system, r->actor) == TA_OK);
+        CHECK(destroy(r) == TA_OK);
         CHECK(ta_actor_reconstruct(r->system, &(ta_actor_reconstruct_params){ .image = image, .out = &r->actor }) ==
               TA_OK);
         ta_session_image_destroy(image);
@@ -676,13 +715,13 @@ static void jump_into_w1(run *r, uint32_t action_budget, int capture_at) {
         CHECK(inspection.microstep_in_progress);
         /* The configuration is the one before the jump until it completes. */
         CHECK(active_is(r, "idle"));
-        CHECK(ta_actor_abandon(r->system, r->actor) == TA_ERR_BUSY);
+        CHECK(abandon(r) == TA_ERR_BUSY);
         CHECK(offer(r, "go", NULL) == TA_ERR_BUSY);
         if ((int)pauses == capture_at) {
             ta_session_image *image = NULL;
             CHECK(ta_actor_capture(r->system, &(ta_actor_capture_params){ .actor = r->actor, .out = &image }) ==
                   TA_OK);
-            CHECK(ta_actor_destroy(r->system, r->actor) == TA_OK);
+            CHECK(destroy(r) == TA_OK);
             CHECK(ta_actor_reconstruct(r->system, &(ta_actor_reconstruct_params){ .image = image,
                                                                                  .out = &r->actor }) == TA_OK);
             ta_session_image_destroy(image);
@@ -726,7 +765,7 @@ static void test_abandon_a_macrostep_that_never_ends(void) {
     run r;
     start(&r);
     CHECK(settle(&r, 0) == TA_RUN_STABLE);
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_ERR_INVALID); /* idle: nothing to abandon */
+    CHECK(abandon(&r) == TA_ERR_INVALID); /* idle: nothing to abandon */
     CHECK(offer(&r, "spin", NULL) == TA_OK);
     ta_run_status status = TA_RUN_ERROR;
     CHECK(resume_with(&r, 21, 0, &status) == TA_OK);
@@ -741,12 +780,12 @@ static void test_abandon_a_macrostep_that_never_ends(void) {
     CHECK(jump(&r, TA_STATE_NONE, &jump_to, 1) == TA_ERR_BUSY); /* busy forever, a jump included */
 
     uint32_t first = record_count;
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_OK);
+    CHECK(abandon(&r) == TA_OK);
     uint32_t abandoned = find_record(TA_TRACE_ABANDONED, first);
     CHECK(abandoned < record_count);
     if (abandoned < record_count) {
         CHECK(records[abandoned].dropped == waiting);
-        CHECK(records[abandoned].has_event && records[abandoned].event == event_name(&r, "spin"));
+        CHECK(records[abandoned].has_event && kept_event_is(&records[abandoned], event_name(&r, "spin")));
         CHECK(abandoned + 1u < record_count && records[abandoned + 1u].kind == TA_TRACE_MACROSTEP_END);
         CHECK(records[abandoned + 1u].key.macrostep == records[abandoned].key.macrostep);
         CHECK(records[abandoned + 1u].state_count == 2);
@@ -759,7 +798,7 @@ static void test_abandon_a_macrostep_that_never_ends(void) {
     char active[64];
     active_text(&r, active, sizeof(active));
     CHECK(strcmp(active, "loop l1") == 0 || strcmp(active, "loop l2") == 0);
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_ERR_INVALID);
+    CHECK(abandon(&r) == TA_ERR_INVALID);
 
     /* Then the jump works as usual, and the actor is out of the loop. */
     clear_log();
@@ -768,8 +807,8 @@ static void test_abandon_a_macrostep_that_never_ends(void) {
     CHECK(active_is(&r, "work w2"));
     CHECK(log_is("e.work@J e.w2@J "));
 
-    CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_ERR_NOT_FOUND);
+    CHECK(destroy(&r) == TA_OK);
+    CHECK(abandon(&r) == TA_ERR_NOT_FOUND);
     finish(&r);
 }
 
@@ -777,7 +816,7 @@ static void test_abandon_only_between_microsteps(void) {
     run r;
     start(&r);
     /* Its bootstrap has not completed a microstep: no configuration yet. */
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_ERR_BUSY);
+    CHECK(abandon(&r) == TA_ERR_BUSY);
     CHECK(settle(&r, 0) == TA_RUN_STABLE);
     CHECK(offer(&r, "spin", NULL) == TA_OK);
     /* Paused inside l1's <onentry>, which raises. */
@@ -785,12 +824,12 @@ static void test_abandon_only_between_microsteps(void) {
     CHECK(resume_with(&r, 1000, 1, &status) == TA_OK);
     CHECK(status == TA_RUN_PAUSED);
     CHECK(inspect(&r).microstep_in_progress);
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_ERR_BUSY);
+    CHECK(abandon(&r) == TA_ERR_BUSY);
     /* A budget of one microstep and no action budget finishes it. */
     CHECK(resume_with(&r, 1, 0, &status) == TA_OK);
     CHECK(status == TA_RUN_PAUSED);
     CHECK(!inspect(&r).microstep_in_progress);
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_OK);
+    CHECK(abandon(&r) == TA_OK);
     CHECK(active_is(&r, "loop l1"));
     finish(&r);
 }
@@ -802,9 +841,9 @@ static void test_abandon_before_the_event_is_taken(void) {
     /* A plain event: dropped, and no macrostep began, so no MACROSTEP_END. */
     CHECK(offer(&r, "go", NULL) == TA_OK);
     uint32_t first = record_count;
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_OK);
+    CHECK(abandon(&r) == TA_OK);
     uint32_t abandoned = find_record(TA_TRACE_ABANDONED, first);
-    CHECK(abandoned < record_count && records[abandoned].has_event && records[abandoned].event == go_name);
+    CHECK(abandoned < record_count && records[abandoned].has_event && kept_event_is(&records[abandoned], go_name));
     CHECK(abandoned < record_count && records[abandoned].key.macrostep == 0);
     CHECK(find_record(TA_TRACE_MACROSTEP_END, first) == record_count);
     CHECK(active_is(&r, "idle"));
@@ -812,7 +851,7 @@ static void test_abandon_before_the_event_is_taken(void) {
     /* A jump: its operator transition goes with the event. */
     ta_state_id w2 = state(&r, "w2");
     CHECK(jump(&r, TA_STATE_NONE, &w2, 1) == TA_OK);
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_OK);
+    CHECK(abandon(&r) == TA_OK);
     CHECK(active_is(&r, "idle"));
     CHECK(settle(&r, 0) == TA_RUN_STABLE);
     CHECK(active_is(&r, "idle"));
@@ -902,12 +941,12 @@ static void test_out_of_memory(void) {
         CHECK(resume_with(&r, 7, 0, &status) == TA_OK && status == TA_RUN_PAUSED);
         uint32_t waiting = inspect(&r).internal_count;
         heap.policy.fail_at = heap.attempts + failing;
-        ta_result result = ta_actor_abandon(r.system, r.actor);
+        ta_result result = abandon(&r);
         heap.policy.fail_at = 0;
         if (result == TA_ERR_NOMEM) {
             ta_actor_inspection inspection = inspect(&r);
             CHECK(inspection.macrostep_in_progress && inspection.internal_count == waiting);
-            result = ta_actor_abandon(r.system, r.actor);
+            result = abandon(&r);
         }
         CHECK(result == TA_OK);
         CHECK(!inspect(&r).macrostep_in_progress);
@@ -937,9 +976,9 @@ static void test_abandon_a_runaway(void) {
     CHECK(jump(&r, TA_STATE_NONE, &jump_to, 1) == TA_ERR_BUSY);
 
     uint32_t first = record_count;
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_OK);
+    CHECK(abandon(&r) == TA_OK);
     uint32_t abandoned = find_record(TA_TRACE_ABANDONED, first);
-    CHECK(abandoned < record_count && records[abandoned].event == event_name(&r, "spin"));
+    CHECK(abandoned < record_count && kept_event_is(&records[abandoned], event_name(&r, "spin")));
     CHECK(abandoned + 1u < record_count && records[abandoned + 1u].kind == TA_TRACE_MACROSTEP_END);
     CHECK(inspect(&r).residency == TA_ACTOR_IDLE);
 
@@ -954,7 +993,7 @@ static void test_abandon_a_runaway(void) {
     CHECK(settle(&r, 0) == TA_RUN_STABLE);
     CHECK(offer(&r, "spin", NULL) == TA_OK);
     CHECK(resume_with(&r, 1000, 0, &status) == TA_ERR_RUNAWAY);
-    CHECK(ta_actor_abandon(r.system, r.actor) == TA_OK);
+    CHECK(abandon(&r) == TA_OK);
     finish(&r);
 }
 

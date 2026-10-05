@@ -28,6 +28,8 @@
  *   `out.size`. The `kind`, `size`, `seq` and span fields of `fixed` are
  *   ignored. `fixed` may be `out.bytes` itself, so a producer can build
  *   the fixed part in the reservation; the texts must not lie in `out`.
+ *   Texts that lie end to end in the caller's memory, as a producer that
+ *   composes them in catalog order lays them, are copied as one run.
  * - A record with text or bytes has `ta_<ring>_<name>_texts`: a `ta_str`
  *   per text field and a `ta_bytes` per bytes field, named after it. Its
  *   `ta_<ring>_<name>_size(texts, &size)` answers the bytes to reserve:
@@ -1402,43 +1404,63 @@ static inline const ta_c2h_load_result *ta_c2h_load_result_from_view(const ta_re
  * tail; a writer borrows them for one call.
  */
 typedef struct {
-    /** the session’s family/name */
+    /** the u32 IDs of the lists, back to back (see above) */
+    ta_bytes list_ids;
+    /** the session's ID as text, as _sessionid holds it */
+    ta_str session_id;
+    /** the causing session's ID as text; empty when there is no cause */
+    ta_str cause_session_id;
+    /** the session’s family/name, when it has a named address */
     ta_str address;
+    /** the definition's family, on the kinds that open a run */
+    ta_str family_name;
+    /** the definition's revision, on the kinds that open a run */
+    ta_bytes revision;
+    /** the definition's document name, on the kinds that open a run */
+    ta_str document_name;
     /**
-     * the definition’s document name and source, on the kinds that open a run
+     * where the definition's first state was written, on the kinds that open a
+     * run
      */
-    ta_str definition;
+    ta_str source;
     /** the name of `state` */
     ta_str state_name;
     /** the name of `transition` */
     ta_str transition_name;
     /** the name of `action` */
     ta_str action_name;
-    /** the event name, or the name the kind carries */
+    /** the name of `subject_state` */
+    ta_str subject_state_name;
+    /** the name of `subject_action` */
+    ta_str subject_action_name;
+    /** the name the kind carries: a <data>'s */
     ta_str name;
+    /** the event's dotted name */
+    ta_str event_name;
+    /** the event's sendid */
+    ta_str event_send_id;
+    /** the event's invokeid */
+    ta_str event_invoke_id;
+    /** the event's data as text, cut at telemetryValueBytes */
+    ta_str event_data;
     /** the send ID, for SENT and its kin */
     ta_str send_id;
     /** the invoke ID, for INVOKED and its kin */
     ta_str invoke_id;
+    /** the kind's value as text, cut at telemetryValueBytes */
     ta_str value_text;
     /** the fault’s error event name */
     ta_str fault_detail;
     ta_str fault_message;
-    /**
-     * the microstep’s transitions: a u32 count, then per transition its u32 ID,
-     * then its name as a u32 length and UTF-8 bytes
-     */
-    ta_bytes transitions;
-    /**
-     * exited, entered, history, states: per list a u32 count, then per state
-     * its u32 ID, then its name as a u32 length and UTF-8 bytes
-     */
-    ta_bytes states;
+    /** the fault's data as text, cut at telemetryValueBytes */
+    ta_str fault_data;
+    /** the names of the list entries (see above) */
+    ta_bytes list_names;
 } ta_tel_trace_texts;
 
 /**
  * Answers in `*out` the bytes a `tel.trace` record with `texts` takes: its
- * fixed part, 224 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * fixed part, 384 bytes, plus their lengths, rounded up to 8. Never allocates;
  * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
  * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
  * would exceed the largest size a `u32` holds.

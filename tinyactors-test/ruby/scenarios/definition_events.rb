@@ -141,18 +141,20 @@ TinyactorsTest.scenarios 'definition events' do
            "the child registered inside the caller's bootstrap macrostep: #{stream.inspect}"
     assert registered_child < spawned_child, "the child's definition before its SPAWNED: #{stream.inspect}"
 
-    # Destroy: every DESTROYED, then FREED for each definition left.
+    # Destroy: every DESTROYED, then FREED for each definition left. The
+    # ring goes with the system, so teardown writes no record (core ADR
+    # 0098): the FREED events come from the definition sink, and no record
+    # follows the first of them.
     parent.post('finish')
     run_system('the child finishes, and the caller with it')
     mark = stream.size
     teardown!
     tail = DefinitionEvents.stream(self).drop(mark)
-    records = tail.select { |e| e[0] == :record }
-    last_destroyed = records.rindex { |e| e[1] == 'destroyed' }
-    first_freed = records.index { |e| e[1] == 'freed' }
+    freed = tail.select { |e| e[0] == :event && e[1] == 'freed' }
+    first_freed = tail.index { |e| e[0] == :event && e[1] == 'freed' }
     assert first_freed, "destroy frees what is left: #{tail.inspect}"
-    assert last_destroyed.nil? || last_destroyed < first_freed, "every DESTROYED before any FREED: #{tail.inspect}"
-    assert_equal [caller_id, child_id].sort, records.select { |e| e[1] == 'freed' }.map { |e| e[2] }.sort
+    assert tail.drop(first_freed).none? { |e| e[0] == :record }, "every DESTROYED before any FREED: #{tail.inspect}"
+    assert_equal [caller_id, child_id].sort, freed.map { |e| e[2] }.sort
     assert DefinitionEvents.paired?(DefinitionEvents.stream(self)), 'each FREED record just before its event'
   end
 

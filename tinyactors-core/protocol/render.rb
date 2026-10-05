@@ -309,6 +309,8 @@ module RingProto
         `out.size`. The `kind`, `size`, `seq` and span fields of `fixed` are
         ignored. `fixed` may be `out.bytes` itself, so a producer can build
         the fixed part in the reservation; the texts must not lie in `out`.
+        Texts that lie end to end in the caller's memory, as a producer that
+        composes them in catalog order lays them, are copied as one run.
       - A record with text or bytes has `ta_<ring>_<name>_texts`: a `ta_str`
         per text field and a `ta_bytes` per bytes field, named after it. Its
         `ta_<ring>_<name>_size(texts, &size)` answers the bytes to reserve:
@@ -563,84 +565,120 @@ module RingProto
                "#{firsts[m.id]}u },\n"
       end
       out << "};\n\n"
+      codes = model.messages.map(&:code)
+      low = codes.min
+      raise 'the catalog has more kinds than a descriptor slot holds' if model.messages.size > 254
+
+      out << "/* Each kind's descriptor index plus one, by its code less #{hex(low)}; 0 for a\n"
+      out << " * code no record has. One load finds a kind, read or written. */\n"
+      out << "static const uint8_t ta_record_descriptor_slots[#{hex(codes.max - low + 1)}] = {\n"
+      model.messages.each_with_index { |m, i| out << "    [#{c_kind(m)} - #{hex(low)}] = #{i + 1}u,\n" }
+      out << "};\n\n"
       out << "/* The index of `kind` in ta_record_descriptors, or their count when no\n"
       out << " * record has that kind. */\n"
-      out << "static uint32_t ta_record_descriptor_index(uint16_t kind) {\n    switch (kind) {\n"
-      model.messages.each_with_index { |m, i| out << "    case #{c_kind(m)}:\n        return #{i}u;\n" }
-      out << "    default:\n        return TA_ARRAY_COUNT(ta_record_descriptors);\n    }\n}\n\n"
+      out << "static uint32_t ta_record_descriptor_index(uint16_t kind) {\n"
+      out << "    uint32_t at = (uint32_t)kind - #{hex(low)}u; /* wraps past the table below the first code */\n"
+      out << "    uint32_t slot = at < TA_ARRAY_COUNT(ta_record_descriptor_slots) ? ta_record_descriptor_slots[at] : 0u;\n"
+      out << "    return slot == 0u ? TA_ARRAY_COUNT(ta_record_descriptors) : slot - 1u;\n}\n\n"
       out << CODEC_RUNTIME
       model.messages.each { |m| out << c_codec_definitions(m) }
       out
     end
 
     # The part of ring_codec.c that is the same for every catalog: the
-    # measuring, writing, reading and describing loops over the descriptors.
+    # helpers every writer and size function calls, and the reading and
+    # describing loops over the descriptors.
     CODEC_RUNTIME = <<~C
-      /* A writer's texts as one array of tails. */
+      /* What a writer checks a buffer against: its kind, its fixed part and the record's size. */
       typedef struct {
           uint16_t kind;
-          uint32_t count;
-          const ta_bytes *tails;
-      } ta_record_shape;
+          uint32_t fixed_size;
+          uint32_t needed;
+      } ta_record_frame;
 
-      #define TA_RECORD_TAIL(text) { (const uint8_t *)(const void *)(text).ptr, (text).len }
+      /*
+       * A record being written: its bytes, where its next text goes, and the
+       * run of texts not yet copied. Texts that lie end to end in the caller's
+       * memory, as a producer that composes them in catalog order lays them,
+       * are copied as one run.
+       */
+      typedef struct {
+          unsigned char *bytes;
+          uint32_t cursor;
+          const uint8_t *run;
+          uint32_t run_at;
+          uint32_t run_len;
+      } ta_record_tail;
 
-      /* The record's size: the fixed part plus the tails, rounded up to 8. */
-      static ta_result ta_record_measure(const ta_record_shape *shape, uint32_t *out) {
-          uint32_t index = ta_record_descriptor_index(shape->kind);
-          if (index == TA_ARRAY_COUNT(ta_record_descriptors)) {
-              return TA_ERR_INVALID;
-          }
-          uint64_t size = ta_record_descriptors[index].fixed_size;
-          for (uint32_t tail = 0; tail < shape->count; tail += 1u) {
-              if (shape->tails[tail].ptr == NULL && shape->tails[tail].len != 0u) {
-                  return TA_ERR_INVALID;
-              }
-              size += shape->tails[tail].len;
-          }
+      #define TA_RECORD_TEXT(text) ((ta_bytes){ (const uint8_t *)(const void *)(text).ptr, (text).len })
+
+      /* Adds a text's length to `*size`; false for a text with a length but no bytes. */
+      static inline bool ta_record_measure(uint64_t *size, ta_bytes text) {
+          *size += text.len;
+          return text.ptr != NULL || text.len == 0u;
+      }
+
+      /* A measured record's size, rounded up to 8: TA_ERR_INVALID for a bad text
+       * or a record past the largest size a u32 holds. */
+      static ta_result ta_record_round(uint64_t size, bool valid, uint32_t *out) {
           size = (size + 7u) & ~(uint64_t)7u;
-          if (size > UINT32_MAX) {
+          if (!valid || size > UINT32_MAX) {
               return TA_ERR_INVALID;
           }
           *out = (uint32_t)size;
           return TA_OK;
       }
 
-      /* Checks everything, then fills the record; see ring_codec.h. */
-      static ta_result ta_record_write(ta_record_buffer out, const void *fixed, const ta_record_shape *shape) {
+      /* Checks the buffer, then fills the fixed part and the header; see ring_codec.h. */
+      static ta_result ta_record_begin(ta_record_buffer out, const void *fixed, const ta_record_frame *frame) {
           if (out.bytes == NULL || ((uintptr_t)(void *)out.bytes & 7u) != 0u || (out.size & 7u) != 0u ||
               fixed == NULL) {
               return TA_ERR_INVALID;
           }
-          uint32_t needed = 0u;
-          ta_result result = ta_record_measure(shape, &needed);
-          if (result != TA_OK) {
-              return result;
-          }
-          if (out.size < needed) {
+          if (out.size < frame->needed) {
               return TA_ERR_FULL;
           }
-          const ta_record_descriptor *descriptor = &ta_record_descriptors[ta_record_descriptor_index(shape->kind)];
           uint64_t seq = 0u;
           ta_mem_copy(&seq, out.bytes + offsetof(ta_record_header, seq), sizeof(seq));
           if (fixed != (const void *)out.bytes) {
-              ta_mem_copy(out.bytes, fixed, descriptor->fixed_size);
+              ta_mem_copy(out.bytes, fixed, frame->fixed_size);
           }
-          ta_mem_zero(out.bytes + descriptor->fixed_size, out.size - descriptor->fixed_size);
-          uint16_t kind = shape->kind;
+          uint16_t kind = frame->kind;
           ta_mem_copy(out.bytes + offsetof(ta_record_header, kind), &kind, sizeof(kind));
           ta_mem_copy(out.bytes + offsetof(ta_record_header, size), &out.size, sizeof(out.size));
           ta_mem_copy(out.bytes + offsetof(ta_record_header, seq), &seq, sizeof(seq));
-          uint32_t cursor = descriptor->fixed_size;
-          for (uint32_t tail = 0; tail < shape->count; tail += 1u) {
-              ta_span32 span = { cursor, shape->tails[tail].len };
-              ta_mem_copy(out.bytes + ta_record_span_offsets[descriptor->span_first + tail], &span, sizeof(span));
-              if (span.length != 0u) {
-                  ta_mem_copy(out.bytes + cursor, shape->tails[tail].ptr, span.length);
-              }
-              cursor += span.length;
-          }
           return TA_OK;
+      }
+
+      /* Copies the run of texts not yet copied. */
+      static void ta_record_flush(ta_record_tail *tail) {
+          if (tail->run_len != 0u) {
+              ta_mem_copy(tail->bytes + tail->run_at, tail->run, tail->run_len);
+          }
+          tail->run_len = 0u;
+      }
+
+      /* Lays one text at the cursor and points the span at `span_offset` at it. */
+      static inline void ta_record_put(ta_record_tail *tail, uint32_t span_offset, ta_bytes text) {
+          ta_span32 span = { tail->cursor, text.len };
+          ta_mem_copy(tail->bytes + span_offset, &span, sizeof(span));
+          if (text.len == 0u) {
+              return;
+          }
+          if (tail->run_len == 0u || text.ptr != tail->run + tail->run_len) {
+              ta_record_flush(tail);
+              tail->run = text.ptr;
+              tail->run_at = tail->cursor;
+          }
+          tail->run_len += text.len;
+          tail->cursor += text.len;
+      }
+
+      /* Copies the last run, then zeroes the bytes after the last text: the
+       * texts cover the rest of the tail. */
+      static void ta_record_finish(ta_record_buffer out, ta_record_tail *tail) {
+          ta_record_flush(tail);
+          ta_mem_zero(out.bytes + tail->cursor, out.size - tail->cursor);
       }
 
       ta_result ta_record_read(const ta_record_read_params *params, ta_record_view *out) {
@@ -700,27 +738,40 @@ module RingProto
       }
     C
 
+    # Each writer and size function is straight-line code over its own
+    # texts: no array of tails to build, and no kind to look up.
     def c_codec_definitions(msg)
       name = c_record(msg)
+      kind = c_kind(msg)
       tails = tail_fields(msg)
       out = +"\n/* ---- #{msg.id} ---- */\n"
       if tails.empty?
         out << "\nta_result #{name}_write(ta_record_buffer out, const #{name} *fixed) {\n"
-        out << "    const ta_record_shape shape = { #{c_kind(msg)}, 0u, NULL };\n"
-        out << "    return ta_record_write(out, fixed, &shape);\n}\n"
+        out << "    const ta_record_frame frame = { #{kind}, (uint32_t)sizeof(#{name}), (uint32_t)sizeof(#{name}) };\n"
+        out << "    ta_result result = ta_record_begin(out, fixed, &frame);\n"
+        out << "    if (result == TA_OK) {\n"
+        out << "        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(#{name}), NULL, 0u, 0u };\n"
+        out << "        ta_record_finish(out, &tail);\n    }\n"
+        out << "    return result;\n}\n"
         return out
       end
-      list = tails.map { |f| "        TA_RECORD_TAIL(texts->#{f.name}),\n" }.join
-      body = lambda do |call|
-        "    if (texts == NULL) {\n        return TA_ERR_INVALID;\n    }\n" \
-          "    const ta_bytes tails[#{tails.size}] = {\n#{list}    };\n" \
-          "    const ta_record_shape shape = { #{c_kind(msg)}, #{tails.size}u, tails };\n" \
-          "    return #{call};\n}\n"
-      end
       out << "\nta_result #{name}_size(const #{name}_texts *texts, uint32_t *out) {\n"
-      out << body.call('ta_record_measure(&shape, out)')
+      out << "    if (texts == NULL) {\n        return TA_ERR_INVALID;\n    }\n"
+      out << "    uint64_t size = sizeof(#{name});\n    bool valid = true;\n"
+      tails.each { |f| out << "    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->#{f.name}));\n" }
+      out << "    return ta_record_round(size, valid, out);\n}\n"
       out << "\nta_result #{name}_write(ta_record_buffer out, const #{name} *fixed, const #{name}_texts *texts) {\n"
-      out << body.call('ta_record_write(out, fixed, &shape)')
+      out << "    uint32_t needed = 0u;\n"
+      out << "    ta_result result = #{name}_size(texts, &needed);\n"
+      out << "    if (result == TA_OK) {\n"
+      out << "        const ta_record_frame frame = { #{kind}, (uint32_t)sizeof(#{name}), needed };\n"
+      out << "        result = ta_record_begin(out, fixed, &frame);\n    }\n"
+      out << "    if (result != TA_OK) {\n        return result;\n    }\n"
+      out << "    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(#{name}), NULL, 0u, 0u };\n"
+      tails.each do |f|
+        out << "    ta_record_put(&tail, (uint32_t)offsetof(#{name}, #{f.name}), TA_RECORD_TEXT(texts->#{f.name}));\n"
+      end
+      out << "    ta_record_finish(out, &tail);\n    return TA_OK;\n}\n"
       out
     end
 
@@ -730,7 +781,8 @@ module RingProto
                  ta_record_read_params ta_record_view ta_record_description ta_record_read ta_record_describe
                  ta_record_view_text ta_record_view_bytes TA_RECORD_HEADER_BYTES TA_RECORD_RING_COUNT
                  TA_RECORD_KIND_PAD ta_record_descriptor ta_record_span_offsets ta_record_descriptors
-                 ta_record_descriptor_index ta_record_shape TA_RECORD_TAIL ta_record_measure ta_record_write]
+                 ta_record_descriptor_index ta_record_descriptor_slots ta_record_frame ta_record_tail TA_RECORD_TEXT
+                 ta_record_measure ta_record_round ta_record_begin ta_record_flush ta_record_put ta_record_finish]
       names += model.rings.keys.map { |r| c_ring(r) }
       names += COMMON_FLAGS.map { |f| "TA_RECORD_FLAG_#{f.name.upcase}" }
       model.enums.each_value do |e|

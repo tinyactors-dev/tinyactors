@@ -12,6 +12,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "tel_reader.h"
 
 static int failures;
 
@@ -573,12 +574,16 @@ static void seen_write(void *self, const ta_trace_record *record) {
                                             .actor = record->actor };
     }
 }
-static const ta_trace_sink_vtable seen_vtable = { .write = seen_write };
-
 static void watch_withdrawals(ta_system *system) {
     seen_count = 0;
     uint32_t kinds = TA_TRACE_BIT(TA_TRACE_WITHDRAWN) | TA_TRACE_BIT(TA_TRACE_CANCELLED);
-    CHECK(ta_system_set_trace_sink(system, (ta_trace_sink){ .v = &seen_vtable, .kinds = kinds }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(system, &(ta_trace_masks){ .kinds = kinds }) == TA_OK);
+}
+
+/* The records seen so far, after reading what the system wrote to tel. */
+static uint32_t seen_now(ta_system *system) {
+    tel_drain(system, seen_write, NULL);
+    return seen_count;
 }
 
 static ta_send_id send_id(ta_system *system, const char *text) {
@@ -628,13 +633,13 @@ static void test_withdrawing_one_send(void) {
 
     /* One record, outside any macrostep: the session's second lifecycle key
      * (SPAWNED was the first). */
-    CHECK(seen_count == 1);
+    CHECK(seen_now(system) == 1);
     CHECK(seen[0].kind == TA_TRACE_WITHDRAWN && seen[0].send == early && seen[0].actor == actor);
     CHECK(seen[0].key.session == view.session_id && seen[0].key.macrostep == 0 && seen[0].key.microstep == 2);
 
     /* Gone once: again, it is not found, and nothing is recorded. */
     CHECK(ta_actor_withdraw_send(system, actor, early) == TA_ERR_NOT_FOUND);
-    CHECK(seen_count == 1 && cancelled_count(system) == cancelled + 1u);
+    CHECK(seen_now(system) == 1 && cancelled_count(system) == cancelled + 1u);
     /* Only the owner's sends: the neighbour's `far` is not this actor's. */
     ta_send_id far = send_id(system, "far");
     CHECK(ta_actor_withdraw_send(system, actor, far) == TA_ERR_NOT_FOUND);
@@ -684,7 +689,7 @@ static void test_a_submitted_send_is_not_withdrawn(void) {
     watch_withdrawals(system);
     uint64_t cancelled = cancelled_count(system);
     CHECK(ta_actor_withdraw_send(system, sender, send_id(system, "now")) == TA_ERR_DONE);
-    CHECK(seen_count == 0 && cancelled_count(system) == cancelled);
+    CHECK(seen_now(system) == 0 && cancelled_count(system) == cancelled);
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, sender, &view) == TA_OK && view.delayed_send_count == 1);
 
@@ -731,7 +736,7 @@ static void test_withdrawing_inside_a_paused_macrostep(void) {
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 1);
     CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].event == event_name(system, "tock"));
     /* WITHDRAWN outside the macrostep, then the chart's own CANCELLED in it. */
-    CHECK(seen_count == 2);
+    CHECK(seen_now(system) == 2);
     CHECK(seen[0].kind == TA_TRACE_WITHDRAWN && seen[0].key.macrostep == 0 && seen[0].send == t);
     CHECK(seen[1].kind == TA_TRACE_CANCELLED && seen[1].key.macrostep == 2 && seen[1].send == t);
     ta_system_destroy(system);

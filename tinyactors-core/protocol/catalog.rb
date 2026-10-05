@@ -690,18 +690,33 @@ end
 
 message 'tel.trace', code: 0x0301, summary: 'One trace record (core ADR 0067)' do
   doc 'One ta_trace_record, kind for kind; only the fields its kind names ' \
-      'are meaningful. The record is self-contained: names, values and the ' \
-      'fault are text in its tail, and the state and transition lists are ' \
-      'bytes in its tail holding u32 IDs with their names, so a reader ' \
-      'needs no live system (docs/proposals/ring-proto/reference/telemetry.md). Values are ' \
-      'text the data model renders (value_text), cut at the parameter ' \
-      'telemetryValueBytes; vrefs never go on a lossy ring. Header `at` ' \
-      'is logical time; wall_ns is when it happened.'
+      'are meaningful, and the rest are 0, or UINT32_MAX for a state, transition, ' \
+      'action or expression that is none. The record is self-contained ' \
+      '(core ADR 0098): names, values and the fault are text in its tail, beside ' \
+      'the IDs they name, so a reader needs no live system. Values are text the ' \
+      'data model renders (value_text), cut at the parameter telemetryValueBytes; ' \
+      'vrefs never go on a lossy ring. Header `session` and `at` are the step ' \
+      'key\'s session and the logical time; wall_ns is when it happened.'
   doc 'The step key is header `session`, `macrostep` and `microstep`. There ' \
       'is no span ID field: a span ID is a fixed 64-bit mix of the step key ' \
       '(core ADR 0067, ta_step_key_span_id), the same in every reader.'
-  flag :truncated, 0, 'value_text was cut, or a list in the tail was cut to fit maxRecordBytes'
+  doc 'The lists are two spans: list_ids holds the u32 IDs of the transitions, ' \
+      'then the exited, entered and history states, then the states the kind ' \
+      'names, back to back, as many as the five counts say; list_names holds, ' \
+      'in the same order, each entry\'s name as a u32 length and its UTF-8 bytes. ' \
+      'list_ids comes first in the tail, so its IDs are 4-byte aligned and a ' \
+      'reader can use them in place. When the record would not fit ' \
+      'maxRecordBytes, core keeps the lists whole from the first and cuts the ' \
+      'last list first; the counts say how many entries are there, not how many ' \
+      'there were.'
+  flag :truncated, 0, 'something was cut: a value, the event\'s data, a list, or a name, to fit telemetryValueBytes or maxRecordBytes'
   flag :suppressed, 1, 'an effect a replaying session did not perform'
+  flag :event, 2, 'the event_* fields hold the event the kind names'
+  flag :value, 3, 'the kind carries a value; value_text holds its text unless telemetryValueBytes is 0'
+  flag :fault, 4, 'the fault_* fields hold the kind\'s fault'
+  flag :value_cut, 5, 'value_text was cut'
+  flag :event_data_cut, 6, 'event_data was cut'
+  flag :lists_cut, 7, 'a list was cut to fit maxRecordBytes'
   field :wall_ns, :u64, 'the host clock when core wrote the record: wall-clock ' \
                         'nanoseconds since the Unix epoch; 0 when the host installed no clock'
   field :macrostep, :macrostep, 'with header session and microstep, the step key; 0 outside a macrostep'
@@ -709,34 +724,58 @@ message 'tel.trace', code: 0x0301, summary: 'One trace record (core ADR 0067)' d
   field :trace_id_low, :u64
   field :cause_session, :session, 'the session of the step that caused this one; 0 for a host-delivered cause'
   field :cause_macrostep, :macrostep, 'the macrostep of the causing step; with cause_session 0, the host\'s parent span ID (W3C parent-id), or 0'
+  field :actor, :u64, 'the session\'s runtime actor ID, or 0'
+  field :definition, :u64, 'the definition\'s ID'
+  field :send, :u64, 'the send ID\'s handle, for SENT and its kin; send_id is its text'
+  field :invoke, :u64, 'the invocation\'s handle, for INVOKED and its kin; invoke_id is its text'
   field :microstep, :u32, 'from 1 per macrostep; 0 for the macrostep itself'
   field :cause_microstep, :u32, 'the microstep of the causing step; with cause_session and cause_macrostep, the cause\'s step key, whose span ID is the parent span'
-  field :state, :u32
-  field :transition, :u32
-  field :action, :u32
-  field :iteration, :u32
+  field :state, :u32, 'the state at the record\'s position'
+  field :transition, :u32, 'the transition at the record\'s position'
+  field :action, :u32, 'the action at the record\'s position'
+  field :iteration, :u32, 'the <foreach> iteration at the record\'s position; on FOREACH, the iteration it names'
+  field :subject_state, :u32, 'the state the kind names: a final state, a guard\'s source, a <data>\'s owner, an operator transition\'s source'
+  field :subject_action, :u32, 'the action the kind names: ACTION_FAILED\'s'
+  field :expr, :u32, 'the expression the kind names'
+  field :dropped, :u32, 'ABANDONED: the internal events it discarded'
   field :fault_code, :i32, 'the fault’s code, with fault_detail'
+  field :transition_count, :u32, 'transitions in list_ids'
+  field :exited_count, :u32, 'exited states in list_ids'
+  field :entered_count, :u32, 'entered states in list_ids'
+  field :history_count, :u32, 'history states in list_ids'
+  field :state_count, :u32, 'states the kind names in list_ids: a configuration, or an operator transition\'s targets'
   field :trace_kind, :u16, 'ta_trace_kind'
   field :position, :u8, 'ta_trace_at'
   field :result, :bool
   field :trace_flags, :u8, 'the trace context’s flags (sampled)'
   field :trace_detail, :u8, 'the trace context’s detail (watched)'
   field :runaway_cause, :runaway_cause, 'RUNAWAY only: what stopped the input'
-  field :address, :text, 'the session’s family/name'
-  field :definition, :text, 'the definition’s document name and source, on the kinds that open a run'
+  field :event_type, :event_type, 'the event\'s type'
+  field :list_ids, :bytes, 'the u32 IDs of the lists, back to back (see above)'
+  field :session_id, :text, 'the session\'s ID as text, as _sessionid holds it'
+  field :cause_session_id, :text, 'the causing session\'s ID as text; empty when there is no cause'
+  field :address, :text, 'the session’s family/name, when it has a named address'
+  field :family_name, :text, 'the definition\'s family, on the kinds that open a run'
+  field :revision, :bytes, 'the definition\'s revision, on the kinds that open a run'
+  field :document_name, :text, 'the definition\'s document name, on the kinds that open a run'
+  field :source, :text, 'where the definition\'s first state was written, on the kinds that open a run'
   field :state_name, :text, 'the name of `state`'
   field :transition_name, :text, 'the name of `transition`'
   field :action_name, :text, 'the name of `action`'
-  field :name, :text, 'the event name, or the name the kind carries'
+  field :subject_state_name, :text, 'the name of `subject_state`'
+  field :subject_action_name, :text, 'the name of `subject_action`'
+  field :name, :text, 'the name the kind carries: a <data>\'s'
+  field :event_name, :text, 'the event\'s dotted name'
+  field :event_send_id, :text, 'the event\'s sendid'
+  field :event_invoke_id, :text, 'the event\'s invokeid'
+  field :event_data, :text, 'the event\'s data as text, cut at telemetryValueBytes'
   field :send_id, :text, 'the send ID, for SENT and its kin'
   field :invoke_id, :text, 'the invoke ID, for INVOKED and its kin'
-  field :value_text, :text
+  field :value_text, :text, 'the kind\'s value as text, cut at telemetryValueBytes'
   field :fault_detail, :text, 'the fault’s error event name'
   field :fault_message, :text
-  field :transitions, :bytes, 'the microstep’s transitions: a u32 count, then per ' \
-                              'transition its u32 ID, then its name as a u32 length and UTF-8 bytes'
-  field :states, :bytes, 'exited, entered, history, states: per list a u32 count, ' \
-                         'then per state its u32 ID, then its name as a u32 length and UTF-8 bytes'
+  field :fault_data, :text, 'the fault\'s data as text, cut at telemetryValueBytes'
+  field :list_names, :bytes, 'the names of the list entries (see above)'
 end
 
 message 'tel.dropped', code: 0x0302, summary: 'Telemetry records were dropped' do

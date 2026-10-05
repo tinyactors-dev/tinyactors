@@ -53,8 +53,10 @@ struct tna_napi_system {
     double last_send_token;       /* the token of the last send(), for cancelSend() */
     /* A value's JSON for a trace attribute or a log record, cut at the
      * valueBytes parameter (napi ADRs 0035 and 0036), plus a terminator,
-     * allocated at creation. */
+     * allocated at creation; `value_buffer_bytes` is its size without the
+     * terminator (tna_value_buffer_bytes), worked out once at creation. */
     size_t value_bytes;
+    size_t value_buffer_bytes;
     char *trace_value;
     /* napi's own parameters (napi_params.h), fixed at creation. */
     tna_params params;

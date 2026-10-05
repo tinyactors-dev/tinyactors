@@ -530,10 +530,12 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
         inspection = actor.inspect_actor
         next unless inspection[:microstep_in_progress]
 
-        # It stands where its STOPPED record said (ADR 0083).
+        # It stands where its STOPPED record said (ADR 0083). A record
+        # carries no atom (core ADR 0098): its key's family is 0.
         record = trace_records.last
         assert_equal 'stopped', record[:kind]
-        assert_equal [record[:key], record[:position]], [inspection[:step], inspection[:position]]
+        assert_equal [record[:key].except(:family), record[:position]],
+                     [inspection[:step].except(:family), inspection[:position]]
         stopped = actor.data('.log')
         stopped_at = where.call(inspection)
         break

@@ -25,9 +25,18 @@ bool tat_make_peer_io(tat_bind *bind, jv config, void *out);
 bool tat_make_connection_io(tat_bind *bind, jv config, void *out);
 bool tat_make_request_io(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_log(tat_bind *bind, jv config, void *out);
-bool tat_make_recording_trace(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_definition(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_inspector(tat_bind *bind, jv config, void *out);
+
+/*
+ * trace.recording reads its system's tel ring (core ADR 0098) into its
+ * journal: after every host method that may run core, and before any other
+ * instrument but an allocator journals, so the records keep their order
+ * against what core told the other instruments.
+ */
+void tat_trace_drain_all(void);
+/* A system was destroyed: no trace.recording reads its ring again. */
+void tat_trace_forget_system(const void *system);
 
 /* The dotted text of an event name, or null when it cannot be formatted. */
 jv tat_event_name_text(const ta_system *system, ta_event_name_id name);

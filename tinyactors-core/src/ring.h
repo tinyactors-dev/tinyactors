@@ -157,9 +157,6 @@
  *
  * Memory comes from the injected allocator (core ADR 0023). A ring's size
  * is fixed when the system is created (core ADR 0092).
- * Today's trace sink (core ADR 0067) is the idea this ring generalizes:
- * a buffer the reader drains when it chooses, instead of a callback per
- * record.
  */
 #pragma once
 

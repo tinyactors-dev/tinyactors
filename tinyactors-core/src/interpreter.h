@@ -145,12 +145,13 @@ typedef struct {
     uint64_t *bound_decls;
     uint32_t decl_words;
     /*
-     * Tracing (ADR 0067). `trace_kinds` is what the running macrostep builds,
-     * from the sink's mask and the macrostep's context. `trace_action` is the
-     * unit of executable content running now. `trace_states` is scratch for
-     * a record's state lists (3 * state_count), and `conditions` holds the
-     * guards of the selection in progress, written only once it completes;
-     * both are null when the sink wants no record that needs them.
+     * Tracing (ADR 0067, ADR 0098). `trace_kinds` is what the running
+     * macrostep builds, from the system's trace masks and the macrostep's
+     * context. `trace_action` is the unit of executable content running
+     * now. `trace_states` is scratch for a record's state lists
+     * (3 * state_count), and `conditions` holds the guards of the selection
+     * in progress, written only once it completes; both are null when the
+     * masks want no record that needs them.
      */
     uint32_t trace_kinds;
     ta_trace_context trace_context;

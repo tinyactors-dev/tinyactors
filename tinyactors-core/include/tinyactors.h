@@ -404,7 +404,7 @@ typedef struct { void *self; const ta_byte_source_vtable *v; } ta_byte_source TA
  * A step key names one step of one session: macrostep `macrostep` of session
  * `session` (ADR 0066), and microstep `microstep` within it, where 0 is the
  * macrostep itself. Macrosteps count from 1 per session, and 0 is outside a
- * macrostep. The counters run whether or not a trace sink is installed, so
+ * macrostep. The counters run whether or not anything is traced, so
  * keys are the same with tracing on or off. A cause with `session` 0 is the
  * host's: `macrostep` holds its parent span ID, or 0 for none. A lifecycle
  * record (SPAWNED, LOADED, UNLOADED, FINISHED, DESTROYED) is outside every
@@ -426,7 +426,7 @@ typedef struct { uint64_t session; uint64_t macrostep; uint32_t microstep; ta_at
  *
  * `detail` is local, not W3C: it never appears in traceparent text, so it
  * does not leave the process. TA_TRACE_DETAIL_WATCHED makes a sampled
- * macrostep build the sink's `watched_kinds` instead of its `kinds`.
+ * macrostep build the masks' `watched_kinds` instead of their `kinds`.
  */
 typedef struct { uint64_t trace_id_high; uint64_t trace_id_low; uint8_t flags; uint8_t detail; } ta_trace_context;
 #define TA_TRACE_FLAG_SAMPLED ((uint8_t)0x01u)
@@ -868,10 +868,21 @@ typedef struct { void *shared; void *instance; const ta_dm_host *host; TA_OUT TA
  * delayexpr, targetexpr); `*out` is borrowed from `value` and valid while it
  * is retained, so core can parse a target URI out of it and keep the named
  * address a send needs (ADR 0044).
+ *
+ * `trace_bytes` is 0 for those conversions. Otherwise core is putting the
+ * text in a trace record (ADR 0098), cut at `trace_bytes`: a data model may
+ * then render the value for people rather than as a conversion would (JSON,
+ * for example), and it may stop once it has given more than `trace_bytes`
+ * bytes, which tells core the text was cut. Such text needs to stay valid
+ * only until the data model is called again: core copies it before it asks
+ * for the next, so a data model may render every value into one buffer.
+ * Core asks only for what ta_trace_masks' `value_bytes` keeps, and for the
+ * reason a failure gives. Core never asks for it with
+ * TA_OP_NOMEM in mind: a trace text that cannot be had is left out.
  * text_value makes a value from text, e.g. a generated send or invoke ID
  * stored through idlocation.
  */
-typedef struct { void *shared; void *instance; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_LIFETIME(input) ta_str *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_value_text_params;
+typedef struct { void *shared; void *instance; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_LIFETIME(input) ta_str *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; uint32_t trace_bytes; } ta_datamodel_value_text_params;
 typedef struct { void *shared; void *instance; ta_str text; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_text_value_params;
 /*
  * A value as bytes (ADR 0090 section 2, replacing ADR 0074's arena pair).
@@ -1183,12 +1194,16 @@ typedef struct {
 
 
 /* ========================================================================
- * Tracing (ADR 0067)
+ * Tracing (ADR 0067, ADR 0098)
  *
- * Core reports its decisions and the data they changed to one trace sink
- * per system, as flat records. A record is written once, when the step
- * that produced it has committed: a step that runs out of memory and runs
- * again (ADR 0070) writes its records on the run that commits, and the step
+ * Core reports its decisions and the data they changed as flat records on
+ * the system's `tel` ring, a lossy ring core allocates at creation
+ * (telBytes; 0 makes none). The host reads them between calls with
+ * ta_system_tel_peek() and ta_system_tel_release(); a full ring drops a
+ * record and counts it, and the next thing the host reads is a
+ * TA_TEL_DROPPED report. A record is written once, when the step that
+ * produced it has committed: a step that runs out of memory and runs again
+ * (ADR 0070) writes its records on the run that commits, and the step
  * counters move only then, so an interrupted run and an uninterrupted one
  * write the same records apart from PAUSED, RESUMED and STOPPED.
  */
@@ -1261,7 +1276,7 @@ typedef enum {
  */
 #define TA_TRACE_DEFINITIONS_SESSION ((uint64_t)UINT64_MAX)
 
-/* The bit of `kind` in a sink's mask. */
+/* The bit of `kind` in a ta_trace_masks mask. */
 #define TA_TRACE_BIT(kind) ((uint32_t)1u << (uint32_t)(kind))
 
 /* Where in a macrostep a record was written. */
@@ -1296,19 +1311,94 @@ typedef struct {
 } ta_trace_position;
 
 /*
- * One record. Only the fields its kind names are meaningful; the rest are
- * zero, or NONE for IDs. Everything is borrowed for the call: retain a value
- * to keep it (ADR 0006). `context` is the running macrostep's; `cause`, for
- * MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. A
- * fault carries its `detail`, `code` and `message`. Its data went into the
- * error.execution event of the RAISED record that follows; ACTION_FAILED
- * also borrows it, so a sink can say why an action failed from one record.
- * A sink never releases a record's fault data. A MICROSTEP that carries
- * `states` was an operator transition's (ADR 0082), which a chart's never
- * does: `states` are the targets the operator named, history states
- * included, `state` the source (TA_STATE_NONE: the root), and there are no
- * `transitions`. `exited`, `entered` and `history` are as for any
- * microstep.
+ * The texts of a `tel.trace` record, read in place with
+ * ta_trace_record_text(). Each names what a field of ta_trace_record
+ * holds as an ID, or what the record carries only as text:
+ *
+ * - SESSION_ID, CAUSE_SESSION_ID: the sessions of `key` and `cause` as
+ *   `<incarnation>.<session>.<family>`, as `_sessionid` holds it, or the
+ *   decimal session when its family is unknown (empty for no cause);
+ *   ADDRESS: the session's family/name when it has a named address.
+ * - FAMILY, DOCUMENT_NAME, SOURCE: on the kinds that open a run (SPAWNED,
+ *   LOADED, MACROSTEP_BEGIN and the DEFINITION_* kinds), the definition's
+ *   family, document name and the source its first state was written in;
+ *   its revision is `revision`.
+ * - POSITION_STATE, POSITION_TRANSITION, POSITION_ACTION: the names of
+ *   `position`'s state, transition and action; STATE and ACTION: of the
+ *   `state` and `action` the kind names. A state's name is its author ID, a
+ *   transition's its label ("idle → busy on go [guarded]"), an action's its
+ *   element and block ("<assign> in onentry of busy").
+ * - NAME: the <data>'s name.
+ * - EVENT_NAME, EVENT_SEND_ID, EVENT_INVOKE_ID, EVENT_DATA: the event's
+ *   dotted name, its sendid and invokeid, and its data as the data model
+ *   renders it for a trace, cut at the masks' `value_bytes` (`event_data_cut`).
+ * - SEND_ID, INVOKE_ID: the `send` and `invoke` IDs as text.
+ * - VALUE: the value as text, cut at the masks' `value_bytes` (`value_cut`).
+ * - FAULT_DETAIL, FAULT_MESSAGE, FAULT_DATA: the fault's error event name,
+ *   its message, and its data as text. Its data went into the
+ *   error.execution event of the RAISED record that follows; ACTION_FAILED
+ *   carries it too, so a reader can say why an action failed from one record.
+ */
+typedef enum {
+    TA_TRACE_TEXT_SESSION_ID = 0,
+    TA_TRACE_TEXT_CAUSE_SESSION_ID,
+    TA_TRACE_TEXT_ADDRESS,
+    TA_TRACE_TEXT_FAMILY,
+    TA_TRACE_TEXT_DOCUMENT_NAME,
+    TA_TRACE_TEXT_SOURCE,
+    TA_TRACE_TEXT_POSITION_STATE,
+    TA_TRACE_TEXT_POSITION_TRANSITION,
+    TA_TRACE_TEXT_POSITION_ACTION,
+    TA_TRACE_TEXT_STATE,
+    TA_TRACE_TEXT_ACTION,
+    TA_TRACE_TEXT_NAME,
+    TA_TRACE_TEXT_EVENT_NAME,
+    TA_TRACE_TEXT_EVENT_SEND_ID,
+    TA_TRACE_TEXT_EVENT_INVOKE_ID,
+    TA_TRACE_TEXT_EVENT_DATA,
+    TA_TRACE_TEXT_SEND_ID,
+    TA_TRACE_TEXT_INVOKE_ID,
+    TA_TRACE_TEXT_VALUE,
+    TA_TRACE_TEXT_FAULT_DETAIL,
+    TA_TRACE_TEXT_FAULT_MESSAGE,
+    TA_TRACE_TEXT_FAULT_DATA
+} ta_trace_text TA_SYMBOLS("TA_TRACE_TEXT_");
+
+/*
+ * One `tel.trace` record, as ta_system_tel_peek() reads it (ADR 0098): its
+ * IDs, numbers and flags, and the record itself, whose texts a reader takes
+ * with ta_trace_record_text(), in place, only when it uses them. Only the
+ * fields its kind names are meaningful; the rest are zero, empty, or NONE
+ * for IDs. A record is self-contained: beside every ID is its name as text,
+ * so a reader needs no live system and never calls back into core. The
+ * record, its texts, its lists and `revision` are borrowed from the ring
+ * until ta_system_tel_release(); a reader copies what it keeps.
+ *
+ * `context` is the running macrostep's; `cause`, for MACROSTEP_BEGIN and
+ * SPAWNED, is the key of the step that caused it. The `family` of `key` and
+ * of `cause` is 0: an atom means nothing outside the process, and a record
+ * names its sessions by the texts SESSION_ID and CAUSE_SESSION_ID.
+ * `iteration` is FOREACH's, the same as `position.iteration`, and 0 for
+ * any other kind. `now` is the system's logical time and `wall_ns` the host
+ * clock's, 0 without one (ta_system_set_wall_clock). `revision` is the
+ * definition's revision on the kinds that open a run, empty on the others.
+ * `has_event` says the record names an event, of type `event_type`;
+ * `has_fault` that it carries a fault, with code `fault_code`.
+ *
+ * A MICROSTEP that carries `states` was an operator transition's (ADR
+ * 0082), which a chart's never does: `states` are the targets the operator
+ * named, history states included, `state` the source (TA_STATE_NONE: the
+ * root), and there are no `transitions`. `exited`, `entered` and `history`
+ * are as for any microstep. `list_names` holds the name of every entry of
+ * the five lists, in their order (transitions, exited, entered, history,
+ * states), each as a u32 length in this machine's byte order and its
+ * UTF-8 bytes. A list cut to fit maxRecordBytes sets `lists_cut`, a value
+ * cut at the masks' `value_bytes` `value_cut` (the event's data
+ * `event_data_cut`), and any of them, or any other text cut to fit,
+ * `truncated`.
+ *
+ * `bytes` is the record as it lies in the ring. Its layout is core's: read
+ * it only through this struct and ta_trace_record_text().
  */
 typedef struct {
     ta_trace_kind kind;
@@ -1318,24 +1408,29 @@ typedef struct {
     ta_step_key cause;
     ta_actor_id actor;
     ta_definition_id definition;
-    /* The definition's identity, for the DEFINITION_* kinds; borrowed. */
-    ta_definition_identity identity;
     ta_time now;
+    uint64_t wall_ns;
 
-    TA_IN TA_OPTIONAL const ta_event *event;
+    bool has_event;
+    ta_event_type event_type;
+    bool event_data_cut;
     ta_state_id state;
     ta_expr_id expr;
-    ta_str name;
     ta_action_id action;
     uint32_t iteration;
     ta_send_id send;
     ta_invoke_id invoke;
     bool result;
     bool has_value;
-    ta_value value;
+    bool value_cut;
     bool has_fault;
-    ta_fault fault;
+    int32_t fault_code;
     uint32_t dropped;
+    /* RUNAWAY: 1 when the chain limit stopped the input. */
+    uint8_t runaway_cause;
+    bool suppressed;
+    bool truncated;
+    bool lists_cut;
 
     TA_COUNTED_BY(transition_count) const ta_transition_id *transitions;
     uint32_t transition_count;
@@ -1347,16 +1442,18 @@ typedef struct {
     uint32_t history_count;
     TA_COUNTED_BY(state_count) const ta_state_id *states;
     uint32_t state_count;
+    ta_bytes list_names;
+    ta_bytes revision;
+    ta_bytes bytes;
 } ta_trace_record;
 
 /*
- * Writing a record cannot fail and cannot change the run. A sink must not
- * call back into the system for the actor that is running; it may read the
- * record, retain values it keeps, and inspect other actors.
+ * The text `text` of `record`, read in place from its bytes: borrowed from
+ * the ring until ta_system_tel_release(). Empty when the record does not
+ * carry it, and for a `text` that is not a ta_trace_text or a record that
+ * ta_system_tel_peek() did not answer. O(1); never allocates, never fails.
  */
-typedef struct ta_trace_sink_vtable {
-    void (*write)(void *self, TA_IN const ta_trace_record *record);
-} ta_trace_sink_vtable TA_VTABLE;
+TA_API ta_str ta_trace_record_text(TA_IN const ta_trace_record *record, ta_trace_text text);
 
 /*
  * Three masks of TA_TRACE_BIT(kind) (ADR 0073): core builds no record whose
@@ -1366,18 +1463,101 @@ typedef struct ta_trace_sink_vtable {
  * TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled.
  * Lifecycle records are outside macrosteps and never sampled: their bit is
  * looked up in `watched_kinds` when their context is watched, else in
- * `kinds`.
+ * `kinds`. A system starts with every mask zero, and builds nothing.
+ *
+ * `value_bytes` is the text kept of each value a record carries (a value,
+ * the data of an event a chart takes, raises or sends), at most
+ * telemetryValueBytes: core keeps the smaller. With 0, core renders none of
+ * them and calls no data model's value_text for them, and their texts are
+ * empty. The reason a failure gives, a fault's data and the data of an
+ * error event core raises (TA_EVENT_PLATFORM), is kept at
+ * telemetryValueBytes whatever `value_bytes` says: it is what a log of the
+ * failure says, and failures are rare.
  */
 typedef struct {
-    void *self;
-    const ta_trace_sink_vtable *v;
     uint32_t kinds;
     uint32_t watched_kinds;
     uint32_t unsampled_kinds;
-} ta_trace_sink TA_ADAPTER;
+    uint32_t value_bytes;
+} ta_trace_masks;
 
-/* The sink a system starts with: it wants nothing and writes nothing. */
-TA_API ta_trace_sink ta_null_trace_sink(void);
+/*
+ * Sets the masks (ADR 0098), between calls that run the system. Writing a
+ * record cannot fail and cannot change the run: a record the ring has no
+ * room for is dropped and counted. ta_system_destroy() sets every mask to
+ * zero first, so tearing a system down writes no record. TA_ERR_INVALID for
+ * a null argument, or for a mask that is not zero on a system created with
+ * telBytes 0, which has no ring to write to. Never allocates.
+ */
+TA_API ta_result ta_system_set_trace_masks(ta_system *system, TA_IN const ta_trace_masks *masks);
+
+/*
+ * The host's wall clock (ADR 0098): `wall_ns` answers nanoseconds since the
+ * Unix epoch. Core calls it once for each record it writes to tel, inside
+ * the macrostep, and stamps the record's `wall_ns`; a kind that is off, or a
+ * record that is dropped, costs no call. It must not call into the system.
+ */
+typedef struct ta_wall_clock_vtable {
+    uint64_t (*wall_ns)(void *self);
+} ta_wall_clock_vtable TA_VTABLE;
+typedef struct {
+    void *self;
+    /* Null uninstalls the clock: records then carry wall_ns 0. */
+    TA_OPTIONAL const ta_wall_clock_vtable *v;
+} ta_wall_clock TA_ADAPTER;
+
+/* Installs the clock; optional. TA_ERR_INVALID for a null system, or a `v`
+ * without `wall_ns`. */
+TA_API ta_result ta_system_set_wall_clock(ta_system *system, ta_wall_clock clock);
+
+/* What a tel record is: a trace record, or a report of records dropped. */
+typedef enum {
+    TA_TEL_TRACE = 0,
+    TA_TEL_DROPPED
+} ta_tel_kind TA_SYMBOLS("TA_TEL_");
+
+/*
+ * One record read from tel. `seq` numbers it in the ring, from 1; a record
+ * that was dropped still took its number, so the numbers have a gap
+ * exactly where a TA_TEL_DROPPED says there is one. TA_TEL_TRACE: `trace`.
+ * TA_TEL_DROPPED: `dropped` records were lost since the last report, the
+ * first of them with seq `first_dropped`; core writes it as soon as the ring
+ * has room again, before the next trace record.
+ */
+typedef struct {
+    ta_tel_kind kind;
+    uint64_t seq;
+    ta_trace_record trace;
+    uint64_t dropped;
+    uint64_t first_dropped;
+} ta_tel_record;
+
+/*
+ * Reads the oldest record on tel without releasing it (ADR 0098, ADR 0104).
+ * Its texts and lists point into the ring and stay valid until
+ * ta_system_tel_release(); reading again answers the same record. Never
+ * allocates. TA_ERR_NOT_FOUND when nothing is left to read or the system has
+ * no tel ring; TA_ERR_CORRUPT when the ring's bytes are not records core
+ * wrote, and then nothing more can be read; TA_ERR_INVALID for a null
+ * argument.
+ */
+TA_API ta_result ta_system_tel_peek(ta_system *system, TA_OUT TA_LIFETIME(system) ta_tel_record *out);
+/* Releases the record ta_system_tel_peek() answers, making room for core;
+ * answers as it does. */
+TA_API ta_result ta_system_tel_release(ta_system *system);
+
+/*
+ * The tel ring's state: its bytes (0 when there is none), the bytes written
+ * and not yet released, the seq the next record takes, and the records
+ * dropped since creation.
+ */
+typedef struct {
+    uint32_t capacity;
+    uint32_t used;
+    uint64_t next_seq;
+    uint64_t dropped;
+} ta_tel_status;
+TA_API ta_result ta_system_tel_status(const ta_system *system, TA_OUT ta_tel_status *out);
 
 /*
  * The definition lifecycle, told to the host (ADR 0079). REGISTERED fires
@@ -3227,8 +3407,8 @@ typedef struct {
     bool microstep_in_progress;
     /*
      * Where the paused macrostep stands (ADR 0083): the key and position of
-     * the PAUSED or STOPPED record its last run wrote, whether or not a sink
-     * wanted it. Between microsteps `position.at` is TA_TRACE_AT_NONE and
+     * the PAUSED or STOPPED record its last run wrote, whether or not the
+     * trace masks wanted it. Between microsteps `position.at` is TA_TRACE_AT_NONE and
      * `step.microstep` counts the microsteps done. Inside a microstep,
      * `position` names the phase and state (and, in transition content, the
      * transition), and `action` the unit it runs next: the next action of
@@ -3738,10 +3918,13 @@ TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
  * System parameters (ADR 0092): each is set once, when the system is
  * created, and never changes. A parameter bounds a limit or a buffer; the
  * buffers every run needs are allocated at creation (interpreter region 0,
- * the render area, the event-block cache), the ones only nested
+ * the render area, the event-block cache, the tel ring), the ones only nested
  * interpreters need on first use, up to their bound. ta_param_info_of()
  * gives each one's name, default, bounds and unit; names are lowerCamelCase,
- * for hosts to use as they are.
+ * for hosts to use as they are. Creation also checks the bounds between
+ * them (ADR 0098): telBytes is 0 or at least maxRecordBytes, and
+ * telemetryValueBytes is at most maxRecordBytes - 512, the room a trace
+ * record's fixed part and its names take; it names the one at fault.
  */
 typedef enum {
     TA_PARAM_MICROSTEP_LIMIT = 0,  /* microsteps per macrostep before a runaway (ADR 0075); 0: none */
@@ -3756,6 +3939,9 @@ typedef enum {
     TA_PARAM_MAX_ACTORS,           /* quota: live actors */
     TA_PARAM_MAX_PENDING_SENDS,    /* quota: pending delayed sends of one actor */
     TA_PARAM_MAX_DEFINITIONS,      /* quota: live definitions */
+    TA_PARAM_TEL_BYTES,            /* the tel ring (ADR 0098); 0: none, so no tracing; else at least maxRecordBytes */
+    TA_PARAM_MAX_RECORD_BYTES,     /* the largest record on a ring, header and tail included */
+    TA_PARAM_TELEMETRY_VALUE_BYTES,/* text kept of a value in a trace record; at most maxRecordBytes - 512 */
     TA_PARAM_COUNT
 } ta_param TA_SYMBOLS("TA_PARAM_");
 
@@ -3773,7 +3959,10 @@ enum TA_CONSTANTS_OF(ta_param_default, "TA_PARAM_DEFAULT_") {
     TA_PARAM_DEFAULT_INTERPRETER_NESTING = 4,
     TA_PARAM_DEFAULT_MAX_ACTORS = 2147483647,
     TA_PARAM_DEFAULT_MAX_PENDING_SENDS = 2147483647,
-    TA_PARAM_DEFAULT_MAX_DEFINITIONS = 2147483647
+    TA_PARAM_DEFAULT_MAX_DEFINITIONS = 2147483647,
+    TA_PARAM_DEFAULT_TEL_BYTES = 16384,
+    TA_PARAM_DEFAULT_MAX_RECORD_BYTES = 4096,
+    TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES = 1024
 };
 
 typedef struct { ta_param param; uint64_t value; } ta_param_value;
@@ -3908,11 +4097,6 @@ TA_API ta_result ta_system_register_io(ta_system *system, TA_IN const ta_io_regi
 TA_API ta_result ta_system_find_io(const ta_system *system, ta_atom type, TA_OUT uint32_t *index);
 /* Installs where <log> goes; without one, a <log> only evaluates its expr. */
 TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink);
-/*
- * Installs the trace sink (ADR 0067); ta_null_trace_sink() stops tracing.
- * TA_ERR_INVALID for a sink whose `v` or `v->write` is null.
- */
-TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink);
 /*
  * Installs the definition sink (ADR 0079); ta_null_definition_sink() stops
  * the notifications. TA_ERR_INVALID for a sink whose `v` or `v->notify` is

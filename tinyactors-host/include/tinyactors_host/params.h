@@ -12,9 +12,11 @@
 #include <stdint.h>
 
 typedef enum {
-    TAH_PARAM_VALUE_BYTES,           /* bytes of a value's JSON in a trace attribute or a log record */
+    TAH_PARAM_VALUE_BYTES,           /* bytes of a value's JSON in a trace attribute or a log record; core's
+                                        telemetryValueBytes follows it unless set (core ADR 0098) */
     TAH_PARAM_TRACE_STAGING_BYTES,   /* OTLP staging kept between turns; a turn past it ends early */
-    TAH_PARAM_RESUME_BUDGET,         /* microsteps one resume may run (core's `budget`) */
+    TAH_PARAM_RESUME_BUDGET,         /* microsteps one resume may run (core's `budget`); core's telBytes
+                                        holds one resume's records unless set (core ADR 0098) */
     TAH_PARAM_ACTION_BUDGET,         /* units of executable content per resume; 0: no limit */
     TAH_PARAM_RESUMES_PER_TURN,      /* runnable actors resumed in one turn */
     TAH_PARAM_DUE_BUDGET,            /* due sends dispatched in one turn */

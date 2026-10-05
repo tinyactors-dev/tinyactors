@@ -892,11 +892,18 @@ module TinyactorsTest
     # its chart's `datamodel` ("jq", "ecmascript", or none), and the invoker
     # is expected to compile the child with the adapter that datamodel names,
     # as datamodel_adapter does here.
+    # The bytes of the tel ring of a scenario's system (core ADR 0098).
+    TEL_BYTES = 1 << 20
+
     def system_handle
       @system ||= begin
         @creating_system = true
+        # A tel ring large enough that one call's trace records never fill
+        # it: a scenario that reads them compares every one (core ADR 0098).
+        params = [{ param: 'tel_bytes', value: TEL_BYTES }]
         system = core('ta_system_create',
-                      ta.system.create(config: { allocator: allocator.adapter, initial_time: 0 })).fetch(:out)
+                      ta.system.create(config: { allocator: allocator.adapter, initial_time: 0,
+                                                 params: params })).fetch(:out)
         @creating_system = false
         router = { '$adapter' => 'router.direct', 'config' => { 'system' => system } }
         core('ta_system_set_external_event_router',
@@ -1014,7 +1021,8 @@ module TinyactorsTest
     # ----------------------------------------------------------------------
     # Trace records (ADR 0067)
 
-    # Installs a trace.recording instrument as the system's trace sink.
+    # Installs a trace.recording instrument, which reads the system's tel
+    # ring (core ADR 0098) into its journal, and sets the system's masks.
     # `kinds:` lists the ta_trace_kind symbols it wants (every kind by
     # default), and `unsampled: true` also traces unsampled macrosteps. A
     # Trace of the run then compares its records, without PAUSED, RESUMED
@@ -1022,16 +1030,15 @@ module TinyactorsTest
     def recording_trace(kinds: nil, unsampled: false)
       @instruments['trace'] || begin
         sink = instrument('trace', 'trace.recording')
-        config = { system: system_handle }
-        config[:kinds] = kinds.map(&:to_s) if kinds
-        config[:unsampled] = true if unsampled
-        core('ta_system_set_trace_sink',
-             ta.system.set_trace_sink(system: system_handle, sink: sink.adapter(**config)))
+        args = { system: system_handle }
+        args[:kinds] = kinds.map(&:to_s) if kinds
+        args[:unsampled] = true if unsampled
+        sink.control('attach', **args)
         sink
       end
     end
 
-    # The records the trace sink wrote, oldest first, as the codec encodes
+    # The records core wrote to tel, oldest first, as the codec encodes
     # ta_trace_record. `since:` skips records up to that journal seq.
     def trace_records(since: nil)
       sink = @instruments['trace']
@@ -1461,19 +1468,38 @@ module TinyactorsTest
       @actor_labels[id] ||= "actor.#{@actor_labels.size + 1}"
     end
 
-    # Replaces runtime actor IDs in a journal entry by their labels.
+    # Replaces runtime actor IDs in a journal entry by their labels, and the
+    # session number inside a session ID's text.
     def label_actors(value, key = nil)
       case value
       when Hash then value.to_h { |name, inner| [name, label_actors(inner, name)] }
       when Array then value.map { |inner| label_actors(inner, key) }
-      when Integer, String
-        ACTOR_ID_KEYS.include?(key) && value.to_s.match?(/\A[1-9]\d*\z/) ? actor_label(Integer(value)) : value
+      when String
+        return label_session_text(value) if SESSION_TEXT_KEYS.include?(key)
+
+        label_actor_id(value, key)
+      when Integer then label_actor_id(value, key)
       else value
       end
     end
 
     # A session ID is the runtime ID its session started with (ADR 0066).
     ACTOR_ID_KEYS = %i[runtime parent actor session].freeze
+    # A trace record's sessions as text (core ADR 0098):
+    # <incarnation>.<session>.<family>, or the session's number alone.
+    SESSION_TEXT_KEYS = %i[session_id cause_session_id].freeze
+
+    def label_actor_id(value, key)
+      ACTOR_ID_KEYS.include?(key) && value.to_s.match?(/\A[1-9]\d*\z/) ? actor_label(Integer(value)) : value
+    end
+
+    # The session number in a session ID's text, as its label.
+    def label_session_text(text)
+      return actor_label(Integer(text)) if text.match?(/\A[1-9]\d*\z/)
+
+      match = text.match(/\A(\d+)\.([1-9]\d*)\.(.*)\z/m)
+      match ? "#{match[1]}.#{actor_label(Integer(match[2]))}.#{match[3]}" : text
+    end
 
     # Points `actor` at a new runtime ID (after a reload); its trace label stays.
     # Points an Actor at the session it has become. Load resolves the image's

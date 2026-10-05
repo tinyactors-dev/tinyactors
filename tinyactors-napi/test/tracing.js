@@ -588,6 +588,34 @@ async function stagingBound() {
   assert.ok(counts[0] > counts[1], `a small bound makes more requests: ${counts}`);
 }
 
+// One resume's records fit core's tel ring (core ADR 0098): the kernel reads
+// tel only between resumes, so with napi's defaults it sizes the ring from
+// resumeBudget and maxRecordBytes. A macrostep that raises an event 20
+// times, every record traced, loses nothing: no span says records were
+// dropped, and every microstep has its span.
+async function oneResumeFits() {
+  const system = createSystem();
+  const sink = recorder(system, { detail: 'full', values: true });
+  const definition = system.define(
+    statechart({ family: 'echo', revision: 'v1' })
+      .data('count', 0)
+      .state('idle', (s) => s
+        .on('go', (t) => t.assign('count', function () { return this.count + 1; }).raise('again'))
+        .on('again', (t) => t.when(function () { return this.count < 20; })
+          .assign('count', function () { return this.count + 1; }).raise('again'))),
+  );
+  const actor = system.spawn(definition);
+  await system.flush();
+  actor.post('go');
+  await system.flush();
+  const spans = sink.spans;
+  const dropped = spans.filter((span) => span.attributes['tinyactors.telemetry.dropped'] !== undefined);
+  assert.equal(dropped.length, 0, 'no span says records were dropped');
+  assert.equal(spans.filter((span) => span.name === 'scxml.microstep again').length, 19,
+    'every raised event has its microstep span');
+  system.close();
+}
+
 // The staging bound holds outside turns too (napi ADR 0036 section 2): a
 // burst of spawn() calls, each staging its lifecycle span outside any turn,
 // hands the sink a request as soon as the staging reaches the bound, so no
@@ -656,9 +684,10 @@ function defaultsVersion() {
       actionBudget: 1024, compileMessageBytes: 256, compileNearestBytes: 128, compileTextBytes: 1024,
       datamodelNameBytes: 32, dueBudget: 1024, eventBlockCache: 1024, eventNameDepth: 64,
       interpreterBytes: 65536, interpreterNesting: 4, maxActors: 2147483647, maxDefinitions: 2147483647,
-      maxPendingSends: 2147483647, maxQueuedMessages: 0, maxRetainedBytes: 0, messageBudget: 1024,
-      microstepLimit: 100000, registeredDatamodels: 8, renderBytes: 16384, resumeBudget: 64,
-      resumesPerTurn: 1024, traceStagingBytes: 1048576, valueBytes: 1024,
+      maxPendingSends: 2147483647, maxQueuedMessages: 0, maxRecordBytes: 4096, maxRetainedBytes: 0,
+      messageBudget: 1024, microstepLimit: 100000, registeredDatamodels: 8, renderBytes: 16384, resumeBudget: 64,
+      resumesPerTurn: 1024, telBytes: 16384, telemetryValueBytes: 1024, traceStagingBytes: 1048576,
+      valueBytes: 1024,
     },
   };
   const now = Object.fromEntries(Object.entries(parameterInfo()).map(([name, info]) => [name, info.default]));
@@ -860,6 +889,7 @@ async function watchAndSample() {
   await valuesAndLinks();
   await largeValues();
   await stagingBound();
+  await oneResumeFits();
   await stagingBoundOutsideTurns();
   await parameterResource();
   defaultsVersion();

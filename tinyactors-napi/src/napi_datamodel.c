@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "napi_system.h"
+#include "napi_trace.h"
 #include "values.h"
 
 /* ------------------------------------------------------------------------
@@ -1491,6 +1492,18 @@ static ta_op_status tna_dm_value_text(void *self, const ta_datamodel_value_text_
     if (!tna_value_ours(params->value)) {
         *params->fault = (ta_fault){ .code = TA_ERR_UNSUPPORTED,
                                      .message = { "javascript: not a JavaScript value", 34 } };
+        return TA_OP_ERROR;
+    }
+    if (params->trace_bytes != 0) {
+        /* Text for a trace record (core ADR 0098): JSON, as people read it,
+         * with a few bytes more than core keeps, so a cut shows. */
+        size_t limit = (size_t)params->trace_bytes + 4u;
+        size_t room = dm->wrapper->value_buffer_bytes;
+        bool cut = false;
+        if (tna_value_json(dm->wrapper, params->value, limit < room ? limit : room, params->out, &cut)) {
+            return TA_OP_OK;
+        }
+        *params->fault = (ta_fault){ .code = TA_ERR_UNSUPPORTED, .message = { "javascript: value has no text", 29 } };
         return TA_OP_ERROR;
     }
     tna_frame frame;

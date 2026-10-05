@@ -56,7 +56,6 @@ TAH_API uint32_t tah_version(void);
 #include "tinyactors_host/adapter_invoker.h"
 #include "tinyactors_host/adapter_io.h"
 #include "tinyactors_host/adapter_log.h"
-#include "tinyactors_host/adapter_trace.h"
 #include "tinyactors_host/allocator.h"
 #include "tinyactors_host/containers.h"
 #include "tinyactors_host/definitions.h"

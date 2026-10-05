@@ -87,13 +87,14 @@ static void tna_host_trace_id(void *self, uint8_t out[16]) {
 }
 
 /*
- * A value's JSON text, cut at the limit (`values: true`). It runs inside
- * the core call that wrote the record, as the JavaScript data model does;
- * JSON.stringify runs no chart code, and a toJSON that calls into the
- * system meets the reentrancy guard.
+ * A value's JSON text, cut at `limit` bytes, into the system's value buffer
+ * (napi ADR 0035): a <log> record's for the encoder, cut at valueBytes, and
+ * a trace record's for core, which asks the data model for it (core ADR
+ * 0098). It runs inside the core call that wants it, as the JavaScript data
+ * model does; JSON.stringify runs no chart code, and a toJSON that calls
+ * into the system meets the reentrancy guard.
  */
-static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out, bool *cut) {
-    tna_napi_system *wrapper = self;
+bool tna_value_json(tna_napi_system *wrapper, const ta_value *value, size_t limit, ta_str *out, bool *cut) {
     napi_env env = wrapper->env;
     napi_handle_scope scope = NULL;
     if (napi_open_handle_scope(env, &scope) != napi_ok) {
@@ -121,8 +122,7 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out, 
         size_t full = 0;
         size_t written = 0;
         if (napi_get_value_string_utf8(env, text, NULL, 0, &full) == napi_ok &&
-            napi_get_value_string_utf8(env, text, wrapper->trace_value, wrapper->value_bytes + 1u, &written) ==
-                napi_ok) {
+            napi_get_value_string_utf8(env, text, wrapper->trace_value, limit + 1u, &written) == napi_ok) {
             *out = (ta_str){ wrapper->trace_value, (uint32_t)written };
             *cut = written < full;
             ok = true;
@@ -136,6 +136,19 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out, 
     }
     napi_close_handle_scope(env, scope);
     return ok;
+}
+
+size_t tna_value_buffer_bytes(const tna_napi_system *wrapper) {
+    uint64_t telemetry = 0;
+    (void)ta_system_param(tah_system_core(wrapper->system), TA_PARAM_TELEMETRY_VALUE_BYTES, &telemetry);
+    size_t trace = (size_t)telemetry + 4u;
+    return trace > wrapper->value_bytes ? trace : wrapper->value_bytes;
+}
+
+/* A <log> record's value for the encoder (otlp.h), cut at valueBytes. */
+static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out, bool *cut) {
+    tna_napi_system *wrapper = self;
+    return tna_value_json(wrapper, value, wrapper->value_bytes, out, cut);
 }
 
 /* ------------------------------------------------------------------------
@@ -182,6 +195,7 @@ static napi_value tna_request_value(napi_env env, tah_otlp *otlp, size_t size, t
  * neither.
  */
 static napi_value tna_trace_bytes(napi_env env, tah_system *system) {
+    tah_system_drain_telemetry(system); /* core's records not read yet (core ADR 0098) */
     tah_otlp *otlp = tah_system_otlp(system);
     size_t traces = tah_otlp_traces_size(otlp);
     size_t logs = tah_otlp_logs_size(otlp);
@@ -209,6 +223,7 @@ void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
     if (!tah_system_tracing(system)) {
         return;
     }
+    tah_system_drain_telemetry(system);
     if (tah_otlp_staged_records(tah_system_otlp(system)) == 0) {
         tah_otlp_end_turn(tah_system_otlp(system));
         return;
@@ -249,6 +264,7 @@ bool tna_trace_flush_if_full(napi_env env, tna_napi_system *wrapper) {
         napi_is_exception_pending(env, &pending) != napi_ok || pending) {
         return true;
     }
+    tah_system_drain_telemetry(system);
     size_t staged = tah_otlp_traces_size(tah_system_otlp(system)) + tah_otlp_logs_size(tah_system_otlp(system));
     if (staged < tah_system_params(system)->values[TAH_PARAM_TRACE_STAGING_BYTES]) {
         return true;
@@ -308,15 +324,17 @@ static bool tna_set_resource(napi_env env, tah_system *system, napi_value pairs)
 
 /*
  * setTraceSink(installed, kinds, unsampled, values, links, resource, seed,
- * logLimit): installs the encoder and the sink adapter, or core's
- * null sink. Returns the bytes of the spans the previous sink left open,
- * ended now (marked incomplete), for the previous JavaScript sink, or
- * undefined.
+ * logLimit): installs the encoder, which the kernel feeds from core's tel
+ * ring, and sets the kinds core writes there (core ADR 0098), or sets none.
+ * Returns the bytes of the spans the previous sink left open, ended now
+ * (marked incomplete), for the previous JavaScript sink, or undefined.
  */
 /* What core is asked for: the user's masks, plus UNLOADED and DESTROYED,
  * which end a session's open span (the encoder writes their spans only
- * when they were asked for). */
-static tah_trace_masks tna_trace_masks_asked(const tah_trace_masks *masks, bool logs) {
+ * when they were asked for), and values only when the encoder puts them
+ * in attributes (`values`); core keeps at most telemetryValueBytes. */
+static ta_trace_masks tna_trace_masks_asked(const ta_trace_masks *masks, const tah_otlp *otlp) {
+    bool logs = tah_otlp_logs_enabled(otlp);
     uint32_t ending = TA_TRACE_BIT(TA_TRACE_UNLOADED) | TA_TRACE_BIT(TA_TRACE_DESTROYED);
     /* Logs need the failure records whatever the detail and the sampling
      * (core ADR 0072 section 2); the encoder turns them into spans only
@@ -325,13 +343,14 @@ static tah_trace_masks tna_trace_masks_asked(const tah_trace_masks *masks, bool 
                                    TA_TRACE_BIT(TA_TRACE_STOPPED) | TA_TRACE_BIT(TA_TRACE_LONG_MACROSTEP) |
                                    TA_TRACE_BIT(TA_TRACE_RUNAWAY)
                              : 0u;
-    return (tah_trace_masks){ .kinds = masks->kinds | ending | failures,
-                              .watched_kinds = masks->watched_kinds | ending | failures,
-                              .unsampled_kinds = masks->unsampled_kinds | failures };
+    return (ta_trace_masks){ .kinds = masks->kinds | ending | failures,
+                             .watched_kinds = masks->watched_kinds | ending | failures,
+                             .unsampled_kinds = masks->unsampled_kinds | failures,
+                             .value_bytes = tah_otlp_values(otlp) ? UINT32_MAX : 0u };
 }
 
 /* The masks and the sample ratio (parts per 10^9) in argv[0..3]. */
-static bool tna_trace_config(napi_env env, const napi_value *argv, tah_trace_masks *masks, uint32_t *parts) {
+static bool tna_trace_config(napi_env env, const napi_value *argv, ta_trace_masks *masks, uint32_t *parts) {
     return napi_get_value_uint32(env, argv[0], &masks->kinds) == napi_ok &&
            napi_get_value_uint32(env, argv[1], &masks->watched_kinds) == napi_ok &&
            napi_get_value_uint32(env, argv[2], &masks->unsampled_kinds) == napi_ok &&
@@ -353,7 +372,7 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, "reentrant", "setTraceSink cannot be called from inside a core call (ADR 0013)");
     }
     bool installed = false;
-    tah_trace_masks masks = { 0 };
+    ta_trace_masks masks = { 0 };
     uint32_t parts = 0;
     bool values = false;
     bool links = false;
@@ -379,12 +398,13 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
     /* The previous sink's open spans end now, for the previous JavaScript sink. */
     napi_value remaining = NULL;
     if (tah_system_tracing(system)) {
+        tah_system_drain_telemetry(system);
         tah_otlp_end_all(tah_system_otlp(system));
         remaining = tna_trace_bytes(env, system);
         tah_otlp_destroy(tah_system_otlp(system));
         tah_system_set_tracing(system, false);
     }
-    ta_result result = ta_system_set_trace_sink(tah_system_core(system), ta_null_trace_sink());
+    ta_result result = ta_system_set_trace_masks(tah_system_core(system), &(ta_trace_masks){ 0 });
     if (result == TA_OK && installed && (masks.kinds | masks.watched_kinds | masks.unsampled_kinds) != 0) {
         bool reserved = tah_otlp_init(tah_system_otlp(system),
                       &(tah_otlp_config){
@@ -411,8 +431,8 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
         }
         tah_otlp_set_wanted(tah_system_otlp(system), &masks);
         ta_system_set_trace_ratio(tah_system_core(system), parts, TNA_SAMPLE_WHOLE);
-        tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(tah_system_otlp(system)));
-        result = ta_system_set_trace_sink(tah_system_core(system), tah_trace_sink_adapter(system, &asked));
+        ta_trace_masks asked = tna_trace_masks_asked(&masks, tah_system_otlp(system));
+        result = ta_system_set_trace_masks(tah_system_core(system), &asked);
         if (result != TA_OK) {
             tah_otlp_destroy(tah_system_otlp(system));
             tah_system_set_tracing(system, false);
@@ -443,7 +463,7 @@ napi_value tna_configure_traces_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tah_system *system = wrapper->system;
-    tah_trace_masks masks = { 0 };
+    ta_trace_masks masks = { 0 };
     uint32_t parts = 0;
     if (argc < 4 || !tna_trace_config(env, argv, &masks, &parts)) {
         return tna_throw(env, "invalid", "configureTraces: expected (kinds, watchedKinds, unsampledKinds, sample)");
@@ -458,8 +478,8 @@ napi_value tna_configure_traces_method(napi_env env, napi_callback_info info) {
     }
     tah_otlp_set_wanted(tah_system_otlp(system), &masks);
     ta_system_set_trace_ratio(tah_system_core(system), parts, TNA_SAMPLE_WHOLE);
-    tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(tah_system_otlp(system)));
-    ta_system_set_trace_sink(tah_system_core(system), tah_trace_sink_adapter(system, &asked));
+    ta_trace_masks asked = tna_trace_masks_asked(&masks, tah_system_otlp(system));
+    (void)ta_system_set_trace_masks(tah_system_core(system), &asked);
     return undefined;
 }
 

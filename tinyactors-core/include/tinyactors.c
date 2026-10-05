@@ -3204,9 +3204,6 @@ TA_PRIVATE ta_byte_source ta_chunk_source_as_byte_source(ta_chunk_source *source
  *
  * Memory comes from the injected allocator (core ADR 0023). A ring's size
  * is fixed when the system is created (core ADR 0092).
- * Today's trace sink (core ADR 0067) is the idea this ring generalizes:
- * a buffer the reader drains when it chooses, instead of a callback per
- * record.
  */
 
 
@@ -3578,11 +3575,27 @@ typedef enum {
 /** `tel.trace`'s own flags, bits 0..7 of the header's `flags`. */
 typedef enum {
     /**
-     * value_text was cut, or a list in the tail was cut to fit maxRecordBytes
+     * something was cut: a value, the event's data, a list, or a name, to fit
+     * telemetryValueBytes or maxRecordBytes
      */
     TA_TEL_TRACE_FLAG_TRUNCATED = 1 << 0,
     /** an effect a replaying session did not perform */
     TA_TEL_TRACE_FLAG_SUPPRESSED = 1 << 1,
+    /** the event_* fields hold the event the kind names */
+    TA_TEL_TRACE_FLAG_EVENT = 1 << 2,
+    /**
+     * the kind carries a value; value_text holds its text unless
+     * telemetryValueBytes is 0
+     */
+    TA_TEL_TRACE_FLAG_VALUE = 1 << 3,
+    /** the fault_* fields hold the kind's fault */
+    TA_TEL_TRACE_FLAG_FAULT = 1 << 4,
+    /** value_text was cut */
+    TA_TEL_TRACE_FLAG_VALUE_CUT = 1 << 5,
+    /** event_data was cut */
+    TA_TEL_TRACE_FLAG_EVENT_DATA_CUT = 1 << 6,
+    /** a list was cut to fit maxRecordBytes */
+    TA_TEL_TRACE_FLAG_LISTS_CUT = 1 << 7,
 } ta_tel_trace_flag;
 
 /** What _event.type says (SCXML 5.10.1). Stored as uint8_t. */
@@ -3872,7 +3885,7 @@ typedef struct {
     uint64_t data;
     /** with replaying_from_clock: the replayed run’s start */
     uint64_t clock;
-    /** a checkpoint c2h.state wrote, to restore; 0 for none */
+    /** a checkpoint c2h.state wrote, to seed the session from; 0 for none */
     uint64_t state;
     /**
      * c2h.load_needed seq when answering a virtual-family load; 0 for an
@@ -4608,6 +4621,16 @@ typedef struct {
      * parent span ID (W3C parent-id), or 0
      */
     uint64_t cause_macrostep;
+    /** the session's runtime actor ID, or 0 */
+    uint64_t actor;
+    /** the definition's ID */
+    uint64_t definition;
+    /** the send ID's handle, for SENT and its kin; send_id is its text */
+    uint64_t send;
+    /**
+     * the invocation's handle, for INVOKED and its kin; invoke_id is its text
+     */
+    uint64_t invoke;
     /** from 1 per macrostep; 0 for the macrostep itself */
     uint32_t microstep;
     /**
@@ -4615,12 +4638,43 @@ typedef struct {
      * cause_macrostep, the cause's step key, whose span ID is the parent span
      */
     uint32_t cause_microstep;
+    /** the state at the record's position */
     uint32_t state;
+    /** the transition at the record's position */
     uint32_t transition;
+    /** the action at the record's position */
     uint32_t action;
+    /**
+     * the <foreach> iteration at the record's position; on FOREACH, the
+     * iteration it names
+     */
     uint32_t iteration;
+    /**
+     * the state the kind names: a final state, a guard's source, a <data>'s
+     * owner, an operator transition's source
+     */
+    uint32_t subject_state;
+    /** the action the kind names: ACTION_FAILED's */
+    uint32_t subject_action;
+    /** the expression the kind names */
+    uint32_t expr;
+    /** ABANDONED: the internal events it discarded */
+    uint32_t dropped;
     /** the fault’s code, with fault_detail */
     int32_t fault_code;
+    /** transitions in list_ids */
+    uint32_t transition_count;
+    /** exited states in list_ids */
+    uint32_t exited_count;
+    /** entered states in list_ids */
+    uint32_t entered_count;
+    /** history states in list_ids */
+    uint32_t history_count;
+    /**
+     * states the kind names in list_ids: a configuration, or an operator
+     * transition's targets
+     */
+    uint32_t state_count;
     /** ta_trace_kind */
     uint16_t trace_kind;
     /** ta_trace_at */
@@ -4632,74 +4686,120 @@ typedef struct {
     uint8_t trace_detail;
     /** RUNAWAY only: what stopped the input */
     uint8_t runaway_cause; /* ta_record_runaway_cause */
-    uint8_t pad19[1];
-    /** the session’s family/name */
+    /** the event's type */
+    uint8_t event_type; /* ta_record_event_type */
+    /** the u32 IDs of the lists, back to back (see above) */
+    ta_span32 list_ids; /* bytes */
+    /** the session's ID as text, as _sessionid holds it */
+    ta_span32 session_id; /* text */
+    /** the causing session's ID as text; empty when there is no cause */
+    ta_span32 cause_session_id; /* text */
+    /** the session’s family/name, when it has a named address */
     ta_span32 address; /* text */
+    /** the definition's family, on the kinds that open a run */
+    ta_span32 family_name; /* text */
+    /** the definition's revision, on the kinds that open a run */
+    ta_span32 revision; /* bytes */
+    /** the definition's document name, on the kinds that open a run */
+    ta_span32 document_name; /* text */
     /**
-     * the definition’s document name and source, on the kinds that open a run
+     * where the definition's first state was written, on the kinds that open a
+     * run
      */
-    ta_span32 definition; /* text */
+    ta_span32 source; /* text */
     /** the name of `state` */
     ta_span32 state_name; /* text */
     /** the name of `transition` */
     ta_span32 transition_name; /* text */
     /** the name of `action` */
     ta_span32 action_name; /* text */
-    /** the event name, or the name the kind carries */
+    /** the name of `subject_state` */
+    ta_span32 subject_state_name; /* text */
+    /** the name of `subject_action` */
+    ta_span32 subject_action_name; /* text */
+    /** the name the kind carries: a <data>'s */
     ta_span32 name; /* text */
+    /** the event's dotted name */
+    ta_span32 event_name; /* text */
+    /** the event's sendid */
+    ta_span32 event_send_id; /* text */
+    /** the event's invokeid */
+    ta_span32 event_invoke_id; /* text */
+    /** the event's data as text, cut at telemetryValueBytes */
+    ta_span32 event_data; /* text */
     /** the send ID, for SENT and its kin */
     ta_span32 send_id; /* text */
     /** the invoke ID, for INVOKED and its kin */
     ta_span32 invoke_id; /* text */
+    /** the kind's value as text, cut at telemetryValueBytes */
     ta_span32 value_text; /* text */
     /** the fault’s error event name */
     ta_span32 fault_detail; /* text */
     ta_span32 fault_message; /* text */
-    /**
-     * the microstep’s transitions: a u32 count, then per transition its u32 ID,
-     * then its name as a u32 length and UTF-8 bytes
-     */
-    ta_span32 transitions; /* bytes */
-    /**
-     * exited, entered, history, states: per list a u32 count, then per state
-     * its u32 ID, then its name as a u32 length and UTF-8 bytes
-     */
-    ta_span32 states; /* bytes */
-    uint8_t pad_end[4];
+    /** the fault's data as text, cut at telemetryValueBytes */
+    ta_span32 fault_data; /* text */
+    /** the names of the list entries (see above) */
+    ta_span32 list_names; /* bytes */
 } ta_tel_trace;
-_Static_assert(sizeof(ta_tel_trace) == 224, "tel.trace");
+_Static_assert(sizeof(ta_tel_trace) == 384, "tel.trace");
 _Static_assert(offsetof(ta_tel_trace, wall_ns) == 32, "tel.trace wall_ns");
 _Static_assert(offsetof(ta_tel_trace, macrostep) == 40, "tel.trace macrostep");
 _Static_assert(offsetof(ta_tel_trace, trace_id_high) == 48, "tel.trace trace_id_high");
 _Static_assert(offsetof(ta_tel_trace, trace_id_low) == 56, "tel.trace trace_id_low");
 _Static_assert(offsetof(ta_tel_trace, cause_session) == 64, "tel.trace cause_session");
 _Static_assert(offsetof(ta_tel_trace, cause_macrostep) == 72, "tel.trace cause_macrostep");
-_Static_assert(offsetof(ta_tel_trace, microstep) == 80, "tel.trace microstep");
-_Static_assert(offsetof(ta_tel_trace, cause_microstep) == 84, "tel.trace cause_microstep");
-_Static_assert(offsetof(ta_tel_trace, state) == 88, "tel.trace state");
-_Static_assert(offsetof(ta_tel_trace, transition) == 92, "tel.trace transition");
-_Static_assert(offsetof(ta_tel_trace, action) == 96, "tel.trace action");
-_Static_assert(offsetof(ta_tel_trace, iteration) == 100, "tel.trace iteration");
-_Static_assert(offsetof(ta_tel_trace, fault_code) == 104, "tel.trace fault_code");
-_Static_assert(offsetof(ta_tel_trace, trace_kind) == 108, "tel.trace trace_kind");
-_Static_assert(offsetof(ta_tel_trace, position) == 110, "tel.trace position");
-_Static_assert(offsetof(ta_tel_trace, result) == 111, "tel.trace result");
-_Static_assert(offsetof(ta_tel_trace, trace_flags) == 112, "tel.trace trace_flags");
-_Static_assert(offsetof(ta_tel_trace, trace_detail) == 113, "tel.trace trace_detail");
-_Static_assert(offsetof(ta_tel_trace, runaway_cause) == 114, "tel.trace runaway_cause");
-_Static_assert(offsetof(ta_tel_trace, address) == 116, "tel.trace address");
-_Static_assert(offsetof(ta_tel_trace, definition) == 124, "tel.trace definition");
-_Static_assert(offsetof(ta_tel_trace, state_name) == 132, "tel.trace state_name");
-_Static_assert(offsetof(ta_tel_trace, transition_name) == 140, "tel.trace transition_name");
-_Static_assert(offsetof(ta_tel_trace, action_name) == 148, "tel.trace action_name");
-_Static_assert(offsetof(ta_tel_trace, name) == 156, "tel.trace name");
-_Static_assert(offsetof(ta_tel_trace, send_id) == 164, "tel.trace send_id");
-_Static_assert(offsetof(ta_tel_trace, invoke_id) == 172, "tel.trace invoke_id");
-_Static_assert(offsetof(ta_tel_trace, value_text) == 180, "tel.trace value_text");
-_Static_assert(offsetof(ta_tel_trace, fault_detail) == 188, "tel.trace fault_detail");
-_Static_assert(offsetof(ta_tel_trace, fault_message) == 196, "tel.trace fault_message");
-_Static_assert(offsetof(ta_tel_trace, transitions) == 204, "tel.trace transitions");
-_Static_assert(offsetof(ta_tel_trace, states) == 212, "tel.trace states");
+_Static_assert(offsetof(ta_tel_trace, actor) == 80, "tel.trace actor");
+_Static_assert(offsetof(ta_tel_trace, definition) == 88, "tel.trace definition");
+_Static_assert(offsetof(ta_tel_trace, send) == 96, "tel.trace send");
+_Static_assert(offsetof(ta_tel_trace, invoke) == 104, "tel.trace invoke");
+_Static_assert(offsetof(ta_tel_trace, microstep) == 112, "tel.trace microstep");
+_Static_assert(offsetof(ta_tel_trace, cause_microstep) == 116, "tel.trace cause_microstep");
+_Static_assert(offsetof(ta_tel_trace, state) == 120, "tel.trace state");
+_Static_assert(offsetof(ta_tel_trace, transition) == 124, "tel.trace transition");
+_Static_assert(offsetof(ta_tel_trace, action) == 128, "tel.trace action");
+_Static_assert(offsetof(ta_tel_trace, iteration) == 132, "tel.trace iteration");
+_Static_assert(offsetof(ta_tel_trace, subject_state) == 136, "tel.trace subject_state");
+_Static_assert(offsetof(ta_tel_trace, subject_action) == 140, "tel.trace subject_action");
+_Static_assert(offsetof(ta_tel_trace, expr) == 144, "tel.trace expr");
+_Static_assert(offsetof(ta_tel_trace, dropped) == 148, "tel.trace dropped");
+_Static_assert(offsetof(ta_tel_trace, fault_code) == 152, "tel.trace fault_code");
+_Static_assert(offsetof(ta_tel_trace, transition_count) == 156, "tel.trace transition_count");
+_Static_assert(offsetof(ta_tel_trace, exited_count) == 160, "tel.trace exited_count");
+_Static_assert(offsetof(ta_tel_trace, entered_count) == 164, "tel.trace entered_count");
+_Static_assert(offsetof(ta_tel_trace, history_count) == 168, "tel.trace history_count");
+_Static_assert(offsetof(ta_tel_trace, state_count) == 172, "tel.trace state_count");
+_Static_assert(offsetof(ta_tel_trace, trace_kind) == 176, "tel.trace trace_kind");
+_Static_assert(offsetof(ta_tel_trace, position) == 178, "tel.trace position");
+_Static_assert(offsetof(ta_tel_trace, result) == 179, "tel.trace result");
+_Static_assert(offsetof(ta_tel_trace, trace_flags) == 180, "tel.trace trace_flags");
+_Static_assert(offsetof(ta_tel_trace, trace_detail) == 181, "tel.trace trace_detail");
+_Static_assert(offsetof(ta_tel_trace, runaway_cause) == 182, "tel.trace runaway_cause");
+_Static_assert(offsetof(ta_tel_trace, event_type) == 183, "tel.trace event_type");
+_Static_assert(offsetof(ta_tel_trace, list_ids) == 184, "tel.trace list_ids");
+_Static_assert(offsetof(ta_tel_trace, session_id) == 192, "tel.trace session_id");
+_Static_assert(offsetof(ta_tel_trace, cause_session_id) == 200, "tel.trace cause_session_id");
+_Static_assert(offsetof(ta_tel_trace, address) == 208, "tel.trace address");
+_Static_assert(offsetof(ta_tel_trace, family_name) == 216, "tel.trace family_name");
+_Static_assert(offsetof(ta_tel_trace, revision) == 224, "tel.trace revision");
+_Static_assert(offsetof(ta_tel_trace, document_name) == 232, "tel.trace document_name");
+_Static_assert(offsetof(ta_tel_trace, source) == 240, "tel.trace source");
+_Static_assert(offsetof(ta_tel_trace, state_name) == 248, "tel.trace state_name");
+_Static_assert(offsetof(ta_tel_trace, transition_name) == 256, "tel.trace transition_name");
+_Static_assert(offsetof(ta_tel_trace, action_name) == 264, "tel.trace action_name");
+_Static_assert(offsetof(ta_tel_trace, subject_state_name) == 272, "tel.trace subject_state_name");
+_Static_assert(offsetof(ta_tel_trace, subject_action_name) == 280, "tel.trace subject_action_name");
+_Static_assert(offsetof(ta_tel_trace, name) == 288, "tel.trace name");
+_Static_assert(offsetof(ta_tel_trace, event_name) == 296, "tel.trace event_name");
+_Static_assert(offsetof(ta_tel_trace, event_send_id) == 304, "tel.trace event_send_id");
+_Static_assert(offsetof(ta_tel_trace, event_invoke_id) == 312, "tel.trace event_invoke_id");
+_Static_assert(offsetof(ta_tel_trace, event_data) == 320, "tel.trace event_data");
+_Static_assert(offsetof(ta_tel_trace, send_id) == 328, "tel.trace send_id");
+_Static_assert(offsetof(ta_tel_trace, invoke_id) == 336, "tel.trace invoke_id");
+_Static_assert(offsetof(ta_tel_trace, value_text) == 344, "tel.trace value_text");
+_Static_assert(offsetof(ta_tel_trace, fault_detail) == 352, "tel.trace fault_detail");
+_Static_assert(offsetof(ta_tel_trace, fault_message) == 360, "tel.trace fault_message");
+_Static_assert(offsetof(ta_tel_trace, fault_data) == 368, "tel.trace fault_data");
+_Static_assert(offsetof(ta_tel_trace, list_names) == 376, "tel.trace list_names");
 
 /** `tel.dropped` (0x0302, on tel): Telemetry records were dropped. */
 typedef struct {
@@ -4742,6 +4842,8 @@ _Static_assert(offsetof(ta_tel_dropped, first_seq) == 40, "tel.dropped first_seq
  *   `out.size`. The `kind`, `size`, `seq` and span fields of `fixed` are
  *   ignored. `fixed` may be `out.bytes` itself, so a producer can build
  *   the fixed part in the reservation; the texts must not lie in `out`.
+ *   Texts that lie end to end in the caller's memory, as a producer that
+ *   composes them in catalog order lays them, are copied as one run.
  * - A record with text or bytes has `ta_<ring>_<name>_texts`: a `ta_str`
  *   per text field and a `ta_bytes` per bytes field, named after it. Its
  *   `ta_<ring>_<name>_size(texts, &size)` answers the bytes to reserve:
@@ -6112,43 +6214,63 @@ TA_PRIVATE inline const ta_c2h_load_result *ta_c2h_load_result_from_view(const t
  * tail; a writer borrows them for one call.
  */
 typedef struct {
-    /** the session’s family/name */
+    /** the u32 IDs of the lists, back to back (see above) */
+    ta_bytes list_ids;
+    /** the session's ID as text, as _sessionid holds it */
+    ta_str session_id;
+    /** the causing session's ID as text; empty when there is no cause */
+    ta_str cause_session_id;
+    /** the session’s family/name, when it has a named address */
     ta_str address;
+    /** the definition's family, on the kinds that open a run */
+    ta_str family_name;
+    /** the definition's revision, on the kinds that open a run */
+    ta_bytes revision;
+    /** the definition's document name, on the kinds that open a run */
+    ta_str document_name;
     /**
-     * the definition’s document name and source, on the kinds that open a run
+     * where the definition's first state was written, on the kinds that open a
+     * run
      */
-    ta_str definition;
+    ta_str source;
     /** the name of `state` */
     ta_str state_name;
     /** the name of `transition` */
     ta_str transition_name;
     /** the name of `action` */
     ta_str action_name;
-    /** the event name, or the name the kind carries */
+    /** the name of `subject_state` */
+    ta_str subject_state_name;
+    /** the name of `subject_action` */
+    ta_str subject_action_name;
+    /** the name the kind carries: a <data>'s */
     ta_str name;
+    /** the event's dotted name */
+    ta_str event_name;
+    /** the event's sendid */
+    ta_str event_send_id;
+    /** the event's invokeid */
+    ta_str event_invoke_id;
+    /** the event's data as text, cut at telemetryValueBytes */
+    ta_str event_data;
     /** the send ID, for SENT and its kin */
     ta_str send_id;
     /** the invoke ID, for INVOKED and its kin */
     ta_str invoke_id;
+    /** the kind's value as text, cut at telemetryValueBytes */
     ta_str value_text;
     /** the fault’s error event name */
     ta_str fault_detail;
     ta_str fault_message;
-    /**
-     * the microstep’s transitions: a u32 count, then per transition its u32 ID,
-     * then its name as a u32 length and UTF-8 bytes
-     */
-    ta_bytes transitions;
-    /**
-     * exited, entered, history, states: per list a u32 count, then per state
-     * its u32 ID, then its name as a u32 length and UTF-8 bytes
-     */
-    ta_bytes states;
+    /** the fault's data as text, cut at telemetryValueBytes */
+    ta_str fault_data;
+    /** the names of the list entries (see above) */
+    ta_bytes list_names;
 } ta_tel_trace_texts;
 
 /**
  * Answers in `*out` the bytes a `tel.trace` record with `texts` takes: its
- * fixed part, 224 bytes, plus their lengths, rounded up to 8. Never allocates;
+ * fixed part, 384 bytes, plus their lengths, rounded up to 8. Never allocates;
  * may run inside a macrostep. Answers `TA_ERR_INVALID`, and does not write
  * `*out`, when `texts` is NULL, a text has a length but no bytes, or the record
  * would exceed the largest size a `u32` holds.
@@ -7133,68 +7255,326 @@ TA_PRIVATE uint32_t ta_trie_path(const ta_trie *trie, ta_trie_id id, ta_atom out
 
 /* ta_event_retain() and ta_event_release() are public (ADR 0050, ADR 0065). */
 
-
-
-/*
- * Tracing (ADR 0067): the sink a system writes records to, and the rules
- * every call site shares. The interpreter builds the records; this module
- * decides which ones are built at all.
+/**
+ * @file trace.h
+ *
+ * # Tracing: core's decisions as self-contained records on `tel`
+ *
+ * Core reports what it decided and the data it changed (ADR 0067) as
+ * `tel.trace` records on the system's `tel` ring, a lossy `ta_ring` (ADR
+ * 0098). This unit decides which records are built, builds each one with
+ * every name and value as text beside the IDs it names, stamps it with the
+ * host's wall clock, and writes it to the ring; the interpreter, actors,
+ * session images and the system say what happened, as a `ta_trace_entry`.
+ * It also reads records back for the host (`ta_system_tel_peek`, which
+ * decodes a record's IDs and flags and leaves its texts in the ring for
+ * `ta_trace_record_text`), and holds trace contexts: `traceparent` text,
+ * the trace-ID generator and sampling (ADR 0073).
+ *
+ * ## The control block and the ring
+ *
+ * The system's control block holds the `tel` ring: its positions (`head`,
+ * `tail`, the next seq) and its dropped count, which is what a host reads
+ * of it (`ta_system_tel_status`). `ta_trace_open` makes the ring at system
+ * creation, `telBytes` bytes with records of at most `maxRecordBytes`
+ * (both rounded down to a multiple of 8), beside a scratch area of
+ * `maxRecordBytes` where a record's composed texts are laid out before it
+ * is reserved. With `telBytes` 0 there is neither, and the masks stay zero:
+ * `ta_system_set_trace_masks` refuses anything else.
+ *
+ * ## Contract and invariants
+ *
+ * - **Masks decide what is built.** Three masks of `TA_TRACE_BIT(kind)`
+ *   (ADR 0073): a macrostep takes `kinds`, `watched_kinds` or
+ *   `unsampled_kinds` from its context at MACROSTEP_BEGIN
+ *   (`ta_trace_macrostep_kinds`); a lifecycle record is looked up in
+ *   `watched_kinds` or `kinds` (`ta_trace_lifecycle_wanted`). A kind that
+ *   is off costs the caller one test, before it builds anything, so the hot
+ *   path has no branch for a missing ring.
+ * - **A record is self-contained.** Beside each ID it carries the name:
+ *   the session's ID as text (`<incarnation>.<session>.<family>`, as
+ *   `_sessionid` holds it, or the decimal session when its family is
+ *   unknown), its named address, the state, transition and action at the
+ *   position and the ones the kind names, the event's name, sendid and
+ *   invokeid, the send and invoke IDs, the fault's error event name, and
+ *   every list entry. A state's name is its author ID; a transition's is
+ *   its label, as "idle → busy on go [guarded]", "busy on poke
+ *   (internal)", "initial of p → a" or "initial of the document → a"; an
+ *   action's is its element and its block, as "<assign> in onentry of
+ *   busy" or "<raise> in then of <if> in onexit of idle". The kinds that
+ *   open a run (SPAWNED, LOADED, MACROSTEP_BEGIN, the DEFINITION_* kinds)
+ *   also carry the definition's family, revision, document name and the
+ *   source its first state was written in. A record carries no atom: an
+ *   atom means nothing outside the process, so a session's family is in
+ *   its ID text.
+ * - **Values are text.** A value, the event's data and the fault's data
+ *   are rendered by the actor's data model (`value_text` with
+ *   `trace_bytes`) and cut at the masks' `value_bytes` on a UTF-8 boundary,
+ *   setting `value_cut` or `event_data_cut`. `ta_system_set_trace_masks`
+ *   keeps at most `telemetryValueBytes` of it; with 0 no data model is
+ *   asked and no value is rendered. The reason a failure gives (the
+ *   fault's data, an error event's data) is cut at `telemetryValueBytes`
+ *   whatever the masks say: a log of the failure needs it. Each text is
+ *   copied into the scratch area as soon as it is rendered, so a data
+ *   model may render every value of a record into one buffer. A record never carries a value
+ *   reference: a dropped record could not hand it back.
+ * - **A record fits `maxRecordBytes`.** Its texts are cut in this order
+ *   until they fit beside the 384-byte fixed part: the value, the event's
+ *   data, the fault's data and message, the source, the document name, then
+ *   the rest from the last. The lists take what is left, whole from the
+ *   first, the last list cut first; the counts say how many entries are
+ *   there. Any cut sets `truncated`.
+ * - **The ring is lossy.** A full ring drops the record, counts it and
+ *   consumes its seq. Before the next record, core reserves a `tel.dropped`
+ *   report and only then takes the drops into it, so a refused report is
+ *   counted with the rest; the ring's seqs have a gap exactly where a
+ *   report says there is one.
+ * - **A record is measured once and written once.** Its texts are composed
+ *   into the scratch area, cut to fit and summed by `ta_trace_fit`; the
+ *   record is reserved at that size, its fixed part filled in the
+ *   reservation, and the codec copies the texts behind it, the ones
+ *   composed end to end in one run.
+ * - **Texts consecutive records repeat are kept, not composed again:** the
+ *   session's ID text of the last session named, the last transition label
+ *   and the last action label composed (a microstep's records name its
+ *   transition in the list, the position and an action's label), and the
+ *   document name and source of the last definition a record that opens a
+ *   run named. Labels and facts are keyed by the definition's ID and
+ *   forgotten when the definition is freed (`ta_trace_forget_definition`),
+ *   so no record names another definition's.
+ * - **The clock is called once per record written,** after its room is
+ *   reserved, so a dropped record or a kind that is off costs no call.
+ *   Without a clock, `wall_ns` is 0.
+ * - **Every record is committed when it is written,** so a host reading
+ *   between calls sees all of them.
+ *
+ * ## Memory
+ *
+ * The ring's buffer and the scratch area come from the system's allocator
+ * in `ta_trace_open`, at creation, and go in `ta_trace_close`. The kept
+ * session text and labels are copies in `ta_tracer`, part of the system;
+ * the kept facts borrow the definition's texts until it is freed. Nothing
+ * else here allocates: building and writing a record (`ta_trace_write`,
+ * `ta_trace_lifecycle`) only fills the scratch area and the ring, so it
+ * may run inside a macrostep. A record borrows what it names (atom texts,
+ * the definition, the event) only for the call; the data model's text of a
+ * value is copied into the scratch area before the data model is called
+ * again. A record read with
+ * `ta_system_tel_peek`, and every text `ta_trace_record_text` answers,
+ * point into the ring until it is released.
+ *
+ * ## Complexity
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | the mask tests | O(1) |
+ * | `ta_trace_write` | O(the record's size) plus one `value_text` per value, and per action label the depth of its blocks |
+ * | `ta_system_tel_peek`, `ta_system_tel_release` | O(1) per record, plus the pads skipped |
+ * | `ta_trace_record_text` | O(1) |
+ * | `ta_trace_forget_definition` | O(1) |
+ * | `ta_trace_open`, `ta_trace_close` | two allocations, two frees |
+ *
+ * ## Failure
+ *
+ * Writing a record cannot fail and cannot change the run: a record without
+ * room is dropped and counted, a value its data model cannot render is left
+ * empty, and a text that does not fit is cut. `ta_trace_open` answers
+ * `TA_ERR_NOMEM` when the allocator refuses, freeing what it made.
+ *
+ * ## Users
+ *
+ * The interpreter (macrosteps, microsteps, guards, actions), actors
+ * (SPAWNED, DESTROYED, WITHDRAWN), session images (LOADED, UNLOADED), the
+ * system (the DEFINITION_* kinds; teardown sets the masks to zero first,
+ * so a system being destroyed writes nothing), and the host,
+ * which reads `tel` between calls: the kernel's OTLP encoder, the test
+ * host's journal. ADRs 0067, 0072, 0073, 0080, 0082, 0098, 0104.
  */
 
+
+typedef struct ta_actor ta_actor;
+
+/** A trace record's fixed part, in bytes: the size of `ta_tel_trace`. */
+#define TA_TRACE_FIXED_BYTES 384u
+/** The longest session ID text a record carries; a longer one is the session's number. */
+#define TA_TRACE_SESSION_TEXT 255u
+/** What `telemetryValueBytes` leaves of `maxRecordBytes`: the fixed part and room for names. */
+#define TA_TRACE_RESERVED_BYTES 512u
+
+/** The longest transition or action label the tracer keeps for the records that follow. */
+#define TA_TRACE_LABEL_TEXT 255u
+
+/** What a kept label names: a definition (0: nothing) and a transition or action of it. */
+typedef struct {
+    ta_definition_id definition;
+    uint32_t id;
+} ta_trace_label_key;
+
+/** The last label composed of one sort, and what it names. */
+typedef struct {
+    ta_trace_label_key key;
+    uint32_t len;
+    char text[TA_TRACE_LABEL_TEXT];
+} ta_trace_label;
+
+/** The texts of the last definition a record that opens a run named, looked up once. */
+typedef struct {
+    /** The definition they are of; 0 for none. */
+    ta_definition_id definition;
+    /** Its document name and the source its first state was written in; borrowed from the definition. */
+    ta_str document_name;
+    ta_str source;
+} ta_trace_facts;
+
+/**
+ * The system's tracing state, beside the control block that holds the
+ * ring: the masks, the clock, the scratch area and the value limit, and
+ * the texts consecutive records repeat.
+ */
+typedef struct {
+    ta_trace_masks masks;
+    ta_wall_clock clock;
+    /** `maxRecordBytes` bytes where a record's composed texts are laid out; NULL without a ring. */
+    unsigned char *scratch;
+    uint32_t scratch_bytes;
+    /** `telemetryValueBytes`: the most of a value's text the masks may ask for. */
+    uint32_t value_bytes;
+    /** The session whose ID text `session_text` holds, and its family: most
+     * records in a row are one session's, so its text is written once. */
+    uint64_t text_session;
+    ta_atom text_family;
+    uint32_t session_text_len;
+    char session_text[TA_TRACE_SESSION_TEXT];
+    /** The last transition label and the last action label composed: a
+     * microstep's records name its transition three times (the list, the
+     * position, inside an action's label) and its actions in turn. */
+    ta_trace_label transition_label;
+    ta_trace_label action_label;
+    /** The definition facts the last record that opened a run carried. */
+    ta_trace_facts facts;
+} ta_tracer;
+
+/** Whether a context has a trace ID. */
 TA_PRIVATE inline bool ta_trace_context_empty(const ta_trace_context *context) {
     return context->trace_id_high == 0 && context->trace_id_low == 0;
 }
 
+/** Whether a parent carries nothing at all. */
 TA_PRIVATE inline bool ta_trace_parent_empty(const ta_trace_parent *parent) {
     return ta_trace_context_empty(&parent->context) && parent->context.flags == 0 && parent->cause.session == 0 &&
            parent->cause.macrostep == 0 && parent->cause.microstep == 0;
 }
 
-/*
+/**
  * The kinds a macrostep under `context` builds (ADR 0073 section 4):
  * `unsampled_kinds` when it has a trace ID that is not sampled, otherwise
- * `watched_kinds` when it is marked watched, and `kinds` when not.
+ * `watched_kinds` when it is marked watched, and `kinds` when not. Never
+ * allocates.
  */
-TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context);
+TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_masks *masks, const ta_trace_context *context);
 
-/* Whether the sink wants lifecycle record `kind` under `context`: from
- * `watched_kinds` when the context is watched, else from `kinds`. Lifecycle
- * records are not sampled (ADR 0073 section 4). */
-TA_PRIVATE inline bool ta_trace_lifecycle_wanted(const ta_trace_sink *sink, ta_trace_kind kind,
+/** Whether lifecycle record `kind` is wanted under `context`: from
+ * `watched_kinds` when the context is watched, else from `kinds`.
+ * Lifecycle records are not sampled (ADR 0073 section 4). */
+TA_PRIVATE inline bool ta_trace_lifecycle_wanted(const ta_trace_masks *masks, ta_trace_kind kind,
                                              const ta_trace_context *context) {
-    uint32_t kinds = (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? sink->watched_kinds : sink->kinds;
+    uint32_t kinds = (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? masks->watched_kinds : masks->kinds;
     return (kinds & TA_TRACE_BIT(kind)) != 0;
 }
 
-/* Every kind any macrostep may build: what scratch must be reserved for. */
-TA_PRIVATE inline uint32_t ta_trace_any_kinds(const ta_trace_sink *sink) {
-    return sink->kinds | sink->watched_kinds | sink->unsampled_kinds;
+/** Every kind any macrostep may build: what scratch must be reserved for. */
+TA_PRIVATE inline uint32_t ta_trace_any_kinds(const ta_trace_masks *masks) {
+    return masks->kinds | masks->watched_kinds | masks->unsampled_kinds;
 }
 
-/* A record with every ID set to NONE and everything else zero. */
-TA_PRIVATE ta_trace_record ta_trace_record_blank(ta_trace_kind kind);
+/**
+ * What a caller knows of one record, which `ta_trace_write` turns into a
+ * `tel.trace`. It borrows everything it points at for the call. `actor`
+ * renders values through its data model and names the session; it is NULL
+ * for a definition record, which names `definition` alone. The other
+ * fields are the record's (see `ta_trace_record` in the public header);
+ * FOREACH's iteration is `position.iteration`.
+ */
+typedef struct {
+    ta_trace_kind kind;
+    ta_step_key key;
+    ta_trace_position position;
+    ta_trace_context context;
+    ta_step_key cause;
+    const ta_actor *actor;
+    const ta_definition *definition;
+    ta_time now;
 
-struct ta_actor;
+    const ta_event *event;
+    ta_state_id state;
+    ta_expr_id expr;
+    ta_str name;
+    ta_action_id action;
+    ta_send_id send;
+    ta_invoke_id invoke;
+    bool result;
+    bool has_value;
+    ta_value value;
+    bool has_fault;
+    ta_fault fault;
+    uint32_t dropped;
 
-/*
+    const ta_transition_id *transitions;
+    uint32_t transition_count;
+    const ta_state_id *exited;
+    uint32_t exited_count;
+    const ta_state_id *entered;
+    uint32_t entered_count;
+    const ta_state_id *history;
+    uint32_t history_count;
+    const ta_state_id *states;
+    uint32_t state_count;
+} ta_trace_entry;
+
+/** An entry with every ID set to NONE and everything else zero. Never allocates. */
+TA_PRIVATE ta_trace_entry ta_trace_entry_blank(ta_trace_kind kind);
+
+/**
+ * Makes the control block's tel ring and the scratch area, as the
+ * system's `telBytes`, `maxRecordBytes` and `telemetryValueBytes` say;
+ * nothing when `telBytes` is 0. Runs at system creation only. Allocates;
+ * answers `TA_ERR_NOMEM`, freeing what it made, when the allocator refuses.
+ */
+TA_PRIVATE ta_result ta_trace_open(ta_system *system);
+
+/** Frees the ring and the scratch area. Never fails; a closed tracer writes nothing. */
+TA_PRIVATE void ta_trace_close(ta_system *system);
+
+/**
+ * Forgets the labels and facts kept for `definition`, which is being freed: its ID
+ * names nothing from now on, and the slot's next definition must not find
+ * them. Never allocates.
+ */
+TA_PRIVATE void ta_trace_forget_definition(ta_tracer *tracer, ta_definition_id definition);
+
+/**
+ * Writes the record `entry` describes to `tel`, after a `tel.dropped` for
+ * the records dropped before it, when there were any. The caller tested
+ * the masks first. Never allocates; may run inside a macrostep. Cannot fail:
+ * a record without room is dropped and counted.
+ */
+TA_PRIVATE void ta_trace_write(ta_system *system, const ta_trace_entry *entry);
+
+/**
  * Writes the lifecycle record `kind` for `actor` (SPAWNED, LOADED,
  * UNLOADED or DESTROYED), with `parent` as its context and cause when
- * there is one. Lifecycle records are outside macrosteps and never sampled.
+ * there is one, and moves the counters and occupancy every residency
+ * change moves (ADR 0072). Lifecycle records are outside macrosteps and
+ * never sampled. Never allocates.
  */
-TA_PRIVATE void ta_trace_lifecycle(ta_system *system, struct ta_actor *actor, ta_trace_kind kind,
-                        const ta_trace_parent *parent);
+TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind, const ta_trace_parent *parent);
 
-/*
+/**
  * The key of the actor's next lifecycle record: (session, 0, n), where n
- * counts the session's lifecycle records from 1. It moves whether or not a
- * sink wants the record, so keys are the same with tracing on or off.
+ * counts the session's lifecycle records from 1. It moves whether or not
+ * the record is wanted, so keys are the same with tracing on or off.
  */
-TA_PRIVATE ta_step_key ta_trace_lifecycle_key(struct ta_actor *actor);
-
-/* Writes a record the caller built because `sink.kinds` asked for it. */
-TA_PRIVATE inline void ta_trace_write(const ta_trace_sink *sink, const ta_trace_record *record) {
-    sink->v->write(sink->self, record);
-}
+TA_PRIVATE ta_step_key ta_trace_lifecycle_key(ta_actor *actor);
 
 
 
@@ -9097,8 +9477,8 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
  * immutable definitions, the resident actors and their runtime IDs, the
  * address and session tables, delayed-send state, the built-in SCXML
  * Event I/O Processor and its host event router, the registered I/O
- * processors and invokers, and the host's actor directory, trace and log
- * sinks.
+ * processors and invokers, the host's actor directory and log sink, and
+ * the control block with its `tel` ring (ADR 0098, ADR 0104).
  *
  * ## What it is not
  *
@@ -9145,8 +9525,9 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
  * The system owns everything it holds, from the allocator in its config,
  * until `ta_system_destroy`, which destroys every actor and definition
  * first. Creation allocates the system, the first storage of the tables
- * that start with some (sessions, atoms, event names), and the run
- * buffers (ADR 0092 section 3); the actor table starts empty. Afterwards it allocates where a
+ * that start with some (sessions, atoms, event names), the run
+ * buffers (ADR 0092 section 3), and the `tel` ring with its scratch area
+ * unless `telBytes` is 0; the actor table starts empty. Afterwards it allocates where a
  * caller adds something (a spawn, a registration, an interned address), a
  * nested interpreter's region the first time an invocation is cancelled
  * at that depth, and the event blocks it caches; never in the middle of a
@@ -9167,7 +9548,7 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
  *
  * Every unit that runs: the public API's entry points, the interpreter,
  * actors, session images, timers, invocations and I/O. ADRs 0043, 0063,
- * 0066, 0067, 0068, 0072, 0079, 0092.
+ * 0066, 0067, 0068, 0072, 0079, 0092, 0098, 0104.
  */
 
 
@@ -9201,6 +9582,18 @@ typedef struct {
     void *memory;
     size_t bytes;
 } ta_nested_region;
+
+/**
+ * The control block (ADR 0104): the rings core shares with its host, with
+ * their positions (`head`, `tail`, the next seq) and counters. Today it
+ * holds `tel` alone, a lossy ring of `telBytes` (ADR 0098), whose `dropped`
+ * counts the trace records dropped since creation; its capacity is 0 when
+ * `telBytes` is 0. The host reads it through `ta_system_tel_peek`,
+ * `ta_system_tel_release` and `ta_system_tel_status`.
+ */
+typedef struct {
+    ta_ring tel;
+} ta_control_block;
 
 typedef struct {
     ta_definition *definition;
@@ -9254,8 +9647,10 @@ struct ta_system {
     ta_actor_directory directory;
     ta_external_event_router external_events;
     ta_log_sink log_sink;
-    /* Never null: ta_null_trace_sink() when the host installed none (ADR 0067). */
-    ta_trace_sink trace;
+    /* What is traced and how records are built (trace.h, ADR 0098). */
+    ta_tracer trace;
+    /* The rings and their counters (ADR 0104). */
+    ta_control_block control;
     /* Never null: ta_null_definition_sink() when the host installed none (ADR 0079). */
     ta_definition_sink definition_sink;
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
@@ -9482,12 +9877,13 @@ typedef struct {
     uint64_t *bound_decls;
     uint32_t decl_words;
     /*
-     * Tracing (ADR 0067). `trace_kinds` is what the running macrostep builds,
-     * from the sink's mask and the macrostep's context. `trace_action` is the
-     * unit of executable content running now. `trace_states` is scratch for
-     * a record's state lists (3 * state_count), and `conditions` holds the
-     * guards of the selection in progress, written only once it completes;
-     * both are null when the sink wants no record that needs them.
+     * Tracing (ADR 0067, ADR 0098). `trace_kinds` is what the running
+     * macrostep builds, from the system's trace masks and the macrostep's
+     * context. `trace_action` is the unit of executable content running
+     * now. `trace_states` is scratch for a record's state lists
+     * (3 * state_count), and `conditions` holds the guards of the selection
+     * in progress, written only once it completes; both are null when the
+     * masks want no record that needs them.
      */
     uint32_t trace_kinds;
     ta_trace_context trace_context;
@@ -9807,13 +10203,23 @@ TA_PRIVATE void *ta_vec_at(const ta_vec *vec, uint32_t index) {
 
 
 TA_PRIVATE void ta_text_put(ta_text_writer *writer, ta_str text) {
-    for (uint32_t index = 0; index < text.len; index += 1) {
-        if (writer->buffer != NULL && writer->length >= writer->skip &&
-            writer->length - writer->skip < writer->capacity) {
-            writer->buffer[writer->length - writer->skip] = text.ptr[index];
+    /* The text's bytes [length, length + len) that fall in the window
+     * [skip, skip + capacity) are stored, in one copy. */
+    uint64_t first = writer->length;
+    uint64_t end = first + text.len;
+    uint64_t window = writer->skip;
+    uint64_t window_end = window + writer->capacity;
+    uint64_t from = first > window ? first : window;
+    uint64_t to = end < window_end ? end : window_end;
+    if (writer->buffer != NULL && from < to) {
+        char *out = writer->buffer + (from - window);
+        const char *in = text.ptr + (from - first);
+        uint32_t count = (uint32_t)(to - from);
+        for (uint32_t index = 0; index < count; index += 1u) {
+            out[index] = in[index];
         }
-        writer->length += 1;
     }
+    writer->length += text.len;
 }
 
 TA_PRIVATE uint32_t ta_text_format_u64(char out[TA_TEXT_U64_DIGITS], uint64_t value) {
@@ -11352,19 +11758,31 @@ static const uint32_t ta_record_span_offsets[] = {
     /* c2h.destroyed */
     (uint32_t)offsetof(ta_c2h_destroyed, address),
     /* tel.trace */
+    (uint32_t)offsetof(ta_tel_trace, list_ids),
+    (uint32_t)offsetof(ta_tel_trace, session_id),
+    (uint32_t)offsetof(ta_tel_trace, cause_session_id),
     (uint32_t)offsetof(ta_tel_trace, address),
-    (uint32_t)offsetof(ta_tel_trace, definition),
+    (uint32_t)offsetof(ta_tel_trace, family_name),
+    (uint32_t)offsetof(ta_tel_trace, revision),
+    (uint32_t)offsetof(ta_tel_trace, document_name),
+    (uint32_t)offsetof(ta_tel_trace, source),
     (uint32_t)offsetof(ta_tel_trace, state_name),
     (uint32_t)offsetof(ta_tel_trace, transition_name),
     (uint32_t)offsetof(ta_tel_trace, action_name),
+    (uint32_t)offsetof(ta_tel_trace, subject_state_name),
+    (uint32_t)offsetof(ta_tel_trace, subject_action_name),
     (uint32_t)offsetof(ta_tel_trace, name),
+    (uint32_t)offsetof(ta_tel_trace, event_name),
+    (uint32_t)offsetof(ta_tel_trace, event_send_id),
+    (uint32_t)offsetof(ta_tel_trace, event_invoke_id),
+    (uint32_t)offsetof(ta_tel_trace, event_data),
     (uint32_t)offsetof(ta_tel_trace, send_id),
     (uint32_t)offsetof(ta_tel_trace, invoke_id),
     (uint32_t)offsetof(ta_tel_trace, value_text),
     (uint32_t)offsetof(ta_tel_trace, fault_detail),
     (uint32_t)offsetof(ta_tel_trace, fault_message),
-    (uint32_t)offsetof(ta_tel_trace, transitions),
-    (uint32_t)offsetof(ta_tel_trace, states),
+    (uint32_t)offsetof(ta_tel_trace, fault_data),
+    (uint32_t)offsetof(ta_tel_trace, list_names),
 };
 
 /* One descriptor per kind, in catalog order. */
@@ -11405,160 +11823,151 @@ static const ta_record_descriptor ta_record_descriptors[] = {
     { TA_RECORD_KIND_C2H_INPUT_REFUSED, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_input_refused), 49u },
     { TA_RECORD_KIND_C2H_INPUT_COMPLETED, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_input_completed), 49u },
     { TA_RECORD_KIND_C2H_LOAD_RESULT, TA_RECORD_RING_C2H, 0u, (uint32_t)sizeof(ta_c2h_load_result), 49u },
-    { TA_RECORD_KIND_TEL_TRACE, TA_RECORD_RING_TEL, 13u, (uint32_t)sizeof(ta_tel_trace), 49u },
-    { TA_RECORD_KIND_TEL_DROPPED, TA_RECORD_RING_TEL, 0u, (uint32_t)sizeof(ta_tel_dropped), 62u },
+    { TA_RECORD_KIND_TEL_TRACE, TA_RECORD_RING_TEL, 25u, (uint32_t)sizeof(ta_tel_trace), 49u },
+    { TA_RECORD_KIND_TEL_DROPPED, TA_RECORD_RING_TEL, 0u, (uint32_t)sizeof(ta_tel_dropped), 74u },
+};
+
+/* Each kind's descriptor index plus one, by its code less 0x0101; 0 for a
+ * code no record has. One load finds a kind, read or written. */
+static const uint8_t ta_record_descriptor_slots[0x0202] = {
+    [TA_RECORD_KIND_H2C_TIME - 0x0101] = 1u,
+    [TA_RECORD_KIND_H2C_EVENT - 0x0101] = 2u,
+    [TA_RECORD_KIND_H2C_SPAWN - 0x0101] = 3u,
+    [TA_RECORD_KIND_H2C_PUBLISH - 0x0101] = 4u,
+    [TA_RECORD_KIND_H2C_LOAD - 0x0101] = 5u,
+    [TA_RECORD_KIND_H2C_LOAD_FAILED - 0x0101] = 6u,
+    [TA_RECORD_KIND_H2C_UNLOAD - 0x0101] = 7u,
+    [TA_RECORD_KIND_H2C_CHECKPOINT - 0x0101] = 8u,
+    [TA_RECORD_KIND_H2C_INVOKE_REPORT - 0x0101] = 9u,
+    [TA_RECORD_KIND_H2C_DESTROY - 0x0101] = 10u,
+    [TA_RECORD_KIND_H2C_DEFINITION_REGISTER - 0x0101] = 11u,
+    [TA_RECORD_KIND_H2C_DEFINITION_RELEASE - 0x0101] = 12u,
+    [TA_RECORD_KIND_H2C_DEFINITION_RETIRE - 0x0101] = 13u,
+    [TA_RECORD_KIND_H2C_WITHDRAW - 0x0101] = 14u,
+    [TA_RECORD_KIND_H2C_TYPE_DECLARE - 0x0101] = 15u,
+    [TA_RECORD_KIND_C2H_SPAWNED - 0x0101] = 16u,
+    [TA_RECORD_KIND_C2H_INPUT - 0x0101] = 17u,
+    [TA_RECORD_KIND_C2H_SEND - 0x0101] = 18u,
+    [TA_RECORD_KIND_C2H_INVOKE - 0x0101] = 19u,
+    [TA_RECORD_KIND_C2H_INVOKE_CANCEL - 0x0101] = 20u,
+    [TA_RECORD_KIND_C2H_INVOKE_FORWARD - 0x0101] = 21u,
+    [TA_RECORD_KIND_C2H_LOG - 0x0101] = 22u,
+    [TA_RECORD_KIND_C2H_MACROSTEP_ENDED - 0x0101] = 23u,
+    [TA_RECORD_KIND_C2H_WAKE - 0x0101] = 24u,
+    [TA_RECORD_KIND_C2H_BOUNCED - 0x0101] = 25u,
+    [TA_RECORD_KIND_C2H_LOAD_NEEDED - 0x0101] = 26u,
+    [TA_RECORD_KIND_C2H_LOADED - 0x0101] = 27u,
+    [TA_RECORD_KIND_C2H_UNLOADED - 0x0101] = 28u,
+    [TA_RECORD_KIND_C2H_STATE - 0x0101] = 29u,
+    [TA_RECORD_KIND_C2H_PUBLISHED - 0x0101] = 30u,
+    [TA_RECORD_KIND_C2H_FINISHED - 0x0101] = 31u,
+    [TA_RECORD_KIND_C2H_DESTROYED - 0x0101] = 32u,
+    [TA_RECORD_KIND_C2H_DEFINITION_RESULT - 0x0101] = 33u,
+    [TA_RECORD_KIND_C2H_INPUT_REFUSED - 0x0101] = 34u,
+    [TA_RECORD_KIND_C2H_INPUT_COMPLETED - 0x0101] = 35u,
+    [TA_RECORD_KIND_C2H_LOAD_RESULT - 0x0101] = 36u,
+    [TA_RECORD_KIND_TEL_TRACE - 0x0101] = 37u,
+    [TA_RECORD_KIND_TEL_DROPPED - 0x0101] = 38u,
 };
 
 /* The index of `kind` in ta_record_descriptors, or their count when no
  * record has that kind. */
 static uint32_t ta_record_descriptor_index(uint16_t kind) {
-    switch (kind) {
-    case TA_RECORD_KIND_H2C_TIME:
-        return 0u;
-    case TA_RECORD_KIND_H2C_EVENT:
-        return 1u;
-    case TA_RECORD_KIND_H2C_SPAWN:
-        return 2u;
-    case TA_RECORD_KIND_H2C_PUBLISH:
-        return 3u;
-    case TA_RECORD_KIND_H2C_LOAD:
-        return 4u;
-    case TA_RECORD_KIND_H2C_LOAD_FAILED:
-        return 5u;
-    case TA_RECORD_KIND_H2C_UNLOAD:
-        return 6u;
-    case TA_RECORD_KIND_H2C_CHECKPOINT:
-        return 7u;
-    case TA_RECORD_KIND_H2C_INVOKE_REPORT:
-        return 8u;
-    case TA_RECORD_KIND_H2C_DESTROY:
-        return 9u;
-    case TA_RECORD_KIND_H2C_DEFINITION_REGISTER:
-        return 10u;
-    case TA_RECORD_KIND_H2C_DEFINITION_RELEASE:
-        return 11u;
-    case TA_RECORD_KIND_H2C_DEFINITION_RETIRE:
-        return 12u;
-    case TA_RECORD_KIND_H2C_WITHDRAW:
-        return 13u;
-    case TA_RECORD_KIND_H2C_TYPE_DECLARE:
-        return 14u;
-    case TA_RECORD_KIND_C2H_SPAWNED:
-        return 15u;
-    case TA_RECORD_KIND_C2H_INPUT:
-        return 16u;
-    case TA_RECORD_KIND_C2H_SEND:
-        return 17u;
-    case TA_RECORD_KIND_C2H_INVOKE:
-        return 18u;
-    case TA_RECORD_KIND_C2H_INVOKE_CANCEL:
-        return 19u;
-    case TA_RECORD_KIND_C2H_INVOKE_FORWARD:
-        return 20u;
-    case TA_RECORD_KIND_C2H_LOG:
-        return 21u;
-    case TA_RECORD_KIND_C2H_MACROSTEP_ENDED:
-        return 22u;
-    case TA_RECORD_KIND_C2H_WAKE:
-        return 23u;
-    case TA_RECORD_KIND_C2H_BOUNCED:
-        return 24u;
-    case TA_RECORD_KIND_C2H_LOAD_NEEDED:
-        return 25u;
-    case TA_RECORD_KIND_C2H_LOADED:
-        return 26u;
-    case TA_RECORD_KIND_C2H_UNLOADED:
-        return 27u;
-    case TA_RECORD_KIND_C2H_STATE:
-        return 28u;
-    case TA_RECORD_KIND_C2H_PUBLISHED:
-        return 29u;
-    case TA_RECORD_KIND_C2H_FINISHED:
-        return 30u;
-    case TA_RECORD_KIND_C2H_DESTROYED:
-        return 31u;
-    case TA_RECORD_KIND_C2H_DEFINITION_RESULT:
-        return 32u;
-    case TA_RECORD_KIND_C2H_INPUT_REFUSED:
-        return 33u;
-    case TA_RECORD_KIND_C2H_INPUT_COMPLETED:
-        return 34u;
-    case TA_RECORD_KIND_C2H_LOAD_RESULT:
-        return 35u;
-    case TA_RECORD_KIND_TEL_TRACE:
-        return 36u;
-    case TA_RECORD_KIND_TEL_DROPPED:
-        return 37u;
-    default:
-        return TA_ARRAY_COUNT(ta_record_descriptors);
-    }
+    uint32_t at = (uint32_t)kind - 0x0101u; /* wraps past the table below the first code */
+    uint32_t slot = at < TA_ARRAY_COUNT(ta_record_descriptor_slots) ? ta_record_descriptor_slots[at] : 0u;
+    return slot == 0u ? TA_ARRAY_COUNT(ta_record_descriptors) : slot - 1u;
 }
 
-/* A writer's texts as one array of tails. */
+/* What a writer checks a buffer against: its kind, its fixed part and the record's size. */
 typedef struct {
     uint16_t kind;
-    uint32_t count;
-    const ta_bytes *tails;
-} ta_record_shape;
+    uint32_t fixed_size;
+    uint32_t needed;
+} ta_record_frame;
 
-#define TA_RECORD_TAIL(text) { (const uint8_t *)(const void *)(text).ptr, (text).len }
+/*
+ * A record being written: its bytes, where its next text goes, and the
+ * run of texts not yet copied. Texts that lie end to end in the caller's
+ * memory, as a producer that composes them in catalog order lays them,
+ * are copied as one run.
+ */
+typedef struct {
+    unsigned char *bytes;
+    uint32_t cursor;
+    const uint8_t *run;
+    uint32_t run_at;
+    uint32_t run_len;
+} ta_record_tail;
 
-/* The record's size: the fixed part plus the tails, rounded up to 8. */
-static ta_result ta_record_measure(const ta_record_shape *shape, uint32_t *out) {
-    uint32_t index = ta_record_descriptor_index(shape->kind);
-    if (index == TA_ARRAY_COUNT(ta_record_descriptors)) {
-        return TA_ERR_INVALID;
-    }
-    uint64_t size = ta_record_descriptors[index].fixed_size;
-    for (uint32_t tail = 0; tail < shape->count; tail += 1u) {
-        if (shape->tails[tail].ptr == NULL && shape->tails[tail].len != 0u) {
-            return TA_ERR_INVALID;
-        }
-        size += shape->tails[tail].len;
-    }
+#define TA_RECORD_TEXT(text) ((ta_bytes){ (const uint8_t *)(const void *)(text).ptr, (text).len })
+
+/* Adds a text's length to `*size`; false for a text with a length but no bytes. */
+static inline bool ta_record_measure(uint64_t *size, ta_bytes text) {
+    *size += text.len;
+    return text.ptr != NULL || text.len == 0u;
+}
+
+/* A measured record's size, rounded up to 8: TA_ERR_INVALID for a bad text
+ * or a record past the largest size a u32 holds. */
+static ta_result ta_record_round(uint64_t size, bool valid, uint32_t *out) {
     size = (size + 7u) & ~(uint64_t)7u;
-    if (size > UINT32_MAX) {
+    if (!valid || size > UINT32_MAX) {
         return TA_ERR_INVALID;
     }
     *out = (uint32_t)size;
     return TA_OK;
 }
 
-/* Checks everything, then fills the record; see ring_codec.h. */
-static ta_result ta_record_write(ta_record_buffer out, const void *fixed, const ta_record_shape *shape) {
+/* Checks the buffer, then fills the fixed part and the header; see ring_codec.h. */
+static ta_result ta_record_begin(ta_record_buffer out, const void *fixed, const ta_record_frame *frame) {
     if (out.bytes == NULL || ((uintptr_t)(void *)out.bytes & 7u) != 0u || (out.size & 7u) != 0u ||
         fixed == NULL) {
         return TA_ERR_INVALID;
     }
-    uint32_t needed = 0u;
-    ta_result result = ta_record_measure(shape, &needed);
-    if (result != TA_OK) {
-        return result;
-    }
-    if (out.size < needed) {
+    if (out.size < frame->needed) {
         return TA_ERR_FULL;
     }
-    const ta_record_descriptor *descriptor = &ta_record_descriptors[ta_record_descriptor_index(shape->kind)];
     uint64_t seq = 0u;
     ta_mem_copy(&seq, out.bytes + offsetof(ta_record_header, seq), sizeof(seq));
     if (fixed != (const void *)out.bytes) {
-        ta_mem_copy(out.bytes, fixed, descriptor->fixed_size);
+        ta_mem_copy(out.bytes, fixed, frame->fixed_size);
     }
-    ta_mem_zero(out.bytes + descriptor->fixed_size, out.size - descriptor->fixed_size);
-    uint16_t kind = shape->kind;
+    uint16_t kind = frame->kind;
     ta_mem_copy(out.bytes + offsetof(ta_record_header, kind), &kind, sizeof(kind));
     ta_mem_copy(out.bytes + offsetof(ta_record_header, size), &out.size, sizeof(out.size));
     ta_mem_copy(out.bytes + offsetof(ta_record_header, seq), &seq, sizeof(seq));
-    uint32_t cursor = descriptor->fixed_size;
-    for (uint32_t tail = 0; tail < shape->count; tail += 1u) {
-        ta_span32 span = { cursor, shape->tails[tail].len };
-        ta_mem_copy(out.bytes + ta_record_span_offsets[descriptor->span_first + tail], &span, sizeof(span));
-        if (span.length != 0u) {
-            ta_mem_copy(out.bytes + cursor, shape->tails[tail].ptr, span.length);
-        }
-        cursor += span.length;
-    }
     return TA_OK;
+}
+
+/* Copies the run of texts not yet copied. */
+static void ta_record_flush(ta_record_tail *tail) {
+    if (tail->run_len != 0u) {
+        ta_mem_copy(tail->bytes + tail->run_at, tail->run, tail->run_len);
+    }
+    tail->run_len = 0u;
+}
+
+/* Lays one text at the cursor and points the span at `span_offset` at it. */
+static inline void ta_record_put(ta_record_tail *tail, uint32_t span_offset, ta_bytes text) {
+    ta_span32 span = { tail->cursor, text.len };
+    ta_mem_copy(tail->bytes + span_offset, &span, sizeof(span));
+    if (text.len == 0u) {
+        return;
+    }
+    if (tail->run_len == 0u || text.ptr != tail->run + tail->run_len) {
+        ta_record_flush(tail);
+        tail->run = text.ptr;
+        tail->run_at = tail->cursor;
+    }
+    tail->run_len += text.len;
+    tail->cursor += text.len;
+}
+
+/* Copies the last run, then zeroes the bytes after the last text: the
+ * texts cover the rest of the tail. */
+static void ta_record_finish(ta_record_buffer out, ta_record_tail *tail) {
+    ta_record_flush(tail);
+    ta_mem_zero(out.bytes + tail->cursor, out.size - tail->cursor);
 }
 
 TA_PRIVATE ta_result ta_record_read(const ta_record_read_params *params, ta_record_view *out) {
@@ -11620,8 +12029,13 @@ TA_PRIVATE ta_result ta_record_describe(uint16_t kind, ta_record_description *ou
 /* ---- h2c.time ---- */
 
 TA_PRIVATE ta_result ta_h2c_time_write(ta_record_buffer out, const ta_h2c_time *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_TIME, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_H2C_TIME, (uint32_t)sizeof(ta_h2c_time), (uint32_t)sizeof(ta_h2c_time) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_time), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- h2c.event ---- */
@@ -11630,32 +12044,36 @@ TA_PRIVATE ta_result ta_h2c_event_size(const ta_h2c_event_texts *texts, uint32_t
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[6] = {
-        TA_RECORD_TAIL(texts->target),
-        TA_RECORD_TAIL(texts->name),
-        TA_RECORD_TAIL(texts->sendid),
-        TA_RECORD_TAIL(texts->origin),
-        TA_RECORD_TAIL(texts->origin_type),
-        TA_RECORD_TAIL(texts->invokeid),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_EVENT, 6u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_event);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->target));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->sendid));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->origin));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->origin_type));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->invokeid));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_event_write(ta_record_buffer out, const ta_h2c_event *fixed, const ta_h2c_event_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_event_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_EVENT, (uint32_t)sizeof(ta_h2c_event), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[6] = {
-        TA_RECORD_TAIL(texts->target),
-        TA_RECORD_TAIL(texts->name),
-        TA_RECORD_TAIL(texts->sendid),
-        TA_RECORD_TAIL(texts->origin),
-        TA_RECORD_TAIL(texts->origin_type),
-        TA_RECORD_TAIL(texts->invokeid),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_EVENT, 6u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_event), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_event, target), TA_RECORD_TEXT(texts->target));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_event, name), TA_RECORD_TEXT(texts->name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_event, sendid), TA_RECORD_TEXT(texts->sendid));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_event, origin), TA_RECORD_TEXT(texts->origin));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_event, origin_type), TA_RECORD_TEXT(texts->origin_type));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_event, invokeid), TA_RECORD_TEXT(texts->invokeid));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- h2c.spawn ---- */
@@ -11664,24 +12082,28 @@ TA_PRIVATE ta_result ta_h2c_spawn_size(const ta_h2c_spawn_texts *texts, uint32_t
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[2] = {
-        TA_RECORD_TAIL(texts->address),
-        TA_RECORD_TAIL(texts->revision),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_SPAWN, 2u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_spawn);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->revision));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_spawn_write(ta_record_buffer out, const ta_h2c_spawn *fixed, const ta_h2c_spawn_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_spawn_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_SPAWN, (uint32_t)sizeof(ta_h2c_spawn), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[2] = {
-        TA_RECORD_TAIL(texts->address),
-        TA_RECORD_TAIL(texts->revision),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_SPAWN, 2u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_spawn), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_spawn, address), TA_RECORD_TEXT(texts->address));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_spawn, revision), TA_RECORD_TEXT(texts->revision));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- h2c.publish ---- */
@@ -11690,22 +12112,26 @@ TA_PRIVATE ta_result ta_h2c_publish_size(const ta_h2c_publish_texts *texts, uint
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_PUBLISH, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_publish);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_publish_write(ta_record_buffer out, const ta_h2c_publish *fixed, const ta_h2c_publish_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_publish_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_PUBLISH, (uint32_t)sizeof(ta_h2c_publish), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_PUBLISH, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_publish), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_publish, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- h2c.load ---- */
@@ -11714,22 +12140,26 @@ TA_PRIVATE ta_result ta_h2c_load_size(const ta_h2c_load_texts *texts, uint32_t *
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_LOAD, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_load);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_load_write(ta_record_buffer out, const ta_h2c_load *fixed, const ta_h2c_load_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_load_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_LOAD, (uint32_t)sizeof(ta_h2c_load), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_LOAD, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_load), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_load, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- h2c.load_failed ---- */
@@ -11738,24 +12168,28 @@ TA_PRIVATE ta_result ta_h2c_load_failed_size(const ta_h2c_load_failed_texts *tex
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[2] = {
-        TA_RECORD_TAIL(texts->address),
-        TA_RECORD_TAIL(texts->reason),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_LOAD_FAILED, 2u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_load_failed);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->reason));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_load_failed_write(ta_record_buffer out, const ta_h2c_load_failed *fixed, const ta_h2c_load_failed_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_load_failed_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_LOAD_FAILED, (uint32_t)sizeof(ta_h2c_load_failed), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[2] = {
-        TA_RECORD_TAIL(texts->address),
-        TA_RECORD_TAIL(texts->reason),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_LOAD_FAILED, 2u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_load_failed), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_load_failed, address), TA_RECORD_TEXT(texts->address));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_load_failed, reason), TA_RECORD_TEXT(texts->reason));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- h2c.unload ---- */
@@ -11764,22 +12198,26 @@ TA_PRIVATE ta_result ta_h2c_unload_size(const ta_h2c_unload_texts *texts, uint32
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_UNLOAD, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_unload);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_unload_write(ta_record_buffer out, const ta_h2c_unload *fixed, const ta_h2c_unload_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_unload_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_UNLOAD, (uint32_t)sizeof(ta_h2c_unload), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_UNLOAD, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_unload), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_unload, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- h2c.checkpoint ---- */
@@ -11788,22 +12226,26 @@ TA_PRIVATE ta_result ta_h2c_checkpoint_size(const ta_h2c_checkpoint_texts *texts
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_CHECKPOINT, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_checkpoint);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_checkpoint_write(ta_record_buffer out, const ta_h2c_checkpoint *fixed, const ta_h2c_checkpoint_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_checkpoint_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_CHECKPOINT, (uint32_t)sizeof(ta_h2c_checkpoint), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_CHECKPOINT, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_checkpoint), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_checkpoint, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- h2c.invoke_report ---- */
@@ -11812,24 +12254,28 @@ TA_PRIVATE ta_result ta_h2c_invoke_report_size(const ta_h2c_invoke_report_texts 
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[2] = {
-        TA_RECORD_TAIL(texts->invokeid),
-        TA_RECORD_TAIL(texts->reason),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_INVOKE_REPORT, 2u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_invoke_report);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->invokeid));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->reason));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_invoke_report_write(ta_record_buffer out, const ta_h2c_invoke_report *fixed, const ta_h2c_invoke_report_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_invoke_report_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_INVOKE_REPORT, (uint32_t)sizeof(ta_h2c_invoke_report), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[2] = {
-        TA_RECORD_TAIL(texts->invokeid),
-        TA_RECORD_TAIL(texts->reason),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_INVOKE_REPORT, 2u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_invoke_report), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_invoke_report, invokeid), TA_RECORD_TEXT(texts->invokeid));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_invoke_report, reason), TA_RECORD_TEXT(texts->reason));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- h2c.destroy ---- */
@@ -11838,50 +12284,74 @@ TA_PRIVATE ta_result ta_h2c_destroy_size(const ta_h2c_destroy_texts *texts, uint
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DESTROY, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_destroy);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_destroy_write(ta_record_buffer out, const ta_h2c_destroy *fixed, const ta_h2c_destroy_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_destroy_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_DESTROY, (uint32_t)sizeof(ta_h2c_destroy), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DESTROY, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_destroy), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_destroy, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- h2c.definition_register ---- */
 
 TA_PRIVATE ta_result ta_h2c_definition_register_write(ta_record_buffer out, const ta_h2c_definition_register *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DEFINITION_REGISTER, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_H2C_DEFINITION_REGISTER, (uint32_t)sizeof(ta_h2c_definition_register), (uint32_t)sizeof(ta_h2c_definition_register) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_definition_register), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- h2c.definition_release ---- */
 
 TA_PRIVATE ta_result ta_h2c_definition_release_write(ta_record_buffer out, const ta_h2c_definition_release *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DEFINITION_RELEASE, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_H2C_DEFINITION_RELEASE, (uint32_t)sizeof(ta_h2c_definition_release), (uint32_t)sizeof(ta_h2c_definition_release) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_definition_release), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- h2c.definition_retire ---- */
 
 TA_PRIVATE ta_result ta_h2c_definition_retire_write(ta_record_buffer out, const ta_h2c_definition_retire *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_DEFINITION_RETIRE, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_H2C_DEFINITION_RETIRE, (uint32_t)sizeof(ta_h2c_definition_retire), (uint32_t)sizeof(ta_h2c_definition_retire) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_definition_retire), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- h2c.withdraw ---- */
 
 TA_PRIVATE ta_result ta_h2c_withdraw_write(ta_record_buffer out, const ta_h2c_withdraw *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_WITHDRAW, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_H2C_WITHDRAW, (uint32_t)sizeof(ta_h2c_withdraw), (uint32_t)sizeof(ta_h2c_withdraw) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_withdraw), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- h2c.type_declare ---- */
@@ -11890,22 +12360,26 @@ TA_PRIVATE ta_result ta_h2c_type_declare_size(const ta_h2c_type_declare_texts *t
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->type),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_TYPE_DECLARE, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_h2c_type_declare);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->type));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_h2c_type_declare_write(ta_record_buffer out, const ta_h2c_type_declare *fixed, const ta_h2c_type_declare_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_h2c_type_declare_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_H2C_TYPE_DECLARE, (uint32_t)sizeof(ta_h2c_type_declare), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->type),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_H2C_TYPE_DECLARE, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_h2c_type_declare), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_h2c_type_declare, type), TA_RECORD_TEXT(texts->type));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.spawned ---- */
@@ -11914,24 +12388,28 @@ TA_PRIVATE ta_result ta_c2h_spawned_size(const ta_c2h_spawned_texts *texts, uint
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[2] = {
-        TA_RECORD_TAIL(texts->address),
-        TA_RECORD_TAIL(texts->revision),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_SPAWNED, 2u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_spawned);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->revision));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_spawned_write(ta_record_buffer out, const ta_c2h_spawned *fixed, const ta_c2h_spawned_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_spawned_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_SPAWNED, (uint32_t)sizeof(ta_c2h_spawned), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[2] = {
-        TA_RECORD_TAIL(texts->address),
-        TA_RECORD_TAIL(texts->revision),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_SPAWNED, 2u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_spawned), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_spawned, address), TA_RECORD_TEXT(texts->address));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_spawned, revision), TA_RECORD_TEXT(texts->revision));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.input ---- */
@@ -11940,34 +12418,38 @@ TA_PRIVATE ta_result ta_c2h_input_size(const ta_c2h_input_texts *texts, uint32_t
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[7] = {
-        TA_RECORD_TAIL(texts->name),
-        TA_RECORD_TAIL(texts->sendid),
-        TA_RECORD_TAIL(texts->origin),
-        TA_RECORD_TAIL(texts->origin_type),
-        TA_RECORD_TAIL(texts->invokeid),
-        TA_RECORD_TAIL(texts->report_invokeid),
-        TA_RECORD_TAIL(texts->report_reason),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INPUT, 7u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_input);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->sendid));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->origin));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->origin_type));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->invokeid));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->report_invokeid));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->report_reason));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_input_write(ta_record_buffer out, const ta_c2h_input *fixed, const ta_c2h_input_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_input_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_INPUT, (uint32_t)sizeof(ta_c2h_input), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[7] = {
-        TA_RECORD_TAIL(texts->name),
-        TA_RECORD_TAIL(texts->sendid),
-        TA_RECORD_TAIL(texts->origin),
-        TA_RECORD_TAIL(texts->origin_type),
-        TA_RECORD_TAIL(texts->invokeid),
-        TA_RECORD_TAIL(texts->report_invokeid),
-        TA_RECORD_TAIL(texts->report_reason),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INPUT, 7u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_input), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_input, name), TA_RECORD_TEXT(texts->name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_input, sendid), TA_RECORD_TEXT(texts->sendid));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_input, origin), TA_RECORD_TEXT(texts->origin));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_input, origin_type), TA_RECORD_TEXT(texts->origin_type));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_input, invokeid), TA_RECORD_TEXT(texts->invokeid));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_input, report_invokeid), TA_RECORD_TEXT(texts->report_invokeid));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_input, report_reason), TA_RECORD_TEXT(texts->report_reason));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.send ---- */
@@ -11976,28 +12458,32 @@ TA_PRIVATE ta_result ta_c2h_send_size(const ta_c2h_send_texts *texts, uint32_t *
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[4] = {
-        TA_RECORD_TAIL(texts->sendid),
-        TA_RECORD_TAIL(texts->io_type),
-        TA_RECORD_TAIL(texts->target),
-        TA_RECORD_TAIL(texts->name),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_SEND, 4u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_send);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->sendid));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->io_type));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->target));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->name));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_send_write(ta_record_buffer out, const ta_c2h_send *fixed, const ta_c2h_send_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_send_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_SEND, (uint32_t)sizeof(ta_c2h_send), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[4] = {
-        TA_RECORD_TAIL(texts->sendid),
-        TA_RECORD_TAIL(texts->io_type),
-        TA_RECORD_TAIL(texts->target),
-        TA_RECORD_TAIL(texts->name),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_SEND, 4u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_send), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_send, sendid), TA_RECORD_TEXT(texts->sendid));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_send, io_type), TA_RECORD_TEXT(texts->io_type));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_send, target), TA_RECORD_TEXT(texts->target));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_send, name), TA_RECORD_TEXT(texts->name));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.invoke ---- */
@@ -12006,26 +12492,30 @@ TA_PRIVATE ta_result ta_c2h_invoke_size(const ta_c2h_invoke_texts *texts, uint32
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[3] = {
-        TA_RECORD_TAIL(texts->invokeid),
-        TA_RECORD_TAIL(texts->type),
-        TA_RECORD_TAIL(texts->src),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE, 3u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_invoke);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->invokeid));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->type));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->src));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_invoke_write(ta_record_buffer out, const ta_c2h_invoke *fixed, const ta_c2h_invoke_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_invoke_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_INVOKE, (uint32_t)sizeof(ta_c2h_invoke), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[3] = {
-        TA_RECORD_TAIL(texts->invokeid),
-        TA_RECORD_TAIL(texts->type),
-        TA_RECORD_TAIL(texts->src),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE, 3u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_invoke), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke, invokeid), TA_RECORD_TEXT(texts->invokeid));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke, type), TA_RECORD_TEXT(texts->type));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke, src), TA_RECORD_TEXT(texts->src));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.invoke_cancel ---- */
@@ -12034,22 +12524,26 @@ TA_PRIVATE ta_result ta_c2h_invoke_cancel_size(const ta_c2h_invoke_cancel_texts 
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->invokeid),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE_CANCEL, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_invoke_cancel);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->invokeid));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_invoke_cancel_write(ta_record_buffer out, const ta_c2h_invoke_cancel *fixed, const ta_c2h_invoke_cancel_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_invoke_cancel_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_INVOKE_CANCEL, (uint32_t)sizeof(ta_c2h_invoke_cancel), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->invokeid),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE_CANCEL, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_invoke_cancel), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke_cancel, invokeid), TA_RECORD_TEXT(texts->invokeid));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.invoke_forward ---- */
@@ -12058,32 +12552,36 @@ TA_PRIVATE ta_result ta_c2h_invoke_forward_size(const ta_c2h_invoke_forward_text
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[6] = {
-        TA_RECORD_TAIL(texts->invokeid),
-        TA_RECORD_TAIL(texts->name),
-        TA_RECORD_TAIL(texts->sendid),
-        TA_RECORD_TAIL(texts->origin),
-        TA_RECORD_TAIL(texts->origin_type),
-        TA_RECORD_TAIL(texts->event_invokeid),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE_FORWARD, 6u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_invoke_forward);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->invokeid));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->sendid));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->origin));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->origin_type));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->event_invokeid));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_invoke_forward_write(ta_record_buffer out, const ta_c2h_invoke_forward *fixed, const ta_c2h_invoke_forward_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_invoke_forward_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_INVOKE_FORWARD, (uint32_t)sizeof(ta_c2h_invoke_forward), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[6] = {
-        TA_RECORD_TAIL(texts->invokeid),
-        TA_RECORD_TAIL(texts->name),
-        TA_RECORD_TAIL(texts->sendid),
-        TA_RECORD_TAIL(texts->origin),
-        TA_RECORD_TAIL(texts->origin_type),
-        TA_RECORD_TAIL(texts->event_invokeid),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INVOKE_FORWARD, 6u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_invoke_forward), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke_forward, invokeid), TA_RECORD_TEXT(texts->invokeid));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke_forward, name), TA_RECORD_TEXT(texts->name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke_forward, sendid), TA_RECORD_TEXT(texts->sendid));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke_forward, origin), TA_RECORD_TEXT(texts->origin));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke_forward, origin_type), TA_RECORD_TEXT(texts->origin_type));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_invoke_forward, event_invokeid), TA_RECORD_TEXT(texts->event_invokeid));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.log ---- */
@@ -12092,36 +12590,50 @@ TA_PRIVATE ta_result ta_c2h_log_size(const ta_c2h_log_texts *texts, uint32_t *ou
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->label),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOG, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_log);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->label));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_log_write(ta_record_buffer out, const ta_c2h_log *fixed, const ta_c2h_log_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_log_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_LOG, (uint32_t)sizeof(ta_c2h_log), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->label),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOG, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_log), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_log, label), TA_RECORD_TEXT(texts->label));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.macrostep_ended ---- */
 
 TA_PRIVATE ta_result ta_c2h_macrostep_ended_write(ta_record_buffer out, const ta_c2h_macrostep_ended *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_MACROSTEP_ENDED, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_C2H_MACROSTEP_ENDED, (uint32_t)sizeof(ta_c2h_macrostep_ended), (uint32_t)sizeof(ta_c2h_macrostep_ended) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_macrostep_ended), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- c2h.wake ---- */
 
 TA_PRIVATE ta_result ta_c2h_wake_write(ta_record_buffer out, const ta_c2h_wake *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_WAKE, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_C2H_WAKE, (uint32_t)sizeof(ta_c2h_wake), (uint32_t)sizeof(ta_c2h_wake) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_wake), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- c2h.bounced ---- */
@@ -12130,22 +12642,26 @@ TA_PRIVATE ta_result ta_c2h_bounced_size(const ta_c2h_bounced_texts *texts, uint
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->detail),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_BOUNCED, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_bounced);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->detail));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_bounced_write(ta_record_buffer out, const ta_c2h_bounced *fixed, const ta_c2h_bounced_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_bounced_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_BOUNCED, (uint32_t)sizeof(ta_c2h_bounced), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->detail),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_BOUNCED, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_bounced), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_bounced, detail), TA_RECORD_TEXT(texts->detail));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.load_needed ---- */
@@ -12154,22 +12670,26 @@ TA_PRIVATE ta_result ta_c2h_load_needed_size(const ta_c2h_load_needed_texts *tex
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOAD_NEEDED, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_load_needed);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_load_needed_write(ta_record_buffer out, const ta_c2h_load_needed *fixed, const ta_c2h_load_needed_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_load_needed_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_LOAD_NEEDED, (uint32_t)sizeof(ta_c2h_load_needed), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOAD_NEEDED, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_load_needed), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_load_needed, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.loaded ---- */
@@ -12178,22 +12698,26 @@ TA_PRIVATE ta_result ta_c2h_loaded_size(const ta_c2h_loaded_texts *texts, uint32
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOADED, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_loaded);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_loaded_write(ta_record_buffer out, const ta_c2h_loaded *fixed, const ta_c2h_loaded_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_loaded_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_LOADED, (uint32_t)sizeof(ta_c2h_loaded), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOADED, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_loaded), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_loaded, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.unloaded ---- */
@@ -12202,22 +12726,26 @@ TA_PRIVATE ta_result ta_c2h_unloaded_size(const ta_c2h_unloaded_texts *texts, ui
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_UNLOADED, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_unloaded);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_unloaded_write(ta_record_buffer out, const ta_c2h_unloaded *fixed, const ta_c2h_unloaded_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_unloaded_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_UNLOADED, (uint32_t)sizeof(ta_c2h_unloaded), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_UNLOADED, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_unloaded), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_unloaded, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.state ---- */
@@ -12226,22 +12754,26 @@ TA_PRIVATE ta_result ta_c2h_state_size(const ta_c2h_state_texts *texts, uint32_t
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_STATE, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_state);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_state_write(ta_record_buffer out, const ta_c2h_state *fixed, const ta_c2h_state_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_state_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_STATE, (uint32_t)sizeof(ta_c2h_state), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_STATE, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_state), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_state, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.published ---- */
@@ -12250,29 +12782,38 @@ TA_PRIVATE ta_result ta_c2h_published_size(const ta_c2h_published_texts *texts, 
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_PUBLISHED, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_published);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_published_write(ta_record_buffer out, const ta_c2h_published *fixed, const ta_c2h_published_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_published_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_PUBLISHED, (uint32_t)sizeof(ta_c2h_published), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_PUBLISHED, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_published), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_published, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.finished ---- */
 
 TA_PRIVATE ta_result ta_c2h_finished_write(ta_record_buffer out, const ta_c2h_finished *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_FINISHED, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_C2H_FINISHED, (uint32_t)sizeof(ta_c2h_finished), (uint32_t)sizeof(ta_c2h_finished) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_finished), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- c2h.destroyed ---- */
@@ -12281,50 +12822,74 @@ TA_PRIVATE ta_result ta_c2h_destroyed_size(const ta_c2h_destroyed_texts *texts, 
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_DESTROYED, 1u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_c2h_destroyed);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_c2h_destroyed_write(ta_record_buffer out, const ta_c2h_destroyed *fixed, const ta_c2h_destroyed_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_c2h_destroyed_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_C2H_DESTROYED, (uint32_t)sizeof(ta_c2h_destroyed), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[1] = {
-        TA_RECORD_TAIL(texts->address),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_DESTROYED, 1u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_destroyed), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_c2h_destroyed, address), TA_RECORD_TEXT(texts->address));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- c2h.definition_result ---- */
 
 TA_PRIVATE ta_result ta_c2h_definition_result_write(ta_record_buffer out, const ta_c2h_definition_result *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_DEFINITION_RESULT, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_C2H_DEFINITION_RESULT, (uint32_t)sizeof(ta_c2h_definition_result), (uint32_t)sizeof(ta_c2h_definition_result) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_definition_result), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- c2h.input_refused ---- */
 
 TA_PRIVATE ta_result ta_c2h_input_refused_write(ta_record_buffer out, const ta_c2h_input_refused *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INPUT_REFUSED, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_C2H_INPUT_REFUSED, (uint32_t)sizeof(ta_c2h_input_refused), (uint32_t)sizeof(ta_c2h_input_refused) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_input_refused), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- c2h.input_completed ---- */
 
 TA_PRIVATE ta_result ta_c2h_input_completed_write(ta_record_buffer out, const ta_c2h_input_completed *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_INPUT_COMPLETED, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_C2H_INPUT_COMPLETED, (uint32_t)sizeof(ta_c2h_input_completed), (uint32_t)sizeof(ta_c2h_input_completed) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_input_completed), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- c2h.load_result ---- */
 
 TA_PRIVATE ta_result ta_c2h_load_result_write(ta_record_buffer out, const ta_c2h_load_result *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_C2H_LOAD_RESULT, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_C2H_LOAD_RESULT, (uint32_t)sizeof(ta_c2h_load_result), (uint32_t)sizeof(ta_c2h_load_result) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_c2h_load_result), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 /* ---- tel.trace ---- */
@@ -12333,53 +12898,86 @@ TA_PRIVATE ta_result ta_tel_trace_size(const ta_tel_trace_texts *texts, uint32_t
     if (texts == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_bytes tails[13] = {
-        TA_RECORD_TAIL(texts->address),
-        TA_RECORD_TAIL(texts->definition),
-        TA_RECORD_TAIL(texts->state_name),
-        TA_RECORD_TAIL(texts->transition_name),
-        TA_RECORD_TAIL(texts->action_name),
-        TA_RECORD_TAIL(texts->name),
-        TA_RECORD_TAIL(texts->send_id),
-        TA_RECORD_TAIL(texts->invoke_id),
-        TA_RECORD_TAIL(texts->value_text),
-        TA_RECORD_TAIL(texts->fault_detail),
-        TA_RECORD_TAIL(texts->fault_message),
-        TA_RECORD_TAIL(texts->transitions),
-        TA_RECORD_TAIL(texts->states),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_TEL_TRACE, 13u, tails };
-    return ta_record_measure(&shape, out);
+    uint64_t size = sizeof(ta_tel_trace);
+    bool valid = true;
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->list_ids));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->session_id));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->cause_session_id));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->address));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->family_name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->revision));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->document_name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->source));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->state_name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->transition_name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->action_name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->subject_state_name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->subject_action_name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->event_name));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->event_send_id));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->event_invoke_id));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->event_data));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->send_id));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->invoke_id));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->value_text));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->fault_detail));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->fault_message));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->fault_data));
+    valid &= ta_record_measure(&size, TA_RECORD_TEXT(texts->list_names));
+    return ta_record_round(size, valid, out);
 }
 
 TA_PRIVATE ta_result ta_tel_trace_write(ta_record_buffer out, const ta_tel_trace *fixed, const ta_tel_trace_texts *texts) {
-    if (texts == NULL) {
-        return TA_ERR_INVALID;
+    uint32_t needed = 0u;
+    ta_result result = ta_tel_trace_size(texts, &needed);
+    if (result == TA_OK) {
+        const ta_record_frame frame = { TA_RECORD_KIND_TEL_TRACE, (uint32_t)sizeof(ta_tel_trace), needed };
+        result = ta_record_begin(out, fixed, &frame);
     }
-    const ta_bytes tails[13] = {
-        TA_RECORD_TAIL(texts->address),
-        TA_RECORD_TAIL(texts->definition),
-        TA_RECORD_TAIL(texts->state_name),
-        TA_RECORD_TAIL(texts->transition_name),
-        TA_RECORD_TAIL(texts->action_name),
-        TA_RECORD_TAIL(texts->name),
-        TA_RECORD_TAIL(texts->send_id),
-        TA_RECORD_TAIL(texts->invoke_id),
-        TA_RECORD_TAIL(texts->value_text),
-        TA_RECORD_TAIL(texts->fault_detail),
-        TA_RECORD_TAIL(texts->fault_message),
-        TA_RECORD_TAIL(texts->transitions),
-        TA_RECORD_TAIL(texts->states),
-    };
-    const ta_record_shape shape = { TA_RECORD_KIND_TEL_TRACE, 13u, tails };
-    return ta_record_write(out, fixed, &shape);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_tel_trace), NULL, 0u, 0u };
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, list_ids), TA_RECORD_TEXT(texts->list_ids));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, session_id), TA_RECORD_TEXT(texts->session_id));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, cause_session_id), TA_RECORD_TEXT(texts->cause_session_id));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, address), TA_RECORD_TEXT(texts->address));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, family_name), TA_RECORD_TEXT(texts->family_name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, revision), TA_RECORD_TEXT(texts->revision));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, document_name), TA_RECORD_TEXT(texts->document_name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, source), TA_RECORD_TEXT(texts->source));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, state_name), TA_RECORD_TEXT(texts->state_name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, transition_name), TA_RECORD_TEXT(texts->transition_name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, action_name), TA_RECORD_TEXT(texts->action_name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, subject_state_name), TA_RECORD_TEXT(texts->subject_state_name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, subject_action_name), TA_RECORD_TEXT(texts->subject_action_name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, name), TA_RECORD_TEXT(texts->name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, event_name), TA_RECORD_TEXT(texts->event_name));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, event_send_id), TA_RECORD_TEXT(texts->event_send_id));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, event_invoke_id), TA_RECORD_TEXT(texts->event_invoke_id));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, event_data), TA_RECORD_TEXT(texts->event_data));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, send_id), TA_RECORD_TEXT(texts->send_id));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, invoke_id), TA_RECORD_TEXT(texts->invoke_id));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, value_text), TA_RECORD_TEXT(texts->value_text));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, fault_detail), TA_RECORD_TEXT(texts->fault_detail));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, fault_message), TA_RECORD_TEXT(texts->fault_message));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, fault_data), TA_RECORD_TEXT(texts->fault_data));
+    ta_record_put(&tail, (uint32_t)offsetof(ta_tel_trace, list_names), TA_RECORD_TEXT(texts->list_names));
+    ta_record_finish(out, &tail);
+    return TA_OK;
 }
 
 /* ---- tel.dropped ---- */
 
 TA_PRIVATE ta_result ta_tel_dropped_write(ta_record_buffer out, const ta_tel_dropped *fixed) {
-    const ta_record_shape shape = { TA_RECORD_KIND_TEL_DROPPED, 0u, NULL };
-    return ta_record_write(out, fixed, &shape);
+    const ta_record_frame frame = { TA_RECORD_KIND_TEL_DROPPED, (uint32_t)sizeof(ta_tel_dropped), (uint32_t)sizeof(ta_tel_dropped) };
+    ta_result result = ta_record_begin(out, fixed, &frame);
+    if (result == TA_OK) {
+        ta_record_tail tail = { out.bytes, (uint32_t)sizeof(ta_tel_dropped), NULL, 0u, 0u };
+        ta_record_finish(out, &tail);
+    }
+    return result;
 }
 
 
@@ -13769,31 +14367,15 @@ TA_API void ta_origin_release(ta_origin *origin) {
 }
 
 
-/* ------------------------------------------------------------------------
- * The null sink (ADR 0067 section 2)
- */
+_Static_assert(sizeof(ta_tel_trace) == TA_TRACE_FIXED_BYTES, "TA_TRACE_FIXED_BYTES is tel.trace's fixed part");
+/* ta_trace_write measures a record as ta_trace_fit's 23 texts and the two lists: a text the
+ * catalog adds must be cut and measured there too. */
+_Static_assert(sizeof(ta_tel_trace_texts) == 25u * sizeof(ta_str), "tel.trace has 25 texts");
 
-static void ta_null_trace_write(void *self, const ta_trace_record *record) {
-    (void)self;
-    (void)record;
-}
-
-static const ta_trace_sink_vtable ta_null_trace_vtable = { .write = ta_null_trace_write };
-
-TA_API ta_trace_sink ta_null_trace_sink(void) {
-    return (ta_trace_sink){ .self = NULL, .v = &ta_null_trace_vtable };
-}
-
-TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink) {
-    if (system == NULL || sink.v == NULL || sink.v->write == NULL) {
-        return TA_ERR_INVALID;
-    }
-    system->trace = sink;
-    return TA_OK;
-}
+#define TA_TRACE_LIT(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
 
 /* ------------------------------------------------------------------------
- * Step keys as span IDs (section 6)
+ * Step keys as span IDs (ADR 0067 section 6)
  */
 
 TA_API uint64_t ta_step_key_span_id(ta_step_key key) {
@@ -13807,15 +14389,94 @@ TA_API uint64_t ta_step_key_span_id(ta_step_key key) {
 }
 
 /* ------------------------------------------------------------------------
- * What is built
+ * What is built: the masks and the clock
  */
 
-TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context) {
+TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_masks *masks, const ta_trace_context *context) {
     if (!ta_trace_context_empty(context) && (context->flags & TA_TRACE_FLAG_SAMPLED) == 0) {
-        return sink->unsampled_kinds;
+        return masks->unsampled_kinds;
     }
-    return (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? sink->watched_kinds : sink->kinds;
+    return (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? masks->watched_kinds : masks->kinds;
 }
+
+TA_API ta_result ta_system_set_trace_masks(ta_system *system, const ta_trace_masks *masks) {
+    if (system == NULL || masks == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (system->trace.scratch == NULL && ta_trace_any_kinds(masks) != 0) {
+        return TA_ERR_INVALID; /* telBytes 0: no ring to write to (ADR 0098 section 10) */
+    }
+    system->trace.masks = *masks;
+    if (system->trace.masks.value_bytes > system->trace.value_bytes) {
+        system->trace.masks.value_bytes = system->trace.value_bytes; /* at most telemetryValueBytes */
+    }
+    return TA_OK;
+}
+
+TA_API ta_result ta_system_set_wall_clock(ta_system *system, ta_wall_clock clock) {
+    if (system == NULL || (clock.v != NULL && clock.v->wall_ns == NULL)) {
+        return TA_ERR_INVALID;
+    }
+    system->trace.clock = clock;
+    return TA_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * The ring and the scratch area
+ */
+
+TA_PRIVATE ta_result ta_trace_open(ta_system *system) {
+    uint32_t ring_bytes = system->params[TA_PARAM_TEL_BYTES] & ~(TA_RING_ALIGNMENT - 1u);
+    uint32_t record_bytes = system->params[TA_PARAM_MAX_RECORD_BYTES] & ~(TA_RING_ALIGNMENT - 1u);
+    system->trace.value_bytes = system->params[TA_PARAM_TELEMETRY_VALUE_BYTES];
+    if (ring_bytes == 0) {
+        return TA_OK;
+    }
+    unsigned char *scratch = ta_mem_alloc(system->allocator, record_bytes, TA_RING_ALIGNMENT);
+    if (scratch == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_result result = ta_ring_init(&system->control.tel, &(ta_ring_params){ .allocator = system->allocator,
+                                                                             .capacity = ring_bytes,
+                                                                             .max_record_bytes = record_bytes,
+                                                                             .mode = TA_RING_LOSSY });
+    if (result != TA_OK) {
+        ta_mem_free(system->allocator, scratch,
+                    &(ta_allocator_free_params){ .size = record_bytes, .alignment = TA_RING_ALIGNMENT });
+        return result;
+    }
+    system->trace.scratch = scratch;
+    system->trace.scratch_bytes = record_bytes;
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_trace_close(ta_system *system) {
+    system->trace.masks = (ta_trace_masks){ 0 };
+    if (system->trace.scratch == NULL) {
+        return;
+    }
+    ta_ring_destroy(&system->control.tel);
+    ta_mem_free(system->allocator, system->trace.scratch,
+                &(ta_allocator_free_params){ .size = system->trace.scratch_bytes, .alignment = TA_RING_ALIGNMENT });
+    system->trace.scratch = NULL;
+    system->trace.scratch_bytes = 0;
+}
+
+TA_PRIVATE void ta_trace_forget_definition(ta_tracer *tracer, ta_definition_id definition) {
+    if (tracer->facts.definition == definition) {
+        tracer->facts = (ta_trace_facts){ 0 };
+    }
+    if (tracer->transition_label.key.definition == definition) {
+        tracer->transition_label.key = (ta_trace_label_key){ 0 };
+    }
+    if (tracer->action_label.key.definition == definition) {
+        tracer->action_label.key = (ta_trace_label_key){ 0 };
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * Lifecycle records
+ */
 
 TA_PRIVATE ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
     actor->trace_lifecycle += 1u;
@@ -13823,8 +14484,7 @@ TA_PRIVATE ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
                           .family = actor->definition->family };
 }
 
-TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
-                        const ta_trace_parent *parent) {
+TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind, const ta_trace_parent *parent) {
     ta_step_key key = ta_trace_lifecycle_key(actor);
     /* Counters and occupancy (ADR 0072): every residency change passes here. */
     switch (kind) {
@@ -13844,23 +14504,23 @@ TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_
     default: break;
     }
     ta_trace_context none = { 0 };
-    if (!ta_trace_lifecycle_wanted(&system->trace, kind, parent != NULL ? &parent->context : &none)) {
+    if (!ta_trace_lifecycle_wanted(&system->trace.masks, kind, parent != NULL ? &parent->context : &none)) {
         return;
     }
-    ta_trace_record record = ta_trace_record_blank(kind);
-    record.key = key;
-    record.actor = actor->record.id;
-    record.definition = actor->definition->id;
-    record.now = ta_actor_now(system, actor);
+    ta_trace_entry entry = ta_trace_entry_blank(kind);
+    entry.key = key;
+    entry.actor = actor;
+    entry.definition = actor->definition;
+    entry.now = ta_actor_now(system, actor);
     if (parent != NULL) {
-        record.context = parent->context;
-        record.cause = parent->cause;
+        entry.context = parent->context;
+        entry.cause = parent->cause;
     }
-    ta_trace_write(&system->trace, &record);
+    ta_trace_write(system, &entry);
 }
 
-TA_PRIVATE ta_trace_record ta_trace_record_blank(ta_trace_kind kind) {
-    return (ta_trace_record){
+TA_PRIVATE ta_trace_entry ta_trace_entry_blank(ta_trace_kind kind) {
+    return (ta_trace_entry){
         .kind = kind,
         .position = { .at = TA_TRACE_AT_NONE, .state = TA_STATE_NONE, .transition = TA_TRANSITION_NONE,
                       .action = TA_ACTION_NONE },
@@ -13869,6 +14529,931 @@ TA_PRIVATE ta_trace_record ta_trace_record_blank(ta_trace_kind kind) {
         .action = TA_ACTION_NONE,
         .invoke = TA_INVOKE_ID_NONE,
     };
+}
+
+/* ------------------------------------------------------------------------
+ * Composing a record's texts
+ *
+ * Texts core has as they are (atom texts, the definition's) are borrowed;
+ * texts core builds (session IDs, labels, event names, the lists) are laid
+ * out one after another in the scratch area, which holds maxRecordBytes,
+ * as much as any record can carry.
+ */
+
+/* The scratch area, filled from the front. */
+typedef struct {
+    unsigned char *bytes;
+    uint32_t capacity;
+    uint32_t used;
+} ta_trace_area;
+
+/* A writer over what is left of the area. */
+static ta_text_writer ta_area_writer(const ta_trace_area *area) {
+    return (ta_text_writer){ .buffer = (char *)area->bytes + area->used, .capacity = area->capacity - area->used };
+}
+
+/* The longest prefix of `text`, at most `limit` bytes, that ends on a code point boundary. */
+static uint32_t ta_utf8_cut(const char *text, uint32_t len, uint32_t limit) {
+    if (len <= limit) {
+        return len;
+    }
+    uint32_t at = limit;
+    while (at > 0 && ((unsigned char)text[at] & 0xc0u) == 0x80u) {
+        at -= 1u;
+    }
+    return at;
+}
+
+/* Keeps what `writer` wrote into the area as one text; `*cut` when it ran past the area. */
+static ta_str ta_area_take(ta_trace_area *area, const ta_text_writer *writer, bool *cut) {
+    uint32_t len = writer->length;
+    if (len > writer->capacity) {
+        len = ta_utf8_cut(writer->buffer, writer->capacity, writer->capacity);
+        *cut = true;
+    }
+    area->used += len;
+    return (ta_str){ .ptr = len == 0 ? NULL : writer->buffer, .len = len };
+}
+
+/* A state's name: its author ID. */
+static ta_str ta_trace_state_name(const ta_system *system, const ta_definition *definition, ta_state_id state) {
+    if (state >= definition->state_count) {
+        return (ta_str){ 0 };
+    }
+    return ta_atom_text(&system->atoms, definition->states[state].name);
+}
+
+/* Where the labels below look names up: the system's atoms and one
+ * definition; and the tracer, which keeps the last labels composed. */
+typedef struct ta_trace_names {
+    const ta_system *system;
+    const ta_definition *definition;
+    ta_tracer *tracer;
+} ta_trace_names;
+
+/* Puts the label `label` keeps when it is the one `key` names; false when it is not. */
+static bool ta_trace_label_put(const ta_trace_label *label, ta_trace_label_key key, ta_text_writer *writer) {
+    if (label->key.definition != key.definition || label->key.id != key.id || key.definition == 0) {
+        return false;
+    }
+    ta_text_put(writer, (ta_str){ .ptr = label->text, .len = label->len });
+    return true;
+}
+
+/* What `writer` stored from `start` on, when it stored all of it; false when it ran out of room. */
+static bool ta_trace_written(const ta_text_writer *writer, uint32_t start, ta_str *out) {
+    if (writer->buffer == NULL || writer->skip != 0 || writer->length > writer->capacity || start > writer->length) {
+        return false;
+    }
+    *out = (ta_str){ .ptr = writer->buffer + start, .len = writer->length - start };
+    return true;
+}
+
+/* Keeps `text` as the label `key` names, when it fits. */
+static void ta_trace_label_keep(ta_trace_label *label, ta_trace_label_key key, ta_str text) {
+    if (text.len > TA_TRACE_LABEL_TEXT) {
+        return;
+    }
+    ta_mem_copy(label->text, text.ptr, text.len);
+    label->len = text.len;
+    label->key = key;
+}
+
+/* Puts a state's name, or "s<id>" when the definition has none by that ID. */
+static void ta_trace_put_state(const ta_trace_names *names, ta_state_id state, ta_text_writer *writer) {
+    if (state >= names->definition->state_count) {
+        ta_text_put(writer, TA_TRACE_LIT("s"));
+        ta_text_put_u64(writer, state);
+        return;
+    }
+    ta_text_put(writer, ta_trace_state_name(names->system, names->definition, state));
+}
+
+/* Puts a transition's label: "idle → busy on order.placed [guarded]",
+ * "initial of p → a", "initial of the document → a", "busy on poke
+ * (internal)", or "t<id>" when there is none by that ID. */
+static void ta_trace_compose_transition(const ta_trace_names *names, ta_transition_id transition,
+                                        ta_text_writer *writer) {
+    ta_transition_info info = { 0 };
+    if (ta_definition_transition(names->system,
+                                 &(ta_definition_transition_params){ .definition = names->definition->id,
+                                                                             .transition = transition,
+                                                                             .out = &info }) != TA_OK) {
+        ta_text_put(writer, TA_TRACE_LIT("t"));
+        ta_text_put_u64(writer, transition);
+        return;
+    }
+    if (info.origin != TA_TRANSITION_AUTHORED) {
+        ta_text_put(writer, TA_TRACE_LIT("initial of "));
+        if (info.origin == TA_TRANSITION_BOOTSTRAP) {
+            ta_text_put(writer, TA_TRACE_LIT("the document"));
+        } else {
+            ta_trace_put_state(names, info.source, writer);
+        }
+        ta_text_put(writer, TA_TRACE_LIT(" \xe2\x86\x92"));
+        for (uint32_t at = 0; at < info.target_count; at += 1u) {
+            ta_text_put(writer, TA_TRACE_LIT(" "));
+            ta_trace_put_state(names, info.targets[at], writer);
+        }
+        return;
+    }
+    ta_trace_put_state(names, info.source, writer);
+    if (info.target_count != 0) {
+        ta_text_put(writer, TA_TRACE_LIT(" \xe2\x86\x92"));
+        for (uint32_t at = 0; at < info.target_count; at += 1u) {
+            ta_text_put(writer, TA_TRACE_LIT(" "));
+            ta_trace_put_state(names, info.targets[at], writer);
+        }
+    }
+    if (info.event.len != 0) {
+        ta_text_put(writer, TA_TRACE_LIT(" on "));
+        ta_text_put(writer, info.event);
+    }
+    if (info.condition != TA_EXPR_ID_NONE) {
+        ta_text_put(writer, TA_TRACE_LIT(" [guarded]"));
+    }
+    if (info.type == TA_SCXML_TRANSITION_INTERNAL) {
+        ta_text_put(writer, TA_TRACE_LIT(" (internal)"));
+    }
+}
+
+/* Puts a transition's label, the one the tracer kept when it is the last composed. */
+static void ta_trace_put_transition(const ta_trace_names *names, ta_transition_id transition,
+                                    ta_text_writer *writer) {
+    ta_trace_label *label = &names->tracer->transition_label;
+    ta_trace_label_key key = { .definition = names->definition->id, .id = transition };
+    if (ta_trace_label_put(label, key, writer)) {
+        return;
+    }
+    uint32_t start = writer->length;
+    ta_trace_compose_transition(names, transition, writer);
+    ta_str text = { 0 };
+    if (ta_trace_written(writer, start, &text)) {
+        ta_trace_label_keep(label, key, text);
+    }
+}
+
+static const char *const ta_trace_action_elements[] = {
+    "<?>", "<raise>", "<send>", "<cancel>", "<assign>", "<script>", "<log>", "<if>", "<foreach>", "<invoke>",
+};
+
+/* Puts an action's label: "<assign> in onentry of busy", "<raise> in then
+ * of <if> in onexit of idle", "<log> in finalize of <invoke> #2 in a". It
+ * walks up from the action to its block's owner, one level at a time. */
+static void ta_trace_compose_action(const ta_trace_names *names, ta_action_id action, ta_text_writer *writer) {
+    ta_action_id id = action;
+    uint32_t start = writer->length;
+    for (;;) {
+        ta_action_info info = { 0 };
+        if (ta_definition_action(names->system, &(ta_definition_action_params){ .definition = names->definition->id,
+                                                                         .action = id,
+                                                                         .out = &info }) != TA_OK) {
+            writer->length = start; /* nothing stored past the start is kept */
+            ta_text_put(writer, TA_TRACE_LIT("a"));
+            ta_text_put_u64(writer, action);
+            return;
+        }
+        uint32_t kind = (uint32_t)info.kind < TA_ARRAY_COUNT(ta_trace_action_elements) ? (uint32_t)info.kind : 0u;
+        ta_text_put(writer, ta_str_from_cstr(ta_trace_action_elements[kind]));
+        switch (info.block) {
+        case TA_ACTION_IN_THEN:
+        case TA_ACTION_IN_ELSE:
+        case TA_ACTION_IN_FOREACH:
+            ta_text_put(writer, info.block == TA_ACTION_IN_THEN   ? TA_TRACE_LIT(" in then of ")
+                                : info.block == TA_ACTION_IN_ELSE ? TA_TRACE_LIT(" in else of ")
+                                                                  : TA_TRACE_LIT(" in the body of "));
+            id = info.owner;
+            continue;
+        case TA_ACTION_IN_ONENTRY:
+        case TA_ACTION_IN_ONEXIT:
+            ta_text_put(writer, info.block == TA_ACTION_IN_ONENTRY ? TA_TRACE_LIT(" in onentry") : TA_TRACE_LIT(" in onexit"));
+            if (info.block_index > 0) {
+                ta_text_put(writer, TA_TRACE_LIT(" #"));
+                ta_text_put_u64(writer, (uint64_t)info.block_index + 1u);
+            }
+            ta_text_put(writer, TA_TRACE_LIT(" of "));
+            ta_trace_put_state(names, info.owner, writer);
+            return;
+        case TA_ACTION_IN_TRANSITION:
+            ta_text_put(writer, TA_TRACE_LIT(" in "));
+            ta_trace_put_transition(names, info.owner, writer);
+            return;
+        case TA_ACTION_IN_FINALIZE:
+            ta_text_put(writer, TA_TRACE_LIT(" in finalize of <invoke>"));
+            if (info.block_index > 0) {
+                ta_text_put(writer, TA_TRACE_LIT(" #"));
+                ta_text_put_u64(writer, (uint64_t)info.block_index + 1u);
+            }
+            ta_text_put(writer, TA_TRACE_LIT(" in "));
+            ta_trace_put_state(names, info.owner, writer);
+            return;
+        default:
+            ta_text_put(writer, TA_TRACE_LIT(" in the document's <script>"));
+            return;
+        }
+    }
+}
+
+/* Puts an action's label, the one the tracer kept when it is the last composed. */
+static void ta_trace_put_action(const ta_trace_names *names, ta_action_id action, ta_text_writer *writer) {
+    ta_trace_label *label = &names->tracer->action_label;
+    ta_trace_label_key key = { .definition = names->definition->id, .id = action };
+    if (ta_trace_label_put(label, key, writer)) {
+        return;
+    }
+    uint32_t start = writer->length;
+    ta_trace_compose_action(names, action, writer);
+    ta_str text = { 0 };
+    if (ta_trace_written(writer, start, &text)) {
+        ta_trace_label_keep(label, key, text);
+    }
+}
+
+/* Puts an event name's dotted text. */
+static void ta_trace_put_event_name(const ta_system *system, ta_event_name_id name, ta_text_writer *writer) {
+    if (!ta_trie_valid(&system->event_names, name)) {
+        return;
+    }
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    uint32_t count = ta_trie_path(&system->event_names, name, segments);
+    for (uint32_t index = 0; index < count; index += 1u) {
+        if (index != 0) {
+            ta_text_put(writer, TA_TRACE_LIT("."));
+        }
+        ta_text_put(writer, ta_atom_text(&system->atoms, segments[index]));
+    }
+}
+
+/* Puts a step key's session as text: `<incarnation>.<session>.<family>`, or
+ * the decimal session when its family is unknown (a host's cause, a
+ * definition record) or the text would be longer than TA_TRACE_SESSION_TEXT. */
+static void ta_trace_put_session(const ta_system *system, const ta_step_key *key, ta_text_writer *writer) {
+    ta_str family = key->family != 0 ? ta_atom_text(&system->atoms, key->family) : (ta_str){ 0 };
+    if (key->session != 0 && family.len != 0) {
+        char text[TA_TRACE_SESSION_TEXT];
+        ta_text_writer session = { .buffer = text, .capacity = TA_TRACE_SESSION_TEXT };
+        ta_session_text_write(system, &session, key->session, family);
+        if (session.length <= TA_TRACE_SESSION_TEXT) {
+            ta_text_put(writer, (ta_str){ .ptr = text, .len = session.length });
+            return;
+        }
+    }
+    ta_text_put_u64(writer, key->session);
+}
+
+/* The record's own session as text, written once for a run of its records. */
+static ta_str ta_trace_session_text(ta_system *system, const ta_step_key *key) {
+    ta_tracer *tracer = &system->trace;
+    if (tracer->session_text_len == 0 || tracer->text_session != key->session || tracer->text_family != key->family) {
+        ta_text_writer writer = { .buffer = tracer->session_text, .capacity = TA_TRACE_SESSION_TEXT };
+        ta_trace_put_session(system, key, &writer);
+        tracer->session_text_len = writer.length <= TA_TRACE_SESSION_TEXT ? writer.length : 0u;
+        tracer->text_session = key->session;
+        tracer->text_family = key->family;
+    }
+    return (ta_str){ .ptr = tracer->session_text, .len = tracer->session_text_len };
+}
+
+/* What rendering one value of a record needs. */
+typedef struct {
+    const ta_system *system;
+    const ta_trace_entry *entry;
+    const ta_value *value;
+    /* Where the text is copied to, as soon as it is rendered. */
+    ta_trace_area *area;
+    /* Set when the text was cut. */
+    bool *cut;
+    /* The reason a failure gives (a fault's data, an error event's): kept
+     * at telemetryValueBytes whatever the masks' value_bytes says. */
+    bool reason;
+} ta_trace_value_params;
+
+/*
+ * A value as the actor's data model renders it for a trace, cut at the
+ * masks' value_bytes, or at telemetryValueBytes for a failure's reason,
+ * and copied into the area at once: a data model's text stays valid only
+ * until it is called again, and a record may render three. Empty when
+ * there is nothing to render, or no value is wanted.
+ */
+static ta_str ta_trace_value_text(const ta_trace_value_params *params) {
+    const ta_system *system = params->system;
+    const ta_value *value = params->value;
+    uint32_t limit = params->reason ? system->trace.value_bytes : system->trace.masks.value_bytes;
+    const ta_actor *actor = params->entry->actor;
+    if (limit == 0 || actor == NULL || value == NULL || value->v == NULL) {
+        return (ta_str){ 0 };
+    }
+    const ta_definition *definition = actor->definition;
+    const ta_datamodel_vtable *v = definition->datamodel.v;
+    if (v == NULL || v->value_text == NULL) {
+        return (ta_str){ 0 };
+    }
+    ta_str text = { 0 };
+    ta_fault fault = { 0 };
+    ta_op_status status = v->value_text(definition->datamodel.self,
+                                        &(ta_datamodel_value_text_params){
+                                            .shared = definition->datamodel_shared,
+                                            .instance = actor->datamodel_instance,
+                                            .value = value,
+                                            .host = &actor->host,
+                                            .out = &text,
+                                            .fault = &fault,
+                                            .trace_bytes = limit,
+                                        });
+    if (status != TA_OP_OK || (text.ptr == NULL && text.len != 0)) {
+        if (status == TA_OP_ERROR) {
+            ta_value_release(&fault.data); /* a receiver of a fault owns its data */
+        }
+        return (ta_str){ 0 };
+    }
+    if (text.len > limit) {
+        text.len = ta_utf8_cut(text.ptr, text.len, limit);
+        *params->cut = true;
+    }
+    ta_trace_area *area = params->area;
+    uint32_t room = area->capacity - area->used;
+    if (text.len > room) {
+        text.len = ta_utf8_cut(text.ptr, text.len, room);
+        *params->cut = true;
+    }
+    if (text.len == 0) {
+        return (ta_str){ 0 };
+    }
+    char *copy = (char *)area->bytes + area->used;
+    ta_mem_copy(copy, text.ptr, text.len);
+    area->used += text.len;
+    return (ta_str){ .ptr = copy, .len = text.len };
+}
+
+/* Cuts `*text` by up to `excess` bytes, on a code point boundary unless it
+ * is bytes; answers the bytes it took off. */
+static uint32_t ta_trace_shorten(ta_str *text, uint32_t excess, bool bytes) {
+    if (excess == 0 || text->len == 0) {
+        return 0;
+    }
+    uint32_t keep = excess >= text->len ? 0u : text->len - excess;
+    if (!bytes && keep != 0) {
+        keep = ta_utf8_cut(text->ptr, text->len, keep);
+    }
+    uint32_t taken = text->len - keep;
+    text->len = keep;
+    return taken;
+}
+
+/* Appends a u32 in this machine's byte order. */
+static void ta_area_put_u32(ta_trace_area *area, uint32_t value) {
+    ta_mem_copy(area->bytes + area->used, &value, sizeof value);
+    area->used += (uint32_t)sizeof value;
+}
+
+/* The lists of an entry, in the order a record carries them. */
+typedef enum {
+    TA_TRACE_LIST_TRANSITIONS = 0,
+    TA_TRACE_LIST_EXITED,
+    TA_TRACE_LIST_ENTERED,
+    TA_TRACE_LIST_HISTORY,
+    TA_TRACE_LIST_STATES,
+    TA_TRACE_LIST_COUNT
+} ta_trace_list;
+
+/* What the texts of one record are, and the flags composing them set. */
+typedef struct {
+    ta_tel_trace_texts texts;
+    uint16_t flags;
+    uint32_t counts[TA_TRACE_LIST_COUNT];
+} ta_trace_build;
+
+/* What composing the lists needs. */
+typedef struct {
+    ta_system *system;
+    const ta_trace_entry *entry;
+    /* Bytes the lists may take, IDs and names together. */
+    uint32_t budget;
+} ta_trace_lists_params;
+
+/*
+ * Lays the lists out in the area: the IDs first, back to back, then each
+ * entry's name as a u32 length and its bytes. Whole from the first list,
+ * stopping at the first entry that does not fit, so the last list is cut
+ * first. Stores in the build's counts how many of each there are and in its
+ * texts where the IDs and names lie, and answers whether any was cut.
+ */
+static bool ta_trace_lists(ta_trace_area *area, const ta_trace_lists_params *params, ta_trace_build *build) {
+    const ta_trace_entry *entry = params->entry;
+    const ta_trace_names names = { .system = params->system, .definition = entry->definition,
+                                   .tracer = &params->system->trace };
+    uint32_t *counts = build->counts;
+    ta_bytes *ids = &build->texts.list_ids;
+    ta_bytes *list_names = &build->texts.list_names;
+    const uint32_t *lists[TA_TRACE_LIST_COUNT] = { entry->transitions, entry->exited, entry->entered, entry->history,
+                                                   entry->states };
+    const uint32_t sizes[TA_TRACE_LIST_COUNT] = { entry->transition_count, entry->exited_count, entry->entered_count,
+                                                  entry->history_count, entry->state_count };
+    uint32_t total = 0;
+    for (uint32_t list = 0; list < TA_TRACE_LIST_COUNT; list += 1u) {
+        counts[list] = 0;
+        total += lists[list] == NULL ? 0u : sizes[list];
+    }
+    *ids = (ta_bytes){ 0 };
+    *list_names = (ta_bytes){ 0 };
+    uint32_t budget = params->budget;
+    if (total == 0) {
+        return false;
+    }
+    /* Every entry takes at least 8 bytes (its ID and its length), so the IDs of
+     * all that fit take at most half the budget; the names go after them. */
+    uint32_t id_room = budget / 2u;
+    if (id_room > total * 4u) {
+        id_room = total * 4u;
+    }
+    if (id_room > area->capacity - area->used) {
+        id_room = area->capacity - area->used;
+    }
+    id_room &= ~3u;
+    unsigned char *id_bytes = area->bytes + area->used;
+    area->used += id_room;
+    uint32_t names_start = area->used;
+    uint32_t used = 0;
+    uint32_t taken = 0;
+    bool cut = false;
+    for (uint32_t list = 0; list < TA_TRACE_LIST_COUNT && !cut; list += 1u) {
+        for (uint32_t index = 0; lists[list] != NULL && index < sizes[list]; index += 1u) {
+            uint32_t id = lists[list][index];
+            uint32_t mark = area->used;
+            if (area->capacity - area->used < (uint32_t)sizeof(uint32_t)) {
+                cut = true;
+                break;
+            }
+            ta_area_put_u32(area, 0u);
+            ta_text_writer writer = ta_area_writer(area);
+            if (list == TA_TRACE_LIST_TRANSITIONS) {
+                ta_trace_put_transition(&names, id, &writer);
+            } else {
+                ta_trace_put_state(&names, id, &writer);
+            }
+            uint32_t need = 8u + writer.length;
+            if ((taken + 1u) * 4u > id_room || used + need > budget || writer.length > writer.capacity) {
+                area->used = mark;
+                cut = true;
+                break;
+            }
+            ta_mem_copy(area->bytes + mark, &writer.length, sizeof writer.length);
+            area->used += writer.length;
+            ta_mem_copy(id_bytes + taken * 4u, &id, sizeof id);
+            taken += 1u;
+            counts[list] += 1u;
+            used += need;
+        }
+    }
+    *ids = (ta_bytes){ .ptr = taken == 0 ? NULL : id_bytes, .len = taken * 4u };
+    *list_names = (ta_bytes){ .ptr = area->used == names_start ? NULL : area->bytes + names_start,
+                         .len = area->used - names_start };
+    return cut;
+}
+
+/* The event type as the catalog numbers it. */
+static uint8_t ta_trace_event_type(ta_event_type type) {
+    switch (type) {
+    case TA_EVENT_INTERNAL: return TA_RECORD_EVENT_TYPE_INTERNAL;
+    case TA_EVENT_PLATFORM: return TA_RECORD_EVENT_TYPE_PLATFORM;
+    default: return TA_RECORD_EVENT_TYPE_EXTERNAL;
+    }
+}
+
+/* Whether a kind opens a run, and so carries the definition's facts. */
+static bool ta_trace_opens_run(ta_trace_kind kind) {
+    return kind == TA_TRACE_SPAWNED || kind == TA_TRACE_LOADED || kind == TA_TRACE_MACROSTEP_BEGIN ||
+           kind == TA_TRACE_DEFINITION_REGISTERED || kind == TA_TRACE_DEFINITION_RETIRED ||
+           kind == TA_TRACE_DEFINITION_FREED;
+}
+
+/* Composes one text with `put` into the area. */
+#define TA_TRACE_COMPOSE(area, build, field, statement)           \
+    do {                                                          \
+        ta_text_writer writer = ta_area_writer(area);             \
+        ta_text_writer *out = &writer;                            \
+        statement;                                                \
+        bool cut = false;                                         \
+        (build)->texts.field = ta_area_take((area), out, &cut);   \
+        if (cut) {                                                \
+            (build)->flags |= TA_TEL_TRACE_FLAG_TRUNCATED;         \
+        }                                                         \
+    } while (0)
+
+/* What composing a record's texts reads. */
+typedef struct {
+    ta_system *system;
+    const ta_trace_entry *entry;
+} ta_trace_compose_params;
+
+/* The record's texts but its lists. */
+static void ta_trace_compose(const ta_trace_compose_params *params, ta_trace_area *area, ta_trace_build *build) {
+    ta_system *system = params->system;
+    const ta_trace_entry *entry = params->entry;
+    const ta_definition *definition = entry->definition;
+    const ta_trace_names names = { .system = system, .definition = definition, .tracer = &system->trace };
+    const ta_actor *actor = entry->actor;
+    build->texts.session_id = ta_trace_session_text(system, &entry->key);
+    if (entry->cause.session != 0 || entry->cause.macrostep != 0 || entry->cause.microstep != 0) {
+        TA_TRACE_COMPOSE(area, build, cause_session_id, ta_trace_put_session(system, &entry->cause, out));
+    }
+    if (actor != NULL && actor->record.self.kind == TA_ACTOR_REF_NAMED && actor->record.self.as.named != NULL) {
+        ta_actor_address address = ta_address_view(actor->record.self.as.named);
+        TA_TRACE_COMPOSE(area, build, address, {
+            ta_text_put(out, address.family.name);
+            ta_text_put(out, TA_TRACE_LIT("/"));
+            ta_text_put(out, address.name);
+        });
+    }
+    if (ta_trace_opens_run(entry->kind)) {
+        build->texts.family_name = definition->identity.family.name;
+        build->texts.revision = definition->identity.revision;
+        ta_trace_facts *facts = &system->trace.facts;
+        if (facts->definition != definition->id) {
+            facts->document_name = definition->document_name != TA_ATOM_NONE
+                                       ? ta_atom_text(&system->atoms, definition->document_name)
+                                       : (ta_str){ 0 };
+            ta_source_location place;
+            facts->source = ta_definition_span(system, &(ta_definition_span_params){ .definition = definition->id,
+                                                                                      .kind = TA_ELEMENT_STATE,
+                                                                                      .id = 0,
+                                                                                      .out = &place }) == TA_OK
+                                ? place.source
+                                : (ta_str){ 0 };
+            facts->definition = definition->id;
+        }
+        build->texts.document_name = facts->document_name;
+        build->texts.source = facts->source;
+    }
+    if (entry->position.state != TA_STATE_NONE) {
+        build->texts.state_name = ta_trace_state_name(system, definition, entry->position.state);
+    }
+    if (entry->position.transition != TA_TRANSITION_NONE) {
+        TA_TRACE_COMPOSE(area, build, transition_name,
+                         ta_trace_put_transition(&names, entry->position.transition, out));
+    }
+    if (entry->position.action != TA_ACTION_NONE) {
+        TA_TRACE_COMPOSE(area, build, action_name, ta_trace_put_action(&names, entry->position.action, out));
+    }
+    if (entry->state != TA_STATE_NONE) {
+        build->texts.subject_state_name = ta_trace_state_name(system, definition, entry->state);
+    }
+    if (entry->action != TA_ACTION_NONE) {
+        TA_TRACE_COMPOSE(area, build, subject_action_name, ta_trace_put_action(&names, entry->action, out));
+    }
+    build->texts.name = entry->name;
+    if (entry->event != NULL) {
+        const ta_event *event = entry->event;
+        build->flags |= TA_TEL_TRACE_FLAG_EVENT;
+        TA_TRACE_COMPOSE(area, build, event_name, ta_trace_put_event_name(system, event->name, out));
+        if (event->send_id != 0) {
+            TA_TRACE_COMPOSE(area, build, event_send_id, ta_send_id_write(system, event->send_id, out));
+        }
+        if (event->invoke_id != TA_INVOKE_ID_NONE) {
+            (void)ta_system_invoke_id_text(system, event->invoke_id, &build->texts.event_invoke_id);
+        }
+        bool cut = false;
+        build->texts.event_data = ta_trace_value_text(&(ta_trace_value_params){
+            .system = system, .entry = entry, .value = &event->data, .area = area, .cut = &cut,
+            .reason = event->type == TA_EVENT_PLATFORM /* an error event: its data says why */ });
+        if (cut) {
+            build->flags |= TA_TEL_TRACE_FLAG_EVENT_DATA_CUT | TA_TEL_TRACE_FLAG_TRUNCATED;
+        }
+    }
+    if (entry->send != 0) {
+        TA_TRACE_COMPOSE(area, build, send_id, ta_send_id_write(system, entry->send, out));
+    }
+    if (entry->invoke != TA_INVOKE_ID_NONE) {
+        (void)ta_system_invoke_id_text(system, entry->invoke, &build->texts.invoke_id);
+    }
+    if (entry->has_value) {
+        build->flags |= TA_TEL_TRACE_FLAG_VALUE;
+        bool cut = false;
+        build->texts.value_text = ta_trace_value_text(&(ta_trace_value_params){
+            .system = system, .entry = entry, .value = &entry->value, .area = area, .cut = &cut });
+        if (cut) {
+            build->flags |= TA_TEL_TRACE_FLAG_VALUE_CUT | TA_TEL_TRACE_FLAG_TRUNCATED;
+        }
+    }
+    if (entry->has_fault) {
+        build->flags |= TA_TEL_TRACE_FLAG_FAULT;
+        if (entry->fault.detail != 0) {
+            TA_TRACE_COMPOSE(area, build, fault_detail, ta_trace_put_event_name(system, entry->fault.detail, out));
+        }
+        build->texts.fault_message = entry->fault.message;
+        bool cut = false;
+        build->texts.fault_data = ta_trace_value_text(&(ta_trace_value_params){
+            .system = system, .entry = entry, .value = &entry->fault.data, .area = area, .cut = &cut,
+            .reason = true });
+        if (cut) {
+            build->flags |= TA_TEL_TRACE_FLAG_TRUNCATED;
+        }
+    }
+}
+
+/* The texts but the lists, in the order they are cut when a record does not fit. */
+static uint32_t ta_trace_fit(ta_trace_build *build, uint32_t budget) {
+    ta_tel_trace_texts *texts = &build->texts;
+    ta_str *order[] = {
+        &texts->value_text, &texts->event_data, &texts->fault_data, &texts->fault_message, &texts->source,
+        &texts->document_name, &texts->name, &texts->invoke_id, &texts->send_id, &texts->event_invoke_id,
+        &texts->event_send_id, &texts->event_name, &texts->fault_detail, &texts->subject_action_name,
+        &texts->subject_state_name, &texts->action_name, &texts->transition_name, &texts->state_name,
+        &texts->family_name, &texts->address, &texts->cause_session_id, &texts->session_id,
+    };
+    uint32_t sum = texts->revision.len;
+    for (uint32_t index = 0; index < TA_ARRAY_COUNT(order); index += 1u) {
+        sum += order[index]->len;
+    }
+    if (sum > budget && texts->revision.len != 0) {
+        /* The revision is bytes, cut with the definition's other facts. */
+        uint32_t excess = sum - budget;
+        uint32_t taken = excess >= texts->revision.len ? texts->revision.len : excess;
+        texts->revision.len -= taken;
+        sum -= taken;
+        build->flags |= TA_TEL_TRACE_FLAG_TRUNCATED;
+    }
+    for (uint32_t index = 0; index < TA_ARRAY_COUNT(order) && sum > budget; index += 1u) {
+        uint32_t taken = ta_trace_shorten(order[index], sum - budget, false);
+        if (taken != 0) {
+            sum -= taken;
+            build->flags |= TA_TEL_TRACE_FLAG_TRUNCATED;
+            if (order[index] == &texts->value_text) {
+                build->flags |= TA_TEL_TRACE_FLAG_VALUE_CUT;
+            } else if (order[index] == &texts->event_data) {
+                build->flags |= TA_TEL_TRACE_FLAG_EVENT_DATA_CUT;
+            }
+        }
+    }
+    return sum;
+}
+
+/* Reports the records dropped since the last report, ahead of the next record. */
+static void ta_trace_report_drops(ta_system *system, ta_time now) {
+    ta_ring *ring = &system->control.tel;
+    ta_ring_record reserved;
+    /* Reserve first, then take the drops: a refused report is counted with them. */
+    if (ta_ring_reserve(ring, (uint32_t)sizeof(ta_tel_dropped), &reserved) != TA_OK) {
+        return;
+    }
+    ta_ring_drops drops = { 0 };
+    (void)ta_ring_take_drops(ring, &drops);
+    ta_tel_dropped fixed = { .header = { .at = now }, .count = drops.count, .first_seq = drops.first_seq };
+    (void)ta_tel_dropped_write((ta_record_buffer){ .bytes = reserved.bytes, .size = reserved.size }, &fixed);
+    ta_ring_commit(ring);
+}
+
+TA_PRIVATE void ta_trace_write(ta_system *system, const ta_trace_entry *entry) {
+    ta_tracer *tracer = &system->trace;
+    ta_ring *ring = &system->control.tel;
+    if (tracer->scratch == NULL) {
+        return;
+    }
+    if (ring->unreported.count != 0) {
+        ta_trace_report_drops(system, entry->now);
+    }
+    ta_ring_record reserved;
+    if (ta_ring_available(ring) < TA_TRACE_FIXED_BYTES) {
+        /* Full whatever the texts: drop it, counted, before rendering anything. */
+        (void)ta_ring_reserve(ring, TA_TRACE_FIXED_BYTES, &reserved);
+        return;
+    }
+    ta_trace_area area = { .bytes = tracer->scratch, .capacity = tracer->scratch_bytes };
+    ta_trace_build build = { 0 };
+    ta_trace_compose(&(ta_trace_compose_params){ .system = system, .entry = entry }, &area, &build);
+    uint32_t budget = ring->max_record_bytes - TA_TRACE_FIXED_BYTES;
+    uint32_t used = ta_trace_fit(&build, budget);
+    if (entry->definition != NULL) {
+        bool cut = ta_trace_lists(&area, &(ta_trace_lists_params){ .system = system, .entry = entry,
+                                                                   .budget = budget - used },
+                                  &build);
+        if (cut) {
+            build.flags |= TA_TEL_TRACE_FLAG_LISTS_CUT | TA_TEL_TRACE_FLAG_TRUNCATED;
+        }
+    }
+    /* Measured once: the fixed part, the texts ta_trace_fit summed, and the lists. */
+    uint32_t size = TA_ALIGN_UP(TA_TRACE_FIXED_BYTES + used + build.texts.list_ids.len + build.texts.list_names.len, 8u);
+    if (ta_ring_reserve(ring, size, &reserved) != TA_OK) {
+        return; /* dropped and counted (ADR 0098) */
+    }
+    /* The fixed part is built in the reservation, around the seq it stamped. */
+    ta_tel_trace *fixed = (ta_tel_trace *)(void *)reserved.bytes;
+    ta_mem_zero(reserved.bytes + offsetof(ta_record_header, session),
+                TA_TRACE_FIXED_BYTES - offsetof(ta_record_header, session));
+    fixed->header.flags = build.flags;
+    fixed->header.session = entry->key.session;
+    fixed->header.at = entry->now;
+    fixed->wall_ns = tracer->clock.v != NULL ? tracer->clock.v->wall_ns(tracer->clock.self) : 0u;
+    fixed->macrostep = entry->key.macrostep;
+    fixed->trace_id_high = entry->context.trace_id_high;
+    fixed->trace_id_low = entry->context.trace_id_low;
+    fixed->cause_session = entry->cause.session;
+    fixed->cause_macrostep = entry->cause.macrostep;
+    fixed->actor = entry->actor != NULL ? entry->actor->record.id : 0u;
+    fixed->definition = entry->definition != NULL ? entry->definition->id : 0u;
+    fixed->send = entry->send;
+    fixed->invoke = entry->invoke;
+    fixed->microstep = entry->key.microstep;
+    fixed->cause_microstep = entry->cause.microstep;
+    fixed->state = entry->position.state;
+    fixed->transition = entry->position.transition;
+    fixed->action = entry->position.action;
+    fixed->iteration = entry->position.iteration;
+    fixed->subject_state = entry->state;
+    fixed->subject_action = entry->action;
+    fixed->expr = entry->expr;
+    fixed->dropped = entry->dropped;
+    fixed->fault_code = entry->has_fault ? entry->fault.code : 0;
+    fixed->transition_count = build.counts[TA_TRACE_LIST_TRANSITIONS];
+    fixed->exited_count = build.counts[TA_TRACE_LIST_EXITED];
+    fixed->entered_count = build.counts[TA_TRACE_LIST_ENTERED];
+    fixed->history_count = build.counts[TA_TRACE_LIST_HISTORY];
+    fixed->state_count = build.counts[TA_TRACE_LIST_STATES];
+    fixed->trace_kind = (uint16_t)entry->kind;
+    fixed->position = (uint8_t)entry->position.at;
+    fixed->result = entry->result ? 1u : 0u;
+    fixed->trace_flags = entry->context.flags;
+    fixed->trace_detail = entry->context.detail;
+    fixed->runaway_cause = entry->kind == TA_TRACE_RUNAWAY ? (uint8_t)TA_RECORD_RUNAWAY_CAUSE_CHAIN_LIMIT : 0u;
+    fixed->event_type = entry->event != NULL ? ta_trace_event_type(entry->event->type) : 0u;
+    (void)ta_tel_trace_write((ta_record_buffer){ .bytes = reserved.bytes, .size = reserved.size }, fixed,
+                             &build.texts);
+    ta_ring_commit(ring);
+}
+
+/* ------------------------------------------------------------------------
+ * Reading tel (ADR 0098, ADR 0104): the host's side of the ring
+ */
+
+static ta_event_type ta_trace_public_event_type(uint8_t type) {
+    switch (type) {
+    case TA_RECORD_EVENT_TYPE_INTERNAL: return TA_EVENT_INTERNAL;
+    case TA_RECORD_EVENT_TYPE_PLATFORM: return TA_EVENT_PLATFORM;
+    default: return TA_EVENT_EXTERNAL;
+    }
+}
+
+/* A trace record's IDs, numbers, flags and lists, read from its checked view
+ * into `out`; its texts stay in the record, for ta_trace_record_text. */
+static ta_result ta_trace_decode(const ta_record_view *view, ta_trace_record *out) {
+    const ta_tel_trace *fixed = ta_tel_trace_from_view(view);
+    uint16_t flags = fixed->header.flags;
+    uint64_t total = (uint64_t)fixed->transition_count + fixed->exited_count + fixed->entered_count +
+                     fixed->history_count + fixed->state_count;
+    ta_bytes ids = ta_record_view_bytes(view, fixed->list_ids);
+    if (total * 4u != ids.len || ((uintptr_t)ids.ptr & 3u) != 0) {
+        return TA_ERR_CORRUPT;
+    }
+    const uint32_t *list = (const uint32_t *)(const void *)ids.ptr;
+    out->kind = (ta_trace_kind)fixed->trace_kind;
+    out->key = (ta_step_key){ .session = fixed->header.session, .macrostep = fixed->macrostep,
+                              .microstep = fixed->microstep };
+    out->position = (ta_trace_position){ .at = (ta_trace_at)fixed->position, .state = fixed->state,
+                                         .transition = fixed->transition, .action = fixed->action,
+                                         .iteration = fixed->iteration };
+    out->context = (ta_trace_context){ .trace_id_high = fixed->trace_id_high, .trace_id_low = fixed->trace_id_low,
+                                       .flags = fixed->trace_flags, .detail = fixed->trace_detail };
+    out->cause = (ta_step_key){ .session = fixed->cause_session, .macrostep = fixed->cause_macrostep,
+                                .microstep = fixed->cause_microstep };
+    out->actor = fixed->actor;
+    out->definition = fixed->definition;
+    out->now = fixed->header.at;
+    out->wall_ns = fixed->wall_ns;
+    out->has_event = (flags & TA_TEL_TRACE_FLAG_EVENT) != 0;
+    out->event_type = ta_trace_public_event_type(fixed->event_type);
+    out->event_data_cut = (flags & TA_TEL_TRACE_FLAG_EVENT_DATA_CUT) != 0;
+    out->state = fixed->subject_state;
+    out->expr = fixed->expr;
+    out->action = fixed->subject_action;
+    out->iteration = fixed->trace_kind == (uint16_t)TA_TRACE_FOREACH ? fixed->iteration : 0u;
+    out->send = fixed->send;
+    out->invoke = fixed->invoke;
+    out->result = fixed->result != 0;
+    out->has_value = (flags & TA_TEL_TRACE_FLAG_VALUE) != 0;
+    out->value_cut = (flags & TA_TEL_TRACE_FLAG_VALUE_CUT) != 0;
+    out->has_fault = (flags & TA_TEL_TRACE_FLAG_FAULT) != 0;
+    out->fault_code = fixed->fault_code;
+    out->dropped = fixed->dropped;
+    out->runaway_cause = fixed->runaway_cause;
+    out->suppressed = (flags & TA_TEL_TRACE_FLAG_SUPPRESSED) != 0;
+    out->truncated = (flags & TA_TEL_TRACE_FLAG_TRUNCATED) != 0;
+    out->lists_cut = (flags & TA_TEL_TRACE_FLAG_LISTS_CUT) != 0;
+    out->transition_count = fixed->transition_count;
+    out->transitions = fixed->transition_count != 0 ? list : NULL;
+    list += fixed->transition_count;
+    out->exited_count = fixed->exited_count;
+    out->exited = fixed->exited_count != 0 ? list : NULL;
+    list += fixed->exited_count;
+    out->entered_count = fixed->entered_count;
+    out->entered = fixed->entered_count != 0 ? list : NULL;
+    list += fixed->entered_count;
+    out->history_count = fixed->history_count;
+    out->history = fixed->history_count != 0 ? list : NULL;
+    list += fixed->history_count;
+    out->state_count = fixed->state_count;
+    out->states = fixed->state_count != 0 ? list : NULL;
+    out->list_names = ta_record_view_bytes(view, fixed->list_names);
+    out->revision = ta_record_view_bytes(view, fixed->revision);
+    out->bytes = (ta_bytes){ .ptr = view->bytes, .len = view->size };
+    return TA_OK;
+}
+
+/* Where each ta_trace_text's span lies in a tel.trace record, by its value. */
+static const uint16_t ta_trace_text_spans[] = {
+    [TA_TRACE_TEXT_SESSION_ID] = offsetof(ta_tel_trace, session_id),
+    [TA_TRACE_TEXT_CAUSE_SESSION_ID] = offsetof(ta_tel_trace, cause_session_id),
+    [TA_TRACE_TEXT_ADDRESS] = offsetof(ta_tel_trace, address),
+    [TA_TRACE_TEXT_FAMILY] = offsetof(ta_tel_trace, family_name),
+    [TA_TRACE_TEXT_DOCUMENT_NAME] = offsetof(ta_tel_trace, document_name),
+    [TA_TRACE_TEXT_SOURCE] = offsetof(ta_tel_trace, source),
+    [TA_TRACE_TEXT_POSITION_STATE] = offsetof(ta_tel_trace, state_name),
+    [TA_TRACE_TEXT_POSITION_TRANSITION] = offsetof(ta_tel_trace, transition_name),
+    [TA_TRACE_TEXT_POSITION_ACTION] = offsetof(ta_tel_trace, action_name),
+    [TA_TRACE_TEXT_STATE] = offsetof(ta_tel_trace, subject_state_name),
+    [TA_TRACE_TEXT_ACTION] = offsetof(ta_tel_trace, subject_action_name),
+    [TA_TRACE_TEXT_NAME] = offsetof(ta_tel_trace, name),
+    [TA_TRACE_TEXT_EVENT_NAME] = offsetof(ta_tel_trace, event_name),
+    [TA_TRACE_TEXT_EVENT_SEND_ID] = offsetof(ta_tel_trace, event_send_id),
+    [TA_TRACE_TEXT_EVENT_INVOKE_ID] = offsetof(ta_tel_trace, event_invoke_id),
+    [TA_TRACE_TEXT_EVENT_DATA] = offsetof(ta_tel_trace, event_data),
+    [TA_TRACE_TEXT_SEND_ID] = offsetof(ta_tel_trace, send_id),
+    [TA_TRACE_TEXT_INVOKE_ID] = offsetof(ta_tel_trace, invoke_id),
+    [TA_TRACE_TEXT_VALUE] = offsetof(ta_tel_trace, value_text),
+    [TA_TRACE_TEXT_FAULT_DETAIL] = offsetof(ta_tel_trace, fault_detail),
+    [TA_TRACE_TEXT_FAULT_MESSAGE] = offsetof(ta_tel_trace, fault_message),
+    [TA_TRACE_TEXT_FAULT_DATA] = offsetof(ta_tel_trace, fault_data),
+};
+
+_Static_assert(TA_ARRAY_COUNT(ta_trace_text_spans) == (uint32_t)TA_TRACE_TEXT_FAULT_DATA + 1u,
+               "every ta_trace_text has its span");
+
+TA_API ta_str ta_trace_record_text(const ta_trace_record *record, ta_trace_text text) {
+    if (record == NULL || (uint32_t)text >= TA_ARRAY_COUNT(ta_trace_text_spans) ||
+        record->bytes.ptr == NULL || record->bytes.len < TA_TRACE_FIXED_BYTES) {
+        return (ta_str){ 0 };
+    }
+    ta_span32 span = { 0 };
+    ta_mem_copy(&span, record->bytes.ptr + ta_trace_text_spans[text], sizeof span);
+    ta_record_view view = { .bytes = record->bytes.ptr, .size = record->bytes.len, .kind = TA_RECORD_KIND_TEL_TRACE };
+    return ta_record_view_text(&view, span);
+}
+
+TA_API ta_result ta_system_tel_peek(ta_system *system, ta_tel_record *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (system->trace.scratch == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_ring_record record;
+    ta_result result = ta_ring_peek(&system->control.tel, &record);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_record_view view;
+    if (ta_record_read(&(ta_record_read_params){ .bytes = record.bytes, .size = record.size,
+                                                 .ring = TA_RECORD_RING_TEL },
+                       &view) != TA_OK) {
+        return TA_ERR_CORRUPT;
+    }
+    const ta_tel_dropped *dropped = ta_tel_dropped_from_view(&view);
+    if (dropped != NULL) {
+        *out = (ta_tel_record){ .kind = TA_TEL_DROPPED, .seq = record.seq, .dropped = dropped->count,
+                                .first_dropped = dropped->first_seq };
+        return TA_OK;
+    }
+    if (ta_trace_decode(&view, &out->trace) != TA_OK) {
+        return TA_ERR_CORRUPT;
+    }
+    out->kind = TA_TEL_TRACE;
+    out->seq = record.seq;
+    out->dropped = 0;
+    out->first_dropped = 0;
+    return TA_OK;
+}
+
+TA_API ta_result ta_system_tel_release(ta_system *system) {
+    if (system == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (system->trace.scratch == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    return ta_ring_release(&system->control.tel);
+}
+
+TA_API ta_result ta_system_tel_status(const ta_system *system, ta_tel_status *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_ring *ring = &system->control.tel;
+    if (system->trace.scratch == NULL) {
+        *out = (ta_tel_status){ 0 };
+        return TA_OK;
+    }
+    *out = (ta_tel_status){ .capacity = ta_ring_capacity(ring), .used = ta_ring_used(ring),
+                            .next_seq = ring->next_seq, .dropped = ring->dropped };
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -22908,14 +24493,14 @@ static ta_result ta_actor_withdraw(ta_system *system, ta_actor *actor, ta_send_i
     TA_COUNT(system, actor->definition, sends_cancelled);
     ta_step_key key = ta_trace_lifecycle_key(actor);
     ta_trace_context none = {0};
-    if (ta_trace_lifecycle_wanted(&system->trace, TA_TRACE_WITHDRAWN, &none)) {
-        ta_trace_record record = ta_trace_record_blank(TA_TRACE_WITHDRAWN);
-        record.key = key;
-        record.actor = actor->record.id;
-        record.definition = actor->definition->id;
-        record.now = ta_actor_now(system, actor);
-        record.send = send;
-        ta_trace_write(&system->trace, &record);
+    if (ta_trace_lifecycle_wanted(&system->trace.masks, TA_TRACE_WITHDRAWN, &none)) {
+        ta_trace_entry entry = ta_trace_entry_blank(TA_TRACE_WITHDRAWN);
+        entry.key = key;
+        entry.actor = actor;
+        entry.definition = actor->definition;
+        entry.now = ta_actor_now(system, actor);
+        entry.send = send;
+        ta_trace_write(system, &entry);
     }
     return TA_OK;
 }
@@ -24763,8 +26348,13 @@ typedef struct {
     uint32_t max;
 } ta_param_row;
 
-/* One row per ta_param, in its order. The bounds are the only ones: no
- * other code checks a parameter again. */
+/* The most maxRecordBytes may be: the largest c2hBytes, 2 GiB, over the
+ * five records its smallest reserve takes (ADR 0104). */
+#define TA_PARAM_MAX_RECORD_BYTES_MAX 429496729u
+
+/* One row per ta_param, in its order. The bounds are the only ones a value
+ * meets alone; ta_params_resolve checks the bounds between them. No other
+ * code checks a parameter again. */
 static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MICROSTEP_LIMIT] = { "microstepLimit", "microsteps", TA_PARAM_DEFAULT_MICROSTEP_LIMIT, 0, 2147483647u },
     [TA_PARAM_EVENT_BLOCK_CACHE] = { "eventBlockCache", "blocks", TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, 0, 65536u },
@@ -24783,7 +26373,20 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MAX_ACTORS] = { "maxActors", "actors", TA_PARAM_DEFAULT_MAX_ACTORS, 1, 2147483647u },
     [TA_PARAM_MAX_PENDING_SENDS] = { "maxPendingSends", "sends", TA_PARAM_DEFAULT_MAX_PENDING_SENDS, 1, 2147483647u },
     [TA_PARAM_MAX_DEFINITIONS] = { "maxDefinitions", "definitions", TA_PARAM_DEFAULT_MAX_DEFINITIONS, 1, 2147483647u },
+    [TA_PARAM_TEL_BYTES] = { "telBytes", "bytes", TA_PARAM_DEFAULT_TEL_BYTES, 0, 2147483648u },
+    [TA_PARAM_MAX_RECORD_BYTES] = { "maxRecordBytes", "bytes", TA_PARAM_DEFAULT_MAX_RECORD_BYTES,
+                                    TA_TRACE_RESERVED_BYTES, TA_PARAM_MAX_RECORD_BYTES_MAX },
+    [TA_PARAM_TELEMETRY_VALUE_BYTES] = { "telemetryValueBytes", "bytes", TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES, 0,
+                                         TA_PARAM_MAX_RECORD_BYTES_MAX - TA_TRACE_RESERVED_BYTES },
 };
+
+/* Rejects `param`: names it when the config asks. */
+static ta_result ta_params_reject(const ta_system_config *config, ta_param param) {
+    if (config->rejected != NULL) {
+        *config->rejected = param;
+    }
+    return TA_ERR_INVALID;
+}
 
 TA_API ta_result ta_param_info_of(ta_param param, ta_param_info *out) {
     if (out == NULL || (uint32_t)param >= (uint32_t)TA_PARAM_COUNT) {
@@ -24824,13 +26427,19 @@ static ta_result ta_params_resolve(const ta_system_config *config, uint32_t valu
         }
         const ta_param_row *row = &ta_param_rows[param];
         if (given[param] || value->value < row->min || value->value > row->max) {
-            if (config->rejected != NULL) {
-                *config->rejected = value->param;
-            }
-            return TA_ERR_INVALID;
+            return ta_params_reject(config, value->param);
         }
         given[param] = true;
         values[param] = (uint32_t)value->value;
+    }
+    /* The bounds between them (ADR 0098): the largest record fits the ring,
+     * and a value leaves room for the rest of its record. */
+    uint32_t record = values[TA_PARAM_MAX_RECORD_BYTES];
+    if (values[TA_PARAM_TEL_BYTES] != 0 && values[TA_PARAM_TEL_BYTES] < record) {
+        return ta_params_reject(config, TA_PARAM_TEL_BYTES);
+    }
+    if (values[TA_PARAM_TELEMETRY_VALUE_BYTES] > record - TA_TRACE_RESERVED_BYTES) {
+        return ta_params_reject(config, TA_PARAM_TELEMETRY_VALUE_BYTES);
     }
     return TA_OK;
 }
@@ -24999,7 +26608,6 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
                            .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
-                           .trace = ta_null_trace_sink(),
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
@@ -25032,6 +26640,9 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
         result = ta_system_arena_open(system);
     }
     if (result == TA_OK) {
+        result = ta_trace_open(system);
+    }
+    if (result == TA_OK) {
         result = ta_atom_intern(&system->atoms, ta_str_from_cstr(TA_SCXML_IO_URI), &system->scxml_io_type);
     }
     if (result == TA_OK) {
@@ -25053,6 +26664,8 @@ TA_API void ta_system_destroy(ta_system *system) {
     if (system == NULL) {
         return;
     }
+    /* No record is built, nor the clock called, for a ring about to be freed. */
+    system->trace.masks = (ta_trace_masks){ 0 };
     /* Teardown releases submitted sends instead of keeping them as orphans. */
     system->timers.closing = true;
     for (uint32_t slot = 0; slot < ta_actor_table_issued(&system->actors); slot += 1) {
@@ -25086,6 +26699,7 @@ TA_API void ta_system_destroy(ta_system *system) {
     ta_interpreter_block_cache_trim(system);
     ta_system_arena_close(system);
     ta_interpreter_release_spares(system);
+    ta_trace_close(system);
     /* Unloaded sessions hold addresses; give them back before the table goes. */
     ta_session_table_destroy(&system->sessions);
     /* Last: everything above gave its addresses back. */
@@ -25138,10 +26752,10 @@ TA_API ta_result ta_system_set_definition_sink(ta_system *system, ta_definition_
 
 /*
  * One definition event, told twice (ADR 0080): first as a lifecycle record
- * to the trace sink, when its mask asks for the kind, then to the definition
- * sink (ADR 0079). The record goes first, so a trace sink reading the
- * definition finds it as intact as the definition sink does, and before the
- * host's cleanup of it.
+ * on tel, when the masks ask for the kind, then to the definition sink (ADR
+ * 0079). The record goes first, so it names the definition while it is as
+ * intact as the definition sink finds it, and before the host's cleanup of
+ * it.
  */
 TA_PRIVATE void ta_system_tell_definition(ta_system *system, const ta_definition *definition, ta_definition_event_kind kind) {
     static const ta_trace_kind trace_kinds[] = {
@@ -25151,17 +26765,16 @@ TA_PRIVATE void ta_system_tell_definition(ta_system *system, const ta_definition
     };
     ta_trace_kind trace_kind = trace_kinds[kind];
     ta_trace_context none = { 0 };
-    if (ta_trace_lifecycle_wanted(&system->trace, trace_kind, &none)) {
-        ta_trace_record record = ta_trace_record_blank(trace_kind);
+    if (ta_trace_lifecycle_wanted(&system->trace.masks, trace_kind, &none)) {
+        ta_trace_entry entry = ta_trace_entry_blank(trace_kind);
         /* One key per definition and event: a definition ID is never issued
          * twice (ADR 0043), and each event happens at most once to it. */
-        record.key = (ta_step_key){ .session = TA_TRACE_DEFINITIONS_SESSION,
-                                    .macrostep = definition->id,
-                                    .microstep = (uint32_t)kind + 1u };
-        record.definition = definition->id;
-        record.identity = definition->identity;
-        record.now = ta_clock_now(&system->clock);
-        ta_trace_write(&system->trace, &record);
+        entry.key = (ta_step_key){ .session = TA_TRACE_DEFINITIONS_SESSION,
+                                   .macrostep = definition->id,
+                                   .microstep = (uint32_t)kind + 1u };
+        entry.definition = definition;
+        entry.now = ta_clock_now(&system->clock);
+        ta_trace_write(system, &entry);
     }
     ta_definition_event event = { .kind = kind, .definition = definition->id, .identity = definition->identity };
     system->definition_sink.v->notify(system->definition_sink.self, &event);
@@ -25384,6 +26997,7 @@ TA_PRIVATE void ta_system_settle_definition(ta_system *system, ta_definition *de
         ta_definition *freeing = doomed;
         doomed = freeing->free_next;
         ta_system_tell_definition(system, freeing, TA_DEFINITION_EVENT_FREED);
+        ta_trace_forget_definition(&system->trace, freeing->id);
         uint32_t slot = ta_handle_slot(freeing->id);
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
         /* The slot's next occupant gets a new generation, so this ID goes
@@ -26150,23 +27764,23 @@ static ta_trace_position ta_trace_position_now(const ta_interpreter *it) {
 }
 
 /* A record of `kind` at the step and position running now. */
-static ta_trace_record ta_trace_record_now(const ta_interpreter *it, ta_trace_kind kind) {
-    ta_trace_record record = ta_trace_record_blank(kind);
+static ta_trace_entry ta_trace_record_now(const ta_interpreter *it, ta_trace_kind kind) {
+    ta_trace_entry record = ta_trace_entry_blank(kind);
     record.key = ta_trace_key(it);
     record.position = ta_trace_position_now(it);
     record.context = it->trace_context;
-    record.actor = it->actor->record.id;
-    record.definition = it->definition->id;
+    record.actor = it->actor;
+    record.definition = it->definition;
     record.now = ta_actor_now(it->system, it->actor);
     return record;
 }
 
-static void ta_trace_emit(const ta_interpreter *it, const ta_trace_record *record) {
-    ta_trace_write(&it->system->trace, record);
+static void ta_trace_emit(const ta_interpreter *it, const ta_trace_entry *record) {
+    ta_trace_write(it->system, record);
 }
 
 /* A fault's detail and code; its data went into the error event. */
-static void ta_trace_fault(ta_trace_record *record, const ta_fault *fault) {
+static void ta_trace_entry_fault(ta_trace_entry *record, const ta_fault *fault) {
     record->has_fault = true;
     if (fault != NULL) {
         /* The data moved into the error event; ACTION_FAILED borrows it back. */
@@ -26199,7 +27813,7 @@ static void ta_trace_raised_records(ta_interpreter *it, uint32_t mark) {
         return;
     }
     for (uint32_t index = mark; index < queue->count; index += 1u) {
-        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_RAISED);
+        ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_RAISED);
         record.event = &queue->events[index].event;
         ta_trace_emit(it, &record);
     }
@@ -26219,7 +27833,7 @@ TA_PRIVATE void ta_interpreter_trace_invoke(ta_interpreter *it, ta_trace_kind ki
     if (!ta_tracing(it, kind)) {
         return;
     }
-    ta_trace_record record = ta_trace_record_now(it, kind);
+    ta_trace_entry record = ta_trace_record_now(it, kind);
     record.invoke = invoke;
     ta_trace_emit(it, &record);
 }
@@ -26228,7 +27842,7 @@ TA_PRIVATE void ta_interpreter_trace_forward(ta_interpreter *it, ta_invoke_id in
     if (!ta_tracing(it, TA_TRACE_FORWARDED)) {
         return;
     }
-    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FORWARDED);
+    ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_FORWARDED);
     record.invoke = invoke;
     record.event = event;
     ta_trace_emit(it, &record);
@@ -26239,9 +27853,9 @@ static void ta_trace_action_failed(ta_interpreter *it, const ta_fault *fault) {
     if (!ta_tracing(it, TA_TRACE_ACTION_FAILED)) {
         return;
     }
-    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_ACTION_FAILED);
+    ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_ACTION_FAILED);
     record.action = it->trace_action;
-    ta_trace_fault(&record, fault);
+    ta_trace_entry_fault(&record, fault);
     /* The error the failure just queued is the queue's last event, and its
      * data is what the operation reported: borrow it for the record. */
     const ta_event_block *queue = it->actor->event_block;
@@ -26281,11 +27895,11 @@ static void ta_trace_begin(ta_interpreter *it) {
     actor->trace_microstep = 0;
     ta_trace_parent parent = ta_actor_macrostep_parent(actor);
     it->trace_context = parent.context;
-    it->trace_kinds = ta_trace_macrostep_kinds(&it->system->trace, &parent.context);
+    it->trace_kinds = ta_trace_macrostep_kinds(&it->system->trace.masks, &parent.context);
     if (!ta_tracing(it, TA_TRACE_MACROSTEP_BEGIN)) {
         return;
     }
-    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_MACROSTEP_BEGIN);
+    ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_MACROSTEP_BEGIN);
     record.position = ta_trace_nowhere();
     record.cause = parent.cause;
     const ta_event_block *block = actor->event_block;
@@ -26303,7 +27917,7 @@ static void ta_trace_end(ta_interpreter *it) {
         return;
     }
     if (ta_tracing(it, TA_TRACE_MACROSTEP_END) && it->trace_states != NULL) {
-        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_MACROSTEP_END);
+        ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_MACROSTEP_END);
         record.position = ta_trace_nowhere();
         record.states = it->trace_states;
         record.state_count = ta_trace_states(it, it->active, it->trace_states, false);
@@ -26322,7 +27936,7 @@ static void ta_trace_microstep_record(ta_interpreter *it, const ta_event *event)
     if (!ta_tracing(it, TA_TRACE_MICROSTEP) || it->trace_states == NULL) {
         return;
     }
-    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_MICROSTEP);
+    ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_MICROSTEP);
     record.position = ta_trace_nowhere();
     record.event = event;
     if (it->enabled_count != 0 && ta_enabled_authored(it->enabled[0])) {
@@ -26374,7 +27988,7 @@ static void ta_trace_runaway_mark(ta_interpreter *it) {
     if (!ta_tracing(it, kind) || it->trace_states == NULL) {
         return;
     }
-    ta_trace_record record = ta_trace_record_now(it, kind);
+    ta_trace_entry record = ta_trace_record_now(it, kind);
     record.position = ta_trace_nowhere();
     if (it->enabled_count != 0 && it->enabled[0] != TA_ENABLED_BOOTSTRAP) {
         record.transitions = it->enabled;
@@ -26417,7 +28031,7 @@ static void ta_trace_selection(ta_interpreter *it, uint32_t mark) {
     const ta_event_block *queue = it->actor->event_block;
     for (uint32_t index = 0; index < count; index += 1u) {
         const struct ta_trace_condition *guard = &it->conditions[index];
-        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_CONDITION);
+        ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_CONDITION);
         record.position = ta_trace_nowhere();
         record.position.at = TA_TRACE_AT_SELECT;
         record.position.transition = guard->transition;
@@ -26432,7 +28046,7 @@ static void ta_trace_selection(ta_interpreter *it, uint32_t mark) {
         ta_trace_emit(it, &record);
         if (guard->raised != UINT32_MAX && queue != NULL && guard->raised < queue->count &&
             ta_tracing(it, TA_TRACE_RAISED)) {
-            ta_trace_record raised = ta_trace_record_now(it, TA_TRACE_RAISED);
+            ta_trace_entry raised = ta_trace_record_now(it, TA_TRACE_RAISED);
             raised.position = record.position;
             raised.event = &queue->events[guard->raised].event;
             ta_trace_emit(it, &raised);
@@ -27012,7 +28626,7 @@ static ta_result ta_initialize_data(ta_interpreter *it, ta_state_id owner, uint3
             }
         }
         if (ta_tracing(it, TA_TRACE_DATA_INIT)) {
-            ta_trace_record record = ta_trace_record_now(it, TA_TRACE_DATA_INIT);
+            ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_DATA_INIT);
             record.state = owner;
             record.name = ta_atom_text(&it->system->atoms, decl->name);
             record.expr = source->kind == TA_VALUE_SOURCE_EXPR ? source->as.expr : TA_EXPR_ID_NONE;
@@ -27020,7 +28634,7 @@ static ta_result ta_initialize_data(ta_interpreter *it, ta_state_id owner, uint3
                 record.has_value = true;
                 record.value = value;
             } else {
-                ta_trace_fault(&record, &fault);
+                ta_trace_entry_fault(&record, &fault);
             }
             ta_trace_emit(it, &record);
         }
@@ -27064,10 +28678,10 @@ static ta_result ta_declare_data(ta_interpreter *it, uint32_t *cursor) {
             }
             /* A declaration that failed: DATA_INIT with its fault. */
             if (ta_tracing(it, TA_TRACE_DATA_INIT)) {
-                ta_trace_record record = ta_trace_record_now(it, TA_TRACE_DATA_INIT);
+                ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_DATA_INIT);
                 record.state = definition->data_decls[index].owner_state;
                 record.name = ta_atom_text(&it->system->atoms, definition->data_decls[index].name);
-                ta_trace_fault(&record, &fault);
+                ta_trace_entry_fault(&record, &fault);
                 ta_trace_emit(it, &record);
             }
             ta_interpreter_trace_raised(it, mark);
@@ -27212,24 +28826,24 @@ TA_PRIVATE void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor
     ta_count_error(system, actor, name);
     ta_trace_context none = { 0 };
     const ta_trace_context *context = parent != NULL ? &parent->context : &none;
-    if ((ta_trace_macrostep_kinds(&system->trace, context) & TA_TRACE_BIT(TA_TRACE_RAISED)) == 0) {
+    if ((ta_trace_macrostep_kinds(&system->trace.masks, context) & TA_TRACE_BIT(TA_TRACE_RAISED)) == 0) {
         return;
     }
     const ta_event_block *queue = actor->event_block;
     if (queue == NULL || queue->count == 0) {
         return;
     }
-    ta_trace_record record = ta_trace_record_blank(TA_TRACE_RAISED);
+    ta_trace_entry record = ta_trace_entry_blank(TA_TRACE_RAISED);
     record.key = (ta_step_key){ .session = actor->session_id, .family = actor->definition->family };
-    record.actor = actor->record.id;
-    record.definition = actor->definition->id;
+    record.actor = actor;
+    record.definition = actor->definition;
     record.now = ta_actor_now(system, actor);
     record.event = &queue->events[queue->count - 1u].event;
     if (parent != NULL) {
         record.context = parent->context;
         record.cause = parent->cause;
     }
-    ta_trace_write(&system->trace, &record);
+    ta_trace_write(system, &record);
 }
 
 static ta_result ta_communication_error(ta_system *system, ta_actor *actor, const ta_error_params *params) {
@@ -27898,7 +29512,7 @@ static void ta_trace_sent(ta_interpreter *it, const ta_send_state *state, const 
         .invoke_id = TA_INVOKE_ID_NONE,
         .data = *data,
     };
-    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_SENT);
+    ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_SENT);
     record.send = state->send_id;
     record.event = &event;
     ta_trace_emit(it, &record);
@@ -28010,9 +29624,8 @@ static ta_result ta_foreach_bind(ta_interpreter *it, ta_exec_frame *loop) {
                                                                });
     ta_result result = bound == TA_OP_OK ? TA_OK : ta_op_failed(it, bound, &fault);
     if (result == TA_OK && ta_tracing(it, TA_TRACE_FOREACH)) {
-        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FOREACH);
-        record.iteration = loop->iteration;
-        record.position.iteration = loop->iteration;
+        ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_FOREACH);
+        record.position.iteration = loop->iteration; /* the iteration FOREACH names */
         record.has_value = true;
         record.value = loop->iteration_snapshot;
         ta_trace_emit(it, &record);
@@ -28070,7 +29683,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                     TA_COUNT(it->system, it->actor->definition, sends_cancelled);
                 }
                 if (ta_tracing(it, TA_TRACE_CANCELLED)) {
-                    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_CANCELLED);
+                    ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_CANCELLED);
                     record.send = send_id;
                     ta_trace_emit(it, &record);
                 }
@@ -28094,7 +29707,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                                              .fault = &fault,
                                          });
                 if (status == TA_OP_OK && ta_tracing(it, TA_TRACE_ASSIGN)) {
-                    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_ASSIGN);
+                    ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_ASSIGN);
                     record.expr = action->as.assign.location;
                     record.has_value = true;
                     record.value = value;
@@ -28125,10 +29738,10 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                     }
                 }
                 if (ta_tracing(it, TA_TRACE_SCRIPT)) {
-                    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_SCRIPT);
+                    ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_SCRIPT);
                     record.expr = action->as.script;
                     if (status != TA_OP_OK) {
-                        ta_trace_fault(&record, &fault);
+                        ta_trace_entry_fault(&record, &fault);
                     }
                     ta_trace_emit(it, &record);
                 }
@@ -28309,11 +29922,11 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
             ta_op_status status = ta_eval_condition(it, action->as.conditional.condition, &condition, &fault);
             result = status != TA_OP_OK ? ta_op_failed(it, status, &fault) : TA_OK;
             if (result != TA_ERR_NOMEM && ta_tracing(it, TA_TRACE_CONDITION)) {
-                ta_trace_record record = ta_trace_record_now(it, TA_TRACE_CONDITION);
+                ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_CONDITION);
                 record.expr = action->as.conditional.condition;
                 record.result = condition && result == TA_OK;
                 if (result != TA_OK) {
-                    ta_trace_fault(&record, &fault);
+                    ta_trace_entry_fault(&record, &fault);
                 }
                 ta_trace_emit(it, &record);
             }
@@ -29330,7 +30943,7 @@ static void ta_after_selection(ta_interpreter *it, uint32_t mark) {
         TA_COUNT(it->system, actor->definition, internal_ignored);
     }
     if (ta_tracing(it, TA_TRACE_IGNORED)) {
-        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_IGNORED);
+        ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_IGNORED);
         record.event = ta_actor_bound_event(actor);
         ta_trace_emit(it, &record);
     }
@@ -29507,8 +31120,8 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     ta_step_key step = ta_trace_key(it);
     ta_step_key key = ta_trace_lifecycle_key(actor);
     TA_COUNT(it->system, actor->definition, finished);
-    if (ta_trace_lifecycle_wanted(&it->system->trace, TA_TRACE_FINISHED, &it->trace_context)) {
-        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
+    if (ta_trace_lifecycle_wanted(&it->system->trace.masks, TA_TRACE_FINISHED, &it->trace_context)) {
+        ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_FINISHED);
         record.key = key;
         record.cause = step;
         record.position = (ta_trace_position){ .at = TA_TRACE_AT_NONE, .state = TA_STATE_NONE,
@@ -29820,7 +31433,7 @@ static void ta_stop_drop(ta_interpreter *it) {
 /*
  * The bytes of interpreter scratch a definition needs (ADR 0092 section 3):
  * everything ta_interpreter_init takes, in its order and alignment, with
- * both trace buffers, whether or not a sink wants them. The compiler checks
+ * both trace buffers, whether or not the masks want them. The compiler checks
  * it against interpreterBytes, so a definition that registers never runs
  * out of structural scratch.
  */
@@ -29920,12 +31533,12 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
         return TA_ERR_NOMEM;
     }
     /* Tracing (ADR 0067): what this macrostep builds, and the scratch its
-     * records need, taken only when the sink wants those records. */
+     * records need, taken only when the masks want those records. */
     ta_trace_parent parent = ta_actor_macrostep_parent(actor);
     it->trace_context = parent.context;
-    it->trace_kinds = ta_trace_macrostep_kinds(&system->trace, &parent.context);
+    it->trace_kinds = ta_trace_macrostep_kinds(&system->trace.masks, &parent.context);
     it->trace_action = TA_ACTION_NONE;
-    uint32_t wanted = ta_trace_any_kinds(&system->trace);
+    uint32_t wanted = ta_trace_any_kinds(&system->trace.masks);
     if ((wanted & (TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_MACROSTEP_END) |
                    TA_TRACE_BIT(TA_TRACE_LONG_MACROSTEP) | TA_TRACE_BIT(TA_TRACE_RUNAWAY))) != 0) {
         it->trace_states = ta_arena_alloc(&system->scratch, (3u * (size_t)definition->state_count + 1u) *
@@ -29963,7 +31576,7 @@ static void ta_trace_control(ta_interpreter *it, ta_trace_kind kind) {
         TA_COUNT(it->system, it->actor->definition, runs_stopped);
     }
     if (it->actor->trace_begun && ta_tracing(it, kind)) {
-        ta_trace_record record = ta_trace_record_now(it, kind);
+        ta_trace_entry record = ta_trace_record_now(it, kind);
         ta_run_view view = ta_interpreter_view(it);
         record.position = ta_run_position(it->definition, &view);
         ta_trace_emit(it, &record);
@@ -30400,7 +32013,7 @@ TA_PRIVATE ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor) 
     }
     uint32_t dropped = ta_actor_waiting_internal(actor);
     if (ta_tracing(it, TA_TRACE_ABANDONED)) {
-        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_ABANDONED);
+        ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_ABANDONED);
         record.position = ta_trace_nowhere();
         record.event = ta_actor_external_event(actor);
         record.dropped = dropped;

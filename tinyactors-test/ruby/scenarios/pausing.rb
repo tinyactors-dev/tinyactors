@@ -293,7 +293,8 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     while nested.resume(budget: 1000, action_budget: 1) == 'paused'
       record = trace_records.reverse.find { |entry| entry[:kind] == 'paused' }
       inspection = nested.inspect_actor
-      assert_equal record[:key], inspection[:step]
+      # A record carries no atom (core ADR 0098): its key's family is 0.
+      assert_equal record[:key].except(:family), inspection[:step].except(:family)
       assert_equal record[:position], inspection[:position]
       places << inspection.dig(:position, :at)
     end
@@ -316,7 +317,7 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     assert_equal [], nested.data('.log'), 'no unit ran'
     assert_equal [:a], nested.active
     record = trace_records.reverse.find { |entry| entry[:kind] == 'paused' }
-    assert_equal record[:key], inspection[:step]
+    assert_equal record[:key].except(:family), inspection[:step].except(:family)
     assert_equal record[:position], inspection[:position]
     position = inspection[:position]
     assert_equal 'exit', position[:at]

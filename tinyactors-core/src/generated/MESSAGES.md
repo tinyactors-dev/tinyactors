@@ -55,7 +55,7 @@ Generated from [`catalog.rb`](../../protocol/catalog.rb) by `mise run protocol` 
 | `0x0213` | [`c2h.input_refused`](#c2hinput_refused) | An admitted host input was not taken | 48 |
 | `0x0214` | [`c2h.input_completed`](#c2hinput_completed) | A host input and its startup follow-up settled | 56 |
 | `0x0215` | [`c2h.load_result`](#c2hload_result) | A load-failure response finished recycling waiting inputs | 48 |
-| `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 224 |
+| `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 384 |
 | `0x0302` | [`tel.dropped`](#teldropped) | Telemetry records were dropped | 48 |
 
 ## Common header (32 bytes)
@@ -674,11 +674,13 @@ Acknowledges h2c.load_failed after all waiting envelopes were recycled or refuse
 
 ## tel.trace
 
-`0x0301` on `tel`, 224 fixed bytes. One trace record (core ADR 0067).
+`0x0301` on `tel`, 384 fixed bytes. One trace record (core ADR 0067).
 
-One ta_trace_record, kind for kind; only the fields its kind names are meaningful. The record is self-contained: names, values and the fault are text in its tail, and the state and transition lists are bytes in its tail holding u32 IDs with their names, so a reader needs no live system (docs/proposals/ring-proto/reference/telemetry.md). Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `at` is logical time; wall_ns is when it happened.
+One ta_trace_record, kind for kind; only the fields its kind names are meaningful, and the rest are 0, or UINT32_MAX for a state, transition, action or expression that is none. The record is self-contained (core ADR 0098): names, values and the fault are text in its tail, beside the IDs they name, so a reader needs no live system. Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring. Header `session` and `at` are the step key's session and the logical time; wall_ns is when it happened.
 
 The step key is header `session`, `macrostep` and `microstep`. There is no span ID field: a span ID is a fixed 64-bit mix of the step key (core ADR 0067, ta_step_key_span_id), the same in every reader.
+
+The lists are two spans: list_ids holds the u32 IDs of the transitions, then the exited, entered and history states, then the states the kind names, back to back, as many as the five counts say; list_names holds, in the same order, each entry's name as a u32 length and its UTF-8 bytes. list_ids comes first in the tail, so its IDs are 4-byte aligned and a reader can use them in place. When the record would not fit maxRecordBytes, core keeps the lists whole from the first and cuts the last list first; the counts say how many entries are there, not how many there were.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -688,35 +690,67 @@ The step key is header `session`, `macrostep` and `microstep`. There is no span 
 | 56 | `trace_id_low` | u64 |  |
 | 64 | `cause_session` | session | the session of the step that caused this one; 0 for a host-delivered cause |
 | 72 | `cause_macrostep` | macrostep | the macrostep of the causing step; with cause_session 0, the host's parent span ID (W3C parent-id), or 0 |
-| 80 | `microstep` | u32 | from 1 per macrostep; 0 for the macrostep itself |
-| 84 | `cause_microstep` | u32 | the microstep of the causing step; with cause_session and cause_macrostep, the cause's step key, whose span ID is the parent span |
-| 88 | `state` | u32 |  |
-| 92 | `transition` | u32 |  |
-| 96 | `action` | u32 |  |
-| 100 | `iteration` | u32 |  |
-| 104 | `fault_code` | i32 | the fault’s code, with fault_detail |
-| 108 | `trace_kind` | u16 | ta_trace_kind |
-| 110 | `position` | u8 | ta_trace_at |
-| 111 | `result` | bool |  |
-| 112 | `trace_flags` | u8 | the trace context’s flags (sampled) |
-| 113 | `trace_detail` | u8 | the trace context’s detail (watched) |
-| 114 | `runaway_cause` | runaway_cause (u8) | RUNAWAY only: what stopped the input |
-| 116 | `address` | text | the session’s family/name |
-| 124 | `definition` | text | the definition’s document name and source, on the kinds that open a run |
-| 132 | `state_name` | text | the name of `state` |
-| 140 | `transition_name` | text | the name of `transition` |
-| 148 | `action_name` | text | the name of `action` |
-| 156 | `name` | text | the event name, or the name the kind carries |
-| 164 | `send_id` | text | the send ID, for SENT and its kin |
-| 172 | `invoke_id` | text | the invoke ID, for INVOKED and its kin |
-| 180 | `value_text` | text |  |
-| 188 | `fault_detail` | text | the fault’s error event name |
-| 196 | `fault_message` | text |  |
-| 204 | `transitions` | bytes | the microstep’s transitions: a u32 count, then per transition its u32 ID, then its name as a u32 length and UTF-8 bytes |
-| 212 | `states` | bytes | exited, entered, history, states: per list a u32 count, then per state its u32 ID, then its name as a u32 length and UTF-8 bytes |
+| 80 | `actor` | u64 | the session's runtime actor ID, or 0 |
+| 88 | `definition` | u64 | the definition's ID |
+| 96 | `send` | u64 | the send ID's handle, for SENT and its kin; send_id is its text |
+| 104 | `invoke` | u64 | the invocation's handle, for INVOKED and its kin; invoke_id is its text |
+| 112 | `microstep` | u32 | from 1 per macrostep; 0 for the macrostep itself |
+| 116 | `cause_microstep` | u32 | the microstep of the causing step; with cause_session and cause_macrostep, the cause's step key, whose span ID is the parent span |
+| 120 | `state` | u32 | the state at the record's position |
+| 124 | `transition` | u32 | the transition at the record's position |
+| 128 | `action` | u32 | the action at the record's position |
+| 132 | `iteration` | u32 | the <foreach> iteration at the record's position; on FOREACH, the iteration it names |
+| 136 | `subject_state` | u32 | the state the kind names: a final state, a guard's source, a <data>'s owner, an operator transition's source |
+| 140 | `subject_action` | u32 | the action the kind names: ACTION_FAILED's |
+| 144 | `expr` | u32 | the expression the kind names |
+| 148 | `dropped` | u32 | ABANDONED: the internal events it discarded |
+| 152 | `fault_code` | i32 | the fault’s code, with fault_detail |
+| 156 | `transition_count` | u32 | transitions in list_ids |
+| 160 | `exited_count` | u32 | exited states in list_ids |
+| 164 | `entered_count` | u32 | entered states in list_ids |
+| 168 | `history_count` | u32 | history states in list_ids |
+| 172 | `state_count` | u32 | states the kind names in list_ids: a configuration, or an operator transition's targets |
+| 176 | `trace_kind` | u16 | ta_trace_kind |
+| 178 | `position` | u8 | ta_trace_at |
+| 179 | `result` | bool |  |
+| 180 | `trace_flags` | u8 | the trace context’s flags (sampled) |
+| 181 | `trace_detail` | u8 | the trace context’s detail (watched) |
+| 182 | `runaway_cause` | runaway_cause (u8) | RUNAWAY only: what stopped the input |
+| 183 | `event_type` | event_type (u8) | the event's type |
+| 184 | `list_ids` | bytes | the u32 IDs of the lists, back to back (see above) |
+| 192 | `session_id` | text | the session's ID as text, as _sessionid holds it |
+| 200 | `cause_session_id` | text | the causing session's ID as text; empty when there is no cause |
+| 208 | `address` | text | the session’s family/name, when it has a named address |
+| 216 | `family_name` | text | the definition's family, on the kinds that open a run |
+| 224 | `revision` | bytes | the definition's revision, on the kinds that open a run |
+| 232 | `document_name` | text | the definition's document name, on the kinds that open a run |
+| 240 | `source` | text | where the definition's first state was written, on the kinds that open a run |
+| 248 | `state_name` | text | the name of `state` |
+| 256 | `transition_name` | text | the name of `transition` |
+| 264 | `action_name` | text | the name of `action` |
+| 272 | `subject_state_name` | text | the name of `subject_state` |
+| 280 | `subject_action_name` | text | the name of `subject_action` |
+| 288 | `name` | text | the name the kind carries: a <data>'s |
+| 296 | `event_name` | text | the event's dotted name |
+| 304 | `event_send_id` | text | the event's sendid |
+| 312 | `event_invoke_id` | text | the event's invokeid |
+| 320 | `event_data` | text | the event's data as text, cut at telemetryValueBytes |
+| 328 | `send_id` | text | the send ID, for SENT and its kin |
+| 336 | `invoke_id` | text | the invoke ID, for INVOKED and its kin |
+| 344 | `value_text` | text | the kind's value as text, cut at telemetryValueBytes |
+| 352 | `fault_detail` | text | the fault’s error event name |
+| 360 | `fault_message` | text |  |
+| 368 | `fault_data` | text | the fault's data as text, cut at telemetryValueBytes |
+| 376 | `list_names` | bytes | the names of the list entries (see above) |
 
-- flag bit 0 `truncated`: value_text was cut, or a list in the tail was cut to fit maxRecordBytes
+- flag bit 0 `truncated`: something was cut: a value, the event's data, a list, or a name, to fit telemetryValueBytes or maxRecordBytes
 - flag bit 1 `suppressed`: an effect a replaying session did not perform
+- flag bit 2 `event`: the event_* fields hold the event the kind names
+- flag bit 3 `value`: the kind carries a value; value_text holds its text unless telemetryValueBytes is 0
+- flag bit 4 `fault`: the fault_* fields hold the kind's fault
+- flag bit 5 `value_cut`: value_text was cut
+- flag bit 6 `event_data_cut`: event_data was cut
+- flag bit 7 `lists_cut`: a list was cut to fit maxRecordBytes
 
 ## tel.dropped
 

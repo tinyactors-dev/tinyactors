@@ -35,8 +35,13 @@ typedef struct {
     uint32_t max;
 } ta_param_row;
 
-/* One row per ta_param, in its order. The bounds are the only ones: no
- * other code checks a parameter again. */
+/* The most maxRecordBytes may be: the largest c2hBytes, 2 GiB, over the
+ * five records its smallest reserve takes (ADR 0104). */
+#define TA_PARAM_MAX_RECORD_BYTES_MAX 429496729u
+
+/* One row per ta_param, in its order. The bounds are the only ones a value
+ * meets alone; ta_params_resolve checks the bounds between them. No other
+ * code checks a parameter again. */
 static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MICROSTEP_LIMIT] = { "microstepLimit", "microsteps", TA_PARAM_DEFAULT_MICROSTEP_LIMIT, 0, 2147483647u },
     [TA_PARAM_EVENT_BLOCK_CACHE] = { "eventBlockCache", "blocks", TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, 0, 65536u },
@@ -55,7 +60,20 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MAX_ACTORS] = { "maxActors", "actors", TA_PARAM_DEFAULT_MAX_ACTORS, 1, 2147483647u },
     [TA_PARAM_MAX_PENDING_SENDS] = { "maxPendingSends", "sends", TA_PARAM_DEFAULT_MAX_PENDING_SENDS, 1, 2147483647u },
     [TA_PARAM_MAX_DEFINITIONS] = { "maxDefinitions", "definitions", TA_PARAM_DEFAULT_MAX_DEFINITIONS, 1, 2147483647u },
+    [TA_PARAM_TEL_BYTES] = { "telBytes", "bytes", TA_PARAM_DEFAULT_TEL_BYTES, 0, 2147483648u },
+    [TA_PARAM_MAX_RECORD_BYTES] = { "maxRecordBytes", "bytes", TA_PARAM_DEFAULT_MAX_RECORD_BYTES,
+                                    TA_TRACE_RESERVED_BYTES, TA_PARAM_MAX_RECORD_BYTES_MAX },
+    [TA_PARAM_TELEMETRY_VALUE_BYTES] = { "telemetryValueBytes", "bytes", TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES, 0,
+                                         TA_PARAM_MAX_RECORD_BYTES_MAX - TA_TRACE_RESERVED_BYTES },
 };
+
+/* Rejects `param`: names it when the config asks. */
+static ta_result ta_params_reject(const ta_system_config *config, ta_param param) {
+    if (config->rejected != NULL) {
+        *config->rejected = param;
+    }
+    return TA_ERR_INVALID;
+}
 
 ta_result ta_param_info_of(ta_param param, ta_param_info *out) {
     if (out == NULL || (uint32_t)param >= (uint32_t)TA_PARAM_COUNT) {
@@ -96,13 +114,19 @@ static ta_result ta_params_resolve(const ta_system_config *config, uint32_t valu
         }
         const ta_param_row *row = &ta_param_rows[param];
         if (given[param] || value->value < row->min || value->value > row->max) {
-            if (config->rejected != NULL) {
-                *config->rejected = value->param;
-            }
-            return TA_ERR_INVALID;
+            return ta_params_reject(config, value->param);
         }
         given[param] = true;
         values[param] = (uint32_t)value->value;
+    }
+    /* The bounds between them (ADR 0098): the largest record fits the ring,
+     * and a value leaves room for the rest of its record. */
+    uint32_t record = values[TA_PARAM_MAX_RECORD_BYTES];
+    if (values[TA_PARAM_TEL_BYTES] != 0 && values[TA_PARAM_TEL_BYTES] < record) {
+        return ta_params_reject(config, TA_PARAM_TEL_BYTES);
+    }
+    if (values[TA_PARAM_TELEMETRY_VALUE_BYTES] > record - TA_TRACE_RESERVED_BYTES) {
+        return ta_params_reject(config, TA_PARAM_TELEMETRY_VALUE_BYTES);
     }
     return TA_OK;
 }
@@ -271,7 +295,6 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
                            .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
-                           .trace = ta_null_trace_sink(),
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
@@ -304,6 +327,9 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
         result = ta_system_arena_open(system);
     }
     if (result == TA_OK) {
+        result = ta_trace_open(system);
+    }
+    if (result == TA_OK) {
         result = ta_atom_intern(&system->atoms, ta_str_from_cstr(TA_SCXML_IO_URI), &system->scxml_io_type);
     }
     if (result == TA_OK) {
@@ -325,6 +351,8 @@ void ta_system_destroy(ta_system *system) {
     if (system == NULL) {
         return;
     }
+    /* No record is built, nor the clock called, for a ring about to be freed. */
+    system->trace.masks = (ta_trace_masks){ 0 };
     /* Teardown releases submitted sends instead of keeping them as orphans. */
     system->timers.closing = true;
     for (uint32_t slot = 0; slot < ta_actor_table_issued(&system->actors); slot += 1) {
@@ -358,6 +386,7 @@ void ta_system_destroy(ta_system *system) {
     ta_interpreter_block_cache_trim(system);
     ta_system_arena_close(system);
     ta_interpreter_release_spares(system);
+    ta_trace_close(system);
     /* Unloaded sessions hold addresses; give them back before the table goes. */
     ta_session_table_destroy(&system->sessions);
     /* Last: everything above gave its addresses back. */
@@ -410,10 +439,10 @@ ta_result ta_system_set_definition_sink(ta_system *system, ta_definition_sink si
 
 /*
  * One definition event, told twice (ADR 0080): first as a lifecycle record
- * to the trace sink, when its mask asks for the kind, then to the definition
- * sink (ADR 0079). The record goes first, so a trace sink reading the
- * definition finds it as intact as the definition sink does, and before the
- * host's cleanup of it.
+ * on tel, when the masks ask for the kind, then to the definition sink (ADR
+ * 0079). The record goes first, so it names the definition while it is as
+ * intact as the definition sink finds it, and before the host's cleanup of
+ * it.
  */
 void ta_system_tell_definition(ta_system *system, const ta_definition *definition, ta_definition_event_kind kind) {
     static const ta_trace_kind trace_kinds[] = {
@@ -423,17 +452,16 @@ void ta_system_tell_definition(ta_system *system, const ta_definition *definitio
     };
     ta_trace_kind trace_kind = trace_kinds[kind];
     ta_trace_context none = { 0 };
-    if (ta_trace_lifecycle_wanted(&system->trace, trace_kind, &none)) {
-        ta_trace_record record = ta_trace_record_blank(trace_kind);
+    if (ta_trace_lifecycle_wanted(&system->trace.masks, trace_kind, &none)) {
+        ta_trace_entry entry = ta_trace_entry_blank(trace_kind);
         /* One key per definition and event: a definition ID is never issued
          * twice (ADR 0043), and each event happens at most once to it. */
-        record.key = (ta_step_key){ .session = TA_TRACE_DEFINITIONS_SESSION,
-                                    .macrostep = definition->id,
-                                    .microstep = (uint32_t)kind + 1u };
-        record.definition = definition->id;
-        record.identity = definition->identity;
-        record.now = ta_clock_now(&system->clock);
-        ta_trace_write(&system->trace, &record);
+        entry.key = (ta_step_key){ .session = TA_TRACE_DEFINITIONS_SESSION,
+                                   .macrostep = definition->id,
+                                   .microstep = (uint32_t)kind + 1u };
+        entry.definition = definition;
+        entry.now = ta_clock_now(&system->clock);
+        ta_trace_write(system, &entry);
     }
     ta_definition_event event = { .kind = kind, .definition = definition->id, .identity = definition->identity };
     system->definition_sink.v->notify(system->definition_sink.self, &event);
@@ -656,6 +684,7 @@ void ta_system_settle_definition(ta_system *system, ta_definition *definition) {
         ta_definition *freeing = doomed;
         doomed = freeing->free_next;
         ta_system_tell_definition(system, freeing, TA_DEFINITION_EVENT_FREED);
+        ta_trace_forget_definition(&system->trace, freeing->id);
         uint32_t slot = ta_handle_slot(freeing->id);
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
         /* The slot's next occupant gets a new generation, so this ID goes

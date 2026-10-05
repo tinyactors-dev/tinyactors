@@ -9,6 +9,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "tel_reader.h"
 
 static int failures;
 
@@ -941,12 +942,15 @@ typedef struct {
     ta_definition_id definition;
     ta_step_key key;
     bool identity_matches; /* 't': the record's identity is the definition's own */
+    uint32_t live_watched; /* 'd': how many of the stream's watched actors still exist */
 } stream_entry;
 
 typedef struct {
     ta_system *system;
     stream_entry entries[64];
     uint32_t count;
+    /* Actors whose existence each definition event notes. */
+    ta_actor_id watched[2];
 } stream;
 
 static void stream_put(stream *log, stream_entry entry) {
@@ -961,19 +965,35 @@ static void stream_trace(void *self, const ta_trace_record *record) {
     bool matches = true;
     if (record->kind >= TA_TRACE_DEFINITION_REGISTERED) {
         ta_definition_inspection view;
+        ta_str family = ta_trace_record_text(record, TA_TRACE_TEXT_FAMILY);
         matches = ta_definition_inspect(log->system, record->definition, &view) == TA_OK &&
-                  view.identity.revision.ptr == record->identity.revision.ptr &&
-                  view.identity.family.name.len == record->identity.family.name.len;
+                  view.identity.revision.len == record->revision.len &&
+                  memcmp(view.identity.revision.ptr, record->revision.ptr, view.identity.revision.len) == 0 &&
+                  view.identity.family.name.len == family.len &&
+                  memcmp(view.identity.family.name.ptr, family.ptr, view.identity.family.name.len) == 0;
     }
     stream_put(log, (stream_entry){ .source = 't', .kind = (int)record->kind, .definition = record->definition,
                                     .key = record->key, .identity_matches = matches });
 }
 
+/* The records written before an event come first: read them, then the event. */
 static void stream_definition(void *self, const ta_definition_event *event) {
-    stream_put(self, (stream_entry){ .source = 'd', .kind = (int)event->kind, .definition = event->definition });
+    stream *log = self;
+    tel_drain(log->system, stream_trace, log);
+    uint32_t live = 0;
+    for (uint32_t at = 0; at < 2u; at += 1u) {
+        ta_actor_inspection view;
+        live += log->watched[at] != 0 && ta_actor_inspect(log->system, log->watched[at], &view) == TA_OK ? 1u : 0u;
+    }
+    stream_put(log, (stream_entry){ .source = 'd', .kind = (int)event->kind, .definition = event->definition,
+                                    .live_watched = live });
 }
 
-static const ta_trace_sink_vtable stream_trace_vtable = { .write = stream_trace };
+/* The entries so far, after reading what the system wrote to tel. */
+static uint32_t logged(stream *log) {
+    tel_drain(log->system, stream_trace, log);
+    return log->count;
+}
 static const ta_definition_sink_vtable stream_definition_vtable = { .notify = stream_definition };
 
 #define DEFINITION_KINDS                                                                       \
@@ -983,8 +1003,7 @@ static const ta_definition_sink_vtable stream_definition_vtable = { .notify = st
 
 static void follow(fixture *f, stream *log, uint32_t kinds) {
     *log = (stream){ .system = f->system };
-    CHECK(ta_system_set_trace_sink(f->system, (ta_trace_sink){ .self = log, .v = &stream_trace_vtable,
-                                                               .kinds = kinds }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(f->system, &(ta_trace_masks){ .kinds = kinds }) == TA_OK);
     CHECK(ta_system_set_definition_sink(f->system, (ta_definition_sink){ .self = log,
                                                                          .v = &stream_definition_vtable }) == TA_OK);
 }
@@ -1019,24 +1038,24 @@ static void test_definition_records(void) {
 
     /* REGISTERED, just before the sink hears it; a reuse writes nothing. */
     ta_definition_id id = register_chart(&f, "followed");
-    CHECK(log.count == 2);
+    CHECK(logged(&log) == 2);
     CHECK(is_record(&log, 0, TA_TRACE_DEFINITION_REGISTERED, id));
     CHECK(is_event(&log, 1, TA_DEFINITION_EVENT_REGISTERED, id));
     CHECK(register_chart(&f, "followed") == id);
-    CHECK(log.count == 2);
+    CHECK(logged(&log) == 2);
 
     /* Before the first SPAWNED of the definition. */
     ta_actor_id actor = 0;
     CHECK(spawn(&f, id, &actor) == TA_OK);
-    CHECK(log.count == 3 && is_record(&log, 2, TA_TRACE_SPAWNED, id));
+    CHECK(logged(&log) == 3 && is_record(&log, 2, TA_TRACE_SPAWNED, id));
 
     /* RETIRED from the retiring call; FREED after the last DESTROYED. */
     CHECK(ta_system_retire_definition(f.system, id) == TA_OK);
-    CHECK(log.count == 5);
+    CHECK(logged(&log) == 5);
     CHECK(is_record(&log, 3, TA_TRACE_DEFINITION_RETIRED, id));
     CHECK(is_event(&log, 4, TA_DEFINITION_EVENT_RETIRED, id));
     CHECK(ta_actor_destroy(f.system, actor) == TA_OK);
-    CHECK(log.count == 8);
+    CHECK(logged(&log) == 8);
     CHECK(is_record(&log, 5, TA_TRACE_DESTROYED, id));
     CHECK(is_record(&log, 6, TA_TRACE_DEFINITION_FREED, id));
     CHECK(is_event(&log, 7, TA_DEFINITION_EVENT_FREED, id));
@@ -1048,47 +1067,43 @@ static void test_definition_records(void) {
     CHECK(ta_definition_nest(f.system, &(ta_definition_nest_params){ .parent = parent, .invoke = 0,
                                                                    .child = child }) == TA_OK);
     CHECK(ta_system_release_definition(f.system, child) == TA_OK);
-    uint32_t before = log.count;
+    uint32_t before = logged(&log);
     CHECK(ta_system_release_definition(f.system, parent) == TA_OK);
-    CHECK(log.count == before + 4u);
+    CHECK(logged(&log) == before + 4u);
     CHECK(is_record(&log, before, TA_TRACE_DEFINITION_FREED, child));
     CHECK(is_event(&log, before + 1u, TA_DEFINITION_EVENT_FREED, child));
     CHECK(is_record(&log, before + 2u, TA_TRACE_DEFINITION_FREED, parent));
     CHECK(is_event(&log, before + 3u, TA_DEFINITION_EVENT_FREED, parent));
 
     /* A mask without the kinds builds no definition record; the sink still hears. */
-    CHECK(ta_system_set_trace_sink(f.system, (ta_trace_sink){ .self = &log, .v = &stream_trace_vtable,
-                                                              .kinds = ACTOR_KINDS }) == TA_OK);
-    before = log.count;
+    CHECK(ta_system_set_trace_masks(f.system, &(ta_trace_masks){ .kinds = ACTOR_KINDS }) == TA_OK);
+    before = logged(&log);
     ta_definition_id unrecorded = register_chart(&f, "unrecorded");
-    CHECK(log.count == before + 1u && is_event(&log, before, TA_DEFINITION_EVENT_REGISTERED, unrecorded));
-    CHECK(ta_system_set_trace_sink(f.system, (ta_trace_sink){ .self = &log, .v = &stream_trace_vtable,
-                                                              .kinds = DEFINITION_KINDS | ACTOR_KINDS }) == TA_OK);
+    CHECK(logged(&log) == before + 1u && is_event(&log, before, TA_DEFINITION_EVENT_REGISTERED, unrecorded));
+    CHECK(ta_system_set_trace_masks(f.system, &(ta_trace_masks){ .kinds = DEFINITION_KINDS | ACTOR_KINDS }) == TA_OK);
 
-    /* Destroy: every DESTROYED first, then FREED for each definition left. */
+    /* Destroy: every actor goes first, then FREED for each definition left.
+     * The ring goes with the system, so teardown writes no record: the
+     * definition sink sees that both actors are gone by the first FREED. */
     ta_definition_id busy = register_chart(&f, "left-busy");
-    CHECK(spawn(&f, busy, &actor) == TA_OK);
-    CHECK(spawn(&f, busy, &actor) == TA_OK);
-    before = log.count;
+    CHECK(spawn(&f, busy, &log.watched[0]) == TA_OK);
+    CHECK(spawn(&f, busy, &log.watched[1]) == TA_OK);
+    before = logged(&log);
+    ta_actor_inspection alive;
+    CHECK(ta_actor_inspect(f.system, log.watched[0], &alive) == TA_OK &&
+          ta_actor_inspect(f.system, log.watched[1], &alive) == TA_OK);
     ta_system_destroy(f.system);
-    uint32_t last_destroyed = 0;
-    uint32_t first_freed = UINT32_MAX;
-    uint32_t destroyed = 0;
+    uint32_t records = 0;
     uint32_t freed = 0;
     for (uint32_t at = before; at < log.count; at += 1u) {
         const stream_entry *entry = &log.entries[at];
-        if (entry->source == 't' && entry->kind == (int)TA_TRACE_DESTROYED) {
-            destroyed += 1u;
-            last_destroyed = at;
-        }
-        if (entry->source == 't' && entry->kind == (int)TA_TRACE_DEFINITION_FREED) {
+        records += entry->source == 't' ? 1u : 0u;
+        if (entry->source == 'd' && entry->kind == (int)TA_DEFINITION_EVENT_FREED) {
             freed += 1u;
-            first_freed = at < first_freed ? at : first_freed;
-            CHECK(is_event(&log, at + 1u, TA_DEFINITION_EVENT_FREED, entry->definition));
+            CHECK(entry->live_watched == 0);
         }
     }
-    CHECK(destroyed == 2 && freed == 2);
-    CHECK(last_destroyed < first_freed);
+    CHECK(records == 0 && freed == 2);
     CHECK(f.counts.live == 0 && f.counts.live_bytes == 0);
     CHECK(test_allocator_finish(&f.counts) == 0);
 

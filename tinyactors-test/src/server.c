@@ -311,6 +311,7 @@ static jv tat_dispatch(void *context, const char *method, jv params, int *error_
     tat_bind_begin(&server->bind);
     tat_value_codec_select(&server->bind, method, params);
     jv result = server->methods[selected]->handler(&server->bind, params, error_code);
+    tat_trace_drain_all(); /* what the call wrote to tel */
     tat_bind_end(&server->bind);
     jv_free(params);
     return result;

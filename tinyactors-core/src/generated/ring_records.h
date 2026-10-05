@@ -201,11 +201,27 @@ typedef enum {
 /** `tel.trace`'s own flags, bits 0..7 of the header's `flags`. */
 typedef enum {
     /**
-     * value_text was cut, or a list in the tail was cut to fit maxRecordBytes
+     * something was cut: a value, the event's data, a list, or a name, to fit
+     * telemetryValueBytes or maxRecordBytes
      */
     TA_TEL_TRACE_FLAG_TRUNCATED = 1 << 0,
     /** an effect a replaying session did not perform */
     TA_TEL_TRACE_FLAG_SUPPRESSED = 1 << 1,
+    /** the event_* fields hold the event the kind names */
+    TA_TEL_TRACE_FLAG_EVENT = 1 << 2,
+    /**
+     * the kind carries a value; value_text holds its text unless
+     * telemetryValueBytes is 0
+     */
+    TA_TEL_TRACE_FLAG_VALUE = 1 << 3,
+    /** the fault_* fields hold the kind's fault */
+    TA_TEL_TRACE_FLAG_FAULT = 1 << 4,
+    /** value_text was cut */
+    TA_TEL_TRACE_FLAG_VALUE_CUT = 1 << 5,
+    /** event_data was cut */
+    TA_TEL_TRACE_FLAG_EVENT_DATA_CUT = 1 << 6,
+    /** a list was cut to fit maxRecordBytes */
+    TA_TEL_TRACE_FLAG_LISTS_CUT = 1 << 7,
 } ta_tel_trace_flag;
 
 /** What _event.type says (SCXML 5.10.1). Stored as uint8_t. */
@@ -1231,6 +1247,16 @@ typedef struct {
      * parent span ID (W3C parent-id), or 0
      */
     uint64_t cause_macrostep;
+    /** the session's runtime actor ID, or 0 */
+    uint64_t actor;
+    /** the definition's ID */
+    uint64_t definition;
+    /** the send ID's handle, for SENT and its kin; send_id is its text */
+    uint64_t send;
+    /**
+     * the invocation's handle, for INVOKED and its kin; invoke_id is its text
+     */
+    uint64_t invoke;
     /** from 1 per macrostep; 0 for the macrostep itself */
     uint32_t microstep;
     /**
@@ -1238,12 +1264,43 @@ typedef struct {
      * cause_macrostep, the cause's step key, whose span ID is the parent span
      */
     uint32_t cause_microstep;
+    /** the state at the record's position */
     uint32_t state;
+    /** the transition at the record's position */
     uint32_t transition;
+    /** the action at the record's position */
     uint32_t action;
+    /**
+     * the <foreach> iteration at the record's position; on FOREACH, the
+     * iteration it names
+     */
     uint32_t iteration;
+    /**
+     * the state the kind names: a final state, a guard's source, a <data>'s
+     * owner, an operator transition's source
+     */
+    uint32_t subject_state;
+    /** the action the kind names: ACTION_FAILED's */
+    uint32_t subject_action;
+    /** the expression the kind names */
+    uint32_t expr;
+    /** ABANDONED: the internal events it discarded */
+    uint32_t dropped;
     /** the fault’s code, with fault_detail */
     int32_t fault_code;
+    /** transitions in list_ids */
+    uint32_t transition_count;
+    /** exited states in list_ids */
+    uint32_t exited_count;
+    /** entered states in list_ids */
+    uint32_t entered_count;
+    /** history states in list_ids */
+    uint32_t history_count;
+    /**
+     * states the kind names in list_ids: a configuration, or an operator
+     * transition's targets
+     */
+    uint32_t state_count;
     /** ta_trace_kind */
     uint16_t trace_kind;
     /** ta_trace_at */
@@ -1255,74 +1312,120 @@ typedef struct {
     uint8_t trace_detail;
     /** RUNAWAY only: what stopped the input */
     uint8_t runaway_cause; /* ta_record_runaway_cause */
-    uint8_t pad19[1];
-    /** the session’s family/name */
+    /** the event's type */
+    uint8_t event_type; /* ta_record_event_type */
+    /** the u32 IDs of the lists, back to back (see above) */
+    ta_span32 list_ids; /* bytes */
+    /** the session's ID as text, as _sessionid holds it */
+    ta_span32 session_id; /* text */
+    /** the causing session's ID as text; empty when there is no cause */
+    ta_span32 cause_session_id; /* text */
+    /** the session’s family/name, when it has a named address */
     ta_span32 address; /* text */
+    /** the definition's family, on the kinds that open a run */
+    ta_span32 family_name; /* text */
+    /** the definition's revision, on the kinds that open a run */
+    ta_span32 revision; /* bytes */
+    /** the definition's document name, on the kinds that open a run */
+    ta_span32 document_name; /* text */
     /**
-     * the definition’s document name and source, on the kinds that open a run
+     * where the definition's first state was written, on the kinds that open a
+     * run
      */
-    ta_span32 definition; /* text */
+    ta_span32 source; /* text */
     /** the name of `state` */
     ta_span32 state_name; /* text */
     /** the name of `transition` */
     ta_span32 transition_name; /* text */
     /** the name of `action` */
     ta_span32 action_name; /* text */
-    /** the event name, or the name the kind carries */
+    /** the name of `subject_state` */
+    ta_span32 subject_state_name; /* text */
+    /** the name of `subject_action` */
+    ta_span32 subject_action_name; /* text */
+    /** the name the kind carries: a <data>'s */
     ta_span32 name; /* text */
+    /** the event's dotted name */
+    ta_span32 event_name; /* text */
+    /** the event's sendid */
+    ta_span32 event_send_id; /* text */
+    /** the event's invokeid */
+    ta_span32 event_invoke_id; /* text */
+    /** the event's data as text, cut at telemetryValueBytes */
+    ta_span32 event_data; /* text */
     /** the send ID, for SENT and its kin */
     ta_span32 send_id; /* text */
     /** the invoke ID, for INVOKED and its kin */
     ta_span32 invoke_id; /* text */
+    /** the kind's value as text, cut at telemetryValueBytes */
     ta_span32 value_text; /* text */
     /** the fault’s error event name */
     ta_span32 fault_detail; /* text */
     ta_span32 fault_message; /* text */
-    /**
-     * the microstep’s transitions: a u32 count, then per transition its u32 ID,
-     * then its name as a u32 length and UTF-8 bytes
-     */
-    ta_span32 transitions; /* bytes */
-    /**
-     * exited, entered, history, states: per list a u32 count, then per state
-     * its u32 ID, then its name as a u32 length and UTF-8 bytes
-     */
-    ta_span32 states; /* bytes */
-    uint8_t pad_end[4];
+    /** the fault's data as text, cut at telemetryValueBytes */
+    ta_span32 fault_data; /* text */
+    /** the names of the list entries (see above) */
+    ta_span32 list_names; /* bytes */
 } ta_tel_trace;
-_Static_assert(sizeof(ta_tel_trace) == 224, "tel.trace");
+_Static_assert(sizeof(ta_tel_trace) == 384, "tel.trace");
 _Static_assert(offsetof(ta_tel_trace, wall_ns) == 32, "tel.trace wall_ns");
 _Static_assert(offsetof(ta_tel_trace, macrostep) == 40, "tel.trace macrostep");
 _Static_assert(offsetof(ta_tel_trace, trace_id_high) == 48, "tel.trace trace_id_high");
 _Static_assert(offsetof(ta_tel_trace, trace_id_low) == 56, "tel.trace trace_id_low");
 _Static_assert(offsetof(ta_tel_trace, cause_session) == 64, "tel.trace cause_session");
 _Static_assert(offsetof(ta_tel_trace, cause_macrostep) == 72, "tel.trace cause_macrostep");
-_Static_assert(offsetof(ta_tel_trace, microstep) == 80, "tel.trace microstep");
-_Static_assert(offsetof(ta_tel_trace, cause_microstep) == 84, "tel.trace cause_microstep");
-_Static_assert(offsetof(ta_tel_trace, state) == 88, "tel.trace state");
-_Static_assert(offsetof(ta_tel_trace, transition) == 92, "tel.trace transition");
-_Static_assert(offsetof(ta_tel_trace, action) == 96, "tel.trace action");
-_Static_assert(offsetof(ta_tel_trace, iteration) == 100, "tel.trace iteration");
-_Static_assert(offsetof(ta_tel_trace, fault_code) == 104, "tel.trace fault_code");
-_Static_assert(offsetof(ta_tel_trace, trace_kind) == 108, "tel.trace trace_kind");
-_Static_assert(offsetof(ta_tel_trace, position) == 110, "tel.trace position");
-_Static_assert(offsetof(ta_tel_trace, result) == 111, "tel.trace result");
-_Static_assert(offsetof(ta_tel_trace, trace_flags) == 112, "tel.trace trace_flags");
-_Static_assert(offsetof(ta_tel_trace, trace_detail) == 113, "tel.trace trace_detail");
-_Static_assert(offsetof(ta_tel_trace, runaway_cause) == 114, "tel.trace runaway_cause");
-_Static_assert(offsetof(ta_tel_trace, address) == 116, "tel.trace address");
-_Static_assert(offsetof(ta_tel_trace, definition) == 124, "tel.trace definition");
-_Static_assert(offsetof(ta_tel_trace, state_name) == 132, "tel.trace state_name");
-_Static_assert(offsetof(ta_tel_trace, transition_name) == 140, "tel.trace transition_name");
-_Static_assert(offsetof(ta_tel_trace, action_name) == 148, "tel.trace action_name");
-_Static_assert(offsetof(ta_tel_trace, name) == 156, "tel.trace name");
-_Static_assert(offsetof(ta_tel_trace, send_id) == 164, "tel.trace send_id");
-_Static_assert(offsetof(ta_tel_trace, invoke_id) == 172, "tel.trace invoke_id");
-_Static_assert(offsetof(ta_tel_trace, value_text) == 180, "tel.trace value_text");
-_Static_assert(offsetof(ta_tel_trace, fault_detail) == 188, "tel.trace fault_detail");
-_Static_assert(offsetof(ta_tel_trace, fault_message) == 196, "tel.trace fault_message");
-_Static_assert(offsetof(ta_tel_trace, transitions) == 204, "tel.trace transitions");
-_Static_assert(offsetof(ta_tel_trace, states) == 212, "tel.trace states");
+_Static_assert(offsetof(ta_tel_trace, actor) == 80, "tel.trace actor");
+_Static_assert(offsetof(ta_tel_trace, definition) == 88, "tel.trace definition");
+_Static_assert(offsetof(ta_tel_trace, send) == 96, "tel.trace send");
+_Static_assert(offsetof(ta_tel_trace, invoke) == 104, "tel.trace invoke");
+_Static_assert(offsetof(ta_tel_trace, microstep) == 112, "tel.trace microstep");
+_Static_assert(offsetof(ta_tel_trace, cause_microstep) == 116, "tel.trace cause_microstep");
+_Static_assert(offsetof(ta_tel_trace, state) == 120, "tel.trace state");
+_Static_assert(offsetof(ta_tel_trace, transition) == 124, "tel.trace transition");
+_Static_assert(offsetof(ta_tel_trace, action) == 128, "tel.trace action");
+_Static_assert(offsetof(ta_tel_trace, iteration) == 132, "tel.trace iteration");
+_Static_assert(offsetof(ta_tel_trace, subject_state) == 136, "tel.trace subject_state");
+_Static_assert(offsetof(ta_tel_trace, subject_action) == 140, "tel.trace subject_action");
+_Static_assert(offsetof(ta_tel_trace, expr) == 144, "tel.trace expr");
+_Static_assert(offsetof(ta_tel_trace, dropped) == 148, "tel.trace dropped");
+_Static_assert(offsetof(ta_tel_trace, fault_code) == 152, "tel.trace fault_code");
+_Static_assert(offsetof(ta_tel_trace, transition_count) == 156, "tel.trace transition_count");
+_Static_assert(offsetof(ta_tel_trace, exited_count) == 160, "tel.trace exited_count");
+_Static_assert(offsetof(ta_tel_trace, entered_count) == 164, "tel.trace entered_count");
+_Static_assert(offsetof(ta_tel_trace, history_count) == 168, "tel.trace history_count");
+_Static_assert(offsetof(ta_tel_trace, state_count) == 172, "tel.trace state_count");
+_Static_assert(offsetof(ta_tel_trace, trace_kind) == 176, "tel.trace trace_kind");
+_Static_assert(offsetof(ta_tel_trace, position) == 178, "tel.trace position");
+_Static_assert(offsetof(ta_tel_trace, result) == 179, "tel.trace result");
+_Static_assert(offsetof(ta_tel_trace, trace_flags) == 180, "tel.trace trace_flags");
+_Static_assert(offsetof(ta_tel_trace, trace_detail) == 181, "tel.trace trace_detail");
+_Static_assert(offsetof(ta_tel_trace, runaway_cause) == 182, "tel.trace runaway_cause");
+_Static_assert(offsetof(ta_tel_trace, event_type) == 183, "tel.trace event_type");
+_Static_assert(offsetof(ta_tel_trace, list_ids) == 184, "tel.trace list_ids");
+_Static_assert(offsetof(ta_tel_trace, session_id) == 192, "tel.trace session_id");
+_Static_assert(offsetof(ta_tel_trace, cause_session_id) == 200, "tel.trace cause_session_id");
+_Static_assert(offsetof(ta_tel_trace, address) == 208, "tel.trace address");
+_Static_assert(offsetof(ta_tel_trace, family_name) == 216, "tel.trace family_name");
+_Static_assert(offsetof(ta_tel_trace, revision) == 224, "tel.trace revision");
+_Static_assert(offsetof(ta_tel_trace, document_name) == 232, "tel.trace document_name");
+_Static_assert(offsetof(ta_tel_trace, source) == 240, "tel.trace source");
+_Static_assert(offsetof(ta_tel_trace, state_name) == 248, "tel.trace state_name");
+_Static_assert(offsetof(ta_tel_trace, transition_name) == 256, "tel.trace transition_name");
+_Static_assert(offsetof(ta_tel_trace, action_name) == 264, "tel.trace action_name");
+_Static_assert(offsetof(ta_tel_trace, subject_state_name) == 272, "tel.trace subject_state_name");
+_Static_assert(offsetof(ta_tel_trace, subject_action_name) == 280, "tel.trace subject_action_name");
+_Static_assert(offsetof(ta_tel_trace, name) == 288, "tel.trace name");
+_Static_assert(offsetof(ta_tel_trace, event_name) == 296, "tel.trace event_name");
+_Static_assert(offsetof(ta_tel_trace, event_send_id) == 304, "tel.trace event_send_id");
+_Static_assert(offsetof(ta_tel_trace, event_invoke_id) == 312, "tel.trace event_invoke_id");
+_Static_assert(offsetof(ta_tel_trace, event_data) == 320, "tel.trace event_data");
+_Static_assert(offsetof(ta_tel_trace, send_id) == 328, "tel.trace send_id");
+_Static_assert(offsetof(ta_tel_trace, invoke_id) == 336, "tel.trace invoke_id");
+_Static_assert(offsetof(ta_tel_trace, value_text) == 344, "tel.trace value_text");
+_Static_assert(offsetof(ta_tel_trace, fault_detail) == 352, "tel.trace fault_detail");
+_Static_assert(offsetof(ta_tel_trace, fault_message) == 360, "tel.trace fault_message");
+_Static_assert(offsetof(ta_tel_trace, fault_data) == 368, "tel.trace fault_data");
+_Static_assert(offsetof(ta_tel_trace, list_names) == 376, "tel.trace list_names");
 
 /** `tel.dropped` (0x0302, on tel): Telemetry records were dropped. */
 typedef struct {

@@ -9,8 +9,8 @@
  * immutable definitions, the resident actors and their runtime IDs, the
  * address and session tables, delayed-send state, the built-in SCXML
  * Event I/O Processor and its host event router, the registered I/O
- * processors and invokers, and the host's actor directory, trace and log
- * sinks.
+ * processors and invokers, the host's actor directory and log sink, and
+ * the control block with its `tel` ring (ADR 0098, ADR 0104).
  *
  * ## What it is not
  *
@@ -57,8 +57,9 @@
  * The system owns everything it holds, from the allocator in its config,
  * until `ta_system_destroy`, which destroys every actor and definition
  * first. Creation allocates the system, the first storage of the tables
- * that start with some (sessions, atoms, event names), and the run
- * buffers (ADR 0092 section 3); the actor table starts empty. Afterwards it allocates where a
+ * that start with some (sessions, atoms, event names), the run
+ * buffers (ADR 0092 section 3), and the `tel` ring with its scratch area
+ * unless `telBytes` is 0; the actor table starts empty. Afterwards it allocates where a
  * caller adds something (a spawn, a registration, an interned address), a
  * nested interpreter's region the first time an invocation is cancelled
  * at that depth, and the event blocks it caches; never in the middle of a
@@ -79,7 +80,7 @@
  *
  * Every unit that runs: the public API's entry points, the interpreter,
  * actors, session images, timers, invocations and I/O. ADRs 0043, 0063,
- * 0066, 0067, 0068, 0072, 0079, 0092.
+ * 0066, 0067, 0068, 0072, 0079, 0092, 0098, 0104.
  */
 #pragma once
 
@@ -96,6 +97,7 @@
 #include "routing.h"
 #include "timer.h"
 #include "trace.h"
+#include "ring.h"
 #include "vec.h"
 #include "../include/tinyactors.h"
 #include "clock.h"
@@ -131,6 +133,18 @@ typedef struct {
     void *memory;
     size_t bytes;
 } ta_nested_region;
+
+/**
+ * The control block (ADR 0104): the rings core shares with its host, with
+ * their positions (`head`, `tail`, the next seq) and counters. Today it
+ * holds `tel` alone, a lossy ring of `telBytes` (ADR 0098), whose `dropped`
+ * counts the trace records dropped since creation; its capacity is 0 when
+ * `telBytes` is 0. The host reads it through `ta_system_tel_peek`,
+ * `ta_system_tel_release` and `ta_system_tel_status`.
+ */
+typedef struct {
+    ta_ring tel;
+} ta_control_block;
 
 typedef struct {
     ta_definition *definition;
@@ -184,8 +198,10 @@ struct ta_system {
     ta_actor_directory directory;
     ta_external_event_router external_events;
     ta_log_sink log_sink;
-    /* Never null: ta_null_trace_sink() when the host installed none (ADR 0067). */
-    ta_trace_sink trace;
+    /* What is traced and how records are built (trace.h, ADR 0098). */
+    ta_tracer trace;
+    /* The rings and their counters (ADR 0104). */
+    ta_control_block control;
     /* Never null: ta_null_definition_sink() when the host installed none (ADR 0079). */
     ta_definition_sink definition_sink;
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */

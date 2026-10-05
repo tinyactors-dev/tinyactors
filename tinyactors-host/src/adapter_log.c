@@ -6,6 +6,8 @@
 static void tah_log_write(void *self, const ta_log_record *record) {
     tah_system *system = self;
     if (system->tracing) {
+        /* The trace records written before it go first, so logs keep core's order. */
+        tah_system_drain_telemetry(system);
         tah_otlp_log(&system->otlp, record); /* an OTLP log record (napi ADR 0017 section 7) */
     }
     if (!system->log_to_js) {

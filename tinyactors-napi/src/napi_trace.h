@@ -29,6 +29,19 @@ bool tna_trace_flush_if_full(napi_env env, tna_napi_system *wrapper);
 /* The same, for a native method on the system that returns `result`:
  * NULL when the sink threw. */
 napi_value tna_trace_after_method(napi_env env, napi_callback_info info, napi_value result);
+/*
+ * A value's JSON text, cut at `limit` bytes, at most tna_value_buffer_bytes(),
+ * into the system's value buffer, valid until the next call: a <log>
+ * record's, and a trace record's, which core asks the data model for (core
+ * ADR 0098). `*cut`: there was more. False when the value has no text.
+ */
+bool tna_value_json(tna_napi_system *wrapper, const ta_value *value, size_t limit, ta_str *out, bool *cut);
+/* The value buffer's size, its terminator aside: valueBytes, or the trace
+ * text core asks for, telemetryValueBytes, and 4 bytes more, so a text that
+ * was cut shows it (ta_datamodel_value_text_params.trace_bytes). It asks
+ * core, so the system keeps it, worked out once at creation
+ * (value_buffer_bytes). */
+size_t tna_value_buffer_bytes(const tna_napi_system *wrapper);
 /* setTraceSink(installed, kinds, unsampled, values, valueLimit, links, resource, seed). */
 napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info);
 /* The sample ratio crosses as parts of this whole. */

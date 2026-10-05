@@ -182,6 +182,9 @@ tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value) {
 static void tna_definition_notify(void *self, const ta_definition_event *event) {
     tna_napi_system *wrapper = self;
     tah_definition_origin origin = tah_definitions_note(tah_system_definitions(wrapper->system), event);
+    /* The trace records core wrote before it go to the encoder first: they
+     * name the definition's scope, and the log follows them (core ADR 0098). */
+    tah_system_drain_telemetry(wrapper->system);
     if (tah_system_tracing(wrapper->system)) {
         tah_otlp_definition_log(tah_system_otlp(wrapper->system), &(tah_otlp_definition_log_params){
                                                             .event = event,
@@ -460,7 +463,8 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
                                                                       .params = params,
                                                                       .param_count = param_count,
                                                                       .hosting = &napi_params,
-                                                                      .rejected = &rejected },
+                                                                      .rejected = &rejected,
+                                                                      .traced = true },
                                          &wrapper->system);
     if (result != TA_OK) {
         free(wrapper);
@@ -476,7 +480,8 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     }
     /* napi's buffers are allocated with the system (napi ADR 0035). */
     wrapper->value_bytes = (size_t)napi_params.values[TAH_PARAM_VALUE_BYTES];
-    wrapper->trace_value = malloc(wrapper->value_bytes + 1u);
+    wrapper->value_buffer_bytes = tna_value_buffer_bytes(wrapper);
+    wrapper->trace_value = malloc(wrapper->value_buffer_bytes + 1u);
     uint64_t compile_text = 0;
     (void)ta_system_param(tah_system_core(wrapper->system), TA_PARAM_COMPILE_TEXT_BYTES, &compile_text);
     wrapper->refusal_bytes = (size_t)compile_text + TNA_REFUSAL_FRAME_BYTES;
