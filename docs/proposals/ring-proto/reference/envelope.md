@@ -115,7 +115,8 @@ measurements:
 | One envelope | 88 bytes, plus 4 for its slot in the deadline index |
 | Default pool, 4,096 envelopes | about 368 KiB |
 | One [waiting entry](#the-waiting-entry-one-copy-of-the-address) | about 40 bytes, plus the address's text in the name area: list head and tail 8, text reference 8, hash 4, `request_seq` 8, recycle cursor, flags and count about 12. Taken only while an address has envelopes or an outstanding load request. |
-| The waiting-entry table | a fixed B3 table that holds `poolEnvelopes` keys at three-quarters load: 8 bytes per slot, 8,192 slots and 64 KiB at the default pool, allocated with the system |
+| The waiting-entry table | a B3 table that grows in the pool's refill, with room for one key per envelope the pool holds, at three-quarters load: 8 bytes per slot, so 8,192 slots and 64 KiB when the default pool is full |
+| The `source_seq` index | a B3 table that grows in the pool's refill like the waiting-entry table: 8 bytes per slot, 64 KiB when the default pool is full ([below](#withdrawing-an-admitted-input)) |
 | Default name area | 256 KiB (`nameAreaBytes`, 262,144): one 64-byte chunk per envelope ([BEHAVIORS.md](../BEHAVIORS.md#nameareabytes)) |
 | A traced envelope | 40 more bytes of name area, usually a second 64-byte chunk; a traced system sets about 128 bytes of name area per envelope |
 | Default ordinary internal quota, 256 entries of about 48 bytes | about 12 KiB (`internalQueueEvents`), plus the compiler-sized mandatory floor |
@@ -605,18 +606,18 @@ way. A withdrawn `done` or an `ends` error leaves the invocation active, so
 the chart learns of the service's end only from its own timeout. That is
 the host's choice to make.
 
-**Finding the envelope.** The envelope already carries `source_seq`. Core
-scans the pool's array for a runnable or waiting envelope with that seq,
-then unlinks it by walking the list it is on, which is singly linked. Both
-are bounded by `poolEnvelopes`, run between macrosteps and allocate
-nothing. The run queue's arrival order is unchanged for the envelopes that
-remain. At the default 4,096 envelopes this is a few microseconds per
-withdrawal.
-
-**Open:** whether a storm of withdrawals (many clients disconnecting at
-once) justifies a fixed `source_seq` index, allocated with the pool, so
-that each withdrawal costs O(1) rather than a scan. It would cost about 8
-bytes per envelope.
+**Finding the envelope.** Core finds it through the `source_seq` index,
+a B3 hash table keyed by `source_seq` whose value is the envelope's index
+([building-blocks.md](building-blocks.md#b-containers-over-indexes)). Admission inserts
+the key; taking, bouncing, refusing or withdrawing the input removes it.
+The index grows in the pool's refill like the
+[waiting-entry table](#the-waiting-entry-one-copy-of-the-address), with
+room for one key per envelope the pool holds, so an insert never
+allocates. A lookup is O(1), so a storm of withdrawals (many clients
+disconnecting at once) does not scan the pool. Core then unlinks the
+envelope from the list it is on. The withdrawal runs between macrosteps
+and allocates nothing. The run queue's arrival order is unchanged for the
+envelopes that remain.
 
 ## The taken envelope stays put through input completion
 

@@ -665,7 +665,7 @@
       "code": 259,
       "ring": "h2c",
       "summary": "Create a session",
-      "doc": "With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish. Inputs seed new configuration and data model values; exact restoration is not promised.\n\nWith `state`, the session is restored from a checkpoint (c2h.state, core ADR 0091) as a replaying session whose clock starts at the state's; the c2h.input records after the checkpoint follow. This is how a session survives a restart. h2c.load is not: it only pages a session back into memory within one process.\n\nThe trace fields are the trace parent the bootstrap macrostep runs under, as for h2c.event. When it answers c2h.load_needed and has none, the bootstrap runs under the trace parent of the first envelope waiting for the address.",
+      "doc": "With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish. Inputs seed new configuration and data model values; exact restoration is not promised.\n\nWith `state`, a checkpoint (c2h.state, core ADR 0091) seeds the session, which replays with its clock starting at the state's; the c2h.input records after the checkpoint follow. This is how new execution starts from a checkpoint after a restart (core ADR 0105); exact restoration is not promised. h2c.load is not: it only pages a session back into memory within one process.\n\nThe trace fields are the trace parent the bootstrap macrostep runs under, as for h2c.event. When it answers c2h.load_needed and has none, the bootstrap runs under the trace parent of the first envelope waiting for the address.",
       "fields": [
         {
           "name": "address",
@@ -694,7 +694,7 @@
         {
           "name": "state",
           "type": "blob",
-          "doc": "a checkpoint c2h.state wrote, to restore; 0 for none",
+          "doc": "a checkpoint c2h.state wrote, to seed the session from; 0 for none",
           "offset": 64
         },
         {
@@ -782,7 +782,7 @@
       "code": 261,
       "ring": "h2c",
       "summary": "Bring an unloaded session back",
-      "doc": "Usually the answer to c2h.load_needed. Its delayed sends rejoin the pool. Waiting envelopes for it become runnable.\n\nLoading only bounds memory; it is not persistence. The image is one c2h.unloaded wrote in this process, and it is valid only here (core ADR 0074). To restore a session after a restart, use h2c.spawn with `state` (docs/proposals/ring-proto/reference/unloading.md).\n\nStage the complete restore outside macrosteps. Capacity or decoding failure leaves residency, timers and waiting mail unchanged. The host pins image until c2h.loaded or c2h.bounced correlates this request. Zero request_seq is refused when an active load request exists for the address.",
+      "doc": "Usually the answer to c2h.load_needed. Its delayed sends rejoin the pool. Waiting envelopes for it become runnable.\n\nLoading only bounds memory; it is not persistence. The image is one c2h.unloaded wrote in this process, and it is valid only here (core ADR 0074). To seed new execution after a restart, use h2c.spawn with `state` (docs/proposals/ring-proto/reference/unloading.md).\n\nStage the complete restore outside macrosteps. Capacity or decoding failure leaves residency, timers and waiting mail unchanged. The host pins image until c2h.loaded or c2h.bounced correlates this request. Zero request_seq is refused when an active load request exists for the address.",
       "fields": [
         {
           "name": "address",
@@ -1178,7 +1178,7 @@
       "code": 514,
       "ring": "c2h",
       "summary": "A recorded session took an input",
-      "doc": "Written when a recorded session takes an envelope, before any effect of the macrostep it starts. These observations, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), seed a new execution. Recording imposes no persistence-before-effects rule.\n\nNot written for an input a replaying session takes: that input is already in the log being replayed. A session restored from c2h.state and replayed starts writing c2h.input again after h2c.publish.\n\nData is a copy_out snapshot created before binding or running the input, including finalize and autoforward. Later chart mutations cannot change it.\n\nThe trace fields are the trace parent the macrostep runs under, in h2c.event's form, so a journal keeps it and a replay fed back as h2c.event runs under the same trace ID and parent span. For mail and timers, parent_span_id is the span ID of the sending step: the cause's step key becomes a host cause with the same span ID.",
+      "doc": "Written when a recorded session takes an envelope, before any effect of the macrostep it starts. These observations, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), seed a new execution. Recording imposes no persistence-before-effects rule.\n\nNot written for an input a replaying session takes: that input is already in the log being replayed. A session seeded from c2h.state and replayed starts writing c2h.input again after h2c.publish.\n\nData is a copy_out snapshot created before binding or running the input, including finalize and autoforward. Later chart mutations cannot change it.\n\nThe trace fields are the trace parent the macrostep runs under, in h2c.event's form, so a journal keeps it and a replay fed back as h2c.event runs under the same trace ID and parent span. For mail and timers, parent_span_id is the span ID of the sending step: the cause's step key becomes a host cause with the same span ID.",
       "fields": [
         {
           "name": "macrostep",
@@ -1867,7 +1867,7 @@
       "code": 526,
       "ring": "c2h",
       "summary": "A recorded session's state at a point of its log",
-      "doc": "A checkpoint (core ADR 0091). Its delayed sends are inside the image, so it is one artifact. Replaying from it needs only the c2h.input records after input_seq.\n\nUnlike the image c2h.unloaded writes, it is meant to be stored: its values are written with value_write durable=true (core ADR 0090). It is restored with h2c.spawn `state`.",
+      "doc": "A checkpoint (core ADR 0091). Its delayed sends are inside the image, so it is one artifact. Replaying from it needs only the c2h.input records after input_seq.\n\nUnlike the image c2h.unloaded writes, it is meant to be stored. h2c.spawn `state` seeds new execution from it (core ADR 0105).",
       "fields": [
         {
           "name": "address",

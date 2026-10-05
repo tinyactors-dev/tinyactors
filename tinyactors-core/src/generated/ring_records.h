@@ -495,7 +495,7 @@ typedef struct {
     uint64_t data;
     /** with replaying_from_clock: the replayed run’s start */
     uint64_t clock;
-    /** a checkpoint c2h.state wrote, to restore; 0 for none */
+    /** a checkpoint c2h.state wrote, to seed the session from; 0 for none */
     uint64_t state;
     /**
      * c2h.load_needed seq when answering a virtual-family load; 0 for an

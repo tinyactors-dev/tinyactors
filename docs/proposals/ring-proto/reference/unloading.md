@@ -19,17 +19,19 @@ paged back in when mail or a timer needs them.
 - **Where the host keeps images is up to the host:** memory, a temporary
   file, a table it empties at startup. The choice is about how much RAM to
   save, not about surviving a crash.
-- **Surviving a restart is a different mechanism:** a recorded session's
-  [`c2h.input`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput) log, and its
+- **Starting again after a restart is a different mechanism:** a recorded
+  session's [`c2h.input`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput) log, and its
   checkpoints, [`c2h.state`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hstate),
-  restored with [`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn)
-  and its `state` field ([recording-and-replay.md](recording-and-replay.md)).
-  [`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload) never restores
-  anything across a restart.
+  seed new execution through [`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn)
+  and its `state` field (core ADR 0105,
+  [recording-and-replay.md](recording-and-replay.md)). They do not restore
+  the old execution.
+  [`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload) never brings
+  anything back across a restart.
 
 So after a crash there are no unloaded sessions. The host's index of them
-is empty, and every session a restarted system needs comes back through
-replay or a checkpoint.
+is empty, and every session a restarted system needs is seeded again
+from replay or a checkpoint.
 
 ## The records
 

@@ -70,6 +70,10 @@ lists the ADRs this reverses.)
   - installing and calling the synchronous data model vtable;
   - installing the clock function core stamps `tel` records with
     ([reference/telemetry.md](reference/telemetry.md#the-host-clock));
+  - setting the trace kind masks between `ta_run` calls, as installing a
+    trace sink sets them today; with `telBytes` 0 the call refuses
+    non-zero masks
+    ([reference/telemetry.md](reference/telemetry.md#masks-and-sampling));
   - building definition specs with core's spec builder;
   - value ownership and byte source/sink integrations;
   - read-only inspection with `ta_actor_inspect` whenever core has

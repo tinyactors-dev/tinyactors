@@ -96,7 +96,8 @@ napi becomes a binding over core and its rings. What it keeps:
 Suites to rewrite: `route.js`, `loads.js`, `session-loads.js`,
 `recorder.js`, `replay-events.js`, `persist.js`, `session-inputs.js`,
 `scale.js` and `allocations.js`, since the zero-allocation property moves
-from "after warm-up" to "always, in a macrostep".
+from "after warm-up" to "always, in a macrostep". `quarantine.js` is
+removed with quarantine.
 
 ## The test host
 
@@ -210,7 +211,7 @@ history, with a status line pointing at the ADR that removes the kernel.
 | 0032 to 0034 Persistence by replay; the input log | already superseded by kernel ADR 0006; input observations become `c2h.input` |
 | 0035, 0036 Parameters | refined: kernel parameters go |
 | 0037 napi is a binding over the host kernel | superseded: a binding over core's rings |
-| 0040 Effects are not held | kept: effects may execute on receipt for every live session, independently of macrostep ends and journaling |
+| 0040 Effects are not held | kept: effects may execute on receipt for every live session, independently of macrostep ends and journaling. Its text about quarantining actors on a failed commit no longer applies once quarantine is removed (napi ADR 0041 removes quarantine); step 6.1 records that on 0040's status line |
 
 ### ADRs to write
 
@@ -273,15 +274,17 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
    - **One waiting entry per address.** Extends ADR 0065's handles to
      addresses that are not resident. Envelopes that wait for an address
      name its waiting entry, an item of a small index pool whose ceiling
-     is `poolEnvelopes`, found through a fixed hash table keyed by the
-     address's hash. The entry holds the address's text once, the waiting
+     is `poolEnvelopes`, found through a hash table keyed by the
+     address's hash. The table grows in the pool's refill, never at an
+     insert. The entry holds the address's text once, the waiting
      list and the load request. A burst of mail to an unloaded actor copies
      its address once, not once per message, and nothing is interned
      ([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address)).
    - **Withdrawal is a new record.** Committed records never change.
      [`h2c.withdraw`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cwithdraw) names
-     an admitted input by its h2c seq. If it has not been taken, core
-     frees its envelope and writes `c2h.input_refused` (`withdrawn`);
+     an admitted input by its h2c seq, which core finds through a
+     `source_seq` index that grows in the pool's refill. If it has not
+     been taken, core frees its envelope and writes `c2h.input_refused` (`withdrawn`);
      otherwise the input's own terminal record stands, and only an
      operator abandon stops it
      ([envelope.md](envelope.md#withdrawing-an-admitted-input)).

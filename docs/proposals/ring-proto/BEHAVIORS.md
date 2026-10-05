@@ -145,8 +145,9 @@ because a full one fails the chart's action.
 - **It also bounds waiting entries:** one per address that has envelopes
   waiting for a load, about 40 bytes each, filled on demand with the pool.
   No more addresses can wait than there are envelopes, so `poolEnvelopes`
-  is their ceiling, and the fixed table that finds them holds that many
-  (64 KiB at the default)
+  is their ceiling. The table that finds them grows in the pool's refill,
+  with room for one key per envelope the pool holds (64 KiB when the
+  default pool is full)
   ([envelope.md](reference/envelope.md#the-waiting-entry-one-copy-of-the-address)).
 - **Default 4,096, about 368 KiB including the deadline index.** napi resumes up to 1,024 actors per turn
   today (`resumesPerTurn`, and `eventBlockCache` 1,024). Four times that
@@ -407,11 +408,14 @@ because a full one fails the chart's action.
 - **What it bounds:** the tel ring ([telemetry.md](reference/telemetry.md)).
   Unit: bytes.
 - **Default 16,384 (16 KiB).** With every trace kind on, one microstep
-  writes several records of about 170 bytes. 16 KiB holds about 95 between
-  drains, enough for a quiet turn or a sampled one. tel stays lossy: a host
+  writes several records. A `tel.trace` record is at least 224 bytes, its
+  fixed part, before its tail of names and values. 16 KiB holds at most
+  about 73 between drains, enough for a quiet turn or a sampled one. tel stays lossy: a host
   that traces every kind in a busy turn raises it, or sees `tel.dropped`.
 - **Minimum 0, or else `maxRecordBytes`,** so the largest record fits.
-  0 means no `tel` ring at all: the kind masks must be zero, and nothing
+  0 means no `tel` ring at all: the kind masks must be zero, and the
+  native call that sets them between `ta_run` calls refuses non-zero
+  masks ([telemetry.md](reference/telemetry.md#masks-and-sampling)). Nothing
   a host needs is lost, because every outcome also reaches c2h
   ([telemetry.md](reference/telemetry.md#a-system-without-tel)).
   **Maximum 2 GiB.**
@@ -475,7 +479,6 @@ Creation checks these and answers `TA_ERR_INVALID`, naming the parameter
 
 - `maxRecordBytes` ≤ `c2hBytes` / 5;
 - `maxRecordBytes` ≤ `h2cBytes`, `nameAreaBytes`, and `telBytes` unless it is 0;
-- `telBytes` 0 requires every trace kind mask to be zero;
 - `telemetryValueBytes` ≤ `maxRecordBytes` − 256;
 - `admissionWatermark` from 1 to 99;
 - `microstepLimit` from 1, never 0 or none.
@@ -525,7 +528,7 @@ figure a system actually pays small:
 |---|---|
 | `microstepLimit` | It counts one input's whole chain: every microstep, every selection pass and every startup pass, from take until input completion. It must be finite: 0 and `TA_MICROSTEP_LIMIT_NONE` are refused, for the system and for a definition. At the limit core abandons the input with status `runaway`; the session lives on and takes its next input ([macrostep](reference/macrostep.md#runaways-the-chain-limit)). |
 | `eventNameDepth` (default 64, at most 64) | It also sizes the scratch that resolves a run-time name's segments ([names.md](reference/names.md)). A deeper name is invalid: `c2h.bounced` (`invalid`) at admission, plain `error.execution` at a `<send>`. |
-| `interpreterBytes`, `interpreterNesting` | Reserved at creation rather than on first use, if nested interpreters can start inside a macrostep (cancelling an invocation). **To check:** that this is the only path. |
+| `interpreterBytes`, `interpreterNesting` | Nested interpreter workspaces are sized and allocated outside macrosteps: at registration, and at the spawn or load of a session whose definition needs them, never on first use inside a macrostep (ADR 0102; today ADR 0092 allocates them on first use, while a cancellation runs). |
 | `renderBytes` | Smaller. Names and send IDs are written into ring tails or the name area, not rendered here. |
 | `maxPendingSends` | A per-session quota inside the pool ([above](#maxpendingsends)). |
 | `compileMessageBytes`, `compileTextBytes`, `compileNearestBytes`, `maxActors`, `maxDefinitions` | Nothing. Compiling, spawning and loading are not macrosteps. |

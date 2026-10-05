@@ -113,7 +113,11 @@ record is cheaper than the sink call per record of today's kernel.
 Core decides what is traced, with the controls today's trace sink has:
 
 - the `kinds`, `watched_kinds` and `unsampled_kinds` masks
-  (`TA_TRACE_BIT(kind)`) decide which kinds core writes;
+  (`TA_TRACE_BIT(kind)`) decide which kinds core writes. They are not
+  creation parameters (ADR 0092: trace kinds are not parameters). The host
+  sets them through a native call between `ta_run` calls, as installing a
+  trace sink with `ta_system_set_trace_sink` sets them today; that call
+  replaces it;
 - core computes trace contexts and applies sampling (ADR 0073). It
   computes the trace ID, carried as `trace_id_high` and `trace_id_low`,
   and the span IDs. A span ID is a fixed mix of the step key;
@@ -258,9 +262,8 @@ input completes, and report a wrong duration.
 ### A system without `tel`
 
 `telBytes` may be 0. Core then allocates no `tel` ring, and the control
-block has no `tel` positions. The kind masks are forced to zero, and
-creation refuses a non-zero mask with `TA_ERR_INVALID`, naming the
-parameter.
+block has no `tel` positions. The kind masks stay zero: the native call
+that sets them refuses a non-zero mask with `TA_ERR_INVALID`.
 
 Nothing a host needs arrives only on `tel`: a runaway is
 `c2h.input_completed` with status `runaway`, a dead letter is

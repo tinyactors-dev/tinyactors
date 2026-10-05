@@ -115,7 +115,7 @@ A trace parent travels with the event (core ADRs 0067, 0073). A host that receiv
 
 With the replaying flag the session is prepared to replay (core ADR 0089): its clock starts at `clock`, it crosses no border, and it is published with h2c.publish. Inputs seed new configuration and data model values; exact restoration is not promised.
 
-With `state`, the session is restored from a checkpoint (c2h.state, core ADR 0091) as a replaying session whose clock starts at the state's; the c2h.input records after the checkpoint follow. This is how a session survives a restart. h2c.load is not: it only pages a session back into memory within one process.
+With `state`, a checkpoint (c2h.state, core ADR 0091) seeds the session, which replays with its clock starting at the state's; the c2h.input records after the checkpoint follow. This is how new execution starts from a checkpoint after a restart (core ADR 0105); exact restoration is not promised. h2c.load is not: it only pages a session back into memory within one process.
 
 The trace fields are the trace parent the bootstrap macrostep runs under, as for h2c.event. When it answers c2h.load_needed and has none, the bootstrap runs under the trace parent of the first envelope waiting for the address.
 
@@ -125,7 +125,7 @@ The trace fields are the trace parent the bootstrap macrostep runs under, as for
 | 40 | `revision` | bytes | the definition's revision hash |
 | 48 | `data` | vref | the data model binding, or 0 |
 | 56 | `clock` | time | with replaying_from_clock: the replayed run’s start |
-| 64 | `state` | blob | a checkpoint c2h.state wrote, to restore; 0 for none |
+| 64 | `state` | blob | a checkpoint c2h.state wrote, to seed the session from; 0 for none |
 | 72 | `request_seq` | seq | c2h.load_needed seq when answering a virtual-family load; 0 for an unsolicited spawn |
 | 80 | `trace_id_high` | u64 | the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context |
 | 88 | `trace_id_low` | u64 | the W3C trace ID, low 64 bits |
@@ -159,7 +159,7 @@ Refuses without mutation while supplied seed inputs remain pending. Generated lo
 
 Usually the answer to c2h.load_needed. Its delayed sends rejoin the pool. Waiting envelopes for it become runnable.
 
-Loading only bounds memory; it is not persistence. The image is one c2h.unloaded wrote in this process, and it is valid only here (core ADR 0074). To restore a session after a restart, use h2c.spawn with `state` (docs/proposals/ring-proto/reference/unloading.md).
+Loading only bounds memory; it is not persistence. The image is one c2h.unloaded wrote in this process, and it is valid only here (core ADR 0074). To seed new execution after a restart, use h2c.spawn with `state` (docs/proposals/ring-proto/reference/unloading.md).
 
 Stage the complete restore outside macrosteps. Capacity or decoding failure leaves residency, timers and waiting mail unchanged. The host pins image until c2h.loaded or c2h.bounced correlates this request. Zero request_seq is refused when an active load request exists for the address.
 
@@ -340,7 +340,7 @@ Creation does not imply bootstrap and invocation startup have settled. c2h.input
 
 Written when a recorded session takes an envelope, before any effect of the macrostep it starts. These observations, fed back as h2c.event and h2c.invoke_report under h2c.spawn(replaying), seed a new execution. Recording imposes no persistence-before-effects rule.
 
-Not written for an input a replaying session takes: that input is already in the log being replayed. A session restored from c2h.state and replayed starts writing c2h.input again after h2c.publish.
+Not written for an input a replaying session takes: that input is already in the log being replayed. A session seeded from c2h.state and replayed starts writing c2h.input again after h2c.publish.
 
 Data is a copy_out snapshot created before binding or running the input, including finalize and autoforward. Later chart mutations cannot change it.
 
@@ -567,7 +567,7 @@ The image bounds memory; it is not a checkpoint. It is valid only in the process
 
 A checkpoint (core ADR 0091). Its delayed sends are inside the image, so it is one artifact. Replaying from it needs only the c2h.input records after input_seq.
 
-Unlike the image c2h.unloaded writes, it is meant to be stored: its values are written with value_write durable=true (core ADR 0090). It is restored with h2c.spawn `state`.
+Unlike the image c2h.unloaded writes, it is meant to be stored. h2c.spawn `state` seeds new execution from it (core ADR 0105).
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|

@@ -696,9 +696,10 @@ replay whose seed loops from ever being published. The implementation
 therefore removes quarantine, `release()`, and the parent's
 `error.communication.invoke.<id>.quarantined` event: a child whose input
 ran away is not stuck, and a parent waiting for its `done.invoke` relies
-on its own timeout, as for any child that does not finish. An operator who
-wants to look at a live actor attaches the debugger
-([debugging.md](debugging.md)).
+on its own timeout, as for any child that does not finish. An operator
+reads a live actor with `ta_actor_inspect` between `ta_run` calls
+([debugging.md](debugging.md#inspection-without-attaching)), and attaches
+the debugger to intervene ([debugging.md](debugging.md)).
 
 ### Consequence for chart authors: order inside a block matters
 

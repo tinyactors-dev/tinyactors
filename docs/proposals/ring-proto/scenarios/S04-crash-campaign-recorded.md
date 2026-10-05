@@ -43,6 +43,7 @@ configuration and data model values; that is accepted.
 | S04.3 | h2c | 7 × [`h2c.event`][h2c.event] `0x0102` `{flag replaying, at: the logged time}` from L2–L8 | Each input carries its logged time (core ADR 0094), so no `h2c.time` is needed. L3's data is decoded into new JavaScript objects (`v1'`). |
 | S04.4 | tel | [`tel.trace`][tel.trace] `0x0301` `{SENT, flag suppressed}`, … | The supplied inputs derive a new chart configuration and JavaScript data model values: data model calls are computation, not effects ([data model](../reference/data-model.md)). Effects do not cross the border while seeding: no `c2h.send`, no tracker mail. Telemetry shows them as suppressed. Core writes no `c2h.input` for replay inputs. |
 | S04.5 | – | – | The delayed send `t` (due t0+30s) is held in the pool under the session's clock. **pool 1/64.** |
+| S04.5a | c2h | 7 × [`c2h.input_completed`][c2h.input_completed] `{source_seq: each S04.3 h2c.event}` | The host waits for all seven before it publishes ([ARCHITECTURE](../ARCHITECTURE.md#recording-and-replay)): admission alone does not establish completion. A bounced or refused seed input would need a retry, or an explicit choice to omit it. |
 | S04.6 | h2c | [`h2c.publish`][h2c.publish] `0x0104` `{campaign/42, at: t0+2s}` | `at` is the time of L8, the last thing the run did before the crash. |
 | S04.7 | c2h | [`c2h.published`][c2h.published] `0x020F` `{replayed: 7, dropped_timers: 0}`, [`c2h.wake`][c2h.wake] `0x0209` `{t0+30s}` | `t` was due after `at`, so it is scheduled. Had it been due by `at`, it would have fired before the crash, and that firing would be in the log as an input. The campaign is in `attempt`/`sending` with `pending = {n5}`, `sent = {n1…n4}`, attempt 1, and `replyTo` = the dead `http:req/9f`. |
 | S04.8 | h2c | [`h2c.spawn`][h2c.spawn] `{progress/42}` | The tracker is not recorded, so it starts fresh, after the publish so that its first mail has somewhere to go. |
@@ -101,6 +102,7 @@ with each other. Derived actors resync ([S05](S05-crash-both-recorded.md)).
 [c2h.unloaded]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hunloaded
 [c2h.state]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hstate
 [c2h.published]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hpublished
+[c2h.input_completed]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput_completed
 [c2h.finished]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hfinished
 [c2h.destroyed]: ../../../../tinyactors-core/src/generated/MESSAGES.md#c2hdestroyed
 [tel.trace]: ../../../../tinyactors-core/src/generated/MESSAGES.md#teltrace

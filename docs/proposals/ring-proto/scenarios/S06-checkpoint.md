@@ -4,7 +4,7 @@
 
 A recorded campaign with 10,000 notifications has a long log: one input
 per acknowledgement. The host takes a checkpoint, truncates the log, and
-after a crash restores the checkpoint and replays only the tail.
+after a crash seeds a new session from the checkpoint and replays only the tail.
 
 The checkpoint supplies starting state for a new execution. Replaying the
 tail derives configuration and data model values under its new resource
@@ -23,7 +23,7 @@ The pool is large enough for the brutal fanout. With the
 |---|---|---|---|
 | S06.1 | – | – | The log holds [`c2h.spawned`][c2h.spawned] and 6,001 [`c2h.input`][c2h.input] records: `send.requested` and 6,000 outcomes. The host's policy is to checkpoint every 5,000 inputs. |
 | S06.2 | h2c | [`h2c.checkpoint`][h2c.checkpoint] `0x0108` `{campaign/42, image: b9}` | The host pins writable image sink `b9` through the response. Core runs macrosteps to completion, so the session is between two macrosteps when core reads the request. |
-| S06.3 | c2h | [`c2h.state`][c2h.state] `0x020E` `{campaign/42, image: b9, input_seq: the c2h seq of the 6,001st input}` | Core writes the image through the host's byte sink (core ADR 0090), with `durable=true`, because unlike an unload image it is meant to outlive the process, and the host gives it the blob ID `b9`. The image holds the configuration, history, active invocations, and **the delayed send `t`**, with its due time and data. The data model's root (`batch`, `pending`, `sent`, `idOf`, `counts`, …) is written through `value_write`, so the binding's codec encodes the JavaScript objects ([data model](../reference/data-model.md)). It is one artifact. |
+| S06.3 | c2h | [`c2h.state`][c2h.state] `0x020E` `{campaign/42, image: b9, input_seq: the c2h seq of the 6,001st input}` | Core writes the image through the host's byte sink, and the host gives it the blob ID `b9`. Unlike an unload image, it is meant to be stored, and it seeds new execution after a restart. The image holds the configuration, history, active invocations, and **the delayed send `t`**, with its due time and data. The data model's root (`batch`, `pending`, `sent`, `idOf`, `counts`, …) is written through `value_write`, so the binding's codec encodes the JavaScript objects ([data model](../reference/data-model.md)). It is one artifact. |
 | S06.4 | – | – | The host stores `b9` and then deletes the log entries up to `input_seq`, in that order. A crash between the two leaves a log that is too long, which is harmless. |
 
 ## Crash and restore
@@ -31,7 +31,7 @@ The pool is large enough for the brutal fanout. With the
 | Step | Ring | Record | What happens |
 |---|---|---|---|
 | S06.5 | – | – | 1,500 more outcomes are logged, and then the process crashes. |
-| S06.6 | h2c | [`h2c.spawn`][h2c.spawn] `0x0103` `{campaign/42, revision, state: b9}` | The checkpoint is restored as a replaying session. `t` goes back into the pool, held under the session's clock. This is `h2c.spawn`, not [`h2c.load`][h2c.load]: loading only pages a session back in within one process, and nothing it loads survives a crash ([unloading](../reference/unloading.md)). |
+| S06.6 | h2c | [`h2c.spawn`][h2c.spawn] `0x0103` `{campaign/42, revision, state: b9}` | The checkpoint seeds a replaying session. `t` goes back into the pool, held under the session's clock. This is `h2c.spawn`, not [`h2c.load`][h2c.load]: loading only pages a session back in within one process, and no image it loads is valid after a crash ([unloading](../reference/unloading.md)). |
 | S06.7 | c2h | [`c2h.spawned`][c2h.spawned] `0x0201` `{flags: replaying, recorded}` | |
 | S06.8 | h2c | 1,500 × [`h2c.event`][h2c.event] `{flag replaying}` | Only the tail is replayed. |
 | S06.9 | h2c | [`h2c.publish`][h2c.publish] `0x0104` `{campaign/42, at: the last input's time}` | The host first waits for `c2h.input_completed` for all 1,500 supplied replay inputs. |

@@ -216,11 +216,12 @@ message 'h2c.spawn', code: 0x0103, summary: 'Create a session' do
       'ADR 0089): its clock starts at `clock`, it crosses no border, and ' \
       'it is published with h2c.publish. Inputs seed new configuration ' \
       'and data model values; exact restoration is not promised.'
-  doc 'With `state`, the session is restored from a checkpoint (c2h.state, ' \
-      'core ADR 0091) as a replaying session whose clock starts at the ' \
+  doc 'With `state`, a checkpoint (c2h.state, core ADR 0091) seeds the ' \
+      'session, which replays with its clock starting at the ' \
       "state's; the c2h.input records after the checkpoint follow. This is " \
-      'how a session survives a restart. h2c.load is not: it only pages ' \
-      'a session back into memory within one process.'
+      'how new execution starts from a checkpoint after a restart (core ' \
+      'ADR 0105); exact restoration is not promised. h2c.load is not: it ' \
+      'only pages a session back into memory within one process.'
   doc 'The trace fields are the trace parent the bootstrap macrostep runs ' \
       'under, as for h2c.event. When it answers c2h.load_needed and has ' \
       'none, the bootstrap runs under the trace parent of the first ' \
@@ -230,7 +231,7 @@ message 'h2c.spawn', code: 0x0103, summary: 'Create a session' do
   field :revision, :bytes, "the definition's revision hash"
   field :data, :vref, 'the data model binding, or 0'
   field :clock, :time, 'with replaying_from_clock: the replayed run’s start'
-  field :state, :blob, 'a checkpoint c2h.state wrote, to restore; 0 for none'
+  field :state, :blob, 'a checkpoint c2h.state wrote, to seed the session from; 0 for none'
   field :request_seq, :seq, 'c2h.load_needed seq when answering a virtual-family load; 0 for an unsolicited spawn'
   field :trace_id_high, :u64, 'the W3C trace ID, high 64 bits; with trace_id_low all zero means no trace context'
   field :trace_id_low, :u64, 'the W3C trace ID, low 64 bits'
@@ -260,7 +261,7 @@ message 'h2c.load', code: 0x0105, summary: 'Bring an unloaded session back' do
       'pool. Waiting envelopes for it become runnable.'
   doc 'Loading only bounds memory; it is not persistence. The image is one ' \
       'c2h.unloaded wrote in this process, and it is valid only here ' \
-      '(core ADR 0074). To restore a session after a restart, use ' \
+      '(core ADR 0074). To seed new execution after a restart, use ' \
       'h2c.spawn with `state` (docs/proposals/ring-proto/reference/unloading.md).'
   field :address, :text
   field :image, :blob, 'the bytes c2h.unloaded gave, in this process'
@@ -417,7 +418,7 @@ message 'c2h.input', code: 0x0202, summary: 'A recorded session took an input' d
       'h2c.spawn(replaying), seed a new execution. Recording imposes no ' \
       'persistence-before-effects rule.'
   doc 'Not written for an input a replaying session takes: that input is ' \
-      'already in the log being replayed. A session restored from c2h.state ' \
+      'already in the log being replayed. A session seeded from c2h.state ' \
       'and replayed starts writing c2h.input again after h2c.publish.'
   doc 'Data is a copy_out snapshot created before binding or running the input, ' \
       'including finalize and autoforward. Later chart mutations cannot change it.'
@@ -605,9 +606,8 @@ message 'c2h.state', code: 0x020E, summary: "A recorded session's state at a poi
   doc 'A checkpoint (core ADR 0091). Its delayed sends are inside the ' \
       'image, so it is one artifact. Replaying from it needs only the ' \
       'c2h.input records after input_seq.'
-  doc 'Unlike the image c2h.unloaded writes, it is meant to be stored: its ' \
-      'values are written with value_write durable=true (core ADR 0090). ' \
-      'It is restored with h2c.spawn `state`.'
+  doc 'Unlike the image c2h.unloaded writes, it is meant to be stored. ' \
+      'h2c.spawn `state` seeds new execution from it (core ADR 0105).'
   field :address, :text
   field :cause_seq, :seq, 'the h2c.checkpoint'
   field :image, :blob

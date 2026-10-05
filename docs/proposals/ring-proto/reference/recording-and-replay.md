@@ -242,7 +242,8 @@ for a stable recorded session's state. Core answers with
   sends**, because they are envelopes the session owns;
 - `input_seq` names the last `c2h.input` it includes.
 
-A checkpoint is one artifact. Replay from it is
+A checkpoint is one artifact. It seeds new execution; it does not restore
+the old one (core ADR 0105). Replay from it is
 [`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn) `{state: image}`
 as a replaying session, followed by selected inputs after `input_seq`, then
 [`h2c.publish`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cpublish).
