@@ -61,8 +61,15 @@
  * the move: a closure capturing the slot (its CLOSURE runs after every LOCAL
  * so far), a parameter's DEFAULT_LOCAL, and a write. A module's exports are
  * reads at its end, so a const it exports is never moved before then.
+ *
+ * Shapes: unless the config says no_shapes, every event goes through the
+ * matcher (matcher.c) before the compiler handles it. The matcher reports a
+ * function whose body is a known shape during the ARROW_END that closes it,
+ * while the function is still the innermost scope here, and the compiler
+ * records the shape on its sjs_function_info. The code is the same either
+ * way (docs/matcher.md).
  */
-#include "internal.h"
+#include "matcher.h"
 
 /* Kinds of binding. */
 enum { B_LOCAL = 0, B_CONSTANT };
@@ -113,6 +120,7 @@ typedef struct {
     uint32_t early_read_length;
     sjs_position early_read_at;
     uint8_t block;         /* SC_FUNCTION: its body is a block */
+    uint32_t node;         /* SC_FUNCTION: its ARROW_BEGIN's node, which a shape's report names */
     uint32_t reads_base;   /* SC_FUNCTION: its slots' entries in c->last_reads */
     sjs_position at;
     name_index names;      /* its bindings, by name */
@@ -208,6 +216,9 @@ typedef struct {
 struct sjs_compiler {
     sjs_context *context;
     sjs_goal goal;
+    /* The tee before the compiler's own handling of each event. */
+    bool matching;
+    sjs_matcher matcher;
     const sjs_str *globals;
     uint32_t global_count;
     name_index global_index;   /* the first global of each name */
@@ -479,14 +490,18 @@ static void land(sjs_compiler *c, uint32_t operand) {
  */
 
 /* Numbers are found by their bits, which tell 0 from -0. */
+static sjs_result number_index(sjs_compiler *c, double value, uint32_t *index) {
+    if (index_find(&c->number_index, (sjs_str){ (const char *)&value, sizeof value }, index)) return SJS_OK;
+    *index = SJS_BUF_COUNT(c->numbers, double);
+    sjs_result r = buf_add(c, &c->numbers, bytes_of(&value, sizeof value));
+    if (r == SJS_OK) r = index_put(c, &c->number_index, at_offset(*index * (uint32_t)sizeof value, sizeof value, *index));
+    return r;
+}
+
 static sjs_result number_constant(sjs_compiler *c, double value, sjs_position at) {
     uint32_t index;
-    if (!index_find(&c->number_index, (sjs_str){ (const char *)&value, sizeof value }, &index)) {
-        index = SJS_BUF_COUNT(c->numbers, double);
-        sjs_result r = buf_add(c, &c->numbers, bytes_of(&value, sizeof value));
-        if (r == SJS_OK) r = index_put(c, &c->number_index, at_offset(index * (uint32_t)sizeof value, sizeof value, index));
-        if (r != SJS_OK) return fail_result(c, r, at);
-    }
+    sjs_result r = number_index(c, value, &index);
+    if (r != SJS_OK) return fail_result(c, r, at);
     return op32(c, ins(SJS_OP_NUMBER_, index, at));
 }
 
@@ -907,6 +922,7 @@ static sjs_result begin_function(sjs_compiler *c, const sjs_event *e) {
     if (push_construct(c, k, at) != SJS_OK) return SJS_ERR_PROGRAM;
     if (open_function_scope(c, at) != SJS_OK) return SJS_ERR_PROGRAM;
     scope *s = current(c);
+    s->node = e->node;
     s->params = (uint16_t)e->count;
     s->slots = (uint16_t)e->count;
     s->slot_high = (uint16_t)e->count;
@@ -2011,10 +2027,54 @@ static sjs_result on_event(void *self, const sjs_event *e) {
     sjs_compiler *c = self;
     if (c->failed) return SJS_ERR_PROGRAM;
     if (c->ended) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_SYNTAX, "an event after the end" });
+    if (c->matching) {
+        /* The matcher sees the event first: a report about the function an
+         * ARROW_END closes comes while it is still open here. */
+        sjs_result r = sjs_matcher_event(&c->matcher, e);
+        if (r != SJS_OK) return c->failed ? SJS_ERR_PROGRAM : fail_result(c, r, e->at);
+    }
     return event(c, e);
 }
 
 static const sjs_sink_vtable sink_vtable = { on_event };
+
+/* The matcher found that the innermost function computes a shape: record
+ * it, with its arguments, on the function's info. A report for any other
+ * node is ignored; the parser's ids make that never happen. */
+static sjs_result on_shape(void *self, const sjs_shape_match *match) {
+    sjs_compiler *c = self;
+    if (c->failed) return SJS_ERR_PROGRAM;
+    if (scope_count(c) < 2 || function_scope(c)->node != match->node) return SJS_OK;
+    uint32_t function = function_scope(c)->function;
+    uint32_t args[SJS_SHAPE_ARGS] = { 0 };
+    for (uint32_t i = 0; i < SJS_SHAPE_ARGS; i++) {
+        switch (sjs_shape_arg_kind(match->shape, i)) {
+        case SJS_SHAPE_ARG_TEXT: {
+            /* The key's string constant: the one GET_MEMBER reads it with. */
+            sjs_event key = { 0 };
+            key.kind = SJS_EV_MEMBER;
+            key.text = match->args[i].text;
+            key.at = match->start;
+            if (string_constant(c, &key, &args[i]) != SJS_OK) return SJS_ERR_PROGRAM;
+            break;
+        }
+        case SJS_SHAPE_ARG_NUMBER: {
+            sjs_result r = number_index(c, match->args[i].number, &args[i]);
+            if (r != SJS_OK) return fail_result(c, r, match->start);
+            break;
+        }
+        default:
+            args[i] = match->args[i].count;
+            break;
+        }
+    }
+    sjs_function_info *info = &SJS_BUF_AT(c->functions, sjs_function_info, function);
+    info->shape = (uint8_t)match->shape;
+    for (uint32_t i = 0; i < SJS_SHAPE_ARGS; i++) info->shape_args[i] = args[i];
+    return SJS_OK;
+}
+
+static const sjs_shape_reporter_vtable shape_reporter_vtable = { on_shape };
 
 /* ------------------------------------------------------------------------
  * The public API
@@ -2038,6 +2098,11 @@ sjs_result sjs_compiler_init(sjs_compiler **out, const sjs_compiler_config *conf
     c->export_names = index_over(&c->names);
     c->star_modules = index_over(&c->names);
     c->namespaces = index_over(&c->names);
+    if (!config->no_shapes) {
+        sjs_matcher_config matcher = { alloc(c), c->context->limits.max_nesting, { c, &shape_reporter_vtable } };
+        sjs_matcher_init(&c->matcher, &matcher);
+        c->matching = true;
+    }
     sjs_result r = SJS_OK;
     for (uint32_t i = 0; i < c->global_count && r == SJS_OK; i++) {
         /* A name given twice is the first. */
@@ -2143,6 +2208,7 @@ void sjs_compiler_destroy(sjs_compiler *compiler) {
                         &c->constructs, &c->jumps, &c->patterns, &c->pattern_keys, &c->pattern_slots, &c->literals, &c->literal_keys, &c->exports,
                         &c->stars, &c->sorting };
     for (uint32_t i = 0; i < sizeof bufs / sizeof bufs[0]; i++) sjs_buf_free(a, bufs[i]);
+    if (c->matching) sjs_matcher_free(&c->matcher);
     sjs_mem_free(a, c, sizeof *c);
 }
 

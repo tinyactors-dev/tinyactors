@@ -516,6 +516,18 @@ typedef struct {
     const sjs_str *globals;
     uint32_t global_count;
     sjs_modules modules;   /* optional: v may be NULL */
+    /*
+     * Compile without matching shapes: no function is tagged with the shape
+     * of what it computes (a key read, a comparison by a key), so no built-in
+     * can run a callback in C instead of its code. A program gives the same
+     * values and faults either way, and never uses more fuel with shapes.
+     * Matching allocates (its records, from the context's allocator), so a
+     * compile at the edge of an allocator's budget can fail only with shapes.
+     * For tests that compare the two, and for an embedder ruling the fast
+     * paths out. false, which a designated initialiser that leaves it out
+     * gives, matches (docs/matcher.md).
+     */
+    bool no_shapes;
 } sjs_compiler_config;
 
 SJS_API sjs_result sjs_compiler_init(sjs_compiler **out, const sjs_compiler_config *config);

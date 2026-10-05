@@ -539,8 +539,8 @@ static bool compile_source(bench_run *run, const bench_source *source, sjs_progr
     sjs_sink sink = { NULL, NULL };
     *out = NULL;
     if (!source->parse_only) {
-        sjs_compiler_config config = { run->context, source->goal, run->names, source->global_count,
-                                       { run, &modules_vtable } };
+        sjs_compiler_config config = { .context = run->context, .goal = source->goal, .globals = run->names,
+                                       .global_count = source->global_count, .modules = { run, &modules_vtable } };
         if (sjs_compiler_init(&compiler, &config) != SJS_OK) return fail(run, "sjs_compiler_init failed");
         sink = sjs_compiler_sink(compiler);
     }

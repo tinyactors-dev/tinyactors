@@ -1,8 +1,11 @@
 # Shapes: a tree-pattern matcher on the event stream
 
-Status: design (option A). Section 1, node identity in the events, is
-implemented ([nodes]); the rest is not yet. Section 9 lists the four
-commits that implement it, each with its tests.
+Status: option A. Sections 1 to 6 and 8 are implemented: node identity in
+the events ([nodes]), then the rules, their generator, the matcher, the
+compiler's recording, the off switch and the differential test
+([matcher]). Section 7, the first consumers, is not yet. Section 9 lists the
+commits, each with its tests; where the implementation proved the first
+draft wrong in a detail, the sections say what changed and why.
 
 The compiler keeps reinventing small pattern matchers over the events it
 receives: OBJECT_LITERAL gathers static keys until a property breaks the
@@ -19,7 +22,7 @@ The first use is **callback shapes**. When an arrow function is `x => x.k`
 or `(a, b) => a.k - b.k`, the matcher tags it, and `map` and `toSorted` run
 the tagged callback in C instead of in bytecode. Later uses (constant
 folding, superinstructions, chain fusion) are further rule sets; they are
-not part of the four commits.
+not part of the commits of section 9.
 
 Three properties hold throughout:
 
@@ -40,7 +43,9 @@ bytes --> parser --events--> matcher (tee) --same events--> compiler
                                 +--- match(shape, node, args) -+
 ```
 
-The matcher does not depend on the compiler. Its checks see only the events
+The tee is the compiler's own sink function, which hands each event to the
+matcher before it handles it (6.1). The matcher does not depend on the
+compiler. Its checks see only the events
 of the subtree they match, such as an arrow's own parameter list, and never
 the compiler's scopes.
 
@@ -212,11 +217,10 @@ one small struct:
 
 ### 1.4 Who uses them
 
-- **The compiler** ignores `start`. Before the matcher lands it ignores
-  `node` too. From the [matcher] commit on, it reads `node` once per
-  function: `begin_function` stores ARROW_BEGIN's `node` in the function's
-  scope (`scope.node`), so that a match report names the function it is
-  for. Errors and line tables keep using `at`.
+- **The compiler** ignores `start`. It reads `node` once per function:
+  `begin_function` stores ARROW_BEGIN's `node` in the function's scope
+  (`scope.node`), so that a match report names the function it is for.
+  Errors and line tables keep using `at`.
 - **The matcher** uses `node` to tell which open bracket an event belongs
   to, and copies the closing event's `node` and `start` into each report. It
   never counts events.
@@ -301,12 +305,15 @@ head         = ( lower | UPPER ) "(" [ term { "," term } ] ")" ;
 pattern      = KIND [ "{" test { "," test } "}" ] [ "(" [ pattern { "," pattern } ] ")" ]
              | lower [ "(" [ term { "," term } ] ")" ] ;    (* a nonterminal *)
 test         = lower ":" term ;            (* a field of the event *)
-term         = lower                       (* a variable *)
-             | INT | STRING | "true" | "false" | UPPER ;  (* a constant; UPPER: an sjs_operator *)
+term         = lower                       (* a variable; `_` is a new one each time *)
+             | INT | NUMBER | STRING | "true" | "false" | UPPER ;  (* a constant; UPPER: an sjs_operator *)
 ```
 
 `KIND` is an `sjs_event_kind` without `SJS_EV_`. Comments run from `#` to
-the end of the line.
+the end of the line. `NUMBER` is digits with a fraction (`1.5`); a string
+escapes only `\"` and `\\`. The keywords (`event`, `shape`, `nonterminal`,
+the actions, `item`, `cost`, `true`, `false`) are not variables or
+nonterminals, and names beginning with `_` are the generator's.
 
 - **Field types** say which member of `sjs_event` a field reads and what it
   may be compared with. `count` and `operator` read `count`, `number` reads
@@ -490,8 +497,8 @@ KEY_EQUALS(k, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAM
 
 `NAME undefined` and `NaN` are not literals here, because a module can
 rebind `undefined`, and `-0` is a UNARY. This shape lands with its first
-consumer, not before. Nothing in the four commits uses it, and the repository
-removes what nothing uses.
+consumer, not before. Nothing in the commits of section 9 uses it, and the
+repository removes what nothing uses.
 
 ---
 
@@ -505,6 +512,7 @@ removes what nothing uses.
   edit" banner):
   - `src/shapes.h`: what the rest of `src/` and the tests may include. It
     holds the shape ids, their argument kinds and their names.
+    `src/internal.h` includes it, for `sjs_function_info`.
   - `src/shapes_table.h`: the matcher's tables. Only `src/matcher.c`
     includes it, so the static tables appear once in every build and once
     in check-recursion's amalgamation.
@@ -517,7 +525,8 @@ removes what nothing uses.
     result"), as tinyxml's `generated` does.
   - `mise run shapes-test` is the generator's self-test, in the style of
     `check-acronyms-test`: a list of cases and a `failures` array, with no
-    test framework.
+    test framework. Its small rules file and the C it must produce are in
+    `mise/shapes-test/`.
   - `mise run test` (`mise/tasks/test/_default`) runs `shapes --check` and
     `shapes-test` before `check-parameters`. Its `#MISE sources` already
     cover `src/**` and `mise/**`.
@@ -535,37 +544,56 @@ As in iburg, nested patterns become fresh, numbered nonterminals (`_1`,
 | chain | `nt <- nt2` | `value(x) <- key_of(o, x)` |
 
 A fresh nonterminal's attributes are the variables its subtree binds that
-the pattern around it uses. An equality between two occurrences is checked
-at the lowest rule where both are available: a leaf's or postfix's own
-tests, or the bracket rule that holds both children. Identical normalised
-rules are merged, so `NAME{name: x}` under both `key_of`s is one
-nonterminal.
+the pattern around it uses, in the order the matcher meets them. An
+equality between two occurrences is checked at the lowest rule where both
+are available: a leaf's or postfix's own tests, or the rule that holds both
+children. Identical normalised rules are merged, so `NAME{name: x}` under
+both `key_of`s, and `BIND{name: a}` and `BIND{name: b}`, are one
+nonterminal each; so are `a.k - b.k` and `b.k - a.k`, whose attributes are
+the same three variables in another order.
+
+A rule's variables are numbered in the order the matcher meets them: the
+node's own tests, then its children left to right. Each test and each link
+of a child's attribute says whether it is the variable's first occurrence
+(bind it) or a later one (compare), so the matcher keeps no record of what
+is bound. Each rule's row in the table carries its normalised form as a
+comment.
 
 ### 4.3 Checks (errors name `shapes.rules:LINE`)
 
 - Every `sjs_event_kind` in `include/staticjs.h` is declared exactly once.
-  Every `close` kind closes exactly one `open` kind, and an `open`'s CLOSE
-  is declared `close`.
+  Every `close` kind but END closes exactly one `open` kind, and an
+  `open`'s CLOSE is declared `close`. END is declared `close`, and closes
+  the program.
 - A pattern has the right number of children for its event's action.
-  `inner` events appear only inside a bracket's child list, and `close`
-  events never appear in patterns.
+  `inner` events appear only inside a bracket's child list, `close` events
+  never appear in patterns, and a shape is never a child.
+- **No rule on an `open N` event with N > 0** (a call, a logical or
+  conditional operator, an if). The matcher keeps nothing of a bracket that
+  no rule can match any more (5.3), so the cells before such an open, its
+  first children, are not kept for it. Rules there need the matcher to keep
+  cells in dead regions, which costs every compile; they wait for a rule
+  set that needs them (section 10).
 - Tests name declared fields. Constants have the field's type (an operator
   name for `operator`). Every variable in a head is bound, and a variable's
-  occurrences agree in type (`name` and `read` agree with each other).
-- An `open N` event with N > 0 captures no text. Its marker goes below cells
-  that already hold text, so a capture there would break the text stack's
-  order (section 5.2).
-- **Closure check.** In a shape rule, every `read` variable is also bound
-  from a `name` (a BIND) in the same rule. Without it, a rule could match
-  `x => y.k` with `y` a capture.
+  occurrences agree in type (`name` and `read` agree with each other). A
+  head's text comes from its pattern, never a constant.
+- **Closure check.** A `read` variable (a name an expression reads) is
+  bound from a `name` (a BIND) in the same rule, or, in a nonterminal's
+  rule, handed up as a `read` attribute for a rule above to bind. In a
+  shape rule it must be bound. Without it, a rule could match `x => y.k`
+  with `y` a capture, or hide a read name inside a nonterminal.
 - Every shape rule's pattern is an `ARROW_BEGIN` bracket, because the
   compiler records shapes on functions. The check goes when another node
   kind gets shapes.
+- Every shape and every declared nonterminal has a rule, and every
+  declared nonterminal is used.
 - Chain rules form no cycle. The generator emits them in topological order,
   so the matcher closes over them in one pass.
-- Size limits fit the table's types: at most 255 nonterminals, at most 32
-  bracket rules per open kind (the `alive` mask), at most `SHAPE_VARIABLES`
-  variables per rule, and costs below 0xFFFF.
+- Size limits fit the table's types: at most 63 nonterminals (a cell keeps
+  a 64-bit mask of what it derives), at most 32 bracket rules per open kind
+  (the `alive` mask), at most 32 variables per rule, and costs at most
+  65534.
 
 ### 4.4 `src/shapes.h` (generated)
 
@@ -575,129 +603,96 @@ nonterminal.
 
 typedef enum {
     SJS_SHAPE_NONE = 0,
-    SJS_SHAPE_PLUCK,           /* key: text */
-    SJS_SHAPE_COMPARE_BY_KEY,  /* key: text, descending: flag */
+    SJS_SHAPE_PLUCK,          /* key: text */
+    SJS_SHAPE_COMPARE_BY_KEY, /* key: text, descending: flag */
     SJS_SHAPE_COUNT
 } sjs_shape;
 
-/* The most arguments any shape has. */
+/* The most arguments a shape has. */
 #define SJS_SHAPE_ARGS 2u
 
 /* What a shape's argument is: a text (recorded as a string constant), a
  * flag (0 or 1), a count, or a number (a number constant). */
 enum { SJS_SHAPE_ARG_NONE = 0, SJS_SHAPE_ARG_TEXT, SJS_SHAPE_ARG_FLAG, SJS_SHAPE_ARG_COUNT, SJS_SHAPE_ARG_NUMBER };
 
-/* Argument `i` of `shape`; SJS_SHAPE_ARG_NONE past its last. */
-static inline uint8_t sjs_shape_arg(sjs_shape shape, uint32_t i) { /* a switch */ }
+/* Argument `i` of `shape`: SJS_SHAPE_ARG_NONE past its last. */
+static inline uint8_t sjs_shape_arg_kind(uint32_t shape, uint32_t i) { /* a switch */ }
 /* "PLUCK", ...: for tests and messages. */
-static inline const char *sjs_shape_name(sjs_shape shape) { /* a switch */ }
+static inline const char *sjs_shape_name(uint32_t shape) { /* a switch */ }
 ```
 
 Inline functions, rather than tables, keep `-Wunused-const-variable` quiet in
-every translation unit that includes the header and uses none of them.
+every translation unit that includes the header and uses none of them. The
+function is `sjs_shape_arg_kind`, not `sjs_shape_arg`, because the matcher's
+argument value is a type (`sjs_shape_value`), and C keeps one namespace for
+both.
 
 ### 4.5 `src/shapes_table.h` (generated)
 
-A sketch: names may change in the implementation, but not what the tables
-say.
-
 ```c
-#define SHAPE_NONTERMINALS 6u   /* shapes first (1..SJS_SHAPE_COUNT-1), then the rest; 0 is none */
-#define SHAPE_SLOTS 10u         /* attribute slots of a record: the larger of a cell's
-                                 * (sum of every nonterminal's attributes) and a marker's
-                                 * (sum of the variables of one open kind's bracket rules) */
-#define SHAPE_VARIABLES 4u      /* the most variables one rule has */
+#define SHAPE_NONTERMINALS 9u   /* 0 is none; shapes first (1..SJS_SHAPE_COUNT-1), then the rest */
+#define SHAPE_SLOTS 16u         /* the larger of a cell's (every nonterminal's attributes) and a
+                                 * marker's (the variables of one open kind's bracket rules) */
+#define SHAPE_VARIABLES 3u      /* the most variables one rule has */
+#define SHAPE_COSTS 9u          /* the larger of the nonterminals and one open kind's bracket rules */
 #define SHAPE_TEXT_MAX 64u      /* a longer captured text fails its test */
-#define SHAPE_INFINITE 0xFFFFu
+#define SHAPE_INFINITE 0xFFFFu  /* costs saturate below it */
+#define SHAPE_CONSTANT 0xFFu    /* a test or a result with a constant, not a variable */
+#define SHAPE_RULE_COUNT 12u
+#define SHAPE_CHAIN_COUNT 0u
+#define SHAPE_NUMBER_COUNT 0u
+#define SHAPE_TEXT_COUNT 0u
 
 enum { SHAPE_LEAF = 1, SHAPE_POSTFIX, SHAPE_POSTFIX_COUNT, SHAPE_OPEN, SHAPE_INNER, SHAPE_CLOSE };
 enum { SHAPE_FIELD_COUNT = 1, SHAPE_FIELD_NUMBER, SHAPE_FIELD_TEXT };
-#define SHAPE_CONSTANT 0xFFu    /* a test that compares with a constant, not a variable */
+enum { SHAPE_FORM_LEAF = 1, SHAPE_FORM_POSTFIX, SHAPE_FORM_BRACKET, SHAPE_FORM_CHAIN };
 
-/* How an event builds the tree, and which rules look at it. */
+typedef struct { uint8_t action, arity, item, close; uint16_t first_rule, rule_count; } shape_event;
+typedef struct { uint8_t field, variable, bind; uint32_t constant; } shape_test;
+typedef struct { uint8_t nonterminal, kind, test_count, link_count; uint16_t first_test, first_link; } shape_child;
+typedef struct { uint8_t variable, bind; } shape_link;      /* attribute i of a child, in order */
+typedef struct { uint8_t variable; uint32_t constant; } shape_result;
 typedef struct {
-    uint8_t action;        /* SHAPE_LEAF ... SHAPE_CLOSE */
-    uint8_t arity;         /* SHAPE_POSTFIX: operands; SHAPE_OPEN: cells before it that it takes */
-    uint8_t item;          /* its node is a whole child of its bracket, never an operand */
-    uint8_t close;         /* SHAPE_OPEN: the sjs_event_kind that closes it */
-    uint16_t first_rule;   /* leaf and postfix rules on this event, or bracket rules on this open */
-    uint16_t rule_count;
-} shape_event;
-
-/* A test of one field of an event: bind or check `variable`, or compare
- * with `constant` (a count, or an index into shape_numbers or shape_texts). */
-typedef struct {
-    uint8_t field;
-    uint8_t variable;
-    uint16_t constant;
-} shape_test;
-
-/* A bracket rule's child: a cell deriving `nonterminal`, or the inner event
- * `kind` (nonterminal 0) passing its tests. */
-typedef struct {
-    uint8_t nonterminal;
-    uint8_t kind;
-    uint8_t test_count;
-    uint8_t link_count;
-    uint16_t first_test;
-    uint16_t first_link;
-} shape_child;
-
-/* A child's attribute bound to one of the rule's variables. */
-typedef struct {
-    uint8_t attribute;
-    uint8_t variable;
-} shape_link;
-
-/* One attribute of what a rule derives: a variable, or a constant. */
-typedef struct {
-    uint8_t variable;      /* SHAPE_CONSTANT: use `constant` */
-    uint16_t constant;
-} shape_result;
-
-typedef struct {
-    uint8_t lhs;           /* the nonterminal derived */
-    uint8_t form;          /* leaf, postfix, bracket, chain */
-    uint8_t kind;          /* the leaf's or postfix's event, or the bracket's open */
-    uint8_t child_count;
-    uint8_t variable_count;
-    uint8_t test_count;    /* tests on the node's own event (the open's, for a bracket) */
-    uint8_t first_slot;    /* bracket rules: its variables' first slot in a marker */
-    uint16_t cost;
-    uint16_t first_test;
-    uint16_t first_child;  /* postfix and bracket rules: in shape_children */
-    uint16_t first_result; /* in shape_results: one per attribute of lhs */
+    uint8_t lhs, form, kind, child_count, test_count, first_slot, variable_count;
+    uint16_t cost, first_test, first_child, first_result, first_variable;
 } shape_rule;
 
-static const shape_event shape_events[SJS_EV_END + 1];
-static const shape_rule shape_rules[];
-static const shape_child shape_children[];
+static const shape_event shape_events[SJS_EV_END + 1];     /* by designated initialisers */
+static const shape_rule shape_rules[SHAPE_RULE_COUNT];     /* each with its normalised form */
 static const shape_test shape_tests[];
+static const shape_child shape_children[];
 static const shape_link shape_links[];
 static const shape_result shape_results[];
-static const uint16_t shape_chain_rules[];                  /* in topological order */
-static const uint8_t shape_slot[SHAPE_NONTERMINALS];        /* a nonterminal's first slot in a cell */
+static const uint8_t shape_variable_fields[];              /* SHAPE_FIELD_* of each rule's variables */
+static const uint16_t shape_chain_rules[];                 /* in topological order */
+static const uint8_t shape_slot[SHAPE_NONTERMINALS];       /* a nonterminal's first slot in a cell */
 static const uint8_t shape_attribute_count[SHAPE_NONTERMINALS];
-static const uint8_t shape_slot_field[SHAPE_SLOTS];         /* SHAPE_FIELD_*: what a cell's slot holds */
+static const uint8_t shape_slot_field[];                   /* SHAPE_FIELD_* of each slot of a cell */
 static const double shape_numbers[];
 static const sjs_str shape_texts[];
 ```
 
-Postfix and leaf rules are grouped by event kind, and bracket rules by open
-kind, so `shape_events[kind]` gives a contiguous range. A kind no rule
-mentions has `rule_count` 0, and the matcher skips the work for it.
+Leaf and postfix rules are grouped by event kind, and bracket rules by open
+kind, so `shape_events[kind]` gives a contiguous range; chain rules come
+last. A kind no rule mentions has `rule_count` 0. C has no empty arrays, so
+an unused one holds one placeholder that its count never reaches.
 
 ### 4.6 The generator's tests (`mise run shapes-test`)
 
-- A small rules file and the exact C it must produce (a golden string in
-  the test), covering every rule form, fresh nonterminals, merged
-  duplicates, a chain rule and the topological order.
+- A small rules file (`mise/shapes-test/small.rules`, with a small
+  `staticjs.h`) and the exact C it must produce (`small_shapes.h` whole,
+  and `small_table.txt`, the table's sizes and data), covering every rule
+  form, fresh nonterminals, merged duplicates, two chain rules written in
+  the opposite order to the one they run in, costs, and a number and a text
+  constant.
 - Each check in 4.3 has a rules snippet that must fail with its message and
-  line.
-- `shapes --check` fails on a stale header and passes on a fresh one. The
-  test runs it on a copy in a temporary directory, never on `src/`.
-- The real `src/shapes.rules` parses and every one of its rules is used.
-- Its own run is deterministic: two generations give identical bytes.
+  line, 37 in all, among them the size limits on bracket rules and costs.
+- `shapes --check` fails on missing and stale headers and passes on fresh
+  ones. The test runs it on a copy in a temporary directory (`--root`),
+  never on `src/`.
+- The real `src/shapes.rules` generates; the checks make every declaration
+  used.
+- Two generations give identical bytes.
 
 ---
 
@@ -706,26 +701,23 @@ mentions has `rule_count` 0, and the matcher skips the work for it.
 ### 5.1 Interface: `src/matcher.h` (private)
 
 ```c
-#pragma once
-#include "internal.h"   /* and through it shapes.h */
-
 typedef struct {
     uint8_t kind;          /* SJS_SHAPE_ARG_* */
     uint32_t count;        /* a flag or a count */
     double number;
     sjs_str text;          /* valid during the report only */
-} sjs_shape_arg;
+} sjs_shape_value;
 
 /* A node that derives a shape: what, which node, from where, with what. */
 typedef struct {
     sjs_shape shape;
     uint32_t node;         /* the event's node: for now always an arrow function */
     sjs_position start;
-    sjs_shape_arg args[SJS_SHAPE_ARGS];
+    sjs_shape_value args[SJS_SHAPE_ARGS];
 } sjs_shape_match;
 
 typedef struct sjs_shape_reporter_vtable {
-    /* SJS_OK to go on; any other result stops the matcher, which returns it. */
+    /* SJS_OK to go on; any other result is sjs_matcher_event's. */
     sjs_result (*report)(void *self, const sjs_shape_match *match);
 } sjs_shape_reporter_vtable;
 
@@ -733,231 +725,233 @@ typedef struct { void *self; const sjs_shape_reporter_vtable *v; } sjs_shape_rep
 
 typedef struct {
     const sjs_allocator *allocator;   /* the context's counting allocator */
-    uint32_t max_nesting;             /* sizes its bound (5.6) */
-    sjs_sink downstream;              /* gets every event, unchanged, after the matcher */
+    uint32_t max_nesting;             /* sizes its bound: 4 * max_nesting + 4 records */
     sjs_shape_reporter reporter;
 } sjs_matcher_config;
 
-typedef struct sjs_matcher sjs_matcher;
+typedef struct { ... } sjs_matcher;   /* its owner holds it: the compiler, in itself */
 
-sjs_result sjs_matcher_init(sjs_matcher **out, const sjs_matcher_config *config);
-/* The sink to give the parser: a tee. Valid while the matcher is. */
-sjs_sink sjs_matcher_sink(sjs_matcher *matcher);
-void sjs_matcher_destroy(sjs_matcher *matcher);
-/* For matcher_test: the most records it held at once, and whether it stopped. */
-uint32_t sjs_matcher_peak(const sjs_matcher *matcher);
-bool sjs_matcher_stopped(const sjs_matcher *matcher);
+void sjs_matcher_init(sjs_matcher *matcher, const sjs_matcher_config *config);
+/* Match one event, before its sink sees it: SJS_OK; SJS_ERR_NOMEM; or the
+ * reporter's result. An unreadable stream is SJS_OK: the matcher stops. */
+sjs_result sjs_matcher_event(sjs_matcher *matcher, const sjs_event *event);
+void sjs_matcher_free(sjs_matcher *matcher);
 ```
 
-The tee's event function matches the event first, and only then forwards
-it. So a report about a node arrives while the downstream still has that
-node open: the compiler learns that a function has a shape before it sees
-the function's ARROW_END. A downstream result other than SJS_OK is returned
-unchanged. The downstream keeps its own error, as the parser expects of a
-sink.
+**Changed from the first draft:** the matcher is not a sink of its own with
+a downstream. Its owner calls `sjs_matcher_event` first and then handles
+the event itself, so the compiler's own sink is the tee (6.1). A separate
+sink returned the matcher's out-of-memory to the parser as a sink's
+refusal, which left the compiler with no error to report, and cost an
+indirect call per event. The struct is public to its owner, so that the
+compiler holds it in itself and the matcher allocates nothing until it
+needs records; `peak` and `stopped` are fields the tests read.
+
+A report about a node arrives during the node's last event, before the
+owner handles that event: the compiler learns that a function has a shape
+before it sees the function's ARROW_END.
 
 ### 5.2 Data
 
-The matcher has two stacks of records, both `sjs_buf`, grown through the
-allocator and freed by `destroy`:
+The matcher keeps a stack of records, and the text they captured:
 
 ```c
-/* A record: a cell (a complete node) or a marker (an open bracket). Records
- * have a fixed stride: this header, then SHAPE_SLOTS values. */
+/* A cell (a complete node) or a marker (an open bracket), of one stride. */
 typedef struct {
+    uint64_t derived;      /* cell: a bit per nonterminal it derives */
     uint32_t node;
-    uint8_t kind;          /* the event that made it: a leaf's, a postfix's, a bracket's open */
-    uint8_t marker;
-    uint8_t dead;          /* a cell deriving nothing, or a marker with no candidate left */
-    uint16_t children;     /* marker: children folded so far */
-    uint32_t outer;        /* marker: the index of the marker around it */
+    uint32_t text_base;    /* its first byte in the text */
+    uint32_t outer;        /* marker: the marker around it */
     uint32_t alive;        /* marker: a bit per bracket rule of its kind still matching */
-    uint32_t text_base;    /* its first byte in the text stack */
-    uint16_t cost[SHAPE_COSTS];  /* cell: per nonterminal; marker: per bracket rule.
-                                  * SHAPE_COSTS = max(nonterminals, rules per open kind) */
-    uint8_t rule[SHAPE_NONTERMINALS]; /* cell: the rule that derived each nonterminal */
+    uint32_t children;     /* marker: children folded so far */
+    uint8_t kind, marker, dead;
+    uint16_t cost[SHAPE_COSTS];       /* cell: per nonterminal; marker: per bracket rule */
+    shape_value slots[SHAPE_SLOTS];   /* cell: by shape_slot; marker: by each rule's first_slot */
 } shape_record;
 
-/* A slot: what its type says (static, from the table), so 8 bytes. */
-typedef union {
-    double number;
-    uint32_t count;
-    struct { uint32_t offset, length; } text;   /* in the text stack */
-} shape_value;
-
-struct sjs_matcher {
-    const sjs_allocator *allocator;
-    sjs_sink downstream;
-    sjs_shape_reporter reporter;
-    uint32_t bound;        /* records at most: 4 * max_nesting + 4 */
-    uint32_t top;          /* the innermost marker */
-    uint32_t peak;
-    bool stopped;
-    sjs_buf records;       /* shape_record + SHAPE_SLOTS shape_value each */
-    sjs_buf text;          /* captured text, in record order */
-};
+/* A slot: what its field says, so 8 bytes: a number, a count, or a text,
+ * as an offset and a length in the text (or the event's own text, or
+ * none). */
+typedef union { double number; uint32_t count; struct { uint32_t offset, length; } text; } shape_value;
 ```
 
-A cell keeps, for each nonterminal it derives, the cost, the rule, and that
-derivation's attributes in the nonterminal's slots (`shape_slot[nt]`). A
-marker keeps, for each bracket rule of its open kind that is still alive,
-the cost so far, and the variables bound so far in the rule's slots
-(`first_slot`).
+A cell keeps, for each nonterminal it derives, the cost and that
+derivation's attributes in the nonterminal's slots. A marker keeps, for
+each bracket rule of its open kind still alive, the cost so far and the
+variables bound so far. The first draft kept, per cell, the rule that
+derived each nonterminal; nothing reads it until rules emit code, so it is
+gone.
 
 **Text** captured from events (a key, a parameter's name) is copied, since
 `sjs_event.text` lives only during the call. It goes into the text stack in
 record order, and every record knows where its text begins. When records
-are replaced (a reduction, a fold), the text that the new record's
-attributes still reference is moved down to the region's start, in
-increasing offset order (a forward copy, as the destination is never past
-the source), and the stack is cut after it. A text longer than
-SHAPE_TEXT_MAX is not captured, and its test fails. A key that long only
-loses the fast path.
+are replaced by one (a postfix node, a bracket's close), the text the new
+record still refers to is moved down to the region's start, in increasing
+offset order (a forward copy, as the destination is never past the
+source), and the stack is cut after it. When cells are folded into a
+marker, their text stays, now the marker's, until the marker closes or
+dies: a marker that can still match has at most as many children as its
+longest rule, so what it keeps is bounded, and the fold moves nothing. A
+text longer than SHAPE_TEXT_MAX is not captured, and its test fails: a key
+that long only loses the fast path. The first 64 bytes of text are in the
+matcher itself; past them the text moves to the heap.
 
 ### 5.3 Per event
 
+One fact makes most events free. Every rule wants each child of a bracket
+to derive some nonterminal, or to be a given separator. So a child that
+derives nothing kills every rule of its bracket, and once a bracket can
+match no more, nothing inside it is a child of any rule again: its leaves,
+its operators and the brackets inside it can only end up folded into it.
+The only exception is a bracket inside it that rules look at, which can
+derive a shape of its own (an arrow inside a call). The matcher calls such
+a dead bracket a **dead region**, and keeps of it one record, its marker,
+or none at all for the program, which no rule matches.
+
 ```
-on_event(e):
-    if stopped: return forward(e)
+on_event(e):                                  # sjs_matcher_event
+    if stopped: return OK
+    if e.kind is not an event kind, or e.node == 0 but e is not END:
+        stop; return OK                       # 5.5
+    if the innermost marker is dead (a dead region):
+        if e.node != its node and e is not an open: return OK
     r = step(e)
-    if r == CANNOT_READ: stopped = true; free both stacks   # 5.5
-    elif r != SJS_OK: return r                             # out of memory, or the reporter's result
-    return forward(e)
+    if r == UNREADABLE: stop, free the stacks; return OK
+    return r                                  # OK, out of memory, or the reporter's result
 
 step(e):
-    m = the innermost marker (the root marker, node 0, is pushed at init)
-    if e.node == m.node:                                   # an event of the open bracket
-        fold_cells_above(m)
-        if action(e.kind) == CLOSE:
-            if e.kind != close_of(m.kind): return CANNOT_READ
-            cell = finish(m, e); replace m by cell; return created(cell, e)
-        fold_separator(m, e); return OK
-    if e.node == 0: return CANNOT_READ                     # only END belongs to the program
-    switch action(e.kind):
-      LEAF:          cell = derive(e, no children); push cell; return created(cell, e)
-      POSTFIX N:     the top N records must be cells above m, else CANNOT_READ
-                     cell = derive(e, those N); replace them by cell; return created(cell, e)
-      POSTFIX_COUNT: as POSTFIX with N = (e.count != 0)
-      OPEN N:        the top N records must be cells above m, else CANNOT_READ
-                     insert a marker below them: node e.node, kind e.kind,
-                     alive = the bracket rules of e.kind whose open tests pass
-                     (their variables bound from e into the marker's slots)
-      INNER, CLOSE:  return CANNOT_READ                    # an event of no open bracket
+    m = the innermost marker (the program, when there is none)
+    if e.node == m.node:                      # an event of m's bracket
+        if action(e) == CLOSE:
+            if m is the program: return END ? OK : UNREADABLE
+            if e.kind != close_of(m.kind): return UNREADABLE
+            return finish(m)
+        if m is dead: return OK
+        fold the cells above m, then the separator e, into m
+        if m died: doom(m)
+        return OK
+    if action(e) == OPEN: return open(e)
+    if m is dead: return OK
+    LEAF, POSTFIX N, POSTFIX_COUNT:
+        the top N records must be cells above m, else UNREADABLE
+        no rule on e.kind:  doom(m); return OK
+        cell = derive(e, those N)             # iburg's labeller at one node
+        cell derives nothing: doom(m); return OK
+        replace them by cell; created(cell)
+    INNER, CLOSE: return UNREADABLE           # an event of no open bracket
 
-created(cell, e):
-    if the cell derives a shape: report(cheapest shape, e.node, e.start, its attributes)
-    if item(cell.kind): fold_cells_above(innermost marker)
-    return OK
+open(e):
+    if m is alive and fewer than arity(e) cells are above it: return UNREADABLE
+    no rule on e.kind, or arity(e) > 0:       # it will derive nothing
+        if m is alive: doom(m)
+        return OK                             # in a dead region: part of it
+    the bracket rules of e.kind whose open tests pass are alive
+    none: if m is alive: doom(m); return OK
+    push a marker for e
+
+finish(m):                                    # m's bracket closes
+    if m is alive: fold the cells above it into it
+    cell = what m's rules derive, if each alive rule has all its children
+    pop m
+    cell derives nothing: if the marker around is alive, doom it
+    else: created(cell)
+
+created(cell):
+    if cell derives a shape: report(cheapest shape, e.node, e.start, its attributes)
+    if the innermost marker is dead: drop cell
+    elif item(cell.kind): fold the cells above the innermost marker into it
+
+doom(m):  m can match no more: drop every record and every byte of text above
+          its own start, and keep m, dead, as a dead region.
 ```
 
-- **`derive(e, children)`** is iburg's labeller at one node. Every rule
-  starts at SHAPE_INFINITE. For each leaf or postfix rule on `e.kind`, its
-  own tests run against `e`'s fields: constants compare, variables bind.
-  Then each child's cost for the rule's nonterminal at that position is
-  read; if one is infinite, the rule is skipped. The child's attributes are
-  linked into the rule's variables, and a variable already bound must be
-  equal. The cost is the rule's cost plus the children's, saturating. If it
-  is lower than the cell's cost for the rule's lhs, it replaces it, with the
-  rule and the lhs's attributes from `shape_results`. Then the chain rules
-  run once, in topological order. Variables live in a local array of
-  SHAPE_VARIABLES values. A cell deriving nothing is marked `dead`. For an
-  event kind with no rules, that is all that happens: one record with
-  infinite costs.
-- **`fold_cells_above(m)`** folds every cell above marker `m` into it, left
-  to right, then cuts the records and the text back to the marker.
-  **`fold_separator(m, e)`** folds an inner event the same way. Folding
-  child number `m.children` into each alive bracket rule `r`:
-  - If `r` has no child at that position, the rule dies.
-  - If the position wants a nonterminal, the child must be a cell with a
-    finite cost for it. Its attributes are linked into `r`'s variables.
-  - If the position wants an inner event of some kind, the child must be
-    that event, and the symbol's tests run on it.
-  - A failed check kills the rule; otherwise the cost accumulates.
+- **`derive(e, children)`**: for each leaf or postfix rule on `e.kind`
+  with as many children, its own tests run against `e`'s fields:
+  constants compare, variables bind or compare. Each child must derive the
+  rule's nonterminal at that position; its attributes are linked into the
+  rule's variables. The cost is the rule's plus the children's,
+  saturating. If the cell does not derive the rule's lhs yet, or does
+  only at a higher cost, the rule's derivation replaces it, with the lhs's
+  attributes from `shape_results`. Then the chain rules run once, in
+  topological order. Ties go to the rule first in the table.
+- **Folding** child number `m.children` into each alive bracket rule `r`:
+  if `r` has no child at that position, or the position wants a nonterminal
+  the child does not derive, or a separator the child is not (or that
+  fails its tests), `r` dies. Otherwise its variables are linked and its
+  cost accumulates. A marker with no rule alive is dead.
+- **Reports** come from `created`, before the closing event reaches the
+  owner, with the shape's attributes as `sjs_shape_value`s, a text pointing
+  into the text stack. A reporter result other than SJS_OK stops the
+  event: it is returned, and the owner does not handle the event.
+- **Not checked in a dead region:** what is passed over is not read, so a
+  postfix with too few operands, a stray separator or a stray close there
+  does not stop the matcher. Node 0 and unknown kinds stop it anywhere.
 
-  `m.children` then counts one more. A marker with no rule alive is `dead`,
-  and folding into it does nothing but count.
-- **`finish(m, e)`**: each alive rule whose child count equals
-  `m.children` derives its lhs at its accumulated cost plus its own. Then
-  the chain rules run, as in `derive`. The new cell takes the bracket's node
-  id. Only after `finish` is the close event forwarded: the downstream has
-  not yet seen the node end when the report arrives.
-- **Reports** come from `created`. The arguments are a shape nonterminal's
-  attributes, as `sjs_shape_arg`, with text pointing into the text stack.
-  The report is made before the closing event is forwarded, so the compiler
-  still has the function open. A reporter result other than SJS_OK stops
-  the event: it is returned, and nothing is forwarded.
-
-Nothing recurses: rules are table rows, children are a loop, and chain
-rules are one pass in a fixed order. Every function has at most three
-parameters (`derive` and `finish` take a small context struct). File-scope
-names begin with `matcher_` or `shape_`, so they mean one thing in
-check-recursion's amalgamation.
+Nothing recurses: rules are table rows, children a loop, chain rules one
+pass in a fixed order. Every function has at most three parameters (the
+step's state is one struct). File-scope names begin with `matcher_` or
+`shape_`, so they mean one thing in check-recursion's amalgamation.
 
 ### 5.4 Example
 
 `xs.map(x => x.k)`:
 
-| event | node | records after it (top right) |
-|---|---|---|
-| (init) | | root⟨0⟩ |
-| NAME xs | 1 | root, xs |
-| MEMBER map | 2 | root, ·map |
-| CALL_BEGIN | 3 | root, call⟨3⟩, ·map (open 1: the marker goes below the callee) |
-| ARROW_BEGIN(1) | 4 | root, call, ·map, arrow⟨4⟩ [PLUCK×2 alive: params 1] |
-| PARAM(0) | 4 | (inner: separator 1, PARAM{index 0} passes) |
-| BIND x | 5 | (item: folded at once as child 2; `x` bound) |
-| PARAMS_END | 4 | (separator 3) |
-| NAME x | 6 | root, call, ·map, arrow, _1(x) |
-| MEMBER k | 7 | root, call, ·map, arrow, key_of(x, k) |
-| ARROW_END | 4 | close: key_of folded as child 4 (`x` = `x`). The block-body PLUCK dies, the other finishes. The cell derives PLUCK(k): **report PLUCK, node 4, start 1:8, key "k"**, then forward ARROW_END |
-| ARGUMENT | 3 | inner: fold ·map and the arrow into call⟨3⟩ |
-| CALL_END | 3 | close: a dead cell |
-| END | 0 | close of the root |
+| event | node | what happens | records after it |
+|---|---|---|---|
+| NAME xs | 1 | the program is a dead region: passed over | (none) |
+| MEMBER map | 2 | passed over | |
+| CALL_BEGIN | 3 | an open no rule looks at, in a dead region: passed over | |
+| ARROW_BEGIN(1) | 4 | rules look at it; PLUCK×2 pass `params: 1`: a marker | arrow⟨4⟩ |
+| PARAM(0) | 4 | a separator of the arrow: PARAM{index 0} passes | arrow |
+| BIND x | 5 | a cell deriving `_2(x)`; an item, so folded at once | arrow |
+| PARAMS_END | 4 | a separator | arrow |
+| NAME x | 6 | a cell deriving `_1(x)` | arrow, _1(x) |
+| MEMBER k | 7 | replaces it by a cell deriving `key_of(x, k)` | arrow, key_of(x, k) |
+| ARROW_END | 4 | close: key_of folded as child 4 (`x` = `x`); the block-body PLUCK dies, the other derives PLUCK(k): **report PLUCK, node 4, start 7, key "k"**; the program is dead, so the cell is dropped | (none) |
+| ARGUMENT, CALL_END, END | 3, 3, 0 | passed over; END closes the program | |
 
 ### 5.5 Streams it cannot read
 
-Some streams cannot be the tree of section 2: a close that does not match
-the open bracket, an inner event with no bracket, node 0 on an event other
-than END, too few cells for a postfix, or the bound exceeded (5.6). On any
-of these, the matcher stops matching, frees its stacks and forwards
-everything from then on. It never fails the compile for this: the compiler
-reports a malformed stream itself ("the events are out of order"), and a
-stream it accepts compiles the same, untagged. Reports made before the stop
-stand; each one covered a complete subtree. matcher_test checks that the
-parser never makes the matcher stop (every spec source), and that
-`compile_events`' hand-built streams compile and fail exactly as they do
-without it.
+Where a bracket can still match, a stream that cannot be the tree of
+section 2 (a close that does not match the open bracket, a separator of no
+bracket, too few cells for a postfix), and anywhere node 0 on an event
+other than END, an event kind out of range, or the bound exceeded (5.6),
+make the matcher stop matching, free its stacks and let everything pass
+from then on. It never fails the compile for this: the compiler reports a
+malformed stream itself ("the events are out of order"), and a stream it
+accepts compiles the same, untagged. Reports made before the stop stand;
+each one covered a complete subtree. matcher_test checks that the parser
+never makes the matcher stop (every spec source, the deepest programs), and
+api_test's `compile_events` streams, which carry node 0, compile and fail
+exactly as before.
 
 ### 5.6 Memory
 
-- **Records.** A marker stands for a bracket the parser has open: a frame
-  (array, object, call, `new`, template, arrow, if, block statement, const,
-  pattern, default) or a pending operator (logical, the `:` of `?:`, an
-  expression-bodied arrow). A cell that is not yet folded is an operand
-  waiting for a pending operator or frame (the left side of `+`, the object
-  of `a[`, a const's value before its pattern), or the operand being read.
-  Separators, closes and items fold everything above their bracket, so
-  neither width nor the number of statements adds records. So records ≤
-  2 × (frames + operators) + 2 ≤ **4 × max_nesting + 4**. That is 1,028 at
-  the default limits.
-- **Per record:** a 20-byte header, 2 × SHAPE_COSTS + SHAPE_NONTERMINALS
-  bytes, and 8 × SHAPE_SLOTS. With the first rule set (about 6 nonterminals
-  and 10 slots) that is about 120 bytes: about 123 KB at the bound. A
-  typical guard or module holds a few dozen records.
-- **Text** ≤ records × text slots per record × SHAPE_TEXT_MAX. The generator
-  computes the default-limit figure into a comment in `shapes_table.h`.
-- **Allocations:** the matcher struct and the two stacks, three in all,
-  each reserved once and grown by doubling. Memory goes through the
-  context's counting allocator, so `sjs_context_live_bytes` sees it and
-  `spec_test --full` fails each allocation.
+- **Records.** A record is a marker of a bracket a rule can still match, a
+  cell of a node inside one, or a marker that died and stands for its dead
+  region. Separators, closes and items fold everything above their
+  bracket, so neither width nor the number of statements adds records, and
+  a dead region holds none for the brackets in it. Records ≤ 2 × (frames +
+  operators) + 2 ≤ **4 × max_nesting + 4**, as the first draft bounded
+  them; in practice only nested arrows that can still match reach depth.
+  matcher_test measures it: at most 5 records over every spec source, and
+  at max_nesting nested arrows 256 records, arrays, calls, operators,
+  templates and patterns none.
+- **Per record:** with the first rule set, 184 bytes (a 40-byte header, 9
+  costs, 16 slots of 8 bytes).
+- **Allocations:** none until a record is needed, so a program without an
+  arrow a rule can match allocates nothing. The record stack's first
+  allocation is 1 KiB (5 records), and grows by doubling. The text's first
+  64 bytes are in the matcher, which the compiler holds in itself; past
+  them, one more allocation. Memory goes through the context's counting
+  allocator, so `sjs_context_live_bytes` sees it and `spec_test --full`
+  fails each allocation.
 - **Beyond the bound** the matcher stops matching (5.5) instead of
-  allocating further. matcher_test compiles the deepest programs the limits
-  allow (operators, brackets, if chains, patterns, each at max_nesting) and
-  checks `sjs_matcher_peak` stays within the bound and that it never stopped.
+  allocating further.
 
 Precomputed BURS state tables would replace the cost vectors with one state
 number per record. They are worth it only if a compile profile shows the
-labeller hot; until then, the dynamic programme stays.
+labeller hot; section 6.5 has the profile.
 
 ---
 
@@ -965,17 +959,16 @@ labeller hot; until then, the dynamic programme stays.
 
 ### 6.1 Wiring
 
-- `sjs_compiler` gains `sjs_matcher *matcher`, which is NULL when matching
-  is off (section 8). `sjs_compiler_init` makes it with the compiler's own
-  internal sink as downstream, the compiler as reporter, and
-  `context->limits.max_nesting`. `sjs_compiler_sink()` returns the
-  matcher's sink when there is a matcher, and the compiler's own otherwise.
-  Embedders keep calling `sjs_compiler_sink()`, and `sjs_compile()` needs no
-  change.
-- The parser's error path does not change: the compiler reports the
-  matcher's failures (out of memory) as its own. The tee returns the
-  compiler's result, and the compiler sets `c->error` with `fail_result`
-  when the matcher's allocation fails.
+- `sjs_compiler` holds `bool matching` and an `sjs_matcher`, initialised in
+  `sjs_compiler_init` unless the config says `no_shapes` (section 8), with
+  the context's counting allocator, `limits.max_nesting`, and the compiler
+  as reporter. The compiler's sink function hands each event to
+  `sjs_matcher_event` before it handles it itself: that is the tee.
+  `sjs_compiler_sink()` and `sjs_compile()` are unchanged, and every sink a
+  compiler gives out goes through the tee.
+- A matcher failure (out of memory) is the compiler's own: the sink sets
+  `c->error` with `fail_result`, as for any allocation of the compiler, and
+  returns SJS_ERR_PROGRAM, so `sjs_compiler_error` reports it.
 - `scope` gains `uint32_t node`, set by `begin_function` from ARROW_BEGIN.
 
 ### 6.2 Recording
@@ -984,19 +977,21 @@ The reporter, `on_shape(c, match)`, runs during the ARROW_END that closes
 the matched function, before the compiler sees that ARROW_END:
 
 1. If the compiler has failed, return its error.
-2. Find the innermost function scope. If it is not a function (scope 0 is
-   the program), or `scope.node != match->node`, ignore the report. Today
-   every shape is an arrow's, reported at its ARROW_END, so this never
-   happens unless the parser's ids are wrong. matcher_test counts ignored
-   reports and expects 0.
+2. Find the innermost function scope. If it is the program's, or its
+   `node` is not `match->node`, ignore the report. Every shape is an
+   arrow's, reported at its ARROW_END, so this does not happen unless the
+   parser's ids are wrong; matcher_test checks, for a list of sources, that
+   the compiler tags as many functions as the matcher reports.
 3. On the function's `sjs_function_info`, set `shape` and convert each
    argument by its kind:
    - A **text** becomes `string_constant()`, the same interned, `NAMED`
      string constant GET_MEMBER uses for that key (constants are one per
-     text). `string_constant` keeps its signature: `on_shape` passes it a
-     MEMBER event built from the text and `match->start`.
+     text, so this adds none). `string_constant` keeps its signature:
+     `on_shape` passes it a MEMBER event built from the text and
+     `match->start`.
    - A **flag** or a **count** is stored as the integer.
-   - A **number** would become `number_constant()` (no shape has one yet).
+   - A **number** becomes the index of a number constant (`number_index`,
+     split out of `number_constant`; no shape has one yet).
 
 `close_function_scope` sets `info` field by field and leaves the shape
 alone.
@@ -1045,7 +1040,39 @@ means no shape:
 `internal.h`, as `names_test` reads `sjs_names`. It prints text arguments as
 the constant's text and flags as `true` or `false`, with `sjs_shape_name`.
 A case without `@shapes` does not check shapes. `diff-node.mjs` skips
-`@shapes` lines.
+`@shapes` lines. The runs pushed whole, a byte at a time and in chunks
+must tag the same functions with the same shapes.
+
+### 6.5 Cost
+
+Measured on machine `172a3dd3bd74` (4-core cloud VM), against the [nodes]
+commit:
+
+- **Instructions** (callgrind, a program compiling one source 200 times,
+  shapes on against `no_shapes`, `-O2`): `bench/modules/power.js` +4.7%;
+  a guard written as an arrow, `(pending, _event) => pending.has(...) &&
+  ...`, +7.4%, almost all of it folding the arrow's parameters into the
+  four comparator rules that stay alive until its body; a guard with no
+  arrow nothing measurable: every event is in the program's dead region,
+  and nothing is allocated.
+- **`mise run bench-compare 2476e5f compile --quick`**: compile throughput
+  2% to 6% lower, most rows within the noise; one allocation more per
+  module compile (the records; `campaign.js` two, its text outgrowing the
+  matcher's 64 bytes) and none per guard; peaks up by 152 bytes for a guard
+  (the matcher in the compiler) and by about 1.2 KiB for a module (the
+  first 1 KiB of records).
+
+The first version, which kept a cell for every node and compacted text at
+every fold, cost 15% to 20% of compile throughput. What brought it down:
+dead regions (5.3), which make most events a comparison or two; leaving
+folded text in place; walking only the alive rules' bits; a mask of what a
+cell derives; and allocating nothing until a bracket a rule can match
+opens, with 1 KiB of records first and the first 64 bytes of text in the
+matcher. What is left is per child of an arrow whose rules are alive, per
+alive rule. If a profile shows it, the next step is to share the rules'
+common prefixes (a trie of child sequences per open kind, so that the four
+comparators fold their five common children once), before precomputed BURS
+states (section 10).
 
 ---
 
@@ -1190,11 +1217,13 @@ observe them.
 
 ## 8. The off switch and the differential test
 
+Both landed with [matcher] (section 9), so that the matcher arrived under
+the test that guards it.
+
 ### 8.1 The switch
 
 It is a field of the public compiler config, so it needs no global state
-and no internal hook. Every existing positional initialiser leaves it
-`false`, which means matching is on:
+and no internal hook:
 
 ```c
 typedef struct {
@@ -1203,49 +1232,61 @@ typedef struct {
     const sjs_str *globals;
     uint32_t global_count;
     sjs_modules modules;   /* optional: v may be NULL */
-    /* Compile without matching shapes (docs/matcher.md): no function is
-     * tagged, and every built-in runs its callback's bytecode. A program
-     * gives the same values and faults either way, and never uses more fuel
-     * with shapes. For tests that compare the two, and for an embedder
-     * ruling the fast paths out. */
+    /* Compile without matching shapes: ... false, which a designated
+     * initialiser that leaves it out gives, matches. */
     bool no_shapes;
 } sjs_compiler_config;
 ```
 
 With `no_shapes`, `sjs_compiler_init` makes no matcher, so it costs
 nothing. `sjs_compile_params.compiler` carries the field, so `sjs_compile()`
-honours it too. A public field also lets `bench` run any case both ways
-when a question calls for it, though `bench-compare` across commits stays
-the record.
+honours it too. A positional initialiser of the five older fields still
+means "on", but `-Wextra` warns about the missing field, so every caller in
+the repository now names it (`api_test`, `spec_test`) or uses designated
+initialisers (`bench.c`, which must also build against older headers for
+`bench-compare`).
+
+The matcher's records come from the context's allocator, like the
+compiler's own memory. An embedder whose allocator refuses past a budget
+can see a program that compiles with `no_shapes` within a few hundred
+bytes of that budget (the records, at most
+1 KiB at first) can fail with `SJS_ERR_NOMEM` with shapes on. That is the
+one outcome matching can change, and only at compile time: what a compiled
+program computes, its faults and its fuel follow THE RULE. The differential
+test runs without a memory limit, so it does not see that boundary.
 
 ### 8.2 The differential test
 
-- **`spec_test`**, fast pass. Every case runs as today (whole, bytes,
-  chunks, with shapes on), and once more whole with `no_shapes`. The two
-  whole runs must have identical outcome text: the written value; or the
-  fault's code, line:column, message and subject; or the compile error. The
-  run with shapes must use no more fuel than the run without
-  (`sjs_vm_fuel_used`, which `evaluate` now reports). Under `no_shapes`,
-  every function's shape must be NONE. The bytes and chunks runs, with
-  shapes on, already pause on every unit of fuel and every 13, so they
-  resume fast loops mid-sort and mid-map.
+- **`spec_test`**, fast pass. Every case runs as before (whole, bytes,
+  chunks, with shapes on), and once more whole with `no_shapes`. The run
+  without shapes must compile to the same program, but for its functions'
+  tags (a hash of the code, numbers, constants' kinds, strings' bytes and
+  numbers, functions, captures and lines), give the identical outcome text (the written value; or the
+  fault's code, line:column, message and subject; or the compile error),
+  tag no function, and use no less fuel than the run with shapes
+  (`sjs_vm_fuel_used`). The three runs with shapes must tag the same
+  functions with the same shapes. The bytes and chunks runs pause on every
+  unit of fuel and every 13, so once the fast paths land they resume fast
+  loops mid-sort and mid-map.
 - **`spec_test --full`** fails every allocation with shapes on, which
   covers the matcher's and the compiler's recording.
 - **`api_test`**:
-  - fuel pinned both ways for a key sort and a pluck;
-  - `test_fuel_pinned`'s program has no shape and keeps its 194;
-  - the limit edges (5.6, 7.1).
+  - `no_shapes` saves exactly the matcher's one allocation (its records)
+    on a program with shapes, gives the same value, and a designated
+    initialiser that leaves the field out matches;
+  - a program with shapes fails each allocation in turn, in the fast pass;
+  - `test_fuel_pinned`'s program has no shape and keeps its 194.
 - **`bench --smoke`**: unchanged. It checks values, and those do not move.
 
 ---
 
 ## 9. The commits
 
-Four commits, in this order, each passing `mise run test`. The task named
-three ([nodes], [matcher], [consumers]). The fourth, [differential], holds
-the off switch and the both-ways spec run. It lands before the fast paths,
-so they arrive under the test that guards them. This document lands with
-[nodes] and is updated as each later commit lands.
+Three commits, in this order, each passing `mise run test`. The first plan
+had a fourth, [differential], with the off switch and the both-ways spec
+run, to land before the fast paths; [matcher] carries both instead, so the
+matcher itself arrived under the test that guards it. This document landed
+with [nodes] and is updated as each later commit lands.
 
 ### 1. [nodes] `feat(staticjs): give each syntax event its node's id and start`
 
@@ -1285,14 +1326,17 @@ Changes:
 
 - `src/shapes.rules`, and the generated `src/shapes.h` and
   `src/shapes_table.h`;
-- `mise/shapes.rb`, `mise/tasks/shapes`, `mise/tasks/shapes-test`, and the
-  `test` task running `shapes --check` and `shapes-test`;
+- `mise/shapes.rb`, `mise/tasks/shapes`, `mise/tasks/shapes-test` with its
+  fixtures in `mise/shapes-test/`, and the `test` task running
+  `shapes --check` and `shapes-test`;
 - `src/matcher.h` and `src/matcher.c`;
 - the compiler wiring and recording (section 6);
 - `sjs_function_info.shape` and `shape_args` (with `flags` shrunk to
   `uint8_t`);
+- `sjs_compiler_config.no_shapes` and the differential run (section 8),
+  which the first plan held for a commit of their own, [differential];
 - the `@shapes` spec directive, in `spec_test.c` and `diff-node.mjs`;
-- `src/README.md` (the new modules) and `docs/matcher.md`.
+- `README.md`, `AGENTS.md`, `src/README.md` and this document.
 
 Nothing reads a shape yet, so no value and no fuel can change.
 
@@ -1300,64 +1344,57 @@ Tests:
 
 - `mise run shapes-test` (4.6), and `mise run shapes --check` in every
   `mise run test`.
-- `tests/spec/shapes.spec` with `@shapes`:
+- `tests/spec/shapes.spec` with `@shapes`, 43 cases, each with its value or
+  fault, which `diff-node` checks against Node:
   - **Positives:** `x => x.k`, `(x) => x.k`, `x => (x.k)`,
-    `x => { return x.k; }`, the four comparators, nested functions (an
-    outer function untagged and an inner one tagged, and the reverse), a
-    shaped arrow in a parameter default, and one in a held `const`
-    pattern's default.
-  - **Negatives:**
-    - `x => y.k` (a capture);
-    - `(x = 1) => x.k`, `({k}) => k`, `(...x) => x.k`, `(x, i) => x.k`;
-    - `x => x?.k`, `x => x["k"]`;
-    - `(a, b) => a.k - b.j`, `(a, b) => a.k - a.k`, `(a, b) => b.k - b.k`;
-    - `(a, b) => a.k + b.k`;
-    - `x => { const y = x; return y.k; }`;
-    - `x => { { const x = {k: 5}; return x.k; } }` (shadowing in a block);
-    - `x => { if (x) return x.k; }`;
-    - a `"use strict"` directive before the return.
-
-  Every case also has its value or fault, which `diff-node` checks against
-  Node.
+    `x => { return x.k; }` with and without the semicolon, a body with
+    empty statements (which send no events), a key that is also a method
+    name (`length`), a missing key, a fault on null, a pluck never called,
+    a key of 64 bytes; the four comparators, and `(b, a) => a.k - b.k`
+    (descending: positions decide, not names), a comparator that faults on
+    strings; nested functions (an outer function untagged and an inner one
+    tagged, and a tagged one before an untagged one), a shaped arrow in a
+    parameter default, one in a held `const` pattern's default, and two in
+    an untagged comparator.
+  - **Negatives:** `x => y.k` and a comparator reading a captured name;
+    `(x = 1) => x.k`, `({k}) => k`, `(...x) => x.length`, `(x, i) => x.k`,
+    `(a, b, c) => a.k - b.k`; `x => x?.k`, `x => x["k"]`, `x => x.k.j`,
+    `x => -x.k`; `(a, b) => a.k - b.j`, `(a, b) => a.k - a.k`,
+    `(a, b) => b.k - b.k`, `(a, b) => a.k + b.k`;
+    `x => { const y = x; return y.k; }`;
+    `x => { { const x = {k: 5}; return x.k; } }` (shadowing in a block);
+    `x => { if (x) return x.k; }`; a statement after the return; a
+    function returning a function; a key of 65 bytes, longer than the
+    matcher captures. A `"use strict"` directive before the return is not
+    among them: staticjs refuses that body ("an expression statement has
+    no effect in staticjs").
 - `tests/matcher_test.c`, a new internal test program in
   `StaticJS::TESTS`. It includes `src/matcher.h` and drives a parser into a
-  matcher, with a recording downstream and a recording reporter:
-  - **Tee:** for every spec source, the downstream's events equal the
-    parser's own, byte for byte, field for field.
+  matcher through a tee of its own:
   - **Reports:** for a list of sources, the exact reports (shape, node,
-    start, arguments), and the compiler ignores none.
-  - **Never stops** on any spec source, nor on the deepest programs the
-    limits allow, and `sjs_matcher_peak` stays within 4 × max_nesting + 4.
-  - **Width:** an array of 100,000 elements, a module of 2,000 consts and a
-    template of 1,000 substitutions each peak at a handful of records.
-  - **Unreadable streams:** `compile_events`' streams and hand-made bad
-    ones (a stray close, node 0, too few operands) make it stop, and it
-    keeps forwarding.
-  - **Out of memory:** every allocation of a matching compile fails in
-    turn, each ends with SJS_ERR_NOMEM, and nothing leaks.
-- `spec_test --full` covers the compiler with the matcher. `mise run asan`
-  runs all of it under the sanitizers.
-- `bench-compare` for `compile.*`, in the body. Compile throughput and
-  allocations per compile will move (three allocations more per compile,
-  and the peak by the records used). The body says so and quotes the rows.
-  If guards suffer, the first remedy is a small inline record stack in the
-  matcher struct, spilling to the heap past it.
+    start, arguments), pushed whole and a byte at a time, and the compiler
+    tags as many functions as were reported.
+  - **Never stops** on any spec source (1,093), nor on the deepest programs
+    the limits allow, for 18 kinds of nesting, and the records stay within
+    4 × max_nesting + 4.
+  - **Width:** an array of 100,000 members, a module of 2,000 consts, each
+    a pluck, and a template of 1,000 substitutions, each hold at most 2
+    records.
+  - **Unreadable streams:** node 0, an unknown kind, a stray close, a close
+    of another kind, too few operands, a stray separator, and more records
+    than the bound make it stop, free what it holds, and keep returning
+    SJS_OK.
+  - **Out of memory:** each of the matcher's allocations (its records, and
+    its text past the bytes it has in itself) fails in turn; each run ends
+    with SJS_ERR_NOMEM, and nothing leaks.
+- `spec_test` with and without shapes (8.2); `spec_test --full` covers the
+  compiler with the matcher. `mise run asan` runs all of it under the
+  sanitizers.
+- `bench-compare` for `compile.*`, in the body (6.5).
 
-### 3. [differential] `test(staticjs): compile the spec with and without shapes and compare`
+### 3. [differential]
 
-Changes: `sjs_compiler_config.no_shapes` (8.1), and `spec_test` running
-every case both ways (8.2).
-
-Tests:
-
-- **The differential run itself.** With no consumer yet, the outcomes and
-  the fuel are equal. The test asserts outcomes equal and fuel with shapes
-  ≤ fuel without.
-- `api_test`:
-  - `no_shapes` makes no matcher (allocation count) and leaves every
-    function untagged;
-  - `sjs_compile` honours it;
-  - a positional config initialiser still means "on".
+Merged into [matcher] (section 8).
 
 ### 4. [consumers] `perf(staticjs): sort by a key and pluck a key in C when the callback's shape allows`
 
@@ -1419,7 +1456,8 @@ Tests:
 
 ## 10. Later
 
-These come after the four commits, in the order a profile asks for them.
+These come after the commits of section 9, in the order a profile asks for
+them.
 
 - **KEY_EQUALS** (3.3) for `filter`, `find`, `findIndex`, `some`, `every`.
 - **The compiler's own peepholes as rules,** once a non-arrow node can
@@ -1429,8 +1467,13 @@ These come after the four commits, in the order a profile asks for them.
   the node it is compiling, by id, which the [nodes] ids already allow.
 - **Constant folding and superinstructions,** as further rule sets with
   costs, where competing rules choose.
-- **Precomputed BURS states,** only if the labeller shows in a compile
-  profile.
+- **Shared rule prefixes,** if the matcher shows in a compile profile
+  (6.5): a trie of each open kind's child sequences, so that rules with a
+  common prefix (the four comparators' five children) fold it once.
+- **Precomputed BURS states,** only if the labeller still shows after that.
+- **Rules on brackets that take the nodes before them** (a call, `&&`,
+  `?:`, an if), which the generator refuses today (4.3): the matcher would
+  have to keep the cells before such an open even in a dead region.
 - **Key caching in the sort** (each element's key read once). It is not in
   the first commit, because it would charge fuel for keys of elements that
   are never compared.
