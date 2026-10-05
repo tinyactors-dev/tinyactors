@@ -111,6 +111,19 @@ typedef struct ta_run_slot {
     ta_actor_id actor; /* the session that holds the slot */
     uint32_t envelope; /* the input's envelope, or 0 for a started macrostep */
     bool occupied;
+    /*
+     * The macrostep reserve (ADR 0099 section 3): the envelopes this input
+     * may take for the mail it sends, reserved when the input is taken and
+     * given back when it ends. Lifetime: input.
+     */
+    ta_quota_claim claim;
+    /*
+     * The mail this macrostep has sent, in send order, not yet visible to
+     * any receiver (ADR 0099 section 4). Spliced onto the run queue when
+     * the macrostep ends, freed unseen when it is abandoned. Lifetime:
+     * input. See mail.h.
+     */
+    ta_ilist outgoing;
 } ta_run_slot;
 
 /* ta_runner is the control block (lifetime: system). Its fields are for run.c and the tests. */

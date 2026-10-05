@@ -407,7 +407,7 @@ static void ta_trace_fault(ta_trace_record *record, const ta_fault *fault) {
 }
 
 /* Counts one error event by its kind (ADR 0072); other events count nothing. */
-static void ta_count_error(ta_system *system, const ta_actor *actor, ta_event_name_id name) {
+void ta_interpreter_count_error(ta_system *system, const ta_actor *actor, ta_event_name_id name) {
     if (ta_trie_under(&system->event_names.trie, name, TA_EVENT_NAME_ERROR_EXECUTION)) {
         TA_COUNT(system, actor->definition, errors_execution);
     } else if (ta_trie_under(&system->event_names.trie, name, TA_EVENT_NAME_ERROR_COMMUNICATION)) {
@@ -421,7 +421,7 @@ static void ta_count_error(ta_system *system, const ta_actor *actor, ta_event_na
 static void ta_count_raised(ta_interpreter *it, uint32_t mark) {
     const ta_event_block *queue = it->actor->event_block;
     for (uint32_t index = mark; queue != NULL && index < queue->count; index += 1u) {
-        ta_count_error(it->system, it->actor, queue->events[index].event.name);
+        ta_interpreter_count_error(it->system, it->actor, queue->events[index].event.name);
     }
 }
 
@@ -1440,7 +1440,7 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
 
 void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_name_id name,
                                    const ta_trace_parent *parent) {
-    ta_count_error(system, actor, name);
+    ta_interpreter_count_error(system, actor, name);
     ta_trace_context none = { 0 };
     const ta_trace_context *context = parent != NULL ? &parent->context : &none;
     if ((ta_trace_macrostep_kinds(&system->trace_masks, context) & TA_TRACE_BIT(TA_TRACE_RAISED)) == 0) {

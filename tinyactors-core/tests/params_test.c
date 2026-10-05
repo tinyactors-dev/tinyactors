@@ -432,20 +432,19 @@ static void test_block_cache_on_demand(void) {
     ta_system *fresh = create(none, 1);
     CHECK(fresh != NULL);
     ta_definition_id fresh_id = define(fresh, &toggle);
+    /* The session is spawned and not yet run: the pool is empty until the first admission or take (ADR 0099 section 2). */
     ta_actor_id actor = spawn(fresh, fresh_id);
-    CHECK(resume(fresh, actor) == TEST_RUN_STABLE);
     ta_event event = { .name = event_name(fresh, "go"), .type = TA_EVENT_EXTERNAL };
     ta_test_allocator_fail_nth(&heap, 1);
     CHECK(ta_actor_deliver(fresh, &(ta_actor_deliver_params){ .time = ta_system_time(fresh), .actor = actor, .event = &event }) == TA_ERR_NOMEM);
     ta_test_allocator_disarm(&heap);
-    CHECK(in_state(fresh, actor, "a"));
     CHECK(ta_actor_deliver(fresh, &(ta_actor_deliver_params){ .time = ta_system_time(fresh), .actor = actor, .event = &event }) == TA_OK);
-    /* Out of memory taking the input (its event block): ta_run answers TA_ERR_NOMEM and the input stays queued. */
+    /* Out of memory taking an input (the pool must grow to cover the macrostep reserve): ta_run answers
+     * TA_ERR_NOMEM, nothing is taken, and the bootstrap and the event stay queued. */
     test_run_status status = TEST_RUN_ERROR;
     ta_test_allocator_fail_nth(&heap, 1);
     CHECK(test_resume(fresh, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) == TA_ERR_NOMEM);
     ta_test_allocator_disarm(&heap);
-    CHECK(in_state(fresh, actor, "a"));
     CHECK(resume(fresh, actor) == TEST_RUN_STABLE);
     CHECK(in_state(fresh, actor, "b"));
     ta_system_destroy(fresh);

@@ -53,3 +53,4 @@
 #include "store.h"
 #include "system.h"
 #include "interpreter.h"
+#include "mail.h"

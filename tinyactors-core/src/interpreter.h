@@ -259,6 +259,8 @@ ta_trace_position ta_actor_position(const ta_actor *actor);
 /* Adds the actor's active states to its definition's occupancy, or takes
  * them away (ADR 0072), when it becomes resident or stops being so. */
 void ta_interpreter_occupancy(ta_actor *actor, bool arrive);
+/* Counts one error event by its kind (ADR 0072); other events count nothing. */
+void ta_interpreter_count_error(ta_system *system, const ta_actor *actor, ta_event_name_id name);
 /* Counts and records an event core queued outside a run (ADR 0072), with
  * `parent` as its cause when there is one. */
 void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_name_id name,

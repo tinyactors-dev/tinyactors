@@ -110,6 +110,7 @@ void ta_run_start(ta_system *system, ta_actor *actor) {
  */
 static void ta_run_end_slot(ta_system *system) {
     ta_run_slot *slot = &system->runner.slot;
+    ta_mail_macrostep_discarded(system); /* the mail it sent so far is never seen (ADR 0099 section 4) */
     if (slot->envelope != 0) {
         /* The event is not needed to say how the input ended: let go of it now, not at the next call. */
         ta_envelope *envelope = ta_envelope_at(&system->envelopes, slot->envelope);
@@ -118,6 +119,32 @@ static void ta_run_end_slot(ta_system *system) {
         ta_ilist_push_back(&system->runner.abandoned, ta_envelopes_link(&system->envelopes), slot->envelope);
     }
     *slot = (ta_run_slot){0};
+}
+
+/*
+ * ta_run_slot_open gives the input that has just filled the slot its mail
+ * state: an empty outgoing list and the macrostep reserve (ADR 0099 section
+ * 3), as many envelopes as the quota allows up to macrostepReserve. It never
+ * allocates and cannot fail; the pool was refilled to cover the reserve before
+ * the input was chosen (ta_run_cover).
+ */
+static void ta_run_slot_open(ta_system *system) {
+    ta_run_slot *slot = &system->runner.slot;
+    ta_ilist_init(&slot->outgoing);
+    slot->claim = (ta_quota_claim){0};
+    (void)ta_envelopes_reserve(&system->envelopes, &slot->claim);
+}
+
+/*
+ * ta_run_cover makes the pool hold at least macrostepReserve free envelopes
+ * (fewer when the bound does not allow), so that the claim ta_run_slot_open
+ * makes is backed by envelopes that exist and a send in the macrostep never
+ * fails because the pool had not grown yet. It is a safe point: the only
+ * allocation in the path of taking an input. Answers TA_ERR_NOMEM with
+ * nothing changed (envelope.h: a refill is all or nothing).
+ */
+static ta_result ta_run_cover(ta_system *system) {
+    return ta_envelopes_refill(&system->envelopes, system->envelopes.macrostep_reserve);
 }
 
 /* ta_run_actor_gone: see run.h. */
@@ -159,6 +186,7 @@ typedef struct ta_run_input {
     const ta_trace_parent *trace;
     ta_time time;
     ta_input_source source;
+    uint32_t room; /* free envelopes the pool must hold before this one is made, at least 1 */
 } ta_run_input;
 
 /*
@@ -167,9 +195,15 @@ typedef struct ta_run_input {
  * unit of the pool's quota that nothing reserved. The envelope is not on a
  * list. Answers 0 when the pool cannot make one: the refill failed, or the
  * pool is at its bound.
+ *
+ * The refill leaves room for the envelope and for what the running input has
+ * yet to claim: envelopes are interchangeable pool items, so one taken for
+ * admission could otherwise be the item a send in a paused macrostep was
+ * promised (envelope.h: a claim is backed by items that exist).
  */
 static uint32_t ta_run_fill(ta_system *system, ta_actor *actor, const ta_run_input *input) {
-    if (ta_envelopes_refill(&system->envelopes, 1u) != TA_OK) {
+    uint32_t promised = (uint32_t)system->runner.slot.claim.held;
+    if (ta_envelopes_refill(&system->envelopes, input->room + promised) != TA_OK) {
         return 0;
     }
     uint32_t index = ta_envelope_make(&system->envelopes, NULL, TA_ENVELOPE_RUNNABLE);
@@ -216,7 +250,8 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     uint32_t index = ta_run_fill(system, actor, &(ta_run_input){ .event = &accepted,
                                                                  .trace = &params->trace,
                                                                  .time = params->time,
-                                                                 .source = TA_SOURCE_HOST });
+                                                                 .source = TA_SOURCE_HOST,
+                                                                 .room = 1u });
     if (index == 0) {
         return TA_ERR_NOMEM;
     }
@@ -263,7 +298,8 @@ static void ta_run_install(ta_actor *actor, const ta_envelope *envelope, ta_oper
 static void ta_run_refuse(ta_system *system, uint32_t index, ta_refusal_reason reason, ta_run_notices *out) {
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
     if (envelope->source != TA_SOURCE_HOST) {
-        ta_envelope_release(&system->envelopes, index);
+        /* Mail comes back to its sender as an error; anything else nobody asked to hear about is freed. */
+        ta_mail_recycle(system, index, reason == TA_REFUSED_DONE ? TA_RECYCLE_DONE : TA_RECYCLE_DESTROYED);
         return;
     }
     ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_INPUT_REFUSED,
@@ -307,6 +343,7 @@ static ta_result ta_run_take(ta_system *system, uint32_t index, ta_run_notices *
     ta_run_install(actor, envelope, NULL);
     envelope->state = TA_ENVELOPE_TAKEN;
     system->runner.slot = (ta_run_slot){ .actor = actor->record.id, .envelope = index, .occupied = true };
+    ta_run_slot_open(system);
     *occupied = true;
     return TA_OK;
 }
@@ -364,7 +401,8 @@ ta_result ta_actor_transition(ta_system *system, const ta_actor_transition_param
     uint32_t index = ta_run_fill(system, actor, &(ta_run_input){ .event = &accepted,
                                                                  .trace = &params->trace,
                                                                  .time = params->time,
-                                                                 .source = TA_SOURCE_TRANSITION });
+                                                                 .source = TA_SOURCE_TRANSITION,
+                                                                 .room = 1u + system->envelopes.macrostep_reserve });
     if (index == 0) {
         /* A pool at its bound is a capacity condition, not an allocation failure. */
         result = system->envelopes.pool.used >= system->envelopes.bound ? TA_ERR_FULL : TA_ERR_NOMEM;
@@ -385,6 +423,7 @@ ta_result ta_actor_transition(ta_system *system, const ta_actor_transition_param
     }
     ta_run_install(actor, envelope, jump);
     system->runner.slot = (ta_run_slot){ .actor = actor->record.id, .envelope = index, .occupied = true };
+    ta_run_slot_open(system);
     return TA_OK;
 }
 
@@ -429,6 +468,7 @@ static bool ta_run_take_started(ta_system *system) {
             continue;
         }
         runner->slot = (ta_run_slot){ .actor = id, .occupied = true };
+        ta_run_slot_open(system);
         if (runner->started_first == 0) {
             ta_run_started_drained(runner);
         }
@@ -487,6 +527,12 @@ static void ta_run_complete(ta_system *system, ta_input_status status, bool igno
                                              .ignored = ignored });
     if (status == TA_INPUT_DONE) {
         ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_FINISHED, .actor = slot->actor, .input = token });
+    }
+    /* The macrostep's mail becomes visible now, all at once; an abandoned macrostep's never does. */
+    if (status == TA_INPUT_RUNAWAY || status == TA_INPUT_ABANDONED) {
+        ta_mail_macrostep_discarded(system);
+    } else {
+        ta_mail_macrostep_ended(system);
     }
     if (index != 0) {
         if (lend) {
@@ -589,6 +635,12 @@ ta_result ta_run(ta_system *system, const ta_run_params *params) {
                 break;
             }
             if (budget == 0) {
+                status = TA_RUN_MORE;
+                break;
+            }
+            /* Safe point: the pool grows to back the reserve before any input is chosen, so a failure changes nothing. */
+            result = ta_run_cover(system);
+            if (result != TA_OK) {
                 status = TA_RUN_MORE;
                 break;
             }

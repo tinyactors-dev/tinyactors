@@ -143,7 +143,9 @@ typedef enum ta_envelope_state {
 /* ta_input_source says where an input came from, which decides how it is settled. */
 typedef enum ta_input_source {
     TA_SOURCE_HOST = 0,      /* ta_actor_deliver: the host is told how it ended, or that it was refused */
-    TA_SOURCE_TRANSITION = 1 /* ta_actor_transition: an operator's event, taken straight into the slot */
+    TA_SOURCE_TRANSITION = 1,/* ta_actor_transition: an operator's event, taken straight into the slot */
+    TA_SOURCE_MAIL = 2,      /* ta_mail_send: another session's <send>; if it is refused its sender hears of it (mail.h) */
+    TA_SOURCE_ERROR = 3      /* a recycled mail: the data-free error.communication its sender takes (ADR 0099 section 6) */
 } ta_input_source;
 
 /*
