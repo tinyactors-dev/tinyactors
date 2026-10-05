@@ -1014,6 +1014,13 @@ static void tah_sched_settle(tah_sched *sched, tah_sched_entry *entry, ta_actor_
     tah_sched_requeue(sched, &sched->ready, actor);
 }
 
+/* The turn left core: let the owner read what the call traced (tah_turn_params.left_core). */
+static void tah_sched_left_core(const tah_turn_params *params) {
+    if (params->left_core != NULL) {
+        params->left_core(params->stop_context);
+    }
+}
+
 static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params, ta_actor_id actor) {
     tah_sched_entry *entry = tah_sched_lookup(sched, actor);
     if (entry == NULL || entry->state != TAH_SCHED_RUNNABLE) {
@@ -1041,6 +1048,7 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
     *params->inside_core = true;
     ta_result result = ta_actor_resume(params->core, &resume);
     *params->inside_core = false;
+    tah_sched_left_core(params);
     /* The table is the addon's: core calls never move its pages. */
     if (result == TA_ERR_NOMEM) {
         entry->flags |= TAH_SCHED_BACKOFF;
@@ -1104,6 +1112,7 @@ static const ta_operator_transition *tah_sched_jump(const tah_turn_params *param
     *params->inside_core = true;
     ta_result result = ta_actor_inspect(params->core, actor, &view);
     *params->inside_core = false;
+    tah_sched_left_core(params);
     if (result != TA_OK || view.definition_id != jump->definition) {
         return NULL;
     }
@@ -1159,6 +1168,7 @@ static void tah_sched_report_one(tah_sched *sched, const tah_turn_params *params
                                                                 .as.error = &error,
                                                             });
     *params->inside_core = false;
+    tah_sched_left_core(params);
     if (result != TA_OK) {
         tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_UNDELIVERED, .actor = actor, .envelope = head });
     }
@@ -1296,6 +1306,7 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
                                                          .transition = transition,
                                                      });
     *params->inside_core = false;
+    tah_sched_left_core(params);
     if (result != TA_OK) {
         tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_UNDELIVERED, .actor = actor, .envelope = head });
     }

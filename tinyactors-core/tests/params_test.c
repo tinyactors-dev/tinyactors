@@ -658,11 +658,6 @@ static void test_quotas(void) {
  * interpreterBytes runs the chart, every trace kind included
  */
 
-static void trace_write(void *self, const ta_trace_record *record) {
-    (void)self, (void)record;
-}
-static const ta_trace_sink_vtable trace_vtable = { .write = trace_write };
-
 enum { REGIONS = 3, PER_REGION = 20 };
 
 static void test_scratch_need_exact(void) {
@@ -746,9 +741,9 @@ static void test_scratch_need_exact(void) {
     ta_param_value exact[] = { { TA_PARAM_INTERPRETER_BYTES, need } };
     system = create(exact, 1);
     CHECK(system != NULL);
-    CHECK(ta_system_set_trace_sink(system, (ta_trace_sink){ .v = &trace_vtable, .kinds = UINT32_MAX,
-                                                              .watched_kinds = UINT32_MAX,
-                                                              .unsampled_kinds = UINT32_MAX }) == TA_OK);
+    /* Every kind is built. Nobody reads tel here: a full ring drops, and the chart runs the same. */
+    CHECK(ta_system_set_trace_masks(system, &(ta_trace_masks){ .kinds = UINT32_MAX, .watched_kinds = UINT32_MAX,
+                                                               .unsampled_kinds = UINT32_MAX }) == TA_OK);
     ta_actor_id actor = spawn(system, define(system, &spec));
     CHECK(resume(system, actor) == TA_RUN_STABLE);
     for (int round = 0; round < 3; round += 1) {

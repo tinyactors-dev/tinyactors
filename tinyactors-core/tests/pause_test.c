@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "tel_reader.h"
 #include "test_allocator.h"
 
 static int failures = 0;
@@ -181,8 +182,9 @@ static bool nowhere(ta_trace_position position) {
            position.transition == TA_TRANSITION_NONE && position.action == TA_ACTION_NONE && position.iteration == 0;
 }
 
-static void control_write(void *self, const ta_trace_record *record) {
+static void control_visit(void *self, const ta_tel_entry *entry) {
     (void)self;
+    const ta_tel_trace *record = &entry->trace;
     if (record->kind == TA_TRACE_RESUMED) {
         /* A run goes on from where the last one stopped. */
         CHECK(same_key(record->key, last_control_key));
@@ -192,11 +194,11 @@ static void control_write(void *self, const ta_trace_record *record) {
     last_control_position = record->position;
     control_records += 1;
 }
-static const ta_trace_sink_vtable control_vtable = { .write = control_write };
-static const ta_trace_sink control_sink = {
-    .v = &control_vtable,
+static const ta_trace_masks control_masks = {
     .kinds = TA_TRACE_BIT(TA_TRACE_PAUSED) | TA_TRACE_BIT(TA_TRACE_RESUMED),
 };
+/* Read after each resume: the records are checked in the order core wrote them. */
+static tel_reader control_reader = { .visit = control_visit };
 
 /* ------------------------------------------------------------------------
  * The chart: nested <if> and <foreach> in exit handlers, transition
@@ -312,7 +314,7 @@ typedef struct {
 static void start(run *r, uint32_t action_budget) {
     *r = (run){ .budget = 1000, .action_budget = action_budget };
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &r->system) == TA_OK);
-    CHECK(ta_system_set_trace_sink(r->system, control_sink) == TA_OK);
+    CHECK(ta_system_set_trace_masks(r->system, &control_masks) == TA_OK);
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(r->system, &(ta_definition_compile_params){ .spec = &chart,
                                                                                  .datamodel = { .v = &dm_vtable },
@@ -335,6 +337,8 @@ static ta_run_status resume_once(run *r) {
     CHECK(ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = r->budget,
                                                                .status = &status,
                                                                .action_budget = r->action_budget }) == TA_OK);
+    tel_read(r->system, &control_reader);
+    CHECK(control_reader.bad == 0);
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(r->system, r->actor, &inspection) == TA_OK);
     CHECK(inspection.step.session == inspection.session_id);

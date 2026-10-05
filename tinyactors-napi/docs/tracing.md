@@ -67,7 +67,7 @@ Post each to the collector's `/v1/traces` and `/v1/logs`.
 - `unsampled`: also trace macrosteps whose traceparent is not sampled.
 - `resource`: resource attributes every request carries, strings only.
 - `values`: event data and assigned values as JSON attributes, cut at the
-  `valueBytes` system parameter (default 1024 bytes of JSON, napi ADR
+  `telemetryValueBytes` system parameter (default 1024 bytes of JSON, core ADR 0098; napi ADR
   0035) and marked `<key>.truncated` when cut, such as
   `scxml.event.data.truncated`. Off by default: values may hold personal
   data.

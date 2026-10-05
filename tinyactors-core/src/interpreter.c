@@ -384,8 +384,17 @@ static ta_trace_record ta_trace_record_now(const ta_interpreter *it, ta_trace_ki
     return record;
 }
 
+/*
+ * ta_trace_emit writes a record the interpreter built because its mask
+ * asked for the kind. The values the record carries are rendered by the
+ * running definition's data model, so the writer is given its binding.
+ */
 static void ta_trace_emit(const ta_interpreter *it, const ta_trace_record *record) {
-    ta_trace_write(&it->system->trace, record);
+    const ta_tel_values values = { .datamodel = &it->definition->datamodel,
+                                   .shared = it->definition->datamodel_shared,
+                                   .instance = it->actor->datamodel_instance,
+                                   .host = &it->actor->host };
+    ta_tel_write_trace(it->system, record, &values);
 }
 
 /* A fault's detail and code; its data went into the error event. */
@@ -504,7 +513,7 @@ static void ta_trace_begin(ta_interpreter *it) {
     actor->trace_microstep = 0;
     ta_trace_parent parent = ta_actor_macrostep_parent(actor);
     it->trace_context = parent.context;
-    it->trace_kinds = ta_trace_macrostep_kinds(&it->system->trace, &parent.context);
+    it->trace_kinds = ta_trace_macrostep_kinds(&it->system->trace_masks, &parent.context);
     if (!ta_tracing(it, TA_TRACE_MACROSTEP_BEGIN)) {
         return;
     }
@@ -1434,7 +1443,7 @@ void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_
     ta_count_error(system, actor, name);
     ta_trace_context none = { 0 };
     const ta_trace_context *context = parent != NULL ? &parent->context : &none;
-    if ((ta_trace_macrostep_kinds(&system->trace, context) & TA_TRACE_BIT(TA_TRACE_RAISED)) == 0) {
+    if ((ta_trace_macrostep_kinds(&system->trace_masks, context) & TA_TRACE_BIT(TA_TRACE_RAISED)) == 0) {
         return;
     }
     const ta_event_block *queue = actor->event_block;
@@ -1451,7 +1460,7 @@ void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_
         record.context = parent->context;
         record.cause = parent->cause;
     }
-    ta_trace_write(&system->trace, &record);
+    ta_tel_write_trace(system, &record, NULL);
 }
 
 static ta_result ta_communication_error(ta_system *system, ta_actor *actor, const ta_error_params *params) {
@@ -3743,7 +3752,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     ta_step_key step = ta_trace_key(it);
     ta_step_key key = ta_trace_lifecycle_key(actor);
     TA_COUNT(it->system, actor->definition, finished);
-    if (ta_trace_lifecycle_wanted(&it->system->trace, TA_TRACE_FINISHED, &it->trace_context)) {
+    if (ta_trace_lifecycle_wanted(&it->system->trace_masks, TA_TRACE_FINISHED, &it->trace_context)) {
         ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
         record.key = key;
         record.cause = step;
@@ -4177,9 +4186,9 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
      * records need, taken only when the sink wants those records. */
     ta_trace_parent parent = ta_actor_macrostep_parent(actor);
     it->trace_context = parent.context;
-    it->trace_kinds = ta_trace_macrostep_kinds(&system->trace, &parent.context);
+    it->trace_kinds = ta_trace_macrostep_kinds(&system->trace_masks, &parent.context);
     it->trace_action = TA_ACTION_NONE;
-    uint32_t wanted = ta_trace_any_kinds(&system->trace);
+    uint32_t wanted = ta_trace_any_kinds(&system->trace_masks);
     if ((wanted & (TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_MACROSTEP_END) |
                    TA_TRACE_BIT(TA_TRACE_LONG_MACROSTEP) | TA_TRACE_BIT(TA_TRACE_RUNAWAY))) != 0) {
         it->trace_states = ta_arena_alloc(&system->scratch, (3u * (size_t)definition->state_count + 1u) *

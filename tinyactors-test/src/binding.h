@@ -141,6 +141,10 @@ bool tat_decode_ta_expression(tat_bind *bind, jv value, ta_expression *out);
 jv tat_encode_ta_expression(tat_bind *bind, const ta_expression *value);
 bool tat_decode_ta_actor_ref(tat_bind *bind, jv value, ta_actor_ref *out);
 jv tat_encode_ta_actor_ref(tat_bind *bind, const ta_actor_ref *value);
+bool tat_decode_ta_trace_masks(tat_bind *bind, jv value, ta_trace_masks *out);
+jv tat_encode_ta_trace_masks(tat_bind *bind, const ta_trace_masks *value);
+bool tat_decode_ta_tel_u32s(tat_bind *bind, jv value, ta_tel_u32s *out);
+jv tat_encode_ta_tel_u32s(tat_bind *bind, const ta_tel_u32s *value);
 
 /* Protocol handles: {"$handle": "<type>:<id>"}. IDs are never reused, so a
  * retired handle stays invalid. */
@@ -148,6 +152,8 @@ bool tat_handle_resolve(tat_bind *bind, jv value, const char *type, void **out);
 jv tat_handle_register(tat_bind *bind, const char *type, void *ptr);
 jv tat_handle_encode(tat_bind *bind, const char *type, const void *ptr);
 void tat_handle_retire(tat_bind *bind, const void *ptr);
+/* Whether `ptr` is a live handle of `type`: false once it was retired (a destroyed system). */
+bool tat_handle_live(const tat_bind *bind, const char *type, const void *ptr);
 jv tat_handle_fixture(tat_bind *bind, const char *type);
 jv tat_borrowed_encode(const char *type, const void *ptr);
 

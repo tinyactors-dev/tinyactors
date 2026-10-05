@@ -601,19 +601,19 @@ const { createSystem, parameterInfo } = require('@tinyactors/node');
 
 // Event payloads of up to 16 KiB arrive whole in traces (`values: true`);
 // the default cuts them at 1024 bytes and marks them `.truncated`.
-const system = createSystem({ parameters: { valueBytes: 16384, maxQueuedMessages: 10_000 } });
-console.log(system.parameters.valueBytes);       // 16384
+const system = createSystem({ parameters: { telemetryValueBytes: 16384, maxRecordBytes: 32768, telBytes: 262144 } });
+console.log(system.parameters.telemetryValueBytes); // 16384
 console.log(parameterInfo().interpreterBytes);        // { default, min, max, unit, owner }
 system.close();
 ```
 
 They include core's (`microstepLimit`, `interpreterBytes`, `renderBytes`,
-`maxActors`, ...), the host kernel's (`valueBytes`, `traceStagingBytes`,
-the scheduling budgets, the mailbox limits) and napi's own
-(`registeredDatamodels`, `datamodelNameBytes`); `owner` says which. Every trace request's resource
+`maxActors`, `telBytes`, `maxRecordBytes`, `telemetryValueBytes`, ...), the
+host kernel's (the scheduling budgets, the mailbox limits) and napi's own
+(`registeredDatamodels`, `datamodelNameBytes`, `traceStagingBytes`); `owner` says which. Every trace request's resource
 carries them as one attribute, `tinyactors.params`: the defaults' version,
 then each parameter that differs from its default, in name order
-(`v1;valueBytes=16384`), or `v1` alone, so a trace says which caps applied
+(`v1;telemetryValueBytes=16384`), or `v1` alone, so a trace says which caps applied
 (napi ADR 0036).
 
 ## TypeScript

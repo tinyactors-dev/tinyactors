@@ -1388,14 +1388,14 @@ static ta_result ta_actor_withdraw(ta_system *system, ta_actor *actor, ta_send_i
     TA_COUNT(system, actor->definition, sends_cancelled);
     ta_step_key key = ta_trace_lifecycle_key(actor);
     ta_trace_context none = {0};
-    if (ta_trace_lifecycle_wanted(&system->trace, TA_TRACE_WITHDRAWN, &none)) {
+    if (ta_trace_lifecycle_wanted(&system->trace_masks, TA_TRACE_WITHDRAWN, &none)) {
         ta_trace_record record = ta_trace_record_blank(TA_TRACE_WITHDRAWN);
         record.key = key;
         record.actor = actor->record.id;
         record.definition = actor->definition->id;
         record.now = ta_actor_now(system, actor);
         record.send = send;
-        ta_trace_write(&system->trace, &record);
+        ta_tel_write_trace(system, &record, NULL);
     }
     return TA_OK;
 }

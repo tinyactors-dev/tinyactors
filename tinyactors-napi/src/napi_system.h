@@ -52,7 +52,7 @@ struct tna_napi_system {
     tna_children children;        /* the SCXML invoker's children (napi ADR 0021) */
     double last_send_token;       /* the token of the last send(), for cancelSend() */
     /* A value's JSON for a trace attribute or a log record, cut at the
-     * valueBytes parameter (napi ADRs 0035 and 0036), plus a terminator,
+     * telemetryValueBytes parameter (core ADR 0098; napi ADRs 0035 and 0036), plus a terminator,
      * allocated at creation. */
     size_t value_bytes;
     char *trace_value;

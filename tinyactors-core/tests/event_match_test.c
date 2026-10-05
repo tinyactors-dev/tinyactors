@@ -380,10 +380,6 @@ static void test_dotted_invoke_id_is_one_segment(void) {
     close_run(&r);
 }
 
-static void sink_write(void *self, const ta_trace_record *record) {
-    (void)self, (void)record;
-}
-
 /* The scratch figure is the bytes init takes, with the trace buffers wanted, at two depths. */
 static void test_scratch_need(void) {
     static const uint64_t depths[] = { 8, 64 };
@@ -391,10 +387,8 @@ static void test_scratch_need(void) {
         next_param(TA_PARAM_EVENT_NAME_DEPTH, depths[index]);
         run r;
         start(&r);
-        ta_trace_sink_vtable vtable = { .write = sink_write };
-        CHECK(ta_system_set_trace_sink(r.system, (ta_trace_sink){ .v = &vtable, .kinds = UINT32_MAX,
-                                                                  .watched_kinds = UINT32_MAX,
-                                                                  .unsampled_kinds = UINT32_MAX }) == TA_OK);
+        CHECK(ta_system_set_trace_masks(r.system, &(ta_trace_masks){ .kinds = UINT32_MAX, .watched_kinds = UINT32_MAX,
+                                                                     .unsampled_kinds = UINT32_MAX }) == TA_OK);
         const ta_definition *definition = ta_definition_lookup(r.system, r.definition);
         ta_actor *actor = ta_actor_lookup(r.system, r.actor);
         CHECK(definition != NULL && actor != NULL);

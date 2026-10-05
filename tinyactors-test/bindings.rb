@@ -27,8 +27,7 @@ module TinyactorsBindings
     'ta_io_scope_{open,close}' => 'scopes belong to the io.connection instrument, which opens and closes them on command',
     'ta_origin_text' => 'renders into a C arena; the ta_io_origin codec reports what an origin is',
     'ta_{ring_peek,ring_release,system_control_block}' => 'rings are read in C, by the trace.recording instrument after each call that runs core (core ADR 0098)',
-    'ta_tel_{decode,u32_at}' => 'tel records are decoded in C, by the trace.recording instrument (core ADR 0098)',
-    'ta_system_set_trace_masks' => 'set in C by the trace.recording instrument (core ADR 0098)'
+    'ta_tel_{decode,u32_at}' => 'tel records are decoded in C, by the trace.recording instrument (core ADR 0098)'
   }.freeze
 
   # Functions with a hand-written `tat_handler_<function>` in src/. None yet.
@@ -39,6 +38,8 @@ module TinyactorsBindings
   # by their semantic in the API description.)
   OVERRIDE_TYPES = {
     'ta_expression' => 'source text only; host expressions cannot cross the protocol',
+    'ta_trace_masks' => 'plain masks, or the trace.recording instrument as an adapter, which creates it and says what it wants (core ADR 0098)',
+    'ta_tel_u32s' => 'a list of IDs in a tel record: crosses as an array of numbers, read with ta_tel_u32_at',
     'ta_actor_ref' => 'a named ref is an interned address handle (ADR 0065); it crosses as {kind, family, name}'
   }.freeze
 
@@ -52,8 +53,7 @@ module TinyactorsBindings
     'ta_expression_host' => 'host expressions cannot cross the protocol',
     'ta_datamodel_*_params' => 'data-model callback argument; adapters are C',
     'ta_ring_{shared,control,record}' => 'ring plumbing: read in C (core ADR 0098)',
-    'ta_tel_*' => 'telemetry plumbing: decoded in C (core ADR 0098)',
-    'ta_trace_masks' => 'set in C by the trace.recording instrument (core ADR 0098)',
+
     'ta_invoker_start_params' => 'invoker callback argument; adapters are C',
     'ta_invoker_forward_params' => 'invoker callback argument; adapters are C'
   }.freeze

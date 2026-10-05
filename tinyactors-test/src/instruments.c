@@ -150,8 +150,8 @@ typedef struct tat_instrument {
     tat_invoker_state invoker;
     tat_inspector_state inspector;
     tat_endpoint_state endpoint;
-    /* trace.recording: the sink's mask and whether it traces unsampled
-     * macrosteps, fixed when it is created. */
+    /* trace.recording: the kinds it asked core for and whether it traces
+     * unsampled macrosteps, fixed when it is created. */
     uint32_t trace_kinds;
     bool trace_unsampled;
 } tat_instrument;
@@ -1271,25 +1271,68 @@ bool tat_make_recording_log(tat_bind *bind, jv config, void *out) {
 /* ------------------------------------------------------------------------
  * trace.recording
  *
- * The system's trace sink (ADR 0067). It journals each record as the
- * generated codec encodes ta_trace_record (op "trace"), with the dotted
- * name of its event as event.name_text. Config: {"name", "system",
- * "kinds"?: [kind symbols] (default: every kind), "unsampled"?: bool}.
- * Writing a record cannot fail, so it has no commands.
+ * Reads the system's tel ring (core ADR 0098). Creating it sets the masks
+ * that say which kinds core writes (config: {"name", "system", "kinds"?:
+ * [kind symbols] (default: every kind), "unsampled"?: bool}); the server
+ * then drains tel into its journal after every request that may have run
+ * core (tat_trace_recorders_drain), and the definition recorder drains it
+ * before it journals an event, so a definition's record comes just before
+ * its event (ADR 0080). A record is journaled as the generated codec
+ * encodes ta_tel_trace (op "trace"), with `event` as {name_text, type,
+ * send_id, invoke_id, data_text} or null, and `fault` as {code, detail,
+ * message, data_text} when it has one. Reading cannot fail, so it has no
+ * commands.
  */
 
-static void tat_recording_trace(void *self, const ta_trace_record *record) {
-    tat_instrument *instrument = self;
-    jv entry = tat_encode_ta_trace_record(instrument->bind, record);
-    if (record->event != NULL) {
-        jv event = jv_object_get(jv_copy(entry), jv_string("event"));
-        event = jv_object_set(event, jv_string("name_text"), tat_event_name_text(instrument->system, record->event->name));
-        entry = jv_object_set(entry, jv_string("event"), event);
+/* A tel.trace as the journal shows it: the codec's encoding, with the event and the fault as objects. */
+static jv tat_trace_entry(tat_instrument *instrument, const ta_tel_trace *record) {
+    jv entry = tat_encode_ta_tel_trace(instrument->bind, record);
+    jv event = jv_null();
+    if (record->has_event) {
+        event = jv_object_set(jv_object(), jv_string("name_text"), tat_text(record->event_name));
+        event = jv_object_set(event, jv_string("send_id"), tat_text(record->event_send_id));
+        event = jv_object_set(event, jv_string("invoke_id"), tat_text(record->event_invoke_id));
+        event = jv_object_set(event, jv_string("data_text"), tat_text(record->event_data));
     }
-    tat_journal(instrument, "trace", entry);
+    entry = jv_object_set(entry, jv_string("event"), event);
+    jv fault = jv_null();
+    if (record->has_fault) {
+        fault = jv_object_set(jv_object(), jv_string("code"), jv_number(record->fault_code));
+        fault = jv_object_set(fault, jv_string("detail"), tat_text(record->fault_detail));
+        fault = jv_object_set(fault, jv_string("message"), tat_text(record->fault_message));
+        fault = jv_object_set(fault, jv_string("data_text"), tat_text(record->fault_data));
+    }
+    return jv_object_set(entry, jv_string("fault"), fault);
 }
 
-static const ta_trace_sink_vtable TAT_RECORDING_TRACE = {.write = tat_recording_trace};
+/* Reads everything on one recorder's system's tel ring into its journal. */
+static void tat_trace_drain(tat_instrument *instrument) {
+    ta_ring_record raw;
+    while (ta_ring_peek(instrument->system, TA_RING_TEL, &raw) == TA_OK) {
+        ta_tel_entry entry;
+        if (ta_tel_decode(&raw, &entry) == TA_OK) {
+            if (entry.type == TA_TEL_TRACE) {
+                tat_journal(instrument, "trace", tat_trace_entry(instrument, &entry.trace));
+            } else {
+                jv dropped = jv_object_set(jv_object(), jv_string("count"), tat_u64(entry.dropped.count));
+                dropped = jv_object_set(dropped, jv_string("first_seq"), tat_u64(entry.dropped.first_seq));
+                tat_journal(instrument, "dropped", dropped);
+            }
+        }
+        ta_ring_release(instrument->system, TA_RING_TEL, raw.size);
+    }
+}
+
+void tat_trace_recorders_drain(tat_bind *bind) {
+    for (size_t index = 0; index < tat_instrument_count; index += 1) {
+        tat_instrument *instrument = tat_instruments[index];
+        /* A recorder whose system was destroyed has nothing to read, and no ring. */
+        if (instrument->kind == TAT_INSTRUMENT_TRACE && instrument->bind == bind && instrument->system != NULL &&
+            tat_handle_live(bind, "system", instrument->system)) {
+            tat_trace_drain(instrument);
+        }
+    }
+}
 
 /* The mask config.kinds names; every kind when it is absent. */
 static bool tat_trace_kinds(tat_bind *bind, jv config, uint32_t *out) {
@@ -1332,10 +1375,11 @@ bool tat_make_recording_trace(tat_bind *bind, jv config, void *out) {
         instrument->trace_unsampled = jv_get_kind(unsampled) == JV_KIND_TRUE;
         jv_free(unsampled);
     }
-    *(ta_trace_sink *)out = (ta_trace_sink){.self = instrument, .v = &TAT_RECORDING_TRACE,
-                                            .kinds = instrument->trace_kinds,
-                                            .watched_kinds = instrument->trace_kinds,
-                                            .unsampled_kinds = instrument->trace_unsampled ? instrument->trace_kinds : 0u};
+    /* The masks core is to be given (ta.system.set_trace_masks); values are asked for, so they are journaled. */
+    *(ta_trace_masks *)out = (ta_trace_masks){.kinds = instrument->trace_kinds,
+                                              .watched_kinds = instrument->trace_kinds,
+                                              .unsampled_kinds = instrument->trace_unsampled ? instrument->trace_kinds : 0u,
+                                              .values = true};
     return true;
 }
 
@@ -1351,6 +1395,8 @@ bool tat_make_recording_trace(tat_bind *bind, jv config, void *out) {
 
 static void tat_recording_definition(void *self, const ta_definition_event *event) {
     tat_instrument *instrument = self;
+    /* The record of this event is on tel already (core ADR 0080): journal it before the event. */
+    tat_trace_recorders_drain(instrument->bind);
     jv entry = tat_encode_ta_definition_event(instrument->bind, event);
     entry = jv_object_set(entry, jv_string("family"), tat_text(event->identity.family.name));
     tat_journal(instrument, "definition", entry);

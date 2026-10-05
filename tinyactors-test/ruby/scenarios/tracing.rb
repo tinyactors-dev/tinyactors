@@ -102,9 +102,9 @@ TinyactorsTest.scenarios 'tracing' do
     caller = spawn :caller
     run_system('the child starts')
     caller.deliver 'finish'
-    forwarded = trace_lines(actor: caller).map { |line| line.sub(/ v\d+ /, ' v ') }
-    assert_equal ['forwarded 2.0 finalize v progress', 'forwarded 3.0 finalize v finish',
-                  'forwarded 4.0 finalize v done.invoke.worker'], forwarded
+    # The record names the invocation by its text, the invoke ID's text (core ADR 0098).
+    assert_equal ['forwarded 2.0 finalize invoke worker progress', 'forwarded 3.0 finalize invoke worker finish',
+                  'forwarded 4.0 finalize invoke worker done.invoke.worker'], trace_lines(actor: caller)
     assert_equal ['progress 21', 'done 42'], caller.data('.log'), 'the child still finished'
   end
 

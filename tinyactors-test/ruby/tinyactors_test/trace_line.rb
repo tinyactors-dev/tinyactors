@@ -72,7 +72,7 @@ module TinyactorsTest
         transition = @record.dig(:position, :transition)
         [none?(transition) ? 'if' : "t#{transition}", outcome(@record[:result].to_s)]
       when 'raised', 'sent' then [event]
-      when 'forwarded' then ["v#{@record[:invoke]}", event]
+      when 'forwarded' then ["invoke #{@record[:invoke]}", event]
       when 'withdrawn' then ["send #{@record[:send]}"]
       when 'data_init' then [@record[:name], @record[:has_fault] ? fault : nil]
       when 'script' then [@record[:has_fault] ? fault : nil]

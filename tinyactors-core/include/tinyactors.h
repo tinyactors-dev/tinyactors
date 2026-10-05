@@ -402,7 +402,7 @@ typedef struct { void *self; const ta_byte_source_vtable *v; } ta_byte_source TA
  * A step key names one step of one session: macrostep `macrostep` of session
  * `session` (ADR 0066), and microstep `microstep` within it, where 0 is the
  * macrostep itself. Macrosteps count from 1 per session, and 0 is outside a
- * macrostep. The counters run whether or not a trace sink is installed, so
+ * macrostep. The counters run whether or not any kind is traced, so
  * keys are the same with tracing on or off. A cause with `session` 0 is the
  * host's: `macrostep` holds its parent span ID, or 0 for none. A lifecycle
  * record (SPAWNED, LOADED, UNLOADED, FINISHED, DESTROYED) is outside every
@@ -424,7 +424,7 @@ typedef struct { uint64_t session; uint64_t macrostep; uint32_t microstep; ta_at
  *
  * `detail` is local, not W3C: it never appears in traceparent text, so it
  * does not leave the process. TA_TRACE_DETAIL_WATCHED makes a sampled
- * macrostep build the sink's `watched_kinds` instead of its `kinds`.
+ * macrostep build the `watched_kinds` mask instead of its `kinds`.
  */
 typedef struct { uint64_t trace_id_high; uint64_t trace_id_low; uint8_t flags; uint8_t detail; } ta_trace_context;
 #define TA_TRACE_FLAG_SAMPLED ((uint8_t)0x01u)
@@ -1204,8 +1204,8 @@ typedef struct {
 /* ========================================================================
  * Tracing (ADR 0067)
  *
- * Core reports its decisions and the data they changed to one trace sink
- * per system, as flat records. A record is written once, when the step
+ * Core reports its decisions and the data they changed to the tel ring of its
+ * system (ADR 0098), as flat records. A record is written once, when the step
  * that produced it has committed: a step that runs out of memory and runs
  * again (ADR 0070) writes its records on the run that commits, and the step
  * counters move only then, so an interrupted run and an uninterrupted one
@@ -1280,7 +1280,7 @@ typedef enum {
  */
 #define TA_TRACE_DEFINITIONS_SESSION ((uint64_t)UINT64_MAX)
 
-/* The bit of `kind` in a sink's mask. */
+/* The bit of `kind` in a trace mask. */
 #define TA_TRACE_BIT(kind) ((uint32_t)1u << (uint32_t)(kind))
 
 /* Where in a macrostep a record was written. */
@@ -1313,90 +1313,6 @@ typedef struct {
     ta_action_id action;
     uint32_t iteration;
 } ta_trace_position;
-
-/*
- * One record. Only the fields its kind names are meaningful; the rest are
- * zero, or NONE for IDs. Everything is borrowed for the call: retain a value
- * to keep it (ADR 0006). `context` is the running macrostep's; `cause`, for
- * MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. A
- * fault carries its `detail`, `code` and `message`. Its data went into the
- * error.execution event of the RAISED record that follows; ACTION_FAILED
- * also borrows it, so a sink can say why an action failed from one record.
- * A sink never releases a record's fault data. A MICROSTEP that carries
- * `states` was an operator transition's (ADR 0082), which a chart's never
- * does: `states` are the targets the operator named, history states
- * included, `state` the source (TA_STATE_NONE: the root), and there are no
- * `transitions`. `exited`, `entered` and `history` are as for any
- * microstep.
- */
-typedef struct {
-    ta_trace_kind kind;
-    ta_step_key key;
-    ta_trace_position position;
-    ta_trace_context context;
-    ta_step_key cause;
-    ta_actor_id actor;
-    ta_definition_id definition;
-    /* The definition's identity, for the DEFINITION_* kinds; borrowed. */
-    ta_definition_identity identity;
-    ta_time now;
-
-    TA_IN TA_OPTIONAL const ta_event *event;
-    ta_state_id state;
-    ta_expr_id expr;
-    ta_str name;
-    ta_action_id action;
-    uint32_t iteration;
-    ta_send_id send;
-    ta_invoke_id invoke;
-    bool result;
-    bool has_value;
-    ta_value value;
-    bool has_fault;
-    ta_fault fault;
-    uint32_t dropped;
-
-    TA_COUNTED_BY(transition_count) const ta_transition_id *transitions;
-    uint32_t transition_count;
-    TA_COUNTED_BY(exited_count) const ta_state_id *exited;
-    uint32_t exited_count;
-    TA_COUNTED_BY(entered_count) const ta_state_id *entered;
-    uint32_t entered_count;
-    TA_COUNTED_BY(history_count) const ta_state_id *history;
-    uint32_t history_count;
-    TA_COUNTED_BY(state_count) const ta_state_id *states;
-    uint32_t state_count;
-} ta_trace_record;
-
-/*
- * Writing a record cannot fail and cannot change the run. A sink must not
- * call back into the system for the actor that is running; it may read the
- * record, retain values it keeps, and inspect other actors.
- */
-typedef struct ta_trace_sink_vtable {
-    void (*write)(void *self, TA_IN const ta_trace_record *record);
-} ta_trace_sink_vtable TA_VTABLE;
-
-/*
- * Three masks of TA_TRACE_BIT(kind) (ADR 0073): core builds no record whose
- * bit the macrostep's mask lacks. A macrostep picks its mask at
- * MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is
- * sampled, `watched_kinds` when it is sampled and marked
- * TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled.
- * Lifecycle records are outside macrosteps and never sampled: their bit is
- * looked up in `watched_kinds` when their context is watched, else in
- * `kinds`.
- */
-typedef struct {
-    void *self;
-    const ta_trace_sink_vtable *v;
-    uint32_t kinds;
-    uint32_t watched_kinds;
-    uint32_t unsampled_kinds;
-} ta_trace_sink TA_ADAPTER;
-
-/* The sink a system starts with: it wants nothing and writes nothing. */
-TA_API ta_trace_sink ta_null_trace_sink(void);
 
 /*
  * The definition lifecycle, told to the host (ADR 0079). REGISTERED fires
@@ -3244,7 +3160,7 @@ typedef struct {
     bool microstep_in_progress;
     /*
      * Where the paused macrostep stands (ADR 0083): the key and position of
-     * the PAUSED or STOPPED record its last run wrote, whether or not a sink
+     * the PAUSED or STOPPED record its last run wrote, whether or not any kind
      * wanted it. Between microsteps `position.at` is TA_TRACE_AT_NONE and
      * `step.microstep` counts the microsteps done. Inside a microstep,
      * `position` names the phase and state (and, in transition content, the
@@ -3872,7 +3788,7 @@ typedef struct {
 TA_API uint32_t ta_tel_u32_at(TA_IN const ta_tel_u32s *list, uint32_t index);
 
 /*
- * One tel.trace record, decoded: the fields of the ta_trace_record core
+ * One tel.trace record, decoded: the fields of the trace record core
  * wrote, with names and values as text. Only the fields the record's kind
  * names are meaningful; the rest are zero, or NONE for IDs. The texts and
  * lists are views into the record's bytes and die when it is released; the
@@ -4186,11 +4102,6 @@ TA_API ta_result ta_system_register_io(ta_system *system, TA_IN const ta_io_regi
 TA_API ta_result ta_system_find_io(const ta_system *system, ta_atom type, TA_OUT uint32_t *index);
 /* Installs where <log> goes; without one, a <log> only evaluates its expr. */
 TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink);
-/*
- * Installs the trace sink (ADR 0067); ta_null_trace_sink() stops tracing.
- * TA_ERR_INVALID for a sink whose `v` or `v->write` is null.
- */
-TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink);
 /*
  * Installs the definition sink (ADR 0079); ta_null_definition_sink() stops
  * the notifications. TA_ERR_INVALID for a sink whose `v` or `v->notify` is

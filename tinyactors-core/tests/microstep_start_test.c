@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "tel_reader.h"
 #include "test_allocator.h"
 
 static int failures = 0;
@@ -206,8 +207,9 @@ static bool same_position(ta_trace_position a, ta_trace_position b) {
            a.iteration == b.iteration;
 }
 
-static void sink_write(void *self, const ta_trace_record *record) {
+static void sink_visit(void *self, const ta_tel_entry *entry) {
     (void)self;
+    const ta_tel_trace *record = &entry->trace;
     if (record->kind == TA_TRACE_CONDITION) {
         condition_records += 1;
     } else if (record->kind == TA_TRACE_MICROSTEP) {
@@ -224,7 +226,13 @@ static void sink_write(void *self, const ta_trace_record *record) {
         last_control_position = record->position;
     }
 }
-static const ta_trace_sink_vtable sink_vtable = { .write = sink_write };
+
+/* Reads tel after each call into core, in order: the records are checked as they were written. */
+static tel_reader reader = { .visit = sink_visit };
+static void flush(ta_system *system) {
+    tel_read(system, &reader);
+    CHECK(reader.bad == 0);
+}
 
 /* ------------------------------------------------------------------------
  * Driving it
@@ -276,15 +284,16 @@ static void open_system(run *r) {
                                                                                  .allocator = allocator,
                                                                                  .out = &definition }) == TA_OK);
     CHECK(ta_system_register_definition(r->system, definition, &r->definition) == TA_OK);
-    CHECK(ta_system_set_trace_sink(r->system, (ta_trace_sink){ .v = &sink_vtable, .kinds = UINT32_MAX,
-                                                               .watched_kinds = UINT32_MAX,
-                                                               .unsampled_kinds = UINT32_MAX }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(r->system, &(ta_trace_masks){ .kinds = UINT32_MAX, .watched_kinds = UINT32_MAX,
+                                                                  .unsampled_kinds = UINT32_MAX }) == TA_OK);
 }
 
 static ta_result resume_with(run *r, uint32_t action_budget, bool at_start, ta_run_status *status) {
-    return ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000,
+    ta_result result = ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000,
                                                                 .status = status, .action_budget = action_budget,
                                                                 .pause_at_microstep_start = at_start });
+    flush(r->system);
+    return result;
 }
 
 static ta_run_status resume(run *r, uint32_t action_budget, bool at_start) {
@@ -299,6 +308,7 @@ static void start(run *r) {
     open_system(r);
     CHECK(ta_actor_spawn(r->system, &(ta_actor_spawn_params){ .definition = r->definition, .out = &r->actor }) ==
           TA_OK);
+    flush(r->system);
     long paused = paused_records;
     CHECK(resume(r, 0, true) == TA_RUN_STABLE);
     CHECK(paused_records == paused);
@@ -319,6 +329,7 @@ static void deliver(run *r, const char *name, const char *target) {
         result = ta_actor_deliver(r->system, &params);
     }
     CHECK(result == TA_OK);
+    flush(r->system);
 }
 
 static void offer(run *r, const char *name) {
@@ -562,6 +573,7 @@ static void test_microstep_budget(void) {
     ta_run_status status = TA_RUN_ERROR;
     CHECK(ta_actor_resume(r.system, &(ta_actor_resume_params){ .actor = r.actor, .budget = 1, .status = &status,
                                                               .pause_at_microstep_start = true }) == TA_OK);
+    flush(r.system);
     CHECK(status == TA_RUN_PAUSED);
     CHECK(log_is("pi "));
     ta_actor_inspection inspection = inspect(&r);

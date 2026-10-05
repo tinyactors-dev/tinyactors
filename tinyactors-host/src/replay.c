@@ -70,7 +70,7 @@ static ta_result tah_replay_resume(tah_system *system, ta_actor_id actor, bool u
                                                              .no_microstep_limit = unlimited,
                                                              .ignored = &took_nothing,
                                                          });
-        system->inside_core = false;
+        tah_system_leave_core(system);
         if (result != TA_OK) {
             return result;
         }
@@ -208,7 +208,7 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
                                                           .time = params->time,
                                                           .as.error = &error,
                                                       });
-        system->inside_core = false;
+        tah_system_leave_core(system);
     } else {
         if (event.invoke_id != TA_INVOKE_ID_NONE && !tah_replay_invoke_active(system, params->actor, event.invoke_id)) {
             /* The invocation it came from is not active in the replay: the event arrives without it. */
@@ -217,7 +217,7 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
         system->inside_core = true;
         result = ta_actor_deliver(system->core, &(ta_actor_deliver_params){
                                                     .actor = params->actor, .event = &event, .time = params->time });
-        system->inside_core = false;
+        tah_system_leave_core(system);
     }
     ta_event_release(&event);
     if (result != TA_OK) {

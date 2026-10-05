@@ -396,7 +396,6 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
                            .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
-                           .trace = ta_null_trace_sink(),
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
@@ -548,10 +547,9 @@ ta_result ta_system_set_definition_sink(ta_system *system, ta_definition_sink si
 
 /*
  * One definition event, told twice (ADR 0080): first as a lifecycle record
- * to the trace sink, when its mask asks for the kind, then to the definition
- * sink (ADR 0079). The record goes first, so a trace sink reading the
- * definition finds it as intact as the definition sink does, and before the
- * host's cleanup of it.
+ * to the tel ring, when the masks ask for the kind, then to the definition
+ * sink (ADR 0079). The record goes first, and carries a copy of the
+ * identity, so the host's cleanup in the definition sink cannot reach it.
  */
 void ta_system_tell_definition(ta_system *system, const ta_definition *definition, ta_definition_event_kind kind) {
     static const ta_trace_kind trace_kinds[] = {
@@ -561,7 +559,7 @@ void ta_system_tell_definition(ta_system *system, const ta_definition *definitio
     };
     ta_trace_kind trace_kind = trace_kinds[kind];
     ta_trace_context none = { 0 };
-    if (ta_trace_lifecycle_wanted(&system->trace, trace_kind, &none)) {
+    if (ta_trace_lifecycle_wanted(&system->trace_masks, trace_kind, &none)) {
         ta_trace_record record = ta_trace_record_blank(trace_kind);
         /* One key per definition and event: a definition ID is never issued
          * twice (ADR 0043), and each event happens at most once to it. */
@@ -571,7 +569,7 @@ void ta_system_tell_definition(ta_system *system, const ta_definition *definitio
         record.definition = definition->id;
         record.identity = definition->identity;
         record.now = ta_clock_now(&system->clock);
-        ta_trace_write(&system->trace, &record);
+        ta_tel_write_trace(system, &record, NULL);
     }
     ta_definition_event event = { .kind = kind, .definition = definition->id, .identity = definition->identity };
     system->definition_sink.v->notify(system->definition_sink.self, &event);

@@ -212,6 +212,7 @@ void tah_system_enter_core(tah_system *system) {
 
 void tah_system_leave_core(tah_system *system) {
     system->inside_core = false;
+    tah_trace_drain(system);
 }
 
 bool tah_system_tracing(const tah_system *system) {
@@ -285,17 +286,6 @@ bool tah_system_quiet(const tah_system *system) {
            tah_loads_pending_requests(&system->loads) == 0 &&
            (!system->tracing || system->otlp.span_count == 0) &&
            !tah_system_due_now(system);
-}
-
-void tah_system_trace(tah_system *system, const ta_trace_record *record) {
-    if (!system->tracing) {
-        return;
-    }
-    uint32_t before = system->otlp.span_count;
-    tah_otlp_write(&system->otlp, record);
-    if (system->otlp.span_count != before) {
-        tah_system_want_turn(system);
-    }
 }
 
 uint64_t tah_system_wall_ns(const tah_system *system) {
@@ -574,20 +564,26 @@ bool tah_system_dispatch_due(tah_system *system) {
                                                    .more_due = &more_due,
                                                });
     system->dispatching_due = false;
-    system->inside_core = false;
+    tah_system_leave_core(system);
     return more_due;
 }
 
 /*
- * A turn stops once it has staged traceStagingBytes of spans and logs (napi
- * ADR 0035): the sink gets this turn's request, and the next turn goes on
- * where this one stopped, so the staging stays near its bound and nothing
- * is dropped. One macrostep's records are never split.
+ * A turn stops once it has staged the encoder's staging bound of spans and
+ * logs (napi ADR 0035; the bound is the encoder's setting since core ADR
+ * 0098): the sink gets this turn's request, and the next turn goes on where
+ * this one stopped, so the staging stays near its bound and nothing is
+ * dropped. One macrostep's records are never split.
  */
 static bool tah_system_staging_full(void *context) {
     tah_system *system = context;
     return system->tracing && tah_otlp_traces_size(&system->otlp) + tah_otlp_logs_size(&system->otlp) >=
-                                  system->params.values[TAH_PARAM_TRACE_STAGING_BYTES];
+                                  tah_otlp_staging_bytes(&system->otlp);
+}
+
+/* The scheduler left core after a resume, a delivery or a report: the tel ring is read before the next call. */
+static void tah_system_left_core(void *context) {
+    tah_trace_drain(context);
 }
 
 void tah_system_turn(tah_system *system) {
@@ -604,6 +600,7 @@ void tah_system_turn(tah_system *system) {
                                        .watch = &system->trace_watch,
                                        .stop = tah_system_staging_full,
                                        .stop_context = system,
+                                       .left_core = tah_system_left_core,
                                    });
     tah_quarantine_reports_retry(system);
     tah_quarantine_reports_make(system);
@@ -668,7 +665,7 @@ void tah_system_observe(tah_system *system) {
 ta_result tah_system_withdraw_send(tah_system *system, ta_actor_id actor, ta_send_id send) {
     system->inside_core = true;
     ta_result result = ta_actor_withdraw_send(system->core, actor, send);
-    system->inside_core = false;
+    tah_system_leave_core(system);
     if (result == TA_OK) {
         /* Its wake may move (kernel ADR 0006 section 2). */
         ta_actor_inspection view;
@@ -682,6 +679,6 @@ ta_result tah_system_withdraw_send(tah_system *system, ta_actor_id actor, ta_sen
 ta_result tah_system_abandon(tah_system *system, ta_actor_id actor) {
     system->inside_core = true;
     ta_result result = ta_actor_abandon(system->core, actor);
-    system->inside_core = false;
+    tah_system_leave_core(system);
     return result == TA_OK ? tah_hook_actor_abandoned(system, actor) : result;
 }

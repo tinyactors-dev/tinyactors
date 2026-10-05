@@ -26,6 +26,13 @@ bool tat_make_connection_io(tat_bind *bind, jv config, void *out);
 bool tat_make_request_io(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_log(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_trace(tat_bind *bind, jv config, void *out);
+/*
+ * Reads the tel ring of every trace.recording instrument's system into its
+ * journal. The server calls it after each request, and the definition
+ * recorder before it journals an event, so records and events keep the order
+ * core wrote them (core ADR 0098).
+ */
+void tat_trace_recorders_drain(tat_bind *bind);
 bool tat_make_recording_definition(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_inspector(tat_bind *bind, jv config, void *out);
 

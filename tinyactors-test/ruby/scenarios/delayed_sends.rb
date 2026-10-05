@@ -224,7 +224,8 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
     assert_equal [['tick.two', 40_000, false]], DelayedSendsAtOwner.pending(self, a), 'a\'s tick.one is gone'
     assert_equal [['tick.one', 20_000, false]], DelayedSendsAtOwner.pending(self, b), 'b\'s send of that ID stays'
     assert_equal 20_000, next_deadline, 'the owner is re-keyed to its next send'
-    assert_equal ["withdrawn send #{one}"], trace_lines(actor: a)
+    # The record names the send by its text, the id attribute the sender gave it (core ADR 0098).
+    assert_equal ['withdrawn send tick_one'], trace_lines(actor: a)
     assert_equal 'err_not_found', ta.actor.withdraw_send(system: system_handle, actor: a.handle, send: one)[:result],
                  'a send withdrawn once is not found again'
 

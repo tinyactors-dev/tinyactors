@@ -5,6 +5,8 @@ const tna_param_info tna_param_table[TNA_PARAM_COUNT] = {
                                           TNA_PARAM_DEFAULT_REGISTERED_DATAMODELS, 0, 1024 },
     [TNA_PARAM_DATAMODEL_NAME_BYTES] = { "datamodelNameBytes", "bytes", TNA_PARAM_DEFAULT_DATAMODEL_NAME_BYTES, 8,
                                          256 },
+    [TNA_PARAM_TRACE_STAGING_BYTES] = { "traceStagingBytes", "bytes", TNA_PARAM_DEFAULT_TRACE_STAGING_BYTES, 65536,
+                                        1073741824 },
 };
 
 void tna_params_defaults(tna_params *params) {

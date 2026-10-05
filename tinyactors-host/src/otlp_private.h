@@ -25,6 +25,7 @@ typedef struct tah_otlp_span {
     uint32_t microstep;      /* for a microstep span */
     bool error;
     uint64_t definition;     /* the definition whose scope the span goes in */
+    uint64_t dropped;        /* a macrostep span: records tel dropped while it was open */
     tah_otlp_buf name;
     tah_otlp_buf attributes; /* encoded Span.attributes entries */
     tah_otlp_buf events;     /* encoded Span.events entries */
@@ -123,6 +124,7 @@ struct tah_otlp {
      * (host_metrics.h); the host clears `set` when it takes it. */
     tah_exemplar last_macrostep;
     uint64_t dropped;          /* records lost to a failed allocation */
+    uint64_t telemetry_dropped; /* records core's tel ring dropped, as its tel.dropped records said (ADR 0098) */
 };
 
 /* Spans still open (for tests). */

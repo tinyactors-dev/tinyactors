@@ -1,9 +1,10 @@
 /* test: runtime asan */
 /*
- * Tracing (ADR 0067): the null sink a system starts with, the mask that
+ * Tracing (ADR 0067, ADR 0098): the masks a system starts with, the mask that
  * keeps core from building records nobody wants, sampling, exact record
  * sequences for small charts, step keys and their span IDs, and counters
- * and trace parents that survive a session image.
+ * and trace parents that survive a session image. Records are read from the
+ * tel ring after each call that runs an actor (tel_reader.h).
  *
  * Uses the C library; the core does not.
  */
@@ -13,6 +14,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "tel_reader.h"
 #include "test_allocator.h"
 
 static int failures = 0;
@@ -128,10 +130,9 @@ static const ta_datamodel_vtable dm_vtable = {
 };
 
 /* ------------------------------------------------------------------------
- * A sink that renders every record as one line
+ * A reader that renders every record as one line
  */
 
-static ta_system *traced_system = NULL;
 static char journal[16384];
 static size_t journal_length = 0;
 static long records = 0;
@@ -148,23 +149,18 @@ static void put(const char *format, ...) {
     }
 }
 
-static void put_event(const ta_event *event) {
-    if (event == NULL) {
+static void put_event(const ta_tel_trace *record) {
+    if (!record->has_event) {
         put(" -");
         return;
     }
-    char name[64];
-    uint32_t needed = 0;
-    ta_result result = ta_event_name_format(traced_system, &(ta_event_name_format_params){
-                                                               .name = event->name, .buffer = name,
-                                                               .capacity = sizeof(name) - 1u, .needed = &needed });
-    put(" %.*s", result == TA_OK ? (int)needed : 1, result == TA_OK ? name : "?");
+    put(" %.*s", (int)record->event_name.len, record->event_name.ptr);
 }
 
-static void put_states(const char *label, const ta_state_id *states, uint32_t count) {
+static void put_states(const char *label, const ta_tel_u32s *states) {
     put(" %s[", label);
-    for (uint32_t index = 0; index < count; index += 1u) {
-        put(index == 0 ? "%u" : ",%u", (unsigned)states[index]);
+    for (uint32_t index = 0; index < states->count; index += 1u) {
+        put(index == 0 ? "%u" : ",%u", (unsigned)ta_tel_u32_at(states, index));
     }
     put("]");
 }
@@ -180,8 +176,9 @@ _Static_assert(sizeof kind_names / sizeof kind_names[0] == (size_t)TA_TRACE_WITH
                "a name for every trace kind");
 static const char *const at_names[] = { "", "select", "exit", "transition", "enter", "boot", "finalize", "invoke" };
 
-static void record_write(void *self, const ta_trace_record *record) {
+static void record_visit(void *self, const ta_tel_entry *entry) {
     (void)self;
+    const ta_tel_trace *record = &entry->trace;
     records += 1;
     if (!journal_control && (record->kind == TA_TRACE_PAUSED || record->kind == TA_TRACE_RESUMED ||
                              record->kind == TA_TRACE_STOPPED)) {
@@ -197,35 +194,35 @@ static void record_write(void *self, const ta_trace_record *record) {
     }
     switch (record->kind) {
         case TA_TRACE_MACROSTEP_BEGIN:
-            put_event(record->event);
+            put_event(record);
             break;
         case TA_TRACE_MACROSTEP_END:
-            put_states("in", record->states, record->state_count);
+            put_states("in", &record->states);
             break;
         case TA_TRACE_MICROSTEP:
-            put_event(record->event);
-            put_states("t", record->transitions, record->transition_count);
-            put_states("x", record->exited, record->exited_count);
-            put_states("e", record->entered, record->entered_count);
-            if (record->history_count != 0) {
-                put_states("h", record->history, record->history_count);
+            put_event(record);
+            put_states("t", &record->transitions);
+            put_states("x", &record->exited);
+            put_states("e", &record->entered);
+            if (record->history.count != 0) {
+                put_states("h", &record->history);
             }
             break;
         case TA_TRACE_CONDITION:
             if (record->position.transition != TA_TRANSITION_NONE) {
                 put(" t%u", (unsigned)record->position.transition);
             }
-            put(record->has_fault ? " !%d" : " =%d", record->has_fault ? record->fault.code : (int)record->result);
+            put(record->has_fault ? " !%d" : " =%d", record->has_fault ? record->fault_code : (int)record->result);
             break;
         case TA_TRACE_RAISED:
-            put_event(record->event);
+            put_event(record);
             break;
         case TA_TRACE_DATA_INIT:
             put(" %.*s", (int)record->name.len, record->name.ptr);
             break;
         case TA_TRACE_SCRIPT:
             if (record->has_fault) {
-                put(" !%d", record->fault.code);
+                put(" !%d", record->fault_code);
             }
             break;
         case TA_TRACE_FOREACH:
@@ -235,7 +232,7 @@ static void record_write(void *self, const ta_trace_record *record) {
             put(" a%u", (unsigned)record->action);
             break;
         case TA_TRACE_SENT:
-            put_event(record->event);
+            put_event(record);
             break;
         case TA_TRACE_FINISHED:
             put(" s%u", (unsigned)record->state);
@@ -246,10 +243,19 @@ static void record_write(void *self, const ta_trace_record *record) {
     put("; ");
 }
 
-static const ta_trace_sink_vtable record_vtable = { .write = record_write };
+/* What the test is reading tel with: set by watch(), used by flush(). */
+static tel_reader reader;
 
-static ta_trace_sink recording_sink(uint32_t kinds) {
-    return (ta_trace_sink){ .self = NULL, .v = &record_vtable, .kinds = kinds };
+/* Masks and a callback for the records they let through; the reader starts afresh. */
+static void watch(ta_system *system, ta_trace_masks masks, tel_visit visit) {
+    reader = (tel_reader){ .visit = visit };
+    CHECK(ta_system_set_trace_masks(system, &masks) == TA_OK);
+}
+
+/* Reads what core wrote since the last flush: after every call that runs an actor. */
+static void flush(ta_system *system) {
+    tel_read(system, &reader);
+    CHECK(reader.bad == 0);
 }
 
 #define ALL_KINDS UINT32_MAX
@@ -353,10 +359,12 @@ typedef struct {
     ta_actor_id actor;
 } run;
 
-static void start_system(run *r) {
+/* A system with the traced chart; `params` size its rings (ADR 0098). */
+static void start_with(run *r, const ta_param_value *params, uint32_t count) {
     *r = (run){0};
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &r->system) == TA_OK);
-    traced_system = r->system;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = params, .param_count = count },
+                           &r->system) == TA_OK);
+    reader = (tel_reader){0};
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(r->system, &(ta_definition_compile_params){ .spec = &chart,
                                                                                  .datamodel = { .v = &dm_vtable },
@@ -365,14 +373,34 @@ static void start_system(run *r) {
     CHECK(ta_system_register_definition(r->system, definition, &r->definition) == TA_OK);
 }
 
+static void start_system(run *r) { start_with(r, NULL, 0); }
+
+/* The states the system's actors have active, summed (ta_definition_occupancy). */
+static uint32_t occupied_states(run *r) {
+    uint32_t states[64];
+    uint32_t count = 0;
+    CHECK(ta_definition_occupancy(r->system, &(ta_definition_occupancy_params){ .definition = r->definition,
+                                                                                .states = states,
+                                                                                .capacity = 64,
+                                                                                .count = &count }) == TA_OK);
+    uint32_t total = 0;
+    for (uint32_t state = 0; state < count; state += 1u) {
+        total += states[state] * (state + 1u);
+    }
+    return total;
+}
+
 static void spawn(run *r, ta_trace_parent trace) {
     CHECK(ta_actor_spawn(r->system, &(ta_actor_spawn_params){ .definition = r->definition, .out = &r->actor,
                                                               .trace = trace }) == TA_OK);
+    flush(r->system);
 }
 
 static ta_result resume(run *r, uint32_t budget, ta_run_status *status) {
-    return ta_actor_resume(r->system,
-                           &(ta_actor_resume_params){ .actor = r->actor, .budget = budget, .status = status });
+    ta_result result = ta_actor_resume(r->system,
+                                       &(ta_actor_resume_params){ .actor = r->actor, .budget = budget, .status = status });
+    flush(r->system);
+    return result;
 }
 
 static void settle(run *r) {
@@ -406,40 +434,85 @@ static void deliver(run *r, const char *name, ta_trace_parent trace) {
     ta_event event = event_named(r, name);
     CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &event,
                                                                   .trace = trace }) == TA_OK);
+    flush(r->system);
 }
 
 static void finish(run *r) {
     ta_system_destroy(r->system);
-    traced_system = NULL;
 }
 
 /* ------------------------------------------------------------------------
  * Tests
  */
 
-/* A system starts with the null sink; a sink without operations is refused. */
-static void test_null_sink(void) {
-    ta_trace_sink null = ta_null_trace_sink();
-    CHECK(null.self == NULL && null.v != NULL && null.v->write != NULL);
-    CHECK(null.kinds == 0 && null.watched_kinds == 0 && null.unsampled_kinds == 0);
-    null.v->write(NULL, NULL); /* writes nothing, reads nothing */
-
+/* A system starts with all three masks zero and writes nothing; setting them needs a system and masks. */
+static void test_masks_start_at_zero(void) {
     run r;
     start_system(&r);
-    CHECK(ta_system_set_trace_sink(r.system, (ta_trace_sink){ .v = NULL, .kinds = ALL_KINDS }) == TA_ERR_INVALID);
-    static const ta_trace_sink_vtable no_write = {0};
-    CHECK(ta_system_set_trace_sink(r.system, (ta_trace_sink){ .v = &no_write, .kinds = ALL_KINDS }) ==
-          TA_ERR_INVALID);
-    CHECK(ta_system_set_trace_sink(NULL, ta_null_trace_sink()) == TA_ERR_INVALID);
-    CHECK(ta_system_set_trace_sink(r.system, ta_null_trace_sink()) == TA_OK);
+    const ta_ring_control *control = ta_system_control_block(r.system);
+    spawn(&r, (ta_trace_parent){0});
+    settle(&r);
+    deliver(&r, "go", (ta_trace_parent){0});
+    settle(&r);
+    CHECK(reader.records == 0 && control->tel.head == 0 && control->tel.next_seq == 1); /* not even a seq was used */
+    CHECK(ta_system_set_trace_masks(r.system, NULL) == TA_ERR_INVALID);
+    CHECK(ta_system_set_trace_masks(NULL, &(ta_trace_masks){0}) == TA_ERR_INVALID);
+    CHECK(ta_system_set_trace_masks(r.system, &(ta_trace_masks){0}) == TA_OK);
     finish(&r);
 }
 
+/*
+ * A ring nobody reads changes nothing the system does (ADR 0098): with every
+ * kind traced into the smallest ring, which fills at once and drops, the
+ * chart takes the same microsteps, ends in the same states and counts the
+ * same as with a ring that never fills; and the control block says how many
+ * records were lost, to the record.
+ */
+static void test_a_full_ring_changes_nothing(void) {
+    ta_counters counters[2];
+    uint32_t active[2];
+    uint64_t dropped[2];
+    uint64_t written[2];
+    for (int small = 0; small < 2; small += 1) {
+        static const ta_param_value tiny[] = { { TA_PARAM_TEL_BYTES, 512 }, { TA_PARAM_MAX_RECORD_BYTES, 512 },
+                                               { TA_PARAM_TELEMETRY_VALUE_BYTES, 0 } };
+        run r;
+        start_with(&r, small ? tiny : NULL, small ? 3u : 0u);
+        CHECK(ta_system_set_trace_masks(r.system, &(ta_trace_masks){ .kinds = ALL_KINDS, .watched_kinds = ALL_KINDS,
+                                                                     .unsampled_kinds = ALL_KINDS }) == TA_OK);
+        const ta_ring_control *control = ta_system_control_block(r.system);
+        /* Nobody reads: the call helpers' flush is not used here. */
+        CHECK(ta_actor_spawn(r.system, &(ta_actor_spawn_params){ .definition = r.definition, .out = &r.actor }) == TA_OK);
+        ta_run_status status = TA_RUN_ERROR;
+        CHECK(ta_actor_resume(r.system, &(ta_actor_resume_params){ .actor = r.actor, .budget = 1000, .status = &status }) == TA_OK);
+        for (int round = 0; round < 2; round += 1) {
+            ta_event event = event_named(&r, round == 0 ? "go" : "stop");
+            CHECK(ta_actor_deliver(r.system, &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor,
+                                                                          .event = &event }) == TA_OK);
+            CHECK(ta_actor_resume(r.system, &(ta_actor_resume_params){ .actor = r.actor, .budget = 1000,
+                                                                       .status = &status }) == TA_OK);
+        }
+        CHECK(status == TA_RUN_DONE);
+        ta_system_counters(r.system, &counters[small]);
+        active[small] = occupied_states(&r);
+        dropped[small] = control->tel.dropped;
+        written[small] = control->tel.next_seq - 1u;
+        /* Every record the writer tried took a seq: those that fit are in the ring, and the rest were counted. */
+        CHECK(control->tel.head - control->tel.tail <= control->tel.capacity);
+        finish(&r);
+    }
+    CHECK(memcmp(&counters[0], &counters[1], sizeof counters[0]) == 0);
+    CHECK(active[0] == active[1]);
+    CHECK(dropped[0] == 0 && dropped[1] > 0);
+    /* The same records were attempted in both: written + dropped is the same, though tel.dropped records take seqs. */
+    CHECK(written[0] <= written[1]);
+}
+
 /* Runs the chart's whole life and returns the allocations it made. */
-static long whole_life(ta_trace_sink sink) {
+static long whole_life(ta_trace_masks masks) {
     run r;
     start_system(&r);
-    CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
+    watch(r.system, masks, record_visit);
     long before = heap.stats.allocations;
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
@@ -449,19 +522,23 @@ static long whole_life(ta_trace_sink sink) {
     settle(&r);
     long made = heap.stats.allocations - before;
     CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
+    flush(r.system);
     finish(&r);
     return made;
 }
 
-/* The mask decides what is built: a sink that wants nothing sees nothing,
- * and costs nothing more than no sink at all. */
+/* The mask decides what is built: masks that want nothing see nothing,
+ * and cost nothing more than none at all; tracing allocates nothing. */
 static void test_mask_suppresses_construction(void) {
     journal_reset();
-    long untraced = whole_life(ta_null_trace_sink());
-    long masked = whole_life(recording_sink(0));
+    long untraced = whole_life((ta_trace_masks){0});
+    long masked = whole_life((ta_trace_masks){ .kinds = 0 });
     CHECK(records == 0);
     CHECK(masked == untraced);
-    long lifecycle = whole_life(recording_sink(TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_DESTROYED)));
+    long everything = whole_life((ta_trace_masks){ .kinds = ALL_KINDS, .watched_kinds = ALL_KINDS });
+    CHECK(everything == untraced); /* writing records allocates nothing: the ring is made at creation */
+    journal_reset();
+    long lifecycle = whole_life((ta_trace_masks){ .kinds = TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_DESTROYED) });
     CHECK(lifecycle == untraced);
     expect_journal("spawned 0.1; destroyed 0.3; ");
 }
@@ -478,7 +555,7 @@ static void test_exact_sequence(void) {
     journal_reset();
     run r;
     start_system(&r);
-    CHECK(ta_system_set_trace_sink(r.system, recording_sink(ALL_KINDS)) == TA_OK);
+    watch(r.system, (ta_trace_masks){ .kinds = ALL_KINDS }, record_visit);
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
     expect_journal("spawned 0.1; begin 1.0 -; data 1.0 @boot x; micro 1.1 - t[] x[] e[0]; "
@@ -501,6 +578,7 @@ static void test_exact_sequence(void) {
 
     journal_reset();
     CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
+    flush(r.system);
     expect_journal("destroyed 0.3; ");
     finish(&r);
 }
@@ -511,7 +589,7 @@ static void test_ignored_event(void) {
     start_system(&r);
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
-    CHECK(ta_system_set_trace_sink(r.system, recording_sink(ALL_KINDS)) == TA_OK);
+    watch(r.system, (ta_trace_masks){ .kinds = ALL_KINDS }, record_visit);
     journal_reset();
     deliver(&r, "unknown", (ta_trace_parent){0});
     settle(&r);
@@ -529,9 +607,9 @@ static void test_pause_and_resume(void) {
     start_system(&r);
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
-    CHECK(ta_system_set_trace_sink(r.system, recording_sink(TA_TRACE_BIT(TA_TRACE_PAUSED) |
-                                                            TA_TRACE_BIT(TA_TRACE_RESUMED) |
-                                                            TA_TRACE_BIT(TA_TRACE_MICROSTEP))) == TA_OK);
+    watch(r.system, (ta_trace_masks){ .kinds = TA_TRACE_BIT(TA_TRACE_PAUSED) | TA_TRACE_BIT(TA_TRACE_RESUMED) |
+                                                TA_TRACE_BIT(TA_TRACE_MICROSTEP) },
+          record_visit);
     journal_reset();
     deliver(&r, "go", (ta_trace_parent){0});
     ta_run_status status = TA_RUN_ERROR;
@@ -551,23 +629,22 @@ static ta_trace_parent parent_of(uint64_t high, uint64_t low, uint8_t flags, uin
 static ta_trace_context seen_context;
 static ta_step_key seen_cause;
 static long seen_records = 0;
-static void context_write(void *self, const ta_trace_record *record) {
+static void context_visit(void *self, const ta_tel_entry *entry) {
     (void)self;
     seen_records += 1;
-    if (record->kind == TA_TRACE_MACROSTEP_BEGIN) {
-        seen_context = record->context;
-        seen_cause = record->cause;
+    if (entry->trace.kind == TA_TRACE_MACROSTEP_BEGIN) {
+        seen_context = entry->trace.context;
+        seen_cause = entry->trace.cause;
     }
 }
-static const ta_trace_sink_vtable context_vtable = { .write = context_write };
 
 /* Sampling: an unsampled context builds only lifecycle records, unless the
- * sink asks for unsampled ones; a sampled one, or none, builds all. */
+ * masks ask for unsampled ones; a sampled one, or none, builds all. */
 static void test_sampling(void) {
     run r;
     start_system(&r);
-    ta_trace_sink sink = { .v = &context_vtable, .kinds = ALL_KINDS };
-    CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
+    ta_trace_masks masks = { .kinds = ALL_KINDS };
+    watch(r.system, masks, context_visit);
     spawn(&r, parent_of(1, 2, 0, 99));
     seen_records = 0;
     settle(&r);
@@ -581,8 +658,8 @@ static void test_sampling(void) {
     CHECK(seen_cause.session == 0 && seen_cause.macrostep == 77);
 
     seen_records = 0;
-    sink.unsampled_kinds = sink.kinds;
-    CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
+    masks.unsampled_kinds = masks.kinds;
+    watch(r.system, masks, context_visit);
     deliver(&r, "stop", parent_of(5, 6, 0, 55));
     settle(&r);
     CHECK(seen_records > 0);
@@ -643,7 +720,6 @@ static const ta_scxml_spec sender_chart = { .name = STR("sender"), .states = sen
 static void test_counters_and_parents_survive_an_image(void) {
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
-    traced_system = system;
     CHECK(ta_system_set_external_event_router(system, (ta_external_event_router){ .v = &router_vtable }) == TA_OK);
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){ .spec = &sender_chart,
@@ -663,6 +739,7 @@ static void test_counters_and_parents_survive_an_image(void) {
     ta_actor_inspection before;
     CHECK(ta_actor_inspect(system, r.actor, &before) == TA_OK);
     CHECK(ta_actor_destroy(system, r.actor) == TA_OK);
+    flush(system);
     ta_actor_id restored = 0;
     CHECK(ta_actor_reconstruct(system, &(ta_actor_reconstruct_params){ .image = image, .out = &restored }) ==
           TA_OK);
@@ -681,14 +758,13 @@ static void test_counters_and_parents_survive_an_image(void) {
     CHECK(delivered_trace.cause.macrostep == 2 && delivered_trace.cause.microstep == 1);
 
     /* The counters go on: the next macrostep of the session is 3. */
-    CHECK(ta_system_set_trace_sink(system, recording_sink(TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN))) == TA_OK);
+    watch(system, (ta_trace_masks){ .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN) }, record_visit);
     journal_reset();
     r.actor = restored;
     deliver(&r, "go", (ta_trace_parent){0});
     settle(&r);
     expect_journal("begin 3.0 go; ");
     ta_system_destroy(system);
-    traced_system = NULL;
 }
 
 /*
@@ -701,7 +777,7 @@ static void test_records_are_written_once(void) {
     /* The run that fails nothing, and how many allocations it makes. */
     run r;
     start_system(&r);
-    CHECK(ta_system_set_trace_sink(r.system, recording_sink(ALL_KINDS)) == TA_OK);
+    watch(r.system, (ta_trace_masks){ .kinds = ALL_KINDS }, record_visit);
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
     journal_reset();
@@ -716,7 +792,7 @@ static void test_records_are_written_once(void) {
 
     for (long failing = 1; failing <= made; failing += 1) {
         start_system(&r);
-        CHECK(ta_system_set_trace_sink(r.system, recording_sink(ALL_KINDS)) == TA_OK);
+        watch(r.system, (ta_trace_masks){ .kinds = ALL_KINDS }, record_visit);
         spawn(&r, (ta_trace_parent){0});
         settle(&r);
         journal_reset();
@@ -734,6 +810,7 @@ static void test_records_are_written_once(void) {
             attempts += 1u;
         }
         ta_test_allocator_disarm(&heap);
+        flush(r.system);
         CHECK(status == TA_RUN_STABLE);
         if (strcmp(journal, baseline) != 0) {
             fprintf(stderr, "allocation %ld failing changed the records\n  expected: %s\n  actual:   %s\n",
@@ -753,20 +830,19 @@ static void test_records_are_written_once(void) {
 
 static uint64_t lifecycle_spans[16];
 static uint32_t lifecycle_count = 0;
-static void lifecycle_write(void *self, const ta_trace_record *record) {
-    record_write(self, record);
+static void lifecycle_visit(void *self, const ta_tel_entry *entry) {
+    record_visit(self, entry);
     if (lifecycle_count < 16u) {
-        lifecycle_spans[lifecycle_count++] = ta_step_key_span_id(record->key);
+        lifecycle_spans[lifecycle_count++] = ta_step_key_span_id(entry->trace.key);
     }
 }
-static const ta_trace_sink_vtable lifecycle_vtable = { .write = lifecycle_write };
 
 static void test_lifecycle_keys(void) {
     run r;
     start_system(&r);
     uint32_t kinds = TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_LOADED) |
                      TA_TRACE_BIT(TA_TRACE_UNLOADED) | TA_TRACE_BIT(TA_TRACE_DESTROYED);
-    CHECK(ta_system_set_trace_sink(r.system, (ta_trace_sink){ .v = &lifecycle_vtable, .kinds = kinds }) == TA_OK);
+    watch(r.system, (ta_trace_masks){ .kinds = kinds }, lifecycle_visit);
     journal_reset();
     lifecycle_count = 0;
     spawn(&r, (ta_trace_parent){0});
@@ -778,8 +854,10 @@ static void test_lifecycle_keys(void) {
         CHECK(ta_actor_reconstruct(r.system, &(ta_actor_reconstruct_params){ .image = image, .out = &r.actor }) ==
               TA_OK);
         ta_session_image_destroy(image);
+        flush(r.system);
     }
     CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
+    flush(r.system);
     /* Each image holds the count at capture; restoring skips the ordinal an
      * UNLOADED would take next, which the DESTROYED of the source used. */
     expect_journal("spawned 0.1; destroyed 0.2; loaded 0.3; destroyed 0.4; loaded 0.5; destroyed 0.6; ");
@@ -928,13 +1006,12 @@ static void test_sampler(void) {
     finish(&r);
 }
 
-/* A watched context builds the sink's watched kinds, and its macrostep keeps the mark. */
+/* A watched context builds the watched kinds, and its macrostep keeps the mark. */
 static long watched_run(uint8_t detail) {
     run r;
     start_system(&r);
-    ta_trace_sink sink = { .v = &context_vtable, .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN),
-                           .watched_kinds = ALL_KINDS };
-    CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
+    watch(r.system, (ta_trace_masks){ .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN), .watched_kinds = ALL_KINDS },
+          context_visit);
     spawn(&r, parent_of(1, 2, TA_TRACE_FLAG_SAMPLED, 9));
     settle(&r);
     ta_trace_parent parent = parent_of(3, 4, TA_TRACE_FLAG_SAMPLED, 7);
@@ -971,7 +1048,7 @@ static uint32_t occupied(run *r) {
     return total;
 }
 
-/* Counters move whether or not a sink is installed; occupancy follows residency. */
+/* Counters move whether or not records are written; occupancy follows residency. */
 static void test_counters_and_occupancy(void) {
     run r;
     start_system(&r);
@@ -1003,14 +1080,16 @@ static void test_counters_and_occupancy(void) {
     CHECK(count != 0);
 
     CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
+    flush(r.system);
     CHECK(occupied(&r) == 0);
     CHECK(ta_definition_counters(r.system, r.definition, &counters) == TA_OK && counters.destroyed == 1);
     finish(&r);
 }
 
 int main(void) {
-    test_null_sink();
+    test_masks_start_at_zero();
     test_mask_suppresses_construction();
+    test_a_full_ring_changes_nothing();
     test_exact_sequence();
     test_ignored_event();
     test_pause_and_resume();

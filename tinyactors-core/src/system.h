@@ -79,8 +79,6 @@ struct ta_system {
     ta_actor_directory directory;
     ta_external_event_router external_events;
     ta_log_sink log_sink;
-    /* Never null: ta_null_trace_sink() when the host installed none (ADR 0067). */
-    ta_trace_sink trace;
     /* Never null: ta_null_definition_sink() when the host installed none (ADR 0079). */
     ta_definition_sink definition_sink;
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */

@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.c"
+#include "tel_reader.h"
 #include "test_allocator.h"
 
 static int failures;
@@ -186,22 +187,21 @@ static void test_load_keeps_the_session(void) {
 /* A load runs under the trace parent it is given (napi ADR 0020): the
  * LOADED record carries it, so the load is in the trace of the message
  * that found the actor unloaded. */
-static ta_trace_record loaded_record;
+static ta_tel_trace loaded_record;
 static int loaded_records = 0;
-static void loaded_write(void *self, const ta_trace_record *record) {
+static void loaded_visit(void *self, const ta_tel_entry *entry) {
     (void)self;
-    if (record->kind == TA_TRACE_LOADED) {
-        loaded_record = *record;
+    if (entry->trace.kind == TA_TRACE_LOADED) {
+        loaded_record = entry->trace; /* its texts are views, dead after this call: this test reads only scalars */
         loaded_records += 1;
     }
 }
-static const ta_trace_sink_vtable loaded_vtable = { .write = loaded_write };
+static tel_reader loaded_reader = { .visit = loaded_visit };
 
 static void test_load_runs_under_its_trace_parent(void) {
     fixture f;
     start(&f);
-    CHECK(ta_system_set_trace_sink(f.system, (ta_trace_sink){ .v = &loaded_vtable,
-                                                             .kinds = TA_TRACE_BIT(TA_TRACE_LOADED) }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(f.system, &(ta_trace_masks){ .kinds = TA_TRACE_BIT(TA_TRACE_LOADED) }) == TA_OK);
     ta_actor_id first = spawn(&f, &the_address);
     ta_session_image *image = unload(&f, first);
     ta_trace_parent parent = {
@@ -213,7 +213,8 @@ static void test_load_runs_under_its_trace_parent(void) {
     loaded_records = 0;
     CHECK(ta_actor_load(f.system, &(ta_actor_load_params){ .image = image, .out = &id, .trace = parent }) == TA_OK);
     ta_session_image_destroy(image);
-    CHECK(loaded_records == 1);
+    tel_read(f.system, &loaded_reader);
+    CHECK(loaded_reader.bad == 0 && loaded_records == 1);
     CHECK(loaded_record.context.trace_id_high == parent.context.trace_id_high &&
           loaded_record.context.trace_id_low == parent.context.trace_id_low);
     CHECK(loaded_record.cause.session == 0 && loaded_record.cause.macrostep == parent.cause.macrostep);
@@ -222,6 +223,7 @@ static void test_load_runs_under_its_trace_parent(void) {
     loaded_records = 0;
     CHECK(ta_actor_load(f.system, &(ta_actor_load_params){ .image = image, .out = &id }) == TA_OK);
     ta_session_image_destroy(image);
+    tel_read(f.system, &loaded_reader);
     CHECK(loaded_records == 1 && loaded_record.context.trace_id_high == 0 && loaded_record.cause.macrostep == 0);
     finish(&f);
 }
@@ -532,18 +534,17 @@ static void test_an_unnamed_session_names_its_family(void) {
 static int keyed_records = 0;
 static int keyed_without_family = 0;
 static ta_atom keyed_family = 0;
-static void keyed_write(void *self, const ta_trace_record *record) {
+static void keyed_visit(void *self, const ta_tel_entry *entry) {
     (void)self;
     keyed_records += 1;
-    keyed_without_family += record->key.family == keyed_family ? 0 : 1;
+    keyed_without_family += entry->trace.key.family == keyed_family ? 0 : 1;
 }
-static const ta_trace_sink_vtable keyed_vtable = { .write = keyed_write };
 
 static void test_a_step_key_names_its_family(void) {
     fixture f;
     start(&f);
     CHECK(ta_system_intern_atom(f.system, (ta_str)STR("idle"), &keyed_family) == TA_OK);
-    CHECK(ta_system_set_trace_sink(f.system, (ta_trace_sink){ .v = &keyed_vtable, .kinds = UINT32_MAX }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(f.system, &(ta_trace_masks){ .kinds = UINT32_MAX }) == TA_OK);
     keyed_records = 0;
     keyed_without_family = 0;
     ta_actor_id actor = spawn(&f, NULL);
@@ -554,7 +555,9 @@ static void test_a_step_key_names_its_family(void) {
     CHECK(ta_actor_inspect(f.system, actor, &view) == TA_OK);
     CHECK(view.step.family == keyed_family && view.trace.cause.family == keyed_family);
     CHECK(ta_actor_destroy(f.system, actor) == TA_OK);
-    CHECK(keyed_records > 0 && keyed_without_family == 0);
+    tel_reader keyed_reader = { .visit = keyed_visit };
+    tel_read(f.system, &keyed_reader);
+    CHECK(keyed_reader.bad == 0 && keyed_records > 0 && keyed_without_family == 0);
     finish(&f);
 }
 

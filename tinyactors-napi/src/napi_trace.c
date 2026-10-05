@@ -117,7 +117,7 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out, 
               napi_call_function(env, json, stringify, 1, &js, &text) == napi_ok;
     }
     if (got && napi_typeof(env, text, &type) == napi_ok && type == napi_string) {
-        /* valueBytes (napi ADR 0035): the buffer was sized by it at creation. */
+        /* telemetryValueBytes (core ADR 0098): the buffer was sized by it at creation. */
         size_t full = 0;
         size_t written = 0;
         if (napi_get_value_string_utf8(env, text, NULL, 0, &full) == napi_ok &&
@@ -209,6 +209,7 @@ void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
     if (!tah_system_tracing(system)) {
         return;
     }
+    tah_trace_drain(system); /* once per turn, whatever a call into core left on the ring */
     if (tah_otlp_staged_records(tah_system_otlp(system)) == 0) {
         tah_otlp_end_turn(tah_system_otlp(system));
         return;
@@ -250,7 +251,7 @@ bool tna_trace_flush_if_full(napi_env env, tna_napi_system *wrapper) {
         return true;
     }
     size_t staged = tah_otlp_traces_size(tah_system_otlp(system)) + tah_otlp_logs_size(tah_system_otlp(system));
-    if (staged < tah_system_params(system)->values[TAH_PARAM_TRACE_STAGING_BYTES]) {
+    if (staged < tah_otlp_staging_bytes(tah_system_otlp(system))) {
         return true;
     }
     napi_value first_error = NULL;
@@ -316,7 +317,8 @@ static bool tna_set_resource(napi_env env, tah_system *system, napi_value pairs)
 /* What core is asked for: the user's masks, plus UNLOADED and DESTROYED,
  * which end a session's open span (the encoder writes their spans only
  * when they were asked for). */
-static tah_trace_masks tna_trace_masks_asked(const tah_trace_masks *masks, bool logs) {
+static tah_trace_masks tna_trace_masks_asked(const tah_trace_masks *masks, const tah_otlp *otlp) {
+    bool logs = tah_otlp_logs_enabled(otlp);
     uint32_t ending = TA_TRACE_BIT(TA_TRACE_UNLOADED) | TA_TRACE_BIT(TA_TRACE_DESTROYED);
     /* Logs need the failure records whatever the detail and the sampling
      * (core ADR 0072 section 2); the encoder turns them into spans only
@@ -327,7 +329,8 @@ static tah_trace_masks tna_trace_masks_asked(const tah_trace_masks *masks, bool 
                              : 0u;
     return (tah_trace_masks){ .kinds = masks->kinds | ending | failures,
                               .watched_kinds = masks->watched_kinds | ending | failures,
-                              .unsampled_kinds = masks->unsampled_kinds | failures };
+                              .unsampled_kinds = masks->unsampled_kinds | failures,
+                              .values = tah_otlp_values(otlp) };
 }
 
 /* The masks and the sample ratio (parts per 10^9) in argv[0..3]. */
@@ -376,15 +379,17 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, "invalid", "setTraceSink: options.seed must be a bigint of at most 64 bits");
     }
 
-    /* The previous sink's open spans end now, for the previous JavaScript sink. */
+    /* The previous sink's open spans end now, for the previous JavaScript sink. Zero masks first: that
+     * reads what core wrote into the old encoder. */
     napi_value remaining = NULL;
     if (tah_system_tracing(system)) {
+        (void)tah_trace_set_masks(system, &(tah_trace_masks){ 0 });
         tah_otlp_end_all(tah_system_otlp(system));
         remaining = tna_trace_bytes(env, system);
         tah_otlp_destroy(tah_system_otlp(system));
         tah_system_set_tracing(system, false);
     }
-    ta_result result = ta_system_set_trace_sink(tah_system_core(system), ta_null_trace_sink());
+    ta_result result = tah_trace_set_masks(system, &(tah_trace_masks){ 0 });
     if (result == TA_OK && installed && (masks.kinds | masks.watched_kinds | masks.unsampled_kinds) != 0) {
         bool reserved = tah_otlp_init(tah_system_otlp(system),
                       &(tah_otlp_config){
@@ -393,7 +398,7 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
                           .host = { .self = wrapper, .now = tna_host_now, .trace_id = tna_host_trace_id,
                                     .value_text = tna_host_value_text },
                           .log_limit = log_limit,
-                          .keep_bytes = (size_t)tah_system_params(system)->values[TAH_PARAM_TRACE_STAGING_BYTES],
+                          .keep_bytes = (size_t)wrapper->params.values[TNA_PARAM_TRACE_STAGING_BYTES],
                           .link_parents = links,
                           .values = values,
                           .version = { TINYACTORS_NAPI_VERSION, (uint32_t)(sizeof TINYACTORS_NAPI_VERSION - 1u) },
@@ -411,8 +416,8 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
         }
         tah_otlp_set_wanted(tah_system_otlp(system), &masks);
         ta_system_set_trace_ratio(tah_system_core(system), parts, TNA_SAMPLE_WHOLE);
-        tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(tah_system_otlp(system)));
-        result = ta_system_set_trace_sink(tah_system_core(system), tah_trace_sink_adapter(system, &asked));
+        tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_system_otlp(system));
+        result = tah_trace_set_masks(system, &asked);
         if (result != TA_OK) {
             tah_otlp_destroy(tah_system_otlp(system));
             tah_system_set_tracing(system, false);
@@ -458,8 +463,8 @@ napi_value tna_configure_traces_method(napi_env env, napi_callback_info info) {
     }
     tah_otlp_set_wanted(tah_system_otlp(system), &masks);
     ta_system_set_trace_ratio(tah_system_core(system), parts, TNA_SAMPLE_WHOLE);
-    tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_otlp_logs_enabled(tah_system_otlp(system)));
-    ta_system_set_trace_sink(tah_system_core(system), tah_trace_sink_adapter(system, &asked));
+    tah_trace_masks asked = tna_trace_masks_asked(&masks, tah_system_otlp(system));
+    (void)tah_trace_set_masks(system, &asked);
     return undefined;
 }
 

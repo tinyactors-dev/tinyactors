@@ -219,6 +219,8 @@ const tah_params *tah_system_params(const tah_system *system);
  * Around every core call the binding makes (ADR 0013 point 4): a binding
  * that finds tah_system_inside_core() true refuses to call core again
  * ("reentrant"), since the callbacks core runs may run the binding's code.
+ * Leaving core also drains the tel ring (tah_trace_drain): the records the
+ * call wrote reach the encoder before the next call can fill the ring.
  */
 bool tah_system_inside_core(const tah_system *system);
 void tah_system_enter_core(tah_system *system);
@@ -265,8 +267,6 @@ ta_result tah_system_post(tah_system *system, const tah_message *message);
  */
 bool tah_system_effect(tah_system *system, const tah_effect *effect);
 
-/* Encodes a trace record (otlp.h) and asks for a turn. */
-void tah_system_trace(tah_system *system, const ta_trace_record *record);
 /* Wall-clock time in nanoseconds since the Unix epoch, from the platform. */
 uint64_t tah_system_wall_ns(const tah_system *system);
 /* The platform's monotonic clock, in nanoseconds. */

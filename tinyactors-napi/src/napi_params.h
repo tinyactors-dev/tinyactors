@@ -4,7 +4,8 @@
 /*
  * napi's own system parameters (napi ADR 0035), beside core's (core ADR
  * 0092) and the kernel's (tinyactors-host's params.h): the limits of napi's
- * data-model registry. Named, bounded, set once when the system is created;
+ * data-model registry and the encoder's staging bound (core ADR 0098
+ * moved it here from the kernel: it is the encoder's setting). Named, bounded, set once when the system is created;
  * parameterInfo() reports them beside the kernel's, with owner "napi"
  * (the kernel's have owner "kernel").
  */
@@ -13,12 +14,14 @@
 typedef enum {
     TNA_PARAM_REGISTERED_DATAMODELS, /* data models registerDatamodel() may add */
     TNA_PARAM_DATAMODEL_NAME_BYTES,  /* longest registered data model name, in bytes */
+    TNA_PARAM_TRACE_STAGING_BYTES,   /* OTLP staging kept between turns; a turn past it ends early (the encoder's bound) */
     TNA_PARAM_COUNT
 } tna_param;
 
 enum {
     TNA_PARAM_DEFAULT_REGISTERED_DATAMODELS = 8,
-    TNA_PARAM_DEFAULT_DATAMODEL_NAME_BYTES = 32
+    TNA_PARAM_DEFAULT_DATAMODEL_NAME_BYTES = 32,
+    TNA_PARAM_DEFAULT_TRACE_STAGING_BYTES = 1048576
 };
 
 typedef struct {

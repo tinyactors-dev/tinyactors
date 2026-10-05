@@ -311,6 +311,8 @@ static jv tat_dispatch(void *context, const char *method, jv params, int *error_
     tat_bind_begin(&server->bind);
     tat_value_codec_select(&server->bind, method, params);
     jv result = server->methods[selected]->handler(&server->bind, params, error_code);
+    /* Whatever the call made core trace is read before the next call can fill the ring (core ADR 0098). */
+    tat_trace_recorders_drain(&server->bind);
     tat_bind_end(&server->bind);
     jv_free(params);
     return result;

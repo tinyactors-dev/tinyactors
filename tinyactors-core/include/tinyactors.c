@@ -7931,10 +7931,69 @@ TA_PRIVATE ta_result ta_name_resolve(const ta_name_resolve_params *params);
 
 
 /*
- * Tracing (ADR 0067): the sink a system writes records to, and the rules
- * every call site shares. The interpreter builds the records; this module
- * decides which ones are built at all.
+ * Tracing (ADR 0067, ADR 0098): the record the call sites build and the rules
+ * they share. The interpreter builds the records; this module decides which
+ * ones are built at all, from the masks in the system (ta_trace_masks), and
+ * tel.h writes them to the telemetry ring.
  */
+
+/*
+ * One trace record, as the interpreter and the lifecycle sites build it and
+ * ta_tel_write_trace (tel.h) writes it to the tel ring (ADR 0098). Private
+ * to core: it borrows events, values and fault data that no host may hold,
+ * and a host reads a ta_tel_trace (include/tinyactors.h) instead. Only the
+ * fields its kind names are meaningful; the rest are zero, or NONE for IDs.
+ * Everything is borrowed for the call: retain a value to keep it (ADR 0006). `context` is the running macrostep's; `cause`, for
+ * MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. A
+ * fault carries its `detail`, `code` and `message`. Its data went into the
+ * error.execution event of the RAISED record that follows; ACTION_FAILED
+ * also borrows it, so a record can say why an action failed.
+ * Writing a record never releases its fault data. A MICROSTEP that carries
+ * `states` was an operator transition's (ADR 0082), which a chart's never
+ * does: `states` are the targets the operator named, history states
+ * included, `state` the source (TA_STATE_NONE: the root), and there are no
+ * `transitions`. `exited`, `entered` and `history` are as for any
+ * microstep.
+ */
+typedef struct {
+    ta_trace_kind kind;
+    ta_step_key key;
+    ta_trace_position position;
+    ta_trace_context context;
+    ta_step_key cause;
+    ta_actor_id actor;
+    ta_definition_id definition;
+    /* The definition's identity, for the DEFINITION_* kinds; borrowed. */
+    ta_definition_identity identity;
+    ta_time now;
+
+    TA_IN TA_OPTIONAL const ta_event *event;
+    ta_state_id state;
+    ta_expr_id expr;
+    ta_str name;
+    ta_action_id action;
+    uint32_t iteration;
+    ta_send_id send;
+    ta_invoke_id invoke;
+    bool result;
+    bool has_value;
+    ta_value value;
+    bool has_fault;
+    ta_fault fault;
+    uint32_t dropped;
+
+    TA_COUNTED_BY(transition_count) const ta_transition_id *transitions;
+    uint32_t transition_count;
+    TA_COUNTED_BY(exited_count) const ta_state_id *exited;
+    uint32_t exited_count;
+    TA_COUNTED_BY(entered_count) const ta_state_id *entered;
+    uint32_t entered_count;
+    TA_COUNTED_BY(history_count) const ta_state_id *history;
+    uint32_t history_count;
+    TA_COUNTED_BY(state_count) const ta_state_id *states;
+    uint32_t state_count;
+} ta_trace_record;
+
 
 TA_PRIVATE inline bool ta_trace_context_empty(const ta_trace_context *context) {
     return context->trace_id_high == 0 && context->trace_id_low == 0;
@@ -7950,20 +8009,20 @@ TA_PRIVATE inline bool ta_trace_parent_empty(const ta_trace_parent *parent) {
  * `unsampled_kinds` when it has a trace ID that is not sampled, otherwise
  * `watched_kinds` when it is marked watched, and `kinds` when not.
  */
-TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context);
+TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_masks *masks, const ta_trace_context *context);
 
-/* Whether the sink wants lifecycle record `kind` under `context`: from
+/* Whether the masks want lifecycle record `kind` under `context`: from
  * `watched_kinds` when the context is watched, else from `kinds`. Lifecycle
  * records are not sampled (ADR 0073 section 4). */
-TA_PRIVATE inline bool ta_trace_lifecycle_wanted(const ta_trace_sink *sink, ta_trace_kind kind,
+TA_PRIVATE inline bool ta_trace_lifecycle_wanted(const ta_trace_masks *masks, ta_trace_kind kind,
                                              const ta_trace_context *context) {
-    uint32_t kinds = (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? sink->watched_kinds : sink->kinds;
+    uint32_t kinds = (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? masks->watched_kinds : masks->kinds;
     return (kinds & TA_TRACE_BIT(kind)) != 0;
 }
 
 /* Every kind any macrostep may build: what scratch must be reserved for. */
-TA_PRIVATE inline uint32_t ta_trace_any_kinds(const ta_trace_sink *sink) {
-    return sink->kinds | sink->watched_kinds | sink->unsampled_kinds;
+TA_PRIVATE inline uint32_t ta_trace_any_kinds(const ta_trace_masks *masks) {
+    return masks->kinds | masks->watched_kinds | masks->unsampled_kinds;
 }
 
 /* A record with every ID set to NONE and everything else zero. */
@@ -7982,14 +8041,9 @@ TA_PRIVATE void ta_trace_lifecycle(ta_system *system, struct ta_actor *actor, ta
 /*
  * The key of the actor's next lifecycle record: (session, 0, n), where n
  * counts the session's lifecycle records from 1. It moves whether or not a
- * sink wants the record, so keys are the same with tracing on or off.
+ * mask wants the record, so keys are the same with tracing on or off.
  */
 TA_PRIVATE ta_step_key ta_trace_lifecycle_key(struct ta_actor *actor);
-
-/* Writes a record the caller built because `sink.kinds` asked for it. */
-TA_PRIVATE inline void ta_trace_write(const ta_trace_sink *sink, const ta_trace_record *record) {
-    sink->v->write(sink->self, record);
-}
 
 
 
@@ -9718,8 +9772,6 @@ struct ta_system {
     ta_actor_directory directory;
     ta_external_event_router external_events;
     ta_log_sink log_sink;
-    /* Never null: ta_null_trace_sink() when the host installed none (ADR 0067). */
-    ta_trace_sink trace;
     /* Never null: ta_null_definition_sink() when the host installed none (ADR 0079). */
     ta_definition_sink definition_sink;
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
@@ -17208,29 +17260,6 @@ TA_API void ta_origin_release(ta_origin *origin) {
 
 
 /* ------------------------------------------------------------------------
- * The null sink (ADR 0067 section 2)
- */
-
-static void ta_null_trace_write(void *self, const ta_trace_record *record) {
-    (void)self;
-    (void)record;
-}
-
-static const ta_trace_sink_vtable ta_null_trace_vtable = { .write = ta_null_trace_write };
-
-TA_API ta_trace_sink ta_null_trace_sink(void) {
-    return (ta_trace_sink){ .self = NULL, .v = &ta_null_trace_vtable };
-}
-
-TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink) {
-    if (system == NULL || sink.v == NULL || sink.v->write == NULL) {
-        return TA_ERR_INVALID;
-    }
-    system->trace = sink;
-    return TA_OK;
-}
-
-/* ------------------------------------------------------------------------
  * Step keys as span IDs (section 6)
  */
 
@@ -17248,11 +17277,11 @@ TA_API uint64_t ta_step_key_span_id(ta_step_key key) {
  * What is built
  */
 
-TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context) {
+TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_masks *masks, const ta_trace_context *context) {
     if (!ta_trace_context_empty(context) && (context->flags & TA_TRACE_FLAG_SAMPLED) == 0) {
-        return sink->unsampled_kinds;
+        return masks->unsampled_kinds;
     }
-    return (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? sink->watched_kinds : sink->kinds;
+    return (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? masks->watched_kinds : masks->kinds;
 }
 
 TA_PRIVATE ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
@@ -17282,7 +17311,7 @@ TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_
     default: break;
     }
     ta_trace_context none = { 0 };
-    if (!ta_trace_lifecycle_wanted(&system->trace, kind, parent != NULL ? &parent->context : &none)) {
+    if (!ta_trace_lifecycle_wanted(&system->trace_masks, kind, parent != NULL ? &parent->context : &none)) {
         return;
     }
     ta_trace_record record = ta_trace_record_blank(kind);
@@ -17294,7 +17323,7 @@ TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_
         record.context = parent->context;
         record.cause = parent->cause;
     }
-    ta_trace_write(&system->trace, &record);
+    ta_tel_write_trace(system, &record, NULL);
 }
 
 TA_PRIVATE ta_trace_record ta_trace_record_blank(ta_trace_kind kind) {
@@ -26792,14 +26821,14 @@ static ta_result ta_actor_withdraw(ta_system *system, ta_actor *actor, ta_send_i
     TA_COUNT(system, actor->definition, sends_cancelled);
     ta_step_key key = ta_trace_lifecycle_key(actor);
     ta_trace_context none = {0};
-    if (ta_trace_lifecycle_wanted(&system->trace, TA_TRACE_WITHDRAWN, &none)) {
+    if (ta_trace_lifecycle_wanted(&system->trace_masks, TA_TRACE_WITHDRAWN, &none)) {
         ta_trace_record record = ta_trace_record_blank(TA_TRACE_WITHDRAWN);
         record.key = key;
         record.actor = actor->record.id;
         record.definition = actor->definition->id;
         record.now = ta_actor_now(system, actor);
         record.send = send;
-        ta_trace_write(&system->trace, &record);
+        ta_tel_write_trace(system, &record, NULL);
     }
     return TA_OK;
 }
@@ -29019,7 +29048,6 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
                            .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
-                           .trace = ta_null_trace_sink(),
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
     ta_system_seed_trace_ids(system, 0);
@@ -29171,10 +29199,9 @@ TA_API ta_result ta_system_set_definition_sink(ta_system *system, ta_definition_
 
 /*
  * One definition event, told twice (ADR 0080): first as a lifecycle record
- * to the trace sink, when its mask asks for the kind, then to the definition
- * sink (ADR 0079). The record goes first, so a trace sink reading the
- * definition finds it as intact as the definition sink does, and before the
- * host's cleanup of it.
+ * to the tel ring, when the masks ask for the kind, then to the definition
+ * sink (ADR 0079). The record goes first, and carries a copy of the
+ * identity, so the host's cleanup in the definition sink cannot reach it.
  */
 TA_PRIVATE void ta_system_tell_definition(ta_system *system, const ta_definition *definition, ta_definition_event_kind kind) {
     static const ta_trace_kind trace_kinds[] = {
@@ -29184,7 +29211,7 @@ TA_PRIVATE void ta_system_tell_definition(ta_system *system, const ta_definition
     };
     ta_trace_kind trace_kind = trace_kinds[kind];
     ta_trace_context none = { 0 };
-    if (ta_trace_lifecycle_wanted(&system->trace, trace_kind, &none)) {
+    if (ta_trace_lifecycle_wanted(&system->trace_masks, trace_kind, &none)) {
         ta_trace_record record = ta_trace_record_blank(trace_kind);
         /* One key per definition and event: a definition ID is never issued
          * twice (ADR 0043), and each event happens at most once to it. */
@@ -29194,7 +29221,7 @@ TA_PRIVATE void ta_system_tell_definition(ta_system *system, const ta_definition
         record.definition = definition->id;
         record.identity = definition->identity;
         record.now = ta_clock_now(&system->clock);
-        ta_trace_write(&system->trace, &record);
+        ta_tel_write_trace(system, &record, NULL);
     }
     ta_definition_event event = { .kind = kind, .definition = definition->id, .identity = definition->identity };
     system->definition_sink.v->notify(system->definition_sink.self, &event);
@@ -30192,8 +30219,17 @@ static ta_trace_record ta_trace_record_now(const ta_interpreter *it, ta_trace_ki
     return record;
 }
 
+/*
+ * ta_trace_emit writes a record the interpreter built because its mask
+ * asked for the kind. The values the record carries are rendered by the
+ * running definition's data model, so the writer is given its binding.
+ */
 static void ta_trace_emit(const ta_interpreter *it, const ta_trace_record *record) {
-    ta_trace_write(&it->system->trace, record);
+    const ta_tel_values values = { .datamodel = &it->definition->datamodel,
+                                   .shared = it->definition->datamodel_shared,
+                                   .instance = it->actor->datamodel_instance,
+                                   .host = &it->actor->host };
+    ta_tel_write_trace(it->system, record, &values);
 }
 
 /* A fault's detail and code; its data went into the error event. */
@@ -30312,7 +30348,7 @@ static void ta_trace_begin(ta_interpreter *it) {
     actor->trace_microstep = 0;
     ta_trace_parent parent = ta_actor_macrostep_parent(actor);
     it->trace_context = parent.context;
-    it->trace_kinds = ta_trace_macrostep_kinds(&it->system->trace, &parent.context);
+    it->trace_kinds = ta_trace_macrostep_kinds(&it->system->trace_masks, &parent.context);
     if (!ta_tracing(it, TA_TRACE_MACROSTEP_BEGIN)) {
         return;
     }
@@ -31242,7 +31278,7 @@ TA_PRIVATE void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor
     ta_count_error(system, actor, name);
     ta_trace_context none = { 0 };
     const ta_trace_context *context = parent != NULL ? &parent->context : &none;
-    if ((ta_trace_macrostep_kinds(&system->trace, context) & TA_TRACE_BIT(TA_TRACE_RAISED)) == 0) {
+    if ((ta_trace_macrostep_kinds(&system->trace_masks, context) & TA_TRACE_BIT(TA_TRACE_RAISED)) == 0) {
         return;
     }
     const ta_event_block *queue = actor->event_block;
@@ -31259,7 +31295,7 @@ TA_PRIVATE void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor
         record.context = parent->context;
         record.cause = parent->cause;
     }
-    ta_trace_write(&system->trace, &record);
+    ta_tel_write_trace(system, &record, NULL);
 }
 
 static ta_result ta_communication_error(ta_system *system, ta_actor *actor, const ta_error_params *params) {
@@ -33551,7 +33587,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     ta_step_key step = ta_trace_key(it);
     ta_step_key key = ta_trace_lifecycle_key(actor);
     TA_COUNT(it->system, actor->definition, finished);
-    if (ta_trace_lifecycle_wanted(&it->system->trace, TA_TRACE_FINISHED, &it->trace_context)) {
+    if (ta_trace_lifecycle_wanted(&it->system->trace_masks, TA_TRACE_FINISHED, &it->trace_context)) {
         ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
         record.key = key;
         record.cause = step;
@@ -33985,9 +34021,9 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
      * records need, taken only when the sink wants those records. */
     ta_trace_parent parent = ta_actor_macrostep_parent(actor);
     it->trace_context = parent.context;
-    it->trace_kinds = ta_trace_macrostep_kinds(&system->trace, &parent.context);
+    it->trace_kinds = ta_trace_macrostep_kinds(&system->trace_masks, &parent.context);
     it->trace_action = TA_ACTION_NONE;
-    uint32_t wanted = ta_trace_any_kinds(&system->trace);
+    uint32_t wanted = ta_trace_any_kinds(&system->trace_masks);
     if ((wanted & (TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_MACROSTEP_END) |
                    TA_TRACE_BIT(TA_TRACE_LONG_MACROSTEP) | TA_TRACE_BIT(TA_TRACE_RUNAWAY))) != 0) {
         it->trace_states = ta_arena_alloc(&system->scratch, (3u * (size_t)definition->state_count + 1u) *

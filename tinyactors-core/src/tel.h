@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.h"
+#include "trace.h"
 
 /*
  * Package tel is the producer of the telemetry ring: it turns a trace record

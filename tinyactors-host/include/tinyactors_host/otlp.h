@@ -2,8 +2,9 @@
 /*
  * Trace records to OTLP protobuf (napi ADR 0016).
  *
- * The encoder is a core trace sink's back end: it takes the records core
- * writes (core ADR 0067), maps them to OpenTelemetry spans, keeps the
+ * The encoder is the back end of core's tel ring: it takes the records core
+ * writes (core ADR 0067, ADR 0098), decoded by the host (ta_tel_decode), maps
+ * them to OpenTelemetry spans, keeps the
  * spans still open between turns, and writes the spans that ended as one
  * `ExportTraceServiceRequest` (opentelemetry-proto, trace/v1), which an
  * OTLP/HTTP `/v1/traces` endpoint accepts as it is. It exports nothing:
@@ -49,8 +50,9 @@ typedef struct {
     uint64_t (*now)(void *self);
     /* A new trace ID, for a span whose record carries none. 16 bytes. */
     void (*trace_id)(void *self, uint8_t out[16]);
-    /* Optional: text for a value (event data, an assigned value), valid until
-     * the next call; false when there is none. Used only with `values`. */
+    /* Optional: text for the value of a <log>, valid until the next call;
+     * false when there is none. Trace records carry their values as text
+     * already, rendered by core (ADR 0098), and do not use this. */
     /* `*cut`: the text was cut at the host's limit (napi ADR 0035). */
     bool (*value_text)(void *self, const ta_value *value, ta_str *out, bool *cut);
 } tah_otlp_host;
@@ -64,7 +66,9 @@ typedef struct {
     /* Parent a macrostep under its cause (false), or make it a root and
      * link it to its cause (true). */
     bool link_parents;
-    /* Put values (event data, assigned values) in attributes. */
+    /* Put values (event data, assigned values) in attributes. Core renders
+     * them only when the host's masks ask (ta_trace_masks.values), so a host
+     * sets both from one option. */
     bool values;
     /* The instrumentation scope's version. */
     ta_str version;
@@ -78,17 +82,18 @@ typedef struct {
      * records, at most `log_limit` per definition and name per second;
      * 0 writes no logs. */
     uint32_t log_limit;
-    /* The span staging, reserved whole when the sink is installed and
-     * shrunk back to it after a burst: the traceStagingBytes parameter
-     * (napi ADRs 0035 and 0036); 0 for 1 MiB. */
+    /* The staging bound: the span staging, reserved whole when the encoder
+     * is installed and shrunk back to it after a burst, and what a turn may
+     * stage before it ends early (napi ADRs 0035 and 0036, now the host's
+     * setting, not a system parameter: core ADR 0098 section 7); 0 for 1 MiB. */
     size_t keep_bytes;
 } tah_otlp_config;
 
 typedef struct tah_otlp tah_otlp;
 
-/* Sets up the encoder, and reserves the span staging whole: the
- * traceStagingBytes parameter (napi ADR 0036 section 2). False when the
- * allocator refuses it; nothing is then kept. */
+/* Sets up the encoder, and reserves the span staging whole: `keep_bytes`
+ * (napi ADR 0036 section 2). False when the allocator refuses it; nothing is
+ * then kept. */
 bool tah_otlp_init(tah_otlp *otlp, const tah_otlp_config *config);
 
 /* One resource attribute, a string. */
@@ -100,8 +105,25 @@ typedef struct {
 /* Sets the resource attributes (`service.name`, ...) every request carries. */
 ta_result tah_otlp_set_resource(tah_otlp *otlp, const tah_otlp_attribute *attributes, uint32_t count);
 
-/* Takes one record, as a trace sink's `write` does. Cannot fail. */
-void tah_otlp_write(tah_otlp *otlp, const ta_trace_record *record);
+/*
+ * Takes one decoded tel.trace record. Cannot fail. `record` is a view into
+ * the ring, valid for the call: the encoder copies what it keeps.
+ */
+void tah_otlp_write(tah_otlp *otlp, const ta_tel_trace *record);
+
+/*
+ * Takes one decoded tel.dropped record (core ADR 0098 section 7): `count`
+ * records were lost before the next one. Every macrostep span that is open
+ * says so, as `tinyactors.telemetry.dropped`, when it ends; a macrostep that
+ * lost nothing has no such attribute. The total is tah_otlp_telemetry_dropped().
+ */
+void tah_otlp_dropped(tah_otlp *otlp, const ta_tel_dropped *dropped);
+/* The records core's tel ring dropped, as its tel.dropped records said, since the encoder was set up. */
+uint64_t tah_otlp_telemetry_dropped(const tah_otlp *otlp);
+/* The staging bound in bytes: keep_bytes, or 1 MiB when it is 0. */
+size_t tah_otlp_staging_bytes(const tah_otlp *otlp);
+/* Whether the encoder puts values in attributes (the config's `values`). */
+bool tah_otlp_values(const tah_otlp *otlp);
 
 /*
  * The size in bytes of the ExportTraceServiceRequest the spans that ended

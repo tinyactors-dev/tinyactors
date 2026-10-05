@@ -467,6 +467,71 @@ jv tat_encode_ta_expression(tat_bind *bind, const ta_expression *value) {
     }
 }
 
+/*
+ * Trace masks cross as {"kinds", "watched_kinds", "unsampled_kinds", "values"}, every member
+ * optional (zero), or as an adapter: {"$adapter": "trace.recording", "config": {...}} creates the
+ * recording instrument and says which kinds it wants (core ADR 0098).
+ */
+bool tat_adapter_decode(tat_bind *bind, jv value, const char *type, void *out, size_t size);
+
+bool tat_decode_ta_trace_masks(tat_bind *bind, jv value, ta_trace_masks *out) {
+    *out = (ta_trace_masks){0};
+    if (jv_get_kind(value) != JV_KIND_OBJECT) {
+        return tat_fail(bind, "expected trace masks {\"kinds\", ...} or a trace.recording adapter");
+    }
+    jv adapter = jv_object_get(jv_copy(value), jv_string("$adapter"));
+    bool is_adapter = jv_get_kind(adapter) == JV_KIND_STRING;
+    jv_free(adapter);
+    if (is_adapter) {
+        return tat_adapter_decode(bind, value, "ta_trace_masks", out, sizeof(*out));
+    }
+    static const char *const keys[] = { "kinds", "watched_kinds", "unsampled_kinds", "values", NULL };
+    if (!tat_check_keys(bind, value, keys)) {
+        return false;
+    }
+    uint32_t *words[3] = { &out->kinds, &out->watched_kinds, &out->unsampled_kinds };
+    for (size_t index = 0; index < 3; index += 1) {
+        jv member = jv_invalid();
+        if (tat_member(value, keys[index], &member)) {
+            bool ok = tat_decode_u32(bind, member, words[index]);
+            jv_free(member);
+            if (!ok) {
+                return tat_at(bind, keys[index]);
+            }
+        }
+    }
+    jv member = jv_invalid();
+    if (tat_member(value, "values", &member)) {
+        out->values = jv_get_kind(member) == JV_KIND_TRUE;
+        jv_free(member);
+    }
+    return true;
+}
+
+jv tat_encode_ta_trace_masks(tat_bind *bind, const ta_trace_masks *value) {
+    (void)bind;
+    jv out = jv_object_set(jv_object(), jv_string("kinds"), jv_number(value->kinds));
+    out = jv_object_set(out, jv_string("watched_kinds"), jv_number(value->watched_kinds));
+    out = jv_object_set(out, jv_string("unsampled_kinds"), jv_number(value->unsampled_kinds));
+    return jv_object_set(out, jv_string("values"), jv_bool(value->values));
+}
+
+/* A list of IDs in a tel record only goes out: it is a view into the ring, and no request carries one. */
+bool tat_decode_ta_tel_u32s(tat_bind *bind, jv value, ta_tel_u32s *out) {
+    (void)value;
+    *out = (ta_tel_u32s){0};
+    return tat_fail(bind, "a tel record's list of IDs cannot be given in a request");
+}
+
+jv tat_encode_ta_tel_u32s(tat_bind *bind, const ta_tel_u32s *value) {
+    (void)bind;
+    jv list = jv_array();
+    for (uint32_t index = 0; index < value->count; index += 1u) {
+        list = jv_array_append(list, jv_number(ta_tel_u32_at(value, index)));
+    }
+    return list;
+}
+
 /* Generated codecs (build/gen/ta_rpc.c) the actor ref codec builds on. */
 bool tat_decode_ta_actor_ref_kind(tat_bind *b, jv in, ta_actor_ref_kind *out);
 jv tat_encode_ta_actor_ref_kind(tat_bind *b, const ta_actor_ref_kind *in);
@@ -581,6 +646,16 @@ bool tat_handle_resolve(tat_bind *bind, jv value, const char *type, void **out) 
         bind->request_system = handle->ptr;
     }
     return true;
+}
+
+bool tat_handle_live(const tat_bind *bind, const char *type, const void *ptr) {
+    for (size_t index = bind->handle_count; index > 0; index -= 1) {
+        const tat_handle *handle = &bind->handles[index - 1];
+        if (handle->live && handle->ptr == ptr && strcmp(handle->type, type) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static jv tat_handle_json(const tat_handle *handle, size_t id) {

@@ -277,6 +277,10 @@ typedef struct {
      * NULL: never. */
     bool (*stop)(void *context);
     void *stop_context;
+    /* Called with stop_context after each call into core that may have traced
+     * (a resume, a delivery, an invocation report): the kernel reads the tel
+     * ring there (core ADR 0098). NULL: nothing. */
+    void (*left_core)(void *context);
 } tah_turn_params;
 
 /* `allocator` for the table and queues, `envelopes` for the envelope store. */

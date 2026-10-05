@@ -660,7 +660,7 @@ const tat_adapter TAT_ADAPTERS[] = {
     {"io.connection", "ta_io", sizeof(ta_io), tat_make_connection_io},
     {"io.request", "ta_io", sizeof(ta_io), tat_make_request_io},
     {"log.recording", "ta_log_sink", sizeof(ta_log_sink), tat_make_recording_log},
-    {"trace.recording", "ta_trace_sink", sizeof(ta_trace_sink), tat_make_recording_trace},
+    {"trace.recording", "ta_trace_masks", sizeof(ta_trace_masks), tat_make_recording_trace},
     {"definition.recording", "ta_definition_sink", sizeof(ta_definition_sink), tat_make_recording_definition},
     {"inspector.recording", "ta_actor_inspector", sizeof(ta_actor_inspector), tat_make_recording_inspector},
 };

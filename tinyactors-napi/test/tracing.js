@@ -532,11 +532,12 @@ async function failureLogsSayWhy() {
   }
 }
 
-// A 16 KiB payload arrives whole with valueBytes: 16384 (napi ADR 0035),
+// A 16 KiB payload arrives whole with telemetryValueBytes: 16384 (core ADR
+// 0098; the ring and its records are made to hold it),
 // and is cut, and marked, at the default of 1024.
 async function largeValues() {
   const payload = { body: 'x'.repeat(16000) };
-  for (const [parameters, whole] of [[{ valueBytes: 16384 }, true], [{}, false]]) {
+  for (const [parameters, whole] of [[{ telemetryValueBytes: 16384, maxRecordBytes: 32768, telBytes: 262144 }, true], [{}, false]]) {
     const system = createSystem({ parameters });
     const sink = recorder(system, { values: true });
     const actor = system.spawn(counter(system));
@@ -637,12 +638,12 @@ async function parameterResource() {
   const defaults = await request(undefined, {});
   assert.equal(defaults['tinyactors.params'], 'v1', 'a system with every default sends the version alone');
   assert.equal(Object.keys(defaults).filter((key) => key.startsWith('tinyactors.param.')).length, 0);
-  const changed = await request({ valueBytes: 4096, microstepLimit: 777, interpreterBytes: 131072 }, {});
-  assert.equal(changed['tinyactors.params'], 'v1;interpreterBytes=131072;microstepLimit=777;valueBytes=4096');
-  const mine = await request({ valueBytes: 4096 }, { 'tinyactors.params': 'mine' });
+  const changed = await request({ telemetryValueBytes: 4096, maxRecordBytes: 8192, microstepLimit: 777, interpreterBytes: 131072 }, {});
+  assert.equal(changed['tinyactors.params'], 'v1;interpreterBytes=131072;maxRecordBytes=8192;microstepLimit=777;telemetryValueBytes=4096');
+  const mine = await request({ telemetryValueBytes: 2048 }, { 'tinyactors.params': 'mine' });
   assert.equal(mine['tinyactors.params'], 'mine', "the application's attribute wins");
-  const system = createSystem({ parameters: { valueBytes: 4096 } });
-  assert.equal(system.stats().parameters.valueBytes, 4096);
+  const system = createSystem({ parameters: { telemetryValueBytes: 2048 } });
+  assert.equal(system.stats().parameters.telemetryValueBytes, 2048);
   assert.ok(Object.isFrozen(system.parameters));
   system.close();
 }
@@ -656,9 +657,10 @@ function defaultsVersion() {
       actionBudget: 1024, compileMessageBytes: 256, compileNearestBytes: 128, compileTextBytes: 1024,
       datamodelNameBytes: 32, dueBudget: 1024, eventBlockCache: 1024, eventNameDepth: 64,
       interpreterBytes: 65536, interpreterNesting: 4, maxActors: 2147483647, maxDefinitions: 2147483647,
-      maxPendingSends: 2147483647, maxQueuedMessages: 0, maxRetainedBytes: 0, messageBudget: 1024,
-      microstepLimit: 100000, registeredDatamodels: 8, renderBytes: 16384, resumeBudget: 64,
-      resumesPerTurn: 1024, traceStagingBytes: 1048576, valueBytes: 1024,
+      maxPendingSends: 2147483647, maxQueuedMessages: 0, maxRecordBytes: 4096, maxRetainedBytes: 0,
+      messageBudget: 1024, microstepLimit: 100000, registeredDatamodels: 8, renderBytes: 16384,
+      resumeBudget: 64, resumesPerTurn: 1024, telBytes: 65536, telemetryValueBytes: 1024,
+      traceStagingBytes: 1048576,
     },
   };
   const now = Object.fromEntries(Object.entries(parameterInfo()).map(([name, info]) => [name, info.default]));
@@ -668,7 +670,7 @@ function defaultsVersion() {
 
 // Values only when asked for; links instead of parents when asked for.
 async function valuesAndLinks() {
-  const system = createSystem({ parameters: { valueBytes: 16 } });
+  const system = createSystem({ parameters: { telemetryValueBytes: 16 } });
   const sink = recorder(system, { values: true });
   const actor = system.spawn(counter(system));
   await system.flush();
@@ -678,7 +680,7 @@ async function valuesAndLinks() {
   const assign = goStep.events.find((event) => event.name === 'scxml.assign');
   assert.equal(assign.attributes['scxml.value'], '1');
   assert.equal(assign.attributes['scxml.value.truncated'], undefined, 'a value that fits is not marked');
-  assert.equal(goStep.attributes['scxml.event.data'], '{"order":"a-long', 'cut at valueBytes');
+  assert.equal(goStep.attributes['scxml.event.data'], '{"order":"a-long', 'cut at telemetryValueBytes');
   assert.equal(goStep.attributes['scxml.event.data.truncated'], true, 'and marked as cut');
   assert.throws(() => system.setTraceSink(() => {}, { valueLimit: 8 }), { code: 'invalid' });
 

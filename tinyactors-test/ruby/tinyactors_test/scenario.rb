@@ -1014,7 +1014,7 @@ module TinyactorsTest
     # ----------------------------------------------------------------------
     # Trace records (ADR 0067)
 
-    # Installs a trace.recording instrument as the system's trace sink.
+    # Installs a trace.recording instrument: it sets the system's trace masks and reads its tel ring (core ADR 0098).
     # `kinds:` lists the ta_trace_kind symbols it wants (every kind by
     # default), and `unsampled: true` also traces unsampled macrosteps. A
     # Trace of the run then compares its records, without PAUSED, RESUMED
@@ -1025,8 +1025,8 @@ module TinyactorsTest
         config = { system: system_handle }
         config[:kinds] = kinds.map(&:to_s) if kinds
         config[:unsampled] = true if unsampled
-        core('ta_system_set_trace_sink',
-             ta.system.set_trace_sink(system: system_handle, sink: sink.adapter(**config)))
+        core('ta_system_set_trace_masks',
+             ta.system.set_trace_masks(system: system_handle, masks: sink.adapter(**config)))
         sink
       end
     end

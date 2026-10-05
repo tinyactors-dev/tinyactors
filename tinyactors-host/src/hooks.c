@@ -7,7 +7,7 @@ ta_result tah_hook_actor_created(tah_system *system, ta_actor_id actor) {
     if (result != TA_OK) {
         system->inside_core = true;
         (void)ta_actor_destroy(system->core, actor);
-        system->inside_core = false;
+        tah_system_leave_core(system);
         return result;
     }
     tah_system_want_turn(system);

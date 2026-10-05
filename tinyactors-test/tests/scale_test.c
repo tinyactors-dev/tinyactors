@@ -486,10 +486,11 @@ static round_cost measure(size_t population) {
     ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
     ta_system *system = NULL;
     require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
-    /* Measured with the null trace sink, which a system starts with, so the
+    /* Measured with the trace masks a system starts with, all zero, so the
      * per-actor figures include what tracing costs every actor untraced:
-     * the step counters (ADR 0067). */
-    require(ta_system_set_trace_sink(system, ta_null_trace_sink()) == TA_OK, "the null trace sink");
+     * the step counters (ADR 0067). The tel ring is part of the system's
+     * own cost, made at creation (ADR 0098), and does not grow with actors. */
+    require(ta_system_set_trace_masks(system, &(ta_trace_masks){0}) == TA_OK, "the zero trace masks");
 
     directory dir;
     directory_init(&dir, population);

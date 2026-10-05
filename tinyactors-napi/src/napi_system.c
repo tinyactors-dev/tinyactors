@@ -474,8 +474,11 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         }
         return tna_throw(env, tna_result_code(result), "cannot create a system");
     }
-    /* napi's buffers are allocated with the system (napi ADR 0035). */
-    wrapper->value_bytes = (size_t)napi_params.values[TAH_PARAM_VALUE_BYTES];
+    /* napi's buffers are allocated with the system (napi ADR 0035). A value's text is cut at core's
+     * telemetryValueBytes (core ADR 0098), for a log record as for a trace record. */
+    uint64_t value_bytes = 0;
+    (void)ta_system_param(tah_system_core(wrapper->system), TA_PARAM_TELEMETRY_VALUE_BYTES, &value_bytes);
+    wrapper->value_bytes = (size_t)value_bytes;
     wrapper->trace_value = malloc(wrapper->value_bytes + 1u);
     uint64_t compile_text = 0;
     (void)ta_system_param(tah_system_core(wrapper->system), TA_PARAM_COMPILE_TEXT_BYTES, &compile_text);

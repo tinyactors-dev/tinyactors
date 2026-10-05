@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "tel_reader.h"
 #include "test_allocator.h"
 
 static int failures;
@@ -556,30 +557,41 @@ static void test_refused_self_send_to_an_unloaded_owner_goes_by_address(void) {
  * Withdrawing one send from outside the chart (ADR 0084)
  */
 
-/* The WITHDRAWN and CANCELLED records a sink saw, in order. */
+/* The WITHDRAWN and CANCELLED records read from tel, in order. The send is the record's text. */
 typedef struct {
     ta_trace_kind kind;
     ta_step_key key;
-    ta_send_id send;
+    char send[16];
     ta_actor_id actor;
 } seen_record;
 
 static seen_record seen[16];
 static uint32_t seen_count;
+static tel_reader seen_reader;
 
-static void seen_write(void *self, const ta_trace_record *record) {
+static void seen_visit(void *self, const ta_tel_entry *entry) {
     (void)self;
     if (seen_count < 16u) {
-        seen[seen_count++] = (seen_record){ .kind = record->kind, .key = record->key, .send = record->send,
-                                            .actor = record->actor };
+        seen_record *at = &seen[seen_count++];
+        *at = (seen_record){ .kind = entry->trace.kind, .key = entry->trace.key, .actor = entry->trace.actor };
+        uint32_t length = entry->trace.send.len < sizeof at->send - 1u ? entry->trace.send.len : (uint32_t)sizeof at->send - 1u;
+        memcpy(at->send, entry->trace.send.ptr, length);
     }
 }
-static const ta_trace_sink_vtable seen_vtable = { .write = seen_write };
+
+static bool seen_send_is(uint32_t index, const char *text) { return strcmp(seen[index].send, text) == 0; }
+
+/* Reads what core wrote to tel since the last read: after each call that may have traced. */
+static void seen_flush(ta_system *system) {
+    tel_read(system, &seen_reader);
+    CHECK(seen_reader.bad == 0);
+}
 
 static void watch_withdrawals(ta_system *system) {
     seen_count = 0;
+    seen_reader = (tel_reader){ .visit = seen_visit };
     uint32_t kinds = TA_TRACE_BIT(TA_TRACE_WITHDRAWN) | TA_TRACE_BIT(TA_TRACE_CANCELLED);
-    CHECK(ta_system_set_trace_sink(system, (ta_trace_sink){ .v = &seen_vtable, .kinds = kinds }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(system, &(ta_trace_masks){ .kinds = kinds }) == TA_OK);
 }
 
 static ta_send_id send_id(ta_system *system, const char *text) {
@@ -629,12 +641,14 @@ static void test_withdrawing_one_send(void) {
 
     /* One record, outside any macrostep: the session's second lifecycle key
      * (SPAWNED was the first). */
+    seen_flush(system);
     CHECK(seen_count == 1);
-    CHECK(seen[0].kind == TA_TRACE_WITHDRAWN && seen[0].send == early && seen[0].actor == actor);
+    CHECK(seen[0].kind == TA_TRACE_WITHDRAWN && seen_send_is(0, "early") && seen[0].actor == actor);
     CHECK(seen[0].key.session == view.session_id && seen[0].key.macrostep == 0 && seen[0].key.microstep == 2);
 
     /* Gone once: again, it is not found, and nothing is recorded. */
     CHECK(ta_actor_withdraw_send(system, actor, early) == TA_ERR_NOT_FOUND);
+    seen_flush(system);
     CHECK(seen_count == 1 && cancelled_count(system) == cancelled + 1u);
     /* Only the owner's sends: the neighbour's `far` is not this actor's. */
     ta_send_id far = send_id(system, "far");
@@ -685,6 +699,7 @@ static void test_a_submitted_send_is_not_withdrawn(void) {
     watch_withdrawals(system);
     uint64_t cancelled = cancelled_count(system);
     CHECK(ta_actor_withdraw_send(system, sender, send_id(system, "now")) == TA_ERR_DONE);
+    seen_flush(system);
     CHECK(seen_count == 0 && cancelled_count(system) == cancelled);
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, sender, &view) == TA_OK && view.delayed_send_count == 1);
@@ -732,9 +747,10 @@ static void test_withdrawing_inside_a_paused_macrostep(void) {
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 1);
     CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].event == event_name(system, "tock"));
     /* WITHDRAWN outside the macrostep, then the chart's own CANCELLED in it. */
+    seen_flush(system);
     CHECK(seen_count == 2);
-    CHECK(seen[0].kind == TA_TRACE_WITHDRAWN && seen[0].key.macrostep == 0 && seen[0].send == t);
-    CHECK(seen[1].kind == TA_TRACE_CANCELLED && seen[1].key.macrostep == 2 && seen[1].send == t);
+    CHECK(seen[0].kind == TA_TRACE_WITHDRAWN && seen[0].key.macrostep == 0 && seen_send_is(0, "t"));
+    CHECK(seen[1].kind == TA_TRACE_CANCELLED && seen[1].key.macrostep == 2 && seen_send_is(1, "t"));
     ta_system_destroy(system);
 }
 

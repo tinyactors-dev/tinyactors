@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "../include/tinyactors.h"
+#include "tel_reader.h"
 #include "test_allocator.h"
 
 static int failures;
@@ -924,7 +925,13 @@ static void test_definition_sink(void) {
  * Definition records in the trace stream (ADR 0080)
  */
 
-/* One stream both sinks write to, so their order against each other shows. */
+/*
+ * One stream the trace records and the definition sink's events both go to, so
+ * their order against each other shows. Trace records are read from tel, which
+ * a host can do once core returns, or inside the definition sink's callback: the
+ * record of a definition event is on the ring before the sink hears it (ADR
+ * 0080), so the sink reads tel first and the stream shows the record first.
+ */
 typedef struct {
     char source;          /* 't': a trace record, 'd': the definition sink */
     int kind;             /* ta_trace_kind for 't', ta_definition_event_kind for 'd' */
@@ -937,6 +944,7 @@ typedef struct {
     ta_system *system;
     stream_entry entries[64];
     uint32_t count;
+    tel_reader reader;
 } stream;
 
 static void stream_put(stream *log, stream_entry entry) {
@@ -946,24 +954,38 @@ static void stream_put(stream *log, stream_entry entry) {
     }
 }
 
-static void stream_trace(void *self, const ta_trace_record *record) {
+static bool same_text(ta_str a, ta_str b) {
+    return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, a.len) == 0);
+}
+
+static void stream_visit(void *self, const ta_tel_entry *entry) {
     stream *log = self;
+    const ta_tel_trace *record = &entry->trace;
     bool matches = true;
     if (record->kind >= TA_TRACE_DEFINITION_REGISTERED) {
+        /* The record holds a copy of the identity, equal to the definition's own while it is intact. */
         ta_definition_inspection view;
         matches = ta_definition_inspect(log->system, record->definition, &view) == TA_OK &&
-                  view.identity.revision.ptr == record->identity.revision.ptr &&
-                  view.identity.family.name.len == record->identity.family.name.len;
+                  view.identity.revision.len == record->identity.revision.len &&
+                  (view.identity.revision.len == 0 ||
+                   memcmp(view.identity.revision.ptr, record->identity.revision.ptr, view.identity.revision.len) == 0) &&
+                  same_text(view.identity.family.name, record->identity.family.name);
     }
     stream_put(log, (stream_entry){ .source = 't', .kind = (int)record->kind, .definition = record->definition,
                                     .key = record->key, .identity_matches = matches });
 }
 
+/* Reads tel into the stream: after each call into core, and first thing in the definition sink. */
+static void stream_flush(stream *log) {
+    tel_read(log->system, &log->reader);
+    CHECK(log->reader.bad == 0);
+}
+
 static void stream_definition(void *self, const ta_definition_event *event) {
+    stream_flush(self);
     stream_put(self, (stream_entry){ .source = 'd', .kind = (int)event->kind, .definition = event->definition });
 }
 
-static const ta_trace_sink_vtable stream_trace_vtable = { .write = stream_trace };
 static const ta_definition_sink_vtable stream_definition_vtable = { .notify = stream_definition };
 
 #define DEFINITION_KINDS                                                                       \
@@ -973,8 +995,8 @@ static const ta_definition_sink_vtable stream_definition_vtable = { .notify = st
 
 static void follow(fixture *f, stream *log, uint32_t kinds) {
     *log = (stream){ .system = f->system };
-    CHECK(ta_system_set_trace_sink(f->system, (ta_trace_sink){ .self = log, .v = &stream_trace_vtable,
-                                                               .kinds = kinds }) == TA_OK);
+    log->reader = (tel_reader){ .visit = stream_visit, .context = log };
+    CHECK(ta_system_set_trace_masks(f->system, &(ta_trace_masks){ .kinds = kinds }) == TA_OK);
     CHECK(ta_system_set_definition_sink(f->system, (ta_definition_sink){ .self = log,
                                                                          .v = &stream_definition_vtable }) == TA_OK);
 }
@@ -1018,6 +1040,7 @@ static void test_definition_records(void) {
     /* Before the first SPAWNED of the definition. */
     ta_actor_id actor = 0;
     CHECK(spawn(&f, id, &actor) == TA_OK);
+    stream_flush(&log);
     CHECK(log.count == 3 && is_record(&log, 2, TA_TRACE_SPAWNED, id));
 
     /* RETIRED from the retiring call; FREED after the last DESTROYED. */
@@ -1026,6 +1049,7 @@ static void test_definition_records(void) {
     CHECK(is_record(&log, 3, TA_TRACE_DEFINITION_RETIRED, id));
     CHECK(is_event(&log, 4, TA_DEFINITION_EVENT_RETIRED, id));
     CHECK(ta_actor_destroy(f.system, actor) == TA_OK);
+    stream_flush(&log);
     CHECK(log.count == 8);
     CHECK(is_record(&log, 5, TA_TRACE_DESTROYED, id));
     CHECK(is_record(&log, 6, TA_TRACE_DEFINITION_FREED, id));
@@ -1047,13 +1071,11 @@ static void test_definition_records(void) {
     CHECK(is_event(&log, before + 3u, TA_DEFINITION_EVENT_FREED, parent));
 
     /* A mask without the kinds builds no definition record; the sink still hears. */
-    CHECK(ta_system_set_trace_sink(f.system, (ta_trace_sink){ .self = &log, .v = &stream_trace_vtable,
-                                                              .kinds = ACTOR_KINDS }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(f.system, &(ta_trace_masks){ .kinds = ACTOR_KINDS }) == TA_OK);
     before = log.count;
     ta_definition_id unrecorded = register_chart(&f, "unrecorded");
     CHECK(log.count == before + 1u && is_event(&log, before, TA_DEFINITION_EVENT_REGISTERED, unrecorded));
-    CHECK(ta_system_set_trace_sink(f.system, (ta_trace_sink){ .self = &log, .v = &stream_trace_vtable,
-                                                              .kinds = DEFINITION_KINDS | ACTOR_KINDS }) == TA_OK);
+    CHECK(ta_system_set_trace_masks(f.system, &(ta_trace_masks){ .kinds = DEFINITION_KINDS | ACTOR_KINDS }) == TA_OK);
 
     /* Destroy: every DESTROYED first, then FREED for each definition left. */
     ta_definition_id busy = register_chart(&f, "left-busy");

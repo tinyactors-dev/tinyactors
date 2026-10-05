@@ -5,29 +5,6 @@
 #include "interpreter.h"
 
 /* ------------------------------------------------------------------------
- * The null sink (ADR 0067 section 2)
- */
-
-static void ta_null_trace_write(void *self, const ta_trace_record *record) {
-    (void)self;
-    (void)record;
-}
-
-static const ta_trace_sink_vtable ta_null_trace_vtable = { .write = ta_null_trace_write };
-
-ta_trace_sink ta_null_trace_sink(void) {
-    return (ta_trace_sink){ .self = NULL, .v = &ta_null_trace_vtable };
-}
-
-ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink) {
-    if (system == NULL || sink.v == NULL || sink.v->write == NULL) {
-        return TA_ERR_INVALID;
-    }
-    system->trace = sink;
-    return TA_OK;
-}
-
-/* ------------------------------------------------------------------------
  * Step keys as span IDs (section 6)
  */
 
@@ -45,11 +22,11 @@ uint64_t ta_step_key_span_id(ta_step_key key) {
  * What is built
  */
 
-uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context) {
+uint32_t ta_trace_macrostep_kinds(const ta_trace_masks *masks, const ta_trace_context *context) {
     if (!ta_trace_context_empty(context) && (context->flags & TA_TRACE_FLAG_SAMPLED) == 0) {
-        return sink->unsampled_kinds;
+        return masks->unsampled_kinds;
     }
-    return (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? sink->watched_kinds : sink->kinds;
+    return (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? masks->watched_kinds : masks->kinds;
 }
 
 ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
@@ -79,7 +56,7 @@ void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
     default: break;
     }
     ta_trace_context none = { 0 };
-    if (!ta_trace_lifecycle_wanted(&system->trace, kind, parent != NULL ? &parent->context : &none)) {
+    if (!ta_trace_lifecycle_wanted(&system->trace_masks, kind, parent != NULL ? &parent->context : &none)) {
         return;
     }
     ta_trace_record record = ta_trace_record_blank(kind);
@@ -91,7 +68,7 @@ void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
         record.context = parent->context;
         record.cause = parent->cause;
     }
-    ta_trace_write(&system->trace, &record);
+    ta_tel_write_trace(system, &record, NULL);
 }
 
 ta_trace_record ta_trace_record_blank(ta_trace_kind kind) {

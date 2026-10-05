@@ -36,6 +36,6 @@ ta_result tah_enumerate_ids(tah_system *system, tah_id_page *page) {
                           .limit = page->limit,
                           .next = &page->next,
                       });
-    system->inside_core = false;
+    tah_system_leave_core(system);
     return result;
 }

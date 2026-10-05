@@ -254,13 +254,23 @@ export interface SystemParameters {
   maxPendingSends?: number;
   /** Live definitions; default and maximum 2147483647 (no limit). */
   maxDefinitions?: number;
-  // napi's.
+  /**
+   * The telemetry ring, in bytes (core ADR 0098): trace records wait there
+   * until the pump turn reads them. A burst that fills it loses the records
+   * that do not fit, and the next span says how many
+   * (`tinyactors.telemetry.dropped`). A multiple of 8, from 512; default 65536.
+   */
+  telBytes?: number;
+  /** The largest record on any ring, in bytes, a multiple of 8 (core ADR 0098); default 4096, from 512. */
+  maxRecordBytes?: number;
   /**
    * Bytes of a value's JSON in a trace attribute (`values: true`) or a log
-   * record: one limit for both (napi ADR 0036). A longer value is cut and
-   * marked `<key>.truncated`. Default 1024, from 16 to 1 MiB.
+   * record: one limit for both (core ADR 0098, napi ADR 0036). A longer value
+   * is cut and marked `<key>.truncated`. At most `maxRecordBytes` less 512;
+   * default 1024, from 16.
    */
-  valueBytes?: number;
+  telemetryValueBytes?: number;
+  // napi's.
   /**
    * The OTLP staging, reserved whole while a trace sink is installed (napi
    * ADR 0036). A turn whose spans and logs reach it ends early, so the sink
@@ -2473,13 +2483,13 @@ export interface TraceSinkOptions extends TraceConfiguration {
    * Resource attributes every request carries, such as `service.name`. The
    * system's parameters are added as one attribute, `tinyactors.params`: the
    * defaults' version, then `name=value` for each parameter that differs from
-   * its default, in name order (`v1;valueBytes=16384`), or `v1` alone (napi
+   * its default, in name order (`v1;telemetryValueBytes=16384`), or `v1` alone (napi
    * ADR 0036), unless this names the same key.
    */
   resource?: Record<string, string>;
   /**
    * Event data and assigned values as JSON attributes, cut at the
-   * `valueBytes` parameter (SystemParameters) and marked
+   * `telemetryValueBytes` parameter (SystemParameters) and marked
    * `<key>.truncated` when cut.
    */
   values?: boolean;

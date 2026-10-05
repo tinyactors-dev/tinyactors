@@ -49,7 +49,6 @@ module TinyactorsNapiBindings
     'ta_system_set_{external_event_router,actor_directory}' => 'installed at system creation (ADR 0006)',
     'ta_system_register_{io,invoker}' => 'reached through hand-written registration (step 13)',
     'ta_system_set_log_sink' => 'reached through hand-written registration (step 13)',
-    'ta_system_set_trace_sink' => 'installed by the tracing hook, which hands records to JavaScript (core ADR 0067)',
     'ta_{ring_peek,ring_release,system_control_block}' => 'the host kernel reads the rings after each call into core; records are not values JavaScript sees (core ADR 0098)',
     'ta_tel_{decode,u32_at}' => 'the host kernel decodes tel records into the OTLP encoder (core ADR 0098)',
     'ta_system_set_trace_masks' => 'the tracing hook sets the masks, which setTraceSink and configureTraces choose (core ADR 0098)',
@@ -78,7 +77,6 @@ module TinyactorsNapiBindings
     'ta_dm_host_*' => 'callable only from inside data-model callbacks (step 11)',
     'ta_wasm_*' => 'the WebAssembly module\'s allocator (root ADR 0001, decision 9), declared only for wasm; the addon is native',
     'ta_null_datamodel' => 'the plumbing chooses the data model; it is injected into compile_spec',
-    'ta_null_trace_sink' => 'the tracing hook installs it when no JavaScript callback is registered (core ADR 0067)',
     'ta_null_definition_sink' => 'the native System always installs its own definition sink (core ADR 0079)',
     'ta_definition_{import,encode}' => 'src/import.c calls them with the SCXML codec, for define(text, { format: \'scxml\' }) and Definition.encode() (ADRs 0019, 0027)'
   }.freeze
@@ -117,7 +115,6 @@ module TinyactorsNapiBindings
     'ta_io_{registration,origin_make,scope_open}_params' => 'arguments of plumbing-owned functions (core ADR 0068)',
     'ta_origin_text_params' => 'argument of a plumbing-owned function (core ADR 0068)',
     'ta_log_record' => 'log sink callback argument (step 13)',
-    'ta_trace_{record,sink}' => 'trace sink plumbing: records reach JavaScript through the tracing hook (core ADR 0067)',
     'ta_ring_{shared,control,record}' => 'ring plumbing: the kernel drains the rings (core ADR 0098)',
     'ta_tel_*' => 'telemetry plumbing: the kernel decodes tel records into OTLP (core ADR 0098)',
     'ta_trace_masks' => 'trace plumbing: the tracing hook sets the masks (core ADR 0098)',

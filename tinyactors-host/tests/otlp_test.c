@@ -70,11 +70,6 @@ static void stub_trace_id(void *self, uint8_t out[16]) {
     memset(out, host->next_id, 16);
 }
 
-static void sink_write(void *self, const ta_trace_record *record) {
-    tah_otlp_write(self, record);
-}
-static const ta_trace_sink_vtable sink_vtable = { .write = sink_write };
-
 /* ------------------------------------------------------------------------
  * A strict reader: every field is well-formed and every length is in bounds
  */
@@ -352,6 +347,41 @@ typedef struct {
     tah_otlp otlp;
 } fixture;
 
+/*
+ * Reads the tel ring into the encoder, as the kernel does after each call
+ * into core (tah_trace_drain, adapter_trace.h): the test has a core system
+ * and an encoder but no tah_system, so it does the same three calls.
+ */
+static void drain(fixture *f) {
+    ta_ring_record raw;
+    while (ta_ring_peek(f->core, TA_RING_TEL, &raw) == TA_OK) {
+        ta_tel_entry entry;
+        CHECK(ta_tel_decode(&raw, &entry) == TA_OK);
+        if (entry.type == TA_TEL_TRACE) {
+            tah_otlp_write(&f->otlp, &entry.trace);
+        } else {
+            tah_otlp_dropped(&f->otlp, &entry.dropped);
+        }
+        ta_ring_release(f->core, TA_RING_TEL, raw.size);
+    }
+}
+
+/* A request taken after reading what core wrote. */
+static ta_str take_from(fixture *f) {
+    drain(f);
+    return take(&f->otlp);
+}
+static ta_str take_logs_from(fixture *f) {
+    drain(f);
+    return take_logs(&f->otlp);
+}
+
+/* Spans still open after reading what core wrote. */
+static uint32_t open_spans(fixture *f) {
+    drain(f);
+    return tah_otlp_open_count(&f->otlp);
+}
+
 static void start(fixture *f, bool install) {
     memset(f, 0, sizeof *f);
     tah_allocator_init(&f->allocator, check_platform_allocator());
@@ -373,8 +403,7 @@ static void start(fixture *f, bool install) {
                                 .wanted_unsampled_kinds = UINT32_MAX,
                             });
     if (install) {
-        CHECK(ta_system_set_trace_sink(f->core, (ta_trace_sink){ .self = &f->otlp, .v = &sink_vtable,
-                                                                 .kinds = UINT32_MAX }) == TA_OK);
+        CHECK(ta_system_set_trace_masks(f->core, &(ta_trace_masks){ .kinds = UINT32_MAX }) == TA_OK);
     }
 }
 
@@ -382,6 +411,7 @@ static ta_run_status resume(fixture *f, uint32_t budget) {
     ta_run_status status = TA_RUN_ERROR;
     CHECK(ta_actor_resume(f->core, &(ta_actor_resume_params){ .actor = f->actor, .budget = budget,
                                                               .status = &status }) == TA_OK);
+    drain(f);
     return status;
 }
 
@@ -400,13 +430,13 @@ static void open_across_turns(void) {
     CHECK(resume(&f, 1) == TA_RUN_PAUSED);
 
     span_view spans[16];
-    uint32_t count = read_spans(take(&f.otlp), spans, 16);
+    uint32_t count = read_spans(take_from(&f), spans, 16);
     CHECK(count == 1); /* spawned: the macrostep and its microstep are still open */
     CHECK(named(spans, count, "scxml.spawned") != NULL);
-    CHECK(tah_otlp_open_count(&f.otlp) == 1);
+    CHECK(open_spans(&f) == 1);
 
     CHECK(resume(&f, 100) == TA_RUN_STABLE);
-    uint32_t more = read_spans(take(&f.otlp), spans, 16);
+    uint32_t more = read_spans(take_from(&f), spans, 16);
     const span_view *macro = named(spans, more, "scxml.macrostep bootstrap");
     CHECK(macro != NULL);
     ta_actor_inspection view;
@@ -420,8 +450,8 @@ static void open_across_turns(void) {
         }
     }
     CHECK(micro == 3u); /* bootstrap, a → b, b → c */
-    CHECK(tah_otlp_open_count(&f.otlp) == 0);
-    CHECK(take(&f.otlp).len == 0);
+    CHECK(open_spans(&f) == 0);
+    CHECK(take_from(&f).len == 0);
 
     /* A delivered event: a macrostep, its microstep, and a raise event on it. */
     ta_atom go = 0;
@@ -431,7 +461,7 @@ static void open_across_turns(void) {
     CHECK(ta_actor_deliver(f.core, &(ta_actor_deliver_params){ .time = ta_system_time(f.core), .actor = f.actor,
                                                                .event = &(ta_event){ .name = name } }) == TA_OK);
     CHECK(resume(&f, 100) == TA_RUN_STABLE);
-    count = read_spans(take(&f.otlp), spans, 16);
+    count = read_spans(take_from(&f), spans, 16);
     const span_view *go_macro = named(spans, count, "scxml.macrostep go");
     const span_view *go_micro = named(spans, count, "scxml.microstep go");
     CHECK(go_macro != NULL && go_micro != NULL);
@@ -440,7 +470,7 @@ static void open_across_turns(void) {
 
     /* Destroying is a lifecycle span of its own. */
     CHECK(ta_actor_destroy(f.core, f.actor) == TA_OK);
-    count = read_spans(take(&f.otlp), spans, 16);
+    count = read_spans(take_from(&f), spans, 16);
     CHECK(count == 1 && named(spans, count, "scxml.destroyed") != NULL);
     CHECK(f.otlp.dropped == 0);
     stop(&f);
@@ -452,10 +482,11 @@ static void end_all(void) {
     start(&f, true);
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
     CHECK(resume(&f, 1) == TA_RUN_PAUSED);
-    (void)take(&f.otlp);
+    (void)take_from(&f);
+    drain(&f);
     tah_otlp_end_all(&f.otlp);
     span_view spans[4];
-    uint32_t count = read_spans(take(&f.otlp), spans, 4);
+    uint32_t count = read_spans(take_from(&f), spans, 4);
     CHECK(count == 2); /* the bootstrap macrostep, and its first microstep */
     CHECK(spans[0].incomplete && spans[1].incomplete);
     CHECK(named(spans, count, "scxml.macrostep bootstrap") != NULL);
@@ -470,12 +501,12 @@ static void abandoned(void) {
     start(&f, true);
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
     CHECK(resume(&f, 1) == TA_RUN_PAUSED);
-    (void)take(&f.otlp);
-    CHECK(tah_otlp_open_count(&f.otlp) == 1);
+    (void)take_from(&f);
+    CHECK(open_spans(&f) == 1);
     CHECK(ta_actor_abandon(f.core, f.actor) == TA_OK);
-    CHECK(tah_otlp_open_count(&f.otlp) == 0);
+    CHECK(open_spans(&f) == 0);
     span_view spans[4];
-    uint32_t count = read_spans(take(&f.otlp), spans, 4);
+    uint32_t count = read_spans(take_from(&f), spans, 4);
     const span_view *macro = named(spans, count, "scxml.macrostep bootstrap");
     CHECK(macro != NULL && !macro->incomplete);
     uint32_t events = 0;
@@ -497,7 +528,7 @@ static void golden(void) {
     CHECK(tah_otlp_set_resource(&f.otlp, &(tah_otlp_attribute){ .key = S("service.name"), .value = S("test") }, 1) ==
           TA_OK);
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
-    ta_str bytes = take(&f.otlp);
+    ta_str bytes = take_from(&f);
     static const char expected[] = "0aa4030a180a160a0c736572766963652e6e616d6512060a04746573741287030abd010a0a74696e796163746f72731205302e302e301a270a1c74696e796163746f72732e646566696e6974696f6e2e66616d696c7912070a05636861696e1a340a1e74696e796163746f72732e646566696e6974696f6e2e7265766973696f6e12120a10653734363930303030393138383039651a220a1874696e796163746f72732e646566696e6974696f6e2e696412061880808080101a250a1a74696e796163746f72732e646566696e6974696f6e2e6e616d6512070a05636861696e12c4010a100101010101010101010101010101010112088b7d46327ff76c852a0d7363786d6c2e737061776e6564300139e80300000000000041e8030000000000004a280a107363786d6c2e73657373696f6e5f696412140a12302e343239343936373239362e636861696e4a150a0f7363786d6c2e6d6163726f73746570120218004a140a0b7363786d6c2e6163746f7212050a03303a314a1a0a107363786d6c2e646566696e6974696f6e12061880808080104a100a0a7363786d6c2e74696d6512021800";
     char hex[2048];
     CHECK(bytes.len * 2u < sizeof hex);
@@ -530,8 +561,8 @@ static void many_open(void) {
         f.actor = actors[at];
         CHECK(resume(&f, 1) == TA_RUN_PAUSED);
     }
-    CHECK(tah_otlp_open_count(&f.otlp) == COUNT);
-    (void)take(&f.otlp);
+    CHECK(open_spans(&f) == COUNT);
+    (void)take_from(&f);
     /* Every third, then the rest, from the back. */
     for (uint32_t pass = 0; pass < 2; pass += 1u) {
         for (uint32_t at = COUNT; at > 0; at -= 1u) {
@@ -541,17 +572,17 @@ static void many_open(void) {
             }
         }
     }
-    CHECK(tah_otlp_open_count(&f.otlp) == 0);
-    (void)take(&f.otlp);
+    CHECK(open_spans(&f) == 0);
+    (void)take_from(&f);
 
     /* An actor unloaded mid-macrostep ends its span as incomplete. */
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
     CHECK(resume(&f, 1) == TA_RUN_PAUSED);
-    CHECK(tah_otlp_open_count(&f.otlp) == 1);
+    CHECK(open_spans(&f) == 1);
     ta_actor_destroy(f.core, f.actor);
-    CHECK(tah_otlp_open_count(&f.otlp) == 0);
+    CHECK(open_spans(&f) == 0);
     span_view spans[8];
-    uint32_t count = read_spans(take(&f.otlp), spans, 8);
+    uint32_t count = read_spans(take_from(&f), spans, 8);
     const span_view *boot = named(spans, count, "scxml.macrostep bootstrap");
     CHECK(boot != NULL && boot->incomplete);
     CHECK(named(spans, count, "scxml.destroyed") != NULL);
@@ -568,7 +599,7 @@ static void logs(void) {
     f.otlp.config.log_limit = 1000; /* the fixture writes no logs by default */
     CHECK(tah_otlp_set_resource(&f.otlp, &(tah_otlp_attribute){ .key = S("service.name"), .value = S("test") }, 1) ==
           TA_OK);
-    CHECK(take_logs(&f.otlp).len == 0);
+    CHECK(take_logs_from(&f).len == 0);
     for (uint32_t round = 0; round < 3; round += 1u) {
         for (uint32_t at = 0; at <= round; at += 1u) {
             tah_otlp_host_log(&f.otlp, &(tah_otlp_host_log_params){ .event_name = S("tinyactors.message.dead_lettered"),
@@ -576,7 +607,7 @@ static void logs(void) {
                                                                    .key = S("tinyactors.dead_letter.reason"),
                                                                    .value = S("no-route") });
         }
-        ta_str bytes = take_logs(&f.otlp);
+        ta_str bytes = take_logs_from(&f);
         CHECK(bytes.len != 0);
         reader r = { .at = (const uint8_t *)bytes.ptr, .end = (const uint8_t *)bytes.ptr + bytes.len };
         CHECK(well_formed(r));
@@ -594,7 +625,7 @@ static void forget_definition(void) {
     start(&f, true);
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
     CHECK(resume(&f, 64) == TA_RUN_STABLE);
-    (void)take(&f.otlp);
+    (void)take_from(&f);
     uint32_t cached = f.otlp.name_count;
     uint32_t mine = 0;
     for (uint32_t at = 0; at < f.otlp.name_capacity; at += 1u) {
@@ -613,7 +644,7 @@ static void forget_definition(void) {
     CHECK(ta_actor_destroy(f.core, f.actor) == TA_OK);
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
     CHECK(resume(&f, 64) == TA_RUN_STABLE);
-    CHECK(take(&f.otlp).len != 0);
+    CHECK(take_from(&f).len != 0);
     CHECK(f.otlp.name_count > cached - mine);
     stop(&f);
 }
@@ -671,7 +702,7 @@ static void scopes_per_definition(void) {
     CHECK(resume(&f, 100) == TA_RUN_STABLE);
     f.actor = second;
     CHECK(resume(&f, 100) == TA_RUN_STABLE);
-    ta_str bytes = take(&f.otlp);
+    ta_str bytes = take_from(&f);
     span_view spans[32];
     uint32_t span_count = read_spans(bytes, spans, 32);
     scope_view scopes[4];
@@ -701,12 +732,13 @@ static void freed_in_turn(void) {
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = other, .out = &f.actor }) == TA_OK);
     CHECK(resume(&f, 100) == TA_RUN_STABLE);
     CHECK(ta_actor_destroy(f.core, f.actor) == TA_OK);
+    drain(&f); /* before the definition goes: a record is read while its definition is intact */
     CHECK(ta_system_retire_definition(f.core, other) == TA_OK);
     ta_definition_inspection view;
     CHECK(ta_definition_inspect(f.core, other, &view) == TA_ERR_NOT_FOUND); /* freed */
     tah_otlp_forget_definition(&f.otlp, other);
     scope_view scopes[2];
-    CHECK(read_scopes(take(&f.otlp), scopes, 2) == 1);
+    CHECK(read_scopes(take_from(&f), scopes, 2) == 1);
     CHECK(scopes[0].id == (int64_t)other && strcmp(scopes[0].family, "other") == 0);
     CHECK(strcmp(scopes[0].source, "file:///charts/other.scxml") == 0);
     stop(&f);
@@ -729,14 +761,15 @@ static void scopes_out_of_memory(void) {
             CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) ==
                   TA_OK);
             if (round == 1) {
-                (void)take(&f.otlp); /* the buffers already hold some capacity */
+                (void)take_from(&f); /* the buffers already hold some capacity */
             }
             tah_allocator_refuse_from(&f.allocator, refuse);
             (void)ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = other, .out = &second });
             (void)ta_actor_resume(f.core, &(ta_actor_resume_params){ .actor = f.actor, .budget = 100,
                                                                      .status = &(ta_run_status){ 0 } });
+            drain(&f);
             tah_allocator_refuse_from(&f.allocator, 0);
-            ta_str bytes = take(&f.otlp);
+            ta_str bytes = take_from(&f);
             if (bytes.len != 0) {
                 span_view spans[32];
                 uint32_t span_count = read_spans(bytes, spans, 32);
