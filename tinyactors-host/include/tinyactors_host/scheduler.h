@@ -54,7 +54,9 @@
  *
  * One turn calls ta_run() for up to `resumes` runnable actors, each call with
  * a microstep budget and an action budget (core ADR 0061); a call that finds
- * the actor already settled by an earlier one does nothing. What the turn learns that
+ * the actor already settled by an earlier one does nothing. The turn stops once `resumes` inputs
+ * are completed and leaves the queue as it is, so its cost is the entries it reaches, not the queue's length;
+ * entries of settled actors are dropped when they come up. What the turn learns that
  * JavaScript must hear about (an actor finished, an actor faulted) becomes a
  * record in the turn arena; the pump calls the hooks for them after the last
  * core call of the turn (ADR 0007 point 5).

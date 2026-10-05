@@ -261,11 +261,48 @@ static void resume_limit(void) {
     tah_system_free(system);
 }
 
+/* A turn costs what its resume budget allows, not the length of the runnable queue: after the budget is used the
+ * turn stops and leaves the queue as it is. Counts, not clocks: the ring after one turn still holds nearly every
+ * actor, and bootstrapping N actors takes about N / resumes turns, none of which pushes an actor twice. */
+static void turn_work_is_bounded(void) {
+    tah_system *system = NULL;
+    CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
+    ta_scxml_state_spec idle_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle") }, { 0 } };
+    ta_scxml_spec idle = { .name = S("idle"), .states = idle_states };
+    ta_definition_id chart = define(system, &idle);
+    system->budgets.resumes = 10u;
+    enum { COUNT = 2000 };
+    static ta_actor_id actors[COUNT];
+    for (int index = 0; index < COUNT; index += 1) {
+        actors[index] = spawn(system, chart);
+    }
+    CHECK(tah_ring_count(&system->sched.runnable) == COUNT);
+    tah_system_turn(system);
+    tah_system_end_turn(system);
+    CHECK(settled_count(system, actors, COUNT) == 9);
+    /* Nothing was rotated: only the paused tenth input's actor was requeued. */
+    CHECK(tah_ring_count(&system->sched.runnable) >= COUNT - 1u);
+    uint32_t turns = 1;
+    while (!tah_system_quiet(system) && turns < COUNT / 8u + 8u) {
+        tah_system_turn(system);
+        tah_system_end_turn(system);
+        turns += 1u;
+        CHECK(tah_ring_count(&system->sched.runnable) <= COUNT);
+    }
+    CHECK(tah_system_quiet(system));
+    CHECK(turns < COUNT / 8u + 8u);
+    CHECK(settled_count(system, actors, COUNT) == COUNT);
+    tah_system_close(system);
+    CHECK(tah_system_leaked_bytes(system) == 0);
+    tah_system_free(system);
+}
+
 int main(void) {
     table_pages();
     turns();
     action_budget();
     resume_limit();
+    turn_work_is_bounded();
     puts("scheduler_test passed");
     return 0;
 }

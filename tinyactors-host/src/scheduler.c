@@ -1532,22 +1532,19 @@ void tah_sched_turn(tah_sched *sched, const tah_turn_params *params) {
     /* Only actors queued before each phase began: a requeued actor waits for the next turn. */
     uint32_t pending = tah_ring_count(&sched->runnable);
     /* `resumes` bounds the inputs core completes in the turn, not the entries popped: one call of ta_run() serves
-     * every actor whose input is next, and the entries it settled are skipped when they come up. */
+     * every actor whose input is next, and the entries it settled are dropped when they come up. */
     sched->turn_left = params->budgets.resumes;
     sched->turn_bounded = true;
     for (uint32_t index = 0; index < pending; index += 1) {
+        if (sched->turn_left == 0) {
+            /* The turn's inputs are used. The entries not reached stay where they are, in order: the next turn
+             * starts with them, and one that a call settled meanwhile is dropped in O(1) when it comes up. Walking
+             * them here would make every turn cost the length of the queue. */
+            break;
+        }
         ta_actor_id actor = 0;
         if (!tah_ring_pop(&sched->runnable, &actor)) {
             break;
-        }
-        if (sched->turn_left == 0) {
-            /* The turn's inputs are used. Entries of actors a call already settled still leave the queue, so it
-             * never holds an actor twice; one that needs a call goes to the back and waits for the next turn. */
-            tah_sched_entry *waiting = tah_sched_lookup(sched, actor);
-            if (waiting != NULL && waiting->state == TAH_SCHED_RUNNABLE) {
-                tah_sched_requeue(sched, &sched->runnable, actor);
-                continue;
-            }
         }
         tah_sched_resume_one(sched, params, actor);
         if (params->stop != NULL && params->stop(params->stop_context)) {
