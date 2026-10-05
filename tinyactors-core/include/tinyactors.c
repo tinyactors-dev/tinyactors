@@ -1982,11 +1982,12 @@ TA_PRIVATE ta_result ta_heap_remove(ta_heap *heap, const ta_heap_items *items, u
  *
  * ## Users
  *
- * The atom table, whose values are atoms plus one. The trie of atoms
- * behind event names, keyed by (parent, segment); the address and session
- * tables, for their resident handles; the waiting lists keyed by address
- * bytes, in fixed mode, bounded by the envelope pool; and the index of open
- * `source_seq`s for withdrawal.
+ * The atom table, whose values are atoms plus one, and the trie of atoms
+ * behind event names, keyed by (parent, segment). The address and session
+ * tables do not use it: they grow by linear hashing, one bucket split per
+ * insert, so that no single insert's cost grows with the number of named
+ * actors (ADR 0065), where this table rehashes all its keys at once when
+ * it grows.
  */
 
 
