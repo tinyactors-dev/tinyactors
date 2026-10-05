@@ -16,7 +16,7 @@
  *     the trie as they were (counts before and after);
  *   - a take allocates nothing: the test allocator refuses every request
  *     from the first on, and the macrostep still completes;
- *   - a name whose text does not fit renderBytes has no atoms and matches
+ *   - an invoke ID with dots is one segment of the failure name, as before
  *     nothing, and the next event is still taken;
  *   - ta_interpreter_scratch_need equals the bytes ta_interpreter_init takes
  *     (eventNameDepth 8 and 64), and a chart that would run short of
@@ -356,24 +356,27 @@ static void test_tables_unchanged_and_no_allocation(void) {
     close_run(&r);
 }
 
-/* A name longer than renderBytes has no atoms, matches nothing (not even `*`), and does not stall the actor. */
-static void test_name_too_long_for_render(void) {
-    next_param(TA_PARAM_RENDER_BYTES, 256);
+/*
+ * An invoke ID is one atom even when its text has dots (generated IDs are
+ * <state>.<serial>). The name an invoke failure builds keeps it one segment:
+ * "payment.7" is not "payment", so the descriptor for invoke.payment does not
+ * match, and a many-dotted ID does not make the name deeper than
+ * eventNameDepth (8), which would have left it with no atoms at all.
+ */
+static void test_dotted_invoke_id_is_one_segment(void) {
+    next_param(TA_PARAM_EVENT_NAME_DEPTH, 8);
     run r;
     start(&r);
-    char text[400];
-    uint32_t length = 0;
-    for (uint32_t segment = 0; segment < 50; segment += 1) {
-        if (segment != 0) {
-            text[length++] = '.';
-        }
-        memcpy(text + length, "abcdefg", 7);
-        length += 7;
+    static const char *const ids[] = { "payment.7", "p.q.r.s.t.u.v" };
+    for (uint32_t index = 0; index < TA_ARRAY_COUNT(ids); index += 1) {
+        ta_invoke_id id = TA_INVOKE_ID_NONE;
+        CHECK(ta_system_intern_invoke_id(r.system, (ta_str){ ids[index], (uint32_t)strlen(ids[index]) }, &id) == TA_OK);
+        ta_event_name_id failure = 0;
+        CHECK(ta_invoke_error_name(r.system, id, STR("timeout"), &failure) == TA_OK);
+        ta_atom path[TA_TRIE_MAX_DEPTH];
+        CHECK(ta_trie_segments(&r.system->event_names.trie, failure, path) == 5u);
+        CHECK(strcmp(fire(&r, failure), "D") == 0);
     }
-    text[length] = 0;
-    CHECK(length > 256);
-    CHECK(strcmp(fire(&r, intern(&r, text)), "") == 0);
-    CHECK(strcmp(fire(&r, intern(&r, "order")), "AD") == 0);
     close_run(&r);
 }
 
@@ -425,7 +428,7 @@ int main(void) {
     test_worked_examples();
     test_unknown_segments();
     test_tables_unchanged_and_no_allocation();
-    test_name_too_long_for_render();
+    test_dotted_invoke_id_is_one_segment();
     test_scratch_need();
     test_scratch_refused_by_deep_names();
     CHECK(ta_test_allocator_finish(&heap) == 0);

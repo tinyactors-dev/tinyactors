@@ -31431,15 +31431,15 @@ static void ta_remove_conflicts(ta_interpreter *it) {
     it->enabled_count = kept;
 }
 
-static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, bool eventful,
-                                  ta_event_atoms event) {
-    if (!eventful) {
+/* ta_transition_matches says whether `transition` is selectable for the take: with no event (NULL) only an eventless one is. */
+static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, const ta_event_atoms *event) {
+    if (event == NULL) {
         return transition->event_patterns.length == 0;
     }
     for (uint32_t index = 0; index < transition->event_patterns.length; index += 1) {
         if (ta_event_pattern_matches(it->definition,
                                      &it->definition->event_patterns[transition->event_patterns.offset + index],
-                                     event)) {
+                                     *event)) {
             return true;
         }
     }
@@ -31447,46 +31447,33 @@ static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *t
 }
 
 /*
- * ta_interpreter_resolve_event turns the name of the event just taken into
- * atoms in it->event_atoms, once, so that selection compares atoms and never
+ * ta_interpreter_resolve_event puts the name of the event just taken into
+ * it->event_atoms as atoms, once, so that selection compares atoms and never
  * walks the trie per descriptor (names.md, "Matching without interning"). It
- * is the one place that knows where the name's bytes come from. Until the
- * name area (Phase 4.2) they do not exist: an event carries a trie ID, so the
- * name is rendered to dotted text in the render arena and resolved back with
- * ta_name_resolve. 4.2 swaps that source for the envelope's own bytes and
- * nothing else changes.
+ * is the one place that knows where the name's atoms come from. Until the
+ * name area (Phase 4.2) the envelope carries no name bytes, only a trie node,
+ * so the atoms are the node's own path (ta_trie_segments). They are not
+ * rendered to dotted text and split again: an atom can contain a dot (an
+ * invoke ID such as s3.7 is one atom of error.communication.invoke.<id>.<reason>),
+ * and splitting would make it two segments and change which descriptors
+ * match. 4.2 swaps this source for the envelope's own bytes and ta_name_resolve.
  *
- * Needs: the interpreter initialised (event_atoms has eventNameDepth room)
- * and no live data in system->render, which holds nothing across a take
- * (ta_unit_reserve resets it for each unit). Guarantees: it never interns,
- * never grows an atom table or the trie and never allocates beyond the
- * render arena, which it resets before it returns, so it may run inside a
- * macrostep. The dotted text has call lifetime. Failure: none is reported.
- * If the text does not fit renderBytes, or the name cannot be resolved, the
- * event has zero atoms and matches no descriptor, as if it were unnamed. It
- * is not given back as TA_ERR_NOMEM: a name that never fits would be taken
- * again forever and stall the actor.
+ * Needs: the interpreter initialised (event_atoms has eventNameDepth room,
+ * and no name is deeper than that). Guarantees: it never interns, never
+ * allocates and never changes the atom table or the trie, so it may run
+ * inside a macrostep. A name that is not a name of this system has zero atoms
+ * and matches no descriptor.
  */
 static void ta_interpreter_resolve_event(ta_interpreter *it, const ta_event *event) {
-    ta_system *system = it->system;
-    it->event_atom_count = 0;
-    uint32_t needed = 0;
-    (void)ta_event_name_format(system, &(ta_event_name_format_params){ .name = event->name, .needed = &needed });
-    if (needed == 0) {
-        return; /* not a name of this system */
+    ta_atom path[TA_TRIE_MAX_DEPTH];
+    uint32_t count = ta_trie_segments(&it->system->event_names.trie, event->name, path);
+    if (count > it->event_atom_capacity) {
+        count = 0; /* cannot happen: the trie's max_depth is the capacity */
     }
-    char *text = ta_arena_alloc(&system->render, needed, 1u);
-    if (text != NULL &&
-        ta_event_name_format(system, &(ta_event_name_format_params){ .name = event->name, .buffer = text,
-                                                                     .capacity = needed, .needed = &needed }) == TA_OK) {
-        uint32_t count = 0;
-        if (ta_name_resolve(&(ta_name_resolve_params){ .atoms = &system->atoms, .name = { .ptr = text, .len = needed - 1u },
-                                                       .out = it->event_atoms, .capacity = it->event_atom_capacity,
-                                                       .count = &count }) == TA_OK) {
-            it->event_atom_count = count;
-        }
+    for (uint32_t index = 0; index < count; index += 1) {
+        it->event_atoms[index] = path[index];
     }
-    ta_arena_reset(&system->render);
+    it->event_atom_count = count;
 }
 
 /* Selects the optimal enabled transition set; event is null for eventless selection. */
@@ -31498,6 +31485,7 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
         ta_interpreter_resolve_event(it, event);
     }
     ta_event_atoms atoms = { .atoms = it->event_atoms, .count = it->event_atom_count };
+    const ta_event_atoms *taken = event != NULL ? &atoms : NULL;
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {
         if (!ta_bits_get(it->active, atomic) || !ta_definition_is_atomic(definition, atomic)) {
             continue;
@@ -31508,7 +31496,7 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
             for (uint32_t index = 0; index < transitions.length && !found; index += 1) {
                 ta_transition_id id = transitions.offset + index;
                 const ta_transition_def *transition = &definition->transitions[id];
-                if (!ta_transition_matches(it, transition, event != NULL, atoms)) {
+                if (!ta_transition_matches(it, transition, taken)) {
                     continue;
                 }
                 bool enabled = true;
