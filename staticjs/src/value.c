@@ -584,6 +584,23 @@ sjs_result sjs_object_put_key(sjs_context *context, sjs_object **object, sjs_put
     return SJS_OK;
 }
 
+sjs_result sjs_object_literal(sjs_context *context, sjs_literal literal, sjs_value *out) {
+    uint32_t n = literal.keys == NULL ? 0 : literal.keys->length;
+    sjs_object *o;
+    sjs_result r = object_alloc(context, literal.capacity, &o);
+    if (r != SJS_OK) return r;
+    for (uint32_t i = 0; i < n; i++) {
+        sjs_string *key = SJS_AS_STRING(literal.keys->items[i]);
+        sjs_ref(literal.keys->items[i]);
+        o->entries[i].key = key;
+        o->entries[i].value = literal.values[i];
+    }
+    o->count = n;
+    if (n >= SJS_INDEX_FROM) lookup_build(context, &o->h);
+    *out = sjs_heap_value(SJS_OBJECT, &o->h);
+    return SJS_OK;
+}
+
 sjs_result sjs_object_new(sjs_context *context, uint32_t capacity, sjs_value *out) {
     if (context == NULL || out == NULL) return SJS_ERR_INVALID;
     sjs_object *o;
