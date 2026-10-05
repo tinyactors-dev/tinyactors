@@ -1947,7 +1947,9 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     if (status == napi_ok) status = napi_create_object(env, &faults);
     for (uint32_t code = 0; status == napi_ok && code < TAH_FAULT_CODES; code += 1u) {
         if (sched.faults[code] != 0) {
-            status = tna_set_number(env, faults, tna_result_code(-(ta_result)code), (double)sched.faults[code]);
+            status = tna_set_number(env, faults,
+                                    code == TAH_FAULT_RUNAWAY ? "runaway" : tna_result_code(-(ta_result)code),
+                                    (double)sched.faults[code]);
         }
     }
     if (status == napi_ok) status = napi_set_named_property(env, out, "faults", faults);

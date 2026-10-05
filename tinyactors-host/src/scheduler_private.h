@@ -78,6 +78,29 @@ typedef struct tah_envelopes {
     uint32_t live;
 } tah_envelopes;
 
+/*
+ * What a caller of tah_sched_run wants to learn about one actor's input: the
+ * replay driver, which runs an actor the scheduler leaves alone. Notices for
+ * that actor are written here and not settled by the scheduler.
+ */
+typedef struct tah_run_watch {
+    ta_actor_id actor;
+    bool completed; /* an input of `actor` ended */
+    bool done;      /* ... and the session finished */
+    bool ignored;   /* ... and its event enabled no transition */
+} tah_run_watch;
+
+/*
+ * Calls ta_run() once (more, while its notice array is full) with the turn's
+ * budgets and settles every actor the notices name, as a resume used to settle
+ * one: the waiter of a send(), the entry's state, the recorder's notes, a
+ * record when a session finished. `watch`, when given, receives the notices of
+ * its actor instead. The status of the last call is stored in `*status`.
+ * TA_ERR_NOMEM is ta_run()'s: the input stays where it was and a later call
+ * continues it.
+ */
+ta_result tah_sched_run(tah_sched *sched, const tah_turn_params *params, tah_run_watch *watch, ta_run_status *status);
+
 struct tah_sched {
     ta_allocator allocator; /* the scheduling category */
     tah_vec pages;          /* tah_sched_entry *, one per page */
@@ -86,6 +109,11 @@ struct tah_sched {
     tah_envelopes envelopes;
     /* Trace parents of queued traced messages (ta_trace_parent). */
     tah_free_list traces;
+    /* Inputs the running turn may still complete (its `resumes`), while it
+     * runs actors; `turn_bounded` is false outside the turn's first phase, as
+     * in a replay's own calls, which no turn limit bounds. */
+    uint32_t turn_left;
+    bool turn_bounded;
     uint32_t known;         /* entries not in state NONE */
     uint32_t stranded;      /* entries marked TAH_SCHED_STRANDED, at most (a turn recounts) */
     /* Accepted messages not yet delivered or reported: mailboxes plus the dead list. */

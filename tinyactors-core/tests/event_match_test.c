@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures = 0;
 
@@ -181,10 +182,10 @@ static void start(run *r) {
     CHECK(open_with(r, &chart) == TA_OK);
     CHECK(ta_actor_spawn(r->system, &(ta_actor_spawn_params){ .definition = r->definition, .out = &r->actor }) ==
           TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000,
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(r->system, &(test_resume_params){ .actor = r->actor, .budget = 1000,
                                                                 .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_RUN_STABLE);
 }
 
 static ta_event_name_id intern(run *r, const char *dotted) {
@@ -201,10 +202,10 @@ static const char *fire(run *r, ta_event_name_id name) {
     ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .actor = r->actor, .event = &event,
                                                                   .time = ta_system_time(r->system) }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000,
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(r->system, &(test_resume_params){ .actor = r->actor, .budget = 1000,
                                                                 .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_RUN_STABLE);
     return script_log;
 }
 

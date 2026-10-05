@@ -110,7 +110,7 @@ typedef struct {
      * when its macrostep ends, cleared with the event. Fills padding. */
     bool external_ignored;
     /* `time` holds the running macrostep's logical time (ADR 0089 section
-     * 9), taken by the first ta_actor_resume() of the macrostep. */
+     * 9), taken when ta_run() first runs the macrostep. */
     bool timed;
     ta_time time;
     /* The external event of the running macrostep. Inspection reports it
@@ -188,6 +188,14 @@ struct ta_actor {
     uint64_t *late_initialized;
     void *datamodel_instance;
     bool datamodel_initialized;
+    /*
+     * ta_run's two counts for this session (run.h): `started` is true while
+     * its id waits in the started queue; `queued` is how many admitted
+     * envelopes name it. Both sit in the padding before the next pointer, so
+     * they cost nothing per actor.
+     */
+    bool started;
+    uint16_t queued;
     ta_actor_sparse_state *sparse;
     /* Its event block (ADR 0064), or null. */
     ta_event_block *event_block;
@@ -286,6 +294,15 @@ void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 /* The host directory's compare-and-swaps, which every residency change uses. */
 ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
+
+/*
+ * ta_actor_accept_origin fills the origin of an event offered for `actor`
+ * when it has none and names an invocation of the actor (ADR 0068), and
+ * checks an I/O origin the host supplied. It changes only `event`, never
+ * allocates, and answers TA_ERR_INVALID for an origin this system never
+ * issued.
+ */
+ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor *actor, ta_event *event);
 
 /* The external event the actor holds, waiting or taken, or null. */
 const ta_event *ta_actor_external_event(const ta_actor *actor);

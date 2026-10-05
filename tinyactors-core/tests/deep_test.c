@@ -14,6 +14,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures = 0;
 
@@ -150,8 +151,8 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
     return name;
 }
 
-static ta_result resume(ta_system *system, ta_actor_id actor, ta_run_status *status) {
-    return ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = status });
+static ta_result resume(ta_system *system, ta_actor_id actor, test_run_status *status) {
+    return test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = status });
 }
 
 /* ------------------------------------------------------------------------
@@ -189,11 +190,11 @@ static void deep_states(void) {
     check_export(system, id, DEPTH);
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume(system, actor, &status) == TA_OK && status == TA_RUN_STABLE);
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(resume(system, actor, &status) == TA_OK && status == TEST_RUN_STABLE);
     ta_event event = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
-    CHECK(resume(system, actor, &status) == TA_OK && status == TA_RUN_STABLE);
+    CHECK(resume(system, actor, &status) == TA_OK && status == TEST_RUN_STABLE);
     ta_state_id b = 0;
     CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){ .definition = id, .id = STR("b"),
                                                                               .out = &b }) == TA_OK);
@@ -261,8 +262,8 @@ static void deep_actions(void) {
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
     conditions = bindings = 0;
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume(system, actor, &status) == TA_OK && status == TA_RUN_STABLE);
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(resume(system, actor, &status) == TA_OK && status == TEST_RUN_STABLE);
     CHECK(conditions == DEPTH / 2u);
     CHECK(bindings == DEPTH / 2u);
     ta_system_destroy(system);
@@ -319,8 +320,8 @@ static void frames_are_sized_at_creation(void) {
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
     conditions = bindings = 0;
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume(system, actor, &status) == TA_OK && status == TA_RUN_STABLE);
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(resume(system, actor, &status) == TA_OK && status == TEST_RUN_STABLE);
     CHECK(conditions == DEPTH / 2u);
     CHECK(bindings == DEPTH / 2u);
     ta_system_destroy(system);

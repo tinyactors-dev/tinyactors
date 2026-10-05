@@ -166,11 +166,10 @@ router_group = TinyactorsTest.scenarios 'router' do
     actor.deliver 'go'
     assert_equal 1, actor.data('.pings')
     # The self-send is submitted while its sender is still in its macrostep,
-    # so ta_actor_deliver answers busy, the router retries, and core offers
-    # it again once the actor is stable.
+    # and core admits it behind the macrostep (core ADR 0099): one submit.
     submits = router.entries('submit')
-    assert_equal [%w[retry err_busy], %w[accepted ok]], submits.map { |entry| entry.values_at(:status, :result) }
-    assert_equal %w[ping ping], submits.map { |entry| entry.dig(:event, :name_text) }
+    assert_equal [%w[accepted ok]], submits.map { |entry| entry.values_at(:status, :result) }
+    assert_equal %w[ping], submits.map { |entry| entry.dig(:event, :name_text) }
     assert_equal({ kind: 'runtime', runtime: actor.handle }, submits[0][:destination])
     assert_equal({ kind: 'actor', actor: { kind: 'runtime', runtime: actor.handle } }, submits[0].dig(:event, :origin))
   end

@@ -1,19 +1,21 @@
 'use strict';
 
-// A quarantined invoked child tells its parent (napi ADR 0025): the parent
-// gets error.communication.invoke.<id>.quarantined with { code, message },
-// the child stays quarantined, and the invocation stays active, so a
-// released child that finishes still sends done.invoke. Runs on Node and
-// Bun.
+// An invoked child that runs away (core ADR 0075) is abandoned by core
+// (core ADR 0099 section 7), not quarantined: the fault hook hears of it, the
+// child keeps the configuration of its last microstep and stands stable, and
+// its parent is not told (napi ADR 0025's `.quarantined` event goes with the
+// quarantine, core ADR 0103 section 8): the invocation stays active, and a
+// child that finishes later still sends done.invoke. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
-const { createSystem, decodeTraces, stepSpanID } = require('..');
+const { createSystem } = require('..');
 const { ecmascript } = require('../tools/ecmascript-datamodel');
 
 const NS = 'xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"';
 
 // Runs away (80 microsteps against a limit of 50) when it starts, and again
-// on `again`; a released run finishes, the second one in a final state.
+// on the second `again`; between them it finishes its macrostep, and the
+// third `again` ends in a final state.
 const TWICE = `<scxml ${NS} name="twice" initial="spin1">
   <datamodel><data id="i" expr="0"/></datamodel>
   <state id="spin1">
@@ -30,15 +32,14 @@ const TWICE = `<scxml ${NS} name="twice" initial="spin1">
   <final id="done"/>
 </scxml>`;
 
-// Waits in `waiting` for its child `w`, keeping every quarantine report.
+// Waits in `waiting` for its child `w`, keeping every error report.
 function waiter(child) {
   return `<scxml ${NS} name="waiter" initial="waiting">
-    <datamodel><data id="errors" expr="[]"/><data id="info" expr="null"/></datamodel>
+    <datamodel><data id="errors" expr="[]"/></datamodel>
     <state id="waiting">
       <invoke type="scxml" id="w"><content>${child}</content></invoke>
       <transition event="error.communication.invoke.w.quarantined">
         <assign location="errors" expr="errors.concat([_event.name])"/>
-        <assign location="info" expr="_event.data"/>
       </transition>
       <transition event="poke"><send event="again" target="#_w"/></transition>
       <transition event="done.invoke.w" target="finished"/>
@@ -48,8 +49,6 @@ function waiter(child) {
     <state id="left"/>
   </scxml>`;
 }
-
-const REPORT = 'error.communication.invoke.w.quarantined';
 
 function setup(options = {}) {
   const faults = [];
@@ -65,42 +64,44 @@ function setup(options = {}) {
   return { system, faults };
 }
 
-// The parent is told, with the fault hook's code and message, and keeps
-// waiting; the child stays quarantined.
-async function told() {
+// The fault hook hears of the runaway; the child is stable, and the parent
+// keeps waiting without being told.
+async function notTold() {
   const { system, faults } = setup();
   const parent = system.spawn(system.define(waiter(TWICE), { format: 'scxml' }));
   await system.flush();
   assert.equal(faults.length, 1);
   assert.equal(faults[0].code, 'runaway');
   const view = parent.inspect();
-  assert.deepEqual(view.data.errors, [REPORT]);
-  assert.deepEqual({ ...view.data.info }, { code: 'runaway', message: faults[0].message });
+  assert.deepEqual(view.data.errors, [], 'the parent is not told');
   assert.deepEqual(view.activeStates, ['waiting']);
-  assert.equal(faults[0].actor.inspect().scheduling, 'quarantined', 'the child stays quarantined');
+  assert.equal(faults[0].actor.inspect().scheduling, 'idle', 'the child is stable, not quarantined');
+  assert.deepEqual(faults[0].actor.inspect().activeStates, ['spin1']);
   system.close();
 }
 
-// A released child carries on: a second runaway reports again, and a child
-// that finishes still sends done.invoke.
-async function releasedChildFinishes() {
+// The child carries on with the next input: a second runaway reports again,
+// and a child that finishes still sends done.invoke.
+async function childFinishes() {
   const { system, faults } = setup();
   const parent = system.spawn(system.define(waiter(TWICE), { format: 'scxml' }));
   await system.flush();
   const child = faults[0].actor;
-  system.release(child);
+
+  parent.post('poke'); // `again` enables nothing in spin1, which finishes its loop
   await system.flush();
-  assert.deepEqual(child.inspect().activeStates, ['idle'], 'the released macrostep finished');
-  assert.equal(parent.inspect().data.errors.length, 1, 'release itself reports nothing');
+  assert.deepEqual(child.inspect().activeStates, ['idle']);
+  assert.equal(faults.length, 1);
 
   parent.post('poke');
   await system.flush();
   assert.equal(faults.length, 2, 'the child ran away again');
-  assert.deepEqual(parent.inspect().data.errors, [REPORT, REPORT], 'each quarantine is reported');
+  assert.deepEqual(child.inspect().activeStates, ['spin2']);
 
-  system.release(child);
+  parent.post('poke');
   await system.flush();
   assert.deepEqual(parent.inspect().activeStates, ['finished'], 'done.invoke arrived');
+  assert.deepEqual(parent.inspect().data.errors, []);
   system.close();
 }
 
@@ -113,13 +114,12 @@ async function parentLeaves() {
   parent.post('leave');
   await system.flush();
   assert.deepEqual(parent.inspect().activeStates, ['left']);
-  assert.equal(child.destroyed, true, 'the quarantined child is destroyed with its invocation');
+  assert.equal(child.destroyed, true, 'the child is destroyed with its invocation');
   assert.equal([...system.actors()].length, 1);
   system.close();
 }
 
-// A parent destroyed from the fault hook: the report was already taken, and
-// nothing crashes or waits.
+// A parent destroyed from the fault hook: nothing crashes or waits.
 async function parentDestroyed() {
   let parent = null;
   const { system, faults } = setup({ onFault: () => system.destroy(parent) });
@@ -131,59 +131,11 @@ async function parentDestroyed() {
   system.close();
 }
 
-// Only the direct parent is told: a grandchild's quarantine reaches the
-// child, which runs normally, and not the top-level actor.
-async function nested() {
-  const { system, faults } = setup();
-  const middle = `<scxml ${NS} name="middle" initial="m0">
-    <datamodel><data id="errors" expr="[]"/></datamodel>
-    <state id="m0">
-      <invoke type="scxml" id="g"><content>${TWICE}</content></invoke>
-      <transition event="error.communication.invoke.g.quarantined">
-        <assign location="errors" expr="errors.concat([_event.name])"/>
-      </transition>
-    </state>
-  </scxml>`;
-  const top = system.spawn(system.define(waiter(middle), { format: 'scxml' }));
-  await system.flush();
-  assert.equal(faults.length, 1, 'only the grandchild faulted');
-  assert.deepEqual(top.inspect().data.errors, [], 'the top-level actor is not told');
-  const middleView = [...system.actors()].find((view) => view.definition.family === 'middle');
-  assert.ok(middleView, 'the middle child is resident');
-  assert.deepEqual(middleView.data.errors, ['error.communication.invoke.g.quarantined']);
-  system.close();
-}
-
-// The report runs under the child's faulting step (core ADR 0067): the
-// parent's macrostep that takes it is in the trace the child ran in, and
-// its parent span is the child's step where the limit stopped it
-// (macrostep 1, microstep 50).
-async function traced() {
-  const { system, faults } = setup();
-  const batches = [];
-  system.setTraceSink((bytes) => batches.push(bytes), { detail: 'full' });
-  system.spawn(system.define(waiter(TWICE), { format: 'scxml' }));
-  await system.flush();
-  assert.equal(faults.length, 1);
-  const spans = batches.flatMap((bytes) => decodeTraces(bytes));
-  const bootstrap = spans.find((span) => span.name === 'scxml.macrostep bootstrap');
-  const taken = spans.find((span) => span.name === `scxml.microstep ${REPORT}`);
-  assert.ok(bootstrap && taken, `spans: ${JSON.stringify(spans.map((span) => span.name))}`);
-  const macrostep = spans.find((span) => span.spanID === taken.parentSpanID);
-  assert.ok(macrostep, 'the microstep that took the report has its macrostep');
-  assert.equal(macrostep.traceID, bootstrap.traceID, 'the report stays in the trace of the step that invoked');
-  const session = faults[0].actor.inspect().sessionID;
-  assert.equal(macrostep.parentSpanID, stepSpanID(session, 1, 50), 'its parent span is the child\'s faulting step');
-  system.close();
-}
-
 (async () => {
-  await told();
-  await traced();
-  await releasedChildFinishes();
+  await notTold();
+  await childFinishes();
   await parentLeaves();
   await parentDestroyed();
-  await nested();
   console.log('quarantine.js passed');
 })().catch((error) => {
   console.error(error);

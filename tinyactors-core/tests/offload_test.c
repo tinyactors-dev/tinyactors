@@ -12,6 +12,7 @@
 
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures;
 
@@ -171,10 +172,10 @@ static void finish(fixture *f) {
 }
 
 static void run(fixture *f, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f->system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(f->system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_RUN_STABLE);
 }
 
 static ta_actor_id spawn(fixture *f, const ta_actor_address *address) {

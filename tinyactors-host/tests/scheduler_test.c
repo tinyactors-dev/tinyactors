@@ -184,32 +184,54 @@ static void action_budget(void) {
 
     system->budgets.actions = 8u;
     ta_actor_id busy = spawn(system, chart);
+    ta_actor_id other = 0;
     uint32_t turns = 0;
     while (tah_sched_lookup(&system->sched, busy)->state == TAH_SCHED_RUNNABLE) {
         tah_system_turn(system);
         tah_system_end_turn(system);
         turns += 1u;
         if (turns == 1u) {
-            /* Another actor bootstraps while the busy one is paused. */
-            ta_actor_id other = spawn(system, idle_chart);
+            /* Another actor is spawned while the busy one is paused. Core runs one input at a time (core ADR 0099
+             * section 4; ADR 0103 adds slots), so its bootstrap waits until the paused macrostep ends. */
+            other = spawn(system, idle_chart);
             tah_system_turn(system);
             tah_system_end_turn(system);
             turns += 1u;
-            CHECK(residency(system, other) == TA_ACTOR_IDLE);
+            CHECK(residency(system, other) == TA_ACTOR_RUNNING);
             CHECK(tah_sched_lookup(&system->sched, busy)->state == TAH_SCHED_RUNNABLE);
         }
         CHECK(turns < 100u);
     }
-    CHECK(turns >= ACTIONS / 8);
+    /* A turn makes one ta_run call for each runnable actor, and each call continues the paused macrostep, so
+     * the 40 units, 8 to a call, take more than one turn. */
+    CHECK(turns >= 3u);
     CHECK(residency(system, busy) == TA_ACTOR_IDLE);
-    CHECK(tah_system_quiet(system));
+    while (!tah_system_quiet(system)) {
+        tah_system_turn(system);
+        tah_system_end_turn(system);
+        turns += 1u;
+        CHECK(turns < 200u);
+    }
+    CHECK(residency(system, other) == TA_ACTOR_IDLE); /* it bootstrapped after the busy one */
 
     tah_system_close(system);
     CHECK(tah_system_leaked_bytes(system) == 0);
     tah_system_free(system);
 }
 
-/* The resume limit bounds one turn; the rest waits for the next. */
+/* How many of `actors` the scheduler has settled (they are no longer RUNNABLE). */
+static uint32_t settled_count(tah_system *system, const ta_actor_id *actors, uint32_t count) {
+    uint32_t settled = 0;
+    for (uint32_t index = 0; index < count; index += 1u) {
+        tah_sched_entry *entry = tah_sched_lookup(&system->sched, actors[index]);
+        settled += entry != NULL && entry->state != TAH_SCHED_RUNNABLE ? 1u : 0u;
+    }
+    return settled;
+}
+
+/* The resume limit bounds the inputs one turn completes; the rest waits for the next. A ta_run() call serves
+ * whichever actors' inputs are next, so the queue keeps entries of actors the call already settled, and the
+ * count of settled actors is what the limit bounds. */
 static void resume_limit(void) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
@@ -218,13 +240,17 @@ static void resume_limit(void) {
     ta_definition_id chart = define(system, &idle);
     system->budgets.resumes = 10u;
     enum { COUNT = 25 };
+    ta_actor_id actors[COUNT];
     for (int index = 0; index < COUNT; index += 1) {
-        spawn(system, chart);
+        actors[index] = spawn(system, chart);
     }
     CHECK(tah_ring_count(&system->sched.runnable) == COUNT);
+    CHECK(settled_count(system, actors, COUNT) == 0);
     tah_system_turn(system);
     tah_system_end_turn(system);
-    CHECK(tah_ring_count(&system->sched.runnable) == COUNT - 10);
+    /* The turn's 10 microsteps: nine bootstraps end, and the tenth is stopped inside its macrostep, which the next
+     * turn continues first. */
+    CHECK(settled_count(system, actors, COUNT) == 9);
     CHECK(system->turn_pending); /* work remains: another turn was asked for */
     tah_system_turn(system);
     tah_system_turn(system);

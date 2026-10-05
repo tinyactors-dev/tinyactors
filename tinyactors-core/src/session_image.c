@@ -577,7 +577,7 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
      * image recorded as idle, so it has a macrostep to run again.
      */
     if (ta_interpreter_internal_pending(actor)) {
-        ta_interpreter_start_macrostep(actor, NULL);
+        ta_interpreter_start_macrostep(system, actor, NULL);
     }
     return TA_OK;
 }
@@ -627,6 +627,11 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     ta_session_image *image = (ta_session_image *)params->image;
     ta_definition_id definition_id = 0;
     ta_result result = ta_session_image_definition(system, image, &definition_id);
+    if (result != TA_OK) {
+        return result;
+    }
+    /* A restored macrostep, or the report of a lost invocation, starts one (run.h): room first. */
+    result = ta_run_reserve_start(system);
     if (result != TA_OK) {
         return result;
     }
@@ -781,6 +786,9 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         ta_actor_free(system, actor); /* frees its delayed sends too */
         return result;
     }
+    if (actor->macrostep) {
+        ta_run_start(system, actor); /* the image was captured inside a macrostep: ta_run continues it */
+    }
     *params->out = id;
     return TA_OK;
 }
@@ -822,6 +830,10 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
      * to hold its place, so evicting it would simply lose it. */
     if (actor->record.self.kind != TA_ACTOR_REF_NAMED) {
         return TA_ERR_INVALID;
+    }
+    /* Inputs admitted for it would be refused when they came up (ADR 0099 section 5): the host waits. */
+    if (actor->queued != 0) {
+        return TA_ERR_BUSY;
     }
     const ta_session_image *image = params->image;
     /*

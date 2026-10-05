@@ -55,32 +55,28 @@ static ta_result tah_replay_origin_of(tah_system *system, ta_str origin, ta_str 
 }
 
 
-/* Resumes a replaying actor until it is between macrosteps; `done` when it finished. */
-static ta_result tah_replay_resume(tah_system *system, ta_actor_id actor, bool unlimited, bool *ignored, bool *done) {
-    uint32_t budget = system->budgets.microsteps != 0 ? system->budgets.microsteps : 64u;
-    for (;;) {
-        ta_run_status status = TA_RUN_STABLE;
-        bool took_nothing = false;
-        system->inside_core = true;
-        ta_result result = ta_actor_resume(system->core, &(ta_actor_resume_params){
-                                                             .actor = actor,
-                                                             .budget = budget,
-                                                             .status = &status,
-                                                             .action_budget = system->budgets.actions,
-                                                             .no_microstep_limit = unlimited,
-                                                             .ignored = &took_nothing,
-                                                         });
-        tah_system_leave_core(system);
+/*
+ * Runs core until the replaying actor is between macrosteps; `done` when it
+ * finished, `ignored` when its event enabled no transition. Core runs what it
+ * admitted in the order it admitted it (core ADR 0099), so the call may also
+ * run other actors' inputs; the scheduler settles those, and only the
+ * replaying actor's notices are read here.
+ */
+static ta_result tah_replay_resume(tah_system *system, ta_actor_id actor, bool *ignored, bool *done) {
+    tah_turn_params params = tah_system_turn_params(system);
+    tah_run_watch watch = { .actor = actor };
+    ta_run_status status = TA_RUN_MORE;
+    while (status != TA_RUN_IDLE) {
+        ta_result result = tah_sched_run(&system->sched, &params, &watch, &status);
         if (result != TA_OK) {
             return result;
         }
-        if (status == TA_RUN_PAUSED) {
-            continue;
-        }
-        *ignored = took_nothing;
-        *done = status == TA_RUN_DONE;
-        return TA_OK;
     }
+    ta_actor_inspection view;
+    bool finished = ta_actor_inspect(system->core, actor, &view) == TA_OK && view.residency == TA_ACTOR_DONE;
+    *ignored = watch.ignored;
+    *done = watch.done || finished;
+    return TA_OK;
 }
 
 
@@ -148,7 +144,7 @@ static ta_result tah_replay_event_of(tah_system *system, const tah_replay_event_
 /* Resumes a replaying actor until it is between macrosteps (its bootstrap, or internal events). */
 static ta_result tah_replay_settle(tah_system *system, ta_actor_id actor, bool *finished) {
     bool ignored = false;
-    return tah_replay_resume(system, actor, false, &ignored, finished);
+    return tah_replay_resume(system, actor, &ignored, finished);
 }
 
 ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *params) {
@@ -224,7 +220,7 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
         return result;
     }
     bool ignored = false;
-    result = tah_replay_resume(system, params->actor, false, &ignored, &finished);
+    result = tah_replay_resume(system, params->actor, &ignored, &finished);
     if (result == TA_OK) {
         if (params->consumed != NULL) {
             *params->consumed = !ignored;

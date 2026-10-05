@@ -242,6 +242,7 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
  */
 void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
+    ta_run_actor_gone(system, actor);
     ta_actor_discard_activation_effects(actor);
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
@@ -586,8 +587,13 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
          * (ADR 0092 section 3). */
         return TA_ERR_UNSUPPORTED;
     }
+    /* The bootstrap is a started macrostep (run.h): room for it comes first, so queueing it cannot fail. */
+    ta_result result = ta_run_reserve_start(system);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_actor *actor = NULL;
-    ta_result result = ta_actor_new(system, definition, &actor);
+    result = ta_actor_new(system, definition, &actor);
     if (result != TA_OK) {
         return result;
     }
@@ -651,6 +657,7 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
         ta_invoke_attach_child(system, params->parent, id);
     }
     ta_trace_lifecycle(system, actor, TA_TRACE_SPAWNED, &params->trace);
+    ta_run_start(system, actor);
     *params->out = id;
     return TA_OK;
 }
@@ -859,7 +866,8 @@ ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_params 
     if (actor->finished) {
         return TA_ERR_DONE;
     }
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL || ta_interpreter_internal_pending(actor)) {
+    if (actor->macrostep || actor->queued != 0 || ta_actor_external_event(actor) != NULL ||
+        ta_interpreter_internal_pending(actor)) {
         return TA_ERR_BUSY;
     }
     const ta_definition *definition = actor->definition;
@@ -974,8 +982,12 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
     if (at != NULL && *at > ta_clock_now(&system->clock)) {
         return TA_ERR_INVALID;
     }
+    ta_result result = ta_run_reserve_start(system);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_actor_ref self = {0};
-    ta_result result = ta_actor_prepared_self(system, params, definition, &self);
+    result = ta_actor_prepared_self(system, params, definition, &self);
     if (result != TA_OK) {
         return result;
     }
@@ -1023,6 +1035,9 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
         ta_actor_release_slot(system, id);
         ta_actor_free(system, actor);
         return result;
+    }
+    if (actor->macrostep) {
+        ta_run_start(system, actor); /* a state-restored actor starts idle: its bootstrap is past */
     }
     *params->out = id;
     return TA_OK;
@@ -1142,7 +1157,7 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
     if (actor->finished) {
         return TA_ERR_DONE;
     }
-    if (actor->macrostep || actor->record.residency != TA_ACTOR_IDLE) {
+    if (actor->macrostep || actor->queued != 0 || actor->record.residency != TA_ACTOR_IDLE) {
         return TA_ERR_BUSY;
     }
     bool replaying = ta_actor_replaying(actor);
@@ -1153,7 +1168,10 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
     }
     /* Everything that can fail comes first, so a refusal changes nothing. */
     uint32_t sends = ta_actor_activation_send_count(actor, at);
-    ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &actor->sparse->timers, sends);
+    ta_result result = ta_run_reserve_start(system); /* a lost invocation or a pending start may begin a macrostep */
+    if (result == TA_OK && sends != 0) {
+        result = ta_timer_reserve(&system->timers, &actor->sparse->timers, sends);
+    }
     if (result == TA_OK && replaying) {
         result = ta_invoke_prepare_retire(system, actor);
     }
@@ -1174,11 +1192,12 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
         /* Its services never started, and the world moved on while it was
          * away: each active invocation is reported lost, as after a load. */
         if (ta_invoke_retire_all(system, actor)) {
-            ta_interpreter_start_macrostep(actor, NULL);
+            ta_interpreter_start_macrostep(system, actor, NULL);
         }
     } else if (actor->sparse != NULL && actor->sparse->pending_invokes.count != 0) {
         actor->macrostep = true;
         actor->record.residency = TA_ACTOR_RUNNING;
+        ta_run_start(system, actor);
     }
     return TA_OK;
 }
@@ -1230,7 +1249,7 @@ void ta_actor_move_clock(ta_actor *actor, ta_time time) {
  * the actor's invocations an invoke origin when it has none (ADR 0068).
  * That covers hosts that post invoker events through their own mailbox.
  */
-static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor *actor, ta_event *event) {
+ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor *actor, ta_event *event) {
     if (event->origin.kind == TA_ORIGIN_IO) {
         const ta_io_origin *io = &event->origin.as.io;
         if (ta_system_io_at(system, io->processor) == NULL ||
@@ -1260,123 +1279,16 @@ ta_result ta_operator_jump_bytes(uint32_t count, uint32_t *bytes) {
     return TA_OK;
 }
 
-/*
- * ta_actor_offer is the admission test both ta_actor_deliver and
- * ta_actor_transition apply (ADR 0055, ADR 0082): the checks in the order
- * that makes the result alone the host's decision, then the steps that can
- * fail (the operator transition's allocation and the event block), then the
- * steps that cannot. `transition` is NULL for an ordinary delivery. It
- * allocates only at this safe point and leaves nothing behind on any result
- * but TA_OK. The event lives in the actor's event block until its macrostep
- * ends (ADR 0069), and the jump, when there is one, in the same place until
- * the macrostep takes the event.
- */
-static ta_result ta_actor_offer(ta_system *system, const ta_actor_deliver_params *params,
-                                const ta_operator_transition *transition) {
-    const ta_event *event = params->event;
-    ta_actor *actor = ta_actor_lookup(system, params->actor);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    if (!ta_trie_valid(&system->event_names.trie, event->name) || event->name == TA_EVENT_NAME_ROOT ||
-        (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||
-        !ta_actor_input_time_valid(system, actor, params->time)) {
-        return TA_ERR_INVALID;
-    }
-    /* Before busy: a finished actor never becomes free again (ADR 0055). */
-    if (actor->finished) {
-        return TA_ERR_DONE;
-    }
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
-        return TA_ERR_BUSY;
-    }
-    /* An idle actor's configuration is the one the operator transition runs
-     * from: it is the first step its macrostep takes (ADR 0082). */
-    if (transition != NULL && transition->source != TA_STATE_NONE &&
-        !ta_actor_state_active(actor, transition->source)) {
-        return TA_ERR_INVALID;
-    }
-    ta_event accepted = *event;
-    ta_result result = ta_actor_accept_origin(system, actor, &accepted);
-    if (result != TA_OK) {
-        return result;
-    }
-    /* The operator transition, and the event block the event lives in until
-     * its macrostep ends (ADR 0069), are the steps here that can fail, and
-     * they change nothing when they do. */
-    ta_operator_jump *jump = NULL;
-    if (transition != NULL) {
-        uint32_t jump_bytes = 0;
-        if (ta_operator_jump_bytes(transition->target_count, &jump_bytes) != TA_OK) {
-            return TA_ERR_NOMEM; /* the count does not fit; nothing was allocated */
-        }
-        jump = ta_mem_alloc(system->allocator, jump_bytes, _Alignof(ta_operator_jump));
-        if (jump == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        jump->bytes = jump_bytes;
-        jump->source = transition->source;
-        jump->target_count = transition->target_count;
-        ta_mem_copy(jump->targets, transition->targets, (size_t)transition->target_count * sizeof(ta_state_id));
-    }
-    result = ta_interpreter_hold_block(system, actor);
-    if (result != TA_OK) {
-        if (jump != NULL) {
-            ta_mem_free(system->allocator, jump,
-                        &(ta_allocator_free_params){ .size = jump->bytes,
-                                                     .alignment = _Alignof(ta_operator_jump) });
-        }
-        return result;
-    }
-    /* Nothing below can fail: the input's time is now the actor's. */
-    ta_actor_move_clock(actor, params->time);
-    ta_event_slots *slots = &actor->event_block->slots;
-    ta_event_retain(&accepted, &slots->external_event);
-    slots->external = TA_EXTERNAL_WAITING;
-    slots->jump = jump;
-    /* The macrostep that takes it runs under the delivery's parent. */
-    slots->trace = params->trace;
-    actor->macrostep = true;
-    ta_actor_touch(actor);
-    actor->record.residency = TA_ACTOR_RUNNING;
-    return TA_OK;
-}
-
-ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
-    if (params == NULL || params->event == NULL) {
-        return TA_ERR_INVALID;
-    }
-    return ta_actor_offer(system, params, NULL);
-}
-
-ta_result ta_actor_transition(ta_system *system, const ta_actor_transition_params *params) {
-    if (params == NULL || params->event == NULL || params->transition == NULL) {
-        return TA_ERR_INVALID;
-    }
-    ta_actor_deliver_params offered = { .actor = params->actor,
-                                        .event = params->event,
-                                        .trace = params->trace,
-                                        .time = params->time };
-    return ta_actor_offer(system, &offered, params->transition);
-}
-
-ta_result ta_actor_resume(ta_system *system, const ta_actor_resume_params *params) {
-    if (params == NULL || params->status == NULL || params->budget == 0) {
-        return TA_ERR_INVALID;
-    }
-    ta_actor *actor = ta_actor_lookup(system, params->actor);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    return ta_interpreter_resume(system, actor, params);
-}
-
 ta_result ta_actor_abandon(ta_system *system, ta_actor_id id) {
     ta_actor *actor = ta_actor_lookup(system, id);
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    return ta_interpreter_abandon(system, actor);
+    ta_result result = ta_interpreter_abandon(system, actor);
+    if (result == TA_OK) {
+        ta_run_abandoned(system, actor);
+    }
+    return result;
 }
 
 /*

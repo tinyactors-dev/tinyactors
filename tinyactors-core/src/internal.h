@@ -31,6 +31,7 @@
 #include "event.h"
 #include "trace.h"
 #include "envelope.h"
+#include "run.h"
 #include "tel.h"
 #include "scxml_uri.h"
 #include "routing.h"

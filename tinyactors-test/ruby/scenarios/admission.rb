@@ -61,15 +61,17 @@ TinyactorsTest.scenarios 'admission', chart: :admission do
                  'a destroyed actor is not found, not done'
   end
 
-  # Catches: a paused actor that accepts a second event, or that answers
-  # done or invalid while it is still working.
-  scenario 'an actor paused inside a microstep answers busy' do
+  # Catches: an operator's jump that overtakes a paused macrostep, and a
+  # paused actor that answers done or invalid while it is still working. An
+  # event is admitted (core queues it behind the macrostep, ADR 0099); a
+  # jump is not an event, and the paused input holds the running slot.
+  scenario 'an actor paused inside a microstep refuses a jump' do
     actor = spawn
     assert_equal 'ok', actor.post('work')
     paused = 0
     while actor.resume(budget: 1000, action_budget: 1) == 'paused'
       paused += 1
-      assert_equal 'err_busy', actor.post('finish')
+      assert_equal 'err_busy', actor.post_jump(:working)
     end
     assert paused.positive?, 'the action budget paused the actor at least once'
     assert_equal [:working], actor.active

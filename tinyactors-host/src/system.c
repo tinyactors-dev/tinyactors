@@ -520,7 +520,8 @@ static void tah_quarantine_reports_retry(tah_system *system) {
 static void tah_quarantine_reports_make(tah_system *system) {
     for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
         ta_actor_inspection view;
-        if (record->kind != TAH_RECORD_FAULT || ta_actor_inspect(system->core, record->actor, &view) != TA_OK ||
+        if (record->kind != TAH_RECORD_FAULT || record->runaway ||
+            ta_actor_inspect(system->core, record->actor, &view) != TA_OK ||
             !view.has_parent) {
             continue;
         }
@@ -586,22 +587,27 @@ static void tah_system_left_core(void *context) {
     tah_trace_drain(context);
 }
 
+tah_turn_params tah_system_turn_params(tah_system *system) {
+    return (tah_turn_params){
+        .core = system->core,
+        .arena = &system->scratch.turn,
+        .inside_core = &system->inside_core,
+        .budgets = system->budgets,
+        .watch = &system->trace_watch,
+        .stop = tah_system_staging_full,
+        .stop_context = system,
+        .left_core = tah_system_left_core,
+    };
+}
+
 void tah_system_turn(tah_system *system) {
     system->turn_pending = false;
     if (system->closed) {
         return;
     }
     tah_system_sync_time(system);
-    tah_sched_turn(&system->sched, &(tah_turn_params){
-                                       .core = system->core,
-                                       .arena = &system->scratch.turn,
-                                       .inside_core = &system->inside_core,
-                                       .budgets = system->budgets,
-                                       .watch = &system->trace_watch,
-                                       .stop = tah_system_staging_full,
-                                       .stop_context = system,
-                                       .left_core = tah_system_left_core,
-                                   });
+    tah_turn_params turn = tah_system_turn_params(system);
+    tah_sched_turn(&system->sched, &turn);
     tah_quarantine_reports_retry(system);
     tah_quarantine_reports_make(system);
     /* Unloaded actors whose own timers are due wake through their loader

@@ -33,7 +33,7 @@ const TA_OK = constant('ta_result', 'TA_OK');
 const ATOMIC = constant('ta_scxml_state_kind', 'TA_SCXML_STATE_ATOMIC');
 const EXTERNAL_TRANSITION = constant('ta_scxml_transition_kind', 'TA_SCXML_TRANSITION_EXTERNAL');
 const EXTERNAL_EVENT = constant('ta_event_type', 'TA_EVENT_EXTERNAL');
-const STABLE = constant('ta_run_status', 'TA_RUN_STABLE');
+const IDLE = constant('ta_run_status', 'TA_RUN_IDLE');
 const INVOKE_ID_NONE = macro('TA_INVOKE_ID_NONE');
 
 async function main() {
@@ -126,15 +126,25 @@ async function main() {
     assert.equal(ta.ta_actor_spawn(system, spawn), TA_OK, 'ta_actor_spawn');
     const actor = getU64(actorOut);
 
-    const resumeLayout = layout('ta_actor_resume_params');
+    // Runs every admitted input until nothing is runnable; answers the last status (ta_run, ADR 0099).
+    const runLayout = layout('ta_run_params');
+    const noticeLayout = layout('ta_run_notice');
     const statusOut = alloc(4, 4);
+    const noticeCount = alloc(4, 4);
+    const notices = alloc(noticeLayout.size * 8, 8);
     const resume = () => {
-      const params = struct('ta_actor_resume_params');
-      u64(params + resumeLayout.offsets.actor, actor);
-      u32(params + resumeLayout.offsets.budget, 100);
-      u32(params + resumeLayout.offsets.status, statusOut);
-      assert.equal(ta.ta_actor_resume(system, params), TA_OK, 'ta_actor_resume');
-      return getU32(statusOut);
+      for (;;) {
+        const params = struct('ta_run_params');
+        u32(params + runLayout.offsets.budget, 100);
+        u32(params + runLayout.offsets.status, statusOut);
+        u32(params + runLayout.offsets.notices, notices);
+        u32(params + runLayout.offsets.notice_capacity, 8);
+        u32(params + runLayout.offsets.notice_count, noticeCount);
+        assert.equal(ta.ta_run(system, params), TA_OK, 'ta_run');
+        if (getU32(statusOut) === IDLE) {
+          return IDLE;
+        }
+      }
     };
     // Whether the state named `name` is active.
     const active = (name) => {
@@ -185,7 +195,7 @@ async function main() {
     u64(deliver + deliverLayout.offsets.actor, actor);
     u32(deliver + deliverLayout.offsets.event, event);
     assert.equal(ta.ta_actor_deliver(system, deliver), TA_OK, 'ta_actor_deliver');
-    assert.equal(resume(), STABLE, 'the macrostep ends stable');
+    assert.equal(resume(), IDLE, 'the macrostep ends and nothing is left to run');
     assert.ok(!active('idle') && active('done'), 'go moves the actor from idle to done');
 
     ta.ta_system_destroy(system);

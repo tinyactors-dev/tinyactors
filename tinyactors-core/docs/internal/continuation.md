@@ -4,7 +4,7 @@ A macrostep that has not reached stability is resumed from two places.
 
 **Between microsteps** the actor holds everything (ADR 0009): its
 configuration, history, internal queue, current and pending external
-events. `ta_actor_resume()`'s `budget` counts microsteps and pauses only
+events. `ta_run()`'s `budget` counts microsteps and pauses only
 there.
 
 **Inside a phase** a run stops in two ways. A pause (ADR 0061) stops the
@@ -40,7 +40,7 @@ a retain of each `<foreach>` snapshot. A session image carries one; loading
 or reconstructing the image gives the new actor its own copy (ADR 0061
 section 4). Resuming moves it back into scratch and frees the allocation.
 
-Saving cannot fail. Every `ta_actor_resume()` first reserves a
+Saving cannot fail. Every `ta_run()` that takes or continues an input first reserves a
 continuation large enough for the definition (the one it resumes from, or
 the system's spare) and a sparse state for an actor without one, so a
 run stops without allocating; a continuation the run no longer needs goes

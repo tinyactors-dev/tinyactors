@@ -387,16 +387,21 @@ void tna_fault_message(const char *operation, ta_result code, char *buffer, size
 }
 
 static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record, napi_value *first_error) {
-    const char *code = tna_result_code(record->code);
+    const char *code = record->runaway ? "runaway" : tna_result_code(record->code);
     char message[160];
-    tna_fault_message(record->operation, record->code, message, sizeof message);
-    char body[200];
-    int length = snprintf(body, sizeof body, "actor quarantined: %s", message);
-    tna_pump_host_log(wrapper->system, record->actor,
-                 (tah_otlp_host_log_params){ .event_name = { "tinyactors.actor.quarantined", 28 },
-                                      .body = { body, length > 0 ? (uint32_t)length : 0u },
-                                      .key = { "tinyactors.fault.code", 21 },
-                                      .value = { code, (uint32_t)strlen(code) } });
+    if (record->runaway) {
+        /* Core's own trace logs the runaway; the actor is not quarantined, so there is no host log (ADR 0103). */
+        snprintf(message, sizeof message, "the macrostep reached the microstep limit and was abandoned");
+    } else {
+        tna_fault_message(record->operation, record->code, message, sizeof message);
+        char body[200];
+        int length = snprintf(body, sizeof body, "actor quarantined: %s", message);
+        tna_pump_host_log(wrapper->system, record->actor,
+                     (tah_otlp_host_log_params){ .event_name = { "tinyactors.actor.quarantined", 28 },
+                                          .body = { body, length > 0 ? (uint32_t)length : 0u },
+                                          .key = { "tinyactors.fault.code", 21 },
+                                          .value = { code, (uint32_t)strlen(code) } });
+    }
     if (wrapper->fault_hook == NULL) {
         return;
     }
@@ -541,6 +546,11 @@ static napi_value tna_settlement_error(napi_env env, const tah_settlement *settl
     if (settlement->kind == TAH_SETTLE_ABANDONED) {
         return tna_error(env, "abandoned",
                          "send: an operator abandoned the message's macrostep (core ADR 0082); what it did so far stays");
+    }
+    if (settlement->kind == TAH_SETTLE_RUNAWAY) {
+        return tna_error(env, "runaway",
+                         "send: the message's macrostep reached the microstep limit and was abandoned (core ADR 0099); "
+                         "the actor keeps the configuration of its last microstep");
     }
     const char *code = tna_result_code(settlement->code);
     snprintf(message, sizeof message, "send: the message's macrostep failed (%s); the actor is quarantined", code);

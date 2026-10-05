@@ -14,6 +14,7 @@
 #include "../include/tinyactors.h"
 #include "tel_reader.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures;
 
@@ -239,10 +240,10 @@ static ta_definition_id define(ta_system *system, const char *family, const ta_s
 }
 
 static void run(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_RUN_STABLE);
 }
 
 static ta_actor_id spawn(ta_system *system, ta_definition_id definition, const ta_actor_address *address) {
@@ -731,19 +732,19 @@ static void test_withdrawing_inside_a_paused_macrostep(void) {
     /* Delivered, not yet run: `t` does not exist yet. */
     CHECK(ta_actor_withdraw_send(system, actor, t) == TA_ERR_NOT_FOUND);
 
-    ta_run_status status = TA_RUN_ERROR;
-    ta_actor_resume_params step = { .actor = actor, .budget = 100, .status = &status, .action_budget = 1 };
-    CHECK(ta_actor_resume(system, &step) == TA_OK);
+    test_run_status status = TEST_RUN_ERROR;
+    test_resume_params step = { .actor = actor, .budget = 100, .status = &status, .action_budget = 1 };
+    CHECK(test_resume(system, &step) == TA_OK);
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK);
     /* One unit ran: the first <send>. */
-    CHECK(status == TA_RUN_PAUSED && view.microstep_in_progress && view.delayed_send_count == 1);
+    CHECK(status == TEST_RUN_PAUSED && view.microstep_in_progress && view.delayed_send_count == 1);
     CHECK(ta_actor_withdraw_send(system, actor, t) == TA_OK);
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 0);
     CHECK(view.macrostep_in_progress);
 
     step.action_budget = 0;
-    CHECK(ta_actor_resume(system, &step) == TA_OK && status == TA_RUN_STABLE);
+    CHECK(test_resume(system, &step) == TA_OK && status == TEST_RUN_STABLE);
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 1);
     CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].event == event_name(system, "tock"));
     /* WITHDRAWN outside the macrostep, then the chart's own CANCELLED in it. */

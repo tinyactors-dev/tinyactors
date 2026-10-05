@@ -16,6 +16,7 @@
 #include "../include/tinyactors.h"
 #include "tel_reader.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures = 0;
 
@@ -396,17 +397,17 @@ static void spawn(run *r, ta_trace_parent trace) {
     flush(r->system);
 }
 
-static ta_result resume(run *r, uint32_t budget, ta_run_status *status) {
-    ta_result result = ta_actor_resume(r->system,
-                                       &(ta_actor_resume_params){ .actor = r->actor, .budget = budget, .status = status });
+static ta_result resume(run *r, uint32_t budget, test_run_status *status) {
+    ta_result result = test_resume(r->system,
+                                       &(test_resume_params){ .actor = r->actor, .budget = budget, .status = status });
     flush(r->system);
     return result;
 }
 
 static void settle(run *r) {
-    ta_run_status status = TA_RUN_ERROR;
+    test_run_status status = TEST_RUN_ERROR;
     CHECK(resume(r, 1000, &status) == TA_OK);
-    CHECK(status == TA_RUN_STABLE || status == TA_RUN_DONE);
+    CHECK(status == TEST_RUN_STABLE || status == TEST_RUN_DONE);
 }
 
 static ta_event event_named(run *r, const char *text) {
@@ -483,16 +484,16 @@ static void test_a_full_ring_changes_nothing(void) {
         const ta_ring_control *control = ta_system_control_block(r.system);
         /* Nobody reads: the call helpers' flush is not used here. */
         CHECK(ta_actor_spawn(r.system, &(ta_actor_spawn_params){ .definition = r.definition, .out = &r.actor }) == TA_OK);
-        ta_run_status status = TA_RUN_ERROR;
-        CHECK(ta_actor_resume(r.system, &(ta_actor_resume_params){ .actor = r.actor, .budget = 1000, .status = &status }) == TA_OK);
+        test_run_status status = TEST_RUN_ERROR;
+        CHECK(test_resume(r.system, &(test_resume_params){ .actor = r.actor, .budget = 1000, .status = &status }) == TA_OK);
         for (int round = 0; round < 2; round += 1) {
             ta_event event = event_named(&r, round == 0 ? "go" : "stop");
             CHECK(ta_actor_deliver(r.system, &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor,
                                                                           .event = &event }) == TA_OK);
-            CHECK(ta_actor_resume(r.system, &(ta_actor_resume_params){ .actor = r.actor, .budget = 1000,
+            CHECK(test_resume(r.system, &(test_resume_params){ .actor = r.actor, .budget = 1000,
                                                                        .status = &status }) == TA_OK);
         }
-        CHECK(status == TA_RUN_DONE);
+        CHECK(status == TEST_RUN_DONE);
         ta_system_counters(r.system, &counters[small]);
         active[small] = occupied_states(&r);
         dropped[small] = control->tel.dropped;
@@ -612,9 +613,9 @@ static void test_pause_and_resume(void) {
           record_visit);
     journal_reset();
     deliver(&r, "go", (ta_trace_parent){0});
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume(&r, 1, &status) == TA_OK && status == TA_RUN_PAUSED);
-    CHECK(resume(&r, 1000, &status) == TA_OK && status == TA_RUN_STABLE);
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(resume(&r, 1, &status) == TA_OK && status == TEST_RUN_PAUSED);
+    CHECK(resume(&r, 1000, &status) == TA_OK && status == TEST_RUN_STABLE);
     expect_journal("micro 2.1 go t[0] x[0] e[1]; paused 2.1; resumed 2.1; micro 2.2 inner t[2] x[1] e[2,3]; "
                    "micro 2.3 - t[4] x[3] e[4]; micro 2.4 done.state.c t[3] x[4,2] e[5]; ");
     finish(&r);
@@ -800,7 +801,7 @@ static void test_records_are_written_once(void) {
         ta_test_allocator_fail_nth(&heap, failing);
         ta_result delivered = ta_actor_deliver(r.system,
                                                &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .event = &event });
-        ta_run_status status = TA_RUN_ERROR;
+        test_run_status status = TEST_RUN_ERROR;
         uint32_t attempts = 0;
         if (delivered == TA_ERR_NOMEM) {
             delivered = ta_actor_deliver(r.system, &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .event = &event });
@@ -811,7 +812,7 @@ static void test_records_are_written_once(void) {
         }
         ta_test_allocator_disarm(&heap);
         flush(r.system);
-        CHECK(status == TA_RUN_STABLE);
+        CHECK(status == TEST_RUN_STABLE);
         if (strcmp(journal, baseline) != 0) {
             fprintf(stderr, "allocation %ld failing changed the records\n  expected: %s\n  actual:   %s\n",
                     failing, baseline, journal);

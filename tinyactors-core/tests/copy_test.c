@@ -14,6 +14,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures = 0;
 
@@ -254,8 +255,8 @@ static ta_actor_id start(ta_system *system, const ta_scxml_spec *spec, const ta_
 }
 
 static ta_result resume(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
-    return ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 1000, .status = &status });
+    test_run_status status = TEST_RUN_ERROR;
+    return test_resume(system, &(test_resume_params){ .actor = actor, .budget = 1000, .status = &status });
 }
 
 static bool in_state(ta_system *system, ta_actor_id actor, const char *id) {

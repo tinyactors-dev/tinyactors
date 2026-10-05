@@ -21,6 +21,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures;
 
@@ -115,8 +116,8 @@ static fixture start(void) {
     ta_definition_id id = 0;
     CHECK(ta_system_register_definition(f.system, definition, &id) == TA_OK);
     CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = id, .out = &f.actor }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f.system, &(ta_actor_resume_params){ .actor = f.actor, .budget = 100,
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(f.system, &(test_resume_params){ .actor = f.actor, .budget = 100,
                                                               .status = &status }) == TA_OK);
     ta_atom atom = 0;
     CHECK(ta_system_intern_atom(f.system, (ta_str)STR("poke"), &atom) == TA_OK);
@@ -125,10 +126,10 @@ static fixture start(void) {
 }
 
 static void run_to_stable(fixture *f) {
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f->system, &(ta_actor_resume_params){ .actor = f->actor, .budget = 100,
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(f->system, &(test_resume_params){ .actor = f->actor, .budget = 100,
                                                                .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_RUN_STABLE);
 }
 
 static void capture_and_destroy(fixture *f) {
@@ -154,7 +155,7 @@ static void test_capture_skips_a_released_external_event(void) {
     CHECK(value.references == 0 && value.used_after_free == 0);
 }
 
-/* An event the actor does hold is kept alive by the image, past the actor. */
+/* An event the actor does hold (its macrostep took it and is paused) is kept alive by the image, past the actor. */
 static void test_capture_keeps_a_held_external_event(void) {
     fixture f = start();
     counted_value value = { .references = 1 };
@@ -162,6 +163,10 @@ static void test_capture_keeps_a_held_external_event(void) {
                        .data = { .self = &value, .v = &counted_vtable } };
     CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .event = &event }) == TA_OK);
     counted_release(&value);
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(f.system, &(test_resume_params){ .actor = f.actor, .budget = 100, .status = &status,
+                                                       .pause_at_microstep_start = true }) == TA_OK);
+    CHECK(status == TEST_RUN_PAUSED);
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(f.system, &(ta_actor_capture_params){ .actor = f.actor, .out = &image }) == TA_OK);
     CHECK(ta_actor_destroy(f.system, f.actor) == TA_OK);

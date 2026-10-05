@@ -329,7 +329,8 @@ TinyactorsTest.scenarios 'hosted' do
     rebuilt = hosted_restore(hosted, definition, 'hosted_box', 'big', journal)
     assert_equal blob.size, hosted_data(hosted, rebuilt, '.size')
     peak = hosted_stats(hosted).dig(:memory, :core, :peak_bytes)
-    assert peak < blob.size / 4, "core's allocations peaked at #{peak} bytes for a #{blob.size}-byte value"
+    # The envelope pool's reserve (core ADR 0099) is a fixed part of the peak; a copy of the value would add all of it.
+    assert peak < blob.size / 2, "core's allocations peaked at #{peak} bytes for a #{blob.size}-byte value"
     assert_equal 0, close_hosted(hosted)
   end
 

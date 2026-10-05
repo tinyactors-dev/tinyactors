@@ -123,13 +123,17 @@ ta_actor_spawn(system, &(ta_actor_spawn_params){
 ta_actor_deliver(system, actor, &user_message_event);
 
 ta_run_status status;
+ta_run_notice notices[16];
+uint32_t count = 0;
 do {
-    ta_actor_resume(system, &(ta_actor_resume_params){
-        .actor = actor,
+    ta_run(system, &(ta_run_params){
         .budget = 1024,
         .status = &status,
+        .notices = notices,
+        .notice_capacity = 16,
+        .notice_count = &count,
     });
-} while (status == TA_RUN_PAUSED);
+} while (status != TA_RUN_IDLE);
 ```
 
 The conversation actor invokes a turn actor; the turn actor invokes inference

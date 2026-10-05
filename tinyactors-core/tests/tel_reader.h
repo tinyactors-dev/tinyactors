@@ -22,7 +22,7 @@
  *	static void visit(void *context, const ta_tel_entry *entry) { ... entry->trace ... }
  *	tel_reader reader = { .visit = visit };
  *	ta_system_set_trace_masks(system, &(ta_trace_masks){ .kinds = UINT32_MAX });
- *	ta_actor_resume(system, &params);
+ *	ta_run(system, &params);
  *	tel_read(system, &reader);          // after every call into core that may trace
  *	CHECK(reader.bad == 0);
  */

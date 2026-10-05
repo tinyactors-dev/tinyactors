@@ -7,6 +7,7 @@
 #include "atom.h"
 #include "builder.h"
 #include "envelope.h"
+#include "run.h"
 #include "event_name.h"
 #include "io.h"
 #include "io_origin.h"
@@ -76,6 +77,8 @@ struct ta_system {
      * address and origin tables, whose references its envelopes hold.
      */
     ta_envelopes envelopes;
+    /* The one running slot, the started sessions and the tokens (run.h). Lifetime: system. */
+    ta_runner runner;
 
     /* The I/O processor registry (ADR 0068): registry index i is element i - 1; 0 is SCXML. */
     ta_vec io_processors; /* ta_io_registration */

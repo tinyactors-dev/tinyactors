@@ -137,15 +137,11 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
   end
 
   # Catches: a pause that counts macrosteps instead of microsteps (the loop
-  # would finish in one resume); a paused actor that accepts a new external
-  # event (invariant 2), or whose refusal still changes it; an event that is
-  # accepted while paused and then processed before the internal `counted`.
-  #
-  # The router holds the self-sent `ping`: delivered at once, it would sit in
-  # the actor's single pending-event slot and make every later offer busy
-  # for that reason alone, whether or not a paused macrostep refuses events.
-  scenario 'a paused macrostep refuses new events and resumes one microstep at a time' do
-    router = recording_router(mode: :hold)
+  # would finish in one resume); a paused actor that loses a new external
+  # event, or whose admission still changes it; an event that is admitted
+  # while paused and then processed before the internal `counted`, or before
+  # the inputs admitted ahead of it (core ADR 0099 queues it behind them).
+  scenario 'a paused macrostep queues new events and resumes one microstep at a time' do
     relay = spawn
     assert_equal 'ok', relay.post('go')
     counts = []
@@ -160,20 +156,18 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
       next if refused || relay.data('.n') != 2
 
       before = relay.observe
-      assert_equal 'err_busy', relay.post('extra')
-      assert_equal before, relay.observe, 'a refused event leaves the paused actor unchanged'
+      assert_equal 'ok', relay.post('extra')
+      assert_equal before, relay.observe, 'a queued event leaves the paused actor unchanged'
       refused = true
     end
     assert refused, 'the scenario offered an event while paused'
+    relay_log = relay.data('.log')
     assert_equal [0, 1, 2, 3, 4, 5], counts.uniq, 'each resume runs one microstep of the counting loop'
 
-    assert_equal ['go', 'n=5', 'counted'], relay.data('.log')
-    held = router.held
-    assert_equal ['ping'], held.map { |delivery| delivery.dig(:event, :name_text) }
-    assert_equal 'ok', router.release(held[0][:id])[:result]
-    run_system('release the self-sent ping')
-    relay.deliver 'extra'
-    assert_equal ['go', 'n=5', 'counted', 'ping', 'extra'], relay.data('.log')
+    assert_equal ['go', 'n=5', 'counted'], relay_log.first(3)
+    run_system('the inputs queued behind the macrostep')
+    assert_equal ['go', 'n=5', 'counted', 'ping', 'extra'], relay.data('.log'),
+                 'the inputs ran in the order they were admitted, after the macrostep'
   end
 
   # Catches: inspection that loses (or misreports) the macrostep's external
@@ -182,15 +176,16 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
   scenario 'every pause reports the external event of its macrostep' do
     relay = spawn
     relay.post('go')
-    pauses = 0
+    names = []
+    # The self-sent ping is the next input, and it pauses too.
     while relay.resume(budget: 1) == 'paused'
-      pauses += 1
       current = relay.inspect_actor[:current_event]
-      assert_equal 'go', current && event_text(current[:name]),
-                   "pause #{pauses} (#{relay.active.join(', ')}, internal queue " \
-                   "#{relay.observe[:internal_events].inspect})"
+      names << (current && event_text(current[:name]))
+      assert %w[go ping].include?(names.last),
+             "pause #{names.size} (#{relay.active.join(', ')}, internal queue " \
+             "#{relay.observe[:internal_events].inspect}) reports #{names.last.inspect}"
     end
-    assert_equal 8, pauses
+    assert_equal 8, names.count('go')
   end
 
   # Catches: an external self-send delivered into the sender's own
@@ -200,7 +195,7 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     relay = spawn
     relay.deliver 'go'
     assert_equal ['go', 'n=5', 'counted', 'ping'], relay.data('.log')
-    assert_equal [%w[retry err_busy], %w[accepted ok]],
+    assert_equal [%w[accepted ok]],
                  router.entries('submit').map { |entry| entry.values_at(:status, :result) }
   end
 
@@ -272,7 +267,7 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
 
       inside += 1
       seen << nested.active
-      assert_equal 'err_busy', nested.post('back')
+      assert_equal 'err_busy', nested.post_jump(:a), 'a jump does not overtake the paused input'
     end
     assert inside > 20, "only #{inside} pauses were inside a microstep"
     # Only whole configurations: after the go microstep, and after the inner one.
@@ -341,11 +336,13 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     assert_equal %i[p c], nested.active
   end
 
-  # Catches: a cancelled child paused inside a microstep that exits the
-  # configuration from before that microstep (running `idle exit` a second
-  # time and never exiting the states it had entered), or that leaks its
-  # paused frames.
-  scenario 'cancelling a child paused inside a microstep exits its live states' do
+  # Catches: a cancelled child that exits the configuration from before
+  # the microstep it paused in (running `idle exit` a second time and never
+  # exiting the states it had entered), or that leaks its paused frames. The
+  # child's paused input holds the one running slot (core ADR 0099), so the
+  # parent's stop waits for it to finish, then cancels the child from its
+  # settled configuration.
+  scenario 'cancelling a child whose input was paused exits its live states' do
     recording_log
     parent = spawn :child_canceller
     child = invoked_actors.fetch(0)
@@ -356,7 +353,8 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
 
     assert_equal 'ok', parent.post('stop')
     assert_equal 'stable', parent.resume(budget: 1000)
-    assert_logs ['idle exit', nil], ['inner exit', nil], ['busy exit', nil]
+    assert_logs ['idle exit', nil], ['step', nil], ['step', nil], ['step', nil], ['inner exit', nil],
+                ['busy exit', nil]
     assert_equal %i[stopped], parent.active
     run_system('reclaim the cancelled child')
     assert_equal [], invoked_actors

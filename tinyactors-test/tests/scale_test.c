@@ -146,6 +146,23 @@ static void require(bool condition, const char *message) {
     }
 }
 
+/* run_idle runs every admitted input until nothing is runnable (ta_run, core ADR 0099); false on any error. */
+static bool run_idle(ta_system *system) {
+    ta_run_status status = TA_RUN_MORE;
+    ta_run_notice notices[8];
+    uint32_t count = 0;
+    while (status != TA_RUN_IDLE) {
+        if (ta_run(system, &(ta_run_params){.budget = 100,
+                                            .status = &status,
+                                            .notices = notices,
+                                            .notice_capacity = 8,
+                                            .notice_count = &count}) != TA_OK) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* ------------------------------------------------------------------------
  * An allocator that counts what core holds, over the host's libc boundary.
  */
@@ -525,14 +542,7 @@ static round_cost measure(size_t population) {
                                            .out = &actors[index],
                                        }) == TA_OK,
                 "spawning a named actor");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = actors[index],
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping a named actor");
+        require(run_idle(system), "bootstrapping a named actor");
         uint64_t now_ns = thread_ns();
         uint64_t spent = now_ns - last_ns;
         spawn_ns[index] = spent > UINT32_MAX ? UINT32_MAX : (uint32_t)spent;
@@ -555,14 +565,7 @@ static round_cost measure(size_t population) {
                                              .out = &replacement,
                                          }) == TA_OK,
                 "preparing a replacement");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = replacement,
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping a replacement");
+        require(run_idle(system), "bootstrapping a replacement");
         require(ta_actor_publish(system, &(ta_actor_publish_params){
                                              .actor = replacement,
                                              .incumbent = actors[index],
@@ -582,14 +585,7 @@ static round_cost measure(size_t population) {
         ta_actor_id ephemeral = 0;
         require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = v2, .out = &ephemeral}) == TA_OK,
                 "spawning an ephemeral actor");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = ephemeral,
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping an ephemeral actor");
+        require(run_idle(system), "bootstrapping an ephemeral actor");
         require(ta_actor_destroy(system, ephemeral) == TA_OK, "destroying an ephemeral actor");
     }
     double churned = cpu_seconds();
@@ -606,14 +602,7 @@ static round_cost measure(size_t population) {
         require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = timed, .out = &timed_actors[index]}) ==
                     TA_OK,
                 "spawning a timed actor");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = timed_actors[index],
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping a timed actor");
+        require(run_idle(system), "bootstrapping a timed actor");
     }
     /*
      * A fixed sample spread over the population, inspected round-robin: the
@@ -633,14 +622,7 @@ static round_cost measure(size_t population) {
         ta_actor_id ephemeral = 0;
         require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = timed, .out = &ephemeral}) == TA_OK,
                 "spawning a timed ephemeral actor");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = ephemeral,
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping a timed ephemeral actor");
+        require(run_idle(system), "bootstrapping a timed ephemeral actor");
         require(ta_actor_destroy(system, ephemeral) == TA_OK, "destroying a timed ephemeral actor");
     }
     double timers_churned = cpu_seconds();
@@ -661,14 +643,7 @@ static round_cost measure(size_t population) {
         ta_actor_id timed_actor = timed_actors[(index % INSPECTION_SAMPLE) * stride];
         ta_event rearm = {.name = rearm_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
         require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = timed_actor, .event = &rearm }) == TA_OK, "delivering rearm");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = timed_actor,
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "cancelling and re-arming a send");
+        require(run_idle(system), "cancelling and re-arming a send");
     }
     double rearmed = cpu_seconds();
     ta_actor_inspection rearmed_view;
@@ -1133,11 +1108,8 @@ static ta_event_name_id intern_event(ta_system *system, ta_str text) {
 }
 
 static void run_to_stable(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
-    require(ta_actor_resume(system, &(ta_actor_resume_params){.actor = actor, .budget = 100, .status = &status}) ==
-                    TA_OK &&
-                status == TA_RUN_STABLE,
-            "running an actor to stable");
+    (void)actor; /* core runs what it admitted, in order; the actor's own input is the only one in these runs */
+    require(run_idle(system), "running an actor to stable");
 }
 
 static void run_event(ta_system *system, ta_actor_id actor, ta_event_name_id name) {
@@ -1267,7 +1239,10 @@ static void check_batched_delivery_allocations(void) {
            DELIVERY_BATCH, default_cache, (unsigned)TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, small_cache, default_bytes,
            empty_bytes);
     require(default_cache == 0.0, "a warm system with the default cache calls no allocator (ADR 0093)");
-    require(small_cache > 0.9, "a batch larger than the cache takes a block per delivery (ADR 0069)");
+    /* Before ADR 0099 each delivery of a batch held an event block until its actor ran, so a batch larger than the
+     * cache took a block per delivery (ADR 0069). Core now queues the batch as envelopes in the pool and runs the
+     * inputs one at a time, so one cached block serves them all. */
+    require(small_cache == 0.0, "a batch larger than the cache calls no allocator once the pool is warm (ADR 0099)");
     require(default_bytes == empty_bytes && small_bytes == empty_bytes,
             "creation makes no event block, whatever the bound (ADR 0093)");
 }

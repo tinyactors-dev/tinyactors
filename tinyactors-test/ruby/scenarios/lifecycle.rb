@@ -83,9 +83,11 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
   end
 
   # Catches: destroy of a busy actor that leaks its paused macrostep (the
-  # current event, the internal queue) or crashes when its self-send, already
-  # submitted, is retried against the dead ID.
-  scenario 'destroying a paused actor releases it and its submitted send fails cleanly' do
+  # current event, the internal queue) or the input its self-send queued
+  # behind it, or crashes when that input is taken for the dead ID. Core
+  # admitted the send while the actor was paused (ADR 0099) and discards it
+  # with a REFUSED notice when the actor is destroyed.
+  scenario 'destroying a paused actor releases it and the input queued behind it' do
     router = recording_router
     relay = spawn :relay
     bystander = spawn :relay
@@ -94,7 +96,8 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
     relay.destroy
 
     submits = router.entries('submit').map { |entry| entry.values_at(:status, :result) }
-    assert_equal [%w[retry err_busy], %w[error err_not_found]], submits
+    assert_equal [%w[accepted ok]], submits
+    run_system('discard the queued input')
     assert_equal [bystander.handle], rpc('system.actors', system: system_handle)
     bystander.deliver 'go'
     assert_equal ['go', 'n=5', 'counted', 'ping'], bystander.data('.log')

@@ -35,13 +35,15 @@ end
 TinyactorsTest.scenarios 'session inputs' do
   # Catches: a resume that cannot tell a host whether its message was used,
   # which a replay needs to report history the current chart ignores.
-  scenario 'a resume says whether its external event was ignored' do
+  scenario 'a completed input says whether its external event was ignored' do
     door = spawn :inputs_door
     outcome = lambda do |event|
       assert_equal 'ok', door.post(event)
-      response = ta.actor.resume(system: system_handle, actor: door.handle, budget: 100)
-      assert_equal 'stable', core('ta_actor_resume', response)[:status]
-      response[:out][:ignored]
+      response = core('ta_run', ta.run(system: system_handle, budget: 100, notice_capacity: 8))
+      completed = response[:notices].select { |notice| notice[:kind] == 'input_completed' }
+      assert_equal 1, completed.size
+      assert_equal 'stable', completed.first[:status]
+      completed.first[:ignored]
     end
     assert_equal true, outcome.call('close'), 'closed takes no close'
     assert_equal false, outcome.call('open')
@@ -52,11 +54,11 @@ TinyactorsTest.scenarios 'session inputs' do
 
   # Catches: `ignored` reported for a call that ended no macrostep, or
   # carried over from an earlier macrostep.
-  scenario 'a resume that ends no macrostep leaves ignored untouched' do
+  scenario 'a run that takes no input reports nothing' do
     door = spawn :inputs_door
-    response = ta.actor.resume(system: system_handle, actor: door.handle, budget: 100)
-    assert_equal 'stable', core('ta_actor_resume', response)[:status]
-    assert_equal false, response[:out][:ignored], 'an idle actor: the binding zeroes it, core leaves it'
+    response = core('ta_run', ta.run(system: system_handle, budget: 100, notice_capacity: 8))
+    assert_equal 'idle', response[:status]
+    assert_equal [], response[:notices].to_a, 'nothing was runnable, so nothing is reported'
   end
 
   # Catches: invoke IDs drawn from a counter shared by the whole system, so

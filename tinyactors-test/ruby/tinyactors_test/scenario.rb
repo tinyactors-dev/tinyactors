@@ -188,7 +188,8 @@ module TinyactorsTest
     end
 
     # Offers an external event without running the system, and returns the
-    # ta_actor_deliver result: "ok", "err_busy", "err_not_found", ...
+    # ta_actor_deliver result: "ok" (admitted; core queues it behind what is
+    # waiting), "err_full", "err_not_found", ...
     def post(event, data: nil, trace: nil, time: nil)
       offer(event, data: data, trace: trace, time: time)[:result]
     end
@@ -198,13 +199,14 @@ module TinyactorsTest
     # The transition takes the event instead of the chart's transitions.
     # States are names; an Integer is passed as a raw state ID.
     def jump(*to, from: nil, event: 'operator.goto', data: nil, trace: nil)
-      @context.core('ta_actor_deliver',
+      @context.core('ta_actor_transition',
                     offer(event, data: data, trace: trace, transition: operator_transition(to, from)))
       @context.run_system("jump to #{to.join(' ')}")
     end
 
     # Offers a jump without running the system, and returns the
-    # ta_actor_deliver result, as #post does.
+    # ta_actor_transition result ("ok", "err_busy" while an input holds the
+    # running slot or the actor has inputs waiting, ...).
     def post_jump(*to, from: nil, event: 'operator.goto', data: nil)
       offer(event, data: data, transition: operator_transition(to, from))[:result]
     end
@@ -216,16 +218,18 @@ module TinyactorsTest
       @context.ta.actor.abandon(system: @context.system_handle, actor: handle)[:result]
     end
 
-    # One ta_actor_resume call with `budget` microsteps and, when not zero,
+    # One ta_run call with `budget` microsteps and, when not zero,
     # `action_budget` units of executable content (ADR 0061); with
     # `pause_at_microstep_start`, it also pauses at the start of each
-    # microstep it begins (ADR 0086). Returns the status: "paused",
-    # "stable", or "done".
+    # microstep it begins (ADR 0086). Core runs the system's inputs in the
+    # order they were admitted (core ADR 0099), not this actor's alone.
+    # Returns how the call ended: "paused" when a budget stopped a
+    # macrostep, "done" when an input ended with a session finished,
+    # "runaway" when one reached the microstep limit and was abandoned, else
+    # "stable".
     def resume(budget:, action_budget: 0, pause_at_microstep_start: false)
-      response = @context.ta.actor.resume(system: @context.system_handle, actor: handle, budget: budget,
-                                          action_budget: action_budget,
-                                          pause_at_microstep_start: pause_at_microstep_start)
-      @context.core('ta_actor_resume', response).fetch(:status)
+      @context.run_once(budget: budget, action_budget: action_budget,
+                        pause_at_microstep_start: pause_at_microstep_start)
     end
 
     # Destroys the actor and runs the system. The actor is no longer checked
@@ -333,14 +337,14 @@ module TinyactorsTest
       'null' => { '$adapter' => 'datamodel.null' }.freeze
     }.freeze
     DEFAULT_DATAMODEL = 'jq'
-    # Microsteps per ta_actor_resume call, and delayed sends per
+    # Microsteps per ta_run call, and delayed sends per
     # ta_system_dispatch_due call.
     RESUME_BUDGET = 1024
     DISPATCH_BUDGET = 64
 
     attr_reader :now, :instruments, :trace, :run
     # With count_allocations: how many allocations each logical
-    # ta_actor_resume made, in order.
+    # ta_run made, in order.
     attr_reader :resume_costs
     # What each stop an armed allocation fault caused looked like:
     # {resume:, microstep:, data:}, the data-model root of the stopped actor.
@@ -349,14 +353,14 @@ module TinyactorsTest
     # `run` names this run; instrument names are prefixed with it, so
     # several runs can share one host process. `trace: true` records a Trace
     # after every step. `resume_budget` and `dispatch_budget` are passed to
-    # ta_actor_resume and ta_system_dispatch_due; `resume_action_budget` is
-    # ta_actor_resume's action budget (ADR 0061), zero for none, and
+    # ta_run and ta_system_dispatch_due; `resume_action_budget` is
+    # ta_run's action budget (ADR 0061), zero for none, and
     # `resume_pause_at_microstep_start` its pause at each microstep's start
     # (ADR 0086). `after_step` is called as
     # after_step.call(context, step_index) once a step is quiescent, before
     # it is traced and its invariants are checked; the system is run to
     # quiescence again after it, without further hooks or trace steps.
-    # `count_allocations: true` records what every ta_actor_resume the run
+    # `count_allocations: true` records what every ta_run the run
     # makes costs (#resume_costs); `allocation_fault:` {resume:, after:,
     # count:, on_stop:} fails allocations inside one of them (see
     # #assert_allocation_failures_invisible).
@@ -368,7 +372,7 @@ module TinyactorsTest
       @group = group
       @charts = charts
       @run = run
-      @scheduler = Scheduler.new(self, resume: method(:resume_logical), budget: resume_budget,
+      @scheduler = Scheduler.new(self, run: method(:run_logical), budget: resume_budget,
                                        action_budget: resume_action_budget, dispatch_budget: dispatch_budget,
                                        pause_at_microstep_start: resume_pause_at_microstep_start)
       @after_step = after_step
@@ -723,12 +727,12 @@ module TinyactorsTest
       baseline
     end
 
-    # Fails one allocation at a time in every ta_actor_resume that `body`
+    # Fails one allocation at a time in every ta_run that `body`
     # makes (ADR 0047, ADR 0070). A baseline run counts the allocations of
-    # each resume; then, for each of those allocations and each entry of
+    # each call; then, for each of those allocations and each entry of
     # `counts`, a fresh run fails that allocation and the count - 1 after
-    # it. The resume must answer err_nomem and leave the actor stopped
-    # (#stopped checks it), and resuming until it runs must end the run
+    # it. The call must answer err_nomem and leave the input where it
+    # stands (#stopped checks it), and calling until it runs must end the run
     # with the baseline's trace, step by step. `on_stop: :cycle` also moves
     # every stopped named actor out of residency and back before it is
     # resumed.
@@ -1436,12 +1440,20 @@ module TinyactorsTest
 
     # Capture, unload, and load a named actor with its current data root as
     # the binding: the residency change ADR 0014 says is invisible.
-    def cycle_residency(actor)
+    # With `skip_busy`, an actor that has inputs waiting behind its macrostep is left resident (core refuses to unload
+    # it, ADR 0099 section 5), and the answer is false.
+    def cycle_residency(actor, skip_busy: false)
       image = capture(actor)
       binding = actor.data
-      core('ta_actor_unload', { result: unload(actor, image) })
+      result = unload(actor, image)
+      if skip_busy && result == 'err_busy'
+        destroy_image(image)
+        return false
+      end
+      core('ta_actor_unload', { result: result })
       core('ta_actor_load', { result: load(actor, image, binding: binding) })
       destroy_image(image)
+      true
     end
 
     # Stops checking invariants against a destroyed actor.
@@ -1560,6 +1572,29 @@ module TinyactorsTest
       core('ta_system_register_invoker', ta.system.register_invoker(system: system, type: type, invoker: invoker))
     end
 
+    # One ta_run call with `budget` microsteps and, when not zero,
+    # `action_budget` units of executable content (ADR 0061); with
+    # `pause_at_microstep_start`, it also pauses at the start of each
+    # microstep it begins (ADR 0086). Returns how it ended, as Actor#resume
+    # says. The scenario runner's calls go through #run_logical, which
+    # counts allocations and fails them; this one does not.
+    def run_once(budget:, action_budget: 0, pause_at_microstep_start: false)
+      out = core('ta_run', ta.run(system: system_handle, budget: budget, action_budget: action_budget,
+                                  pause_at_microstep_start: pause_at_microstep_start, notice_capacity: 16))
+      outcome(out)
+    end
+
+    # How a ta_run call ended (its out fields), as Actor#resume reports it.
+    def outcome(out)
+      return 'paused' if out[:status] == 'paused'
+
+      completed = Array(out[:notices]).select { |notice| notice[:kind] == 'input_completed' }
+      return 'done' if completed.any? { |notice| notice[:status] == 'done' }
+      return 'runaway' if completed.any? { |notice| notice[:status] == 'runaway' }
+
+      'stable'
+    end
+
     # Interns a dotted event name through the public atom and event-name API.
     def event_name(event)
       @event_names[event.to_s] ||= begin
@@ -1601,38 +1636,37 @@ module TinyactorsTest
       context
     end
 
-    # One logical ta_actor_resume with the budgets the Scheduler chose. A
+    # One logical ta_run with the budgets the Scheduler chose. A
     # run counting allocations records what it costs. A run whose
     # allocation fault is armed for it fails the fault's allocations inside
-    # it, checks the actor each time that stops it with err_nomem
-    # (#stopped), and resumes it again until it runs: those retries are part
-    # of the same logical resume. Returns the last response and the actor's
-    # ID, which a residency cycle changes.
-    def resume_logical(id, budget:, action_budget: 0, pause_at_microstep_start: false)
-      resume_actor = lambda do |actor|
-        ta.actor.resume(system: system_handle, actor: actor, budget: budget, action_budget: action_budget,
-                        pause_at_microstep_start: pause_at_microstep_start)
+    # it, checks the system each time that stops it with err_nomem
+    # (#stopped), and calls it again until it runs: those retries are part
+    # of the same logical call. Returns the last response.
+    def run_logical(budget:, action_budget: 0, pause_at_microstep_start: false)
+      run_core = lambda do
+        ta.run(system: system_handle, budget: budget, action_budget: action_budget,
+               pause_at_microstep_start: pause_at_microstep_start, notice_capacity: 16)
       end
       index = @resume_index
       @resume_index += 1
-      return [resume_actor.call(id), id] unless @allocation_fault || @count_allocations
+      return run_core.call unless @allocation_fault || @count_allocations
 
       fault = @allocation_fault if @allocation_fault && @allocation_fault[:resume] == index
       probe_event
       before = allocator.stats[:allocations]
       allocator.arm_fault(after: fault[:after], count: fault[:count]) if fault
-      response = resume_actor.call(id)
+      response = run_core.call
       retries = 0
       while fault && response[:result] == 'err_nomem'
         retries += 1
-        raise ScenarioError, "resume #{index}: still out of memory after #{retries} retries" if retries > fault[:count] + 1
+        raise ScenarioError, "run #{index}: still out of memory after #{retries} retries" if retries > fault[:count] + 1
 
-        id = stopped(id, index, fault)
-        response = resume_actor.call(id)
+        stopped(index, fault)
+        response = run_core.call
       end
       allocator.clear_faults if fault
       @resume_costs << allocator.stats[:allocations] - before if @count_allocations
-      [response, id]
+      response
     end
 
     # An event name to offer a stopped actor. Every sweep run interns it
@@ -1642,13 +1676,23 @@ module TinyactorsTest
       @probe_event ||= event_name('probe')
     end
 
-    # Checks an actor that a failed allocation stopped (ADR 0047): it is in
-    # its macrostep, refuses a new event, and no error event was queued for
-    # the failure. With `on_stop: :cycle` a named actor is then captured,
-    # unloaded and loaded again (ADR 0038), and the retry runs on the loaded
-    # actor. Returns the ID to resume.
-    def stopped(id, index, fault)
-      where = "resume #{index} stopped by allocation #{fault[:after] + 1}"
+    # Checks the system after a failed allocation stopped ta_run (ADR 0047).
+    # If an input was already inside its macrostep, its session is in it, the
+    # running slot is held (an operator's transition answers busy), and no
+    # error event was queued for the failure. An input that could not even be
+    # taken waits in core's queue: there is nothing more to check. With
+    # `on_stop: :cycle` a named actor is then captured, unloaded and loaded
+    # again (ADR 0038), and the retry runs on the loaded actor.
+    def stopped(index, fault)
+      where = "run #{index} stopped by allocation #{fault[:after] + 1}"
+      id = rpc('system.actors', system: system_handle, runnable: true).first
+      if id.nil?
+        # The allocation failed before an input began its macrostep (taking it reserves what it runs with): it waits
+        # in core's queue and nothing of it has run.
+        @stops << { resume: index, microstep: false, data: nil }
+        return
+      end
+
       inspection = core('ta_actor_inspect', ta.actor.inspect(system: system_handle, actor: id)).fetch(:out)
       root = ta.actor.datamodel_root(system: system_handle, actor: id)
       @stops << { resume: index, microstep: inspection[:microstep_in_progress], data: root.dig(:out, :out) }
@@ -1661,19 +1705,21 @@ module TinyactorsTest
       end
 
       event = { name: probe_event, type: 'external', invoke_id: INVOKE_ID_NONE }
-      # The input's time is the system's (core ADR 0094 section 1), so the
-      # answer is the admission test's, not a time error.
-      refused = ta.actor.deliver(system: system_handle, actor: id, event: event, time: now)[:result]
+      # An operator's event does not overtake the stopped input: the running
+      # slot is held. (The input's time is the system's, core ADR 0094
+      # section 1, so the answer is the admission test's, not a time error.)
+      transition = { source: STATE_NONE, targets: [0] }
+      refused = ta.actor.transition(system: system_handle, actor: id, event: event, transition: transition,
+                                    time: now)[:result]
       expected = inspection[:has_completion] ? 'err_done' : 'err_busy'
-      raise AssertionFailed, "#{where}: an event offered to it was answered #{refused}" unless refused == expected
-      return id unless fault[:on_stop] == :cycle
+      raise AssertionFailed, "#{where}: an operator's event offered to it was answered #{refused}" unless refused == expected
+      return unless fault[:on_stop] == :cycle
 
       actor = @actors.find { |candidate| candidate.handle == id }
-      return id if actor.nil? || actor.address.nil?
+      return if actor.nil? || actor.address.nil?
 
       allocator.clear_faults
-      cycle_residency(actor)
-      actor.handle
+      cycle_residency(actor, skip_busy: true)
     end
 
     # Compiles and registers a chart once per scenario; the system then owns

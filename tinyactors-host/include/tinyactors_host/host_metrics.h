@@ -42,6 +42,9 @@ typedef struct {
 
 /* ta_result codes are small negative numbers; faults are counted by -code. */
 #define TAH_FAULT_CODES 32u
+/* The slot of the fault count for a runaway: an input that reached the microstep limit and was abandoned (core ADR
+ * 0099 section 7). It is no ta_result, and it quarantines nothing. */
+#define TAH_FAULT_RUNAWAY (TAH_FAULT_CODES - 1u)
 /* tah_dead_reason, in scheduler.h. */
 #define TAH_DEAD_REASONS 9u
 

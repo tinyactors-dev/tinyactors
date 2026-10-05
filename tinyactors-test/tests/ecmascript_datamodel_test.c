@@ -523,12 +523,18 @@ static ta_event_name_id event_name(ta_system *system, const char *name) {
     return id;
 }
 
-static void run(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_PAUSED;
-    for (int round = 0; round < 100 && status == TA_RUN_PAUSED; round += 1) {
-        require(ta_actor_resume(system, &(ta_actor_resume_params){.actor = actor, .budget = 64, .status = &status}) ==
-                    TA_OK,
-                "resume");
+/* Runs every admitted input until nothing is runnable (ta_run, core ADR 0099). */
+static void run(ta_system *system) {
+    ta_run_status status = TA_RUN_MORE;
+    ta_run_notice notices[8];
+    uint32_t count = 0;
+    for (int round = 0; round < 100 && status != TA_RUN_IDLE; round += 1) {
+        require(ta_run(system, &(ta_run_params){.budget = 64,
+                                                .status = &status,
+                                                .notices = notices,
+                                                .notice_capacity = 8,
+                                                .notice_count = &count}) == TA_OK,
+                "run");
     }
 }
 
@@ -602,7 +608,7 @@ static void test_system(tat_js_datamodel_context *context) {
     require(ta_system_register_definition(system, definition, &id) == TA_OK, "register");
     ta_actor_id actor = 0;
     require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = id, .out = &actor}) == TA_OK, "spawn");
-    run(system, actor);
+    run(system);
     check(root_contains(system, actor, "\"before\":\"undefined\""), "_event is undefined before the first event");
     check(root_contains(system, actor, "\"sid\":\"string\""), "_sessionid is a string");
     check(root_contains(system, actor, "\"nm\":\"probe\""), "_name");
@@ -614,7 +620,7 @@ static void test_system(tat_js_datamodel_context *context) {
                       .invoke_id = TA_INVOKE_ID_NONE, .data = data_value};
     require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK, "deliver");
     ta_value_release(&data_value);
-    run(system, actor);
+    run(system);
     check(root_contains(system, actor, "\"inB\":true"), "In() sees the other parallel region");
     check(root_contains(system, actor, "\"evname\":\"go\""), "_event.name");
     check(root_contains(system, actor, "\"evtype\":\"external\""), "_event.type");

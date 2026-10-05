@@ -136,17 +136,15 @@ TinyactorsTest.scenarios 'io origins' do
     receive(connection, actor, 'ping', uri: 'ws://client/1')
     assert_equal [['pong', 'ws://client/1', nil]], IOOrigins.sends(connection)
 
-    # The event waits while the actor is busy; its connection closes, and a
-    # new one reuses the scope's record under another generation.
+    # The event waits in core's queue behind another input; its connection
+    # closes, and a new one reuses the scope's record under another
+    # generation.
     connection.control('open', processor: connection.processor, uri: 'ws://client/2')
     assert_equal 'ok', actor.post('busy')
-    assert_equal 'held', receive(connection, actor, 'ping', uri: 'ws://client/2', run: false, hold: true)
-      .fetch(:result)
+    assert_equal 'ok', receive(connection, actor, 'ping', uri: 'ws://client/2', run: false).fetch(:result)
     connection.control('close', uri: 'ws://client/2')
     connection.control('open', processor: connection.processor, uri: 'ws://client/3')
-    run_system('the busy event')
-    assert_equal ['ok'], connection.control('flush').fetch(:results)
-    run_system('the late ping')
+    run_system('the busy event and the late ping')
     assert_equal nil, actor.data('.origin'), 'a closed scope renders no origin, not the next connection'
     assert_equal IOOrigins::CONNECTION, actor.data('.origintype'), 'the processor is still named'
     assert_equal 'error.communication', actor.data('.outcome')
@@ -168,19 +166,16 @@ TinyactorsTest.scenarios 'io origins' do
   end
 
   # Catches: an origin reference lost or freed early while the event is
-  # queued in a host, held through a paused macrostep, or refused by a
+  # queued in core, held through a paused macrostep, or refused by a
   # finished actor. Teardown fails on any entry left behind.
   scenario 'an origin lives as long as its event, wherever the event waits' do
     request = endpoint_io(IOOrigins::BASIC_HTTP, 'io.request')
     actor = spawn(IOOrigins.replier)
 
-    # Queued in the host while the actor is busy.
+    # Queued in core behind another input of the actor.
     assert_equal 'ok', actor.post('busy')
-    assert_equal 'held', receive(request, actor, 'ping', uri: IOOrigins::LONG_URI, run: false, hold: true)
-      .fetch(:result)
-    run_system('the busy event')
-    assert_equal ['ok'], request.control('flush').fetch(:results)
-    run_system('the queued ping')
+    assert_equal 'ok', receive(request, actor, 'ping', uri: IOOrigins::LONG_URI, run: false).fetch(:result)
+    run_system('the busy event and the queued ping')
     assert_equal ['pong', IOOrigins::LONG_URI, nil], IOOrigins.sends(request).last
 
     # Paused inside the macrostep by an action budget.
@@ -200,11 +195,13 @@ TinyactorsTest.scenarios 'io origins' do
     actor.deliver 'stop'
     assert_equal 'err_done', receive(request, actor, 'ping', uri: IOOrigins::LONG_URI).fetch(:result)
 
-    # A held event the host drops is released too.
+    # An event queued behind another input, when its actor is destroyed, is
+    # discarded and its origin released too.
     other = spawn(IOOrigins.replier)
     assert_equal 'ok', other.post('busy')
-    receive(request, other, 'ping', uri: IOOrigins::LONG_URI, run: false, hold: true)
-    assert_equal 1, request.control('drop').fetch(:dropped)
+    assert_equal 'ok', receive(request, other, 'ping', uri: IOOrigins::LONG_URI, run: false).fetch(:result)
+    other.destroy
+    run_system('discard what the destroyed actor never took')
   end
 
   # Catches: an event from a non-SCXML invoked service that names the SCXML
@@ -234,14 +231,14 @@ TinyactorsTest.scenarios 'io origins' do
      [connection, { uri: 'ws://client/image' }, 'ws://client/image'],
      [request, { uri: IOOrigins::LONG_URI }, IOOrigins::LONG_URI]].each do |io, args, uri|
       actor = spawn(IOOrigins.replier)
-      assert_equal 'ok', receive(io, actor, 'ping', run: false, **args).fetch(:result)
+      # Paused inside the macrostep, the event is the macrostep's current one.
+      assert_equal 'ok', receive(io, actor, 'slow', run: false, **args).fetch(:result)
+      assert_equal 'paused', actor.resume(budget: 100, action_budget: 1)
       image = capture(actor)
       actor.destroy
       restored = core('ta_actor_reconstruct', ta.actor.reconstruct(system: system_handle, image: image)).fetch(:out)
       run_system("reconstructed #{io.kind}")
-      copy = TinyactorsTest::Actor.new(self, restored, :io_replier, actor.definition)
-      assert_equal uri, copy.data('.origin'), "#{io.kind}: the URI travels in the image"
-      assert_equal ['pong', uri, nil], IOOrigins.sends(io).last, "#{io.kind}: the reply reaches it"
+      assert_equal ['pong', uri, nil], IOOrigins.sends(io).last, "#{io.kind}: the URI travels and the reply reaches it"
       core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: restored))
       destroy_image(image)
     end

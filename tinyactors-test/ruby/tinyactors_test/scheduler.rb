@@ -1,32 +1,32 @@
 # frozen_string_literal: true
 
 module TinyactorsTest
-  # Runs a system's actors. Core leaves scheduling to the host (ADR 0011),
-  # and in this host the Ruby driver is the host: after every step the
-  # scenario runner and the workbench come here.
+  # Runs a system's inputs. Core queues what it is given and runs it in the
+  # order it was admitted (core ADR 0099), and in this host the Ruby driver
+  # is the host: after every step the scenario runner and the workbench come
+  # here.
   #
-  # One round lists every resident actor with a macrostep in progress,
-  # invoked children included, and resumes each until its macrostep ends;
-  # settling one can make others runnable, so it lists again. When nothing
-  # is runnable it dispatches due delayed sends, and it is done when nothing
-  # was dispatched and nothing more is due at the current logical time.
+  # One round is one ta_run call, with the budgets the context chose. Core
+  # takes the next admitted input (a bootstrap, a delivered event, mail a
+  # macrostep sent) and runs it until its macrostep ends or a budget stops
+  # it; a stopped input keeps the one running slot, so the next call
+  # continues it. When ta_run answers "idle" nothing is runnable: the driver
+  # dispatches due delayed sends, and it is done when nothing was dispatched
+  # and nothing more is due at the current logical time.
   class Scheduler
-    # Rounds before a run is declared non-quiescent, and resumes before one
-    # actor's macrostep is.
+    # Rounds before a run is declared non-quiescent, and calls that end in a
+    # budget stop before one input is.
     MAX_ROUNDS = 10_000
 
-    # `resume` is called as resume.call(id, budget:, action_budget:,
-    # pause_at_microstep_start:) and answers [response, id]: the
-    # ta.actor.resume response, and the actor's ID afterwards, which a
-    # residency cycle may change.
-    def initialize(context, resume:, budget:, action_budget:, dispatch_budget:, pause_at_microstep_start: false)
+    # `run` is called as run.call(budget:, action_budget:,
+    # pause_at_microstep_start:) and answers the ta.run response.
+    def initialize(context, run:, budget:, action_budget:, dispatch_budget:, pause_at_microstep_start: false)
       @context = context
-      @resume = resume
+      @run = run
       @budgets = { budget: budget, action_budget: action_budget,
                    pause_at_microstep_start: pause_at_microstep_start }.freeze
       @dispatch_budget = dispatch_budget
-      @queue = []
-      @resumes = 0
+      @stops = 0
     end
 
     # Runs until nothing is left to do at the current logical time.
@@ -45,45 +45,24 @@ module TinyactorsTest
 
     private
 
-    # One piece of work: one resume, one listing, or one dispatch.
+    # One piece of work: one ta_run call, or one dispatch.
     def advance
-      return resume_current unless @queue.empty?
+      status = @context.core('ta_run', @run.call(**@budgets)).fetch(:status)
+      case status
+      when 'idle'
+        @stops = 0
+        dispatch
+      when 'paused'
+        @stops += 1
+        raise ScenarioError, "an input did not finish in #{MAX_ROUNDS} calls" if @stops >= MAX_ROUNDS
 
-      runnable = @context.rpc('system.actors', system: @context.system_handle, runnable: true)
-      unless runnable.empty?
-        @queue = runnable
-        return :round
-      end
-      dispatch
-    end
-
-    # Resumes the actor at the head of the queue once; it leaves the queue
-    # when its macrostep ends or it no longer exists. An invoked child may be
-    # destroyed while others run, when its parent cancels the invocation.
-    def resume_current
-      id = @queue.first
-      response, id = @resume.call(id, **@budgets)
-      @queue[0] = id
-      if response[:result] == 'err_not_found'
-        settled
-        return :resumed
-      end
-
-      status = @context.core('ta_actor_resume', response).fetch(:status)
-      raise CoreResultError.new('ta_actor_resume', "status #{status}") unless %w[paused stable done].include?(status)
-
-      if status == 'paused'
-        @resumes += 1
-        raise ScenarioError, "actor #{id}: macrostep did not finish in #{MAX_ROUNDS} resumes" if @resumes >= MAX_ROUNDS
+        :round
+      when 'more', 'notices_full'
+        @stops = 0
+        :round
       else
-        settled
+        raise CoreResultError.new('ta_run', "status #{status}")
       end
-      :resumed
-    end
-
-    def settled
-      @queue.shift
-      @resumes = 0
     end
 
     def dispatch

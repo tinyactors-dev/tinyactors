@@ -113,7 +113,38 @@ typedef struct {
 
 ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *actor);
 
-ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
+/* How one pass of ta_interpreter_run_input ended. */
+typedef enum ta_step_status {
+    TA_STEP_STABLE,  /* the macrostep ended and the session waits for its next input */
+    TA_STEP_PAUSED,  /* the budget, the action budget or a pause stopped it; the next pass continues */
+    TA_STEP_DONE,    /* the session reached a top-level final state */
+    TA_STEP_RUNAWAY  /* the macrostep ran its microstep limit; the caller abandons it (ADR 0099 section 7) */
+} ta_step_status;
+
+/* What one pass may spend (call lifetime). */
+typedef struct ta_input_run {
+    uint32_t budget;        /* microsteps this pass may run; at least 1 */
+    uint32_t action_budget; /* units of executable content before a pause inside a microstep; 0 for none */
+    bool pause_at_start;    /* also pause at the start of every microstep (ADR 0086) */
+} ta_input_run;
+
+/* What one pass did (call lifetime). Valid when the pass answered TA_OK. */
+typedef struct ta_input_result {
+    ta_step_status status;
+    uint32_t steps;  /* microsteps it ran, for the caller's budget over several inputs */
+    bool ignored;    /* STABLE or DONE: the external event enabled no transition (ADR 0089 section 8) */
+} ta_input_result;
+
+/*
+ * ta_interpreter_run_input runs the actor's macrostep from where it stands
+ * (ADR 0047, ADR 0061, ADR 0070): it takes the macrostep's logical time on
+ * its first pass, and stops when the macrostep ends, the budget is spent, a
+ * pause is asked for, or the microstep limit is reached. An idle actor answers
+ * STABLE with no step. TA_ERR_NOMEM stops it where it stands (the next pass
+ * continues) or, with nothing open, leaves nothing to continue; `*out` is then
+ * not valid. It allocates only as a macrostep always has.
+ */
+ta_result ta_interpreter_run_input(ta_system *system, ta_actor *actor, const ta_input_run *run, ta_input_result *out);
 /*
  * Whether an operator transition is well formed for the definition (ADR
  * 0082): at least one target, known states, and targets that can form a
@@ -235,9 +266,11 @@ void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_
 /*
  * Makes an idle actor run a macrostep for work queued outside any run, such
  * as a failed send's error, under `trace` (null: none). An actor already in
- * a macrostep is left alone.
+ * a macrostep is left alone. The session joins the started queue of ta_run
+ * (run.h), so the caller must have reserved room with ta_run_reserve_start
+ * before the step that made the work, where failing leaves nothing behind.
  */
-void ta_interpreter_start_macrostep(ta_actor *actor, const ta_trace_parent *trace);
+void ta_interpreter_start_macrostep(ta_system *system, ta_actor *actor, const ta_trace_parent *trace);
 bool ta_interpreter_internal_pending(const ta_actor *actor);
 
 /* ------------------------------------------------------------------------

@@ -310,22 +310,18 @@ TinyactorsTest.scenarios 'abandoning a macrostep', chart: :operator do
   end
 
   # Catches: an abandon that answers ok for an actor with nothing to
-  # abandon, and one that forgets a delivered event (or its operator
-  # transition) that was not taken yet.
+  # abandon, and one that discards an input that has not begun: an event
+  # waiting in core's queue (or an operator's transition) is not a macrostep,
+  # and it runs when its turn comes (core ADR 0099).
   scenario 'abandoning answers for every actor state' do
     recording_trace
     actor = spawn
     assert_equal 'err_invalid', actor.abandon, 'an idle actor has no macrostep'
     assert_equal 'ok', actor.post('go')
-    before = trace_records.size
-    assert_equal 'ok', actor.abandon, 'an event not yet taken is dropped'
-    assert_equal ['abandoned 0.0 go dropped 0'], trace_lines(trace_records.drop(before)),
-                 'no macrostep began, so none ends'
-    assert_equal 'ok', actor.post_jump(:w2)
-    assert_equal 'ok', actor.abandon, 'a jump not yet taken is dropped with its event'
-    run_system('after abandoning')
-    assert_equal [:idle], actor.active
-    assert_equal [], actor.data('.log')
+    assert_equal 'err_invalid', actor.abandon, 'an event not yet taken is not a macrostep'
+    assert_equal 'err_busy', actor.post_jump(:w2), 'a jump waits for the inputs ahead of it'
+    run_system('after refusing to abandon')
+    assert_equal %i[work w1], actor.active, 'the event was not dropped'
     actor.destroy
     assert_equal 'err_not_found', actor.abandon
   end

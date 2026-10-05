@@ -53,7 +53,7 @@ function categories() {
                     'system_register_definition']) {
     assert.equal(typeof core[name], 'function', `core.${name} is bound`);
   }
-  for (const name of ['actor_deliver', 'actor_resume', 'system_set_time', 'system_dispatch_due', 'system_create',
+  for (const name of ['actor_deliver', 'run', 'system_set_time', 'system_dispatch_due', 'system_create',
     'system_visit_actors', 'event_name_intern', 'arena_init', 'address_intern', 'dm_host_event',
     // The kernel records them in the input log before calling core (kernel ADR 0002).
     'actor_abandon', 'actor_withdraw_send']) {

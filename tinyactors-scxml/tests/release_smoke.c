@@ -73,6 +73,20 @@ static int in_state(ta_system *system, ta_definition_id definition, ta_actor_id 
     return 0;
 }
 
+/* run_all runs every admitted input until nothing is runnable (ta_run, ADR 0099). */
+static bool run_all(ta_system *system) {
+    ta_run_status status = TA_RUN_MORE;
+    ta_run_notice notices[8];
+    uint32_t count = 0;
+    while (status != TA_RUN_IDLE) {
+        if (ta_run(system, &(ta_run_params){ .budget = 100, .status = &status, .notices = notices,
+                                             .notice_capacity = 8, .notice_count = &count }) != TA_OK) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int main(void) {
     ta_scxml_codec codec;
     if (ta_scxml_codec_init(&codec, NULL) != TA_OK) {
@@ -105,9 +119,8 @@ int main(void) {
     ta_arena_destroy(&arena);
 
     ta_actor_id actor = 0;
-    ta_run_status status = TA_RUN_ERROR;
     if (ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) != TA_OK ||
-        ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) != TA_OK) {
+        !run_all(system)) {
         return fail("the actor does not start");
     }
     if (!in_state(system, id, actor, STR("idle"))) {
@@ -122,10 +135,10 @@ int main(void) {
     }
     ta_event event = { .name = go, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     if (ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) != TA_OK ||
-        ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) != TA_OK) {
+        !run_all(system)) {
         return fail("the event is not delivered");
     }
-    if (status != TA_RUN_STABLE || in_state(system, id, actor, STR("idle")) || !in_state(system, id, actor, STR("done"))) {
+    if (in_state(system, id, actor, STR("idle")) || !in_state(system, id, actor, STR("done"))) {
         return fail("the actor did not reach done");
     }
 

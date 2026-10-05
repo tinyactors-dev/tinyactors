@@ -4,7 +4,9 @@
  * error.communication.invoke.<id>.quarantined, and running out of memory
  * for it delays it to a later turn without losing it. (Core's own report
  * running out of memory takes the same retry; tinyactors-test's sweep
- * covers core.)
+ * covers core.) The child is quarantined by a message core refuses as
+ * malformed: a runaway no longer quarantines, since core abandons its
+ * macrostep at the microstep limit (core ADR 0099 section 7).
  */
 #include "check.h"
 #include <string.h>
@@ -54,8 +56,8 @@ typedef struct {
 static bool quarantine_data(void *context, const tah_quarantine_report *report, ta_value *out) {
     data_script *script = context;
     (void)out;
-    CHECK(report->code == TA_ERR_RUNAWAY);
-    CHECK(strcmp(report->operation, "resume") == 0);
+    CHECK(report->code == TA_ERR_INVALID);
+    CHECK(strcmp(report->operation, "deliver") == 0);
     script->calls += 1u;
     if (script->fail_data > 0) {
         script->fail_data -= 1u;
@@ -82,6 +84,28 @@ static bool in_state(tah_system *system, ta_actor_id actor, const char *state) {
     return false;
 }
 
+/* The invoked child: the actor of the first slots that has a parent. */
+static ta_actor_id invoked_child(tah_system *system) {
+    for (uint32_t slot = 0; slot < 8u; slot += 1u) {
+        for (uint32_t generation = 1; generation < 4u; generation += 1u) {
+            ta_actor_id actor = ta_actor_id_make(slot, generation);
+            ta_actor_inspection view;
+            if (ta_actor_inspect(system->core, actor, &view) == TA_OK && view.has_parent) {
+                return actor;
+            }
+        }
+    }
+    CHECK(false);
+    return 0;
+}
+
+/* Posts the child a message core refuses as malformed (an event name it never issued): it faults and is quarantined. */
+static void fault_the_child(tah_system *system) {
+    ta_actor_id child = invoked_child(system);
+    ta_event bad = { .name = 0x7ffffff0u, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE }; /* a name this system never issued */
+    CHECK(tah_system_post(system, &(tah_message){ .target = child, .event = &bad }) == TA_OK);
+}
+
 /* One turn; true when it recorded a fault. */
 static bool turn(tah_system *system) {
     tah_system_turn(system);
@@ -95,9 +119,7 @@ static bool turn(tah_system *system) {
 
 static void reports(uint32_t fail_data) {
     tah_system *system = NULL;
-    /* A runaway at 50 microsteps (core ADR 0075), a parameter fixed at creation (core ADR 0092). */
-    ta_param_value limit[] = { { .param = TA_PARAM_MICROSTEP_LIMIT, .value = 50 } };
-    CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform(), .params = limit, .param_count = 1 }, &system) == TA_OK);
+    CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
     tah_system_set_driver(system, &(tah_pump_driver){ .wake = no_wake });
     data_script script = { .fail_data = fail_data };
     tah_system_set_callbacks(system, &(tah_system_callbacks){
@@ -106,11 +128,8 @@ static void reports(uint32_t fail_data) {
                                          .quarantine_data = quarantine_data,
                                      });
 
-    /* The child loops for ever; the parent waits for it in `waiting`. */
-    ta_str spin_target[] = { S("spin"), { 0 } };
-    ta_scxml_transition_spec spin[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = spin_target }, { 0 } };
-    ta_scxml_state_spec child_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("spin"), .transitions = spin },
-                                           { 0 } };
+    /* The child waits; the parent waits for it in `waiting`. */
+    ta_scxml_state_spec child_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("spin") }, { 0 } };
     ta_scxml_spec child = { .name = S("spinner"), .states = child_states };
     child_chart = define(system, &child);
 
@@ -138,6 +157,12 @@ static void reports(uint32_t fail_data) {
     CHECK(tah_hook_actor_created(system, parent) == TA_OK);
 
     uint32_t turns = 0;
+    while (!tah_system_quiet(system)) { /* the invocation starts and the child bootstraps */
+        (void)turn(system);
+        turns += 1u;
+        CHECK(turns < 16u);
+    }
+    fault_the_child(system);
     while (!turn(system)) {
         turns += 1u;
         CHECK(turns < 16u);
@@ -168,9 +193,7 @@ static void reports(uint32_t fail_data) {
 /* A parent gone before its child's report is taken: the report is dropped. */
 static void parent_gone(void) {
     tah_system *system = NULL;
-    /* A runaway at 50 microsteps (core ADR 0075), a parameter fixed at creation (core ADR 0092). */
-    ta_param_value limit[] = { { .param = TA_PARAM_MICROSTEP_LIMIT, .value = 50 } };
-    CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform(), .params = limit, .param_count = 1 }, &system) == TA_OK);
+    CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
     tah_system_set_driver(system, &(tah_pump_driver){ .wake = no_wake });
     data_script script = { .fail_data = 1 };
     tah_system_set_callbacks(system, &(tah_system_callbacks){
@@ -179,10 +202,7 @@ static void parent_gone(void) {
                                          .quarantine_data = quarantine_data,
                                      });
 
-    ta_str spin_target[] = { S("spin"), { 0 } };
-    ta_scxml_transition_spec spin[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = spin_target }, { 0 } };
-    ta_scxml_state_spec child_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("spin"), .transitions = spin },
-                                           { 0 } };
+    ta_scxml_state_spec child_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("spin") }, { 0 } };
     ta_scxml_spec child = { .name = S("spinner"), .states = child_states };
     child_chart = define(system, &child);
     ta_scxml_invoke_spec invokes[] = {
@@ -199,6 +219,12 @@ static void parent_gone(void) {
                                                                  .out = &parent }) == TA_OK);
     CHECK(tah_hook_actor_created(system, parent) == TA_OK);
     uint32_t turns = 0;
+    while (!tah_system_quiet(system)) {
+        (void)turn(system);
+        turns += 1u;
+        CHECK(turns < 16u);
+    }
+    fault_the_child(system);
     while (!turn(system)) {
         turns += 1u;
         CHECK(turns < 16u);

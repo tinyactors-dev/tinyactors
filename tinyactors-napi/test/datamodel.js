@@ -218,8 +218,9 @@ async function foreachNames() {
   system.close();
 }
 
-// A small actionBudget splits a <foreach> over a large array across turns,
-// and other actors run between them (core ADR 0061; left by step 5).
+// A small actionBudget splits a <foreach> over a large array across turns.
+// Core runs one input at a time until slots take turns (core ADR 0103), so
+// another actor's input waits behind the paused one, then runs.
 async function foreachAcrossTurns() {
   const system = createSystem({ parameters: { actionBudget: 50 } });
   const busy = system.spawn(
@@ -235,7 +236,7 @@ async function foreachAcrossTurns() {
   await tick();
   await tick();
   assert.equal(busy.inspect().macrostepInProgress, true, 'paused inside the foreach');
-  assert.deepEqual(other.inspect().activeStates, ['idle'], 'another actor ran meanwhile');
+  assert.deepEqual(other.inspect().activeStates, [], 'the other actor waits behind the paused input');
   let turns = 2;
   while (busy.inspect().scheduling === 'runnable') {
     await tick();
@@ -244,6 +245,8 @@ async function foreachAcrossTurns() {
   }
   assert.equal(busy.inspect().data.count, 1000);
   assert.ok(turns >= 20, `1000 iterations at 50 actions per resume took ${turns} turns`);
+  await system.flush();
+  assert.deepEqual(other.inspect().activeStates, ['idle'], 'the other actor ran once the input finished');
   system.close();
 }
 

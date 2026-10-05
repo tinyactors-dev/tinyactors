@@ -12,6 +12,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures = 0;
 
@@ -90,14 +91,14 @@ static bool lands_in(const ta_scxml_spec *spec, const char *event, const char *e
         chart.definition = NULL; /* the system owns it now */
         ta_actor_id actor = 0;
         CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
-        ta_run_status status = TA_RUN_ERROR;
-        CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+        test_run_status status = TEST_RUN_ERROR;
+        CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
               TA_OK);
         if (event != NULL) {
             ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                                    .invoke_id = TA_INVOKE_ID_NONE };
             CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &delivered }) == TA_OK);
-            CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100,
+            CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100,
                                                                     .status = &status }) == TA_OK);
         }
         ta_state_id state = 0;
@@ -361,8 +362,8 @@ static void test_literal_invoke_src(void) {
         chart.definition = NULL; /* the system owns it now */
         ta_actor_id actor = 0;
         CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
-        ta_run_status status = TA_RUN_ERROR;
-        CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+        test_run_status status = TEST_RUN_ERROR;
+        CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
               TA_OK);
         CHECK(invoked.starts == 1);
         CHECK(strcmp(invoked.src_text, "lit-src") == 0);

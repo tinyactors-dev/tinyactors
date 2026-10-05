@@ -130,9 +130,14 @@ TinyactorsTest.scenarios '_event binding' do
       parent = spawn chart
       child = invoked_actors.fetch(0)
       child.deliver 'note', data: { x: 'first' }
+      # Core runs inputs in the order they were admitted: the parent's stop
+      # comes first and cancels the child, which never takes `second`.
+      assert_equal 'ok', parent.post('stop')
       assert_equal 'ok', child.post('note', data: { x: 'second' })
+      run_system('cancel the child before it takes its second event')
 
-      assert_equal [%w[name note], %w[x first]], EventBinding.cancel(self, parent)
+      assert_equal [], invoked_actors, 'the child was cancelled'
+      assert_equal [%w[name note], %w[x first]], logs.map { |record| [record[:label], record[:value]] }
     end
   end
 
@@ -141,8 +146,7 @@ TinyactorsTest.scenarios '_event binding' do
   # allocations core may make after it took an event and before the
   # microstep is visible are the reservation before each microstep (ADR
   # 0064): here, a queue for the external event's microstep and a larger
-  # one for the internal event's. Paused actors hold every cached queue, so
-  # the reservations allocate, and each fails once in turn.
+  # one for the internal event's. Each allocation fails once in turn.
   #
   # Catches: a retry that loses the event it had taken (the transition
   # never runs), takes it twice, or binds `_event` to the wrong event, so
@@ -153,18 +157,12 @@ TinyactorsTest.scenarios '_event binding' do
     expected = ['go', 'inner', 'after inner']
     assert_equal expected, reference.data('.seen')
 
-    # Spawning runs the system, which would resume the holders, so every
-    # actor is spawned before they pause. A run that ends stable returns
-    # its queue to the cache, so one more holder takes it back each time.
+    # Spawning runs the system, so every actor is spawned before its input
+    # is admitted. The one running slot (core ADR 0099) means no other
+    # actor holds a queue while this one runs: the cached blocks serve the
+    # first capacity, and the growth for `inner` is what allocates.
     probe = spawn :event_trail
-    actors = Array.new(4) { spawn :event_trail }
-    holders = Array.new(16) { spawn :event_trail }
-    hold = lambda do
-      holder = holders.shift
-      assert_equal 'ok', holder.post('go')
-      assert_equal 'paused', holder.resume(budget: 1), 'a paused actor keeps its queue'
-    end
-    8.times { hold.call }
+    actors = Array.new(8) { spawn :event_trail }
 
     assert_equal 'ok', probe.post('go')
     before = allocator.stats[:allocations]
@@ -172,17 +170,15 @@ TinyactorsTest.scenarios '_event binding' do
     allocations = allocator.stats[:allocations] - before
     assert allocations.positive?, "the macrostep allocates (#{allocations})"
     assert allocations <= actors.size, "one actor per allocation (#{allocations})"
-    hold.call
 
     allocations.times do |failing|
       actor = actors.fetch(failing)
       assert_equal 'ok', actor.post('go')
       allocator.arm_fault(after: failing, count: 1)
-      result = ta.actor.resume(system: system_handle, actor: actor.handle, budget: 64)[:result]
+      result = ta.run(system: system_handle, budget: 64, notice_capacity: 8)[:result]
       allocator.clear_faults
-      assert_equal 'err_nomem', result, "allocation #{failing + 1} of #{allocations} fails the resume"
+      assert_equal 'err_nomem', result, "allocation #{failing + 1} of #{allocations} fails the run"
       assert_equal 'stable', actor.resume(budget: 64)
-      hold.call
       assert_equal expected, actor.data('.seen'), "after allocation #{failing + 1} of #{allocations} failed"
     end
   end

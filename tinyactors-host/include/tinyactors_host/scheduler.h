@@ -36,7 +36,11 @@
  * a bootstrap, a delivered event, or a macrostep paused by a budget. An actor
  * stays `runnable` while its macrostep runs, so work that arrives for it then
  * only waits. A queue entry whose actor was destroyed or replaced in the
- * meantime is skipped when it is popped.
+ * meantime is skipped when it is popped. Core holds the inputs themselves
+ * (tinyactors-core ADR 0099): ta_actor_deliver() admits an event into core's
+ * pool and ta_run() runs what was admitted, in the order it was admitted, so a
+ * resume here is a call of ta_run() whose notices settle every actor they
+ * name, not just the one that was popped.
  *
  * send() waiters (ADR 0005 point 11): a message may carry a waiter, the
  * native half of a send() promise. While the message is queued the waiter
@@ -48,8 +52,9 @@
  * reused through a free list, so a send makes no allocator call after
  * warm-up.
  *
- * One turn resumes up to `resumes` runnable actors, each with a microstep
- * budget and an action budget (core ADR 0061). What the turn learns that
+ * One turn calls ta_run() for up to `resumes` runnable actors, each call with
+ * a microstep budget and an action budget (core ADR 0061); a call that finds
+ * the actor already settled by an earlier one does nothing. What the turn learns that
  * JavaScript must hear about (an actor finished, an actor faulted) becomes a
  * record in the turn arena; the pump calls the hooks for them after the last
  * core call of the turn (ADR 0007 point 5).
@@ -83,9 +88,6 @@ typedef enum {
 enum {
     TAH_SCHED_BACKOFF = 1u << 0,  /* ran out of memory: skip one turn (ADR 0008) */
     TAH_SCHED_FINISHED = 1u << 1, /* reached a top-level final state */
-    /* quarantined as a runaway (core ADR 0075): once released, it runs with
-     * no microstep limit until its macrostep ends */
-    TAH_SCHED_UNLIMITED = 1u << 2,
     /* A replaying actor (kernel ADR 0006): the replay resumes it itself,
      * and a turn leaves it alone until it is published. */
     TAH_SCHED_REPLAYING = 1u << 5,
@@ -180,6 +182,7 @@ typedef struct tah_waiter tah_waiter;
 typedef enum {
     TAH_SETTLE_STABLE, /* the message's macrostep ended with the actor stable */
     TAH_SETTLE_DONE,   /* ... with the actor finished */
+    TAH_SETTLE_RUNAWAY, /* ... or reached the microstep limit and was abandoned (core ADR 0099 section 7); the actor is stable */
     TAH_SETTLE_DEAD,   /* the message became a dead letter, or its actor went away */
     TAH_SETTLE_FAULT,  /* the macrostep failed and the actor is quarantined */
     TAH_SETTLE_ABANDONED /* an operator abandoned the macrostep (core ADR 0082) */
@@ -213,6 +216,9 @@ typedef struct tah_turn_record {
     ta_actor_address address;
     const char *operation; /* FAULT: "resume", "deliver" */
     ta_result code;        /* FAULT: core's result */
+    /* FAULT: the macrostep reached the microstep limit and core abandoned it (ADR 0103 section 8). `operation` is
+     * "run" and `code` is unused; the actor is not quarantined, and its parent is not told. */
+    bool runaway;
     ta_event_name_id event; /* DEAD_LETTER */
     tah_dead_reason reason; /* DEAD_LETTER */
     /* DEAD_LETTER: the message's data, owned by the record until
@@ -259,10 +265,10 @@ typedef struct {
 typedef struct tah_sched tah_sched;
 
 typedef struct {
-    uint32_t resumes;    /* resume calls in one turn */
+    uint32_t resumes;    /* ta_run() calls in one turn */
     uint32_t messages;   /* deliveries in one turn, and dead letters reported */
-    uint32_t microsteps; /* core's `budget` for one resume */
-    uint32_t actions;    /* core's `action_budget` for one resume; 0: no limit */
+    uint32_t microsteps; /* core's `budget` for one ta_run() call */
+    uint32_t actions;    /* core's `action_budget` for one ta_run() call; 0: no limit */
 } tah_turn_budgets;
 
 typedef struct {

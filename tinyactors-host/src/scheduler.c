@@ -636,10 +636,8 @@ ta_result tah_sched_abandoned(tah_sched *sched, ta_actor_id actor) {
         return TA_ERR_NOT_FOUND;
     }
     tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_ABANDONED });
-    /* The macrostep a release() lifted the microstep limit for is gone. */
-    entry->flags &= (uint8_t)~TAH_SCHED_UNLIMITED;
     if (entry->state != TAH_SCHED_RUNNABLE) {
-        return TA_OK; /* quarantined (a runaway's release() then finds it stable), or core abandoned an event the addon never delivered */
+        return TA_OK; /* quarantined, or core abandoned an event the addon never delivered */
     }
     entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
     if (entry->first == 0) {
@@ -1021,10 +1019,133 @@ static void tah_sched_left_core(const tah_turn_params *params) {
     }
 }
 
+/*
+ * A session's input ended (a COMPLETED notice): settle the actor as the end of
+ * its resume used to (kernel ADR 0005 point 11). An entry that is not
+ * runnable is not waiting for it: the actor was removed, quarantined or
+ * abandoned meanwhile, and its waiter was settled by whoever did that.
+ */
+static void tah_sched_completed(tah_sched *sched, const tah_turn_params *params, const ta_run_notice *notice) {
+    ta_actor_id actor = notice->actor;
+    tah_sched_entry *entry = tah_sched_lookup(sched, actor);
+    if (entry == NULL || entry->state != TAH_SCHED_RUNNABLE || notice->status == TA_INPUT_ABANDONED) {
+        return;
+    }
+    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
+    if (notice->status == TA_INPUT_DONE) {
+        tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_DONE, .ignored = notice->ignored });
+        entry->state = TAH_SCHED_IDLE;
+        tah_sched_bury(sched, entry, TAH_DEAD_DONE);
+        if ((entry->flags & TAH_SCHED_FINISHED) == 0) {
+            entry->flags |= TAH_SCHED_FINISHED;
+            tah_sched_record(sched, params, (tah_turn_record){ .kind = TAH_RECORD_DONE, .actor = actor });
+            tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_FINISHED, .actor = actor });
+        }
+        return;
+    }
+    /* Reaching the microstep limit abandoned the macrostep: the actor is stable, the fault hook hears of it, and
+     * so does the send(). */
+    bool runaway = notice->status == TA_INPUT_RUNAWAY;
+    if (runaway) {
+        sched->faults[TAH_FAULT_RUNAWAY] += 1u;
+        tah_sched_record(sched, params, (tah_turn_record){ .kind = TAH_RECORD_FAULT, .actor = actor,
+                                                           .operation = "run", .runaway = true });
+    }
+    tah_sched_complete(sched, actor, (tah_settlement){ .kind = runaway ? TAH_SETTLE_RUNAWAY : TAH_SETTLE_STABLE,
+                                                       .ignored = notice->ignored });
+    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_SETTLED, .actor = actor });
+    tah_sched_settle(sched, entry, actor);
+}
+
+/*
+ * An admitted message core could not take (a REFUSED notice): the target went
+ * or finished after core admitted it. It is a dead letter, as if
+ * ta_actor_deliver() had said so, and the actor, if the table still knows it,
+ * stands between macrosteps again. The event belongs to core until the next
+ * ta_run(); the record keeps its own references.
+ */
+static void tah_sched_refused(tah_sched *sched, const tah_turn_params *params, const ta_run_notice *notice) {
+    tah_dead_reason reason = notice->reason == TA_REFUSED_DONE      ? TAH_DEAD_DONE
+                             : notice->reason == TA_REFUSED_INVALID ? TAH_DEAD_REFUSED
+                                                                    : TAH_DEAD_NOT_FOUND;
+    tah_turn_record record = {
+        .kind = TAH_RECORD_DEAD_LETTER,
+        .actor = notice->actor,
+        .reason = reason,
+        .event = notice->event != NULL ? notice->event->name : 0,
+    };
+    if (notice->event != NULL) {
+        record.data = notice->event->data;
+        ta_value_retain(&record.data);
+    }
+    sched->dead_letters += 1u;
+    sched->dead_by_reason[reason] += 1u;
+    tah_sched_record(sched, params, record);
+    tah_sched_entry *entry = tah_sched_lookup(sched, notice->actor);
+    tah_sched_complete(sched, notice->actor, (tah_settlement){ .kind = TAH_SETTLE_DEAD, .reason = (uint8_t)reason });
+    if (entry != NULL && entry->state == TAH_SCHED_RUNNABLE) {
+        tah_sched_settle(sched, entry, notice->actor);
+    }
+}
+
+#define TAH_RUN_NOTICES 16u
+
+ta_result tah_sched_run(tah_sched *sched, const tah_turn_params *params, tah_run_watch *watch, ta_run_status *status) {
+    ta_result result = TA_OK;
+    uint32_t budget = params->budgets.microsteps != 0 ? params->budgets.microsteps : 64u;
+    do {
+        if (sched->turn_bounded && sched->turn_left == 0) {
+            *status = TA_RUN_MORE; /* the turn used its inputs: the rest waits for the next one */
+            break;
+        }
+        if (sched->turn_bounded && sched->turn_left < budget) {
+            budget = sched->turn_left; /* one microstep per input at least, so this ends the turn in time */
+        }
+        ta_run_notice notices[TAH_RUN_NOTICES];
+        /* A host that polls `stop` (the trace staging bound) hears of each input as it ends: room for one input's
+         * notices makes core stop after it, and the loop below asks. */
+        uint32_t capacity = params->stop != NULL ? 3u : TAH_RUN_NOTICES;
+        uint32_t count = 0;
+        *params->inside_core = true;
+        result = ta_run(params->core, &(ta_run_params){ .budget = budget,
+                                                        .action_budget = params->budgets.actions,
+                                                        .status = status,
+                                                        .notices = notices,
+                                                        .notice_capacity = capacity,
+                                                        .notice_count = &count });
+        *params->inside_core = false;
+        tah_sched_left_core(params);
+        for (uint32_t index = 0; index < count; index += 1u) {
+            const ta_run_notice *notice = &notices[index];
+            if (notice->kind == TA_NOTICE_INPUT_COMPLETED && sched->turn_left > 0) {
+                sched->turn_left -= 1u;
+            }
+            tah_sched_entry *entry = tah_sched_lookup(sched, notice->actor);
+            bool replayed = entry != NULL && (entry->flags & TAH_SCHED_REPLAYING) != 0;
+            if (watch != NULL && notice->actor == watch->actor && notice->kind == TA_NOTICE_INPUT_COMPLETED) {
+                watch->completed = true;
+                watch->done = watch->done || notice->status == TA_INPUT_DONE;
+                watch->ignored = watch->ignored || notice->ignored;
+            } else if (replayed) {
+                continue; /* the replay settles it itself */
+            } else if (notice->kind == TA_NOTICE_INPUT_COMPLETED) {
+                tah_sched_completed(sched, params, notice);
+            } else if (notice->kind == TA_NOTICE_INPUT_REFUSED) {
+                tah_sched_refused(sched, params, notice);
+            }
+        }
+        if (*status == TA_RUN_NOTICES_FULL && params->stop != NULL && params->stop(params->stop_context)) {
+            *status = TA_RUN_MORE; /* the host asked the turn to end: what core still holds waits for the next one */
+            break;
+        }
+    } while (result == TA_OK && *status == TA_RUN_NOTICES_FULL);
+    return result;
+}
+
 static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params, ta_actor_id actor) {
     tah_sched_entry *entry = tah_sched_lookup(sched, actor);
     if (entry == NULL || entry->state != TAH_SCHED_RUNNABLE) {
-        return; /* destroyed, replaced or quarantined since it was queued */
+        return; /* destroyed, replaced, quarantined or settled by an earlier call since it was queued */
     }
     if ((entry->flags & TAH_SCHED_REPLAYING) != 0) {
         entry->state = TAH_SCHED_IDLE; /* its replay resumes it (napi ADR 0034) */
@@ -1035,69 +1156,29 @@ static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params
         tah_sched_requeue(sched, &sched->runnable, actor);
         return;
     }
-    ta_run_status status = TA_RUN_STABLE;
-    bool ignored = false;
-    ta_actor_resume_params resume = {
-        .actor = actor,
-        .budget = params->budgets.microsteps,
-        .status = &status,
-        .action_budget = params->budgets.actions,
-        .no_microstep_limit = (entry->flags & TAH_SCHED_UNLIMITED) != 0,
-        .ignored = &ignored,
-    };
-    *params->inside_core = true;
-    ta_result result = ta_actor_resume(params->core, &resume);
-    *params->inside_core = false;
-    tah_sched_left_core(params);
+    ta_run_status status = TA_RUN_IDLE;
+    ta_result result = tah_sched_run(sched, params, NULL, &status);
+    if (status == TA_RUN_PAUSED) {
+        sched->turn_left = 0; /* a budget stopped an input inside its macrostep: the turn ends, the next continues it */
+    }
     /* The table is the addon's: core calls never move its pages. */
     if (result == TA_ERR_NOMEM) {
         entry->flags |= TAH_SCHED_BACKOFF;
         tah_sched_requeue(sched, &sched->runnable, actor);
         return;
     }
-    if (result == TA_ERR_NOT_FOUND) {
-        tah_sched_remove(sched, actor, TAH_DEAD_NOT_FOUND);
+    if (entry->state != TAH_SCHED_RUNNABLE) {
         return;
     }
-    if (result != TA_OK) {
-        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
-        if (result == TA_ERR_RUNAWAY) {
-            /* Quarantined as a runaway: an operator's release() lets this
-             * macrostep finish; the next one has the limit again. */
-            entry->flags |= TAH_SCHED_UNLIMITED;
-        }
-        tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_FAULT, .code = result });
-        tah_sched_fault(sched, params, (tah_turn_record){ .actor = actor, .operation = "resume", .code = result });
+    if (status == TA_RUN_IDLE) {
+        /* Core has nothing for it: a released actor, or one whose macrostep ended with nobody to hear of it. It
+         * stands stable, as a resume of an idle actor used to find it. */
+        tah_sched_completed(sched, params, &(ta_run_notice){ .kind = TA_NOTICE_INPUT_COMPLETED, .actor = actor,
+                                                              .status = TA_INPUT_STABLE });
         return;
     }
-    switch (status) {
-    case TA_RUN_PAUSED:
-        tah_sched_requeue(sched, &sched->runnable, actor);
-        return;
-    default:
-        break;
-    }
-    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
-    switch (status) {
-    case TA_RUN_DONE:
-        entry->flags &= (uint8_t)~TAH_SCHED_UNLIMITED;
-        tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_DONE, .ignored = ignored });
-        entry->state = TAH_SCHED_IDLE;
-        tah_sched_bury(sched, entry, TAH_DEAD_DONE);
-        if ((entry->flags & TAH_SCHED_FINISHED) == 0) {
-            entry->flags |= TAH_SCHED_FINISHED;
-            tah_sched_record(sched, params, (tah_turn_record){ .kind = TAH_RECORD_DONE, .actor = actor });
-            tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_FINISHED, .actor = actor });
-        }
-        return;
-    case TA_RUN_STABLE:
-    default:
-        entry->flags &= (uint8_t)~TAH_SCHED_UNLIMITED;
-        tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_STABLE, .ignored = ignored });
-        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_SETTLED, .actor = actor });
-        tah_sched_settle(sched, entry, actor);
-        return;
-    }
+    /* Its input is paused by a budget, or waits behind others in core's queue: ask again next turn. */
+    tah_sched_requeue(sched, &sched->runnable, actor);
 }
 
 /*
@@ -1341,6 +1422,8 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
         tah_sched_requeue(sched, &sched->runnable, actor);
         return;
     case TA_ERR_NOMEM:
+    case TA_ERR_FULL: /* core's pool is at its watermark: the turn's ta_run() makes room */
+    case TA_ERR_BUSY: /* an operator transition while another input holds core's running slot: ask again */
         entry->flags |= TAH_SCHED_BACKOFF; /* retryable (ADR 0008): try again next turn */
         tah_sched_requeue(sched, &sched->ready, actor);
         return;
@@ -1364,17 +1447,13 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
          * Any other failure quarantines the actor and keeps its mailbox
          * (ADR 0008). The envelope core refused (for example a malformed
          * event) becomes a dead letter: delivering it again after release()
-         * would only fault again. TA_ERR_BUSY cannot happen while the table
-         * is right, because a ready actor is between macrosteps; it is a host
-         * bug, and that envelope is kept.
+         * would only fault again.
          */
-        if (result != TA_ERR_BUSY) {
-            entry->first = envelope->next;
-            if (entry->first == 0) {
-                entry->last = 0;
-            }
-            tah_sched_dead_append(sched, head, TAH_DEAD_REFUSED);
+        entry->first = envelope->next;
+        if (entry->first == 0) {
+            entry->last = 0;
         }
+        tah_sched_dead_append(sched, head, TAH_DEAD_REFUSED);
         tah_sched_fault(sched, params, (tah_turn_record){ .actor = actor, .operation = "deliver", .code = result });
         return;
     }
@@ -1452,17 +1531,32 @@ void tah_sched_turn(tah_sched *sched, const tah_turn_params *params) {
     tah_sched_unstrand(sched);
     /* Only actors queued before each phase began: a requeued actor waits for the next turn. */
     uint32_t pending = tah_ring_count(&sched->runnable);
-    uint32_t limit = params->budgets.resumes < pending ? params->budgets.resumes : pending;
-    for (uint32_t index = 0; index < limit; index += 1) {
+    /* `resumes` bounds the inputs core completes in the turn, not the entries popped: one call of ta_run() serves
+     * every actor whose input is next, and the entries it settled are skipped when they come up. */
+    sched->turn_left = params->budgets.resumes;
+    sched->turn_bounded = true;
+    for (uint32_t index = 0; index < pending; index += 1) {
         ta_actor_id actor = 0;
         if (!tah_ring_pop(&sched->runnable, &actor)) {
             break;
         }
+        if (sched->turn_left == 0) {
+            /* The turn's inputs are used. Entries of actors a call already settled still leave the queue, so it
+             * never holds an actor twice; one that needs a call goes to the back and waits for the next turn. */
+            tah_sched_entry *waiting = tah_sched_lookup(sched, actor);
+            if (waiting != NULL && waiting->state == TAH_SCHED_RUNNABLE) {
+                tah_sched_requeue(sched, &sched->runnable, actor);
+                continue;
+            }
+        }
         tah_sched_resume_one(sched, params, actor);
         if (params->stop != NULL && params->stop(params->stop_context)) {
+            sched->turn_bounded = false;
             return;
         }
     }
+    sched->turn_bounded = false;
+    uint32_t limit = 0;
     tah_sched_unpark(sched);
     pending = tah_ring_count(&sched->ready);
     limit = params->budgets.messages < pending ? params->budgets.messages : pending;

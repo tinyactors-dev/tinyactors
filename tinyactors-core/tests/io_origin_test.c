@@ -22,6 +22,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures;
 
@@ -273,8 +274,8 @@ static ta_definition_id define_idle(ta_system *system) {
 static ta_actor_id spawn_idle(ta_system *system, ta_definition_id definition) {
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &actor }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
     return actor;
 }
@@ -313,9 +314,9 @@ static void test_delivery(void) {
      * see only the origin. */
     ta_event warm = { .name = event_name(system, "ping"), .type = TA_EVENT_EXTERNAL,
                       .invoke_id = TA_INVOKE_ID_NONE };
-    ta_run_status status = TA_RUN_ERROR;
+    test_run_status status = TEST_RUN_ERROR;
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &warm }) == TA_OK);
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+    CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
     size_t before = heap.stats.live_blocks;
 
@@ -326,9 +327,9 @@ static void test_delivery(void) {
     CHECK(heap.stats.live_blocks == before + 1);
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(system, actor, &inspection) == TA_OK);
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+    CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_RUN_STABLE);
     /* The macrostep is over, and an actor nobody invoked keeps no event
      * between macrosteps (ADR 0069), so the origin is given back. */
     CHECK(heap.stats.live_blocks == before);
@@ -337,9 +338,9 @@ static void test_delivery(void) {
     ta_event stop = message_event(system, request, "stop", long_uri);
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &stop }) == TA_OK);
     ta_event_release(&stop);
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+    CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
-    CHECK(status == TA_RUN_DONE);
+    CHECK(status == TEST_RUN_DONE);
     size_t finished = heap.stats.live_blocks;
     ta_event late = message_event(system, request, "ping", long_uri);
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &late }) == TA_ERR_DONE);
@@ -363,13 +364,17 @@ static void test_image(void) {
     ta_definition_id definition = define_idle(system);
     ta_actor_id actor = spawn_idle(system, definition);
 
-    /* A computed origin, held as the actor's pending external event. */
-    ta_event event = { .name = event_name(system, "ping"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    /* A computed origin, held as the external event of a macrostep paused at the start of its microstep. */
+    ta_event event = { .name = event_name(system, "stop"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(ta_io_origin_make(system, &(ta_io_origin_make_params){ .processor = peer,
                                                                  .origin_class = TA_IO_ORIGIN_COMPUTED,
                                                                  .token = 42,
                                                                  .out = &event.origin }) == TA_OK);
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
+    test_run_status paused = TEST_RUN_ERROR;
+    CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &paused,
+                                                     .pause_at_microstep_start = true }) == TA_OK);
+    CHECK(paused == TEST_RUN_PAUSED);
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &image }) == TA_OK);
     CHECK(ta_actor_destroy(system, actor) == TA_OK);

@@ -14,6 +14,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures;
 
@@ -164,8 +165,8 @@ static ta_actor_id spawn_sender(ta_system *system) {
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .address = &address,
                                                            .out = &actor }) == TA_OK);
     free(name); /* core keeps its own copy of the address */
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
     return actor;
 }
@@ -233,12 +234,22 @@ static void test_delivered_origin_outlives_the_host_reference(void) {
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
     ta_address_release(origin);
 
-    ta_actor_inspection view;
-    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.current_event != NULL);
-    if (view.current_event != NULL) {
-        ta_actor_address held = ta_address_view(view.current_event->origin.as.actor.as.named);
-        CHECK(held.name.len == 7 && memcmp(held.name.ptr, "client9", 7) == 0);
+    /* The envelope holds the event, and so the origin, until the input has run: the TAKEN notice lends it. */
+    ta_run_notice notices[4];
+    uint32_t count = 0;
+    ta_run_status stopped = TA_RUN_IDLE;
+    CHECK(ta_run(system, &(ta_run_params){ .budget = 100, .report_taken = true, .status = &stopped,
+                                           .notices = notices, .notice_capacity = 4, .notice_count = &count }) ==
+          TA_OK);
+    bool read = false;
+    for (uint32_t index = 0; index < count; index += 1u) {
+        if (notices[index].kind == TA_NOTICE_INPUT_TAKEN && notices[index].event != NULL) {
+            ta_actor_address held = ta_address_view(notices[index].event->origin.as.actor.as.named);
+            CHECK(held.name.len == 7 && memcmp(held.name.ptr, "client9", 7) == 0);
+            read = true;
+        }
     }
+    CHECK(read);
     ta_system_destroy(system);
 }
 

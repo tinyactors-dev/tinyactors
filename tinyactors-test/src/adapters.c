@@ -65,9 +65,11 @@ static bool tat_make_ecmascript_datamodel(tat_bind *bind, jv config, void *out) 
  * Resolution answers TA_ERR_UNSUPPORTED when no directory is installed,
  * TA_ERR_UNLOADED for an actor the directory holds but has not loaded (this
  * router cannot load one; a real host would), and TA_ERR_NOT_FOUND for an
- * address it does not know. A busy actor, or one that ran out of memory
- * taking the event, makes the router answer RETRY, so core keeps the event
- * and offers it again on a later dispatch. Config:
+ * address it does not know. A pool at its admission watermark (TA_ERR_FULL),
+ * or a delivery that ran out of memory, makes the router answer RETRY, so
+ * core keeps the event and offers it again on a later dispatch (an actor
+ * inside a macrostep is not busy any more: core queues its mail, ADR 0099).
+ * Config:
  * {"system": <system handle>}.
  */
 static ta_external_event_submit_status tat_direct_submit(void *self,
@@ -91,10 +93,10 @@ static ta_external_event_submit_status tat_direct_submit(void *self,
     if (result == TA_OK) {
         return TA_EXTERNAL_EVENT_ACCEPTED;
     }
-    /* A busy receiver, or one that could not take the event for lack of
+    /* A full pool, or a delivery that could not take the event for lack of
      * memory, takes it later: running out of memory is never an error the
      * sender's chart sees (ADR 0047, ADR 0070). */
-    if (result == TA_ERR_BUSY || result == TA_ERR_NOMEM) {
+    if (result == TA_ERR_FULL || result == TA_ERR_NOMEM) {
         return TA_EXTERNAL_EVENT_RETRY;
     }
     *params->fault = (ta_fault){.code = result, .message = {.ptr = not_found, .len = sizeof(not_found) - 1}};

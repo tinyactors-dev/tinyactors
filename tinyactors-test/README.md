@@ -226,9 +226,12 @@ actor. Invariants are checked after every step.
 Lower-level steps control a macrostep directly:
 
 - `actor.post(event)` offers an event without running the system, and
-  returns the `ta_actor_deliver` result (`"ok"`, `"err_busy"`, ...).
-- `actor.resume(budget:)` makes one `ta_actor_resume` call and returns its
-  status (`"paused"`, `"stable"`, `"done"`).
+  returns the `ta_actor_deliver` result (`"ok"` when core admitted it behind
+  what is already queued, `"err_full"` at the pool's watermark, ...).
+- `actor.resume(budget:)` makes one `ta_run` call (core runs the system's
+  inputs in the order they were admitted, not this actor's alone) and returns
+  how it ended: `"paused"` when a budget stopped a macrostep, `"done"` or
+  `"runaway"` when an input ended that way, else `"stable"`.
 - `actor.destroy` destroys the actor and runs the system.
 - `actor.jump(*states, from:)` delivers an event (`operator.goto` unless
   `event:` names another) with an operator transition to those states, from

@@ -701,9 +701,9 @@ static ta_external_event_submit_status tat_recording_submit(void *self, const ta
         tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("accepted")));
         return TA_EXTERNAL_EVENT_ACCEPTED;
     }
-    /* Like router.direct: a receiver that is busy, or out of memory, takes
+    /* Like router.direct: a full pool, or a delivery out of memory, takes
      * the event later (ADR 0070). */
-    if (result == TA_ERR_BUSY || result == TA_ERR_NOMEM) {
+    if (result == TA_ERR_FULL || result == TA_ERR_NOMEM) {
         tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("retry")));
         return TA_EXTERNAL_EVENT_RETRY;
     }
@@ -1668,9 +1668,9 @@ static jv tat_control_router(tat_instrument *instrument, const char *command, jv
             return entry;
         }
         ta_result result = tat_router_deliver(instrument, &state->held[index].delivery, &entry);
-        /* A busy actor, or one out of memory, keeps the delivery held;
+        /* A full pool, or a delivery out of memory, keeps the delivery held;
          * release it again later. */
-        if (result != TA_ERR_BUSY && result != TA_ERR_NOMEM) {
+        if (result != TA_ERR_FULL && result != TA_ERR_NOMEM) {
             tat_held_remove(state, index);
         }
         entry = jv_object_set(entry, jv_string("result"), tat_result_name(result));
@@ -1853,11 +1853,11 @@ static jv tat_endpoint_held_record(const tat_endpoint_state *state) {
     return jv_number((double)state->held_count);
 }
 
-/* Delivers one event with its origin; keeps it when the actor is busy and `hold` says so. */
+/* Delivers one event with its origin; keeps it when the pool is full and `hold` says so. */
 static jv tat_endpoint_deliver(tat_instrument *instrument, ta_actor_id actor, ta_event *event, bool hold) {
     tat_endpoint_state *state = &instrument->endpoint;
     ta_result result = ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){ .time = ta_system_time(instrument->system), .actor = actor, .event = event });
-    if (result == TA_ERR_BUSY && hold) {
+    if (result == TA_ERR_FULL && hold) {
         if (state->held_count == state->held_capacity) {
             size_t capacity = state->held_capacity == 0 ? 8 : state->held_capacity * 2;
             tat_held_event *grown = realloc(state->held, capacity * sizeof(*grown));
@@ -1951,7 +1951,7 @@ static jv tat_endpoint_receive(tat_instrument *instrument, jv args, int *error_c
     return jv_object_set(record, jv_string("held"), tat_endpoint_held_record(&instrument->endpoint));
 }
 
-/* flush: offers held events again, oldest first, until one is still refused as busy. */
+/* flush: offers held events again, oldest first, until one is still refused as full. */
 static jv tat_endpoint_flush(tat_instrument *instrument) {
     tat_endpoint_state *state = &instrument->endpoint;
     jv results = jv_array();
@@ -1959,7 +1959,7 @@ static jv tat_endpoint_flush(tat_instrument *instrument) {
     while (taken < state->held_count) {
         tat_held_event *held = &state->held[taken];
         ta_result result = ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){ .time = ta_system_time(instrument->system), .actor = held->actor, .event = &held->event });
-        if (result == TA_ERR_BUSY) {
+        if (result == TA_ERR_FULL) {
             break;
         }
         ta_event_release(&held->event);

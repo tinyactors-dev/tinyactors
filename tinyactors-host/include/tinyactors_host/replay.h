@@ -39,9 +39,10 @@ typedef struct {
  * TA_ERR_INVALID: an empty name, a time earlier than the actor's last
  * input or later than the system's, or an actor that is not replaying;
  * TA_ERR_NOT_FOUND: no such actor, or an error report for an invocation that
- * is not active; TA_ERR_DONE: the actor finished already; TA_ERR_RUNAWAY:
- * its macrostep ran into the microstep limit, as it did live;
- * TA_ERR_NOMEM.
+ * is not active; TA_ERR_DONE: the actor finished already; TA_ERR_NOMEM.
+ * A macrostep that runs into the microstep limit is abandoned, as it was
+ * live (core ADR 0099 section 7): the call answers TA_OK and the actor stands
+ * where its last microstep left it.
  */
 ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *params);
 /*

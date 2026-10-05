@@ -17,6 +17,7 @@
 #include "../include/tinyactors.h"
 #include "tel_reader.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures = 0;
 
@@ -404,25 +405,25 @@ static void start(run *r) {
     collect(r->system);
 }
 
-static ta_result resume_with(run *r, uint32_t budget, uint32_t action_budget, ta_run_status *status) {
-    ta_result result = ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = budget,
+static ta_result resume_with(run *r, uint32_t budget, uint32_t action_budget, test_run_status *status) {
+    ta_result result = test_resume(r->system, &(test_resume_params){ .actor = r->actor, .budget = budget,
                                                                 .status = status, .action_budget = action_budget });
     collect(r->system);
     return result;
 }
 
-static ta_run_status resume(run *r, uint32_t action_budget) {
-    ta_run_status status = TA_RUN_ERROR;
+static test_run_status resume(run *r, uint32_t action_budget) {
+    test_run_status status = TEST_RUN_ERROR;
     CHECK(resume_with(r, 1000, action_budget, &status) == TA_OK);
     return status;
 }
 
 /* Resumes until the actor is stable or done, pausing as the budget says. */
-static ta_run_status settle(run *r, uint32_t action_budget) {
-    ta_run_status status = TA_RUN_ERROR;
+static test_run_status settle(run *r, uint32_t action_budget) {
+    test_run_status status = TEST_RUN_ERROR;
     for (uint32_t calls = 0; calls < 10000u; calls += 1u) {
         status = resume(r, action_budget);
-        if (status != TA_RUN_PAUSED) {
+        if (status != TEST_RUN_PAUSED) {
             break;
         }
     }
@@ -507,13 +508,13 @@ static void finish(run *r) {
 static void test_jump_runs_the_engine(void) {
     run r;
     start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "idle"));
     ta_state_id w2 = state(&r, "w2");
     clear_log();
     uint32_t first = record_count;
     CHECK(jump(&r, TA_STATE_NONE, &w2, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "work w2"));
     /* Entry handlers ran and saw the operator's event as _event. */
     CHECK(log_is("e.work@J e.w2@J "));
@@ -538,7 +539,7 @@ static void test_jump_runs_the_engine(void) {
     /* The chart goes on from there as if it had got there itself. */
     clear_log();
     CHECK(offer(&r, "go", NULL) == TA_OK); /* idle's transition: not active, ignored */
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "work w2"));
     finish(&r);
 }
@@ -546,18 +547,18 @@ static void test_jump_runs_the_engine(void) {
 static void test_history_target(void) {
     run r;
     start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(offer(&r, "go", NULL) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(offer(&r, "next", NULL) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "work w2"));
 
     /* Out: leaving work records its deep history. */
     ta_state_id idle = state(&r, "idle");
     clear_log();
     CHECK(jump(&r, TA_STATE_NONE, &idle, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "idle"));
     CHECK(log_is("x.work@J e.idle@J "));
 
@@ -566,7 +567,7 @@ static void test_history_target(void) {
     clear_log();
     uint32_t first = record_count;
     CHECK(jump(&r, TA_STATE_NONE, &wh, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "work w2"));
     CHECK(log_is("e.work@J e.w2@J "));
     uint32_t micro = find_record(TA_TRACE_MICROSTEP, first);
@@ -577,11 +578,11 @@ static void test_history_target(void) {
 static void test_parallel_region(void) {
     run r;
     start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     ta_state_id both[] = { state(&r, "r1b"), state(&r, "r2a") };
     clear_log();
     CHECK(jump(&r, TA_STATE_NONE, both, 2) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "par r1 r1b r2 r2a"));
     CHECK(log_is("e.par@J e.r1b@J e.r2a@J "));
 
@@ -590,7 +591,7 @@ static void test_parallel_region(void) {
     clear_log();
     uint32_t first = record_count;
     CHECK(jump(&r, state(&r, "r1"), &r1a, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "par r1 r1a r2 r2a"));
     CHECK(log_is("e.r1a@J "));
     uint32_t micro = find_record(TA_TRACE_MICROSTEP, first);
@@ -600,7 +601,7 @@ static void test_parallel_region(void) {
     ta_state_id r2b = state(&r, "r2b");
     clear_log();
     CHECK(jump(&r, TA_STATE_NONE, &r2b, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "par r1 r1a r2 r2b"));
     CHECK(log_is("x.r2a@J e.par@J e.r1a@J e.r2b@J "));
     finish(&r);
@@ -609,11 +610,11 @@ static void test_parallel_region(void) {
 static void test_final_target(void) {
     run r;
     start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     ta_state_id end = state(&r, "end");
     clear_log();
     CHECK(jump(&r, TA_STATE_NONE, &end, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_DONE);
+    CHECK(settle(&r, 0) == TEST_RUN_DONE);
     CHECK(log_is("e.end@J "));
     ta_actor_inspection inspection = inspect(&r);
     CHECK(inspection.residency == TA_ACTOR_DONE);
@@ -630,7 +631,7 @@ static void test_final_target(void) {
 static void test_refusals(void) {
     run r;
     start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     size_t live = heap.stats.live_blocks;
     ta_state_id w1 = state(&r, "w1");
     ta_state_id w2 = state(&r, "w2");
@@ -660,11 +661,11 @@ static void test_refusals(void) {
     CHECK(!inspection.macrostep_in_progress);
     CHECK(inspection.current_event == NULL);
     CHECK(offer(&r, "go", NULL) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "work w1"));
     /* The source is the root or an active state; the targets the chart's. */
     CHECK(jump(&r, work, &w2, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "work w2"));
     finish(&r);
 }
@@ -675,17 +676,17 @@ static void test_busy(void) {
     ta_state_id w2 = state(&r, "w2");
     /* Spawned and not yet bootstrapped: its bootstrap macrostep is running. */
     CHECK(jump(&r, TA_STATE_NONE, &w2, 1) == TA_ERR_BUSY);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     /* Holding an event. */
     CHECK(offer(&r, "go", NULL) == TA_OK);
     CHECK(jump(&r, TA_STATE_NONE, &w2, 1) == TA_ERR_BUSY);
     /* Paused inside a microstep. */
-    CHECK(resume(&r, 1) == TA_RUN_PAUSED);
+    CHECK(resume(&r, 1) == TEST_RUN_PAUSED);
     CHECK(inspect(&r).microstep_in_progress);
     CHECK(jump(&r, TA_STATE_NONE, &w2, 1) == TA_ERR_BUSY);
     /* Malformed is invalid whatever the actor's state. */
     CHECK(jump(&r, TA_STATE_NONE, &w2, 0) == TA_ERR_INVALID);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     finish(&r);
 }
 
@@ -693,7 +694,7 @@ static void test_busy(void) {
  * units, with a pause before each of them when `action_budget` is 1. */
 static void jump_into_w1(run *r, uint32_t action_budget, int capture_at) {
     start(r);
-    CHECK(settle(r, 0) == TA_RUN_STABLE);
+    CHECK(settle(r, 0) == TEST_RUN_STABLE);
     ta_state_id w1 = state(r, "w1");
     clear_log();
     CHECK(jump(r, TA_STATE_NONE, &w1, 1) == TA_OK);
@@ -707,15 +708,16 @@ static void jump_into_w1(run *r, uint32_t action_budget, int capture_at) {
         ta_session_image_destroy(image);
     }
     uint32_t pauses = 0;
-    ta_run_status status = TA_RUN_ERROR;
-    while ((status = resume(r, action_budget)) == TA_RUN_PAUSED) {
+    test_run_status status = TEST_RUN_ERROR;
+    while ((status = resume(r, action_budget)) == TEST_RUN_PAUSED) {
         pauses += 1u;
         ta_actor_inspection inspection = inspect(r);
         CHECK(inspection.microstep_in_progress);
         /* The configuration is the one before the jump until it completes. */
         CHECK(active_is(r, "idle"));
         CHECK(abandon_actor(r->system, r->actor) == TA_ERR_BUSY);
-        CHECK(offer(r, "go", NULL) == TA_ERR_BUSY);
+        /* The slot is occupied: an operator's event waits (an ordinary one is admitted behind it). */
+        CHECK(jump(r, TA_STATE_NONE, &w1, 1) == TA_ERR_BUSY);
         if ((int)pauses == capture_at) {
             ta_session_image *image = NULL;
             CHECK(ta_actor_capture(r->system, &(ta_actor_capture_params){ .actor = r->actor, .out = &image }) ==
@@ -727,7 +729,7 @@ static void jump_into_w1(run *r, uint32_t action_budget, int capture_at) {
             CHECK(inspect(r).microstep_in_progress);
         }
     }
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_RUN_STABLE);
     CHECK(action_budget == 0 || pauses >= 4u);
     CHECK(active_is(r, "work w1"));
 }
@@ -763,14 +765,14 @@ static void test_pause_inside_the_jump(void) {
 static void test_abandon_a_macrostep_that_never_ends(void) {
     run r;
     start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(abandon_actor(r.system, r.actor) == TA_ERR_INVALID); /* idle: nothing to abandon */
     CHECK(offer(&r, "spin", NULL) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
+    test_run_status status = TEST_RUN_ERROR;
     CHECK(resume_with(&r, 21, 0, &status) == TA_OK);
-    CHECK(status == TA_RUN_PAUSED);
+    CHECK(status == TEST_RUN_PAUSED);
     CHECK(resume_with(&r, 20, 0, &status) == TA_OK);
-    CHECK(status == TA_RUN_PAUSED);
+    CHECK(status == TEST_RUN_PAUSED);
     ta_actor_inspection inspection = inspect(&r);
     CHECK(inspection.macrostep_in_progress && !inspection.microstep_in_progress);
     uint32_t waiting = inspection.internal_count;
@@ -802,7 +804,7 @@ static void test_abandon_a_macrostep_that_never_ends(void) {
     /* Then the jump works as usual, and the actor is out of the loop. */
     clear_log();
     CHECK(jump(&r, TA_STATE_NONE, &jump_to, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "work w2"));
     CHECK(log_is("e.work@J e.w2@J "));
 
@@ -816,17 +818,17 @@ static void test_abandon_only_between_microsteps(void) {
     start(&r);
     /* Its bootstrap has not completed a microstep: no configuration yet. */
     CHECK(abandon_actor(r.system, r.actor) == TA_ERR_BUSY);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(offer(&r, "spin", NULL) == TA_OK);
     /* Paused inside l1's <onentry>, which raises. */
-    ta_run_status status = TA_RUN_ERROR;
+    test_run_status status = TEST_RUN_ERROR;
     CHECK(resume_with(&r, 1000, 1, &status) == TA_OK);
-    CHECK(status == TA_RUN_PAUSED);
+    CHECK(status == TEST_RUN_PAUSED);
     CHECK(inspect(&r).microstep_in_progress);
     CHECK(abandon_actor(r.system, r.actor) == TA_ERR_BUSY);
     /* A budget of one microstep and no action budget finishes it. */
     CHECK(resume_with(&r, 1, 0, &status) == TA_OK);
-    CHECK(status == TA_RUN_PAUSED);
+    CHECK(status == TEST_RUN_PAUSED);
     CHECK(!inspect(&r).microstep_in_progress);
     CHECK(abandon_actor(r.system, r.actor) == TA_OK);
     CHECK(active_is(&r, "loop l1"));
@@ -836,23 +838,26 @@ static void test_abandon_only_between_microsteps(void) {
 static void test_abandon_before_the_event_is_taken(void) {
     run r;
     start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
-    /* A plain event: dropped, and no macrostep began, so no MACROSTEP_END. */
-    CHECK(offer(&r, "go", NULL) == TA_OK);
-    uint32_t first = record_count;
-    CHECK(abandon_actor(r.system, r.actor) == TA_OK);
-    uint32_t abandoned = find_record(TA_TRACE_ABANDONED, first);
-    CHECK(abandoned < record_count && event_is(&records[abandoned], "go"));
-    CHECK(abandoned < record_count && records[abandoned].key.macrostep == 0);
-    CHECK(find_record(TA_TRACE_MACROSTEP_END, first) == record_count);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
+    /* A plain event waits in the run queue (ADR 0099): no macrostep began, so there is nothing to abandon. */
+    CHECK(offer(&r, "nothing", NULL) == TA_OK);
+    CHECK(abandon_actor(r.system, r.actor) == TA_ERR_INVALID);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "idle"));
-    CHECK(!inspect(&r).macrostep_in_progress);
-    /* A jump: its operator transition goes with the event. */
+    /* A jump is started in the slot at once, and its event is not taken until the macrostep runs: abandoned
+     * there, the event is dropped and no macrostep began, so no MACROSTEP_END. */
     ta_state_id w2 = state(&r, "w2");
+    uint32_t first = record_count;
     CHECK(jump(&r, TA_STATE_NONE, &w2, 1) == TA_OK);
     CHECK(abandon_actor(r.system, r.actor) == TA_OK);
+    uint32_t abandoned = find_record(TA_TRACE_ABANDONED, first);
+    CHECK(abandoned < record_count && event_is(&records[abandoned], "operator.goto"));
+    CHECK(abandoned < record_count && records[abandoned].key.macrostep == 0);
+    CHECK(find_record(TA_TRACE_MACROSTEP_END, first) == record_count);
+    CHECK(!inspect(&r).macrostep_in_progress);
     CHECK(active_is(&r, "idle"));
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    /* The next call reports the input as abandoned and runs nothing. */
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "idle"));
     finish(&r); /* checks nothing leaked */
 }
@@ -872,15 +877,15 @@ static void jump_retrying(run *r) {
     }
     CHECK(result == TA_OK);
     for (uint32_t calls = 0; calls < 1000u; calls += 1u) {
-        ta_run_status status = TA_RUN_ERROR;
+        test_run_status status = TEST_RUN_ERROR;
         result = resume_with(r, 1000, 1, &status);
         if (result == TA_ERR_NOMEM) {
             CHECK(inspect(r).macrostep_in_progress);
             continue;
         }
         CHECK(result == TA_OK);
-        if (status != TA_RUN_PAUSED) {
-            CHECK(status == TA_RUN_STABLE);
+        if (status != TEST_RUN_PAUSED) {
+            CHECK(status == TEST_RUN_STABLE);
             break;
         }
     }
@@ -892,7 +897,7 @@ static void test_out_of_memory(void) {
      * inside the jump's microstep, before its first unit (ADR 0070). */
     next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
     start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     clear_log();
     uint32_t first = record_count;
     unsigned long before = heap.stats.attempts;
@@ -912,7 +917,7 @@ static void test_out_of_memory(void) {
     for (unsigned long failing = 1; failing <= used; failing += 1u) {
         next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
         start(&r);
-        CHECK(settle(&r, 0) == TA_RUN_STABLE);
+        CHECK(settle(&r, 0) == TEST_RUN_STABLE);
         clear_log();
         first = record_count;
         ta_test_allocator_fail_nth(&heap, failing);
@@ -934,10 +939,10 @@ static void test_out_of_memory(void) {
     /* Abandoning needs scratch memory; without it, nothing changes. */
     for (unsigned long failing = 1; failing <= 4u; failing += 1u) {
         start(&r);
-        CHECK(settle(&r, 0) == TA_RUN_STABLE);
+        CHECK(settle(&r, 0) == TEST_RUN_STABLE);
         CHECK(offer(&r, "spin", NULL) == TA_OK);
-        ta_run_status status = TA_RUN_ERROR;
-        CHECK(resume_with(&r, 7, 0, &status) == TA_OK && status == TA_RUN_PAUSED);
+        test_run_status status = TEST_RUN_ERROR;
+        CHECK(resume_with(&r, 7, 0, &status) == TA_OK && status == TEST_RUN_PAUSED);
         uint32_t waiting = inspect(&r).internal_count;
         ta_test_allocator_fail_nth(&heap, failing);
         ta_result result = abandon_actor(r.system, r.actor);
@@ -955,44 +960,42 @@ static void test_out_of_memory(void) {
 }
 
 /*
- * A macrostep stopped as a runaway (ADR 0075) stands between two microsteps,
- * as after a budget pause, so it can be abandoned; then a jump moves it out
- * of the loop, and the next macrostep has the limit again.
+ * A macrostep that reaches the microstep limit (ADR 0075) stands between two
+ * microsteps, as after a budget pause, and ta_run abandons it at once
+ * (ADR 0099 section 7): the input ends as a runaway, the session is idle in the
+ * configuration after its last completed microstep, a jump moves it out of
+ * the loop, and the next macrostep has the limit again.
  */
-static void test_abandon_a_runaway(void) {
+static void test_a_runaway_is_abandoned(void) {
     run r;
     next_param(TA_PARAM_MICROSTEP_LIMIT, 50);
     start(&r);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(offer(&r, "spin", NULL) == TA_OK);
-    ta_run_status status = TA_RUN_PAUSED;
-    CHECK(resume_with(&r, 1000, 0, &status) == TA_ERR_RUNAWAY);
-    CHECK(status == TA_RUN_ERROR);
-    CHECK(find_record(TA_TRACE_RUNAWAY, 0) < record_count);
-    ta_actor_inspection inspection = inspect(&r);
-    CHECK(inspection.macrostep_in_progress && !inspection.microstep_in_progress);
-    ta_state_id jump_to = state(&r, "w2");
-    CHECK(jump(&r, TA_STATE_NONE, &jump_to, 1) == TA_ERR_BUSY);
-
+    test_run_status status = TEST_RUN_PAUSED;
     uint32_t first = record_count;
-    CHECK(abandon_actor(r.system, r.actor) == TA_OK);
+    CHECK(resume_with(&r, 1000, 0, &status) == TA_OK);
+    CHECK(status == TEST_RUN_RUNAWAY);
+    CHECK(find_record(TA_TRACE_RUNAWAY, 0) < record_count);
     uint32_t abandoned = find_record(TA_TRACE_ABANDONED, first);
     CHECK(abandoned < record_count && event_is(&records[abandoned], "spin"));
     CHECK(abandoned + 1u < record_count && records[abandoned + 1u].kind == TA_TRACE_MACROSTEP_END);
-    CHECK(inspect(&r).residency == TA_ACTOR_IDLE);
+    ta_actor_inspection inspection = inspect(&r);
+    CHECK(!inspection.macrostep_in_progress && !inspection.microstep_in_progress);
+    CHECK(inspection.residency == TA_ACTOR_IDLE);
 
     clear_log();
+    ta_state_id jump_to = state(&r, "w2");
     CHECK(jump(&r, TA_STATE_NONE, &jump_to, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(active_is(&r, "work w2"));
 
     /* Back in idle, the next loop is stopped at the limit again. */
     ta_state_id idle = state(&r, "idle");
     CHECK(jump(&r, TA_STATE_NONE, &idle, 1) == TA_OK);
-    CHECK(settle(&r, 0) == TA_RUN_STABLE);
+    CHECK(settle(&r, 0) == TEST_RUN_STABLE);
     CHECK(offer(&r, "spin", NULL) == TA_OK);
-    CHECK(resume_with(&r, 1000, 0, &status) == TA_ERR_RUNAWAY);
-    CHECK(abandon_actor(r.system, r.actor) == TA_OK);
+    CHECK(resume_with(&r, 1000, 0, &status) == TA_OK && status == TEST_RUN_RUNAWAY);
     finish(&r);
 }
 
@@ -1007,7 +1010,7 @@ int main(void) {
     test_abandon_a_macrostep_that_never_ends();
     test_abandon_only_between_microsteps();
     test_abandon_before_the_event_is_taken();
-    test_abandon_a_runaway();
+    test_a_runaway_is_abandoned();
     test_out_of_memory();
     if (failures != 0) {
         fprintf(stderr, "operator test: %d failures\n", failures);

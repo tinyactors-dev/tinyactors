@@ -121,16 +121,17 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
   # retry that restarts the macrostep instead of continuing it, which the
   # comparison with the uninterrupted run would show as a repeated effect.
   scenario 'an allocation failure suspends a macrostep, and a later resume continues it' do
-    reference = spawn
+    reference = spawn :event_trail
     reference.deliver 'go'
 
-    actor = spawn
+    actor = spawn :event_trail
     assert_equal 'ok', actor.post('go')
 
-    AllocationFailure.tighten(self)
-    interrupted = ta.actor.resume(system: system_handle, actor: actor.handle, budget: 1024)
+    # `go` raises eight events, so the microstep of `inner` grows its queue:
+    # an allocation the chart cannot see.
+    AllocationFailure.tighten(self, headroom: 0)
+    interrupted = ta.run(system: system_handle, budget: 1024, notice_capacity: 8)
     assert_equal 'err_nomem', interrupted[:result], 'the host is told the pool was full'
-    assert_equal nil, interrupted.dig(:out, :status)
     allocator.clear_faults
 
     # Suspended, not finished.
@@ -138,7 +139,7 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
     assert view[:macrostep_in_progress],
            "#{actor} is not mid-macrostep after err_nomem: residency #{view[:residency]}, " \
            "active #{actor.active.inspect}"
-    assert_equal 'err_busy', actor.post('interloper'), 'a suspended actor takes no new event'
+    assert_equal 'err_busy', actor.post_jump(:waiting), 'a suspended input keeps the running slot'
 
     # Resuming continues it, to the state the uninterrupted run reached.
     status = 'paused'
@@ -157,11 +158,11 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
   # running out of memory is not an execution or communication error).
   scenario 'running out of memory is a result, not an error event' do
     recording_log
-    actor = spawn
+    actor = spawn :event_trail
     assert_equal 'ok', actor.post('go')
 
-    AllocationFailure.tighten(self)
-    assert_equal 'err_nomem', ta.actor.resume(system: system_handle, actor: actor.handle, budget: 1024)[:result]
+    AllocationFailure.tighten(self, headroom: 0)
+    assert_equal 'err_nomem', ta.run(system: system_handle, budget: 1024, notice_capacity: 8)[:result]
     allocator.clear_faults
 
     assert_equal 0, actor.inspect_actor.fetch(:internal_events).to_a.size,

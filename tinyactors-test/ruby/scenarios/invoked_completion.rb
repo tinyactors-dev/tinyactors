@@ -1,24 +1,22 @@
 # frozen_string_literal: true
 
 # An invoked child that reaches its final state has to tell its parent
-# (`done.invoke.<id>`), and the parent may be busy with its own macrostep
-# when that happens. `docs/internal/actor-lifecycle.md` describes the
-# protocol:
+# (`done.invoke.<id>`). Core admits that event like any other (ADR 0099), so
+# a parent inside its own macrostep does not refuse it, and nothing is held
+# for a retry; the child keeps its completion until its parent has taken the
+# event. `docs/internal/actor-lifecycle.md` describes the protocol:
 #
-#   "An invoked child retains a pending completion while its parent is
-#   busy; ta_actor_publish_completion() retries publication, and
+#   "An invoked child retains a pending completion until the parent takes
+#   it; ta_actor_publish_completion() is harmless meanwhile, and
 #   destruction is busy while the parent invocation remains active. If that
 #   invocation was cancelled, publication returns TA_ERR_NOT_FOUND, retires
 #   the pending completion, and allows reclamation without manufacturing a
 #   done event."
 #
-# The header adds: "Retries an invoked child's completion after
-# TA_ERR_BUSY."
-#
-# A scenario reaches that window by driving the macrosteps itself: the
-# parent accepts `finish` and runs one microstep (which forwards it to the
-# child), then the child runs to its end while the parent is still inside
-# its own macrostep.
+# A scenario reaches that window by driving ta_run itself, one microstep at
+# a time: the parent takes `finish` (which forwards it to the child), then
+# the child's input runs to its end, and the parent's done.invoke waits in
+# the run queue.
 module InvokedCompletion
   # [parent, child] with the child finished and its completion pending.
   def self.park(context)
@@ -26,45 +24,45 @@ module InvokedCompletion
       parent = spawn :caller
       child = invoked_actors.fetch(0)
       assert_equal 'ok', parent.post('finish')
-      assert_equal 'paused', parent.resume(budget: 1)
-      child.resume(budget: 64)
+      5.times { break unless parent.resume(budget: 1) == 'paused' }
+      5.times do
+        break if child.inspect_actor.fetch(:residency) == 'done'
+
+        child.resume(budget: 1)
+      end
       assert_equal 'done', child.inspect_actor.fetch(:residency)
       assert child.inspect_actor.fetch(:has_completion), 'the child holds its done data'
-      assert parent.inspect_actor.fetch(:macrostep_in_progress), 'the parent is still busy'
+      assert_equal [], parent.data('.log').grep(/done/), 'the parent has not taken the completion yet'
       [parent, child]
     end
   end
 end
 
 TinyactorsTest.scenarios 'invoked completion' do
-  # Catches: a completion dropped because the parent was busy when the
-  # child finished, or one delivered into a parent mid-macrostep. The child
-  # keeps the completion and the delivery it could not make, and the parent
-  # gets its done.invoke once it is idle again.
-  scenario 'a child that finishes while its parent is busy keeps its completion' do
+  # Catches: a completion dropped before the parent took it, or one held
+  # for a retry that core no longer needs. The parent gets its done.invoke
+  # from the run queue, and the child is reclaimed after.
+  scenario 'a child that finishes before its parent takes the completion is reclaimed after' do
     parent, child = InvokedCompletion.park(self)
 
-    held = Array(child.inspect_actor[:delayed_sends])
-    assert_equal 1, held.size, 'the undelivered completion is held for a retry'
-    assert_equal true, held.first[:submitted], 'the held completion waits to be offered again'
-    assert_equal [], parent.data('.log').grep(/done/), 'the busy parent has not been told yet'
+    assert_equal [], Array(child.inspect_actor[:delayed_sends]), 'the completion is queued, not held'
 
-    run_system('let the parent finish its macrostep')
+    run_system('let the parent take the completion')
     assert_equal ['progress 21', 'done 42'], parent.data('.log')
     assert_equal [], invoked_actors, 'the child is reclaimed once its parent has been told'
   end
 
   # Catches: a retry that delivers the completion twice, or that fails
-  # because the completion is already in flight. Publishing again while the
-  # parent is still busy is the documented retry and must be harmless.
-  scenario 'publishing again while the parent is busy is harmless' do
+  # because the completion is already queued. Publishing again before the
+  # parent has taken it must be harmless.
+  scenario 'publishing again before the parent takes the completion is harmless' do
     parent, child = InvokedCompletion.park(self)
 
     assert_equal 'ok', publish_completion(child)
     assert_equal 'ok', publish_completion(child), 'the retry is idempotent'
-    assert_equal 1, Array(child.inspect_actor[:delayed_sends]).size, 'still one pending delivery'
+    assert_equal [], Array(child.inspect_actor[:delayed_sends]), 'nothing is held'
 
-    run_system('let the parent finish its macrostep')
+    run_system('let the parent take the completion')
     assert_equal ['progress 21', 'done 42'], parent.data('.log'),
                  'the parent was told once, however often the host retried'
   end

@@ -85,7 +85,11 @@ export interface DoneRecord<Data = unknown> {
 /**
  * A core call for an actor failed; the actor is quarantined (ADR 0008). An
  * invoked child's parent also gets error.communication.invoke.<id>.quarantined
- * with `{ code, message }` from this record (napi ADR 0025).
+ * with `{ code, message }` from this record (napi ADR 0025). The exception is
+ * a runaway: `code` is `runaway` and `operation` is `run` when core
+ * abandoned a macrostep at the microstep limit (core ADR 0099 section 7).
+ * The actor stands stable and is not quarantined, and its parent is not told
+ * (core ADR 0103 section 8).
  */
 export interface FaultRecord {
   readonly actor: Actor;
@@ -212,10 +216,13 @@ export interface LoaderOptions {
 export interface SystemParameters {
   // Core's (core ADR 0092); their bounds come from core's own table.
   /**
-   * Microsteps one macrostep may run before its actor is quarantined with
-   * fault code `runaway` (core ADR 0075); 0 for no limit; default 100000. A
-   * tenth of it writes a `tinyactors.macrostep.long` log. `release()` lets a
-   * runaway finish its macrostep; the next one has the limit again.
+   * Microsteps one macrostep may run before core abandons it (core ADR 0075,
+   * ADR 0099 section 7); 0 for no limit; default 100000. The `fault` hook
+   * hears it with code `runaway`, a `send()` waiting for it rejects with
+   * `runaway`, and a `tinyactors.actor.runaway` log says where. The actor
+   * keeps the configuration of its last microstep and takes its next message
+   * with the limit again; it is not quarantined. A tenth of the limit writes
+   * a `tinyactors.macrostep.long` log.
    */
   microstepLimit?: number;
   /**
@@ -742,8 +749,8 @@ export interface System {
    * A send() whose message becomes a dead letter rejects with the reason's
    * code: `not-found` (also for `destroyed`), `done`, `unloaded`,
    * `rejected`, `load-failed`, `load-timeout`, `waiting-full`, or `invalid`
-   * for `refused`; a macrostep quarantined as a runaway rejects with
-   * `runaway`.
+   * for `refused`; a macrostep that ran into the microstep limit and was
+   * abandoned rejects with `runaway`.
    */
   send(
     target: ActorTarget,
@@ -1839,9 +1846,9 @@ export interface PreparedActor<Data extends object> extends Actor<Data> {
    * actor took them; publish() then defaults its `at` to the last event's
    * time. Throws `invalid` for an actor not prepared with `at`, an event
    * with no name, or an `at` earlier than the last event's or later than
-   * the system's time; `done` once the actor reached a final state;
-   * `runaway` when the macrostep ran into the microstep limit, as it did
-   * live.
+   * the system's time; `done` once the actor reached a final state. A
+   * macrostep that runs into the microstep limit is abandoned as it was
+   * live (core ADR 0099 section 7), and the call returns normally.
    */
   replay(event: ActorEvent, at: number): SendResult;
 }

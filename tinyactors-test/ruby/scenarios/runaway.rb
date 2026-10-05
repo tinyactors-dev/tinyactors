@@ -1,11 +1,12 @@
 # frozen_string_literal: true
 
-# Runaway macrosteps (ADR 0075). A macrostep that runs its microstep limit
-# stops between microsteps with err_runaway, and nothing about the actor
-# changes: it stays mid-macrostep and a later resume continues it. A tenth
-# of the way there it is recorded as long. The count is of microsteps, so a
-# <foreach> that pauses across many resumes is one microstep and never
-# reaches it.
+# Runaway macrosteps (ADR 0075, ADR 0103). A macrostep that runs its
+# microstep limit stops between microsteps and is abandoned, as by
+# ta_actor_abandon(): ta_run reports the input as "runaway", the session keeps
+# the configuration after its last completed microstep, and the next input
+# runs. A tenth of the way there it is recorded as long. The count is of
+# microsteps, so a <foreach> that pauses across many resumes is one
+# microstep and never reaches it.
 module Runaway
   # An eventless self-transition that counts to `.to` and then leaves, so a
   # run past the limit can finish. States: 0 idle, 1 spin, 2 done.
@@ -65,11 +66,9 @@ module Runaway
            .fetch(:out)
   end
 
-  # One ta_actor_resume; returns [result, status].
-  def self.resume(context, actor, budget: 100_000, action_budget: 0, lifted: false)
-    response = context.ta.actor.resume(system: context.system_handle, actor: actor.handle, budget: budget,
-                                       action_budget: action_budget, no_microstep_limit: lifted)
-    [response[:result], response.dig(:out, :status)]
+  # One ta_run; returns how it ended: "runaway", "paused", "done" or "stable".
+  def self.resume(context, _actor, budget: 100_000, action_budget: 0)
+    context.run_once(budget: budget, action_budget: action_budget)
   end
 end
 
@@ -78,34 +77,44 @@ TinyactorsTest.scxml_chart :rw_ping_pong, Runaway::PING_PONG, datamodel: 'jq'
 TinyactorsTest.scxml_chart :rw_foreach, Runaway::FOREACH, datamodel: 'jq'
 
 TinyactorsTest.scenarios 'runaway macrosteps' do
-  # Catches: a limit that is not checked, a stop that changes the actor, a
-  # second resume that counts again, and a lifted limit that does not let
-  # the macrostep finish.
-  scenario 'an eventless loop stops at the limit, unchanged, and a lifted limit lets it finish' do
+  # Catches: a limit that is not checked, an abandon that changes more than
+  # the macrostep (the session must keep the configuration after the last
+  # completed microstep), a stop that counts twice, and a limit that does not
+  # come back for the next macrostep.
+  scenario 'an eventless loop stops at the limit, is abandoned, and a lifted limit lets it finish' do
     Runaway.limit(self, :rw_counter, 100)
     actor = spawn :rw_counter
     recording_trace(kinds: %i[long_macrostep runaway])
     assert_equal 'ok', actor.post('go')
 
-    assert_equal 'err_runaway', Runaway.resume(self, actor).first
+    assert_equal 'runaway', Runaway.resume(self, actor)
     assert_equal ['long 2.10 [t1] [spin]', 'runaway 2.100 [t1] [spin]'], trace_lines
     counters = Runaway.counters(self, :rw_counter)
     assert_equal 1, counters[:runaways]
     assert_equal 1, counters[:macrosteps_long]
     assert_equal 99, actor.data('.n'), 'the go microstep, then 99 turns of the loop'
-    assert actor.inspect_actor[:macrostep_in_progress], 'the actor is still mid-macrostep'
+    assert !actor.inspect_actor[:macrostep_in_progress], 'the abandoned macrostep is over'
+    assert_active actor, :spin
 
-    assert_equal 'err_runaway', Runaway.resume(self, actor).first, 'the limit holds until lifted'
-    assert_equal 1, Runaway.counters(self, :rw_counter)[:runaways], 'a second stop does not count again'
-    assert_equal 99, actor.data('.n')
+    # The next input runs: `go` enables nothing in spin, and the 51 turns of
+    # the loop left are under the limit, so the macrostep finishes.
+    assert_equal 'ok', actor.post('go')
+    assert_equal 'stable', Runaway.resume(self, actor)
+    assert_equal 150, actor.data('.n')
+    assert_active actor, :idle
+    assert_equal 1, Runaway.counters(self, :rw_counter)[:runaways]
 
-    assert_equal %w[ok stable], Runaway.resume(self, actor, lifted: true)
+    # The limit is there for the next macrostep, and counts again.
+    assert_equal 'ok', actor.post('go')
+    assert_equal 'runaway', Runaway.resume(self, actor)
+    assert_equal 2, Runaway.counters(self, :rw_counter)[:runaways]
+
+    # With the limit lifted the macrostep finishes.
+    Runaway.limit(self, :rw_counter, Runaway::NONE)
+    assert_equal 'ok', actor.post('go')
+    assert_equal 'stable', Runaway.resume(self, actor)
     assert_equal 150, actor.data('.n'), 'the macrostep finished'
     assert_active actor, :idle
-
-    # The next macrostep has the limit again.
-    assert_equal 'ok', actor.post('go')
-    assert_equal 'err_runaway', Runaway.resume(self, actor).first
     assert_equal 2, Runaway.counters(self, :rw_counter)[:runaways]
   end
 
@@ -114,9 +123,9 @@ TinyactorsTest.scenarios 'runaway macrosteps' do
     Runaway.limit(self, :rw_ping_pong, 50)
     actor = spawn :rw_ping_pong
     assert_equal 'ok', actor.post('go')
-    assert_equal 'err_runaway', Runaway.resume(self, actor).first
+    assert_equal 'runaway', Runaway.resume(self, actor)
     assert_equal 1, Runaway.counters(self, :rw_ping_pong)[:runaways]
-    assert_equal 'err_busy', actor.post('go'), 'a stopped actor takes no event'
+    assert_equal 'ok', actor.post('go'), 'an abandoned actor takes the next event'
   end
 
   # Catches: a limit on turns instead of microsteps, which a long <foreach>
@@ -127,8 +136,7 @@ TinyactorsTest.scenarios 'runaway macrosteps' do
     assert_equal 'ok', actor.post('go')
     resumes = 0
     loop do
-      result, status = Runaway.resume(self, actor, action_budget: 50)
-      assert_equal 'ok', result
+      status = Runaway.resume(self, actor, action_budget: 50)
       resumes += 1
       break if status == 'stable'
     end
@@ -143,11 +151,11 @@ TinyactorsTest.scenarios 'runaway macrosteps' do
     Runaway.limit(self, :rw_counter, Runaway::NONE)
     actor = spawn :rw_counter
     assert_equal 'ok', actor.post('go')
-    assert_equal %w[ok stable], Runaway.resume(self, actor)
+    assert_equal 'stable', Runaway.resume(self, actor)
     assert_equal 150, actor.data('.n')
     Runaway.limit(self, :rw_counter, 0)
     assert_equal 'ok', actor.post('go')
-    assert_equal %w[ok stable], Runaway.resume(self, actor), 'the test host sets no system limit'
+    assert_equal 'stable', Runaway.resume(self, actor), 'the test host sets no system limit'
   end
 
   # Catches: a retry after a failed allocation that counts a microstep twice

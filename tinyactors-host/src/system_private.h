@@ -87,3 +87,10 @@ struct tah_system {
 
 /* Points the scheduler's observer at the recorder while it is on. */
 void tah_system_observe(tah_system *system);
+
+/*
+ * The parameters of one scheduler call that enters core: the turn's, and
+ * what the replay driver uses to run core with the same budgets and the same
+ * settling (tah_sched_run).
+ */
+tah_turn_params tah_system_turn_params(tah_system *system);

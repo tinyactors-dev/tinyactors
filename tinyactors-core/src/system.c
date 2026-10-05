@@ -460,6 +460,9 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     }
     result = ta_event_name_table_init(&system->event_names, config->allocator, &system->atoms);
     if (result == TA_OK) {
+        result = ta_runner_init(&system->runner, config->allocator);
+    }
+    if (result == TA_OK) {
         /* Allocates nothing: the pool fills at the first admission (ADR 0099 section 2). */
         result = ta_envelopes_init(&system->envelopes, config->allocator,
                                    &(ta_envelope_limits){ .pool_envelopes = params[TA_PARAM_POOL_ENVELOPES],
@@ -524,6 +527,7 @@ void ta_system_destroy(ta_system *system) {
     ta_pool_destroy(&system->actors);
     /* After the actors, before the origin tables and the addresses: an envelope in use holds references to both. */
     ta_envelopes_destroy(&system->envelopes);
+    ta_runner_destroy(&system->runner);
     /* After the actors: their held events released their MESSAGE origins. */
     ta_io_origin_table_destroy(&system->io_scopes);
     ta_io_origin_table_destroy(&system->io_messages);

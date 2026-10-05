@@ -159,8 +159,8 @@ enum TA_CONSTANTS_OF(ta_result, "TA_") {
     TA_ERR_UNLOADED = -9,
     TA_ERR_STALE = -10,
     TA_ERR_DONE = -11,
-    /* The macrostep ran its microstep limit (ADR 0075); nothing changed. */
-    TA_ERR_RUNAWAY = -12
+    /* The pool of pending inputs is at its admission watermark (ADR 0099); nothing was retained. */
+    TA_ERR_FULL = -13
 };
 
 typedef struct { const char *ptr; uint32_t len; } ta_str TA_STRING;
@@ -354,13 +354,12 @@ typedef struct { ta_event_name_id detail; int32_t code; ta_str message; TA_RELEA
  * What a data-model, invoker or I/O-processor operation answers. ERROR is
  * the chart's failure: core raises the event SCXML defines for it. NOMEM
  * says the operation could not get memory and changed nothing: core stops
- * the run where it stands, ta_actor_resume() answers TA_ERR_NOMEM, and the
- * operation is called again when the host resumes the actor (ADR 0047,
- * ADR 0070). An operation that may have changed something before it ran
+ * the run where it stands, ta_run() answers TA_ERR_NOMEM, and the
+ * operation is called again when the host calls ta_run() again (ADR 0047,
+ * ADR 0070, ADR 0099). An operation that may have changed something before it ran
  * out of memory answers ERROR.
  */
 typedef enum { TA_OP_OK TA_SUCCESS = 0, TA_OP_ERROR = 1, TA_OP_NOMEM = 2 } ta_op_status TA_SYMBOLS("TA_OP_");
-typedef enum { TA_RUN_STABLE = 0, TA_RUN_PAUSED = 1, TA_RUN_DONE = 2, TA_RUN_ERROR = 3 } ta_run_status TA_SYMBOLS("TA_RUN_");
 
 /*
  * Byte sinks and byte sources (ADR 0090): bytes that move in pieces, so
@@ -985,8 +984,8 @@ TA_API const ta_event *ta_dm_host_event(const ta_dm_host *host) TA_OPTIONAL TA_L
 TA_API ta_actor_id ta_dm_host_actor(const ta_dm_host *host);
 /*
  * The logical time of the running macrostep (ADR 0089 section 9): the
- * system's time when its first ta_actor_resume() began, fixed while the
- * macrostep spans several resumes. Outside a macrostep, the system's time.
+ * system's time when its input was taken, fixed while the
+ * macrostep spans several ta_run() calls. Outside a macrostep, the system's time.
  * A data model gives expressions this as their deterministic clock.
  */
 TA_API ta_time ta_dm_host_time(const ta_dm_host *host);
@@ -1323,7 +1322,7 @@ typedef struct {
  * every definition still alive. During every event the definition is
  * intact: its ID resolves and `identity` is its own storage, borrowed for
  * the call. `notify` may read definitions but must not register, retire or
- * release one, nor spawn, destroy, resume or deliver to an actor.
+ * release one, nor spawn, destroy, run or deliver to an actor.
  */
 typedef enum {
     TA_DEFINITION_EVENT_REGISTERED = 0,
@@ -2730,40 +2729,89 @@ typedef struct {
 } ta_actor_spawn_params;
 typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out; } ta_actor_find_params;
 /*
- * `budget` is the number of microsteps this call may run (ADR 0009).
- * `action_budget`, when not zero, is the number of units of executable
- * content it may run before it pauses inside a microstep (ADR 0061): each
- * action of a block, an <if> and a <foreach> included, and each <foreach>
- * iteration. Either one reached answers TA_RUN_PAUSED, and the next call
- * continues where this one stopped. Zero leaves pausing to `budget` alone.
- * `pause_at_microstep_start`, when true, also pauses at the start of every
- * microstep this call begins (ADR 0086): after its transitions are
- * selected, before its first unit and before any state is exited. The
- * position is that first unit's. A call that resumes from such a start
- * passes it. The bootstrap's microstep never pauses there.
+ * What one call of ta_run() reports (ADR 0099 section 7). The notices are
+ * the records the c2h ring will carry; until it exists they are an array
+ * the caller gives.
+ *
+ * TA_RUN_IDLE: nothing is runnable and no input is inside a macrostep.
+ * TA_RUN_MORE: a budget ran out, and no input is inside a macrostep.
+ * TA_RUN_PAUSED: a budget ran out, or a pause was asked for, inside a
+ * macrostep: the next call continues that input before it takes another.
+ * TA_RUN_NOTICES_FULL: the notice array cannot take the next phase's
+ * notices: read it and call again. Core stops between phases, never inside a
+ * macrostep, and keeps what it has not reported.
+ */
+typedef enum { TA_RUN_IDLE = 0, TA_RUN_MORE = 1, TA_RUN_PAUSED = 2, TA_RUN_NOTICES_FULL = 3 } ta_run_status TA_SYMBOLS("TA_RUN_");
+/*
+ * How an input ended. STABLE: its macrostep ended and the session waits.
+ * DONE: the session reached a top-level final state. RUNAWAY: the macrostep
+ * reached its microstep limit (ADR 0075) and was abandoned as by
+ * ta_actor_abandon() (ADR 0082, ADR 0099 section 7): the session keeps the
+ * configuration after its last completed microstep, and the next input runs.
+ * ABANDONED: ta_actor_abandon() or ta_actor_destroy() ended it.
+ */
+typedef enum { TA_INPUT_STABLE = 0, TA_INPUT_DONE = 1, TA_INPUT_RUNAWAY = 2, TA_INPUT_ABANDONED = 3 } ta_input_status TA_SYMBOLS("TA_INPUT_");
+/*
+ * What a notice reports. COMPLETED: an input ended (the token, status and
+ * `ignored`). REFUSED: an admitted input was discarded before it was taken,
+ * with its event and the reason. TAKEN: an input began, with its event; only
+ * when ta_run_params.report_taken asks. FINISHED: a session reached a
+ * top-level final state, once per session.
+ */
+typedef enum { TA_NOTICE_INPUT_COMPLETED = 0, TA_NOTICE_INPUT_REFUSED = 1, TA_NOTICE_INPUT_TAKEN = 2, TA_NOTICE_FINISHED = 3 } ta_run_notice_kind TA_SYMBOLS("TA_NOTICE_");
+/*
+ * Why an admitted input was discarded: the target no longer exists
+ * (DESTROYED, or unloaded), has finished (DONE), or a replaying actor's input
+ * time is no longer valid for it (INVALID).
+ */
+typedef enum { TA_REFUSED_DESTROYED = 0, TA_REFUSED_DONE = 1, TA_REFUSED_INVALID = 2 } ta_refusal_reason TA_SYMBOLS("TA_REFUSED_");
+typedef struct {
+    ta_run_notice_kind kind;
+    ta_actor_id actor;
+    /* The token ta_actor_deliver() or ta_actor_transition() gave, or 0. */
+    uint64_t input;
+    /* COMPLETED. */
+    ta_input_status status;
+    /*
+     * COMPLETED: true when the input's external event enabled no transition,
+     * the event events_ignored counts (ADR 0089 section 8). False for a
+     * bootstrap, an operator transition, a macrostep with no external event
+     * and an event that enabled a transition.
+     */
+    bool ignored;
+    /* REFUSED. */
+    ta_refusal_reason reason;
+    /* TAKEN and REFUSED: the input's event, borrowed until the next ta_run(). */
+    TA_IN TA_OPTIONAL const ta_event *event;
+} ta_run_notice;
+/*
+ * `budget` is the number of microsteps the whole call may run (ADR 0009),
+ * across all the inputs it takes; it is not zero. `action_budget`, when not
+ * zero, is the number of units of executable content one call may run
+ * before it pauses inside a microstep (ADR 0061): each action of a block, an
+ * <if> and a <foreach>, and each <foreach> iteration. Either one reached
+ * ends the call, and the next call continues where this one stopped. Zero
+ * leaves pausing to `budget` alone. `pause_at_microstep_start`, when true,
+ * also pauses at the start of every microstep this call begins (ADR 0086):
+ * after its transitions are selected, before its first unit and before any
+ * state is exited. A call that resumes from such a start passes it. The
+ * bootstrap's microstep never pauses there. `report_taken` asks for a TAKEN
+ * notice for every input taken.
+ *
+ * `notices` takes up to `notice_capacity` notices, at least 3 (an input's
+ * TAKEN, COMPLETED and FINISHED); `notice_count` is how many were written
+ * and is set on every result.
  */
 typedef struct {
-    ta_actor_id actor;
     uint32_t budget;
-    TA_OUT ta_run_status *status;
     uint32_t action_budget;
-    /*
-     * True lifts the microstep limit (ADR 0075) for this call: a host sets
-     * it for an actor an operator released after TA_ERR_RUNAWAY.
-     */
-    bool no_microstep_limit;
-    /* Pauses before the first unit of every microstep it begins (ADR 0086). */
     bool pause_at_microstep_start;
-    /*
-     * Set when this call ends a macrostep (TA_RUN_STABLE or TA_RUN_DONE):
-     * true when that macrostep's external event enabled no transition, the
-     * event events_ignored counts (ADR 0089 section 8). False for a
-     * bootstrap, an operator transition, a macrostep with no external event
-     * and an event that enabled a transition. Untouched when the call pauses
-     * or ends no macrostep.
-     */
-    TA_OUT TA_OPTIONAL bool *ignored;
-} ta_actor_resume_params;
+    bool report_taken;
+    TA_OUT ta_run_status *status;
+    TA_BUFFER(notice_capacity, notice_count) TA_LIFETIME(system) ta_run_notice *notices;
+    uint32_t notice_capacity;
+    TA_OUT TA_ALWAYS uint32_t *notice_count;
+} ta_run_params;
 typedef struct {
     ta_actor_id actor;
     const ta_session_image *image;
@@ -2781,7 +2829,8 @@ typedef struct { TA_IN const ta_actor_address *address; } ta_actor_remove_unload
  * their layout may change in any build. Values go through the actor's data
  * model (value_write, not durable). `root`, when given, is the data-model root to
  * include, which ta_actor_load() hands back. TA_ERR_BUSY: the actor is inside
- * a macrostep, has queued internal events, a pending completion or a parent.
+ * a macrostep, has queued internal events or admitted inputs waiting to run,
+ * a pending completion or a parent.
  * TA_ERR_UNSUPPORTED: its data model has no byte form for a value it holds.
  * TA_ERR_INVALID: an anonymous actor. On any failure the actor is resident
  * and unchanged.
@@ -2959,8 +3008,8 @@ TA_API ta_result ta_actor_publish(ta_system *system, TA_IN const ta_actor_publis
  * array is too small it answers TA_ERR_NOMEM and fills nothing, so zero
  * capacities are a size query. Nothing is allocated, except by the data
  * model for `out->root`, which the caller releases.
- * - TA_ERR_BUSY: inside a macrostep, holding an event, or with internal
- *   events queued.
+ * - TA_ERR_BUSY: inside a macrostep, holding an event, with internal
+ *   events queued or with admitted inputs waiting to run.
  * - TA_ERR_DONE: it reached a top-level final state.
  * - TA_ERR_INVALID: it is not published.
  * - TA_ERR_NOT_FOUND: no resident actor has this ID.
@@ -3011,29 +3060,35 @@ typedef struct {
      * TA_ERR_INVALID.
      */
     ta_time time;
+    /* The token ta_run() reports this input by (a COMPLETED or REFUSED notice), or null. */
+    TA_OUT TA_OPTIONAL uint64_t *input;
 } ta_actor_deliver_params;
 /*
- * Offers an external event to a resident actor: the admission test
- * (ADR 0055). The result alone tells a host what to do with the message,
- * so it never needs to inspect the actor first:
- * - TA_OK: accepted; the actor holds the event, so resume it.
- * - TA_ERR_BUSY: the actor is inside a macrostep, including one paused by
- *   ta_actor_resume()'s budgets (ADR 0061), or already holds an event.
- *   Keep the message queued for this actor.
+ * Admits an external event for a resident actor (ADR 0099 section 5): the
+ * event becomes an envelope on the run queue, behind everything admitted
+ * before it, and ta_run() takes it when its turn comes. Nothing runs here,
+ * and the actor need not be idle: mail for a session inside a macrostep waits
+ * in core, so the host keeps no queue per actor. `input`, when given, receives
+ * the token ta_run() reports the input by. The results:
+ * - TA_OK: admitted; call ta_run().
+ * - TA_ERR_FULL: the pool of pending inputs is at its admission watermark
+ *   (TA_PARAM_ADMISSION_WATERMARK). Keep the message and offer it again after
+ *   ta_run() has made room, or drop it.
  * - TA_ERR_DONE: the actor has reached a top-level final state. Drop the
  *   message or route it to a dead-letter policy.
  * - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or
  *   unloaded). The receiver is gone from here; drop or route the message.
  * - TA_ERR_INVALID: a caller error only: a null event, an event name this
- *   system never issued, or the root name.
- * - TA_ERR_NOMEM: no memory for the event block the event would live in
- *   until its macrostep ends (ADR 0069).
- *   Keep the message and try again later; TA_PARAM_EVENT_BLOCK_CACHE
- *   keeps blocks for reuse.
+ *   system never issued, or the root name; or, for a replaying actor, a time
+ *   outside its range.
+ * - TA_ERR_NOMEM: the pool could not grow (TA_PARAM_POOL_ENVELOPES is the
+ *   bound; this is the allocator refusing). Keep the message and try again.
  * On any result but TA_OK nothing is retained and the event is untouched.
- * A malformed event is TA_ERR_INVALID whatever the actor's state. A finished actor is TA_ERR_DONE,
- * never TA_ERR_BUSY: finishing is permanent, so a host that kept a message
- * queued would wait forever.
+ * A malformed event is TA_ERR_INVALID whatever the actor's state. A finished
+ * actor is TA_ERR_DONE, never TA_ERR_FULL: finishing is permanent, so a host
+ * that kept a message would wait forever. A session that is destroyed or
+ * finishes after its input was admitted is reported by a REFUSED notice
+ * when the input would have been taken.
  */
 TA_API ta_result ta_actor_deliver(ta_system *system, TA_IN const ta_actor_deliver_params *params)
     TA_VALUE_MODEL(actor, params.actor);
@@ -3052,34 +3107,61 @@ typedef struct {
      * sees it, and neither <finalize> nor autoforwarding runs for it. */
     TA_IN const ta_operator_transition *transition;
     ta_time time;
+    /* The token ta_run() reports this input by (a COMPLETED notice), or null. */
+    TA_OUT TA_OPTIONAL uint64_t *input;
 } ta_actor_transition_params;
 /*
- * Offers an operator's event and its transition to a resident actor that
- * holds no input. The results are ta_actor_deliver()'s, and the actor is
- * resumed the same way when TA_OK says it holds the event: TA_ERR_BUSY while
- * it is inside a macrostep or holds an event, TA_ERR_DONE, TA_ERR_NOT_FOUND,
- * TA_ERR_NOMEM, and TA_ERR_INVALID for a malformed event, a transition with
- * no targets, an unknown state, targets that cannot form a legal
- * configuration, a source that is not active, or a null transition. On any
- * result but TA_OK nothing is retained. A malformed event or transition is
- * TA_ERR_INVALID whatever the actor's state, except that whether the source
- * is active is asked only of an actor that would otherwise accept it.
+ * Starts an operator's event and its transition in the running slot of a
+ * resident actor that holds no input (ADR 0082, ADR 0099 section 5): the
+ * next ta_run() continues it before it takes anything from the run queue.
+ * The results:
+ * - TA_OK: started; call ta_run().
+ * - TA_ERR_BUSY: the running slot is occupied (an input is paused inside a
+ *   macrostep), or the actor itself is inside a macrostep or has admitted
+ *   inputs waiting: the operator's event does not overtake them. Offer it
+ *   again after ta_run() has finished them.
+ * - TA_ERR_DONE, TA_ERR_NOT_FOUND: as for ta_actor_deliver().
+ * - TA_ERR_INVALID: a malformed event or transition (no targets, an unknown
+ *   state, targets that cannot form a legal configuration, a null
+ *   transition), or a source that is not active.
+ * - TA_ERR_NOMEM: no memory for the transition or the envelope.
+ * On any result but TA_OK nothing is retained. A malformed event or
+ * transition is TA_ERR_INVALID whatever the actor's state, except that
+ * whether the source is active is asked only of an actor that would
+ * otherwise accept it.
  */
 TA_API ta_result ta_actor_transition(ta_system *system, TA_IN const ta_actor_transition_params *params)
     TA_VALUE_MODEL(actor, params.actor);
-TA_API ta_result ta_actor_resume(ta_system *system, TA_IN const ta_actor_resume_params *params);
+/*
+ * ta_run frees the envelopes the previous call lent out (the events its
+ * notices borrowed), continues the input a budget paused, or takes the oldest
+ * runnable input, and runs inputs until none is runnable or a budget is
+ * spent (ADR 0099 sections 4, 7 and 8). It stops between inputs and inside
+ * macrosteps only where a budget or a pause says, so a stopped input waits in
+ * the one running slot and no other input is taken before it ends. Inputs run
+ * in the order they were admitted.
+ *
+ * It allocates only before an input is taken or while it runs, as
+ * a resume did before ADR 0099: TA_ERR_NOMEM leaves the input where it stands and
+ * the next call continues it (ADR 0047, ADR 0070); an input that could not
+ * be taken stays at the head of the queue. TA_ERR_INVALID: a null system or
+ * params, no budget, no status, notices or count, or room for fewer than 3
+ * notices. On every result `status` and `notice_count` are set.
+ */
+TA_API ta_result ta_run(ta_system *system, TA_IN const ta_run_params *params);
 /*
  * Abandons the actor's macrostep, one that may never end (ADR 0082): its
  * continuation, its internal queue and its external event are discarded,
  * and the actor is idle with the configuration after its last completed
  * microstep. What the macrostep already did stays done: its sends, its
  * invocations, its data. An ABANDONED record, then MACROSTEP_END, is
- * written. The results:
+ * written. If the actor's input was the running one, the next ta_run()
+ * reports it as COMPLETED with status ABANDONED. The results:
  * - TA_OK: abandoned.
  * - TA_ERR_BUSY: the actor is paused or stopped inside a microstep
  *   (`microstep_in_progress`), or has not completed its bootstrap's
- *   microstep; resume it with a budget of 1 and no action budget to finish
- *   that microstep, then abandon.
+ *   microstep; call ta_run() with a budget of 1 and no action budget to
+ *   finish that microstep, then abandon.
  * - TA_ERR_INVALID: no macrostep is in progress; there is nothing to
  *   abandon.
  * - TA_ERR_DONE: the actor has reached a top-level final state.
@@ -3114,8 +3196,11 @@ TA_API ta_result ta_actor_get_completion(ta_system *system,
                                          ta_actor_id actor,
                                          TA_OUT ta_actor_completion *out);
 /*
- * Retries an invoked child's completion after TA_ERR_BUSY. TA_ERR_NOT_FOUND
- * retires it when the parent invocation was already cancelled.
+ * Retries an invoked child's completion that the pool refused (TA_ERR_FULL)
+ * or that ran out of memory (TA_ERR_NOMEM). Core admits it like any other
+ * event, so a parent inside its own macrostep does not refuse it. A
+ * completion already admitted is not sent twice. TA_ERR_NOT_FOUND retires it
+ * when the parent invocation was already cancelled.
  */
 TA_API ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id actor);
 TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
@@ -3174,7 +3259,7 @@ typedef struct {
     bool published;
     /* Number of states in the active configuration, ancestors included. */
     uint32_t active_state_count;
-    /* True while a macrostep is paused mid-way (ta_actor_resume() continues it). */
+    /* True while a macrostep is paused mid-way (ta_run() continues it). */
     bool macrostep_in_progress;
     /* True while it is paused inside a microstep, in executable content
      * (ADR 0061). The active states are then those after the last completed

@@ -16,6 +16,7 @@
 #include <stdio.h>
 
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures = 0;
 
@@ -267,15 +268,15 @@ static uint64_t run_invokes(uint64_t nth) {
     if (nth != 0) {
         ta_test_allocator_fail_nth(&heap, nth);
     }
-    ta_run_status status = TA_RUN_ERROR;
-    ta_result first = ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 1000,
+    test_run_status status = TEST_RUN_ERROR;
+    ta_result first = test_resume(system, &(test_resume_params){ .actor = actor, .budget = 1000,
                                                                          .status = &status });
     uint64_t attempts = heap.stats.attempts;
     ta_test_allocator_disarm(&heap);
-    for (uint32_t retry = 0; retry < 3u && !(first == TA_OK && status == TA_RUN_STABLE); retry += 1u) {
-        first = ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 1000, .status = &status });
+    for (uint32_t retry = 0; retry < 3u && !(first == TA_OK && status == TEST_RUN_STABLE); retry += 1u) {
+        first = test_resume(system, &(test_resume_params){ .actor = actor, .budget = 1000, .status = &status });
     }
-    CHECK(first == TA_OK && status == TA_RUN_STABLE);
+    CHECK(first == TA_OK && status == TEST_RUN_STABLE);
     ta_actor_inspection inspection = {0};
     CHECK(ta_actor_inspect(system, actor, &inspection) == TA_OK);
     CHECK(inspection.invoke_count == INVOKES);

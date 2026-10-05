@@ -523,7 +523,7 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
       where = ->(inspection) { [inspection[:step].except(:session), inspection[:position]] }
       20.times do
         allocator.budget(allocator.stats[:live_bytes] + 32)
-        response = ta.actor.resume(system: system_handle, actor: actor.handle, budget: 1024)
+        response = ta.run(system: system_handle, budget: 1024, notice_capacity: 8)
         allocator.budget(0)
         break unless response[:result] == 'err_nomem'
 
@@ -565,12 +565,14 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
                    'the reconstructed actor ended where an uninterrupted one does'
     end
 
-    # Catches: a second actor that finds no continuation to stop into after
-    # the first took the system's spare, or that changes before it has one.
-    # Every run reserves its continuation before it does anything
-    # (ADR 0070), so the second actor's first allocation is that
-    # reservation, and failing it leaves the actor untouched.
-    scenario "an actor that stops takes the spare continuation, and the next one reserves its own (#{datamodel})" do
+    # Catches: an input that starts while another is stopped inside its
+    # microstep, or that is lost behind it. Core runs one input at a time
+    # (ADR 0099): an input stopped for lack of memory keeps the running slot,
+    # the next input waits in the queue untouched, and both end where
+    # uninterrupted runs do once the allocator has room again. (The spare
+    # continuation of ADR 0070, which let two actors stop at once, goes with
+    # the out-of-memory stop in step 4.4.)
+    scenario "an actor stopped by a failed allocation keeps the running slot, and the next input waits (#{datamodel})" do
       reference = spawn phases
       reference.deliver 'deeper'
       reference.deliver 'go'
@@ -579,28 +581,23 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
       # Posting runs nothing, so both are still to take `go`.
       [first, second].each { |actor| actor.deliver 'deeper' }
       [first, second].each { |actor| assert_equal 'ok', actor.post('go') }
+      before = [second.active, second.data]
 
       20.times do
         allocator.budget(allocator.stats[:live_bytes] + 32)
-        response = ta.actor.resume(system: system_handle, actor: first.handle, budget: 1024)
+        response = ta.run(system: system_handle, budget: 1024, notice_capacity: 8)
         allocator.budget(0)
         break if response[:result] == 'err_nomem' && first.inspect_actor[:microstep_in_progress]
       end
       assert first.inspect_actor[:microstep_in_progress], 'the first actor stopped inside its microstep'
+      assert !second.inspect_actor[:macrostep_in_progress], 'the second input has not begun'
+      assert_equal before, [second.active, second.data], 'nothing of the second input ran'
 
-      before = [second.active, second.data]
-      allocator.arm_fault(after: 0, count: 1)
-      response = ta.actor.resume(system: system_handle, actor: second.handle, budget: 1024)
-      allocator.clear_faults
-      assert_equal 'err_nomem', response[:result], 'the second actor could not reserve a continuation'
-      view = second.inspect_actor
-      assert view[:macrostep_in_progress], 'it still holds its event'
-      assert !view[:microstep_in_progress], 'it had not begun a microstep'
-      assert_equal 'go', event_text(view.dig(:current_event, :name))
-      assert_equal before, [second.active, second.data], 'nothing of its macrostep ran'
-
-      assert_equal 'stable', second.resume(budget: 1024)
-      assert_equal 'stable', first.resume(budget: 1024)
+      status = 'paused'
+      200.times do
+        status = first.resume(budget: 1024)
+        break unless status == 'paused'
+      end
       run_system('dispatch both actors\' effects')
       [first, second].each do |actor|
         assert_equal [reference.active, reference.data], [actor.active, actor.data], "#{actor} ended as a reference run"

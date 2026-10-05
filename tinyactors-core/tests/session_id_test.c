@@ -15,6 +15,7 @@
 #include "../include/tinyactors.c"
 #include "tel_reader.h"
 #include "test_allocator.h"
+#include "run_support.h"
 
 static int failures;
 
@@ -548,8 +549,8 @@ static void test_a_step_key_names_its_family(void) {
     keyed_records = 0;
     keyed_without_family = 0;
     ta_actor_id actor = spawn(&f, NULL);
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f.system, &(ta_actor_resume_params){ .actor = actor, .budget = 16, .status = &status }) ==
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(f.system, &(test_resume_params){ .actor = actor, .budget = 16, .status = &status }) ==
           TA_OK);
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(f.system, actor, &view) == TA_OK);

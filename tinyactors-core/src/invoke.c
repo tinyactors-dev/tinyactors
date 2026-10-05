@@ -1068,19 +1068,25 @@ static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, uint
         return TA_ERR_INVALID;
     }
     /* An input reaches a session only between macrosteps (ADR 0089
-     * section 4), so the host keeps the report, as it keeps mail that
-     * ta_actor_deliver() refused, and a log can say where it fell. */
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
+     * section 4), and the report is not an envelope (it carries a reason
+     * the name area will hold, ADR 0100), so the host keeps it and offers it
+     * again while the session is inside a macrostep or has inputs waiting;
+     * a log can say where it fell. */
+    if (actor->macrostep || actor->queued != 0 || ta_actor_external_event(actor) != NULL) {
         return TA_ERR_BUSY;
     }
-    ta_result result = ta_invoke_raise(system, actor, params->invoke_id, error->reason, error->data, &params->trace);
+    ta_result result = ta_run_reserve_start(system);
+    if (result != TA_OK) {
+        return result;
+    }
+    result = ta_invoke_raise(system, actor, params->invoke_id, error->reason, error->data, &params->trace);
     if (result != TA_OK) {
         return result;
     }
     if (error->ends) {
         ta_invoke_remove_at(actor->sparse, index);
     }
-    ta_interpreter_start_macrostep(actor, &params->trace);
+    ta_interpreter_start_macrostep(system, actor, &params->trace);
     return TA_OK;
 }
 

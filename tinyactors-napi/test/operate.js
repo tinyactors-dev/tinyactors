@@ -136,7 +136,9 @@ async function withdrawing() {
 
 // What inspect() and definitions() report for a debugger.
 async function inspection() {
-  const system = createSystem({ clock: 'manual', parameters: { resumeBudget: 1 } });
+  // `spin` does not end by itself, so a budget of one microstep leaves its macrostep paused in the first turn;
+  // the limit of three ends it (core ADR 0099 section 7) once the test has looked.
+  const system = createSystem({ clock: 'manual', parameters: { resumeBudget: 1, microstepLimit: 3 } });
   const definition = system.define(chart());
   const actor = system.spawn(definition, { name: 'acct' });
   await system.flush();
@@ -146,10 +148,11 @@ async function inspection() {
   assert.equal(view.currentEvent, null);
   assert.deepEqual(view.invocations, []);
   const scope = (system.registerIO('debug', { send() {} }), system.openScope('debug', 'debug://test'));
-  actor.post('hook', { n: 1 }, { origin: { type: 'debug', scope } });
-  await turn();
+  actor.post('spin', { n: 1 }, { origin: { type: 'debug', scope } });
+  await turn(); // core admits the message
+  await turn(); // and the next turn runs it
   view = actor.inspect();
-  assert.equal(view.currentEvent.name, 'hook');
+  assert.equal(view.currentEvent.name, 'spin');
   assert.deepEqual(view.currentEvent.origin,
                    { kind: 'io', scope: { index: scope.index, generation: scope.generation }, type: 'debug', uri: 'debug://test' });
   assert.deepEqual(view.currentEvent.data, { n: 1 });

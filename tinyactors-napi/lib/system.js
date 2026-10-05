@@ -951,7 +951,7 @@ class System {
    * `options.microstepLimit` overrides the system's
    * `microstepLimit` parameter for this definition's actors (core ADR
    * 0075): the microsteps one macrostep may run before its actor is
-   * quarantined as a runaway; 0 for no limit.
+   * abandoned as a runaway (core ADR 0099 section 7); 0 for no limit.
    *
    * With `{ format }`, `source` is a document (a string, as UTF-8, or a
    * Uint8Array) that the codec `format` names decodes (napi ADR 0027):

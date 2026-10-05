@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "../include/tinyactors.h"
+#include "run_support.h"
 
 static int failures;
 
@@ -299,10 +300,10 @@ static void test_actor_inspection(ta_system *system, counting_model *model) {
 
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &actor }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+    test_run_status status = TEST_RUN_ERROR;
+    CHECK(test_resume(system, &(test_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_RUN_STABLE);
 
     ta_definition_inspection facts;
     CHECK(ta_definition_inspect(system, definition, &facts) == TA_OK);

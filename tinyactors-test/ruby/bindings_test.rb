@@ -118,7 +118,7 @@ begin
   # is valid after every result.
   missing = host.ta.actor.get_completion(system: live, actor: 12_345)
   check(missing == { result: 'err_not_found', out: { out: nil } }, "invalid outputs are null: #{missing}")
-  check(host.ta.actor.resume(system: live, actor: actor, budget: 100)[:result] == 'ok', 'the actor enters its states')
+  check(host.ta.run(system: live, budget: 100, notice_capacity: 4)[:result] == 'ok', 'the actor enters its states')
   short = host.ta.actor.active_states(system: live, actor: actor, capacity: 0)
   check(short[:result] == 'err_nomem' && short.dig(:out, :states).nil? && short.dig(:out, :count).positive?,
         "a size query reports the count: #{short}")

@@ -1,10 +1,12 @@
 'use strict';
 
-// Runaway macrosteps (core ADR 0075). An actor whose macrostep runs its
-// microstep limit is quarantined with fault code `runaway`: the fault hook,
-// the faults metric and a WARN log say so. release() lets that macrostep
-// finish; the next one has the limit again. A definition can override the
-// system's limit. Runs on Node and Bun.
+// Runaway macrosteps (core ADR 0075, ADR 0099 section 7). A macrostep that
+// runs its microstep limit is abandoned by core: the actor keeps the
+// configuration of its last microstep and stays stable, the next input runs
+// with the limit again, and the fault hook (code `runaway`), the faults
+// metric and a WARN log say so. Nothing is quarantined, and release() has
+// nothing to lift. A definition can override the system's limit. Runs on
+// Node and Bun.
 
 const assert = require('node:assert/strict');
 const { createSystem, statechart } = require('..');
@@ -60,7 +62,7 @@ const metricValue = (snapshot, name, attributes = {}) =>
     ?.points.filter((point) => Object.entries(attributes).every(([key, value]) => point.attributes[key] === value))
     .reduce((sum, point) => sum + point.value, 0) ?? 0;
 
-async function quarantinedThenReleased() {
+async function abandonedAtTheLimit() {
   const faults = [];
   const logs = [];
   const system = createSystem({ parameters: { microstepLimit: 100 }, fault: (fault) => faults.push(fault) });
@@ -73,30 +75,34 @@ async function quarantinedThenReleased() {
   await system.flush();
   assert.equal(faults.length, 1, 'one fault');
   assert.equal(faults[0].code, 'runaway');
-  assert.equal(system.inspect(actor).scheduling, 'quarantined');
+  assert.equal(system.inspect(actor).scheduling, 'idle', 'abandoned, not quarantined');
   assert.equal(system.inspect(actor).data.n, 99, 'stopped at the limit: the go microstep, then 99 turns');
+  assert.equal(system.inspect(actor).macrostepInProgress, false);
+  assert.deepEqual(system.inspect(actor).activeStates, ['spin']);
 
   const text = logs.flatMap((bytes) => protobufStrings(bytes));
   assert.ok(text.includes('tinyactors.macrostep.long'), `a warning at a tenth of the limit: ${text}`);
   assert.ok(text.includes('tinyactors.actor.runaway'), 'a runaway log');
+  assert.ok(!text.includes('tinyactors.actor.quarantined'), 'nothing is quarantined');
   // The body names the loop's transition, with an arrow the ASCII scan skips.
   const raw = Buffer.concat(logs.map((bytes) => Buffer.from(bytes))).toString('utf8');
   assert.ok(/100 microsteps in one macrostep, the last through spin → spin/.test(raw), 'the body names the loop');
 
   const metrics = system.metrics();
   assert.equal(metricValue(metrics, 'tinyactors.faults', { 'tinyactors.fault.code': 'runaway' }), 1);
-  assert.equal(metricValue(metrics, 'tinyactors.actors.quarantined'), 1);
+  assert.equal(metricValue(metrics, 'tinyactors.actors.quarantined'), 0);
   assert.equal(metricValue(metrics, 'tinyactors.macrosteps.runaway'), 1);
   assert.equal(metricValue(metrics, 'tinyactors.macrosteps.long'), 1);
 
-  // release() lets this macrostep finish.
-  system.release(actor);
+  // The next input runs: `go` enables nothing in spin, and the 51 turns of
+  // the loop that are left are under the limit.
+  actor.post('go');
   await system.flush();
-  assert.equal(system.inspect(actor).data.n, 150, 'the released macrostep finished');
+  assert.equal(system.inspect(actor).data.n, 150, 'the next macrostep finished');
   assert.deepEqual(system.inspect(actor).activeStates, ['idle']);
   assert.equal(faults.length, 1);
 
-  // The next macrostep has the limit again.
+  // The limit is there for the next one too.
   actor.post('go');
   await system.flush();
   assert.equal(faults.length, 2, 'limited again');
@@ -117,7 +123,8 @@ async function overrides() {
   assert.equal(system.inspect(actors[0]).data.n, 500, 'no limit');
   assert.equal(system.inspect(actors[1]).data.n, 500, 'a higher limit');
   assert.equal(faults.length, 1, 'only the tight one is a runaway');
-  assert.equal(system.inspect(actors[2]).scheduling, 'quarantined');
+  assert.equal(system.inspect(actors[2]).scheduling, 'idle', 'abandoned, not quarantined');
+  assert.ok(system.inspect(actors[2]).data.n < 50, 'it stopped at its own limit');
   assert.throws(() => system.define(counter('rw-bad', 1), { microstepLimit: -1 }), /microstepLimit/);
   system.close();
 
@@ -152,39 +159,24 @@ async function longForeach() {
   system.close();
 }
 
-// An operator abandons a runaway's macrostep (core ADR 0082) instead of
-// letting it go on: the send() waiting for it already rejected with the
-// fault, the actor keeps the configuration of its last microstep, and after
-// release() the next macrostep is limited again, as the lifted limit went
-// with the abandoned macrostep.
-async function abandoned() {
+// A send() waiting for a runaway rejects with the fault's code, and the actor
+// keeps the configuration of its last microstep.
+async function sendRejects() {
   const faults = [];
   const system = createSystem({ parameters: { microstepLimit: 100 }, fault: (fault) => faults.push(fault) });
-  const actor = system.spawn(system.define(counter('rw-abandon', 150)));
+  const actor = system.spawn(system.define(counter('rw-send', 150)));
   await system.flush();
-  const waiting = actor.send('go');
-  await system.flush();
-  assert.equal(system.inspect(actor).scheduling, 'quarantined');
-  await assert.rejects(waiting, (error) => error.code === 'runaway');
-  system.abandon(actor);
+  await assert.rejects(actor.send('go'), (error) => error.code === 'runaway');
+  assert.equal(system.inspect(actor).scheduling, 'idle');
   assert.deepEqual(system.inspect(actor).activeStates, ['spin']);
   assert.equal(system.inspect(actor).macrostepInProgress, false);
-  system.release(actor);
-  await system.flush();
-  assert.equal(system.inspect(actor).scheduling, 'idle');
   assert.equal(faults.length, 1);
-  actor.post('operator.goto', undefined, { transition: { targets: ['idle'] } });
-  await system.flush();
-  actor.post('go');
-  await system.flush();
-  assert.equal(faults.length, 2, 'the next macrostep is limited again');
-  assert.equal(faults[1].code, 'runaway');
   system.close();
 }
 
 (async () => {
-  await quarantinedThenReleased();
-  await abandoned();
+  await abandonedAtTheLimit();
+  await sendRejects();
   await overrides();
   await longForeach();
   console.log('runaway.js passed');

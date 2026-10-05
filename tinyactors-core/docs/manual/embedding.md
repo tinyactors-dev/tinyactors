@@ -16,19 +16,24 @@ ta_actor_deliver(system, actor, &event);
 
 for (;;) {
     ta_run_status status;
-    ta_result r = ta_actor_resume(system, &(ta_actor_resume_params){
-        .actor = actor,
+    ta_run_notice notices[16];
+    uint32_t count = 0;
+    ta_result r = ta_run(system, &(ta_run_params){
         .budget = budget,
         .status = &status,
+        .notices = notices,
+        .notice_capacity = 16,
+        .notice_count = &count,
     });
     if (r != TA_OK)
         break;
-    if (status != TA_RUN_PAUSED)
+    /* read notices[0..count): which input ended, and how */
+    if (status == TA_RUN_IDLE)
         break;
 }
 ```
 
-`budget` bounds the microsteps one call runs. `action_budget`, when not
+`budget` bounds the microsteps one call runs, over all the inputs it takes. `action_budget`, when not
 zero, also bounds the units of executable content it runs (each action,
 and each `<foreach>` iteration), so a long handler cannot hold the thread
 (ADR 0061). A debugger steps with `action_budget = 1` and

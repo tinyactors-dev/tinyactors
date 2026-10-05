@@ -142,11 +142,8 @@ typedef enum ta_envelope_state {
 
 /* ta_input_source says where an input came from, which decides how it is settled. */
 typedef enum ta_input_source {
-    TA_SOURCE_HOST = 0,      /* ta_actor_deliver: the host is told how it ended */
-    TA_SOURCE_MAIL = 1,      /* another session's send */
-    TA_SOURCE_REPORT = 2,    /* an invocation report (ta_actor_report_invoke) */
-    TA_SOURCE_BOOTSTRAP = 3, /* the first input of a spawned session */
-    TA_SOURCE_CORE = 4       /* an event core raised outside a run */
+    TA_SOURCE_HOST = 0,      /* ta_actor_deliver: the host is told how it ended, or that it was refused */
+    TA_SOURCE_TRANSITION = 1 /* ta_actor_transition: an operator's event, taken straight into the slot */
 } ta_input_source;
 
 /*
