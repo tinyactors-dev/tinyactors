@@ -60,6 +60,7 @@
 #include "tree.h"
 #include "atom.h"
 #include "names.h"
+#include "type_registry.h"
 #include "address.h"
 #include "io_origin.h"
 #include "session.h"
