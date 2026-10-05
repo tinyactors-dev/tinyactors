@@ -50,3 +50,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0038](0038-a-chart-names-an-effect-with-effect.md) | [A chart names an effect with effect()](0038-a-chart-names-an-effect-with-effect.md) |
 | [0039](0039-data-a-chart-sends-is-copied-by-a-copier-in-javascript.md) | [Data a chart sends is copied by a copier in JavaScript](0039-data-a-chart-sends-is-copied-by-a-copier-in-javascript.md) |
 | [0040](0040-effects-are-not-held-and-send-resolves-once-its-message-is-done-and-committed.md) | [Effects are not held, and send() resolves once its message is done and committed](0040-effects-are-not-held-and-send-resolves-once-its-message-is-done-and-committed.md) |
+| [0041](0041-napi-is-a-binding-over-cores-rings.md) | [napi is a binding over core's rings](0041-napi-is-a-binding-over-cores-rings.md) |

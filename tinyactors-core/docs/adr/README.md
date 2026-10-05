@@ -101,3 +101,11 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0095](0095-a-checkpoint-restores-the-sends-the-router-refused.md) | [A checkpoint restores the sends the router refused](0095-a-checkpoint-restores-the-sends-the-router-refused.md) |
 | [0096](0096-actor-addresses-are-percent-encoded-in-target-uris.md) | [Actor addresses are percent-encoded in target URIs](0096-actor-addresses-are-percent-encoded-in-target-uris.md) |
 | [0097](0097-event-data-leaving-a-session-is-a-copy.md) | [Event data leaving a session is a copy](0097-event-data-leaving-a-session-is-a-copy.md) |
+| [0098](0098-telemetry-is-a-lossy-ring.md) | [Telemetry is a lossy ring](0098-telemetry-is-a-lossy-ring.md) |
+| [0099](0099-pending-inputs-are-envelopes-in-one-pool-per-system.md) | [Pending inputs are envelopes in one pool per system](0099-pending-inputs-are-envelopes-in-one-pool-per-system.md) |
+| [0100](0100-only-authored-names-are-interned.md) | [Only authored names are interned](0100-only-authored-names-are-interned.md) |
+| [0101](0101-delayed-sends-are-envelopes.md) | [Delayed sends are envelopes](0101-delayed-sends-are-envelopes.md) |
+| [0102](0102-a-macrostep-never-allocates-core-memory.md) | [A macrostep never allocates core memory](0102-a-macrostep-never-allocates-core-memory.md) |
+| [0103](0103-macrostep-slots-run-inputs-in-turn.md) | [Macrostep slots run inputs in turn](0103-macrostep-slots-run-inputs-in-turn.md) |
+| [0104](0104-core-talks-to-its-host-through-three-rings.md) | [Core talks to its host through three rings](0104-core-talks-to-its-host-through-three-rings.md) |
+| [0105](0105-recorded-sessions-expose-input-observations-on-c2h.md) | [Recorded sessions expose input observations on c2h](0105-recorded-sessions-expose-input-observations-on-c2h.md) |
