@@ -789,6 +789,176 @@ static void test_limits(void) {
     CHECK(strcmp(out, "error 4 the parser holds more events than max_held_events") == 0);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
+
+    /* A value updated in place grows only to max_value_items, as a copy
+     * does, and a fault there frees it. */
+    limits = SJS_LIMITS_DEFAULT;
+    limits.max_value_items = 4;
+    context = new_context(&c, limits);
+    e.context = context;
+    static const char *const grow_in_place[] = {
+        "[1, 2, 3, 4, 5].reduce((acc, x) => [...acc, x], [])",
+        "[1, 2, 3, 4, 5].reduce((acc, x) => acc.concat(x), [])",
+        "[1, 2, 3].reduce((acc, x) => acc.concat([x, x]), [])",
+        "[\"a\", \"b\", \"c\", \"d\", \"e\"].reduce((acc, k) => ({ ...acc, [k]: 1 }), {})",
+        "[\"a\", \"b\", \"c\"].reduce((acc, k) => ({ ...acc, [k]: 1, [k + k]: 2 }), {})",
+    };
+    for (size_t i = 0; i < sizeof grow_in_place / sizeof grow_in_place[0]; i++) {
+        CHECK(evaluate(&e, grow_in_place[i], out) == SJS_ERR_PROGRAM);
+        CHECK(strncmp(out, "fault 4", 7) == 0);
+        CHECK(sjs_context_live_bytes(context) == 0);
+    }
+    CHECK(evaluate(&e, "[1, 2, 3, 4].reduce((acc, x) => [...acc, x], [])", out) == SJS_OK && strcmp(out, "[1,2,3,4]") == 0);
+    CHECK(evaluate(&e, "[\"a\", \"b\"].reduce((acc, k) => ({ ...acc, [k]: 1, [k + k]: 2 }), {})", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"a\":1,\"aa\":2,\"b\":1,\"bb\":2}") == 0);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+}
+
+/* Natives for test_reuse_leaves_others_alone: `keep` retains each value it
+ * is given, `held` gives a retained copy of a value the embedder holds. */
+typedef struct {
+    sjs_value kept[4];
+    int count;
+    sjs_value held;
+} keeper;
+
+static sjs_result keep_value(void *self, sjs_native_call *call) {
+    keeper *k = self;
+    if (call->count < 1 || k->count >= 4) {
+        call->fault = SJS_STR("keep() keeps four values");
+        return SJS_ERR_PROGRAM;
+    }
+    sjs_retain(call->arguments[0]);
+    k->kept[k->count++] = call->arguments[0];
+    call->result = sjs_undefined();
+    return SJS_OK;
+}
+
+static sjs_result held_value(void *self, sjs_native_call *call) {
+    keeper *k = self;
+    sjs_retain(k->held);
+    call->result = k->held;
+    return SJS_OK;
+}
+
+static const sjs_native_vtable keep_vtable = { keep_value };
+static const sjs_native_vtable held_vtable = { held_value };
+
+static sjs_value number_array(sjs_context *context, const double *numbers, int count) {
+    sjs_value a;
+    CHECK(sjs_array_new(context, 2, &a) == SJS_OK);
+    for (int i = 0; i < count; i++) CHECK(sjs_array_append(context, &a, sjs_number(numbers[i])) == SJS_OK);
+    return a;
+}
+
+/* Every way a value is updated in place, in one module: a moved
+ * accumulator, literals that take over a spread, concat, with and toSorted
+ * on an array nothing else holds. */
+static const char reuse_module[] =
+    "export const f = (xs) => xs.reduce((acc, x, i) => {\n"
+    "  const list = [...acc.list, x].concat([String(i)]).with(0, x);\n"
+    "  return { ...acc, [x]: i, list };\n"
+    "}, { list: [\"z\"] });\n"
+    "export const g = f([\"b\", \"a\", \"c\"]);\n"
+    "export const h = g.list.toSorted((p, q) => (p < q ? -1 : 1));\n";
+
+/* A value is updated in place only when nothing else holds it: never one a
+ * native keeps or gives, a global, or a module's export, each of which the
+ * embedder holds a reference to, even when that is the only one. */
+static void test_reuse_leaves_others_alone(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char out[4096];
+    keeper k = { 0 };
+    static const char *const just_a[] = { "a" };
+    k.held = object_of(context, just_a, 1);
+    sjs_value natives[2];
+    CHECK(sjs_function_native(context, (sjs_native){ &k, &keep_vtable }, &natives[0]) == SJS_OK);
+    CHECK(sjs_function_native(context, (sjs_native){ &k, &held_vtable }, &natives[1]) == SJS_OK);
+    sjs_str native_names[2] = { SJS_STR("keep"), SJS_STR("held") };
+    env natives_env = { context, native_names, natives, 2, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    /* The accumulator a native kept is copied, not changed. */
+    CHECK(evaluate(&natives_env, "[[\"a\", 1], [\"b\", 2]].reduce((acc, [k, v]) => { const kept = keep(acc); return { ...acc, [k]: v }; }, {})",
+                   out) == SJS_OK);
+    CHECK(strcmp(out, "{\"a\":1,\"b\":2}") == 0);
+    CHECK(k.count == 2 && sjs_length(k.kept[0]) == 0 && sjs_length(k.kept[1]) == 1);
+    write_text(context, k.kept[1], out, sizeof out);
+    CHECK(strcmp(out, "{\"a\":1}") == 0);
+    /* A value a native gives, holding it still, is copied. */
+    CHECK(evaluate(&natives_env, "[{ ...held(), b: 2 }, held()]", out) == SJS_OK);
+    CHECK(strcmp(out, "[{\"a\":1,\"b\":2},{\"a\":1}]") == 0);
+    CHECK(sjs_length(k.held) == 1);
+    for (int i = 0; i < k.count; i++) sjs_release(context, k.kept[i]);
+    sjs_release(context, k.held);
+    sjs_release(context, natives[0]);
+    sjs_release(context, natives[1]);
+
+    /* Globals the embedder holds alone, through two runs of one vm. */
+    sjs_value globals[2] = { object_of(context, just_a, 1), number_array(context, (const double[]){ 1, 2 }, 2) };
+    sjs_str global_names[2] = { SJS_STR("g"), SJS_STR("xs") };
+    const char *source = "[{ ...g, b: 2 }, [...xs, 3], xs.concat(4), xs.with(0, 9), xs.toSorted((a, b) => b - a)]";
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, global_names, 2, { NULL, NULL } },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_vm *vm;
+    sjs_vm_config config = { context };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, globals, 2 };
+    for (int i = 0; i < 2; i++) {
+        CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+        CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+        sjs_value v;
+        CHECK(sjs_vm_take_result(vm, &v) == SJS_OK);
+        write_text(context, v, out, sizeof out);
+        CHECK(strcmp(out, "[{\"a\":1,\"b\":2},[1,2,3],[1,2,4],[9,2],[2,1]]") == 0);
+        sjs_release(context, v);
+    }
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+    CHECK(sjs_length(globals[0]) == 1);
+    write_text(context, globals[1], out, sizeof out);
+    CHECK(strcmp(out, "[1,2]") == 0);
+    sjs_release(context, globals[0]);
+    sjs_release(context, globals[1]);
+
+    /* A module's exports, lent while a program compiles: its constants hold
+     * them, and the embedder holds the namespace. */
+    one_module m;
+    env module_env = { context, NULL, NULL, 0, { NULL, NULL }, SJS_GOAL_MODULE };
+    const char *module = "export const o = {a: 1};\nexport const xs = [1, 2];\n";
+    sjs_compile_params module_params = { { context, SJS_GOAL_MODULE, NULL, 0, { NULL, NULL } },
+                                         { module, (uint32_t)strlen(module) }, NULL };
+    CHECK(sjs_compile(&module_params, &program) == SJS_OK);
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params module_run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(vm, &module_run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+    CHECK(sjs_vm_take_result(vm, &m.exports) == SJS_OK);
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+    module_env.modules = (sjs_modules){ &m, &find_vtable };
+    CHECK(evaluate(&module_env, "import { o, xs } from \"lib\";\nexport const r = [{ ...o, b: 2 }, [...xs, 3], xs.concat(4)];\n",
+                   out) == SJS_OK);
+    CHECK(strcmp(out, "{\"r\":[{\"a\":1,\"b\":2},[1,2,3],[1,2,4]]}") == 0);
+    CHECK(evaluate(&module_env, "import * as ns from \"lib\";\nexport const r = { ...ns, z: 1 };\n", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"r\":{\"o\":{\"a\":1},\"xs\":[1,2],\"z\":1}}") == 0);
+    sjs_value o;
+    sjs_value xs;
+    CHECK(sjs_object_get(m.exports, SJS_STR("o"), &o) == SJS_OK && sjs_length(o) == 1);
+    CHECK(sjs_object_get(m.exports, SJS_STR("xs"), &xs) == SJS_OK && sjs_length(xs) == 2);
+    CHECK(sjs_length(m.exports) == 2);
+    sjs_release(context, m.exports);
+
+    /* The module whose every allocation api_test fails, as Node gives it. */
+    module_env.modules = (sjs_modules){ NULL, NULL };
+    CHECK(evaluate(&module_env, reuse_module, out) == SJS_OK);
+    CHECK(strcmp(out, "{\"f\":<function>,\"g\":{\"list\":[\"c\",\"b\",\"0\",\"a\",\"1\",\"c\",\"2\"],\"b\":0,\"a\":1,\"c\":2},"
+                      "\"h\":[\"0\",\"1\",\"2\",\"a\",\"b\",\"c\",\"c\"]}") == 0);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
 }
 
 /* Fail every allocation in turn: each run ends with an error, never a
@@ -840,7 +1010,12 @@ int main(int argc, char **argv) {
     test_writer_resumes();
     test_fuel_and_reset();
     test_limits();
+    test_reuse_leaves_others_alone();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
+    /* Values updated in place: a moved accumulator, literals that take over
+     * a spread, concat, with and toSorted on an array nothing else holds.
+     * Small enough for every run. */
+    test_out_of_memory(reuse_module, SJS_GOAL_MODULE);
     if (full) {
         test_out_of_memory("export const f = (xs) => xs.toSorted((a, b) => b - a).flatMap(x => [x, [x]]);\n"
                            "export const g = new Set(f([3, 1, 2]).flat()).union(new Set([9]));\n"

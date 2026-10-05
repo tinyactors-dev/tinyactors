@@ -180,6 +180,20 @@ static inline bool sjs_is_heap(sjs_value v) {
     return v.kind >= SJS_STRING && v.internal == SJS_INTERNAL_NONE;
 }
 
+/*
+ * Is `v` a heap value with one reference? Every holder that can read a value
+ * later counts in its refs: frame and loop slots, the stack, closures'
+ * captures, a program's constants, and the embedder, for the globals and
+ * modules it lends and the values natives keep. So when an instruction owns
+ * the one reference, nothing else can see the value, and it may update the
+ * value in place. Values are acyclic, so the update cannot make a cycle: the
+ * value put in would need a reference to the container, which would count.
+ * Immortal values never pass.
+ */
+static inline bool sjs_value_unique(sjs_value v) {
+    return sjs_is_heap(v) && v.as.heap->refs == 1;
+}
+
 sjs_result sjs_string_make(sjs_context *context, sjs_str text, sjs_string **out);
 /* The string for an array index, a number's text or a boolean's. */
 sjs_result sjs_string_from_number(sjs_context *context, double value, sjs_string **out);
@@ -305,6 +319,7 @@ typedef enum {
     SJS_OP_NUMBER_,        /* u32 number */
     SJS_OP_CONSTANT,       /* u32 constant */
     SJS_OP_LOCAL,          /* u16 slot */
+    SJS_OP_TAKE_LOCAL,     /* u16 slot: push it and leave the slot undefined, at its last read */
     SJS_OP_SET_LOCAL,      /* u16 slot: pop into it */
     SJS_OP_CAPTURE,        /* u16 capture */
     SJS_OP_GLOBAL,         /* u16 global */

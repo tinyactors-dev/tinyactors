@@ -207,7 +207,10 @@ and `campaign-windowed.scxml`'s window becomes:
    (README, "Layers and responsibilities").
 3. **Speed and cost**, each when a measurement asks for it:
    - updating a value in place when it has one reference (Koka's Perceus),
-     so `{...acc, [k]: v}` in a `reduce` does not copy;
+     so `{...acc, [k]: v}` in a `reduce` does not copy (done: the last
+     read of a local moves its value, reduce moves its accumulator, and
+     spreads into a literal, `concat`, `with` and `toSorted` take over a
+     value nothing else holds);
    - a hash index for large objects and sets, which are searched in order
      today;
    - a static estimate of an expression's cost from declared input sizes,

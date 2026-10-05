@@ -496,6 +496,23 @@ static sjs_result array_join(sjs_vm *vm, sjs_leaf_call *call) {
     return r;
 }
 
+/* Does the method get its receiver to itself? Only an array nothing else
+ * holds: an argument that is the same array counts too. */
+static bool takes_receiver(const sjs_leaf_call *call) {
+    return call->receiver_slot != NULL && call->receiver.kind == SJS_ARRAY && sjs_value_unique(call->receiver);
+}
+
+/* Move the receiver out of its slot into the result, to change in place.
+ * No element is copied, so the fuel array_method charges for copying the
+ * receiver (`cost = n`, before its switch) goes: concat then charges only
+ * for what it appends, and with() nothing beyond its own unit. */
+static sjs_array *take_receiver(sjs_leaf_call *call) {
+    *call->receiver_slot = sjs_undefined();
+    call->result = call->receiver;
+    call->cost = 0;
+    return SJS_AS_ARRAY(call->receiver);
+}
+
 static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     const sjs_array *a = SJS_AS_ARRAY(call->receiver);
     uint32_t n = a->length;
@@ -510,12 +527,18 @@ static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
         return SJS_OK;
     }
     case SJS_METHOD_ARRAY_CONCAT: {
+        /* An array nothing else holds is appended to in place; `a` may move
+         * then, so it is not read again. */
         sjs_array *out;
-        if (new_array(vm, n, &out) != SJS_OK) return SJS_ERR_PROGRAM;
-        call->result = sjs_heap_value(SJS_ARRAY, &out->h);
-        for (uint32_t i = 0; i < n; i++) {
-            sjs_retain(a->items[i]);
-            out->items[out->length++] = a->items[i];
+        if (takes_receiver(call)) {
+            out = take_receiver(call);
+        } else {
+            if (new_array(vm, n, &out) != SJS_OK) return SJS_ERR_PROGRAM;
+            call->result = sjs_heap_value(SJS_ARRAY, &out->h);
+            for (uint32_t i = 0; i < n; i++) {
+                sjs_retain(a->items[i]);
+                out->items[out->length++] = a->items[i];
+            }
         }
         for (uint32_t i = 0; i < call->count; i++) {
             sjs_value v = call->args[i];
@@ -601,8 +624,13 @@ static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
         if (to_integer(vm, arg(call, 0), &rel) != SJS_OK) return SJS_ERR_PROGRAM;
         double k = rel < 0 ? (double)n + rel : rel;
         if (k < 0 || k >= (double)n) return sjs_vm_fault(vm, "with() needs an index inside the array");
-        if (array_slice(vm, call, (range){ 0, n }) != SJS_OK) return SJS_ERR_PROGRAM;
-        sjs_array *out = SJS_AS_ARRAY(call->result);
+        sjs_array *out;
+        if (takes_receiver(call)) {
+            out = take_receiver(call);
+        } else {
+            if (array_slice(vm, call, (range){ 0, n }) != SJS_OK) return SJS_ERR_PROGRAM;
+            out = SJS_AS_ARRAY(call->result);
+        }
         sjs_value v = arg(call, 1);
         sjs_retain(v);
         sjs_release(vm->context, out->items[(uint32_t)k]);
@@ -864,8 +892,10 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
     }
     case SJS_METHOD_ARRAY_REDUCE:
         if (frame->argc >= 2) {
-            sjs_value initial = *slot(vm, frame, LOOP_SECOND);
-            sjs_retain(initial);
+            /* Moved, not copied: LOOP_SECOND is not read again. */
+            sjs_value *second = slot(vm, frame, LOOP_SECOND);
+            sjs_value initial = *second;
+            *second = sjs_undefined();
             return set_output(vm, frame, initial);
         }
         if (a->length == 0) return sjs_vm_fault(vm, "reduce of an empty array needs an initial value");
@@ -968,6 +998,15 @@ static loop_step sort_step(sjs_vm *vm, vm_frame *frame) {
         }
         /* Choose the next pair of runs. */
         if (frame->width >= n) {
+            /* A receiver nothing else holds takes the order itself: the same
+             * elements, so no count changes. The comparator never saw it. */
+            sjs_value *held = slot(vm, frame, LOOP_RECEIVER);
+            if (sjs_value_unique(*held)) {
+                sjs_value sorted = *held;
+                *held = sjs_undefined();
+                sjs_copy(SJS_AS_ARRAY(sorted)->items, src, (size_t)n * sizeof(sjs_value));
+                return done(vm, frame, sorted);
+            }
             sjs_array *out;
             if (new_array(vm, n, &out) != SJS_OK) return LOOP_FAULT;
             for (uint32_t i = 0; i < n; i++) {
@@ -1081,9 +1120,16 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
         }
     }
     if (frame->builtin == SJS_METHOD_ARRAY_REDUCE) {
-        sjs_value args[4] = { *slot(vm, frame, LOOP_OUTPUT), a->items[frame->index], sjs_number((double)frame->index),
-                              *slot(vm, frame, LOOP_RECEIVER) };
-        return call_back(vm, frame, (sjs_values){ args, 4 });
+        /* The accumulator moves into the call, so that the callback can hold
+         * it alone; its result comes back into LOOP_OUTPUT. If the call
+         * cannot be pushed, the release below frees it. */
+        sjs_value *output = slot(vm, frame, LOOP_OUTPUT);
+        sjs_value acc = *output;
+        *output = sjs_undefined();
+        sjs_value args[4] = { acc, a->items[frame->index], sjs_number((double)frame->index), *slot(vm, frame, LOOP_RECEIVER) };
+        loop_step step = call_back(vm, frame, (sjs_values){ args, 4 });
+        sjs_vm_release(vm, acc);
+        return step;
     }
     uint32_t element = frame->builtin == SJS_METHOD_ARRAY_FIND_LAST ? frame->length - 1u - frame->index : frame->index;
     return call_element(vm, frame, element);

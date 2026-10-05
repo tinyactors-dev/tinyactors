@@ -59,7 +59,9 @@ struct sjs_vm {
     sjs_value result;
 };
 
-/* Loop frame slots, from base. */
+/* Loop frame slots, from base. reduce moves LOOP_OUTPUT, its accumulator,
+ * into the callback's first argument while the callback runs, and the
+ * result back, so that the callback holds the accumulator alone. */
 #define LOOP_RECEIVER 0u
 #define LOOP_CALLBACK 2u
 #define LOOP_SECOND 3u
@@ -75,9 +77,12 @@ sjs_value sjs_vm_pop(sjs_vm *vm);
 /* Release a stack value, whatever its internal tag. */
 void sjs_vm_release(sjs_vm *vm, sjs_value v);
 
-/* Arguments of a built-in that does not call back: all borrowed. */
+/* Arguments of a built-in that does not call back: all borrowed. A method
+ * may take its receiver over when nothing else holds it (sjs_value_unique):
+ * it moves the value out of `receiver_slot`, leaving undefined there. */
 typedef struct {
     sjs_value receiver;
+    sjs_value *receiver_slot;  /* the receiver's stack slot; NULL for a function */
     const sjs_value *args;
     uint32_t count;
     sjs_value result;      /* set by the built-in; owned */
