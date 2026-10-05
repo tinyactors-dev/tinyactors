@@ -233,7 +233,8 @@ ${unitHeader(u)}
 The approved plan:
 ${JSON.stringify(plan, null, 2)}
 
-Implement it in this worktree:
+Implement it in this worktree (your current directory). Never cd into ${REPO} itself and never run git
+-C ${REPO}: the main checkout belongs to the integrator, and changing its branch breaks its test run.
 1. git checkout -B ${wip(u)} ${BASE}   (start from the current tip of ${BASE}, whatever this worktree was created at)
 2. Record core's size first: cat tinyactors-core/src/*.c tinyactors-core/src/*.h | wc -l
 3. Work through the plan's steps in order. After each, build and run the narrowest test that covers it.
@@ -282,7 +283,8 @@ ${unitHeader(u)}
 Reviewers found the following in round ${round}:
 ${JSON.stringify(findings, null, 2)}
 
-In this worktree: git checkout ${wip(u)}, and before every commit confirm that
+In this worktree (your current directory; never cd into ${REPO} or run git -C ${REPO}, which the
+integrator owns): git checkout ${wip(u)}, and before every commit confirm that
 git rev-parse --abbrev-ref HEAD prints ${wip(u)}: a commit on a detached HEAD is lost when the branch
 is integrated (this happened in wave 1a-fix). Verify each finding against the code first. Fix every
 blocking finding that is real, and every nit that is plainly right. Decline the rest with the reason.
