@@ -142,7 +142,8 @@ void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envel
     tah_vec_init(&sched->pages, allocator, TAH_LAYOUT(tah_sched_entry *));
     tah_ring_shape shape = { .layout = TAH_LAYOUT(ta_actor_id), .chunk_capacity = TAH_QUEUE_CHUNK };
     tah_ring_init(&sched->runnable, allocator, shape);
-    tah_ring_init(&sched->ready, allocator, shape);    tah_ring_init(&sched->room, allocator, shape);
+    tah_ring_init(&sched->ready, allocator, shape);
+    tah_ring_init(&sched->room, allocator, shape);
     tah_envelopes_init(&sched->envelopes, envelopes);
     tah_free_list_init(&sched->traces, envelopes, TAH_LAYOUT(ta_trace_parent));
     tah_vec_init(&sched->waiters, envelopes, TAH_LAYOUT(tah_waiter));
@@ -375,7 +376,7 @@ static void tah_sched_settle_waiter(tah_sched *sched, uint32_t index, tah_settle
     }
     waiter->state = TAH_WAITER_SETTLING;
     settlement.waiter = index;
-    /* The ring keeps a spare chunk, so this allocates only as it grows. If
+    /* The ring keeps spare chunks, so this allocates only as it grows. If
      * it cannot, the promise is not settled until close() rejects it. */
     (void)tah_ring_push(&sched->settled, &settlement);
 }

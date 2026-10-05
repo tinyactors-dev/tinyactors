@@ -261,9 +261,10 @@ static void resume_limit(void) {
     tah_system_free(system);
 }
 
-/* A turn costs what its resume budget allows, not the length of the runnable queue: after the budget is used the
- * turn stops and leaves the queue as it is. Counts, not clocks: the ring after one turn still holds nearly every
- * actor, and bootstrapping N actors takes about N / resumes turns, none of which pushes an actor twice. */
+/* turn_work_is_bounded checks that a turn costs what its resume budget allows, not the length of the runnable
+ * queue: after the budget is used the turn stops and leaves the queue as it is. Counts, not clocks: the ring after
+ * one turn still holds nearly every actor, and bootstrapping N actors takes about N / resumes turns, none of which
+ * pushes an actor twice. */
 static void turn_work_is_bounded(void) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);

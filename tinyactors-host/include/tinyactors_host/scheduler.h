@@ -54,13 +54,14 @@
  *
  * One turn calls ta_run() for up to `resumes` runnable actors, each call with
  * a microstep budget and an action budget (core ADR 0061); a call that finds
- * the actor already settled by an earlier one does nothing. The turn stops once `resumes` inputs
- * are completed: it drops the entries of actors those calls settled, leaves the first entry that still needs a
- * call and everything behind it in order, so its cost is its inputs plus the entries they settled, never the
- * queue's length. What the turn learns that
- * JavaScript must hear about (an actor finished, an actor faulted) becomes a
- * record in the turn arena; the pump calls the hooks for them after the last
- * core call of the turn (ADR 0007 point 5).
+ * the actor already settled by an earlier one does nothing. The turn stops
+ * once `resumes` inputs are completed: it drops the entries of actors those
+ * calls settled, leaves the first entry that still needs a call and everything
+ * behind it in order, so its cost is its inputs plus the entries they settled,
+ * never the queue's length. What the turn learns that JavaScript must hear
+ * about (an actor finished, an actor faulted) becomes a record in the turn
+ * arena; the pump calls the hooks for them after the last core call of the
+ * turn (ADR 0007 point 5).
  *
  * Operator transitions (ADR 0026, core ADR 0082): a message may carry one. It
  * queues behind the mail before it, like any message, and reaches

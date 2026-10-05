@@ -81,6 +81,8 @@ static void ring_reuses_its_spare_chunk(void) {
     CHECK(tah_allocator_total(&allocator).bytes_in_use == 0);
 }
 
+/* ring_reuses_two_spare_chunks checks that a ring which peaked at two chunks keeps both as spares, so later
+ * fill-and-drain cycles make no allocator call. It needs only an allocator; it leaves nothing allocated. */
 static void ring_reuses_two_spare_chunks(void) {
     tah_ring ring;
     tah_ring_init(&ring, other(), (tah_ring_shape){ .layout = TAH_LAYOUT(uint32_t), .chunk_capacity = 8 });

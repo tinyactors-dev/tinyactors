@@ -114,8 +114,8 @@ struct tah_sched {
      * in a replay's own calls, which no turn limit bounds. */
     uint32_t turn_left;
     bool turn_bounded;
-    /* Entries the last turn's first phase popped: its work, which the scheduler tests bound by the resume limit
-     * rather than by the length of the queue. */
+    /* Count of entries the last turn's first phase popped from the runnable queue. It is bounded by the resume
+     * limit, so tests can check that a turn's work does not grow with the queue's length. */
     uint32_t turn_visited;
     uint32_t known;         /* entries not in state NONE */
     uint32_t stranded;      /* entries marked TAH_SCHED_STRANDED, at most (a turn recounts) */
