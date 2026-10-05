@@ -15,7 +15,7 @@
  * notice can lend the event to the host, the block's `_event` binding is
  * untouched, and a run that stops for lack of memory can take the input
  * again. The envelope is the input's record (ADR 0099 section 8); the block
- * is the interpreter's working storage until step 9 of the plan retires it.
+ * is the interpreter's working storage until a later step of unit 4.2c retires it.
  *
  * ta_run is a loop over four decisions, in this order each time round: report
  * a slot that was abandoned; take the next input if the slot is free (the
