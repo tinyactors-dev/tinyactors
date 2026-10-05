@@ -25,7 +25,8 @@ module TinyactorsBindings
     'ta_io_origin_make' => 'I/O origins are made in C by the io.* instruments (src/instruments.c); scenarios steer them with instrument commands',
     'ta_origin_release' => 'C lifetime helper; the io.* instruments release the origins they make',
     'ta_io_scope_{open,close}' => 'scopes belong to the io.connection instrument, which opens and closes them on command',
-    'ta_origin_text' => 'renders into a C arena; the ta_io_origin codec reports what an origin is'
+    'ta_origin_text' => 'renders into a C arena; the ta_io_origin codec reports what an origin is',
+    'ta_{ring_peek,ring_release,system_control_block}' => 'rings are read in C, by the trace.recording instrument after each call that runs core (core ADR 0098)'
   }.freeze
 
   # Functions with a hand-written `tat_handler_<function>` in src/. None yet.
@@ -48,6 +49,7 @@ module TinyactorsBindings
     'ta_allocator_free_params' => 'allocator callback argument',
     'ta_expression_host' => 'host expressions cannot cross the protocol',
     'ta_datamodel_*_params' => 'data-model callback argument; adapters are C',
+    'ta_ring_{shared,control,record}' => 'ring plumbing: read in C (core ADR 0098)',
     'ta_invoker_start_params' => 'invoker callback argument; adapters are C',
     'ta_invoker_forward_params' => 'invoker callback argument; adapters are C'
   }.freeze

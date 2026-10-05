@@ -263,6 +263,98 @@ static void ta_system_arena_close(ta_system *system) {
     system->render = (ta_arena){ 0 };
 }
 
+/*
+ * ta_system_rings_open makes the one allocation of the rings (ADR 0098
+ * section 1): a ta_layout of the rings region (the control block and the
+ * three ring areas, as ta_rings_layout plans it) and the text staging area,
+ * allocated once with the layout's alignment. h2c and c2h are absent
+ * (capacity 0) until the ring-proto phase that introduces them; tel is
+ * telBytes with records of at most maxRecordBytes. It runs once, in
+ * ta_system_create, at a safe point: it is the only place the rings
+ * allocate. TA_ERR_NOMEM when a size overflows (nothing is allocated) or
+ * the allocator refuses (nothing is kept); the system is then still
+ * destroyable, since ta_system_rings_close frees only what exists.
+ */
+static ta_result ta_system_rings_open(ta_system *system) {
+    uint32_t max_record = system->params[TA_PARAM_MAX_RECORD_BYTES];
+    ta_rings_specs specs = { .ring = { [TA_RING_H2C] = { 0, 0, TA_RING_LOSSLESS },
+                                       [TA_RING_C2H] = { 0, 0, TA_RING_LOSSLESS },
+                                       [TA_RING_TEL] = { system->params[TA_PARAM_TEL_BYTES], max_record,
+                                                         TA_RING_LOSSY } } };
+    ta_rings_plan plan;
+    ta_result result = ta_rings_layout(&specs, &plan);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_layout layout;
+    ta_layout_init(&layout, 0);
+    size_t rings_at = ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = plan.alignment,
+                                                                 .count = plan.bytes });
+    size_t staging_at = ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = TA_RING_ALIGN,
+                                                                   .count = max_record });
+    size_t bytes = 0;
+    size_t alignment = 0;
+    result = ta_layout_finish(&layout, &bytes, &alignment);
+    if (result != TA_OK) {
+        return result;
+    }
+    unsigned char *memory = ta_mem_alloc(system->allocator, bytes, alignment);
+    if (memory == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    result = ta_rings_init(&system->rings, &(ta_rings_init_params){ .memory = memory + rings_at,
+                                                                     .memory_bytes = plan.bytes,
+                                                                     .specs = specs });
+    if (result != TA_OK) {
+        ta_mem_free(system->allocator, memory, &(ta_allocator_free_params){ .size = bytes, .alignment = alignment });
+        return result;
+    }
+    system->rings_memory = memory;
+    system->rings_bytes = bytes;
+    system->rings_alignment = alignment;
+    system->tel_staging = memory + staging_at;
+    system->tel_staging_bytes = max_record;
+    return TA_OK;
+}
+
+/* ta_system_rings_close frees the rings region with the size and alignment it was allocated with, and zeroes the handles. */
+static void ta_system_rings_close(ta_system *system) {
+    if (system->rings_memory != NULL) {
+        ta_mem_free(system->allocator, system->rings_memory,
+                    &(ta_allocator_free_params){ .size = system->rings_bytes, .alignment = system->rings_alignment });
+    }
+    system->rings_memory = NULL;
+    system->rings = (ta_rings){ 0 };
+    system->tel_staging = NULL;
+    system->tel_staging_bytes = 0;
+}
+
+const ta_ring_control *ta_system_control_block(const ta_system *system) {
+    return system == NULL ? NULL : system->rings.control;
+}
+
+ta_result ta_ring_peek(ta_system *system, ta_ring_id ring, ta_ring_record *out) {
+    if (system == NULL || out == NULL || (uint32_t)ring >= (uint32_t)TA_RING_COUNT) {
+        return TA_ERR_INVALID;
+    }
+    if (system->rings.control == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    switch (ta_ring_read(&system->rings.ring[ring], out)) {
+    case TA_RING_OK: return TA_OK;
+    case TA_RING_CORRUPT: return TA_ERR_CORRUPT;
+    default: return TA_ERR_NOT_FOUND;
+    }
+}
+
+void ta_ring_release(ta_system *system, ta_ring_id ring, uint32_t size) {
+    if (system == NULL || (uint32_t)ring >= (uint32_t)TA_RING_COUNT || system->rings.control == NULL ||
+        system->rings.ring[ring].peeked_size != size) {
+        return; /* only the record last peeked can be released, and with its own size */
+    }
+    ta_ring_advance(&system->rings.ring[ring]);
+}
+
 bool ta_system_quota_actor(ta_system *system) {
     if (system->live_actors >= system->params[TA_PARAM_MAX_ACTORS]) {
         system->counters.quota_refusals += 1u;
@@ -345,6 +437,9 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
         result = ta_system_arena_open(system);
     }
     if (result == TA_OK) {
+        result = ta_system_rings_open(system);
+    }
+    if (result == TA_OK) {
         result = ta_atom_intern(&system->atoms, ta_str_from_cstr(TA_SCXML_IO_URI), &system->scxml_io_type);
     }
     if (result == TA_OK) {
@@ -405,6 +500,8 @@ void ta_system_destroy(ta_system *system) {
     ta_address_table_destroy(&system->addresses);
     ta_event_name_table_destroy(&system->event_names);
     ta_atom_table_destroy(&system->atoms);
+    /* After everything that can write a record: the DESTROYED and FREED records above went through the rings. */
+    ta_system_rings_close(system);
     ta_allocator allocator = system->allocator;
     ta_mem_free(allocator, system,
                 &(ta_allocator_free_params){ .size = sizeof(ta_system), .alignment = _Alignof(ta_system) });

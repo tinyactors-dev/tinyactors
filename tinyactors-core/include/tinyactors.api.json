@@ -21846,6 +21846,116 @@
       ]
     },
     {
+      "name": "ta_system_control_block",
+      "doc": "ta_system_control_block returns the control block of the system's rings (ADR 0098 section 1), or NULL for a NULL system. It is created with the system, never moves or grows, and is valid until ta_system_destroy(). A host reads its cells at any time on the system's thread (the producer's head, next_seq and dropped; its own tail); it never writes them: it releases records with ta_ring_release(). `ring[TA_RING_TEL].dropped` is the number of telemetry records dropped since creation.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "pointer": {
+            "type": "ta_ring_control",
+            "const": true
+          }
+        },
+        "shape": "single",
+        "optional": true,
+        "lifetime": "system"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_ring_peek",
+      "doc": "ta_ring_peek shows the oldest committed record of `ring` in place, after silently releasing any wrap pad in front of it, and returns TA_OK. With *out untouched it returns TA_ERR_NOT_FOUND when there is none, or the ring does not exist (h2c and c2h until ring-proto 5.1); TA_ERR_CORRUPT when the ring's framing breaks the protocol (never so for tel, which only core writes: a host stops using that ring); TA_ERR_INVALID for a NULL argument or an unknown ring. Peeking again without a release shows the same record. *out is valid until ta_ring_release() or the next call into core that writes the ring; a record's `gap` says how many records the lossy ring dropped before it. It never allocates.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "ring",
+          "type": {
+            "type": "ta_ring_id"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_ring_record"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "TA_OK",
+          "lifetime": "system"
+        }
+      ]
+    },
+    {
+      "name": "ta_ring_release",
+      "doc": "ta_ring_release releases the record ta_ring_peek last returned for `ring`, so that core may reuse its bytes; `size` must be that record's size, or the call does nothing (so it can never move the tail past the head, or release a record the host did not see). The record's bytes, and any view decoded from them, are dead after it. It never allocates.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "ring",
+          "type": {
+            "type": "ta_ring_id"
+          }
+        },
+        {
+          "name": "size",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ]
+    },
+    {
       "name": "ta_system_set_external_event_router",
       "doc": "Installs the scheduler for normalized external SCXML-session events.",
       "public": true,

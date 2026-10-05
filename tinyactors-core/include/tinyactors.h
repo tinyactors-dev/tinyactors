@@ -3897,6 +3897,38 @@ TA_API void ta_system_destroy(TA_DESTROYS ta_system *system);
 TA_API ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_directory directory);
 /* A system parameter's value (ADR 0092); TA_ERR_INVALID for an unknown one. */
 TA_API ta_result ta_system_param(const ta_system *system, ta_param param, TA_OUT uint64_t *out);
+/*
+ * ta_system_control_block returns the control block of the system's rings
+ * (ADR 0098 section 1), or NULL for a NULL system. It is created with the
+ * system, never moves or grows, and is valid until ta_system_destroy(). A
+ * host reads its cells at any time on the system's thread (the producer's
+ * head, next_seq and dropped; its own tail); it never writes them: it
+ * releases records with ta_ring_release(). `ring[TA_RING_TEL].dropped` is
+ * the number of telemetry records dropped since creation.
+ */
+TA_API const ta_ring_control *ta_system_control_block(const ta_system *system) TA_OPTIONAL TA_LIFETIME(system);
+/*
+ * ta_ring_peek shows the oldest committed record of `ring` in place, after
+ * silently releasing any wrap pad in front of it, and returns TA_OK. With
+ * *out untouched it returns TA_ERR_NOT_FOUND when there is none, or the ring
+ * does not exist (h2c and c2h until ring-proto 5.1); TA_ERR_CORRUPT when the
+ * ring's framing breaks the protocol (never so for tel, which only core
+ * writes: a host stops using that ring); TA_ERR_INVALID for a NULL argument
+ * or an unknown ring. Peeking again without a release shows the same record.
+ * *out is valid until ta_ring_release() or the next call into core that
+ * writes the ring; a record's `gap` says how many records the lossy ring
+ * dropped before it. It never allocates.
+ */
+TA_API ta_result ta_ring_peek(ta_system *system, ta_ring_id ring,
+                              TA_OUT TA_VALID_ON(TA_OK) TA_LIFETIME(system) ta_ring_record *out);
+/*
+ * ta_ring_release releases the record ta_ring_peek last returned for `ring`,
+ * so that core may reuse its bytes; `size` must be that record's size, or the
+ * call does nothing (so it can never move the tail past the head, or release
+ * a record the host did not see). The record's bytes, and any view decoded
+ * from them, are dead after it. It never allocates.
+ */
+TA_API void ta_ring_release(ta_system *system, ta_ring_id ring, uint32_t size);
 /* Installs the scheduler for normalized external SCXML-session events. */
 TA_API ta_result ta_system_set_external_event_router(ta_system *system,
                                                       ta_external_event_router router);

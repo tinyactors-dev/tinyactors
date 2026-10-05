@@ -10,6 +10,7 @@
 #include "io.h"
 #include "io_origin.h"
 #include "invoke.h"
+#include "ring.h"
 #include "routing.h"
 #include "timer.h"
 #include "trace.h"
@@ -110,6 +111,21 @@ struct ta_system {
     /* Invoke: the canonical SCXML invoker type. */
     ta_atom scxml_invoke_type;
     ta_arena scratch;
+    /*
+     * The rings (ADR 0098): the control block, the three ring areas (h2c and
+     * c2h absent until ring-proto 5.1, tel of telBytes) and the text staging
+     * area, one allocation made by ta_system_create (lifetime: system) and
+     * freed, with the size and alignment kept here, by ta_system_destroy.
+     * `rings` holds the handles over it and owns nothing; it is zeroed (and
+     * `rings_memory` NULL) while no region exists. Nothing grows or moves.
+     */
+    ta_rings rings;
+    void *rings_memory;
+    size_t rings_bytes;
+    size_t rings_alignment;
+    /* maxRecordBytes of scratch for the texts of one tel record (lifetime of the contents: one write); inside rings_memory. */
+    unsigned char *tel_staging;
+    uint32_t tel_staging_bytes;
     /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
      * newest first, linked through `next_cached`; at most `block_cache_limit`
      * of them (ADR 0069). Empty at creation: a block is made when a delivery
