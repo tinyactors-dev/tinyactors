@@ -47,24 +47,16 @@ sjs_result sjs_vm_fail(sjs_vm *vm, sjs_result r) {
 void sjs_vm_release(sjs_vm *vm, sjs_value v) {
     if (v.internal == SJS_INTERNAL_METHOD) return;
     v.internal = SJS_INTERNAL_NONE;
-    sjs_release(vm->context, v);
+    sjs_unref(vm->context, v);
 }
 
-bool sjs_vm_push(sjs_vm *vm, sjs_value v) {
-    if (vm->sp >= vm->stack_capacity) {
-        sjs_vm_release(vm, v);
-        if (vm->status != VM_FAULT) {
-            sjs_error_set(&vm->error, fault_position(vm), (sjs_problem){ SJS_ERROR_LIMIT, "the evaluation needs more than max_stack values" });
-            vm->status = VM_FAULT;
-        }
-        return false;
+bool sjs_vm_stack_full(sjs_vm *vm, sjs_value v) {
+    sjs_vm_release(vm, v);
+    if (vm->status != VM_FAULT) {
+        sjs_error_set(&vm->error, fault_position(vm), (sjs_problem){ SJS_ERROR_LIMIT, "the evaluation needs more than max_stack values" });
+        vm->status = VM_FAULT;
     }
-    vm->stack[vm->sp++] = v;
-    return true;
-}
-
-sjs_value sjs_vm_pop(sjs_vm *vm) {
-    return vm->stack[--vm->sp];
+    return false;
 }
 
 static sjs_value *stack_top(sjs_vm *vm) {
@@ -172,7 +164,7 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out) {
         const sjs_entry *e = sjs_object_find(SJS_AS_OBJECT(object), name);
         if (e != NULL) {
             *out = e->value;
-            sjs_retain(*out);
+            sjs_ref(*out);
             return SJS_OK;
         }
         if (sjs_is_prototype_name(name)) return fault_named(vm, "staticjs objects have no prototype", name);
@@ -183,12 +175,12 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out) {
         if (index) {
             if (key->index < a->length) {
                 *out = a->items[key->index];
-                sjs_retain(*out);
+                sjs_ref(*out);
             }
             return SJS_OK;
         }
         if (sjs_str_equal(name, SJS_STR("length"))) {
-            *out = sjs_number((double)a->length);
+            *out = sjs_num((double)a->length);
             return SJS_OK;
         }
         break;
@@ -197,14 +189,14 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out) {
         const sjs_string *s = SJS_AS_STRING(object);
         if (index) return string_at(vm, (char_ref){ s, (double)key->index }, out);
         if (sjs_str_equal(name, SJS_STR("length"))) {
-            *out = sjs_number((double)s->utf16_length);
+            *out = sjs_num((double)s->utf16_length);
             return SJS_OK;
         }
         break;
     }
     case SJS_SET:
         if (sjs_str_equal(name, SJS_STR("size"))) {
-            *out = sjs_number((double)SJS_AS_ARRAY(object)->length);
+            *out = sjs_num((double)SJS_AS_ARRAY(object)->length);
             return SJS_OK;
         }
         break;
@@ -271,7 +263,7 @@ static sjs_result concat(sjs_vm *vm, sjs_values parts, sjs_value *out) {
         if (r != SJS_OK) break;
         if ((uint64_t)text.length + s->length > vm->context->limits.max_string_bytes) r = SJS_ERR_LIMIT;
         else r = sjs_buf_append(alloc, &text, (sjs_bytes){ (const uint8_t *)s->bytes, s->length });
-        sjs_release(vm->context, sjs_heap_value(SJS_STRING, &s->h));
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &s->h));
     }
     sjs_string *result = NULL;
     if (r == SJS_OK) r = sjs_string_make(vm->context, (sjs_str){ (const char *)text.ptr, text.length }, &result);
@@ -288,7 +280,7 @@ static sjs_result add(sjs_vm *vm, const sjs_value *pair, sjs_value *out) {
     sjs_value a = pair[0];
     sjs_value b = pair[1];
     if (a.kind == SJS_NUMBER && b.kind == SJS_NUMBER) {
-        *out = sjs_number(a.as.number + b.as.number);
+        *out = sjs_num(a.as.number + b.as.number);
         return SJS_OK;
     }
     if ((a.kind == SJS_STRING || b.kind == SJS_STRING) && sjs_is_primitive(a) && sjs_is_primitive(b)) {
@@ -316,7 +308,7 @@ static sjs_result in(sjs_vm *vm, const sjs_value *pair, sjs_value *out) {
     } else {
         *out = sjs_boolean(false);
     }
-    sjs_release(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+    sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
     return r;
 }
 
@@ -382,7 +374,7 @@ static sjs_result apply_binary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
             z = sjs_number_remainder(x, y);
             break;
         }
-        *out = sjs_number(z);
+        *out = sjs_num(z);
         return SJS_OK;
     }
     }
@@ -404,7 +396,7 @@ static sjs_result apply_unary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
     }
     default:
         if (v.kind != SJS_NUMBER) return sjs_vm_fault(vm, "arithmetic in staticjs is on numbers");
-        *out = sjs_number(operator == SJS_OP_NEGATE ? -v.as.number : v.as.number);
+        *out = sjs_num(operator == SJS_OP_NEGATE ? -v.as.number : v.as.number);
         return SJS_OK;
     }
 }
@@ -430,7 +422,7 @@ static sjs_result spread_into(sjs_vm *vm, sjs_value *array, sjs_value source) {
     if (source.kind == SJS_ARRAY || source.kind == SJS_SET) {
         const sjs_array *s = SJS_AS_ARRAY(source);
         for (uint32_t i = 0; i < s->length; i++) {
-            sjs_retain(s->items[i]);
+            sjs_ref(s->items[i]);
             if (array_append(vm, array, s->items[i]) != SJS_OK) return SJS_ERR_PROGRAM;
         }
         vm->fuel_used += s->length / 8u;
@@ -457,7 +449,7 @@ static sjs_result object_put(sjs_vm *vm, sjs_value *object, sjs_put property) {
     sjs_string *key = property.key;
     sjs_value value = property.value;
     if (sjs_str_equal(sjs_string_view(key), SJS_STR("__proto__"))) {
-        sjs_release(vm->context, sjs_heap_value(SJS_STRING, &key->h));
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &key->h));
         sjs_vm_release(vm, value);
         return sjs_vm_fault(vm, "staticjs objects have no prototype");
     }
@@ -465,7 +457,7 @@ static sjs_result object_put(sjs_vm *vm, sjs_value *object, sjs_put property) {
     sjs_result r = sjs_object_put_key(vm->context, &o, (sjs_put){ key, value });
     object->as.heap = &o->h;
     if (r != SJS_OK) {
-        sjs_release(vm->context, sjs_heap_value(SJS_STRING, &key->h));
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &key->h));
         sjs_vm_release(vm, value);
         return sjs_vm_fail(vm, r);
     }
@@ -478,8 +470,8 @@ static sjs_result spread_properties(sjs_vm *vm, sjs_value *object, sjs_value sou
     if (source.kind == SJS_OBJECT) {
         const sjs_object *s = SJS_AS_OBJECT(source);
         for (uint32_t i = 0; i < s->count; i++) {
-            sjs_retain(sjs_heap_value(SJS_STRING, &s->entries[i].key->h));
-            sjs_retain(s->entries[i].value);
+            sjs_ref(sjs_heap_value(SJS_STRING, &s->entries[i].key->h));
+            sjs_ref(s->entries[i].value);
             if (object_put(vm, object, (sjs_put){ s->entries[i].key, s->entries[i].value }) != SJS_OK) return SJS_ERR_PROGRAM;
         }
         vm->fuel_used += s->count / 8u;
@@ -491,7 +483,7 @@ static sjs_result spread_properties(sjs_vm *vm, sjs_value *object, sjs_value sou
             sjs_string *k;
             sjs_result r = sjs_string_from_number(vm->context, (double)i, &k);
             if (r != SJS_OK) return sjs_vm_fail(vm, r);
-            sjs_retain(a->items[i]);
+            sjs_ref(a->items[i]);
             if (object_put(vm, object, (sjs_put){ k, a->items[i] }) != SJS_OK) return SJS_ERR_PROGRAM;
         }
         return SJS_OK;
@@ -512,8 +504,8 @@ static sjs_result copy_properties(sjs_vm *vm, sjs_value *object, sjs_value sourc
     if (r != SJS_OK) return sjs_vm_fail(vm, r);
     object->as.heap = &o->h;
     for (uint32_t i = 0; i < s->count; i++) {
-        sjs_retain(sjs_heap_value(SJS_STRING, &s->entries[i].key->h));
-        sjs_retain(s->entries[i].value);
+        sjs_ref(sjs_heap_value(SJS_STRING, &s->entries[i].key->h));
+        sjs_ref(s->entries[i].value);
         o->entries[i] = s->entries[i];
     }
     o->count = s->count;
@@ -538,7 +530,7 @@ static sjs_result object_spread(sjs_vm *vm, sjs_value *object, sjs_value source)
     sjs_result r;
     if (source.kind == SJS_OBJECT && SJS_AS_OBJECT(*object)->count == 0) {
         if (sjs_value_unique(source)) {
-            sjs_release(vm->context, *object);
+            sjs_unref(vm->context, *object);
             *object = source;
             return SJS_OK;
         }
@@ -557,7 +549,7 @@ static sjs_result new_set(sjs_vm *vm, sjs_values args, sjs_value *out) {
         sjs_result r = sjs_array_new(vm->context, 4, &elements);
         if (r != SJS_OK) return sjs_vm_fail(vm, r);
         if (spread_into(vm, &elements, source) != SJS_OK) {
-            sjs_release(vm->context, elements);
+            sjs_unref(vm->context, elements);
             return SJS_ERR_PROGRAM;
         }
     }
@@ -567,15 +559,15 @@ static sjs_result new_set(sjs_vm *vm, sjs_values args, sjs_value *out) {
     for (uint32_t i = 0; i < n && r == SJS_OK; i++) {
         sjs_value e = sjs_array_at(elements, i);
         sjs_array *a = SJS_AS_ARRAY(set);
-        sjs_retain(e);
+        sjs_ref(e);
         r = sjs_set_insert(vm->context, &a, e);
         set.as.heap = &a->h;
-        if (r != SJS_OK) sjs_release(vm->context, e);
+        if (r != SJS_OK) sjs_unref(vm->context, e);
     }
-    sjs_release(vm->context, elements);
+    sjs_unref(vm->context, elements);
     vm->fuel_used += n;
     if (r != SJS_OK) {
-        if (set.kind == SJS_SET) sjs_release(vm->context, set);
+        if (set.kind == SJS_SET) sjs_unref(vm->context, set);
         if (r == SJS_ERR_PROGRAM) return sjs_vm_fault(vm, "staticjs sets hold primitives only");
         return sjs_vm_fail(vm, r);
     }
@@ -621,13 +613,13 @@ static bool expand_spread(sjs_vm *vm, uint32_t *argc) {
         if (v.internal == SJS_INTERNAL_SPREAD) {
             v.internal = SJS_INTERNAL_NONE;
             if (spread_into(vm, &list, v) != SJS_OK) {
-                sjs_release(vm->context, list);
+                sjs_unref(vm->context, list);
                 return false;
             }
         } else {
-            sjs_retain(v);
+            sjs_ref(v);
             if (array_append(vm, &list, v) != SJS_OK) {
-                sjs_release(vm->context, list);
+                sjs_unref(vm->context, list);
                 return false;
             }
         }
@@ -635,11 +627,11 @@ static bool expand_spread(sjs_vm *vm, uint32_t *argc) {
     cut(vm, start);
     const sjs_array *a = SJS_AS_ARRAY(list);
     for (uint32_t i = 0; i < a->length; i++) {
-        sjs_retain(a->items[i]);
+        sjs_ref(a->items[i]);
         vm->stack[vm->sp++] = a->items[i];
     }
     *argc = a->length;
-    sjs_release(vm->context, list);
+    sjs_unref(vm->context, list);
     return true;
 }
 
@@ -669,7 +661,7 @@ static bool gather_rest(sjs_vm *vm, call_site site) {
     vm->fuel_used += n / 8u;
     for (uint32_t i = site.argc; i < fixed; i++) {
         if (!sjs_vm_push(vm, sjs_undefined())) {
-            sjs_release(vm->context, sjs_heap_value(SJS_ARRAY, &rest->h));
+            sjs_unref(vm->context, sjs_heap_value(SJS_ARRAY, &rest->h));
             return false;
         }
     }
@@ -706,15 +698,15 @@ static bool enter_closure(sjs_vm *vm, call_site site) {
     for (uint32_t i = fn->params; i < fn->locals; i++) {
         if (!sjs_vm_push(vm, sjs_undefined())) return false;
     }
-    vm_frame *f = &vm->frames[vm->frame_count++];
-    sjs_zero(f, sizeof *f);
-    f->kind = FRAME_CODE;
-    f->pc = fn->code;
-    f->base = base;
-    f->bottom = bottom;
-    f->function = closure->function;
-    f->program = closure->program;
-    f->closure = closure;
+    vm->frames[vm->frame_count++] = (vm_frame){
+        .kind = FRAME_CODE,
+        .pc = fn->code,
+        .base = base,
+        .bottom = bottom,
+        .function = closure->function,
+        .program = closure->program,
+        .closure = closure,
+    };
     return true;
 }
 
@@ -735,13 +727,14 @@ static bool enter_loop(sjs_vm *vm, sjs_builtin_id id, call_site site) {
     }
     if (!sjs_vm_push(vm, sjs_undefined())) return false;
     vm_frame *f = &vm->frames[vm->frame_count++];
-    sjs_zero(f, sizeof *f);
-    f->kind = FRAME_LOOP;
-    f->builtin = (uint16_t)id;
-    f->base = receiver;
-    f->bottom = receiver;
-    f->argc = argc;
-    f->at = at;
+    *f = (vm_frame){
+        .kind = FRAME_LOOP,
+        .builtin = (uint16_t)id,
+        .base = receiver,
+        .bottom = receiver,
+        .argc = argc,
+        .at = at,
+    };
     return sjs_loop_start(vm, f) == SJS_OK;
 }
 
@@ -848,11 +841,11 @@ static sjs_result rest_elements(sjs_vm *vm, uint32_t start, sjs_value *out) {
             sjs_string *c;
             r = sjs_string_make(vm->context, (sjs_str){ text.ptr + from, i - from }, &c);
             if (r != SJS_OK) {
-                sjs_release(vm->context, rest);
+                sjs_unref(vm->context, rest);
                 return sjs_vm_fail(vm, r);
             }
             if (array_append(vm, &rest, sjs_heap_value(SJS_STRING, &c->h)) != SJS_OK) {
-                sjs_release(vm->context, rest);
+                sjs_unref(vm->context, rest);
                 return SJS_ERR_PROGRAM;
             }
         }
@@ -865,7 +858,7 @@ static sjs_result rest_elements(sjs_vm *vm, uint32_t start, sjs_value *out) {
     sjs_result r = sjs_array_make(vm->context, n, &rest);
     if (r != SJS_OK) return sjs_vm_fail(vm, r);
     for (uint32_t i = 0; i < n; i++) {
-        sjs_retain(a->items[start + i]);
+        sjs_ref(a->items[start + i]);
         rest->items[i] = a->items[start + i];
     }
     rest->length = n;
@@ -921,8 +914,8 @@ static sjs_result rest_properties(sjs_vm *vm, const excluded_keys *x, sjs_value 
         for (uint32_t i = 0; i < o->count; i++) {
             const sjs_entry *entry = &o->entries[i];
             if (excludes(x, entry->key)) continue;
-            sjs_retain(sjs_heap_value(SJS_STRING, &entry->key->h));
-            sjs_retain(entry->value);
+            sjs_ref(sjs_heap_value(SJS_STRING, &entry->key->h));
+            sjs_ref(entry->value);
             rest->entries[rest->count++] = *entry;
         }
         vm->fuel_used += (uint64_t)o->count * (keys + 1u) / 8u;
@@ -936,10 +929,10 @@ static sjs_result rest_properties(sjs_vm *vm, const excluded_keys *x, sjs_value 
             sjs_string *k;
             r = sjs_string_from_number(vm->context, (double)i, &k);
             if (r != SJS_OK) {
-                sjs_release(vm->context, sjs_heap_value(SJS_OBJECT, &rest->h));
+                sjs_unref(vm->context, sjs_heap_value(SJS_OBJECT, &rest->h));
                 return sjs_vm_fail(vm, r);
             }
-            sjs_retain(a->items[i]);
+            sjs_ref(a->items[i]);
             rest->entries[rest->count].key = k;
             rest->entries[rest->count++].value = a->items[i];
         }
@@ -989,19 +982,19 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         return;
     case SJS_OP_NUMBER_:
         f->pc = pc + 4;
-        sjs_vm_push(vm, sjs_number(f->program->numbers[sjs_read32(code + pc)]));
+        sjs_vm_push(vm, sjs_num(f->program->numbers[sjs_read32(code + pc)]));
         return;
     case SJS_OP_CONSTANT: {
         f->pc = pc + 4;
         sjs_value v = f->program->constants[sjs_read32(code + pc)];
-        sjs_retain(v);
+        sjs_ref(v);
         sjs_vm_push(vm, v);
         return;
     }
     case SJS_OP_LOCAL: {
         f->pc = pc + 2;
         sjs_value v = vm->stack[f->base + sjs_read16(code + pc)];
-        sjs_retain(v);
+        sjs_ref(v);
         sjs_vm_push(vm, v);
         return;
     }
@@ -1025,14 +1018,14 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
     case SJS_OP_CAPTURE: {
         f->pc = pc + 2;
         sjs_value v = f->closure->captures[sjs_read16(code + pc)];
-        sjs_retain(v);
+        sjs_ref(v);
         sjs_vm_push(vm, v);
         return;
     }
     case SJS_OP_GLOBAL: {
         f->pc = pc + 2;
         sjs_value v = vm->globals[sjs_read16(code + pc)];
-        sjs_retain(v);
+        sjs_ref(v);
         sjs_vm_push(vm, v);
         return;
     }
@@ -1043,6 +1036,22 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
     case SJS_OP_GET_MEMBER: {
         f->pc = pc + 4;
         const sjs_string *key = SJS_AS_STRING(f->program->constants[sjs_read32(code + pc)]);
+        sjs_value *top = stack_top(vm);
+        if (top->kind == SJS_OBJECT && top->internal == SJS_INTERNAL_NONE) {
+            /* The common case inline: a property the object has. */
+            const sjs_object *o = SJS_AS_OBJECT(*top);
+            sjs_str name = sjs_string_view(key);
+            for (uint32_t i = 0; i < o->count; i++) {
+                const sjs_string *k = o->entries[i].key;
+                if (k == key || sjs_str_equal(sjs_string_view(k), name)) {
+                    sjs_value v = o->entries[i].value;
+                    sjs_ref(v);
+                    sjs_unref(vm->context, *top);
+                    *top = v;
+                    return;
+                }
+            }
+        }
         if (sjs_property_get(vm, (sjs_member){ *stack_top(vm), key }, &result) != SJS_OK) return;
         sjs_vm_release(vm, *stack_top(vm));
         *stack_top(vm) = result;
@@ -1059,7 +1068,7 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
             result = sjs_undefined();
             if (d >= 0 && d < (double)a->length && d == sjs_number_trunc(d)) {
                 result = a->items[(uint32_t)d];
-                sjs_retain(result);
+                sjs_ref(result);
             }
             r = SJS_OK;
         } else if (object.kind == SJS_STRING && key.kind == SJS_NUMBER) {
@@ -1069,7 +1078,7 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
             r = key_of(vm, key, &k);
             if (r == SJS_OK) {
                 r = sjs_property_get(vm, (sjs_member){ object, k }, &result);
-                sjs_release(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+                sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
             }
         }
         sjs_vm_release(vm, key);
@@ -1093,7 +1102,7 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         sjs_vm_release(vm, key);
         if (r != SJS_OK) return;
         r = method(vm, (sjs_member){ *stack_top(vm), k }, &result);
-        sjs_release(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
         if (r != SJS_OK) return;
         sjs_vm_push(vm, result);
         return;
@@ -1195,7 +1204,7 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         /* The literal is still empty and nothing else holds the array: the
          * array becomes the literal, which appends what follows in place. */
         if (v.kind == SJS_ARRAY && SJS_AS_ARRAY(*array)->length == 0 && sjs_value_unique(v)) {
-            sjs_release(vm->context, *array);
+            sjs_unref(vm->context, *array);
             *array = v;
             return;
         }
@@ -1250,7 +1259,7 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         for (uint32_t i = 0; i < fn->capture_count; i++) {
             const sjs_capture_info *ci = &f->program->captures[fn->captures + i];
             sjs_value v = ci->from_capture ? f->closure->captures[ci->index] : vm->stack[f->base + ci->index];
-            sjs_retain(v);
+            sjs_ref(v);
             c->captures[c->count++] = v;
         }
         sjs_vm_push(vm, sjs_heap_value(SJS_FUNCTION, &c->h));
@@ -1290,7 +1299,7 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         }
         const sjs_array *a = SJS_AS_ARRAY(*stack_top(vm));
         sjs_value v = i < a->length ? a->items[i] : sjs_undefined();
-        sjs_retain(v);
+        sjs_ref(v);
         sjs_vm_push(vm, v);
         return;
     }
@@ -1416,11 +1425,7 @@ sjs_result sjs_vm_start(sjs_vm *vm, const sjs_run_params *params) {
         return SJS_ERR_LIMIT;
     }
     for (uint32_t i = 0; i < fn->locals; i++) vm->stack[vm->sp++] = sjs_undefined();
-    vm_frame *f = &vm->frames[vm->frame_count++];
-    sjs_zero(f, sizeof *f);
-    f->kind = FRAME_CODE;
-    f->pc = fn->code;
-    f->program = program;
+    vm->frames[vm->frame_count++] = (vm_frame){ .kind = FRAME_CODE, .pc = fn->code, .program = program };
     return SJS_OK;
 }
 

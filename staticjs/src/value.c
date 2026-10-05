@@ -32,9 +32,7 @@ sjs_value sjs_number(double value) {
 }
 
 void sjs_retain(sjs_value value) {
-    if (!sjs_is_heap(value)) return;
-    sjs_heap *h = value.as.heap;
-    if (h->refs != SJS_IMMORTAL) h->refs++;
+    sjs_ref(value);
 }
 
 /* Drop one reference; a value whose last reference this was joins `work`. */
