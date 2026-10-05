@@ -139,6 +139,7 @@ typedef struct tat_instrument {
     tat_instrument_kind kind;
     tat_bind *bind;
     ta_system *system;
+    size_t system_serial; /* the serial of the system's handle when the instrument was made (tat_handle_serial) */
     jv journal;
     /* Operation -> armed fault spec with "remaining". */
     jv faults;
@@ -407,6 +408,7 @@ static tat_instrument *tat_instrument_resolve(tat_bind *bind, jv config, tat_ins
     instrument->kind = kind;
     instrument->bind = bind;
     instrument->system = system;
+    instrument->system_serial = tat_handle_serial(bind, "system", system);
     instrument->journal = jv_array();
     instrument->faults = jv_object();
     instrument->allocator.fail_after = -1;
@@ -1326,9 +1328,11 @@ static void tat_trace_drain(tat_instrument *instrument) {
 void tat_trace_recorders_drain(tat_bind *bind) {
     for (size_t index = 0; index < tat_instrument_count; index += 1) {
         tat_instrument *instrument = tat_instruments[index];
-        /* A recorder whose system was destroyed has nothing to read, and no ring. */
+        /* A recorder whose system was destroyed has nothing to read, and no ring; a later system at the same
+         * address is another system's (the serial differs), and its ring is its own recorder's. */
         if (instrument->kind == TAT_INSTRUMENT_TRACE && instrument->bind == bind && instrument->system != NULL &&
-            tat_handle_live(bind, "system", instrument->system)) {
+            instrument->system_serial != 0 &&
+            tat_handle_serial(bind, "system", instrument->system) == instrument->system_serial) {
             tat_trace_drain(instrument);
         }
     }

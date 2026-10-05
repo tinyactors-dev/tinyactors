@@ -892,11 +892,17 @@ module TinyactorsTest
     # its chart's `datamodel` ("jq", "ecmascript", or none), and the invoker
     # is expected to compile the child with the adapter that datamodel names,
     # as datamodel_adapter does here.
+    # The telemetry ring of a test host's systems (core ADR 0098): large enough that no scenario's
+    # macrostep fills it, so a trace has no tel.dropped in it and runs that do the same work journal the
+    # same records. The fill test is core's (tel_test).
+    TEL_BYTES = 4 * 1024 * 1024
+
     def system_handle
       @system ||= begin
         @creating_system = true
         system = core('ta_system_create',
-                      ta.system.create(config: { allocator: allocator.adapter, initial_time: 0 })).fetch(:out)
+                      ta.system.create(config: { allocator: allocator.adapter, initial_time: 0,
+                                                 params: [{ param: 'tel_bytes', value: TEL_BYTES }] })).fetch(:out)
         @creating_system = false
         router = { '$adapter' => 'router.direct', 'config' => { 'system' => system } }
         core('ta_system_set_external_event_router',

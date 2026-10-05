@@ -283,7 +283,9 @@ static void sink_visit(void *self, const ta_tel_entry *entry) {
                            .entered_count = record->entered.count, .dropped = record->dropped };
     uint32_t name = record->event_name.len < sizeof kept->event - 1u ? record->event_name.len
                                                                     : (uint32_t)sizeof kept->event - 1u;
-    memcpy(kept->event, record->event_name.ptr, name);
+    if (name != 0) { /* an empty name has a NULL pointer */
+        memcpy(kept->event, record->event_name.ptr, name);
+    }
     for (uint32_t index = 0; index < record->states.count && index < 8u; index += 1u) {
         kept->states[index] = ta_tel_u32_at(&record->states, index);
     }

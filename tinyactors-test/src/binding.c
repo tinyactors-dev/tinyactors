@@ -648,14 +648,14 @@ bool tat_handle_resolve(tat_bind *bind, jv value, const char *type, void **out) 
     return true;
 }
 
-bool tat_handle_live(const tat_bind *bind, const char *type, const void *ptr) {
+size_t tat_handle_serial(const tat_bind *bind, const char *type, const void *ptr) {
     for (size_t index = bind->handle_count; index > 0; index -= 1) {
         const tat_handle *handle = &bind->handles[index - 1];
         if (handle->live && handle->ptr == ptr && strcmp(handle->type, type) == 0) {
-            return true;
+            return index;
         }
     }
-    return false;
+    return 0;
 }
 
 static jv tat_handle_json(const tat_handle *handle, size_t id) {

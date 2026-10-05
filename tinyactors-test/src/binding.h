@@ -152,8 +152,12 @@ bool tat_handle_resolve(tat_bind *bind, jv value, const char *type, void **out);
 jv tat_handle_register(tat_bind *bind, const char *type, void *ptr);
 jv tat_handle_encode(tat_bind *bind, const char *type, const void *ptr);
 void tat_handle_retire(tat_bind *bind, const void *ptr);
-/* Whether `ptr` is a live handle of `type`: false once it was retired (a destroyed system). */
-bool tat_handle_live(const tat_bind *bind, const char *type, const void *ptr);
+/*
+ * The serial of the live handle of `type` that names `ptr`, or 0 when there is none, as once it was
+ * retired (a destroyed system). A serial is never reused, though the address of a later system may be
+ * the same, so equal serials mean the same object.
+ */
+size_t tat_handle_serial(const tat_bind *bind, const char *type, const void *ptr);
 jv tat_handle_fixture(tat_bind *bind, const char *type);
 jv tat_borrowed_encode(const char *type, const void *ptr);
 
