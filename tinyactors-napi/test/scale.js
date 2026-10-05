@@ -74,6 +74,10 @@ const SAMPLE = 1024;          // actors posted to and inspected, spread over the
 const REPEAT = 8;             // messages per sampled actor per round
 const ROUNDS = 7;             // measured rounds; the median is kept
 const PAGE_SIZE = 1024;
+// Posts between two flushes. Core's pool bounds the host's pending inputs (poolEnvelopes and the
+// admission watermark: about 2,048 by default), and a post beyond the bound throws `queue-full`,
+// so a population-sized burst posts in chunks and lets the pump make room.
+const POST_CHUNK = 1024;
 const BASELINE_CAP = 1_000_000;
 // RSS at startup: each population's RSS per actor is measured from here,
 // since memory freed by a smaller population stays mapped.
@@ -306,9 +310,14 @@ async function measure(population, variant) {
   // Post plus delivery: rounds of REPEAT pings to every sampled actor.
   let sequence = 0;
   const round = async () => {
+    let posted = 0;
     for (let repeat = 0; repeat < REPEAT; repeat += 1) {
       for (const actor of sample) {
         actor.post('ping', payload(sequence += 1));
+        posted += 1;
+        if (posted % POST_CHUNK === 0) {
+          await system.flush();
+        }
       }
     }
     await system.flush();
@@ -363,13 +372,18 @@ async function measure(population, variant) {
   // maximum is the longest pump turn (plus the hooks it calls), not the
   // test's own synchronous post loop.
   const e2eStarted = cpuMicros();
+  const loop = loopDelayMonitor();
+  await new Promise((resolve) => setTimeout(resolve, 5)); // the monitor's first sample
+  let queued = 0;
   for (const page of system.actorIDs({ pageSize: PAGE_SIZE })) {
     for (let at = 0; at < page.length; at += 2) {
       system.post(new ActorID(system, page[at], page[at + 1]), 'work');
+      queued += 1;
+      if (queued % POST_CHUNK === 0) {
+        await system.flush();
+      }
     }
   }
-  const loop = loopDelayMonitor();
-  await new Promise((resolve) => setTimeout(resolve, 5)); // the monitor's first sample
   await system.flush();
   const e2eCost = (cpuMicros() - e2eStarted) / population;
   const loopDelayMs = loop.maxMs();
