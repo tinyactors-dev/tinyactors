@@ -133,12 +133,12 @@ tinyactors-core/
     │                                    queue mark/truncate, two-part reservations; the internal queue becomes
     │                                    B4 plus ordinary and mandatory quotas; capacity errors (4.2–4.5)
     ├── continuation.c / .h     ~   227  stays for pause; written to the park area through D2 (4.5)
-    ├── configuration.c / .h    =    56  only the WORDS kind remains (1.8)
+    ├── configuration.c / .h    ~    56  one layout, words of bits; the kind enum goes (1.8)
     ├── history.c / history.h   =    32
     ├── invoke.c / invoke.h     ~  1294  startup after the macrostep, lifetime tokens, invocation_seq;
     │                                    c2h.invoke/_cancel/_forward instead of the invoker vtable (4.4, 5.2)
     ├── event.c / event.h       ~    42  name and origin as text, not an event-name ID or an io_origin
-    ├── fault.c / fault.h       ~    33  undefined declarations removed (1.8)
+    ├── fault.c / fault.h       -    33  declarations never defined, and what only they used (1.8)
     ├── clock.c / clock.h       =    11
     │
     │   ── the host boundary ──────────────────────────────────────────────────────────────
@@ -326,6 +326,9 @@ tinyactors-core/docs/
     ├── name-resolution.md      -
     ├── io.md                   -        I/O processors are declared types and records (5.2)
     ├── store.md                -        with store.c (1.8)
+    ├── fault.md                -        folded into errors.md (1.8)
+    ├── configuration.md        -        folded into configuration.h (1.8)
+    ├── internal-header.md      -        folded into internal.h (1.8)
     ├── types.md                -        replaced by the units' header comments (1.0)
     ├── routing.md              ~        local mail is envelopes; the router boundary is gone
     ├── event-ordering.md       ~        one run queue in arrival order; deferred lists

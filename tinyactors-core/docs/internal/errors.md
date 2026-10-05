@@ -37,11 +37,21 @@ another runtime mechanism. It has platform event type and is appended to the
 internal queue. Its envelope `invoke_id` remains `TA_INVOKE_ID_NONE`, because the
 processor generated the error rather than receiving it from the invoked child.
 
-A callback should not directly enqueue the error. It reports a `ta_fault`; the interpreter maps operation context to the appropriate event and implements the correct local semantic consequence.
+A callback should not directly enqueue the error. It reports `TA_OP_ERROR`
+and a `ta_fault`; the interpreter, which knows the operation it called, maps
+it to the appropriate event and implements the correct local semantic
+consequence:
 
-`ta_fault_to_internal_event()` receives both send and invocation identity in
-`ta_fault_event_params`. The invocation ID is used to construct the detailed
-event name and perform bookkeeping; it does not populate the resulting event's
-invoke-ID field. Reconstruction uses `TA_FAULT_CONTEXT_INVOKE_UNAVAILABLE`; no
-invoker callback or invoker-supplied fault is required for that core-generated
-error.
+- a condition, value, location, assignment or script failure, or an invalid
+  send target or type found while evaluating, is `error.execution...`;
+- an I/O processor unable to dispatch is `error.communication...`;
+- an invocation's failure to start, cancel or forward is
+  `error.communication...`.
+
+The invocation ID names the detailed `error.communication.invoke.<id>...`
+event; it does not populate the resulting event's invoke-ID field.
+Reconstruction raises `...unavailable` itself: no invoker callback or
+invoker-supplied fault is required for that core-generated error.
+
+Error events are appended to the internal event queue and processed in normal
+FIFO order; they are not exception-like immediate jumps.

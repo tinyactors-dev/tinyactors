@@ -201,8 +201,6 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
 void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
                                     ta_bytes *bytes);
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
-/* Frees cached event blocks until the cache holds no more than its limit
- * (ADR 0069); a limit of 0 frees them all, at teardown. */
 /**
  * The bytes of interpreter scratch a run of `definition` takes (ADR 0092
  * section 3), in `*out`: what the interpreter takes from its structural
@@ -213,7 +211,8 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 void ta_interpreter_render_fault(ta_fault *fault);
-/* Fills the event-block cache to its limit, at creation (ADR 0092 section 3). */
+/* Frees cached event blocks until the cache holds no more than its limit
+ * (ADR 0069); a limit of 0 frees them all, at teardown. */
 void ta_interpreter_block_cache_trim(ta_system *system);
 /* Frees the continuation and sparse state the system keeps for a run that
  * stops (ADR 0070), at teardown. */

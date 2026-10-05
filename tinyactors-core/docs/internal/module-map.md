@@ -14,7 +14,6 @@ are private and hold layouts and internal functions.
 | `hash.h` | FNV-1a (32- and 64-bit) and the fixed 64-bit mixer |
 | `handle.h` | generation handles: a slot and a generation packed in 64 bits, for actor and definition IDs |
 | `layout.h` | the layout builder: several regions in one block, with checked offsets and total |
-| `store.h` | empty compatibility boundary; durability is not a core store API |
 | `arena.h` | transient allocation |
 | `index_pool.h` | fixed-size items addressed by `u32` index in pages that never move: take, give, refill up to a ceiling, trim |
 | `table.h` | open-addressing hash table of `u32` values, keys hashed and compared by the owner; fixed, or growing only on an explicit reserve |
@@ -22,17 +21,16 @@ are private and hold layouts and internal functions.
 | `trie.h` | trie of atoms: paths of atoms interned as nodes keyed by (parent, segment), on a `table.h` hash table; event names are one user |
 | `value.h` | host value ownership helpers |
 | `event.h` | event envelope and queued-event ownership |
-| `fault.h` | plugin fault -> SCXML error event mapping |
 | `scxml_uri.h` | the SCXML target URI grammar, parsed and written (ADR 0044) |
-| `routing.h` | host scheduling/routing of normalized external actor events |
+| `routing.h` | actor-reference helpers and external-delivery ownership (see its file comment) |
 | `clock.h` | caller-supplied logical time |
-| `configuration.h` | active atomic-state set representation |
+| `configuration.h` | the active atomic states, one bit per state ID (see its file comment) |
 | `history.h` | shallow/deep history storage layout |
 | `continuation.h` | paused macrostep interpreter state |
 | `timer.h` | per-owner delayed-send lists and the owner deadline index (ADR 0054) |
-| `datamodel.h` | host data-model adapter/binding/context and inspection root |
-| `io.h` | built-in SCXML and custom I/O processor dispatch |
-| `invoke.h` | invoked-service adapters and active records |
+| `datamodel.h` | the data model's view of its actor (see its file comment) |
+| `io.h` | the I/O processor registry entry and origin rendering (see its file comment) |
+| `invoke.h` | invocation bookkeeping, retirement and restore (see its file comment) |
 | `definition.h` | immutable compiled statechart revision |
 | `builder.h` | mutable construction/compilation front end |
 | `export.h` | rebuilds a compiled definition's authoring spec (`ta_definition_export`) |
@@ -40,6 +38,6 @@ are private and hold layouts and internal functions.
 | `session_image.h` | in-memory interpreter capture/reconstruction |
 | `system.h` | the shared runtime container: tables, registries, run buffers (see its file comment) |
 | `interpreter.h` | SCXML execution engine |
-| `internal.h` | implementation umbrella include |
+| `internal.h` | the umbrella include, in dependency order (see its file comment) |
 
 The module boundaries are intended to stay small, but the exact structs are not public ABI.

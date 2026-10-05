@@ -21,10 +21,10 @@ ROOT = Pathname.new(__dir__).join('../..').expand_path
 RULE = ROOT.join('../mise/ast-grep/rules/header-file-comment.yml').expand_path
 
 ALLOWED = %w[
-  src/address.h src/arena.h src/builder.h src/clock.h src/codec.h src/configuration.h
-  src/datamodel.h src/definition.h src/event.h src/export.h src/fault.h
-  src/history.h src/internal.h src/invoke.h src/io.h src/io_origin.h src/null_datamodel.h
-  src/routing.h src/scxml_uri.h src/session.h src/session_image.h src/store.h src/timer.h
+  src/address.h src/arena.h src/builder.h src/clock.h src/codec.h
+  src/definition.h src/event.h src/export.h
+  src/history.h src/io_origin.h src/null_datamodel.h
+  src/scxml_uri.h src/session.h src/session_image.h src/timer.h
   src/trace.h src/tree.h
 ].freeze
 

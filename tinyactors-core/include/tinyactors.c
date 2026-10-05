@@ -6654,37 +6654,6 @@ TA_PRIVATE inline void ta_trace_write(const ta_trace_sink *sink, const ta_trace_
 
 
 
-typedef enum {
-    TA_FAULT_CONTEXT_CONDITION,
-    TA_FAULT_CONTEXT_VALUE,
-    TA_FAULT_CONTEXT_LOCATION,
-    TA_FAULT_CONTEXT_ASSIGN,
-    TA_FAULT_CONTEXT_SCRIPT,
-    TA_FAULT_CONTEXT_SEND_EVAL,
-    TA_FAULT_CONTEXT_SEND_DISPATCH,
-    TA_FAULT_CONTEXT_INVOKE_START,
-    TA_FAULT_CONTEXT_INVOKE_CANCEL,
-    TA_FAULT_CONTEXT_INVOKE_FORWARD,
-    TA_FAULT_CONTEXT_INVOKE_UNAVAILABLE
-} ta_fault_context;
-
-typedef struct {
-    ta_fault_context context;
-    ta_send_id send_id;
-    /* Used for naming/bookkeeping; does not populate ta_event.invoke_id. */
-    ta_invoke_id invoke_id;
-    /* May be null only for a core-generated invocation-unavailable failure. */
-    const ta_fault *fault;
-    ta_event *out;
-} ta_fault_event_params;
-
-ta_event_name_id ta_fault_event_name(ta_system *system,
-                                     const ta_fault_event_params *params);
-ta_result ta_fault_to_internal_event(ta_system *system,
-                                     const ta_fault_event_params *params);
-
-
-
 /*
  * The SCXML Event I/O Processor target URI grammar (ADR 0044).
  *
@@ -6715,6 +6684,34 @@ TA_PRIVATE void ta_session_text_write(const ta_system *system, ta_text_writer *w
  * from the reference or its live actor, otherwise as a bare number. */
 TA_PRIVATE void ta_session_ref_write(const ta_system *system, ta_text_writer *writer, const ta_actor_ref *ref);
 
+/**
+ * @file routing.h
+ *
+ * # Actor references and external deliveries
+ *
+ * The private helpers for a `ta_actor_ref`, the public reference to a
+ * session: a runtime one (an actor ID) or a named one (an interned
+ * address, ADR 0065). The unit also defines the public
+ * `ta_external_delivery_retain` and `ta_external_delivery_release`, which
+ * a router uses to keep a delivery past its callback.
+ *
+ * ## Contract and memory
+ *
+ * - A named ref holds one reference to its address. Retaining and
+ *   releasing it count that reference, allocate nothing and cannot fail;
+ *   both leave a runtime ref alone.
+ * - Localizing turns a detached address (from a session image) into this
+ *   system's interned one, which may allocate in the address table and
+ *   answers `TA_ERR_NOMEM` when it cannot; detaching copies the address
+ *   into a caller's arena for an image.
+ * - Retaining a delivery retains its destination and its event's data;
+ *   releasing gives both back.
+ *
+ * ## Users
+ *
+ * The actor, session images, the interpreter's sends and the host's
+ * router. The router contract is described in `docs/internal/routing.md`.
+ */
 
 
 /* External delivery and the router boundary are fully public. */
@@ -6746,22 +6743,66 @@ typedef struct {
 TA_PRIVATE inline ta_time ta_clock_now(const ta_clock *clock) { return clock->now; }
 TA_PRIVATE inline void ta_clock_set(ta_clock *clock, ta_time now) { clock->now = now; }
 
+/**
+ * @file configuration.h
+ *
+ * # Configuration
+ *
+ * A `ta_configuration` is an actor's stored SCXML configuration: the set of
+ * its active **atomic** states (final states without children included).
+ * Ancestors are not stored; they follow from the definition. A chart with
+ * parallel regions has several active atomic states at once, so code that
+ * reads a configuration never assumes a single leaf: `In(state)` is true
+ * when any active atomic state is `state` or one of its descendants.
+ *
+ * ## Contract and invariants
+ *
+ * - **One bit per state ID**, in whole 64-bit words (`bitset.h`). The
+ *   compiler sizes every definition's configuration this way and keeps the
+ *   result in a `ta_configuration_layout`: `atomic_state_count` is the
+ *   number of addressable bits (the definition's state count), `bytes`
+ *   the storage in whole words. The compiler refuses a chart whose
+ *   configuration would need more than `UINT16_MAX` bytes. Only atomic states' bits are
+ *   ever set.
+ * - A state ID at or past `atomic_state_count` is outside the
+ *   configuration: it reads as inactive, and setting it changes nothing.
+ * - The interpreter works on the full active set (atomic states and their
+ *   ancestors) while it runs and writes the atomic ones back here between
+ *   macrosteps; a session image restores an actor's configuration through
+ *   the same calls.
+ *
+ * ## Memory
+ *
+ * The unit owns nothing and never allocates, so every function may run
+ * inside a macrostep. `storage` points into the actor's session storage
+ * (the first region of it, zeroed when the actor is made) and lives as long
+ * as the actor; `layout` points at the definition's layout and lives as
+ * long as the definition. The late-binding bits and each history slot are
+ * sized like the configuration.
+ *
+ * ## Complexity
+ *
+ * Testing or setting a state is O(1); clearing is O(bytes).
+ *
+ * ## Failure
+ *
+ * Nothing fails. `config` and its `storage` and `layout` must be valid: an
+ * unchecked precondition, since only the actor's own setup makes one.
+ *
+ * ## Users
+ *
+ * The resident actor (its session storage, `In(state)`, inspection and
+ * restore), the interpreter (loading and storing the active set, the
+ * occupancy counts), the compiler (sizing), and history storage (sized
+ * like it).
+ */
 
-
-typedef enum {
-    TA_CONFIG_SINGLE_LEAF,
-    TA_CONFIG_BITMAP32,
-    TA_CONFIG_BITMAP64,
-    TA_CONFIG_WORDS
-} ta_configuration_kind;
 
 /*
- * The compiler currently always selects TA_CONFIG_WORDS: one bit per state ID,
- * of which only atomic and final states are ever set. `atomic_state_count` is
- * the number of addressable bits, `bytes` the storage size in whole words.
+ * A definition's configuration layout: `atomic_state_count` addressable
+ * bits in `bytes` of whole 64-bit words, aligned to `alignment`.
  */
 typedef struct {
-    ta_configuration_kind kind;
     uint16_t bytes;
     uint16_t alignment;
     uint32_t atomic_state_count;
@@ -6773,11 +6814,24 @@ struct ta_configuration {
     const ta_configuration_layout *layout;
 };
 
+/**
+ * Whether `atomic_state` is active. False for a state ID outside the
+ * layout. Borrows `config`; never allocates; may run inside a macrostep.
+ */
 TA_PRIVATE bool ta_configuration_contains_atomic(const ta_configuration *config,
                                       ta_state_id atomic_state);
+/**
+ * Marks `atomic_state` active or inactive. A state ID outside the layout
+ * changes nothing. Borrows `config`; never allocates; may run inside a
+ * macrostep.
+ */
 TA_PRIVATE void ta_configuration_set_atomic(ta_configuration *config,
                                  ta_state_id atomic_state,
                                  bool active);
+/**
+ * Marks every state inactive by zeroing the storage's `bytes`. Borrows
+ * `config`; never allocates; may run inside a macrostep.
+ */
 TA_PRIVATE void ta_configuration_clear(ta_configuration *config);
 
 
@@ -7162,6 +7216,39 @@ TA_PRIVATE bool ta_timer_next_due(const ta_timer_heap *heap, ta_time *out);
 /* Removes the earliest send and transfers ownership of its values to *out. */
 TA_PRIVATE ta_result ta_timer_pop(ta_timer_heap *heap, ta_delayed_send *out);
 
+/**
+ * @file datamodel.h
+ *
+ * # The data model's view of its actor
+ *
+ * A `ta_dm_host` is what core hands a data model so it can read the
+ * statechart it serves: `In(state)`, the bound event (`_event`), the
+ * session's identity and time, the event's fields and the session's
+ * `_ioprocessors` entries as text, and state names. The public header
+ * declares the data-model interface and the `ta_dm_host_*` functions; this
+ * header defines the view's private layout, `ta_dm_host_impl`, which
+ * resolves every question through the calling actor, so a data model never
+ * holds a pointer to interpreter internals.
+ *
+ * ## Contract and memory
+ *
+ * - Each resident actor owns one `ta_dm_host_impl` and one `ta_dm_host`
+ *   pointing at it, set when the actor is made. Both borrow the system and
+ *   the actor and live as long as the actor.
+ * - A view with no system or actor answers as for none (false, no event,
+ *   runtime ID 0, time 0), and its text and state-name calls answer
+ *   `TA_ERR_INVALID`; text or a state that is not there answers
+ *   `TA_ERR_NOT_FOUND`.
+ * - Text the view renders is written into the render area of the running
+ *   interpreter call and lives until that call ends; the view itself never
+ *   calls the allocator.
+ *
+ * ## Users
+ *
+ * The resident actor, which makes the view, and every data model through
+ * the public `ta_dm_host_*` functions. The data model's contract is in
+ * `docs/internal/datamodel.md` and the `datamodel-*` documents beside it.
+ */
 
 
 typedef struct ta_actor ta_actor;
@@ -7185,6 +7272,39 @@ struct ta_dm_host {
  * docs/internal/datamodel-null-profile.md.
  */
 
+/**
+ * @file io.h
+ *
+ * # I/O processors and origins
+ *
+ * The entry of the system's I/O processor registry (`ta_io_registration`:
+ * a type atom and the processor) and the rendering of an event's origin: as the
+ * URI a chart reads from `_event.origin` and as the processor type it reads
+ * from `_event.origintype` (ADR 0068). The unit also defines the public
+ * origin and scope calls of the I/O processor API.
+ *
+ * ## Contract and memory
+ *
+ * - An actor or invocation origin renders as an SCXML target URI and has
+ *   the SCXML Event I/O Processor's type (or, for a non-SCXML invocation,
+ *   the invocation's type). A processor's origin renders by its class:
+ *   COMPUTED asks the processor's `text` callback, SCOPED and MESSAGE give
+ *   back the URI core stores, as a view.
+ * - Rendered text is written into the caller's `arena`; a stored URI is a
+ *   view that lives as long as its scope or message entry.
+ *
+ * ## Failure
+ *
+ * An origin with nothing to render answers `TA_ERR_NOT_FOUND`; a full
+ * arena answers what the arena answers.
+ *
+ * ## Users
+ *
+ * The data model's host view (`_event.origin`, `_event.origintype`),
+ * session images (which store an origin as text), and the system's
+ * registry. The SCXML Event I/O Processor is described in
+ * `docs/internal/io.md`.
+ */
 
 
 typedef struct {
@@ -7209,6 +7329,55 @@ TA_PRIVATE ta_result ta_io_origin_uri(const ta_system *system, const ta_io_origi
 /* The processor type of an origin; TA_ERR_NOT_FOUND for none. */
 TA_PRIVATE ta_result ta_io_origin_type(const ta_system *system, const ta_origin *origin, ta_str *out);
 
+/**
+ * @file invoke.h
+ *
+ * # Invocations
+ *
+ * The SCXML `<invoke>` machinery of a resident actor: starting an
+ * invocation when its state is entered, cancelling it when the state is
+ * exited, autoforwarding and `<finalize>`, the reports an invoker makes
+ * about its service (an event, done, an error; ADR 0081), and the
+ * `done.invoke.<id>` a child session sends its parent. This header holds
+ * the invoker registry's entry, the private bookkeeping kept beside each
+ * active invocation, and the calls the actor and session images make; the
+ * calls the interpreter makes are declared in `interpreter.h`.
+ *
+ * ## Contract and invariants
+ *
+ * - An actor's active invocations live in its sparse state, as the public
+ *   `ta_active_invoke` array with a `ta_invoke_meta` at the same index.
+ * - The service behind an invocation is runtime-only. A session image
+ *   records the logical invocation (ID, type, declaration), never the
+ *   service; an invocation whose service did not survive the image is
+ *   retired and reported once as
+ *   `error.communication.invoke.<id>.unavailable` (ADR 0038), with no
+ *   fault data and an envelope `invoke_id` of `TA_INVOKE_ID_NONE`.
+ * - An invocation started while its actor replayed (ADR 0089) called no
+ *   invoker: nothing is cancelled or forwarded to it.
+ *
+ * ## Memory
+ *
+ * Invocation records are owned by the actor's sparse state and freed with
+ * it. Restoring an invocation may grow those arrays, and reporting a lost
+ * one may intern its event's name and grow the actor's internal queue; the
+ * retire pair separates that allocation (`ta_invoke_prepare_retire`) from
+ * the work that cannot fail.
+ * The registry entries are owned by the system.
+ *
+ * ## Failure
+ *
+ * The calls answer `ta_result`, `TA_ERR_NOMEM` when memory runs out; a
+ * failed call changes nothing visible: the actor's invocations and queue
+ * are as they were.
+ *
+ * ## Users
+ *
+ * The interpreter, the resident actor (publishing a replaying actor,
+ * restoring one from a checkpoint, event origins), session images, and the
+ * system's invoker registry. The SCXML error events it raises are described
+ * in `docs/internal/errors.md`.
+ */
 
 
 typedef struct {
@@ -7241,12 +7410,6 @@ typedef struct {
  */
 TA_PRIVATE ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id invoke);
 /*
- * Publishing a replaying actor retires its active invocations (ADR 0089
- * section 6). The first makes room for their unavailable events, and
- * changes nothing visible when it fails; the second then queues them and
- * forgets the invocations, and cannot fail. It answers whether it queued one.
- */
-/*
  * A replaying actor restored from a checkpoint (ADR 0091) takes back its
  * active invocations as replayed ones: active in core, with no invoker
  * called, so the services' later events still match them.
@@ -7259,6 +7422,12 @@ typedef struct {
 TA_PRIVATE ta_result ta_invoke_restore(ta_system *system, ta_actor *actor, const ta_invoke_restore_params *params);
 /* Whether `invoke` is one of the actor's active invocations. */
 TA_PRIVATE bool ta_invoke_is_active(const ta_actor *actor, ta_invoke_id invoke);
+/*
+ * Publishing a replaying actor retires its active invocations (ADR 0089
+ * section 6). The first makes room for their unavailable events, and
+ * changes nothing visible when it fails; the second then queues them and
+ * forgets the invocations, and cannot fail. It answers whether it queued one.
+ */
 TA_PRIVATE ta_result ta_invoke_prepare_retire(ta_system *system, ta_actor *actor);
 TA_PRIVATE bool ta_invoke_retire_all(ta_system *system, ta_actor *actor);
 
@@ -8196,9 +8365,6 @@ TA_PRIVATE bool ta_actor_input_time_valid(const ta_system *system, const ta_acto
 /* Moves a replaying actor's clock to a checked `time`, dropping held delayed
  * sends due by then (ADR 0089 section 2); nothing for any other actor. */
 TA_PRIVATE void ta_actor_move_clock(ta_actor *actor, ta_time time);
-/* A replaying actor's clock moved by a record that is not an input (ADR 0090
- * section 7's reducer): TA_ERR_INVALID, TA_ERR_BUSY or TA_ERR_NOT_FOUND as
- * an input's time would be refused. */
 
 /* Materialized effects of an unpublished replacement's bootstrap. */
 TA_PRIVATE ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);
@@ -8217,14 +8383,6 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
 
 
 /* Session images are opaque; struct ta_session_image is private to session_image.c. */
-
-
-
-/*
- * Tinyactors core deliberately defines no persistence-store protocol.  This
- * compatibility module remains empty while durable checkpointing, command
- * sourcing, and storage adapters live in optional higher-level components.
- */
 
 /**
  * @file system.h
@@ -8667,8 +8825,6 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
 TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
                                     ta_bytes *bytes);
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
-/* Frees cached event blocks until the cache holds no more than its limit
- * (ADR 0069); a limit of 0 frees them all, at teardown. */
 /**
  * The bytes of interpreter scratch a run of `definition` takes (ADR 0092
  * section 3), in `*out`: what the interpreter takes from its structural
@@ -8679,7 +8835,8 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
 TA_PRIVATE ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 TA_PRIVATE void ta_interpreter_render_fault(ta_fault *fault);
-/* Fills the event-block cache to its limit, at creation (ADR 0092 section 3). */
+/* Frees cached event blocks until the cache holds no more than its limit
+ * (ADR 0069); a limit of 0 frees them all, at teardown. */
 TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system);
 /* Frees the continuation and sparse state the system keeps for a run that
  * stops (ADR 0070), at teardown. */
@@ -12914,7 +13071,6 @@ TA_API ta_trace_context ta_system_new_trace(ta_system *system) {
     }
     return context;
 }
-
 
 
 
@@ -18416,7 +18572,6 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
                                 TA_PHRASE("the chart has more states than a configuration can hold"));
     }
     definition->configuration = (ta_configuration_layout){
-        .kind = TA_CONFIG_WORDS,
         .bytes = (uint16_t)(words * 8u),
         .alignment = (uint16_t)_Alignof(uint64_t),
         .atomic_state_count = definition->state_count,
@@ -23494,7 +23649,6 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
     }
     return result;
 }
-
 
 
 #define TA_SCXML_IO_URI "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"

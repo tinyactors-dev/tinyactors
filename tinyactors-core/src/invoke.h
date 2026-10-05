@@ -1,8 +1,56 @@
+/**
+ * @file invoke.h
+ *
+ * # Invocations
+ *
+ * The SCXML `<invoke>` machinery of a resident actor: starting an
+ * invocation when its state is entered, cancelling it when the state is
+ * exited, autoforwarding and `<finalize>`, the reports an invoker makes
+ * about its service (an event, done, an error; ADR 0081), and the
+ * `done.invoke.<id>` a child session sends its parent. This header holds
+ * the invoker registry's entry, the private bookkeeping kept beside each
+ * active invocation, and the calls the actor and session images make; the
+ * calls the interpreter makes are declared in `interpreter.h`.
+ *
+ * ## Contract and invariants
+ *
+ * - An actor's active invocations live in its sparse state, as the public
+ *   `ta_active_invoke` array with a `ta_invoke_meta` at the same index.
+ * - The service behind an invocation is runtime-only. A session image
+ *   records the logical invocation (ID, type, declaration), never the
+ *   service; an invocation whose service did not survive the image is
+ *   retired and reported once as
+ *   `error.communication.invoke.<id>.unavailable` (ADR 0038), with no
+ *   fault data and an envelope `invoke_id` of `TA_INVOKE_ID_NONE`.
+ * - An invocation started while its actor replayed (ADR 0089) called no
+ *   invoker: nothing is cancelled or forwarded to it.
+ *
+ * ## Memory
+ *
+ * Invocation records are owned by the actor's sparse state and freed with
+ * it. Restoring an invocation may grow those arrays, and reporting a lost
+ * one may intern its event's name and grow the actor's internal queue; the
+ * retire pair separates that allocation (`ta_invoke_prepare_retire`) from
+ * the work that cannot fail.
+ * The registry entries are owned by the system.
+ *
+ * ## Failure
+ *
+ * The calls answer `ta_result`, `TA_ERR_NOMEM` when memory runs out; a
+ * failed call changes nothing visible: the actor's invocations and queue
+ * are as they were.
+ *
+ * ## Users
+ *
+ * The interpreter, the resident actor (publishing a replaying actor,
+ * restoring one from a checkpoint, event origins), session images, and the
+ * system's invoker registry. The SCXML error events it raises are described
+ * in `docs/internal/errors.md`.
+ */
 #pragma once
 
 #include "datamodel.h"
 #include "event.h"
-#include "fault.h"
 #include "../include/tinyactors.h"
 
 typedef struct {
@@ -35,12 +83,6 @@ typedef struct {
  */
 ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id invoke);
 /*
- * Publishing a replaying actor retires its active invocations (ADR 0089
- * section 6). The first makes room for their unavailable events, and
- * changes nothing visible when it fails; the second then queues them and
- * forgets the invocations, and cannot fail. It answers whether it queued one.
- */
-/*
  * A replaying actor restored from a checkpoint (ADR 0091) takes back its
  * active invocations as replayed ones: active in core, with no invoker
  * called, so the services' later events still match them.
@@ -53,6 +95,12 @@ typedef struct {
 ta_result ta_invoke_restore(ta_system *system, ta_actor *actor, const ta_invoke_restore_params *params);
 /* Whether `invoke` is one of the actor's active invocations. */
 bool ta_invoke_is_active(const ta_actor *actor, ta_invoke_id invoke);
+/*
+ * Publishing a replaying actor retires its active invocations (ADR 0089
+ * section 6). The first makes room for their unavailable events, and
+ * changes nothing visible when it fails; the second then queues them and
+ * forgets the invocations, and cannot fail. It answers whether it queued one.
+ */
 ta_result ta_invoke_prepare_retire(ta_system *system, ta_actor *actor);
 bool ta_invoke_retire_all(ta_system *system, ta_actor *actor);
 
