@@ -78,3 +78,81 @@ void ta_memory_source_init(ta_memory_source *source, ta_bytes bytes) {
 ta_byte_source ta_memory_source_as(ta_memory_source *source) {
     return (ta_byte_source){ .self = source, .v = &ta_memory_source_vtable };
 }
+
+static ta_op_status ta_chain_sink_begin(void *self) {
+    ta_chain_sink *sink = self;
+    const ta_chain *chain = sink->params.chain;
+    if (sink->open || chain->length != 0 || chain->head != 0) {
+        return TA_OP_ERROR;
+    }
+    if (sink->params.reserve != 0) {
+        ta_pool_counts counts;
+        ta_pool_counts_get(sink->params.pool, &counts);
+        if (counts.free < ta_chain_need(sink->params.pool, chain, sink->params.reserve)) {
+            return TA_OP_NOMEM;
+        }
+    }
+    sink->freed = 0;
+    sink->open = true;
+    return TA_OP_OK;
+}
+
+static ta_op_status ta_chain_sink_write(void *self, ta_bytes bytes) {
+    ta_chain_sink *sink = self;
+    if (!sink->open) {
+        return TA_OP_ERROR;
+    }
+    ta_result result = ta_chain_write(sink->params.pool, sink->params.chain,
+                                      (ta_chain_span){ .bytes = bytes.ptr, .length = bytes.len });
+    if (result == TA_OK) {
+        return TA_OP_OK;
+    }
+    return result == TA_ERR_NOMEM ? TA_OP_NOMEM : TA_OP_ERROR;
+}
+
+static void ta_chain_sink_end(void *self, bool keep) {
+    ta_chain_sink *sink = self;
+    if (!sink->open) {
+        return;
+    }
+    sink->open = false;
+    if (!keep) {
+        sink->freed = ta_chain_free(sink->params.pool, sink->params.chain);
+    }
+}
+
+static const ta_byte_sink_vtable ta_chain_sink_vtable = {
+    .begin = ta_chain_sink_begin,
+    .write = ta_chain_sink_write,
+    .end = ta_chain_sink_end,
+};
+
+void ta_chain_sink_init(ta_chain_sink *sink, const ta_chain_sink_params *params) {
+    *sink = (ta_chain_sink){ .params = *params };
+}
+
+ta_byte_sink ta_chain_sink_as(ta_chain_sink *sink) {
+    return (ta_byte_sink){ .self = sink, .v = &ta_chain_sink_vtable };
+}
+
+static ta_op_status ta_chain_source_read(void *self, const ta_byte_read_params *params) {
+    ta_chain_source *source = self;
+    uint32_t left = ta_chain_reader_remaining(&source->reader);
+    uint32_t count = left < params->capacity ? left : params->capacity;
+    if (count != 0) {
+        /* Cannot fail: count <= remaining. */
+        (void)ta_chain_reader_copy(&source->reader, params->buffer, count);
+    }
+    *params->got = count;
+    return TA_OP_OK;
+}
+
+static const ta_byte_source_vtable ta_chain_source_vtable = { .read = ta_chain_source_read };
+
+void ta_chain_source_init(ta_chain_source *source, const ta_pool *pool, const ta_chain *chain) {
+    ta_chain_reader_init(&source->reader, pool, chain);
+}
+
+ta_byte_source ta_chain_source_as(ta_chain_source *source) {
+    return (ta_byte_source){ .self = source, .v = &ta_chain_source_vtable };
+}
