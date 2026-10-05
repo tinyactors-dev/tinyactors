@@ -300,12 +300,89 @@ static void turn_work_is_bounded(void) {
     tah_system_free(system);
 }
 
+/* run_until_quiet takes turns until the kernel is quiet and returns how many it took. `limit` turns without
+ * quiet is a failure the check reports. */
+static uint32_t run_until_quiet(tah_system *system, uint32_t limit) {
+    uint32_t turns = 0;
+    while (!tah_system_quiet(system) && turns < limit) {
+        tah_system_turn(system);
+        tah_system_end_turn(system);
+        turns += 1u;
+    }
+    CHECK(tah_system_quiet(system));
+    return turns;
+}
+
+/* work_counts is what work_per_actor measured: ta_run() calls, not time. */
+typedef struct {
+    uint64_t bootstrap_calls;
+    uint64_t delivery_calls;
+    uint32_t turns;
+} work_counts;
+
+/* work_per_actor spawns `count` idle actors, counts the ta_run() calls that bootstrap them all, then posts
+ * `per_actor` messages to each of `posted` of them and counts the calls that deliver those. These are what a
+ * million-actor run pays per actor and per message: bootstrap makes about one call per actor and delivery about
+ * one per message, and neither may depend on how many other actors exist. */
+static work_counts work_per_actor(uint32_t count, uint32_t posted, uint32_t per_actor) {
+    tah_system *system = NULL;
+    CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
+    ta_scxml_state_spec idle_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle") }, { 0 } };
+    ta_scxml_spec idle = { .name = S("idle"), .states = idle_states };
+    ta_definition_id chart = define(system, &idle);
+    system->budgets.resumes = 10u;
+    static ta_actor_id actors[4096];
+    CHECK(count <= sizeof actors / sizeof actors[0]);
+    for (uint32_t index = 0; index < count; index += 1u) {
+        actors[index] = spawn(system, chart);
+    }
+    work_counts counts = { .turns = run_until_quiet(system, count) };
+    CHECK(settled_count(system, actors, count) == count);
+    counts.bootstrap_calls = system->sched.run_calls_total;
+    CHECK(counts.bootstrap_calls > 0);
+
+    ta_event_name_id ping = 0;
+    CHECK(tah_event_name_intern(system->core, S("ping"), &ping) == TA_OK);
+    ta_event event = { .name = ping, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    for (uint32_t round = 0; round < per_actor; round += 1u) {
+        for (uint32_t index = 0; index < posted; index += 1u) {
+            ta_actor_id target = actors[index * (count / posted)];
+            CHECK(tah_system_post(system, &(tah_message){ .target = target, .event = &event }) == TA_OK);
+        }
+    }
+    (void)run_until_quiet(system, count + posted * per_actor);
+    counts.delivery_calls = system->sched.run_calls_total - counts.bootstrap_calls;
+    tah_system_close(system);
+    CHECK(tah_system_leaked_bytes(system) == 0);
+    tah_system_free(system);
+    return counts;
+}
+
+/* bootstrap_and_delivery_cost_a_constant_number_of_calls compares two populations: the ta_run() calls per
+ * bootstrapped actor and per delivered message must be the same at 512 and at 2048 actors. A pass over the
+ * population, a rebuilt table or a re-queue per call would make the larger one cost more per unit, which is what
+ * scale.js's ratio bound sees as a regression. */
+static void bootstrap_and_delivery_cost_a_constant_number_of_calls(void) {
+    enum { POSTED = 64, EACH = 8, SMALL = 512, LARGE = 2048 };
+    work_counts small = work_per_actor(SMALL, POSTED, EACH);
+    work_counts large = work_per_actor(LARGE, POSTED, EACH);
+    /* Bootstrap: at most about one call per actor, at the same rate at both sizes (one call in a hundred of slack). */
+    CHECK(small.bootstrap_calls <= SMALL + small.turns);
+    CHECK(large.bootstrap_calls <= LARGE + large.turns);
+    CHECK(large.bootstrap_calls * SMALL <= (small.bootstrap_calls + SMALL / 100u) * LARGE);
+    /* Delivery: the calls for POSTED * EACH messages do not depend on the population. */
+    CHECK(small.delivery_calls <= POSTED * EACH + 2u * POSTED);
+    CHECK(large.delivery_calls <= small.delivery_calls + 2u);
+    CHECK(small.delivery_calls <= large.delivery_calls + 2u);
+}
+
 int main(void) {
     table_pages();
     turns();
     action_budget();
     resume_limit();
     turn_work_is_bounded();
+    bootstrap_and_delivery_cost_a_constant_number_of_calls();
     puts("scheduler_test passed");
     return 0;
 }
