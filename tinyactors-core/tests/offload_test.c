@@ -11,6 +11,7 @@
 
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
+#include "test_drive.h"
 
 static int failures;
 
@@ -171,8 +172,7 @@ static void finish(fixture *f) {
 
 static void run(fixture *f, ta_actor_id actor) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f->system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_run(f->system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TA_RUN_STABLE);
 }
 
@@ -189,10 +189,13 @@ static void deliver(fixture *f, ta_actor_id actor, const char *name) {
     CHECK(ta_system_intern_atom(f->system, (ta_str){ .ptr = name, .len = (uint32_t)strlen(name) }, &atom) == TA_OK);
     ta_event_name_id event = 0;
     CHECK(ta_event_name_intern(f->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &event) == TA_OK);
-    CHECK(ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .time = ta_system_time(f->system),
-                                          .actor = actor,
-                                          .event = &(ta_event){ .name = event, .type = TA_EVENT_EXTERNAL } }) == TA_OK);
-    run(f, actor);
+    ta_run_status status = TA_RUN_ERROR;
+    CHECK(test_drive_deliver(f->system,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(f->system), .actor = actor,
+                                                         .event = &(ta_event){ .name = event,
+                                                                              .type = TA_EVENT_EXTERNAL } },
+                             &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(status == TA_RUN_STABLE);
 }
 
 /* True when `state` of the chart is active in `actor`. */

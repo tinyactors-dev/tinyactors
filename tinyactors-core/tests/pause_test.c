@@ -14,6 +14,7 @@
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
 #include "tel_reader.h"
+#include "test_drive.h"
 
 static int failures = 0;
 
@@ -318,7 +319,7 @@ static void start(run *r, uint32_t action_budget) {
 }
 
 /*
- * One resume call; counts pauses, and pauses inside a microstep. A paused
+ * One run; counts pauses, and pauses inside a microstep. A paused
  * actor's inspection reports the key and position of the PAUSED record the
  * call wrote (ADR 0083), or, when its macrostep had not begun and so wrote
  * none, the session alone and nowhere.
@@ -326,9 +327,9 @@ static void start(run *r, uint32_t action_budget) {
 static ta_run_status resume_once(run *r) {
     ta_run_status status = TA_RUN_ERROR;
     long records = control_records;
-    CHECK(ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = r->budget,
-                                                               .status = &status,
-                                                               .action_budget = r->action_budget }) == TA_OK);
+    CHECK(test_drive_run(r->system, r->actor,
+                         &(test_drive_run_params){ .budget = r->budget, .status = &status,
+                                                   .action_budget = r->action_budget }) == TA_OK);
     tel_drain(r->system, control_write, NULL);
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(r->system, r->actor, &inspection) == TA_OK);

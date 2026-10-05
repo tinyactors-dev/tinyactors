@@ -9,6 +9,7 @@
  */
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
+#include "test_drive.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -977,16 +978,16 @@ static void test_history_default_chains(void) {
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system_under_test, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(system_under_test, &(ta_actor_resume_params){ .actor = actor, .budget = 100,
-                                                                        .status = &status }) == TA_OK);
+    CHECK(test_drive_run(system_under_test, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     ta_atom go_atom = 0;
     CHECK(ta_system_intern_atom(system_under_test, S("go"), &go_atom) == TA_OK);
     ta_event_name_id go_name = 0;
     CHECK(ta_event_name_intern(system_under_test, &(ta_atom_list){ .atoms = &go_atom, .count = 1 }, &go_name) == TA_OK);
     ta_event event = { .name = go_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system_under_test, &(ta_actor_deliver_params){ .time = ta_system_time(system_under_test), .actor = actor, .event = &event }) == TA_OK);
-    CHECK(ta_actor_resume(system_under_test, &(ta_actor_resume_params){ .actor = actor, .budget = 100,
-                                                                        .status = &status }) == TA_OK);
+    CHECK(test_drive_deliver(system_under_test,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(system_under_test), .actor = actor,
+                                                         .event = &event },
+                             &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TA_RUN_STABLE);
     ta_state_id x = 0;
     CHECK(ta_definition_find_state(system_under_test, &(ta_definition_find_state_params){ .definition = id,

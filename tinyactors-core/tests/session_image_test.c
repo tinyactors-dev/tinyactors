@@ -20,6 +20,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "test_drive.h"
 
 static int failures;
 
@@ -115,8 +116,7 @@ static fixture start(void) {
     CHECK(ta_system_register_definition(f.system, definition, &id) == TA_OK);
     CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = id, .out = &f.actor }) == TA_OK);
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f.system, &(ta_actor_resume_params){ .actor = f.actor, .budget = 100,
-                                                              .status = &status }) == TA_OK);
+    CHECK(test_drive_run(f.system, f.actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     ta_atom atom = 0;
     CHECK(ta_system_intern_atom(f.system, (ta_str)STR("poke"), &atom) == TA_OK);
     CHECK(ta_event_name_intern(f.system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &f.poke) == TA_OK);
@@ -125,8 +125,7 @@ static fixture start(void) {
 
 static void run_to_stable(fixture *f) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f->system, &(ta_actor_resume_params){ .actor = f->actor, .budget = 100,
-                                                               .status = &status }) == TA_OK);
+    CHECK(test_drive_run(f->system, f->actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TA_RUN_STABLE);
 }
 

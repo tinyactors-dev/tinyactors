@@ -11,6 +11,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "test_drive.h"
 
 static int failures = 0;
 
@@ -120,8 +121,7 @@ static ta_actor_id spawn(ta_system *system, ta_definition_id definition) {
 
 static ta_run_status resume(ta_system *system, ta_actor_id actor) {
     ta_run_status status = TA_RUN_ERROR;
-    ta_result result = ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 1000,
-                                                                          .status = &status });
+    ta_result result = test_drive_run(system, actor, &(test_drive_run_params){ .budget = 1000, .status = &status });
     CHECK(result == TA_OK);
     return status;
 }
@@ -368,8 +368,12 @@ static void test_block_cache_on_demand(void) {
     CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .time = ta_system_time(bare), .actor = actor, .event = &event }) == TA_ERR_NOMEM);
     heap.policy.fail_at = 0;
     CHECK(in_state(bare, actor, "a"));
-    CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .time = ta_system_time(bare), .actor = actor, .event = &event }) == TA_OK);
-    CHECK(resume(bare, actor) == TA_RUN_STABLE);
+    ta_run_status status = TA_RUN_ERROR;
+    CHECK(test_drive_deliver(bare,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(bare), .actor = actor,
+                                                         .event = &event },
+                             &(test_drive_run_params){ .budget = 1000, .status = &status }) == TA_OK);
+    CHECK(status == TA_RUN_STABLE);
     CHECK(in_state(bare, actor, "b"));
     ta_system_destroy(bare);
 }

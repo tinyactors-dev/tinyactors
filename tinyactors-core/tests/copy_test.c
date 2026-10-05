@@ -13,6 +13,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "test_drive.h"
 
 static int failures = 0;
 
@@ -253,8 +254,7 @@ static ta_actor_id start(ta_system *system, const ta_scxml_spec *spec, const ta_
 }
 
 static ta_result resume(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
-    return ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 1000, .status = &status });
+    return test_drive_run(system, actor, &(test_drive_run_params){ .budget = 1000 });
 }
 
 static bool in_state(ta_system *system, ta_actor_id actor, const char *id) {
@@ -419,9 +419,10 @@ static void test_invoke_copies(void) {
     CHECK(ta_event_name_intern(system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &name) == TA_OK);
     ta_value data = box_new(5);
     ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE, .data = data };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
-                                                               .event = &event }) == TA_OK);
-    CHECK(resume(system, actor) == TA_OK);
+    CHECK(test_drive_deliver(system,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
+                                                         .event = &event },
+                             &(test_drive_run_params){ .budget = 1000 }) == TA_OK);
     CHECK(copies == 3);
     CHECK(forwarded.count == 1);
     box *given = forwarded.count == 1 ? box_of(&forwarded.data[0]) : NULL;

@@ -21,6 +21,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "test_drive.h"
 
 static int failures;
 
@@ -273,8 +274,7 @@ static ta_actor_id spawn_idle(ta_system *system, ta_definition_id definition) {
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &actor }) == TA_OK);
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     return actor;
 }
 
@@ -313,9 +313,10 @@ static void test_delivery(void) {
     ta_event warm = { .name = event_name(system, "ping"), .type = TA_EVENT_EXTERNAL,
                       .invoke_id = TA_INVOKE_ID_NONE };
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &warm }) == TA_OK);
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_deliver(system,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
+                                                         .event = &warm },
+                             &(test_drive_run_params){ .status = &status }) == TA_OK);
     long before = heap.live;
 
     /* The actor holds the origin after the host lets go; destroy gives it back. */
@@ -325,8 +326,7 @@ static void test_delivery(void) {
     CHECK(heap.live == before + 1);
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(system, actor, &inspection) == TA_OK);
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TA_RUN_STABLE);
     /* The macrostep is over, and an actor nobody invoked keeps no event
      * between macrosteps (ADR 0069), so the origin is given back. */
@@ -336,8 +336,7 @@ static void test_delivery(void) {
     ta_event stop = message_event(system, request, "stop", long_uri);
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &stop }) == TA_OK);
     ta_event_release(&stop);
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TA_RUN_DONE);
     long finished = heap.live;
     ta_event late = message_event(system, request, "ping", long_uri);

@@ -14,6 +14,7 @@
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
 #include "tel_reader.h"
+#include "test_drive.h"
 
 static int failures;
 
@@ -431,8 +432,7 @@ static void test_a_step_key_names_its_family(void) {
     keyed_without_family = 0;
     ta_actor_id actor = spawn(&f, NULL);
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f.system, &(ta_actor_resume_params){ .actor = actor, .budget = 16, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .budget = 16, .status = &status }) == TA_OK);
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(f.system, actor, &view) == TA_OK);
     CHECK(view.step.family == keyed_family && view.trace.cause.family == keyed_family);

@@ -13,6 +13,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "test_drive.h"
 
 static int failures;
 
@@ -164,8 +165,7 @@ static ta_actor_id spawn_sender(ta_system *system) {
                                                            .out = &actor }) == TA_OK);
     free(name); /* core keeps its own copy of the address */
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     return actor;
 }
 

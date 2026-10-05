@@ -13,6 +13,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "test_drive.h"
 
 static int failures = 0;
 
@@ -150,7 +151,7 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 }
 
 static ta_result resume(ta_system *system, ta_actor_id actor, ta_run_status *status) {
-    return ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = status });
+    return test_drive_run(system, actor, &(test_drive_run_params){ .status = status });
 }
 
 /* ------------------------------------------------------------------------
@@ -191,8 +192,11 @@ static void deep_states(void) {
     ta_run_status status = TA_RUN_ERROR;
     CHECK(resume(system, actor, &status) == TA_OK && status == TA_RUN_STABLE);
     ta_event event = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
-    CHECK(resume(system, actor, &status) == TA_OK && status == TA_RUN_STABLE);
+    CHECK(test_drive_deliver(system,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
+                                                         .event = &event },
+                             &(test_drive_run_params){ .status = &status }) == TA_OK &&
+          status == TA_RUN_STABLE);
     ta_state_id b = 0;
     CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){ .definition = id, .id = STR("b"),
                                                                               .out = &b }) == TA_OK);

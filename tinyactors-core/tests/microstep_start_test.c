@@ -18,6 +18,7 @@
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
 #include "tel_reader.h"
+#include "test_drive.h"
 
 static int failures = 0;
 
@@ -280,6 +281,8 @@ static void open_system(run *r) {
                                                                   .unsampled_kinds = UINT32_MAX }) == TA_OK);
 }
 
+/* One run that answers core's own result: the out-of-memory sweep asserts
+ * TA_ERR_NOMEM from it. */
 static ta_result resume_with(run *r, uint32_t action_budget, bool at_start, ta_run_status *status) {
     ta_result result = ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000,
                                                                              .status = status,
@@ -291,7 +294,10 @@ static ta_result resume_with(run *r, uint32_t action_budget, bool at_start, ta_r
 
 static ta_run_status resume(run *r, uint32_t action_budget, bool at_start) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume_with(r, action_budget, at_start, &status) == TA_OK);
+    CHECK(test_drive_run(r->system, r->actor,
+                         &(test_drive_run_params){ .budget = 1000, .status = &status, .action_budget = action_budget,
+                                                   .pause_at_microstep_start = at_start }) == TA_OK);
+    tel_drain(r->system, sink_write, NULL);
     return status;
 }
 
@@ -564,8 +570,9 @@ static void test_microstep_budget(void) {
     CHECK(inspect(&r).microstep_in_progress);
     clear_log();
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(r.system, &(ta_actor_resume_params){ .actor = r.actor, .budget = 1, .status = &status,
-                                                              .pause_at_microstep_start = true }) == TA_OK);
+    CHECK(test_drive_run(r.system, r.actor,
+                         &(test_drive_run_params){ .budget = 1, .status = &status, .pause_at_microstep_start = true }) ==
+          TA_OK);
     tel_drain(r.system, sink_write, NULL);
     CHECK(status == TA_RUN_PAUSED);
     CHECK(log_is("pi "));

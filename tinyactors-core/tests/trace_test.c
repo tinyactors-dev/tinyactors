@@ -15,6 +15,7 @@
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
 #include "tel_reader.h"
+#include "test_drive.h"
 
 static int failures = 0;
 
@@ -397,6 +398,8 @@ static void spawn(run *r, ta_trace_parent trace) {
     read_tel(r->system);
 }
 
+/* One run that answers core's own result: the out-of-memory sweep asserts
+ * TA_ERR_NOMEM from it. */
 static ta_result resume(run *r, uint32_t budget, ta_run_status *status) {
     ta_result result = ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = budget,
                                                                              .status = status });
@@ -404,9 +407,17 @@ static ta_result resume(run *r, uint32_t budget, ta_run_status *status) {
     return result;
 }
 
+/* One run with this budget, and reads what it wrote. */
+static ta_result run_for(run *r, uint32_t budget, ta_run_status *status) {
+    ta_result result =
+        test_drive_run(r->system, r->actor, &(test_drive_run_params){ .budget = budget, .status = status });
+    read_tel(r->system);
+    return result;
+}
+
 static void settle(run *r) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume(r, 1000, &status) == TA_OK);
+    CHECK(run_for(r, 1000, &status) == TA_OK);
     CHECK(status == TA_RUN_STABLE || status == TA_RUN_DONE);
 }
 
@@ -570,8 +581,8 @@ static void test_pause_and_resume(void) {
     journal_reset();
     deliver(&r, "go", (ta_trace_parent){0});
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume(&r, 1, &status) == TA_OK && status == TA_RUN_PAUSED);
-    CHECK(resume(&r, 1000, &status) == TA_OK && status == TA_RUN_STABLE);
+    CHECK(run_for(&r, 1, &status) == TA_OK && status == TA_RUN_PAUSED);
+    CHECK(run_for(&r, 1000, &status) == TA_OK && status == TA_RUN_STABLE);
     expect_journal("micro 2.1 go t[0] x[0] e[1]; paused 2.1; resumed 2.1; micro 2.2 inner t[2] x[1] e[2,3]; "
                    "micro 2.3 - t[4] x[3] e[4]; micro 2.4 done.state.c t[3] x[4,2] e[5]; ");
     finish(&r);

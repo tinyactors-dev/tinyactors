@@ -19,7 +19,7 @@
  * ```c
  * static void seen(void *self, const ta_trace_record *record) { ... }
  * ...
- * CHECK(ta_actor_resume(system, &params) == TA_OK);
+ * CHECK(test_drive_run(system, actor, NULL) == TA_OK);
  * tel_drain(system, seen, NULL);
  * ```
  *

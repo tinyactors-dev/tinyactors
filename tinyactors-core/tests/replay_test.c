@@ -22,6 +22,7 @@
 
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
+#include "test_drive.h"
 
 static int failures;
 
@@ -311,8 +312,7 @@ static void destroy_system(ta_system *system) {
 
 static ta_run_status run(ta_system *system, ta_actor_id actor) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     return status;
 }
 
@@ -340,9 +340,10 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 static void deliver_at(ta_system *system, ta_actor_id actor, const char *event, ta_time time) {
     ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                            .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered,
-                                                               .time = time }) == TA_OK);
-    CHECK(run(system, actor) == TA_RUN_STABLE);
+    ta_run_status status = TA_RUN_ERROR;
+    CHECK(test_drive_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered, .time = time },
+                             &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(status == TA_RUN_STABLE);
 }
 
 /* An input to a live actor, at the system's time. */

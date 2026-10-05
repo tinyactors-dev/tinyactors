@@ -16,6 +16,7 @@
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
 #include "tel_reader.h"
+#include "test_drive.h"
 
 static int failures = 0;
 
@@ -394,6 +395,8 @@ static void start(run *r) {
     tel_drain(r->system, sink_write, NULL);
 }
 
+/* One run that answers core's own result: the tests of runaways and of
+ * running out of memory assert it. */
 static ta_result resume_with(run *r, uint32_t budget, uint32_t action_budget, ta_run_status *status) {
     ta_result result = ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = budget,
                                                                              .status = status,
@@ -416,9 +419,18 @@ static ta_result destroy(run *r) {
     return result;
 }
 
+/* One run with these budgets, and reads what it wrote. */
+static ta_result run_for(run *r, uint32_t budget, uint32_t action_budget, ta_run_status *status) {
+    ta_result result = test_drive_run(r->system, r->actor,
+                                      &(test_drive_run_params){ .budget = budget, .status = status,
+                                                                .action_budget = action_budget });
+    tel_drain(r->system, sink_write, NULL);
+    return result;
+}
+
 static ta_run_status resume(run *r, uint32_t action_budget) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume_with(r, 1000, action_budget, &status) == TA_OK);
+    CHECK(run_for(r, 1000, action_budget, &status) == TA_OK);
     return status;
 }
 
@@ -768,9 +780,9 @@ static void test_abandon_a_macrostep_that_never_ends(void) {
     CHECK(abandon(&r) == TA_ERR_INVALID); /* idle: nothing to abandon */
     CHECK(offer(&r, "spin", NULL) == TA_OK);
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume_with(&r, 21, 0, &status) == TA_OK);
+    CHECK(run_for(&r, 21, 0, &status) == TA_OK);
     CHECK(status == TA_RUN_PAUSED);
-    CHECK(resume_with(&r, 20, 0, &status) == TA_OK);
+    CHECK(run_for(&r, 20, 0, &status) == TA_OK);
     CHECK(status == TA_RUN_PAUSED);
     ta_actor_inspection inspection = inspect(&r);
     CHECK(inspection.macrostep_in_progress && !inspection.microstep_in_progress);
@@ -821,12 +833,12 @@ static void test_abandon_only_between_microsteps(void) {
     CHECK(offer(&r, "spin", NULL) == TA_OK);
     /* Paused inside l1's <onentry>, which raises. */
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(resume_with(&r, 1000, 1, &status) == TA_OK);
+    CHECK(run_for(&r, 1000, 1, &status) == TA_OK);
     CHECK(status == TA_RUN_PAUSED);
     CHECK(inspect(&r).microstep_in_progress);
     CHECK(abandon(&r) == TA_ERR_BUSY);
     /* A budget of one microstep and no action budget finishes it. */
-    CHECK(resume_with(&r, 1, 0, &status) == TA_OK);
+    CHECK(run_for(&r, 1, 0, &status) == TA_OK);
     CHECK(status == TA_RUN_PAUSED);
     CHECK(!inspect(&r).microstep_in_progress);
     CHECK(abandon(&r) == TA_OK);
@@ -938,7 +950,7 @@ static void test_out_of_memory(void) {
         CHECK(settle(&r, 0) == TA_RUN_STABLE);
         CHECK(offer(&r, "spin", NULL) == TA_OK);
         ta_run_status status = TA_RUN_ERROR;
-        CHECK(resume_with(&r, 7, 0, &status) == TA_OK && status == TA_RUN_PAUSED);
+        CHECK(run_for(&r, 7, 0, &status) == TA_OK && status == TA_RUN_PAUSED);
         uint32_t waiting = inspect(&r).internal_count;
         heap.policy.fail_at = heap.attempts + failing;
         ta_result result = abandon(&r);

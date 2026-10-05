@@ -13,6 +13,7 @@
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
 #include "tel_reader.h"
+#include "test_drive.h"
 
 static int failures;
 
@@ -239,8 +240,7 @@ static ta_definition_id define(ta_system *system, const char *family, const ta_s
 
 static void run(ta_system *system, ta_actor_id actor) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TA_RUN_STABLE);
 }
 
@@ -263,8 +263,12 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 static void deliver(ta_system *system, ta_actor_id actor, const char *event) {
     ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                            .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &delivered }) == TA_OK);
-    run(system, actor);
+    ta_run_status status = TA_RUN_ERROR;
+    CHECK(test_drive_deliver(system,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
+                                                         .event = &delivered },
+                             &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(status == TA_RUN_STABLE);
 }
 
 static ta_system *create_system(router_state *router) {
@@ -721,8 +725,8 @@ static void test_withdrawing_inside_a_paused_macrostep(void) {
     CHECK(ta_actor_withdraw_send(system, actor, t) == TA_ERR_NOT_FOUND);
 
     ta_run_status status = TA_RUN_ERROR;
-    ta_actor_resume_params step = { .actor = actor, .budget = 100, .status = &status, .action_budget = 1 };
-    CHECK(ta_actor_resume(system, &step) == TA_OK);
+    test_drive_run_params step = { .status = &status, .action_budget = 1 };
+    CHECK(test_drive_run(system, actor, &step) == TA_OK);
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK);
     /* One unit ran: the first <send>. */
@@ -732,7 +736,7 @@ static void test_withdrawing_inside_a_paused_macrostep(void) {
     CHECK(view.macrostep_in_progress);
 
     step.action_budget = 0;
-    CHECK(ta_actor_resume(system, &step) == TA_OK && status == TA_RUN_STABLE);
+    CHECK(test_drive_run(system, actor, &step) == TA_OK && status == TA_RUN_STABLE);
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 1);
     CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].event == event_name(system, "tock"));
     /* WITHDRAWN outside the macrostep, then the chart's own CANCELLED in it. */

@@ -56,6 +56,7 @@
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
 #include "tel_reader.h"
+#include "test_drive.h"
 
 static int failures = 0;
 
@@ -283,8 +284,8 @@ static ta_definition_id define(ta_system *system, const ta_scxml_spec *spec) {
 
 static void settle(run *r) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000,
-                                                                .status = &status }) == TA_OK);
+    CHECK(test_drive_run(r->system, r->actor, &(test_drive_run_params){ .budget = 1000, .status = &status }) ==
+          TA_OK);
     CHECK(status == TA_RUN_STABLE || status == TA_RUN_DONE);
 }
 

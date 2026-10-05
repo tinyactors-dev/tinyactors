@@ -10,6 +10,7 @@
 #include "../include/tinyactors.h"
 #include "test_allocator.h"
 #include "tel_reader.h"
+#include "test_drive.h"
 
 static int failures;
 
@@ -203,8 +204,7 @@ static ta_result spawn(fixture *f, ta_definition_id definition, ta_actor_id *out
 
 static ta_run_status run(fixture *f, ta_actor_id actor) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f->system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(test_drive_run(f->system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     return status;
 }
 
@@ -324,9 +324,13 @@ static void test_retire_with_actors(void) {
           TA_OK);
     /* Running grows the system's scratch arena, which it keeps. */
     CHECK(run(&f, warm_actors[0]) == TA_RUN_STABLE);
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = warm_actors[0], .event = &(ta_event){ .name = warm_go, .type = TA_EVENT_EXTERNAL } }) ==
-          TA_OK);
-    CHECK(run(&f, warm_actors[0]) == TA_RUN_STABLE);
+    ta_run_status status = TA_RUN_ERROR;
+    CHECK(test_drive_deliver(f.system,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = warm_actors[0],
+                                                         .event = &(ta_event){ .name = warm_go,
+                                                                              .type = TA_EVENT_EXTERNAL } },
+                             &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(status == TA_RUN_STABLE);
     CHECK(ta_system_retire_definition(f.system, warm) == TA_OK);
     CHECK(ta_actor_destroy(f.system, warm_actors[0]) == TA_OK);
     CHECK(ta_actor_destroy(f.system, warm_actors[1]) == TA_OK);
@@ -362,8 +366,12 @@ static void test_retire_with_actors(void) {
     ta_atom segment = 0;
     CHECK(ta_system_intern_atom(f.system, (ta_str)STR("go"), &segment) == TA_OK);
     CHECK(ta_event_name_intern(f.system, &(ta_atom_list){ .atoms = &segment, .count = 1 }, &go) == TA_OK);
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = first, .event = &(ta_event){ .name = go, .type = TA_EVENT_EXTERNAL } }) == TA_OK);
-    CHECK(run(&f, first) == TA_RUN_STABLE);
+    CHECK(test_drive_deliver(f.system,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = first,
+                                                         .event = &(ta_event){ .name = go,
+                                                                              .type = TA_EVENT_EXTERNAL } },
+                             &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(status == TA_RUN_STABLE);
     CHECK(run(&f, second) == TA_RUN_STABLE);
     ta_actor_inspection actor;
     CHECK(ta_actor_inspect(f.system, first, &actor) == TA_OK);
