@@ -882,6 +882,15 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
         }
         return sjs_vm_fault(vm, "the callback is not a function");
     }
+    /* A closure reads only its parameters: staticjs has no `arguments`.
+     * Arguments past them are not pushed, so not retained and cut again. */
+    frame->pass = UINT32_MAX;
+    frame->entered = false;
+    if (callback.as.heap->type == SJS_HEAP_CLOSURE) {
+        const sjs_closure *c = SJS_AS_CLOSURE(callback);
+        const sjs_function_info *fn = &c->program->functions[c->function];
+        if ((fn->flags & SJS_FUNCTION_REST) == 0) frame->pass = fn->params;
+    }
     switch (frame->builtin) {
     case SJS_METHOD_ARRAY_MAP:
     case SJS_METHOD_ARRAY_FILTER:
@@ -930,10 +939,10 @@ void sjs_loop_free(sjs_vm *vm, vm_frame *frame) {
     }
 }
 
-/* Push the callback and its arguments. */
+/* Push the callback and the arguments it can read. */
 static loop_step call_back(sjs_vm *vm, vm_frame *frame, sjs_values values) {
     const sjs_value *args = values.ptr;
-    uint32_t count = values.count;
+    uint32_t count = values.count < frame->pass ? values.count : frame->pass;
     sjs_value callback = *slot(vm, frame, LOOP_CALLBACK);
     sjs_ref(callback);
     if (!sjs_vm_push(vm, callback)) return LOOP_FAULT;

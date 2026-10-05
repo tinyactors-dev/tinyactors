@@ -115,6 +115,45 @@ Object.entries({a: 1, b: 2}).map(([k, v]) => k + "=" + v)
 --- value
 ["1","2","3"]
 
+=== a callback with a rest parameter sees every argument
+[5, 6].map((...xs) => xs.length + ":" + xs[1])
+--- value
+["3:0","3:1"]
+
+=== a callback with fewer parameters than the arguments
+[[1, 2], [3]].map((xs, i) => xs.length + i)
+--- value
+[2,2]
+
+=== a reduce callback that reads no parameter drops the accumulator
+[[1], [2], [3]].reduce(() => [0], [9])
+--- value
+[0]
+
+=== a reduce callback that reads only the accumulator
+[1, 2, 3].reduce(acc => acc.concat([acc.length]), [])
+--- value
+[0,1,2]
+
+=== a parameter past the arguments is undefined in a callback
+[1].map((x, i, a, extra) => extra)
+--- value
+[undefined]
+
+=== a toSorted comparator with one parameter
+[3, 1, 2].toSorted(a => 0)
+--- value
+[3,1,2]
+
+=== a loop inside a function that calls that function back is refused
+(f => f(f))(g => [1, 2].map(x => x).concat([3].map(g)))
+--- fault already running
+
+=== loops nested inside a callback with callbacks of their own
+(h => [1, 2].map(h))(x => [x].map(y => y + 1)[0] + [0].findIndex(z => true))
+--- value
+[2,3]
+
 === a function that is passed itself is refused when it calls itself
 (g => g(g))(g => g(g))
 --- fault already running

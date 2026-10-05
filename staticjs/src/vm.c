@@ -668,19 +668,25 @@ static bool gather_rest(sjs_vm *vm, call_site site) {
     return sjs_vm_push(vm, sjs_heap_value(SJS_ARRAY, &rest->h));
 }
 
+/* Fault when the closure's function has a frame: staticjs has no recursion. */
+static bool closure_running(sjs_vm *vm, const sjs_closure *closure) {
+    for (uint32_t i = 0; i < vm->frame_count; i++) {
+        const vm_frame *f = &vm->frames[i];
+        if (f->kind == FRAME_CODE && f->program == closure->program && f->function == closure->function) {
+            sjs_vm_fault(vm, "this function is already running: staticjs functions cannot call themselves");
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Enter a closure that closure_running has cleared. */
 static bool enter_closure(sjs_vm *vm, call_site site) {
     uint32_t callee = site.callee;
     uint32_t argc = site.argc;
     uint32_t bottom = site.bottom;
     sjs_closure *closure = SJS_AS_CLOSURE(vm->stack[callee]);
     const sjs_function_info *fn = &closure->program->functions[closure->function];
-    for (uint32_t i = 0; i < vm->frame_count; i++) {
-        const vm_frame *f = &vm->frames[i];
-        if (f->kind == FRAME_CODE && f->program == closure->program && f->function == closure->function) {
-            sjs_vm_fault(vm, "this function is already running: staticjs functions cannot call themselves");
-            return false;
-        }
-    }
     if (vm->frame_count >= vm->frame_capacity) {
         sjs_error_set(&vm->error, fault_position(vm), (sjs_problem){ SJS_ERROR_LIMIT, "the evaluation needs more than max_frames frames" });
         vm->status = VM_FAULT;
@@ -761,6 +767,7 @@ static bool call(sjs_vm *vm, uint32_t argc, uint8_t flags) {
             return false;
         }
     } else if (f.as.heap->type == SJS_HEAP_CLOSURE) {
+        if (closure_running(vm, SJS_AS_CLOSURE(f))) return false;
         return enter_closure(vm, (call_site){ callee, argc, bottom });
     } else if (f.as.heap->type == SJS_HEAP_BUILTIN) {
         sjs_builtin_id id = (sjs_builtin_id)((const sjs_builtin_function *)(const void *)f.as.heap)->id;
@@ -789,6 +796,21 @@ static bool call(sjs_vm *vm, uint32_t argc, uint8_t flags) {
     vm->fuel_used += leaf.cost;
     cut(vm, bottom);
     return sjs_vm_push(vm, leaf.result);
+}
+
+/* Call a loop's callback. A closure is checked once per loop: neither it
+ * nor the frames below the loop change while the loop runs. The callback
+ * is a heap value: sjs_loop_start accepts only callables, and is_callable
+ * excludes internal methods. */
+static bool call_from_loop(sjs_vm *vm, vm_frame *loop) {
+    uint32_t callee = vm->sp - loop->argc - 1u;
+    sjs_value f = vm->stack[callee];
+    if (f.as.heap->type != SJS_HEAP_CLOSURE) return call(vm, loop->argc, 0);
+    if (!loop->entered) {
+        if (closure_running(vm, SJS_AS_CLOSURE(f))) return false;
+        loop->entered = true;
+    }
+    return enter_closure(vm, (call_site){ callee, loop->argc, callee });
 }
 
 static void finish_loop(sjs_vm *vm, vm_frame *f) {
@@ -1456,7 +1478,7 @@ sjs_run sjs_vm_run(sjs_vm *vm, uint64_t fuel) {
         }
         switch (sjs_loop_step(vm, f)) {
         case LOOP_CALL:
-            call(vm, f->argc, 0);
+            call_from_loop(vm, f);
             break;
         case LOOP_DONE:
             finish_loop(vm, f);
