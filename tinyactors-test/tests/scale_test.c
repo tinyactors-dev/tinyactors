@@ -1336,13 +1336,11 @@ static void check_io_origin_allocations(void) {
 }
 
 /* ------------------------------------------------------------------------
- * A router that keeps a delivery and releases it later (ADR 0065). The
- * delivery's named destination and origin are shared handles, so keeping
- * it retains three references and releasing it gives them back: once the
- * system is warm, neither calls the allocator. Before ADR 0065 keeping a
- * delivery copied its destination's strings, two allocations, and releasing
- * it freed them. The sender keeps a far delayed send, so its sparse state
- * stays (ADR 0064) and only the router's own work is counted.
+ * Local mail to a resident named session is an envelope (ADR 0099): once
+ * the system is warm, a send takes an envelope from the pool and the
+ * macrostep end gives it back, so neither calls the allocator. The sender
+ * keeps a far delayed send, so its sparse state stays (ADR 0064) and only
+ * the mail's own work is counted.
  */
 
 static const ta_scxml_state_spec STATES_PINGER[] = {
@@ -1379,36 +1377,16 @@ static const ta_scxml_state_spec STATES_PINGER[] = {
     {0},
 };
 
-typedef struct {
-    ta_external_delivery kept;
-    bool holding;
-    unsigned accepted;
-} keeping_router;
-
-static ta_external_event_submit_status keep_delivery(void *self, const ta_external_event_submit_params *params) {
-    keeping_router *router = self;
-    require(!router->holding, "the router holds one delivery at a time");
-    ta_external_delivery_retain(params->delivery, &router->kept);
-    router->holding = true;
-    router->accepted += 1u;
-    return TA_EXTERNAL_EVENT_ACCEPTED;
-}
-
-static const ta_external_event_router_vtable KEEPING_ROUTER = {.submit = keep_delivery};
-
-static void check_kept_delivery_allocations(void) {
+static void check_mail_envelope_allocations(void) {
     counting_allocator counts = {.backing = tat_libc_allocator()};
     ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
     ta_system *system = NULL;
     require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
     directory dir;
     directory_init(&dir, 16);
-    keeping_router router = {0};
     require(ta_system_set_actor_directory(system, (ta_actor_directory){.self = &dir, .v = &DIRECTORY_VTABLE}) ==
-                    TA_OK &&
-                ta_system_set_external_event_router(
-                    system, (ta_external_event_router){.self = &router, .v = &KEEPING_ROUTER}) == TA_OK,
-            "installing the directory and the router");
+                TA_OK,
+            "installing the directory");
     ta_definition_id pinger = register_revision(system, allocator, &(revision_spec){"pinger", "v1", STATES_PINGER});
     ta_definition_id peer = register_revision(system, allocator, &(revision_spec){"peer", "v1", STATES_V2});
     ta_actor_id sender = 0;
@@ -1427,27 +1405,21 @@ static void check_kept_delivery_allocations(void) {
     ta_event_name_id ping = intern_event(system, (ta_str)STR("ping"));
     /* Warm-up. */
     run_event(system, sender, ping);
-    require(router.holding, "the router kept the delivery");
-    ta_external_delivery_release(&router.kept);
-    router.holding = false;
 
     counts.alloc_calls = 0;
     counts.free_calls = 0;
     for (unsigned round = 0; round < EVENT_ROUNDS; round += 1u) {
         run_event(system, sender, ping);
-        ta_external_delivery_release(&router.kept);
-        router.holding = false;
     }
     double allocs = (double)counts.alloc_calls / EVENT_ROUNDS;
     double frees = (double)counts.free_calls / EVENT_ROUNDS;
-    printf("allocator calls per kept-then-released delivery after warm-up: %.2f allocations and %.2f frees\n",
+    printf("allocator calls per local mail envelope after warm-up: %.2f allocations and %.2f frees\n",
            allocs, frees);
-    require(router.accepted == EVENT_ROUNDS + 1u, "every ping reached the router");
     directory_release(&dir);
     ta_system_destroy(system);
     directory_destroy(&dir);
-    require(counts.live_bytes == 0, "the router system returned every byte it was given");
-    require(allocs == 0.0 && frees == 0.0, "keeping and releasing a delivery calls the allocator (ADR 0065)");
+    require(counts.live_bytes == 0, "the mail system returned every byte it was given");
+    require(allocs == 0.0 && frees == 0.0, "sending local mail as an envelope calls the allocator (ADR 0099)");
 }
 
 int main(int argc, char **argv) {
@@ -1497,7 +1469,7 @@ int main(int argc, char **argv) {
     }
     check_event_allocations();
     check_batched_delivery_allocations();
-    check_kept_delivery_allocations();
+    check_mail_envelope_allocations();
     check_io_origin_allocations();
     /* And every population stays inside the budget the target implies. */
     for (size_t index = 0; index < count; index += 1) {
