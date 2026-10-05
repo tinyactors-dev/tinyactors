@@ -1035,37 +1035,61 @@ bool ta_invoke_retire_all(ta_system *system, ta_actor *actor) {
 }
 
 /*
- * An ERROR report (ADR 0081). The event joins the internal queue whether
- * the session is idle or inside a macrostep, so it never answers BUSY; an
- * idle session starts a macrostep. With `ends`, the invocation is retired
- * only once the event is queued, so a failure changes nothing.
+ * An ERROR report (ADR 0081) is an input like any other: it is admitted as an
+ * envelope of source ERROR (ta_run_admit_report) and applied when ta_run takes
+ * it (ta_invoke_report_take), so it never answers TA_ERR_BUSY and its order
+ * against mail and host input is the order of admission. The one step that
+ * allocates before the admission is interning the event name
+ * error.communication.invoke.<id>.<reason>, which needs the reason's text; it
+ * is idempotent and leaves a name behind on failure. Inside a macrostep (the
+ * invoker's start reports a failure to the session that is starting it) that
+ * intern is a known exception to "allocation only at safe points": the answer
+ * is a clean TA_ERR_NOMEM with nothing queued, and the exception goes with the
+ * name area (ADR 0100, unit 4.2b).
  */
-static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, uint32_t index,
-                                        const ta_invoke_report_params *params) {
+static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, const ta_invoke_report_params *params) {
     const ta_invoke_error *error = params->as.error;
     if (error == NULL || !ta_invoke_reason_valid(error->reason)) {
         return TA_ERR_INVALID;
     }
-    /* An input reaches a session only between macrosteps (ADR 0089
-     * section 4), and the report is not an envelope (it carries a reason
-     * the name area will hold, ADR 0100), so the host keeps it and offers it
-     * again while the session is inside a macrostep or has inputs waiting;
-     * a log can say where it fell. */
-    if (actor->macrostep || actor->queued != 0 || ta_actor_external_event(actor) != NULL) {
-        return TA_ERR_BUSY;
+    ta_run_report report = { .event = { .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE },
+                             .trace = params->trace,
+                             .time = params->time,
+                             .invoke = params->invoke_id,
+                             .ends = error->ends };
+    ta_result result = ta_invoke_error_name(system, params->invoke_id, error->reason, &report.event.name);
+    if (result != TA_OK) {
+        return result;
     }
+    if (error->data != NULL) {
+        report.event.data = *error->data; /* the envelope retains its own reference */
+    }
+    return ta_run_admit_report(system, actor, &report);
+}
+
+/* ta_invoke_report_take: see invoke.h. */
+ta_result ta_invoke_report_take(ta_system *system, ta_actor *actor, ta_envelope *envelope) {
+    int64_t found = ta_invoke_find(actor, envelope->from);
+    if (found < 0) {
+        return TA_ERR_NOT_FOUND;
+    }
+    /* The steps that can fail come first and leave nothing behind: the cell for the started macrostep, then the queue. */
     ta_result result = ta_run_reserve_start(system);
     if (result != TA_OK) {
         return result;
     }
-    result = ta_invoke_raise(system, actor, params->invoke_id, error->reason, error->data, &params->trace);
+    ta_event queued;
+    ta_event_retain(&envelope->event, &queued);
+    result = ta_interpreter_enqueue_internal(system, actor, &queued); /* releases `queued` itself on failure */
     if (result != TA_OK) {
         return result;
     }
-    if (error->ends) {
-        ta_invoke_remove_at(actor->sparse, index);
+    ta_interpreter_raised_outside(system, actor, envelope->event.name, &envelope->trace);
+    if ((envelope->flags & TA_ENVELOPE_REPORT_ENDS) != 0) {
+        ta_invoke_remove_at(actor->sparse, (uint32_t)found);
     }
-    ta_interpreter_start_macrostep(system, actor, &params->trace);
+    ta_actor_move_clock(actor, envelope->due); /* the report's time is now the actor's (ADR 0094) */
+    ta_interpreter_start_macrostep(system, actor, &envelope->trace);
     return TA_OK;
 }
 
@@ -1082,16 +1106,6 @@ bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_inv
     }
     *out = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
     return true;
-}
-
-/* An ERROR report; its time becomes the actor's when it is taken (ADR 0094). */
-static ta_result ta_invoke_error_report(ta_system *system, ta_actor *actor, const ta_invoke_report_params *params) {
-    uint32_t index = (uint32_t)ta_invoke_find(actor, params->invoke_id);
-    ta_result result = ta_invoke_report_error(system, actor, index, params);
-    if (result == TA_OK) {
-        ta_actor_move_clock(actor, params->time); /* the report's time is now the actor's (ADR 0094) */
-    }
-    return result;
 }
 
 ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_params *params) {
@@ -1137,7 +1151,7 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
                                                                   .input = params->input });
         }
         case TA_INVOKE_REPORT_ERROR:
-            return ta_invoke_error_report(system, actor, params);
+            return ta_invoke_report_error(system, actor, params);
         default:
             return TA_ERR_INVALID;
     }

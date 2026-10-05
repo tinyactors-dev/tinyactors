@@ -253,6 +253,24 @@ ta_result ta_mail_prepare(ta_system *system, uint32_t count) {
     return ta_quota_available(&system->envelopes.quota) >= count ? TA_OK : TA_ERR_FULL;
 }
 
+/* ta_mail_hold: see mail.h. */
+void ta_mail_hold(ta_system *system, uint32_t index, ta_address *address) {
+    ta_run_slot *slot = &system->runner.slot;
+    ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+    if (address == NULL) {
+        ta_actor *target = ta_actor_lookup(system, envelope->target);
+        if (target != NULL) {
+            target->queued += 1u; /* the caller checked it could take one more */
+        }
+        ta_ilist_push_back(&slot->outgoing, ta_envelopes_link(&system->envelopes), index);
+        return;
+    }
+    ta_address_retain(address);
+    envelope->state = TA_ENVELOPE_WAITING;
+    envelope->payload.address = address;
+    ta_ilist_push_back(&slot->outgoing_waiting, ta_envelopes_link(&system->envelopes), index);
+}
+
 /* ta_mail_macrostep_ended: see mail.h. */
 void ta_mail_macrostep_ended(ta_system *system) {
     ta_run_slot *slot = &system->runner.slot;
@@ -282,13 +300,37 @@ void ta_mail_macrostep_ended(ta_system *system) {
     (void)ta_envelopes_unreserve(&system->envelopes, &slot->claim);
 }
 
+/*
+ * ta_mail_discard disposes of one envelope of an abandoned macrostep's
+ * outgoing lists, already off the list: mail is freed unseen (a WAITING
+ * envelope gives its address back), and a host input the macrostep admitted is
+ * refused (TA_REFUSED_DISCARDED) so that the host, which holds its token, is
+ * told. A withdrawn input is freed like mail.
+ */
+static void ta_mail_discard(ta_system *system, uint32_t index) {
+    ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+    if (envelope->source != TA_SOURCE_HOST || (envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0) {
+        ta_envelope_release(&system->envelopes, index);
+        return;
+    }
+    if (envelope->state == TA_ENVELOPE_WAITING) {
+        ta_address_release(envelope->payload.address);
+        envelope->payload.address = NULL;
+    }
+    envelope->flags = (uint16_t)TA_REFUSED_DISCARDED;
+    envelope->target = 0;
+    envelope->state = TA_ENVELOPE_DECIDED;
+    ta_run_input_decided(system, envelope);
+    ta_ilist_push_back(&system->runner.refused, ta_envelopes_link(&system->envelopes), index);
+}
+
 /* ta_mail_macrostep_discarded: see mail.h. */
 void ta_mail_macrostep_discarded(ta_system *system) {
     ta_run_slot *slot = &system->runner.slot;
     const ta_ilink *link = ta_envelopes_link(&system->envelopes);
     uint32_t index = 0;
     while ((index = ta_ilist_pop_front(&slot->outgoing, link)) != 0) {
-        const ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+        ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
         /* A withdrawn input gave its place back when it was withdrawn. */
         ta_actor *receiver = (envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0
                                  ? NULL
@@ -296,10 +338,10 @@ void ta_mail_macrostep_discarded(ta_system *system) {
         if (receiver != NULL && receiver->queued != 0) {
             receiver->queued -= 1u;
         }
-        ta_envelope_release(&system->envelopes, index);
+        ta_mail_discard(system, index);
     }
     while ((index = ta_ilist_pop_front(&slot->outgoing_waiting, link)) != 0) {
-        ta_envelope_release(&system->envelopes, index); /* a WAITING envelope gives its address back */
+        ta_mail_discard(system, index);
     }
     (void)ta_envelopes_unreserve(&system->envelopes, &slot->claim);
 }
@@ -354,7 +396,7 @@ static void ta_mail_unwait(ta_envelope *envelope) {
     ta_address_release(envelope->payload.address);
     envelope->payload.address = NULL;
     envelope->state = TA_ENVELOPE_RUNNABLE;
-    envelope->flags = (uint16_t)(envelope->flags & TA_ENVELOPE_WITHDRAWN);
+    envelope->flags = (uint16_t)(envelope->flags & (TA_ENVELOPE_WITHDRAWN | TA_ENVELOPE_REPORT | TA_ENVELOPE_REPORT_ENDS));
     envelope->next = 0;
 }
 

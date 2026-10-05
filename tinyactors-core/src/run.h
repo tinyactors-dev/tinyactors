@@ -26,8 +26,14 @@ typedef struct ta_actor ta_actor;
  *   - An *input* is an admitted event: an envelope on the run queue, from
  *     ta_actor_deliver (the host's), from the mail another session's
  *     macrostep sent (package mail: it joins the queue when that macrostep
- *     ends), or from an event report of ta_actor_report_invoke. A host input
- *     is named by a token ta_run reports it by; mail has none. An operator's
+ *     ends), or from a report of ta_actor_report_invoke (an event or done
+ *     report is a host input; an error report is an input of source ERROR,
+ *     applied when it is taken). A host input
+ *     is named by a token ta_run reports it by; mail has none. A host input
+ *     admitted while a macrostep executes (a data-model callback posting to
+ *     another session) is paid from that macrostep's reserve and waits on its
+ *     outgoing list, so it is ordered with the mail the macrostep sends and
+ *     dropped with it if the macrostep is abandoned. An operator's
  *     event with a transition (ta_actor_transition) is an input that skips
  *     the queue and fills the slot.
  *   - A *started macrostep* is a session that began a macrostep with no event
@@ -68,7 +74,10 @@ typedef struct ta_actor ta_actor;
  *
  * When it allocates. ta_actor_deliver and ta_actor_transition allocate only
  * through the envelope pool's refill, at their own call (the admission safe
- * point), and ta_actor_transition also allocates its jump. ta_run allocates
+ * point; inside a macrostep they allocate nothing), and ta_actor_transition
+ * also allocates its jump. An error report interns its event name at its
+ * call (invoke.c explains the one exception that makes). ta_input_withdraw
+ * and ta_actor_pending never allocate. ta_run allocates
  * before an input is taken: the pool refill that backs the macrostep reserve
  * (so a send never fails because the pool had not grown yet) and the event
  * block its macrostep needs; and as a macrostep always has (the interpreter,
@@ -222,6 +231,33 @@ typedef struct ta_runner {
  * abandoned, withdrawn); other sources do nothing. Never allocates. O(1).
  */
 void ta_run_input_decided(ta_system *system, const ta_envelope *envelope);
+
+/*
+ * ta_run_report is an invocation error report to admit (ta_run_admit_report).
+ * Lifetime: call; the event is retained by the envelope, not moved.
+ */
+typedef struct ta_run_report {
+    ta_event event;       /* error.communication.invoke.<id>.<reason>, with the report's data */
+    ta_trace_parent trace;
+    ta_time time;         /* the report's logical time (ADR 0094) */
+    ta_invoke_id invoke;  /* the invocation it is about */
+    bool ends;            /* retire the invocation when the report is taken */
+} ta_run_report;
+
+/*
+ * ta_run_admit_report queues an invocation error report for `actor` as an
+ * input of source ERROR (ta_actor_report_invoke with TA_INVOKE_REPORT_ERROR),
+ * behind everything admitted before it. Like ta_actor_deliver it never runs
+ * anything; inside a macrostep it pays from the running input's reserve and
+ * waits on the slot's outgoing list. It carries no token: the host does not
+ * ask to hear how it ended. The invocation is looked up again when the report
+ * is taken (ta_invoke_report_take), so it may end meanwhile.
+ * TA_ERR_FULL: the watermark, the session's 65,535 inputs, or a spent
+ * reserve inside a macrostep. TA_ERR_NOMEM: the pool could not grow. Nothing
+ * is retained on any other result than TA_OK. Allocates only in the pool's
+ * refill, at the admission safe point.
+ */
+ta_result ta_run_admit_report(ta_system *system, ta_actor *actor, const ta_run_report *report);
 
 /*
  * ta_run_executing reports whether a macrostep is executing now, inside

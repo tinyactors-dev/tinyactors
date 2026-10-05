@@ -1,6 +1,6 @@
 # ADR 0099: Pending inputs are envelopes in one pool per system
 
-**Status:** Accepted (2026-10-04); sections 1 to 5, 7 and 8 implemented in ring-proto step 4.2a, and in 4.2d the mail, waiting lists, router deletion and the event-block cache (see the implementation notes at the end); partly implemented: the start record and kept event in sparse state, the kernel's admission-only scheduler (4.2d's remainder) and the name area (4.2b) are pending. Supersedes ADR 0011, ADR 0029, ADR 0040, ADR 0055, ADR 0064, ADR 0069, ADR 0093 and ADR 0095, each in the part section 10 names; the rest of each stays. Run-time names in the name area are ADR 0100; delayed sends join the pool in ADR 0101; slots and the chain limit are ADR 0103.
+**Status:** Accepted (2026-10-04); sections 1 to 5, 7 and 8 implemented in ring-proto step 4.2a, in 4.2e the withdrawal of host inputs, admission inside a macrostep and error reports as inputs, and in 4.2d the mail, waiting lists, router deletion and the event-block cache (see the implementation notes at the end); partly implemented: the start record and kept event in sparse state, the kernel's admission-only scheduler (4.2d's remainder) and the name area (4.2b) are pending. Supersedes ADR 0011, ADR 0029, ADR 0040, ADR 0055, ADR 0064, ADR 0069, ADR 0093 and ADR 0095, each in the part section 10 names; the rest of each stays. Run-time names in the name area are ADR 0100; delayed sends join the pool in ADR 0101; slots and the chain limit are ADR 0103.
 **Date:** 2026-10-04
 
 ## Context
@@ -544,3 +544,63 @@ macrostep is abandoned; if the pool has no envelope, the sender hears
 (`ta_invoke_deliver`) choose the same way. Covered by `tests/mail_test.c`
 (`test_exit_mail_outside_a_macrostep`,
 `test_exit_mail_inside_the_parents_macrostep`).
+
+### Implementation notes, 4.2e: host input goes straight into core
+
+Core's part of the unit that ends the kernel's mailboxes (the kernel's part is
+in the kernel's ADRs and napi's ADR 0041). Four additions, all in
+`src/run.{h,c}`, `src/mail.{h,c}`, `src/invoke.{h,c}` and `src/envelope.h`:
+
+- **A token carries its envelope.** `sequence << 25 | envelope index`: the
+  index takes 25 bits because the pool is bounded by 2^24 envelopes (index
+  2^24 itself is the last, so 24 bits would not hold it), the sequence has the
+  other 39. Nothing but `ta_input_withdraw` reads the index.
+  `ta_input_withdraw(token)` marks a waiting host input
+  `TA_ENVELOPE_WITHDRAWN` (the top bit of `flags`) and returns its session's
+  `queued` count at once; the envelope is released unseen where its list next
+  reaches it (the take, a waiting list that moves or fails, a discarded
+  macrostep), so nothing is searched. A waiting list keeps its withdrawn
+  envelopes until it moves, because its first envelope holds the list's load
+  cue; `ta_address_waiting` does not count them, and `ta_waiting_length` (the
+  owner's own question) does. A token whose envelope was released and reused
+  fails the check on `envelope->input`. A new envelope state `DECIDED` marks a
+  host input that waits on the refused list for its notice, which cannot be
+  withdrawn any more.
+- **`ta_counters.host_inputs`** is a gauge of the host inputs (HOST and
+  TRANSITION) admitted and not decided. It goes down where the end is decided
+  (`ta_run_input_decided`: completion, a refusal, an abandon, a withdrawal),
+  not when the notice is written, so a host that admits against it never
+  waits for a notice to see room.
+- **Admission inside a macrostep.** `ta_actor_deliver` and
+  `ta_actor_report_invoke` may be called while `ta_run_executing`: the input
+  is paid from the slot's claim and put on the slot's `outgoing` (or
+  `outgoing_waiting`) list by `ta_mail_hold`, so it is ordered with the
+  macrostep's own mail, invisible until the macrostep ends, and answers
+  `TA_ERR_FULL` when the claim is spent. The watermark does not apply there.
+  An abandoned or runaway macrostep refuses the host inputs it admitted with a
+  REFUSED notice of reason `TA_REFUSED_DISCARDED` carrying their tokens. This
+  is what lets a data-model callback post without a kernel queue to defer to.
+- **An error report is an input.** `ta_actor_report_invoke` with
+  `TA_INVOKE_REPORT_ERROR` no longer answers `TA_ERR_BUSY`: it interns the
+  event name, makes an envelope of source `ERROR` flagged
+  `TA_ENVELOPE_REPORT` (the invocation in `from`, `REPORT_ENDS` for `ends`)
+  and queues it. `ta_run` takes it with `ta_invoke_report_take`, which queues
+  the event, retires the invocation if the report ends it, moves a replaying
+  session's clock and starts a macrostep; that macrostep runs from the
+  started queue in the same call. The invocation is looked up again at the
+  take, so a session that cancelled it meanwhile drops the report. The name's
+  intern is the one allocation that can happen inside a macrostep (a failed
+  start reports from `start`); it goes with the name area (4.2b).
+- **Inspection.** `ta_actor_pending` writes a session's waiting inputs, in the
+  order they will be taken, into the caller's array (no allocation; the cost is
+  the run queue up to the capacity-th match). A TAKEN notice carries the
+  input's `time`.
+- **Not done in core's commits:** `ta_input_watch.mark` still marks only mail
+  and errors; the kernel marks the host inputs it admits itself until it
+  admits them straight into core.
+- **Tests:** `tests/input_test.c` (withdrawal in every state, the gauge,
+  admission and withdrawal inside a macrostep, an abandoned and a runaway
+  macrostep, error reports, `ta_actor_pending`, the notice time) and
+  `tests/input_sweep_test.c` (exhaustive: every allocation of a delivery, of a
+  report's admission and of its take; a withdrawal with every allocation
+  refused).

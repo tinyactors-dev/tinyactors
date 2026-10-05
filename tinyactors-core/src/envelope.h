@@ -152,6 +152,17 @@ typedef enum ta_envelope_state {
 #define TA_ENVELOPE_WITHDRAWN 0x8000u
 
 /*
+ * TA_ENVELOPE_REPORT marks (in ta_envelope.flags) an ERROR-source envelope
+ * that carries an invocation error report (ta_actor_report_invoke): the event
+ * is the error.communication.invoke.<id>.<reason> name with the report's data,
+ * and the invocation it is about is in `from`. TA_ENVELOPE_REPORT_ENDS says
+ * the report retires the invocation when it is taken. Both stay with the
+ * envelope wherever it waits (a waiting list included).
+ */
+#define TA_ENVELOPE_REPORT 0x4000u
+#define TA_ENVELOPE_REPORT_ENDS 0x2000u
+
+/*
  * ta_input_source (tinyactors.h) says where an input came from, which decides
  * how it is settled. An envelope's source is HOST, TRANSITION, MAIL or ERROR;
  * START is the source of a macrostep that has no envelope.
@@ -175,7 +186,7 @@ typedef struct ta_envelope {
     uint8_t source;        /* ta_input_source */
     uint16_t flags;        /* the owner's bits; make clears them */
     uint64_t target;       /* the target session ID, or 0 while the target is the address in `payload` */
-    uint64_t from;         /* the sending session ID, or 0 for the host */
+    uint64_t from;         /* the sending session ID, or 0 for the host; for an invocation error report (TA_ENVELOPE_REPORT) the invoke ID */
     ta_time due;           /* the input time ADR 0094 validates; after take, the macrostep's logical time */
     uint64_t input;        /* the host's token for an admitted input (run.h: sequence << 25 | index), or 0 */
     union {

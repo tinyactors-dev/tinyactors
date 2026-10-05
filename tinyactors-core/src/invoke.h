@@ -2,6 +2,7 @@
 
 #include "datamodel.h"
 #include "event.h"
+#include "envelope.h"
 
 typedef struct {
     ta_atom type;
@@ -72,3 +73,17 @@ bool ta_invoke_retire_all(ta_system *system, ta_actor *actor);
 ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke);
 /* The origin of an event from the actor's active invocation `invoke`; false when there is none. */
 bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out);
+
+/*
+ * ta_invoke_report_take applies the invocation error report in `envelope`
+ * (TA_ENVELOPE_REPORT) to `actor` when ta_run takes it: it queues the
+ * report's event on the session's internal queue (the envelope keeps its own
+ * references), counts and records it as raised outside a macrostep, retires
+ * the invocation if the report ends it, moves a replaying session's clock to
+ * the report's time (ADR 0094) and starts a macrostep under the report's
+ * trace. TA_ERR_NOT_FOUND: the invocation is not active any more; nothing
+ * changed. TA_ERR_NOMEM: the cell for the started macrostep, or the queue,
+ * could not be had; nothing changed (the report can be taken again). Allocates
+ * only for those, at ta_run's take, which is a safe point.
+ */
+ta_result ta_invoke_report_take(ta_system *system, ta_actor *actor, ta_envelope *envelope);

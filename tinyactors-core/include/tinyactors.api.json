@@ -2123,6 +2123,87 @@
         }
       }
     },
+    "ta_actor_pending_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "inputs",
+          "type": {
+            "pointer": {
+              "type": "ta_pending_input"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "count",
+          "shape": "buffer",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "system"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "inputs"
+        },
+        {
+          "name": "count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "inputs"
+        },
+        {
+          "name": "total",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "doc": "How many inputs are queued for the session, the ones not listed included. Null for none."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "inputs": 8,
+            "capacity": 16,
+            "count": 24,
+            "total": 32
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "inputs": 8,
+            "capacity": 12,
+            "count": 16,
+            "total": 20
+          }
+        }
+      }
+    },
     "ta_actor_prepare_params": {
       "kind": "struct",
       "fields": [
@@ -11401,7 +11482,7 @@
     },
     "ta_invoke_error": {
       "kind": "struct",
-      "doc": "An ERROR report (ADR 0081). `reason` is the event name's last token, one token of the host's choosing: not empty, with no '.' and no white space, or the report answers TA_ERR_INVALID and changes nothing. `data`, when set, is retained as the event's data. `ends` also retires the invocation, so its service's later events are ignored (SCXML 6.4.3); a lost service is reason \"unavailable\" with `ends`. Without `ends` the invocation stays active: its events, done.invoke. <id >, autoforwarding and cancellation behave as if no report was made. Like every input, a report reaches the session only between macrosteps (ADR 0089 section 4): inside one (paused by a budget, or holding a delivered event) every kind answers TA_ERR_BUSY and changes nothing, and the host keeps the report and offers it again, as it keeps mail ta_actor_deliver() refused. The idle session takes the event on its internal queue and starts a macrostep under the report's `trace`.",
+      "doc": "An ERROR report (ADR 0081). `reason` is the event name's last token, one token of the host's choosing: not empty, with no '.' and no white space, or the report answers TA_ERR_INVALID and changes nothing. `data`, when set, is retained as the event's data. `ends` also retires the invocation, so its service's later events are ignored (SCXML 6.4.3); a lost service is reason \"unavailable\" with `ends`. Without `ends` the invocation stays active: its events, done.invoke. <id >, autoforwarding and cancellation behave as if no report was made. Like every input, a report reaches the session only between macrosteps (ADR 0089 section 4), and core keeps it until then: it is admitted as an input of source ERROR, behind everything admitted before it, so it never answers TA_ERR_BUSY. When ta_run() takes it the event joins the session's internal queue, `ends` retires the invocation, and a macrostep starts under the report's `trace`. It carries no token and no notice says how it ended; a TAKEN notice (when asked for) lends its event. If the invocation has ended meanwhile (the session cancelled it, or left its state) the report is dropped when it is taken. TA_ERR_FULL (the pool is at its watermark) and TA_ERR_NOMEM are as for ta_actor_deliver(); the reason's event name is interned at the call.",
       "fields": [
         {
           "name": "reason",
@@ -11638,7 +11719,7 @@
           "direction": "out",
           "optional": true,
           "valid_on": "success",
-          "doc": "The token ta_run() reports an EVENT or DONE report by (a COMPLETED or REFUSED notice), or null. An ERROR report is not queued as an input and has no token: *input is left alone."
+          "doc": "The token ta_run() reports an EVENT or DONE report by (a COMPLETED or REFUSED notice), or null. An ERROR report is an input but has no token, because the host does not ask how it ended: *input is left alone."
         },
         {
           "name": "as",
@@ -12106,7 +12187,7 @@
           },
           "shape": "callback",
           "direction": "in",
-          "doc": "start arranges for the service to start and answers TA_OP_OK, or TA_OP_NOMEM when it could not even arrange that (core starts the invocation again later, ADR 0070). A service that then fails to start is reported with an ERROR report (ADR 0089 section 4), which reaches the session between macrosteps like any input. A start that still answers TA_OP_ERROR raises error.execution in the invoking macrostep, as before ADR 0089; that failure is in no host's log, so a replay of that session is not exact. start must not report reentrantly through ta_actor_report_invoke()."
+          "doc": "start arranges for the service to start and answers TA_OP_OK, or TA_OP_NOMEM when it could not even arrange that (core starts the invocation again later, ADR 0070). A service that then fails to start is reported with an ERROR report (ADR 0089 section 4), which reaches the session between macrosteps like any input. A start that still answers TA_OP_ERROR raises error.execution in the invoking macrostep, as before ADR 0089; that failure is in no host's log, so a replay of that session is not exact. start may report an ERROR reentrantly through ta_actor_report_invoke(): the report is queued behind the macrostep that is starting the service. It must not report an EVENT or DONE reentrantly."
         },
         {
           "name": "cancel",
@@ -13653,6 +13734,55 @@
         }
       }
     },
+    "ta_pending_input": {
+      "kind": "struct",
+      "doc": "One input waiting for a session, as ta_actor_pending() lists it. `input` is the token of a host input (the one ta_actor_deliver() gave), and 0 for mail and error reports, which have none. `event` is borrowed until the next call into core.",
+      "fields": [
+        {
+          "name": "input",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "source",
+          "type": {
+            "type": "ta_input_source"
+          }
+        },
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "input": 0,
+            "source": 8,
+            "event": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "input": 0,
+            "source": 8,
+            "event": 12
+          }
+        }
+      }
+    },
     "ta_queued_event": {
       "kind": "struct",
       "fields": [
@@ -13731,9 +13861,14 @@
           "name": "TA_REFUSED_LOAD_UNLOADED",
           "value": 7,
           "symbol": "load_unloaded"
+        },
+        {
+          "name": "TA_REFUSED_DISCARDED",
+          "value": 8,
+          "symbol": "discarded"
         }
       ],
-      "doc": "Why an admitted input was discarded: the target no longer exists (DESTROYED, or unloaded), has finished (DONE), or a replaying actor's input time is no longer valid for it (INVALID). The LOAD_ reasons are the host's answer to a LOAD_NEEDED notice, from ta_address_load_failed(): the address names nothing (LOAD_NOT_FOUND), the loader refused it (LOAD_REJECTED), the load failed (LOAD_FAILED) or did not finish in time (LOAD_TIMED_OUT), or the address is unloaded and nothing would load it (LOAD_UNLOADED).",
+      "doc": "Why an admitted input was discarded: the target no longer exists (DESTROYED, or unloaded), has finished (DONE), or a replaying actor's input time is no longer valid for it (INVALID). The LOAD_ reasons are the host's answer to a LOAD_NEEDED notice, from ta_address_load_failed(): the address names nothing (LOAD_NOT_FOUND), the loader refused it (LOAD_REJECTED), the load failed (LOAD_FAILED) or did not finish in time (LOAD_TIMED_OUT), or the address is unloaded and nothing would load it (LOAD_UNLOADED). DISCARDED: the input was admitted while a macrostep was executing (a callback of the data model posted it) and that macrostep was abandoned or ran away, so the input, which waited for its end, was dropped with the mail it sent.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -14160,6 +14295,13 @@
           "doc": "TAKEN and REFUSED: the input's event, borrowed until the next ta_run() or until the input ends or is abandoned, whichever comes first."
         },
         {
+          "name": "time",
+          "type": {
+            "type": "ta_time"
+          },
+          "doc": "TAKEN: the input's logical time, the `time` it was admitted with (ADR 0094), so a host that records the input records the time the session saw, not the time of the take. Zero for every other notice."
+        },
+        {
           "name": "address",
           "type": {
             "pointer": {
@@ -14189,7 +14331,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 112,
+          "size": 120,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -14200,13 +14342,14 @@
             "ignored": 32,
             "reason": 36,
             "event": 40,
-            "address": 48,
-            "trace": 56,
-            "session": 104
+            "time": 48,
+            "address": 56,
+            "trace": 64,
+            "session": 112
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 104,
+          "size": 120,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -14217,9 +14360,10 @@
             "ignored": 32,
             "reason": 36,
             "event": 40,
-            "address": 44,
-            "trace": 48,
-            "session": 96
+            "time": 48,
+            "address": 56,
+            "trace": 64,
+            "session": 112
           }
         }
       }
@@ -20513,7 +20657,7 @@
     },
     {
       "name": "ta_actor_report_invoke",
-      "doc": "Externally synchronize this call; do not call it reentrantly from start.",
+      "doc": "Externally synchronize this call; do not call it reentrantly from start, except with an ERROR report.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -21205,7 +21349,7 @@
     },
     {
       "name": "ta_actor_deliver",
-      "doc": "Admits an external event for a resident actor (ADR 0099 section 5): the event becomes an envelope on the run queue, behind everything admitted before it, and ta_run() takes it when its turn comes. Nothing runs here, and the actor need not be idle: mail for a session inside a macrostep waits in core, so the host keeps no queue per actor. `input`, when given, receives the token ta_run() reports the input by. The results: - TA_OK: admitted; call ta_run(). - TA_ERR_FULL: the pool of pending inputs is at its admission watermark (TA_PARAM_ADMISSION_WATERMARK). Keep the message and offer it again after ta_run() has made room, or drop it. - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: `actor` names no resident session (unknown, stale or unloaded), or neither an actor nor an address was given. The receiver is gone from here; drop or route the message, or name it by address. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; or, for a replaying actor, a time outside its range. - TA_ERR_NOMEM: the pool could not grow (TA_PARAM_POOL_ENVELOPES is the bound; this is the allocator refusing). Keep the message and try again. On any result but TA_OK nothing is retained and the event is untouched. A malformed event is TA_ERR_INVALID whatever the actor's state. An input that waits for an address counts against the pool like any other, and a session that becomes resident at the address takes its waiting inputs in the order they arrived. A finished actor is TA_ERR_DONE, never TA_ERR_FULL: finishing is permanent, so a host that kept a message would wait forever. A session that is destroyed or finishes after its input was admitted is reported by a REFUSED notice when the input would have been taken.",
+      "doc": "Admits an external event for a resident actor (ADR 0099 section 5): the event becomes an envelope on the run queue, behind everything admitted before it, and ta_run() takes it when its turn comes. Nothing runs here, and the actor need not be idle: mail for a session inside a macrostep waits in core, so the host keeps no queue per actor. `input`, when given, receives the token ta_run() reports the input by. The results: - TA_OK: admitted; call ta_run(). - TA_ERR_FULL: the pool of pending inputs is at its admission watermark (TA_PARAM_ADMISSION_WATERMARK), or the target already holds 65,535 inputs. Keep the message and offer it again after ta_run() has made room, or drop it. This is the host's back-pressure: there is no other queue to put the message in. - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: `actor` names no resident session (unknown, stale or unloaded), or neither an actor nor an address was given. The receiver is gone from here; drop or route the message, or name it by address. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; or, for a replaying actor, a time outside its range. - TA_ERR_NOMEM: the pool could not grow (TA_PARAM_POOL_ENVELOPES is the bound; this is the allocator refusing). Keep the message and try again. On any result but TA_OK nothing is retained and the event is untouched. A malformed event is TA_ERR_INVALID whatever the actor's state.\n\nIt may be called from inside a macrostep (a data-model callback that posts to another session). Nothing may allocate there, so the input is paid from the running macrostep's reserve (TA_PARAM_MACROSTEP_RESERVE, the same envelopes its own mail uses) and waits behind the mail that macrostep has sent; it becomes visible when the macrostep ends, in the order the macrostep made its sends and posts. The watermark does not apply there, and TA_ERR_FULL means the reserve is spent. If the macrostep is abandoned or runs away the input is dropped with its mail and ta_run() reports it with a REFUSED notice (TA_REFUSED_DISCARDED). An input that waits for an address counts against the pool like any other, and a session that becomes resident at the address takes its waiting inputs in the order they arrived. A finished actor is TA_ERR_DONE, never TA_ERR_FULL: finishing is permanent, so a host that kept a message would wait forever. A session that is destroyed or finishes after its input was admitted is reported by a REFUSED notice when the input would have been taken.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -21274,6 +21418,43 @@
           "type": {
             "builtin": "uint64_t"
           }
+        }
+      ]
+    },
+    {
+      "name": "ta_actor_pending",
+      "doc": "Writes the inputs waiting for `actor` into the caller's array, oldest first (the order ta_run() will take them in), at most `capacity` of them; `*count` is how many were written. It looks at the run queue only and changes nothing: it never allocates and costs the length of the queue up to the capacity-th input found. Inputs withdrawn (ta_input_withdraw()) are not listed. Not listed either: mail the running macrostep has sent and inputs it admitted, which are invisible until it ends, and inputs waiting for an address. `*total` counts the session's queued inputs, those included. - TA_OK: written. - TA_ERR_NOT_FOUND: no such session; `*count` is 0. - TA_ERR_INVALID: a null argument, or a capacity with no array.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_pending_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
         }
       ]
     },

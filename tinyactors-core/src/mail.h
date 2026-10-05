@@ -256,10 +256,24 @@ void ta_mail_macrostep_ended(ta_system *system);
  * ta_mail_macrostep_discarded frees the running input's mail unseen, both
  * lists, and gives its claim back: the input was abandoned, ran away, or its
  * session was destroyed. Call it before the slot is cleared. Receivers'
- * `queued` counts fall by one per envelope freed. It never allocates.
- * O(envelopes freed).
+ * `queued` counts fall by one per envelope freed. A host input the macrostep
+ * admitted (ta_mail_hold) is not freed silently: the host holds its token, so
+ * it moves to the runner's refused list with reason TA_REFUSED_DISCARDED and
+ * ta_run writes its REFUSED notice. It never allocates. O(envelopes freed).
  */
 void ta_mail_macrostep_discarded(ta_system *system);
+
+/*
+ * ta_mail_hold puts the made input in `index`, which a macrostep is admitting
+ * (ta_actor_deliver while ta_run_executing), on the running slot's outgoing
+ * lists, in order with the mail that macrostep sends: on `outgoing` when its
+ * target is set, with the target's `queued` raised; on `outgoing_waiting` when
+ * it waits for `address`, which it then holds a reference to. It becomes
+ * visible when the macrostep ends and is refused unseen, with a REFUSED notice
+ * (TA_REFUSED_DISCARDED), if the macrostep is abandoned. The envelope was
+ * paid from the slot's claim, so this never allocates and cannot fail.
+ */
+void ta_mail_hold(ta_system *system, uint32_t index, ta_address *address);
 
 /*
  * ta_mail_recycle reports the undeliverable envelope `index`, which is on no
