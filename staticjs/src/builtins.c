@@ -896,17 +896,26 @@ static sjs_result set_add(sjs_vm *vm, sjs_array **set, sjs_value element) {
     return sjs_vm_fail(vm, r);
 }
 
+/* The fuel of one lookup in a set: one through its index, or under
+ * SJS_INDEX_FROM members; its length when its index failed to allocate and
+ * a lookup scans it. */
+static uint64_t lookup_cost(const sjs_array *set) {
+    return set->index != NULL || set->length < SJS_INDEX_FROM ? 1u : set->length;
+}
+
 static sjs_result set_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     const sjs_array *a = SJS_AS_ARRAY(call->receiver);
     sjs_value x = arg(call, 0);
     if (id == SJS_METHOD_SET_HAS) {
         call->result = sjs_boolean(sjs_set_contains(a, x));
-        call->cost = a->length;
+        call->cost = lookup_cost(a);
         return SJS_OK;
     }
     if (x.kind != SJS_SET) return sjs_vm_fault(vm, "staticjs combines a set only with another set");
     const sjs_array *b = SJS_AS_ARRAY(x);
-    call->cost = a->length * (b->length + 1u);
+    /* Each member of either set is looked up at most once in the other, or
+     * in the result. */
+    call->cost = (uint64_t)a->length * lookup_cost(b) + (uint64_t)b->length * lookup_cost(a);
     if (id == SJS_METHOD_SET_IS_SUBSET_OF) {
         bool subset = a->length <= b->length;
         for (uint32_t i = 0; subset && i < a->length; i++) subset = sjs_set_contains(b, a->items[i]);

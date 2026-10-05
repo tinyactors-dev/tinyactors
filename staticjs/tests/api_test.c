@@ -762,6 +762,40 @@ static void test_fuel_pinned(sjs_context *context) {
     sjs_program_release(program);
 }
 
+/* A set's lookups go through its index, so combining two sets costs fuel in
+ * proportion to their sizes, not their product. */
+static void test_set_fuel_linear(sjs_context *context) {
+    static const sjs_str names[2] = { { "a", 1 }, { "b", 1 } };
+    const char *source = "[a.intersection(b).size, a.union(b).size, a.difference(b).size, a.has(1999)]";
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, names, 2, { NULL, NULL } },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_value sets[2];
+    for (uint32_t s = 0; s < 2; s++) {
+        CHECK(sjs_set_new(context, 2000, &sets[s]) == SJS_OK);
+        for (uint32_t i = 0; i < 2000; i++) CHECK(sjs_set_add(context, &sets[s], sjs_number(i + s * 1000.0)) == SJS_OK);
+    }
+    sjs_vm *vm;
+    sjs_vm_config config = { context };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, sets, 2 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+    /* Three combinations of 2,000 by 2,000 members: 4,000 lookups each. */
+    CHECK(sjs_vm_fuel_used(vm) < 13000);
+    sjs_value v;
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK);
+    char out[64];
+    write_text(context, v, out, sizeof out);
+    CHECK(strcmp(out, "[1000,3000,1000,true]") == 0);
+    sjs_release(context, v);
+    sjs_vm_destroy(vm);
+    sjs_release(context, sets[0]);
+    sjs_release(context, sets[1]);
+    sjs_program_release(program);
+}
+
 static void test_fuel_and_reset(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
@@ -793,6 +827,7 @@ static void test_fuel_and_reset(void) {
     sjs_vm_destroy(vm);
     sjs_program_release(program);
     test_fuel_pinned(context);
+    test_set_fuel_linear(context);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
 }

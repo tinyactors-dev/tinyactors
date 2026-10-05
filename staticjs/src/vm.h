@@ -105,7 +105,7 @@ typedef struct {
     const sjs_value *args;
     uint32_t count;
     sjs_value result;      /* set by the built-in; owned */
-    uint32_t cost;         /* fuel beyond the call's own unit */
+    uint64_t cost;         /* fuel beyond the call's own unit */
 } sjs_leaf_call;
 
 sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
