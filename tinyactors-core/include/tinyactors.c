@@ -7899,6 +7899,13 @@ TA_PRIVATE ta_result ta_io_origin_type(const ta_system *system, const ta_origin 
  *   fault data and an envelope `invoke_id` of `TA_INVOKE_ID_NONE`.
  * - An invocation started while its actor replayed (ADR 0089) called no
  *   invoker: nothing is cancelled or forwarded to it.
+ * - The names core generates for an invocation, `done.invoke.<id>` and
+ *   `error.communication.invoke.<id>.<reason>`, take one segment per dotted
+ *   part of the ID's text (ADR 0049: a segment never holds a dot), so a
+ *   descriptor naming the first part of `s3.7` (`done.invoke.s3`,
+ *   `error.communication.invoke.s3`) matches. A name that would be deeper
+ *   than the system's `eventNameDepth` is not made: the call that needs it
+ *   answers `TA_ERR_INVALID`.
  *
  * ## Memory
  *
@@ -15972,10 +15979,18 @@ TA_API ta_result ta_system_invoke_id_text(const ta_system *system, ta_invoke_id 
     return TA_OK;
 }
 
-/* done.invoke.<id>, one event-name segment per dotted part of the ID text. */
-static ta_result ta_invoke_done_name(ta_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
+/*
+ * The event name under `parent` with one more segment per dotted part of
+ * the invocation ID's text (ADR 0049: a segment never holds a dot), stored
+ * in `*out`; an empty part adds no segment. Builds both done.invoke.<id>
+ * and error.communication.invoke.<id>.<reason>. May allocate: interns each
+ * part and adds the nodes the event-name trie lacks. Answers TA_ERR_INVALID
+ * when the name would be deeper than eventNameDepth, TA_ERR_NOMEM or
+ * TA_ERR_FULL when the tables cannot grow; the nodes of the parts before the
+ * failing one stay in the trie, as every interned name does.
+ */
+static ta_result ta_invoke_id_segments(ta_system *system, ta_invoke_id invoke, ta_event_name_id *name) {
     ta_str text = ta_invoke_id_text(system, invoke);
-    ta_event_name_id name = TA_EVENT_NAME_DONE_INVOKE;
     uint32_t start = 0;
     for (uint32_t index = 0; text.ptr != NULL && index <= text.len; index += 1) {
         if (index < text.len && text.ptr[index] != '.') {
@@ -15986,7 +16001,7 @@ static ta_result ta_invoke_done_name(ta_system *system, ta_invoke_id invoke, ta_
             ta_result result = ta_atom_intern(&system->atoms,
                                               (ta_str){ .ptr = text.ptr + start, .len = index - start }, &atom);
             if (result == TA_OK) {
-                result = ta_trie_child(&system->event_names, (ta_trie_edge){ .parent = name, .segment = atom }, &name);
+                result = ta_trie_child(&system->event_names, (ta_trie_edge){ .parent = *name, .segment = atom }, name);
             }
             if (result != TA_OK) {
                 return result;
@@ -15994,8 +16009,17 @@ static ta_result ta_invoke_done_name(ta_system *system, ta_invoke_id invoke, ta_
         }
         start = index + 1u;
     }
-    *out = name;
     return TA_OK;
+}
+
+/* done.invoke.<id>, one event-name segment per dotted part of the ID text. */
+static ta_result ta_invoke_done_name(ta_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
+    ta_event_name_id name = TA_EVENT_NAME_DONE_INVOKE;
+    ta_result result = ta_invoke_id_segments(system, invoke, &name);
+    if (result == TA_OK) {
+        *out = name;
+    }
+    return result;
 }
 
 /* ------------------------------------------------------------------------
@@ -16870,9 +16894,11 @@ TA_PRIVATE void ta_invoke_release(ta_system *system, ta_actor *actor) {
  * Host reports
  */
 
-/* error.communication.invoke.<id>.<reason> (ADR 0081). The `invoke`
- * segment is the atom system creation interned; the ID and the reason are
- * interned here. */
+/* error.communication.invoke.<id>.<reason> (ADR 0081), the ID split at its
+ * dots as in done.invoke.<id>, so a descriptor naming the ID's first part
+ * matches. The `invoke` segment is the atom system creation interned; the
+ * ID's parts and the reason are interned here. TA_ERR_INVALID when the name
+ * is deeper than eventNameDepth. */
 static ta_result ta_invoke_error_name(ta_system *system, ta_invoke_id invoke, ta_str reason, ta_event_name_id *out) {
     ta_event_name_id name = 0;
     ta_atom reason_atom = 0;
@@ -16883,18 +16909,15 @@ static ta_result ta_invoke_error_name(ta_system *system, ta_invoke_id invoke, ta
                                                .segment = system->invoke_segment },
                                &name);
     }
-    ta_str text = ta_invoke_id_text(system, invoke);
-    ta_atom id_atom = 0;
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, text, &id_atom);
-    }
-    if (result == TA_OK) {
-        result = ta_trie_child(&system->event_names, (ta_trie_edge){ .parent = name, .segment = id_atom }, &name);
+        result = ta_invoke_id_segments(system, invoke, &name);
     }
     if (result == TA_OK) {
         result = ta_trie_child(&system->event_names, (ta_trie_edge){ .parent = name, .segment = reason_atom }, &name);
     }
-    *out = name;
+    if (result == TA_OK) {
+        *out = name;
+    }
     return result;
 }
 

@@ -193,3 +193,15 @@ generated invocation ID, `done.invoke.<id>`,
 `error.communication.invoke.<id>.<reason>`, `#_<invokeid>` and
 session-URI families in `targetexpr`, and the host calls. Decision 7 lands
 before it.
+
+## Implementation notes
+
+- **The invocation error name splits a dotted ID (decision 7), 2026-10-05.**
+  `ta_invoke_error_name` and `ta_invoke_done_name` share one helper that
+  appends a segment per non-empty dotted part of the invocation ID, so
+  `error.communication.invoke.<id>.<reason>` and `done.invoke.<id>` have
+  the same segments for the same ID. A descriptor naming the ID's first
+  part matches both. A name deeper than `eventNameDepth` is refused with
+  `TA_ERR_INVALID`, for an error report as already for a done report, and
+  the session is unchanged. Tested in `tests/name_matching_test.c`
+  (claims 6 and 7); no IRP test or scenario changed.

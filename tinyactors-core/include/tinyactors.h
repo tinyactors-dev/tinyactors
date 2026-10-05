@@ -1464,7 +1464,9 @@ typedef enum {
 /*
  * An ERROR report (ADR 0081). `reason` is the event name's last token, one
  * token of the host's choosing: not empty, with no '.' and no white space,
- * or the report answers TA_ERR_INVALID and changes nothing. `data`, when
+ * or the report answers TA_ERR_INVALID and changes nothing. The ID takes
+ * one segment per dotted part, as in done.invoke.<id>; a name deeper than
+ * the system's eventNameDepth answers TA_ERR_INVALID too. `data`, when
  * set, is retained as the event's data. `ends` also retires the invocation,
  * so its service's later events are ignored (SCXML 6.4.3); a lost service is
  * reason "unavailable" with `ends`. Without `ends` the invocation stays

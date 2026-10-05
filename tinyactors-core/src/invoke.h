@@ -24,6 +24,13 @@
  *   fault data and an envelope `invoke_id` of `TA_INVOKE_ID_NONE`.
  * - An invocation started while its actor replayed (ADR 0089) called no
  *   invoker: nothing is cancelled or forwarded to it.
+ * - The names core generates for an invocation, `done.invoke.<id>` and
+ *   `error.communication.invoke.<id>.<reason>`, take one segment per dotted
+ *   part of the ID's text (ADR 0049: a segment never holds a dot), so a
+ *   descriptor naming the first part of `s3.7` (`done.invoke.s3`,
+ *   `error.communication.invoke.s3`) matches. A name that would be deeper
+ *   than the system's `eventNameDepth` is not made: the call that needs it
+ *   answers `TA_ERR_INVALID`.
  *
  * ## Memory
  *

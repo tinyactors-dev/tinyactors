@@ -31,7 +31,20 @@
  * 5. a `<send typeexpr>` and an `<invoke typeexpr>` whose text names no
  *    processor or invoker fail as error.execution, as before, and leave the
  *    atom table and the trie unchanged, for random text and for text that
- *    is an atom but no type.
+ *    is an atom but no type;
+ * 6. error.communication.invoke.<id>.<reason> takes one segment per dotted
+ *    part of the invocation ID, as done.invoke.<id> does: for an authored
+ *    `pay.ment` and a generated `s3.<platformid>`, the name's segments are
+ *    the parts, it is the node the full dotted text names, it matches
+ *    `error.communication.invoke.*` and a descriptor naming the ID's first
+ *    part (`error.communication.invoke.s3`, `.pay`) and not one that splits
+ *    a part (`.paym`), and a host's ERROR report takes the transition such
+ *    a descriptor selects;
+ * 7. a name deeper than `eventNameDepth` is not made: an ERROR report whose
+ *    error name would be too deep answers TA_ERR_INVALID and changes
+ *    nothing the session sees, as a DONE report whose done.invoke name
+ *    would be too deep does; a shallower name for the same session is
+ *    still made.
  *
  * Paths that still add a run-time name to the tables, and that claim 4
  * and 5 therefore do not cover, because an event carries its name as a
@@ -561,12 +574,315 @@ static void test_typeexpr_looks_up(void) {
     fixture_close(&f);
 }
 
+/* ------------------------------------------------------------------------
+ * Invocation names
+ */
+
+/* An invoker whose services start and stop at once and do nothing else. */
+static ta_op_status svc_start(void *self, const ta_invoker_start_params *params) {
+    (void)self;
+    *params->service_handle = 1;
+    return TA_OP_OK;
+}
+static ta_op_status svc_cancel(void *self, uint64_t service, ta_fault *fault) {
+    (void)self, (void)service, (void)fault;
+    return TA_OP_OK;
+}
+static ta_op_status svc_forward(void *self, const ta_invoker_forward_params *params) {
+    (void)self, (void)params;
+    return TA_OP_OK;
+}
+static const ta_invoker_vtable svc_vtable = { .start = svc_start, .cancel = svc_cancel, .forward = svc_forward };
+
+/* The descriptors of `s3`'s transitions, in document order: the first two
+ * leave for `by_part` and `by_state`, the others stay. */
+static const char *const invoke_descriptors[] = {
+    "error.communication.invoke.pay",
+    "error.communication.invoke.s3",
+    "error.communication.invoke.pay.ment.failed",
+    "error.communication.invoke.*",
+    "error.communication.invoke.pay.ment",
+    "error.communication.invoke.paym",
+    "done.invoke.s3",
+};
+
+#define INVOKE_DESCRIPTORS (sizeof invoke_descriptors / sizeof invoke_descriptors[0])
+
+/* `s3` invokes `pay.ment` and an invocation with a generated ID, both of
+ * type `svc`. */
+static const ta_scxml_spec *invoke_chart(void) {
+    static const ta_str to_by_part[] = { STR("by_part"), {0} };
+    static const ta_str to_by_state[] = { STR("by_state"), {0} };
+    static ta_scxml_transition_spec transitions[INVOKE_DESCRIPTORS + 1u];
+    for (uint32_t index = 0; index < INVOKE_DESCRIPTORS; index += 1u) {
+        transitions[index] = (ta_scxml_transition_spec){ .kind = TA_SCXML_TRANSITION_INTERNAL,
+                                                         .event = text(invoke_descriptors[index]) };
+    }
+    transitions[0].kind = TA_SCXML_TRANSITION_EXTERNAL;
+    transitions[0].targets = to_by_part;
+    transitions[1].kind = TA_SCXML_TRANSITION_EXTERNAL;
+    transitions[1].targets = to_by_state;
+    transitions[INVOKE_DESCRIPTORS] = (ta_scxml_transition_spec){0};
+    static const ta_scxml_invoke_spec invokes[] = {
+        { .kind = TA_SCXML_INVOKE, .id = { .kind = TA_SCXML_ID_LITERAL, .as.literal = STR("pay.ment") },
+          .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("svc") } },
+        { .kind = TA_SCXML_INVOKE, .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("svc") } },
+        {0},
+    };
+    static ta_scxml_state_spec states[4];
+    states[0] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = STR("s3"), .transitions = transitions,
+                                       .invokes = invokes };
+    states[1] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = STR("by_part") };
+    states[2] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = STR("by_state") };
+    states[3] = (ta_scxml_state_spec){0};
+    static ta_scxml_spec spec;
+    spec = (ta_scxml_spec){ .name = STR("invoking"), .states = states };
+    return &spec;
+}
+
+/* A system with `depth` as its eventNameDepth (0: the default), `spec`
+ * registered, and the invoker `svc`. */
+static void invoke_fixture_open(fixture *f, const ta_scxml_spec *spec, uint32_t depth) {
+    memset(f, 0, sizeof *f);
+    ta_allocator allocator = test_allocator_of(&f->heap);
+    ta_param_value params[] = { { TA_PARAM_EVENT_NAME_DEPTH, depth } };
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = params,
+                                                .param_count = depth == 0 ? 0u : 1u },
+                           &f->system) == TA_OK);
+    ta_atom svc = 0;
+    CHECK(ta_system_intern_atom(f->system, STR("svc"), &svc) == TA_OK);
+    CHECK(ta_system_register_invoker(f->system, svc, (ta_invoker){ .v = &svc_vtable }) == TA_OK);
+    ta_definition *compiled = NULL;
+    CHECK(ta_definition_compile_spec(f->system, &(ta_definition_compile_params){
+                                                    .spec = spec,
+                                                    .datamodel = { .v = &dm_vtable },
+                                                    .allocator = allocator,
+                                                    .out = &compiled,
+                                                }) == TA_OK);
+    CHECK(ta_system_register_definition(f->system, compiled, &f->id) == TA_OK);
+    f->definition = ta_definition_lookup(f->system, f->id);
+    CHECK(f->definition != NULL);
+}
+
+static void run_stable(fixture *f, ta_actor_id actor) {
+    ta_run_status status = TA_RUN_ERROR;
+    CHECK(ta_actor_resume(f->system, &(ta_actor_resume_params){ .actor = actor, .budget = 100,
+                                                                .status = &status }) == TA_OK);
+    CHECK(status == TA_RUN_STABLE);
+}
+
+/* Spawns a session and runs it into its first state, which invokes. */
+static ta_actor_id spawn_invoking(fixture *f) {
+    ta_actor_id actor = 0;
+    CHECK(ta_actor_spawn(f->system, &(ta_actor_spawn_params){ .definition = f->id, .out = &actor }) == TA_OK);
+    run_stable(f, actor);
+    return actor;
+}
+
+/* The ID of `actor`'s active invocation whose text is `cstr`, or whose text
+ * starts with it when `prefix`; 0 when there is none. */
+static ta_invoke_id invoke_named(fixture *f, ta_actor_id actor, const char *cstr, bool prefix) {
+    const ta_actor *record = ta_actor_lookup(f->system, actor);
+    const ta_actor_sparse_state *sparse = record == NULL ? NULL : record->sparse;
+    size_t len = strlen(cstr);
+    for (uint32_t index = 0; sparse != NULL && index < sparse->invoke_count; index += 1u) {
+        ta_str id = ta_invoke_id_text(f->system, sparse->invokes[index].id);
+        if ((prefix ? id.len > len : id.len == len) && memcmp(id.ptr, cstr, len) == 0) {
+            return sparse->invokes[index].id;
+        }
+    }
+    return 0;
+}
+
+static bool session_in(fixture *f, ta_actor_id actor, const char *state) {
+    ta_state_id active[4];
+    uint32_t count = 0;
+    CHECK(ta_actor_active_states(f->system, &(ta_actor_active_states_params){ .actor = actor, .states = active,
+                                                                             .capacity = 4, .count = &count }) ==
+          TA_OK);
+    for (uint32_t index = 0; index < count; index += 1u) {
+        ta_state_info info = {0};
+        CHECK(ta_definition_state(f->system, &(ta_definition_state_params){ .definition = f->id,
+                                                                            .state = active[index],
+                                                                            .out = &info }) == TA_OK);
+        if (info.id.len == strlen(state) && memcmp(info.id.ptr, state, info.id.len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static ta_result report_error(fixture *f, ta_actor_id actor, ta_invoke_id invoke) {
+    return ta_actor_report_invoke(f->system, &(ta_invoke_report_params){
+                                                 .actor = actor,
+                                                 .invoke_id = invoke,
+                                                 .kind = TA_INVOKE_REPORT_ERROR,
+                                                 .time = ta_system_time(f->system),
+                                                 .as.error = &(ta_invoke_error){ .reason = STR("failed") },
+                                             });
+}
+
+/* Whether the segments of `name` are, in order, the `count` texts. */
+static bool segments_are(fixture *f, ta_event_name_id name, const char *const *texts, uint32_t count) {
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    if (ta_trie_path(&f->system->event_names, name, segments) != count) {
+        return false;
+    }
+    for (uint32_t index = 0; index < count; index += 1u) {
+        ta_str segment = ta_atom_text(&f->system->atoms, segments[index]);
+        if (segment.len != strlen(texts[index]) || memcmp(segment.ptr, texts[index], segment.len) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Claim 6. */
+static void test_error_name_splits_the_id(void) {
+    fixture f;
+    invoke_fixture_open(&f, invoke_chart(), 0);
+    ta_actor_id actor = spawn_invoking(&f);
+    ta_invoke_id authored = invoke_named(&f, actor, "pay.ment", false);
+    ta_invoke_id generated = invoke_named(&f, actor, "s3.", true);
+    CHECK(authored != 0 && generated != 0);
+    ta_str generated_text = ta_invoke_id_text(f.system, generated);
+    char platform[32] = {0};
+    CHECK(generated_text.len > 3u && generated_text.len - 3u < sizeof platform);
+    memcpy(platform, generated_text.ptr + 3, generated_text.len - 3u);
+    CHECK(strchr(platform, '.') == NULL);
+
+    ta_event_name_id authored_name = 0;
+    ta_event_name_id generated_name = 0;
+    CHECK(ta_invoke_error_name(f.system, authored, STR("failed"), &authored_name) == TA_OK);
+    CHECK(ta_invoke_error_name(f.system, generated, STR("failed"), &generated_name) == TA_OK);
+
+    /* One segment per dotted part. */
+    static const char *const authored_segments[] = { "error", "communication", "invoke", "pay", "ment", "failed" };
+    const char *const generated_segments[] = { "error", "communication", "invoke", "s3", platform, "failed" };
+    CHECK(segments_are(&f, authored_name, authored_segments, 6));
+    CHECK(segments_are(&f, generated_name, generated_segments, 6));
+
+    /* The node the full dotted text names: the full name matches itself. */
+    char full[96];
+    ta_event_name_id dotted = 0;
+    CHECK(ta_trie_intern_dotted(&f.system->event_names, text("error.communication.invoke.pay.ment.failed"),
+                                &dotted) == TA_OK && dotted == authored_name);
+    snprintf(full, sizeof full, "error.communication.invoke.s3.%s.failed", platform);
+    CHECK(ta_trie_intern_dotted(&f.system->event_names, text(full), &dotted) == TA_OK && dotted == generated_name);
+
+    /* The descriptors match by prefix of whole segments. */
+    static const bool authored_matches[INVOKE_DESCRIPTORS] = { true, false, true, true, true, false, false };
+    static const bool generated_matches[INVOKE_DESCRIPTORS] = { false, true, false, true, false, false, false };
+    for (uint32_t index = 0; index < INVOKE_DESCRIPTORS; index += 1u) {
+        bool ok = interned_matches(&f, index, authored_name) == authored_matches[index] &&
+                  interned_matches(&f, index, generated_name) == generated_matches[index];
+        if (!ok) {
+            fprintf(stderr, "%s matched an invocation error name wrongly\n", invoke_descriptors[index]);
+        }
+        CHECK(ok);
+    }
+
+    /* A host's report takes the transition the first part selects. */
+    CHECK(report_error(&f, actor, generated) == TA_OK);
+    run_stable(&f, actor);
+    CHECK(session_in(&f, actor, "by_state"));
+    ta_actor_id other = spawn_invoking(&f);
+    CHECK(report_error(&f, other, invoke_named(&f, other, "pay.ment", false)) == TA_OK);
+    run_stable(&f, other);
+    CHECK(session_in(&f, other, "by_part"));
+    fixture_close(&f);
+}
+
+/* `s3` invokes `a.b.c.d.e`, whose error name has nine segments and its
+ * done.invoke name seven, and `a.b.c.d.e.f.g`, whose done.invoke name has
+ * nine; and `x`, whose names are short. Any error leaves for `failed`, any
+ * done.invoke for `done`. */
+static const ta_scxml_spec *deep_chart(void) {
+    static const ta_str to_failed[] = { STR("failed"), {0} };
+    static const ta_str to_done[] = { STR("done"), {0} };
+    static const ta_scxml_transition_spec transitions[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("error"), .targets = to_failed },
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("done.invoke"), .targets = to_done },
+        {0},
+    };
+    static const ta_scxml_invoke_spec invokes[] = {
+        { .kind = TA_SCXML_INVOKE, .id = { .kind = TA_SCXML_ID_LITERAL, .as.literal = STR("a.b.c.d.e") },
+          .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("svc") } },
+        { .kind = TA_SCXML_INVOKE, .id = { .kind = TA_SCXML_ID_LITERAL, .as.literal = STR("a.b.c.d.e.f.g") },
+          .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("svc") } },
+        { .kind = TA_SCXML_INVOKE, .id = { .kind = TA_SCXML_ID_LITERAL, .as.literal = STR("x") },
+          .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("svc") } },
+        {0},
+    };
+    static const ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("s3"), .transitions = transitions, .invokes = invokes },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("failed") },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("done") },
+        {0},
+    };
+    static const ta_scxml_spec spec = { .name = STR("deep"), .states = states };
+    return &spec;
+}
+
+/* Whether `actor` is idle in `s3` with its three invocations and nothing
+ * queued. */
+static bool untouched(fixture *f, ta_actor_id actor) {
+    const ta_actor *record = ta_actor_lookup(f->system, actor);
+    return record != NULL && !record->macrostep && record->sparse != NULL && record->sparse->invoke_count == 3u &&
+           !ta_interpreter_internal_pending(record) && session_in(f, actor, "s3");
+}
+
+/* Claim 7. */
+static void test_too_deep_names(void) {
+    fixture f;
+    invoke_fixture_open(&f, deep_chart(), 8);
+    ta_actor_id actor = spawn_invoking(&f);
+    ta_invoke_id five = invoke_named(&f, actor, "a.b.c.d.e", false);
+    ta_invoke_id seven = invoke_named(&f, actor, "a.b.c.d.e.f.g", false);
+    ta_invoke_id short_id = invoke_named(&f, actor, "x", false);
+    CHECK(five != 0 && seven != 0 && short_id != 0);
+    CHECK(untouched(&f, actor));
+
+    /* The error name would have nine segments: refused, nothing changes,
+     * whether or not the report ends the invocation. */
+    CHECK(report_error(&f, actor, five) == TA_ERR_INVALID);
+    CHECK(ta_actor_report_invoke(f.system, &(ta_invoke_report_params){
+                                               .actor = actor,
+                                               .invoke_id = five,
+                                               .kind = TA_INVOKE_REPORT_ERROR,
+                                               .time = ta_system_time(f.system),
+                                               .as.error = &(ta_invoke_error){ .reason = STR("x"), .ends = true },
+                                           }) == TA_ERR_INVALID);
+    CHECK(untouched(&f, actor));
+
+    /* So would the done.invoke name of the seven-part ID: refused the same way. */
+    CHECK(ta_actor_report_invoke(f.system, &(ta_invoke_report_params){ .actor = actor,
+                                                                       .invoke_id = seven,
+                                                                       .kind = TA_INVOKE_REPORT_DONE,
+                                                                       .time = ta_system_time(f.system) }) ==
+          TA_ERR_INVALID);
+    CHECK(untouched(&f, actor));
+
+    /* The five-part ID's done.invoke name has seven segments and is made. */
+    ta_event_name_id done = 0;
+    CHECK(ta_invoke_done_name(f.system, five, &done) == TA_OK);
+    CHECK(ta_trie_path(&f.system->event_names, done, (ta_atom[TA_TRIE_MAX_DEPTH]){0}) == 7u);
+
+    /* A short name for the same session is still made and taken. */
+    CHECK(report_error(&f, actor, short_id) == TA_OK);
+    run_stable(&f, actor);
+    CHECK(session_in(&f, actor, "failed"));
+    fixture_close(&f);
+}
+
 int main(void) {
     test_generated_prefixes();
     test_worked_examples();
     test_same_answers_as_the_trie();
     test_random_names_leave_no_trace();
     test_typeexpr_looks_up();
+    test_error_name_splits_the_id();
+    test_too_deep_names();
     if (failures != 0) {
         fprintf(stderr, "name_matching_test: %d failure(s)\n", failures);
         return 1;
