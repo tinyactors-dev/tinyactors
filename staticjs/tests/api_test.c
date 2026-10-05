@@ -1388,15 +1388,17 @@ static void test_no_shapes(void) {
     compiled without = compile_counting(off, source);
     compiled by_default = compile_counting(unsaid, source);
     CHECK(strcmp(with.out, "[1,2]") == 0 && strcmp(without.out, with.out) == 0);
-    /* The matcher's records: one allocation. Its text fits in itself. */
-    CHECK(with.allocations == without.allocations + 1);
+    /* The matcher's records: two allocations, as the comparator's marker
+     * and its two keys outgrow the first (src/matcher.c,
+     * MATCHER_FIRST_RECORDS). Its text fits in itself. */
+    CHECK(with.allocations == without.allocations + 2);
     CHECK(by_default.allocations == with.allocations);
 }
 
 /* The shapes' C paths (docs/matcher.md, sections 7 and 11): toSorted with
- * a COMPARE_BY_KEY or a COMPARE_NUMERIC comparator, and map with a PLUCK
- * callback. A run of one
- * source, with shapes or without, whole and then one unit of fuel at a time:
+ * a COMPARE_BY_KEY or a COMPARE_NUMERIC comparator, map with a PLUCK
+ * callback, and the predicate loops with a KEY_COMPARE or an
+ * ELEMENT_COMPARE callback. A run of one source, with shapes or without, whole and then one unit of fuel at a time:
  * its value or its fault ("fault LINE:COLUMN message"), the fuel it used and
  * how often it paused. */
 typedef struct {
@@ -1484,6 +1486,25 @@ static void test_shape_paths(void) {
     CHECK(strcmp(on.out, "[0,1,2,3]") == 0 && strcmp(off.out, on.out) == 0);
     CHECK(off.fuel == 40 && on.fuel == 20 && off.fuel - on.fuel == 5 * (5 - 1));
     CHECK(off.pauses == 39 && on.pauses == 39 - 5 * 4);
+    /* Four elements of a filter: 6 units each in bytecode (the step,
+     * TAKE_LOCAL, GET_MEMBER, NUMBER_, BINARY, RETURN), 2 in C (the step
+     * and a lookup), which is one pause. */
+    const char *filter = "[{k: 3}, {k: 1}, {k: 0}, {k: 4}].filter(x => x.k > 2)";
+    on = run_shaped((shaped_source){ filter, false, SJS_LIMITS_DEFAULT });
+    off = run_shaped((shaped_source){ filter, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "[{\"k\":3},{\"k\":4}]") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 43 && on.fuel == 27 && off.fuel - on.fuel == 4 * (6 - 2));
+    CHECK(off.pauses == 42 && on.pauses == 42 - 4 * 5);
+    /* some, answered at its third element: 5 units each in bytecode (the
+     * step, TAKE_LOCAL, NUMBER_, BINARY, RETURN), 1 in C; and the bytecode
+     * reads the last answer in a step of its own, where C finishes in the
+     * step that decides. */
+    const char *some = "[1, 2, 3, 4].some(x => x === 3)";
+    on = run_shaped((shaped_source){ some, false, SJS_LIMITS_DEFAULT });
+    off = run_shaped((shaped_source){ some, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "true") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 30 && on.fuel == 17 && off.fuel - on.fuel == 3 * (5 - 1) + 1);
+    CHECK(off.pauses == 29 && on.pauses == 29 - 3 * 4 - 1);
     /* A fault after C steps: where the bytecode faults, for less fuel. */
     expect_same_both_ways("[{k: 2}, {k: 1}, {k: 4},\n {j: 3}].toSorted((a, b) =>\n a.k - b.k)", SJS_LIMITS_DEFAULT,
                           "fault 3:6 arithmetic in staticjs is on numbers");
@@ -1491,6 +1512,12 @@ static void test_shape_paths(void) {
                           "fault 2:4 cannot read a property of null");
     expect_same_both_ways("[4, 3, 2, 1,\n \"0\"].toSorted((a, b) =>\n a - b)", SJS_LIMITS_DEFAULT,
                           "fault 3:4 arithmetic in staticjs is on numbers");
+    expect_same_both_ways("[{k: 2}, {k: 1}, null].filter(x =>\n x.k > 0)", SJS_LIMITS_DEFAULT,
+                          "fault 2:4 cannot read a property of null");
+    expect_same_both_ways("[{k: 2}, {k: 1}, {k: \"a\"}].every(x =>\n 0 < x.k)", SJS_LIMITS_DEFAULT,
+                          "fault 2:4 staticjs compares two numbers or two strings");
+    expect_same_both_ways("[{}, {toString: 2}].findLast(x =>\n x.toString === 1)", SJS_LIMITS_DEFAULT,
+                          "fault 2:4 staticjs objects have no prototype");
 
     /* max_stack: a C step succeeds only where the bytecode has room for
      * what it pushes. The comparator's frame sits on the loop's five slots
@@ -1533,6 +1560,37 @@ static void test_shape_paths(void) {
         limits.max_stack = max_stack;
         expect_same_both_ways("[{k: 2}, {k: 1}].map(x => x.k)", limits, map_stack[max_stack - 5]);
     }
+    /* A predicate's frame has one slot; it pushes x.k (or x) and the
+     * literal, in either order: the seventh and the eighth value. With 5
+     * the frame cannot be entered, with 6 the first push does not fit, with
+     * 7 the second does not. */
+    static const struct {
+        const char *source;
+        const char *outcomes[5];
+    } predicate_stack[] = {
+        { "[{k: 2}, {k: 1}].filter(x => x.k === 1)",
+          { "fault 1:24 the evaluation needs more than max_stack values",
+            "fault 1:30 the evaluation needs more than max_stack values",
+            "fault 1:38 the evaluation needs more than max_stack values", "[{\"k\":1}]", "[{\"k\":1}]" } },
+        { "[{k: 2}, {k: 1}].filter(x => 1 === x.k)",
+          { "fault 1:24 the evaluation needs more than max_stack values",
+            "fault 1:30 the evaluation needs more than max_stack values",
+            "fault 1:36 the evaluation needs more than max_stack values", "[{\"k\":1}]", "[{\"k\":1}]" } },
+        { "[2, 1].findIndex(x => x < 2)",
+          { "fault 1:17 the evaluation needs more than max_stack values",
+            "fault 1:23 the evaluation needs more than max_stack values",
+            "fault 1:27 the evaluation needs more than max_stack values", "1", "1" } },
+        { "[2, 1].findIndex(x => 2 > x)",
+          { "fault 1:17 the evaluation needs more than max_stack values",
+            "fault 1:23 the evaluation needs more than max_stack values",
+            "fault 1:27 the evaluation needs more than max_stack values", "1", "1" } },
+    };
+    for (uint32_t i = 0; i < sizeof predicate_stack / sizeof predicate_stack[0]; i++) {
+        for (uint32_t max_stack = 5; max_stack <= 9; max_stack++) {
+            limits.max_stack = max_stack;
+            expect_same_both_ways(predicate_stack[i].source, limits, predicate_stack[i].outcomes[max_stack - 5]);
+        }
+    }
     /* max_frames: the program, the loop, and the callback the C path
      * enters as the bytecode's first call would. */
     limits = SJS_LIMITS_DEFAULT;
@@ -1545,6 +1603,11 @@ static void test_shape_paths(void) {
                               max_frames < 3 ? "fault 1:16 the evaluation needs more than max_frames frames" : "[1,2]");
         expect_same_both_ways("[{k: 2}, {k: 1}].map(x => x.k)", limits,
                               max_frames < 3 ? "fault 1:21 the evaluation needs more than max_frames frames" : "[2,1]");
+        expect_same_both_ways("[{k: 2}, {k: 1}].filter(x => x.k > 1)", limits,
+                              max_frames < 3 ? "fault 1:24 the evaluation needs more than max_frames frames"
+                                             : "[{\"k\":2}]");
+        expect_same_both_ways("[2, 1].every(x => x >= 2)", limits,
+                              max_frames < 3 ? "fault 1:13 the evaluation needs more than max_frames frames" : "false");
     }
 }
 

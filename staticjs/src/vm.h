@@ -44,22 +44,32 @@ typedef struct {
     uint32_t argc;        /* loop frames: the arguments the built-in was called with */
     bool entered;         /* loop frames: the callback is a closure, and its frame is kept */
     /* Loop frames: the callback's sjs_shape when this built-in has a C path
-     * for it (docs/matcher.md, section 7), or SJS_SHAPE_NONE; and its flag:
-     * COMPARE_BY_KEY's descending, or for PLUCK, the key is on
-     * Object.prototype. */
+     * for it (docs/matcher.md, sections 7 and 11), or SJS_SHAPE_NONE; its
+     * flag: for the comparators, descending; for PLUCK and KEY_COMPARE, the
+     * key is on Object.prototype; and for KEY_COMPARE and ELEMENT_COMPARE,
+     * the sjs_operator. */
     uint8_t shape;
     uint8_t shape_flag;
-    /* toSorted: a bottom-up merge sort over two scratch arrays. */
-    uint32_t width;
-    uint32_t left;
-    uint32_t mid;
-    uint32_t right;
-    uint32_t i;
-    uint32_t j;
-    uint32_t k;
-    sjs_value *scratch;
-    uint32_t scratch_count;
+    uint8_t shape_op;
     uint32_t shape_guess;  /* loop frames with a shape: where the last object had the key */
+    union {
+        /* toSorted: a bottom-up merge sort over two scratch arrays, of
+         * scratch_count values while scratch is set. */
+        struct {
+            uint32_t width;
+            uint32_t left;
+            uint32_t mid;
+            uint32_t right;
+            uint32_t i;
+            uint32_t j;
+            uint32_t k;
+            uint32_t scratch_count;
+        };
+        /* KEY_COMPARE and ELEMENT_COMPARE: the literal, borrowed from the
+         * callback's program, which LOOP_CALLBACK holds. */
+        sjs_value shape_value;
+    };
+    sjs_value *scratch;    /* outside the union: sjs_loop_free reads it for every loop */
 } vm_frame;
 
 /* The shape fields sit in padding and share the closure's word: a frame is
@@ -164,6 +174,14 @@ bool sjs_vm_call_back(sjs_vm *vm, vm_frame *loop, sjs_values args);
  * called it, so that a running closure, a full frame stack or no room for its
  * slots faults there, alike. False on a fault. */
 bool sjs_vm_enter_callback(sjs_vm *vm, vm_frame *loop);
+
+/* The comparisons of the bytecode, shared with the shapes' C paths
+ * (docs/matcher.md, 11.7): 1 or 0, or SJS_VM_UNDECIDED where the bytecode
+ * faults. a === b, or two objects (identity, which staticjs lacks); a OP b
+ * for <, <=, > and >=, on two numbers or two strings, or any other pair. */
+#define SJS_VM_UNDECIDED (-1)
+int sjs_vm_strict_equal(sjs_value a, sjs_value b);
+int sjs_vm_order(uint8_t operator, sjs_value a, sjs_value b);
 
 /* A property of a value: `object.key`. */
 typedef struct {

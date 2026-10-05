@@ -206,12 +206,15 @@ callback's own instructions.
 
 The compiler tags a function whose body has a known shape
 (`docs/matcher.md`): `x => x.key` is PLUCK, `(a, b) => a.key - b.key` is
-COMPARE_BY_KEY, `(a, b) => a - b` is COMPARE_NUMERIC. A loop built-in may
-run such a callback in C, as `map` does with PLUCK and `toSorted` with
-COMPARE_BY_KEY and COMPARE_NUMERIC (`pluck_step`, `sort_by_key` and
-`sort_numbers` in `src/builtins.c`). The tag only says what the bytecode
-computes; the bytecode is still there, and the C path must give exactly
-what it gives.
+COMPARE_BY_KEY, `(a, b) => a - b` is COMPARE_NUMERIC, `x => x.key OP c` is
+KEY_COMPARE and `x => x OP c` is ELEMENT_COMPARE (OP a strict equality or
+an order, `c` a literal). A loop built-in may run such a callback in C, as
+`map` does with PLUCK, `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC,
+and `filter`, `find`, `findIndex`, `findLast`, `some` and `every` with
+KEY_COMPARE and ELEMENT_COMPARE (`pluck_step`, `sort_by_key`,
+`sort_numbers` and `predicate_step` in `src/builtins.c`). The tag only
+says what the bytecode computes; the bytecode is still there, and the C
+path must give exactly what it gives.
 
 - **Set it up once per loop.** `shape_start` (from `sjs_loop_start`) notes
   the shape, its key and its flag in the loop frame when the callback is a
@@ -225,10 +228,15 @@ what it gives.
   `call_back`) when one fails. The bytecode then gives the value, or
   faults with its own message, position and subject. Only what the C path
   can prove takes it: an object's own property (no prototype, no `length`
-  of an array or a string), a number for arithmetic.
+  of an array or a string), a number for arithmetic, a comparison the
+  bytecode does not fault on.
+- **Share the answer and the operation.** The bytecode's answer and the C
+  path's go through one helper (`sort_take`, `predicate_answer`), and the
+  C path computes with the evaluator's own operation where one exists
+  (`sjs_vm_strict_equal`, `sjs_vm_order`), so the two cannot drift.
 - **Room on the stack.** A C step requires as much room above the
   callback's slots as its bytecode pushes (`PLUCK_STACK`,
-  `COMPARE_STACK`), so it succeeds only where the bytecode would not run
+  `COMPARE_STACK`, `PREDICATE_STACK`), so it succeeds only where the bytecode would not run
   out of `max_stack`. More only falls back; less is wrong.
 - **One unit of work per step,** returning `LOOP_AGAIN`, so a paused
   evaluation still pauses within the loop.

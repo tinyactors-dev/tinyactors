@@ -45,7 +45,9 @@
  * eval (unit element): eval.array.map, .filter, .reduce, .pipeline,
  * .toSorted, .toSorted.desc ((a, b) => b - a), .toSorted.rows,
  * .toSorted.rows.desc ((a, b) => b.kwh - a.kwh), .map.pluck (r => r.kwh),
- * eval.string.join (L); eval.object.spread-reduce (C);
+ * .every (x => x >= 0), .some (r => r.kwh < 0) and .findIndex (r => r.id
+ * === "none"), which scan every element and find nothing, so they give
+ * their smoke value at every size, eval.string.join (L); eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
@@ -224,6 +226,7 @@ typedef enum {
     CHECK_PIPELINE,
     CHECK_SORTED,
     CHECK_SORTED_DESC,
+    CHECK_SAME,
     CHECK_JOIN,
     CHECK_OBJECT_N,
     CHECK_SET_N,
@@ -380,6 +383,14 @@ static const bench_case cases[] = {
     { .name = "eval.array.map.pluck", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.map(r => r.kwh)", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "[0,3.7,7.4,11.1,14.8,18.5,22.2,25.9,29.6,33.3]", .check = CHECK_ARRAY_N },
+    { .name = "eval.array.every", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "xs.every(x => x >= 0)", .globals = { { "xs", FIX_XS, NULL } }, .expect = "true", .check = CHECK_SAME },
+    { .name = "eval.array.some", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.some(r => r.kwh < 0)", .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "false",
+      .check = CHECK_SAME },
+    { .name = "eval.array.findIndex", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.findIndex(r => r.id === \"none\")", .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "-1",
+      .check = CHECK_SAME },
     { .name = "eval.string.join", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.map(r => r.id).join(\",\")", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "\"r000000,r000001,r000002,r000003,r000004,r000005,r000006,r000007,r000008,r000009\"",
@@ -944,6 +955,7 @@ static bool check_value(bench_run *run, sjs_value value) {
             if (sjs_array_at(value, i).as.number != i * 0.5) return fail(run, "toSorted: not in order");
         }
         return true;
+    case CHECK_SAME: return true; /* verify_value compares it with the smoke value */
     case CHECK_SORTED_DESC:
         if (!expect_shape(run, value, (bench_shape){ SJS_ARRAY, n })) return false;
         for (uint32_t i = 0; i < n; i++) {
@@ -980,7 +992,8 @@ static bool expect_text(bench_run *run, const bench_text *text) {
 }
 
 static bool verify_value(bench_run *run, sjs_value value) {
-    if (!run->at_smoke_size || run->c->expect == NULL) return check_value(run, value);
+    bool as_written = run->at_smoke_size || run->c->check == CHECK_SAME;
+    if (!as_written || run->c->expect == NULL) return check_value(run, value);
     bench_text text = { 0 };
     bool ok = write_value(run, value, &text) && expect_text(run, &text);
     text_free(&text);

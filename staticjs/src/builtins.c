@@ -998,12 +998,14 @@ static sjs_result set_output(sjs_vm *vm, vm_frame *frame, sjs_value v) {
  */
 
 /* The most a C path's bytecode pushes above the callback's slots: `a.k` and
- * `b.k` (or `a` and `b`) for a comparator, `x.k` for a pluck. A C step
- * needs that much room, so that it succeeds only where the bytecode would
- * not run out of max_stack. More would only fall back more often; less
- * would be wrong. */
+ * `b.k` (or `a` and `b`) for a comparator, `x.k` for a pluck, `x.k` (or
+ * `x`) and the literal, in either order, for a predicate. A C step needs
+ * that much room, so that it succeeds only where the bytecode would not run
+ * out of max_stack. More would only fall back more often; less would be
+ * wrong. */
 #define PLUCK_STACK 1u
 #define COMPARE_STACK 2u
+#define PREDICATE_STACK 2u
 
 /* The shapes each loop built-in runs in C (docs/matcher.md, 7 and 11.5). */
 static const struct {
@@ -1013,12 +1015,62 @@ static const struct {
     { SJS_METHOD_ARRAY_MAP, SJS_SHAPE_PLUCK },
     { SJS_METHOD_ARRAY_TO_SORTED, SJS_SHAPE_COMPARE_BY_KEY },
     { SJS_METHOD_ARRAY_TO_SORTED, SJS_SHAPE_COMPARE_NUMERIC },
+    { SJS_METHOD_ARRAY_FILTER, SJS_SHAPE_KEY_COMPARE },
+    { SJS_METHOD_ARRAY_FILTER, SJS_SHAPE_ELEMENT_COMPARE },
+    { SJS_METHOD_ARRAY_FIND, SJS_SHAPE_KEY_COMPARE },
+    { SJS_METHOD_ARRAY_FIND, SJS_SHAPE_ELEMENT_COMPARE },
+    { SJS_METHOD_ARRAY_FIND_INDEX, SJS_SHAPE_KEY_COMPARE },
+    { SJS_METHOD_ARRAY_FIND_INDEX, SJS_SHAPE_ELEMENT_COMPARE },
+    { SJS_METHOD_ARRAY_FIND_LAST, SJS_SHAPE_KEY_COMPARE },
+    { SJS_METHOD_ARRAY_FIND_LAST, SJS_SHAPE_ELEMENT_COMPARE },
+    { SJS_METHOD_ARRAY_SOME, SJS_SHAPE_KEY_COMPARE },
+    { SJS_METHOD_ARRAY_SOME, SJS_SHAPE_ELEMENT_COMPARE },
+    { SJS_METHOD_ARRAY_EVERY, SJS_SHAPE_KEY_COMPARE },
+    { SJS_METHOD_ARRAY_EVERY, SJS_SHAPE_ELEMENT_COMPARE },
 };
+
+/* A key the C path reads as an object's own property: one an object lacks
+ * reads as undefined, unless JavaScript would find it on Object.prototype,
+ * where staticjs faults. */
+static bool key_on_prototype(const sjs_string *key) {
+    const sjs_name *n = sjs_name_of(key);
+    return n != NULL && (n->flags & SJS_NAME_OBJECT) != 0;
+}
+
+/* A predicate's literal (sjs_shape_operand): the value the literal's own
+ * instruction pushes, borrowed from the program. */
+static sjs_value operand_value(const sjs_program *program, uint32_t operand) {
+    uint32_t index = sjs_shape_operand_index(operand);
+    switch (sjs_shape_operand_kind(operand)) {
+    case SJS_OPERAND_NUMBER: return sjs_num(program->numbers[index]);
+    case SJS_OPERAND_TEXT: return program->constants[index];
+    case SJS_OPERAND_TRUE: return sjs_boolean(true);
+    case SJS_OPERAND_FALSE: return sjs_boolean(false);
+    default: return sjs_null();
+    }
+}
+
+/* KEY_COMPARE's and ELEMENT_COMPARE's operator and literal, from argument
+ * `at` on. False for an order (<, <=, >, >=) against true, false or null:
+ * staticjs faults on every such comparison, so the bytecode runs the loop
+ * and faults at its first element. */
+static bool predicate_start(vm_frame *frame, const sjs_closure *closure, uint32_t at) {
+    const sjs_function_info *fn = &closure->program->functions[closure->function];
+    uint32_t op = fn->shape_args[at];
+    uint32_t operand = fn->shape_args[at + 1u];
+    uint32_t kind = sjs_shape_operand_kind(operand);
+    bool equality = op == SJS_OP_STRICT_EQUAL || op == SJS_OP_STRICT_NOT_EQUAL;
+    if (!equality && kind != SJS_OPERAND_NUMBER && kind != SJS_OPERAND_TEXT) return false;
+    frame->shape_op = (uint8_t)op;
+    frame->shape_value = operand_value(closure->program, operand);
+    return true;
+}
 
 /* Note the callback's shape when this built-in runs it in C: a closure the
  * matcher tagged with a shape shape_runners pairs with the built-in. Its
- * key, for the shapes that have one, and its flag: for PLUCK, the key is on
- * Object.prototype; for the comparators, descending. */
+ * key, for the shapes that have one; its flag: for PLUCK and KEY_COMPARE,
+ * the key is on Object.prototype; for the comparators, descending; and a
+ * predicate's operator and literal. */
 static void shape_start(vm_frame *frame, sjs_value callback) {
     frame->shape = SJS_SHAPE_NONE;
     if (callback.as.heap->type != SJS_HEAP_CLOSURE) return;
@@ -1032,15 +1084,15 @@ static void shape_start(vm_frame *frame, sjs_value callback) {
     frame->shape = (uint8_t)fn->shape;
     frame->shape_guess = 0;
     switch (fn->shape) {
-    case SJS_SHAPE_PLUCK: {
-        const sjs_string *key = SJS_AS_STRING(closure->program->constants[fn->shape_args[0]]);
-        frame->shape_key = key;
-        /* A key an object lacks reads as undefined, unless JavaScript would
-         * find it on Object.prototype, where staticjs faults. */
-        const sjs_name *n = sjs_name_of(key);
-        frame->shape_flag = n != NULL && (n->flags & SJS_NAME_OBJECT) != 0;
+    case SJS_SHAPE_PLUCK:
+    case SJS_SHAPE_KEY_COMPARE:
+        frame->shape_key = SJS_AS_STRING(closure->program->constants[fn->shape_args[0]]);
+        frame->shape_flag = key_on_prototype(frame->shape_key);
+        if (fn->shape == SJS_SHAPE_KEY_COMPARE && !predicate_start(frame, closure, 1)) frame->shape = SJS_SHAPE_NONE;
         break;
-    }
+    case SJS_SHAPE_ELEMENT_COMPARE:
+        if (!predicate_start(frame, closure, 0)) frame->shape = SJS_SHAPE_NONE;
+        break;
     case SJS_SHAPE_COMPARE_BY_KEY:
         frame->shape_key = SJS_AS_STRING(closure->program->constants[fn->shape_args[0]]);
         frame->shape_flag = fn->shape_args[1] != 0;
@@ -1180,6 +1232,84 @@ static loop_step pluck_step(sjs_vm *vm, vm_frame *frame) {
     return call_element(vm, frame, frame->index);
 }
 
+/* What filter, find, findIndex, findLast, some and every make of the
+ * callback's answer for the element at frame->index (from the end, for
+ * findLast), which it moves past: keep it, or finish with true, false, the
+ * element or its index. LOOP_AGAIN to go on to the next element. The
+ * bytecode's answer and the C path's go through here alike. */
+static loop_step predicate_answer(sjs_vm *vm, vm_frame *frame, bool truthy) {
+    const sjs_array *a = receiver(vm, frame);
+    uint32_t i = frame->index;
+    uint32_t element = frame->builtin == SJS_METHOD_ARRAY_FIND_LAST ? frame->length - 1u - i : i;
+    frame->index++;
+    if (!truthy) {
+        return frame->builtin == SJS_METHOD_ARRAY_EVERY ? done(vm, frame, sjs_boolean(false)) : LOOP_AGAIN;
+    }
+    switch (frame->builtin) {
+    case SJS_METHOD_ARRAY_FILTER: {
+        sjs_array *out = SJS_AS_ARRAY(*slot(vm, frame, LOOP_OUTPUT));
+        sjs_ref(a->items[i]);
+        if (array_add(vm, &out, a->items[i]) != SJS_OK) return LOOP_FAULT;
+        slot(vm, frame, LOOP_OUTPUT)->as.heap = &out->h;
+        return LOOP_AGAIN;
+    }
+    case SJS_METHOD_ARRAY_SOME:
+        return done(vm, frame, sjs_boolean(true));
+    case SJS_METHOD_ARRAY_EVERY:
+        return LOOP_AGAIN;
+    case SJS_METHOD_ARRAY_FIND_INDEX:
+        return done(vm, frame, sjs_num((double)element));
+    default: /* FIND, FIND_LAST */
+        sjs_ref(a->items[element]);
+        return done(vm, frame, a->items[element]);
+    }
+}
+
+/* A KEY_COMPARE or ELEMENT_COMPARE callback's answer for `v`, the element
+ * or its key's value, against the literal: the bytecode's own comparison,
+ * so 1 or 0; or SJS_VM_UNDECIDED where the bytecode faults. The rules
+ * record `c OP x` as `x OP' c`, which is the same comparison (docs/matcher.md,
+ * 11.7.2). */
+static int predicate_compare(const vm_frame *frame, sjs_value v) {
+    switch (frame->shape_op) {
+    case SJS_OP_STRICT_EQUAL:
+        return sjs_vm_strict_equal(v, frame->shape_value);
+    case SJS_OP_STRICT_NOT_EQUAL: {
+        /* The literal is a primitive, so this never fails. */
+        int equal = sjs_vm_strict_equal(v, frame->shape_value);
+        return equal == SJS_VM_UNDECIDED ? equal : !equal;
+    }
+    default:
+        return sjs_vm_order(frame->shape_op, v, frame->shape_value);
+    }
+}
+
+/* The step of a predicate loop whose callback is a KEY_COMPARE, `x => x.key
+ * OP c`, or an ELEMENT_COMPARE, `x => x OP c`: the element decided in C, as
+ * TAKE_LOCAL, GET_MEMBER, the literal, BINARY and RETURN would decide it,
+ * for one unit of fuel and one per key looked up, where they cost five or
+ * four more. An element that is not an object for a key, a key missing that
+ * is on Object.prototype, and a comparison the bytecode faults on call the
+ * bytecode for that element, which faults. */
+static loop_step predicate_step(sjs_vm *vm, vm_frame *frame) {
+    if (!frame->entered && !sjs_vm_enter_callback(vm, frame)) return LOOP_FAULT;
+    uint32_t element = frame->builtin == SJS_METHOD_ARRAY_FIND_LAST ? frame->length - 1u - frame->index : frame->index;
+    sjs_value v = receiver(vm, frame)->items[element];
+    if (vm->stack_capacity - vm->sp < PREDICATE_STACK) return call_element(vm, frame, element);
+    uint64_t lookups = 0;
+    if (frame->shape == SJS_SHAPE_KEY_COMPARE) {
+        if (v.kind != SJS_OBJECT) return call_element(vm, frame, element);
+        const sjs_entry *e = own_entry(frame, SJS_AS_OBJECT(v));
+        if (e == NULL && frame->shape_flag) return call_element(vm, frame, element);
+        v = e != NULL ? e->value : sjs_undefined();
+        lookups = 1;
+    }
+    int answer = predicate_compare(frame, v);
+    if (answer == SJS_VM_UNDECIDED) return call_element(vm, frame, element);
+    vm->fuel_used += lookups;
+    return predicate_answer(vm, frame, answer != 0);
+}
+
 /* Merge toSorted's next element: from the right run when the comparator
  * gave more than 0, else from the left (NaN and 0 included), which keeps
  * the sort stable. The bytecode's answer and the C path's go through here
@@ -1314,27 +1444,15 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
     if (frame->phase == 1) {
         sjs_value r = sjs_vm_pop(vm);
         frame->phase = 0;
-        uint32_t i = frame->index;
-        uint32_t element = frame->builtin == SJS_METHOD_ARRAY_FIND_LAST ? frame->length - 1u - i : i;
-        frame->index++;
         switch (frame->builtin) {
         case SJS_METHOD_ARRAY_MAP: {
             sjs_array *out = SJS_AS_ARRAY(*slot(vm, frame, LOOP_OUTPUT));
             out->items[out->length++] = r;
-            break;
-        }
-        case SJS_METHOD_ARRAY_FILTER: {
-            bool keep = sjs_truthy(r);
-            sjs_vm_release(vm, r);
-            if (keep) {
-                sjs_array *out = SJS_AS_ARRAY(*slot(vm, frame, LOOP_OUTPUT));
-                sjs_ref(a->items[i]);
-                if (array_add(vm, &out, a->items[i]) != SJS_OK) return LOOP_FAULT;
-                slot(vm, frame, LOOP_OUTPUT)->as.heap = &out->h;
-            }
+            frame->index++;
             break;
         }
         case SJS_METHOD_ARRAY_FLAT_MAP: {
+            frame->index++;
             sjs_array *out = SJS_AS_ARRAY(*slot(vm, frame, LOOP_OUTPUT));
             if (r.kind == SJS_ARRAY) {
                 const sjs_array *b = SJS_AS_ARRAY(r);
@@ -1355,27 +1473,13 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
         }
         case SJS_METHOD_ARRAY_REDUCE:
             set_output(vm, frame, r);
+            frame->index++;
             break;
-        default: {
+        default: { /* the predicate loops */
             bool truthy = sjs_truthy(r);
             sjs_vm_release(vm, r);
-            switch (frame->builtin) {
-            case SJS_METHOD_ARRAY_SOME:
-                if (truthy) return done(vm, frame, sjs_boolean(true));
-                break;
-            case SJS_METHOD_ARRAY_EVERY:
-                if (!truthy) return done(vm, frame, sjs_boolean(false));
-                break;
-            case SJS_METHOD_ARRAY_FIND_INDEX:
-                if (truthy) return done(vm, frame, sjs_num((double)element));
-                break;
-            default: /* FIND, FIND_LAST */
-                if (truthy) {
-                    sjs_ref(a->items[element]);
-                    return done(vm, frame, a->items[element]);
-                }
-                break;
-            }
+            loop_step step = predicate_answer(vm, frame, truthy);
+            if (step != LOOP_AGAIN) return step;
             break;
         }
         }
@@ -1408,6 +1512,7 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
         return step;
     }
     if (frame->shape == SJS_SHAPE_PLUCK) return pluck_step(vm, frame);
+    if (frame->shape == SJS_SHAPE_KEY_COMPARE || frame->shape == SJS_SHAPE_ELEMENT_COMPARE) return predicate_step(vm, frame);
     uint32_t element = frame->builtin == SJS_METHOD_ARRAY_FIND_LAST ? frame->length - 1u - frame->index : frame->index;
     return call_element(vm, frame, element);
 }

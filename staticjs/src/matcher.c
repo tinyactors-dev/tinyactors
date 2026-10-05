@@ -41,7 +41,9 @@
 #include "shapes_table.h"
 
 /* A slot: what its field says it is. A text is a range of m->text, or of
- * the event being matched, or unbound. */
+ * the event being matched, or unbound. An operand is a text too: a kind
+ * byte (SJS_OPERAND_*) and the literal's value, a number's 8 bytes or a
+ * string's bytes; while its event is matched, in the step's own bytes. */
 typedef union {
     double number;
     uint32_t count;
@@ -53,6 +55,7 @@ typedef union {
 
 #define SHAPE_TEXT_NONE UINT32_MAX
 #define SHAPE_TEXT_EVENT (UINT32_MAX - 1u)
+#define SHAPE_TEXT_OPERAND (UINT32_MAX - 2u)
 
 /* A cell or a marker. Every record has the same stride. */
 typedef struct {
@@ -86,7 +89,9 @@ typedef struct {
     uint32_t count;        /* its operands */
     uint32_t cost;         /* the cost of the derivation being accepted */
     bool event_text;       /* a test read the event's text: settle may copy it */
+    bool event_operand;    /* a test read the event as an operand, into `operand` */
     shape_value local[SHAPE_VARIABLES];
+    uint8_t operand[1u + SHAPE_TEXT_MAX];
 } matcher_step;
 
 static uint32_t matcher_count(const sjs_matcher *m) {
@@ -104,6 +109,7 @@ static uint32_t matcher_add_cost(uint32_t a, uint32_t b) {
 
 static sjs_str matcher_text(const matcher_step *s, shape_value v) {
     if (v.text.offset == SHAPE_TEXT_EVENT) return s->e->text;
+    if (v.text.offset == SHAPE_TEXT_OPERAND) return (sjs_str){ (const char *)s->operand, v.text.length };
     return (sjs_str){ (const char *)s->m->text.ptr + v.text.offset, v.text.length };
 }
 
@@ -126,8 +132,45 @@ static bool matcher_use(const matcher_step *s, shape_value *variable, shape_use 
     switch (use.field) {
     case SHAPE_FIELD_COUNT: return variable->count == use.value.count;
     case SHAPE_FIELD_NUMBER: return variable->number == use.value.number;
+    /* Texts, and operands by their bytes: a literal's number is never NaN
+     * or -0 (those are a name and a negation), so equal bits are ==. */
     default: return sjs_str_equal(matcher_text(s, *variable), matcher_text(s, use.value));
     }
+}
+
+/* The event read as an operand, into the step's bytes: false for an event
+ * that is not a literal, and for a string too long to keep. */
+static bool matcher_operand(matcher_step *s, shape_value *out) {
+    const sjs_event *e = s->e;
+    uint32_t length = 1;
+    switch (e->kind) {
+    case SJS_EV_NUMBER:
+        s->operand[0] = SJS_OPERAND_NUMBER;
+        sjs_copy(&s->operand[1], &e->number, sizeof e->number);
+        length += (uint32_t)sizeof e->number;
+        break;
+    case SJS_EV_STRING:
+        if (e->text.length > SHAPE_TEXT_MAX) return false;
+        s->operand[0] = SJS_OPERAND_TEXT;
+        sjs_copy(&s->operand[1], e->text.ptr, e->text.length);
+        length += e->text.length;
+        break;
+    case SJS_EV_TRUE:
+        s->operand[0] = SJS_OPERAND_TRUE;
+        break;
+    case SJS_EV_FALSE:
+        s->operand[0] = SJS_OPERAND_FALSE;
+        break;
+    case SJS_EV_NULL:
+        s->operand[0] = SJS_OPERAND_NULL;
+        break;
+    default:
+        return false;
+    }
+    out->text.offset = SHAPE_TEXT_OPERAND;
+    out->text.length = length;
+    s->event_operand = true;
+    return true;
 }
 
 /* The field of the event a test reads; false for a text too long to keep,
@@ -140,6 +183,8 @@ static bool matcher_field(matcher_step *s, uint8_t field, shape_value *out) {
     case SHAPE_FIELD_NUMBER:
         out->number = s->e->number;
         return true;
+    case SHAPE_FIELD_OPERAND:
+        return matcher_operand(s, out);
     default:
         if (s->e->text.length > SHAPE_TEXT_MAX) return false;
         out->text.offset = SHAPE_TEXT_EVENT;
@@ -149,6 +194,7 @@ static bool matcher_field(matcher_step *s, uint8_t field, shape_value *out) {
     }
 }
 
+/* A test against a constant: the generator gives none for an operand. */
 static bool matcher_constant(const sjs_event *e, const shape_test *t, shape_value v) {
     switch (t->field) {
     case SHAPE_FIELD_COUNT: return v.count == t->constant;
@@ -259,8 +305,13 @@ static void matcher_derive(matcher_step *s, shape_record *cell) {
  * Text: what a record refers to, moved down to where its region began
  */
 
+/* A field kept in m->text: a text, or an operand. */
+static bool matcher_is_text(uint8_t field) {
+    return field == SHAPE_FIELD_TEXT || field == SHAPE_FIELD_OPERAND;
+}
+
 /* The text slots of `record` that may refer to m->text at `region` or
- * after, or to the event: a cell's, of each nonterminal it derives; a
+ * after, or to the event or its operand: a cell's, of each nonterminal it derives; a
  * marker's, of each bracket rule still alive. Answers how many. */
 static uint32_t matcher_text_slots(shape_record *record, shape_value **out) {
     uint32_t n = 0;
@@ -270,7 +321,7 @@ static uint32_t matcher_text_slots(shape_record *record, shape_value **out) {
             uint32_t nt = (uint32_t)__builtin_ctzll(derived);
             for (uint32_t i = 0; i < shape_attribute_count[nt]; i++) {
                 uint32_t slot = shape_slot[nt] + i;
-                if (shape_slot_field[slot] == SHAPE_FIELD_TEXT) out[n++] = &record->slots[slot];
+                if (matcher_is_text(shape_slot_field[slot])) out[n++] = &record->slots[slot];
             }
         }
         return n;
@@ -280,7 +331,7 @@ static uint32_t matcher_text_slots(shape_record *record, shape_value **out) {
         if ((record->alive & (1u << j)) == 0) continue;
         const shape_rule *r = &shape_rules[ev->first_rule + j];
         for (uint32_t v = 0; v < r->variable_count; v++) {
-            if (shape_variable_fields[r->first_variable + v] == SHAPE_FIELD_TEXT) out[n++] = &record->slots[r->first_slot + v];
+            if (matcher_is_text(shape_variable_fields[r->first_variable + v])) out[n++] = &record->slots[r->first_slot + v];
         }
     }
     return n;
@@ -306,21 +357,22 @@ static void matcher_free_stacks(sjs_matcher *m) {
     m->text = (sjs_buf){ NULL, 0, 0 };
 }
 
-/* Nothing is above the record's region: the event's text, if the record
- * refers to it, goes after everything, once. */
-static sjs_result matcher_settle_event(matcher_step *s, shape_record *record) {
+/* Nothing is above the record's region: the bytes of the event (its text,
+ * or its operand) that the record refers to go after everything, once. */
+static sjs_result matcher_settle_event(matcher_step *s, shape_record *record, uint32_t sentinel) {
     sjs_matcher *m = s->m;
     shape_value *all[SHAPE_SLOTS];
     uint32_t total = matcher_text_slots(record, all);
     uint32_t at = m->text.length;
     bool copied = false;
     for (uint32_t i = 0; i < total; i++) {
-        if (all[i]->text.offset != SHAPE_TEXT_EVENT) continue;
+        if (all[i]->text.offset != sentinel) continue;
         if (!copied) {
-            sjs_result r = matcher_text_reserve(m, s->e->text.length);
+            sjs_str bytes = matcher_text(s, *all[i]);
+            sjs_result r = matcher_text_reserve(m, bytes.length);
             if (r != SJS_OK) return r;
-            sjs_copy(m->text.ptr + at, s->e->text.ptr, s->e->text.length);
-            m->text.length += s->e->text.length;
+            sjs_copy(m->text.ptr + at, bytes.ptr, bytes.length);
+            m->text.length += bytes.length;
             copied = true;
         }
         all[i]->text.offset = at;
@@ -333,18 +385,31 @@ static sjs_result matcher_settle_event(matcher_step *s, shape_record *record) {
  * text stack ends after it. Each move goes down, so a forward copy is safe. */
 static sjs_result matcher_settle(matcher_step *s, shape_record *record, uint32_t region) {
     sjs_matcher *m = s->m;
-    /* Nothing above the region, and no text of the event: nothing moves. */
-    if (region == m->text.length && !s->event_text) return SJS_OK;
-    if (region == m->text.length) return matcher_settle_event(s, record);
+    /* Nothing above the region, and no bytes of the event: nothing moves. */
+    if (region == m->text.length && !s->event_text && !s->event_operand) return SJS_OK;
+    if (region == m->text.length) {
+        sjs_result r = s->event_text ? matcher_settle_event(s, record, SHAPE_TEXT_EVENT) : SJS_OK;
+        if (r == SJS_OK && s->event_operand) r = matcher_settle_event(s, record, SHAPE_TEXT_OPERAND);
+        return r;
+    }
     shape_value *all[SHAPE_SLOTS];
     shape_value *list[SHAPE_SLOTS];
     uint32_t total = matcher_text_slots(record, all);
     uint32_t n = 0;
+    uint32_t extra = 0;     /* the event's bytes, which go on top */
     bool event = false;
+    bool operand = false;
     for (uint32_t i = 0; i < total; i++) {
         uint32_t offset = all[i]->text.offset;
         if (offset == SHAPE_TEXT_NONE || offset < region) continue;
-        if (offset == SHAPE_TEXT_EVENT) event = true;
+        if (offset == SHAPE_TEXT_EVENT && !event) {
+            event = true;
+            extra += s->e->text.length;
+        }
+        if (offset == SHAPE_TEXT_OPERAND && !operand) {
+            operand = true;
+            extra += all[i]->text.length;
+        }
         /* Insertion by offset: few slots. */
         uint32_t at = n++;
         while (at > 0 && list[at - 1]->text.offset > offset) {
@@ -353,8 +418,8 @@ static sjs_result matcher_settle(matcher_step *s, shape_record *record, uint32_t
         }
         list[at] = all[i];
     }
-    if (event) {
-        sjs_result r = matcher_text_reserve(m, s->e->text.length);
+    if (extra > 0) {
+        sjs_result r = matcher_text_reserve(m, extra);
         if (r != SJS_OK) return r;
     }
     uint32_t write = region;
@@ -371,8 +436,8 @@ static sjs_result matcher_settle(matcher_step *s, shape_record *record, uint32_t
         last_from = v->text.offset;
         last_length = v->text.length;
         last_to = write;
-        if (v->text.offset == SHAPE_TEXT_EVENT) {
-            sjs_copy(m->text.ptr + write, s->e->text.ptr, s->e->text.length);
+        if (v->text.offset == SHAPE_TEXT_EVENT || v->text.offset == SHAPE_TEXT_OPERAND) {
+            sjs_copy(m->text.ptr + write, matcher_text(s, *v).ptr, v->text.length);
         } else {
             for (uint32_t b = 0; b < v->text.length; b++) m->text.ptr[write + b] = m->text.ptr[v->text.offset + b];
         }
@@ -474,6 +539,14 @@ static void matcher_fold_above(matcher_step *s) {
     m->records.length = (m->top + 1u) * (uint32_t)sizeof(shape_record);
 }
 
+/* An operand's bytes, as a report gives them: its kind, and a number's
+ * value or a string's text. */
+static void matcher_report_operand(sjs_str bytes, sjs_shape_value *arg) {
+    arg->operand = (uint8_t)bytes.ptr[0];
+    if (arg->operand == SJS_OPERAND_NUMBER) sjs_copy(&arg->number, bytes.ptr + 1, sizeof arg->number);
+    if (arg->operand == SJS_OPERAND_TEXT) arg->text = (sjs_str){ bytes.ptr + 1, bytes.length - 1u };
+}
+
 /* A cell that derives something was made for the event's node, at `index`:
  * report a shape it derives; then keep it in the bracket it is in, folded
  * at once if it is an item, unless that bracket is a dead region. */
@@ -492,6 +565,7 @@ static sjs_result matcher_created(matcher_step *s, uint32_t index) {
             arg->kind = sjs_shape_arg_kind(best, i);
             if (arg->kind == SJS_SHAPE_ARG_TEXT) arg->text = matcher_text(s, v);
             else if (arg->kind == SJS_SHAPE_ARG_NUMBER) arg->number = v.number;
+            else if (arg->kind == SJS_SHAPE_ARG_OPERAND) matcher_report_operand(matcher_text(s, v), arg);
             else arg->count = v.count;
         }
         sjs_result r = m->reporter.v->report(m->reporter.self, &match);
@@ -634,6 +708,7 @@ static sjs_result matcher_step_event(sjs_matcher *m, const sjs_event *e) {
     s.e = e;
     s.count = 0;
     s.event_text = false;
+    s.event_operand = false;
     const shape_event *ev = &shape_events[e->kind];
     if (e->node == m->top_node) {
         /* An event of the open bracket: a separator, or its close. */

@@ -22,7 +22,8 @@
 /* One argument of a match, by sjs_shape_arg_kind(). */
 typedef struct {
     uint8_t kind;          /* SJS_SHAPE_ARG_* */
-    uint32_t count;        /* a flag or a count */
+    uint8_t operand;       /* an operand's SJS_OPERAND_*: then a number's value, or a string's text */
+    uint32_t count;        /* a flag, a count or an sjs_operator */
     double number;
     sjs_str text;          /* valid during the report only */
 } sjs_shape_value;

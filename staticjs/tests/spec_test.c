@@ -481,9 +481,35 @@ static uint64_t hash_program(const sjs_program *program) {
     return h;
 }
 
+/* An operand as JavaScript writes the literal: 2, "open", true, null. */
+static void describe_operand(const sjs_program *program, uint32_t operand, char out[256]) {
+    uint32_t index = sjs_shape_operand_index(operand);
+    switch (sjs_shape_operand_kind(operand)) {
+    case SJS_OPERAND_NUMBER: {
+        uint32_t n = sjs_number_format(program->numbers[index], out);
+        out[n] = '\0';
+        break;
+    }
+    case SJS_OPERAND_TEXT: {
+        const sjs_string *text = SJS_AS_STRING(program->constants[index]);
+        snprintf(out, 256, "\"%.*s\"", (int)text->length, text->bytes);
+        break;
+    }
+    case SJS_OPERAND_TRUE:
+        snprintf(out, 256, "true");
+        break;
+    case SJS_OPERAND_FALSE:
+        snprintf(out, 256, "false");
+        break;
+    default:
+        snprintf(out, 256, "null");
+        break;
+    }
+}
+
 /* Each function's shape, as @shapes writes them: `-`, or the shape's name
- * and its arguments, a text as the constant's text and a flag as true or
- * false. */
+ * and its arguments, a text as the constant's text, a flag as true or
+ * false, an operator by its name and an operand as its literal. */
 static void describe_shapes(const sjs_program *program, char *out, size_t capacity) {
     size_t used = 0;
     out[0] = '\0';
@@ -507,6 +533,15 @@ static void describe_shapes(const sjs_program *program, char *out, size_t capaci
             case SJS_SHAPE_ARG_FLAG:
                 used += (size_t)snprintf(out + used, capacity - used, "%s%s", comma, f->shape_args[a] ? "true" : "false");
                 break;
+            case SJS_SHAPE_ARG_OPERATOR:
+                used += (size_t)snprintf(out + used, capacity - used, "%s%s", comma, sjs_shape_operator_name(f->shape_args[a]));
+                break;
+            case SJS_SHAPE_ARG_OPERAND: {
+                char operand[256];
+                describe_operand(program, f->shape_args[a], operand);
+                used += (size_t)snprintf(out + used, capacity - used, "%s%s", comma, operand);
+                break;
+            }
             default:
                 used += (size_t)snprintf(out + used, capacity - used, "%s%u", comma, f->shape_args[a]);
                 break;

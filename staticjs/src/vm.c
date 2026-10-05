@@ -288,6 +288,27 @@ static sjs_result in(sjs_vm *vm, const sjs_value *pair, sjs_value *out) {
     return r;
 }
 
+int sjs_vm_strict_equal(sjs_value a, sjs_value b) {
+    if (sjs_is_primitive(a) && sjs_is_primitive(b)) return sjs_strict_equal_primitive(a, b);
+    if (sjs_is_primitive(a) || sjs_is_primitive(b)) return 0;
+    return SJS_VM_UNDECIDED;
+}
+
+int sjs_vm_order(uint8_t operator, sjs_value a, sjs_value b) {
+    if (a.kind == SJS_NUMBER && b.kind == SJS_NUMBER) {
+        double x = a.as.number;
+        double y = b.as.number;
+        return operator == SJS_OP_LESS ? x < y : operator == SJS_OP_LESS_EQUAL ? x <= y
+             : operator == SJS_OP_GREATER ? x > y : x >= y;
+    }
+    if (a.kind == SJS_STRING && b.kind == SJS_STRING) {
+        int32_t c = sjs_utf16_compare(sjs_string_view(SJS_AS_STRING(a)), sjs_string_view(SJS_AS_STRING(b)));
+        return operator == SJS_OP_LESS ? c < 0 : operator == SJS_OP_LESS_EQUAL ? c <= 0
+             : operator == SJS_OP_GREATER ? c > 0 : c >= 0;
+    }
+    return SJS_VM_UNDECIDED;
+}
+
 /* The operator applied to the two values on top of the stack. */
 static sjs_result apply_binary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
     const sjs_value *pair = &vm->stack[vm->sp - 2];
@@ -298,15 +319,11 @@ static sjs_result apply_binary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
         return add(vm, pair, out);
     case SJS_OP_STRICT_EQUAL:
     case SJS_OP_STRICT_NOT_EQUAL: {
-        bool equal;
-        if (sjs_is_primitive(a) && sjs_is_primitive(b)) {
-            equal = sjs_strict_equal_primitive(a, b);
-        } else if (sjs_is_primitive(a) || sjs_is_primitive(b)) {
-            equal = false;
-        } else {
+        int equal = sjs_vm_strict_equal(a, b);
+        if (equal == SJS_VM_UNDECIDED) {
             return sjs_vm_fault(vm, "=== on two objects compares identity, which staticjs does not have");
         }
-        *out = sjs_boolean(operator == SJS_OP_STRICT_EQUAL ? equal : !equal);
+        *out = sjs_boolean(operator == SJS_OP_STRICT_EQUAL ? equal != 0 : equal == 0);
         return SJS_OK;
     }
     case SJS_OP_IN:
@@ -315,20 +332,9 @@ static sjs_result apply_binary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
     case SJS_OP_LESS_EQUAL:
     case SJS_OP_GREATER:
     case SJS_OP_GREATER_EQUAL: {
-        bool result;
-        if (a.kind == SJS_NUMBER && b.kind == SJS_NUMBER) {
-            double x = a.as.number;
-            double y = b.as.number;
-            result = operator == SJS_OP_LESS ? x < y : operator == SJS_OP_LESS_EQUAL ? x <= y
-                   : operator == SJS_OP_GREATER ? x > y : x >= y;
-        } else if (a.kind == SJS_STRING && b.kind == SJS_STRING) {
-            int32_t c = sjs_utf16_compare(sjs_string_view(SJS_AS_STRING(a)), sjs_string_view(SJS_AS_STRING(b)));
-            result = operator == SJS_OP_LESS ? c < 0 : operator == SJS_OP_LESS_EQUAL ? c <= 0
-                   : operator == SJS_OP_GREATER ? c > 0 : c >= 0;
-        } else {
-            return sjs_vm_fault(vm, "staticjs compares two numbers or two strings");
-        }
-        *out = sjs_boolean(result);
+        int result = sjs_vm_order(operator, a, b);
+        if (result == SJS_VM_UNDECIDED) return sjs_vm_fault(vm, "staticjs compares two numbers or two strings");
+        *out = sjs_boolean(result != 0);
         return SJS_OK;
     }
     default: {
