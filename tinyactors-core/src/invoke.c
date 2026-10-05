@@ -952,14 +952,12 @@ void ta_invoke_release(ta_system *system, ta_actor *actor) {
 /* error.communication.invoke.<id>.<reason> (ADR 0081) */
 static ta_result ta_invoke_error_name(ta_system *system, ta_invoke_id invoke, ta_str reason, ta_event_name_id *out) {
     ta_event_name_id name = 0;
-    ta_atom invoke_atom = 0;
     ta_atom reason_atom = 0;
-    ta_result result = ta_atom_intern(&system->atoms, (ta_str){ .ptr = "invoke", .len = 6 }, &invoke_atom);
+    /* `invoke` is a system-lifetime atom made at creation (event_name.h), so only the reason can grow the table. */
+    ta_result result = ta_atom_intern(&system->atoms, reason, &reason_atom);
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, reason, &reason_atom);
-    }
-    if (result == TA_OK) {
-        result = ta_event_name_child(&system->event_names, TA_EVENT_NAME_ERROR_COMMUNICATION, invoke_atom, &name);
+        result = ta_event_name_child(&system->event_names, TA_EVENT_NAME_ERROR_COMMUNICATION,
+                                     system->event_names.invoke_segment, &name);
     }
     ta_str text = ta_invoke_id_text(system, invoke);
     ta_atom id_atom = 0;

@@ -38,6 +38,10 @@ ta_result ta_event_name_table_init(ta_event_name_table *table,
     for (uint32_t index = 0; result == TA_OK && index < TA_ARRAY_COUNT(builtins); index += 1) {
         result = ta_event_name_builtin(table, builtins[index]);
     }
+    if (result == TA_OK) {
+        /* Interned just above as the last built-in: a find, which cannot insert. */
+        result = ta_atom_find(atoms, (ta_str){ .ptr = "invoke", .len = 6 }, &table->invoke_segment);
+    }
     if (result != TA_OK) {
         ta_event_name_table_destroy(table);
     }

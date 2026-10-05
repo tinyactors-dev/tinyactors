@@ -7572,6 +7572,14 @@ TA_PRIVATE bool ta_session_route(const ta_system *system, const ta_actor_ref *re
  *     the trie, knowing atoms only as numbers, cannot make;
  *   - the dotted text form, used by the compiler for authored names.
  *
+ * Generated prefixes. Every segment core itself puts in a generated name is
+ * an atom from ta_system_create on: error, execution, communication,
+ * platform, done, state and invoke (the `invoke` of both done.invoke.<id> and
+ * error.communication.invoke.<id>.<reason>). They are interned by
+ * ta_event_name_table_init, the one safe point, and never added later, so
+ * code that builds or matches a generated name finds them with
+ * ta_atom_find or reads `invoke_segment`, and never needs to intern them.
+ *
  * Lifetime: system. The table does not own the atom table it points at (the
  * system does, and destroys the trie first); the trie it embeds owns its
  * nodes and index. Names are never removed.
@@ -7595,6 +7603,9 @@ typedef struct {
     ta_atom_table *atoms;
     /* Event names are the trie's nodes. Its max_depth is the system's eventNameDepth (ADR 0092). */
     ta_atom_trie trie;
+    /* The atom of `invoke`, the segment of error.communication.invoke.<id>.<reason>.
+     * System lifetime; an index into `atoms`, set once by ta_event_name_table_init. */
+    ta_atom invoke_segment;
 } ta_event_name_table;
 
 enum {
@@ -16511,6 +16522,10 @@ TA_PRIVATE ta_result ta_event_name_table_init(ta_event_name_table *table,
     for (uint32_t index = 0; result == TA_OK && index < TA_ARRAY_COUNT(builtins); index += 1) {
         result = ta_event_name_builtin(table, builtins[index]);
     }
+    if (result == TA_OK) {
+        /* Interned just above as the last built-in: a find, which cannot insert. */
+        result = ta_atom_find(atoms, (ta_str){ .ptr = "invoke", .len = 6 }, &table->invoke_segment);
+    }
     if (result != TA_OK) {
         ta_event_name_table_destroy(table);
     }
@@ -19781,14 +19796,12 @@ TA_PRIVATE void ta_invoke_release(ta_system *system, ta_actor *actor) {
 /* error.communication.invoke.<id>.<reason> (ADR 0081) */
 static ta_result ta_invoke_error_name(ta_system *system, ta_invoke_id invoke, ta_str reason, ta_event_name_id *out) {
     ta_event_name_id name = 0;
-    ta_atom invoke_atom = 0;
     ta_atom reason_atom = 0;
-    ta_result result = ta_atom_intern(&system->atoms, (ta_str){ .ptr = "invoke", .len = 6 }, &invoke_atom);
+    /* `invoke` is a system-lifetime atom made at creation (event_name.h), so only the reason can grow the table. */
+    ta_result result = ta_atom_intern(&system->atoms, reason, &reason_atom);
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, reason, &reason_atom);
-    }
-    if (result == TA_OK) {
-        result = ta_event_name_child(&system->event_names, TA_EVENT_NAME_ERROR_COMMUNICATION, invoke_atom, &name);
+        result = ta_event_name_child(&system->event_names, TA_EVENT_NAME_ERROR_COMMUNICATION,
+                                     system->event_names.invoke_segment, &name);
     }
     ta_str text = ta_invoke_id_text(system, invoke);
     ta_atom id_atom = 0;

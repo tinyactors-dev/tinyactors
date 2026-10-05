@@ -18,6 +18,14 @@
  *     the trie, knowing atoms only as numbers, cannot make;
  *   - the dotted text form, used by the compiler for authored names.
  *
+ * Generated prefixes. Every segment core itself puts in a generated name is
+ * an atom from ta_system_create on: error, execution, communication,
+ * platform, done, state and invoke (the `invoke` of both done.invoke.<id> and
+ * error.communication.invoke.<id>.<reason>). They are interned by
+ * ta_event_name_table_init, the one safe point, and never added later, so
+ * code that builds or matches a generated name finds them with
+ * ta_atom_find or reads `invoke_segment`, and never needs to intern them.
+ *
  * Lifetime: system. The table does not own the atom table it points at (the
  * system does, and destroys the trie first); the trie it embeds owns its
  * nodes and index. Names are never removed.
@@ -41,6 +49,9 @@ typedef struct {
     ta_atom_table *atoms;
     /* Event names are the trie's nodes. Its max_depth is the system's eventNameDepth (ADR 0092). */
     ta_atom_trie trie;
+    /* The atom of `invoke`, the segment of error.communication.invoke.<id>.<reason>.
+     * System lifetime; an index into `atoms`, set once by ta_event_name_table_init. */
+    ta_atom invoke_segment;
 } ta_event_name_table;
 
 enum {
