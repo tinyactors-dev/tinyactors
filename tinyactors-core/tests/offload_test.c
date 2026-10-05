@@ -171,9 +171,9 @@ static void finish(fixture *f) {
 }
 
 static void run(fixture *f, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(f->system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 }
 
 static ta_actor_id spawn(fixture *f, const ta_actor_address *address) {
@@ -189,13 +189,13 @@ static void deliver(fixture *f, ta_actor_id actor, const char *name) {
     CHECK(ta_system_intern_atom(f->system, (ta_str){ .ptr = name, .len = (uint32_t)strlen(name) }, &atom) == TA_OK);
     ta_event_name_id event = 0;
     CHECK(ta_event_name_intern(f->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &event) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(f->system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(f->system), .actor = actor,
                                                          .event = &(ta_event){ .name = event,
                                                                               .type = TA_EVENT_EXTERNAL } },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 }
 
 /* True when `state` of the chart is active in `actor`. */

@@ -7,7 +7,9 @@ The smallest useful mental model is:
 - a **definition** is one immutable statechart revision shared by many actors;
 - an **actor** is one running statechart session, optionally reachable by a logical named address;
 - an **event** is delivered to one actor;
-- `ta_actor_resume()` advances that actor for a caller-supplied execution budget;
+- core admits the event into its pool, and `ta_run()` runs the admitted inputs
+  in arrival order for a caller-supplied execution budget, reporting what
+  became of each;
 - data models, I/O processors, and invoked services are host-provided interfaces;
 - the host data-model object graph remains host-owned;
 - every resident actor can be inspected;

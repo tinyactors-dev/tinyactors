@@ -219,7 +219,8 @@ async function foreachNames() {
 }
 
 // A small actionBudget splits a <foreach> over a large array across turns,
-// and other actors run between them (core ADR 0061; left by step 5).
+// one slice a turn (core ADR 0061; left by step 5). It holds core's one
+// macrostep slot (core ADR 0103): the other actor runs after it.
 async function foreachAcrossTurns() {
   const system = createSystem({ parameters: { actionBudget: 50 } });
   const busy = system.spawn(
@@ -235,7 +236,7 @@ async function foreachAcrossTurns() {
   await tick();
   await tick();
   assert.equal(busy.inspect().macrostepInProgress, true, 'paused inside the foreach');
-  assert.deepEqual(other.inspect().activeStates, ['idle'], 'another actor ran meanwhile');
+  assert.deepEqual(other.inspect().activeStates, [], 'the other actor waits for the slot');
   let turns = 2;
   while (busy.inspect().scheduling === 'runnable') {
     await tick();
@@ -243,7 +244,9 @@ async function foreachAcrossTurns() {
     assert.ok(turns < 1000);
   }
   assert.equal(busy.inspect().data.count, 1000);
-  assert.ok(turns >= 20, `1000 iterations at 50 actions per resume took ${turns} turns`);
+  assert.ok(turns >= 20, `1000 iterations at 50 actions per run took ${turns} turns`);
+  await system.flush();
+  assert.deepEqual(other.inspect().activeStates, ['idle'], 'the other actor ran after it');
   system.close();
 }
 
@@ -365,7 +368,9 @@ async function pingPong() {
 // with the reason and the target (napi ADR 0022), and no dead letter.
 async function originOfADestroyedSender() {
   const dead = [];
-  const system = createSystem({ parameters: { messageBudget: 1 }, deadLetter: (record) => dead.push(record) });
+  // One input a turn: the sender finishes in one turn, its done hook
+  // destroys it, and its hello is taken in a later turn.
+  const system = createSystem({ parameters: { resumesPerTurn: 1 }, deadLetter: (record) => dead.push(record) });
   const receiver = system.spawn(
     system.define(
       statechart({ family: 'receiver', revision: 'v1' })

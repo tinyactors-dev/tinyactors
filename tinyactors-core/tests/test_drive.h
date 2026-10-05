@@ -19,9 +19,9 @@
  * ## Use
  *
  * ```c
- * ta_run_status status = TA_RUN_ERROR;
+ * test_drive_status status = TEST_DRIVE_ERROR;
  * CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
- * CHECK(status == TA_RUN_STABLE);
+ * CHECK(status == TEST_DRIVE_STABLE);
  * CHECK(test_drive_deliver(system,
  *                          &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
  *                                                      .event = &event },
@@ -30,23 +30,35 @@
  *
  * ## Contract
  *
- * - `test_drive_run` is one run of the actor: it runs what the actor
- *   holds until the actor is idle (stable or done), or until a limit in
- *   `test_drive_run_params` stops it, paused, where the next run
- *   continues. Its result and its status are the run's own: the helper
- *   neither retries nor loops, so a test that needs several runs, or that
- *   checks the actor between pauses, calls it once per run.
- * - `test_drive_deliver` offers the event and, when the actor accepts it,
+ * - `test_drive_run` is one run of the actor: one `ta_run()` call with the
+ *   actor as its session filter and room for one outcome, so it runs what
+ *   the actor holds (its bootstrap, the input admitted for it, or the
+ *   macrostep a limit paused) until that input's macrostep ends, or until a
+ *   limit in `test_drive_run_params` pauses it, where the next run
+ *   continues. With `release`, a session a fault stopped is released first
+ *   (`ta_actor_release()`), as a host that lets it go on does; without it,
+ *   such a session's run finds nothing to run. Its result
+ *   and its status are the run's own: the helper neither retries nor
+ *   loops, so a test that needs several runs, or that checks the actor
+ *   between pauses, calls it once per run.
+ * - The status is the input's outcome: stable (COMPLETED or IGNORED), done
+ *   (FINISHED), paused (the call paused inside the macrostep), or error (a
+ *   FAULTED or REFUSED outcome, whose code the run answers, or a ta_run()
+ *   that failed). A run that finds nothing to run is stable, or done for a
+ *   finished actor, and answers TA_ERR_NOT_FOUND when there is no such
+ *   actor.
+ * - `test_drive_deliver` admits the event and, when the actor accepts it,
  *   runs the actor once as `test_drive_run` does. It answers the
  *   delivery's result when the actor refuses the event, and then runs
  *   nothing and leaves `status` and `ignored` untouched; otherwise it
  *   answers the run's result.
  * - A null `test_drive_run_params` is all defaults: the budget
- *   `TEST_DRIVE_BUDGET`, no other limit, and no status reported.
+ *   `TEST_DRIVE_BUDGET`, no other limit, no release, and no status
+ *   reported.
  *
- * A test whose point is the exact result of delivery or of a run (a busy
- * actor, a refusal, running out of memory, a runaway) calls core
- * directly where it asserts that result.
+ * A test whose point is the exact result of admission or of a run (a full
+ * pool, a refusal, running out of memory, a runaway) calls core directly
+ * where it asserts that result.
  *
  * ## Memory
  *
@@ -65,10 +77,18 @@
 /** The number of microsteps a run may take when the test sets none. */
 #define TEST_DRIVE_BUDGET 100u
 
+/** How one run of an actor ended; see the file comment. */
+typedef enum {
+    TEST_DRIVE_STABLE = 0,
+    TEST_DRIVE_DONE = 1,
+    TEST_DRIVE_PAUSED = 2,
+    TEST_DRIVE_ERROR = 3
+} test_drive_status;
+
 /**
  * How far one run may go, and where it reports. Zeroed, it is the
- * defaults: `TEST_DRIVE_BUDGET` microsteps, no other limit, nothing
- * reported.
+ * defaults: `TEST_DRIVE_BUDGET` microsteps, no other limit, no release,
+ * nothing reported.
  */
 typedef struct {
     /* Microsteps the run may take before it pauses; 0 is TEST_DRIVE_BUDGET. */
@@ -76,14 +96,14 @@ typedef struct {
     /* Units of executable content the run may take before it pauses inside
      * a microstep; 0 is no such limit. */
     uint32_t action_budget;
-    /* Lifts the microstep limit for this run, as for an actor an operator
-     * released after a runaway. */
-    bool no_microstep_limit;
     /* Pauses before the first unit of every microstep the run begins. */
     bool pause_at_microstep_start;
+    /* Releases the session first when a fault stopped it
+     * (`ta_actor_release()`), so the run continues its input. */
+    bool release;
     /* When not null, receives how the run ended: stable, done, paused or
      * error. */
-    ta_run_status *status;
+    test_drive_status *status;
     /* When not null, set when the run ends a macrostep whose external event
      * enabled no transition, cleared when it ends one that did; untouched
      * when it ends none. */
@@ -91,22 +111,62 @@ typedef struct {
 } test_drive_run_params;
 
 /**
- * Runs `actor` once: what it holds, until it is idle or a limit in `run`
- * (null for the defaults) pauses it. Answers the run's result: TA_OK
- * whatever the status, or the error that stopped it.
+ * Runs `actor` once: what it holds, until its input is done or a limit in
+ * `run` (null for the defaults) pauses it. Answers the run's result: TA_OK
+ * for a stable, done or paused run, or the error that stopped it.
  */
 static inline ta_result test_drive_run(ta_system *system, ta_actor_id actor, const test_drive_run_params *run) {
     test_drive_run_params limits = run != NULL ? *run : (test_drive_run_params){0};
-    ta_run_status status = TA_RUN_ERROR;
-    return ta_actor_resume(system, &(ta_actor_resume_params){
-                                                   .actor = actor,
-                                                   .budget = limits.budget != 0 ? limits.budget : TEST_DRIVE_BUDGET,
-                                                   .status = limits.status != NULL ? limits.status : &status,
-                                                   .action_budget = limits.action_budget,
-                                                   .no_microstep_limit = limits.no_microstep_limit,
-                                                   .pause_at_microstep_start = limits.pause_at_microstep_start,
-                                                   .ignored = limits.ignored,
-                                               });
+    test_drive_status ended = TEST_DRIVE_ERROR;
+    test_drive_status *status = limits.status != NULL ? limits.status : &ended;
+    if (limits.release) {
+        (void)ta_actor_release(system, actor); /* a session a fault stopped goes on; any other answers no */
+    }
+    ta_input_outcome outcome = { .kind = TA_INPUT_TAKEN };
+    uint32_t count = 0;
+    ta_run_status run_status = TA_RUN_IDLE;
+    ta_result result = ta_run(system, &(ta_run_params){
+                                          .budget = limits.budget != 0 ? limits.budget : TEST_DRIVE_BUDGET,
+                                          .action_budget = limits.action_budget,
+                                          .pause_at_microstep_start = limits.pause_at_microstep_start,
+                                          .session = actor,
+                                          .outcomes = &outcome,
+                                          .outcome_capacity = 1,
+                                          .outcome_count = &count,
+                                          .status = &run_status,
+                                      });
+    if (result != TA_OK) {
+        *status = TEST_DRIVE_ERROR;
+        return result;
+    }
+    if (count == 0) {
+        if (run_status == TA_RUN_PAUSED) {
+            *status = TEST_DRIVE_PAUSED;
+            return TA_OK;
+        }
+        ta_actor_inspection view;
+        result = ta_actor_inspect(system, actor, &view);
+        *status = result != TA_OK                         ? TEST_DRIVE_ERROR
+                  : view.residency == TA_ACTOR_DONE ? TEST_DRIVE_DONE
+                                                          : TEST_DRIVE_STABLE;
+        return result;
+    }
+    switch (outcome.kind) {
+    case TA_INPUT_COMPLETED:
+    case TA_INPUT_IGNORED:
+        *status = TEST_DRIVE_STABLE;
+        break;
+    case TA_INPUT_FINISHED:
+        *status = TEST_DRIVE_DONE;
+        break;
+    default:
+        *status = TEST_DRIVE_ERROR;
+        return outcome.code;
+    }
+    if (limits.ignored != NULL) {
+        *limits.ignored = outcome.kind == TA_INPUT_IGNORED;
+    }
+    return TA_OK;
 }
 
 /**

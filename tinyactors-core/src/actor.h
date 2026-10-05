@@ -54,7 +54,10 @@
  * `ta_actor_new` allocates the block, and refills the table's pool by one
  * page when no slot is free, at the point where it allocates the block;
  * `ta_actor_free` releases what the actor holds (its sparse state, its
- * event block, its session entry) and frees the block.
+ * event block, its session entry, the input it took and the inputs
+ * deferred for it, which go back to the run queue) and frees the block.
+ * An actor's deferred list and the input its event block names are pool
+ * envelopes (`envelope.h`): the actor owns neither, only the indices.
  * The definition outlives each of its actors: it counts them in
  * `actor_count`. The event block is lent to an actor from delivery or its
  * first internal event until its macrostep ends (ADR 0064, ADR 0069).
@@ -86,6 +89,7 @@
 #include "continuation.h"
 #include "definition.h"
 #include "index_pool.h"
+#include "list.h"
 #include "invoke.h"
 #include "timer.h"
 #include "session.h"
@@ -126,6 +130,10 @@ typedef struct ta_activation_effects {
      * and `clock` is its own logical time, moved by each input's time (ADR 0094). */
     bool replaying;
     ta_time clock;
+    /* The latest time an input admitted for it carries. Its clock moves
+     * only when ta_run() takes an input, so admission checks the next
+     * input's time against this as well (ADR 0094 section 1). */
+    ta_time admitted;
     /* QUEUED records of the checkpoint the replay started from (ADR 0091)
      * still to hand back, although their seq is the checkpoint's. */
     uint32_t checkpoint_owed;
@@ -186,7 +194,7 @@ typedef struct {
      * when its macrostep ends, cleared with the event. Fills padding. */
     bool external_ignored;
     /* `time` holds the running macrostep's logical time (ADR 0089 section
-     * 9), taken by the first ta_actor_resume() of the macrostep. */
+     * 9), taken by the macrostep's first run. */
     bool timed;
     ta_time time;
     /* The external event of the running macrostep. Inspection reports it
@@ -203,6 +211,19 @@ typedef struct {
      * parent stays with its actor until the macrostep ends.
      */
     ta_trace_parent trace;
+    /*
+     * The pool envelope of the input this macrostep runs (run.h): taken
+     * from the run queue when the macrostep began, and given back when it
+     * ends; 0 while no input is taken.
+     */
+    uint32_t input;
+    /* A fault stopped the macrostep: it waits for ta_actor_release(). */
+    bool stopped;
+    /* The fault was the microstep limit (ADR 0075). */
+    bool runaway;
+    /* Released after a runaway: the rest of this macrostep runs without
+     * the microstep limit. */
+    bool unlimited;
 } ta_event_slots;
 
 /*
@@ -260,6 +281,9 @@ struct ta_actor {
     ta_actor_sparse_state *sparse;
     /* Its event block (ADR 0064), or null. */
     ta_event_block *event_block;
+    /* Its inputs that ta_run() reached while it was in a macrostep, in
+     * arrival order, linked through the pool's envelopes (run.h). */
+    ta_list deferred;
     ta_actor_id replacement_of;
     /* The session this actor holds (ADR 0066), and its entry in the session
      * table when that ID is not this actor's runtime ID. */
@@ -399,10 +423,16 @@ bool ta_actor_replaying(const ta_actor *actor);
 /* The time the actor lives at: a replaying actor's own clock, otherwise the
  * system's (ADR 0089 section 2). */
 ta_time ta_actor_now(const ta_system *system, const ta_actor *actor);
-/* Whether `time` may be an input's time for `actor` (ADR 0094 section 1). */
+/* Whether `time` may be an input's time for `actor` (ADR 0094 section 1):
+ * for a replaying actor, no earlier than its clock or than the last input
+ * admitted for it, and no later than the system's. */
 bool ta_actor_input_time_valid(const ta_system *system, const ta_actor *actor, ta_time time);
-/* Moves a replaying actor's clock to a checked `time`, dropping held delayed
- * sends due by then (ADR 0089 section 2); nothing for any other actor. */
+/* An input with a checked `time` was admitted for `actor`: the next one may
+ * not be earlier. Nothing for an actor that is not replaying. */
+void ta_actor_note_admitted(ta_actor *actor, ta_time time);
+/* Moves a replaying actor's clock to `time`, dropping held delayed sends due
+ * by then (ADR 0089 section 2); a time before its clock leaves it as it is,
+ * and nothing happens for any other actor. */
 void ta_actor_move_clock(ta_actor *actor, ta_time time);
 
 /* Materialized effects of an unpublished replacement's bootstrap. */

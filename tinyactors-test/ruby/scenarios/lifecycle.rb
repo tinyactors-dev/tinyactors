@@ -84,18 +84,29 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
 
   # Catches: destroy of a busy actor that leaks its paused macrostep (the
   # current event, the internal queue) or crashes when its self-send, already
-  # submitted, is retried against the dead ID.
-  scenario 'destroying a paused actor releases it and its submitted send fails cleanly' do
+  # admitted behind that macrostep, is reached after the actor is gone.
+  scenario 'destroying a paused actor releases it and its admitted send fails cleanly' do
     router = recording_router
     relay = spawn :relay
     bystander = spawn :relay
     relay.post('go')
     3.times { assert_equal 'paused', relay.resume(budget: 1) }
-    relay.destroy
+    # Destroyed without running the system, so the run below is the one that
+    # reaches the self-send.
+    core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: relay.handle))
+    forget(relay)
 
     submits = router.entries('submit').map { |entry| entry.values_at(:status, :result) }
-    assert_equal [%w[retry err_busy], %w[error err_not_found]], submits
+    assert_equal [%w[accepted ok]], submits, 'the self-send was admitted while the macrostep ran'
     assert_equal [bystander.handle], rpc('system.actors', system: system_handle)
+    # Running the system reaches the self-send, which core refuses: its
+    # session is gone.
+    response = ta.run(system: system_handle, budget: 64, outcome_capacity: 8)
+    assert_equal 'ok', response[:result]
+    assert_equal [['refused', 'err_not_found', relay.handle]],
+                 Array(response.dig(:out, :outcomes)).map { |outcome| outcome.values_at(:kind, :code, :actor) },
+                 'the destroyed sender\'s send is refused, once'
+    assert_equal 'idle', response.dig(:out, :status)
     bystander.deliver 'go'
     assert_equal ['go', 'n=5', 'counted', 'ping'], bystander.data('.log')
   end

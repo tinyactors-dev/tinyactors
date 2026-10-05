@@ -3,17 +3,10 @@
 # An invoked child that reaches its final state has to tell its parent
 # (`done.invoke.<id>`), and the parent may be busy with its own macrostep
 # when that happens. `docs/internal/actor-lifecycle.md` describes the
-# protocol:
-#
-#   "An invoked child retains a pending completion while its parent is
-#   busy; ta_actor_publish_completion() retries publication, and
-#   destruction is busy while the parent invocation remains active. If that
-#   invocation was cancelled, publication returns TA_ERR_NOT_FOUND, retires
-#   the pending completion, and allows reclamation without manufacturing a
-#   done event."
-#
-# The header adds: "Retries an invoked child's completion after
-# TA_ERR_BUSY."
+# protocol: the child retains a pending completion until its parent's pool
+# admits it; a parent inside a macrostep admits it and takes it after that
+# macrostep; "ta_actor_publish_completion() retries publication, and
+# destruction is busy while the parent invocation remains active."
 #
 # A scenario reaches that window by driving the macrosteps itself: the
 # parent accepts `finish` and runs one microstep (which forwards it to the
@@ -44,10 +37,9 @@ TinyactorsTest.scenarios 'invoked completion' do
   scenario 'a child that finishes while its parent is busy keeps its completion' do
     parent, child = InvokedCompletion.park(self)
 
-    held = Array(child.inspect_actor[:delayed_sends])
-    assert_equal 1, held.size, 'the undelivered completion is held for a retry'
-    assert_equal true, held.first[:submitted], 'the held completion waits to be offered again'
-    assert_equal [], parent.data('.log').grep(/done/), 'the busy parent has not been told yet'
+    assert_equal [], Array(child.inspect_actor[:delayed_sends]),
+                 'the completion was admitted for the parent: nothing waits for a retry'
+    assert_equal [], parent.data('.log').grep(/done/), 'the busy parent has not taken it yet'
 
     run_system('let the parent finish its macrostep')
     assert_equal ['progress 21', 'done 42'], parent.data('.log')
@@ -62,11 +54,38 @@ TinyactorsTest.scenarios 'invoked completion' do
 
     assert_equal 'ok', publish_completion(child)
     assert_equal 'ok', publish_completion(child), 'the retry is idempotent'
-    assert_equal 1, Array(child.inspect_actor[:delayed_sends]).size, 'still one pending delivery'
+    assert_equal [], Array(child.inspect_actor[:delayed_sends]), 'nothing waits for a retry'
+    assert_equal [], parent.data('.log').grep(/done/), 'the busy parent has not taken it yet'
 
     run_system('let the parent finish its macrostep')
     assert_equal ['progress 21', 'done 42'], parent.data('.log'),
                  'the parent was told once, however often the host retried'
+  end
+
+  # Catches: a completion lost when the parent's pool refused it, or one
+  # told twice when the host publishes it again. With a small pool the
+  # child's completion finds no room (TA_ERR_FULL): the child keeps it as
+  # one submitted delayed send; publishing it while the pool is still full
+  # (the parent's paused input and an event posted to it) keeps it so, and
+  # publishing after a run that made room admits it, once.
+  scenario 'a completion the parent\'s pool refused is published again after a run' do
+    system_params(pool_envelopes: 8, admission_watermark: 25) # 2 of 8 envelopes for admission
+    parent, child = InvokedCompletion.park(self)
+
+    held = Array(child.inspect_actor[:delayed_sends])
+    assert_equal 1, held.size, 'the refused completion is held for a retry'
+    assert_equal true, held.first[:submitted], 'the held completion waits to be offered again'
+    assert_equal 'ok', parent.post('noise'), 'the second envelope admission may use'
+    assert_equal 'ok', publish_completion(child), 'publishing into the full pool keeps it'
+    assert_equal 1, Array(child.inspect_actor[:delayed_sends]).size, 'still one pending delivery'
+    assert_equal [], parent.data('.log').grep(/done/), 'the busy parent has not been told'
+
+    assert_equal 'stable', parent.resume(budget: 64), 'the parent ends its macrostep and gives its input back'
+    assert_equal 'ok', publish_completion(child)
+    assert_equal [], Array(child.inspect_actor[:delayed_sends]), 'admitted: nothing waits for a retry'
+    run_system('let the parent take it')
+    assert_equal ['progress 21', 'done 42'], parent.data('.log'), 'the parent was told exactly once'
+    assert_equal [], invoked_actors, 'the child is reclaimed once its parent has been told'
   end
 
   # Catches: publication for an actor that is not a finished invoked child.

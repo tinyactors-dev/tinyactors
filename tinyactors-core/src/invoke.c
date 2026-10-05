@@ -15,6 +15,7 @@
 #include "definition.h"
 #include "actor.h"
 #include "system.h"
+#include "run.h"
 
 /*
  * SCXML <invoke>: starting services at the end of a macrostep, cancelling
@@ -1093,31 +1094,50 @@ bool ta_invoke_retire_all(ta_system *system, ta_actor *actor) {
 }
 
 /*
- * An ERROR report (ADR 0081). The event joins the internal queue whether
- * the session is idle or inside a macrostep, so it never answers BUSY; an
- * idle session starts a macrostep. With `ends`, the invocation is retired
- * only once the event is queued, so a failure changes nothing.
+ * An ERROR report (ADR 0081), admitted into the pool as an input (run.h):
+ * its event's name is made now, and ta_run() takes it between macrosteps
+ * (ta_invoke_take_report). A failure changes nothing.
  */
-static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, uint32_t index,
-                                        const ta_invoke_report_params *params) {
+static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, const ta_invoke_report_params *params) {
     const ta_invoke_error *error = params->as.error;
     if (error == NULL || !ta_invoke_reason_valid(error->reason)) {
         return TA_ERR_INVALID;
     }
-    /* An input reaches a session only between macrosteps (ADR 0089
-     * section 4), so the host keeps the report, as it keeps mail that
-     * ta_actor_deliver() refused, and a log can say where it fell. */
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
-        return TA_ERR_BUSY;
-    }
-    ta_result result = ta_invoke_raise(system, actor, params->invoke_id, error->reason, error->data, &params->trace);
+    ta_event_name_id name = 0;
+    ta_result result = ta_invoke_error_name(system, params->invoke_id, error->reason, &name);
     if (result != TA_OK) {
         return result;
     }
-    if (error->ends) {
-        ta_invoke_remove_at(actor->sparse, index);
+    return ta_run_admit_report(system, &(ta_run_report){ .actor = actor,
+                                                         .invoke = params->invoke_id,
+                                                         .name = name,
+                                                         .data = error->data,
+                                                         .ends = error->ends,
+                                                         .trace = &params->trace,
+                                                         .time = params->time,
+                                                         .correlation = params->correlation });
+}
+
+ta_result ta_invoke_take_report(ta_system *system, ta_actor *actor, const ta_invoke_report_take *take) {
+    int64_t index = ta_invoke_find(actor, take->invoke);
+    if (index < 0) {
+        return TA_ERR_NOT_FOUND;
     }
-    ta_interpreter_start_macrostep(actor, &params->trace);
+    ta_event event = { .name = take->name, .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE,
+                       .data = *take->data };
+    /* Queueing releases what it was given when it fails; the report keeps its own. */
+    ta_value_retain(&event.data);
+    ta_result result = ta_interpreter_enqueue_internal(system, actor, &event);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_value_release(take->data);
+    *take->data = (ta_value){ 0 };
+    ta_interpreter_raised_outside(system, actor, take->name, take->trace);
+    if (take->ends) {
+        ta_invoke_remove_at(actor->sparse, (uint32_t)index);
+    }
+    ta_interpreter_start_macrostep(actor, take->trace);
     return TA_OK;
 }
 
@@ -1134,16 +1154,6 @@ bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_inv
     }
     *out = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
     return true;
-}
-
-/* An ERROR report; its time becomes the actor's when it is taken (ADR 0094). */
-static ta_result ta_invoke_error_report(ta_system *system, ta_actor *actor, const ta_invoke_report_params *params) {
-    uint32_t index = (uint32_t)ta_invoke_find(actor, params->invoke_id);
-    ta_result result = ta_invoke_report_error(system, actor, index, params);
-    if (result == TA_OK) {
-        ta_actor_move_clock(actor, params->time); /* the report's time is now the actor's (ADR 0094) */
-    }
-    return result;
 }
 
 ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_params *params) {
@@ -1173,7 +1183,8 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace, .time = params->time });
+                                                                  .trace = params->trace, .time = params->time,
+                                                                  .correlation = params->correlation });
         case TA_INVOKE_REPORT_DONE: {
             ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
             if (result != TA_OK) {
@@ -1184,10 +1195,11 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             }
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace, .time = params->time });
+                                                                  .trace = params->trace, .time = params->time,
+                                                                  .correlation = params->correlation });
         }
         case TA_INVOKE_REPORT_ERROR:
-            return ta_invoke_error_report(system, actor, params);
+            return ta_invoke_report_error(system, actor, params);
         default:
             return TA_ERR_INVALID;
     }

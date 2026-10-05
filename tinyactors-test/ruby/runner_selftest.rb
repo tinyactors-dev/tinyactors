@@ -33,7 +33,7 @@ class FakeHost
     @proxy = TinyactorsTest::Proxy.new(self, discovery)
     @calls = []
     @atoms = 0
-    @resumes = 0
+    @runs = 0
   end
 
   def ta = @proxy.ta
@@ -42,22 +42,20 @@ class FakeHost
     @calls << [method, params]
     return { result: 'err_invalid', out: {} } if method == fail_method
 
-    @runnable = true if %w[ta.actor.spawn ta.actor.deliver ta.system.set_time].include?(method)
     case method
     when 'ta.system.create' then ok(out: { '$handle': 'system:1' })
     when 'ta.system.set_external_event_router', 'ta.system.register_invoker' then ok
-    when 'system.actors'
-      # Actor 5 has work after each step until it has been listed once.
-      runnable = @runnable ? [5] : []
-      @runnable = false
-      runnable
     when 'ta.definition.compile_spec' then ok(out: { '$handle': 'definition:2' })
     when 'ta.system.register_definition' then ok(out: 0)
     when 'ta.actor.spawn' then ok(out: 5)
-    when 'ta.actor.resume'
-      # Every other resume leaves the macrostep paused once.
-      @resumes += 1
-      ok(status: @resumes.odd? ? 'paused' : 'stable')
+    when 'ta.run'
+      # Each idle answer follows a paused macrostep and a call that stopped
+      # with inputs left.
+      @runs += 1
+      ok(outcomes: [], outcome_count: 0, status: %w[paused more idle][(@runs - 1) % 3])
+    when 'system.actors'
+      # At quiescence no session is left in a macrostep.
+      params[:runnable] ? [] : [5]
     when 'ta.system.dispatch_due' then ok(dispatched: 0, more_due: false)
     when 'ta.system.set_time', 'ta.actor.deliver' then ok
     when 'ta.system.intern_atom' then ok(out: @atoms += 1)
@@ -98,7 +96,6 @@ invoker = host.calls.find { |method, _| method == 'ta.system.register_invoker' }
 check(invoker[:type] == 1 && invoker.dig(:invoker, '$adapter') == 'invoker.scxml' &&
         invoker.dig(:invoker, 'config', 'charts').key?('traffic_light'),
       'the SCXML invoker is registered with every chart')
-check(methods.include?('system.actors'), 'every resident actor, including invoked children, is settled')
 router = host.calls.find { |method, _| method == 'ta.system.set_external_event_router' }.last
 check(router == { system: { '$handle': 'system:1' },
                   router: { '$adapter' => 'router.direct', 'config' => { 'system' => { '$handle': 'system:1' } } } },
@@ -117,8 +114,10 @@ check(name[:segments] == { atoms: [2, 3] }, "event names travel as a ta_atom_lis
 deliver = host.calls.find { |method, _| method == 'ta.actor.deliver' }.last
 check(deliver[:event] == { name: 9, type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE,
                            data: { reason: 'test' } }, "deliver event: #{deliver[:event]}")
-check(methods.count('ta.actor.resume') >= 2 * methods.count('ta.system.dispatch_due'),
-      'paused macrosteps are resumed until stable')
+check(methods.count('ta.run') >= 3 * methods.count('ta.system.dispatch_due'),
+      'paused macrosteps, and calls with inputs left, are run until core is idle')
+check(host.calls.any? { |method, params| method == 'system.actors' && params[:runnable] },
+      'at quiescence, every session left in a macrostep is cross-checked')
 check(methods.count('ta.definition.state') == 2, 'state names are resolved once per state')
 
 # A non-OK core result fails the step with the function and result.

@@ -1,4 +1,5 @@
 #include "interpreter.h"
+#include "run.h"
 #include "layout.h"
 #include "memory.h"
 #include "str.h"
@@ -933,7 +934,7 @@ static void ta_jump_free(ta_system *system, ta_event_slots *slots) {
 }
 
 /* Notes, as its macrostep ends, whether the external event it took enabled
- * nothing, for ta_actor_resume_params.ignored (ADR 0089 section 8). */
+ * nothing, for an IGNORED outcome (ADR 0089 section 8). */
 static void ta_note_ignored(ta_interpreter *it) {
     ta_event_block *block = it->actor->event_block;
     it->ended_ignored = block != NULL && block->slots.external_ignored;
@@ -944,8 +945,8 @@ static void ta_note_ignored(ta_interpreter *it) {
 
 /*
  * The logical time of the actor's macrostep (ADR 0089 section 9): the one
- * its first resume took, so it does not move while a macrostep spans
- * several resumes; the system's time when no macrostep has one.
+ * its first run took, so it does not move while a macrostep spans
+ * several ta_run() calls; the system's time when no macrostep has one.
  */
 ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *actor) {
     const ta_event_block *block = actor->event_block;
@@ -955,7 +956,7 @@ ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *a
     return ta_actor_now(system, actor);
 }
 
-/* The first resume of a macrostep takes its time, in a block the actor then
+/* The first run of a macrostep takes its time, in a block the actor then
  * holds until the macrostep ends (ta_block_settle). */
 static ta_result ta_take_macrostep_time(ta_system *system, ta_actor *actor) {
     ta_result result = ta_interpreter_hold_block(system, actor);
@@ -1486,17 +1487,31 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
         }
         return TA_OK;
     }
+    /* An asynchronous failure makes an idle actor run a macrostep again,
+     * which a wake on the run queue starts (run.h): it is reserved first,
+     * so the error is queued only when the actor will run it. */
+    uint32_t wake = 0;
+    ta_result result = actor->macrostep ? TA_OK : ta_run_wake_reserve(system, false, &wake);
+    if (result != TA_OK) {
+        if (params->fault != NULL) {
+            ta_value_release(&params->fault->data);
+            params->fault->data = (ta_value){0};
+        }
+        return result;
+    }
     ta_error_params error = *params;
     error.name = TA_EVENT_NAME_ERROR_COMMUNICATION;
-    ta_result result = ta_raise_error(system, actor, &error);
+    result = ta_raise_error(system, actor, &error);
     if (result == TA_OK && params->trace != NULL) {
         /* Queued outside a run, by a delayed send that failed: no unit
          * commits it, so it is counted and recorded here (ADR 0072). */
         ta_interpreter_raised_outside(system, actor, TA_EVENT_NAME_ERROR_COMMUNICATION, params->trace);
     }
     if (result == TA_OK) {
-        /* An asynchronous failure makes an idle actor runnable again. */
         ta_interpreter_start_macrostep(actor, params->trace);
+    }
+    if (wake != 0) {
+        ta_run_wake_place(system, actor, wake);
     }
     return result;
 }
@@ -1600,6 +1615,13 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
         return status;
     }
     if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL) {
+        /*
+         * An idle sender runs its error.communication in a macrostep a wake
+         * starts. When the pool has no envelope for that wake (TA_ERR_FULL,
+         * or TA_ERR_NOMEM when its refill failed), or no room is left in the
+         * sender's queue, the error event is dropped here: the send still
+         * ends, and the sender is never told it failed.
+         */
         (void)ta_communication_error(system, sender,
                                      &(ta_error_params){ .send_id = send->send_id, .fault = &fault,
                                                          .trace = in_run ? NULL : &send->trace });
@@ -4221,7 +4243,7 @@ static void ta_trace_control(ta_interpreter *it, ta_trace_kind kind) {
  * with nothing open, while selecting transitions, leaves nothing to
  * continue: the next run selects again.
  */
-static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *status) {
+static ta_result ta_run_steps(ta_interpreter *it, uint32_t budget, ta_macrostep_status *status) {
     ta_actor *actor = it->actor;
     for (;;) {
         ta_result result = TA_OK;
@@ -4234,25 +4256,24 @@ static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *stat
             ta_trace_begin(it);
         } else if (actor->finished) {
             if (actor->record.residency == TA_ACTOR_DONE) {
-                *status = TA_RUN_DONE;
+                *status = TA_MACROSTEP_FINISHED;
                 return TA_OK;
             }
             it->at = (ta_micro_position){ .phase = TA_PHASE_FINISH, .state = it->definition->state_count,
                                           .stage = TA_FINISH_EXIT };
         } else if (it->microstep_limit != 0 && actor->trace_begun && actor->trace_microstep >= it->microstep_limit) {
             /* Between microsteps, nothing open: the actor stays mid-macrostep
-             * and a later resume continues it (ADR 0075). */
-            *status = TA_RUN_ERROR;
+             * and holds its input until it is released (ADR 0075). */
             return TA_ERR_RUNAWAY;
         } else if (it->steps >= budget) {
             ta_trace_control(it, TA_TRACE_PAUSED);
-            *status = TA_RUN_PAUSED;
+            *status = TA_MACROSTEP_PAUSED;
             return TA_OK;
         } else {
             bool stable = false;
             result = ta_next_step(it, &stable);
             if (result == TA_OK && stable) {
-                *status = TA_RUN_STABLE;
+                *status = TA_MACROSTEP_ENDED;
                 return TA_OK;
             }
         }
@@ -4262,7 +4283,7 @@ static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *stat
         if (result == TA_EXEC_PAUSED) {
             ta_trace_control(it, TA_TRACE_PAUSED);
             ta_stop(it);
-            *status = TA_RUN_PAUSED;
+            *status = TA_MACROSTEP_PAUSED;
             return TA_OK;
         }
         if (result == TA_ERR_NOMEM) {
@@ -4271,20 +4292,21 @@ static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *stat
         if (result == TA_ERR_NOMEM && it->at.phase != TA_PHASE_NONE) {
             ta_stop(it);
         }
-        *status = TA_RUN_ERROR;
         return result;
     }
 }
 
-ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
-    ta_run_status *status = params->status;
+ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, ta_interpreter_run_params *params) {
+    params->steps = 0;
+    params->actions = 0;
+    params->ignored = false;
     if (actor->finished && (actor->sparse == NULL || actor->sparse->paused == NULL)) {
-        *status = TA_RUN_DONE;
+        params->status = TA_MACROSTEP_FINISHED;
         return TA_OK;
     }
     if (!actor->macrostep) {
         /* Idle: its last macrostep ended stable, and nothing waits. */
-        *status = TA_RUN_STABLE;
+        params->status = TA_MACROSTEP_ENDED;
         return TA_OK;
     }
     ta_interpreter interpreter;
@@ -4297,14 +4319,13 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
         result = ta_interpreter_init(it, system, actor);
     }
     if (result != TA_OK) {
-        *status = TA_RUN_ERROR;
         return result;
     }
     it->pausable = true;
     it->action_budget = params->action_budget;
     uint32_t limit = actor->definition->microstep_limit == 0 ? system->params[TA_PARAM_MICROSTEP_LIMIT]
                                                             : actor->definition->microstep_limit;
-    it->microstep_limit = params->no_microstep_limit || limit == TA_MICROSTEP_LIMIT_NONE ? 0 : limit;
+    it->microstep_limit = params->unlimited || limit == TA_MICROSTEP_LIMIT_NONE ? 0 : limit;
     it->pause_at_start = params->pause_at_microstep_start;
     if (it->at.phase != TA_PHASE_NONE) {
         /* Continuing a stopped run changes the actor again, so an image
@@ -4316,9 +4337,13 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
         /* It stopped at a microstep's start: this call passes it. */
         ta_microstep_pass_start(it);
     }
-    result = ta_run(it, params->budget, status);
-    if (params->ignored != NULL && (*status == TA_RUN_STABLE || *status == TA_RUN_DONE)) {
-        *params->ignored = it->ended_ignored;
+    ta_macrostep_status status = TA_MACROSTEP_PAUSED;
+    result = ta_run_steps(it, params->budget, &status);
+    params->status = status;
+    params->steps = it->steps;
+    params->actions = it->actions;
+    if (result == TA_OK && status != TA_MACROSTEP_PAUSED) {
+        params->ignored = it->ended_ignored;
     }
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
     actor->live_active = NULL;

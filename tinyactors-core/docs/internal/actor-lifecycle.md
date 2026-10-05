@@ -24,7 +24,9 @@ A top-level final state terminates statechart processing. It is not necessarily 
 
 The terminal actor remains resident with `TA_ACTOR_DONE` residency.
 `ta_actor_get_completion()` retains the optional `<donedata>` value for the host.
-An invoked child retains a pending completion while its parent is busy;
+An invoked child retains a pending completion until its parent's pool admits
+it, which a full pool refuses (`TA_ERR_FULL`); a parent inside a macrostep
+admits it and takes it after that macrostep.
 `ta_actor_publish_completion()` retries publication, and destruction is busy
 while the parent invocation remains active. If that invocation was cancelled,
 publication returns `TA_ERR_NOT_FOUND`, retires the pending completion, and

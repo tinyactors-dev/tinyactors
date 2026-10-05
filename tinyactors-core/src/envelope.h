@@ -54,6 +54,21 @@
  *   list, in order, to the end of the run queue. A macrostep that is
  *   abandoned frees its outgoing list instead, envelope by envelope.
  *
+ * - **A deferred list** belongs to a session in a macrostep. An envelope
+ *   the run queue holds for such a session moves there when it is reached,
+ *   in arrival order (`ta_envelope_pool_defer`), and goes back into the
+ *   run queue, at the position its arrival number gives it, when the
+ *   session is free to take it (`ta_envelope_pool_return`). It stays
+ *   runnable all the while.
+ *
+ * Taking from the run queue is `ta_envelope_pool_dequeue` for the head;
+ * `ta_envelope_pool_dequeue_after` takes from the middle, behind an
+ * envelope a walk stood on, and `ta_envelope_pool_unqueue` takes one from
+ * wherever it is. `ta_envelope_pool_push_front` puts one back at the head
+ * with its arrival number, for an input that must be taken next, and
+ * `ta_envelope_pool_enqueue_beside` queues one with the arrival number of
+ * another, for an input that counts as having arrived with it.
+ *
  * **Arrival numbers.** The pool numbers each envelope as it joins the run
  * queue, from a `uint32_t` counter that wraps. Numbers are compared modulo
  * 2^32 (`ta_envelope_arrived_before`), which is exact while fewer than
@@ -112,7 +127,8 @@
  * the pool releases nothing, and neither does destroy.
  *
  * - **Never allocate, and may run inside a macrostep:** `take`, `admit`,
- *   `give`, `at`, `admitting`, the links, `enqueue`, `dequeue`, `post`,
+ *   `give`, `at`, `admitting`, the links, `enqueue`, `dequeue`,
+ *   `dequeue_after`, `unqueue`, `push_front`, `return`, `defer`, `post`,
  *   `deliver` and `ta_envelope_arrived_before`.
  * - **`ta_envelope_pool_refill` allocates** pages, up to the bound. It
  *   runs only at a safe point (during admission, after a macrostep ends,
@@ -129,7 +145,9 @@
  * | Operation | Cost |
  * |---|---|
  * | `take`, `admit`, `give`, `at`, `admitting` | O(1) |
- * | `enqueue`, `dequeue`, `post` | O(1) |
+ * | `enqueue`, `dequeue`, `dequeue_after`, `push_front`, `post` | O(1) |
+ * | `return`, `defer`, `enqueue_beside` | O(1) when the envelope lands at the list's tail; otherwise a walk to its place |
+ * | `unqueue` | walks the run queue to the envelope |
  * | `deliver` | O(envelopes on the outgoing list): each gets its arrival number; the splice itself is O(1) |
  * | `refill` | O(1) when enough envelopes are free; otherwise one allocation per page added (`index_pool.h`) |
  * | `trim` | walks the pages and the free list once |
@@ -147,6 +165,8 @@
  *   well, and the input is bounced.
  * - `ta_envelope_pool_refill` answers `TA_ERR_NOMEM` when an allocation
  *   fails, and changes nothing.
+ * - `ta_envelope_pool_unqueue` answers `TA_ERR_NOT_FOUND`, changing
+ *   nothing, when the envelope is not on the run queue.
  * - A failed call changes nothing. Giving an envelope that is not taken,
  *   or one still on a list, and placing an envelope that is already on a
  *   list, are programmer errors, not checked.
@@ -157,9 +177,9 @@
  * `poolEnvelopes`. Sending to a local session, delaying a send, starting
  * a local invocation and admitting external input take an envelope from
  * it; raising an internal event does not. The run queue feeds the
- * macrostep; the outgoing list holds a macrostep's mail until it ends.
- * The deadline index, the owner lists, the deferred lists and the waiting
- * lists are built over the same envelopes and links.
+ * macrostep (`run.h`); the outgoing list holds a macrostep's mail until it
+ * ends. The deadline index, the owner lists, the deferred lists and the
+ * waiting lists are built over the same envelopes and links.
  */
 #pragma once
 
@@ -219,10 +239,10 @@ typedef struct {
     uint8_t source;
     /** `TA_ENVELOPE_FLAG_*`. */
     uint8_t flags;
-    /** The target session's ID (ADR 0066), or, with
-     * `TA_ENVELOPE_FLAG_WAITING_TARGET`, the index of its address's
-     * waiting entry; 0 for a timer whose target is an I/O processor's,
-     * kept as text. */
+    /** The runtime ID of the resident actor that holds the target session,
+     * or, with `TA_ENVELOPE_FLAG_WAITING_TARGET`, the index of its
+     * address's waiting entry; 0 for a timer whose target is an I/O
+     * processor's, kept as text. */
     uint64_t target;
     /** The sending session's ID, or 0 for external input. */
     uint64_t from;
@@ -393,6 +413,77 @@ void ta_envelope_pool_post(ta_envelope_pool *pool, ta_envelope_post post);
  * allocates. Cannot fail.
  */
 void ta_envelope_pool_deliver(ta_envelope_pool *pool, ta_list *outgoing);
+
+/**
+ * Removes the envelope after `previous` on the run queue, or the head when
+ * `previous` is 0, marks it taken and answers its index; answers 0 and
+ * changes nothing when there is none. A walk that runs one session's
+ * inputs takes from the middle this way. O(1). Never allocates.
+ */
+uint32_t ta_envelope_pool_dequeue_after(ta_envelope_pool *pool, uint32_t previous);
+
+/**
+ * Removes `index` from wherever it is on the run queue and marks it taken,
+ * on no list. Walks the run queue: O(its length). Never allocates; may run
+ * inside a macrostep. Answers `TA_ERR_NOT_FOUND`, changing nothing, when
+ * the run queue does not hold it.
+ */
+ta_result ta_envelope_pool_unqueue(ta_envelope_pool *pool, uint32_t index);
+
+/**
+ * Puts `index`, on no list through `next`, back at the head of the run
+ * queue with the arrival number it has, and marks it runnable: an input
+ * that must be taken next. O(1). Never allocates; may run inside a
+ * macrostep. Cannot fail.
+ */
+void ta_envelope_pool_push_front(ta_envelope_pool *pool, uint32_t index);
+
+/**
+ * Puts `index`, a runnable envelope on no list through `next` that has its
+ * arrival number already, back into the run queue at the position that
+ * number gives it: after every envelope that arrived before it. A
+ * session's deferred mail returns this way. O(1) when it arrived after the
+ * tail, otherwise a walk from the head to its place, which it takes behind
+ * any envelope queued with its number. Never allocates; may
+ * run inside a macrostep. Cannot fail.
+ */
+void ta_envelope_pool_return(ta_envelope_pool *pool, uint32_t index);
+
+/** What `ta_envelope_pool_enqueue_beside` queues, and beside what. */
+typedef struct {
+    /** An envelope with an arrival number: taken, or runnable. */
+    uint32_t beside;
+    /** The envelope to queue, on no list through `next`. */
+    uint32_t index;
+} ta_envelope_beside;
+
+/**
+ * Queues `beside.index` on the run queue with the arrival number of
+ * `beside.beside`, behind every envelope that arrived before it or with
+ * the same number, and marks it runnable: an input that counts as having
+ * arrived with another, such as the bootstrap of a session that the other
+ * input's macrostep started, which then runs before the mail that arrived
+ * during that macrostep. Several queued beside one input keep the order
+ * they were queued in. A walk from the head to its place, unless it lands
+ * at the tail. Never allocates; may run inside a macrostep. Cannot fail.
+ */
+void ta_envelope_pool_enqueue_beside(ta_envelope_pool *pool, ta_envelope_beside beside);
+
+/** Where `ta_envelope_pool_defer` puts an envelope. */
+typedef struct {
+    /** The deferred list of the session the envelope is for. */
+    ta_list *deferred;
+    /** The envelope, runnable, taken off the run queue, on no list. */
+    uint32_t index;
+} ta_envelope_defer;
+
+/**
+ * Puts `defer.index` on the deferred list `defer.deferred`, in arrival
+ * order, and keeps it runnable: its session is in a macrostep and takes it
+ * later. O(1) when it arrived after the list's tail, otherwise a walk to
+ * its place. Never allocates; may run inside a macrostep. Cannot fail.
+ */
+void ta_envelope_pool_defer(ta_envelope_pool *pool, ta_envelope_defer defer);
 
 /**
  * Whether arrival number `a` came before `b`, modulo 2^32: exact while

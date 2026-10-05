@@ -729,8 +729,8 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
                                                                    .report = TAH_REPORT_UNAVAILABLE });
         if (result != TA_OK) {
             ta_value_release(&event.data);
-            if (result == TA_ERR_BUSY) {
-                return tna_throw(env, "queue-full", "reportInvoke: the parent's mailbox is full");
+            if (result == TA_ERR_FULL) {
+                return tna_throw(env, "queue-full", "reportInvoke: the system holds as many pending inputs as it admits");
             }
             return tna_throw(env, tna_result_code(result), "reportInvoke: the report was not accepted");
         }
@@ -772,8 +772,8 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
     ta_result result = tah_system_post(system, &(tah_message){ .target = parent, .event = &event, .trace = &trace });
     if (result != TA_OK) {
         ta_value_release(&event.data);
-        if (result == TA_ERR_BUSY) {
-            return tna_throw(env, "queue-full", "reportInvoke: the parent's mailbox is full");
+        if (result == TA_ERR_FULL) {
+            return tna_throw(env, "queue-full", "reportInvoke: the system holds as many pending inputs as it admits");
         }
         return tna_throw(env, tna_result_code(result), "reportInvoke: the report was not accepted");
     }

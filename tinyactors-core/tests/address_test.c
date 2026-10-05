@@ -164,7 +164,7 @@ static ta_actor_id spawn_sender(ta_system *system) {
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .address = &address,
                                                            .out = &actor }) == TA_OK);
     free(name); /* core keeps its own copy of the address */
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     return actor;
 }
@@ -203,7 +203,8 @@ static void test_submitted_send_outlives_its_sender(void) {
 }
 
 /* (c) A host interns an origin, delivers an event from it and lets go of its
- * own reference; the event the actor holds still reads the origin. */
+ * own reference; the event the actor takes, and then holds, still reads the
+ * origin. */
 static void test_delivered_origin_outlives_the_host_reference(void) {
     router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
     one_directory dir = {0};
@@ -231,6 +232,11 @@ static void test_delivered_origin_outlives_the_host_reference(void) {
                                    .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = origin } } };
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
     ta_address_release(origin);
+    /* The pool held the event until the actor takes it; one step takes it,
+     * and the macrostep pauses holding it. */
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .budget = 1, .status = &status }) == TA_OK);
+    CHECK(status == TEST_DRIVE_PAUSED);
 
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.current_event != NULL);

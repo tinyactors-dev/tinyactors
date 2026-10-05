@@ -1,10 +1,11 @@
 # frozen_string_literal: true
 
 # Running out of memory inside a macrostep (ADR 0047, ADR 0070). Every
-# scenario here fails the allocations of every ta_actor_resume a run makes,
-# one at a time, and checks that the resume answers err_nomem, that the
-# stopped actor is still in its macrostep, refuses events and queued no
-# error event, and that resuming it until it runs ends the run exactly as a
+# scenario here fails the allocations of every ta_run a run makes, one at a
+# time, and checks that the input faults with err_nomem (or that ta_run
+# answers it, keeping an input it could not take), that the stopped actor is
+# still in its macrostep, holds a new event back and queued no error event,
+# and that releasing it and running until it runs ends the run exactly as a
 # run without the failure does: configuration, data, queued events, delayed
 # sends, invocations, completion, and every instrument's journal (the
 # events it sent, in order, and what it logged).
@@ -499,6 +500,9 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
           instance_exec(chart, 'subject', &body)
         end
         assert result[:runs] >= 3, "only #{result[:runs]} allocations were failed"
+        assert result[:cycles].positive?, 'a stopped actor was unloaded and loaded'
+        assert_equal result[:stops].size - result[:skipped], result[:cycles],
+                     'every stop not held by admitted mail was unloaded and loaded'
       end
     end
   end
@@ -523,7 +527,7 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
       where = ->(inspection) { [inspection[:step].except(:session), inspection[:position]] }
       20.times do
         allocator.budget(allocator.stats[:live_bytes] + 32)
-        response = ta.actor.resume(system: system_handle, actor: actor.handle, budget: 1024)
+        response = actor.run_once(budget: 1024)
         allocator.budget(0)
         break unless response[:result] == 'err_nomem'
 
@@ -569,9 +573,11 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
 
     # Catches: a second actor that finds no continuation to stop into after
     # the first took the system's spare, or that changes before it has one.
-    # Every run reserves its continuation before it does anything
-    # (ADR 0070), so the second actor's first allocation is that
-    # reservation, and failing it leaves the actor untouched.
+    # Taking an input first gets the session its event block, and every run
+    # then reserves its continuation before it does anything (ADR 0070): so
+    # failing the second actor's first allocation leaves its input waiting,
+    # and failing the next one, that reservation, stops it holding its event
+    # before anything of the macrostep ran.
     scenario "an actor that stops takes the spare continuation, and the next one reserves its own (#{datamodel})" do
       reference = spawn phases
       reference.deliver 'deeper'
@@ -584,7 +590,7 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
 
       20.times do
         allocator.budget(allocator.stats[:live_bytes] + 32)
-        response = ta.actor.resume(system: system_handle, actor: first.handle, budget: 1024)
+        response = first.run_once(budget: 1024)
         allocator.budget(0)
         break if response[:result] == 'err_nomem' && first.inspect_actor[:microstep_in_progress]
       end
@@ -592,9 +598,17 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
 
       before = [second.active, second.data]
       allocator.arm_fault(after: 0, count: 1)
-      response = ta.actor.resume(system: system_handle, actor: second.handle, budget: 1024)
+      response = second.run_once(budget: 1024)
       allocator.clear_faults
-      assert_equal 'err_nomem', response[:result], 'the second actor could not reserve a continuation'
+      assert_equal ['err_nomem', nil], response.values_at(:result, :outcome), 'the second actor could not take go'
+      assert !second.inspect_actor[:macrostep_in_progress], 'go still waits to be taken'
+      assert_equal before, [second.active, second.data], 'nothing of its macrostep ran'
+
+      allocator.arm_fault(after: 1, count: 1)
+      response = second.run_once(budget: 1024)
+      allocator.clear_faults
+      assert_equal %w[err_nomem faulted], response.values_at(:result, :outcome),
+                   'the second actor could not reserve a continuation'
       view = second.inspect_actor
       assert view[:macrostep_in_progress], 'it still holds its event'
       assert !view[:microstep_in_progress], 'it had not begun a microstep'

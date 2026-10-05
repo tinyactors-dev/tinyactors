@@ -178,7 +178,7 @@ TinyactorsTest.scenarios '_event binding' do
       actor = actors.fetch(failing)
       assert_equal 'ok', actor.post('go')
       allocator.arm_fault(after: failing, count: 1)
-      result = ta.actor.resume(system: system_handle, actor: actor.handle, budget: 64)[:result]
+      result = actor.run_once(budget: 64)[:result]
       allocator.clear_faults
       assert_equal 'err_nomem', result, "allocation #{failing + 1} of #{allocations} fails the resume"
       assert_equal 'stable', actor.resume(budget: 64)

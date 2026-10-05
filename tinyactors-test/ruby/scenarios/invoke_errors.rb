@@ -91,10 +91,10 @@ TinyactorsTest.scenarios 'invocation errors' do
   end
 
   # Catches: a report taken inside a macrostep, where a log could not say
-  # where it fell (core ADR 0089 section 4): inside one, every kind answers
-  # BUSY and changes nothing; once the session is idle, the same report is
-  # taken.
-  scenario 'a report into a paused macrostep answers busy and is taken once idle' do
+  # where it fell (core ADR 0089 section 4): inside one, core admits it and
+  # holds it back, and it changes nothing until the macrostep ends; then it
+  # is taken as an input of its own.
+  scenario 'a report into a paused macrostep is held and taken once the macrostep ends' do
     service = scripted_invoker(InvokeErrors::SERVICE)
     client = spawn :error_client
     start = service.started.first
@@ -103,7 +103,7 @@ TinyactorsTest.scenarios 'invocation errors' do
     error = { reason: 'quarantined', ends: false }
     report = ta.actor.report_invoke(system: system_handle, actor: start[:parent], invoke_id: start[:invoke_id],
                                     kind: 'error', error: error)
-    assert_equal 'err_busy', report[:result]
+    assert_equal 'ok', report[:result]
     status = 'paused'
     20.times do
       status = client.resume(budget: 1)
@@ -111,11 +111,8 @@ TinyactorsTest.scenarios 'invocation errors' do
     end
     assert_equal 'stable', status
     assert_equal ['worked'], client.data('.replies')
-    assert_equal [], client.data('.errors'), 'the refused report changed nothing'
-    report = ta.actor.report_invoke(system: system_handle, actor: start[:parent], invoke_id: start[:invoke_id],
-                                    kind: 'error', error: error)
-    assert_equal 'ok', report[:result]
-    client.resume(budget: 100)
+    assert_equal [], client.data('.errors'), 'the held report did not enter the macrostep'
+    assert_equal 'stable', client.resume(budget: 100), 'the held report is the next input'
     assert_equal ['error.communication.invoke.svc.quarantined'], client.data('.errors')
   end
 

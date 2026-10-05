@@ -1,4 +1,5 @@
 #include "actor.h"
+#include "run.h"
 #include "layout.h"
 #include "interpreter.h"
 #include "memory.h"
@@ -279,6 +280,9 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
  */
 void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
+    /* Its taken input goes back, and its deferred inputs return to the run
+     * queue to be refused, while its event block still names them. */
+    ta_run_session_gone(system, actor);
     ta_actor_discard_activation_effects(actor);
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
@@ -611,10 +615,29 @@ static uint32_t ta_actor_invoke_depth(ta_system *system, ta_actor_id id) {
     return depth;
 }
 
+static ta_result ta_actor_spawn_new(ta_system *system, const ta_actor_spawn_params *params);
+
 ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
+    /* The bootstrap is the session's first input: admitted (run.h), before
+     * anything is made, so a full pool refuses the spawn. */
+    uint32_t wake = 0;
+    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    if (result != TA_OK) {
+        return result;
+    }
+    result = ta_actor_spawn_new(system, params);
+    if (result != TA_OK) {
+        ta_run_wake_cancel(system, wake);
+        return result;
+    }
+    ta_run_wake_place(system, ta_actor_lookup(system, *params->out), wake);
+    return TA_OK;
+}
+
+static ta_result ta_actor_spawn_new(ta_system *system, const ta_actor_spawn_params *params) {
     ta_definition *definition = ta_system_definition(system, params->definition);
     if (definition == NULL || definition->retired) {
         return TA_ERR_NOT_FOUND;
@@ -983,10 +1006,29 @@ ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_params 
     return TA_OK;
 }
 
+static ta_result ta_actor_prepare_new(ta_system *system, const ta_actor_prepare_params *params);
+
 ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
+    /* Its bootstrap is admitted as a spawn's is; a restored state has none,
+     * and gives the wake back. */
+    uint32_t wake = 0;
+    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    if (result != TA_OK) {
+        return result;
+    }
+    result = ta_actor_prepare_new(system, params);
+    if (result != TA_OK) {
+        ta_run_wake_cancel(system, wake);
+        return result;
+    }
+    ta_run_wake_place(system, ta_actor_lookup(system, *params->out), wake);
+    return TA_OK;
+}
+
+static ta_result ta_actor_prepare_new(ta_system *system, const ta_actor_prepare_params *params) {
     ta_definition *definition = ta_system_definition(system, params->definition);
     if (definition == NULL || definition->retired) {
         return TA_ERR_NOT_FOUND;
@@ -1192,14 +1234,23 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
     if (at != NULL && (!replaying || !ta_actor_input_time_valid(system, actor, *at))) {
         return TA_ERR_INVALID;
     }
-    /* Everything that can fail comes first, so a refusal changes nothing. */
+    /* Everything that can fail comes first, so a refusal changes nothing:
+     * room for the held sends, the retired invocations' events, and a wake
+     * for the macrostep they or the invocations to start may leave (run.h). */
     uint32_t sends = ta_actor_activation_send_count(actor, at);
     ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &actor->sparse->timers, sends);
     if (result == TA_OK && replaying) {
         result = ta_invoke_prepare_retire(system, actor);
     }
+    uint32_t wake = 0;
+    if (result == TA_OK) {
+        result = ta_run_wake_reserve(system, false, &wake);
+    }
     if (result == TA_OK) {
         result = ta_actor_publish_route(system, actor, params->incumbent);
+        if (result != TA_OK) {
+            ta_run_wake_cancel(system, wake);
+        }
     }
     if (result != TA_OK) {
         return result;
@@ -1221,30 +1272,44 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
         actor->macrostep = true;
         actor->record.residency = TA_ACTOR_RUNNING;
     }
+    ta_run_wake_place(system, actor, wake);
     return TA_OK;
 }
 
 /*
  * Whether `time` may be an input's time for `actor` (ADR 0094 section 1): a
- * replaying actor's is no earlier than its clock and no later than the
- * system's; every other actor's is the system's own.
+ * replaying actor's is no earlier than its clock, nor than the last input
+ * admitted for it, which ta_run() has not taken yet perhaps, and no later
+ * than the system's; every other actor's is the system's own.
  */
 bool ta_actor_input_time_valid(const ta_system *system, const ta_actor *actor, ta_time time) {
     ta_time now = ta_clock_now(&system->clock);
     if (!ta_actor_replaying(actor)) {
         return time == now;
     }
-    return time >= actor->sparse->activation_effects->clock && time <= now;
+    const ta_activation_effects *effects = actor->sparse->activation_effects;
+    ta_time floor = effects->admitted > effects->clock ? effects->admitted : effects->clock;
+    return time >= floor && time <= now;
+}
+
+void ta_actor_note_admitted(ta_actor *actor, ta_time time) {
+    if (!ta_actor_replaying(actor)) {
+        return;
+    }
+    ta_activation_effects *effects = actor->sparse->activation_effects;
+    if (time > effects->admitted) {
+        effects->admitted = time;
+    }
 }
 
 /*
  * Moves a replaying actor's clock to `time`, dropping every held delayed
  * send due by then: time reached it in the run being replayed, so it fired
- * then (ADR 0089 section 2). Nothing to do for any other actor. The caller
- * has checked the time.
+ * then (ADR 0089 section 2). Nothing to do for any other actor, nor for a
+ * time before its clock (an input admitted before a publish moved it).
  */
 void ta_actor_move_clock(ta_actor *actor, ta_time time) {
-    if (!ta_actor_replaying(actor)) {
+    if (!ta_actor_replaying(actor) || time < actor->sparse->activation_effects->clock) {
         return;
     }
     ta_activation_effects *effects = actor->sparse->activation_effects;
@@ -1289,7 +1354,7 @@ static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor 
 }
 
 ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
-    if (params == NULL || params->event == NULL) {
+    if (system == NULL || params == NULL || params->event == NULL) {
         return TA_ERR_INVALID;
     }
     const ta_event *event = params->event;
@@ -1303,16 +1368,14 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
         !ta_actor_input_time_valid(system, actor, params->time)) {
         return TA_ERR_INVALID;
     }
-    /* Before busy: a finished actor never becomes free again (ADR 0055). */
+    /* A finished actor never takes another input (ADR 0055). */
     if (actor->finished) {
         return TA_ERR_DONE;
     }
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
-        return TA_ERR_BUSY;
-    }
-    /* An idle actor's configuration is the one the operator transition runs
-     * from: it is the first step its macrostep takes (ADR 0082). */
-    if (transition != NULL && transition->source != TA_STATE_NONE &&
+    /* The configuration of an actor between macrosteps is the one the
+     * operator transition runs from unless an input before it moves it;
+     * taking it asks again (ADR 0082). */
+    if (transition != NULL && transition->source != TA_STATE_NONE && !actor->macrostep &&
         !ta_actor_state_active(actor, transition->source)) {
         return TA_ERR_INVALID;
     }
@@ -1321,9 +1384,8 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     if (result != TA_OK) {
         return result;
     }
-    /* The operator transition, and the event block the event lives in until
-     * its macrostep ends (ADR 0069), are the steps here that can fail, and
-     * they change nothing when they do. */
+    /* The operator transition is the one allocation here, and the input
+     * then goes into the pool (ADR 0099), where it waits for ta_run(). */
     ta_operator_jump *jump = NULL;
     size_t jump_bytes = 0;
     if (transition != NULL) {
@@ -1339,37 +1401,17 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
         jump->target_count = transition->target_count;
         ta_mem_copy(jump->targets, transition->targets, (size_t)transition->target_count * sizeof(ta_state_id));
     }
-    result = ta_interpreter_hold_block(system, actor);
-    if (result != TA_OK) {
-        if (jump != NULL) {
-            ta_mem_free(system->allocator, jump,
-                        &(ta_allocator_free_params){ .size = jump_bytes, .alignment = _Alignof(ta_operator_jump) });
-        }
-        return result;
+    result = ta_run_admit_event(system, &(ta_run_event){ .actor = actor,
+                                                         .event = &accepted,
+                                                         .trace = &params->trace,
+                                                         .jump = jump,
+                                                         .time = params->time,
+                                                         .correlation = params->correlation });
+    if (result != TA_OK && jump != NULL) {
+        ta_mem_free(system->allocator, jump,
+                    &(ta_allocator_free_params){ .size = jump_bytes, .alignment = _Alignof(ta_operator_jump) });
     }
-    /* Nothing below can fail: the input's time is now the actor's. */
-    ta_actor_move_clock(actor, params->time);
-    ta_event_slots *slots = &actor->event_block->slots;
-    ta_event_retain(&accepted, &slots->external_event);
-    slots->external = TA_EXTERNAL_WAITING;
-    slots->jump = jump;
-    /* The macrostep that takes it runs under the delivery's parent. */
-    slots->trace = params->trace;
-    actor->macrostep = true;
-    ta_actor_touch(actor);
-    actor->record.residency = TA_ACTOR_RUNNING;
-    return TA_OK;
-}
-
-ta_result ta_actor_resume(ta_system *system, const ta_actor_resume_params *params) {
-    if (params == NULL || params->status == NULL || params->budget == 0) {
-        return TA_ERR_INVALID;
-    }
-    ta_actor *actor = ta_actor_lookup(system, params->actor);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    return ta_interpreter_resume(system, actor, params);
+    return result;
 }
 
 ta_result ta_actor_abandon(ta_system *system, ta_actor_id id) {
@@ -1377,7 +1419,14 @@ ta_result ta_actor_abandon(ta_system *system, ta_actor_id id) {
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    return ta_interpreter_abandon(system, actor);
+    /* Abandoning may give the event block back, so the input it names is read first. */
+    uint32_t input = actor->event_block == NULL ? 0u : actor->event_block->slots.input;
+    ta_result result = ta_interpreter_abandon(system, actor);
+    if (result == TA_OK) {
+        /* Its input ends unreported, and its next deferred input may run. */
+        ta_run_input_dropped(system, actor, input);
+    }
+    return result;
 }
 
 /*

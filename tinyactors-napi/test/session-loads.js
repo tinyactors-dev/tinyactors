@@ -79,11 +79,25 @@ async function replyToAGoneRequester() {
 }
 
 async function withoutALoader() {
-  const system = createSystem();
+  // One input a turn: the requester finishes in one turn, its done hook
+  // destroys it, and the server takes the request in a later turn.
+  const system = createSystem({ parameters: { resumesPerTurn: 1 } });
   const s = system.spawn(server(system), { address: { family: 'server', name: 's' } });
   system.spawn(requester(system));
   await until(system, () => s.inspect().data.failure !== null, 'the refusal');
   assert.equal(s.inspect().data.failure.reason, 'not-found');
+  system.close();
+}
+
+// The same at the default parameters: the server takes the request in the
+// turn the requester finished, before its done hook destroys it, so the
+// reply finds a finished session.
+async function withoutALoaderInOneTurn() {
+  const system = createSystem();
+  const s = system.spawn(server(system), { address: { family: 'server', name: 's' } });
+  system.spawn(requester(system));
+  await until(system, () => s.inspect().data.failure !== null, 'the refusal');
+  assert.equal(s.inspect().data.failure.reason, 'done');
   system.close();
 }
 
@@ -148,6 +162,7 @@ async function oneLoadForSeveralMessages() {
 (async () => {
   await replyToAGoneRequester();
   await withoutALoader();
+  await withoutALoaderInOneTurn();
   await notFoundIsADeadLetter();
   await anotherIncarnation();
   await oneLoadForSeveralMessages();

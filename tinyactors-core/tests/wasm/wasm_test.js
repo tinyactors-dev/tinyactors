@@ -33,7 +33,7 @@ const TA_OK = constant('ta_result', 'TA_OK');
 const ATOMIC = constant('ta_scxml_state_kind', 'TA_SCXML_STATE_ATOMIC');
 const EXTERNAL_TRANSITION = constant('ta_scxml_transition_kind', 'TA_SCXML_TRANSITION_EXTERNAL');
 const EXTERNAL_EVENT = constant('ta_event_type', 'TA_EVENT_EXTERNAL');
-const STABLE = constant('ta_run_status', 'TA_RUN_STABLE');
+const COMPLETED = constant('ta_input_outcome_kind', 'TA_INPUT_COMPLETED');
 const INVOKE_ID_NONE = macro('TA_INVOKE_ID_NONE');
 
 async function main() {
@@ -126,15 +126,22 @@ async function main() {
     assert.equal(ta.ta_actor_spawn(system, spawn), TA_OK, 'ta_actor_spawn');
     const actor = getU64(actorOut);
 
-    const resumeLayout = layout('ta_actor_resume_params');
+    // One ta_run with room for one outcome: the kind of the outcome it reports.
+    const runLayout = layout('ta_run_params');
+    const outcomeLayout = layout('ta_input_outcome');
     const statusOut = alloc(4, 4);
-    const resume = () => {
-      const params = struct('ta_actor_resume_params');
-      u64(params + resumeLayout.offsets.actor, actor);
-      u32(params + resumeLayout.offsets.budget, 100);
-      u32(params + resumeLayout.offsets.status, statusOut);
-      assert.equal(ta.ta_actor_resume(system, params), TA_OK, 'ta_actor_resume');
-      return getU32(statusOut);
+    const countOut = alloc(4, 4);
+    const outcome = alloc(outcomeLayout.size, outcomeLayout.align);
+    const runOnce = () => {
+      const params = struct('ta_run_params');
+      u32(params + runLayout.offsets.budget, 100);
+      u32(params + runLayout.offsets.outcomes, outcome);
+      u32(params + runLayout.offsets.outcome_capacity, 1);
+      u32(params + runLayout.offsets.outcome_count, countOut);
+      u32(params + runLayout.offsets.status, statusOut);
+      assert.equal(ta.ta_run(system, params), TA_OK, 'ta_run');
+      assert.equal(getU32(countOut), 1, 'ta_run reports one outcome');
+      return getU32(outcome + outcomeLayout.offsets.kind);
     };
     // Whether the state named `name` is active.
     const active = (name) => {
@@ -161,7 +168,7 @@ async function main() {
       return false;
     };
 
-    resume();
+    assert.equal(runOnce(), COMPLETED, 'the bootstrap completes');
     assert.ok(active('idle'), 'the actor starts in idle');
 
     const text = alloc(strSize, layout('ta_str').align);
@@ -185,7 +192,7 @@ async function main() {
     u64(deliver + deliverLayout.offsets.actor, actor);
     u32(deliver + deliverLayout.offsets.event, event);
     assert.equal(ta.ta_actor_deliver(system, deliver), TA_OK, 'ta_actor_deliver');
-    assert.equal(resume(), STABLE, 'the macrostep ends stable');
+    assert.equal(runOnce(), COMPLETED, 'the macrostep ends stable');
     assert.ok(!active('idle') && active('done'), 'go moves the actor from idle to done');
 
     ta.ta_system_destroy(system);

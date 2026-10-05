@@ -42,7 +42,9 @@ module TinyactorsNapiBindings
   }.freeze
 
   PLUMBING_FUNCTIONS = {
-    'ta_actor_{deliver,resume,publish_completion}' => 'the pump delivers and resumes (ADRs 0005, 0007)',
+    'ta_actor_{deliver,publish_completion,release}' => 'the kernel admits mail into core and releases quarantined actors (ADRs 0005, 0008; core ADRs 0099, 0103)',
+    'ta_run' => 'the pump runs core (ADR 0007, core ADR 0103)',
+    'ta_system_withdraw_input' => "the kernel withdraws a cancelled send()'s message (ADR 0005 point 11, core ADR 0099)",
     'ta_actor_{abandon,withdraw_send}' => "System#abandon and System#withdrawSend reach tah_system_abandon (which runs the abandoned hook) and tah_system_withdraw_send (which reports the address's wake to the recorder, kernel ADR 0006)",
     'ta_actor_offload' => 'unload() offloads into the native offload store, which owns the bytes (core ADR 0074)',
     'ta_system_{dispatch_due,set_time}' => 'the clock belongs to the pump (ADR 0007)',
@@ -106,7 +108,8 @@ module TinyactorsNapiBindings
     'ta_{io,invoke}_origin' => 'cross only inside ta_origin, whose hand-written codec renders them (core ADR 0068)',
     'ta_actor_inspector' => 'enumeration is plumbing (ADR 0003)',
     'ta_actor_visit_params' => 'enumeration is plumbing (ADR 0003)',
-    'ta_actor_resume_params' => 'the pump resumes actors (ADR 0007)',
+    'ta_run_params' => 'the pump runs core (ADR 0007, core ADR 0103)',
+    'ta_input_outcome' => "ta_run()'s outcomes: the kernel settles send() and the hooks from them (core ADR 0103)",
     'ta_due_dispatch_params' => 'the clock belongs to the pump (ADR 0007)',
     'ta_external_{delivery,event_submit_params}' => 'router callback arguments (ADR 0006)',
     'ta_invoke_{request,report_params}' => 'invoker plumbing (step 13)',

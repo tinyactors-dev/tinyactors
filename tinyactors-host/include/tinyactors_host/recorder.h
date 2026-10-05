@@ -5,11 +5,12 @@
  * per turn for the application to journal.
  *
  * An event is recorded when the macrostep it started ends, after its
- * effects were handed out: a delivery, or an invocation's error report as
- * the event the chart takes (error.communication.invoke.<id>.<reason>, type
- * platform). Its time is the delivery's. A macrostep that starts without
- * an event from the kernel (a bootstrap, internal events queued outside a
- * run) records nothing. The binding takes each turn's records and wakes
+ * effects were handed out: a message core took, or an invocation's error
+ * report as the event the chart takes
+ * (error.communication.invoke.<id>.<reason>, type platform). Its time is
+ * the time core took it (core ADR 0103's TAKEN outcome). A macrostep that
+ * starts without an event from the kernel (a bootstrap, internal events
+ * queued outside a run) records nothing. The binding takes each turn's records and wakes
  * after the turn (tah_recorder_count(), tah_recorder_record(),
  * tah_recorder_wakes()) and then releases them (tah_recorder_release()).
  *

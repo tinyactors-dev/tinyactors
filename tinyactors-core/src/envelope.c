@@ -123,3 +123,67 @@ void ta_envelope_pool_deliver(ta_envelope_pool *pool, ta_list *outgoing) {
     }
     ta_list_splice(&pool->run_queue, &links, outgoing);
 }
+
+/*
+ * Inserts `index`, which keeps its arrival number, into `list`, ordered by
+ * arrival: after the last envelope that arrived before it or with the same
+ * number. Most inserts land at the tail, which is checked first.
+ */
+static void ta_envelope_pool_insert_arrived(ta_envelope_pool *pool, ta_list *list, uint32_t index) {
+    ta_list_links links = ta_envelope_pool_links(pool);
+    uint32_t arrival = ta_envelope_pool_at(pool, index)->heap_index;
+    uint32_t tail = ta_list_tail(list);
+    if (tail == 0u || !ta_envelope_arrived_before(arrival, ta_envelope_pool_at(pool, tail)->heap_index)) {
+        ta_list_push_back(list, &links, index);
+        return;
+    }
+    uint32_t after = 0u;
+    for (uint32_t at = ta_list_head(list); at != 0u; at = ta_list_next(&links, at)) {
+        if (ta_envelope_arrived_before(arrival, ta_envelope_pool_at(pool, at)->heap_index)) {
+            break;
+        }
+        after = at;
+    }
+    ta_list_insert_after(list, &links, (ta_list_insert){ .after = after, .item = index });
+}
+
+void ta_envelope_pool_return(ta_envelope_pool *pool, uint32_t index) {
+    ta_envelope_pool_at(pool, index)->state = TA_ENVELOPE_RUNNABLE;
+    ta_envelope_pool_insert_arrived(pool, &pool->run_queue, index);
+}
+
+void ta_envelope_pool_enqueue_beside(ta_envelope_pool *pool, ta_envelope_beside beside) {
+    ta_envelope *envelope = ta_envelope_pool_at(pool, beside.index);
+    envelope->heap_index = ta_envelope_pool_at(pool, beside.beside)->heap_index;
+    envelope->state = TA_ENVELOPE_RUNNABLE;
+    ta_envelope_pool_insert_arrived(pool, &pool->run_queue, beside.index);
+}
+
+void ta_envelope_pool_defer(ta_envelope_pool *pool, ta_envelope_defer defer) {
+    ta_envelope_pool_at(pool, defer.index)->state = TA_ENVELOPE_RUNNABLE;
+    ta_envelope_pool_insert_arrived(pool, defer.deferred, defer.index);
+}
+
+void ta_envelope_pool_push_front(ta_envelope_pool *pool, uint32_t index) {
+    ta_envelope_pool_at(pool, index)->state = TA_ENVELOPE_RUNNABLE;
+    ta_list_links links = ta_envelope_pool_links(pool);
+    ta_list_push_front(&pool->run_queue, &links, index);
+}
+
+uint32_t ta_envelope_pool_dequeue_after(ta_envelope_pool *pool, uint32_t previous) {
+    ta_list_links links = ta_envelope_pool_links(pool);
+    uint32_t index = ta_list_remove_after(&pool->run_queue, &links, previous);
+    if (index != 0u) {
+        ta_envelope_pool_at(pool, index)->state = TA_ENVELOPE_TAKEN;
+    }
+    return index;
+}
+
+ta_result ta_envelope_pool_unqueue(ta_envelope_pool *pool, uint32_t index) {
+    ta_list_links links = ta_envelope_pool_links(pool);
+    ta_result result = ta_list_unlink(&pool->run_queue, &links, index);
+    if (result == TA_OK) {
+        ta_envelope_pool_at(pool, index)->state = TA_ENVELOPE_TAKEN;
+    }
+    return result;
+}

@@ -7,6 +7,20 @@
 #include "scheduler_private.h"
 
 #define TAH_QUEUE_CHUNK 1024u
+/*
+ * Outcomes one ta_run() reports at most: an input's TAKEN and its end. With
+ * room for two, a call takes at most one input, so `resumes` ta_run() calls
+ * a turn take at most `resumes` inputs, as many as actors it once resumed.
+ * A macrostep its budget pauses gets one call a turn, one slice, and ends
+ * the turn's run of core: the next turn continues it.
+ */
+#define TAH_SCHED_OUTCOMES 2u
+
+/* A fault the kernel found outside a turn, recorded at the next one. */
+typedef struct {
+    ta_actor_id actor;
+    ta_result code;
+} tah_pending_fault;
 
 /* ------------------------------------------------------------------------
  * The envelope store
@@ -57,6 +71,33 @@ static uint32_t tah_envelope_take(tah_sched *sched) {
     return index;
 }
 
+/*
+ * The name core knows the message in envelope `index` by: its index. Core
+ * holds a message only while its envelope lives here, admitted or taken: the
+ * kernel withdraws what it gives back first, and core reports nothing it
+ * dropped itself (an abandoned or a destroyed session's input).
+ */
+static uint64_t tah_envelope_correlation(const tah_sched *sched, uint32_t index) {
+    (void)sched;
+    return index;
+}
+
+/* The envelope `correlation` names, or 0 when it is core's own input, or a
+ * message the kernel does not hold in core. */
+static uint32_t tah_envelope_of(const tah_sched *sched, uint64_t correlation) {
+    if (correlation > UINT32_MAX) {
+        return 0;
+    }
+    uint32_t index = (uint32_t)correlation;
+    const tah_envelope *envelope = tah_sched_envelope(sched, index);
+    if (envelope == NULL || !envelope->live ||
+        (envelope->phase != TAH_ENVELOPE_ADMITTED && envelope->phase != TAH_ENVELOPE_TAKEN &&
+         envelope->phase != TAH_ENVELOPE_ORPHANED)) {
+        return 0;
+    }
+    return index;
+}
+
 static size_t tah_jump_size(uint32_t count) {
     return sizeof(tah_jump) + (size_t)count * sizeof(ta_state_id);
 }
@@ -87,7 +128,9 @@ static void tah_sched_note_to(const tah_sched *sched, tah_sched_note note) {
 /* Releases the envelope's references and returns it to the free list. */
 static void tah_envelope_give(tah_sched *sched, uint32_t index) {
     tah_envelope *envelope = tah_sched_envelope(sched, index);
-    if (envelope->overflow) {
+    if (envelope->phase == TAH_ENVELOPE_TAKEN) {
+        /* uncounted when core took it */
+    } else if (envelope->overflow) {
         sched->overflow -= 1u;
     } else {
         sched->retained -= envelope->bytes;
@@ -105,6 +148,7 @@ static void tah_envelope_give(tah_sched *sched, uint32_t index) {
     *envelope = (tah_envelope){ .next = sched->envelopes.free_head };
     sched->envelopes.free_head = index;
     sched->envelopes.live -= 1u;
+    sched->held_blocked = false; /* room under the limits */
 }
 
 static void tah_envelopes_destroy(tah_envelopes *store) {
@@ -141,17 +185,23 @@ void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envel
     *sched = (tah_sched){ .allocator = allocator };
     tah_vec_init(&sched->pages, allocator, TAH_LAYOUT(tah_sched_entry *));
     tah_ring_shape shape = { .layout = TAH_LAYOUT(ta_actor_id), .chunk_capacity = TAH_QUEUE_CHUNK };
-    tah_ring_init(&sched->runnable, allocator, shape);
-    tah_ring_init(&sched->ready, allocator, shape);
-    tah_ring_init(&sched->room, allocator, shape);
+    tah_ring_init(&sched->held, allocator, shape);
+    tah_ring_init(&sched->backoff, allocator, shape);
     tah_envelopes_init(&sched->envelopes, envelopes);
     tah_free_list_init(&sched->traces, envelopes, TAH_LAYOUT(ta_trace_parent));
     tah_vec_init(&sched->waiters, envelopes, TAH_LAYOUT(tah_waiter));
-    tah_map_init(&sched->inflight, allocator);
+    tah_vec_init(&sched->faults_pending, allocator, TAH_LAYOUT(tah_pending_fault));
+    tah_vec_init(&sched->outcomes_pending, allocator, TAH_LAYOUT(ta_input_outcome));
     /* One chunk holds a default turn's settlements (messageBudget and
      * resumesPerTurn are 1024 by default), so steady state reuses it. */
     tah_ring_init(&sched->settled, allocator,
                   (tah_ring_shape){ .layout = TAH_LAYOUT(tah_settlement), .chunk_capacity = TAH_QUEUE_CHUNK });
+}
+
+void tah_sched_attach(tah_sched *sched, const tah_sched_attach_params *params) {
+    sched->core = params->core;
+    sched->inside_core = params->inside_core;
+    sched->watch = params->watch;
 }
 
 void tah_sched_discard_mail(tah_sched *sched) {
@@ -187,14 +237,14 @@ void tah_sched_destroy(tah_sched *sched) {
         }
     }
     tah_vec_destroy(&sched->pages);
-    tah_ring_destroy(&sched->runnable);
-    tah_ring_destroy(&sched->ready);
-    tah_ring_destroy(&sched->room);
+    tah_ring_destroy(&sched->held);
+    tah_ring_destroy(&sched->backoff);
     tah_sched_discard_mail(sched); /* gives back the trace parents envelopes hold */
     tah_envelopes_destroy(&sched->envelopes);
     tah_free_list_destroy(&sched->traces);
     tah_vec_destroy(&sched->waiters);
-    tah_map_destroy(&sched->inflight);
+    tah_vec_destroy(&sched->faults_pending);
+    tah_vec_destroy(&sched->outcomes_pending);
     tah_ring_destroy(&sched->settled);
     sched->waiter_free = 0;
     sched->waiters_live = 0;
@@ -205,6 +255,9 @@ void tah_sched_destroy(tah_sched *sched) {
     sched->dead_first = 0;
     sched->dead_last = 0;
     sched->dead_count = 0;
+    sched->ready_count = 0;
+    sched->runnable_count = 0;
+    sched->core_work = false;
     sched->records = NULL;
     sched->last_record = NULL;
     sched->record_count = 0;
@@ -253,7 +306,38 @@ static tah_sched_entry *tah_sched_entry_make(tah_sched *sched, uint32_t slot) {
     return &(*entries)[slot & (TAH_SCHED_PAGE_ENTRIES - 1u)];
 }
 
-/* Appends one taken envelope to the dead list. */
+/* Moves an entry to `state`, keeping the counts of each state. */
+static void tah_sched_set_state(tah_sched *sched, tah_sched_entry *entry, tah_sched_state state) {
+    switch ((tah_sched_state)entry->state) {
+    case TAH_SCHED_READY: sched->ready_count -= 1u; break;
+    case TAH_SCHED_RUNNABLE: sched->runnable_count -= 1u; break;
+    case TAH_SCHED_QUARANTINED: sched->quarantined -= 1u; break;
+    default: break;
+    }
+    switch (state) {
+    case TAH_SCHED_READY: sched->ready_count += 1u; break;
+    case TAH_SCHED_RUNNABLE: sched->runnable_count += 1u; break;
+    case TAH_SCHED_QUARANTINED: sched->quarantined += 1u; break;
+    default: break;
+    }
+    entry->state = (uint8_t)state;
+}
+
+static uint32_t tah_sched_waiting_first(const tah_sched *sched, const tah_sched_entry *entry);
+
+/* An actor between macrosteps: ready with mail in its mailbox, idle without. */
+static void tah_sched_between(tah_sched *sched, tah_sched_entry *entry) {
+    tah_sched_set_state(sched, entry, tah_sched_waiting_first(sched, entry) != 0 ? TAH_SCHED_READY : TAH_SCHED_IDLE);
+}
+
+/* An actor that took mail into its mailbox: an idle one is ready now. */
+static void tah_sched_has_mail(tah_sched *sched, tah_sched_entry *entry) {
+    if (entry->state == TAH_SCHED_IDLE) {
+        tah_sched_set_state(sched, entry, TAH_SCHED_READY);
+    }
+}
+
+/* Appends one envelope to the dead list; a report is dropped instead. */
 static void tah_sched_dead_append(tah_sched *sched, uint32_t index, tah_dead_reason reason) {
     tah_envelope *envelope = tah_sched_envelope(sched, index);
     if (envelope->report != TAH_REPORT_NONE) {
@@ -262,6 +346,7 @@ static void tah_sched_dead_append(tah_sched *sched, uint32_t index, tah_dead_rea
         tah_envelope_give(sched, index);
         return;
     }
+    envelope->phase = TAH_ENVELOPE_DEAD;
     envelope->reason = (uint8_t)reason;
     envelope->next = 0;
     if (sched->dead_last != 0) {
@@ -273,17 +358,66 @@ static void tah_sched_dead_append(tah_sched *sched, uint32_t index, tah_dead_rea
     sched->dead_count += 1u;
 }
 
-/* Moves the entry's whole mailbox to the dead list (ADR 0005 point 10). */
-static void tah_sched_bury(tah_sched *sched, tah_sched_entry *entry, tah_dead_reason reason) {
+/* Appends envelope `index` to the entry's mailbox. */
+static void tah_sched_mailbox_append(tah_sched *sched, tah_sched_entry *entry, uint32_t index) {
+    tah_sched_envelope(sched, index)->next = 0;
+    if (entry->last != 0) {
+        tah_sched_envelope(sched, entry->last)->next = index;
+    } else {
+        entry->first = index;
+    }
+    entry->last = index;
+}
+
+/* Unlinks `index` from the entry's mailbox; false when it is not there. */
+static bool tah_sched_unlink(tah_sched *sched, tah_sched_entry *entry, uint32_t index) {
+    uint32_t previous = 0;
+    for (uint32_t at = entry->first; at != 0; at = tah_sched_envelope(sched, at)->next) {
+        if (at == index) {
+            uint32_t next = tah_sched_envelope(sched, at)->next;
+            if (previous == 0) {
+                entry->first = next;
+            } else {
+                tah_sched_envelope(sched, previous)->next = next;
+            }
+            if (entry->last == index) {
+                entry->last = previous;
+            }
+            tah_sched_envelope(sched, index)->next = 0;
+            return true;
+        }
+        previous = at;
+    }
+    return false;
+}
+
+/* The held mail of the entry's mailbox becomes dead letters with `reason`;
+ * mail core admitted stays, and core refuses it. */
+static void tah_sched_bury_held(tah_sched *sched, tah_sched_entry *entry, tah_dead_reason reason) {
     uint32_t index = entry->first;
     while (index != 0) {
-        uint32_t next = tah_sched_envelope(sched, index)->next;
-        tah_sched_dead_append(sched, index, reason);
+        tah_envelope *envelope = tah_sched_envelope(sched, index);
+        uint32_t next = envelope->next;
+        if (envelope->phase == TAH_ENVELOPE_HELD) {
+            (void)tah_sched_unlink(sched, entry, index);
+            tah_sched_dead_append(sched, index, reason);
+        }
         index = next;
     }
-    entry->first = 0;
-    entry->last = 0;
-    entry->parked = 0;
+}
+
+/* Puts an actor with held mail on the held queue, once; a quarantined one
+ * joins it when it is released. Out of memory, it is stranded, and the next
+ * turn tries again. */
+static void tah_sched_hold(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor) {
+    if (entry->held || entry->state == TAH_SCHED_QUARANTINED) {
+        return;
+    }
+    entry->held = 1u;
+    if (tah_ring_push(&sched->held, &actor) != TA_OK && (entry->flags & TAH_SCHED_STRANDED) == 0) {
+        entry->flags |= TAH_SCHED_STRANDED;
+        sched->stranded += 1u;
+    }
 }
 
 /* ------------------------------------------------------------------------
@@ -381,36 +515,51 @@ static void tah_sched_settle_waiter(tah_sched *sched, uint32_t index, tah_settle
     (void)tah_ring_push(&sched->settled, &settlement);
 }
 
-/* The macrostep `actor` ran for a send() ended: settle its waiter. */
-static void tah_sched_complete(tah_sched *sched, ta_actor_id actor, tah_settlement settlement) {
-    uint64_t index = 0;
-    if (tah_map_count(&sched->inflight) == 0 || !tah_map_get(&sched->inflight, actor, &index)) {
-        return;
+/* Settles the waiter of envelope `index`, if it has one, and detaches it. */
+static void tah_sched_settle_envelope(tah_sched *sched, uint32_t index, tah_settlement settlement) {
+    tah_envelope *envelope = tah_sched_envelope(sched, index);
+    if (envelope->waiter != 0) {
+        tah_sched_settle_waiter(sched, envelope->waiter, settlement);
+        envelope->waiter = 0;
     }
-    tah_map_remove(&sched->inflight, actor);
-    settlement.actor = actor;
-    tah_sched_settle_waiter(sched, (uint32_t)index, settlement);
 }
 
-/* Unlinks `index` from the entry's mailbox; false when it is not there. */
-static bool tah_sched_unlink(tah_sched *sched, tah_sched_entry *entry, uint32_t index) {
-    uint32_t previous = 0;
-    for (uint32_t at = entry->first; at != 0; at = tah_sched_envelope(sched, at)->next) {
-        if (at == index) {
-            uint32_t next = tah_sched_envelope(sched, at)->next;
-            if (previous == 0) {
-                entry->first = next;
-            } else {
-                tah_sched_envelope(sched, previous)->next = next;
-            }
-            if (entry->last == index) {
-                entry->last = previous;
-            }
-            return true;
-        }
-        previous = at;
+/*
+ * The input `actor`'s macrostep ran for, at the head of its mailbox, ended
+ * without core saying so (it was abandoned): its send() settles and its
+ * envelope goes.
+ */
+static void tah_sched_complete(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor,
+                               tah_settlement settlement) {
+    uint32_t index = entry->first;
+    if (index == 0 || tah_sched_envelope(sched, index)->phase != TAH_ENVELOPE_TAKEN) {
+        return;
     }
-    return false;
+    (void)tah_sched_unlink(sched, entry, index);
+    settlement.actor = actor;
+    tah_sched_settle_envelope(sched, index, settlement);
+    tah_envelope_give(sched, index);
+}
+
+/* The first message of the entry's mailbox core has not taken, or 0. */
+static uint32_t tah_sched_waiting_first(const tah_sched *sched, const tah_sched_entry *entry) {
+    uint32_t index = entry->first;
+    if (index != 0 && tah_sched_envelope(sched, index)->phase == TAH_ENVELOPE_TAKEN) {
+        index = tah_sched_envelope(sched, index)->next;
+    }
+    return index;
+}
+
+/* Withdraws envelope `index` from core's pool; true when core held it untaken. */
+static bool tah_sched_withdraw_admitted(tah_sched *sched, uint32_t index) {
+    if (sched->core == NULL) {
+        return false;
+    }
+    bool inside = *sched->inside_core;
+    *sched->inside_core = true;
+    ta_result result = ta_system_withdraw_input(sched->core, tah_envelope_correlation(sched, index));
+    *sched->inside_core = inside;
+    return result == TA_OK;
 }
 
 bool tah_sched_cancel(tah_sched *sched, uint32_t index) {
@@ -420,11 +569,23 @@ bool tah_sched_cancel(tah_sched *sched, uint32_t index) {
     }
     if (waiter->state == TAH_WAITER_QUEUED) {
         /* A message waiting for a load is withdrawn by tah_system_cancel(). */
-        tah_envelope *envelope = tah_sched_envelope(sched, waiter->envelope);
+        uint32_t at = waiter->envelope;
+        tah_envelope *envelope = tah_sched_envelope(sched, at);
         tah_sched_entry *entry = tah_sched_lookup(sched, waiter->actor);
-        if (envelope != NULL && entry != NULL && tah_sched_unlink(sched, entry, waiter->envelope)) {
-            /* A ready actor whose mailbox is now empty becomes idle when popped. */
-            tah_envelope_give(sched, waiter->envelope);
+        bool withdrawn = false;
+        if (envelope != NULL && envelope->phase == TAH_ENVELOPE_HELD) {
+            withdrawn = entry != NULL && tah_sched_unlink(sched, entry, at);
+        } else if (envelope != NULL && envelope->phase == TAH_ENVELOPE_ADMITTED) {
+            withdrawn = tah_sched_withdraw_admitted(sched, at);
+            if (withdrawn && entry != NULL) {
+                (void)tah_sched_unlink(sched, entry, at);
+            }
+        }
+        if (withdrawn) {
+            tah_envelope_give(sched, at);
+            if (entry != NULL && entry->state == TAH_SCHED_READY && entry->first == 0) {
+                tah_sched_set_state(sched, entry, TAH_SCHED_IDLE);
+            }
         } else if (envelope != NULL) {
             envelope->waiter = 0; /* on the dead list: still reported, without the waiter */
         }
@@ -432,7 +593,10 @@ bool tah_sched_cancel(tah_sched *sched, uint32_t index) {
         return true;
     }
     if (waiter->state == TAH_WAITER_INFLIGHT) {
-        tah_map_remove(&sched->inflight, waiter->actor);
+        tah_envelope *envelope = tah_sched_envelope(sched, waiter->envelope);
+        if (envelope != NULL && envelope->waiter == index) {
+            envelope->waiter = 0;
+        }
         waiter->state = TAH_WAITER_SETTLING;
         return true;
     }
@@ -444,19 +608,21 @@ ta_result tah_sched_add(tah_sched *sched, ta_actor_id actor) {
     if (entry == NULL) {
         return TA_ERR_NOMEM;
     }
-    if (tah_ring_push(&sched->runnable, &actor) != TA_OK) {
-        return TA_ERR_NOMEM;
-    }
     if (entry->state == TAH_SCHED_NONE) {
         sched->known += 1u;
     } else {
         /* A previous actor of this slot the addon never saw go: its mail is dead. */
-        sched->quarantined -= entry->state == TAH_SCHED_QUARANTINED ? 1u : 0u;
-        tah_sched_bury(sched, entry, TAH_DEAD_NOT_FOUND);
-        tah_sched_complete(sched, ta_actor_id_make(ta_actor_id_slot(actor), entry->generation),
-                           (tah_settlement){ .kind = TAH_SETTLE_DEAD, .reason = TAH_DEAD_NOT_FOUND });
+        tah_sched_remove(sched, ta_actor_id_make(ta_actor_id_slot(actor), entry->generation), TAH_DEAD_NOT_FOUND);
+        sched->known += 1u;
     }
-    *entry = (tah_sched_entry){ .generation = ta_actor_id_generation(actor), .state = TAH_SCHED_RUNNABLE };
+    *entry = (tah_sched_entry){ .generation = ta_actor_id_generation(actor) };
+    /* Core admitted its bootstrap, or the macrostep it was restored in; an
+     * actor restored between macrosteps has nothing to run. */
+    ta_actor_inspection view;
+    bool idle = sched->core != NULL && ta_actor_inspect(sched->core, actor, &view) == TA_OK &&
+                !view.macrostep_in_progress;
+    tah_sched_set_state(sched, entry, idle ? TAH_SCHED_IDLE : TAH_SCHED_RUNNABLE);
+    sched->core_work = sched->core_work || !idle;
     return TA_OK;
 }
 
@@ -465,17 +631,54 @@ void tah_sched_remove(tah_sched *sched, ta_actor_id actor, tah_dead_reason reaso
     if (entry == NULL) {
         return;
     }
-    tah_sched_bury(sched, entry, reason);
-    tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_DEAD, .reason = (uint8_t)reason });
-    sched->quarantined -= entry->state == TAH_SCHED_QUARANTINED ? 1u : 0u;
+    /* Its mail dies now, what core admitted withdrawn from its pool first.
+     * Inside a ta_run() core may have taken a message whose outcome the turn
+     * has not read yet: that one waits for it (orphaned). The message its
+     * macrostep took settles as a dead letter: core dropped it with the
+     * session. */
+    uint32_t index = entry->first;
+    while (index != 0) {
+        tah_envelope *envelope = tah_sched_envelope(sched, index);
+        uint32_t next = envelope->next;
+        if (envelope->phase == TAH_ENVELOPE_TAKEN) {
+            tah_sched_settle_envelope(sched, index, (tah_settlement){ .kind = TAH_SETTLE_DEAD, .reason = (uint8_t)reason,
+                                                                      .actor = actor });
+            tah_envelope_give(sched, index);
+        } else if (envelope->phase == TAH_ENVELOPE_ADMITTED && !tah_sched_withdraw_admitted(sched, index)) {
+            envelope->phase = TAH_ENVELOPE_ORPHANED;
+            envelope->reason = (uint8_t)reason;
+            envelope->next = 0;
+        } else {
+            tah_sched_dead_append(sched, index, reason);
+        }
+        index = next;
+    }
+    entry->first = 0;
+    entry->last = 0;
+    if ((entry->flags & TAH_SCHED_STRANDED) != 0) {
+        sched->stranded -= 1u;
+    }
+    tah_sched_set_state(sched, entry, TAH_SCHED_NONE);
     *entry = (tah_sched_entry){0};
     sched->known -= 1u;
 }
 
+/* Withdraws what core admitted from the entry's mailbox and holds it again,
+ * so it is admitted anew behind what goes in front of it. */
+static void tah_sched_rehold(tah_sched *sched, tah_sched_entry *entry) {
+    for (uint32_t index = entry->first; index != 0; index = tah_sched_envelope(sched, index)->next) {
+        tah_envelope *envelope = tah_sched_envelope(sched, index);
+        if (envelope->phase == TAH_ENVELOPE_ADMITTED && tah_sched_withdraw_admitted(sched, index)) {
+            envelope->phase = TAH_ENVELOPE_HELD;
+        }
+    }
+}
+
 /*
  * Moves the list `first`..`last`, in order, to the front of `to`'s mailbox,
- * with its send() waiters; an idle `to` becomes ready. TA_ERR_NOMEM, with
- * nothing moved, when `to` cannot join the ready queue.
+ * held, with its send() waiters; `to` joins the held queue, and its own
+ * mail, withdrawn from core's pool, is held behind it, so the list is
+ * admitted first.
  */
 typedef struct {
     uint32_t first;
@@ -484,36 +687,32 @@ typedef struct {
     tah_sched_entry *entry; /* `to`'s */
 } tah_splice;
 
-static ta_result tah_sched_splice_front(tah_sched *sched, const tah_splice *splice) {
+static void tah_sched_splice_front(tah_sched *sched, const tah_splice *splice) {
     tah_sched_entry *to = splice->entry;
     if (splice->first == 0) {
-        return TA_OK;
+        return;
     }
-    /* A parked `to` gets a new head, which may not wait for room: it goes
-     * back on the ready queue, and its entry on the room queue is skipped. */
-    bool unpark = to->parked && to->state == TAH_SCHED_READY;
-    if ((to->state == TAH_SCHED_IDLE || unpark) && tah_ring_push(&sched->ready, &splice->to) != TA_OK) {
-        return TA_ERR_NOMEM;
-    }
-    to->parked = 0;
+    tah_sched_rehold(sched, to);
     for (uint32_t index = splice->first; index != 0;) {
         tah_envelope *envelope = tah_sched_envelope(sched, index);
         envelope->target = splice->to;
+        envelope->phase = TAH_ENVELOPE_HELD;
         tah_waiter *waiter = tah_sched_waiter(sched, envelope->waiter);
         if (waiter != NULL && waiter->state == TAH_WAITER_QUEUED) {
             waiter->actor = splice->to;
         }
         index = envelope->next;
     }
-    tah_sched_envelope(sched, splice->last)->next = to->first;
-    if (to->last == 0) {
+    /* In front of the waiting mail, behind a message `to` is running. */
+    uint32_t taken = to->first != 0 && tah_sched_envelope(sched, to->first)->phase == TAH_ENVELOPE_TAKEN ? to->first : 0;
+    uint32_t *front = taken != 0 ? &tah_sched_envelope(sched, taken)->next : &to->first;
+    tah_sched_envelope(sched, splice->last)->next = *front;
+    if (*front == 0) {
         to->last = splice->last;
     }
-    to->first = splice->first;
-    if (to->state == TAH_SCHED_IDLE) {
-        to->state = TAH_SCHED_READY;
-    }
-    return TA_OK;
+    *front = splice->first;
+    tah_sched_has_mail(sched, to);
+    tah_sched_hold(sched, to, splice->to);
 }
 
 ta_result tah_sched_transfer(tah_sched *sched, const tah_sched_transfer_params *params) {
@@ -525,16 +724,29 @@ ta_result tah_sched_transfer(tah_sched *sched, const tah_sched_transfer_params *
     if (from == to || from->first == 0) {
         return TA_OK;
     }
-    ta_result result = tah_sched_splice_front(
-        sched, &(tah_splice){ .first = from->first, .last = from->last, .to = params->to, .entry = to });
-    if (result != TA_OK) {
-        return result;
+    /* What core admitted for `from` and has not taken is withdrawn and held
+     * for `to`; what it took already stays `from`'s. */
+    uint32_t first = 0;
+    uint32_t last = 0;
+    uint32_t index = from->first;
+    while (index != 0) {
+        tah_envelope *envelope = tah_sched_envelope(sched, index);
+        uint32_t next = envelope->next;
+        if (envelope->phase == TAH_ENVELOPE_HELD ||
+            (envelope->phase == TAH_ENVELOPE_ADMITTED && tah_sched_withdraw_admitted(sched, index))) {
+            (void)tah_sched_unlink(sched, from, index);
+            if (last != 0) {
+                tah_sched_envelope(sched, last)->next = index;
+            } else {
+                first = index;
+            }
+            last = index;
+        }
+        index = next;
     }
-    from->first = 0;
-    from->last = 0;
-    from->parked = 0;
-    if (from->state == TAH_SCHED_READY) {
-        from->state = TAH_SCHED_IDLE; /* its ready-queue entry is skipped */
+    tah_sched_splice_front(sched, &(tah_splice){ .first = first, .last = last, .to = params->to, .entry = to });
+    if (from->state == TAH_SCHED_READY && from->first == 0) {
+        tah_sched_set_state(sched, from, TAH_SCHED_IDLE);
     }
     return TA_OK;
 }
@@ -544,12 +756,9 @@ ta_result tah_sched_hand_over(tah_sched *sched, tah_mailbox *box, ta_actor_id to
     if (entry == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    ta_result result = tah_sched_splice_front(
-        sched, &(tah_splice){ .first = box->first, .last = box->last, .to = to, .entry = entry });
-    if (result == TA_OK) {
-        *box = (tah_mailbox){ 0 };
-    }
-    return result;
+    tah_sched_splice_front(sched, &(tah_splice){ .first = box->first, .last = box->last, .to = to, .entry = entry });
+    *box = (tah_mailbox){ 0 };
+    return TA_OK;
 }
 
 void tah_sched_bury_waiting(tah_sched *sched, tah_mailbox *box, tah_dead_reason reason) {
@@ -589,15 +798,10 @@ ta_result tah_sched_wake(tah_sched *sched, ta_actor_id actor) {
     if (entry == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    if (entry->state != TAH_SCHED_IDLE && entry->state != TAH_SCHED_READY) {
-        return TA_OK;
+    sched->core_work = true;
+    if (entry->state == TAH_SCHED_IDLE || entry->state == TAH_SCHED_READY) {
+        tah_sched_set_state(sched, entry, TAH_SCHED_RUNNABLE);
     }
-    /* A ready actor's entry in the ready queue, or the room queue, is skipped once it is runnable. */
-    if (tah_ring_push(&sched->runnable, &actor) != TA_OK) {
-        return TA_ERR_NOMEM;
-    }
-    entry->state = TAH_SCHED_RUNNABLE;
-    entry->parked = 0;
     return TA_OK;
 }
 
@@ -609,25 +813,38 @@ ta_result tah_sched_release(tah_sched *sched, ta_actor_id actor) {
     if (entry->state != TAH_SCHED_QUARANTINED) {
         return TA_OK;
     }
-    if (tah_ring_push(&sched->runnable, &actor) != TA_OK) {
-        return TA_ERR_NOMEM;
+    bool inside = *sched->inside_core;
+    *sched->inside_core = true;
+    ta_result result = ta_actor_release(sched->core, actor);
+    *sched->inside_core = inside;
+    if (result == TA_OK) {
+        /* Core goes on with the macrostep a fault stopped. */
+        tah_sched_set_state(sched, entry, TAH_SCHED_RUNNABLE);
+        sched->core_work = true;
+    } else {
+        /* Core did not stop it: the kernel quarantined it, or its macrostep
+         * was abandoned since. */
+        tah_sched_between(sched, entry);
     }
-    entry->state = TAH_SCHED_RUNNABLE;
     entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
-    sched->quarantined -= 1u;
+    /* Mail it collected while quarantined is admitted at the next turn,
+     * though overflow waits for room: the limits do not hold it back. */
+    if (tah_sched_waiting_first(sched, entry) != 0) {
+        tah_sched_hold(sched, entry, actor);
+        sched->held_blocked = false;
+    }
     return TA_OK;
 }
 
-bool tah_sched_quarantine(tah_sched *sched, ta_actor_id actor) {
+void tah_sched_ran(tah_sched *sched, ta_actor_id actor, bool finished) {
     tah_sched_entry *entry = tah_sched_lookup(sched, actor);
     if (entry == NULL || entry->state == TAH_SCHED_QUARANTINED) {
-        return false;
+        return;
     }
-    entry->state = TAH_SCHED_QUARANTINED;
-    entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
-    sched->quarantined += 1u;
-    sched->faults[0] += 1u;
-    return true;
+    if (finished) {
+        entry->flags |= TAH_SCHED_FINISHED;
+    }
+    tah_sched_between(sched, entry);
 }
 
 ta_result tah_sched_abandoned(tah_sched *sched, ta_actor_id actor) {
@@ -635,42 +852,34 @@ ta_result tah_sched_abandoned(tah_sched *sched, ta_actor_id actor) {
     if (entry == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_ABANDONED });
-    /* The macrostep a release() lifted the microstep limit for is gone. */
-    entry->flags &= (uint8_t)~TAH_SCHED_UNLIMITED;
-    if (entry->state != TAH_SCHED_RUNNABLE) {
-        return TA_OK; /* quarantined (a runaway's release() then finds it stable), or core abandoned an event the addon never delivered */
+    tah_sched_complete(sched, entry, actor, (tah_settlement){ .kind = TAH_SETTLE_ABANDONED });
+    /* Core returned the mail it deferred for it to its run queue. */
+    sched->core_work = true;
+    if (entry->state == TAH_SCHED_QUARANTINED) {
+        return TA_OK; /* release() lets it take its mail again */
     }
     entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
-    if (entry->first == 0) {
-        entry->state = TAH_SCHED_IDLE;
-        return TA_OK;
-    }
-    entry->state = TAH_SCHED_READY;
-    if (tah_ring_push(&sched->ready, &actor) != TA_OK) {
-        /* No room in the ready queue: it stays runnable, and its entry in the
-         * runnable queue resumes it, which finds it stable and settles it. */
-        entry->state = TAH_SCHED_RUNNABLE;
-    }
+    tah_sched_between(sched, entry);
     return TA_OK;
 }
 
-/* The limits a message must fit before it is accepted (ADR 0005 point 9). */
+/* The limits mail between actors must fit before it is admitted (ADR 0005 point 9). */
 static bool tah_sched_full(const tah_sched *sched, uint32_t bytes) {
     return (sched->max_queued != 0 && sched->queued >= sched->max_queued) ||
            (sched->max_retained != 0 && sched->retained + bytes > sched->max_retained);
 }
 
 bool tah_sched_quiet(const tah_sched *sched) {
-    return tah_ring_count(&sched->runnable) == 0 && tah_ring_count(&sched->ready) == 0 && sched->dead_count == 0 &&
-           tah_ring_count(&sched->settled) == 0 && sched->stranded == 0 &&
-           (tah_ring_count(&sched->room) == 0 || tah_sched_full(sched, 0));
+    return !sched->core_work && sched->dead_count == 0 && tah_ring_count(&sched->settled) == 0 &&
+           sched->stranded == 0 && tah_ring_count(&sched->backoff) == 0 && sched->faults_pending.count == 0 &&
+           sched->outcomes_pending.count == 0 &&
+           (tah_ring_count(&sched->held) == 0 || sched->held_blocked);
 }
 
 uint32_t tah_sched_mailbox_count(const tah_sched *sched, ta_actor_id actor) {
     const tah_sched_entry *entry = tah_sched_lookup(sched, actor);
     uint32_t count = 0;
-    for (uint32_t index = entry == NULL ? 0 : entry->first; index != 0;
+    for (uint32_t index = entry == NULL ? 0 : tah_sched_waiting_first(sched, entry); index != 0;
          index = tah_sched_envelope(sched, index)->next) {
         count += 1u;
     }
@@ -684,7 +893,7 @@ tah_sched_state tah_sched_state_of(const tah_sched *sched, ta_actor_id actor) {
 
 uint32_t tah_sched_mailbox_first(const tah_sched *sched, ta_actor_id actor) {
     const tah_sched_entry *entry = tah_sched_lookup(sched, actor);
-    return entry == NULL ? 0 : entry->first;
+    return entry == NULL ? 0 : tah_sched_waiting_first(sched, entry);
 }
 
 tah_queued_message tah_sched_queued_message(const tah_sched *sched, uint32_t envelope) {
@@ -693,12 +902,13 @@ tah_queued_message tah_sched_queued_message(const tah_sched *sched, uint32_t env
                                  .jump = message->has_jump ? message->jump : NULL,
                                  .waiter = message->waiter,
                                  .next = message->next,
-                                 .overflow = message->overflow != 0 };
+                                 .overflow = message->overflow != 0,
+                                 .held = message->phase == TAH_ENVELOPE_HELD };
 }
 
 void tah_sched_read_stats(const tah_sched *sched, tah_sched_stats *out) {
-    *out = (tah_sched_stats){ .runnable = tah_ring_count(&sched->runnable),
-                              .ready = tah_ring_count(&sched->ready),
+    *out = (tah_sched_stats){ .runnable = sched->runnable_count,
+                              .ready = sched->ready_count,
                               .quarantined = sched->quarantined,
                               .queued = sched->queued + sched->overflow,
                               .overflow = sched->overflow,
@@ -710,6 +920,111 @@ void tah_sched_read_stats(const tah_sched *sched, tah_sched_stats *out) {
     for (uint32_t code = 0; code < TAH_FAULT_CODES; code += 1u) {
         out->faults[code] = sched->faults[code];
     }
+}
+
+/* ------------------------------------------------------------------------
+ * Admission
+ */
+
+/* The core reason token of a report envelope (core ADR 0081). */
+static ta_str tah_report_reason(uint8_t kind) {
+    switch (kind) {
+    case TAH_REPORT_QUARANTINED: return (ta_str){ .ptr = "quarantined", .len = 11 };
+    case TAH_REPORT_FAILED: return (ta_str){ .ptr = "failed", .len = 6 };
+    default: return (ta_str){ .ptr = "unavailable", .len = 11 };
+    }
+}
+
+/* Offers envelope `index` to core's pool: ta_actor_deliver(), or for a
+ * report ta_actor_report_invoke(), under the envelope's correlation. */
+static ta_result tah_sched_offer(tah_sched *sched, uint32_t index) {
+    tah_envelope *envelope = tah_sched_envelope(sched, index);
+    ta_trace_parent trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0};
+    uint64_t correlation = tah_envelope_correlation(sched, index);
+    ta_time now = ta_system_time(sched->core);
+    bool inside = *sched->inside_core;
+    *sched->inside_core = true;
+    ta_result result = TA_OK;
+    if (envelope->report != TAH_REPORT_NONE) {
+        ta_invoke_error error = {
+            .reason = tah_report_reason(envelope->report),
+            .data = envelope->event.data.v != NULL ? &envelope->event.data : NULL,
+            .ends = envelope->report != TAH_REPORT_QUARANTINED,
+        };
+        result = ta_actor_report_invoke(sched->core, &(ta_invoke_report_params){ .time = now,
+                                                                                 .actor = envelope->target,
+                                                                                 .invoke_id = envelope->event.invoke_id,
+                                                                                 .kind = TA_INVOKE_REPORT_ERROR,
+                                                                                 .trace = trace,
+                                                                                 .correlation = correlation,
+                                                                                 .as.error = &error });
+    } else {
+        tah_trace_watch_mark(sched->watch, sched->core, envelope->target, &trace);
+        ta_operator_transition jump = { 0 };
+        if (envelope->has_jump) {
+            jump = (ta_operator_transition){ .source = envelope->jump->source,
+                                             .targets = envelope->jump->targets,
+                                             .target_count = envelope->jump->count };
+        }
+        result = ta_actor_deliver(sched->core, &(ta_actor_deliver_params){ .time = now,
+                                                                           .actor = envelope->target,
+                                                                           .event = &envelope->event,
+                                                                           .trace = trace,
+                                                                           .transition = envelope->has_jump ? &jump
+                                                                                                            : NULL,
+                                                                           .correlation = correlation });
+    }
+    *sched->inside_core = inside;
+    return result;
+}
+
+/* Notes a fault the kernel found outside a turn, for the next turn's records. */
+static void tah_sched_fault_later(tah_sched *sched, ta_actor_id actor, ta_result code) {
+    tah_pending_fault fault = { .actor = actor, .code = code };
+    (void)tah_vec_push(&sched->faults_pending, &fault); /* out of memory: no record, the quarantine stands */
+}
+
+/*
+ * Admits envelope `index`, in its target's mailbox, into core's pool.
+ * TA_OK when core admitted it, or it became a dead letter (the target
+ * gone, finished, or refusing it); TA_ERR_FULL or TA_ERR_NOMEM when core
+ * had no room, and the envelope is as it was.
+ */
+static ta_result tah_sched_admit(tah_sched *sched, tah_sched_entry *entry, uint32_t index) {
+    tah_envelope *envelope = tah_sched_envelope(sched, index);
+    ta_actor_id actor = envelope->target;
+    ta_result result = tah_sched_offer(sched, index);
+    if (result == TA_ERR_FULL || result == TA_ERR_NOMEM) {
+        return result;
+    }
+    if (result == TA_OK) {
+        envelope->phase = TAH_ENVELOPE_ADMITTED;
+        sched->core_work = true;
+        return TA_OK;
+    }
+    (void)tah_sched_unlink(sched, entry, index);
+    bool jump = envelope->has_jump;
+    tah_dead_reason reason = result == TA_ERR_DONE ? TAH_DEAD_DONE
+                             : result == TA_ERR_NOT_FOUND ? TAH_DEAD_NOT_FOUND
+                                                          : TAH_DEAD_REFUSED;
+    tah_sched_dead_append(sched, index, reason);
+    if (result == TA_ERR_DONE) {
+        entry->flags |= TAH_SCHED_FINISHED;
+        tah_sched_bury_held(sched, entry, TAH_DEAD_DONE);
+    } else if (result != TA_ERR_NOT_FOUND && !jump && entry->state != TAH_SCHED_QUARANTINED) {
+        /* Core refused the message itself (a malformed event): the actor is
+         * quarantined with its mailbox, as ADR 0008 says, and the fault is
+         * recorded at the next turn. A jump it refuses is the operator's
+         * fault, not the actor's (ADR 0026). */
+        uint32_t code = (uint32_t)(-(int64_t)result);
+        sched->faults[code < TAH_FAULT_CODES ? code : 0u] += 1u;
+        tah_sched_set_state(sched, entry, TAH_SCHED_QUARANTINED);
+        tah_sched_fault_later(sched, actor, result);
+    }
+    if (entry->state == TAH_SCHED_READY && entry->first == 0) {
+        tah_sched_set_state(sched, entry, TAH_SCHED_IDLE);
+    }
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -764,6 +1079,7 @@ static void tah_sched_fill(tah_sched *sched, uint32_t index, const tah_message *
     envelope->bytes = message->bytes;
     envelope->waiter = message->waiter;
     envelope->report = message->report;
+    envelope->external = !message->may_overflow && message->report == TAH_REPORT_NONE;
     sched->queued += 1u;
     sched->retained += message->bytes;
     tah_waiter *waiter = tah_sched_waiter(sched, message->waiter);
@@ -772,15 +1088,6 @@ static void tah_sched_fill(tah_sched *sched, uint32_t index, const tah_message *
         waiter->envelope = index;
         waiter->actor = message->target;
     }
-}
-
-/*
- * Whether `message` is accepted past the limits, as overflow (kernel ADR
- * 0003). TA_ERR_BUSY when it is full and the message may not overflow.
- */
-static ta_result tah_sched_admit(const tah_sched *sched, const tah_message *message, bool *overflow) {
-    *overflow = tah_sched_full(sched, message->bytes);
-    return *overflow && !message->may_overflow ? TA_ERR_BUSY : TA_OK;
 }
 
 /* Counts a filled envelope as overflow instead of queued (kernel ADR 0003). */
@@ -792,7 +1099,7 @@ static void tah_sched_mark_overflow(tah_sched *sched, uint32_t index) {
     sched->overflow += 1u;
 }
 
-/* Moves an overflowed envelope into the mailbox: it counts against the limits from now on. */
+/* Moves an overflowed envelope in: it counts against the limits from now on. */
 static void tah_sched_move_in(tah_sched *sched, tah_envelope *envelope) {
     envelope->overflow = 0;
     sched->overflow -= 1u;
@@ -800,26 +1107,32 @@ static void tah_sched_move_in(tah_sched *sched, tah_envelope *envelope) {
     sched->retained += envelope->bytes;
 }
 
+/* Whether the operator transition is for the definition `actor` runs. */
+static bool tah_sched_jump_applies(tah_sched *sched, ta_actor_id actor, const tah_message *message) {
+    if (message->jump == NULL) {
+        return true;
+    }
+    ta_actor_inspection view;
+    bool inside = *sched->inside_core;
+    *sched->inside_core = true;
+    ta_result result = ta_actor_inspect(sched->core, actor, &view);
+    *sched->inside_core = inside;
+    return result == TA_OK && view.definition_id == message->jump->definition;
+}
+
 ta_result tah_sched_post(tah_sched *sched, const tah_message *message) {
     ta_actor_id target = message->target;
-    bool overflow = false;
-    if (tah_sched_admit(sched, message, &overflow) != TA_OK) {
-        return TA_ERR_BUSY;
-    }
     tah_sched_entry *entry = tah_sched_lookup(sched, target);
     bool dead = entry == NULL || (entry->flags & TAH_SCHED_FINISHED) != 0;
-    /* An idle actor joins the ready queue; reserve that before taking mail. */
-    if (!dead && entry->state == TAH_SCHED_IDLE && tah_ring_push(&sched->ready, &target) != TA_OK) {
-        return TA_ERR_NOMEM;
-    }
+    bool refused = !dead && !tah_sched_jump_applies(sched, target, message);
+    bool overflow = message->may_overflow && tah_sched_full(sched, message->bytes);
     ta_trace_parent *trace = NULL;
     if (!tah_sched_take_trace(sched, message, &trace)) {
-        return TA_ERR_NOMEM; /* a ready-queue entry pushed above names an idle actor; delivery skips it */
+        return TA_ERR_NOMEM;
     }
     tah_jump *jump = NULL;
     uint32_t index = tah_sched_take_jump(sched, message, &jump) ? tah_envelope_take(sched) : 0;
     if (index == 0) {
-        /* A ready-queue entry pushed above names an idle actor; delivery skips it. */
         if (trace != NULL) {
             tah_free_list_give(&sched->traces, trace);
         }
@@ -833,35 +1146,56 @@ ta_result tah_sched_post(tah_sched *sched, const tah_message *message) {
         return TA_ERR_NOMEM;
     }
     tah_sched_fill(sched, index, message, trace);
+    tah_envelope *envelope = tah_sched_envelope(sched, index);
     if (overflow) {
         tah_sched_mark_overflow(sched, index);
     }
     if (jump != NULL) {
-        tah_envelope *envelope = tah_sched_envelope(sched, index);
         envelope->jump = jump;
         envelope->has_jump = 1u;
     }
-    if (dead) {
-        tah_sched_dead_append(sched, index, entry == NULL ? TAH_DEAD_NOT_FOUND : TAH_DEAD_DONE);
+    if (dead || refused) {
+        tah_sched_dead_append(sched, index, dead ? (entry == NULL ? TAH_DEAD_NOT_FOUND : TAH_DEAD_DONE)
+                                                 : TAH_DEAD_REFUSED);
         return TA_OK;
     }
-    if (entry->last != 0) {
-        tah_sched_envelope(sched, entry->last)->next = index;
-    } else {
-        entry->first = index;
+    tah_sched_mailbox_append(sched, entry, index);
+    tah_sched_has_mail(sched, entry);
+    /* A quarantined actor collects mail until it is released (ADR 0008),
+     * and mail between actors queues behind the target's held mail. */
+    bool hold = overflow || entry->state == TAH_SCHED_QUARANTINED || (!envelope->external && entry->held);
+    ta_result result = hold ? TA_ERR_FULL : tah_sched_admit(sched, entry, index);
+    if (result == TA_OK) {
+        return TA_OK;
     }
-    entry->last = index;
-    if (entry->state == TAH_SCHED_IDLE) {
-        entry->state = TAH_SCHED_READY;
+    if (envelope->external && !hold) {
+        /* The host's own message: core's full pool refuses it at the post.
+         * The caller keeps the event and the waiter: the envelope gives back
+         * only what the scheduler took for it (its trace, its transition). */
+        (void)tah_sched_unlink(sched, entry, index);
+        envelope->event = (ta_event){ 0 };
+        tah_waiter *waiter = tah_sched_waiter(sched, message->waiter);
+        if (waiter != NULL) {
+            waiter->state = TAH_WAITER_SETTLING;
+            waiter->envelope = 0;
+            waiter->actor = 0;
+        }
+        tah_envelope_give(sched, index);
+        if (entry->state == TAH_SCHED_READY && entry->first == 0) {
+            tah_sched_set_state(sched, entry, TAH_SCHED_IDLE);
+        }
+        return result;
     }
+    envelope->phase = TAH_ENVELOPE_HELD;
+    if (!hold) {
+        sched->held_blocked = true;
+    }
+    tah_sched_hold(sched, entry, target);
     return TA_OK;
 }
 
 ta_result tah_sched_post_waiting(tah_sched *sched, const tah_waiting_post *post) {
-    bool overflow = false;
-    if (tah_sched_admit(sched, post->message, &overflow) != TA_OK) {
-        return TA_ERR_BUSY;
-    }
+    bool overflow = tah_sched_full(sched, post->message->bytes);
     ta_trace_parent *trace = NULL;
     if (!tah_sched_take_trace(sched, post->message, &trace)) {
         return TA_ERR_NOMEM;
@@ -882,6 +1216,7 @@ ta_result tah_sched_post_waiting(tah_sched *sched, const tah_waiting_post *post)
     ta_address_retain(post->address);
     tah_envelope *envelope = tah_sched_envelope(sched, index);
     envelope->address = post->address; /* a dead letter names it if the load fails */
+    envelope->phase = TAH_ENVELOPE_WAITING;
     tah_mailbox *box = post->box;
     if (box->last != 0) {
         tah_sched_envelope(sched, box->last)->next = index;
@@ -894,10 +1229,6 @@ ta_result tah_sched_post_waiting(tah_sched *sched, const tah_waiting_post *post)
 }
 
 ta_result tah_sched_post_dead(tah_sched *sched, const tah_dead_post *post) {
-    bool overflow = false;
-    if (tah_sched_admit(sched, post->message, &overflow) != TA_OK) {
-        return TA_ERR_BUSY;
-    }
     ta_trace_parent *trace = NULL;
     if (!tah_sched_take_trace(sched, post->message, &trace)) {
         return TA_ERR_NOMEM;
@@ -910,9 +1241,6 @@ ta_result tah_sched_post_dead(tah_sched *sched, const tah_dead_post *post) {
         return TA_ERR_NOMEM;
     }
     tah_sched_fill(sched, index, post->message, trace);
-    if (overflow) {
-        tah_sched_mark_overflow(sched, index);
-    }
     tah_envelope *envelope = tah_sched_envelope(sched, index);
     envelope->target = 0;
     envelope->address = post->address;
@@ -925,10 +1253,11 @@ ta_result tah_sched_post_dead(tah_sched *sched, const tah_dead_post *post) {
  */
 
 static void tah_sched_record(tah_sched *sched, const tah_turn_params *params, tah_turn_record record) {
-    tah_turn_record *copy = ta_arena_alloc(params->arena, sizeof *copy, _Alignof(tah_turn_record));
+    tah_turn_record *copy =
+        params == NULL ? NULL : ta_arena_alloc(params->arena, sizeof *copy, _Alignof(tah_turn_record));
     if (copy == NULL) {
-        /* The turn arena is out of memory: the hook is not called, and what
-         * the record owned goes back now. */
+        /* The turn arena is out of memory, or there is no turn: the hook is
+         * not called, and what the record owned goes back now. */
         ta_value_release(&record.data);
         return;
     }
@@ -949,34 +1278,30 @@ static void tah_sched_fault(tah_sched *sched, const tah_turn_params *params, tah
     uint32_t code = record.code < 0 ? (uint32_t)(-(int64_t)record.code) : 0u;
     sched->faults[code < TAH_FAULT_CODES ? code : 0u] += 1u;
     if (entry != NULL) {
-        sched->quarantined += entry->state == TAH_SCHED_QUARANTINED ? 0u : 1u;
-        entry->state = TAH_SCHED_QUARANTINED;
+        tah_sched_set_state(sched, entry, TAH_SCHED_QUARANTINED);
         entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
+    }
+    if (params == NULL) {
+        tah_sched_fault_later(sched, record.actor, record.code); /* no turn: recorded at the next one */
+        return;
     }
     record.kind = TAH_RECORD_FAULT;
     tah_sched_record(sched, params, record);
 }
 
-/*
- * Puts an actor back at the end of `queue`, the one its state names. Out of
- * memory, it is stranded: it keeps its state and its mail, and the next
- * turn tries again (tah_sched_unstrand), so a quiet scheduler never holds
- * an actor with work to do.
- */
-static void tah_sched_requeue(tah_sched *sched, tah_ring *queue, ta_actor_id actor) {
-    if (tah_ring_push(queue, &actor) == TA_OK) {
-        return;
+/* The faults found outside the turn become its first records. */
+static void tah_sched_record_pending_faults(tah_sched *sched, const tah_turn_params *params) {
+    for (uint32_t at = 0; at < sched->faults_pending.count; at += 1u) {
+        const tah_pending_fault *fault = tah_vec_at(&sched->faults_pending, at);
+        tah_sched_record(sched, params, (tah_turn_record){ .kind = TAH_RECORD_FAULT, .actor = fault->actor,
+                                                           .operation = "deliver", .code = fault->code });
     }
-    tah_sched_entry *entry = tah_sched_lookup(sched, actor);
-    if (entry != NULL && (entry->flags & TAH_SCHED_STRANDED) == 0) {
-        entry->flags |= TAH_SCHED_STRANDED;
-        sched->stranded += 1u;
-    }
+    tah_vec_clear(&sched->faults_pending);
 }
 
 /*
- * Puts stranded actors back on their queues, and recounts the ones still
- * stranded. A walk of the table, only after a requeue ran out of memory.
+ * Puts stranded actors back on the held queue, and recounts the ones still
+ * stranded. A walk of the table, only after a push ran out of memory.
  */
 static void tah_sched_unstrand(tah_sched *sched) {
     if (sched->stranded == 0) {
@@ -990,11 +1315,8 @@ static void tah_sched_unstrand(tah_sched *sched) {
             if ((entry->flags & TAH_SCHED_STRANDED) == 0) {
                 continue;
             }
-            tah_ring *queue = entry->state == TAH_SCHED_READY      ? &sched->ready
-                              : entry->state == TAH_SCHED_RUNNABLE ? &sched->runnable
-                                                                   : NULL;
             ta_actor_id actor = ta_actor_id_make((page << TAH_SCHED_PAGE_BITS) | at, entry->generation);
-            if (queue != NULL && (left != 0 || tah_ring_push(queue, &actor) != TA_OK)) {
+            if (left != 0 || tah_ring_push(&sched->held, &actor) != TA_OK) {
                 left += 1u; /* still no memory: the next turn tries again */
                 continue;
             }
@@ -1004,364 +1326,310 @@ static void tah_sched_unstrand(tah_sched *sched) {
     sched->stranded = left;
 }
 
-/* A stable actor: ready when it has mail, idle otherwise. */
-static void tah_sched_settle(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor) {
-    if (entry->first == 0) {
-        entry->state = TAH_SCHED_IDLE;
-        return;
-    }
-    entry->state = TAH_SCHED_READY;
-    tah_sched_requeue(sched, &sched->ready, actor);
-}
-
-static void tah_sched_resume_one(tah_sched *sched, const tah_turn_params *params, ta_actor_id actor) {
-    tah_sched_entry *entry = tah_sched_lookup(sched, actor);
-    if (entry == NULL || entry->state != TAH_SCHED_RUNNABLE) {
-        return; /* destroyed, replaced or quarantined since it was queued */
-    }
-    if ((entry->flags & TAH_SCHED_REPLAYING) != 0) {
-        entry->state = TAH_SCHED_IDLE; /* its replay resumes it (napi ADR 0034) */
-        return;
-    }
-    if ((entry->flags & TAH_SCHED_BACKOFF) != 0) {
-        entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
-        tah_sched_requeue(sched, &sched->runnable, actor);
-        return;
-    }
-    ta_run_status status = TA_RUN_STABLE;
-    bool ignored = false;
-    ta_actor_resume_params resume = {
-        .actor = actor,
-        .budget = params->budgets.microsteps,
-        .status = &status,
-        .action_budget = params->budgets.actions,
-        .no_microstep_limit = (entry->flags & TAH_SCHED_UNLIMITED) != 0,
-        .ignored = &ignored,
-    };
-    *params->inside_core = true;
-    ta_result result = ta_actor_resume(params->core, &resume);
-    *params->inside_core = false;
-    /* The table is the addon's: core calls never move its pages. */
-    if (result == TA_ERR_NOMEM) {
-        entry->flags |= TAH_SCHED_BACKOFF;
-        tah_sched_requeue(sched, &sched->runnable, actor);
-        return;
-    }
-    if (result == TA_ERR_NOT_FOUND) {
-        tah_sched_remove(sched, actor, TAH_DEAD_NOT_FOUND);
-        return;
-    }
-    if (result != TA_OK) {
-        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
-        if (result == TA_ERR_RUNAWAY) {
-            /* Quarantined as a runaway: an operator's release() lets this
-             * macrostep finish; the next one has the limit again. */
-            entry->flags |= TAH_SCHED_UNLIMITED;
-        }
-        tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_FAULT, .code = result });
-        tah_sched_fault(sched, params, (tah_turn_record){ .actor = actor, .operation = "resume", .code = result });
-        return;
-    }
-    switch (status) {
-    case TA_RUN_PAUSED:
-        tah_sched_requeue(sched, &sched->runnable, actor);
-        return;
-    default:
-        break;
-    }
-    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
-    switch (status) {
-    case TA_RUN_DONE:
-        entry->flags &= (uint8_t)~TAH_SCHED_UNLIMITED;
-        tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_DONE, .ignored = ignored });
-        entry->state = TAH_SCHED_IDLE;
-        tah_sched_bury(sched, entry, TAH_DEAD_DONE);
-        if ((entry->flags & TAH_SCHED_FINISHED) == 0) {
-            entry->flags |= TAH_SCHED_FINISHED;
-            tah_sched_record(sched, params, (tah_turn_record){ .kind = TAH_RECORD_DONE, .actor = actor });
-            tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_FINISHED, .actor = actor });
-        }
-        return;
-    case TA_RUN_STABLE:
-    default:
-        entry->flags &= (uint8_t)~TAH_SCHED_UNLIMITED;
-        tah_sched_complete(sched, actor, (tah_settlement){ .kind = TAH_SETTLE_STABLE, .ignored = ignored });
-        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_SETTLED, .actor = actor });
-        tah_sched_settle(sched, entry, actor);
-        return;
-    }
-}
+/* What admitting an actor's held mail ran into. */
+typedef struct {
+    bool pool;   /* core's pool had no room: nothing more is admitted this turn */
+    bool limits; /* overflow found no room under the limits */
+} tah_held_blocked;
 
 /*
- * The operator transition of a jump envelope for ta_actor_deliver(), or NULL
- * when the actor no longer runs the definition its state IDs belong to (a
- * replacement took the mail over, ADR 0005 point 12). Only a jump pays for
- * the inspection.
+ * Admits one actor's held mail, in order, while there is room: core's pool
+ * below its watermark, and, for overflow, room under the limits, which
+ * `blocked->limits` says an earlier actor's overflow already found none of.
+ * Stops at the first message without room, and says which room was
+ * missing; the actor's held mail from there on waits.
  */
-static const ta_operator_transition *tah_sched_jump(const tah_turn_params *params, ta_actor_id actor, const tah_jump *jump,
-                                                    ta_operator_transition *out) {
-    ta_actor_inspection view;
-    *params->inside_core = true;
-    ta_result result = ta_actor_inspect(params->core, actor, &view);
-    *params->inside_core = false;
-    if (result != TA_OK || view.definition_id != jump->definition) {
-        return NULL;
-    }
-    *out = (ta_operator_transition){ .source = jump->source, .targets = jump->targets, .target_count = jump->count };
-    return out;
-}
-
-/* The head envelope is a jump the actor does not accept: a dead letter with
- * reason `refused`, and the actor stands between macrosteps as before. */
-static void tah_sched_refuse_jump(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor) {
-    uint32_t head = entry->first;
-    entry->first = tah_sched_envelope(sched, head)->next;
-    if (entry->first == 0) {
-        entry->last = 0;
-    }
-    tah_sched_dead_append(sched, head, TAH_DEAD_REFUSED);
-    tah_sched_settle(sched, entry, actor);
-}
-
-/* The core reason token of a report envelope (core ADR 0081). */
-static ta_str tah_report_reason(uint8_t kind) {
-    switch (kind) {
-    case TAH_REPORT_QUARANTINED: return (ta_str){ .ptr = "quarantined", .len = 11 };
-    case TAH_REPORT_FAILED: return (ta_str){ .ptr = "failed", .len = 6 };
-    default: return (ta_str){ .ptr = "unavailable", .len = 11 };
-    }
-}
-
-/*
- * Offers the head envelope, an error report, to its idle parent (napi ADR
- * 0032 section 3). Taken, it starts a macrostep; a report core has no
- * invocation for any more (it ended, or the parent went) is dropped, and
- * the next mail follows; out of memory, or busy, it stays at the head.
- */
-
-static void tah_sched_report_one(tah_sched *sched, const tah_turn_params *params, tah_sched_entry *entry,
-                                 ta_actor_id actor, uint32_t head) {
-    tah_envelope *envelope = tah_sched_envelope(sched, head);
-    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_REPORTING, .actor = actor, .envelope = head });
-    ta_trace_parent trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0};
-    bool has_data = envelope->event.data.v != NULL;
-    ta_invoke_error error = {
-        .reason = tah_report_reason(envelope->report),
-        .data = has_data ? &envelope->event.data : NULL,
-        .ends = envelope->report != TAH_REPORT_QUARANTINED,
-    };
-    *params->inside_core = true;
-    ta_result result = ta_actor_report_invoke(params->core, &(ta_invoke_report_params){ .time = ta_system_time(params->core),
-                                                                .actor = actor,
-                                                                .invoke_id = envelope->event.invoke_id,
-                                                                .kind = TA_INVOKE_REPORT_ERROR,
-                                                                .trace = trace,
-                                                                .as.error = &error,
-                                                            });
-    *params->inside_core = false;
-    if (result != TA_OK) {
-        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_UNDELIVERED, .actor = actor, .envelope = head });
-    }
-    if (result == TA_ERR_NOMEM || result == TA_ERR_BUSY) {
-        if (result == TA_ERR_NOMEM) {
-            entry->flags |= TAH_SCHED_BACKOFF; /* retryable (ADR 0008): try again next turn */
-        }
-        tah_sched_requeue(sched, &sched->ready, actor);
-        return;
-    }
-    entry->first = envelope->next;
-    if (entry->first == 0) {
-        entry->last = 0;
-    }
-    if (result == TA_OK) {
-        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_REPORTED, .actor = actor, .envelope = head });
-    }
-    if (envelope->waiter != 0) {
-        /* A replayed report (napi ADR 0032 section 7) follows the macrostep
-         * it starts, as a delivered message's send() does. */
-        tah_waiter *waiter = tah_sched_waiter(sched, envelope->waiter);
-        if (result == TA_OK && tah_map_put(&sched->inflight, actor, envelope->waiter) == TA_OK) {
-            waiter->state = TAH_WAITER_INFLIGHT;
-            waiter->actor = actor;
-            waiter->envelope = 0;
-        } else {
-            tah_sched_settle_waiter(sched, envelope->waiter,
-                                    result == TA_OK
-                                        ? (tah_settlement){ .kind = TAH_SETTLE_FAULT, .code = TA_ERR_NOMEM, .actor = actor }
-                                        : (tah_settlement){ .kind = TAH_SETTLE_DEAD, .reason = TAH_DEAD_NOT_FOUND,
-                                                            .actor = actor });
-        }
-        envelope->waiter = 0;
-    }
-    tah_envelope_give(sched, head);
-    if (result == TA_OK) {
-        entry->state = TAH_SCHED_RUNNABLE;
-        tah_sched_requeue(sched, &sched->runnable, actor);
-        return;
-    }
-    tah_sched_settle(sched, entry, actor);
-}
-
-/*
- * A ready actor whose head waits in the overflow (kernel ADR 0003) waits on
- * the room queue, off the ready queue, until a turn moves its head in.
- */
-static void tah_sched_park(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor) {
-    if (entry->parked) {
-        return; /* on the room queue already */
-    }
-    if (tah_ring_push(&sched->room, &actor) != TA_OK) {
-        tah_sched_requeue(sched, &sched->ready, actor); /* out of memory: it asks again next turn */
-        return;
-    }
-    entry->parked = 1u;
-}
-
-/*
- * While there is room, moves the head of each actor on the room queue into
- * its mailbox, one message each, in the order they asked, and puts the
- * actor on the ready queue. Entries of actors that left (woken, moved on,
- * destroyed) are skipped.
- */
-static void tah_sched_unpark(tah_sched *sched) {
-    while (tah_ring_count(&sched->room) != 0 && !tah_sched_full(sched, 0)) {
-        ta_actor_id actor = 0;
-        (void)tah_ring_pop(&sched->room, &actor);
-        tah_sched_entry *entry = tah_sched_lookup(sched, actor);
-        if (entry == NULL || !entry->parked) {
-            continue;
-        }
-        entry->parked = 0;
-        if (entry->state != TAH_SCHED_READY || entry->first == 0) {
-            continue;
-        }
-        tah_envelope *head = tah_sched_envelope(sched, entry->first);
-        if (head->overflow) {
-            if (tah_sched_full(sched, head->bytes)) {
-                tah_sched_park(sched, entry, actor); /* its bytes do not fit yet */
+static void tah_sched_admit_held(tah_sched *sched, tah_sched_entry *entry, tah_held_blocked *blocked) {
+    uint32_t index = entry->first;
+    while (index != 0) {
+        tah_envelope *envelope = tah_sched_envelope(sched, index);
+        uint32_t next = envelope->next;
+        if (envelope->phase == TAH_ENVELOPE_HELD) {
+            if (envelope->overflow) {
+                if (blocked->limits || tah_sched_full(sched, envelope->bytes)) {
+                    blocked->limits = true;
+                    return;
+                }
+                tah_sched_move_in(sched, envelope);
+            }
+            ta_result result = tah_sched_admit(sched, entry, index);
+            if (result != TA_OK) {
+                blocked->pool = true;
                 return;
             }
-            tah_sched_move_in(sched, head);
         }
-        tah_sched_requeue(sched, &sched->ready, actor);
+        index = next;
     }
 }
 
-/* Delivers the head envelope of a ready actor (ADR 0005 point 6). */
-static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *params, ta_actor_id actor) {
-    tah_sched_entry *entry = tah_sched_lookup(sched, actor);
-    if (entry == NULL || entry->state != TAH_SCHED_READY) {
-        return; /* destroyed, replaced or quarantined since it was queued */
+/*
+ * Admits held mail, the actors in the order they first held it (kernel ADR
+ * 0003), up to `limit` of them. When core's pool has no room the rest keep
+ * their order for the next turn. When the limits have none, overflow waits
+ * in the same order, but the mail that needs no room under them (the
+ * application's, held while its actor was quarantined or the pool was
+ * full) is still admitted, up to each actor's first overflow: it may be
+ * what makes the room.
+ */
+static void tah_sched_admit_holders(tah_sched *sched, uint32_t limit) {
+    uint32_t pending = tah_ring_count(&sched->held);
+    tah_held_blocked blocked = { .pool = false, .limits = false };
+    for (uint32_t at = 0; at < pending; at += 1u) {
+        ta_actor_id actor = 0;
+        (void)tah_ring_pop(&sched->held, &actor);
+        tah_sched_entry *entry = tah_sched_lookup(sched, actor);
+        if (entry == NULL || !entry->held) {
+            continue; /* gone, or a stale entry of the queue */
+        }
+        if (entry->state == TAH_SCHED_QUARANTINED) {
+            entry->held = 0; /* it collects mail until release() queues it again */
+            continue;
+        }
+        if (!blocked.pool && at < limit) {
+            tah_sched_admit_held(sched, entry, &blocked);
+        }
+        bool still = false;
+        for (uint32_t index = entry->first; index != 0; index = tah_sched_envelope(sched, index)->next) {
+            still = still || tah_sched_envelope(sched, index)->phase == TAH_ENVELOPE_HELD;
+        }
+        if (!still) {
+            entry->held = 0;
+            continue;
+        }
+        if (tah_ring_push(&sched->held, &actor) != TA_OK && (entry->flags & TAH_SCHED_STRANDED) == 0) {
+            entry->flags |= TAH_SCHED_STRANDED;
+            sched->stranded += 1u;
+        }
     }
-    if ((entry->flags & TAH_SCHED_BACKOFF) != 0) {
+    sched->held_blocked = blocked.pool || blocked.limits;
+}
+
+/* The actors whose input ran out of memory last turn go on (ADR 0008's backoff). */
+static void tah_sched_release_backoff(tah_sched *sched) {
+    uint32_t pending = tah_ring_count(&sched->backoff);
+    for (uint32_t at = 0; at < pending; at += 1u) {
+        ta_actor_id actor = 0;
+        (void)tah_ring_pop(&sched->backoff, &actor);
+        tah_sched_entry *entry = tah_sched_lookup(sched, actor);
+        if (entry == NULL || (entry->flags & TAH_SCHED_BACKOFF) == 0) {
+            continue;
+        }
         entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
-        tah_sched_requeue(sched, &sched->ready, actor);
-        return;
+        bool inside = *sched->inside_core;
+        *sched->inside_core = true;
+        (void)ta_actor_release(sched->core, actor);
+        *sched->inside_core = inside;
+        sched->core_work = true;
     }
-    if (entry->first == 0) {
-        entry->state = TAH_SCHED_IDLE;
-        return;
-    }
-    uint32_t head = entry->first;
-    tah_envelope *envelope = tah_sched_envelope(sched, head);
-    if (envelope->overflow) {
-        /* Room goes to the actors that asked first (kernel ADR 0003). */
-        if (entry->parked || tah_ring_count(&sched->room) != 0 || tah_sched_full(sched, envelope->bytes)) {
-            tah_sched_park(sched, entry, actor);
-            return;
-        }
-        tah_sched_move_in(sched, envelope);
-    }
-    if (envelope->report != TAH_REPORT_NONE) {
-        tah_sched_report_one(sched, params, entry, actor, head);
-        return;
-    }
-    ta_trace_parent trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0};
-    tah_trace_watch_mark(params->watch, params->core, actor, &trace);
-    ta_operator_transition jump;
-    const ta_operator_transition *transition = NULL;
-    if (envelope->has_jump) {
-        transition = tah_sched_jump(params, actor, envelope->jump, &jump);
-        if (transition == NULL) {
-            tah_sched_refuse_jump(sched, entry, actor);
-            return;
+}
+
+/*
+ * Core took the message in `index` for `actor`: its macrostep runs it now.
+ * It leaves the waiting mail, uncounted, and stays at the head of the
+ * mailbox until it ends, where an abandon or a removal finds it.
+ */
+static void tah_sched_taken(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor, uint32_t index) {
+    tah_envelope *envelope = tah_sched_envelope(sched, index);
+    if (entry != NULL && tah_sched_unlink(sched, entry, index)) {
+        envelope->next = entry->first;
+        entry->first = index;
+        if (entry->last == 0) {
+            entry->last = index;
         }
     }
-    tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERING, .actor = actor, .envelope = head });
-    *params->inside_core = true;
-    ta_result result = ta_actor_deliver(params->core, &(ta_actor_deliver_params){ .time = ta_system_time(params->core),
-                                                         .actor = actor,
-                                                         .event = &envelope->event,
-                                                         .trace = trace,
-                                                         .transition = transition,
-                                                     });
-    *params->inside_core = false;
-    if (result != TA_OK) {
-        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_UNDELIVERED, .actor = actor, .envelope = head });
+    if (!envelope->overflow) {
+        sched->queued -= 1u;
+        sched->retained -= envelope->bytes;
     }
-    switch (result) {
-    case TA_OK:
-        /* Core retained what it keeps; the envelope's own references go. */
-        entry->first = envelope->next;
-        if (entry->first == 0) {
-            entry->last = 0;
+    envelope->phase = TAH_ENVELOPE_TAKEN;
+    if (envelope->report == TAH_REPORT_NONE) {
+        sched->delivered += 1u;
+    }
+    tah_waiter *waiter = tah_sched_waiter(sched, envelope->waiter);
+    if (waiter != NULL) {
+        /* The send() follows the macrostep this message starts. */
+        waiter->state = TAH_WAITER_INFLIGHT;
+        waiter->actor = actor;
+    }
+    tah_sched_note_to(sched, (tah_sched_note){
+                                 .kind = envelope->report != TAH_REPORT_NONE ? TAH_NOTE_REPORTED : TAH_NOTE_DELIVERED,
+                                 .actor = actor,
+                                 .envelope = index });
+}
+
+/* The input in `index` ended (or 0 for core's own): its send() settles and its envelope goes. */
+static void tah_sched_ended(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor, uint32_t index,
+                            tah_settlement settlement) {
+    if (index != 0 && entry != NULL) {
+        (void)tah_sched_unlink(sched, entry, index);
+    }
+    if (index != 0) {
+        settlement.actor = actor;
+        tah_sched_settle_envelope(sched, index, settlement);
+        tah_envelope_give(sched, index);
+    }
+}
+
+/* A message core refused: a dead letter. */
+static void tah_sched_refused(tah_sched *sched, tah_sched_entry *entry, uint32_t index, ta_result code) {
+    tah_dead_reason reason = code == TA_ERR_DONE      ? TAH_DEAD_DONE
+                             : code == TA_ERR_INVALID ? TAH_DEAD_REFUSED
+                                                      : TAH_DEAD_NOT_FOUND;
+    if (entry != NULL) {
+        (void)tah_sched_unlink(sched, entry, index);
+        if (code == TA_ERR_DONE) {
+            entry->flags |= TAH_SCHED_FINISHED;
         }
-        if (envelope->waiter != 0) {
-            /* The send() follows the macrostep this message starts. */
-            tah_waiter *waiter = tah_sched_waiter(sched, envelope->waiter);
-            if (tah_map_put(&sched->inflight, actor, envelope->waiter) == TA_OK) {
-                waiter->state = TAH_WAITER_INFLIGHT;
-                waiter->actor = actor;
-                waiter->envelope = 0;
-            } else {
-                tah_sched_settle_waiter(sched, envelope->waiter,
-                                        (tah_settlement){ .kind = TAH_SETTLE_FAULT, .code = TA_ERR_NOMEM, .actor = actor });
+    }
+    tah_sched_dead_append(sched, index, reason);
+}
+
+/* Acts on one outcome ta_run() reported (core ADR 0103). */
+static void tah_sched_outcome(tah_sched *sched, const tah_turn_params *params, const ta_input_outcome *outcome) {
+    ta_actor_id actor = outcome->actor;
+    tah_sched_entry *entry = tah_sched_lookup(sched, actor);
+    uint32_t index = outcome->correlation == 0 ? 0 : tah_envelope_of(sched, outcome->correlation);
+    tah_envelope *orphan = index == 0 ? NULL : tah_sched_envelope(sched, index);
+    if (orphan != NULL && orphan->phase == TAH_ENVELOPE_ORPHANED) {
+        /* Its actor was removed while core ran it, or before core's refusal
+         * was read: it is a dead letter of that removal. */
+        tah_sched_dead_append(sched, index, (tah_dead_reason)orphan->reason);
+        return;
+    }
+    switch (outcome->kind) {
+    case TA_INPUT_TAKEN:
+        if (index != 0) {
+            tah_sched_taken(sched, entry, actor, index);
+        }
+        if (entry != NULL && entry->state != TAH_SCHED_QUARANTINED) {
+            tah_sched_set_state(sched, entry, TAH_SCHED_RUNNABLE);
+        }
+        return;
+    case TA_INPUT_COMPLETED:
+    case TA_INPUT_IGNORED: {
+        sched->held_blocked = false;
+        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
+        tah_sched_ended(sched, entry, actor, index,
+                        (tah_settlement){ .kind = TAH_SETTLE_STABLE, .ignored = outcome->kind == TA_INPUT_IGNORED });
+        if (entry != NULL) {
+            tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_SETTLED, .actor = actor });
+            if (entry->state != TAH_SCHED_QUARANTINED) {
+                tah_sched_between(sched, entry);
             }
         }
-        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERED, .actor = actor, .envelope = head });
-        tah_envelope_give(sched, head);
-        sched->delivered += 1u;
-        entry->state = TAH_SCHED_RUNNABLE;
-        tah_sched_requeue(sched, &sched->runnable, actor);
         return;
-    case TA_ERR_NOMEM:
-        entry->flags |= TAH_SCHED_BACKOFF; /* retryable (ADR 0008): try again next turn */
-        tah_sched_requeue(sched, &sched->ready, actor);
+    }
+    case TA_INPUT_FINISHED:
+        sched->held_blocked = false;
+        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
+        tah_sched_ended(sched, entry, actor, index, (tah_settlement){ .kind = TAH_SETTLE_DONE });
+        if (entry != NULL) {
+            tah_sched_bury_held(sched, entry, TAH_DEAD_DONE);
+            if (entry->state != TAH_SCHED_QUARANTINED) {
+                tah_sched_between(sched, entry);
+            }
+            if ((entry->flags & TAH_SCHED_FINISHED) == 0) {
+                entry->flags |= TAH_SCHED_FINISHED;
+                tah_sched_record(sched, params, (tah_turn_record){ .kind = TAH_RECORD_DONE, .actor = actor });
+                tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_FINISHED, .actor = actor });
+            }
+        }
         return;
-    case TA_ERR_DONE:
-        entry->state = TAH_SCHED_IDLE;
-        entry->flags |= TAH_SCHED_FINISHED;
-        tah_sched_bury(sched, entry, TAH_DEAD_DONE);
+    case TA_INPUT_FAULTED:
+        if (outcome->code == TA_ERR_NOMEM) {
+            /* Retryable (ADR 0008): released at the next turn; its send()
+             * follows the macrostep until it ends. */
+            if (entry != NULL && (entry->flags & TAH_SCHED_BACKOFF) == 0) {
+                entry->flags |= TAH_SCHED_BACKOFF;
+                if (tah_ring_push(&sched->backoff, &actor) != TA_OK) {
+                    entry->flags &= (uint8_t)~TAH_SCHED_BACKOFF;
+                    tah_sched_fault(sched, params, (tah_turn_record){ .actor = actor, .operation = "resume",
+                                                                      .code = outcome->code });
+                }
+            }
+            return;
+        }
+        tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_ENDED, .actor = actor });
+        if (index != 0) {
+            tah_sched_settle_envelope(sched, index,
+                                      (tah_settlement){ .kind = TAH_SETTLE_FAULT, .code = outcome->code, .actor = actor });
+        }
+        tah_sched_fault(sched, params, (tah_turn_record){ .actor = actor, .operation = "resume", .code = outcome->code });
         return;
-    case TA_ERR_NOT_FOUND:
-        tah_sched_remove(sched, actor, TAH_DEAD_NOT_FOUND);
+    case TA_INPUT_REFUSED:
+        sched->held_blocked = false;
+        if (index != 0) {
+            tah_sched_refused(sched, entry, index, outcome->code);
+        }
+        if (entry != NULL && entry->state == TAH_SCHED_READY && entry->first == 0) {
+            tah_sched_set_state(sched, entry, TAH_SCHED_IDLE);
+        }
         return;
     default:
-        if (result == TA_ERR_INVALID && transition != NULL) {
-            /* The actor does not accept the jump now (its source is no
-             * longer active): the operator's input is at fault, not the
-             * actor (ADR 0026). */
-            tah_sched_refuse_jump(sched, entry, actor);
-            return;
-        }
-        /*
-         * Any other failure quarantines the actor and keeps its mailbox
-         * (ADR 0008). The envelope core refused (for example a malformed
-         * event) becomes a dead letter: delivering it again after release()
-         * would only fault again. TA_ERR_BUSY cannot happen while the table
-         * is right, because a ready actor is between macrosteps; it is a host
-         * bug, and that envelope is kept.
-         */
-        if (result != TA_ERR_BUSY) {
-            entry->first = envelope->next;
-            if (entry->first == 0) {
-                entry->last = 0;
-            }
-            tah_sched_dead_append(sched, head, TAH_DEAD_REFUSED);
-        }
-        tah_sched_fault(sched, params, (tah_turn_record){ .actor = actor, .operation = "deliver", .code = result });
         return;
     }
+}
+
+void tah_sched_outcome_outside(tah_sched *sched, const ta_input_outcome *outcome) {
+    if (outcome->correlation == 0) {
+        return; /* core's own input, or the caller's */
+    }
+    if (tah_vec_push(&sched->outcomes_pending, outcome) != TA_OK) {
+        /* No memory to keep it for the turn: acted on now, so its send()
+         * settles; a record it would write is lost, as when the turn arena
+         * runs out. */
+        tah_sched_outcome(sched, NULL, outcome);
+    }
+}
+
+/* The outcomes reported outside the turn, acted on first, in order. */
+static void tah_sched_take_pending_outcomes(tah_sched *sched, const tah_turn_params *params) {
+    for (uint32_t at = 0; at < sched->outcomes_pending.count; at += 1u) {
+        const ta_input_outcome *outcome = tah_vec_at(&sched->outcomes_pending, at);
+        tah_sched_outcome(sched, params, outcome);
+    }
+    tah_vec_clear(&sched->outcomes_pending);
+}
+
+/*
+ * Runs core until it is idle, up to `resumes` calls of ta_run(), acting on
+ * each outcome. False when the turn is to stop (the staging bound).
+ */
+static bool tah_sched_run_core(tah_sched *sched, const tah_turn_params *params) {
+    ta_input_outcome outcomes[TAH_SCHED_OUTCOMES];
+    for (uint32_t call = 0; call < params->budgets.resumes && sched->core_work; call += 1u) {
+        uint32_t count = 0;
+        ta_run_status status = TA_RUN_IDLE;
+        *sched->inside_core = true;
+        ta_result result = ta_run(sched->core, &(ta_run_params){ .budget = params->budgets.microsteps,
+                                                                 .action_budget = params->budgets.actions,
+                                                                 .report_taken = true,
+                                                                 .outcomes = outcomes,
+                                                                 .outcome_capacity = TAH_SCHED_OUTCOMES,
+                                                                 .outcome_count = &count,
+                                                                 .status = &status });
+        *sched->inside_core = false;
+        /* The table is the addon's: core calls never move its pages. */
+        for (uint32_t at = 0; at < count; at += 1u) {
+            tah_sched_outcome(sched, params, &outcomes[at]);
+        }
+        if (result != TA_OK) {
+            /* No memory to take the next input: it waits for the next turn. */
+            return true;
+        }
+        if (status == TA_RUN_IDLE) {
+            sched->core_work = false;
+        }
+        if (params->stop != NULL && params->stop(params->stop_context)) {
+            return false;
+        }
+        if (status == TA_RUN_PAUSED) {
+            /* A macrostep its budget paused has had its slice of the turn:
+             * the next turn continues it (ADR 0009). */
+            return true;
+        }
+    }
+    return true;
 }
 
 static bool tah_copy_text(ta_arena *arena, ta_str text, ta_str *out) {
@@ -1433,33 +1701,13 @@ void tah_sched_release_records(tah_sched *sched) {
 
 void tah_sched_turn(tah_sched *sched, const tah_turn_params *params) {
     tah_sched_release_records(sched);
+    tah_sched_record_pending_faults(sched, params);
+    tah_sched_take_pending_outcomes(sched, params);
     tah_sched_unstrand(sched);
-    /* Only actors queued before each phase began: a requeued actor waits for the next turn. */
-    uint32_t pending = tah_ring_count(&sched->runnable);
-    uint32_t limit = params->budgets.resumes < pending ? params->budgets.resumes : pending;
-    for (uint32_t index = 0; index < limit; index += 1) {
-        ta_actor_id actor = 0;
-        if (!tah_ring_pop(&sched->runnable, &actor)) {
-            break;
-        }
-        tah_sched_resume_one(sched, params, actor);
-        if (params->stop != NULL && params->stop(params->stop_context)) {
-            return;
-        }
-    }
-    tah_sched_unpark(sched);
-    pending = tah_ring_count(&sched->ready);
-    limit = params->budgets.messages < pending ? params->budgets.messages : pending;
-    for (uint32_t index = 0; index < limit; index += 1) {
-        ta_actor_id actor = 0;
-        if (!tah_ring_pop(&sched->ready, &actor)) {
-            break;
-        }
-        tah_sched_deliver_one(sched, params, actor);
-        if (params->stop != NULL && params->stop(params->stop_context)) {
-            return;
-        }
+    tah_sched_admit_holders(sched, params->budgets.messages);
+    tah_sched_release_backoff(sched);
+    if (!tah_sched_run_core(sched, params)) {
+        return;
     }
     tah_sched_report_dead(sched, params, params->budgets.messages);
-    tah_sched_unpark(sched); /* what the deliveries and reports made room for waits for the next turn */
 }

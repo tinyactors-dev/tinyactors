@@ -283,10 +283,10 @@ static ta_definition_id define(ta_system *system, const ta_scxml_spec *spec) {
 }
 
 static void settle(run *r) {
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(r->system, r->actor, &(test_drive_run_params){ .budget = 1000, .status = &status }) ==
           TA_OK);
-    CHECK(status == TA_RUN_STABLE || status == TA_RUN_DONE);
+    CHECK(status == TEST_DRIVE_STABLE || status == TEST_DRIVE_DONE);
 }
 
 static void deliver(run *r, const char *name, ta_value data) {

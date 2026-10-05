@@ -53,7 +53,7 @@
  *
  * ## Users
  *
- * The actor and system units (spawn, delivery, resume, abandon), the
+ * The run (`run.h`), the actor and system units (spawn, delivery, abandon), the
  * compiler (the scratch check), invocations and session images.
  * ADRs 0047, 0060, 0061, 0067, 0069, 0070, 0082, 0086, 0092.
  */
@@ -169,7 +169,50 @@ typedef struct {
 
 ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *actor);
 
-ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
+/** How one run of a session's macrostep ended (`ta_interpreter_run`). */
+typedef enum {
+    /** The macrostep ended with the session stable. */
+    TA_MACROSTEP_ENDED = 0,
+    /** The session reached a top-level final state. */
+    TA_MACROSTEP_FINISHED = 1,
+    /** A budget ran out inside it, or it paused at a microstep's start; the
+     * next run continues it. */
+    TA_MACROSTEP_PAUSED = 2
+} ta_macrostep_status;
+
+/** What one run of a session's macrostep may use, and what it reports. */
+typedef struct {
+    /** Microsteps it may run (ADR 0009); at least 1. */
+    uint32_t budget;
+    /** Units of executable content it may run before it pauses inside a
+     * microstep (ADR 0061); 0 for no such limit. */
+    uint32_t action_budget;
+    /** Pause at the start of every microstep it begins (ADR 0086). */
+    bool pause_at_microstep_start;
+    /** Run without the microstep limit (ADR 0075): the rest of a
+     * macrostep released after a runaway. */
+    bool unlimited;
+    /** Out: how it ended, on TA_OK. */
+    ta_macrostep_status status;
+    /** Out: the microsteps and the units it ran. */
+    uint32_t steps;
+    uint32_t actions;
+    /** Out: it ended a macrostep whose external event enabled no transition
+     * (ADR 0089 section 8). */
+    bool ignored;
+} ta_interpreter_run_params;
+
+/**
+ * Runs `actor`'s macrostep, which its input began (`run.h`), until it ends,
+ * a budget pauses it, or a fault stops it (ADR 0047, ADR 0061, ADR 0070,
+ * ADR 0075). Allocates what a stop needs before it runs anything, and what
+ * a step needs before that step, so a run that answers TA_ERR_NOMEM had no
+ * effect that running again would repeat. Answers TA_OK with
+ * `params->status`, or the fault that stopped it: TA_ERR_RUNAWAY at the
+ * microstep limit, TA_ERR_NOMEM, or what an operation answered; the
+ * actor then stays in its macrostep.
+ */
+ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, ta_interpreter_run_params *params);
 /*
  * Whether an operator transition is well formed for the definition (ADR
  * 0082): at least one target, known states, and targets that can form a

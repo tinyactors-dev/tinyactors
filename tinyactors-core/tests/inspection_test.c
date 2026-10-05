@@ -282,9 +282,9 @@ static void test_actor_inspection(ta_system *system, counting_model *model) {
 
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &actor }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 
     ta_definition_inspection facts;
     CHECK(ta_definition_inspect(system, definition, &facts) == TA_OK);

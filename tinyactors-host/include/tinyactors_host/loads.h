@@ -93,8 +93,8 @@ ta_result tah_loads_set_family(tah_loads *loads, ta_str family, uint32_t max_wai
  * mailbox when a load is in flight; otherwise, when it has no resident actor
  * and its family has a loader, a new load (and a request) with the message
  * as its first. TA_ERR_NOT_FOUND: neither, and the caller routes as before.
- * TA_OK: accepted, perhaps as a `waiting-full` dead letter. TA_ERR_BUSY and
- * TA_ERR_NOMEM: nothing accepted.
+ * TA_OK: accepted, perhaps as a `waiting-full` dead letter. TA_ERR_NOMEM:
+ * nothing accepted.
  */
 typedef struct {
     tah_sched *sched;
@@ -111,7 +111,7 @@ ta_result tah_loads_route(tah_loads *loads, const tah_load_route *route);
  * new load with `why` = session. `address` is the session's key (above);
  * `shared` is false for a session this system cannot name. TA_OK: accepted,
  * perhaps as a `waiting-full` dead letter. TA_ERR_NOT_FOUND: the family has
- * no loader. TA_ERR_BUSY and TA_ERR_NOMEM: nothing accepted.
+ * no loader. TA_ERR_NOMEM: nothing accepted.
  */
 typedef struct {
     tah_sched *sched;

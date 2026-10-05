@@ -342,7 +342,7 @@ RPC conversations. The current adapters are `allocator.libc`,
 `allocator.counting`, `router.recording`, `directory.memory`,
 `invoker.scripted`, `io.recording`, and `log.recording` (see [Instruments](#instruments)). `router.direct` takes
 `{"system": <system handle>}` and hands each external event to
-`ta_actor_deliver()`; a busy actor makes it answer retry, so core keeps the
+`ta_actor_deliver()`; a full pool makes it answer retry, so core keeps the
 event for a later dispatch. A named destination is resolved first with
 `ta_actor_find()`, through whatever actor directory the system has, so a chart
 can address a peer as `#_actor_<family>/<name>` without the host installing a
@@ -440,8 +440,8 @@ them.
   residency: the actor may be unloaded, or live in another process. In mode `direct` it delivers like
   `router.direct`, and it also records the `ta_actor_deliver` result. In mode
   `hold` it clones the delivery and answers accepted. `held` lists the held
-  deliveries. `release {id}` delivers one with `ta_actor_deliver`; a busy
-  actor keeps it held. `drop {id}` discards one. An injected `submit` fault
+  deliveries. `release {id}` delivers one with `ta_actor_deliver`; a full
+  pool keeps it held. `drop {id}` discards one. An injected `submit` fault
   answers `status` `"retry"` or `"error"` (the default).
 - **`directory.memory`** is a compare-and-swap directory. `claim` fails with
   `err_stale` when the address has an entry. `replace` and `remove` fail with
@@ -508,7 +508,7 @@ maps onto the public C API:
 | `spawn` | `ta.actor.spawn` |
 | `advance_time` | `ta.system.set_time` with absolute logical time |
 | `deliver` | `ta.system.intern_atom` per segment and `ta.event.name_intern` with `{"atoms": [...]}` (cached), then `ta.actor.deliver` with an external event whose `invoke_id` is `TA_INVOKE_ID_NONE` |
-| after every step | run to quiescence: `system.actors` with `"runnable": true` lists every resident actor with a macrostep in progress, including invoked children; `ta.actor.resume` each until `stable` or `done` and list again until none is runnable; then `ta.system.dispatch_due`; repeat until nothing was dispatched and nothing more is due |
+| after every step | run to quiescence: `ta.run` until its status is `idle` (every input core admitted, invoked children's included, has run); then `ta.system.dispatch_due`; repeat until nothing was dispatched and nothing more is due. A faulted input fails the step |
 | end of the scenario | `ta.system.destroy`, then `instrument.control` `stats` on the counting allocator: live allocations or a bad free fail the scenario |
 | `active` | `ta.actor.inspect` for the count, `ta.actor.active_states`, and `ta.definition.state` for each state's ID (cached) |
 | `data` | `ta.actor.datamodel_root`, then `json.transform` for a filter |

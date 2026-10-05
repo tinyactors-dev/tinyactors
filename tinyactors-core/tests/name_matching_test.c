@@ -513,12 +513,12 @@ static void test_random_names_leave_no_trace(void) {
 
 static void deliver(fixture *f, ta_actor_id actor, ta_event_name_id name) {
     ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(f->system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(f->system), .actor = actor,
                                                          .event = &event },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 }
 
 static ta_event_name_id event_name(fixture *f, const char *cstr) {
@@ -538,7 +538,7 @@ static void test_typeexpr_looks_up(void) {
     fixture_open(&f, typeexpr_chart());
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.id, .out = &actor }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     ta_event_name_id send = event_name(&f, "send");
     ta_event_name_id invoke = event_name(&f, "invoke");
@@ -665,9 +665,9 @@ static void invoke_fixture_open(fixture *f, const ta_scxml_spec *spec, uint32_t 
 }
 
 static void run_stable(fixture *f, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(f->system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 }
 
 /* Spawns a session and runs it into its first state, which invokes. */

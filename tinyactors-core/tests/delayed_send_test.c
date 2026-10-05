@@ -3,8 +3,9 @@
  * public header and the amalgamation only: inspection returns an actor's
  * pending sends as a sorted, borrowed array however many sends other actors
  * hold; cancelling an actor's earliest send moves the global deadline; a
- * submitted send outlives its destroyed sender; and an unloaded session
- * takes its sends into the image and gets them back on load.
+ * submitted send outlives its destroyed sender; an unloaded session
+ * takes its sends into the image and gets them back on load; and a session
+ * with an admitted input waiting does not unload.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -239,9 +240,9 @@ static ta_definition_id define(ta_system *system, const char *family, const ta_s
 }
 
 static void run(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 }
 
 static ta_actor_id spawn(ta_system *system, ta_definition_id definition, const ta_actor_address *address) {
@@ -263,12 +264,12 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 static void deliver(ta_system *system, ta_actor_id actor, const char *event) {
     ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                            .invoke_id = TA_INVOKE_ID_NONE };
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
                                                          .event = &delivered },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 }
 
 static ta_system *create_system(router_state *router) {
@@ -724,19 +725,19 @@ static void test_withdrawing_inside_a_paused_macrostep(void) {
     /* Delivered, not yet run: `t` does not exist yet. */
     CHECK(ta_actor_withdraw_send(system, actor, t) == TA_ERR_NOT_FOUND);
 
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     test_drive_run_params step = { .status = &status, .action_budget = 1 };
     CHECK(test_drive_run(system, actor, &step) == TA_OK);
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK);
     /* One unit ran: the first <send>. */
-    CHECK(status == TA_RUN_PAUSED && view.microstep_in_progress && view.delayed_send_count == 1);
+    CHECK(status == TEST_DRIVE_PAUSED && view.microstep_in_progress && view.delayed_send_count == 1);
     CHECK(ta_actor_withdraw_send(system, actor, t) == TA_OK);
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 0);
     CHECK(view.macrostep_in_progress);
 
     step.action_budget = 0;
-    CHECK(test_drive_run(system, actor, &step) == TA_OK && status == TA_RUN_STABLE);
+    CHECK(test_drive_run(system, actor, &step) == TA_OK && status == TEST_DRIVE_STABLE);
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 1);
     CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].event == event_name(system, "tock"));
     /* WITHDRAWN outside the macrostep, then the chart's own CANCELLED in it. */
@@ -836,6 +837,39 @@ static void test_an_image_from_before_a_send_fired_is_stale(void) {
     ta_system_destroy(system);
 }
 
+/*
+ * An input core admitted names the session's runtime ID, which a loaded
+ * actor does not keep: a session with one waiting does not unload, and
+ * changes nothing, until the input is taken or withdrawn.
+ */
+static void test_admitted_mail_keeps_a_session_resident(void) {
+    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
+    ta_system *system = create_system(&router);
+    one_directory dir = {0};
+    CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .self = &dir, .v = &dir_vtable }) == TA_OK);
+    ta_definition_id three = define(system, "three", three_timers);
+    ta_actor_address address = { .family = { STR("three") }, .name = STR("t1") };
+    ta_actor_id actor = spawn(system, three, &address);
+
+    ta_event waiting = { .name = event_name(system, "nothing"), .type = TA_EVENT_EXTERNAL,
+                         .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &waiting,
+                                                               .time = ta_system_time(system),
+                                                               .correlation = 7 }) == TA_OK);
+    ta_session_image *image = NULL;
+    CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &image }) == TA_OK);
+    CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = image }) == TA_ERR_BUSY);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 3);
+    CHECK(ta_system_withdraw_input(system, 7) == TA_OK);
+    CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = image }) == TA_OK);
+    ta_actor_id loaded = 0;
+    CHECK(ta_actor_load(system, &(ta_actor_load_params){ .image = image, .out = &loaded }) == TA_OK);
+    CHECK(ta_actor_inspect(system, loaded, &view) == TA_OK && view.delayed_send_count == 3);
+    ta_session_image_destroy(image);
+    ta_system_destroy(system);
+}
+
 int main(void) {
     test_inspection_lists_only_the_actors_sends();
     test_cancelling_the_front_send();
@@ -851,6 +885,7 @@ int main(void) {
     test_withdrawing_inside_a_paused_macrostep();
     test_an_image_from_before_a_withdrawal_is_stale();
     test_an_image_from_before_a_send_fired_is_stale();
+    test_admitted_mail_keeps_a_session_resident();
     CHECK(heap.live == 0);
     CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {

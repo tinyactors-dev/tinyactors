@@ -1514,8 +1514,8 @@ class System {
    * dead letter too. `data` is any JavaScript value, shared with the
    * receiver, not copied (ADR 0011); it is `_event.data`
    * (`context.event.data`) in the receiver's expressions. Throws
-   * `queue-full` when scheduling.maxQueuedMessages or maxRetainedBytes would
-   * be passed: post() has no promise to report it through (ADR 0008).
+   * `queue-full` when core's pool is at its admissionWatermark (core ADR
+   * 0099): post() has no promise to report it through (ADR 0008).
    */
   post(target, event, data, options) {
     if (options?.signal?.aborted) {

@@ -282,18 +282,20 @@ static void open_system(run *r) {
 }
 
 /* One run that answers core's own result: the out-of-memory sweep asserts
- * TA_ERR_NOMEM from it. */
-static ta_result resume_with(run *r, uint32_t action_budget, bool at_start, ta_run_status *status) {
-    ta_result result = ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000,
-                                                                             .status = status,
-                                                                             .action_budget = action_budget,
-                                                                             .pause_at_microstep_start = at_start });
+ * TA_ERR_NOMEM from it, the code of the fault that stopped the input. A
+ * stopped input goes on at the next run. */
+static ta_result resume_with(run *r, uint32_t action_budget, bool at_start, test_drive_status *status) {
+    ta_result result = test_drive_run(r->system, r->actor,
+                                      &(test_drive_run_params){ .budget = 1000, .status = status,
+                                                                .action_budget = action_budget,
+                                                                .pause_at_microstep_start = at_start,
+                                                                .release = true });
     tel_drain(r->system, sink_write, NULL);
     return result;
 }
 
-static ta_run_status resume(run *r, uint32_t action_budget, bool at_start) {
-    ta_run_status status = TA_RUN_ERROR;
+static test_drive_status resume(run *r, uint32_t action_budget, bool at_start) {
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(r->system, r->actor,
                          &(test_drive_run_params){ .budget = 1000, .status = &status, .action_budget = action_budget,
                                                    .pause_at_microstep_start = at_start }) == TA_OK);
@@ -309,7 +311,7 @@ static void start(run *r) {
           TA_OK);
     tel_drain(r->system, sink_write, NULL);
     long paused = paused_records;
-    CHECK(resume(r, 0, true) == TA_RUN_STABLE);
+    CHECK(resume(r, 0, true) == TEST_DRIVE_STABLE);
     CHECK(paused_records == paused);
 }
 
@@ -402,7 +404,7 @@ static void check_start(run *r, const start_case *c) {
     long microsteps = microstep_records;
     long paused = paused_records;
     clear_log();
-    CHECK(resume(r, 1, true) == TA_RUN_PAUSED);
+    CHECK(resume(r, 1, true) == TEST_DRIVE_PAUSED);
     CHECK(paused_records == paused + 1);
     CHECK(microstep_records == microsteps + 1);
     CHECK(log_is(c->selected));
@@ -438,25 +440,29 @@ static void check_start(run *r, const start_case *c) {
             CHECK(info.owner == position.transition);
         }
     }
-    /* Paused inside a microstep: busy, and not to be abandoned (ADR 0082). */
-    ta_event refused = { .name = event_name(r->system, "refused"), .type = TA_EVENT_EXTERNAL,
+    /* Paused inside a microstep: an event admitted now waits for the
+     * macrostep to end (ADR 0099), and it is not to be abandoned (ADR 0082). */
+    ta_event waiting = { .name = event_name(r->system, "waiting"), .type = TA_EVENT_EXTERNAL,
                          .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &refused }) ==
-          TA_ERR_BUSY);
+    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor,
+                                                                  .event = &waiting, .correlation = 7 }) == TA_OK);
     CHECK(ta_actor_abandon(r->system, r->actor) == TA_ERR_BUSY);
 
     /* A single step runs the first unit, and only it. */
-    ta_run_status status = resume(r, 1, true);
+    test_drive_status status = resume(r, 1, true);
     char expected[128];
     snprintf(expected, sizeof(expected), "%s%s", c->selected, c->first);
     CHECK(log_is(expected));
-    if (status == TA_RUN_PAUSED) {
+    if (status == TEST_DRIVE_PAUSED) {
         CHECK(inspect(r).position.action != position.action);
     }
-    while (status == TA_RUN_PAUSED) {
+    while (status == TEST_DRIVE_PAUSED) {
         status = resume(r, 1, true);
     }
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
+    /* The event admitted during the pause was never taken: it can still be
+     * withdrawn, and runs nothing. */
+    CHECK(ta_system_withdraw_input(r->system, 7) == TA_OK);
 }
 
 /* ------------------------------------------------------------------------
@@ -519,11 +525,11 @@ static void run_all(run *r, uint32_t action_budget, bool at_start, uint32_t *pau
         } else {
             jump(r, cases[index].jump);
         }
-        ta_run_status status;
-        while ((status = resume(r, action_budget, at_start)) == TA_RUN_PAUSED) {
+        test_drive_status status;
+        while ((status = resume(r, action_budget, at_start)) == TEST_DRIVE_PAUSED) {
             *pauses += 1u;
         }
-        CHECK(status == TA_RUN_STABLE);
+        CHECK(status == TEST_DRIVE_STABLE);
         length += (size_t)snprintf(configurations + length, 256u - length, "%llx.",
                                    (unsigned long long)configuration(r));
     }
@@ -566,21 +572,21 @@ static void test_microstep_budget(void) {
     run r;
     start(&r);
     offer(&r, "init");
-    CHECK(resume(&r, 0, true) == TA_RUN_PAUSED);
+    CHECK(resume(&r, 0, true) == TEST_DRIVE_PAUSED);
     CHECK(inspect(&r).microstep_in_progress);
     clear_log();
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(r.system, r.actor,
                          &(test_drive_run_params){ .budget = 1, .status = &status, .pause_at_microstep_start = true }) ==
           TA_OK);
     tel_drain(r.system, sink_write, NULL);
-    CHECK(status == TA_RUN_PAUSED);
+    CHECK(status == TEST_DRIVE_PAUSED);
     CHECK(log_is("pi "));
     ta_actor_inspection inspection = inspect(&r);
     CHECK(inspection.macrostep_in_progress && !inspection.microstep_in_progress);
     CHECK(inspection.position.at == TA_TRACE_AT_NONE && inspection.position.action == TA_ACTION_NONE);
     CHECK(inspection.step.microstep == 1);
-    CHECK(resume(&r, 0, true) == TA_RUN_STABLE);
+    CHECK(resume(&r, 0, true) == TEST_DRIVE_STABLE);
     CHECK(configuration(&r) == (((uint64_t)1u << state(&r, "p")) | ((uint64_t)1u << state(&r, "b"))));
     finish(&r);
 }
@@ -593,7 +599,7 @@ static void test_capture_at_the_start(void) {
     run r;
     start(&r);
     offer(&r, "init");
-    CHECK(resume(&r, 0, true) == TA_RUN_PAUSED);
+    CHECK(resume(&r, 0, true) == TEST_DRIVE_PAUSED);
     ta_actor_inspection captured = inspect(&r);
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(r.system, &(ta_actor_capture_params){ .actor = r.actor, .out = &image }) == TA_OK);
@@ -607,11 +613,11 @@ static void test_capture_at_the_start(void) {
     CHECK(same_position(restored.position, captured.position));
     CHECK(restored.position.at == TA_TRACE_AT_ENTER && restored.position.state == state(&r, "p"));
     clear_log();
-    CHECK(resume(&r, 0, true) == TA_RUN_STABLE);
+    CHECK(resume(&r, 0, true) == TEST_DRIVE_STABLE);
     CHECK(log_is("pi "));
     CHECK(configuration(&r) == (((uint64_t)1u << state(&r, "p")) | ((uint64_t)1u << state(&r, "b"))));
     offer(&r, "leave");
-    CHECK(resume(&r, 0, false) == TA_RUN_STABLE);
+    CHECK(resume(&r, 0, false) == TEST_DRIVE_STABLE);
     CHECK(log_is("pi px "));
     finish(&r);
 }
@@ -633,14 +639,14 @@ static void run_retrying(run *r, uint32_t first, char *configurations) {
         } else {
             jump(r, cases[index].jump);
         }
-        ta_run_status status = TA_RUN_PAUSED;
-        for (uint32_t calls = 0; status != TA_RUN_STABLE && calls < 1000u; calls += 1u) {
+        test_drive_status status = TEST_DRIVE_PAUSED;
+        for (uint32_t calls = 0; status != TEST_DRIVE_STABLE && calls < 1000u; calls += 1u) {
             ta_actor_inspection before = inspect(r);
             ta_result result = resume_with(r, 1, true, &status);
             CHECK(result == TA_OK || result == TA_ERR_NOMEM);
             if (result == TA_ERR_NOMEM) {
                 resumes_out_of_memory += 1u;
-                status = TA_RUN_PAUSED;
+                status = TEST_DRIVE_PAUSED;
                 if (before.microstep_in_progress && before.step.microstep != 0 &&
                     same_position(inspect(r).position, before.position) &&
                     same_key(inspect(r).step, before.step)) {
@@ -649,7 +655,7 @@ static void run_retrying(run *r, uint32_t first, char *configurations) {
                 }
             }
         }
-        CHECK(status == TA_RUN_STABLE);
+        CHECK(status == TEST_DRIVE_STABLE);
         length += (size_t)snprintf(configurations + length, 256u - length, "%llx.",
                                    (unsigned long long)configuration(r));
     }

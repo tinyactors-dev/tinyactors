@@ -48,7 +48,24 @@
  *    never allocate, so they may run inside a macrostep; a refill that
  *    cannot allocate answers TA_ERR_NOMEM and changes nothing; an
  *    envelope's address and contents survive the refills that add pages
- *    after it; destroy frees every page.
+ *    after it; destroy frees every page;
+ * 10. a session's deferred list and the run queue stay in arrival order:
+ *    defer puts an envelope on a deferred list by its arrival number, at
+ *    the tail or before every envelope that arrived after it, and keeps
+ *    it runnable; return puts it back into the run queue at the position
+ *    its number gives it, ahead of later envelopes and behind earlier
+ *    ones, at the head of an empty queue; dequeue_after takes the
+ *    envelope behind the one a walk stood on (the head for 0, nothing
+ *    past the tail); unqueue takes one from anywhere and answers
+ *    TA_ERR_NOT_FOUND, changing nothing, for one the run queue does not
+ *    hold; push_front puts one back at the head with its number; none of
+ *    them allocates.
+ * 11. enqueue_beside queues an envelope with the arrival number of a taken
+ *    one: behind every runnable envelope that arrived before that one and
+ *    ahead of those that arrived after it, at the tail when none did;
+ *    several queued beside one envelope keep the order they were queued
+ *    in, and an envelope returned later with a larger number lands behind
+ *    them; it marks the envelope runnable and allocates nothing.
  */
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
@@ -448,6 +465,125 @@ static void test_no_allocation(void) {
     CHECK(test_allocator_finish(&heap) == 0u);
 }
 
+/* The arrival numbers of the run queue, head first, into `out`; answers how many. */
+static uint32_t queue_arrivals(const ta_envelope_pool *pool, uint32_t *out, uint32_t capacity) {
+    ta_list_links links = ta_envelope_pool_links((ta_envelope_pool *)pool);
+    uint32_t count = 0u;
+    for (uint32_t at = ta_list_head(&pool->run_queue); at != 0u && count < capacity; at = ta_list_next(&links, at)) {
+        out[count] = ta_envelope_pool_at(pool, at)->heap_index;
+        count += 1u;
+    }
+    return count;
+}
+
+/* Claim 10. */
+static void test_deferred_order(void) {
+    test_allocator heap = { 0 };
+    ta_envelope_pool pool = pool_over(&heap, (uint32_t[3]){ 64u, 50u, 16u });
+    CHECK(ta_envelope_pool_refill(&pool) == TA_OK);
+    uint32_t taken[8];
+    for (uint32_t i = 0; i < 8u; i += 1u) {
+        CHECK(ta_envelope_pool_take(&pool, &taken[i]) == TA_OK);
+        ta_envelope_pool_enqueue(&pool, taken[i]); /* arrival i */
+    }
+    uint32_t attempts = heap.attempts;
+    /* A walk defers 0, 2 and 5 for one session, out of order: the list is
+     * in arrival order all the same. */
+    ta_list deferred = TA_LIST_EMPTY;
+    ta_list_links links = ta_envelope_pool_links(&pool);
+    CHECK(ta_envelope_pool_unqueue(&pool, taken[5]) == TA_OK);
+    CHECK(ta_envelope_pool_at(&pool, taken[5])->state == TA_ENVELOPE_TAKEN);
+    ta_envelope_pool_defer(&pool, (ta_envelope_defer){ .deferred = &deferred, .index = taken[5] });
+    CHECK(ta_envelope_pool_dequeue(&pool) == taken[0]);
+    ta_envelope_pool_defer(&pool, (ta_envelope_defer){ .deferred = &deferred, .index = taken[0] });
+    /* Behind taken[1], the walk takes taken[2]. */
+    CHECK(ta_envelope_pool_dequeue_after(&pool, taken[1]) == taken[2]);
+    ta_envelope_pool_defer(&pool, (ta_envelope_defer){ .deferred = &deferred, .index = taken[2] });
+    CHECK(ta_list_head(&deferred) == taken[0] && ta_list_next(&links, taken[0]) == taken[2] &&
+          ta_list_next(&links, taken[2]) == taken[5] && ta_list_tail(&deferred) == taken[5]);
+    CHECK(ta_envelope_pool_at(&pool, taken[2])->state == TA_ENVELOPE_RUNNABLE);
+    uint32_t arrivals[8];
+    CHECK(queue_arrivals(&pool, arrivals, 8u) == 5u);
+    CHECK(arrivals[0] == 1u && arrivals[1] == 3u && arrivals[2] == 4u && arrivals[3] == 6u && arrivals[4] == 7u);
+    /* Nothing behind the tail, and none it does not hold. */
+    CHECK(ta_envelope_pool_dequeue_after(&pool, taken[7]) == 0u);
+    CHECK(ta_envelope_pool_unqueue(&pool, taken[0]) == TA_ERR_NOT_FOUND);
+    CHECK(ta_list_head(&deferred) == taken[0] && queue_arrivals(&pool, arrivals, 8u) == 5u);
+
+    /* Returned, they go where their numbers put them. */
+    CHECK(ta_list_pop_front(&deferred, &links) == taken[0]);
+    ta_envelope_pool_return(&pool, taken[0]);
+    CHECK(ta_list_pop_front(&deferred, &links) == taken[2]);
+    ta_envelope_pool_return(&pool, taken[2]);
+    CHECK(queue_arrivals(&pool, arrivals, 8u) == 7u);
+    CHECK(arrivals[0] == 0u && arrivals[1] == 1u && arrivals[2] == 2u && arrivals[3] == 3u && arrivals[4] == 4u &&
+          arrivals[5] == 6u && arrivals[6] == 7u);
+    CHECK(ta_list_pop_front(&deferred, &links) == taken[5]);
+    ta_envelope_pool_return(&pool, taken[5]);
+    CHECK(queue_arrivals(&pool, arrivals, 8u) == 8u && arrivals[5] == 5u && arrivals[7] == 7u);
+    CHECK(ta_envelope_pool_at(&pool, taken[5])->state == TA_ENVELOPE_RUNNABLE);
+
+    /* An input that must be taken next goes back to the head, keeping its number. */
+    CHECK(ta_envelope_pool_unqueue(&pool, taken[6]) == TA_OK);
+    ta_envelope_pool_push_front(&pool, taken[6]);
+    CHECK(ta_list_head(&pool.run_queue) == taken[6]);
+    CHECK(ta_envelope_pool_at(&pool, taken[6])->heap_index == 6u);
+    CHECK(ta_envelope_pool_at(&pool, taken[6])->state == TA_ENVELOPE_RUNNABLE);
+
+    /* Into an empty queue, return puts it at the head. */
+    while (ta_envelope_pool_dequeue(&pool) != 0u) {
+    }
+    ta_envelope_pool_return(&pool, taken[3]);
+    CHECK(ta_list_head(&pool.run_queue) == taken[3] && ta_list_tail(&pool.run_queue) == taken[3]);
+    CHECK(heap.attempts == attempts);
+    ta_envelope_pool_destroy(&pool);
+    CHECK(heap.live == 0u);
+    CHECK(test_allocator_finish(&heap) == 0u);
+}
+
+/* Claim 11. */
+static void test_enqueue_beside(void) {
+    test_allocator heap = { 0 };
+    ta_envelope_pool pool = pool_over(&heap, (uint32_t[3]){ 64u, 50u, 16u });
+    CHECK(ta_envelope_pool_refill(&pool) == TA_OK);
+    uint32_t taken[6];
+    for (uint32_t i = 0; i < 6u; i += 1u) {
+        CHECK(ta_envelope_pool_take(&pool, &taken[i]) == TA_OK);
+    }
+    uint32_t attempts = heap.attempts;
+    /* Nothing queued: beside a taken input, a wake lands at the tail. */
+    ta_envelope_pool_enqueue(&pool, taken[0]); /* arrival 0 */
+    CHECK(ta_envelope_pool_dequeue(&pool) == taken[0]);
+    ta_envelope_pool_enqueue_beside(&pool, (ta_envelope_beside){ .beside = taken[0], .index = taken[1] });
+    CHECK(ta_list_head(&pool.run_queue) == taken[1] && ta_list_tail(&pool.run_queue) == taken[1]);
+    CHECK(ta_envelope_pool_at(&pool, taken[1])->heap_index == 0u);
+    CHECK(ta_envelope_pool_at(&pool, taken[1])->state == TA_ENVELOPE_RUNNABLE);
+    CHECK(ta_envelope_pool_dequeue(&pool) == taken[1]);
+
+    /* taken[2] runs; mail arrives during it; two wakes go beside it, ahead
+     * of that mail, in the order they were queued. */
+    ta_envelope_pool_enqueue(&pool, taken[2]); /* arrival 1 */
+    CHECK(ta_envelope_pool_dequeue(&pool) == taken[2]);
+    ta_envelope_pool_enqueue(&pool, taken[3]); /* arrival 2 */
+    ta_envelope_pool_enqueue_beside(&pool, (ta_envelope_beside){ .beside = taken[2], .index = taken[4] });
+    ta_envelope_pool_enqueue_beside(&pool, (ta_envelope_beside){ .beside = taken[2], .index = taken[5] });
+    ta_list_links links = ta_envelope_pool_links(&pool);
+    CHECK(ta_list_head(&pool.run_queue) == taken[4] && ta_list_next(&links, taken[4]) == taken[5] &&
+          ta_list_next(&links, taken[5]) == taken[3] && ta_list_tail(&pool.run_queue) == taken[3]);
+    uint32_t arrivals[6];
+    CHECK(queue_arrivals(&pool, arrivals, 6u) == 3u);
+    CHECK(arrivals[0] == 1u && arrivals[1] == 1u && arrivals[2] == 2u);
+
+    /* The mail, deferred and returned, goes back behind both wakes. */
+    CHECK(ta_envelope_pool_unqueue(&pool, taken[3]) == TA_OK);
+    ta_envelope_pool_return(&pool, taken[3]);
+    CHECK(ta_list_tail(&pool.run_queue) == taken[3] && ta_list_next(&links, taken[5]) == taken[3]);
+    CHECK(heap.attempts == attempts);
+    ta_envelope_pool_destroy(&pool);
+    CHECK(heap.live == 0u);
+    CHECK(test_allocator_finish(&heap) == 0u);
+}
+
 int main(void) {
     test_init();
     test_take_give();
@@ -458,6 +594,8 @@ int main(void) {
     test_arrival_wrap();
     test_owner_links();
     test_no_allocation();
+    test_deferred_order();
+    test_enqueue_beside();
     if (failures != 0) {
         fprintf(stderr, "envelope_test: %d checks failed\n", failures);
         return 1;

@@ -115,7 +115,7 @@ static fixture start(void) {
     ta_definition_id id = 0;
     CHECK(ta_system_register_definition(f.system, definition, &id) == TA_OK);
     CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = id, .out = &f.actor }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(f.system, f.actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     ta_atom atom = 0;
     CHECK(ta_system_intern_atom(f.system, (ta_str)STR("poke"), &atom) == TA_OK);
@@ -124,9 +124,9 @@ static fixture start(void) {
 }
 
 static void run_to_stable(fixture *f) {
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(f->system, f->actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 }
 
 static void capture_and_destroy(fixture *f) {
@@ -160,6 +160,10 @@ static void test_capture_keeps_a_held_external_event(void) {
                        .data = { .self = &value, .v = &counted_vtable } };
     CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .event = &event }) == TA_OK);
     counted_release(&value);
+    /* One step takes it, and the macrostep pauses holding it. */
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(f.system, f.actor, &(test_drive_run_params){ .budget = 1, .status = &status }) == TA_OK);
+    CHECK(status == TEST_DRIVE_PAUSED);
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(f.system, &(ta_actor_capture_params){ .actor = f.actor, .out = &image }) == TA_OK);
     CHECK(ta_actor_destroy(f.system, f.actor) == TA_OK);

@@ -310,8 +310,8 @@ static void destroy_system(ta_system *system) {
     ta_system_destroy(system);
 }
 
-static ta_run_status run(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
+static test_drive_status run(ta_system *system, ta_actor_id actor) {
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     return status;
 }
@@ -340,10 +340,10 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 static void deliver_at(ta_system *system, ta_actor_id actor, const char *event, ta_time time) {
     ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                            .invoke_id = TA_INVOKE_ID_NONE };
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered, .time = time },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 }
 
 /* An input to a live actor, at the system's time. */
@@ -385,7 +385,7 @@ static ta_actor_id prepare_replaying(ta_system *system, ta_definition_id definit
     ta_actor_id actor = 0;
     CHECK(ta_actor_prepare(system, &(ta_actor_prepare_params){ .address = address, .definition = definition,
                                                                .at = &at, .out = &actor }) == TA_OK);
-    CHECK(run(system, actor) == TA_RUN_STABLE);
+    CHECK(run(system, actor) == TEST_DRIVE_STABLE);
     return actor;
 }
 
@@ -421,7 +421,7 @@ static ta_actor_id live_until_e1(ta_system *system, ta_definition_id definition)
     ta_actor_id live = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &address_a,
                                                            .out = &live }) == TA_OK);
-    CHECK(run(system, live) == TA_RUN_STABLE);
+    CHECK(run(system, live) == TEST_DRIVE_STABLE);
     CHECK(ta_system_set_time(system, 1000) == TA_OK);
     deliver(system, live, "e1");
     return live;
@@ -532,7 +532,7 @@ static void test_replay_matches_live_run(void) {
     ta_actor_id live = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &live_address,
                                                            .out = &live }) == TA_OK);
-    CHECK(run(system, live) == TA_RUN_STABLE);
+    CHECK(run(system, live) == TEST_DRIVE_STABLE);
     for (size_t index = 0; index < sizeof inputs / sizeof inputs[0]; index += 1) {
         CHECK(ta_system_set_time(system, inputs[index].at) == TA_OK);
         deliver(system, live, inputs[index].event);
@@ -615,7 +615,7 @@ static void test_replayed_invocation_finalizes(void) {
     CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .actor = replay, .invoke_id = job,
                                                                      .kind = TA_INVOKE_REPORT_EVENT,
                                                                      .time = 10, .as.event = &reply }) == TA_OK);
-    CHECK(run(system, replay) == TA_RUN_STABLE);
+    CHECK(run(system, replay) == TEST_DRIVE_STABLE);
     CHECK(in_state(system, replay, "finished_job"));
     CHECK(invoker_starts == 0 && invoker_cancels == 0 && invoker_forwards == 0);
     CHECK(publish(system, replay) == TA_OK);
@@ -633,7 +633,7 @@ static void test_publish_retires_invocations(void) {
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, replay, &view) == TA_OK);
     CHECK(view.invoke_count == 0 && view.macrostep_in_progress);
-    CHECK(run(system, replay) == TA_RUN_STABLE);
+    CHECK(run(system, replay) == TEST_DRIVE_STABLE);
     CHECK(in_state(system, replay, "lost"));
     CHECK(invoker_starts == 0 && invoker_cancels == 0);
     destroy_system(system);
@@ -664,7 +664,7 @@ static void test_result_codes(void) {
     /* an input's time (ADR 0094 section 1) */
     ta_actor_id live = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &live }) == TA_OK);
-    CHECK(run(system, live) == TA_RUN_STABLE);
+    CHECK(run(system, live) == TEST_DRIVE_STABLE);
     ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1, .time = 5 }) ==
           TA_ERR_INVALID); /* a live actor's input is at the system's time */
@@ -675,10 +675,22 @@ static void test_result_codes(void) {
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 101 }) ==
           TA_ERR_INVALID); /* the future */
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 25 }) == TA_OK);
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 30 }) ==
-          TA_ERR_BUSY);
+    /* A second input waits behind the first (ADR 0099), and its time is the
+     * actor's when it is taken. */
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 30 }) == TA_OK);
+    /* Admitting 30 then 28 goes backwards too, though neither was taken:
+     * refused, and nothing is admitted. */
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 28,
+                                                               .correlation = 7 }) == TA_ERR_INVALID);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 25,
+                                                               .correlation = 7 }) == TA_ERR_INVALID);
+    CHECK(ta_system_withdraw_input(system, 7) == TA_ERR_NOT_FOUND);
+    test_drive_status taken = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(system, replay, &(test_drive_run_params){ .budget = 1, .status = &taken }) == TA_OK);
+    CHECK(taken == TEST_DRIVE_PAUSED);
     CHECK(publish(system, replay) == TA_ERR_BUSY); /* inside a macrostep */
-    CHECK(run(system, replay) == TA_RUN_STABLE);
+    CHECK(run(system, replay) == TEST_DRIVE_STABLE);
+    CHECK(run(system, replay) == TEST_DRIVE_STABLE);
     ta_time before = 20;
     CHECK(ta_actor_publish(system, &(ta_actor_publish_params){ .actor = replay, .at = &before }) ==
           TA_ERR_INVALID); /* publish's `at` is not earlier than the clock */
@@ -696,7 +708,7 @@ static void test_result_codes(void) {
     ta_actor_id holder = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &address_a,
                                                            .out = &holder }) == TA_OK);
-    CHECK(run(system, holder) == TA_RUN_STABLE);
+    CHECK(run(system, holder) == TEST_DRIVE_STABLE);
     CHECK(publish(system, replay) == TA_ERR_BUSY);
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = holder, .out = &image }) == TA_OK);
@@ -712,8 +724,8 @@ static void test_result_codes(void) {
     ta_actor_id done = 0;
     CHECK(ta_actor_prepare(system, &(ta_actor_prepare_params){ .address = &fin_address, .definition = finishing,
                                                                .at = &zero, .out = &done }) == TA_OK);
-    ta_run_status status = run(system, done);
-    CHECK(status == TA_RUN_DONE);
+    test_drive_status status = run(system, done);
+    CHECK(status == TEST_DRIVE_DONE);
     CHECK(publish(system, done) == TA_ERR_DONE);
     CHECK(ta_actor_destroy(system, done) == TA_OK);
     destroy_system(system);
@@ -742,7 +754,7 @@ static void test_publish_out_of_memory(void) {
             CHECK(publish(system, replay) == TA_OK);
         }
         published = result == TA_OK;
-        CHECK(run(system, replay) == TA_RUN_STABLE);
+        CHECK(run(system, replay) == TEST_DRIVE_STABLE);
         CHECK(in_state(system, replay, "lost"));
         destroy_system(system);
     }
@@ -795,7 +807,7 @@ static void test_export_restores(void) {
     ta_actor_id live = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &live_address,
                                                            .out = &live }) == TA_OK);
-    CHECK(run(system, live) == TA_RUN_STABLE);
+    CHECK(run(system, live) == TEST_DRIVE_STABLE);
     static const struct { ta_time at; const char *event; } inputs[] = {
         { 100, "next" }, { 200, "arm" }, { 300, "next" }, { 400, "off" }, { 500, "arm" },
     };
@@ -856,7 +868,7 @@ static void test_export_restores_invocations(void) {
     ta_actor_id live = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &address_job,
                                                            .out = &live }) == TA_OK);
-    CHECK(run(system, live) == TA_RUN_STABLE);
+    CHECK(run(system, live) == TEST_DRIVE_STABLE);
     CHECK(invoker_starts == 1);
     exported out;
     CHECK(export_into(system, live, &out) == TA_OK);
@@ -867,7 +879,7 @@ static void test_export_restores_invocations(void) {
     CHECK(active_invoke(system, copy) == out.state.invokes[0].id);
     CHECK(invoker_starts == 1);
     CHECK(publish(system, copy) == TA_OK);
-    CHECK(run(system, copy) == TA_RUN_STABLE);
+    CHECK(run(system, copy) == TEST_DRIVE_STABLE);
     CHECK(in_state(system, copy, "lost"));
     CHECK(invoker_starts == 1);
     destroy_system(system);
@@ -917,12 +929,15 @@ static void test_export_result_codes(void) {
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &address_a,
                                                            .out = &live }) == TA_OK);
     CHECK(export_into(system, live, &out) == TA_ERR_BUSY); /* its bootstrap has not run */
-    CHECK(run(system, live) == TA_RUN_STABLE);
+    CHECK(run(system, live) == TEST_DRIVE_STABLE);
     ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1,
                                                                .time = ta_system_time(system) }) == TA_OK);
+    test_drive_status taken = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(system, live, &(test_drive_run_params){ .budget = 1, .status = &taken }) == TA_OK);
+    CHECK(taken == TEST_DRIVE_PAUSED);
     CHECK(export_into(system, live, &out) == TA_ERR_BUSY); /* holding an event */
-    CHECK(run(system, live) == TA_RUN_STABLE);
+    CHECK(run(system, live) == TEST_DRIVE_STABLE);
     CHECK(export_into(system, live, &out) == TA_OK);
 
     /* Another revision; a state the definition does not have. */
@@ -948,7 +963,7 @@ static void test_export_result_codes(void) {
     CHECK(export_into(system, replay, &out) == TA_ERR_INVALID);
     ta_actor_id done = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = finishing, .out = &done }) == TA_OK);
-    CHECK(run(system, done) == TA_RUN_DONE);
+    CHECK(run(system, done) == TEST_DRIVE_DONE);
     CHECK(export_into(system, done, &out) == TA_ERR_DONE);
     destroy_system(system);
 }

@@ -22,8 +22,8 @@
  *   change.
  * - The order is by group: the foundation units (memory, text, the
  *   generic containers, the ring and its records), then names and types,
- *   events and routing, the queue of pending inputs (the envelope pool
- *   and the name area), the configuration and history, the data model and
+ *   events and routing, the queue of pending inputs (the envelope pool,
+ *   the name area and the run that takes from them), the configuration and history, the data model and
  *   invocations, definitions and the builder, actors and session images,
  *   the system and the interpreter. A new header goes in its group.
  *
@@ -72,6 +72,7 @@
 #include "routing.h"
 #include "envelope.h"
 #include "name_area.h"
+#include "run.h"
 #include "clock.h"
 #include "configuration.h"
 #include "history.h"

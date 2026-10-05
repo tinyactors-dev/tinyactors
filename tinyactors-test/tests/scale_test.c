@@ -481,6 +481,22 @@ static ta_result count_visit(void *self, const ta_actor_inspection *inspection) 
     return TA_OK;
 }
 
+
+/*
+ * Runs `actor`'s next input to its end: one ta_run() for that session (its
+ * session filter), with room for its outcome. True when the input completed
+ * with the actor stable.
+ */
+static bool run_input(ta_system *system, ta_actor_id actor) {
+    ta_input_outcome outcome = {.kind = TA_INPUT_TAKEN};
+    uint32_t count = 0;
+    ta_run_status status = TA_RUN_MORE;
+    return ta_run(system, &(ta_run_params){.budget = 100, .session = actor, .outcomes = &outcome,
+                                           .outcome_capacity = 1, .outcome_count = &count, .status = &status}) ==
+               TA_OK &&
+           count == 1 && (outcome.kind == TA_INPUT_COMPLETED || outcome.kind == TA_INPUT_IGNORED);
+}
+
 static round_cost measure(size_t population) {
     counting_allocator counts = {.backing = tat_libc_allocator()};
     ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
@@ -524,14 +540,7 @@ static round_cost measure(size_t population) {
                                            .out = &actors[index],
                                        }) == TA_OK,
                 "spawning a named actor");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = actors[index],
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping a named actor");
+        require(run_input(system, actors[index]), "bootstrapping a named actor");
         uint64_t now_ns = thread_ns();
         uint64_t spent = now_ns - last_ns;
         spawn_ns[index] = spent > UINT32_MAX ? UINT32_MAX : (uint32_t)spent;
@@ -554,14 +563,7 @@ static round_cost measure(size_t population) {
                                              .out = &replacement,
                                          }) == TA_OK,
                 "preparing a replacement");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = replacement,
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping a replacement");
+        require(run_input(system, replacement), "bootstrapping a replacement");
         require(ta_actor_publish(system, &(ta_actor_publish_params){
                                              .actor = replacement,
                                              .incumbent = actors[index],
@@ -581,14 +583,7 @@ static round_cost measure(size_t population) {
         ta_actor_id ephemeral = 0;
         require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = v2, .out = &ephemeral}) == TA_OK,
                 "spawning an ephemeral actor");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = ephemeral,
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping an ephemeral actor");
+        require(run_input(system, ephemeral), "bootstrapping an ephemeral actor");
         require(ta_actor_destroy(system, ephemeral) == TA_OK, "destroying an ephemeral actor");
     }
     double churned = cpu_seconds();
@@ -605,14 +600,7 @@ static round_cost measure(size_t population) {
         require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = timed, .out = &timed_actors[index]}) ==
                     TA_OK,
                 "spawning a timed actor");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = timed_actors[index],
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping a timed actor");
+        require(run_input(system, timed_actors[index]), "bootstrapping a timed actor");
     }
     /*
      * A fixed sample spread over the population, inspected round-robin: the
@@ -632,14 +620,7 @@ static round_cost measure(size_t population) {
         ta_actor_id ephemeral = 0;
         require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = timed, .out = &ephemeral}) == TA_OK,
                 "spawning a timed ephemeral actor");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = ephemeral,
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "bootstrapping a timed ephemeral actor");
+        require(run_input(system, ephemeral), "bootstrapping a timed ephemeral actor");
         require(ta_actor_destroy(system, ephemeral) == TA_OK, "destroying a timed ephemeral actor");
     }
     double timers_churned = cpu_seconds();
@@ -660,14 +641,7 @@ static round_cost measure(size_t population) {
         ta_actor_id timed_actor = timed_actors[(index % INSPECTION_SAMPLE) * stride];
         ta_event rearm = {.name = rearm_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
         require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = timed_actor, .event = &rearm }) == TA_OK, "delivering rearm");
-        ta_run_status status = TA_RUN_ERROR;
-        require(ta_actor_resume(system, &(ta_actor_resume_params){
-                                            .actor = timed_actor,
-                                            .budget = 100,
-                                            .status = &status,
-                                        }) == TA_OK &&
-                    status == TA_RUN_STABLE,
-                "cancelling and re-arming a send");
+        require(run_input(system, timed_actor), "cancelling and re-arming a send");
     }
     double rearmed = cpu_seconds();
     ta_actor_inspection rearmed_view;
@@ -1132,11 +1106,7 @@ static ta_event_name_id intern_event(ta_system *system, ta_str text) {
 }
 
 static void run_to_stable(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
-    require(ta_actor_resume(system, &(ta_actor_resume_params){.actor = actor, .budget = 100, .status = &status}) ==
-                    TA_OK &&
-                status == TA_RUN_STABLE,
-            "running an actor to stable");
+    require(run_input(system, actor), "running an actor to stable");
 }
 
 static void run_event(ta_system *system, ta_actor_id actor, ta_event_name_id name) {
@@ -1193,12 +1163,14 @@ static void check_event_allocations(void) {
 }
 
 /* ------------------------------------------------------------------------
- * Batched delivery (ADR 0069). A delivered event lives in an event block
- * until its macrostep ends, so a host that delivers a batch before it
- * resumes the actors holds a block per actor. The cache fills on demand up
- * to its bound (ADR 0093): with the default bound of 1,024 a warm system
- * makes no allocator call, and with a bound of 4 every delivery past the
- * fourth takes a new block and frees it again. Creation makes no block.
+ * Batched delivery (ADR 0069, ADR 0099). A delivered event waits in core's
+ * pool, which holds no event block, and takes one from its session only
+ * when its macrostep takes it, until that macrostep ends. So a host that
+ * delivers a batch before it runs the actors holds one block at a time.
+ * The cache fills on demand up to its bound (ADR 0093): with the default
+ * bound of 1,024, or a bound of 4, a warm system makes no allocator call,
+ * and with no cache every input takes a new block and frees it again.
+ * Creation makes no block.
  */
 
 #define DELIVERY_BATCH 256u
@@ -1260,13 +1232,14 @@ static void check_batched_delivery_allocations(void) {
     size_t empty_bytes = 0;
     double default_cache = batched_system(TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, &default_bytes);
     double small_cache = batched_system(4u, &small_bytes);
-    (void)batched_system(0, &empty_bytes);
+    double no_cache = batched_system(0, &empty_bytes);
     printf("allocator calls per event delivered in batches of %u: %.2f with the default block cache (%u), %.2f with "
-           "a cache of 4; creation allocated %zu bytes with either bound, %zu with none\n",
-           DELIVERY_BATCH, default_cache, (unsigned)TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, small_cache, default_bytes,
-           empty_bytes);
+           "a cache of 4, %.2f with none; creation allocated %zu bytes with either bound, %zu with none\n",
+           DELIVERY_BATCH, default_cache, (unsigned)TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, small_cache, no_cache,
+           default_bytes, empty_bytes);
     require(default_cache == 0.0, "a warm system with the default cache calls no allocator (ADR 0093)");
-    require(small_cache > 0.9, "a batch larger than the cache takes a block per delivery (ADR 0069)");
+    require(small_cache == 0.0, "a batch waiting in the pool holds no event block, so a cache of 4 serves it (ADR 0099)");
+    require(no_cache > 0.9, "with no cache every input taken takes a block (ADR 0069)");
     require(default_bytes == empty_bytes && small_bytes == empty_bytes,
             "creation makes no event block, whatever the bound (ADR 0093)");
 }

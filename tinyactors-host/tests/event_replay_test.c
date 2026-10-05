@@ -11,6 +11,8 @@
  * - A replay to a final state reports it, and an event after it is DONE.
  * - Refusals: an empty name, a time earlier than the last event's, a
  *   published actor.
+ * - Mail the kernel admitted for the replaying actor before a replayed
+ *   event runs first, and its send() settles at the next turn, once.
  */
 #include "check.h"
 #include <string.h>
@@ -18,6 +20,7 @@
 #include "tinyactors_host.h"
 #include "tinyactors_host/hooks.h"
 #include "tinyactors_host/replay.h"
+#include "tinyactors_host/scheduler.h"
 #include "tinyactors_host/system.h"
 #include "system_private.h"
 
@@ -293,6 +296,43 @@ static void refusals(void) {
     finish_world(&w);
 }
 
+/*
+ * The replay's session filter takes the mail the kernel admitted for the
+ * actor first: its outcome reaches the scheduler, and the send() waiting
+ * for it settles at the next turn, exactly once.
+ */
+static void kernel_mail_during_replay(void) {
+    world w = make_world();
+    CHECK(tah_system_advance_to(w.system, 1000) == TA_OK);
+    ta_actor_id actor = prepare(&w, 0);
+    CHECK(tah_replay_events_done(w.system, actor) == TA_OK); /* its bootstrap */
+    ta_event_name_id ping = 0;
+    CHECK(tah_event_name_intern(w.system->core, S("ping"), &ping) == TA_OK);
+    uint32_t waiter = tah_sched_waiter_take(&w.system->sched);
+    CHECK(waiter != 0);
+    ta_event message = { .name = ping, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(tah_system_post(w.system, &(tah_message){ .target = actor, .event = &message, .waiter = waiter }) == TA_OK);
+    bool consumed = true;
+    CHECK(replay(&w, actor, "ping", 1000, &consumed, NULL) == TA_OK);
+    /* The kernel's ping took it to one; the replayed one then found no transition. */
+    CHECK(!consumed && in_state(w.system, actor, "one"));
+    CHECK(!tah_system_quiet(w.system));
+    uint32_t settled = 0;
+    for (int guard = 0; !tah_system_quiet(w.system); guard += 1) {
+        CHECK(guard < 100);
+        tah_system_turn(w.system);
+        tah_system_end_turn(w.system);
+        tah_settlement settlement;
+        while (tah_sched_settlement_pop(&w.system->sched, &settlement)) {
+            CHECK(settlement.waiter == waiter && settlement.kind == TAH_SETTLE_STABLE && settlement.actor == actor);
+            tah_sched_waiter_give(&w.system->sched, settlement.waiter);
+            settled += 1u;
+        }
+    }
+    CHECK(settled == 1u);
+    finish_world(&w);
+}
+
 int main(void) {
     crosses_nothing();
     unconsumed();
@@ -301,6 +341,7 @@ int main(void) {
     finished();
     empty_journal();
     refusals();
+    kernel_mail_during_replay();
     puts("tinyactors-host event replay test passed");
     return 0;
 }

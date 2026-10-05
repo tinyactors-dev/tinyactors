@@ -1390,9 +1390,9 @@ static bool tna_accept_begin(napi_env env, tna_napi_system *wrapper, tna_accepti
 }
 
 static napi_value tna_accept_failed(napi_env env, tna_napi_system *wrapper, tna_accepting *accepting, ta_result result) {
-    const char *code = result == TA_ERR_BUSY ? "queue-full" : tna_result_code(result);
-    const char *message = result == TA_ERR_BUSY
-                              ? "the system holds maxQueuedMessages messages or maxRetainedBytes of data"
+    const char *code = result == TA_ERR_FULL ? "queue-full" : tna_result_code(result);
+    const char *message = result == TA_ERR_FULL
+                              ? "the system holds as many pending inputs as it admits (poolEnvelopes, nameAreaBytes and admissionWatermark)"
                               : "the message was not accepted";
     if (!accepting->send) {
         return tna_throw(env, code, message);

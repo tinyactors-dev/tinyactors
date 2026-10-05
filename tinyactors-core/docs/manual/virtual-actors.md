@@ -120,16 +120,22 @@ ta_actor_spawn(system, &(ta_actor_spawn_params){
     .out = &actor,
 });
 
-ta_actor_deliver(system, actor, &user_message_event);
+ta_actor_deliver(system, &(ta_actor_deliver_params){
+    .actor = actor, .event = &user_message_event, .time = now, .correlation = message_id,
+});
 
+ta_input_outcome outcomes[16];
 ta_run_status status;
 do {
-    ta_actor_resume(system, &(ta_actor_resume_params){
-        .actor = actor,
+    uint32_t count = 0;
+    ta_run(system, &(ta_run_params){
         .budget = 1024,
+        .outcomes = outcomes,
+        .outcome_capacity = 16,
+        .outcome_count = &count,
         .status = &status,
     });
-} while (status == TA_RUN_PAUSED);
+} while (status != TA_RUN_IDLE);
 ```
 
 The conversation actor invokes a turn actor; the turn actor invokes inference
@@ -182,7 +188,10 @@ host_unlock_actor(conversation_address);
 
 If capture and unload are separated by an actor mutation,
 `ta_actor_unload()` returns `TA_ERR_STALE` and leaves the actor resident. The
-host retries from capture. The residency adapter owns the image from then on,
+host retries from capture. While inputs core admitted for the actor wait to be
+taken, `ta_actor_unload()` returns `TA_ERR_BUSY`: they name the runtime ID,
+which the loaded actor will not have. The host runs the system first, or
+withdraws them (`ta_system_withdraw_input()`). The residency adapter owns the image from then on,
 and destroys it when the actor is loaded again or removed.
 
 Unloading cancels runtime invocation handles and removes the actor's delayed
@@ -245,7 +254,7 @@ if (result == TA_OK)
 host_unlock_actor(conversation_address);
 ```
 
-The host then resumes the actor with the normal bounded loop. Load returns a new
+The host then runs the system with the normal bounded loop. Load returns a new
 runtime actor ID, while `_sessionid`, logical self-address, configuration,
 history, queued internal events, and delayed-send semantics come from the image.
 

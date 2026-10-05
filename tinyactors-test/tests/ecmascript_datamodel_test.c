@@ -506,12 +506,21 @@ static ta_event_name_id event_name(ta_system *system, const char *name) {
     return id;
 }
 
+/* Runs the actor's admitted inputs until nothing of its is left to run. */
 static void run(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_PAUSED;
-    for (int round = 0; round < 100 && status == TA_RUN_PAUSED; round += 1) {
-        require(ta_actor_resume(system, &(ta_actor_resume_params){.actor = actor, .budget = 64, .status = &status}) ==
-                    TA_OK,
-                "resume");
+    ta_run_status status = TA_RUN_MORE;
+    for (int round = 0; round < 100 && status != TA_RUN_IDLE; round += 1) {
+        ta_input_outcome outcomes[4];
+        uint32_t count = 0;
+        require(ta_run(system, &(ta_run_params){.budget = 64, .session = actor, .outcomes = outcomes,
+                                                 .outcome_capacity = 4, .outcome_count = &count,
+                                                 .status = &status}) == TA_OK,
+                "run");
+        /* A faulted or refused input fails the test, as a failed resume did. */
+        for (uint32_t at = 0; at < count; at += 1u) {
+            require(outcomes[at].kind != TA_INPUT_FAULTED && outcomes[at].kind != TA_INPUT_REFUSED,
+                    "run: an input faulted or was refused");
+        }
     }
 }
 

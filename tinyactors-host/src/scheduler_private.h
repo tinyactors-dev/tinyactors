@@ -7,13 +7,18 @@
  */
 #include "tinyactors_host/scheduler.h"
 
+/*
+ * An actor's mailbox lists the messages its macrostep has not taken, in the
+ * order they were accepted; while a macrostep runs one, that one is at the
+ * head, TAKEN, out of every count and view.
+ */
 struct tah_sched_entry {
     uint32_t generation;
     uint8_t state; /* tah_sched_state */
     uint8_t flags;
-    /* 1: on the room queue, READY with its head in the overflow (kernel ADR
-     * 0003); 0 for a stale entry of the queue, which is skipped. */
-    uint8_t parked;
+    /* 1: on the held queue, with mail in its mailbox that core has not
+     * admitted yet; 0 for a stale entry of the queue, which is skipped. */
+    uint8_t held;
     uint8_t reserved;
     uint32_t first; /* mailbox head envelope, 0 when empty */
     uint32_t last;  /* mailbox tail envelope, 0 when empty */
@@ -30,12 +35,27 @@ struct tah_mailbox {
     uint32_t count;
 };
 
+/* Where a kernel envelope stands; see tah_envelope. */
+typedef enum {
+    TAH_ENVELOPE_HELD = 0,  /* in its target's mailbox; core has not admitted it */
+    TAH_ENVELOPE_ADMITTED,  /* in its target's mailbox, and in core's pool, not yet taken */
+    TAH_ENVELOPE_TAKEN,     /* taken by its target's macrostep, out of the mailbox */
+    /* admitted for an actor the kernel removed inside a ta_run(), before
+     * the turn read what core did with it: the outcome makes it a dead letter */
+    TAH_ENVELOPE_ORPHANED,
+    TAH_ENVELOPE_DEAD,      /* on the dead list */
+    TAH_ENVELOPE_WAITING    /* in a load's mailbox (loads.h) */
+} tah_envelope_phase;
+
 /*
- * One queued message. `event` holds its own references (data, named origin).
- * `address` is set only for a dead letter to a named target that had no
- * resident actor; it holds a reference too. `jump` is set only for a message
- * that carries an operator transition, which only a message to an actor ID
- * does, so the two share their room and `has_jump` says which it is.
+ * One message from its post until core reports what became of it. `event`
+ * holds its own references (data, named origin) also while core holds its
+ * own, so a refused message's data reaches its dead letter. `address` is
+ * set only for a dead letter to a named target that had no resident actor,
+ * and for mail waiting for a load; it holds a reference too. `jump` is set
+ * only for a message that carries an operator transition, which only a
+ * message to an actor ID does, so the two share their room and `has_jump`
+ * says which it is. Core names it by its index (the correlation).
  */
 struct tah_envelope {
     ta_event event;
@@ -51,18 +71,22 @@ struct tah_envelope {
     uint32_t next;   /* the next envelope in its list, 0 when last */
     uint32_t waiter; /* the send() waiting for this message, or 0 */
     uint32_t bytes;  /* counted against max_retained (ADR 0005 point 9) */
-    uint8_t reason;  /* tah_dead_reason, while on the dead list */
+    uint8_t reason;  /* tah_dead_reason, while on the dead list or orphaned */
     uint8_t report;  /* tah_report_kind: an error report, not a message */
+    uint8_t phase;   /* tah_envelope_phase */
     uint8_t live : 1;     /* taken from the store */
     uint8_t has_jump : 1; /* `jump`, not `address` */
     /* Accepted past the limits (kernel ADR 0003): counted in `overflow`, not
-     * in `queued` and `retained`, and not delivered until it is moved in. */
+     * in `queued` and `retained`, and held until it is moved in. */
     uint8_t overflow : 1;
+    /* Posted by the host for an actor ID, not mail between actors: core's
+     * full pool refuses it at the post instead of holding it. */
+    uint8_t external : 1;
 };
 
 struct tah_waiter {
     uint32_t generation; /* part of the token JavaScript holds; never 0 */
-    uint32_t envelope;   /* QUEUED: the message's envelope */
+    uint32_t envelope;   /* QUEUED and INFLIGHT: the message's envelope */
     ta_actor_id actor;   /* QUEUED: the target; INFLIGHT: the actor running it */
     uint32_t next_free;
     uint8_t state;       /* tah_waiter_state */
@@ -81,38 +105,62 @@ typedef struct tah_envelopes {
 struct tah_sched {
     ta_allocator allocator; /* the scheduling category */
     tah_vec pages;          /* tah_sched_entry *, one per page */
-    tah_ring runnable;      /* ta_actor_id */
-    tah_ring ready;         /* ta_actor_id */
+    /* The core whose pool admits the mail, the reentrancy flag set around
+     * every call into it (ADR 0013 point 4), and the watched sessions whose
+     * mail is marked as it is admitted (watch.h); set by
+     * tah_sched_attach(). */
+    ta_system *core;
+    bool *inside_core;
+    tah_trace_watch *watch;
+    /* Core may have an input to run: something was admitted, created,
+     * released or woken since a ta_run() last answered TA_RUN_IDLE. */
+    bool core_work;
+    /* The last admission of held mail found core's pool, or the limits,
+     * full; room appears when an envelope is given back or core ends an
+     * input. A scheduler whose only work is blocked held mail is quiet. */
+    bool held_blocked;
+    /* Entries in each state, for the stats. */
+    uint32_t ready_count;
+    uint32_t runnable_count;
+    /* Faults the kernel found outside a turn (core refused a message when
+     * it was posted), each { actor, code }, recorded at the next turn. */
+    tah_vec faults_pending;
+    /* Outcomes a ta_run() outside a turn (a replay's session filter)
+     * reported for messages the kernel admitted (ta_input_outcome), acted
+     * on at the next turn. */
+    tah_vec outcomes_pending;
     tah_envelopes envelopes;
     /* Trace parents of queued traced messages (ta_trace_parent). */
     tah_free_list traces;
     uint32_t known;         /* entries not in state NONE */
     uint32_t stranded;      /* entries marked TAH_SCHED_STRANDED, at most (a turn recounts) */
-    /* Accepted messages not yet delivered or reported: mailboxes plus the dead list. */
+    /* Accepted messages not yet taken or reported: mailboxes and the dead list. */
     uint32_t queued;
     uint32_t max_queued;    /* 0: no limit (ADR 0005 point 9) */
     /* Mail between actors accepted past the limits and not moved in yet
      * (kernel ADR 0003): it counts in neither `queued` nor `retained`. */
     uint32_t overflow;
-    /* ta_actor_id: ready actors whose head waits in the overflow, in the
-     * order they asked for room (kernel ADR 0003). */
-    tah_ring room;
+    /* ta_actor_id: actors with held mail, in the order they first held it
+     * (kernel ADR 0003). */
+    tah_ring held;
+    /* ta_actor_id: actors whose input ran out of memory, released next turn
+     * (ADR 0008's backoff). */
+    tah_ring backoff;
     /* Retained-bytes estimates of queued messages, and their limit (0: none). */
     uint64_t retained;
     uint64_t max_retained;
     /* send() waiters: records by index (0 is never issued), a free list,
-     * the actors whose macrostep a waiter follows, and settlements. */
+     * and settlements. */
     tah_vec waiters;        /* tah_waiter */
     uint32_t waiter_free;
     uint32_t waiters_live;
-    tah_map inflight;       /* ta_actor_id -> waiter index */
     tah_ring settled;       /* tah_settlement */
     /* Dead letters waiting to be reported, threaded through `next`. */
     uint32_t dead_first;
     uint32_t dead_last;
     uint32_t dead_count;
     uint64_t dead_letters;  /* reported so far, with or without a hook */
-    uint64_t delivered;     /* messages core accepted */
+    uint64_t delivered;     /* messages core took */
     /* For metrics (napi ADR 0017 section 7): dead letters by tah_dead_reason,
      * faults by -ta_result, and the actors in quarantine now. */
     uint64_t dead_by_reason[TAH_DEAD_REASONS];

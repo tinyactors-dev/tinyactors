@@ -126,8 +126,9 @@ end
 module HostedOverflow
   # hosted_ping/a sends `ping` to hosted_pong/p while the queue is full
   # (maxQueuedMessages 1, taken by the application's `noise` for p): the
-  # router accepts it into p's overflow (kernel ADR 0003). Both families
-  # are recorded. Answers [hosted, ping, pong].
+  # router accepts it into p's overflow (kernel ADR 0003). The application's
+  # own mail is bounded by core's pool, not by this limit. Both families are
+  # recorded. Answers [hosted, ping, pong].
   def self.start(context, incarnation: 1)
     hosted = context.hosted_system(incarnation: incarnation, max_queued_messages: 1)
     context.hosted_record(hosted, 'hosted_ping', 'hosted_pong')
@@ -137,7 +138,6 @@ module HostedOverflow
     context.hosted_post(hosted, ping, 'go')
     context.hosted_run(hosted, limit: 1) # `go` delivered; a runs it next turn
     context.assert_equal 'ok', context.hosted_post(hosted, pong, 'noise')
-    context.assert_equal 'err_busy', context.hosted_post(hosted, pong, 'noise'), "the application's mail is refused"
     context.hosted_run(hosted, limit: 1) # a sends `ping`; p takes `noise`
     boxes = context.hosted_mailboxes(hosted, pong)
     context.assert_equal 1, boxes[:overflow]
@@ -229,7 +229,8 @@ TinyactorsTest.scenarios 'hosted' do
     store = hosted_store(hosted)
     close_hosted(hosted) # a crash: nothing more is recorded
     assert_equal %w[go], store.journals['hosted_ping/a'].map { |entry| entry[:event][:name] }
-    assert_equal [], store.journals['hosted_pong/p'], "p's `noise` was delivered, but its macrostep had not ended"
+    assert_equal %w[noise], store.journals['hosted_pong/p'].map { |entry| entry[:event][:name] },
+                 "p's `noise` ran; the `ping` in its overflow was never taken"
 
     again = hosted_system(incarnation: 2)
     ping = hosted_restore(again, hosted_define(again, :hosted_ping), 'hosted_ping', 'a', store.journals['hosted_ping/a'])

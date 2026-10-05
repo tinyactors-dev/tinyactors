@@ -2,7 +2,8 @@
 
 # Runaway macrosteps (ADR 0075). A macrostep that runs its microstep limit
 # stops between microsteps with err_runaway, and nothing about the actor
-# changes: it stays mid-macrostep and a later resume continues it. A tenth
+# changes: it stays mid-macrostep, runs nothing until the host releases it,
+# and the release lifts the limit for the rest of that macrostep. A tenth
 # of the way there it is recorded as long. The count is of microsteps, so a
 # <foreach> that pauses across many resumes is one microstep and never
 # reaches it.
@@ -65,11 +66,11 @@ module Runaway
            .fetch(:out)
   end
 
-  # One ta_actor_resume; returns [result, status].
-  def self.resume(context, actor, budget: 100_000, action_budget: 0, lifted: false)
-    response = context.ta.actor.resume(system: context.system_handle, actor: actor.handle, budget: budget,
-                                       action_budget: action_budget, no_microstep_limit: lifted)
-    [response[:result], response.dig(:out, :status)]
+  # One ta_run for the actor's session, releasing it first when `lifted`;
+  # returns [result, status].
+  def self.resume(_context, actor, budget: 100_000, action_budget: 0, lifted: false)
+    run = actor.run_once(budget: budget, action_budget: action_budget, release: lifted)
+    [run[:result], run[:status]]
   end
 end
 
@@ -79,8 +80,8 @@ TinyactorsTest.scxml_chart :rw_foreach, Runaway::FOREACH, datamodel: 'jq'
 
 TinyactorsTest.scenarios 'runaway macrosteps' do
   # Catches: a limit that is not checked, a stop that changes the actor, a
-  # second resume that counts again, and a lifted limit that does not let
-  # the macrostep finish.
+  # stopped session that runs again before it is released, and a lifted
+  # limit that does not let the macrostep finish.
   scenario 'an eventless loop stops at the limit, unchanged, and a lifted limit lets it finish' do
     Runaway.limit(self, :rw_counter, 100)
     actor = spawn :rw_counter
@@ -95,9 +96,10 @@ TinyactorsTest.scenarios 'runaway macrosteps' do
     assert_equal 99, actor.data('.n'), 'the go microstep, then 99 turns of the loop'
     assert actor.inspect_actor[:macrostep_in_progress], 'the actor is still mid-macrostep'
 
-    assert_equal 'err_runaway', Runaway.resume(self, actor).first, 'the limit holds until lifted'
-    assert_equal 1, Runaway.counters(self, :rw_counter)[:runaways], 'a second stop does not count again'
+    assert_equal %w[ok stable], Runaway.resume(self, actor), 'a stopped session runs nothing until released'
+    assert_equal 1, Runaway.counters(self, :rw_counter)[:runaways], 'nothing counts again'
     assert_equal 99, actor.data('.n')
+    assert actor.inspect_actor[:macrostep_in_progress], 'the actor is still mid-macrostep'
 
     assert_equal %w[ok stable], Runaway.resume(self, actor, lifted: true)
     assert_equal 150, actor.data('.n'), 'the macrostep finished'
@@ -116,7 +118,10 @@ TinyactorsTest.scenarios 'runaway macrosteps' do
     assert_equal 'ok', actor.post('go')
     assert_equal 'err_runaway', Runaway.resume(self, actor).first
     assert_equal 1, Runaway.counters(self, :rw_ping_pong)[:runaways]
-    assert_equal 'err_busy', actor.post('go'), 'a stopped actor takes no event'
+    assert_equal 'ok', actor.post('go'), 'a stopped actor admits an event'
+    assert_equal %w[ok stable], Runaway.resume(self, actor), 'and holds it back while it is stopped'
+    assert actor.inspect_actor[:macrostep_in_progress], 'the actor is still mid-macrostep'
+    assert_equal 1, Runaway.counters(self, :rw_ping_pong)[:runaways]
   end
 
   # Catches: a limit on turns instead of microsteps, which a long <foreach>

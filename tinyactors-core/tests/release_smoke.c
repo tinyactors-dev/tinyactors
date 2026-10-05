@@ -94,9 +94,13 @@ int main(void) {
         return fail("ta_system_register_definition failed");
     }
     ta_actor_id actor = 0;
-    ta_run_status status = TA_RUN_ERROR;
+    ta_run_status status = TA_RUN_MORE;
+    ta_input_outcome outcome = { .kind = TA_INPUT_TAKEN };
+    uint32_t outcomes = 0;
+    ta_run_params run = { .budget = 100, .outcomes = &outcome, .outcome_capacity = 1, .outcome_count = &outcomes,
+                          .status = &status };
     if (ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) != TA_OK ||
-        ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) != TA_OK) {
+        ta_run(system, &run) != TA_OK || outcomes != 1 || outcome.kind != TA_INPUT_COMPLETED) {
         return fail("the actor does not start");
     }
     if (!in_state(system, id, actor, STR("idle"))) {
@@ -110,11 +114,13 @@ int main(void) {
         return fail("the event name cannot be interned");
     }
     ta_event event = { .name = go, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    if (ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) != TA_OK ||
-        ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) != TA_OK) {
+    if (ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
+                                                            .event = &event, .correlation = 1 }) != TA_OK ||
+        ta_run(system, &run) != TA_OK) {
         return fail("the event is not delivered");
     }
-    if (status != TA_RUN_STABLE || in_state(system, id, actor, STR("idle")) || !in_state(system, id, actor, STR("done"))) {
+    if (outcomes != 1 || outcome.kind != TA_INPUT_COMPLETED || outcome.correlation != 1 || status != TA_RUN_IDLE ||
+        in_state(system, id, actor, STR("idle")) || !in_state(system, id, actor, STR("done"))) {
         return fail("the actor did not reach done");
     }
 

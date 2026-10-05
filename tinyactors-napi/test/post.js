@@ -158,16 +158,25 @@ async function finishedAndDestroyedTargets() {
   quiet.close();
 }
 
-// maxQueuedMessages refuses new mail with queue-full; accepted mail is kept.
+// A full pool of pending inputs refuses new mail with queue-full (core ADR
+// 0099: 8 envelopes, 2 of them for admission); accepted mail is kept.
 async function backpressure() {
-  const system = createSystem({ parameters: { maxQueuedMessages: 2 } });
+  const system = createSystem({ parameters: { poolEnvelopes: 8, admissionWatermark: 25 } });
   const actor = system.spawn(system.define(steps()));
   await system.flush();
   actor.post('x');
   actor.post('y');
   assertCode(() => actor.post('z'), 'queue-full');
+  // Refused data stays the caller's: its box is released once, by the post.
+  const live = () => native.environmentStats().valuesLive;
+  const start = live();
+  assertCode(() => actor.post('z', { refused: true }), 'queue-full');
+  await assert.rejects(actor.send('z', { refused: 'too' }), { code: 'queue-full' });
+  assert.equal(live(), start, 'a refused message releases its data once');
+  assert.equal(system.stats().messages.queued, 2);
   await system.flush();
   assert.equal(stateOf(actor), 'c', 'both accepted messages were delivered');
+  assert.equal(live(), start);
   actor.post('z');
   await system.flush();
   system.close();

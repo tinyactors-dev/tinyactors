@@ -338,7 +338,7 @@ static void abandoned_macrostep(void) {
     const tah_settlement *abandoned = settlement_of(waiter);
     CHECK(abandoned != NULL && abandoned->kind == TAH_SETTLE_ABANDONED);
     CHECK(state(system, actor) == TAH_SCHED_READY); /* its next message waits */
-    turn(system); /* the stale runnable entry is skipped; the next go starts another runaway */
+    turn(system); /* the next go starts another macrostep that never ends */
     CHECK(state(system, actor) == TAH_SCHED_RUNNABLE);
     CHECK(tah_sched_mailbox_count(&system->sched, actor) == 0u);
 

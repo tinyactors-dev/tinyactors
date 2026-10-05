@@ -152,9 +152,11 @@ async function turnsYieldToTheEventLoop() {
   system.close();
 }
 
-// A small actionBudget splits one long entry handler over several turns, and
-// other actors run between them (core ADR 0061). The null data model has no
-// <foreach> to iterate; that variant waits for the data model (step 11).
+// A small actionBudget splits one long entry handler over several turns
+// (core ADR 0061): a paused macrostep has one slice a turn. The handler
+// holds core's one macrostep slot (core ADR 0103): the other actors run
+// once it ends. The null data model has no <foreach> to iterate; that
+// variant waits for the data model (step 11).
 async function actionBudgetSplitsAHandler() {
   const system = createSystem({ parameters: { actionBudget: 5 } });
   // The bootstrap never pauses (core ADR 0061), so the long handler belongs to
@@ -171,7 +173,7 @@ async function actionBudgetSplitsAHandler() {
   const busy = system.spawn(system.define(busyChart));
   const other = system.spawn(system.define(idleChart('other')));
   await tick(); // one pump turn
-  assert.deepEqual(other.inspect().activeStates, ['idle'], 'the other actor ran in the first turn');
+  assert.deepEqual(other.inspect().activeStates, [], 'the other actor waits for the slot');
   assert.equal(busy.inspect().scheduling, 'runnable');
   assert.equal(busy.inspect().macrostepInProgress, true, 'paused inside the handler');
   const late = system.spawn(system.define(idleChart('late')));
@@ -181,7 +183,9 @@ async function actionBudgetSplitsAHandler() {
     turns += 1;
     assert.ok(turns < 100);
   }
-  assert.ok(turns >= 8, `40 actions at 5 per resume took ${turns} turns`);
+  assert.ok(turns >= 8, `40 actions at 5 per run took ${turns} turns`);
+  await system.flush();
+  assert.deepEqual(other.inspect().activeStates, ['idle'], 'the other actor ran after it');
   assert.deepEqual(late.inspect().activeStates, ['idle'], 'an actor spawned meanwhile ran');
   assert.deepEqual(busy.inspect().activeStates, ['busy']);
   system.close();

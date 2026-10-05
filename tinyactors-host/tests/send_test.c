@@ -2,10 +2,11 @@
  * send() waiters and retained bytes (ADR 0005 points 9 and 11), driven
  * without Node-API: a waiter settles when its message's macrostep ends
  * (stable, done), when the message becomes a dead letter, and when its actor
- * goes away; a cancelled message still in a mailbox is withdrawn; a delivered
- * one is not undone; the retained-bytes limit refuses a message that would
- * pass it and counts bytes back down; and waiters are reused, so steady
- * state makes no allocator call.
+ * goes away; a cancelled message core has not taken is withdrawn, from its
+ * mailbox and core's pool; a taken one is not undone; the retained-bytes
+ * limit holds back mail between actors that would pass it, counts bytes
+ * back down as core takes mail, and leaves the application's mail to core's
+ * pool; and waiters are reused, so steady state makes no allocator call.
  */
 #include "check.h"
 #include <string.h>
@@ -190,8 +191,10 @@ static void settles_when_its_actor_goes(void) {
     reset_settled();
     uint32_t waiter = send(system, actor, name(system, "ping"));
     uint32_t queued = send(system, actor, name(system, "ping"));
-    /* Deliver the first only: one turn delivers, and does not resume yet. */
+    /* Take the first only: one ta_run() of one microstep takes it, and its
+     * macrostep pauses. */
     system->budgets.resumes = 1;
+    system->budgets.microsteps = 1;
     tah_system_turn(system);
     collect(system);
     tah_system_end_turn(system);
@@ -203,7 +206,7 @@ static void settles_when_its_actor_goes(void) {
     finish_system(system);
 }
 
-/* Cancel withdraws a message still in its mailbox; a delivered one is not undone. */
+/* Cancel withdraws a message core has not taken; a taken one is not undone. */
 static void cancel(void) {
     tah_system *system = make_system();
     ta_definition_id chart = define_ping(system);
@@ -216,7 +219,8 @@ static void cancel(void) {
     uint32_t withdrawn = send(system, actor, stop);
     uint32_t kept = send(system, actor, ping);
     system->budgets.resumes = 1;
-    tah_system_turn(system); /* delivers `delivered` */
+    system->budgets.microsteps = 1;
+    tah_system_turn(system); /* takes `delivered`, whose macrostep pauses */
     collect(system);
     tah_system_end_turn(system);
     CHECK(tah_sched_waiter(&system->sched, delivered)->state == TAH_WAITER_INFLIGHT);
@@ -227,6 +231,7 @@ static void cancel(void) {
     CHECK(tah_sched_cancel(&system->sched, delivered));
     tah_sched_waiter_give(&system->sched, delivered);
     CHECK(!tah_sched_cancel(&system->sched, delivered)); /* already given back */
+    system->budgets.microsteps = 64;
     run(system);
     /* `stop` was withdrawn, so the actor is still running and got `kept`. */
     CHECK(settlement_of(kept)->kind == TAH_SETTLE_STABLE);
@@ -241,7 +246,19 @@ static void cancel(void) {
     finish_system(system);
 }
 
-/* max_retained refuses a message that would pass it and counts back down. */
+/* Mail between actors, as the router posts it, with a retained-bytes estimate. */
+static ta_result post_between_bytes(tah_system *system, ta_actor_id target, ta_event_name_id event, uint32_t bytes) {
+    ta_event message = { .name = event, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    return tah_system_post(system, &(tah_message){ .target = target, .event = &message, .bytes = bytes,
+                                                   .may_overflow = true });
+}
+
+/*
+ * max_retained holds back mail between actors that would pass it, as
+ * overflow (kernel ADR 0003), and counts bytes back down as core takes the
+ * mail; the application's mail is not held back by it: core's pool bounds
+ * that (core ADR 0099).
+ */
 static void retained_bytes(void) {
     tah_system *system = make_system();
     ta_definition_id chart = define_ping(system);
@@ -249,15 +266,23 @@ static void retained_bytes(void) {
     run(system);
     system->sched.max_retained = 100;
     ta_event_name_id ping = name(system, "ping");
-    CHECK(post_bytes(system, actor, ping, 60) == TA_OK);
-    CHECK(post_bytes(system, actor, ping, 50) == TA_ERR_BUSY);
-    CHECK(post_bytes(system, actor, ping, 40) == TA_OK);
-    CHECK(system->sched.retained == 100u);
-    CHECK(post_bytes(system, actor, ping, 1) == TA_ERR_BUSY);
-    CHECK(post_bytes(system, actor, ping, 0) == TA_OK); /* no data: always fits */
+    CHECK(post_between_bytes(system, actor, ping, 60) == TA_OK);
+    CHECK(post_between_bytes(system, actor, ping, 50) == TA_OK); /* held: it would pass the limit */
+    CHECK(system->sched.retained == 60u && system->sched.overflow == 1u);
+    CHECK(post_bytes(system, actor, ping, 70) == TA_OK); /* the application's: admitted */
+    CHECK(system->sched.retained == 130u);
+    CHECK(post_between_bytes(system, actor, ping, 0) == TA_OK); /* no data, but behind the held one */
     run(system);
-    CHECK(system->sched.retained == 0);
-    CHECK(post_bytes(system, actor, ping, 101) == TA_ERR_BUSY); /* never fits */
+    CHECK(system->sched.retained == 0u && system->sched.overflow == 0u && system->sched.queued == 0u);
+    CHECK(system->sched.delivered == 4u); /* the four messages, each taken once */
+    /* The application's data alone above the limit holds back mail between
+     * actors with no data, until core takes it. */
+    CHECK(post_bytes(system, actor, ping, 101) == TA_OK);
+    CHECK(post_between_bytes(system, actor, ping, 0) == TA_OK);
+    CHECK(system->sched.retained == 101u && system->sched.overflow == 1u);
+    run(system);
+    CHECK(system->sched.retained == 0u && system->sched.overflow == 0u && system->sched.queued == 0u);
+    CHECK(system->sched.delivered == 6u);
     finish_system(system);
 }
 

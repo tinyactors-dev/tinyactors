@@ -51,11 +51,11 @@ IDs from `ta_invoke_request` and reports one of three outcomes through
   service is `unavailable` with `ends`); without it, the invocation stays
   active (napi reports a quarantined child as `quarantined`).
 
-Ordinary-event and completion reports may return `TA_ERR_BUSY`, because the
-core has no unbounded external mailbox; the host retains and retries them after
-the current macrostep. An error report is appended even while an actor is inside a
-macrostep, so it never returns `TA_ERR_BUSY`, subject to the normal
-external-synchronization rule. A report for an
+Every report is admitted into the system's pool, as `ta_actor_deliver` admits
+an event, and is taken after the macrostep in progress, if any. A full pool
+answers `TA_ERR_FULL`, changing nothing; the host retains the report and retries
+it once the system has run. An error report's event goes on the internal queue
+when the report is taken, and retires the invocation then when it ends it. A report for an
 unknown, completed, cancelled, or retired invocation returns `TA_ERR_NOT_FOUND`
 and generates no chart event.
 

@@ -192,8 +192,8 @@ typedef struct {
     ta_param *rejected;
     /*
      * The binding may turn the trace encoder on (tah_system_set_tracing).
-     * The kernel reads core's tel ring only between resumes, and core sizes
-     * the ring at creation, so the kernel then sizes it for one resume's
+     * The kernel reads core's tel ring only between ta_run() calls, and core sizes
+     * the ring at creation, so the kernel then sizes it for one call's
      * records, unless the binding set telBytes (core ADR 0098). False keeps
      * core's ring as the parameters say.
      */
@@ -262,9 +262,10 @@ size_t tah_system_leaked_bytes(const tah_system *system);
 void tah_system_free(tah_system *system);
 
 /*
- * Accepts a message and asks for a turn (ADR 0005). On TA_OK the system owns
- * the event's references and the message's waiter. TA_ERR_BUSY: the queue is
- * full (max_queued or max_retained) and the message may not overflow;
+ * Accepts a message, admits it into core's pool, and asks for a turn (ADR
+ * 0005, core ADR 0099). On TA_OK the system owns the event's references and
+ * the message's waiter. TA_ERR_FULL: core's pool is at its admission
+ * watermark and the message may not be held (tah_message.may_overflow);
  * TA_ERR_NOMEM: nothing accepted.
  */
 ta_result tah_system_post(tah_system *system, const tah_message *message);

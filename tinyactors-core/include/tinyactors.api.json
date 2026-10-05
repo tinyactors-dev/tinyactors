@@ -738,30 +738,39 @@
           "type": {
             "type": "ta_time"
           },
-          "doc": "The input's logical time (ADR 0094 section 1). For a published actor, or one prepared without `at`, it is ta_system_time(). For a replaying actor it is no earlier than its previous input's and no later than the system's, and the actor's clock moves to it: every held delayed send due by then is dropped (ADR 0089 section 2). Anything else is TA_ERR_INVALID."
+          "doc": "The input's logical time (ADR 0094 section 1). For a published actor, or one prepared without `at`, it is ta_system_time(). For a replaying actor it is no earlier than its previous input's and no later than the system's, and the actor's clock moves to it: every held delayed send due by then is dropped (ADR 0089 section 2). Its previous input is the last one admitted for it, taken or not. Anything else is TA_ERR_INVALID, and admits nothing. A replaying actor's clock moves to it when ta_run() takes the input."
+        },
+        {
+          "name": "correlation",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The host's own name for this input, which every outcome ta_run() reports for it carries (ta_input_outcome.correlation); core only keeps it. Use a value other than 0 to tell it from core's own inputs."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "actor": 0,
             "event": 8,
             "trace": 16,
             "transition": 64,
-            "time": 72
+            "time": 72,
+            "correlation": 80
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "actor": 0,
             "event": 8,
             "trace": 16,
             "transition": 64,
-            "time": 72
+            "time": 72,
+            "correlation": 80
           }
         }
       }
@@ -1592,7 +1601,7 @@
           "type": {
             "builtin": "bool"
           },
-          "doc": "True while a macrostep is paused mid-way (ta_actor_resume() continues it)."
+          "doc": "True while a macrostep is in progress: begun or waiting to begin, paused by a budget (ta_run() continues it), or stopped by a fault (ta_actor_release() lets it go on)."
         },
         {
           "name": "microstep_in_progress",
@@ -2486,96 +2495,6 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
-        }
-      }
-    },
-    "ta_actor_resume_params": {
-      "kind": "struct",
-      "doc": "`budget` is the number of microsteps this call may run (ADR 0009). `action_budget`, when not zero, is the number of units of executable content it may run before it pauses inside a microstep (ADR 0061): each action of a block, an <if > and a <foreach > included, and each <foreach > iteration. Either one reached answers TA_RUN_PAUSED, and the next call continues where this one stopped. Zero leaves pausing to `budget` alone. `pause_at_microstep_start`, when true, also pauses at the start of every microstep this call begins (ADR 0086): after its transitions are selected, before its first unit and before any state is exited. The position is that first unit's. A call that resumes from such a start passes it. The bootstrap's microstep never pauses there.",
-      "fields": [
-        {
-          "name": "actor",
-          "type": {
-            "type": "ta_actor_id"
-          }
-        },
-        {
-          "name": "budget",
-          "type": {
-            "builtin": "uint32_t"
-          }
-        },
-        {
-          "name": "status",
-          "type": {
-            "pointer": {
-              "type": "ta_run_status"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "success"
-        },
-        {
-          "name": "action_budget",
-          "type": {
-            "builtin": "uint32_t"
-          }
-        },
-        {
-          "name": "no_microstep_limit",
-          "type": {
-            "builtin": "bool"
-          },
-          "doc": "True lifts the microstep limit (ADR 0075) for this call: a host sets it for an actor an operator released after TA_ERR_RUNAWAY."
-        },
-        {
-          "name": "pause_at_microstep_start",
-          "type": {
-            "builtin": "bool"
-          },
-          "doc": "Pauses before the first unit of every microstep it begins (ADR 0086)."
-        },
-        {
-          "name": "ignored",
-          "type": {
-            "pointer": {
-              "builtin": "bool"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "optional": true,
-          "valid_on": "success",
-          "doc": "Set when this call ends a macrostep (TA_RUN_STABLE or TA_RUN_DONE): true when that macrostep's external event enabled no transition, the event events_ignored counts (ADR 0089 section 8). False for a bootstrap, an operator transition, a macrostep with no external event and an event that enabled a transition. Untouched when the call pauses or ends no macrostep."
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "actor": 0,
-            "budget": 8,
-            "status": 16,
-            "action_budget": 24,
-            "no_microstep_limit": 28,
-            "pause_at_microstep_start": 29,
-            "ignored": 32
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "actor": 0,
-            "budget": 8,
-            "status": 12,
-            "action_budget": 16,
-            "no_microstep_limit": 20,
-            "pause_at_microstep_start": 21,
-            "ignored": 24
-          }
         }
       }
     },
@@ -11074,6 +10993,106 @@
         }
       }
     },
+    "ta_input_outcome": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_input_outcome_kind"
+          }
+        },
+        {
+          "name": "code",
+          "type": {
+            "type": "ta_result"
+          },
+          "doc": "FAULTED and REFUSED: why. COMPLETED and FINISHED: TA_OK, or the fault that came as the macrostep ended. TA_OK for the others."
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "doc": "The session the input was for."
+        },
+        {
+          "name": "correlation",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The host's own name for the input, from ta_actor_deliver_params or ta_invoke_report_params; 0 for core's own inputs."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "code": 4,
+            "actor": 8,
+            "correlation": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "code": 4,
+            "actor": 8,
+            "correlation": 16
+          }
+        }
+      }
+    },
+    "ta_input_outcome_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_INPUT_TAKEN",
+          "value": 0,
+          "symbol": "taken"
+        },
+        {
+          "name": "TA_INPUT_COMPLETED",
+          "value": 1,
+          "symbol": "completed"
+        },
+        {
+          "name": "TA_INPUT_IGNORED",
+          "value": 2,
+          "symbol": "ignored"
+        },
+        {
+          "name": "TA_INPUT_FINISHED",
+          "value": 3,
+          "symbol": "finished"
+        },
+        {
+          "name": "TA_INPUT_FAULTED",
+          "value": 4,
+          "symbol": "faulted"
+        },
+        {
+          "name": "TA_INPUT_REFUSED",
+          "value": 5,
+          "symbol": "refused"
+        }
+      ],
+      "doc": "What became of one input, as ta_run() reports it in the caller's outcome buffer (ADR 0103). An input ta_run() takes is reported once when it ends, with one of COMPLETED, IGNORED or FINISHED, and FAULTED comes before that each time a fault stops its macrostep on the way; an input it does not take is reported once, REFUSED. An input is never reported when: - it is withdrawn (ta_system_withdraw_input()) before it is taken; - it was taken, and its session is destroyed or unloaded before its macrostep ends, or its macrostep is abandoned (ta_actor_abandon()); that includes an input reported FAULTED whose session is then abandoned or destroyed instead of released; - it is one of core's own that its session no longer needs. The kinds: - TAKEN: its macrostep began (only with `report_taken`). - COMPLETED: its macrostep ended with the session stable; the event, if it had one, enabled a transition. - IGNORED: as COMPLETED, but its external event enabled no transition, the event events_ignored counts (ADR 0089 section 8). - FINISHED: the session reached a top-level final state. - FAULTED: a fault stopped the session inside its macrostep: `code` is TA_ERR_RUNAWAY at the microstep limit (ADR 0075), TA_ERR_NOMEM when it ran out of memory (ADR 0070), or another error an operation answered. The session is still in that macrostep, always: it keeps its input and its continuation; later inputs for it wait until ta_actor_release() lets it go on, or it is abandoned or destroyed. When it goes on, the input is reported again when it ends. A fault that comes as the macrostep ends leaves nothing to continue, and is reported as the input's end instead (COMPLETED or FINISHED, with the fault's `code`). - REFUSED: never taken: `code` is TA_ERR_NOT_FOUND when its session is gone, or, for an invocation's error report, its invocation is; TA_ERR_DONE when the session has finished; TA_ERR_INVALID when the operator transition it carries no longer applies (its source is not active, or the session now runs another definition). Core's own inputs (a session's bootstrap, and a macrostep core started for work queued outside any run) have correlation 0.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
     "ta_invoke_decl_id": {
       "kind": "alias",
       "type": {
@@ -11092,7 +11111,7 @@
     },
     "ta_invoke_error": {
       "kind": "struct",
-      "doc": "An ERROR report (ADR 0081). `reason` is the event name's last token, one token of the host's choosing: not empty, with no '.' and no white space, or the report answers TA_ERR_INVALID and changes nothing. The ID takes one segment per dotted part, as in done.invoke. <id >; a name deeper than the system's eventNameDepth answers TA_ERR_INVALID too. `data`, when set, is retained as the event's data. `ends` also retires the invocation, so its service's later events are ignored (SCXML 6.4.3); a lost service is reason \"unavailable\" with `ends`. Without `ends` the invocation stays active: its events, done.invoke. <id >, autoforwarding and cancellation behave as if no report was made. Like every input, a report reaches the session only between macrosteps (ADR 0089 section 4): inside one (paused by a budget, or holding a delivered event) every kind answers TA_ERR_BUSY and changes nothing, and the host keeps the report and offers it again, as it keeps mail ta_actor_deliver() refused. The idle session takes the event on its internal queue and starts a macrostep under the report's `trace`.",
+      "doc": "An ERROR report (ADR 0081). `reason` is the event name's last token, one token of the host's choosing: not empty, with no '.' and no white space, or the report answers TA_ERR_INVALID and changes nothing. The ID takes one segment per dotted part, as in done.invoke. <id >; a name deeper than the system's eventNameDepth answers TA_ERR_INVALID too. `data`, when set, is retained as the event's data. `ends` also retires the invocation, so its service's later events are ignored (SCXML 6.4.3); a lost service is reason \"unavailable\" with `ends`. Without `ends` the invocation stays active: its events, done.invoke. <id >, autoforwarding and cancellation behave as if no report was made. Like every input, a report reaches the session only between macrosteps (ADR 0089 section 4): it is admitted into the pool as ta_actor_deliver() admits an event, answering TA_ERR_FULL at the admission watermark, and when ta_run() takes it the session takes the event on its internal queue, retires the invocation with `ends`, and starts a macrostep under the report's `trace`. An invocation that ended before then makes the report REFUSED with TA_ERR_NOT_FOUND.",
       "fields": [
         {
           "name": "reason",
@@ -11319,6 +11338,13 @@
           "doc": "The report's logical time, as ta_actor_deliver_params.time (ADR 0094)."
         },
         {
+          "name": "correlation",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The host's own name for the report, as ta_actor_deliver_params.correlation."
+        },
+        {
           "name": "as",
           "type": {
             "record": {
@@ -11378,7 +11404,7 @@
       },
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 88,
+          "size": 96,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -11386,14 +11412,15 @@
             "kind": 16,
             "trace": 24,
             "time": 72,
-            "as": 80,
-            "as.event": 80,
-            "as.done_data": 80,
-            "as.error": 80
+            "correlation": 80,
+            "as": 88,
+            "as.event": 88,
+            "as.done_data": 88,
+            "as.error": 88
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 88,
+          "size": 96,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -11401,10 +11428,11 @@
             "kind": 16,
             "trace": 24,
             "time": 72,
-            "as": 80,
-            "as.event": 80,
-            "as.done_data": 80,
-            "as.error": 80
+            "correlation": 80,
+            "as": 88,
+            "as.event": 88,
+            "as.done_data": 88,
+            "as.error": 88
           }
         }
       }
@@ -12739,7 +12767,7 @@
           "symbol": "nomem"
         }
       ],
-      "doc": "What a data-model, invoker or I/O-processor operation answers. ERROR is the chart's failure: core raises the event SCXML defines for it. NOMEM says the operation could not get memory and changed nothing: core stops the run where it stands, ta_actor_resume() answers TA_ERR_NOMEM, and the operation is called again when the host resumes the actor (ADR 0047, ADR 0070). An operation that may have changed something before it ran out of memory answers ERROR.",
+      "doc": "What a data-model, invoker or I/O-processor operation answers. ERROR is the chart's failure: core raises the event SCXML defines for it. NOMEM says the operation could not get memory and changed nothing: core stops the run where it stands, ta_run() reports the input faulted with TA_ERR_NOMEM, and the operation is called again when the host releases the session (ta_actor_release(), ADR 0047, ADR 0070). An operation that may have changed something before it ran out of memory answers ERROR.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -13086,12 +13114,30 @@
           "doc": "text kept of a value in a trace record; at most maxRecordBytes - 512"
         },
         {
-          "name": "TA_PARAM_COUNT",
+          "name": "TA_PARAM_POOL_ENVELOPES",
           "value": 15,
+          "symbol": "pool_envelopes",
+          "doc": "pending inputs the pool holds (ADR 0099); 8 to 2^24"
+        },
+        {
+          "name": "TA_PARAM_NAME_AREA_BYTES",
+          "value": 16,
+          "symbol": "name_area_bytes",
+          "doc": "the pool's text (ADR 0099), in 64-byte chunks; maxRecordBytes to 1 GiB"
+        },
+        {
+          "name": "TA_PARAM_ADMISSION_WATERMARK",
+          "value": 17,
+          "symbol": "admission_watermark",
+          "doc": "percent of the pool and of the name area admission may fill (ADR 0099)"
+        },
+        {
+          "name": "TA_PARAM_COUNT",
+          "value": 18,
           "symbol": "count"
         }
       ],
-      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\nSystem parameters (ADR 0092): each is set once, when the system is created, and never changes. A parameter bounds a limit or a buffer; the buffers every run needs are allocated at creation (interpreter region 0, the render area, the event-block cache, the tel ring), the ones only nested interpreters need on first use, up to their bound. ta_param_info_of() gives each one's name, default, bounds and unit; names are lowerCamelCase, for hosts to use as they are. Creation also checks the bounds between them (ADR 0098): telBytes is 0 or at least maxRecordBytes, and telemetryValueBytes is at most maxRecordBytes - 512, the room a trace record's fixed part and its names take; it names the one at fault.",
+      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\nSystem parameters (ADR 0092): each is set once, when the system is created, and never changes. A parameter bounds a limit or a buffer; the buffers every run needs are allocated at creation (interpreter region 0, the render area, the event-block cache, the tel ring), the ones only nested interpreters need on first use, up to their bound. ta_param_info_of() gives each one's name, default, bounds and unit; names are lowerCamelCase, for hosts to use as they are. Creation also checks the bounds between them (ADR 0098): telBytes is 0 or at least maxRecordBytes, and telemetryValueBytes is at most maxRecordBytes - 512, the room a trace record's fixed part and its names take; and nameAreaBytes is at least maxRecordBytes (ADR 0099); it names the one at fault.\n\nThe pool of pending inputs (ADR 0099) is bounded by poolEnvelopes and its name area by nameAreaBytes; both fill on demand, at safe points, up to their bound, and keep what they filled. Admission (ta_actor_deliver(), ta_actor_report_invoke(), a spawn's or a load's bootstrap) stops at admissionWatermark percent of either, so the rest stays free for what sessions send each other.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -13183,6 +13229,21 @@
           "name": "TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES",
           "value": 1024,
           "symbol": "telemetry_value_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_POOL_ENVELOPES",
+          "value": 4096,
+          "symbol": "pool_envelopes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_NAME_AREA_BYTES",
+          "value": 262144,
+          "symbol": "name_area_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_ADMISSION_WATERMARK",
+          "value": 50,
+          "symbol": "admission_watermark"
         }
       ],
       "doc": "The built-in defaults (ADR 0092 rule 4); ta_param_info_of() reports them too.",
@@ -13435,30 +13496,137 @@
         }
       }
     },
+    "ta_run_params": {
+      "kind": "struct",
+      "doc": "One call of ta_run(), with one macrostep slot (ADR 0103): it takes runnable inputs in the order they were admitted (ADR 0099), runs each one's macrostep to its end, and reports each input's outcome.\n\n`budget` is the number of microsteps the call may run, over all its inputs (ADR 0009); at least 1. `action_budget`, when not zero, is the number of units of executable content it may run before it pauses inside a microstep (ADR 0061): each action of a block, an <if > and a <foreach > included, and each <foreach > iteration. Either one reached answers TA_RUN_PAUSED inside a macrostep, which the next call continues before it takes anything else, or TA_RUN_MORE between inputs. `pause_at_microstep_start`, when true, also pauses at the start of every microstep this call begins (ADR 0086): after its transitions are selected, before its first unit and before any state is exited. A call that continues from such a start passes it. A bootstrap's microstep never pauses there.\n\n`outcomes` is the caller's buffer of `outcome_capacity` outcomes, which the call fills from the start and counts in `outcome_count`; it has room for at least what one input reports (one outcome, two with `report_taken`). The call takes an input only while the buffer has room for all it can report about it, so a full buffer answers TA_RUN_MORE and loses nothing. `report_taken` adds a TAKEN outcome for every input as its macrostep begins, for a host that records inputs when they are taken.\n\n`session`, when not 0, is the debugging exception (ADR 0103): the call runs only that session's inputs, the first one queued for it first, whatever arrived before, and leaves every other session's as they are, including a macrostep paused in the slot. Replay and a debugger use it to run one session; production hosts pass 0.",
+      "fields": [
+        {
+          "name": "budget",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "action_budget",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "pause_at_microstep_start",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "report_taken",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "session",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "outcomes",
+          "type": {
+            "pointer": {
+              "type": "ta_input_outcome"
+            }
+          },
+          "capacity": "outcome_capacity",
+          "needed": "outcome_count",
+          "shape": "buffer",
+          "direction": "out",
+          "valid_on": "success"
+        },
+        {
+          "name": "outcome_capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "outcomes"
+        },
+        {
+          "name": "outcome_count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "outcomes"
+        },
+        {
+          "name": "status",
+          "type": {
+            "pointer": {
+              "type": "ta_run_status"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "budget": 0,
+            "action_budget": 4,
+            "pause_at_microstep_start": 8,
+            "report_taken": 9,
+            "session": 16,
+            "outcomes": 24,
+            "outcome_capacity": 32,
+            "outcome_count": 40,
+            "status": 48
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "budget": 0,
+            "action_budget": 4,
+            "pause_at_microstep_start": 8,
+            "report_taken": 9,
+            "session": 16,
+            "outcomes": 24,
+            "outcome_capacity": 28,
+            "outcome_count": 32,
+            "status": 36
+          }
+        }
+      }
+    },
     "ta_run_status": {
       "kind": "enum",
       "constants": [
         {
-          "name": "TA_RUN_STABLE",
+          "name": "TA_RUN_IDLE",
           "value": 0,
-          "symbol": "stable"
+          "symbol": "idle"
+        },
+        {
+          "name": "TA_RUN_MORE",
+          "value": 1,
+          "symbol": "more"
         },
         {
           "name": "TA_RUN_PAUSED",
-          "value": 1,
-          "symbol": "paused"
-        },
-        {
-          "name": "TA_RUN_DONE",
           "value": 2,
-          "symbol": "done"
-        },
-        {
-          "name": "TA_RUN_ERROR",
-          "value": 3,
-          "symbol": "error"
+          "symbol": "paused"
         }
       ],
+      "doc": "How a ta_run() call ended (ADR 0103): - IDLE: nothing is runnable, and no macrostep is paused: call again once an input is admitted. - MORE: the budget or the outcome buffer ran out between inputs, and inputs wait: call again. - PAUSED: the budget ran out inside a macrostep, which the next call continues.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -19587,7 +19755,7 @@
     },
     {
       "name": "ta_dm_host_time",
-      "doc": "The logical time of the running macrostep (ADR 0089 section 9): the system's time when its first ta_actor_resume() began, fixed while the macrostep spans several resumes. Outside a macrostep, the system's time. A data model gives expressions this as their deterministic clock.",
+      "doc": "The logical time of the running macrostep (ADR 0089 section 9): the system's time when ta_run() first ran it, fixed while the macrostep spans several ta_run() calls. Outside a macrostep, the system's time. A data model gives expressions this as their deterministic clock.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20574,6 +20742,7 @@
     },
     {
       "name": "ta_actor_spawn",
+      "doc": "Creates an actor and admits its bootstrap, the session's first input, into the system's pool (ADR 0099), where ta_run() takes it. - TA_ERR_FULL: the pool is at its admission watermark (as for ta_actor_deliver()); nothing was created. Offer it again after a ta_run(). - TA_ERR_INVALID: a null params or `out`, an empty `address`, or parameters ta_actor_spawn_params rules out. - TA_ERR_NOT_FOUND: no such definition, or it is retired. - TA_ERR_UNSUPPORTED: an invoked child past interpreterNesting, or an `address` with no directory. - TA_ERR_STALE: another actor holds `address`. - TA_ERR_NOMEM, or the data model's error: nothing was created.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20616,7 +20785,7 @@
     },
     {
       "name": "ta_actor_prepare",
-      "doc": "Creates an unpublished actor (see ta_actor_prepare_params). - TA_ERR_NOT_FOUND: no such definition, it is retired, or no resident actor has the incumbent's ID. - TA_ERR_INVALID: the incumbent is unpublished or has no name, or is of another family; with no incumbent, `address` is missing, empty, or of another family; `at` is later than ta_system_time(). - TA_ERR_UNSUPPORTED: with no incumbent, the system has no directory. - TA_ERR_NOMEM: nothing was created.",
+      "doc": "Creates an unpublished actor (see ta_actor_prepare_params). - TA_ERR_NOT_FOUND: no such definition, it is retired, or no resident actor has the incumbent's ID. - TA_ERR_INVALID: the incumbent is unpublished or has no name, or is of another family; with no incumbent, `address` is missing, empty, or of another family; `at` is later than ta_system_time(). - TA_ERR_UNSUPPORTED: with no incumbent, the system has no directory. - TA_ERR_FULL: the system's pool of pending inputs is at its admission watermark, so its bootstrap cannot be admitted (as for ta_actor_deliver()); nothing was created. - TA_ERR_NOMEM: nothing was created.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20659,7 +20828,7 @@
     },
     {
       "name": "ta_actor_publish",
-      "doc": "Publishes a prepared actor: one atomic directory call puts it on the route, replacing the incumbent's RESIDENT entry, or, with no incumbent, claiming an address with no entry or replacing an UNLOADED one (whose unloaded session ends). Then an actor prepared without `at` releases its held effects in SCXML order and starts its pending invocations; a replaying actor schedules its held delayed sends under their due times (one already due fires at the next ta_system_dispatch_due()) and retires each active invocation with error.communication.invoke. <id >.unavailable, as a load does (ADR 0038), which leaves it a macrostep to run. - TA_ERR_DONE: it reached a top-level final state before it was published. - TA_ERR_BUSY: it is inside a macrostep; or, with no incumbent, another actor is resident at the address. - TA_ERR_STALE: the directory no longer holds the incumbent's entry. - TA_ERR_INVALID: it is published, or was not prepared for `incumbent`. - TA_ERR_NOT_FOUND: no resident actor has either ID. - TA_ERR_NOMEM: nothing changed.",
+      "doc": "Publishes a prepared actor: one atomic directory call puts it on the route, replacing the incumbent's RESIDENT entry, or, with no incumbent, claiming an address with no entry or replacing an UNLOADED one (whose unloaded session ends). Then an actor prepared without `at` releases its held effects in SCXML order and starts its pending invocations; a replaying actor schedules its held delayed sends under their due times (one already due fires at the next ta_system_dispatch_due()) and retires each active invocation with error.communication.invoke. <id >.unavailable, as a load does (ADR 0038), which leaves it a macrostep to run. - TA_ERR_DONE: it reached a top-level final state before it was published. - TA_ERR_BUSY: it is inside a macrostep; or, with no incumbent, another actor is resident at the address. - TA_ERR_STALE: the directory no longer holds the incumbent's entry. - TA_ERR_INVALID: it is published, or was not prepared for `incumbent`. - TA_ERR_NOT_FOUND: no resident actor has either ID. - TA_ERR_FULL: the system's pool of pending inputs has no free envelope for the macrostep publishing may leave it to run; nothing changed. Publish again after a ta_run(). - TA_ERR_NOMEM: nothing changed.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20765,7 +20934,7 @@
     },
     {
       "name": "ta_actor_deliver",
-      "doc": "Offers an external event to a resident actor: the admission test (ADR 0055). The result alone tells a host what to do with the message, so it never needs to inspect the actor first: - TA_OK: accepted; the actor holds the event, so resume it. - TA_ERR_BUSY: the actor is inside a macrostep, including one paused by ta_actor_resume()'s budgets (ADR 0061), or already holds an event. Keep the message queued for this actor. - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or unloaded). The receiver is gone from here; drop or route the message. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; or an operator transition with no targets, an unknown state, targets that cannot form a legal configuration, or a source that is not active (ADR 0082). - TA_ERR_NOMEM: no memory for the event block the event would live in until its macrostep ends (ADR 0069), or for the operator transition. Keep the message and try again later; TA_PARAM_EVENT_BLOCK_CACHE keeps blocks for reuse. On any result but TA_OK nothing is retained and the event is untouched. A malformed event or operator transition is TA_ERR_INVALID whatever the actor's state, except that whether its source is active is asked only of an actor that would otherwise accept it. A finished actor is TA_ERR_DONE, never TA_ERR_BUSY: finishing is permanent, so a host that kept a message queued would wait forever.",
+      "doc": "Admits an external event for a resident actor into the system's pool of pending inputs (ADR 0099): it waits on the run queue, in the order it was admitted, until ta_run() takes it. A session in a macrostep, or with inputs ahead of it, takes it in turn: the host never sees a busy session and keeps no mailbox. Admission allocates only to keep the pool's and the name area's reserve of free room, at this safe point; it never runs anything. The result alone tells a host what to do with the message: - TA_OK: admitted; ta_run() reports what became of it under `correlation`. - TA_ERR_FULL: the pool or the name area is at the admission watermark (admissionWatermark of poolEnvelopes and of nameAreaBytes), so the rest stays free for what sessions send each other. Refuse the message at the host's edge, or offer it again after a ta_run(). - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or unloaded). The receiver is gone from here; drop or route the message. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; an input time the actor cannot take; or an operator transition with no targets, an unknown state, targets that cannot form a legal configuration, or, for an actor between macrosteps, a source that is not active (ADR 0082). - TA_ERR_NOMEM: no memory for the operator transition, or the pool or the name area had no free room below the watermark because refilling them failed (ADR 0102). Offer it again later. On any result but TA_OK nothing is retained and the event is untouched. A malformed event or operator transition is TA_ERR_INVALID whatever the actor's state. A finished actor is TA_ERR_DONE: finishing is permanent. Whether an operator transition's source is active is asked again when the input is taken, of the configuration it then runs from; one that no longer applies is reported REFUSED with TA_ERR_INVALID.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20807,7 +20976,8 @@
       }
     },
     {
-      "name": "ta_actor_resume",
+      "name": "ta_run",
+      "doc": "Runs the system's admitted inputs with one macrostep slot (ADR 0103; see ta_run_params): it continues the macrostep a budget paused, then takes the run queue's inputs in arrival order and runs each one's macrostep to its end, reporting each input's outcome, until the run queue is empty, the budget runs out, or the outcome buffer is full. A session whose macrostep a fault stopped holds no slot: the next inputs go on, and its own wait until ta_actor_release(). Between inputs it is a safe point: core refills its pool and its name area before each input it takes or continues, and never inside a macrostep, nor after the last input a call runs; so a call that takes nothing refills and runs nothing (a session filter with nothing queued). `*status` says how it ended. - TA_OK: whatever the status. Faults are the inputs' own, in the outcomes. - TA_ERR_INVALID: a null system, params, status, outcome count or outcomes, a budget of 0, or an outcome buffer with room for fewer outcomes than one input reports (one, or two with `report_taken`); nothing ran. - TA_ERR_BUSY: called from inside a ta_run() (a callback); nothing ran. - TA_ERR_NOMEM: no memory to take the next input (its event block); the input waits at the head of the run queue, and what ran before is reported in the outcomes.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20832,7 +21002,7 @@
           "name": "params",
           "type": {
             "pointer": {
-              "type": "ta_actor_resume_params",
+              "type": "ta_run_params",
               "const": true
             }
           },
@@ -20842,8 +21012,70 @@
       ]
     },
     {
+      "name": "ta_actor_release",
+      "doc": "Lets a session whose macrostep a fault stopped (a FAULTED outcome) go on with the input it stopped in: the next ta_run() takes it up after the inputs queued before this call, and reports the input again when its macrostep ends. A session that stopped at its microstep limit (TA_ERR_RUNAWAY) runs the rest of that macrostep without the limit, as an operator who released it asks; the next macrostep has the limit again. Allocates nothing. TA_ERR_NOT_FOUND: no resident actor has this ID; TA_ERR_INVALID: no fault stopped it.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_withdraw_input",
+      "doc": "Withdraws an admitted input that ta_run() has not taken yet: the first with `correlation` (ADR 0099 decision 11). Its references and text are released, and it is never run nor reported. It looks through the pool, bounded by poolEnvelopes, and allocates nothing. TA_ERR_INVALID for correlation 0, which names core's own inputs; TA_ERR_NOT_FOUND when no input waiting to be taken has it: never admitted, already taken or refused, or withdrawn.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "correlation",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        }
+      ]
+    },
+    {
       "name": "ta_actor_abandon",
-      "doc": "Abandons the actor's macrostep, one that may never end (ADR 0082): its continuation, its internal queue and its external event are discarded, and the actor is idle with the configuration after its last completed microstep. What the macrostep already did stays done: its sends, its invocations, its data. An ABANDONED record, then MACROSTEP_END, is written. The results: - TA_OK: abandoned. - TA_ERR_BUSY: the actor is paused or stopped inside a microstep (`microstep_in_progress`), or has not completed its bootstrap's microstep; resume it with a budget of 1 and no action budget to finish that microstep, then abandon. - TA_ERR_INVALID: no macrostep is in progress; there is nothing to abandon. - TA_ERR_DONE: the actor has reached a top-level final state. - TA_ERR_NOT_FOUND: no resident actor has this ID. - TA_ERR_NOMEM: no scratch memory to write the records; nothing changed.",
+      "doc": "Abandons the actor's macrostep, one that may never end (ADR 0082): its continuation, its internal queue and its external event are discarded, and the actor is idle with the configuration after its last completed microstep. What the macrostep already did stays done: its sends, its invocations, its data. An ABANDONED record, then MACROSTEP_END, is written. The results: - TA_OK: abandoned. - TA_ERR_BUSY: the actor is paused or stopped inside a microstep (`microstep_in_progress`), or has not completed its bootstrap's microstep; run it (ta_run() with its `session`, a budget of 1 and no action budget, after ta_actor_release() when a fault stopped it) to finish that microstep, then abandon. An abandoned input is not reported: the host that abandoned it knows. - TA_ERR_INVALID: no macrostep is in progress; there is nothing to abandon. - TA_ERR_DONE: the actor has reached a top-level final state. - TA_ERR_NOT_FOUND: no resident actor has this ID. - TA_ERR_NOMEM: no scratch memory to write the records; nothing changed.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20874,7 +21106,7 @@
     },
     {
       "name": "ta_actor_unload",
-      "doc": "Evicts a named actor without terminating it, to bound memory; the image is not persistence and is valid only in this process. The image must be a fresh capture of actor; TA_ERR_STALE means the actor changed after capture.",
+      "doc": "Evicts a named actor without terminating it, to bound memory; the image is not persistence and is valid only in this process. The image must be a fresh capture of actor; TA_ERR_STALE means the actor changed after capture. TA_ERR_BUSY, changing nothing, when inputs core admitted for the actor wait to be taken (they name its runtime ID, which a load does not keep): run the system, or withdraw them, and capture again.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20910,7 +21142,7 @@
     },
     {
       "name": "ta_actor_load",
-      "doc": "Restores an unloaded named actor and atomically republishes its route.",
+      "doc": "Restores an unloaded named actor and atomically republishes its route. TA_ERR_FULL, changing nothing, when the system's pool of pending inputs is at its admission watermark (as for ta_actor_deliver()): the macrostep a loaded session may have to run is admitted like a spawn's bootstrap.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20953,7 +21185,7 @@
     },
     {
       "name": "ta_actor_reconstruct",
-      "doc": "Reconstructs an image under a fresh runtime ID without reading or changing the actor directory. For a named image, the logical self-address is kept; sends to that address follow the directory's current route. The image's session continues, keeping its session ID, unless a resident session holds that ID; then this is a new session (ADR 0066). ta_actor_load() always continues the session.",
+      "doc": "Reconstructs an image under a fresh runtime ID without reading or changing the actor directory. For a named image, the logical self-address is kept; sends to that address follow the directory's current route. The image's session continues, keeping its session ID, unless a resident session holds that ID; then this is a new session (ADR 0066). ta_actor_load() always continues the session. TA_ERR_FULL, changing nothing, as for ta_actor_load().",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -21073,7 +21305,7 @@
     },
     {
       "name": "ta_actor_publish_completion",
-      "doc": "Retries an invoked child's completion after TA_ERR_BUSY. TA_ERR_NOT_FOUND retires it when the parent invocation was already cancelled.",
+      "doc": "Retries an invoked child's completion after its parent's pool refused it (TA_ERR_FULL). TA_ERR_NOT_FOUND retires it when the parent invocation was already cancelled.",
       "public": true,
       "static_inline": false,
       "implemented": true,

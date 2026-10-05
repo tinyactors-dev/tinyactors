@@ -119,8 +119,8 @@ static ta_actor_id spawn(ta_system *system, ta_definition_id definition) {
     return actor;
 }
 
-static ta_run_status resume(ta_system *system, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
+static test_drive_status resume(ta_system *system, ta_actor_id actor) {
+    test_drive_status status = TEST_DRIVE_ERROR;
     ta_result result = test_drive_run(system, actor, &(test_drive_run_params){ .budget = 1000, .status = &status });
     CHECK(result == TA_OK);
     return status;
@@ -276,15 +276,21 @@ static void test_ordinary_run_allocates_nothing(void) {
     CHECK(system != NULL);
     ta_definition_id id = define(system, &toggle);
     ta_actor_id actor = spawn(system, id);
-    CHECK(resume(system, actor) == TA_RUN_STABLE);
+    CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
     (void)event_name(system, "go"); /* interned once, outside the measure */
+    /* The first event's text tops the name area's reserve up, once
+     * (ADR 0099): measured apart, it takes at most one page of the area. */
+    unsigned long warm = heap.attempts;
+    deliver(system, actor, "go");
+    CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
+    CHECK(heap.attempts - warm <= 1u);
     unsigned long before = heap.attempts;
     for (int round = 0; round < 4; round += 1) {
         deliver(system, actor, "go");
-        CHECK(resume(system, actor) == TA_RUN_STABLE);
+        CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
     }
     CHECK(heap.attempts == before);
-    CHECK(in_state(system, actor, "a"));
+    CHECK(in_state(system, actor, "b"));
     ta_system_destroy(system);
 }
 
@@ -294,14 +300,22 @@ static void test_ordinary_run_allocates_nothing(void) {
 
 enum { CACHE_ACTORS = 5, CACHE_BOUND = 3 };
 
-/* Delivers "go" to the first `count` actors, then resumes each: while they
- * are delivered, `count` actors hold a block at once. */
+/* Delivers "go" to the first `count` actors, then takes it in each with a
+ * budget of one microstep, where its macrostep pauses holding its event
+ * (the session filter lets each pause beside the others): `count` actors
+ * hold a block at once. Then each finishes. */
 static void go_round(ta_system *system, const ta_actor_id *actors, uint32_t count) {
     for (uint32_t index = 0; index < count; index += 1u) {
         deliver(system, actors[index], "go");
     }
     for (uint32_t index = 0; index < count; index += 1u) {
-        CHECK(resume(system, actors[index]) == TA_RUN_STABLE);
+        test_drive_status status = TEST_DRIVE_ERROR;
+        CHECK(test_drive_run(system, actors[index], &(test_drive_run_params){ .budget = 1, .status = &status }) ==
+              TA_OK);
+        CHECK(status == TEST_DRIVE_PAUSED);
+    }
+    for (uint32_t index = 0; index < count; index += 1u) {
+        CHECK(resume(system, actors[index]) == TEST_DRIVE_STABLE);
     }
 }
 
@@ -328,7 +342,7 @@ static void test_block_cache_on_demand(void) {
     ta_actor_id actors[CACHE_ACTORS];
     for (uint32_t index = 0; index < CACHE_ACTORS; index += 1u) {
         actors[index] = spawn(system, id);
-        CHECK(resume(system, actors[index]) == TA_RUN_STABLE);
+        CHECK(resume(system, actors[index]) == TEST_DRIVE_STABLE);
     }
     (void)event_name(system, "go");
 
@@ -357,24 +371,29 @@ static void test_block_cache_on_demand(void) {
     CHECK(heap.attempts - before == CACHE_ACTORS - CACHE_BOUND);
     ta_system_destroy(system);
 
-    /* Out of memory on the on-demand path: TA_ERR_NOMEM, nothing taken (ADR 0069). */
+    /* Out of memory on the on-demand path, when the input is taken: the run
+     * answers TA_ERR_NOMEM, nothing is taken, and the input waits for the
+     * next run (ADR 0069). One round first tops the pool's reserves up. */
     ta_system *bare = create(none, 1);
     CHECK(bare != NULL);
     ta_definition_id bare_id = define(bare, &toggle);
     ta_actor_id actor = spawn(bare, bare_id);
-    CHECK(resume(bare, actor) == TA_RUN_STABLE);
-    ta_event event = { .name = event_name(bare, "go"), .type = TA_EVENT_EXTERNAL };
+    CHECK(resume(bare, actor) == TEST_DRIVE_STABLE);
+    deliver(bare, actor, "go");
+    CHECK(resume(bare, actor) == TEST_DRIVE_STABLE);
+    deliver(bare, actor, "go");
+    test_drive_status status = TEST_DRIVE_ERROR;
     heap.policy.fail_at = heap.attempts + 1u;
-    CHECK(ta_actor_deliver(bare, &(ta_actor_deliver_params){ .time = ta_system_time(bare), .actor = actor, .event = &event }) == TA_ERR_NOMEM);
+    CHECK(test_drive_run(bare, actor, &(test_drive_run_params){ .budget = 1000, .status = &status }) ==
+          TA_ERR_NOMEM);
     heap.policy.fail_at = 0;
-    CHECK(in_state(bare, actor, "a"));
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(test_drive_deliver(bare,
-                             &(ta_actor_deliver_params){ .time = ta_system_time(bare), .actor = actor,
-                                                         .event = &event },
-                             &(test_drive_run_params){ .budget = 1000, .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_ERROR);
     CHECK(in_state(bare, actor, "b"));
+    ta_actor_inspection inspection = {0};
+    CHECK(ta_actor_inspect(bare, actor, &inspection) == TA_OK && !inspection.macrostep_in_progress);
+    CHECK(test_drive_run(bare, actor, &(test_drive_run_params){ .budget = 1000, .status = &status }) == TA_OK);
+    CHECK(status == TEST_DRIVE_STABLE);
+    CHECK(in_state(bare, actor, "a"));
     ta_system_destroy(bare);
 }
 
@@ -416,7 +435,7 @@ static void test_render_overflow(void) {
     ta_system *system = create(NULL, 0);
     CHECK(system != NULL);
     ta_actor_id actor = spawn(system, define(system, &spec));
-    CHECK(resume(system, actor) == TA_RUN_STABLE);
+    CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
     CHECK(in_state(system, actor, "a") && pending_sends(system, actor) == 1);
     ta_system_destroy(system);
 
@@ -426,7 +445,7 @@ static void test_render_overflow(void) {
         system = create(small, 1);
         CHECK(system != NULL);
         actor = spawn(system, define(system, &spec));
-        CHECK(resume(system, actor) == TA_RUN_STABLE);
+        CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
         CHECK(in_state(system, actor, "failed") && pending_sends(system, actor) == 0);
         ta_system_destroy(system);
     }
@@ -555,7 +574,7 @@ static void test_nested_regions(void) {
     heap.policy.large = (size_t)interpreter_bytes;
     spawned_count = 0;
     ta_actor_id parent = spawn(system, parent_definition);
-    CHECK(resume(system, parent) == TA_RUN_STABLE); /* starts the child */
+    CHECK(resume(system, parent) == TEST_DRIVE_STABLE); /* starts the child */
     resume_spawned(system, 0);                      /* the child starts the grandchild */
     resume_spawned(system, 1);
     CHECK(spawned_count == 2 && last_spawn == TA_OK);
@@ -564,18 +583,18 @@ static void test_nested_regions(void) {
      * region 2, allocating each once. */
     unsigned long before = heap.large_allocations;
     deliver(system, parent, "stop");
-    CHECK(resume(system, parent) == TA_RUN_STABLE);
+    CHECK(resume(system, parent) == TEST_DRIVE_STABLE);
     CHECK(heap.large_allocations - before == 2u);
 
     /* The second finds both regions kept. */
     uint32_t mark = spawned_count;
     deliver(system, parent, "start");
-    CHECK(resume(system, parent) == TA_RUN_STABLE);
+    CHECK(resume(system, parent) == TEST_DRIVE_STABLE);
     resume_spawned(system, mark);
     resume_spawned(system, mark + 1u);
     before = heap.large_allocations;
     deliver(system, parent, "stop");
-    CHECK(resume(system, parent) == TA_RUN_STABLE);
+    CHECK(resume(system, parent) == TEST_DRIVE_STABLE);
     CHECK(heap.large_allocations == before);
     heap.policy.large = 0;
     ta_system_destroy(system);
@@ -585,7 +604,7 @@ static void test_nested_regions(void) {
     system = nesting_system(2, &parent_definition);
     spawned_count = 0;
     parent = spawn(system, parent_definition);
-    CHECK(resume(system, parent) == TA_RUN_STABLE);
+    CHECK(resume(system, parent) == TEST_DRIVE_STABLE);
     resume_spawned(system, 0);
     CHECK(spawned_count == 1 && last_spawn == TA_ERR_UNSUPPORTED);
     ta_system_destroy(system);
@@ -649,7 +668,7 @@ static void test_quotas(void) {
     system = create(one, 1);
     CHECK(system != NULL);
     ta_actor_id actor = spawn(system, define(system, &spec));
-    CHECK(resume(system, actor) == TA_RUN_STABLE);
+    CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
     CHECK(in_state(system, actor, "failed") && pending_sends(system, actor) == 1);
     ta_system_counters(system, &counters);
     CHECK(counters.quota_refusals == 1u);
@@ -748,10 +767,10 @@ static void test_scratch_need_exact(void) {
                                                                .watched_kinds = UINT32_MAX,
                                                                .unsampled_kinds = UINT32_MAX }) == TA_OK);
     ta_actor_id actor = spawn(system, define(system, &spec));
-    CHECK(resume(system, actor) == TA_RUN_STABLE);
+    CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
     for (int round = 0; round < 3; round += 1) {
         deliver(system, actor, "go");
-        CHECK(resume(system, actor) == TA_RUN_STABLE);
+        CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
     }
     CHECK(in_state(system, actor, "r0s3"));
     ta_system_destroy(system);

@@ -1,7 +1,8 @@
 /*
- * The scheduling table and the runnable part of a turn (ADRs 0005, 0007,
- * 0008), driven without Node-API: entries in fixed pages, stale queue
- * entries skipped, coalesced wake-ups, bootstrap, budget pauses and done
+ * The scheduling table and the run part of a turn (ADRs 0005, 0007, 0008;
+ * core ADR 0103), driven without Node-API: entries in fixed pages, a
+ * destroyed actor's bootstrap dropped, coalesced wake-ups, bootstrap,
+ * budget pauses that hold the one slot, the turn's call budget, done
  * records, and no leak at close.
  */
 #include "check.h"
@@ -134,7 +135,7 @@ static void turns(void) {
     CHECK(!system->turn_pending);
     CHECK(counter.wakes == 1u);
 
-    /* A destroyed actor's queue entry is skipped. */
+    /* A destroyed actor's bootstrap is dropped. */
     ta_actor_id c = spawn(system, idle_chart);
     CHECK(ta_actor_destroy(system->core, c) == TA_OK);
     CHECK(tah_hook_actor_removed(system, c) == TA_OK);
@@ -156,7 +157,12 @@ static void turns(void) {
     tah_system_free(system);
 }
 
-/* A long entry handler, split by the action budget over several turns. */
+/*
+ * A long entry handler, split by the action budget over several turns: a
+ * paused macrostep has one slice a turn. With one slot, the paused
+ * macrostep goes on before anything else is taken: another actor's
+ * bootstrap waits for it (core ADR 0103).
+ */
 static void action_budget(void) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
@@ -184,32 +190,40 @@ static void action_budget(void) {
 
     system->budgets.actions = 8u;
     ta_actor_id busy = spawn(system, chart);
+    ta_actor_id other = 0;
     uint32_t turns = 0;
     while (tah_sched_lookup(&system->sched, busy)->state == TAH_SCHED_RUNNABLE) {
         tah_system_turn(system);
         tah_system_end_turn(system);
         turns += 1u;
         if (turns == 1u) {
-            /* Another actor bootstraps while the busy one is paused. */
-            ta_actor_id other = spawn(system, idle_chart);
+            /* Another actor's bootstrap waits behind the paused macrostep. */
+            other = spawn(system, idle_chart);
             tah_system_turn(system);
             tah_system_end_turn(system);
             turns += 1u;
-            CHECK(residency(system, other) == TA_ACTOR_IDLE);
+            CHECK(residency(system, other) == TA_ACTOR_RUNNING);
             CHECK(tah_sched_lookup(&system->sched, busy)->state == TAH_SCHED_RUNNABLE);
         }
         CHECK(turns < 100u);
     }
     CHECK(turns >= ACTIONS / 8);
     CHECK(residency(system, busy) == TA_ACTOR_IDLE);
-    CHECK(tah_system_quiet(system));
+    while (!tah_system_quiet(system)) {
+        tah_system_turn(system);
+        tah_system_end_turn(system);
+        CHECK(turns < 100u);
+        turns += 1u;
+    }
+    CHECK(residency(system, other) == TA_ACTOR_IDLE);
 
     tah_system_close(system);
     CHECK(tah_system_leaked_bytes(system) == 0);
     tah_system_free(system);
 }
 
-/* The resume limit bounds one turn; the rest waits for the next. */
+/* The resume limit bounds one turn: each ta_run() call takes one input, so
+ * ten calls bootstrap ten actors; the rest waits for the next turn. */
 static void resume_limit(void) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
@@ -221,15 +235,21 @@ static void resume_limit(void) {
     for (int index = 0; index < COUNT; index += 1) {
         spawn(system, chart);
     }
-    CHECK(tah_ring_count(&system->sched.runnable) == COUNT);
+    tah_sched_stats stats;
+    tah_sched_read_stats(&system->sched, &stats);
+    CHECK(stats.runnable == COUNT);
     tah_system_turn(system);
     tah_system_end_turn(system);
-    CHECK(tah_ring_count(&system->sched.runnable) == COUNT - 10);
+    tah_sched_read_stats(&system->sched, &stats);
+    CHECK(stats.runnable == COUNT - 10);
     CHECK(system->turn_pending); /* work remains: another turn was asked for */
-    tah_system_turn(system);
-    tah_system_turn(system);
-    tah_system_end_turn(system);
+    for (int index = 0; index < 10 && !tah_system_quiet(system); index += 1) {
+        tah_system_turn(system);
+        tah_system_end_turn(system);
+    }
     CHECK(tah_system_quiet(system));
+    tah_sched_read_stats(&system->sched, &stats);
+    CHECK(stats.runnable == 0);
     tah_system_close(system);
     CHECK(tah_system_leaked_bytes(system) == 0);
     tah_system_free(system);

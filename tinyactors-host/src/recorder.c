@@ -56,10 +56,6 @@ static void tah_recorder_forget_touched(tah_recorder *recorder) {
 }
 
 void tah_recorder_destroy(tah_recorder *recorder) {
-    if (recorder->offering) {
-        tah_recorded_release(&recorder->offered);
-        recorder->offering = false;
-    }
     tah_recorder_clear(&recorder->open);
     tah_recorder_clear(&recorder->records);
     tah_recorder_forget_touched(recorder);
@@ -212,13 +208,10 @@ static ta_result tah_recorder_report_event(tah_system *system, const tah_envelop
     return result;
 }
 
-/* A delivery or report about to be offered to core: kept until core takes it or not. */
-static void tah_recorder_offering(tah_system *system, const tah_sched_note *note) {
+/* Core took a message or a report: its macrostep is open, and its event is
+ * kept, at the time it was taken, until the macrostep ends. */
+static void tah_recorder_taken(tah_system *system, const tah_sched_note *note) {
     tah_recorder *recorder = &system->recorder;
-    if (recorder->offering) {
-        tah_recorded_release(&recorder->offered);
-        recorder->offering = false;
-    }
     uint64_t session = 0;
     ta_address *address = tah_recorder_address_of(system, note->actor, &session);
     /* An operator's jump (core ADR 0082) is not an event the chart took by
@@ -229,7 +222,7 @@ static void tah_recorder_offering(tah_system *system, const tah_sched_note *note
     }
     tah_recorded recorded = { .actor = note->actor, .address = address, .at = ta_system_time(system->core),
                               .session = session };
-    if (note->kind == TAH_NOTE_REPORTING) {
+    if (note->kind == TAH_NOTE_REPORTED) {
         if (tah_recorder_report_event(system, note->message, &recorded.event) != TA_OK) {
             recorder->lost += 1u;
             return;
@@ -238,21 +231,10 @@ static void tah_recorder_offering(tah_system *system, const tah_sched_note *note
         ta_event_retain(&note->message->event, &recorded.event);
     }
     ta_address_retain(address);
-    recorder->offered = recorded;
-    recorder->offering = true;
-}
-
-/* Core took the offered event: its macrostep is open. */
-static void tah_recorder_taken(tah_recorder *recorder) {
-    if (!recorder->offering) {
-        return;
-    }
-    recorder->offering = false;
-    if (tah_vec_push(&recorder->open, &recorder->offered) != TA_OK) {
+    if (tah_vec_push(&recorder->open, &recorded) != TA_OK) {
         recorder->lost += 1u;
-        tah_recorded_release(&recorder->offered);
+        tah_recorded_release(&recorded);
     }
-    recorder->offered = (tah_recorded){ 0 };
 }
 
 static int64_t tah_recorder_open_index(const tah_recorder *recorder, ta_actor_id actor) {
@@ -293,19 +275,9 @@ void tah_recorder_note(tah_system *system, const tah_sched_note *note) {
         return;
     }
     switch (note->kind) {
-    case TAH_NOTE_DELIVERING:
-    case TAH_NOTE_REPORTING:
-        tah_recorder_offering(system, note);
-        return;
     case TAH_NOTE_DELIVERED:
     case TAH_NOTE_REPORTED:
-        tah_recorder_taken(recorder);
-        return;
-    case TAH_NOTE_UNDELIVERED:
-        if (recorder->offering) {
-            tah_recorded_release(&recorder->offered);
-            recorder->offering = false;
-        }
+        tah_recorder_taken(system, note);
         return;
     case TAH_NOTE_ENDED:
         tah_recorder_ended(system, note->actor);

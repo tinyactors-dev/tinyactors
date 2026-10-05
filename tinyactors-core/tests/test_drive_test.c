@@ -30,7 +30,10 @@
  *    test_drive_deliver passes its limits on in the same way;
  * 5. one call is one run: the helper never runs again after a pause;
  * 6. the helper keeps nothing: every allocation is given back when the
- *    system is destroyed.
+ *    system is destroyed;
+ * 7. release is asked for: a session a fault stopped (a runaway) answers
+ *    the fault's code and stays stopped through a run without `release`;
+ *    a run with `release` lets it go on to the end of its macrostep.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,9 +99,10 @@ typedef struct {
     ta_actor_deliver_params delivery;
 } fixture;
 
-static fixture open_fixture(void) {
+static fixture open_fixture_with(const ta_param_value *params, uint32_t count) {
     fixture f = { 0 };
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &f.system) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = params, .param_count = count },
+                           &f.system) == TA_OK);
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(f.system, &(ta_definition_compile_params){
                                                    .spec = &(ta_scxml_spec){ .name = STR("driven"), .states = states },
@@ -110,6 +114,10 @@ static fixture open_fixture(void) {
     CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) ==
           TA_OK);
     return f;
+}
+
+static fixture open_fixture(void) {
+    return open_fixture_with(NULL, 0);
 }
 
 static void close_fixture(fixture *f) {
@@ -177,9 +185,9 @@ static void test_defaults_run_the_bootstrap(void) {
     close_fixture(&f);
 
     f = open_fixture();
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(f.system, f.actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE && only_in(&f, "idle"));
+    CHECK(status == TEST_DRIVE_STABLE && only_in(&f, "idle"));
     close_fixture(&f);
 }
 
@@ -187,23 +195,23 @@ static void test_defaults_run_the_bootstrap(void) {
 static void test_deliver_runs_the_macrostep(void) {
     fixture f = open_fixture();
     CHECK(test_drive_run(f.system, f.actor, NULL) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     bool ignored = true;
     ta_event go = event(&f, "go");
     CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor, &go),
                              &(test_drive_run_params){ .status = &status, .ignored = &ignored }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE && !ignored && only_in(&f, "idle"));
+    CHECK(status == TEST_DRIVE_STABLE && !ignored && only_in(&f, "idle"));
 
     ta_event noise = event(&f, "noise");
-    status = TA_RUN_ERROR;
+    status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor, &noise),
                              &(test_drive_run_params){ .status = &status, .ignored = &ignored }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE && ignored && only_in(&f, "idle"));
+    CHECK(status == TEST_DRIVE_STABLE && ignored && only_in(&f, "idle"));
 
     ta_event stop = event(&f, "stop");
     CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor, &stop),
                              &(test_drive_run_params){ .status = &status, .ignored = &ignored }) == TA_OK);
-    CHECK(status == TA_RUN_DONE && !ignored && finished(&f));
+    CHECK(status == TEST_DRIVE_DONE && !ignored && finished(&f));
     close_fixture(&f);
 }
 
@@ -215,16 +223,16 @@ static void test_refused_delivery_runs_nothing(void) {
     CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor, &stop), NULL) == TA_OK);
     CHECK(finished(&f));
 
-    ta_run_status status = TA_RUN_PAUSED;
+    test_drive_status status = TEST_DRIVE_PAUSED;
     bool ignored = true;
     ta_event go = event(&f, "go");
     CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor, &go),
                              &(test_drive_run_params){ .status = &status, .ignored = &ignored }) == TA_ERR_DONE);
-    CHECK(status == TA_RUN_PAUSED && ignored);
+    CHECK(status == TEST_DRIVE_PAUSED && ignored);
     CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor + 1000u, &go),
                              &(test_drive_run_params){ .status = &status, .ignored = &ignored }) ==
           TA_ERR_NOT_FOUND);
-    CHECK(status == TA_RUN_PAUSED && ignored && finished(&f));
+    CHECK(status == TEST_DRIVE_PAUSED && ignored && finished(&f));
     close_fixture(&f);
 }
 
@@ -233,20 +241,20 @@ static void test_microstep_budget_pauses_between_microsteps(void) {
     fixture f = open_fixture();
     CHECK(test_drive_run(f.system, f.actor, NULL) == TA_OK);
     ta_event go = event(&f, "go");
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     test_drive_run_params one = { .budget = 1, .status = &status };
     CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor, &go), &one) == TA_OK);
     ta_actor_inspection view = inspect(&f);
-    CHECK(status == TA_RUN_PAUSED && only_in(&f, "a"));
+    CHECK(status == TEST_DRIVE_PAUSED && only_in(&f, "a"));
     CHECK(view.macrostep_in_progress && !view.microstep_in_progress && view.step.microstep == 1u);
 
     CHECK(test_drive_run(f.system, f.actor, &one) == TA_OK);
-    CHECK(status == TA_RUN_PAUSED && only_in(&f, "b"));
+    CHECK(status == TEST_DRIVE_PAUSED && only_in(&f, "b"));
     CHECK(test_drive_run(f.system, f.actor, &one) == TA_OK);
     /* The budget is spent before the macrostep finds itself complete. */
-    CHECK(status == TA_RUN_PAUSED && only_in(&f, "idle") && inspect(&f).macrostep_in_progress);
+    CHECK(status == TEST_DRIVE_PAUSED && only_in(&f, "idle") && inspect(&f).macrostep_in_progress);
     CHECK(test_drive_run(f.system, f.actor, &one) == TA_OK);
-    CHECK(status == TA_RUN_STABLE && only_in(&f, "idle") && !inspect(&f).macrostep_in_progress);
+    CHECK(status == TEST_DRIVE_STABLE && only_in(&f, "idle") && !inspect(&f).macrostep_in_progress);
     close_fixture(&f);
 }
 
@@ -256,22 +264,42 @@ static void test_action_limits_pause_inside_a_microstep(void) {
     fixture f = open_fixture();
     CHECK(test_drive_run(f.system, f.actor, NULL) == TA_OK);
     ta_event go = event(&f, "go");
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     test_drive_run_params unit = { .action_budget = 1, .status = &status };
     CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor, &go), &unit) == TA_OK);
     ta_actor_inspection view = inspect(&f);
-    CHECK(status == TA_RUN_PAUSED && view.microstep_in_progress);
+    CHECK(status == TEST_DRIVE_PAUSED && view.microstep_in_progress);
     CHECK(test_drive_run(f.system, f.actor, NULL) == TA_OK);
     CHECK(only_in(&f, "idle") && !inspect(&f).macrostep_in_progress);
 
     test_drive_run_params at_start = { .pause_at_microstep_start = true, .status = &status };
     CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor, &go), &at_start) == TA_OK);
     view = inspect(&f);
-    CHECK(status == TA_RUN_PAUSED && view.microstep_in_progress && view.position.action != TA_ACTION_NONE);
+    CHECK(status == TEST_DRIVE_PAUSED && view.microstep_in_progress && view.position.action != TA_ACTION_NONE);
     CHECK(only_in(&f, "idle")); /* nothing exited yet */
-    status = TA_RUN_ERROR;
+    status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(f.system, f.actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE && only_in(&f, "idle"));
+    CHECK(status == TEST_DRIVE_STABLE && only_in(&f, "idle"));
+    close_fixture(&f);
+}
+
+/* Claim 7. */
+static void test_release_is_asked_for(void) {
+    /* `go` takes three microsteps: the limit of two stops it. */
+    ta_param_value limit[] = { { TA_PARAM_MICROSTEP_LIMIT, 2 } };
+    fixture f = open_fixture_with(limit, 1);
+    CHECK(test_drive_run(f.system, f.actor, NULL) == TA_OK);
+    ta_event go = event(&f, "go");
+    test_drive_status status = TEST_DRIVE_STABLE;
+    CHECK(test_drive_deliver(f.system, deliver_to(&f, f.actor, &go), &(test_drive_run_params){ .status = &status }) ==
+          TA_ERR_RUNAWAY);
+    CHECK(status == TEST_DRIVE_ERROR && inspect(&f).macrostep_in_progress);
+    /* Not released: the run leaves it stopped where it stands. */
+    CHECK(test_drive_run(f.system, f.actor, NULL) == TA_OK);
+    CHECK(inspect(&f).macrostep_in_progress && !only_in(&f, "idle"));
+    CHECK(test_drive_run(f.system, f.actor, &(test_drive_run_params){ .status = &status, .release = true }) ==
+          TA_OK);
+    CHECK(status == TEST_DRIVE_STABLE && only_in(&f, "idle") && !inspect(&f).macrostep_in_progress);
     close_fixture(&f);
 }
 
@@ -281,6 +309,7 @@ int main(void) {
     test_refused_delivery_runs_nothing();
     test_microstep_budget_pauses_between_microsteps();
     test_action_limits_pause_inside_a_microstep();
+    test_release_is_asked_for();
     if (failures != 0) {
         fprintf(stderr, "test_drive_test: %d failures\n", failures);
         return 1;

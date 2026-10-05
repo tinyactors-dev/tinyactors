@@ -57,17 +57,17 @@ static bool tat_make_ecmascript_datamodel(tat_bind *bind, jv config, void *out) 
 }
 
 /*
- * router.direct: delivers each external event straight to a resident actor
- * with ta_actor_deliver(). A runtime destination is delivered by ID; a named
+ * router.direct: admits each external event for a resident actor with
+ * ta_actor_deliver(), into core's pool. A runtime destination is delivered by ID; a named
  * one is resolved first with ta_actor_find(), which goes through the system's
  * actor directory (ADR 0037), so a chart may address a peer as
  * `#_actor_<family>/<name>` without the host installing a routing instrument.
  * Resolution answers TA_ERR_UNSUPPORTED when no directory is installed,
  * TA_ERR_UNLOADED for an actor the directory holds but has not loaded (this
  * router cannot load one; a real host would), and TA_ERR_NOT_FOUND for an
- * address it does not know. A busy actor, or one that ran out of memory
- * taking the event, makes the router answer RETRY, so core keeps the event
- * and offers it again on a later dispatch. Config:
+ * address it does not know. A full pool (core ADR 0099), or no memory for
+ * the event, makes the router answer RETRY, so core keeps the event and
+ * offers it again on a later dispatch. Config:
  * {"system": <system handle>}.
  */
 static ta_external_event_submit_status tat_direct_submit(void *self,
@@ -91,10 +91,10 @@ static ta_external_event_submit_status tat_direct_submit(void *self,
     if (result == TA_OK) {
         return TA_EXTERNAL_EVENT_ACCEPTED;
     }
-    /* A busy receiver, or one that could not take the event for lack of
-     * memory, takes it later: running out of memory is never an error the
-     * sender's chart sees (ADR 0047, ADR 0070). */
-    if (result == TA_ERR_BUSY || result == TA_ERR_NOMEM) {
+    /* A full pool, or no memory for the event, takes it later: running out
+     * of room is never an error the sender's chart sees (ADR 0047, ADR
+     * 0070). */
+    if (result == TA_ERR_FULL || result == TA_ERR_NOMEM) {
         return TA_EXTERNAL_EVENT_RETRY;
     }
     *params->fault = (ta_fault){.code = result, .message = {.ptr = not_found, .len = sizeof(not_found) - 1}};

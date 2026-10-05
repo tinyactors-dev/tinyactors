@@ -17,8 +17,8 @@ events.
 `TA_ERR_DONE` reports that an actor has reached a top-level final state and
 accepts nothing more (ADR 0055). `ta_actor_deliver()` returns it instead of
 `TA_ERR_INVALID`, which from deliver means a caller error only. It is a
-control result for the host's scheduler, like `TA_ERR_BUSY`, and generates no
-SCXML event.
+control result for the host's scheduler, like `TA_ERR_FULL` from a pool at its
+admission watermark, and generates no SCXML event.
 
 ## SCXML `error.*`
 

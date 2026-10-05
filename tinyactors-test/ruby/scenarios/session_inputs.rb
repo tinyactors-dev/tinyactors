@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-# What core ADR 0089 changes for live sessions: a resume says whether its
-# event was ignored (section 8), and generated invoke IDs are numbered by
+# What core ADR 0089 changes for live sessions: the outcome of an input says
+# whether its event was ignored (section 8), and generated invoke IDs are numbered by
 # the session, with its generated send IDs (section 5), so a replay of the
 # session numbers them as the original run did.
 
@@ -33,15 +33,15 @@ TinyactorsTest.chart :inputs_numbering do
 end
 
 TinyactorsTest.scenarios 'session inputs' do
-  # Catches: a resume that cannot tell a host whether its message was used,
-  # which a replay needs to report history the current chart ignores.
-  scenario 'a resume says whether its external event was ignored' do
+  # Catches: an outcome that cannot tell a host whether its message was
+  # used, which a replay needs to report history the current chart ignores.
+  scenario 'an outcome says whether its external event was ignored' do
     door = spawn :inputs_door
     outcome = lambda do |event|
       assert_equal 'ok', door.post(event)
-      response = ta.actor.resume(system: system_handle, actor: door.handle, budget: 100)
-      assert_equal 'stable', core('ta_actor_resume', response)[:status]
-      response[:out][:ignored]
+      run = door.run_once(budget: 100)
+      assert_equal %w[ok stable], run.values_at(:result, :status)
+      run[:outcome] == 'ignored'
     end
     assert_equal true, outcome.call('close'), 'closed takes no close'
     assert_equal false, outcome.call('open')
@@ -50,13 +50,14 @@ TinyactorsTest.scenarios 'session inputs' do
     assert_equal false, outcome.call('close')
   end
 
-  # Catches: `ignored` reported for a call that ended no macrostep, or
-  # carried over from an earlier macrostep.
-  scenario 'a resume that ends no macrostep leaves ignored untouched' do
+  # Catches: an outcome reported for a call that ended no macrostep, or
+  # carried over from an earlier one.
+  scenario 'a call that ends no macrostep reports no outcome' do
     door = spawn :inputs_door
-    response = ta.actor.resume(system: system_handle, actor: door.handle, budget: 100)
-    assert_equal 'stable', core('ta_actor_resume', response)[:status]
-    assert_equal false, response[:out][:ignored], 'an idle actor: the binding zeroes it, core leaves it'
+    door.deliver 'close'
+    run = door.run_once(budget: 100)
+    assert_equal ['ok', 'stable', nil], run.values_at(:result, :status, :outcome),
+                 'an idle actor: nothing ran, so nothing is reported'
   end
 
   # Catches: invoke IDs drawn from a counter shared by the whole system, so

@@ -3,8 +3,8 @@
  * Replaying events (kernel ADR 0006 section 3): the Node-API glue over the
  * host kernel's tah_replay_event(). A replaying actor is resumed by the
  * replay itself, synchronously, until it is between macrosteps: it crosses
- * no border (core ADR 0089 section 3), so nothing it does waits for a turn,
- * and the scheduler leaves it alone (TAH_SCHED_REPLAYING).
+ * no border (core ADR 0089 section 3), so nothing it does waits for a turn:
+ * the kernel runs its inputs through ta_run()'s session filter.
  */
 #include <node_api.h>
 

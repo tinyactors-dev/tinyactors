@@ -176,18 +176,21 @@ TinyactorsTest.scenarios 'operator transitions', chart: :operator do
     assert_equal 'ok', actor.post('go'), 'the actor holds no event'
   end
 
-  # Catches: a jump accepted by an actor that is busy, which would run it
-  # from a configuration it was not checked against.
+  # Catches: a jump that runs inside the macrostep of an input before it,
+  # or from a configuration it was not checked against when it is taken.
   scenario 'a jump waits for the actor like any event' do
     actor = spawn
     assert_equal 'ok', actor.post('go')
-    assert_equal 'err_busy', actor.post_jump(:w2)
+    assert_equal 'ok', actor.post_jump(:w2, from: :idle), 'idle is active when the jump is offered'
     assert_equal 'paused', actor.resume(budget: 1000, action_budget: 1)
     assert actor.inspect_actor[:microstep_in_progress], 'paused inside the entry of w1'
-    assert_equal 'err_busy', actor.post_jump(:w2)
-    run_system('finish go')
-    actor.jump :w2
+    assert_equal 'ok', actor.post_jump(:w2), 'admitted, and held behind the paused macrostep'
+    assert_equal ['enter work go'], actor.data('.log'), 'no jump entered the macrostep'
+    run_system('finish go, then the jumps')
     assert_equal %i[work w2], actor.active
+    assert_equal ['enter work go', 'w1 1 go', 'w1 2 go', 'exit work operator.goto', 'enter work operator.goto',
+                  'enter w2 operator.goto'], actor.data('.log'),
+                 'the jump from idle was refused when taken, and the other ran once go had ended'
   end
 
   # Catches: a pause inside the operator's microstep that loses or repeats
@@ -229,11 +232,12 @@ TinyactorsTest.scenarios 'operator transitions', chart: :operator do
     assert_equal ['enter work operator.goto', 'enter w2 operator.goto'], actor.data('.log')
   end
 
-  # Catches: an image that loses an operator transition waiting with its
+  # Catches: an image that loses an operator transition taken with its
   # event, or the position inside the operator's microstep.
-  scenario 'a jump survives unload and load, before it is taken and inside it' do
+  scenario 'a jump survives unload and load, before its first unit and inside it' do
     actor = spawn(name: 'subject')
     assert_equal 'ok', actor.post_jump(:w1)
+    assert_equal 'paused', actor.resume(budget: 1000, pause_at_microstep_start: true)
     cycle_residency(actor)
     assert_equal 'paused', actor.resume(budget: 1000, action_budget: 2)
     assert actor.inspect_actor[:microstep_in_progress], 'paused inside the jump'
@@ -275,7 +279,7 @@ TinyactorsTest.scenarios 'abandoning a macrostep', chart: :operator do
   scenario 'a macrostep that never ends is abandoned, and a jump then works' do
     recording_trace
     actor = Operator.spinning(self)
-    assert_equal 'err_busy', actor.post_jump(:idle), 'a wedged actor refuses a jump'
+    assert_equal 'ok', actor.post_jump(:idle), 'a wedged actor admits a jump, and holds it back'
     waiting = Operator.waiting(actor)
     assert waiting >= 10, "the loop queued ticks (#{waiting})"
     before = trace_records.size
@@ -289,6 +293,8 @@ TinyactorsTest.scenarios 'abandoning a macrostep', chart: :operator do
     assert_equal 'idle', inspection[:residency]
     assert_equal 0, Operator.waiting(actor)
     assert_equal 'err_invalid', actor.abandon, 'nothing is left to abandon'
+    run_system('the held jump')
+    assert_equal [:idle], actor.active, 'the jump held back is taken once the macrostep is gone'
     actor.jump :idle
     assert_equal [:idle], actor.active
     actor.deliver 'go'
@@ -310,20 +316,21 @@ TinyactorsTest.scenarios 'abandoning a macrostep', chart: :operator do
   end
 
   # Catches: an abandon that answers ok for an actor with nothing to
-  # abandon, and one that forgets a delivered event (or its operator
-  # transition) that was not taken yet.
+  # abandon, and an admitted event (or its operator transition) that is
+  # neither abandoned nor withdrawn: it would still run.
   scenario 'abandoning answers for every actor state' do
     recording_trace
     actor = spawn
     assert_equal 'err_invalid', actor.abandon, 'an idle actor has no macrostep'
-    assert_equal 'ok', actor.post('go')
+    assert_equal 'ok', actor.post('go', correlation: 1)
     before = trace_records.size
-    assert_equal 'ok', actor.abandon, 'an event not yet taken is dropped'
-    assert_equal ['abandoned 0.0 go dropped 0'], trace_lines(trace_records.drop(before)),
-                 'no macrostep began, so none ends'
-    assert_equal 'ok', actor.post_jump(:w2)
-    assert_equal 'ok', actor.abandon, 'a jump not yet taken is dropped with its event'
-    run_system('after abandoning')
+    assert_equal 'err_invalid', actor.abandon, 'an event not yet taken began no macrostep'
+    assert_equal 'ok', withdraw_input(1), 'the host withdraws it instead'
+    assert_equal [], trace_lines(trace_records.drop(before)), 'no macrostep began, so none ends'
+    assert_equal 'ok', actor.post_jump(:w2, correlation: 2)
+    assert_equal 'ok', withdraw_input(2), 'a jump not yet taken is withdrawn with its event'
+    assert_equal 'err_not_found', withdraw_input(2), 'once'
+    run_system('after withdrawing')
     assert_equal [:idle], actor.active
     assert_equal [], actor.data('.log')
     actor.destroy

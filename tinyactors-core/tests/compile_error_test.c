@@ -977,7 +977,7 @@ static void test_history_default_chains(void) {
     CHECK(definition != NULL && ta_system_register_definition(system_under_test, definition, &id) == TA_OK);
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system_under_test, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(system_under_test, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     ta_atom go_atom = 0;
     CHECK(ta_system_intern_atom(system_under_test, S("go"), &go_atom) == TA_OK);
@@ -988,7 +988,7 @@ static void test_history_default_chains(void) {
                              &(ta_actor_deliver_params){ .time = ta_system_time(system_under_test), .actor = actor,
                                                          .event = &event },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
     ta_state_id x = 0;
     CHECK(ta_definition_find_state(system_under_test, &(ta_definition_find_state_params){ .definition = id,
                                                                                          .id = S("x"),

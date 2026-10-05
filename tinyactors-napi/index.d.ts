@@ -254,6 +254,25 @@ export interface SystemParameters {
   maxPendingSends?: number;
   /** Live definitions; default and maximum 2147483647 (no limit). */
   maxDefinitions?: number;
+  /**
+   * Pending inputs core's pool holds (core ADR 0099): posted messages,
+   * reports and bootstraps not yet run, and the mail between actors; from 8
+   * to 16777216. The pool fills on demand and keeps what it filled. Unset, a
+   * system holds up to the maximum.
+   */
+  poolEnvelopes?: number;
+  /**
+   * Bytes of the pool's text, in 64-byte chunks (core ADR 0099); from
+   * maxRecordBytes to 1 GiB. Unset, a system has up to the maximum.
+   */
+  nameAreaBytes?: number;
+  /**
+   * Percent of poolEnvelopes and of nameAreaBytes that posted messages,
+   * reports and spawns may fill (core ADR 0099); past it they throw
+   * `queue-full`, and the rest stays for mail between actors. Default 50,
+   * from 1 to 99.
+   */
+  admissionWatermark?: number;
   // napi's.
   /**
    * Bytes of a value's JSON in a trace attribute (`values: true`) or a log
@@ -275,32 +294,34 @@ export interface SystemParameters {
   registeredDatamodels?: number;
   /** Longest registered data model name, in bytes; default 32, from 8 to 256. */
   datamodelNameBytes?: number;
-  /** Microsteps one resume may run before the actor yields (core's `budget`); default 64, at least 1. */
+  /** Microsteps one run of core may take before its macrostep pauses (core's `budget`); default 64, at least 1. */
   resumeBudget?: number;
   /**
-   * Units of executable content one resume may run before the actor pauses
-   * inside a microstep (core ADR 0061); 0 means no limit; default 1024.
+   * Units of executable content one run of core may take before its
+   * macrostep pauses inside a microstep (core ADR 0061); 0 means no limit;
+   * default 1024.
    */
   actionBudget?: number;
-  /** Runnable actors resumed in one pump turn; default 1024, at least 1. */
+  /** Runs of core in one pump turn, each taking at most one input; default 1024, at least 1. */
   resumesPerTurn?: number;
   /** Due sends dispatched during one pump turn; default 1024, at least 1. */
   dueBudget?: number;
-  /** Deliveries started, and dead letters reported, in one pump turn; default 1024, at least 1. */
+  /** Actors whose held mail is admitted, and dead letters reported, in one pump turn; default 1024, at least 1. */
   messageBudget?: number;
   /**
-   * Accepted messages not yet delivered or reported; post() and send()
-   * are refused with `queue-full` beyond it. Mail between actors is never
-   * refused: past the limit it waits in its receiver's overflow, and is
-   * delivered as room appears (kernel ADR 0003). 0 (default): no limit.
+   * Accepted messages not yet taken or reported past which mail between
+   * actors waits in its receiver's overflow, and is admitted as room
+   * appears (kernel ADR 0003). post() and send() are bounded by core's pool
+   * instead (admissionWatermark). 0 (default): no limit.
    */
   maxQueuedMessages?: number;
   /**
-   * Retained-bytes estimate of the data of accepted messages not yet
-   * delivered or reported (ADR 0005 point 9); 0 (default): no limit. The
-   * estimate: `options.bytes`, or 2 bytes per string code unit, byteLength
-   * for buffers, 64 for other objects, 0 for primitives. Mail between actors
-   * carries no estimate, and is never refused (see maxQueuedMessages).
+   * Retained-bytes estimate of the data of accepted messages not yet taken
+   * or reported (ADR 0005 point 9) past which mail between actors waits in
+   * its receiver's overflow, as for maxQueuedMessages; 0 (default): no
+   * limit. The estimate: `options.bytes`, or 2 bytes per string code unit,
+   * byteLength for buffers, 64 for other objects, 0 for primitives. Mail
+   * between actors carries no estimate.
    */
   maxRetainedBytes?: number;
 }
@@ -692,7 +713,7 @@ export interface System {
    * Mail for an actor that is gone is a dead letter, not an error. An
    * address is resolved through the directory when the post is accepted; a
    * name with no resident actor is a dead letter too (ADR 0006). Throws
-   * `queue-full` at maxQueuedMessages or maxRetainedBytes. `data` is any JavaScript value, shared
+   * `queue-full` when core's pool is at its admissionWatermark. `data` is any JavaScript value, shared
    * with the receiver, not copied (ADR 0011; mail enters a session, napi ADR
    * 0039); the receiver's expressions see it as `context.event.data`.
    */
@@ -804,7 +825,7 @@ export interface SystemStats {
     /**
      * Of them, mail between actors accepted past maxQueuedMessages or
      * maxRetainedBytes (kernel ADR 0003): it waits in its receiver's
-     * mailbox and is delivered as room appears.
+     * mailbox and is admitted as room appears.
      */
     readonly overflow: number;
     readonly delivered: number;
@@ -2363,8 +2384,8 @@ export interface InvokedService {
  * an invocation that ends before it is taken is dropped.
  *
  * A report that could not be taken throws and changes nothing: event() and
- * done() throw `queue-full` when the parent's mailbox is at
- * maxQueuedMessages or maxRetainedBytes, and any report throws
+ * done() throw `queue-full` when core's pool is at its admissionWatermark,
+ * and any report throws
  * `out-of-memory` when the addon or core cannot allocate. The invocation
  * stays alive and its signal unaborted, so the service can report again,
  * for example once the parent has drained its mailbox.
@@ -2473,7 +2494,7 @@ export interface TraceSinkOptions extends TraceConfiguration {
    * Resource attributes every request carries, such as `service.name`. The
    * system's parameters are added as one attribute, `tinyactors.params`: the
    * defaults' version, then `name=value` for each parameter that differs from
-   * its default, in name order (`v1;valueBytes=16384`), or `v1` alone (napi
+   * its default, in name order (`v2;valueBytes=16384`), or `v2` alone (napi
    * ADR 0036), unless this names the same key.
    */
   resource?: Record<string, string>;

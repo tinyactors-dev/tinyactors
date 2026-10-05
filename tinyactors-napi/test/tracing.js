@@ -663,10 +663,10 @@ async function parameterResource() {
     return span.resource.attributes;
   };
   const defaults = await request(undefined, {});
-  assert.equal(defaults['tinyactors.params'], 'v1', 'a system with every default sends the version alone');
+  assert.equal(defaults['tinyactors.params'], 'v2', 'a system with every default sends the version alone');
   assert.equal(Object.keys(defaults).filter((key) => key.startsWith('tinyactors.param.')).length, 0);
   const changed = await request({ valueBytes: 4096, microstepLimit: 777, interpreterBytes: 131072 }, {});
-  assert.equal(changed['tinyactors.params'], 'v1;interpreterBytes=131072;microstepLimit=777;valueBytes=4096');
+  assert.equal(changed['tinyactors.params'], 'v2;interpreterBytes=131072;microstepLimit=777;valueBytes=4096');
   const mine = await request({ valueBytes: 4096 }, { 'tinyactors.params': 'mine' });
   assert.equal(mine['tinyactors.params'], 'mine', "the application's attribute wins");
   const system = createSystem({ parameters: { valueBytes: 4096 } });
@@ -688,6 +688,16 @@ function defaultsVersion() {
       messageBudget: 1024, microstepLimit: 100000, registeredDatamodels: 8, renderBytes: 16384, resumeBudget: 64,
       resumesPerTurn: 1024, telBytes: 16384, telemetryValueBytes: 1024, traceStagingBytes: 1048576,
       valueBytes: 1024,
+    },
+    // v1 and core's pool of pending inputs (core ADR 0099).
+    v2: {
+      actionBudget: 1024, admissionWatermark: 50, compileMessageBytes: 256, compileNearestBytes: 128,
+      compileTextBytes: 1024, datamodelNameBytes: 32, dueBudget: 1024, eventBlockCache: 1024, eventNameDepth: 64,
+      interpreterBytes: 65536, interpreterNesting: 4, maxActors: 2147483647, maxDefinitions: 2147483647,
+      maxPendingSends: 2147483647, maxQueuedMessages: 0, maxRecordBytes: 4096, maxRetainedBytes: 0,
+      messageBudget: 1024, microstepLimit: 100000, nameAreaBytes: 262144, poolEnvelopes: 4096,
+      registeredDatamodels: 8, renderBytes: 16384, resumeBudget: 64, resumesPerTurn: 1024, telBytes: 16384,
+      telemetryValueBytes: 1024, traceStagingBytes: 1048576, valueBytes: 1024,
     },
   };
   const now = Object.fromEntries(Object.entries(parameterInfo()).map(([name, info]) => [name, info.default]));

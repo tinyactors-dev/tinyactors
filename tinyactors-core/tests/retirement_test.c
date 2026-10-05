@@ -202,8 +202,8 @@ static ta_result spawn(fixture *f, ta_definition_id definition, ta_actor_id *out
     return ta_actor_spawn(f->system, &(ta_actor_spawn_params){ .definition = definition, .out = out });
 }
 
-static ta_run_status run(fixture *f, ta_actor_id actor) {
-    ta_run_status status = TA_RUN_ERROR;
+static test_drive_status run(fixture *f, ta_actor_id actor) {
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(f->system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     return status;
 }
@@ -323,14 +323,14 @@ static void test_retire_with_actors(void) {
     CHECK(ta_event_name_intern(f.system, &(ta_atom_list){ .atoms = &warm_segment, .count = 1 }, &warm_go) ==
           TA_OK);
     /* Running grows the system's scratch arena, which it keeps. */
-    CHECK(run(&f, warm_actors[0]) == TA_RUN_STABLE);
-    ta_run_status status = TA_RUN_ERROR;
+    CHECK(run(&f, warm_actors[0]) == TEST_DRIVE_STABLE);
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(f.system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = warm_actors[0],
                                                          .event = &(ta_event){ .name = warm_go,
                                                                               .type = TA_EVENT_EXTERNAL } },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
     CHECK(ta_system_retire_definition(f.system, warm) == TA_OK);
     CHECK(ta_actor_destroy(f.system, warm_actors[0]) == TA_OK);
     CHECK(ta_actor_destroy(f.system, warm_actors[1]) == TA_OK);
@@ -342,7 +342,7 @@ static void test_retire_with_actors(void) {
     ta_actor_id second = 0;
     CHECK(spawn(&f, id, &first) == TA_OK);
     CHECK(spawn(&f, id, &second) == TA_OK);
-    CHECK(run(&f, first) == TA_RUN_STABLE);
+    CHECK(run(&f, first) == TEST_DRIVE_STABLE);
     int destroyed = f.model.destroyed;
 
     CHECK(ta_system_retire_definition(f.system, id) == TA_OK);
@@ -371,8 +371,8 @@ static void test_retire_with_actors(void) {
                                                          .event = &(ta_event){ .name = go,
                                                                               .type = TA_EVENT_EXTERNAL } },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
-    CHECK(run(&f, second) == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
+    CHECK(run(&f, second) == TEST_DRIVE_STABLE);
     ta_actor_inspection actor;
     CHECK(ta_actor_inspect(f.system, first, &actor) == TA_OK);
     CHECK(actor.definition_id == id);

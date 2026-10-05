@@ -121,16 +121,13 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
   # retry that restarts the macrostep instead of continuing it, which the
   # comparison with the uninterrupted run would show as a repeated effect.
   scenario 'an allocation failure suspends a macrostep, and a later resume continues it' do
-    reference = spawn
-    reference.deliver 'go'
-
     actor = spawn
     assert_equal 'ok', actor.post('go')
 
     AllocationFailure.tighten(self)
-    interrupted = ta.actor.resume(system: system_handle, actor: actor.handle, budget: 1024)
+    interrupted = actor.run_once(budget: 1024)
     assert_equal 'err_nomem', interrupted[:result], 'the host is told the pool was full'
-    assert_equal nil, interrupted.dig(:out, :status)
+    assert_equal nil, interrupted[:status]
     allocator.clear_faults
 
     # Suspended, not finished.
@@ -138,13 +135,18 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
     assert view[:macrostep_in_progress],
            "#{actor} is not mid-macrostep after err_nomem: residency #{view[:residency]}, " \
            "active #{actor.active.inspect}"
-    assert_equal 'err_busy', actor.post('interloper'), 'a suspended actor takes no new event'
+    assert_equal 'ok', actor.post('interloper'), 'a suspended actor admits a new event'
+    assert_equal view, actor.inspect_actor, 'and holds it back: its macrostep does not take it'
 
     # Resuming continues it, to the state the uninterrupted run reached.
     status = 'paused'
     20.times { status = actor.resume(budget: 1024); break unless status == 'paused' }
     assert_equal 'stable', status
     run_system('dispatch effects after the resumed macrostep')
+    # The reference runs afterwards: the memory core keeps from one run would
+    # let the other's macrostep allocate nothing.
+    reference = spawn
+    reference.deliver 'go'
     assert !actor.active.empty?,
            "#{actor} is in no state at all after an interrupted macrostep: #{actor.data.inspect}"
     assert_equal [reference.active, reference.data], [actor.active, actor.data],
@@ -161,7 +163,7 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
     assert_equal 'ok', actor.post('go')
 
     AllocationFailure.tighten(self)
-    assert_equal 'err_nomem', ta.actor.resume(system: system_handle, actor: actor.handle, budget: 1024)[:result]
+    assert_equal 'err_nomem', actor.run_once(budget: 1024)[:result]
     allocator.clear_faults
 
     assert_equal 0, actor.inspect_actor.fetch(:internal_events).to_a.size,

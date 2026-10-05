@@ -143,9 +143,10 @@ static void named_origin_outlives_its_sender(void) {
     ta_actor_id receiver = spawn(system, define_receiver(system), &receiver_name);
     ta_actor_id sender = spawn(system, define_sender(system, S("#_actor_r/recv")), &sender_name);
 
-    /* One turn with no deliveries: both bootstrap, the sender sends and finishes. */
-    uint32_t messages = system->budgets.messages;
-    system->budgets.messages = 0;
+    /* Two ta_run() calls, each taking one input: both bootstrap, the
+     * sender sends and finishes, and its message waits. */
+    tah_turn_budgets budgets = system->budgets;
+    system->budgets.resumes = 2u;
     tah_system_turn(system);
     bool done = false;
     for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
@@ -154,7 +155,7 @@ static void named_origin_outlives_its_sender(void) {
     }
     CHECK(done);
     tah_system_end_turn(system);
-    system->budgets.messages = messages;
+    system->budgets = budgets;
     CHECK(tah_sched_mailbox_count(&system->sched, receiver) == 1u);
 
     destroy(system, sender); /* what finished: "destroy" does after the done hook */

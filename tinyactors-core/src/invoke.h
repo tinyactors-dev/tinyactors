@@ -24,6 +24,10 @@
  *   fault data and an envelope `invoke_id` of `TA_INVOKE_ID_NONE`.
  * - An invocation started while its actor replayed (ADR 0089) called no
  *   invoker: nothing is cancelled or forwarded to it.
+ * - An ERROR report is an input (ADR 0099): `ta_actor_report_invoke()`
+ *   admits it into the pool (`run.h`), and `ta_invoke_take_report` queues
+ *   its event when `ta_run()` takes it. EVENT and DONE reports are
+ *   admitted as `ta_actor_deliver()` admits an event.
  * - The names core generates for an invocation, `done.invoke.<id>` and
  *   `error.communication.invoke.<id>.<reason>`, take one segment per dotted
  *   part of the ID's text (ADR 0049: a segment never holds a dot), so a
@@ -110,6 +114,29 @@ bool ta_invoke_is_active(const ta_actor *actor, ta_invoke_id invoke);
  */
 ta_result ta_invoke_prepare_retire(ta_system *system, ta_actor *actor);
 bool ta_invoke_retire_all(ta_system *system, ta_actor *actor);
+
+/* An admitted ERROR report as ta_run() takes it (run.h). */
+typedef struct {
+    /* The invocation it reports on. */
+    ta_invoke_id invoke;
+    /* error.communication.invoke.<id>.<reason>, made when it was admitted. */
+    ta_event_name_id name;
+    /* The report's data: moved into the event on TA_OK, kept otherwise. */
+    ta_value *data;
+    /* It retires the invocation. */
+    bool ends;
+    /* What the macrostep runs under; all zero for none. */
+    const ta_trace_parent *trace;
+} ta_invoke_report_take;
+/*
+ * Takes an admitted ERROR report for `actor`, between macrosteps (ADR 0081):
+ * its event joins the internal queue, the invocation retires when the
+ * report ends it, and a macrostep starts under its trace parent. May grow
+ * the internal queue; never runs inside a macrostep. TA_ERR_NOT_FOUND when
+ * the invocation ended since; TA_ERR_NOMEM when there is no room. A
+ * failure changes nothing.
+ */
+ta_result ta_invoke_take_report(ta_system *system, ta_actor *actor, const ta_invoke_report_take *take);
 
 /* The origin of an event from `invoke`: its ID and its invoker's registry index (ADR 0068). */
 ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke);

@@ -16,7 +16,7 @@ If evaluation fails, the engine:
 2. enqueues a structured `error.execution...` internal platform event;
 3. continues according to statechart semantics.
 
-A plugin fault is therefore not normally returned from `ta_actor_resume()` as a C API failure.
+A plugin fault is therefore not normally reported by `ta_run()` as a faulted input.
 
 ## Value expression
 

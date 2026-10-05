@@ -368,6 +368,7 @@ static void test_copy_out_of_memory_runs_again(void) {
     ta_actor_id actor = start(system, &sender, &copying);
     CHECK(resume(system, actor) == TA_ERR_NOMEM);
     CHECK(routed.count == 0);
+    CHECK(ta_actor_release(system, actor) == TA_OK); /* the fault stopped it: it goes on */
     CHECK(resume(system, actor) == TA_OK);
     CHECK(copies == 2);
     CHECK(routed.count == 1 && box_of(&routed.data[0]) != held);

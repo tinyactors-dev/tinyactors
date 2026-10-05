@@ -7,10 +7,12 @@
  * actor shares: the injected allocator and the buffers each run needs,
  * the logical clock, atom and event-name interning, the registered
  * immutable definitions, the resident actors and their runtime IDs, the
- * address and session tables, delayed-send state, the built-in SCXML
- * Event I/O Processor and its host event router, the registered I/O
- * processors and invokers, the host's actor directory and log sink, and
- * the control block with its `tel` ring (ADR 0098, ADR 0104).
+ * address and session tables, delayed-send state, the pool of pending
+ * inputs with its name area and macrostep slot (`run.h`, ADR 0099, ADR
+ * 0103), the built-in SCXML Event I/O Processor and its host event router,
+ * the registered I/O processors and invokers, the host's actor directory
+ * and log sink, and the control block with its `tel` ring (ADR 0098, ADR
+ * 0104).
  *
  * ## What it is not
  *
@@ -50,7 +52,8 @@
  *   since every processor and invoker type is an atom already.
  * - The parameters (ADR 0092) are fixed at creation and bound every
  *   buffer; `maxActors` and `maxDefinitions` are counted against
- *   `live_actors` and `live_definitions`.
+ *   `live_actors` and `live_definitions`, and `poolEnvelopes`,
+ *   `nameAreaBytes` and `admissionWatermark` bound the pool (`run.h`).
  *
  * ## Memory
  *
@@ -59,11 +62,13 @@
  * first. Creation allocates the system, the first storage of the tables
  * that start with some (sessions, atoms, event names), the run
  * buffers (ADR 0092 section 3), and the `tel` ring with its scratch area
- * unless `telBytes` is 0; the actor table starts empty. Afterwards it allocates where a
- * caller adds something (a spawn, a registration, an interned address), a
- * nested interpreter's region the first time an invocation is cancelled
- * at that depth, and the event blocks it caches; never in the middle of a
- * macrostep, where room is reserved before the run (ADR 0070).
+ * unless `telBytes` is 0; the actor table, the pool and the name area
+ * start empty. Afterwards it allocates where a caller adds something (a
+ * spawn, a registration, an interned address, an admitted input, which
+ * may add a page to the pool or the name area), a nested interpreter's
+ * region the first time an invocation is cancelled at that depth, and the
+ * event blocks it caches; never in the middle of a macrostep, where room
+ * is reserved before the run (ADR 0070).
  *
  * ## Complexity
  *
@@ -98,6 +103,7 @@
 #include "timer.h"
 #include "trace.h"
 #include "ring.h"
+#include "run.h"
 #include "vec.h"
 #include "../include/tinyactors.h"
 #include "clock.h"
@@ -202,6 +208,9 @@ struct ta_system {
     ta_tracer trace;
     /* The rings and their counters (ADR 0104). */
     ta_control_block control;
+    /* The pool of pending inputs, its name area and the macrostep slot
+     * (run.h, ADRs 0099, 0103). */
+    ta_run_state run;
     /* Never null: ta_null_definition_sink() when the host installed none (ADR 0079). */
     ta_definition_sink definition_sink;
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */

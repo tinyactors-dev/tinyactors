@@ -4,7 +4,7 @@ A macrostep that has not reached stability is resumed from two places.
 
 **Between microsteps** the actor holds everything (ADR 0009): its
 configuration, history, internal queue, current and pending external
-events. `ta_actor_resume()`'s `budget` counts microsteps and pauses only
+events. `ta_run()`'s `budget` counts microsteps and pauses only
 there.
 
 **Inside a phase** a run stops in two ways. A pause (ADR 0061) stops the
@@ -27,7 +27,7 @@ a retain of each `<foreach>` snapshot. A session image carries one; loading
 or reconstructing the image gives the new actor its own copy (ADR 0061
 section 4). Resuming moves it back into scratch and gives the allocation back to the system as its spare continuation.
 
-Saving cannot fail. Every `ta_actor_resume()` first reserves a
+Saving cannot fail. Every run of a macrostep first reserves a
 continuation large enough for the definition (the one it resumes from, or
 the system's spare) and a sparse state for an actor without one, so a
 run stops without allocating; a continuation the run no longer needs goes
@@ -42,12 +42,12 @@ active set, and the rest of its continuation is dropped.
 `ta_actor_abandon()` refuses an actor that holds a continuation
 (`TA_ERR_BUSY`): the states a stopped step entered or exited have already
 started or cancelled invocations and recorded history, which the stored
-configuration does not reflect. Resuming with a budget of 1 and no action
-budget finishes the step and pauses between microsteps, where abandoning
+configuration does not reflect. Running it with a budget of 1 and no
+action budget (`ta_run()` with its `session`) finishes the step and pauses between microsteps, where abandoning
 is allowed (ADR 0082).
 
-The implementation never reports a half-completed microstep as
-`TA_RUN_STABLE`, and the configuration it reports while paused is the one
+The implementation never reports an input whose microstep is half done as
+completed, and the configuration it reports while paused is the one
 after the last completed microstep.
 
 Where a stopped run stands is read from the continuation (ADR 0083).

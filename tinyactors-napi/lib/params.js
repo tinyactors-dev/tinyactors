@@ -15,7 +15,7 @@ let table;
 // reader must know which defaults applied. Change the version whenever a
 // default changes; test/tracing.js holds each version's defaults and fails
 // until it is changed.
-const DEFAULTS_VERSION = 'v1';
+const DEFAULTS_VERSION = 'v2';
 
 function tableOf() {
   if (table === undefined) {

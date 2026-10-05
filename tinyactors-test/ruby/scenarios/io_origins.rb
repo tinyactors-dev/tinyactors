@@ -87,6 +87,23 @@ module IOOrigins
     end
   end
 
+  # Envelopes of a small pool: at the default watermark, half of them may
+  # hold admitted inputs, so a few posts fill it.
+  POOL = 8
+
+  # Offers `actor` events it ignores until core's pool refuses one, so that
+  # an endpoint must hold what comes next. Returns how many were admitted.
+  def self.fill_pool(actor)
+    admitted = 0
+    loop do
+      result = actor.post('busy')
+      return admitted if result == 'err_full'
+      raise TinyactorsTest::AssertionFailed, "filling the pool: #{result}" unless result == 'ok'
+
+      admitted += 1
+    end
+  end
+
   # [event, target, refused] of the sends an instrument journaled.
   def self.sends(io)
     io.entries('send').map { |entry| [entry[:event_text], entry[:target], entry[:refused]] }
@@ -130,21 +147,23 @@ TinyactorsTest.scenarios 'io origins' do
   # Catches: a SCOPED origin that renders another scope's URI after its own
   # closed, and a late reply that is lost silently instead of failing.
   scenario 'a reply to an open connection arrives, and a late one fails' do
+    system_params(pool_envelopes: IOOrigins::POOL)
     connection = endpoint_io(IOOrigins::CONNECTION, 'io.connection')
     actor = spawn(IOOrigins.replier)
     connection.control('open', processor: connection.processor, uri: 'ws://client/1')
     receive(connection, actor, 'ping', uri: 'ws://client/1')
     assert_equal [['pong', 'ws://client/1', nil]], IOOrigins.sends(connection)
 
-    # The event waits while the actor is busy; its connection closes, and a
-    # new one reuses the scope's record under another generation.
+    # The event waits in the endpoint while core's pool is full; its
+    # connection closes, and a new one reuses the scope's record under
+    # another generation.
     connection.control('open', processor: connection.processor, uri: 'ws://client/2')
-    assert_equal 'ok', actor.post('busy')
+    assert IOOrigins.fill_pool(actor).positive?, 'the pool admitted events before it was full'
     assert_equal 'held', receive(connection, actor, 'ping', uri: 'ws://client/2', run: false, hold: true)
       .fetch(:result)
     connection.control('close', uri: 'ws://client/2')
     connection.control('open', processor: connection.processor, uri: 'ws://client/3')
-    run_system('the busy event')
+    run_system('the events that filled the pool')
     assert_equal ['ok'], connection.control('flush').fetch(:results)
     run_system('the late ping')
     assert_equal nil, actor.data('.origin'), 'a closed scope renders no origin, not the next connection'
@@ -168,20 +187,28 @@ TinyactorsTest.scenarios 'io origins' do
   end
 
   # Catches: an origin reference lost or freed early while the event is
-  # queued in a host, held through a paused macrostep, or refused by a
-  # finished actor. Teardown fails on any entry left behind.
+  # queued in a host, admitted behind another input, held through a paused
+  # macrostep, or refused by a finished actor. Teardown fails on any entry
+  # left behind.
   scenario 'an origin lives as long as its event, wherever the event waits' do
+    system_params(pool_envelopes: IOOrigins::POOL)
     request = endpoint_io(IOOrigins::BASIC_HTTP, 'io.request')
     actor = spawn(IOOrigins.replier)
 
-    # Queued in the host while the actor is busy.
-    assert_equal 'ok', actor.post('busy')
+    # Queued in the host while core's pool is full.
+    assert IOOrigins.fill_pool(actor).positive?, 'the pool admitted events before it was full'
     assert_equal 'held', receive(request, actor, 'ping', uri: IOOrigins::LONG_URI, run: false, hold: true)
       .fetch(:result)
-    run_system('the busy event')
+    run_system('the events that filled the pool')
     assert_equal ['ok'], request.control('flush').fetch(:results)
     run_system('the queued ping')
     assert_equal ['pong', IOOrigins::LONG_URI, nil], IOOrigins.sends(request).last
+
+    # Admitted by core behind an input the actor has not taken yet.
+    assert_equal 'ok', actor.post('busy')
+    assert_equal 'ok', receive(request, actor, 'ping', uri: 'http://client/r/queued', run: false).fetch(:result)
+    run_system('the busy event, then the admitted ping')
+    assert_equal ['pong', 'http://client/r/queued', nil], IOOrigins.sends(request).last
 
     # Paused inside the macrostep by an action budget.
     receive(request, actor, 'slow', uri: 'http://client/r/slow', run: false)
@@ -202,8 +229,9 @@ TinyactorsTest.scenarios 'io origins' do
 
     # A held event the host drops is released too.
     other = spawn(IOOrigins.replier)
-    assert_equal 'ok', other.post('busy')
-    receive(request, other, 'ping', uri: IOOrigins::LONG_URI, run: false, hold: true)
+    IOOrigins.fill_pool(other)
+    assert_equal 'held', receive(request, other, 'ping', uri: IOOrigins::LONG_URI, run: false, hold: true)
+      .fetch(:result)
     assert_equal 1, request.control('drop').fetch(:dropped)
   end
 
@@ -225,6 +253,8 @@ TinyactorsTest.scenarios 'io origins' do
 
   # Catches: an image that drops I/O origins, or keeps a pointer into the
   # system it was captured from. Every class comes back as a stored URI.
+  # The actor is captured paused before the event's first microstep, so the
+  # event and its origin are in the image.
   scenario 'an origin of each class survives capture and reconstruction' do
     peer = endpoint_io(IOOrigins::PEER, 'io.peer')
     connection = endpoint_io(IOOrigins::CONNECTION, 'io.connection')
@@ -235,6 +265,7 @@ TinyactorsTest.scenarios 'io origins' do
      [request, { uri: IOOrigins::LONG_URI }, IOOrigins::LONG_URI]].each do |io, args, uri|
       actor = spawn(IOOrigins.replier)
       assert_equal 'ok', receive(io, actor, 'ping', run: false, **args).fetch(:result)
+      assert_equal 'paused', actor.resume(budget: 1, pause_at_microstep_start: true)
       image = capture(actor)
       actor.destroy
       restored = core('ta_actor_reconstruct', ta.actor.reconstruct(system: system_handle, image: image)).fetch(:out)

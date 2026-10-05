@@ -100,25 +100,26 @@ If the directory entry is unloaded, `ta_actor_find` returns
 it kept at unload, and the binding, and calls `ta_actor_load` before retrying
 delivery.
 
-`ta_actor_deliver` begins delivery of one external event to an actor that is ready for a new macrostep. It does not imply an unbounded external mailbox. With an operator transition in its params (ADR 0082), the event is taken by that transition, built at run time from a source that is active and targets that can form a legal configuration, instead of by transition selection; a malformed one is `TA_ERR_INVALID` with nothing retained.
+`ta_actor_deliver` admits one external event for an actor into the system's pool of pending inputs, where it waits for `ta_run` (ADR 0099). The pool is bounded: at its admission watermark deliver answers `TA_ERR_FULL` and changes nothing, and the host keeps the message and offers it again after the system has run. The host names each input by a correlation, which its outcome carries back. With an operator transition in its params (ADR 0082), the event is taken by that transition, built at run time from a source that is active and targets that can form a legal configuration, instead of by transition selection; a malformed one is `TA_ERR_INVALID` with nothing retained.
 
 `ta_actor_abandon` abandons a macrostep that never ends (ADR 0082): the continuation, internal queue and external event are discarded, and the actor is idle with the configuration after its last completed microstep. It is refused (`TA_ERR_BUSY`) while the actor is stopped inside a step, and is `TA_ERR_INVALID` for an actor with no macrostep in progress.
 
 `ta_actor_report_invoke` is the asynchronous return path for an invoked service.
 It reports an ordinary child event, normal completion, or terminal service
 unavailability. Ordinary and completion reports use the actor's external-event
-flow and may return `TA_ERR_BUSY`; an unavailable report retires the invocation
-and appends a platform error to the internal queue. Reports for stale invocation
+flow and may return `TA_ERR_FULL`; an error report is admitted the same way,
+and when it is taken its platform error goes on the internal queue, retiring the
+invocation when it ends it. Reports for stale invocation
 IDs return `TA_ERR_NOT_FOUND` without generating another event. The start
 request supplies the owning system pointer as well as the system-local actor and
 invocation IDs needed for later reports.
 
-`ta_actor_resume` advances the in-progress macrostep for a caller-supplied budget and reports stable/paused/done/error execution status.
+`ta_run` takes the admitted inputs in arrival order and runs each one's macrostep with one macrostep slot (ADR 0103), within the call's budgets; it reports each input's outcome (completed, ignored, finished, faulted, refused) and answers idle, more or paused. A `session` filter runs one actor's inputs only, for a debugger. A fault stops the session where it stands, holding its input, until `ta_actor_release`; `ta_system_withdraw_input` takes back an admitted input not yet taken.
 
-`TA_RUN_DONE` leaves the terminal actor resident. `ta_actor_get_completion`
+An input reported finished leaves the terminal actor resident. `ta_actor_get_completion`
 retains its optional final data. For an invoked child,
-`ta_actor_publish_completion` retries a `done.invoke.<id>` delivery that could
-not be accepted while the parent was busy. Explicit destruction is not normal
+`ta_actor_publish_completion` retries a `done.invoke.<id>` delivery that the
+parent's pool refused (`TA_ERR_FULL`). Explicit destruction is not normal
 completion and never generates that event.
 
 `ta_system_invoke_id_text` says which invocation a `ta_invoke_id` is — the author's `<invoke id>` or the generated `<stateid>.<platformid>` — so a host reading `ta_active_invoke.id` can name it (ADR 0049).

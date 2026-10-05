@@ -1,4 +1,5 @@
 #include "system.h"
+#include "run.h"
 #include "layout.h"
 #include "trace.h"
 #include "interpreter.h"
@@ -65,6 +66,11 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
                                     TA_TRACE_RESERVED_BYTES, TA_PARAM_MAX_RECORD_BYTES_MAX },
     [TA_PARAM_TELEMETRY_VALUE_BYTES] = { "telemetryValueBytes", "bytes", TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES, 0,
                                          TA_PARAM_MAX_RECORD_BYTES_MAX - TA_TRACE_RESERVED_BYTES },
+    [TA_PARAM_POOL_ENVELOPES] = { "poolEnvelopes", "envelopes", TA_PARAM_DEFAULT_POOL_ENVELOPES, TA_ENVELOPE_POOL_MIN,
+                                  TA_ENVELOPE_POOL_MAX },
+    [TA_PARAM_NAME_AREA_BYTES] = { "nameAreaBytes", "bytes", TA_PARAM_DEFAULT_NAME_AREA_BYTES, TA_NAME_AREA_MIN_BYTES,
+                                   TA_NAME_AREA_MAX_BYTES },
+    [TA_PARAM_ADMISSION_WATERMARK] = { "admissionWatermark", "percent", TA_PARAM_DEFAULT_ADMISSION_WATERMARK, 1, 99 },
 };
 
 /* Rejects `param`: names it when the config asks. */
@@ -127,6 +133,10 @@ static ta_result ta_params_resolve(const ta_system_config *config, uint32_t valu
     }
     if (values[TA_PARAM_TELEMETRY_VALUE_BYTES] > record - TA_TRACE_RESERVED_BYTES) {
         return ta_params_reject(config, TA_PARAM_TELEMETRY_VALUE_BYTES);
+    }
+    /* The name area holds at least one of the largest records' text (ADR 0099). */
+    if (values[TA_PARAM_NAME_AREA_BYTES] < record) {
+        return ta_params_reject(config, TA_PARAM_NAME_AREA_BYTES);
     }
     return TA_OK;
 }
@@ -297,6 +307,8 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
                            .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
+    /* The bounds were checked: the pool and the name area accept them. */
+    (void)ta_run_init(system);
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
@@ -361,6 +373,9 @@ void ta_system_destroy(ta_system *system) {
             (void)ta_actor_destroy(system, ta_handle_make(slot, entry->generation));
         }
     }
+    /* After the actors, which gave their inputs back: what still waits
+     * holds origins, values and addresses, which go before their tables. */
+    ta_run_destroy(system);
     while (system->unregistered_definitions != NULL) {
         ta_definition_destroy(system->unregistered_definitions);
     }

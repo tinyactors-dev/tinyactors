@@ -1,4 +1,5 @@
 #include "session_image.h"
+#include "run.h"
 #include "bytes.h"
 #include "interpreter.h"
 #include "timer.h"
@@ -786,11 +787,25 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
 }
 
 ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
-    ta_result result = ta_image_reconstruct(system, params);
-    if (result == TA_OK) {
-        ta_trace_lifecycle(system, ta_actor_lookup(system, *params->out), TA_TRACE_LOADED, NULL);
+    if (system == NULL) {
+        return TA_ERR_INVALID;
     }
-    return result;
+    /* A session restored in a macrostep has it to run: its wake is admitted
+     * like a spawn's bootstrap (run.h), before anything is made. */
+    uint32_t wake = 0;
+    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    if (result != TA_OK) {
+        return result;
+    }
+    result = ta_image_reconstruct(system, params);
+    if (result != TA_OK) {
+        ta_run_wake_cancel(system, wake);
+        return result;
+    }
+    ta_actor *actor = ta_actor_lookup(system, *params->out);
+    ta_trace_lifecycle(system, actor, TA_TRACE_LOADED, NULL);
+    ta_run_wake_place(system, actor, wake);
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -832,6 +847,10 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
      */
     if (image->source_actor != actor->record.id || image->source_epoch != actor->session_epoch) {
         return TA_ERR_STALE;
+    }
+    /* Admitted inputs name this runtime ID, which the loaded actor will not have. */
+    if (ta_run_has_mail(system, actor)) {
+        return TA_ERR_BUSY;
     }
     /* Room for the submitted sends to outlive the session, before anything changes. */
     ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
@@ -1508,10 +1527,30 @@ static ta_result ta_offload_decode(ta_system *system, ta_bytes bytes, ta_session
     return result;
 }
 
+static ta_result ta_actor_load_image(ta_system *system, const ta_actor_load_params *params);
+
 ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
+    /* A session loaded in a macrostep, or with invocations to retire, has it
+     * to run: its wake is admitted like a spawn's bootstrap (run.h), before
+     * anything is made. */
+    uint32_t wake = 0;
+    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    if (result != TA_OK) {
+        return result;
+    }
+    result = ta_actor_load_image(system, params);
+    if (result != TA_OK) {
+        ta_run_wake_cancel(system, wake);
+        return result;
+    }
+    ta_run_wake_place(system, ta_actor_lookup(system, *params->out), wake);
+    return TA_OK;
+}
+
+static ta_result ta_actor_load_image(ta_system *system, const ta_actor_load_params *params) {
     if (params->root != NULL) {
         *params->root = (ta_value){0};
     }

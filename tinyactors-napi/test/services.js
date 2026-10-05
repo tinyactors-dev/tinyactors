@@ -328,13 +328,14 @@ async function invokerLiteralSource() {
   }
 }
 
-// A done() the parent's mailbox cannot take throws, and the invocation stays
-// alive: the service reports again once the mailbox drains, and only that
-// report ends the invocation.
+// A done() the system cannot take throws, and the invocation stays alive:
+// the service reports again once the pending inputs drain, and only that
+// report ends the invocation. 8 envelopes, 2 of them for admission (core
+// ADR 0099).
 async function doneRetried() {
   let reporter;
   const system = createSystem({
-    parameters: { maxQueuedMessages: 2 },
+    parameters: { poolEnvelopes: 8, admissionWatermark: 25 },
     invokers: { job: { start(_, report) { reporter = report; } } },
   });
   const actor = system.spawn(system.define(

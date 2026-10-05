@@ -55,34 +55,85 @@ static ta_result tah_replay_origin_of(tah_system *system, ta_str origin, ta_str 
 }
 
 
-/* Resumes a replaying actor until it is between macrosteps; `done` when it finished. */
-static ta_result tah_replay_resume(tah_system *system, ta_actor_id actor, bool unlimited, bool *ignored, bool *done) {
+/*
+ * Runs a replaying actor's input until its macrostep ends, through ta_run()'s
+ * session filter (core ADR 0103's debugging exception): the replay runs
+ * this one session whatever else waits. `done` when it finished; what a
+ * fault or a refusal answered otherwise. Nothing to run is TA_OK, `done`
+ * when the actor finished before.
+ *
+ * The filter may take a message the kernel admitted for the actor before
+ * the replay's own input (correlation 0): its outcomes, TAKEN included, go
+ * to the scheduler, which settles its send() at the next turn, and the run
+ * goes on to the replay's input. A fault in such a message stops the
+ * session, and answers its code.
+ */
+static ta_result tah_replay_resume(tah_system *system, ta_actor_id actor, bool *ignored, bool *done) {
     uint32_t budget = system->budgets.microsteps != 0 ? system->budgets.microsteps : 64u;
+    *ignored = false;
+    *done = false;
     for (;;) {
-        ta_run_status status = TA_RUN_STABLE;
-        bool took_nothing = false;
+        ta_input_outcome outcomes[2]; /* an input's TAKEN and its end */
+        uint32_t count = 0;
+        ta_run_status status = TA_RUN_IDLE;
         system->inside_core = true;
-        ta_result result = ta_actor_resume(system->core, &(ta_actor_resume_params){
-                                                             .actor = actor,
-                                                             .budget = budget,
-                                                             .status = &status,
-                                                             .action_budget = system->budgets.actions,
-                                                             .no_microstep_limit = unlimited,
-                                                             .ignored = &took_nothing,
-                                                         });
+        ta_result result = ta_run(system->core, &(ta_run_params){ .budget = budget,
+                                                                  .action_budget = system->budgets.actions,
+                                                                  .report_taken = true,
+                                                                  .session = actor,
+                                                                  .outcomes = outcomes,
+                                                                  .outcome_capacity = 2,
+                                                                  .outcome_count = &count,
+                                                                  .status = &status });
         system->inside_core = false;
+        bool ended = false;
+        ta_result answer = TA_OK;
+        for (uint32_t at = 0; at < count; at += 1u) {
+            const ta_input_outcome *outcome = &outcomes[at];
+            if (outcome->correlation != 0) {
+                tah_sched_outcome_outside(&system->sched, outcome);
+                if (outcome->kind == TA_INPUT_FAULTED) {
+                    ended = true;
+                    answer = outcome->code;
+                }
+                continue;
+            }
+            switch (outcome->kind) {
+            case TA_INPUT_TAKEN:
+                continue;
+            case TA_INPUT_FAULTED:
+            case TA_INPUT_REFUSED:
+                answer = outcome->code;
+                break;
+            case TA_INPUT_FINISHED:
+                *done = true;
+                break;
+            case TA_INPUT_IGNORED:
+                *ignored = true;
+                break;
+            default:
+                break;
+            }
+            ended = true;
+            if (answer == TA_OK) {
+                tah_sched_ran(&system->sched, actor, *done);
+            }
+        }
         if (result != TA_OK) {
             return result;
         }
-        if (status == TA_RUN_PAUSED) {
-            continue;
+        if (ended) {
+            return answer;
         }
-        *ignored = took_nothing;
-        *done = status == TA_RUN_DONE;
+        if (count != 0 || status == TA_RUN_PAUSED) {
+            continue; /* the kernel's message ran, or the input goes on */
+        }
+        /* Nothing to run: an actor that finished stays finished. */
+        ta_actor_inspection view;
+        *done = ta_actor_inspect(system->core, actor, &view) == TA_OK && view.residency == TA_ACTOR_DONE;
         return TA_OK;
     }
 }
-
 
 /* Whether `invoke` is one of the actor's active invocations. */
 static bool tah_replay_invoke_active(tah_system *system, ta_actor_id actor, ta_invoke_id invoke) {
@@ -145,10 +196,10 @@ static ta_result tah_replay_event_of(tah_system *system, const tah_replay_event_
     return result;
 }
 
-/* Resumes a replaying actor until it is between macrosteps (its bootstrap, or internal events). */
+/* Runs a replaying actor until it is between macrosteps (its bootstrap, or internal events). */
 static ta_result tah_replay_settle(tah_system *system, ta_actor_id actor, bool *finished) {
     bool ignored = false;
-    return tah_replay_resume(system, actor, false, &ignored, finished);
+    return tah_replay_resume(system, actor, &ignored, finished);
 }
 
 ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *params) {
@@ -167,10 +218,6 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
     }
     if (view.published) {
         return TA_ERR_INVALID;
-    }
-    tah_sched_entry *entry = tah_sched_lookup(&system->sched, params->actor);
-    if (entry != NULL) {
-        entry->flags |= TAH_SCHED_REPLAYING; /* the replay resumes it, not the scheduler */
     }
     bool finished = false;
     ta_result result = tah_replay_settle(system, params->actor, &finished);
@@ -224,7 +271,7 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
         return result;
     }
     bool ignored = false;
-    result = tah_replay_resume(system, params->actor, false, &ignored, &finished);
+    result = tah_replay_resume(system, params->actor, &ignored, &finished);
     if (result == TA_OK) {
         if (params->consumed != NULL) {
             *params->consumed = !ignored;
@@ -239,9 +286,5 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
 ta_result tah_replay_events_done(tah_system *system, ta_actor_id actor) {
     bool finished = false;
     ta_result result = tah_replay_settle(system, actor, &finished);
-    tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
-    if (entry != NULL) {
-        entry->flags &= (uint8_t)~TAH_SCHED_REPLAYING;
-    }
     return result == TA_OK && finished ? TA_ERR_DONE : result;
 }

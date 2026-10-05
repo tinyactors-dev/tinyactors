@@ -162,9 +162,12 @@ async function close() {
   assertThrows(() => actor.send('ping'), 'closed');
 }
 
-// A full queue: post() throws, send() rejects (ADR 0008), for both limits.
+// A full pool of pending inputs: post() throws, send() rejects (ADR 0008;
+// core ADR 0099: 8 envelopes, 2 of them for admission). The pool holds
+// envelopes, not data: what a message's data retains bounds only mail
+// between actors (maxRetainedBytes).
 async function backpressure() {
-  const system = createSystem({ parameters: { maxQueuedMessages: 2, maxRetainedBytes: 100 } });
+  const system = createSystem({ parameters: { poolEnvelopes: 8, admissionWatermark: 25 } });
   const definition = system.define(chart());
   const actor = system.spawn(definition);
   await system.flush();
@@ -172,18 +175,43 @@ async function backpressure() {
   actor.post('ping');
   assertThrows(() => actor.post('ping'), 'queue-full');
   await assertRejects(actor.send('ping'), 'queue-full');
-  await system.flush();
-  // Retained bytes: strings count 2 bytes per code unit, other objects 64 or `bytes`.
-  actor.post('ping', 'x'.repeat(30)); // 60 bytes
-  assertThrows(() => actor.post('ping', { big: true }), 'queue-full'); // 60 + 64 > 100
-  await assertRejects(actor.send('ping', new Uint8Array(41)), 'queue-full');
-  actor.post('ping', { big: true }, { bytes: 40 });
   assert.equal(system.stats().messages.queued, 2);
   await system.flush();
-  actor.post('ping', new Uint8Array(100)); // fits again once delivered
+  actor.post('ping', new Uint8Array(100)); // fits again once taken
   await system.flush();
   assertThrows(() => actor.post('ping', 'x', { bytes: -1 }), 'invalid');
   assertThrows(() => createSystem({ parameters: { maxRetainedBytes: -1 } }), 'invalid');
+  system.close();
+}
+
+// maxRetainedBytes bounds mail between actors (kernel ADR 0003): the
+// application's data counts against it (strings 2 bytes per code unit,
+// other objects 64 or `bytes`), and above it a send between actors is held
+// back as overflow, not refused, until a flush finds room.
+async function retainedBytes() {
+  const system = createSystem({ parameters: { maxRetainedBytes: 100 } });
+  const holder = system.spawn(system.define(plain()));
+  const sink = system.spawn(
+    system.define(statechart({ family: 'sink', revision: 'v1' }).state('idle', (s) => s.on('pong', (t) => t.target('got'))).state('got')),
+    { address: { family: 'sink', name: 'main' } },
+  );
+  const sender = system.spawn(
+    system.define(statechart({ family: 'sender', revision: 'v1' }).state('idle', (s) => s.on('ping', (t) => t.send('pong', (m) => m.to('#_actor_sink/main'))))),
+  );
+  await system.flush();
+  // A quarantined actor collects its mail, so its data stays retained.
+  nativeOf(system).post(holder.slot, holder.generation, 0x7fffffff);
+  await system.flush();
+  assert.equal(holder.inspect().scheduling, 'quarantined');
+  holder.post('ping', 'x'.repeat(60)); // 120 bytes: the application's mail is accepted past the limit
+  sender.post('ping');
+  await system.flush();
+  assert.equal(system.stats().messages.overflow, 1, 'the send between actors is held back');
+  assert.equal(sink.inspect().activeStates.at(-1), 'idle');
+  system.release(holder); // its mail is taken, and makes room
+  await system.flush();
+  assert.equal(system.stats().messages.overflow, 0);
+  assert.equal(sink.inspect().activeStates.at(-1), 'got', 'admitted after a flush, once');
   system.close();
 }
 
@@ -222,6 +250,7 @@ async function steadyState() {
   await timeout();
   await close();
   await backpressure();
+  await retainedBytes();
   await steadyState();
   clearTimeout(watchdog);
   console.log('send.js passed');

@@ -136,8 +136,9 @@ static ta_result tah_router_post_session(tah_system *system, const ta_actor_ref 
 /*
  * Whether mail a chart sends to `destination` has nowhere to go (napi
  * ADR 0022): a runtime ID with no actor, or one that finished, whose family
- * has no loader (napi ADR 0032 section 2); a name with
- * no resident actor, no load in flight, and no loader that would start one.
+ * has no loader (napi ADR 0032 section 2); a name whose resident actor
+ * finished, or with no resident actor, no load in flight, and no loader
+ * that would start one.
  * Such mail is not accepted: core raises error.communication in the sender
  * (SCXML 6.2.4). Mail from JavaScript does not come here, and stays a dead
  * letter (ADR 0008).
@@ -146,8 +147,17 @@ static bool tah_router_unreachable(tah_system *system, const ta_actor_ref *desti
     if (destination->kind == TA_ACTOR_REF_NAMED) {
         ta_address *address = destination->as.named;
         ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);
-        if (entry.kind == TA_ACTOR_DIRECTORY_RESIDENT || tah_loads_waiting(&system->loads, address) ||
-            tah_loads_would_load(&system->loads, address)) {
+        if (entry.kind == TA_ACTOR_DIRECTORY_RESIDENT) {
+            /* A resident actor that finished takes nothing, as for a runtime
+             * ID; its done hook has not destroyed it yet. */
+            const tah_sched_entry *scheduled = tah_sched_lookup(&system->sched, entry.actor);
+            if (scheduled == NULL || (scheduled->flags & TAH_SCHED_FINISHED) == 0) {
+                return false;
+            }
+            *reason = TAH_DEAD_DONE;
+            return true;
+        }
+        if (tah_loads_waiting(&system->loads, address) || tah_loads_would_load(&system->loads, address)) {
             return false;
         }
         *reason = entry.kind == TA_ACTOR_DIRECTORY_UNLOADED ? TAH_DEAD_UNLOADED : TAH_DEAD_NOT_FOUND;

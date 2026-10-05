@@ -226,9 +226,15 @@ actor. Invariants are checked after every step.
 Lower-level steps control a macrostep directly:
 
 - `actor.post(event)` offers an event without running the system, and
-  returns the `ta_actor_deliver` result (`"ok"`, `"err_busy"`, ...).
-- `actor.resume(budget:)` makes one `ta_actor_resume` call and returns its
-  status (`"paused"`, `"stable"`, `"done"`).
+  returns the `ta_actor_deliver` result (`"ok"`, `"err_full"`, `"err_done"`,
+  ...). Core admits it and runs it after the inputs admitted before it; with
+  `correlation:` the scenario can take it back (`withdraw_input`).
+- `actor.resume(budget:)` makes one `ta_run` call for this actor's session
+  alone, ending one input at most, and returns its status (`"paused"`,
+  `"stable"`, `"done"`); `actor.run_once` answers the result and the input's
+  outcome instead of failing on a fault.
+- `system_params(pool_envelopes: 8, ...)`, on a scenario's first line, sets
+  `ta_param` values of its system.
 - `actor.destroy` destroys the actor and runs the system.
 - `actor.jump(*states, from:)` delivers an event (`operator.goto` unless
   `event:` names another) with an operator transition to those states, from

@@ -273,7 +273,7 @@ static ta_definition_id define_idle(ta_system *system) {
 static ta_actor_id spawn_idle(ta_system *system, ta_definition_id definition) {
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &actor }) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     return actor;
 }
@@ -312,7 +312,7 @@ static void test_delivery(void) {
      * see only the origin. */
     ta_event warm = { .name = event_name(system, "ping"), .type = TA_EVENT_EXTERNAL,
                       .invoke_id = TA_INVOKE_ID_NONE };
-    ta_run_status status = TA_RUN_ERROR;
+    test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
                                                          .event = &warm },
@@ -327,7 +327,7 @@ static void test_delivery(void) {
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(system, actor, &inspection) == TA_OK);
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
     /* The macrostep is over, and an actor nobody invoked keeps no event
      * between macrosteps (ADR 0069), so the origin is given back. */
     CHECK(heap.live == before);
@@ -337,7 +337,7 @@ static void test_delivery(void) {
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &stop }) == TA_OK);
     ta_event_release(&stop);
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(status == TA_RUN_DONE);
+    CHECK(status == TEST_DRIVE_DONE);
     long finished = heap.live;
     ta_event late = message_event(system, request, "ping", long_uri);
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &late }) == TA_ERR_DONE);
@@ -361,13 +361,17 @@ static void test_image(void) {
     ta_definition_id definition = define_idle(system);
     ta_actor_id actor = spawn_idle(system, definition);
 
-    /* A computed origin, held as the actor's pending external event. */
+    /* A computed origin, held as the external event of the actor's macrostep:
+     * admitted, then taken by one step, where the macrostep pauses. */
     ta_event event = { .name = event_name(system, "ping"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(ta_io_origin_make(system, &(ta_io_origin_make_params){ .processor = peer,
                                                                  .origin_class = TA_IO_ORIGIN_COMPUTED,
                                                                  .token = 42,
                                                                  .out = &event.origin }) == TA_OK);
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .budget = 1, .status = &status }) == TA_OK);
+    CHECK(status == TEST_DRIVE_PAUSED);
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &image }) == TA_OK);
     CHECK(ta_actor_destroy(system, actor) == TA_OK);

@@ -398,10 +398,9 @@ static void drain(fixture *f) {
     }
 }
 
-static ta_run_status resume(fixture *f, uint32_t budget) {
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f->core, &(ta_actor_resume_params){ .actor = f->actor, .budget = budget,
-                                                              .status = &status }) == TA_OK);
+static check_run_status resume(fixture *f, uint32_t budget) {
+    check_run_status status = check_run(f->core, f->actor, budget);
+    CHECK(status != CHECK_RUN_ERROR);
     drain(f);
     return status;
 }
@@ -428,7 +427,7 @@ static void open_across_turns(void) {
     fixture f;
     start(&f, true);
     spawn(&f, f.definition, &f.actor);
-    CHECK(resume(&f, 1) == TA_RUN_PAUSED);
+    CHECK(resume(&f, 1) == CHECK_RUN_PAUSED);
 
     span_view spans[16];
     uint32_t count = read_spans(take(&f.otlp), spans, 16);
@@ -436,7 +435,7 @@ static void open_across_turns(void) {
     CHECK(named(spans, count, "scxml.spawned") != NULL);
     CHECK(tah_otlp_open_count(&f.otlp) == 1);
 
-    CHECK(resume(&f, 100) == TA_RUN_STABLE);
+    CHECK(resume(&f, 100) == CHECK_RUN_STABLE);
     uint32_t more = read_spans(take(&f.otlp), spans, 16);
     const span_view *macro = named(spans, more, "scxml.macrostep bootstrap");
     CHECK(macro != NULL);
@@ -462,7 +461,7 @@ static void open_across_turns(void) {
     CHECK(ta_actor_deliver(f.core, &(ta_actor_deliver_params){ .time = ta_system_time(f.core), .actor = f.actor,
                                                                .event = &(ta_event){ .name = name } }) == TA_OK);
     drain(&f);
-    CHECK(resume(&f, 100) == TA_RUN_STABLE);
+    CHECK(resume(&f, 100) == CHECK_RUN_STABLE);
     count = read_spans(take(&f.otlp), spans, 16);
     const span_view *go_macro = named(spans, count, "scxml.macrostep go");
     const span_view *go_micro = named(spans, count, "scxml.microstep go");
@@ -483,7 +482,7 @@ static void end_all(void) {
     fixture f;
     start(&f, true);
     spawn(&f, f.definition, &f.actor);
-    CHECK(resume(&f, 1) == TA_RUN_PAUSED);
+    CHECK(resume(&f, 1) == CHECK_RUN_PAUSED);
     (void)take(&f.otlp);
     tah_otlp_end_all(&f.otlp);
     span_view spans[4];
@@ -528,14 +527,12 @@ static void dropped_records(void) {
     CHECK(ta_system_set_wall_clock(f.core, (ta_wall_clock){ .self = &f.host, .v = &stub_clock }) == TA_OK);
     CHECK(ta_system_set_trace_masks(f.core, &(ta_trace_masks){ .kinds = UINT32_MAX }) == TA_OK);
     spawn(&f, f.definition, &f.actor);
-    CHECK(resume(&f, 1) == TA_RUN_PAUSED); /* the bootstrap macrostep is open */
+    CHECK(resume(&f, 1) == CHECK_RUN_PAUSED); /* the bootstrap macrostep is open */
     (void)take(&f.otlp);
     CHECK(tah_otlp_open_count(&f.otlp) == 1);
 
     /* The rest of the bootstrap, unread: its records overflow the ring. */
-    ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(f.core, &(ta_actor_resume_params){ .actor = f.actor, .budget = 100, .status = &status }) ==
-          TA_OK);
+    CHECK(check_run(f.core, f.actor, 100) != CHECK_RUN_ERROR);
     ta_tel_status tel;
     CHECK(ta_system_tel_status(f.core, &tel) == TA_OK && tel.dropped > 0);
     drain(&f); /* the records that fit; the report comes with the next record */
@@ -584,7 +581,7 @@ static void abandoned(void) {
     fixture f;
     start(&f, true);
     spawn(&f, f.definition, &f.actor);
-    CHECK(resume(&f, 1) == TA_RUN_PAUSED);
+    CHECK(resume(&f, 1) == CHECK_RUN_PAUSED);
     (void)take(&f.otlp);
     CHECK(tah_otlp_open_count(&f.otlp) == 1);
     CHECK(ta_actor_abandon(f.core, f.actor) == TA_OK);
@@ -643,7 +640,7 @@ static void many_open(void) {
     for (uint32_t at = 0; at < COUNT; at += 1u) {
         spawn(&f, f.definition, &actors[at]);
         f.actor = actors[at];
-        CHECK(resume(&f, 1) == TA_RUN_PAUSED);
+        CHECK(resume(&f, 1) == CHECK_RUN_PAUSED);
     }
     CHECK(tah_otlp_open_count(&f.otlp) == COUNT);
     (void)take(&f.otlp);
@@ -652,7 +649,7 @@ static void many_open(void) {
         for (uint32_t at = COUNT; at > 0; at -= 1u) {
             if (((at - 1u) % 3u == 0) == (pass == 0)) {
                 f.actor = actors[at - 1u];
-                CHECK(resume(&f, 1000) == TA_RUN_STABLE);
+                CHECK(resume(&f, 1000) == CHECK_RUN_STABLE);
             }
         }
     }
@@ -661,7 +658,7 @@ static void many_open(void) {
 
     /* An actor unloaded mid-macrostep ends its span as incomplete. */
     spawn(&f, f.definition, &f.actor);
-    CHECK(resume(&f, 1) == TA_RUN_PAUSED);
+    CHECK(resume(&f, 1) == CHECK_RUN_PAUSED);
     CHECK(tah_otlp_open_count(&f.otlp) == 1);
     destroy(&f, f.actor);
     CHECK(tah_otlp_open_count(&f.otlp) == 0);
@@ -708,7 +705,7 @@ static void forget_definition(void) {
     fixture f;
     start(&f, true);
     spawn(&f, f.definition, &f.actor);
-    CHECK(resume(&f, 64) == TA_RUN_STABLE);
+    CHECK(resume(&f, 64) == CHECK_RUN_STABLE);
     (void)take(&f.otlp);
     uint32_t cached = f.otlp.name_count;
     uint32_t mine = 0;
@@ -727,7 +724,7 @@ static void forget_definition(void) {
     /* The encoder still names the definition's states: they are cached again. */
     destroy(&f, f.actor);
     spawn(&f, f.definition, &f.actor);
-    CHECK(resume(&f, 64) == TA_RUN_STABLE);
+    CHECK(resume(&f, 64) == CHECK_RUN_STABLE);
     CHECK(take(&f.otlp).len != 0);
     CHECK(f.otlp.name_count > cached - mine);
     stop(&f);
@@ -783,9 +780,9 @@ static void scopes_per_definition(void) {
     ta_actor_id second = 0;
     spawn(&f, f.definition, &f.actor);
     spawn(&f, other, &second);
-    CHECK(resume(&f, 100) == TA_RUN_STABLE);
+    CHECK(resume(&f, 100) == CHECK_RUN_STABLE);
     f.actor = second;
-    CHECK(resume(&f, 100) == TA_RUN_STABLE);
+    CHECK(resume(&f, 100) == CHECK_RUN_STABLE);
     ta_str bytes = take(&f.otlp);
     span_view spans[32];
     uint32_t span_count = read_spans(bytes, spans, 32);
@@ -814,7 +811,7 @@ static void freed_in_turn(void) {
     start(&f, true);
     ta_definition_id other = define_other(&f);
     spawn(&f, other, &f.actor);
-    CHECK(resume(&f, 100) == TA_RUN_STABLE);
+    CHECK(resume(&f, 100) == CHECK_RUN_STABLE);
     destroy(&f, f.actor);
     CHECK(ta_system_retire_definition(f.core, other) == TA_OK);
     drain(&f);
@@ -849,8 +846,7 @@ static void scopes_out_of_memory(void) {
             }
             tah_allocator_refuse_from(&f.allocator, refuse);
             (void)ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = other, .out = &second });
-            (void)ta_actor_resume(f.core, &(ta_actor_resume_params){ .actor = f.actor, .budget = 100,
-                                                                     .status = &(ta_run_status){ 0 } });
+            (void)check_run(f.core, f.actor, 100);
             drain(&f);
             tah_allocator_refuse_from(&f.allocator, 0);
             ta_str bytes = take(&f.otlp);

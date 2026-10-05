@@ -23,7 +23,7 @@ static const ta_wall_clock_vtable tah_system_core_clock = { .wall_ns = tah_syste
  * microstep, a guard, an action, and the event it raises.
  */
 #define TAH_TEL_RECORDS_PER_MICROSTEP 4u
-/* The records a resume writes besides its microsteps: a macrostep's begin and end. */
+/* The records a ta_run() call writes besides its microsteps: a macrostep's begin and end. */
 #define TAH_TEL_RECORDS_PER_RESUME 2u
 /* Records of maxRecordBytes any ring holds when valueBytes makes records
  * larger than core's default: a macrostep writes the event's data twice
@@ -56,8 +56,8 @@ static uint32_t tah_core_param_at(tah_core_params *out, ta_param param, uint64_t
 
 /*
  * Core's parameters as the binding gave them, with the trace sizes the
- * kernel's own parameters ask for (core ADR 0098). Each of the three
- * follows the kernel while it is unset or at core's default; one set to
+ * kernel's own parameters ask for (core ADR 0098), and the pool's size.
+ * Each follows the kernel while it is unset or at core's default; one set to
  * anything else stays as given. A binding may pass every parameter,
  * defaults included (napi does), so a value equal to the default counts as
  * unset: an explicit telemetryValueBytes of 1,024 follows valueBytes too.
@@ -66,7 +66,7 @@ static uint32_t tah_core_param_at(tah_core_params *out, ta_param param, uint64_t
  * - maxRecordBytes leaves that value room beside the rest of a record: at
  *   least telemetryValueBytes + 512.
  * - When the binding may turn the encoder on (`traced`), telBytes holds
- *   one resume's records, since the kernel reads tel only between resumes
+ *   one ta_run() call's records, since the kernel reads tel only between calls
  *   (tah_system_staging_full): resumeBudget microsteps of
  *   TAH_TEL_RECORDS_PER_MICROSTEP records, and a macrostep's begin and end,
  *   each of maxRecordBytes, at most core's bound. The encoder is turned on
@@ -76,6 +76,11 @@ static uint32_t tah_core_param_at(tah_core_params *out, ta_param param, uint64_t
  *   keeps core's 16 KiB, for whoever reads tel some other way, or four of
  *   the largest records when valueBytes makes them larger than core's
  *   default, so that telBytes stays at least maxRecordBytes.
+ * - poolEnvelopes and nameAreaBytes are core's largest (core ADR 0099): a
+ *   binding over the kernel admits what its host posts up to the pool's
+ *   watermark, and the pool fills on demand, so a system pays for its
+ *   peak, not for the bound; a binding that wants a smaller pool sets
+ *   them.
  *
  * Answers the list to give core: `out`'s, or the binding's own list when it
  * is longer than any list core accepts, which core then refuses.
@@ -94,6 +99,21 @@ static const ta_param_value *tah_system_core_params(const tah_system_create_para
     uint32_t ring_at = tah_core_param_at(out, TA_PARAM_TEL_BYTES, TA_PARAM_DEFAULT_TEL_BYTES);
     if (value_at == UINT32_MAX || record_at == UINT32_MAX || ring_at == UINT32_MAX) {
         return out->values; /* a list with repeats, which core refuses as it is */
+    }
+    ta_param_info pool_info = { 0 };
+    ta_param_info names_info = { 0 };
+    (void)ta_param_info_of(TA_PARAM_POOL_ENVELOPES, &pool_info);
+    (void)ta_param_info_of(TA_PARAM_NAME_AREA_BYTES, &names_info);
+    uint32_t pool_at = tah_core_param_at(out, TA_PARAM_POOL_ENVELOPES, TA_PARAM_DEFAULT_POOL_ENVELOPES);
+    uint32_t names_at = tah_core_param_at(out, TA_PARAM_NAME_AREA_BYTES, TA_PARAM_DEFAULT_NAME_AREA_BYTES);
+    if (pool_at == UINT32_MAX || names_at == UINT32_MAX) {
+        return out->values;
+    }
+    if (out->values[pool_at].value == TA_PARAM_DEFAULT_POOL_ENVELOPES) {
+        out->values[pool_at].value = pool_info.max;
+    }
+    if (out->values[names_at].value == TA_PARAM_DEFAULT_NAME_AREA_BYTES) {
+        out->values[names_at].value = names_info.max;
     }
     ta_param_value *value = &out->values[value_at];
     ta_param_value *record = &out->values[record_at];
@@ -201,6 +221,9 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
         tah_system_release_record(system);
         return result;
     }
+    tah_sched_attach(&system->sched, &(tah_sched_attach_params){ .core = system->core,
+                                                                .inside_core = &system->inside_core,
+                                                                .watch = &system->trace_watch });
     (void)ta_system_set_wall_clock(system->core, (ta_wall_clock){ .self = system, .v = &tah_system_core_clock });
     (void)ta_system_set_actor_directory(system->core, tah_directory_adapter(&system->directory));
     (void)ta_system_set_external_event_router(system->core, tah_router_adapter(system));
@@ -718,7 +741,7 @@ bool tah_system_dispatch_due(tah_system *system) {
  */
 static bool tah_system_staging_full(void *context) {
     tah_system *system = context;
-    tah_system_drain_telemetry(system); /* what the resume before wrote */
+    tah_system_drain_telemetry(system); /* what the ta_run() before wrote */
     return system->tracing && tah_otlp_traces_size(&system->otlp) + tah_otlp_logs_size(&system->otlp) >=
                                   system->params.values[TAH_PARAM_TRACE_STAGING_BYTES];
 }
@@ -730,11 +753,8 @@ void tah_system_turn(tah_system *system) {
     }
     tah_system_sync_time(system);
     tah_sched_turn(&system->sched, &(tah_turn_params){
-                                       .core = system->core,
                                        .arena = &system->scratch.turn,
-                                       .inside_core = &system->inside_core,
                                        .budgets = system->budgets,
-                                       .watch = &system->trace_watch,
                                        .stop = tah_system_staging_full,
                                        .stop_context = system,
                                    });

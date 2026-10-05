@@ -203,7 +203,9 @@ static void waiting_mail_moves_in_order(void) {
     finish_system(system);
 }
 
-/* At most max_waiting messages wait; waiting mail counts against max_queued. */
+/* At most max_waiting messages wait, and waiting mail counts as queued; the
+ * limits of ADR 0005 point 9 hold back only mail between actors, so the
+ * application's mail past them is accepted, here as a dead letter. */
 static void waiting_mail_is_bounded(void) {
     tah_system *system = make_system();
     ta_actor_id first = spawn(system, define_receiver(system), &recv_name);
@@ -216,11 +218,12 @@ static void waiting_mail_is_bounded(void) {
     CHECK(post(system, address, "c") == TA_OK); /* accepted as a waiting-full dead letter */
     CHECK(system->loads.waiting == 2u && system->sched.queued == 3u);
     system->sched.max_queued = 3u;
-    CHECK(post(system, address, "d") == TA_ERR_BUSY);
+    CHECK(post(system, address, "d") == TA_OK); /* waiting-full too */
+    CHECK(system->loads.waiting == 2u && system->sched.queued == 4u);
     system->sched.max_queued = 0;
     tah_load_request request = next_request(system); /* the pump hands it to JavaScript after a turn */
     tah_dead_reason reason = TAH_DEAD_NOT_FOUND;
-    CHECK(settle(system, &reason) == 1u && reason == TAH_DEAD_WAITING_FULL);
+    CHECK(settle(system, &reason) == 2u && reason == TAH_DEAD_WAITING_FULL);
 
     ta_actor_id loaded = load(system, image);
     CHECK(finish(system, request, TAH_LOAD_LOADED, loaded) == TA_OK);

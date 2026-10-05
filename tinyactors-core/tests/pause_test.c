@@ -302,6 +302,9 @@ typedef struct {
     uint32_t microstep_pauses;
     /* Pauses whose inspected position named a unit to run next. */
     uint32_t pauses_before_unit;
+    /* Events admitted while the macrostep was paused, as correlations 1 to
+     * `waiting`: none is taken before the macrostep ends. */
+    uint32_t waiting;
 } run;
 
 static void start(run *r, uint32_t action_budget) {
@@ -324,8 +327,8 @@ static void start(run *r, uint32_t action_budget) {
  * call wrote (ADR 0083), or, when its macrostep had not begun and so wrote
  * none, the session alone and nowhere.
  */
-static ta_run_status resume_once(run *r) {
-    ta_run_status status = TA_RUN_ERROR;
+static test_drive_status resume_once(run *r) {
+    test_drive_status status = TEST_DRIVE_ERROR;
     long records = control_records;
     CHECK(test_drive_run(r->system, r->actor,
                          &(test_drive_run_params){ .budget = r->budget, .status = &status,
@@ -334,13 +337,19 @@ static ta_run_status resume_once(run *r) {
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(r->system, r->actor, &inspection) == TA_OK);
     CHECK(inspection.step.session == inspection.session_id);
-    if (status != TA_RUN_PAUSED) {
+    if (status != TEST_DRIVE_PAUSED) {
+        /* The events admitted during its pauses were never taken: each can
+         * still be withdrawn, and runs nothing. */
+        for (uint32_t correlation = 1; correlation <= r->waiting; correlation += 1u) {
+            CHECK(ta_system_withdraw_input(r->system, correlation) == TA_OK);
+        }
+        r->waiting = 0;
         /* Outside a macrostep: the session alone, and nowhere. */
         CHECK(!inspection.macrostep_in_progress);
         CHECK(same_key(inspection.step, (ta_step_key){ .session = inspection.session_id }));
         CHECK(nowhere(inspection.position));
     }
-    if (status == TA_RUN_PAUSED) {
+    if (status == TEST_DRIVE_PAUSED) {
         r->pauses += 1u;
         CHECK(inspection.macrostep_in_progress);
         r->microstep_pauses += inspection.microstep_in_progress ? 1u : 0u;
@@ -355,22 +364,26 @@ static ta_run_status resume_once(run *r) {
         CHECK(inspection.microstep_in_progress == (inspection.position.action != TA_ACTION_NONE));
         CHECK(inspection.microstep_in_progress || nowhere(inspection.position));
         r->pauses_before_unit += inspection.position.action != TA_ACTION_NONE ? 1u : 0u;
+        /* An event admitted now waits for the macrostep to end (ADR 0099). */
         ta_atom atom = 0;
-        CHECK(ta_system_intern_atom(r->system, STR("refused"), &atom) == TA_OK);
-        ta_event refused = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-        CHECK(ta_event_name_intern(r->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &refused.name) == TA_OK);
-        CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &refused }) == TA_ERR_BUSY);
+        CHECK(ta_system_intern_atom(r->system, STR("waiting"), &atom) == TA_OK);
+        ta_event waiting = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+        CHECK(ta_event_name_intern(r->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &waiting.name) == TA_OK);
+        r->waiting += 1u;
+        CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system),
+                                                                      .actor = r->actor, .event = &waiting,
+                                                                      .correlation = r->waiting }) == TA_OK);
     }
     return status;
 }
 
 static void settle(run *r) {
-    ta_run_status status;
+    test_drive_status status;
     uint32_t calls = 0;
-    while ((status = resume_once(r)) == TA_RUN_PAUSED && calls < 10000u) {
+    while ((status = resume_once(r)) == TEST_DRIVE_PAUSED && calls < 10000u) {
         calls += 1u;
     }
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
 }
 
 static void deliver(run *r, const char *name) {
@@ -474,7 +487,7 @@ static void test_capture_inside_foreach(void) {
     deliver(&r, "go");
     /* Run into the transition's content: the exit handlers take 12 units. */
     for (uint32_t step = 0; step < 16u; step += 1u) {
-        CHECK(resume_once(&r) == TA_RUN_PAUSED);
+        CHECK(resume_once(&r) == TEST_DRIVE_PAUSED);
     }
     CHECK(live_snapshots >= 2);
     ta_actor_inspection captured;
@@ -527,17 +540,17 @@ static void test_pause_needs_no_allocation(void) {
     size_t warmed = trace_length;
     deliver(&r, "go");
     refuse_from_x1 = 1;
-    ta_run_status status = resume_once(&r);
+    test_drive_status status = resume_once(&r);
     refuse_from_x1 = 0;
     CHECK(heap.policy.refuse == 1);
-    CHECK(status == TA_RUN_PAUSED);
+    CHECK(status == TEST_DRIVE_PAUSED);
     uint32_t pauses = 0;
-    while ((status = resume_once(&r)) == TA_RUN_PAUSED && pauses < 10000u) {
+    while ((status = resume_once(&r)) == TEST_DRIVE_PAUSED && pauses < 10000u) {
         pauses += 1u;
     }
     heap.policy.refuse = false;
     CHECK(pauses > 10u);
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
     note_configuration(&r);
     finish(&r);
     /* The refused run did what the first "go" did. */
@@ -579,9 +592,9 @@ static void test_position_names_the_next_unit(void) {
     start(&r, 1);
     settle(&r);
     deliver(&r, "go");
-    ta_run_status status = resume_once(&r);
+    test_drive_status status = resume_once(&r);
     /* The first unit, `x1`, ran: next is the <if> after it in a's first <onexit>. */
-    CHECK(status == TA_RUN_PAUSED);
+    CHECK(status == TEST_DRIVE_PAUSED);
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(r.system, r.actor, &inspection) == TA_OK);
     CHECK(inspection.position.at == TA_TRACE_AT_EXIT && inspection.position.state == 0);
@@ -595,7 +608,7 @@ static void test_position_names_the_next_unit(void) {
 
     uint32_t next_iterations = 0;
     uint32_t seen[4] = {0}; /* pauses in EXIT, TRANSITION, ENTER, elsewhere */
-    for (uint32_t calls = 0; status == TA_RUN_PAUSED && calls < 1000u; calls += 1u) {
+    for (uint32_t calls = 0; status == TEST_DRIVE_PAUSED && calls < 1000u; calls += 1u) {
         CHECK(ta_actor_inspect(r.system, r.actor, &inspection) == TA_OK);
         ta_trace_position at = inspection.position;
         ta_action_info root = root_block(&r, at.action);
@@ -624,7 +637,7 @@ static void test_position_names_the_next_unit(void) {
         CHECK(at.iteration < 3u);
         status = resume_once(&r);
     }
-    CHECK(status == TA_RUN_STABLE);
+    CHECK(status == TEST_DRIVE_STABLE);
     CHECK(seen[0] > 5u && seen[1] > 5u && seen[2] > 5u && seen[3] == 0);
     CHECK(next_iterations > 3u);
     CHECK(r.pauses == r.pauses_before_unit);
