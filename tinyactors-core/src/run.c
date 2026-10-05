@@ -150,6 +150,11 @@ static ta_result ta_run_cover(ta_system *system) {
     return ta_envelopes_refill(&system->envelopes, system->envelopes.macrostep_reserve);
 }
 
+/* ta_run_executing: see run.h. */
+bool ta_run_executing(const ta_system *system) {
+    return system->runner.executing;
+}
+
 /* ta_run_actor_gone: see run.h. */
 void ta_run_actor_gone(ta_system *system, const ta_actor *actor) {
     const ta_run_slot *slot = &system->runner.slot;
@@ -779,10 +784,12 @@ ta_result ta_run(ta_system *system, const ta_run_params *params) {
             continue;
         }
         ta_input_result stepped;
+        runner->executing = true;
         result = ta_interpreter_run_input(system, actor, &(ta_input_run){ .budget = budget,
                                                                         .action_budget = params->action_budget,
                                                                         .pause_at_start = params->pause_at_microstep_start },
                                           &stepped);
+        runner->executing = false;
         if (result != TA_OK) {
             status = TA_RUN_PAUSED;
             break;

@@ -8577,7 +8577,26 @@ typedef struct ta_runner {
     ta_ilist loads;
     ta_ilist refused;
     uint64_t tokens;       /* the last token issued; 0 is "no token" */
+    /*
+     * True only while ta_run is inside the interpreter for the slot's input:
+     * a macrostep is executing, not merely holding the slot. A budget-paused
+     * macrostep keeps the slot between calls, so `slot.occupied` cannot say
+     * this. Lifetime: one ta_interpreter_run_input call. See ta_run_executing.
+     */
+    bool executing;
 } ta_runner;
+
+/*
+ * ta_run_executing reports whether a macrostep is executing now, inside
+ * ta_run. Everything a send does while it is true is paid from the slot's
+ * claim and waits on the slot's outgoing lists, whichever session sends:
+ * an invoked child cancelled by its parent's macrostep runs its <onexit>
+ * inside that macrostep, so its mail belongs to the parent's input (dropped
+ * if the parent's macrostep is abandoned, after the parent's earlier sends).
+ * While it is false the caller is at a safe point (a host call, a due
+ * dispatch, a publish) and posts from the pool after ta_mail_prepare. O(1).
+ */
+TA_PRIVATE bool ta_run_executing(const ta_system *system);
 
 /*
  * ta_runner_init prepares an empty runner over `allocator`. It allocates
@@ -19112,6 +19131,11 @@ static ta_result ta_run_cover(ta_system *system) {
     return ta_envelopes_refill(&system->envelopes, system->envelopes.macrostep_reserve);
 }
 
+/* ta_run_executing: see run.h. */
+TA_PRIVATE bool ta_run_executing(const ta_system *system) {
+    return system->runner.executing;
+}
+
 /* ta_run_actor_gone: see run.h. */
 TA_PRIVATE void ta_run_actor_gone(ta_system *system, const ta_actor *actor) {
     const ta_run_slot *slot = &system->runner.slot;
@@ -19741,10 +19765,12 @@ TA_API ta_result ta_run(ta_system *system, const ta_run_params *params) {
             continue;
         }
         ta_input_result stepped;
+        runner->executing = true;
         result = ta_interpreter_run_input(system, actor, &(ta_input_run){ .budget = budget,
                                                                         .action_budget = params->action_budget,
                                                                         .pause_at_start = params->pause_at_microstep_start },
                                           &stepped);
+        runner->executing = false;
         if (result != TA_OK) {
             status = TA_RUN_PAUSED;
             break;
@@ -22726,11 +22752,16 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
             return TA_OK;
         }
     }
+    /* Inside an executing macrostep the claim pays; at a safe point (a host call ending the child) the pool. */
+    bool in_macrostep = ta_run_executing(system);
+    if (!in_macrostep) {
+        (void)ta_mail_prepare(system, 1u);
+    }
     ta_mail_status mailed = ta_mail_send(system, &(ta_mail_params){ .sender = delivery->sender->record.id,
                                                                     .destination = delivery->destination,
                                                                     .event = delivery->event,
                                                                     .trace = delivery->trace,
-                                                                    .in_macrostep = true });
+                                                                    .in_macrostep = in_macrostep });
     if (mailed == TA_MAIL_FULL) {
         system->counters.quota_refusals += 1u;
     }
@@ -34507,11 +34538,12 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         return raised == TA_EXEC_FAILED ? TA_OK : raised;
     }
     if (state->delay == 0) {
-        /* The macrostep's claim pays for this mail only while the sender's own input holds the slot. A send made
-         * outside it (a host call that destroys the session and runs an invoked child's <onexit>) is posted at
-         * this safe point instead, from the pool, as a due send is (mail.h). The pool is grown if it can be; if
-         * not, mail finds no envelope and the sender hears error.communication. */
-        bool own_run = system->runner.slot.occupied && system->runner.slot.actor == actor->record.id;
+        /* An executing macrostep pays for this mail from its claim, whoever sends it: an invoked child cancelled
+         * by its parent's macrostep runs its <onexit> there, and its mail belongs to the parent's input (run.h,
+         * ta_run_executing). Outside one (a host call that destroys the session) it is a safe point: the mail is
+         * posted from the pool, as a due send is (mail.h), after growing the pool if it can be; if not, mail
+         * finds no envelope and the sender hears error.communication. */
+        bool own_run = ta_run_executing(system);
         if (!own_run) {
             (void)ta_mail_prepare(system, 1u);
         }

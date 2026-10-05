@@ -709,11 +709,16 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
             return TA_OK;
         }
     }
+    /* Inside an executing macrostep the claim pays; at a safe point (a host call ending the child) the pool. */
+    bool in_macrostep = ta_run_executing(system);
+    if (!in_macrostep) {
+        (void)ta_mail_prepare(system, 1u);
+    }
     ta_mail_status mailed = ta_mail_send(system, &(ta_mail_params){ .sender = delivery->sender->record.id,
                                                                     .destination = delivery->destination,
                                                                     .event = delivery->event,
                                                                     .trace = delivery->trace,
-                                                                    .in_macrostep = true });
+                                                                    .in_macrostep = in_macrostep });
     if (mailed == TA_MAIL_FULL) {
         system->counters.quota_refusals += 1u;
     }

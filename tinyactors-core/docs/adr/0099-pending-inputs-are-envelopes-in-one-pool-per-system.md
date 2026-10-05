@@ -524,14 +524,23 @@ beyond it:
   to a start record in the sparse state and reading the envelope in place
   changes the session-image format and is left for a later unit.
 
-**Mail sent outside the sender's own macrostep (review fix, 4.2d).** An
-invoked child's `<onexit>` runs when the host destroys, frees or tears down
-its parent, which is a host call, not a macrostep. `ta_send_commit` pays for a
-send from the running input's claim only when the slot is occupied by the
-sender itself; otherwise it makes room with `ta_mail_prepare` (a safe point,
-best effort) and posts the envelope straight to the run queue from the pool,
-as a due send is. The mail is therefore delivered whether the slot is empty or
-held by another session's paused macrostep, and it is not lost when that other
-macrostep is abandoned. If the pool has no envelope, the sender hears
-`error.communication`, not the quota-refusal `error.execution`. Covered by
-`tests/mail_test.c` (`test_exit_mail_outside_a_macrostep`).
+**Who pays for a send: an executing macrostep, whoever sends (review fixes,
+4.2d).** The runner sets `executing` only while `ta_run` is inside the
+interpreter for the slot's input (`ta_run_executing`, run.h); a macrostep
+paused by a budget keeps the slot but is not executing. A send made while it
+is true is paid from the slot's claim and waits on the slot's outgoing lists,
+whichever session sends. That covers an invoked child cancelled by its
+parent's macrostep (leaving the invoking state, `<cancel>`, a final state):
+the child's `<onexit>` mail belongs to the parent's input, follows the
+parent's earlier sends (M4), and is dropped with them if the parent's
+macrostep is abandoned or runs away (D2). A send made while it is false is at
+a safe point: an invoked child's `<onexit>` running because the host destroys,
+frees or tears down its parent. It makes room with `ta_mail_prepare` (best
+effort) and posts the envelope straight to the run queue from the pool, as a
+due send is, so the mail is delivered whether the slot is empty or held by
+another session's paused macrostep, and it is not lost when that other
+macrostep is abandoned; if the pool has no envelope, the sender hears
+`error.communication`. Invoke completions and forwarded events
+(`ta_invoke_deliver`) choose the same way. Covered by `tests/mail_test.c`
+(`test_exit_mail_outside_a_macrostep`,
+`test_exit_mail_inside_the_parents_macrostep`).

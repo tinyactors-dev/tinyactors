@@ -1549,6 +1549,94 @@ static void exit_mail_case(bool slot_held) {
     world_close(&w);
 }
 
+/*
+ * The parent's own macrostep cancels its child: `go` leaves the invoking
+ * state, whose <onexit> sends e1 to the receiver, and the cancel runs the
+ * child's <onexit>, which sends e2. Both sends are made inside the parent's
+ * executing macrostep, so both are paid from its claim and wait on its
+ * outgoing list in that order (ADR 0099 sections 3 and 4): the pool is not
+ * grown inside the macrostep, nothing reaches the receiver while the
+ * macrostep is paused, the receiver sees e1 before e2, and abandoning the
+ * parent drops both (D2).
+ */
+static void cancel_mail_case(bool abandon) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_atom kid_type = 0;
+    CHECK(ta_system_intern_atom(w.system, (ta_str)STR("kid"), &kid_type) == TA_OK);
+    CHECK(ta_system_register_invoker(w.system, kid_type, (ta_invoker){ .v = &kid_vtable }) == TA_OK);
+    ta_actor_id receiver = spawn(&w, w.chain);
+    settle(&w);
+    char target[96];
+    session_target(&w, receiver, target, sizeof target);
+    ta_str to = { .ptr = target, .len = (uint32_t)strlen(target) };
+    ta_scxml_handler_spec kid_onexit[] = {
+        { .actions = (const ta_scxml_action_spec[]){
+              { .kind = TA_SCXML_ACTION_SEND,
+                .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR("e2") },
+                             .target = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = to } } },
+              END } },
+        END,
+    };
+    ta_scxml_state_spec kid_states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("k"), .onexit = kid_onexit }, END
+    };
+    kid_definition = define(w.system, &(ta_scxml_spec){ .name = STR("kid"), .states = kid_states });
+    static const ta_scxml_invoke_spec invoke[] = {
+        { .kind = TA_SCXML_INVOKE, .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("kid") } }, END
+    };
+    ta_scxml_handler_spec parent_onexit[] = {
+        { .actions = (const ta_scxml_action_spec[]){
+              { .kind = TA_SCXML_ACTION_SEND,
+                .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR("e1") },
+                             .target = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = to } } },
+              END } },
+        END,
+    };
+    ta_scxml_state_spec parent_states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("p"), .invokes = invoke, .onexit = parent_onexit,
+          .transitions = (const ta_scxml_transition_spec[]){ ON("go", "q"), END } },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("q") },
+        END,
+    };
+    ta_actor_id parent = spawn(&w, define(w.system, &(ta_scxml_spec){ .name = STR("cancelparent"),
+                                                                     .states = parent_states }));
+    settle(&w); /* the parent starts its child, which enters k */
+    CHECK(post(&w, parent, w.go) == TA_OK);
+    uint64_t refusals = w.system->counters.quota_refusals;
+    CHECK(run_for(&w, 1) == TA_RUN_PAUSED);
+    /* Both envelopes came from the parent's claim, not from a pool grown in the macrostep (ta_mail_prepare). */
+    CHECK(w.system->runner.slot.claim.held == w.system->envelopes.macrostep_reserve - 2u);
+    CHECK(w.system->runner.slot.occupied && w.system->runner.slot.actor == parent);
+    CHECK(w.system->counters.quota_refusals == refusals);
+    CHECK(queued_of(&w, receiver) == 2u);
+    uint32_t outgoing = 0; /* both wait on the parent's outgoing list */
+    for (uint32_t index = w.system->runner.slot.outgoing.head; index != 0;
+         index = ta_ilist_next(ta_envelopes_link(&w.system->envelopes), index)) {
+        outgoing += ta_envelope_at(&w.system->envelopes, index)->target == receiver ? 1u : 0u;
+    }
+    CHECK(outgoing == 2u);
+    CHECK(ta_ilist_is_empty(&w.system->envelopes.run));
+    if (abandon) {
+        CHECK(ta_actor_abandon(w.system, parent) == TA_OK);
+        CHECK(queued_of(&w, receiver) == 0u);
+        settle(&w);
+        CHECK(in_state(&w, receiver, "s0"));
+    } else {
+        settle(&w);
+        CHECK(in_state(&w, parent, "q"));
+        CHECK(in_state(&w, receiver, "s2")); /* e1, then e2 */
+    }
+    CHECK(w.system->counters.quota_refusals == refusals);
+    quiescent(&w);
+    world_close(&w);
+}
+
+static void test_exit_mail_inside_the_parents_macrostep(void) {
+    cancel_mail_case(false);
+    cancel_mail_case(true);
+}
+
 static void test_exit_mail_outside_a_macrostep(void) {
     exit_mail_case(false);
     exit_mail_case(true);
@@ -1586,6 +1674,7 @@ int main(void) {
     test_due_send_is_mail();
     test_due_dispatch_stops_when_full();
     test_exit_mail_outside_a_macrostep();
+    test_exit_mail_inside_the_parents_macrostep();
     CHECK(heap.stats.bad_frees == 0);
     CHECK(ta_test_allocator_finish(&heap) == 0);
     if (failures != 0) {

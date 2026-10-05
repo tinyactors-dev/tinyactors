@@ -2083,11 +2083,12 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         return raised == TA_EXEC_FAILED ? TA_OK : raised;
     }
     if (state->delay == 0) {
-        /* The macrostep's claim pays for this mail only while the sender's own input holds the slot. A send made
-         * outside it (a host call that destroys the session and runs an invoked child's <onexit>) is posted at
-         * this safe point instead, from the pool, as a due send is (mail.h). The pool is grown if it can be; if
-         * not, mail finds no envelope and the sender hears error.communication. */
-        bool own_run = system->runner.slot.occupied && system->runner.slot.actor == actor->record.id;
+        /* An executing macrostep pays for this mail from its claim, whoever sends it: an invoked child cancelled
+         * by its parent's macrostep runs its <onexit> there, and its mail belongs to the parent's input (run.h,
+         * ta_run_executing). Outside one (a host call that destroys the session) it is a safe point: the mail is
+         * posted from the pool, as a due send is (mail.h), after growing the pool if it can be; if not, mail
+         * finds no envelope and the sender hears error.communication. */
+        bool own_run = ta_run_executing(system);
         if (!own_run) {
             (void)ta_mail_prepare(system, 1u);
         }
