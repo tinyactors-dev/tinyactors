@@ -351,6 +351,22 @@ left after 4.2a and the core's waiting machinery:
   unknown); the aggregate napi task therefore stops at `check-types`.
   The full-pass run before these fixes found `bindings --check` stale after
   `ta_actor_publish_completion` was deleted; the bindings were regenerated.
+- Integrated as `c83615dd` after a last review fix: a send made while a
+  macrostep is executing is paid from that input's claim and queued on its
+  outgoing list whoever sends (`ta_run_executing`), so an invoked child
+  cancelled by its parent's macrostep sends after the parent's earlier mail
+  and is dropped with it (ADR 0099 notes). `mise run test:full` passed on
+  `c83615dd` with the napi dependencies installed: `check-types`, Bun (the IRP
+  suite, 176 passed) and Node's `scale.js` included. napi `scale.js` native
+  bytes per actor at 1,000,000: plain 320.5, data 320.6; ws 1,106 at 200,000
+  (about 1,200 before 4.2d: the event-block cache is gone).
+- Decided for the remainder: (1) the event block's removal (the start record,
+  the kept event, the taken external event read in place) moves to 4.4, which
+  removes the event block entirely; (2) the kernel's mailboxes go in 4.2e,
+  before 4.2b; (3) the napi declarations 4.2d deleted (`messages.overflow`,
+  `eventBlockCache`, `submitted`) name concepts that no longer exist, an API
+  changed in place, not an unimplemented one, so they stay deleted; (4) D7,
+  D10 and D11 of the 4.2d plan are accepted.
 
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
