@@ -179,7 +179,7 @@ This one call replaces `ta_actor_deliver`, `ta_actor_resume` and
 1. post to h2c;
 2. call `ta_run`;
 3. drain c2h and tel;
-4. arm the timer from the last [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake);
+4. arm the timer from the last [`c2h.wake`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hwake);
 5. repeat.
 
 ## Pauses: the budget and the slice
@@ -296,10 +296,10 @@ long one keeps the thread.
 A macrostep's records reach c2h in this order:
 
 1. its `c2h.input`, if the session is recorded;
-2. its effects: [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend),
-   [`c2h.invoke_cancel`](../protocol/generated/MESSAGES.md#c2hinvoke_cancel),
-   [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward),
-   [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog);
+2. its effects: [`c2h.send`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hsend),
+   [`c2h.invoke_cancel`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinvoke_cancel),
+   [`c2h.invoke_forward`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinvoke_forward),
+   [`c2h.log`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hlog);
 3. its `c2h.macrostep_ended`.
 
 That order holds within one macrostep, not across them. With several
@@ -390,7 +390,7 @@ executable content:
   send that doesn't fit, not once per remaining item.
 - **The last segment of its name says what ran out:** `pool`, `names`,
   `c2h`, `internal` or `record`, as the catalog's
-  [`capacity_resource`](../protocol/generated/MESSAGES.md#capacity_resource-u8)
+  [`capacity_resource`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#capacity_resource-u8)
   enum lists them. A chart that doesn't care which one matches
   `error.execution.capacity`.
 - **`_event.data` says where:** the action and the `<foreach>` iteration, as

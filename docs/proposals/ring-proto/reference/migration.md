@@ -24,18 +24,18 @@ below.
 | Module | Lines (src) | What did it, what does it now |
 |---|---|---|
 | `scheduler.h`, `scheduler.c` | 1,465 | Mailboxes, runnable actors, turn budgets, quarantine, dead letters. Replaced by core's pool and its run queue ([envelope.md](envelope.md)), macrostep slots with deferred lists ([macrostep.md](macrostep.md#macrostep-slots)) and `ta_run`'s budget. Quarantine is removed, not moved: the chain limit ends a runaway's input ([macrostep.md](macrostep.md#runaways-the-chain-limit)). |
-| `router.h`, `router.c` | 232 | `ta_external_event_router` for mail between sessions. Mail between local sessions is an envelope in core. Anything else is a [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend). |
+| `router.h`, `router.c` | 232 | `ta_external_event_router` for mail between sessions. Mail between local sessions is an envelope in core. Anything else is a [`c2h.send`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hsend). |
 | `effects.h`, `effects.c` | 98 | The per-turn effect queue that kept effects until JavaScript could run. Replaced by c2h records executable on receipt, including before the macrostep end. |
 | `adapter_io.h`, `adapter_io.c` | 260 | The I/O processor adapter that copied sends into effects. Replaced by `c2h.send`. |
-| `adapter_invoker.h`, `adapter_invoker.c` | 210 | The invoker adapter. Replaced by [`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke), [`c2h.invoke_cancel`](../protocol/generated/MESSAGES.md#c2hinvoke_cancel), [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward) and [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report). |
-| `adapter_log.h`, `adapter_log.c` | 34 | The buffered log sink. Replaced by [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog). |
-| `recorder.h`, `recorder.c` | 509 | Collecting the events recorded families took, once per turn. Replaced by [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) and the `recorded` bit ([recording-and-replay.md](recording-and-replay.md)). |
+| `adapter_invoker.h`, `adapter_invoker.c` | 210 | The invoker adapter. Replaced by [`c2h.invoke`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinvoke), [`c2h.invoke_cancel`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinvoke_cancel), [`c2h.invoke_forward`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinvoke_forward) and [`h2c.invoke_report`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cinvoke_report). |
+| `adapter_log.h`, `adapter_log.c` | 34 | The buffered log sink. Replaced by [`c2h.log`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hlog). |
+| `recorder.h`, `recorder.c` | 509 | Collecting the events recorded families took, once per turn. Replaced by [`c2h.input`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput) and the `recorded` bit ([recording-and-replay.md](recording-and-replay.md)). |
 | `replay.h`, `replay.c` | 247 | `tah_replay_event`, `tah_replay_events_done`. Replaced by `h2c.spawn` (replaying), `h2c.event` and `h2c.publish`. Core's replay semantics (ADR 0089, 0094) stay. |
 | `loads.h`, `loads.c` | 529 | Load records, waiting mailboxes, wakeups. Replaced by waiting lists in the pool and four records ([unloading.md](unloading.md)). |
-| `offloads.h`, `offloads.c` | 99 | Images of offloaded actors, kept per address. The host keeps the `blob` from [`c2h.unloaded`](../protocol/generated/MESSAGES.md#c2hunloaded). |
+| `offloads.h`, `offloads.c` | 99 | Images of offloaded actors, kept per address. The host keeps the `blob` from [`c2h.unloaded`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hunloaded). |
 | `directory.h`, `directory.c` | 118 | The in-memory directory with unloaded entries. Core keeps the resident ones. Unloaded addresses are in the host's index. |
 | `events.h`, `events.c` | 30 | The cache of interned event names (napi ADR 0004). Run-time names are bytes now ([names.md](names.md)). |
-| `hooks.h`, `hooks.c` | 57 | Post-call hooks that told the plumbing about new and removed actors. There is no plumbing left to tell. [`c2h.spawned`](../protocol/generated/MESSAGES.md#c2hspawned) and [`c2h.destroyed`](../protocol/generated/MESSAGES.md#c2hdestroyed) carry the same facts. |
+| `hooks.h`, `hooks.c` | 57 | Post-call hooks that told the plumbing about new and removed actors. There is no plumbing left to tell. [`c2h.spawned`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hspawned) and [`c2h.destroyed`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hdestroyed) carry the same facts. |
 | `params.h`, `params.c` | 22 | Kernel parameters. Removed or replaced ([BEHAVIORS.md](../BEHAVIORS.md#removed-parameters)). |
 | `system.h`, `system.c` | 687 | The native system record, the pump driver, entering and leaving core. What is left is napi's: one `ta_system`, its rings, and the pump. |
 | `version.c` | 6 | |
@@ -73,13 +73,13 @@ napi becomes a binding over core and its rings. What it keeps:
 - the public definitions API, implemented by complete-spec requests and
   correlated results rather than a separate native management interface
   ([definitions.md](definitions.md));
-- the loader and its timeouts, as JavaScript that answers [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed);
+- the loader and its timeouts, as JavaScript that answers [`c2h.load_needed`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hload_needed);
 - the pump, reduced to a short loop:
   1. post h2c;
   2. call `ta_run`;
   3. read each c2h record and hand it to I/O processors, invokers or the recorder on receipt; macrostep ends report completion;
   4. drain `tel` into the OTLP encoder;
-  5. set one timer from [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake).
+  5. set one timer from [`c2h.wake`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hwake).
 
 | File | Change |
 |---|---|
@@ -90,7 +90,7 @@ napi becomes a binding over core and its rings. What it keeps:
 | `src/napi_recorder.c` (167), `src/napi_replay.c` (165) | read `c2h.input`, post replay records. Most of the code goes. |
 | `src/napi_trace.c` (722) | drains `tel` |
 | `src/napi_children.c`, `src/import.c` | invoked children are local sessions. Their `done.invoke` is an envelope in core. |
-| `lib/system.js`, `lib/loader.js`, `lib/tracing.js`, `lib/params.js` | follow the native changes. `send()` settles from the correlated input disposition: bounced, refused, or input_completed after stabilization and invocation-startup follow-up, independently of recording. `PostOptions.signal` aborting before the input is taken posts [`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw). |
+| `lib/system.js`, `lib/loader.js`, `lib/tracing.js`, `lib/params.js` | follow the native changes. `send()` settles from the correlated input disposition: bounced, refused, or input_completed after stabilization and invocation-startup follow-up, independently of recording. `PostOptions.signal` aborting before the input is taken posts [`h2c.withdraw`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cwithdraw). |
 | `index.d.ts` | the API it declares mostly stays. Mark what changes meaning with `// status:` (AGENTS.md, "Desired API files"). `setRecorder`'s `families` become recording selectors. Dead letter reasons change. `IOProcessorOptions.location` becomes a function `location({id, address})`; its `origin` template, `IOOrigin`'s `scope` and `token` forms, `openScope()` and `closeScope()` go ([S12](../scenarios/S12-http-request.md), [S13](../scenarios/S13-webhook-callback.md)). `SendResult.consumed` comes from the `ignored` flag of `c2h.input_completed`. |
 
 Suites to rewrite: `route.js`, `loads.js`, `session-loads.js`,
@@ -107,7 +107,7 @@ from "after warm-up" to "always, in a macrostep".
 - `hosted.turn` calls `ta_run`;
 - `hosted.batches` returns available c2h records, including records before
   a pending macrostep end, decoded by
-  the catalog's JSON form ([`protocol/generated/messages.json`](../protocol/generated/messages.json)).
+  the catalog's JSON form ([`protocol/generated/messages.json`](../../../../tinyactors-core/protocol/generated/messages.json)).
 
 A scenario then reads as an h2c script, with expected c2h records. That
 is how the [scenarios](../scenarios/) are written. The `ta.*` methods,
@@ -118,7 +118,7 @@ changes automatically.
 
 | Gain | Reference |
 |---|---|
-| The three rings, their records, and a reader/writer API for each | [ring.md](ring.md), [MESSAGES.md](../protocol/generated/MESSAGES.md) |
+| The three rings, their records, and a reader/writer API for each | [ring.md](ring.md), [MESSAGES.md](../../../../tinyactors-core/protocol/generated/MESSAGES.md) |
 | The envelope pool: one run queue, waiting lists per address, admission watermark, fairness, delayed sends as envelopes with a deadline index, recycling | [envelope.md](envelope.md) |
 | The name area, and matching of run-time names that looks names up and never inserts | [names.md](names.md) |
 | `ta_run(budget)`: one call that admits, runs to completion and writes records | [macrostep.md](macrostep.md) |
@@ -281,7 +281,7 @@ when h2c and c2h arrive, not at the end.
   Exact spec and diagnostic encodings remain sketches
   ([definitions.md](definitions.md)).
 - **A pending input is withdrawn by a new record, not by editing h2c.**
-  Committed records never change. [`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw)
+  Committed records never change. [`h2c.withdraw`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cwithdraw)
   names an admitted input by its h2c seq. If it has not been taken, core
   frees its envelope and writes `c2h.input_refused` (`withdrawn`);
   otherwise the input's own terminal record stands. A taken input is
@@ -317,8 +317,8 @@ when h2c and c2h arrive, not at the end.
   sketches also keep session images as durable
   state, which this proposal rules out: an image only bounds memory
   ([unloading.md](unloading.md#unloading-bounds-memory-it-is-not-persistence)).
-  They would persist a session as [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate)
-  plus its [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) records,
+  They would persist a session as [`c2h.state`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hstate)
+  plus its [`c2h.input`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput) records,
   journaled on the application's schedule. A shared transaction with
   `ta_outbox` is the application's choice, not a protocol requirement.
   Their persistence notes would need updating to this contract. Neither

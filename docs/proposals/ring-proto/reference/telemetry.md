@@ -16,7 +16,7 @@ The rings are split by delivery guarantee, not by purpose:
 | Loss | none | drops when full |
 | When full | the action that writes fails as `error.execution.capacity`; a macrostep starts only with room for its reserve ([ring.md](ring.md)) | the record is dropped and counted |
 | Carries vrefs | yes, ownership passes to the host | never |
-| Used for replay | yes ([`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput)) | never |
+| Used for replay | yes ([`c2h.input`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput)) | never |
 
 If telemetry shared `c2h`, a slow OTLP exporter would make sends fail.
 If recording shared `tel`, a burst of traces would lose inputs. Both
@@ -25,12 +25,12 @@ host reads them with the same code.
 
 ## Records
 
-- [`tel.trace`](../protocol/generated/MESSAGES.md#teltrace) is one
+- [`tel.trace`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#teltrace) is one
   `ta_trace_record`. Its `trace_kind` field is the `ta_trace_kind`, and
   only the fields that kind names are meaningful, as today. The state
   arrays (`exited`, `entered`, `history`, `states`) are packed into the
   `states` bytes in the tail.
-- [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) says how
+- [`tel.dropped`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#teldropped) says how
   many records were dropped since the last one, and the sequence number
   the first of them would have had. Core writes it as soon as the ring
   has room again, before the next `tel.trace`. The ring's sequence
@@ -83,7 +83,7 @@ SENT or INVOKED with the `suppressed` flag. A `<log>` has no trace kind of
 its own today (it goes to `ta_log_sink`), so a replay drops it without a
 record. The
 common flag `replaying` is set on every record about the session until
-[`c2h.published`](../protocol/generated/MESSAGES.md#c2hpublished).
+[`c2h.published`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hpublished).
 
 This lets an operator see what a replay did, and lets a host compare a
 replay against the original run

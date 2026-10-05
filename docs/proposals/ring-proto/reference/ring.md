@@ -7,8 +7,8 @@ record. There are three: [`h2c`](#the-three-rings) from the host to core,
 [`c2h`](#the-three-rings) and [`tel`](#the-three-rings) from core to the
 host. This file describes how one ring works, then why there are exactly
 three. The records themselves are defined in
-[`protocol/catalog.rb`](../protocol/catalog.rb) and listed in
-[MESSAGES.md](../protocol/generated/MESSAGES.md).
+[`protocol/catalog.rb`](../../../../tinyactors-core/protocol/catalog.rb) and listed in
+[MESSAGES.md](../../../../tinyactors-core/protocol/generated/MESSAGES.md).
 
 ## What a ring is
 
@@ -56,11 +56,11 @@ The control block is a few hundred bytes per system.
 ## Records
 
 Every record has the 32-byte common header from
-[`protocol/dsl.rb`](../protocol/dsl.rb):
+[`protocol/dsl.rb`](../../../../tinyactors-core/protocol/dsl.rb):
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `kind` | u16 | the message code, such as `0x0208` for [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended) |
+| 0 | `kind` | u16 | the message code, such as `0x0208` for [`c2h.macrostep_ended`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hmacrostep_ended) |
 | 2 | `flags` | u16 | the message's flags (bits 0..7) and the common flags `replaying`, `recorded` (bits 8..15) |
 | 4 | `size` | u32 | the whole record, header and tail, a multiple of 8 |
 | 8 | `seq` | u64 | the record's sequence number in this ring |
@@ -77,7 +77,7 @@ tail. A record's size is rounded up to 8 bytes, so every record starts
   bigger one. On c2h, an action whose record would be bigger fails as
   `error.execution.capacity` ([macrostep.md](macrostep.md)). On h2c, core
   bounces a bigger record with
-  [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced)
+  [`c2h.bounced`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hbounced)
   (`invalid`), and the host should never write one. On tel, a too-long
   `value_text` is cut and flagged `truncated`.
 - **Every envelope must fit its complete input observation.** Admission
@@ -165,13 +165,13 @@ host that holds records unreleased keeps the ring full.
   `invalid` and stops reading h2c.
 - **On tel, a dropped record still takes its number.** The gap is how a
   reader knows records were lost, and
-  [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) says how
+  [`tel.dropped`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#teldropped) says how
   many and from which seq.
 - **Other records cite h2c seq numbers.** For example `source_seq` in
-  [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) and
-  [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced), and
+  [`c2h.input`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput) and
+  [`c2h.bounced`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hbounced), and
   `cause_seq` in
-  [`c2h.spawned`](../protocol/generated/MESSAGES.md#c2hspawned). So the
+  [`c2h.spawned`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hspawned). So the
   host writes h2c seq numbers and core checks them.
 
 ## When a ring is full
@@ -183,7 +183,7 @@ are three:
 |---|---|---|---|
 | `h2c` | host | The host cannot post. It refuses at its edge (HTTP 503, or it stops reading a socket), or keeps the input in its own memory. Core never waits on h2c. | The external client, or the host by its own policy |
 | `c2h` | core | An ordinary action whose record does not fit while preserving the mandatory reserve fails as `error.execution.capacity.c2h`. Control and startup work can return for a drain between macrosteps. | Sending chart or host driver |
-| `tel` | core | The record is dropped and counted. The next [`tel.dropped`](../protocol/generated/MESSAGES.md#teldropped) reports it. | Nobody: telemetry is allowed to be incomplete |
+| `tel` | core | The record is dropped and counted. The next [`tel.dropped`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#teldropped) reports it. | Nobody: telemetry is allowed to be incomplete |
 
 ### The c2h reserve
 
@@ -214,9 +214,9 @@ alone does not settle the input.
 
 When the reserve isn't there, core takes no envelope and `ta_run` returns.
 The host drains c2h and calls `ta_run` again. Records outside a macrostep
-work the same way: [`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced),
-[`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed),
-[`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake). If c2h has no room
+work the same way: [`c2h.bounced`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hbounced),
+[`c2h.load_needed`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hload_needed),
+[`c2h.wake`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hwake). If c2h has no room
 for one, core doesn't consume the h2c record or event that would cause it.
 When an event cannot be admitted because the pool or name area is full,
 core reserves a bounded `c2h.bounced`, consumes the event and releases its
@@ -226,7 +226,7 @@ one processed to completion gets `c2h.input_completed`. Both preserve the
 originating h2c sequence independently of recording.
 
 Definition requests follow this rule too: core reserves their fixed
-[`c2h.definition_result`](../protocol/generated/MESSAGES.md#c2hdefinition_result)
+[`c2h.definition_result`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hdefinition_result)
 before consuming the request, compiling or changing definition state.
 They run between macrosteps without an envelope; compile diagnostics use
 a bounded host-owned buffer ([definitions.md](definitions.md)).
@@ -275,7 +275,7 @@ the binding crosses as a reference:
 | Reference | What it names | Who owns it on each ring |
 |---|---|---|
 | `vref` | a slot in the binding's value table: a JS object, a `jv`, an SQL row ([data-model.md](data-model.md)) | On **c2h**, core retained it for the host, and the host releases it when done with the record. On **h2c**, the host retained it for core, and core releases it when the envelope holding it is freed ([envelope.md](envelope.md)). **Never on tel:** a lossy ring would leak the references it drops, so tel carries `value_text`, cut at `telemetryValueBytes`. |
-| `blob` | a host-owned byte buffer, read or written through core's byte source and sink (core ADR 0090) | The host. Core writes images into a sink the host provides ([`c2h.unloaded`](../protocol/generated/MESSAGES.md#c2hunloaded), [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate)) and reads them from a source ([`h2c.load`](../protocol/generated/MESSAGES.md#h2cload)). The ring carries only the handle. |
+| `blob` | a host-owned byte buffer, read or written through core's byte source and sink (core ADR 0090) | The host. Core writes images into a sink the host provides ([`c2h.unloaded`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hunloaded), [`c2h.state`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hstate)) and reads them from a source ([`h2c.load`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cload)). The ring carries only the handle. |
 
 A committed h2c vref transfers one retained reference to core; a committed
 c2h vref transfers one retained reference to the host. Before commit the
@@ -325,7 +325,7 @@ objects so an invalidated attempt releases its image instead of posting.
 
 | Ring | Direction | Guarantee | Carries |
 |---|---|---|---|
-| `h2c` | host → core | lossless, gap-free; full means the host refuses at its edge | every input: [`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent), [`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime), [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn), [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload), [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report), ... |
+| `h2c` | host → core | lossless, gap-free; full means the host refuses at its edge | every input: [`h2c.event`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cevent), [`h2c.time`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2ctime), [`h2c.spawn`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cspawn), [`h2c.load`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cload), [`h2c.invoke_report`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cinvoke_report), ... |
 | `c2h` | core → host | lossless, gap-free, ordered with macrostep ends; full means the action fails | effects, macrostep ends, bounces, load requests, images, and the inputs of recorded sessions |
 | `tel` | core → host | lossy; full means drop and count | trace records for observability ([telemetry.md](telemetry.md)) |
 

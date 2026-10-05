@@ -4,7 +4,7 @@
 
 How the pieces fit together. Each section links to the reference that has the
 details. Messages are cited by stable ID; all of them are in
-[MESSAGES.md](protocol/generated/MESSAGES.md).
+[MESSAGES.md](../../../tinyactors-core/protocol/generated/MESSAGES.md).
 
 ## Layers, before and after
 
@@ -139,31 +139,31 @@ command. Refusal requires an explicit retry or application decision.
 
 ## The life of an input
 
-1. **Edge.** The host posts [`h2c.event`](protocol/generated/MESSAGES.md#h2cevent).
+1. **Edge.** The host posts [`h2c.event`](../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cevent).
    Its name is bytes and its data is a `vref`. If `h2c` is full, the host
    refuses here. ([S09](scenarios/S09-edge-backpressure.md))
 2. **Admission.** Core moves the record into an envelope while the pool is
    below `admissionWatermark` and its complete text fits. Its name bytes go to the name area. It is
    appended to the run queue, whose arrival order keeps each sender's
    messages to a receiver in order. If the target isn't loaded, it waits on
-   that address's list, and core writes [`c2h.load_needed`](protocol/generated/MESSAGES.md#c2hload_needed).
+   that address's list, and core writes [`c2h.load_needed`](../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hload_needed).
    ([S07](scenarios/S07-unloaded-tracker.md))
    An input that cannot be admitted is consumed and answered with
    `c2h.bounced`, after reserving its result bytes; it leaves no envelope
    or transferred value reference behind. Until it is taken, the host can
-   withdraw an admitted input with [`h2c.withdraw`](protocol/generated/MESSAGES.md#h2cwithdraw),
+   withdraw an admitted input with [`h2c.withdraw`](../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cwithdraw),
    which frees its envelope and answers `c2h.input_refused` (`withdrawn`).
    Records are never edited after commit.
 3. **Take.** When a macrostep slot is free, core picks the next runnable
    envelope whose session isn't active, mail before admission by
    `fairnessRatio`. Mail for an active session waits on its deferred list. If the session is recorded, core writes
-   [`c2h.input`](protocol/generated/MESSAGES.md#c2hinput).
+   [`c2h.input`](../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput).
    The envelope stays owned through invocation startup and its internal follow-up.
 4. **Macrostep.** Data model calls go through the vtable. Each effect is
    either a `c2h` record or a new envelope (mail, delayed send). Nothing
    allocates. A resource that is full fails the action as
    `error.execution.capacity`. ([S02](scenarios/S02-full-pool.md))
-5. **Macrostep end and startup.** Core writes [`c2h.macrostep_ended`](protocol/generated/MESSAGES.md#c2hmacrostep_ended),
+5. **Macrostep end and startup.** Core writes [`c2h.macrostep_ended`](../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hmacrostep_ended),
    then starts surviving pending invocations. Resulting internal errors run
    before another external input. Once the chain and notification flushing
    settle, core writes `c2h.input_completed` and frees the envelope. The host may already have executed effects
@@ -177,7 +177,7 @@ command. Refusal requires an explicit retry or application decision.
 
 | `<send>` to | Becomes | Delivered | Full | Reference |
 |---|---|---|---|---|
-| An I/O processor, no delay | [`c2h.send`](protocol/generated/MESSAGES.md#c2hsend) | on receipt, by the host, including before the macrostep end | `c2h` has no room: `error.execution.capacity` | [ring](reference/ring.md) |
+| An I/O processor, no delay | [`c2h.send`](../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hsend) | on receipt, by the host, including before the macrostep end | `c2h` has no room: `error.execution.capacity` | [ring](reference/ring.md) |
 | A local session (`#_scxml_…`, an actor URI) | an envelope on the run queue, at the macrostep end | when core takes it | pool or name area is full: `error.execution.capacity` | [envelope](reference/envelope.md) |
 | Anything, with a delay | an envelope in the deadline index | when `h2c.time` reaches its due time: mail is taken, an I/O send becomes `c2h.send` | as above | [envelope](reference/envelope.md) |
 | An unloaded session | an envelope that waits; `c2h.load_needed` | after `h2c.load` | as above; if the load fails, the envelope becomes `error.communication` for its sender | [unloading](reference/unloading.md) |
@@ -189,7 +189,7 @@ cancelled delayed send never arrives. ([S08](scenarios/S08-cancel-and-second-cli
 ## Time
 
 - The host owns the clock. It moves the clock by posting
-  [`h2c.time`](protocol/generated/MESSAGES.md#h2ctime).
+  [`h2c.time`](../../../tinyactors-core/protocol/generated/MESSAGES.md#h2ctime).
 - A live input uses the system clock when it is taken. That time is fixed
   for its entire macrostep, including budget pauses. Its h2c header `at`
   does not advance the live clock. The host posts a clock update before
@@ -198,7 +198,7 @@ cancelled delayed send never arrives. ([S08](scenarios/S08-cancel-and-second-cli
   replaying session's clock under the monotonic-time rules. Refused input
   changes no clock.
 - Core owns the deadline index for resident sessions. It writes
-  [`c2h.wake`](protocol/generated/MESSAGES.md#c2hwake) whenever the earliest
+  [`c2h.wake`](../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hwake) whenever the earliest
   due time changes.
 - The host keeps one timer for that, plus an index of unloaded sessions keyed
   by `wake_at` ([reference/unloading.md](reference/unloading.md)).
@@ -207,7 +207,7 @@ cancelled delayed send never arrives. ([S08](scenarios/S08-cancel-and-second-cli
 
 - Recording is a bit on each session, set by an address selector when the
   session is spawned or loaded. A recorded session's inputs appear as
-  [`c2h.input`](protocol/generated/MESSAGES.md#c2hinput) before the effects
+  [`c2h.input`](../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput) before the effects
   they cause.
 - **Recording observes inputs; the application owns journaling.** Effects
   may execute on receipt, independently of recording or persistence.

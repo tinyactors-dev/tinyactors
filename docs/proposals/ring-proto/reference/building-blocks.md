@@ -66,7 +66,7 @@ Verdicts:
 | B3 | **Hash table, grows only when told** | Open addressing, keys hashed by the caller, `u32` values, delete by backward shift (no tombstones). Two modes: **fixed** (capacity set once, so insert never allocates) and **growing**, where growth happens only in an explicit call at a safe point. An owner whose keys come from outside also calls `prepare(hash)` there, which doubles a page that has no empty slot instead of letting the insert fail. | **Four** implementations: atoms and event names (chained, with near-identical rehash code: `atom.c:13` and `event_name.c:13`); addresses and sessions (paged linear hashing, near copies of each other). The kernel adds `tah_map` and `tah_id_set`. | atom lookup (`find`, no insert, inside macrosteps); **waiting lists keyed by address bytes** (fixed mode, bounded by `poolEnvelopes`); the open `source_seq` index for `h2c.withdraw`; resident session and address handles | **generalize**. One table can replace four. |
 | B4 | **Fixed-entry FIFO** | A circular array of fixed-size entries. Ordered `push` and `pop`, `peek` at the head (the taken entry stays at the head while it is `_event`), and `clear`. | The event block's queue array, whose growth code is written twice (`interpreter.c:755` and `interpreter.c:4445`) | the **internal queue**: one live queue in the running workspace and one per nested interpreter | **generalize**. Becomes fixed-size; quota accounting comes from C3. |
 | B5 | **Bitset** | Word-array bits. | `ta_bits_*` (`types.h:52`) | configuration, history and the interpreter's sets; parked as bytes | **have** |
-| B7 | **Type registry** | A set of declared type names (atoms) with built-in entries that core owns and their aliases (`scxml`, and SCXML's URI forms). `declare(name)` happens outside a macrostep and allocates; `declared(name)` is a lookup that never inserts. No behaviour is attached to an entry. Withdrawal is not supported yet; adding it later only refuses new uses. | Two registries, each with a vtable per entry: I/O processors (`system.c:690-752`, with registry indices) and invokers (`system.c:753-785`) | `<send type>` and `<invoke type>` checks, which raise `error.execution` in the chart; declared by [`h2c.type_declare`](../protocol/generated/MESSAGES.md#h2ctype_declare) | **generalize**: one block over B3, created twice (I/O processors and invokers) |
+| B7 | **Type registry** | A set of declared type names (atoms) with built-in entries that core owns and their aliases (`scxml`, and SCXML's URI forms). `declare(name)` happens outside a macrostep and allocates; `declared(name)` is a lookup that never inserts. No behaviour is attached to an entry. Withdrawal is not supported yet; adding it later only refuses new uses. | Two registries, each with a vtable per entry: I/O processors (`system.c:690-752`, with registry indices) and invokers (`system.c:753-785`) | `<send type>` and `<invoke type>` checks, which raise `error.execution` in the chart; declared by [`h2c.type_declare`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2ctype_declare) | **generalize**: one block over B3, created twice (I/O processors and invokers) |
 | B6 | **Growable array** | Doubles, copies, holds indices rather than pointers. | `ta_vec` (`types.c:48`), plus about five hand-rolled parallel-array copies (invokes, timer lists, export blocks, arena sink) | compiler only. Nothing in a macrostep may use it. | **have**; fold the copies into it |
 
 ### C. Transport and accounting
@@ -172,7 +172,7 @@ So `io_origin.c`, the scope API and the origin classes are deleted. The
 reply target is text that the processor owns. The text costs name-area
 bytes per event, which are bounded and accounted for. If the input
 completes and the chart has not answered, the processor learns it from
-[`c2h.input_completed`](../protocol/generated/MESSAGES.md#c2hinput_completed)
+[`c2h.input_completed`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput_completed)
 and its `ignored` flag.
 
 ### I/O processors and invokers: one type registry, twice
@@ -218,7 +218,7 @@ Registering napi's `console` processor:
 
 1. `system.registerIO('console', processor)` keeps `processor` in
    JavaScript's `#io` map, as today, and posts
-   [`h2c.type_declare`](../protocol/generated/MESSAGES.md#h2ctype_declare)
+   [`h2c.type_declare`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2ctype_declare)
    `{registry: io, type: "console"}`.
 2. A chart's `<send type="console">` checks the set (an unknown type is
    `error.execution`), then writes `c2h.send` with `io_type = "console"`.

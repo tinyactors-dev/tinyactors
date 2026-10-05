@@ -38,14 +38,14 @@ vrefs:
 
 | Record | vref fields |
 |---|---|
-| [`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent) | `data` |
-| [`h2c.spawn`](../protocol/generated/MESSAGES.md#h2cspawn) | `data` (the data model binding) |
-| [`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report) | `data` |
-| [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) | `data` |
-| [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend) | `data`, `content` |
-| [`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke), [`c2h.invoke_forward`](../protocol/generated/MESSAGES.md#c2hinvoke_forward) | `data` |
-| [`c2h.log`](../protocol/generated/MESSAGES.md#c2hlog) | `value` |
-| [`c2h.finished`](../protocol/generated/MESSAGES.md#c2hfinished) | `donedata` |
+| [`h2c.event`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cevent) | `data` |
+| [`h2c.spawn`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cspawn) | `data` (the data model binding) |
+| [`h2c.invoke_report`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cinvoke_report) | `data` |
+| [`c2h.input`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput) | `data` |
+| [`c2h.send`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hsend) | `data`, `content` |
+| [`c2h.invoke`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinvoke), [`c2h.invoke_forward`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinvoke_forward) | `data` |
+| [`c2h.log`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hlog) | `value` |
+| [`c2h.finished`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hfinished) | `donedata` |
 
 ### Who owns a vref
 
@@ -120,8 +120,8 @@ rather than silently journal later mutations.
 ## Offload
 
 An image is self-contained. When core writes one for
-[`c2h.unloaded`](../protocol/generated/MESSAGES.md#c2hunloaded) or
-[`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate), it calls
+[`c2h.unloaded`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hunloaded) or
+[`c2h.state`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hstate), it calls
 `value_write` for the data model root, and for the data of every delayed
 send the session holds in the pool. The image holds bytes, not vrefs.
 Loading calls `value_read`.

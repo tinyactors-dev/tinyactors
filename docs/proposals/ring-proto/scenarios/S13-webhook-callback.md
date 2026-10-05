@@ -92,10 +92,10 @@ server.on('request', async (req, res) => {
 | A callback while core is not admitting | the host, at its edge | HTTP 503 | the provider's own webhook retry |
 | A callback for an address whose load fails | core recycles the envelope ([S07](S07-unloaded-tracker.md)) | `c2h.input_refused` → HTTP 503 | the provider's own webhook retry |
 
-[h2c.event]: ../protocol/generated/MESSAGES.md#h2cevent
-[h2c.unload]: ../protocol/generated/MESSAGES.md#h2cunload
-[h2c.load]: ../protocol/generated/MESSAGES.md#h2cload
-[c2h.send]: ../protocol/generated/MESSAGES.md#c2hsend
-[c2h.unloaded]: ../protocol/generated/MESSAGES.md#c2hunloaded
-[c2h.load_needed]: ../protocol/generated/MESSAGES.md#c2hload_needed
-[c2h.input_completed]: ../protocol/generated/MESSAGES.md#c2hinput_completed
+[h2c.event]: ../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cevent
+[h2c.unload]: ../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cunload
+[h2c.load]: ../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cload
+[c2h.send]: ../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hsend
+[c2h.unloaded]: ../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hunloaded
+[c2h.load_needed]: ../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hload_needed
+[c2h.input_completed]: ../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput_completed

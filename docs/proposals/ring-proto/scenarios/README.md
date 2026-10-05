@@ -6,7 +6,7 @@ Walkthroughs of the [stress-test charts](../charts/README.md) through the
 protocol. Each step has a stable number (`S04.3`) so that
 [BEHAVIORS.md](../BEHAVIORS.md) and the reference documents can cite it.
 Each step cites the records it uses by their stable ID and code, which
-link to the [generated message catalog](../protocol/generated/MESSAGES.md).
+link to the [generated message catalog](../../../../tinyactors-core/protocol/generated/MESSAGES.md).
 Each scenario ends with a table of who drops what and who retries how.
 
 | Scenario | What it shows |

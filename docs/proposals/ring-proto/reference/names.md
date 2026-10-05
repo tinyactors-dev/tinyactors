@@ -55,7 +55,7 @@ This causes two problems.
 | The generated prefixes core itself names (`done.state`, `done.invoke`, `error.execution`, `error.communication`, `error.platform`, and the `invoke` segment of `error.communication.invoke`) | authored by core | atoms interned at system creation. Today's `TA_EVENT_NAME_*` cover all but `invoke`, which `ta_invoke_error_name` (`src/invoke.c`) interns at run time; it would join them. |
 | `<send event>`, `<raise event>`, a literal `<send id>`, `<invoke id>`, `<send type>` | authored | atoms, interned at registration |
 | The value of `eventexpr`, `typeexpr`, `targetexpr`, `idlocation` text, `sendidexpr` | run time | bytes in the name area |
-| Names and IDs in external input ([`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent): `name`, `sendid`, `origin`, `origin_type`, `invokeid`) | run time | bytes in the name area |
+| Names and IDs in external input ([`h2c.event`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cevent): `name`, `sendid`, `origin`, `origin_type`, `invokeid`) | run time | bytes in the name area |
 | A generated send ID `#_send.<n>` | run time | a counter in `ta_send_id`, which was never text (ADR 0048) |
 | A generated invocation ID `<stateid>.<platformid>` | run time | a state ID and a counter, rendered to text on demand like `#_send.<n>` |
 | An invocation error's reason (ADR 0081) | run time | bytes |
@@ -84,7 +84,7 @@ only the step that produces the event's atoms changes:
    atom; any other gives `TA_ATOM_NONE`, written here as **UNKNOWN**.
 3. **The atoms go into scratch**, which has room for `eventNameDepth`
    segments. A name with more segments is refused when admitted
-   ([`c2h.bounced`](../protocol/generated/MESSAGES.md#c2hbounced),
+   ([`c2h.bounced`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hbounced),
    `invalid`). One produced inside a macrostep is an invalid name, so the
    `<send>` fails as plain `error.execution`, as any other invalid event
    name does.
@@ -172,9 +172,9 @@ committing a send. Definition registration checks representability of
 platform events, including generated-name bounds.
 
 **Text leaves through rings as spans,** and is copied into a record's tail
-when written: [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput),
-[`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend),
-[`tel.trace`](../protocol/generated/MESSAGES.md#teltrace). Images and logs
+when written: [`c2h.input`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput),
+[`c2h.send`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hsend),
+[`tel.trace`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#teltrace). Images and logs
 store text, so ADR 0007's caveat goes away: "persisted data must not assume
 process-local event-name IDs remain stable". No ID was persisted.
 
@@ -201,13 +201,13 @@ process-local event-name IDs remain stable". No ID was persisted.
   descriptors such as `done.invoke.payment` match it.
 - **Generated:** a state ID and a per-session counter, rendered as
   `<stateid>.<platformid>` when text is needed
-  ([`c2h.invoke`](../protocol/generated/MESSAGES.md#c2hinvoke) `invokeid`,
+  ([`c2h.invoke`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinvoke) `invokeid`,
   `_event.invokeid`).
 - **`done.invoke.<id>` and `error.communication.invoke.<id>.<reason>`** are
   built as bytes in the envelope's text, not as trie nodes. Matching then
   resolves `done`, `invoke`, `error`, `communication` and authored IDs to
   atoms, and the rest to UNKNOWN.
-- **[`h2c.invoke_report`](../protocol/generated/MESSAGES.md#h2cinvoke_report)**
+- **[`h2c.invoke_report`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cinvoke_report)**
   carries both its SCXML invocation text and `invocation_seq`, the sequence
   of the `c2h.invoke` that started this instance. Service events carry both
   too. Core rejects a stale instance at take before applying a report or
@@ -216,7 +216,7 @@ process-local event-name IDs remain stable". No ID was persisted.
   Core parses the generated form, or
   looks up an authored ID, and doesn't intern either. `ta_system_intern_invoke_id`
   and `ta_send_id_intern` are no longer needed: a replayed
-  [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) record carries
+  [`c2h.input`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput) record carries
   text, and the session's own definition knows the literals.
 
 ### I/O processor types
@@ -235,9 +235,9 @@ so it is `error.execution`, as SCXML says. Nothing is interned.
 - **The address of a session that isn't resident** (unloaded, or never
   spawned in a family that has a loader) has no handle. The envelope keeps
   the bytes, the waiting list is keyed by them, and
-  [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed)
+  [`c2h.load_needed`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hload_needed)
   carries them. The handle is created at
-  [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload), outside a
+  [`h2c.load`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cload), outside a
   macrostep ([unloading.md](unloading.md)).
 
 ## What changes for the data model and the host
@@ -246,7 +246,7 @@ so it is `error.execution`, as SCXML says. Nothing is interned.
   a `ta_event_name_id` that the data model formats with
   `ta_event_name_format`. The ECMAScript and JSON data models want text
   anyway ([data-model.md](data-model.md)).
-- **The host never interns.** [`h2c.event`](../protocol/generated/MESSAGES.md#h2cevent)
+- **The host never interns.** [`h2c.event`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cevent)
   carries the name as bytes. `ta_event_name_intern` stays only for the
   compiler and for tools that build descriptors.
 - **Trace records** already carry a `ta_str name`

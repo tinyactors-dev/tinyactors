@@ -1,15 +1,15 @@
 # The protocol's records
 
-**Status:** Sketch (2026-10-01), part of [the ring protocol proposal](../README.md)
+**Status:** Sketch (2026-10-01), part of [the ring protocol proposal](../../docs/proposals/ring-proto/README.md)
 
 Every record that crosses a ring is defined once, in [`catalog.rb`](catalog.rb),
 with a small Ruby DSL ([`dsl.rb`](dsl.rb)). Evaluating the catalog builds a
 model: rings, enums, scalar types and messages, with each message's byte layout
 computed. [`render.rb`](render.rb) turns the model into other formats:
 
-| Command (in this directory) | Writes |
+| Command (in tinyactors-core) | Writes |
 |---|---|
-| `mise run ring-proto:render` | all three files below, into `generated/` |
+| `mise run protocol` | all three files below, into `generated/` |
 
 The generated files are [`MESSAGES.md`](generated/MESSAGES.md), the reference
 every document links to; [`messages.json`](generated/messages.json), for tools
@@ -47,9 +47,9 @@ scenario references move to the new name together.
   table. A `blob` names a byte buffer the host owns, read or written through a
   byte source or sink (core ADR 0090).
 
-How rings carry records is in [reference/ring.md](../reference/ring.md).
+How rings carry records is in [reference/ring.md](../../docs/proposals/ring-proto/reference/ring.md).
 Complete-spec requests and bounded structured compile diagnostics are in
-[reference/definitions.md](../reference/definitions.md). They use blobs so
+[reference/definitions.md](../../docs/proposals/ring-proto/reference/definitions.md). They use blobs so
 their size does not determine the size of a ring record. Exact spec and
 diagnostic encodings remain sketch questions; native data model and value
 integrations remain part of the binding.

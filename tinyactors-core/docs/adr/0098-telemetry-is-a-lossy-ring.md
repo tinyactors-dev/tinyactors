@@ -90,7 +90,7 @@ record.
   drop count go up by one, and **the record still consumes its seq**, so a
   gap in seq is exactly where records were lost.
 - As soon as the ring has room again, and before the next `tel.trace`,
-  core writes [`tel.dropped`](../../../docs/proposals/ring-proto/protocol/generated/MESSAGES.md#teldropped)
+  core writes [`tel.dropped`](../../protocol/generated/MESSAGES.md#teldropped)
   with the count and the seq the first dropped record would have had. If
   `tel.dropped` itself does not fit, the next record is dropped too and the
   count grows.
@@ -99,7 +99,7 @@ record.
 
 ### 3. A `tel.trace` record carries every field its kind names
 
-[`tel.trace`](../../../docs/proposals/ring-proto/protocol/generated/MESSAGES.md#teltrace)
+[`tel.trace`](../../protocol/generated/MESSAGES.md#teltrace)
 is one `ta_trace_record`: its `trace_kind`, and the fields that kind names,
 as today. The state arrays (`exited`, `entered`, `history`, `states`) and
 the transitions are packed into the tail, each counted.

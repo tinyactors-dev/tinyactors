@@ -170,10 +170,10 @@ The rest of the pool is kept free for what sessions send each other.
   bounce cannot fit, core returns for the host to drain c2h before consuming
   the event. A full pool therefore cannot trap controls behind an unread
   event indefinitely.
-- **Records that are not events** ([`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime),
-  [`h2c.load`](../protocol/generated/MESSAGES.md#h2cload),
-  [`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed),
-  [`h2c.definition_register`](../protocol/generated/MESSAGES.md#h2cdefinition_register), ...)
+- **Records that are not events** ([`h2c.time`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2ctime),
+  [`h2c.load`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cload),
+  [`h2c.load_failed`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cload_failed),
+  [`h2c.definition_register`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cdefinition_register), ...)
   are applied when read and take no envelope. They are still read in order;
   earlier events are admitted or explicitly bounced before the control runs.
   Record order is not an execution barrier. A host that needs an earlier
@@ -203,11 +203,11 @@ system, `#_parent`, `#_<invokeid>`) doesn't go to c2h:
    data vref, and puts the text in the name area.
 3. It keeps the envelope on the running macrostep's **outgoing list**, in
    send order. The envelope is on no queue yet, so nothing can take it.
-4. At the macrostep's [`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended),
+4. At the macrostep's [`c2h.macrostep_ended`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hmacrostep_ended),
    core moves the outgoing list, in order, to the end of the run queue. The
    macrostep end's `mail` field counts them. An envelope whose target address isn't
    resident goes to that address's waiting list instead, and core writes
-   [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed)
+   [`c2h.load_needed`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hload_needed)
    after the macrostep end ([below](#envelopes-for-an-address-that-isnt-resident)).
 
 Post-macrostep routing and notifications are a bounded drain phase. Its cursor
@@ -231,7 +231,7 @@ crosses the host, so no JavaScript runs for it and no vref leaves core.
   Host effects on c2h may execute before the macrostep end; they are independent
   of this local scheduling rule and cannot be rolled back by abandonment.
 - **Cause comes before effect in the log.** A recorded sender's
-  [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) is on c2h
+  [`c2h.input`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput) is on c2h
   before the receiver can take the mail and write its own `c2h.input`. A
   stream read in order shows the sender's input observation first. This
   is an observation order, not a durability guarantee.
@@ -240,7 +240,7 @@ crosses the host, so no JavaScript runs for it and no vref leaves core.
   only decides *when* the mail becomes visible.
 
 Mail to an address in another system or process isn't local. It is a
-[`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend) for the host's SCXML
+[`c2h.send`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hsend) for the host's SCXML
 I/O processor.
 
 ## Delayed sends: envelopes with a due time
@@ -258,14 +258,14 @@ envelopes in the pool.**
   IDs. A timer core has
   already turned into input can't be cancelled. SCXML says the same, and
   core is the only place this can happen, so there is no race with the host.
-- **[`h2c.time`](../protocol/generated/MESSAGES.md#h2ctime) moves the
+- **[`h2c.time`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2ctime) moves the
   clock.** Every timer due by then leaves the index in (due, send order):
   - a local target's timer becomes runnable at the end of the run queue;
   - an I/O processor's timer is written as a
-    [`c2h.send`](../protocol/generated/MESSAGES.md#c2hsend) and freed only
+    [`c2h.send`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hsend) and freed only
     after commit. If the record cannot fit, the due envelope retains all
     its references and core returns for the host to drain c2h and resume.
-- **[`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake)** is written
+- **[`c2h.wake`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hwake)** is written
   after the head of the index changes. The bounded drain phase retains the
   latest head while c2h is full and emits the current wake deadline before
   completing the input or time operation. The host needs one timer.
@@ -286,10 +286,10 @@ and the global index ordering owners. The per-owner list stays, as `owner_next`.
 - **The capacity is shared.** A timer is an envelope like any other, so a
   fanout of 10,000 timeouts is limited by the pool, not by slots per actor.
 - **The host needs only one timer.** It needs that one timer, set by
-  [`c2h.wake`](../protocol/generated/MESSAGES.md#c2hwake), plus its index of
+  [`c2h.wake`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hwake), plus its index of
   unloaded sessions ([unloading.md](unloading.md)).
 - **A session's state is one artifact.** Its pending timers are inside its
-  image and its [`c2h.state`](../protocol/generated/MESSAGES.md#c2hstate).
+  image and its [`c2h.state`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hstate).
   Replaying a session rebuilds them, so the host needs no reducer over
   suppressed sends.
 
@@ -297,7 +297,7 @@ and the global index ordering owners. The per-owner list stays, as `owner_next`.
 
 A timer for an I/O processor becomes due while core handles `h2c.time`, not
 inside a macrostep. Core writes its `c2h.send` with `macrostep` 0, and no
-[`c2h.macrostep_ended`](../protocol/generated/MESSAGES.md#c2hmacrostep_ended) follows. The host
+[`c2h.macrostep_ended`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hmacrostep_ended) follows. The host
 may act on it at once.
 
 **Why there is no macrostep end:** this record is not part of a running macrostep.
@@ -316,15 +316,15 @@ resident session, can't run yet:
    doesn't commit asks for no load). The address bytes are its key, in the
    name area.
 2. The first time an address gets a waiting list, core writes
-   [`c2h.load_needed`](../protocol/generated/MESSAGES.md#c2hload_needed).
+   [`c2h.load_needed`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hload_needed).
   It writes it once until the host answers. Until that notification commits,
   a flag and cursor on the existing waiting list retain the obligation;
   c2h exhaustion returns to the host for a drain, without dropping mail or
   attempting to undo its sender's completed macrostep.
-3. **[`h2c.load`](../protocol/generated/MESSAGES.md#h2cload)** loads the
+3. **[`h2c.load`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cload)** loads the
    session. Its waiting envelopes join the run queue in their order. Its
    delayed sends, kept in its image, rejoin the deadline index.
-4. **[`h2c.load_failed`](../protocol/generated/MESSAGES.md#h2cload_failed)**
+4. **[`h2c.load_failed`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cload_failed)**
    recycles them (below).
 
 Waiting envelopes count against the pool. A host that wants to keep mail for
@@ -356,7 +356,7 @@ A host sometimes no longer wants an input it has committed. An HTTP client
 disconnects, or an `AbortSignal` fires, while the event still waits behind
 a busy pool. h2c records are not edited after commit: commit is where a
 `vref` moves to core, and an admitted event no longer lives in the ring.
-The host posts [`h2c.withdraw`](../protocol/generated/MESSAGES.md#h2cwithdraw)
+The host posts [`h2c.withdraw`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cwithdraw)
 instead, naming the input by its h2c seq.
 
 - **It is a control.** It takes no envelope and is applied when read, so it
@@ -418,7 +418,7 @@ This is ADR
 0069's "taking an event does not move it", applied to the pool:
 
 - inspection (ADR 0083) reports the event from the envelope;
-- [`c2h.input`](../protocol/generated/MESSAGES.md#c2hinput) for a recorded
+- [`c2h.input`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hinput) for a recorded
   session is written from the envelope;
 - if an operator abandons the macrostep (ADR 0082), core reports the input's
   terminal completion and frees the envelope and its outgoing list.

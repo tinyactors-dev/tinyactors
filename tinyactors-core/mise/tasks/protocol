@@ -1,0 +1,40 @@
+#!/usr/bin/env ruby
+#MISE description="Generate the ring protocol's reference and codec from protocol/catalog.rb, or verify the checked-in files"
+# vim:ft=ruby
+
+# The ring protocol's records are defined once, in protocol/catalog.rb. This task
+# renders them: protocol/generated/MESSAGES.md and messages.json for people and
+# tools, and protocol/generated/ring_proto.h (until the codec emitter replaces it).
+# The outputs are committed, like include/tinyactors.c.
+#
+#   mise run protocol           write the generated files
+#   mise run protocol --check   fail if a checked-in file is out of date
+
+require 'pathname'
+require 'cache'
+require_relative '../../protocol/render'
+
+Cache.gate('protocol',
+           inputs: Cache.files('protocol/*.rb', 'mise/tasks/protocol'),
+           outputs: Dir[Cache::ROOT.join('protocol/generated/*').to_s].map { |path| Pathname.new(path) })
+
+root = Pathname.new(__dir__).join('../..').expand_path
+model = RingProto.load(root.join('protocol/catalog.rb').to_s)
+outputs = {
+  root.join('protocol/generated/MESSAGES.md') => RingProto::Render.markdown(model),
+  root.join('protocol/generated/messages.json') => RingProto::Render.json(model),
+  root.join('protocol/generated/ring_proto.h') => RingProto::Render.c_header(model)
+}
+
+if ARGV == ['--check']
+  outputs.each do |path, contents|
+    abort "#{path.relative_path_from(root)} is out of date; run mise run protocol" unless path.file? && path.read == contents
+  end
+  puts 'Ring protocol files are current.'
+  exit
+end
+
+abort 'usage: mise run protocol [--check]' unless ARGV.empty?
+changed = outputs.reject { |path, contents| path.file? && path.read == contents }
+changed.each { |path, contents| path.write(contents) }
+puts changed.empty? ? 'ring protocol files unchanged' : "generated #{changed.keys.map { |path| path.relative_path_from(root) }.join(', ')}"

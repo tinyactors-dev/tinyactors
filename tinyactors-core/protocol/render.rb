@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
-# Renders the catalog: `ruby render.rb markdown|json|c [OUT]`.
-# `ruby render.rb all` writes generated/MESSAGES.md, generated/messages.json
-# and generated/ring_proto.h next to this file.
+# Renders the catalog as text for people and tools: `Render.markdown(model)` and
+# `Render.json(model)`. They are called by `mise run protocol` (tinyactors-core/
+# mise/tasks/protocol), which writes generated/MESSAGES.md and
+# generated/messages.json next to this file.
 require 'json'
 require_relative 'dsl'
 
@@ -20,7 +21,7 @@ module RingProto
 
     def markdown(model)
       out = +"# #{model.title}\n\n"
-      out << "Generated from [`catalog.rb`](../catalog.rb) by `ruby render.rb all`. Do not edit.\n\n"
+      out << "Generated from [`catalog.rb`](../catalog.rb) by `mise run protocol` in tinyactors-core. Do not edit.\n\n"
       model.notes.each { |n| out << "- #{n}\n" }
       out << "\n## Rings\n\n| Ring | Producer → consumer | Loss | When full |\n|---|---|---|---|\n"
       model.rings.each_value do |r|
@@ -141,26 +142,5 @@ module RingProto
       end
       out
     end
-  end
-end
-
-if $PROGRAM_NAME == __FILE__
-  model = RingProto.load
-  format, path = ARGV
-  outputs = {
-    'markdown' => ['MESSAGES.md', ->(m) { RingProto::Render.markdown(m) }],
-    'json' => ['messages.json', ->(m) { RingProto::Render.json(m) }],
-    'c' => ['ring_proto.h', ->(m) { RingProto::Render.c_header(m) }]
-  }
-  if format == 'all'
-    dir = File.join(__dir__, 'generated')
-    Dir.mkdir(dir) unless Dir.exist?(dir)
-    outputs.each_value { |file, render| File.write(File.join(dir, file), render.call(model)) }
-  elsif outputs.key?(format)
-    text = outputs[format][1].call(model)
-    path ? File.write(path, text) : $stdout.write(text)
-  else
-    warn 'usage: ruby render.rb markdown|json|c [OUT] | all'
-    exit 2
   end
 end

@@ -9,10 +9,10 @@ byte layout is still open.
 
 ## Submit a complete definition
 
-[`h2c.definition_register`](../protocol/generated/MESSAGES.md#h2cdefinition_register)
+[`h2c.definition_register`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cdefinition_register)
 contains one complete specification, a native data model adapter handle and
 a diagnostic output buffer. Core compiles and registers it, then writes
-[`c2h.definition_result`](../protocol/generated/MESSAGES.md#c2hdefinition_result)
+[`c2h.definition_result`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#c2hdefinition_result)
 with the request's `seq`. Success returns a system-local definition ID.
 There are no add-state, add-transition or finish-builder records, and no
 partly constructed definition for the host to manage.
@@ -37,9 +37,9 @@ registration hold or retained spec data. Registration keeps ADR 0077's
 identity, mismatch, adapter and host-expression semantics, including taking
 one hold when returning an existing definition.
 
-[`h2c.definition_release`](../protocol/generated/MESSAGES.md#h2cdefinition_release)
+[`h2c.definition_release`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cdefinition_release)
 releases one registration hold.
-[`h2c.definition_retire`](../protocol/generated/MESSAGES.md#h2cdefinition_retire)
+[`h2c.definition_retire`](../../../../tinyactors-core/protocol/generated/MESSAGES.md#h2cdefinition_retire)
 ends availability for new actors and drops registration holds. Existing
 actors and nested references keep the definition alive until they finish.
 Both receive the same correlated result. These are host operations, rather
