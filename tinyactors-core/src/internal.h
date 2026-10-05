@@ -30,6 +30,7 @@
 #include "name_resolver.h"
 #include "event.h"
 #include "trace.h"
+#include "tel.h"
 #include "scxml_uri.h"
 #include "routing.h"
 #include "clock.h"

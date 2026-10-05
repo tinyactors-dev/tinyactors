@@ -281,6 +281,19 @@ static void test_would_fit_lossy(void) {
     ta_ring_cell(f.rings.control, (ta_ring_id)TA_RING_TEL)[0].tail = 0;
     host_release(ring, 32);
     CHECK(ta_ring_would_fit(ring, 32) && ta_ring_would_fit(ring, 16) && !ta_ring_would_fit(ring, 33));
+    /* ta_ring_drop loses a record without trying it: the seq and the count move together, once. */
+    uint64_t seq = ring->shared->next_seq;
+    CHECK(ta_ring_drop(ring) == seq && ring->shared->next_seq == seq + 1 && ring->shared->dropped == 2);
+    CHECK(ta_ring_reserve(ring, 16, &res) == TA_RING_OK && res.seq == seq + 1);
+    CHECK(ta_ring_drop(ring) == 0 && ring->shared->dropped == 2); /* not while a reservation is open */
+    ta_ring_abandon(ring);
+    fixture_down(&f);
+
+    /* Not on a lossless ring: nothing there is lost without being refused. */
+    ta_rings_specs lossless = specs_of(64, 32, TA_RING_LOSSLESS);
+    fixture_up(&f, &lossless);
+    CHECK(ta_ring_drop(&f.rings.ring[TA_RING_C2H]) == 0 && ta_ring_cell(f.rings.control, TA_RING_C2H)->next_seq == 1);
+    CHECK(ta_ring_cell(f.rings.control, TA_RING_C2H)->dropped == 0);
     fixture_down(&f);
 }
 

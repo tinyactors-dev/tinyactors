@@ -3808,6 +3808,156 @@ typedef struct {
 
 
 /* ========================================================================
+ * Telemetry (ADR 0098)
+ *
+ * Core writes a trace record to the tel ring for every kind a macrostep's
+ * mask enables (ADR 0073), in the order it wrote them. The ring is lossy:
+ * when it is full a record is dropped and counted, and the next record that
+ * fits is a tel.dropped that says how many. Nothing waits, and nothing a
+ * macrostep does depends on whether tel has room.
+ *
+ * A host reads tel after each call into core that may have run an actor:
+ *
+ *     ta_ring_record raw;
+ *     while (ta_ring_peek(system, TA_RING_TEL, &raw) == TA_OK) {
+ *         ta_tel_entry entry;
+ *         if (ta_tel_decode(&raw, &entry) == TA_OK) {
+ *             use(&entry);                       // views into raw.bytes
+ *         }
+ *         ta_ring_release(system, TA_RING_TEL, raw.size);   // the views die here
+ *     }
+ */
+
+/*
+ * Three masks of TA_TRACE_BIT(kind) (ADR 0073): core writes no record whose
+ * bit the macrostep's mask lacks. A macrostep picks its mask at
+ * MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is
+ * sampled, `watched_kinds` when it is sampled and marked
+ * TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled.
+ * Lifecycle records are outside macrosteps and never sampled: their bit is
+ * looked up in `watched_kinds` when their context is watched, else in
+ * `kinds`. A system starts with all of them zero and writes nothing.
+ *
+ * `values` asks core to render values (the data of an event, an assigned
+ * value) as text into the records it writes, through the data model's
+ * value_trace_text. A fault's data is always rendered, since the reason a
+ * step failed is what an operator cannot do without; and so is the data of an
+ * error.* event a record names. Rendering costs a serialization per record,
+ * so it is off until a host wants it. (ADR 0098 sketches three masks; this
+ * is the fourth word, a switch, not a mask.)
+ */
+typedef struct {
+    uint32_t kinds;
+    uint32_t watched_kinds;
+    uint32_t unsampled_kinds;
+    bool values;
+} ta_trace_masks;
+
+/*
+ * ta_system_set_trace_masks sets the masks, replacing all four words at
+ * once. They are configuration of the system (ADR 0092 rule 1), not
+ * parameters, and may change at any time except while a macrostep of this
+ * system runs, since a macrostep keeps the mask it picked at its start.
+ * TA_ERR_INVALID for a NULL system or masks. It never allocates.
+ */
+TA_API ta_result ta_system_set_trace_masks(ta_system *system, TA_IN const ta_trace_masks *masks);
+
+/* A list of 32-bit IDs in a record's tail: `count` of them in `bytes`, which are not aligned. Read one with ta_tel_u32_at(). */
+typedef struct {
+    TA_COUNTED_BY(count) const uint8_t *bytes;
+    uint32_t count;
+} ta_tel_u32s;
+
+/* ta_tel_u32_at returns element `index` of `list`, or 0 past its end. */
+TA_API uint32_t ta_tel_u32_at(TA_IN const ta_tel_u32s *list, uint32_t index);
+
+/*
+ * One tel.trace record, decoded: the fields of the ta_trace_record core
+ * wrote, with names and values as text. Only the fields the record's kind
+ * names are meaningful; the rest are zero, or NONE for IDs. The texts and
+ * lists are views into the record's bytes and die when it is released; the
+ * scalars are copies. `has_value` says `value` is text (the data model
+ * rendered it, and the mask asked for values); `truncated`,
+ * `event_data_truncated` and `fault_data_truncated` that the value, the
+ * event's data or the fault's data was cut at telemetryValueBytes or at the
+ * room the record had; and `suppressed` that a replaying session did not
+ * perform the effect (always false until ring-proto 5.5).
+ */
+typedef struct {
+    ta_trace_kind kind;
+    ta_step_key key;
+    ta_trace_position position;
+    ta_trace_context context;
+    ta_step_key cause;
+    ta_actor_id actor;
+    ta_definition_id definition;
+    ta_time now;
+    bool has_event;
+    ta_event_type event_type;
+    ta_str event_name;
+    ta_str event_send_id;
+    ta_str event_invoke_id;
+    ta_str event_data;
+    ta_state_id state;
+    ta_expr_id expr;
+    ta_str name;
+    ta_action_id action;
+    uint32_t iteration;
+    ta_str send;
+    ta_str invoke;
+    bool result;
+    bool has_value;
+    ta_str value;
+    bool truncated;
+    bool event_data_truncated;
+    bool fault_data_truncated;
+    bool suppressed;
+    bool has_fault;
+    int32_t fault_code;
+    ta_str fault_detail;
+    ta_str fault_message;
+    ta_str fault_data;
+    uint32_t dropped;
+    ta_tel_u32s transitions;
+    ta_tel_u32s exited;
+    ta_tel_u32s entered;
+    ta_tel_u32s history;
+    ta_tel_u32s states;
+    /* DEFINITION_* kinds: the definition's family and revision. */
+    ta_definition_identity identity;
+} ta_tel_trace;
+
+/* One tel.dropped record: `count` records were dropped, the first of which would have had seq `first_seq`. */
+typedef struct {
+    uint64_t count;
+    uint64_t first_seq;
+} ta_tel_dropped;
+
+typedef enum { TA_TEL_TRACE = 1, TA_TEL_DROPPED = 2 } ta_tel_type TA_SYMBOLS("TA_TEL_");
+
+/* A decoded record of the tel ring: `type` says which of `trace` and `dropped` is meaningful. */
+typedef struct {
+    ta_tel_type type;
+    uint64_t seq;
+    uint64_t gap;
+    uint64_t at;
+    ta_tel_trace trace;
+    ta_tel_dropped dropped;
+} ta_tel_entry;
+
+/*
+ * ta_tel_decode validates the record peeked from tel (ta_record_check: the
+ * size, the kind, the seq, every span inside the record, every enum and
+ * flag defined) and fills *out with views into it. It is what a host calls
+ * instead of reading bytes. TA_ERR_INVALID, with *out untouched, for a
+ * malformed record, one that is not on tel, or one whose lists, kind,
+ * position or event type are out of range. It never allocates and holds
+ * nothing: *out is dead when the record is released.
+ */
+TA_API ta_result ta_tel_decode(TA_IN const ta_ring_record *record, TA_OUT TA_LIFETIME(input) ta_tel_entry *out);
+
+
+/* ========================================================================
  * Systems
  */
 

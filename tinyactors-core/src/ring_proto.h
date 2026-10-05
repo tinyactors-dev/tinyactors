@@ -156,11 +156,13 @@ typedef enum ta_msg_c2h_input_completed_flag {
 
 /* tel.trace's own flags: bits 0..7 of the header's flags. */
 typedef enum ta_msg_tel_trace_flag {
-    TA_MSG_TEL_TRACE_TRUNCATED = 1 << 0, /* a value, event data or fault data was cut at telemetryValueBytes */
+    TA_MSG_TEL_TRACE_TRUNCATED = 1 << 0, /* the value was cut at telemetryValueBytes or at the room the record had */
     TA_MSG_TEL_TRACE_SUPPRESSED = 1 << 1, /* an effect a replaying session did not perform */
     TA_MSG_TEL_TRACE_HAS_EVENT = 1 << 2, /* the record names an event: event_type and the event_* texts are meaningful */
     TA_MSG_TEL_TRACE_HAS_VALUE = 1 << 3, /* the record carries a value: `value` is its text (empty when the data model has none) */
     TA_MSG_TEL_TRACE_HAS_FAULT = 1 << 4, /* the record carries a fault: fault_code and the fault_* texts are meaningful */
+    TA_MSG_TEL_TRACE_EVENT_DATA_TRUNCATED = 1 << 5, /* event_data was cut, as `truncated` says of the value */
+    TA_MSG_TEL_TRACE_FAULT_DATA_TRUNCATED = 1 << 6, /* fault_data was cut, as `truncated` says of the value */
 } ta_msg_tel_trace_flag;
 
 /* What _event.type says (SCXML 5.10.1). Stored as uint8_t. */
@@ -3198,8 +3200,8 @@ ta_result ta_msg_c2h_load_result_get(const ta_record *record, ta_msg_c2h_load_re
  *   entered (bytes): u32 state IDs
  *   history (bytes): u32 state IDs
  *   states (bytes): u32 state IDs
- *   flag truncated (bit 0): a value, event data or fault data was cut at
- *       telemetryValueBytes
+ *   flag truncated (bit 0): the value was cut at telemetryValueBytes or at the
+ *       room the record had
  *   flag suppressed (bit 1): an effect a replaying session did not perform
  *   flag has_event (bit 2): the record names an event: event_type and the
  *       event_* texts are meaningful
@@ -3207,6 +3209,10 @@ ta_result ta_msg_c2h_load_result_get(const ta_record *record, ta_msg_c2h_load_re
  *       (empty when the data model has none)
  *   flag has_fault (bit 4): the record carries a fault: fault_code and the
  *       fault_* texts are meaningful
+ *   flag event_data_truncated (bit 5): event_data was cut, as `truncated` says
+ *       of the value
+ *   flag fault_data_truncated (bit 6): fault_data was cut, as `truncated` says
+ *       of the value
  */
 typedef struct ta_msg_tel_trace_wire {
     ta_msg_wire_header header;

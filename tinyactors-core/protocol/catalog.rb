@@ -629,11 +629,13 @@ message 'tel.trace', code: 0x0301, summary: 'One trace record (core ADR 0067)' d
       '0 in the rest. `transitions`, `exited`, `entered`, `history` and ' \
       '`states` are lists of u32 IDs, little arrays in the tail: read each ' \
       'with memcpy, since their offsets are not aligned.'
-  flag :truncated, 0, 'a value, event data or fault data was cut at telemetryValueBytes'
+  flag :truncated, 0, 'the value was cut at telemetryValueBytes or at the room the record had'
   flag :suppressed, 1, 'an effect a replaying session did not perform'
   flag :has_event, 2, 'the record names an event: event_type and the event_* texts are meaningful'
   flag :has_value, 3, 'the record carries a value: `value` is its text (empty when the data model has none)'
   flag :has_fault, 4, 'the record carries a fault: fault_code and the fault_* texts are meaningful'
+  flag :event_data_truncated, 5, 'event_data was cut, as `truncated` says of the value'
+  flag :fault_data_truncated, 6, 'fault_data was cut, as `truncated` says of the value'
   field :macrostep, :macrostep, 'the key: macrostep (its session is the header’s)'
   field :trace_id_high, :u64, 'the context: the trace ID'
   field :trace_id_low, :u64

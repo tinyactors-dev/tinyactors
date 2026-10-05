@@ -190,6 +190,19 @@ bool ta_ring_would_fit(ta_ring *ring, uint32_t size) {
     return pad + rounded <= ring->capacity - (ring->head - ring->peer_tail);
 }
 
+/* ta_ring_drop: see ring.h. The counters of a refused reserve, without the reserve. */
+uint64_t ta_ring_drop(ta_ring *ring) {
+    if (ring->mode != TA_RING_LOSSY || ring->pending_size != 0 || ring->capacity == 0) {
+        return 0;
+    }
+    uint64_t seq = ring->next_seq;
+    ring->next_seq += 1;
+    ring->dropped += 1;
+    ring->shared->next_seq = ring->next_seq;
+    ring->shared->dropped = ring->dropped;
+    return seq;
+}
+
 /* ta_ring_commit: see ring.h. Bytes first, counters last, so a reader never sees a half-written record. */
 void ta_ring_commit(ta_ring *ring) {
     if (ring->pending_size == 0) {

@@ -2346,7 +2346,7 @@ ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const ta_ring_res
     }
     if (to->bytes == NULL ||
         to->size != size ||
-        (data->head.flags & (uint16_t)~0x031Fu) != 0 ||
+        (data->head.flags & (uint16_t)~0x037Fu) != 0 ||
         !ta_record_in_domain(0x3ull, data->result)) {
         return TA_ERR_INVALID;
     }
@@ -2587,7 +2587,7 @@ static const ta_record_descriptor ta_msg_descriptors[] = {
     { .kind = TA_MSG_C2H_INPUT_REFUSED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 1, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = ta_msg_c2h_input_refused_domains },
     { .kind = TA_MSG_C2H_INPUT_COMPLETED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 1, .fixed_size = 56, .flags_allowed = 0x0301, .spans = NULL, .domains = ta_msg_c2h_input_completed_domains },
     { .kind = TA_MSG_C2H_LOAD_RESULT, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
-    { .kind = TA_MSG_TEL_TRACE, .ring = TA_RING_TEL, .span_count = 18, .domain_count = 1, .fixed_size = 296, .flags_allowed = 0x031F, .spans = ta_msg_tel_trace_spans, .domains = ta_msg_tel_trace_domains },
+    { .kind = TA_MSG_TEL_TRACE, .ring = TA_RING_TEL, .span_count = 18, .domain_count = 1, .fixed_size = 296, .flags_allowed = 0x037F, .spans = ta_msg_tel_trace_spans, .domains = ta_msg_tel_trace_domains },
     { .kind = TA_MSG_TEL_DROPPED, .ring = TA_RING_TEL, .span_count = 0, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
 };
 _Static_assert(sizeof ta_msg_descriptors / sizeof ta_msg_descriptors[0] == 38, "every message has a descriptor");

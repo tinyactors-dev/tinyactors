@@ -2182,7 +2182,7 @@
         {
           "name": "truncated",
           "bit": 0,
-          "doc": "a value, event data or fault data was cut at telemetryValueBytes"
+          "doc": "the value was cut at telemetryValueBytes or at the room the record had"
         },
         {
           "name": "suppressed",
@@ -2203,6 +2203,16 @@
           "name": "has_fault",
           "bit": 4,
           "doc": "the record carries a fault: fault_code and the fault_* texts are meaningful"
+        },
+        {
+          "name": "event_data_truncated",
+          "bit": 5,
+          "doc": "event_data was cut, as `truncated` says of the value"
+        },
+        {
+          "name": "fault_data_truncated",
+          "bit": 6,
+          "doc": "fault_data was cut, as `truncated` says of the value"
         }
       ],
       "replies": [],

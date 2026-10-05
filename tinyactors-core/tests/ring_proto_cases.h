@@ -1087,7 +1087,7 @@ _Static_assert(sizeof(ta_msg_tel_trace) <= RING_PROTO_CASE_DATA_BYTES, "tel.trac
 static void case_tel_trace_fill(void *p, uint32_t seed, const uint8_t *pool) {
     ta_msg_tel_trace *d = p;
     ta_mem_zero(d, sizeof *d);
-    d->head.flags = (uint16_t)(ring_proto_mix(seed, 0) & 0x031Fu);
+    d->head.flags = (uint16_t)(ring_proto_mix(seed, 0) & 0x037Fu);
     d->head.session = ring_proto_mix(seed, 1);
     d->head.at = ring_proto_mix(seed, 2);
     d->macrostep = (uint64_t)ring_proto_mix(seed, 3);

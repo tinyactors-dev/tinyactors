@@ -678,11 +678,13 @@ A record that does not name an item has NONE (0xFFFFFFFF) in its ID fields (stat
 | 280 | `history` | bytes | u32 state IDs |
 | 288 | `states` | bytes | u32 state IDs |
 
-- flag bit 0 `truncated`: a value, event data or fault data was cut at telemetryValueBytes
+- flag bit 0 `truncated`: the value was cut at telemetryValueBytes or at the room the record had
 - flag bit 1 `suppressed`: an effect a replaying session did not perform
 - flag bit 2 `has_event`: the record names an event: event_type and the event_* texts are meaningful
 - flag bit 3 `has_value`: the record carries a value: `value` is its text (empty when the data model has none)
 - flag bit 4 `has_fault`: the record carries a fault: fault_code and the fault_* texts are meaningful
+- flag bit 5 `event_data_truncated`: event_data was cut, as `truncated` says of the value
+- flag bit 6 `fault_data_truncated`: fault_data was cut, as `truncated` says of the value
 
 ## tel.dropped
 

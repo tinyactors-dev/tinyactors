@@ -17078,6 +17078,519 @@
         }
       }
     },
+    "ta_tel_dropped": {
+      "kind": "struct",
+      "doc": "One tel.dropped record: `count` records were dropped, the first of which would have had seq `first_seq`.",
+      "fields": [
+        {
+          "name": "count",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "first_seq",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "count": 0,
+            "first_seq": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "count": 0,
+            "first_seq": 8
+          }
+        }
+      }
+    },
+    "ta_tel_entry": {
+      "kind": "struct",
+      "doc": "A decoded record of the tel ring: `type` says which of `trace` and `dropped` is meaningful.",
+      "fields": [
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_tel_type"
+          }
+        },
+        {
+          "name": "seq",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "gap",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "at",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_tel_trace"
+          }
+        },
+        {
+          "name": "dropped",
+          "type": {
+            "type": "ta_tel_dropped"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 520,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "seq": 8,
+            "gap": 16,
+            "at": 24,
+            "trace": 32,
+            "dropped": 504
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 368,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "seq": 8,
+            "gap": 16,
+            "at": 24,
+            "trace": 32,
+            "dropped": 352
+          }
+        }
+      }
+    },
+    "ta_tel_trace": {
+      "kind": "struct",
+      "doc": "One tel.trace record, decoded: the fields of the ta_trace_record core wrote, with names and values as text. Only the fields the record's kind names are meaningful; the rest are zero, or NONE for IDs. The texts and lists are views into the record's bytes and die when it is released; the scalars are copies. `has_value` says `value` is text (the data model rendered it, and the mask asked for values); `truncated`, `event_data_truncated` and `fault_data_truncated` that the value, the event's data or the fault's data was cut at telemetryValueBytes or at the room the record had; and `suppressed` that a replaying session did not perform the effect (always false until ring-proto 5.5).",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_trace_kind"
+          }
+        },
+        {
+          "name": "key",
+          "type": {
+            "type": "ta_step_key"
+          }
+        },
+        {
+          "name": "position",
+          "type": {
+            "type": "ta_trace_position"
+          }
+        },
+        {
+          "name": "context",
+          "type": {
+            "type": "ta_trace_context"
+          }
+        },
+        {
+          "name": "cause",
+          "type": {
+            "type": "ta_step_key"
+          }
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "now",
+          "type": {
+            "type": "ta_time"
+          }
+        },
+        {
+          "name": "has_event",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "event_type",
+          "type": {
+            "type": "ta_event_type"
+          }
+        },
+        {
+          "name": "event_name",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "event_send_id",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "event_invoke_id",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "event_data",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "state",
+          "type": {
+            "type": "ta_state_id"
+          }
+        },
+        {
+          "name": "expr",
+          "type": {
+            "type": "ta_expr_id"
+          }
+        },
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "action",
+          "type": {
+            "type": "ta_action_id"
+          }
+        },
+        {
+          "name": "iteration",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "send",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "invoke",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "result",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "has_value",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "value",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "truncated",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "event_data_truncated",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "fault_data_truncated",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "suppressed",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "has_fault",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "fault_code",
+          "type": {
+            "builtin": "int32_t"
+          }
+        },
+        {
+          "name": "fault_detail",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "fault_message",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "fault_data",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "dropped",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "transitions",
+          "type": {
+            "type": "ta_tel_u32s"
+          }
+        },
+        {
+          "name": "exited",
+          "type": {
+            "type": "ta_tel_u32s"
+          }
+        },
+        {
+          "name": "entered",
+          "type": {
+            "type": "ta_tel_u32s"
+          }
+        },
+        {
+          "name": "history",
+          "type": {
+            "type": "ta_tel_u32s"
+          }
+        },
+        {
+          "name": "states",
+          "type": {
+            "type": "ta_tel_u32s"
+          }
+        },
+        {
+          "name": "identity",
+          "type": {
+            "type": "ta_definition_identity"
+          },
+          "doc": "DEFINITION_* kinds: the definition's family and revision."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 472,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "key": 8,
+            "position": 32,
+            "context": 56,
+            "cause": 80,
+            "actor": 104,
+            "definition": 112,
+            "now": 120,
+            "has_event": 128,
+            "event_type": 132,
+            "event_name": 136,
+            "event_send_id": 152,
+            "event_invoke_id": 168,
+            "event_data": 184,
+            "state": 200,
+            "expr": 204,
+            "name": 208,
+            "action": 224,
+            "iteration": 228,
+            "send": 232,
+            "invoke": 248,
+            "result": 264,
+            "has_value": 265,
+            "value": 272,
+            "truncated": 288,
+            "event_data_truncated": 289,
+            "fault_data_truncated": 290,
+            "suppressed": 291,
+            "has_fault": 292,
+            "fault_code": 296,
+            "fault_detail": 304,
+            "fault_message": 320,
+            "fault_data": 336,
+            "dropped": 352,
+            "transitions": 360,
+            "exited": 376,
+            "entered": 392,
+            "history": 408,
+            "states": 424,
+            "identity": 440
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 320,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "key": 8,
+            "position": 32,
+            "context": 56,
+            "cause": 80,
+            "actor": 104,
+            "definition": 112,
+            "now": 120,
+            "has_event": 128,
+            "event_type": 132,
+            "event_name": 136,
+            "event_send_id": 144,
+            "event_invoke_id": 152,
+            "event_data": 160,
+            "state": 168,
+            "expr": 172,
+            "name": 176,
+            "action": 184,
+            "iteration": 188,
+            "send": 192,
+            "invoke": 200,
+            "result": 208,
+            "has_value": 209,
+            "value": 212,
+            "truncated": 220,
+            "event_data_truncated": 221,
+            "fault_data_truncated": 222,
+            "suppressed": 223,
+            "has_fault": 224,
+            "fault_code": 228,
+            "fault_detail": 232,
+            "fault_message": 240,
+            "fault_data": 248,
+            "dropped": 256,
+            "transitions": 260,
+            "exited": 268,
+            "entered": 276,
+            "history": 284,
+            "states": 292,
+            "identity": 300
+          }
+        }
+      }
+    },
+    "ta_tel_type": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_TEL_TRACE",
+          "value": 1,
+          "symbol": "trace"
+        },
+        {
+          "name": "TA_TEL_DROPPED",
+          "value": 2,
+          "symbol": "dropped"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_tel_u32s": {
+      "kind": "struct",
+      "doc": "A list of 32-bit IDs in a record's tail: `count` of them in `bytes`, which are not aligned. Read one with ta_tel_u32_at().",
+      "fields": [
+        {
+          "name": "bytes",
+          "type": {
+            "pointer": {
+              "builtin": "uint8_t",
+              "const": true
+            }
+          },
+          "count": "count",
+          "shape": "counted",
+          "direction": "in"
+        },
+        {
+          "name": "count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "bytes"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "bytes": 0,
+            "count": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "bytes": 0,
+            "count": 4
+          }
+        }
+      }
+    },
     "ta_time": {
       "kind": "alias",
       "doc": "Monotonic logical time in milliseconds, supplied by the embedder.",
@@ -17489,6 +18002,58 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
+        }
+      }
+    },
+    "ta_trace_masks": {
+      "kind": "struct",
+      "doc": "Three masks of TA_TRACE_BIT(kind) (ADR 0073): core writes no record whose bit the macrostep's mask lacks. A macrostep picks its mask at MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is sampled, `watched_kinds` when it is sampled and marked TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled. Lifecycle records are outside macrosteps and never sampled: their bit is looked up in `watched_kinds` when their context is watched, else in `kinds`. A system starts with all of them zero and writes nothing.\n\n`values` asks core to render values (the data of an event, an assigned value) as text into the records it writes, through the data model's value_trace_text. A fault's data is always rendered, since the reason a step failed is what an operator cannot do without; and so is the data of an error.* event a record names. Rendering costs a serialization per record, so it is off until a host wants it. (ADR 0098 sketches three masks; this is the fourth word, a switch, not a mask.)",
+      "fields": [
+        {
+          "name": "kinds",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "watched_kinds",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "unsampled_kinds",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "values",
+          "type": {
+            "builtin": "bool"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "kinds": 0,
+            "watched_kinds": 4,
+            "unsampled_kinds": 8,
+            "values": 12
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "kinds": 0,
+            "watched_kinds": 4,
+            "unsampled_kinds": 8,
+            "values": 12
+          }
         }
       }
     },
@@ -21836,6 +22401,111 @@
           "shape": "handle",
           "direction": "in",
           "destroys": true
+        }
+      ]
+    },
+    {
+      "name": "ta_system_set_trace_masks",
+      "doc": "ta_system_set_trace_masks sets the masks, replacing all four words at once. They are configuration of the system (ADR 0092 rule 1), not parameters, and may change at any time except while a macrostep of this system runs, since a macrostep keeps the mask it picked at its start. TA_ERR_INVALID for a NULL system or masks. It never allocates.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "masks",
+          "type": {
+            "pointer": {
+              "type": "ta_trace_masks",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_tel_u32_at",
+      "doc": "ta_tel_u32_at returns element `index` of `list`, or 0 past its end.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "list",
+          "type": {
+            "pointer": {
+              "type": "ta_tel_u32s",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "index",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_tel_decode",
+      "doc": "ta_tel_decode validates the record peeked from tel (ta_record_check: the size, the kind, the seq, every span inside the record, every enum and flag defined) and fills *out with views into it. It is what a host calls instead of reading bytes. TA_ERR_INVALID, with *out untouched, for a malformed record, one that is not on tel, or one whose lists, kind, position or event type are out of range. It never allocates and holds nothing: *out is dead when the record is released.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "record",
+          "type": {
+            "pointer": {
+              "type": "ta_ring_record",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_tel_entry"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "input"
         }
       ]
     },

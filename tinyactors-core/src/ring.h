@@ -306,6 +306,19 @@ ta_ring_status ta_ring_reserve(ta_ring *ring, uint32_t size, ta_ring_reservation
 bool ta_ring_would_fit(ta_ring *ring, uint32_t size);
 
 /*
+ * ta_ring_drop (producer) records a record the producer decided not to write
+ * as lost, on a lossy ring: it consumes the record's seq and counts one drop
+ * exactly as a refused ta_ring_reserve does (both counters stored at once), and
+ * returns the seq consumed, so that the consumer sees the gap. It is how a
+ * producer that cannot even build a record (it is over max_record_bytes
+ * once its texts are rendered) keeps the gap honest. On a lossless ring, while
+ * a reservation is open and on an absent ring it does nothing and returns 0:
+ * a lossless record that cannot be written is the producer's to retry, not
+ * to lose. It never allocates.
+ */
+uint64_t ta_ring_drop(ta_ring *ring);
+
+/*
  * ta_ring_commit (producer) publishes the open reservation: it writes size
  * and seq into bytes 4..16 of the record, the pad if the record wrapped, and
  * only then stores head and next_seq, so a reader sees whole records. The

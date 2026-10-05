@@ -12,6 +12,7 @@
 #include "invoke.h"
 #include "ring.h"
 #include "routing.h"
+#include "tel.h"
 #include "timer.h"
 #include "trace.h"
 
@@ -126,6 +127,10 @@ struct ta_system {
     /* maxRecordBytes of scratch for the texts of one tel record (lifetime of the contents: one write); inside rings_memory. */
     unsigned char *tel_staging;
     uint32_t tel_staging_bytes;
+    /* What the tel producer lost and has not yet reported (tel.h); zero at creation. */
+    ta_tel_state tel;
+    /* The trace masks (ADR 0098 section 5): all zero at creation, so nothing is written. */
+    ta_trace_masks trace_masks;
     /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
      * newest first, linked through `next_cached`; at most `block_cache_limit`
      * of them (ADR 0069). Empty at creation: a block is made when a delivery
