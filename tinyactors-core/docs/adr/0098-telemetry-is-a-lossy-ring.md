@@ -1,6 +1,6 @@
 # ADR 0098: Telemetry is a lossy ring
 
-**Status:** Accepted (2026-10-04); implementation pending (ring-proto Phase 4.1). Refines ADR 0067: trace records go to the `tel` ring instead of a sink, and their values are text. The first of the core ADRs that adopt [the ring protocol proposal](../../../docs/proposals/ring-proto/README.md).
+**Status:** Accepted (2026-10-04); implemented (2026-10-05, ring-proto Phase 4.1). Refines ADR 0067: trace records go to the `tel` ring instead of a sink, and their values are text. The first of the core ADRs that adopt [the ring protocol proposal](../../../docs/proposals/ring-proto/README.md).
 **Date:** 2026-10-04
 
 ## Context
@@ -212,3 +212,40 @@ lists, and the encoder can do better later without a change in core.
   arrive with recording on the rings (Phase 5.5). The watched bit per actor
   replaces the kernel's watch list when the kernel goes (Phase 6). Where the
   OTLP encoder lives after the kernel is deleted is still open.
+
+## Implementation notes (2026-10-05)
+
+Implemented in ring-proto Phase 4.1. Where the code differs from, or fills in,
+the text above:
+
+- **Names.** The public header has `ta_ring_peek`, `ta_ring_release` and
+  `ta_system_control_block`; the trace record types and the sink are gone
+  from it, and `ta_trace_record` is private to core (`src/trace.h`). The
+  decoder is `ta_tel_decode`: its views point into the ring and die at
+  `ta_ring_release`.
+- **Send and invoke IDs are text.** A record names a send or an invocation
+  by its text (the `id` attribute), as the encoder always rendered it, so a
+  trace line in the test host shows `invoke worker`, not a number.
+- **Where the kernel reads.** `tah_trace_drain` runs when the kernel leaves
+  core (`tah_system_leave_core`) and after each scheduler call into core
+  (`tah_turn_params.left_core`); napi drains once more at the start of a
+  dispatch. The test host's `trace.recording` reads after each request and
+  before the definition recorder journals an event.
+- **Parameters.** `TAH_PARAM_VALUE_BYTES` is core's `telemetryValueBytes`
+  (at most `maxRecordBytes` less 512). The trace staging bound is the
+  encoder's setting (`tah_otlp_config.keep_bytes`); napi keeps the
+  JavaScript name `traceStagingBytes` as a parameter of its own.
+- **Numbers** (this machine, 4 CPUs; default parameters):
+
+  | | before | after |
+  |---|---|---|
+  | live bytes of an empty system | 89,864 in 9 blocks | 160,088 in 10 blocks |
+  | the smallest ring (`telBytes` 1,024) | | 92,504 |
+  | bytes per actor (`scale_test`) | 329 to 332 | 329 |
+  | core `src/` lines (code and comments) | 33,673 | 34,826 |
+  | core `src/` lines without comments and blank lines | 22,215 | 22,936 |
+
+  The growth per system is the ring (65,536 bytes), its staging area and the
+  control block, as the Consequences say; per actor nothing changed.
+  The core grew because the writer, the decoder and the text rendering now
+  live in core; the kernel lost its staging buffer and its sink adapter.
