@@ -239,10 +239,10 @@ static void test_golden_figures(void) {
     if (system == NULL) {
         return;
     }
-    check_chart(system, (golden){ 2, 240, 240, 256, 652 }, NULL);
-    check_chart(system, (golden){ 7, 240, 240, 296, 776 }, NULL);
-    check_chart(system, (golden){ 70, 256, 256, 832, 2444 }, NULL);
-    check_chart(system, (golden){ 700, 400, 400, 6160, 18988 }, NULL);
+    check_chart(system, (golden){ 2, 240, 240, 256, 908 }, NULL);
+    check_chart(system, (golden){ 7, 240, 240, 296, 1032 }, NULL);
+    check_chart(system, (golden){ 70, 256, 256, 832, 2700 }, NULL);
+    check_chart(system, (golden){ 700, 400, 400, 6160, 19244 }, NULL);
     /* The default system's arena: one region (interpreterBytes and renderBytes) and the nested table. */
     CHECK(system->arena_bytes == 82048u);
     /* The header is 12 bytes since the jump stores its own size (it was 8). */
@@ -295,8 +295,8 @@ static void test_spare_reuse(void) {
     }
     ta_definition *big = NULL;
     ta_definition *small = NULL;
-    check_chart(system, (golden){ 700, 400, 400, 6160, 18988 }, &big);
-    check_chart(system, (golden){ 2, 240, 240, 256, 652 }, &small);
+    check_chart(system, (golden){ 700, 400, 400, 6160, 19244 }, &big);
+    check_chart(system, (golden){ 2, 240, 240, 256, 908 }, &small);
     ta_actor *actor_big = calloc(1, sizeof *actor_big);
     ta_actor *actor_small = calloc(1, sizeof *actor_small);
     if (big != NULL && small != NULL && actor_big != NULL && actor_small != NULL) {

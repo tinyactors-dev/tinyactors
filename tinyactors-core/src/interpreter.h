@@ -78,6 +78,18 @@ typedef struct {
     uint64_t *bound_decls;
     uint32_t decl_words;
     /*
+     * The taken event's name as atoms (name_resolver.h), `event_atom_count`
+     * of the `event_atom_capacity` that fit. Lifetime: macrostep/unit scratch,
+     * one buffer per interpreter. Allocated once, in ta_interpreter_init, from
+     * system->scratch with eventNameDepth entries; never during a macrostep.
+     * Written once per take, before selection; read only by
+     * ta_select_transitions and the matcher, which borrow it for the call.
+     * Nothing keeps a pointer into it: the arena is reset by the next init.
+     */
+    ta_atom *event_atoms;
+    uint32_t event_atom_count;
+    uint32_t event_atom_capacity;
+    /*
      * Tracing (ADR 0067). `trace_kinds` is what the running macrostep builds,
      * from the sink's mask and the macrostep's context. `trace_action` is the
      * unit of executable content running now. `trace_states` is scratch for

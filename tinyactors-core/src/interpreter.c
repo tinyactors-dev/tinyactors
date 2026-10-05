@@ -2757,10 +2757,10 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
     const ta_definition *definition = it->definition;
     it->enabled_count = 0;
     it->condition_count = 0;
-    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    ta_event_atoms atoms = { .atoms = segments };
+    ta_event_atoms atoms = { .atoms = it->event_atoms };
     if (event != NULL) {
-        atoms.count = ta_trie_segments(&definition->system->event_names.trie, event->name, segments);
+        atoms.count = ta_trie_segments(&definition->system->event_names.trie, event->name, it->event_atoms);
+        it->event_atom_count = atoms.count;
     }
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {
         if (!ta_bits_get(it->active, atomic) || !ta_definition_is_atomic(definition, atomic)) {
@@ -4084,6 +4084,7 @@ ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *o
     TA_SCRATCH_TAKE(&layout, ta_state_id, (size_t)definition->history.slot_count + 1u);
     TA_SCRATCH_TAKE(&layout, ta_exec_frame, ta_exec_capacity(definition));
     TA_SCRATCH_TAKE(&layout, uint64_t, ta_decl_words(definition));
+    TA_SCRATCH_TAKE(&layout, ta_atom, definition->system->event_names.trie.max_depth);
     /* 3 * state_count + 1 items, as four entries so that no count wraps: same alignment, no gap between. */
     for (uint32_t index = 0; index < 3u; index += 1u) {
         TA_SCRATCH_TAKE(&layout, ta_state_id, definition->state_count);
@@ -4134,7 +4135,12 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     it->exec_frames = ta_arena_alloc(&system->scratch, it->exec_capacity * sizeof(ta_exec_frame), _Alignof(ta_exec_frame));
     it->decl_words = ta_decl_words(definition);
     it->bound_decls = ta_arena_alloc(&system->scratch, (size_t)it->decl_words * sizeof(uint64_t), _Alignof(uint64_t));
-    if (it->entry_frames == NULL || it->history_stack == NULL || it->exec_frames == NULL || it->bound_decls == NULL) {
+    /* The taken event's atoms: eventNameDepth of them, the longest name there is. */
+    it->event_atom_capacity = system->event_names.trie.max_depth;
+    it->event_atoms = ta_arena_alloc(&system->scratch, (size_t)it->event_atom_capacity * sizeof(ta_atom),
+                                     _Alignof(ta_atom));
+    if (it->entry_frames == NULL || it->history_stack == NULL || it->exec_frames == NULL || it->bound_decls == NULL ||
+        it->event_atoms == NULL) {
         return TA_ERR_NOMEM;
     }
     /* Tracing (ADR 0067): what this macrostep builds, and the scratch its
