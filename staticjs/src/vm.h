@@ -12,6 +12,17 @@ enum { FRAME_CODE = 1, FRAME_LOOP };
  * for each element (map, reduce, toSorted, ...). A loop frame owns the stack
  * slots from `base`: the receiver, the method, the callback, a second
  * argument, and its result so far.
+ *
+ * A loop whose callback is a closure keeps one frame for it while the loop
+ * runs (sjs_vm_call_back): once `entered`, the callback's frame is at
+ * `frames[the loop's index + 1]` and its slots at `base + LOOP_SLOTS`. While
+ * the body runs, the frame is counted in `frame_count`; between elements it
+ * is parked just above it, its slots still on the stack. Nothing pushes a
+ * frame while the loop frame is on top, so the parked record stays as it
+ * was. It holds no references of its own: cutting the stack frees all of it.
+ * The slots keep an element's values from the body's return to the loop's
+ * next step, which clears them (clear_callback); an evaluation paused in
+ * between holds them that long.
  */
 typedef struct {
     uint8_t kind;
@@ -19,16 +30,16 @@ typedef struct {
     uint16_t builtin;
     uint32_t pc;
     uint32_t base;
-    uint32_t bottom;      /* the stack height the frame leaves behind */
+    uint32_t bottom;      /* the stack height the frame leaves behind; a loop's
+                           * kept callback frame leaves its own slots */
     uint32_t function;
     sjs_program *program;
     sjs_closure *closure; /* NULL for a program's main function */
     sjs_position at;      /* loop frames: where the call was */
     uint32_t index;
     uint32_t length;
-    uint32_t argc;        /* loop frames: the arguments of the callback to call */
-    uint32_t pass;        /* loop frames: the arguments the callback can read; more are not pushed */
-    bool entered;         /* loop frames: the callback passed the check that it is not running */
+    uint32_t argc;        /* loop frames: the arguments the built-in was called with */
+    bool entered;         /* loop frames: the callback is a closure, and its frame is kept */
     /* toSorted: a bottom-up merge sort over two scratch arrays. */
     uint32_t width;
     uint32_t left;
@@ -69,9 +80,10 @@ struct sjs_vm {
     uint32_t member_guess[VM_MEMBER_GUESSES];
 };
 
-/* Loop frame slots, from base. reduce moves LOOP_OUTPUT, its accumulator,
- * into the callback's first argument while the callback runs, and the
- * result back, so that the callback holds the accumulator alone. */
+/* Loop frame slots, from base; a kept callback frame's slots follow them.
+ * reduce moves LOOP_OUTPUT, its accumulator, into the callback's first
+ * argument while the callback runs, and the result back, so that the
+ * callback holds the accumulator alone. */
 #define LOOP_RECEIVER 0u
 #define LOOP_CALLBACK 2u
 #define LOOP_SECOND 3u
@@ -114,9 +126,9 @@ typedef enum { LOOP_CALL = 0, LOOP_DONE, LOOP_FAULT } loop_step;
 
 /* Start a loop frame whose slots are in place. */
 sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame);
-/* Advance a loop frame; with LOOP_CALL it has pushed a callee and frame->argc
- * arguments for the evaluator to call, and will see the result on top of the
- * stack when it is next stepped. */
+/* Advance a loop frame. With LOOP_CALL it has called the callback: a
+ * closure's frame is running, or a built-in's or a native's result is on
+ * top of the stack. It sees the result there when it is next stepped. */
 loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame);
 void sjs_loop_free(sjs_vm *vm, vm_frame *frame);
 
@@ -125,6 +137,12 @@ typedef struct {
     const sjs_value *ptr;
     uint32_t count;
 } sjs_values;
+
+/* Call a loop's callback with `args` (borrowed). A closure runs in a frame
+ * kept for the whole loop, its arguments written into its parameters; a
+ * built-in or a native is called as any call is, its result on top. False on
+ * a fault. */
+bool sjs_vm_call_back(sjs_vm *vm, vm_frame *loop, sjs_values args);
 
 /* A property of a value: `object.key`. */
 typedef struct {

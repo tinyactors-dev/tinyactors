@@ -528,3 +528,15 @@ null.x
 === with() outside the array
 [1].with(5, 2)
 --- fault inside the array
+
+=== a fault in a callback on the third element
+[1, 2, 3, 4].map(x => x === 3 ? x.k.j : x)
+--- fault reads properties
+
+=== a fault in a nested callback on the outer loop's third element
+[1, 2, 3, 4].map(x => [x].map(y => y === 3 ? y.k.j : y))
+--- fault reads properties
+
+=== a fault in a comparator on its third call
+[4, 3, 2, 1].toSorted((a, b) => { const d = a - b; return d === 2 || d === -1 ? a.k.j : d; })
+--- fault reads properties

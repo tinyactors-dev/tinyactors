@@ -507,3 +507,23 @@ undefined
 === a missing member still faults on prototype names
 (o => o.constructor)({ a: 1 })
 --- fault no prototype
+
+=== a callback that spreads its parameter leaves the receiver's elements alone
+(xs => [xs.map(a => [...a, 0]), xs])([[1], [2]])
+--- value
+[[[1,0],[2,0]],[[1],[2]]]
+
+=== a callback that spreads its object parameter leaves the receiver's elements alone
+(xs => [xs.map(o => ({...o, n: 0})), xs])([{a: 1}, {b: 2}])
+--- value
+[[{"a":1,"n":0},{"b":2,"n":0}],[{"a":1},{"b":2}]]
+
+=== a callback that moves a local leaves the next element's alone
+[[1], [2]].map(a => { const b = a; return [...b, 9]; })
+--- value
+[[1,9],[2,9]]
+
+=== reduce's initial value, held elsewhere, is not updated in place
+(init => [[1, 2].reduce((acc, x) => [...acc, x], init), init])([])
+--- value
+[[1,2],[]]

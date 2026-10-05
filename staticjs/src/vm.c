@@ -619,29 +619,39 @@ typedef struct {
     uint32_t bottom;
 } call_site;
 
-/* A rest parameter: the arguments from site.bottom (the parameters before
- * it) on become one array in its slot, the last parameter's. */
-static bool gather_rest(sjs_vm *vm, call_site site) {
-    uint32_t base = site.callee + 1u;
-    uint32_t fixed = site.bottom;
-    uint32_t n = site.argc > fixed ? site.argc - fixed : 0;
+/* A rest parameter's value: an array of `values`, each retained. */
+static bool rest_array(sjs_vm *vm, sjs_values values, sjs_value *out) {
     sjs_array *rest;
-    sjs_result r = sjs_array_make(vm->context, n, &rest);
+    sjs_result r = sjs_array_make(vm->context, values.count, &rest);
     if (r != SJS_OK) {
         sjs_vm_fail(vm, r);
         return false;
     }
-    for (uint32_t i = 0; i < n; i++) rest->items[i] = vm->stack[base + fixed + i];
-    rest->length = n;
-    vm->sp -= n;
-    vm->fuel_used += n / 8u;
-    for (uint32_t i = site.argc; i < fixed; i++) {
+    for (uint32_t i = 0; i < values.count; i++) {
+        sjs_ref(values.ptr[i]);
+        rest->items[i] = values.ptr[i];
+    }
+    rest->length = values.count;
+    vm->fuel_used += values.count / 8u;
+    *out = sjs_heap_value(SJS_ARRAY, &rest->h);
+    return true;
+}
+
+/* A rest parameter: the arguments from site.bottom (the parameters before
+ * it) on become one array in its slot, the last parameter's. */
+static bool gather_rest(sjs_vm *vm, call_site site) {
+    uint32_t start = site.callee + 1u + site.bottom;
+    uint32_t n = site.argc > site.bottom ? site.argc - site.bottom : 0;
+    sjs_value rest;
+    if (!rest_array(vm, (sjs_values){ n != 0 ? &vm->stack[start] : NULL, n }, &rest)) return false;
+    cut(vm, start);
+    for (uint32_t i = site.argc; i < site.bottom; i++) {
         if (!sjs_vm_push(vm, sjs_undefined())) {
-            sjs_unref(vm->context, sjs_heap_value(SJS_ARRAY, &rest->h));
+            sjs_unref(vm->context, rest);
             return false;
         }
     }
-    return sjs_vm_push(vm, sjs_heap_value(SJS_ARRAY, &rest->h));
+    return sjs_vm_push(vm, rest);
 }
 
 /* Fault when the closure's function has a frame: staticjs has no recursion. */
@@ -656,6 +666,14 @@ static bool closure_running(sjs_vm *vm, const sjs_closure *closure) {
     return false;
 }
 
+/* Fault when every frame is taken. */
+static bool frames_full(sjs_vm *vm) {
+    if (vm->frame_count < vm->frame_capacity) return false;
+    sjs_error_set(&vm->error, fault_position(vm), (sjs_problem){ SJS_ERROR_LIMIT, "the evaluation needs more than max_frames frames" });
+    vm->status = VM_FAULT;
+    return true;
+}
+
 /* Enter a closure that closure_running has cleared. */
 static bool enter_closure(sjs_vm *vm, call_site site) {
     uint32_t callee = site.callee;
@@ -663,11 +681,7 @@ static bool enter_closure(sjs_vm *vm, call_site site) {
     uint32_t bottom = site.bottom;
     sjs_closure *closure = SJS_AS_CLOSURE(vm->stack[callee]);
     const sjs_function_info *fn = &closure->program->functions[closure->function];
-    if (vm->frame_count >= vm->frame_capacity) {
-        sjs_error_set(&vm->error, fault_position(vm), (sjs_problem){ SJS_ERROR_LIMIT, "the evaluation needs more than max_frames frames" });
-        vm->status = VM_FAULT;
-        return false;
-    }
+    if (frames_full(vm)) return false;
     uint32_t base = callee + 1;
     if ((fn->flags & SJS_FUNCTION_REST) != 0) {
         if (!gather_rest(vm, (call_site){ callee, argc, fn->params - 1u })) return false;
@@ -696,11 +710,7 @@ static bool enter_closure(sjs_vm *vm, call_site site) {
 static bool enter_loop(sjs_vm *vm, sjs_builtin_id id, call_site site) {
     uint32_t receiver = site.bottom;
     uint32_t argc = site.argc;
-    if (vm->frame_count >= vm->frame_capacity) {
-        sjs_error_set(&vm->error, fault_position(vm), (sjs_problem){ SJS_ERROR_LIMIT, "the evaluation needs more than max_frames frames" });
-        vm->status = VM_FAULT;
-        return false;
-    }
+    if (frames_full(vm)) return false;
     sjs_position at = fault_position(vm);
     uint32_t first = receiver + LOOP_CALLBACK;
     if (argc > 2) cut(vm, first + 2);
@@ -774,19 +784,77 @@ static bool call(sjs_vm *vm, uint32_t argc, uint8_t flags) {
     return sjs_vm_push(vm, leaf.result);
 }
 
-/* Call a loop's callback. A closure is checked once per loop: neither it
- * nor the frames below the loop change while the loop runs. The callback
- * is a heap value: sjs_loop_start accepts only callables, and is_callable
- * excludes internal methods. */
-static bool call_from_loop(sjs_vm *vm, vm_frame *loop) {
-    uint32_t callee = vm->sp - loop->argc - 1u;
-    sjs_value f = vm->stack[callee];
-    if (f.as.heap->type != SJS_HEAP_CLOSURE) return call(vm, loop->argc, 0);
-    if (!loop->entered) {
-        if (closure_running(vm, SJS_AS_CLOSURE(f))) return false;
-        loop->entered = true;
+/* The first call of a loop's closure callback: the frame it keeps for the
+ * whole loop, its slots undefined above the loop's, the record parked above
+ * the loop frame (vm.h). The closure is checked once per loop: neither it
+ * nor the frames below the loop change while the loop runs. LOOP_CALLBACK
+ * keeps the closure alive, and the body cannot reach that slot. */
+static bool enter_callback(sjs_vm *vm, vm_frame *loop) {
+    sjs_closure *closure = SJS_AS_CLOSURE(vm->stack[loop->base + LOOP_CALLBACK]);
+    if (closure_running(vm, closure)) return false;
+    if (frames_full(vm)) return false;
+    const sjs_function_info *fn = &closure->program->functions[closure->function];
+    uint32_t base = loop->base + LOOP_SLOTS;
+    for (uint32_t i = 0; i < fn->locals; i++) {
+        if (!sjs_vm_push(vm, (sjs_value){ .kind = SJS_UNDEFINED })) return false;
     }
-    return enter_closure(vm, (call_site){ callee, loop->argc, callee });
+    vm->frames[vm->frame_count] = (vm_frame){
+        .kind = FRAME_CODE,
+        .base = base,
+        .bottom = base + fn->locals,
+        .function = closure->function,
+        .program = closure->program,
+        .closure = closure,
+    };
+    loop->entered = true;
+    return true;
+}
+
+/* The callback is a heap value: sjs_loop_start accepts only callables, and
+ * is_callable excludes internal methods. A closure reads only its
+ * parameters (staticjs has no `arguments`), so arguments past them are not
+ * written. Its slots are undefined here (clear_callback), as a new frame's
+ * are. RETURN cuts the stack to the frame's bottom, the top of its slots,
+ * parks the record and leaves the result on top for the loop's next step. */
+bool sjs_vm_call_back(sjs_vm *vm, vm_frame *loop, sjs_values args) {
+    sjs_value callback = vm->stack[loop->base + LOOP_CALLBACK];
+    if (callback.as.heap->type != SJS_HEAP_CLOSURE) {
+        sjs_ref(callback);
+        if (!sjs_vm_push(vm, callback)) return false;
+        for (uint32_t i = 0; i < args.count; i++) {
+            sjs_ref(args.ptr[i]);
+            if (!sjs_vm_push(vm, args.ptr[i])) return false;
+        }
+        return call(vm, args.count, 0);
+    }
+    if (!loop->entered && !enter_callback(vm, loop)) return false;
+    vm_frame *callee = &vm->frames[vm->frame_count];
+    const sjs_function_info *fn = &callee->program->functions[callee->function];
+    sjs_value *slots = &vm->stack[callee->base];
+    bool rest = (fn->flags & SJS_FUNCTION_REST) != 0;
+    uint32_t fixed = rest ? fn->params - 1u : fn->params;
+    uint32_t n = args.count < fixed ? args.count : fixed;
+    for (uint32_t i = 0; i < n; i++) {
+        sjs_ref(args.ptr[i]);
+        slots[i] = args.ptr[i];
+    }
+    /* The record is counted last, so that a fault here is the loop's. */
+    if (rest && !rest_array(vm, (sjs_values){ args.ptr + n, args.count - n }, &slots[fixed])) return false;
+    callee->pc = fn->code;
+    vm->frame_count++;
+    return true;
+}
+
+/* Undefine a kept callback frame's slots after it returned, as a return from
+ * a frame of its own would have released them, and before the loop reads its
+ * result. The loop frame is on top, its callback's record just above it. */
+static void clear_callback(sjs_vm *vm) {
+    const vm_frame *callee = &vm->frames[vm->frame_count];
+    for (uint32_t i = callee->base; i < callee->bottom; i++) {
+        sjs_value v = vm->stack[i];
+        vm->stack[i] = (sjs_value){ .kind = SJS_UNDEFINED }; /* sjs_undefined() is out of line */
+        sjs_vm_release(vm, v);
+    }
 }
 
 static void finish_loop(sjs_vm *vm, vm_frame *f) {
@@ -1492,16 +1560,8 @@ sjs_run sjs_vm_run(sjs_vm *vm, uint64_t fuel) {
             execute(vm, f);
             continue;
         }
-        switch (sjs_loop_step(vm, f)) {
-        case LOOP_CALL:
-            call_from_loop(vm, f);
-            break;
-        case LOOP_DONE:
-            finish_loop(vm, f);
-            break;
-        default:
-            break;
-        }
+        if (f->entered) clear_callback(vm);
+        if (sjs_loop_step(vm, f) == LOOP_DONE) finish_loop(vm, f);
     }
     return vm->status == VM_DONE ? SJS_RUN_DONE : SJS_RUN_FAULT;
 }

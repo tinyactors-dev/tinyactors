@@ -195,3 +195,140 @@ Object.entries({a: 1, b: 2}).map(([k, v]) => k + "=" + v)
 (true ? x => 1 : x => 2)()
 --- value
 1
+
+# A loop's callback runs in one frame kept for the whole loop. Each element
+# starts from the slots a fresh call would have: its arguments, undefined
+# past them, and nothing an earlier element left behind.
+
+=== closures made in a callback's body keep their own values
+[1, 2, 3].map(x => { const y = [x]; return () => y; }).map(f => f())
+--- value
+[[1],[2],[3]]
+
+=== closures made in a callback capture each element's arguments
+[1, 2].map((x, i) => () => x + i).map(f => f())
+--- value
+[1,3]
+
+=== a parameter past the arguments starts undefined for every element
+[1, 2, 3].map((x, i, a, extra = x * 10) => (() => extra)())
+--- value
+[10,20,30]
+
+=== reduce: a parameter past the arguments starts undefined for every element
+[1, 2, 3].reduce((acc, x, i, a, last = x) => (() => acc + last)(), 0)
+--- value
+6
+
+=== toSorted: a parameter past the two compared values starts undefined
+[3, 1, 2].toSorted((p, q, r = p - q) => (() => r)())
+--- value
+[1,2,3]
+
+=== toSorted: a parameter past the two compared values, with no default
+[3, 1, 2].toSorted((p, q, r) => (() => r === undefined ? p - q : 99)())
+--- value
+[1,2,3]
+
+=== a default parameter runs for each element that leaves it undefined
+[1, undefined, 3, undefined].map((x = 7) => (() => x)())
+--- value
+[1,7,3,7]
+
+=== array patterns in a callback's parameter, element by element
+[[1, 2], [3]].map(([a, b = a]) => [a, b])
+--- value
+[[1,2],[3,3]]
+
+=== object patterns with a rest in a callback's parameter, element by element
+[{k: 1, z: 2}, {y: 3}].map(({k = 0, ...r}) => [k, r])
+--- value
+[[1,{"z":2}],[0,{"y":3}]]
+
+=== a computed key in a callback's pattern, per element
+[{a: 1}, {b: 2}].map((o, i, xs, {[i === 0 ? "a" : "b"]: v} = o) => v)
+--- value
+[1,2]
+
+=== a callback's rest parameter gets the arguments past the others
+[1, 2].map((x, ...r) => r.length)
+--- value
+[2,2]
+
+=== a callback's rest parameter holds every argument
+[1, 2].map((...r) => r)
+--- value
+[[1,0,[1,2]],[2,1,[1,2]]]
+
+=== reduce with a rest parameter
+[1, 2, 3].reduce((acc, ...r) => acc + r[0], 0)
+--- value
+6
+
+=== toSorted with a rest parameter
+[3, 1, 2].toSorted((...p) => p[0] - p[1])
+--- value
+[1,2,3]
+
+=== each element's rest parameter is an array of its own
+[1, 2].map((...r) => () => r[0]).map(f => f())
+--- value
+[1,2]
+
+=== a loop nested in a callback keeps its own callback
+[1, 2].map(x => [10, 20].map(y => x + y))
+--- value
+[[11,21],[12,22]]
+
+=== three levels of loops, with block locals at each
+[1, 2].map(x => { const a = x * 100; return [3, 4].map(y => { const b = a + y * 10; return [5, 6].filter(z => { const c = b + z; return c % 2 === 0; }).map(z => { const d = [b, z]; return d; }); }); })
+--- value
+[[[[130,6]],[[140,6]]],[[[230,6]],[[240,6]]]]
+
+=== the same callback in a new inner loop for each element
+(f => [[1], [2]].map(r => r.map(f)))(v => v + 1)
+--- value
+[[2],[3]]
+
+=== the same callback in two loops, one after the other
+(f => [[1].map(f), [2].map(f)])(v => v * 2)
+--- value
+[[2],[4]]
+
+=== a loop's callback called directly after the loop
+(f => [[1].map(f), f(2)])(v => v * 2)
+--- value
+[[2],4]
+
+=== a callback that calls a function with a loop of its own
+(g => [1, 2].map(x => g(x)))(n => [n, n].map(m => m * n).reduce((a, b) => a + b, 0))
+--- value
+[2,8]
+
+=== a callback that runs a loop with itself as the callback is refused
+(h => [h].map(h))(f => [1].map(f))
+--- fault already running
+
+=== a callback that calls a function whose loop calls back into it is refused
+(h => [1, 2].map(x => h(h)))(g => [3].map(g))
+--- fault already running
+
+=== find, some, every, findIndex and findLast stop early, and a loop after them runs
+[[1, 2, 3].find(x => { const y = x * 2; return y > 2; }), [1, 2, 3].some(x => { const y = x; return y === 2; }), [1, 2, 3].every(x => { const y = x; return y < 2; }), [1, 2, 3].findIndex(x => { const y = x; return y === 2; }), [1, 2, 3].findLast(x => { const y = x; return y < 3; }), [4, 5].map(x => { const y = x; return y; })]
+--- value
+[2,true,false,1,2,[4,5]]
+
+=== a callback that returns for one element only
+[1, 2, 3].map(x => { if (x === 2) return "two"; })
+--- value
+[undefined,"two",undefined]
+
+=== a block-bodied comparator, with undefined sorted last
+[3, undefined, 1].toSorted((a, b) => { const d = a - b; return d; })
+--- value
+[1,3,undefined]
+
+=== flatMap and filter with locals in their callbacks
+[1, 2, 3].flatMap(x => { const y = [x, x * 10]; return x === 2 ? [] : y; }).filter(v => { const big = v > 5; return big; })
+--- value
+[10,30]

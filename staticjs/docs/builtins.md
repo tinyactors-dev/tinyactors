@@ -21,24 +21,27 @@ A built-in is one of two kinds, and the choice decides most of its cost.
 - **A loop** calls a callback: `map`, `filter`, `reduce`, `some`, `every`,
   `find`, `findIndex`, `findLast`, `flatMap`, `toSorted`. It is a frame on the
   evaluator's stack (`FRAME_LOOP`). `sjs_loop_start` sets it up, and
-  `sjs_loop_step` either asks for one call (`LOOP_CALL`) or finishes
+  `sjs_loop_step` either calls the callback once (`LOOP_CALL`) or finishes
   (`LOOP_DONE`). A callback never runs on the C stack. That keeps an
   evaluation resumable on fuel and keeps the C call graph acyclic
   (`mise run check-recursion`).
 
-Make it a leaf unless JavaScript calls a function. Each element of a loop
-built-in costs a closure call: pushing the callee and its arguments, a
-frame, the body, and a return. That call is the cost that remains in every
-loop benchmark. It is also why fusing `filter` into `map` made the pipeline
-17–23% slower: fusion removed the arrays but kept every call.
+Make it a leaf unless JavaScript calls a function. A closure callback runs
+in one frame that the loop keeps from its first call to its end
+(`sjs_vm_call_back` in `src/vm.c`): each element writes the arguments into
+the parameter slots, runs the body and returns, and the loop clears the
+slots before its next step. So an element costs the body and a return, not
+a frame per call; that remains the cost in every loop benchmark. It is also
+why fusing `filter` into `map` made the pipeline 17–23% slower: fusion
+removed the arrays but kept every call.
 
 For a loop built-in:
 
 - **Call back at most once per element,** and only with the arguments
-  JavaScript passes. `call_back` already pushes no more than the closure's
-  parameters (`frame->pass`), so a callback written `x => …` costs one
-  argument, not three. Keep it that way: build the full argument list and
-  let `call_back` trim it.
+  JavaScript passes. `sjs_vm_call_back` already writes no more than the
+  closure's parameters, so a callback written `x => …` costs one argument,
+  not three. Keep it that way: build the full argument list, pass it to
+  `call_back`, and let the evaluator trim it.
 - **Give the callback its own value to update.** If the built-in threads a
   value through the calls, as `reduce` does, move it into the argument and
   take the result back (see `LOOP_OUTPUT` in `vm.h`). Never keep a second
@@ -46,8 +49,8 @@ For a loop built-in:
   (section 4).
 - **Size the output when the loop starts,** as `map` does with `new_array(vm,
   a->length, …)`. `filter` cannot know its size, so it grows from 4.
-- **The recursion check is already done once per loop** (`call_from_loop`).
-  Do not add a check per element.
+- **The recursion check is already done once per loop** (`enter_callback`,
+  on the first call). Do not add a check per element.
 
 ## 2. Register it
 
