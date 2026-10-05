@@ -521,10 +521,6 @@ to become a state ID and a counter), `done.invoke.<id>`,
 session-URI families in `targetexpr`, and the host calls
 `ta_send_id_intern`, `ta_system_intern_invoke_id`,
 `ta_event_name_intern` and `ta_system_intern_atom`.
-**Open for 4.2:** `error.communication.invoke.<id>.<reason>` keeps a
-dotted invocation ID as one segment today, where `done.invoke.<id>`
-splits it; as bytes, it splits. A descriptor naming the ID's first part
-would then match where it does not today.
 
 ## Phase 4: core gains its queue
 
@@ -539,6 +535,61 @@ ones; run `mise run test:full` before each commit.
 | 4.3 | **Delayed sends as envelopes.** The deadline index (B2 on B8, grown in the pool's refill) and the owner lists (B1). A delayed send keeps its sender's trace parent, in the pool and in session images. `ta_run` reports the next due time; that value becomes `c2h.wake` in 5.1. `<cancel>` walks the owner list. | `timer.c` / `timer.h` (634 lines), sparse state, `ta_system_dispatch_due` | delayed sends as envelopes |
 | 4.4 | **No allocation in a macrostep.** The internal queue becomes B4 with an ordinary and a mandatory quota (C3). The compiler sizes the mandatory floor for one round of every phase; a mandatory event beyond it takes a free ordinary entry, and an overflow abandons the input as a runaway, with `runaway_cause` `internal_queue` on the `RUNAWAY` record. Invocation startup moves after the macrostep, with the local child's lifetime token. An actor's invoke table becomes a fixed table sized from its definition at spawn, and its activation effects and pending invokes stop growing a `ta_vec` inside a macrostep. Capacity failures become `error.execution.capacity.<resource>`. Data models answer `TA_OP_ERROR` instead of `TA_OP_NOMEM`, which changes the test host's jq and quickjs data models and napi's data model. ADR 0097's `copy_out`, which relies on `TA_OP_NOMEM` today, answers `TA_OP_ERROR` when it runs out, and the chart sees `error.execution` like every data-model failure (ADR 0102). Nested interpreter workspaces are sized and allocated at registration, spawn or load, not on first use inside a macrostep, where ADR 0092 allocates them today (ADR 0102). A core test asserts that an allocator which refuses every request after a macrostep starts never sees a call. | The out-of-memory stop machinery: the NOMEM branch, `ta_reserve_stop` / `ta_stop*` where only out-of-memory uses them, the spare continuation and spare sparse state, queue mark/truncate, `TA_OP_NOMEM` | no allocation in a macrostep |
 | 4.5 | **Macrostep slots.** Slot records (A5), deferred lists (B1), `slotSlice`, the chain limit, and parking into the park area (A5 + A6 + D1 + D2). Start with parking disabled (`parkAreaBytes` 0, plain run to completion), then enable it in its own commit. `ta_actor_inspect` marks a session stable or active and gives an active one's position, so a host reads a live system between `ta_run` calls without attaching ([debugging](reference/debugging.md#inspection-without-attaching)). `ta_system_trim` gives back free pages of the pool, the name area, the park area and the deadline index; core never trims on its own. | napi's quarantine, `release()` and the `.quarantined` event (napi call sites only) | macrostep slots |
+
+**Step 4.2 in commits.** 4.2 lands as eight commits, each green, in
+this order; the baseline for 4.5's `bench-compare` is `ccd6d632`, the
+commit before the first.
+
+1. `envelope.c/.h` and `name_area.c/.h`, with their test, and no callers.
+2. Admission and `ta_run` with one slot. `ta_actor_deliver` admits or
+   bounces; `ta_run` replaces `ta_actor_resume` and reports each input's
+   outcome (completed, ignored, finished, faulted, refused) in a buffer the
+   caller passes, previewing `c2h.input_completed` and
+   `c2h.input_refused`. The kernel settles waiters, quarantine, hooks and
+   the recorder from those outcomes; the recorder journals an input when it
+   is taken. Spawn and load admit their bootstrap input, outside any
+   macrostep. A session stopped by a fault leaves the slot and keeps its
+   continuation; its mail waits on its deferred list, so the deferred list
+   arrives here with one slot. napi's `release()` calls a native release
+   until 4.5 removes quarantine.
+3. The taken envelope stays put while its macrostep runs; the event blocks
+   and their cache go.
+4. Mail to resident sessions travels as envelopes on the outgoing list,
+   with the trace parent in its text when traced. A failed fanout fails
+   once, at the first send that does not fit.
+5. Waiting entries, `load_needed` and a native "load failed" call, the
+   index by input sequence behind a native withdraw (napi's `send()`
+   cancellation needs it before `h2c.withdraw` exists), and
+   `error.communication` for undeliverable mail. The router vtable and the
+   kernel's router and mailboxes go; the kernel's `loads.c` keeps the
+   loader policy until 5.1.
+6. Names resolved from the envelope's bytes at take; core stops interning
+   run-time names, except the `eventexpr` of delayed sends, whose names
+   `timer.c` and `ta_delayed_send_info` hold as IDs until 4.3.
+7. Hosts pass names as bytes; `ta_send_id_intern`,
+   `ta_system_intern_invoke_id` and the host calls of
+   `ta_event_name_intern` go.
+8. The defaults measured, recorded in ADR 0099's notes.
+
+Decisions for these commits:
+
+- **`TA_ERR_BUSY` stays where it means "not idle"** (offload, capture,
+  export, abandon). Its admission uses go; a bounce answers `TA_ERR_FULL`,
+  which napi maps to its existing queue-full code.
+- **`fairnessRatio` arrives with h2c in 5.1**: until then admission
+  happens at call time, and nothing alternates with the run queue.
+- **One session at a time.** Replay and the debugger run one session
+  through a session filter in `ta_run`'s parameters, the debugging
+  exception of [macrostep.md](reference/macrostep.md#macrostep-slots).
+- **Invocation tokens** come from free envelopes when an invocation
+  starts, until 4.4 moves startup after the macrostep.
+- **The defaults are measured by proxy** in 4.2, since h2c and c2h
+  arrive in 5.1: `tel` by `tel.dropped` directly; h2c by the peak of
+  native admissions between two `ta_run` calls times the size of
+  `h2c.event`; `c2hBytes` by the largest per-input batch of the records
+  an input would write, against the derived 794,624 bytes. The counters
+  live in the test host and the benchmarks, not in core. 5.1 checks the
+  figures again on real rings.
 
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
