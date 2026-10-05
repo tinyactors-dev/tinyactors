@@ -26,6 +26,9 @@
  *      the table, the lists and the counters as they were, and the retry
  *      works (a strict allocator checks every free's size).
  *   9. Destroy releases the references of envelopes still in use.
+ *  10. Bytes per envelope: the pool's pages and the waiting table, divided by
+ *      the envelopes they hold, are printed and bounded (the figure ADR 0099
+ *      section 9 and the unit notes report).
  *
  * Fast, not exhaustive: the largest pool here has 1,024 envelopes.
  * Includes the amalgamation, because the unit is private to core.
@@ -457,6 +460,26 @@ static void test_refill_failure(void) {
     CHECK(total >= 3u);
 }
 
+/*
+ * The cost of one pending input, measured with the counting allocator: a full
+ * pool of 1,024 envelopes holds `bytes` (pages, directory, waiting table).
+ * The bound is the envelope (168) plus the table's share (a 4-byte slot at
+ * most 75% full, rounded to a power of two: at most 8 bytes), plus the
+ * directories and a rounding allowance.
+ */
+static void test_bytes_per_envelope(void) {
+    ta_envelopes envelopes;
+    CHECK(open_pool(&envelopes, 1024u, 50u, 16u) == TA_OK);
+    size_t before = heap.stats.live_bytes;
+    CHECK(ta_envelopes_refill(&envelopes, 1024u) == TA_OK && envelopes.pool.capacity == 1024u);
+    size_t bytes = heap.stats.live_bytes - before;
+    printf("bytes per envelope: %zu (envelope %zu, waiting table and directories %zu)\n", bytes / 1024u,
+           sizeof(ta_envelope), bytes / 1024u - sizeof(ta_envelope));
+    CHECK(bytes / 1024u <= sizeof(ta_envelope) + 16u);
+    ta_envelopes_destroy(&envelopes);
+    CHECK(heap.stats.live_blocks == 0);
+}
+
 int main(void) {
     test_creation();
     test_refill_and_ceiling();
@@ -466,6 +489,7 @@ int main(void) {
     test_lists();
     test_waiting();
     test_refill_failure();
+    test_bytes_per_envelope();
     CHECK(heap.stats.bad_frees == 0);
     CHECK(ta_test_allocator_finish(&heap) == 0);
     if (failures != 0) {
