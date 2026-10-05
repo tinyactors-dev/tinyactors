@@ -3,10 +3,17 @@
 # vim:ft=ruby
 
 # The ring protocol's records are defined once, in protocol/catalog.rb. This task
-# renders them: protocol/generated/MESSAGES.md and messages.json for people and
-# tools, and the C codec, src/ring_proto.h and src/ring_proto.c (see protocol/codec.rb), and
-# tests/ring_proto_cases.h, the test support that lets one loop cover every message. The outputs
-# are committed, like include/tinyactors.c.
+# renders them:
+#
+#   protocol/generated/MESSAGES.md, messages.json   for people and tools
+#   src/ring_proto.h, src/ring_proto.c              the C codec (protocol/codec.rb)
+#   tests/ring_proto_cases.h                        test support for one loop over every message
+#
+# The outputs are committed, like include/tinyactors.c. Before writing or
+# checking anything, the task checks the generator itself: two runs give the
+# same bytes; the largest fixed part of the catalog fits TA_RECORD_FIXED_MAX in
+# src/record.h; every generated C file says it is generated; and every function
+# ring_proto.h declares has a comment that begins with its name.
 #
 #   mise run protocol           write the generated files
 #   mise run protocol --check   fail if a checked-in file is out of date
@@ -16,20 +23,58 @@ require 'cache'
 require_relative '../../protocol/render'
 require_relative '../../protocol/codec'
 
+OUTPUT_FILES = %w[protocol/generated/MESSAGES.md protocol/generated/messages.json src/ring_proto.h src/ring_proto.c
+                  tests/ring_proto_cases.h].freeze
 Cache.gate('protocol',
-           inputs: Cache.files('protocol/*.rb', 'mise/tasks/protocol'),
-           outputs: Dir[Cache::ROOT.join('protocol/generated/*').to_s].map { |path| Pathname.new(path) } +
-                    [Cache::ROOT.join('src/ring_proto.h'), Cache::ROOT.join('src/ring_proto.c'), Cache::ROOT.join('tests/ring_proto_cases.h')])
+           inputs: Cache.files('protocol/*.rb', 'src/record.h', 'mise/tasks/protocol'),
+           outputs: OUTPUT_FILES.map { |path| Cache::ROOT.join(path) })
 
 root = Pathname.new(__dir__).join('../..').expand_path
-model = RingProto.load(root.join('protocol/catalog.rb').to_s)
-outputs = {
-  root.join('protocol/generated/MESSAGES.md') => RingProto::Render.markdown(model),
-  root.join('protocol/generated/messages.json') => RingProto::Render.json(model),
-  root.join('src/ring_proto.h') => RingProto::Codec.header(model),
-  root.join('src/ring_proto.c') => RingProto::Codec.source(model),
-  root.join('tests/ring_proto_cases.h') => RingProto::Codec.cases(model)
-}
+
+def generate(root)
+  model = RingProto.load(root.join('protocol/catalog.rb').to_s)
+  {
+    root.join('protocol/generated/MESSAGES.md') => RingProto::Render.markdown(model),
+    root.join('protocol/generated/messages.json') => RingProto::Render.json(model),
+    root.join('src/ring_proto.h') => RingProto::Codec.header(model),
+    root.join('src/ring_proto.c') => RingProto::Codec.source(model),
+    root.join('tests/ring_proto_cases.h') => RingProto::Codec.cases(model)
+  }
+end
+
+# The checks of the generator, which the byte comparison below cannot make.
+def verify(root, outputs)
+  errors = []
+  errors << 'the generator is not deterministic: two runs differ' unless generate(root) == outputs
+
+  fixed_max = root.join('src/record.h').read(encoding: 'UTF-8')[/^#define TA_RECORD_FIXED_MAX (\d+)u/, 1]
+  errors << "src/record.h: TA_RECORD_FIXED_MAX is #{fixed_max.inspect}, the emitter assumes #{RingProto::Codec::FIXED_MAX}" unless fixed_max.to_i == RingProto::Codec::FIXED_MAX
+
+  outputs.each do |path, contents|
+    next unless path.extname == '.h' || path.extname == '.c'
+
+    errors << "#{path.relative_path_from(root)}: does not start with the GENERATED FILE comment" unless contents.start_with?("/*\n * GENERATED FILE. Do not edit.\n")
+  end
+
+  header = outputs.fetch(root.join('src/ring_proto.h')).lines(chomp: true)
+  header.each_with_index do |line, index|
+    next unless (name = line[/\A[A-Za-z_][\w ]*?[ *]+(ta_\w+)\(.*\);\z/, 1])
+
+    # The comment above the declaration: its first text line begins with the function's name.
+    close = index - 1
+    close -= 1 while close >= 0 && header[close].empty?
+    open = close
+    open -= 1 while open >= 0 && header[open] != '/*'
+    unless header[close] == ' */' && open >= 0 && header[open + 1].to_s.start_with?(" * #{name} ")
+      errors << "src/ring_proto.h: #{name} has no comment that begins with its name"
+    end
+  end
+  errors
+end
+
+outputs = generate(root)
+errors = verify(root, outputs)
+abort errors.map { |error| "protocol: #{error}" }.join("\n") unless errors.empty?
 
 if ARGV == ['--check']
   outputs.each do |path, contents|

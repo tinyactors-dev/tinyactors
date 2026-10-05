@@ -107,7 +107,7 @@ module RingProto
         enum = model.enums[f.type]
         base = enum ? enum.base : f.type
         if SPAN_TYPES.include?(f.type)
-          Field.new(name: f.name, type: f.type, doc: f.doc, offset: f.offset, ctype: 'ta_span32', kind: :span, size: 8)
+          Field.new(name: f.name, type: f.type, doc: field_doc(model, f), offset: f.offset, ctype: 'ta_span32', kind: :span, size: 8)
         else
           ctype = SCALAR_C[base] or raise "#{msg.id}.#{f.name}: no C type for #{base}; add it to Codec::SCALAR_C"
           kind = enum ? :enum : (base == :bool ? :bool : :scalar)
@@ -116,7 +116,7 @@ module RingProto
             raise "#{enum.name}: a value of #{DOMAIN_BITS} or more does not fit the 64-bit domain mask"
           end
 
-          Field.new(name: f.name, type: f.type, doc: f.doc, offset: f.offset, ctype: ctype, kind: kind, mask: mask,
+          Field.new(name: f.name, type: f.type, doc: field_doc(model, f), offset: f.offset, ctype: ctype, kind: kind, mask: mask,
                     enum: enum, size: model.size_of(f.type))
         end
       end
@@ -124,6 +124,13 @@ module RingProto
 
       flags = msg.flags.sum { |f| 1 << f.bit } | COMMON_FLAGS.sum { |f| 1 << f.bit }
       Info.new(msg: msg, c: c_name(msg.id), fields: fields, kind_const: "TA_MSG_#{c_name(msg.id).upcase}", flags_allowed: flags)
+    end
+
+    # A field's own words, or else what its type is.
+    def field_doc(model, field)
+      return field.doc unless field.doc.empty?
+
+      model.enums.key?(field.type) ? model.enums[field.type].doc : model.types.fetch(field.type).doc
     end
 
     # Everything the C refers to by number is checked against the C side here.
@@ -305,12 +312,12 @@ module RingProto
 
     def size_prototype(info)
       spans = info.spans
-      text = +"#{info.type}_size sets *size to the exact size in bytes of the #{info.msg.id} record that\n"
+      text = +"#{info.type}_size sets *size to the exact size in bytes of the #{info.msg.id} record that "
       text << "#{info.type}_write stores for data: #{info.msg.fixed_size} fixed bytes"
       text << if spans.empty?
                 ', so always that many'
               else
-                " and the #{spans.size} spans' bytes (#{spans.map(&:name).join(', ')}), rounded up to a multiple of 8"
+                " and the bytes of its #{spans.size == 1 ? 'span' : "#{spans.size} spans"} (#{spans.map(&:name).join(', ')}), rounded up to a multiple of 8"
               end
       text << '. It never allocates. '
       text << if spans.empty?
@@ -536,11 +543,11 @@ module RingProto
       msg = info.msg
       text = +"#{msg.id}: #{msg.summary}.\n\n"
       text << "#{msg.doc}\n\n" unless msg.doc.empty?
-      text << "Ring #{msg.ring}, kind #{hex(msg.code)}, #{msg.fixed_size} fixed bytes, #{info.spans.size} spans. "
+      text << "Ring #{msg.ring}, kind #{hex(msg.code)}, #{msg.fixed_size} fixed bytes, #{info.spans.size} #{info.spans.size == 1 ? "span" : "spans"}. "
       text << "Replied to by #{msg.replies.join(', ')}. " if msg.replies.any?
       text << "See also #{msg.see.join(', ')}." if msg.see.any?
       text << "\n\nFields:\n"
-      info.fields.each { |f| text << "  #{f.name} (#{f.type}): #{f.doc}\n" }
+      info.fields.each { |f| text << "  #{f.name} (#{f.type})#{f.doc.empty? ? '' : ": #{f.doc}"}\n" }
       msg.flags.each { |f| text << "  flag #{f.name} (bit #{f.bit}): #{f.doc}\n" }
       comment(text.rstrip)
     end
