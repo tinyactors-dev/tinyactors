@@ -223,6 +223,12 @@ the text above:
   from it, and `ta_trace_record` is private to core (`src/trace.h`). The
   decoder is `ta_tel_decode`: its views point into the ring and die at
   `ta_ring_release`.
+- **Draining bound.** The host kernel drains tel when it regains control of
+  core, once per call into core. What one such call traces (a macrostep with
+  full detail and values) must fit `telBytes` (64 KiB by default), or the
+  overflow is dropped and the next record is preceded by `tel.dropped`; the
+  encoder shows the dropped attribute. A host that traces heavily raises
+  `telBytes`.
 - **Send and invoke IDs are text.** A record names a send or an invocation
   by its text (the `id` attribute), as the encoder always rendered it, so a
   trace line in the test host shows `invoke worker`, not a number.

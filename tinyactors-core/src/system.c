@@ -329,10 +329,22 @@ static void ta_system_rings_close(ta_system *system) {
     system->tel_staging_bytes = 0;
 }
 
+/*
+ * ta_system_control_block returns the control block of the system's rings
+ * (system lifetime: valid until ta_system_destroy), or NULL for a NULL system.
+ * It reads, allocates and changes nothing.
+ */
 const ta_ring_control *ta_system_control_block(const ta_system *system) {
     return system == NULL ? NULL : system->rings.control;
 }
 
+/*
+ * ta_ring_peek shows the oldest committed record of `ring` in place through
+ * the handle-level ta_ring_read. TA_ERR_INVALID for a NULL system or out, or
+ * an unknown ring; TA_ERR_NOT_FOUND when the ring is empty or does not exist;
+ * TA_ERR_CORRUPT when the framing is broken. It never allocates, and on any
+ * error *out is not valid. The record lives until ta_ring_release.
+ */
 ta_result ta_ring_peek(ta_system *system, ta_ring_id ring, ta_ring_record *out) {
     if (system == NULL || out == NULL || (uint32_t)ring >= (uint32_t)TA_RING_COUNT) {
         return TA_ERR_INVALID;
@@ -347,6 +359,13 @@ ta_result ta_ring_peek(ta_system *system, ta_ring_id ring, ta_ring_record *out) 
     }
 }
 
+/*
+ * ta_ring_release releases the record ta_ring_peek last returned for `ring`,
+ * advancing the consumer tail (ta_ring_advance) so its bytes can be reused;
+ * every view into it dies here. `size` must be the peeked record's size; with
+ * an invalid system or ring, no peeked record, or another size, it does
+ * nothing. It never allocates.
+ */
 void ta_ring_release(ta_system *system, ta_ring_id ring, uint32_t size) {
     if (system == NULL || (uint32_t)ring >= (uint32_t)TA_RING_COUNT || system->rings.control == NULL ||
         system->rings.ring[ring].peeked_size != size) {

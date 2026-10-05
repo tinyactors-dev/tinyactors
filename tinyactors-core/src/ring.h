@@ -50,7 +50,8 @@
  *
  * Names. These are the handle-level calls, on a ta_ring. The system's
  * public pair, ta_ring_peek and ta_ring_release (include/tinyactors.h), take
- * a ta_system and a ta_ring_id and call these two; the names differ because
+ * a ta_system and a ta_ring_id and call the handle-level ta_ring_read and
+ * ta_ring_advance (the consumer's pair); the names differ because
  * the amalgamation is one translation unit and C has no overloading.
  *
  * An absent ring. A ring whose capacity (and max_record_bytes) is 0 does not
