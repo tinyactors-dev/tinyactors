@@ -450,9 +450,14 @@ gets its own test program in `tinyactors-core/tests/`.
 | 1.8 | – | Dead code: `fault.h`'s undefined declarations, unused `ta_configuration` kinds, stale comments (`interpreter.h:143`, `actor.h:287`) | |
 
 **Exit:** the duplication summary in the catalog is resolved, except for
-code that later phases delete. `mise run test:full` passes. Core has fewer
-lines than before. Every unit the phase touched opens with a file comment,
-and its `docs/internal/` document is folded in.
+code that later phases delete and the address and session tables, which
+keep linear hashing (ADR 0065). `mise run test:full` passes. Every unit the
+phase touched opens with a file comment, and its `docs/internal/` document
+is folded in. `bench-compare` against the commit before Phase 1 is
+recorded. Core's size is measured at the end (Phase 7), not here: the
+blocks carry what Phase 4 needs (refill, ceilings, trim, checked growth),
+and the large deletions (`timer.c`, `io.c`, `io_origin.c`, the event
+blocks, the out-of-memory stop) come in Phases 4 and 5.
 
 ## Phase 2: add the new blocks, unused
 
@@ -557,6 +562,11 @@ rings.
 - Run the out-of-memory sweep over creation, registration, spawn, load
   and refill only. A sweep over macrosteps has nothing left to fail.
 - Final `bench-compare` against the commit before Phase 1.
+- **Core is smaller than before Phase 1:** count `tinyactors-core/src/`
+  without `src/generated/`, code and comments separately, against the
+  commit before Phase 1. At the end of Phase 1, code was 18,424 lines
+  against 17,588 before it, and comments 5,975 against 4,070; the
+  comments grow on purpose, as documentation moves into headers.
 - Changelogs come at release time, through the `release-changelog` skill,
   not as part of this work.
 
