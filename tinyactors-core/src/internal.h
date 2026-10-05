@@ -10,6 +10,7 @@
 #include "fifo.h"
 #include "ring.h"
 #include "record.h"
+#include "ring_proto.h"
 #include "vec.h"
 #include "pool.h"
 #include "ilist.h"
