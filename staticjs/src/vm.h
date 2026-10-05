@@ -27,6 +27,8 @@ typedef struct {
     uint32_t index;
     uint32_t length;
     uint32_t argc;        /* loop frames: the arguments of the callback to call */
+    uint32_t pass;        /* loop frames: the arguments the callback can read; more are not pushed */
+    bool entered;         /* loop frames: the callback passed the check that it is not running */
     /* toSorted: a bottom-up merge sort over two scratch arrays. */
     uint32_t width;
     uint32_t left;
