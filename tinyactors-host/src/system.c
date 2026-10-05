@@ -571,13 +571,15 @@ bool tah_system_dispatch_due(tah_system *system) {
                                                                 .fired_count = &fired_count,
                                                             });
     system->dispatching_due = false;
-    tah_system_leave_core(system);
+    /* Before leaving core: the senders are borrowed addresses, valid only until
+     * the trace drain below could run a hook (ta_due_fired.sender). */
     for (uint32_t index = 0; index < fired_count; index += 1u) {
         if (fired[index].delivered) {
             tah_system_record_lateness(system, fired[index].due, &fired[index].trace);
         }
         tah_recorder_fired(system, &fired[index].sender); /* consumed: its wake moves */
     }
+    tah_system_leave_core(system);
     return more_due || result != TA_OK;
 }
 

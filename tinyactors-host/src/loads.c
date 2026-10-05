@@ -1,3 +1,67 @@
+/*
+ * Implementation of the loads module. The contract (what a load is, the two
+ * places mail waits, the request/finish protocol, the sessions' key addresses)
+ * is in tinyactors_host/loads.h; this comment records what the code relies on.
+ *
+ * Purpose. A load is the host kernel's record that an address with no
+ * resident actor is being brought in. The kernel owns the record, the
+ * requests JavaScript has yet to hear of, and the wake-up heap. Core owns the
+ * chart mail that waits for the same address (ADR 0099 section 4); this file
+ * only starts a load when core reports LOAD_NEEDED (tah_loads_wanted) and
+ * tells core how it ended (tah_loads_finish).
+ *
+ * Lifetimes. A tah_load is a record-lifetime object: it lives from
+ * tah_loads_start to tah_loads_finish (or tah_loads_close) and is then given
+ * back to a free list; its generation advances on reuse, so a finish with a
+ * stale (index, generation) answers TA_ERR_STALE and touches nothing. The
+ * address is retained by the record and by each wake-up heap entry, and
+ * released when the record or the entry goes. The load's mailbox holds
+ * scheduler envelopes (the host's own posts); they are the scheduler's, and
+ * leave through tah_sched_hand_over (to the actor) or tah_sched_bury_waiting
+ * (dead letters), never freed here.
+ *
+ * Allocation. Only through the tah_vec and tah_map containers on the
+ * allocator given to tah_loads_init: the record vector, the family list, the
+ * address map, the request queue and the wake-up heap. They grow only in
+ * tah_loads_set_family, tah_loads_route, tah_loads_wanted and
+ * tah_loads_wake_at, the functions that may return TA_ERR_NOMEM; every other
+ * function, and tah_loads_finish above all, never allocates, so a load can
+ * always end.
+ * Frees go through the containers, which know their own sizes.
+ *
+ * Failure. tah_loads_start reserves the request slot and the map entry
+ * before it retains the address or counts the load, so a failure leaves no
+ * record and no count behind. tah_loads_route undoes a start whose first
+ * message was refused. tah_loads_finish reports the outcome to core with
+ * ta_address_loaded or ta_address_load_failed after the kernel's mail has
+ * moved, so a handover that ran out of memory still ends the load (as FAILED)
+ * and the senders hear error.communication.
+ *
+ * Order. Host posts for an address wait in the load's mailbox and chart mail
+ * waits on core's list. When the load finishes, core's list moves to the run
+ * queue when the actor is published (or ta_address_loaded names a gone
+ * session's instance), and the kernel's mailbox is handed over afterwards by
+ * tah_sched_hand_over. Chart mail for the address therefore precedes the
+ * host's posts to it, whatever order they arrived in: each source keeps its
+ * own order, and the two are not merged (recorded in core ADR 0099).
+ *
+ * Complexity. Lookup by address is one map probe, O(1). Starting and
+ * finishing a load are O(1) plus the hand-over of its mailbox, O(k) in the
+ * posts that waited. The wake-up heap is a binary min-heap: O(log n) to add
+ * or pop; replacing or cancelling a wake-up is O(1) and leaves the old entry
+ * to be skipped when it surfaces, so the heap can hold stale entries until
+ * they come due.
+ *
+ * Usage (a kernel turn):
+ *
+ *     tah_loads_wanted(&loads, &(tah_load_wanted){ .address = notice.address, ... });
+ *     tah_load_request request;
+ *     while (tah_loads_next_request(&loads, &request)) { ...call the loader... }
+ *     tah_loads_finish(&loads, &(tah_load_finish){ .index = request.index,
+ *                                                  .generation = request.generation,
+ *                                                  .outcome = TAH_LOAD_LOADED, ... });
+ */
+
 #include "tinyactors_host/loads.h"
 
 #include "memory.h"

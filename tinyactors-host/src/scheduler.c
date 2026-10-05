@@ -1,3 +1,52 @@
+/*
+ * Implementation of the scheduler. The contract (the scheduling table, the
+ * mailboxes, the dead-letter list, the send() waiters, the turn) is in
+ * tinyactors_host/scheduler.h; this comment records what the code relies on.
+ *
+ * Purpose. The scheduler is the host kernel's half of input: it holds the
+ * application's posts in per-actor mailboxes until core takes them, keeps
+ * the bookkeeping that is not core's (generations, back-off, quarantine,
+ * waiters) and runs the turn that hands envelopes to ta_actor_deliver and
+ * calls ta_run. Chart mail between sessions is not here: it is core's
+ * (ADR 0099). The mailboxes are interim and go with the kernel (Phase 6).
+ *
+ * Lifetimes. The table entry is per slot of core's actor table and lives
+ * with the scheduler. An envelope is an envelope-lifetime record in the
+ * store: taken at post, given back when core accepted its event, or when it
+ * became a dead letter, or when the scheduler is discarded
+ * (tah_sched_discard_mail). It owns one reference to its event and to its
+ * address (or the operator transition it carries) and gives them back in
+ * tah_envelope_give, which is the only place an envelope returns to the free
+ * list. Nothing keeps an envelope index across that call except the
+ * waiter's map entry, which is removed in the same step that settles it.
+ *
+ * Allocation. Envelopes come in pages of TAH_ENVELOPE_PAGE_ENTRIES from
+ * the allocator given to tah_sched_init; a page is allocated only when the
+ * free list is empty and the last page is full, is never moved, and is freed
+ * whole with its allocated size. Freed envelopes are reused through the free
+ * list, so after warm-up a post makes no allocator call. The functions that
+ * may return TA_ERR_NOMEM are the post functions, tah_envelope_take, the
+ * table growth and the queue pushes; the settle, hand-over and dead-letter
+ * paths do not allocate, so an input that was accepted can always be
+ * finished. A failed post leaves the mailbox, the counters and the store as
+ * they were.
+ *
+ * Sizes are computed with the page constants and sizeof, never from input;
+ * the one size that depends on data is an operator transition's state list,
+ * computed by tah_jump_size from a count that is bounded by core's own
+ * limit, and freed with the same count.
+ *
+ * Complexity. Post, deliver and settle are O(1). A turn costs its inputs plus
+ * the queue entries those inputs settled, never the queue's length. Dead
+ * letters are reported at most `messages` per turn.
+ *
+ * Usage (what the pump does, in outline):
+ *
+ *     tah_sched_post(&sched, &message);        // queue the application's post
+ *     tah_sched_turn(&sched, &turn_params);    // delivers, runs, settles
+ *     // then read the turn arena's records and call the hooks
+ */
+
 #include "tinyactors_host/scheduler.h"
 
 #include "memory.h"
