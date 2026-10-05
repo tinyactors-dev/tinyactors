@@ -4,16 +4,7 @@
 #include "../include/tinyactors.h"
 #include "vec.h"
 #include "arena.h"
-
-uint32_t ta_hash_bytes(uint32_t seed, const void *bytes, size_t size) {
-    const unsigned char *in = bytes;
-    uint32_t hash = seed ^ 2166136261u;
-    for (size_t index = 0; index < size; index += 1) {
-        hash ^= in[index];
-        hash *= 16777619u;
-    }
-    return hash;
-}
+#include "hash.h"
 
 static ta_result ta_atom_rehash(ta_atom_table *table, uint32_t bucket_count) {
     uint32_t *buckets = ta_mem_alloc(table->allocator, bucket_count * sizeof(uint32_t),
@@ -71,7 +62,7 @@ ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *out) {
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_hash_bytes(0, text.ptr, text.len);
+    uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, text.ptr, text.len);
     for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
         const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
         if (entry->hash == hash && ta_str_equal(entry->text, text)) {
@@ -120,7 +111,7 @@ ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_atom *out) {
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_hash_bytes(0, text.ptr, text.len);
+    uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, text.ptr, text.len);
     for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
         const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
         if (entry->hash == hash && ta_str_equal(entry->text, text)) {

@@ -5,12 +5,14 @@
 #include "../include/tinyactors.h"
 #include "vec.h"
 #include "atom.h"
+#include "hash.h"
 
 static uint32_t ta_address_hash(const ta_actor_address *address) {
-    uint32_t hash = ta_hash_bytes(0, address->family.name.ptr, address->family.name.len);
+    /* Each part starts again from the basis, with the hash so far XORed in. */
+    uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, address->family.name.ptr, address->family.name.len);
     const char separator = 0;
-    hash = ta_hash_bytes(hash, &separator, 1);
-    return ta_hash_bytes(hash, address->name.ptr, address->name.len);
+    hash = ta_hash_fnv1a32(hash ^ TA_HASH_FNV1A32_BASIS, &separator, 1);
+    return ta_hash_fnv1a32(hash ^ TA_HASH_FNV1A32_BASIS, address->name.ptr, address->name.len);
 }
 
 static uint32_t ta_address_bucket_count(const ta_address_table *table) {

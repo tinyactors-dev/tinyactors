@@ -3,6 +3,8 @@
 #include "../include/tinyactors.h"
 #include "vec.h"
 #include "atom.h"
+#include "hash.h"
+#include "str.h"
 
 static const ta_event_name_node *ta_event_name_node_at(const ta_event_name_table *table,
                                                        ta_event_name_id name) {
@@ -11,7 +13,7 @@ static const ta_event_name_node *ta_event_name_node_at(const ta_event_name_table
 
 static uint32_t ta_event_name_hash(ta_event_name_id parent, ta_atom segment) {
     uint32_t key[2] = { parent, segment };
-    return ta_hash_bytes(0x9e3779b9u, key, sizeof(key));
+    return ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS ^ 0x9e3779b9u, key, sizeof(key));
 }
 
 static ta_result ta_event_name_rehash(ta_event_name_table *table, uint32_t bucket_count) {
@@ -80,10 +82,7 @@ ta_result ta_event_name_child(ta_event_name_table *table,
 static ta_result ta_event_name_builtin(ta_event_name_table *table, const char *parent_and_segment) {
     /* "P:segment" where P is the parent's built-in index digit. */
     ta_event_name_id parent = (ta_event_name_id)(parent_and_segment[0] - '0');
-    ta_str text = { .ptr = parent_and_segment + 2, .len = 0 };
-    while (text.ptr[text.len] != '\0') {
-        text.len += 1;
-    }
+    ta_str text = ta_str_from_cstr(parent_and_segment + 2);
     ta_atom atom = 0;
     ta_event_name_id name = 0;
     ta_result result = ta_atom_intern(table->atoms, text, &atom);

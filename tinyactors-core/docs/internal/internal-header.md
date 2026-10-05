@@ -15,7 +15,7 @@ to change as the implementation is specialized for memory density.
 The current umbrella order is:
 
 ```text
-memory/str/vec/bitset/span/text_writer
+memory/str/vec/bitset/span/text_writer/hash
       -> arena/atom -> event_name/value/event/fault/routing/clock
       -> configuration/history/continuation/timer
       -> datamodel/io/invoke

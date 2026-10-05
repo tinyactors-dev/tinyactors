@@ -12,18 +12,31 @@ void ta_text_put(ta_text_writer *writer, ta_str text) {
     }
 }
 
-void ta_text_put_u64(ta_text_writer *writer, uint64_t value) {
-    char digits[20];
+uint32_t ta_text_format_u64(char out[TA_TEXT_U64_DIGITS], uint64_t value) {
+    char reversed[TA_TEXT_U64_DIGITS];
     uint32_t count = 0;
     do {
-        digits[count++] = (char)('0' + value % 10u);
+        reversed[count++] = (char)('0' + value % 10u);
         value /= 10u;
     } while (value != 0);
-    char ordered[20];
     for (uint32_t index = 0; index < count; index += 1) {
-        ordered[index] = digits[count - 1u - index];
+        out[index] = reversed[count - 1u - index];
     }
-    ta_text_put(writer, (ta_str){ .ptr = ordered, .len = count });
+    return count;
+}
+
+void ta_text_format_hex(char *out, uint64_t value, uint32_t count) {
+    static const char digits[] = "0123456789abcdef";
+    for (uint32_t index = count; index > 0; index -= 1) {
+        out[index - 1u] = digits[value & 0xfu];
+        value >>= 4;
+    }
+}
+
+void ta_text_put_u64(ta_text_writer *writer, uint64_t value) {
+    char digits[TA_TEXT_U64_DIGITS];
+    uint32_t count = ta_text_format_u64(digits, value);
+    ta_text_put(writer, (ta_str){ .ptr = digits, .len = count });
 }
 
 ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed) {

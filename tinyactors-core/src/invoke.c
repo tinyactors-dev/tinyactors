@@ -4,6 +4,7 @@
 #include "str.h"
 #include "vec.h"
 #include "span.h"
+#include "text_writer.h"
 #include "../include/tinyactors.h"
 #include "atom.h"
 #include "event_name.h"
@@ -195,11 +196,7 @@ static ta_atom ta_invoke_normalize_type(const ta_system *system, ta_atom type) {
     static const char *const aliases[] = { "scxml", "http://www.w3.org/TR/scxml", "http://www.w3.org/TR/scxml/" };
     ta_str text = ta_atom_text(&system->atoms, type);
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(aliases); index += 1) {
-        ta_str alias = { .ptr = aliases[index], .len = 0 };
-        while (alias.ptr[alias.len] != '\0') {
-            alias.len += 1;
-        }
-        if (ta_str_equal(text, alias)) {
+        if (ta_str_equal(text, ta_str_from_cstr(aliases[index]))) {
             return system->scxml_invoke_type;
         }
     }
@@ -346,11 +343,8 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
         return TA_OK;
     }
     ta_str state = ta_atom_text(&system->atoms, it->definition->states[decl->owner].name);
-    char digits[20];
-    uint32_t digit_count = 0;
-    for (uint64_t serial = it->actor->next_send_id + 1u; serial != 0 || digit_count == 0; serial /= 10u) {
-        digits[digit_count++] = (char)('0' + serial % 10u);
-    }
+    char digits[TA_TEXT_U64_DIGITS];
+    uint32_t digit_count = ta_text_format_u64(digits, it->actor->next_send_id + 1u);
     uint32_t length = state.len + 1u + digit_count;
     char *text = ta_arena_alloc(&system->render, length, 1);
     if (text == NULL) {
@@ -359,9 +353,7 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
     }
     ta_mem_copy(text, state.ptr, state.len);
     text[state.len] = '.';
-    for (uint32_t index = 0; index < digit_count; index += 1) {
-        text[state.len + 1u + index] = digits[digit_count - 1u - index];
-    }
+    ta_mem_copy(text + state.len + 1u, digits, digit_count);
     ta_str id = { .ptr = text, .len = length };
     ta_result result = ta_invoke_core(ta_invoke_id_from_text(system, id, out));
     if (result != TA_OK || decl->id.kind != TA_ID_SOURCE_LOCATION) {

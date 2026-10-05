@@ -8,7 +8,9 @@
  * buffer: run a writer with no buffer to measure, or with a buffer that
  * may be too small and learn from `ta_text_finish` how much was needed.
  * `ta_text_render` builds on it to write text of unknown length into
- * memory of its own.
+ * memory of its own. Two formatters write numbers into a caller's
+ * characters, for the writer and for callers that build text by hand:
+ * `ta_text_format_u64` in decimal and `ta_text_format_hex` in hex.
  *
  * ## Contract and invariants
  *
@@ -22,25 +24,39 @@
  *   It assumes `skip` 0.
  * - `ta_text_render` calls its `write` function twice, once to measure and
  *   once to fill, and `write` must put the same text both times.
+ * - `ta_text_format_u64` writes a value's decimal digits, most significant
+ *   first, with no sign, no leading zeros and no NUL ("0" for zero), into
+ *   at most `TA_TEXT_U64_DIGITS` characters, and answers how many it
+ *   wrote. `ta_text_put_u64` puts the same digits.
+ * - `ta_text_format_hex` writes exactly `count` lowercase hex digits of a
+ *   value's low `4 * count` bits, most significant first, zero-padded on
+ *   the left, with no prefix and no NUL. Trace IDs, span IDs, definition
+ *   fingerprints and `\x` escapes are written with it. Percent-encoding in
+ *   SCXML URIs uses capitals and is the URI writer's own.
  *
  * ## Memory
  *
  * The writer owns nothing: its buffer belongs to the caller, and the
  * struct is a value the caller keeps on its stack. `ta_text_put`,
- * `ta_text_put_u64` and `ta_text_finish` never allocate and may run
- * inside a macrostep. `ta_text_render` allocates the text, NUL-terminated,
+ * `ta_text_put_u64`, `ta_text_finish` and the two formatters never
+ * allocate and may run inside a macrostep; the formatters write only the
+ * caller's characters. `ta_text_render` allocates the text, NUL-terminated,
  * from the allocator it is given; the caller owns it and frees it with
  * that allocator, `length + 1` bytes at alignment 1.
  *
  * ## Complexity
  *
- * `ta_text_put` is O(length of the text); `ta_text_put_u64` is O(digits);
+ * `ta_text_put` is O(length of the text); `ta_text_put_u64` and
+ * `ta_text_format_u64` are O(digits), at most 20; `ta_text_format_hex` is
+ * O(count);
  * `ta_text_finish` is O(1); `ta_text_render` is two runs of `write` and one
  * allocation.
  *
  * ## Failure
  *
- * Putting never fails: text beyond the buffer is counted, not stored.
+ * Putting and formatting never fail: text beyond the buffer is counted,
+ * not stored. An `out` shorter than `TA_TEXT_U64_DIGITS` or than `count`
+ * is a programmer error, not checked.
  * `ta_text_finish` answers `TA_ERR_NOMEM` when the text and its NUL did not
  * fit (and what was written is not useful). `ta_text_render` answers
  * `TA_ERR_NOT_FOUND` when `write` reports there is no text, and
@@ -52,6 +68,9 @@
  * Everything that answers text to a host or writes it into a trace: event
  * names, send IDs, origins and SCXML URIs, compile errors and the builder,
  * the data model, definitions, export, the codec, I/O and the interpreter.
+ * The formatters: trace contexts (`traceparent`, trace and span IDs), the
+ * compiler's fingerprint revisions and compile-error lines, and generated
+ * invoke IDs.
  */
 #pragma once
 
@@ -70,8 +89,26 @@ typedef struct {
 
 /** Puts `text`, storing what falls in the window and counting all of it. Borrows `text`; never allocates. */
 void ta_text_put(ta_text_writer *writer, ta_str text);
-/** Puts `value` in decimal. Never allocates. */
+/** The most decimal digits of a `uint64_t`: 18446744073709551615 has 20. */
+#define TA_TEXT_U64_DIGITS 20u
+
+/** Puts `value` in decimal, as `ta_text_format_u64` writes it. Never allocates; may run inside a macrostep. */
 void ta_text_put_u64(ta_text_writer *writer, uint64_t value);
+/**
+ * Writes `value` in decimal into `out`, most significant digit first, with
+ * no leading zeros and no NUL, and answers the number of digits, 1 to
+ * `TA_TEXT_U64_DIGITS`. Borrows `out`, which holds `TA_TEXT_U64_DIGITS`
+ * characters. Never allocates; may run inside a macrostep. Does not fail.
+ */
+uint32_t ta_text_format_u64(char out[TA_TEXT_U64_DIGITS], uint64_t value);
+/**
+ * Writes the low `4 * count` bits of `value` into `out` as `count`
+ * lowercase hex digits, most significant first, zero-padded, with no NUL
+ * (16 digits write all of a `uint64_t`; more add leading zeros). Borrows
+ * `out`, which holds `count` characters. Never allocates; may run inside a
+ * macrostep. Does not fail.
+ */
+void ta_text_format_hex(char *out, uint64_t value, uint32_t count);
 /**
  * NUL-terminates the text and stores in `*needed` the bytes it takes with
  * its NUL. Answers `TA_ERR_NOMEM` (and nothing useful written) when it

@@ -361,7 +361,9 @@ typedef struct {
  * buffer: run a writer with no buffer to measure, or with a buffer that
  * may be too small and learn from `ta_text_finish` how much was needed.
  * `ta_text_render` builds on it to write text of unknown length into
- * memory of its own.
+ * memory of its own. Two formatters write numbers into a caller's
+ * characters, for the writer and for callers that build text by hand:
+ * `ta_text_format_u64` in decimal and `ta_text_format_hex` in hex.
  *
  * ## Contract and invariants
  *
@@ -375,25 +377,39 @@ typedef struct {
  *   It assumes `skip` 0.
  * - `ta_text_render` calls its `write` function twice, once to measure and
  *   once to fill, and `write` must put the same text both times.
+ * - `ta_text_format_u64` writes a value's decimal digits, most significant
+ *   first, with no sign, no leading zeros and no NUL ("0" for zero), into
+ *   at most `TA_TEXT_U64_DIGITS` characters, and answers how many it
+ *   wrote. `ta_text_put_u64` puts the same digits.
+ * - `ta_text_format_hex` writes exactly `count` lowercase hex digits of a
+ *   value's low `4 * count` bits, most significant first, zero-padded on
+ *   the left, with no prefix and no NUL. Trace IDs, span IDs, definition
+ *   fingerprints and `\x` escapes are written with it. Percent-encoding in
+ *   SCXML URIs uses capitals and is the URI writer's own.
  *
  * ## Memory
  *
  * The writer owns nothing: its buffer belongs to the caller, and the
  * struct is a value the caller keeps on its stack. `ta_text_put`,
- * `ta_text_put_u64` and `ta_text_finish` never allocate and may run
- * inside a macrostep. `ta_text_render` allocates the text, NUL-terminated,
+ * `ta_text_put_u64`, `ta_text_finish` and the two formatters never
+ * allocate and may run inside a macrostep; the formatters write only the
+ * caller's characters. `ta_text_render` allocates the text, NUL-terminated,
  * from the allocator it is given; the caller owns it and frees it with
  * that allocator, `length + 1` bytes at alignment 1.
  *
  * ## Complexity
  *
- * `ta_text_put` is O(length of the text); `ta_text_put_u64` is O(digits);
+ * `ta_text_put` is O(length of the text); `ta_text_put_u64` and
+ * `ta_text_format_u64` are O(digits), at most 20; `ta_text_format_hex` is
+ * O(count);
  * `ta_text_finish` is O(1); `ta_text_render` is two runs of `write` and one
  * allocation.
  *
  * ## Failure
  *
- * Putting never fails: text beyond the buffer is counted, not stored.
+ * Putting and formatting never fail: text beyond the buffer is counted,
+ * not stored. An `out` shorter than `TA_TEXT_U64_DIGITS` or than `count`
+ * is a programmer error, not checked.
  * `ta_text_finish` answers `TA_ERR_NOMEM` when the text and its NUL did not
  * fit (and what was written is not useful). `ta_text_render` answers
  * `TA_ERR_NOT_FOUND` when `write` reports there is no text, and
@@ -405,6 +421,9 @@ typedef struct {
  * Everything that answers text to a host or writes it into a trace: event
  * names, send IDs, origins and SCXML URIs, compile errors and the builder,
  * the data model, definitions, export, the codec, I/O and the interpreter.
+ * The formatters: trace contexts (`traceparent`, trace and span IDs), the
+ * compiler's fingerprint revisions and compile-error lines, and generated
+ * invoke IDs.
  */
 
 
@@ -421,8 +440,26 @@ typedef struct {
 
 /** Puts `text`, storing what falls in the window and counting all of it. Borrows `text`; never allocates. */
 TA_PRIVATE void ta_text_put(ta_text_writer *writer, ta_str text);
-/** Puts `value` in decimal. Never allocates. */
+/** The most decimal digits of a `uint64_t`: 18446744073709551615 has 20. */
+#define TA_TEXT_U64_DIGITS 20u
+
+/** Puts `value` in decimal, as `ta_text_format_u64` writes it. Never allocates; may run inside a macrostep. */
 TA_PRIVATE void ta_text_put_u64(ta_text_writer *writer, uint64_t value);
+/**
+ * Writes `value` in decimal into `out`, most significant digit first, with
+ * no leading zeros and no NUL, and answers the number of digits, 1 to
+ * `TA_TEXT_U64_DIGITS`. Borrows `out`, which holds `TA_TEXT_U64_DIGITS`
+ * characters. Never allocates; may run inside a macrostep. Does not fail.
+ */
+TA_PRIVATE uint32_t ta_text_format_u64(char out[TA_TEXT_U64_DIGITS], uint64_t value);
+/**
+ * Writes the low `4 * count` bits of `value` into `out` as `count`
+ * lowercase hex digits, most significant first, zero-padded, with no NUL
+ * (16 digits write all of a `uint64_t`; more add leading zeros). Borrows
+ * `out`, which holds `count` characters. Never allocates; may run inside a
+ * macrostep. Does not fail.
+ */
+TA_PRIVATE void ta_text_format_hex(char *out, uint64_t value, uint32_t count);
 /**
  * NUL-terminates the text and stores in `*needed` the bytes it takes with
  * its NUL. Answers `TA_ERR_NOMEM` (and nothing useful written) when it
@@ -448,6 +485,116 @@ typedef struct {
  * `TA_ERR_NOMEM` when the allocation fails, changing nothing.
  */
 TA_PRIVATE ta_result ta_text_render(ta_allocator allocator, const ta_text_render_params *params);
+
+/**
+ * @file hash.h
+ *
+ * # Hash functions
+ *
+ * The two hash functions of core, each defined once: FNV-1a over bytes,
+ * in a 32-bit and a 64-bit form, and a fixed 64-bit mixer, the finalizer
+ * of MurmurHash3's 64-bit variant. They are fixed functions, not seeded
+ * per process: every host and every run derives the same values, so a
+ * value computed here may be compared across hosts and runs (span IDs,
+ * definition fingerprints) as well as used for buckets.
+ *
+ * ## Contract
+ *
+ * - `ta_hash_fnv1a32(hash, bytes, size)` and `ta_hash_fnv1a64` continue
+ *   an FNV-1a hash: for each byte, XOR it in, then multiply by the FNV
+ *   prime. `hash` is the hash so far; a fresh hash starts from
+ *   `TA_HASH_FNV1A32_BASIS` or `TA_HASH_FNV1A64_BASIS`, the FNV offset
+ *   bases. Hashing a text in pieces gives the same value as hashing it
+ *   whole, when each piece continues from the last. A caller that wants a
+ *   seeded or separated hash XORs its seed into the basis.
+ * - `bytes` may be NULL when `size` is 0; the hash is then `hash`
+ *   unchanged.
+ * - `ta_hash_mix64(value)` is a bijection on 64-bit values in which every
+ *   input bit reaches every output bit. It maps 0 to 0. Its low 32 bits
+ *   are a good bucket hash for IDs that differ mostly in their low bits.
+ * - The values are part of what core promises: the test pins the
+ *   standard FNV-1a vectors and the mixer's outputs, and span IDs, which
+ *   leave core in traces, are built from the mixer.
+ *
+ * ## Memory
+ *
+ * Nothing here owns or allocates memory: the bytes belong to the caller
+ * and are only read. Every function may run inside a macrostep.
+ *
+ * ## Complexity
+ *
+ * The FNV-1a functions are O(size); `ta_hash_mix64` is O(1).
+ *
+ * ## Failure
+ *
+ * Nothing fails. NULL `bytes` with a non-zero `size` is a programmer
+ * error, not checked.
+ *
+ * ## Users
+ *
+ * FNV-1a 32: the atom table, the address table and the event-name table,
+ * for their buckets. FNV-1a 64: the compiler, for a definition's content
+ * hash and the fingerprint revision written from it (ADR 0077). The
+ * mixer: span IDs from step keys (ADR 0067) and the session table's
+ * buckets.
+ */
+
+#include <stddef.h>
+#include <stdint.h>
+
+/** The 32-bit FNV offset basis: the hash of no bytes. */
+#define TA_HASH_FNV1A32_BASIS 2166136261u
+/** The 32-bit FNV prime. */
+#define TA_HASH_FNV1A32_PRIME 16777619u
+/** The 64-bit FNV offset basis: the hash of no bytes. */
+#define TA_HASH_FNV1A64_BASIS 14695981039346656037ull
+/** The 64-bit FNV prime. */
+#define TA_HASH_FNV1A64_PRIME 1099511628211ull
+
+/**
+ * Continues the 32-bit FNV-1a hash `hash` over `size` bytes at `bytes`
+ * and answers the new hash; start from `TA_HASH_FNV1A32_BASIS`. Borrows
+ * `bytes` (NULL when `size` is 0). Never allocates; may run inside a
+ * macrostep. Does not fail.
+ */
+TA_PRIVATE inline uint32_t ta_hash_fnv1a32(uint32_t hash, const void *bytes, size_t size) {
+    const unsigned char *in = bytes;
+    for (size_t index = 0; index < size; index += 1) {
+        hash ^= in[index];
+        hash *= TA_HASH_FNV1A32_PRIME;
+    }
+    return hash;
+}
+
+/**
+ * Continues the 64-bit FNV-1a hash `hash` over `size` bytes at `bytes`
+ * and answers the new hash; start from `TA_HASH_FNV1A64_BASIS`. Borrows
+ * `bytes` (NULL when `size` is 0). Never allocates; may run inside a
+ * macrostep. Does not fail.
+ */
+TA_PRIVATE inline uint64_t ta_hash_fnv1a64(uint64_t hash, const void *bytes, size_t size) {
+    const unsigned char *in = bytes;
+    for (size_t index = 0; index < size; index += 1) {
+        hash ^= in[index];
+        hash *= TA_HASH_FNV1A64_PRIME;
+    }
+    return hash;
+}
+
+/**
+ * Mixes `value` with the finalizer of MurmurHash3's 64-bit variant, so
+ * every input bit reaches every output bit; maps 0 to 0. Fixed, so every
+ * host derives the same span IDs. Never allocates; may run inside a
+ * macrostep. Does not fail.
+ */
+TA_PRIVATE inline uint64_t ta_hash_mix64(uint64_t value) {
+    value ^= value >> 33;
+    value *= 0xff51afd7ed558ccdull;
+    value ^= value >> 33;
+    value *= 0xc4ceb9fe1a85ec53ull;
+    value ^= value >> 33;
+    return value;
+}
 
 
 
@@ -4984,15 +5131,77 @@ typedef struct {
     ta_arena arena;
 } ta_tree_state;
 
+/**
+ * @file atom.h
+ *
+ * # Atom table
+ *
+ * `ta_atom_table` interns ordinary strings, such as definition, state and
+ * type names, and gives each distinct text one `ta_atom`: a compact,
+ * process-local index into the table. Atoms and structured event names
+ * are distinct: an event name is a path of atom segments linked through
+ * the event-name table.
+ *
+ * ## Contract and invariants
+ *
+ * - Interning the same bytes twice answers the same atom; atoms are
+ *   numbered from 0 in the order their texts were first interned.
+ * - Atom 0 is the empty text, interned by `ta_atom_table_init`, so a
+ *   zeroed family atom names none (ADR 0088).
+ * - An atom's text is a copy the table keeps in arena blocks, so the
+ *   `ta_str` that `ta_atom_text` answers never moves while the table
+ *   lives.
+ * - Buckets are found with 32-bit FNV-1a over the text (`hash.h`), and
+ *   the table doubles its buckets when it holds more atoms than buckets.
+ * - An atom is process-local. A portable durability encoding records the
+ *   text (or another stable dictionary representation), never an atom's
+ *   index; session images in-process may hold atoms.
+ *
+ * ## Memory
+ *
+ * The table owns its entries (a `ta_vec`), its buckets and the arena of
+ * texts, all from the allocator given to `ta_atom_table_init`, until
+ * `ta_atom_table_destroy`. Callers borrow the texts it answers for as long
+ * as the table lives. `ta_atom_table_init` and `ta_atom_intern` allocate;
+ * `ta_atom_find`, `ta_atom_text` and `ta_atom_valid` never allocate and
+ * may run inside a macrostep.
+ *
+ * ## Complexity
+ *
+ * `ta_atom_intern` and `ta_atom_find` hash the text, O(length), then walk
+ * one bucket's chain, expected O(1); an intern that doubles the buckets
+ * rehashes every atom once, amortized O(1). `ta_atom_text` and
+ * `ta_atom_valid` are O(1).
+ *
+ * ## Failure
+ *
+ * `ta_atom_intern` and `ta_atom_find` answer `TA_ERR_INVALID` for a text
+ * with a NULL `ptr` and a non-zero `len`. `ta_atom_find` answers
+ * `TA_ERR_NOT_FOUND` for a text that is not an atom. `ta_atom_intern`
+ * answers `TA_ERR_NOMEM` when the copy or the entry cannot be allocated,
+ * or the table is full; the table then holds no new atom (the arena may
+ * keep the copied bytes until the table is destroyed). A failed doubling
+ * of the buckets is not a failure: the old buckets stay correct.
+ * `ta_atom_table_init` answers `TA_ERR_NOMEM` and holds nothing.
+ * `ta_atom_text` answers an empty text for an atom the table does not
+ * hold.
+ *
+ * ## Users
+ *
+ * The system's names and types, the event-name table and the name
+ * resolver, the builder and compiled definitions, the interpreter and
+ * invocations, the data model, SCXML URIs and the session image.
+ */
 
 
-/* Atom text lives in arena blocks, so a returned ta_str never moves. */
+/** One atom: its text's hash, the next atom in its bucket, and its text in arena blocks, which never moves. */
 typedef struct {
     uint32_t hash;
     uint32_t next;
     ta_str text;
 } ta_atom_entry;
 
+/** The atom table; see the file comment. */
 typedef struct {
     ta_allocator allocator;
     ta_vec entries;
@@ -5001,16 +5210,35 @@ typedef struct {
     ta_arena strings;
 } ta_atom_table;
 
+/** No atom; it also ends a bucket's chain. */
 #define TA_ATOM_NONE UINT32_MAX
 
+/**
+ * Makes `table` an atom table on `allocator`, holding the empty text as
+ * atom 0. Allocates. Answers `TA_ERR_NOMEM`, holding nothing, when an
+ * allocation fails.
+ */
 TA_PRIVATE ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator allocator);
+/** Frees everything `table` holds; texts it answered are gone. Never allocates. */
 TA_PRIVATE void ta_atom_table_destroy(ta_atom_table *table);
+/**
+ * Stores in `*out` the atom of `text`, interning a copy when it is new.
+ * Borrows `text`. Allocates. Answers `TA_ERR_INVALID` for a NULL `ptr`
+ * with a non-zero `len`, and `TA_ERR_NOMEM` when it cannot allocate or the
+ * table is full, holding no new atom.
+ */
 TA_PRIVATE ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *out);
+/** The text of `atom`, borrowed from the table; empty for an atom it does not hold. Never allocates. */
 TA_PRIVATE ta_str ta_atom_text(const ta_atom_table *table, ta_atom atom);
-/* Looks text up without interning it; TA_ERR_NOT_FOUND when it is not an atom. */
+/**
+ * Looks `text` up without interning it and stores its atom in `*out`.
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_NOT_FOUND`
+ * when it is not an atom and `TA_ERR_INVALID` for a NULL `ptr` with a
+ * non-zero `len`.
+ */
 TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_atom *out);
+/** Whether the table holds `atom`. Never allocates. */
 TA_PRIVATE bool ta_atom_valid(const ta_atom_table *table, ta_atom atom);
-TA_PRIVATE uint32_t ta_hash_bytes(uint32_t seed, const void *bytes, size_t size);
 
 /**
  * @file names.h
@@ -7447,18 +7675,31 @@ TA_PRIVATE void ta_text_put(ta_text_writer *writer, ta_str text) {
     }
 }
 
-TA_PRIVATE void ta_text_put_u64(ta_text_writer *writer, uint64_t value) {
-    char digits[20];
+TA_PRIVATE uint32_t ta_text_format_u64(char out[TA_TEXT_U64_DIGITS], uint64_t value) {
+    char reversed[TA_TEXT_U64_DIGITS];
     uint32_t count = 0;
     do {
-        digits[count++] = (char)('0' + value % 10u);
+        reversed[count++] = (char)('0' + value % 10u);
         value /= 10u;
     } while (value != 0);
-    char ordered[20];
     for (uint32_t index = 0; index < count; index += 1) {
-        ordered[index] = digits[count - 1u - index];
+        out[index] = reversed[count - 1u - index];
     }
-    ta_text_put(writer, (ta_str){ .ptr = ordered, .len = count });
+    return count;
+}
+
+TA_PRIVATE void ta_text_format_hex(char *out, uint64_t value, uint32_t count) {
+    static const char digits[] = "0123456789abcdef";
+    for (uint32_t index = count; index > 0; index -= 1) {
+        out[index - 1u] = digits[value & 0xfu];
+        value >>= 4;
+    }
+}
+
+TA_PRIVATE void ta_text_put_u64(ta_text_writer *writer, uint64_t value) {
+    char digits[TA_TEXT_U64_DIGITS];
+    uint32_t count = ta_text_format_u64(digits, value);
+    ta_text_put(writer, (ta_str){ .ptr = digits, .len = count });
 }
 
 TA_PRIVATE ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed) {
@@ -9567,16 +9808,6 @@ TA_API const void *ta_tree_close(ta_tree_list *list) {
 }
 
 
-TA_PRIVATE uint32_t ta_hash_bytes(uint32_t seed, const void *bytes, size_t size) {
-    const unsigned char *in = bytes;
-    uint32_t hash = seed ^ 2166136261u;
-    for (size_t index = 0; index < size; index += 1) {
-        hash ^= in[index];
-        hash *= 16777619u;
-    }
-    return hash;
-}
-
 static ta_result ta_atom_rehash(ta_atom_table *table, uint32_t bucket_count) {
     uint32_t *buckets = ta_mem_alloc(table->allocator, bucket_count * sizeof(uint32_t),
                                      _Alignof(uint32_t));
@@ -9633,7 +9864,7 @@ TA_PRIVATE ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_hash_bytes(0, text.ptr, text.len);
+    uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, text.ptr, text.len);
     for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
         const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
         if (entry->hash == hash && ta_str_equal(entry->text, text)) {
@@ -9682,7 +9913,7 @@ TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_at
     if (text.ptr == NULL && text.len != 0) {
         return TA_ERR_INVALID;
     }
-    uint32_t hash = ta_hash_bytes(0, text.ptr, text.len);
+    uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, text.ptr, text.len);
     for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
         const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
         if (entry->hash == hash && ta_str_equal(entry->text, text)) {
@@ -9758,10 +9989,11 @@ TA_PRIVATE ta_atom ta_names_lookup(const ta_names *names, ta_str text) {
 
 
 static uint32_t ta_address_hash(const ta_actor_address *address) {
-    uint32_t hash = ta_hash_bytes(0, address->family.name.ptr, address->family.name.len);
+    /* Each part starts again from the basis, with the hash so far XORed in. */
+    uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, address->family.name.ptr, address->family.name.len);
     const char separator = 0;
-    hash = ta_hash_bytes(hash, &separator, 1);
-    return ta_hash_bytes(hash, address->name.ptr, address->name.len);
+    hash = ta_hash_fnv1a32(hash ^ TA_HASH_FNV1A32_BASIS, &separator, 1);
+    return ta_hash_fnv1a32(hash ^ TA_HASH_FNV1A32_BASIS, address->name.ptr, address->name.len);
 }
 
 static uint32_t ta_address_bucket_count(const ta_address_table *table) {
@@ -10178,13 +10410,8 @@ TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry) {
 
 
 static uint32_t ta_session_hash(uint64_t id) {
-    /* A 64-bit finalizer: runtime IDs differ mostly in their low slot bits. */
-    id ^= id >> 33;
-    id *= 0xff51afd7ed558ccdull;
-    id ^= id >> 33;
-    id *= 0xc4ceb9fe1a85ec53ull;
-    id ^= id >> 33;
-    return (uint32_t)id;
+    /* Mixed, since runtime IDs differ mostly in their low slot bits. */
+    return (uint32_t)ta_hash_mix64(id);
 }
 
 static uint32_t ta_session_bucket_count(const ta_session_table *table) {
@@ -10392,7 +10619,7 @@ static const ta_event_name_node *ta_event_name_node_at(const ta_event_name_table
 
 static uint32_t ta_event_name_hash(ta_event_name_id parent, ta_atom segment) {
     uint32_t key[2] = { parent, segment };
-    return ta_hash_bytes(0x9e3779b9u, key, sizeof(key));
+    return ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS ^ 0x9e3779b9u, key, sizeof(key));
 }
 
 static ta_result ta_event_name_rehash(ta_event_name_table *table, uint32_t bucket_count) {
@@ -10461,10 +10688,7 @@ TA_PRIVATE ta_result ta_event_name_child(ta_event_name_table *table,
 static ta_result ta_event_name_builtin(ta_event_name_table *table, const char *parent_and_segment) {
     /* "P:segment" where P is the parent's built-in index digit. */
     ta_event_name_id parent = (ta_event_name_id)(parent_and_segment[0] - '0');
-    ta_str text = { .ptr = parent_and_segment + 2, .len = 0 };
-    while (text.ptr[text.len] != '\0') {
-        text.len += 1;
-    }
+    ta_str text = ta_str_from_cstr(parent_and_segment + 2);
     ta_atom atom = 0;
     ta_event_name_id name = 0;
     ta_result result = ta_atom_intern(table->atoms, text, &atom);
@@ -10648,24 +10872,13 @@ TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink)
  * Step keys as span IDs (section 6)
  */
 
-/* The finalizer of MurmurHash3's 64-bit variant: every input bit reaches
- * every output bit. Fixed, so every host derives the same span IDs. */
-static uint64_t ta_trace_mix(uint64_t value) {
-    value ^= value >> 33;
-    value *= 0xff51afd7ed558ccdull;
-    value ^= value >> 33;
-    value *= 0xc4ceb9fe1a85ec53ull;
-    value ^= value >> 33;
-    return value;
-}
-
 TA_API uint64_t ta_step_key_span_id(ta_step_key key) {
     if (key.session == 0) {
         return key.macrostep;
     }
-    uint64_t span = ta_trace_mix(key.session);
-    span = ta_trace_mix(span ^ key.macrostep);
-    span = ta_trace_mix(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
+    uint64_t span = ta_hash_mix64(key.session);
+    span = ta_hash_mix64(span ^ key.macrostep);
+    span = ta_hash_mix64(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
     return span == 0 ? 1u : span;
 }
 
@@ -10807,16 +11020,6 @@ static bool ta_hex_read16(const char *text, uint64_t *out) {
     return high_valid && low_valid;
 }
 
-static const char ta_hex_digits[] = "0123456789abcdef";
-
-/* Writes `count` hex digits of `value`, most significant first. */
-static void ta_hex_write(char *out, uint64_t value, uint32_t count) {
-    for (uint32_t index = count; index > 0; index -= 1) {
-        out[index - 1u] = ta_hex_digits[value & 0xfu];
-        value >>= 4;
-    }
-}
-
 static bool ta_trace_space(char c) {
     return c == ' ' || c == '\t';
 }
@@ -10891,12 +11094,12 @@ TA_API ta_result ta_traceparent_format(const ta_traceparent_format_params *param
     out[0] = '0';
     out[1] = '0';
     out[2] = '-';
-    ta_hex_write(out + 3, params->parent.context.trace_id_high, 16u);
-    ta_hex_write(out + 19, params->parent.context.trace_id_low, 16u);
+    ta_text_format_hex(out + 3, params->parent.context.trace_id_high, 16u);
+    ta_text_format_hex(out + 19, params->parent.context.trace_id_low, 16u);
     out[35] = '-';
-    ta_hex_write(out + 36, span, 16u);
+    ta_text_format_hex(out + 36, span, 16u);
     out[52] = '-';
-    ta_hex_write(out + 53, params->parent.context.flags, 2u);
+    ta_text_format_hex(out + 53, params->parent.context.flags, 2u);
     return TA_OK;
 }
 
@@ -10906,8 +11109,8 @@ TA_API ta_result ta_trace_id_format(const ta_trace_id_format_params *params) {
     }
     ta_result result = ta_trace_text_begin(params->buffer, params->capacity, params->needed, 32u);
     if (result == TA_OK) {
-        ta_hex_write(params->buffer, params->context.trace_id_high, 16u);
-        ta_hex_write(params->buffer + 16, params->context.trace_id_low, 16u);
+        ta_text_format_hex(params->buffer, params->context.trace_id_high, 16u);
+        ta_text_format_hex(params->buffer + 16, params->context.trace_id_low, 16u);
     }
     return result;
 }
@@ -10918,7 +11121,7 @@ TA_API ta_result ta_span_id_format(const ta_span_id_format_params *params) {
     }
     ta_result result = ta_trace_text_begin(params->buffer, params->capacity, params->needed, 16u);
     if (result == TA_OK) {
-        ta_hex_write(params->buffer, params->span_id, 16u);
+        ta_text_format_hex(params->buffer, params->span_id, 16u);
     }
     return result;
 }
@@ -12947,11 +13150,7 @@ static ta_atom ta_invoke_normalize_type(const ta_system *system, ta_atom type) {
     static const char *const aliases[] = { "scxml", "http://www.w3.org/TR/scxml", "http://www.w3.org/TR/scxml/" };
     ta_str text = ta_atom_text(&system->atoms, type);
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(aliases); index += 1) {
-        ta_str alias = { .ptr = aliases[index], .len = 0 };
-        while (alias.ptr[alias.len] != '\0') {
-            alias.len += 1;
-        }
-        if (ta_str_equal(text, alias)) {
+        if (ta_str_equal(text, ta_str_from_cstr(aliases[index]))) {
             return system->scxml_invoke_type;
         }
     }
@@ -13098,11 +13297,8 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
         return TA_OK;
     }
     ta_str state = ta_atom_text(&system->atoms, it->definition->states[decl->owner].name);
-    char digits[20];
-    uint32_t digit_count = 0;
-    for (uint64_t serial = it->actor->next_send_id + 1u; serial != 0 || digit_count == 0; serial /= 10u) {
-        digits[digit_count++] = (char)('0' + serial % 10u);
-    }
+    char digits[TA_TEXT_U64_DIGITS];
+    uint32_t digit_count = ta_text_format_u64(digits, it->actor->next_send_id + 1u);
     uint32_t length = state.len + 1u + digit_count;
     char *text = ta_arena_alloc(&system->render, length, 1);
     if (text == NULL) {
@@ -13111,9 +13307,7 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
     }
     ta_mem_copy(text, state.ptr, state.len);
     text[state.len] = '.';
-    for (uint32_t index = 0; index < digit_count; index += 1) {
-        text[state.len + 1u + index] = digits[digit_count - 1u - index];
-    }
+    ta_mem_copy(text + state.len + 1u, digits, digit_count);
     ta_str id = { .ptr = text, .len = length };
     ta_result result = ta_invoke_core(ta_invoke_id_from_text(system, id, out));
     if (result != TA_OK || decl->id.kind != TA_ID_SOURCE_LOCATION) {
@@ -14806,11 +15000,7 @@ static ta_str ta_compiler_nearest(ta_compiler *compiler, ta_str id) {
  */
 
 static void ta_compiler_hash(ta_compiler *compiler, const void *bytes, size_t size) {
-    const unsigned char *in = bytes;
-    for (size_t index = 0; index < size; index += 1) {
-        compiler->hash ^= in[index];
-        compiler->hash *= 1099511628211ull;
-    }
+    compiler->hash = ta_hash_fnv1a64(compiler->hash, bytes, size);
 }
 
 static void ta_compiler_hash_str(ta_compiler *compiler, ta_str text) {
@@ -16373,7 +16563,6 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     const ta_scxml_spec *spec = compiler->spec;
     ta_str family = spec->name;
     ta_bytes revision = {0};
-    static const char hex[] = "0123456789abcdef";
     char fingerprint[16];
     /* An identity with an empty revision names only the family: the
      * revision is still the fingerprint (ADR 0077). */
@@ -16389,9 +16578,7 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     if (explicit_revision) {
         revision = spec->identity->revision;
     } else {
-        for (uint32_t index = 0; index < 16; index += 1) {
-            fingerprint[index] = hex[(compiler->hash >> (60u - index * 4u)) & 0xfu];
-        }
+        ta_text_format_hex(fingerprint, compiler->hash, 16u);
         revision = (ta_bytes){ .ptr = (const uint8_t *)fingerprint, .len = 16 };
     }
     if (family.ptr == NULL || family.len == 0) {
@@ -16707,7 +16894,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         .error = run->error,
         .error_arena = run->error_arena,
         .locate = run->locate,
-        .hash = 14695981039346656037ull,
+        .hash = TA_HASH_FNV1A64_BASIS,
     };
     const struct { ta_vec *vec; const ta_tree_list_layout *layout; } vecs[] = {
         { &compiler.states, TA_VEC_LAYOUT(ta_state_def) },
@@ -16959,14 +17146,9 @@ static void ta_text_append(ta_text_builder *text, ta_str piece) {
 }
 
 static void ta_text_append_u32(ta_text_builder *text, uint32_t value) {
-    char digits[10];
-    uint32_t count = 0;
-    do {
-        digits[sizeof(digits) - 1u - count] = (char)('0' + value % 10u);
-        value /= 10u;
-        count += 1u;
-    } while (value != 0);
-    ta_text_append(text, (ta_str){ .ptr = digits + sizeof(digits) - count, .len = count });
+    char digits[TA_TEXT_U64_DIGITS];
+    uint32_t count = ta_text_format_u64(digits, value);
+    ta_text_append(text, (ta_str){ .ptr = digits, .len = count });
 }
 
 /*
@@ -17022,7 +17204,6 @@ static uint32_t ta_utf8_unit(ta_str text, uint32_t at) {
  * quoted field, the quotes. */
 static uint32_t ta_text_escape(ta_str text, uint32_t at, uint32_t unit, bool quoted, char out[4]) {
     unsigned char byte = (unsigned char)text.ptr[at];
-    static const char hex[] = "0123456789abcdef";
     if (unit == 1u && (byte < 0x20u || byte == 0x7Fu || byte >= 0x80u)) {
         if (byte == '\n' || byte == '\t' || byte == '\r') {
             out[0] = '\\';
@@ -17031,8 +17212,7 @@ static uint32_t ta_text_escape(ta_str text, uint32_t at, uint32_t unit, bool quo
         }
         out[0] = '\\';
         out[1] = 'x';
-        out[2] = hex[byte >> 4];
-        out[3] = hex[byte & 0xFu];
+        ta_text_format_hex(out + 2, byte, 2u);
         return 4u;
     }
     if (quoted && unit == 1u && (byte == '"' || byte == '\\')) {
@@ -21544,14 +21724,6 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
 
 #define TA_SCXML_IO_URI "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
 
-static ta_str ta_cstr(const char *text) {
-    ta_str out = { .ptr = text, .len = 0 };
-    while (text[out.len] != '\0') {
-        out.len += 1;
-    }
-    return out;
-}
-
 /* ------------------------------------------------------------------------
  * System parameters (ADR 0092)
  */
@@ -21591,11 +21763,11 @@ TA_API ta_result ta_param_info_of(ta_param param, ta_param_info *out) {
         return TA_ERR_INVALID;
     }
     const ta_param_row *row = &ta_param_rows[param];
-    *out = (ta_param_info){ .name = ta_cstr(row->name),
+    *out = (ta_param_info){ .name = ta_str_from_cstr(row->name),
                             .default_value = row->default_value,
                             .min = row->min,
                             .max = row->max,
-                            .unit = ta_cstr(row->unit) };
+                            .unit = ta_str_from_cstr(row->unit) };
     return TA_OK;
 }
 
@@ -21769,13 +21941,13 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
         result = ta_system_arena_open(system);
     }
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, ta_cstr(TA_SCXML_IO_URI), &system->scxml_io_type);
+        result = ta_atom_intern(&system->atoms, ta_str_from_cstr(TA_SCXML_IO_URI), &system->scxml_io_type);
     }
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, ta_cstr("scxml"), &system->scxml_io_alias);
+        result = ta_atom_intern(&system->atoms, ta_str_from_cstr("scxml"), &system->scxml_io_alias);
     }
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, ta_cstr("http://www.w3.org/TR/scxml/"),
+        result = ta_atom_intern(&system->atoms, ta_str_from_cstr("http://www.w3.org/TR/scxml/"),
                                 &system->scxml_invoke_type);
     }
     if (result != TA_OK) {

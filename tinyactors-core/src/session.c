@@ -5,15 +5,11 @@
 #include "vec.h"
 #include "datamodel.h"
 #include "actor.h"
+#include "hash.h"
 
 static uint32_t ta_session_hash(uint64_t id) {
-    /* A 64-bit finalizer: runtime IDs differ mostly in their low slot bits. */
-    id ^= id >> 33;
-    id *= 0xff51afd7ed558ccdull;
-    id ^= id >> 33;
-    id *= 0xc4ceb9fe1a85ec53ull;
-    id ^= id >> 33;
-    return (uint32_t)id;
+    /* Mixed, since runtime IDs differ mostly in their low slot bits. */
+    return (uint32_t)ta_hash_mix64(id);
 }
 
 static uint32_t ta_session_bucket_count(const ta_session_table *table) {

@@ -8,6 +8,7 @@
 #include "span.h"
 #include "text_writer.h"
 #include "../include/tinyactors.h"
+#include "hash.h"
 #include "arena.h"
 #include "atom.h"
 #include "event_name.h"
@@ -362,11 +363,7 @@ static ta_str ta_compiler_nearest(ta_compiler *compiler, ta_str id) {
  */
 
 static void ta_compiler_hash(ta_compiler *compiler, const void *bytes, size_t size) {
-    const unsigned char *in = bytes;
-    for (size_t index = 0; index < size; index += 1) {
-        compiler->hash ^= in[index];
-        compiler->hash *= 1099511628211ull;
-    }
+    compiler->hash = ta_hash_fnv1a64(compiler->hash, bytes, size);
 }
 
 static void ta_compiler_hash_str(ta_compiler *compiler, ta_str text) {
@@ -1929,7 +1926,6 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     const ta_scxml_spec *spec = compiler->spec;
     ta_str family = spec->name;
     ta_bytes revision = {0};
-    static const char hex[] = "0123456789abcdef";
     char fingerprint[16];
     /* An identity with an empty revision names only the family: the
      * revision is still the fingerprint (ADR 0077). */
@@ -1945,9 +1941,7 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     if (explicit_revision) {
         revision = spec->identity->revision;
     } else {
-        for (uint32_t index = 0; index < 16; index += 1) {
-            fingerprint[index] = hex[(compiler->hash >> (60u - index * 4u)) & 0xfu];
-        }
+        ta_text_format_hex(fingerprint, compiler->hash, 16u);
         revision = (ta_bytes){ .ptr = (const uint8_t *)fingerprint, .len = 16 };
     }
     if (family.ptr == NULL || family.len == 0) {
@@ -2263,7 +2257,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         .error = run->error,
         .error_arena = run->error_arena,
         .locate = run->locate,
-        .hash = 14695981039346656037ull,
+        .hash = TA_HASH_FNV1A64_BASIS,
     };
     const struct { ta_vec *vec; const ta_tree_list_layout *layout; } vecs[] = {
         { &compiler.states, TA_VEC_LAYOUT(ta_state_def) },
@@ -2515,14 +2509,9 @@ static void ta_text_append(ta_text_builder *text, ta_str piece) {
 }
 
 static void ta_text_append_u32(ta_text_builder *text, uint32_t value) {
-    char digits[10];
-    uint32_t count = 0;
-    do {
-        digits[sizeof(digits) - 1u - count] = (char)('0' + value % 10u);
-        value /= 10u;
-        count += 1u;
-    } while (value != 0);
-    ta_text_append(text, (ta_str){ .ptr = digits + sizeof(digits) - count, .len = count });
+    char digits[TA_TEXT_U64_DIGITS];
+    uint32_t count = ta_text_format_u64(digits, value);
+    ta_text_append(text, (ta_str){ .ptr = digits, .len = count });
 }
 
 /*
@@ -2578,7 +2567,6 @@ static uint32_t ta_utf8_unit(ta_str text, uint32_t at) {
  * quoted field, the quotes. */
 static uint32_t ta_text_escape(ta_str text, uint32_t at, uint32_t unit, bool quoted, char out[4]) {
     unsigned char byte = (unsigned char)text.ptr[at];
-    static const char hex[] = "0123456789abcdef";
     if (unit == 1u && (byte < 0x20u || byte == 0x7Fu || byte >= 0x80u)) {
         if (byte == '\n' || byte == '\t' || byte == '\r') {
             out[0] = '\\';
@@ -2587,8 +2575,7 @@ static uint32_t ta_text_escape(ta_str text, uint32_t at, uint32_t unit, bool quo
         }
         out[0] = '\\';
         out[1] = 'x';
-        out[2] = hex[byte >> 4];
-        out[3] = hex[byte & 0xFu];
+        ta_text_format_hex(out + 2, byte, 2u);
         return 4u;
     }
     if (quoted && unit == 1u && (byte == '"' || byte == '\\')) {

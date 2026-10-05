@@ -4,6 +4,8 @@
 #include "../include/tinyactors.h"
 #include "datamodel.h"
 #include "actor.h"
+#include "hash.h"
+#include "text_writer.h"
 
 /* ------------------------------------------------------------------------
  * The null sink (ADR 0067 section 2)
@@ -32,24 +34,13 @@ ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink) {
  * Step keys as span IDs (section 6)
  */
 
-/* The finalizer of MurmurHash3's 64-bit variant: every input bit reaches
- * every output bit. Fixed, so every host derives the same span IDs. */
-static uint64_t ta_trace_mix(uint64_t value) {
-    value ^= value >> 33;
-    value *= 0xff51afd7ed558ccdull;
-    value ^= value >> 33;
-    value *= 0xc4ceb9fe1a85ec53ull;
-    value ^= value >> 33;
-    return value;
-}
-
 uint64_t ta_step_key_span_id(ta_step_key key) {
     if (key.session == 0) {
         return key.macrostep;
     }
-    uint64_t span = ta_trace_mix(key.session);
-    span = ta_trace_mix(span ^ key.macrostep);
-    span = ta_trace_mix(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
+    uint64_t span = ta_hash_mix64(key.session);
+    span = ta_hash_mix64(span ^ key.macrostep);
+    span = ta_hash_mix64(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
     return span == 0 ? 1u : span;
 }
 
@@ -191,16 +182,6 @@ static bool ta_hex_read16(const char *text, uint64_t *out) {
     return high_valid && low_valid;
 }
 
-static const char ta_hex_digits[] = "0123456789abcdef";
-
-/* Writes `count` hex digits of `value`, most significant first. */
-static void ta_hex_write(char *out, uint64_t value, uint32_t count) {
-    for (uint32_t index = count; index > 0; index -= 1) {
-        out[index - 1u] = ta_hex_digits[value & 0xfu];
-        value >>= 4;
-    }
-}
-
 static bool ta_trace_space(char c) {
     return c == ' ' || c == '\t';
 }
@@ -275,12 +256,12 @@ ta_result ta_traceparent_format(const ta_traceparent_format_params *params) {
     out[0] = '0';
     out[1] = '0';
     out[2] = '-';
-    ta_hex_write(out + 3, params->parent.context.trace_id_high, 16u);
-    ta_hex_write(out + 19, params->parent.context.trace_id_low, 16u);
+    ta_text_format_hex(out + 3, params->parent.context.trace_id_high, 16u);
+    ta_text_format_hex(out + 19, params->parent.context.trace_id_low, 16u);
     out[35] = '-';
-    ta_hex_write(out + 36, span, 16u);
+    ta_text_format_hex(out + 36, span, 16u);
     out[52] = '-';
-    ta_hex_write(out + 53, params->parent.context.flags, 2u);
+    ta_text_format_hex(out + 53, params->parent.context.flags, 2u);
     return TA_OK;
 }
 
@@ -290,8 +271,8 @@ ta_result ta_trace_id_format(const ta_trace_id_format_params *params) {
     }
     ta_result result = ta_trace_text_begin(params->buffer, params->capacity, params->needed, 32u);
     if (result == TA_OK) {
-        ta_hex_write(params->buffer, params->context.trace_id_high, 16u);
-        ta_hex_write(params->buffer + 16, params->context.trace_id_low, 16u);
+        ta_text_format_hex(params->buffer, params->context.trace_id_high, 16u);
+        ta_text_format_hex(params->buffer + 16, params->context.trace_id_low, 16u);
     }
     return result;
 }
@@ -302,7 +283,7 @@ ta_result ta_span_id_format(const ta_span_id_format_params *params) {
     }
     ta_result result = ta_trace_text_begin(params->buffer, params->capacity, params->needed, 16u);
     if (result == TA_OK) {
-        ta_hex_write(params->buffer, params->span_id, 16u);
+        ta_text_format_hex(params->buffer, params->span_id, 16u);
     }
     return result;
 }

@@ -6,6 +6,7 @@
 #include "bitset.h"
 #include "span.h"
 #include "text_writer.h"
+#include "hash.h"
 #include "arena.h"
 #include "list.h"
 #include "paged_array.h"

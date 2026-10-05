@@ -10,7 +10,8 @@ are private and hold layouts and internal functions.
 | `vec.h` | `ta_vec`, the growable array |
 | `bitset.h` | `ta_bits_*`, bitsets of 64-bit words |
 | `span.h` | `ta_span32`, an offset and length into an array |
-| `text_writer.h` | the bounded text writer and `ta_text_render` |
+| `text_writer.h` | the bounded text writer and `ta_text_render`; decimal and hex formatters |
+| `hash.h` | FNV-1a (32- and 64-bit) and the fixed 64-bit mixer |
 | `store.h` | empty compatibility boundary; durability is not a core store API |
 | `arena.h` | transient allocation |
 | `atom.h` | ordinary string interning |
