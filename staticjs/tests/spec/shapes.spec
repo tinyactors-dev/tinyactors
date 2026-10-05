@@ -307,6 +307,76 @@
 false
 
 # ---------------------------------------------------------------------------
+# SUM: (a, x) => a + x; SUM_KEY: (a, x) => a + x.key. The flag says the
+# element is the left operand: x + a, x.key + a.
+
+=== sum the elements
+@shapes SUM(false)
+[1, 2, 3].reduce((a, x) => a + x, 0)
+--- value
+6
+
+=== sum the elements, the element first
+@shapes SUM(true)
+[1, 2, 3].reduce((a, x) => x + a, 0)
+--- value
+6
+
+=== sum the elements in a block body, both orders
+@shapes SUM(false) SUM(true)
+[[1, 2].reduce((a, x) => { return a + x; }, 0), [1, 2].reduce((a, x) => { return x + a; }, 0)]
+--- value
+[3,3]
+
+=== sum the elements with the body in parentheses
+@shapes SUM(false)
+[1, 2].reduce((acc, n) => (acc + n), 0)
+--- value
+3
+
+=== sum: the parameters' positions decide the order, not their names
+@shapes SUM(true) SUM(false)
+[["a", "b"].reduce((x, a) => a + x, ""), ["a", "b"].reduce((x, a) => x + a, "")]
+--- value
+["ba","ab"]
+
+=== sum a key
+@shapes SUM_KEY(k, false)
+[{k: 1}, {k: 2}].reduce((a, x) => a + x.k, 0)
+--- value
+3
+
+=== sum a key, the key first
+@shapes SUM_KEY(k, true)
+[{k: 1}, {k: 2}].reduce((a, x) => x.k + a, 0)
+--- value
+3
+
+=== sum a key in a block body, both orders
+@shapes SUM_KEY(kwh, false) SUM_KEY(kwh, true)
+[[{kwh: 1.5}].reduce((t, r) => { return t + r.kwh; }, 1), [{kwh: 1.5}].reduce((t, r) => { return r.kwh + t; }, 1)]
+--- value
+[2.5,2.5]
+
+=== sum a key with the body in parentheses
+@shapes SUM_KEY(k, false)
+[{k: 1}, {k: 2}].reduce((a, x) => (a + x.k), 0)
+--- value
+3
+
+=== sum a key that is also a method name
+@shapes SUM_KEY(length, false)
+[[1, 2], "abc"].reduce((a, x) => a + x.length, 0)
+--- value
+5
+
+=== a sum that is never called is tagged all the same
+@shapes SUM(false) SUM_KEY(k, true)
+[[5].reduce((a, x) => a + x), [].reduce((a, x) => x.k + a, 0)]
+--- value
+[5,0]
+
+# ---------------------------------------------------------------------------
 # Functions inside functions, and functions in defaults and patterns
 
 === an outer function untagged, the function inside it tagged
@@ -476,8 +546,8 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 --- value
 [3,1,2]
 
-=== numbers: an addition, not a subtraction
-@shapes -
+=== numbers: an addition is SUM, not a comparator, and toSorted runs its bytecode
+@shapes SUM(false)
 [0, -0, 0].toSorted((a, b) => a + b)
 --- value
 [0,-0,0]
@@ -676,6 +746,125 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 === predicates: equality that JavaScript has and staticjs leaves out
 [1, 2].filter(x => x == 1)
 --- error unsupported
+
+=== sums: the accumulator on both sides
+@shapes -
+[1, 2].reduce((a, x) => a + a, 1)
+--- value
+4
+
+=== sums: the element on both sides
+@shapes -
+[1, 2].reduce((a, x) => x + x, 0)
+--- value
+4
+
+=== sums: a subtraction is COMPARE_NUMERIC, and reduce runs its bytecode
+@shapes COMPARE_NUMERIC(false)
+[1, 2, 3].reduce((a, x) => a - x, 10)
+--- value
+4
+
+=== sums: a sum of a sum
+@shapes - -
+[[1, 2].reduce((a, x) => a + x + 0, 0), [1, 2].reduce((a, x) => a + (x + 1), 0)]
+--- value
+[3,5]
+
+=== sums: a product, not a sum
+@shapes -
+[2, 3].reduce((a, x) => a * x, 1)
+--- value
+6
+
+=== sums: a third parameter
+@shapes -
+[1, 2].reduce((a, x, i) => a + x, 0)
+--- value
+3
+
+=== sums: one parameter
+@shapes -
+[1, 2].reduce(a => a + 1, 0)
+--- value
+2
+
+=== sums: a parameter with a default
+@shapes -
+[1, 2].reduce((a = 0, x) => a + x, 0)
+--- value
+3
+
+=== sums: a rest parameter
+@shapes -
+[1].reduce((a, ...x) => a + x, 0)
+--- fault staticjs adds two numbers, or a string and a primitive
+
+=== sums: a rest parameter, never called
+@shapes -
+[].reduce((a, ...x) => a + x, 0)
+--- value
+0
+
+=== sums: a parameter that is a pattern
+@shapes -
+[{k: 1}, {k: 2}].reduce((a, {k}) => a + k, 0)
+--- value
+3
+
+=== sums: a captured name, not the element
+@shapes - -
+(y => [1, 2].reduce((a, x) => a + y, 0))(5)
+--- value
+10
+
+=== sums: a key of the accumulator
+@shapes -
+[1].reduce((a, x) => a.k + x, {k: 1})
+--- value
+2
+
+=== sums: keys on both sides
+@shapes -
+[{k: 2}].reduce((a, x) => a.k + x.k, {k: 1})
+--- value
+3
+
+=== sums: a key of a key
+@shapes -
+[{k: {j: 1}}].reduce((a, x) => a + x.k.j, 0)
+--- value
+1
+
+=== sums: a computed key and an index
+@shapes - -
+[[{k: 1}].reduce((a, x) => a + x["k"], 0), [[1], [2]].reduce((a, x) => a + x[0], 0)]
+--- value
+[1,3]
+
+=== sums: an optional chain
+@shapes -
+[{k: 1}].reduce((a, x) => a + x?.k, 0)
+--- value
+1
+
+=== sums: a key read from the wrong parameter's name
+@shapes - -
+(b => [{k: 1}].reduce((a, x) => a + b.k, 0))({k: 2})
+--- value
+2
+
+=== sums: a const before the return
+@shapes -
+[1, 2].reduce((a, x) => { const s = a + x; return s; }, 0)
+--- value
+3
+
+=== sums: a negated element
+@shapes -
+[1, 2].reduce((a, x) => a + -x, 0)
+--- value
+-3
 
 # ---------------------------------------------------------------------------
 # The fast paths (docs/matcher.md, section 7): toSorted runs a COMPARE_BY_KEY
@@ -1337,3 +1526,161 @@ true
 (x => x < 3)(2)
 --- value
 true
+
+# reduce with SUM and SUM_KEY (docs/matcher.md, 11.8): a number accumulator
+# and a number element (or key) are added in C, anything else in bytecode,
+# which concatenates or faults.
+
+# sums: values
+
+=== sums: with and without an initial value
+@shapes SUM(false) SUM(false)
+[[1, 2, 3].reduce((a, x) => a + x, 10), [1, 2, 3].reduce((a, x) => a + x)]
+--- value
+[16,6]
+
+=== sums: one element and no initial value is never added
+@shapes SUM(false) SUM(false) SUM_KEY(k, false)
+[[7].reduce((a, x) => a + x), [null].reduce((a, x) => a + x), ["s"].reduce((a, x) => a + x.k)]
+--- value
+[7,null,"s"]
+
+=== sums: an empty array with an initial value is the initial value
+@shapes SUM(false) SUM_KEY(k, false)
+[[].reduce((a, x) => a + x, 0), [].reduce((a, x) => a + x.k, "start")]
+--- value
+[0,"start"]
+
+=== sums: an empty array without an initial value faults
+@shapes SUM(false)
+[].reduce((a, x) => a + x)
+--- fault reduce of an empty array needs an initial value
+
+=== sums: rounding follows the order of the additions
+@shapes SUM(false) SUM(true) SUM(false) SUM(false)
+[[0.1, 0.2, 0.3].reduce((a, x) => a + x, 0), [0.1, 0.2, 0.3].reduce((a, x) => x + a, 0), [1e16, 1, 1].reduce((a, x) => a + x), [1, 1, 1e16].reduce((a, x) => a + x)]
+--- value
+[0.6000000000000001,0.6000000000000001,10000000000000000,10000000000000002]
+
+=== sums: -0 survives only -0
+@shapes SUM(false) SUM(false) SUM(true) SUM(false) SUM(false)
+[[-0].reduce((a, x) => a + x, -0), [-0].reduce((a, x) => a + x, 0), [-0, -0].reduce((a, x) => x + a), [-0].reduce((a, x) => a + x), [0, -0].reduce((a, x) => a + x)]
+--- value
+[-0,0,-0,-0,0]
+
+=== sums: NaN, and Infinity with -Infinity
+@shapes SUM(false) SUM(false) SUM(true)
+[[1, NaN, 2].reduce((a, x) => a + x, 0), [Infinity, -Infinity].reduce((a, x) => a + x, 0), [Number.MAX_VALUE, Number.MAX_VALUE].reduce((a, x) => x + a)]
+--- value
+[NaN,NaN,Infinity]
+
+=== sums: an initial string concatenates, in the bytecode's order
+@shapes SUM(false) SUM(true) SUM(false)
+[[1, 2].reduce((a, x) => a + x, ""), ["a", "b"].reduce((a, x) => x + a, ""), [1, 2].reduce((a, x) => a + x, "s")]
+--- value
+["12","ba","s12"]
+
+=== sums: a string element turns the sum into a string
+@shapes SUM(false) SUM(true) SUM(false)
+[[1, 2, "3", 4].reduce((a, x) => a + x), [1, 2, "3", 4].reduce((a, x) => x + a), [1, "x", true].reduce((a, x) => a + x)]
+--- value
+["334","433","1xtrue"]
+
+=== sums: a large array
+@shapes - SUM(false) - SUM_KEY(k, true)
+(xs => [xs.reduce((a, x) => a + x, 0), xs.map(n => ({k: n / 4})).reduce((a, x) => x.k + a, 0.5)])([3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3])
+--- value
+[118,30]
+
+=== sums: a key's values, the key at different places and with many keys
+@shapes SUM_KEY(k, false)
+[{k: 1}, {j: 0, k: 2}, {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, k: 4}, {k: 8, j: 0}].reduce((a, x) => a + x.k, 0)
+--- value
+15
+
+=== sums: a key holding strings concatenates
+@shapes SUM_KEY(k, false) SUM_KEY(k, false)
+[[{k: "a"}, {k: "b"}].reduce((a, x) => a + x.k, ""), [{k: 1}, {k: "b"}, {k: 2}].reduce((a, x) => a + x.k, 0)]
+--- value
+["ab","1b2"]
+
+=== sums: an own key named toString
+@shapes SUM_KEY(toString, false)
+[{toString: 2}, {toString: 3}].reduce((a, x) => a + x.toString, 1)
+--- value
+6
+
+=== sums: arrays and strings by length, sets by size, in bytecode
+@shapes SUM_KEY(length, false) SUM_KEY(size, true)
+[[[1, 2], "abc", {length: 4}].reduce((a, x) => a + x.length, 0), [new Set([1]), {size: 2}].reduce((a, x) => x.size + a, 0)]
+--- value
+[9,3]
+
+=== sums: a tagged sum in map and toSorted runs its bytecode
+@shapes SUM(false) SUM(true)
+[[1, 2].map((a, x) => a + x), [0, -0].toSorted((a, x) => x + a)]
+--- value
+[[1,3],[0,-0]]
+
+=== sums: a tagged sum called directly
+@shapes SUM(true) SUM_KEY(k, false)
+[((a, x) => x + a)("a", "b"), ((a, x) => a + x.k)(1, {k: 2})]
+--- value
+["ba",3]
+
+# sums: faults, each the bytecode's own
+
+=== sums: a boolean element faults
+@shapes SUM(false)
+[1, 2, true].reduce((a, x) => a + x)
+--- fault staticjs adds two numbers, or a string and a primitive
+
+=== sums: null and undefined elements fault
+@shapes SUM(false) SUM(true)
+[[1, null].reduce((a, x) => a + x), [1, undefined].reduce((a, x) => x + a)]
+--- fault staticjs adds two numbers, or a string and a primitive
+
+=== sums: an array or an object element faults
+@shapes SUM(false)
+[1, [2]].reduce((a, x) => a + x)
+--- fault staticjs adds two numbers, or a string and a primitive
+
+=== sums: a string with an object faults
+@shapes SUM(false)
+["a", {}].reduce((a, x) => a + x)
+--- fault staticjs adds two numbers, or a string and a primitive
+
+=== sums: an initial value that is not a number or a string faults
+@shapes SUM(false) SUM(false)
+[[1].reduce((a, x) => a + x, undefined), [1].reduce((a, x) => a + x, null)]
+--- fault staticjs adds two numbers, or a string and a primitive
+
+=== sums: a missing key faults
+@shapes SUM_KEY(k, false)
+[{k: 1}, {}].reduce((a, x) => a + x.k, 0)
+--- fault staticjs adds two numbers, or a string and a primitive
+
+=== sums: a key found only on Object.prototype faults
+@shapes SUM_KEY(toString, false)
+[{toString: 1}, {}].reduce((a, x) => a + x.toString, 0)
+--- fault staticjs objects have no prototype
+
+=== sums: a null element faults for a key
+@shapes SUM_KEY(k, false)
+[{k: 1}, null].reduce((a, x) => a + x.k, 0)
+--- fault cannot read a property of null
+
+=== sums: a number element faults for a key
+@shapes SUM_KEY(k, true)
+[{k: 1}, 2].reduce((a, x) => x.k + a, 0)
+--- fault staticjs reads properties of objects, arrays, strings and sets
+
+=== sums: the first bad key faults, before a null
+@shapes SUM_KEY(k, false)
+[{k: 1}, {k: true}, null].reduce((a, x) => a + x.k, 0)
+--- fault staticjs adds two numbers, or a string and a primitive
+
+=== sums: the first null faults, before a bad key
+@shapes SUM_KEY(k, false)
+[{k: 1}, null, {k: true}].reduce((a, x) => a + x.k, 0)
+--- fault cannot read a property of null

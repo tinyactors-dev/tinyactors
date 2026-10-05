@@ -214,6 +214,11 @@ static void test_reports(void) {
     expect_reports("[x => x === true, x => false !== x, x => x.k === null, x => x <= 1e21]", SJS_GOAL_EXPRESSION,
                    "ELEMENT_COMPARE#2@1(STRICT_EQUAL, true) ELEMENT_COMPARE#7@18(STRICT_NOT_EQUAL, false) "
                    "KEY_COMPARE#12@36(k, STRICT_EQUAL, null) ELEMENT_COMPARE#18@55(LESS_EQUAL, 1e+21)");
+    /* Sums: the flag says the element is the left operand. */
+    expect_reports("(a, x) => a + x", SJS_GOAL_EXPRESSION, "SUM#1@0(false)");
+    expect_reports("(t, n) => { return n + t; }", SJS_GOAL_EXPRESSION, "SUM#1@0(true)");
+    expect_reports("(a, r) => a + r.kwh", SJS_GOAL_EXPRESSION, "SUM_KEY#1@0(kwh, false)");
+    expect_reports("(a, r) => { return r.kwh + a; }", SJS_GOAL_EXPRESSION, "SUM_KEY#1@0(kwh, true)");
     /* An arrow's node and start in a call: the call is node 3, the arrow 4. */
     expect_reports("[].map(x => x.k)", SJS_GOAL_EXPRESSION, "PLUCK#4@7(k)");
     expect_reports("[].map(xs => xs.map(x => x.k))", SJS_GOAL_EXPRESSION, "PLUCK#9@20(k)");
@@ -238,6 +243,13 @@ static void test_reports(void) {
     expect_reports("(x, i) => x === 1", SJS_GOAL_EXPRESSION, "");
     expect_reports("x => 1 === 2", SJS_GOAL_EXPRESSION, "");
     expect_reports("x => x === x", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => a + a", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => a + x + 0", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x, i) => a + x", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => a + x.k.j", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => a + x[0]", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => a.k + x", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, ...x) => a + x", SJS_GOAL_EXPRESSION, "");
 }
 
 /* ------------------------------------------------------------------------

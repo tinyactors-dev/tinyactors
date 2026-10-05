@@ -42,7 +42,8 @@
  *   eval.module.power                   evaluating power.js: loading a chart's module
  *   eval.call.waterFill                 waterFill(capacity, demand), n ports {3, 30, 300}
  *
- * eval (unit element): eval.array.map, .filter, .reduce, .pipeline,
+ * eval (unit element): eval.array.map, .filter, .reduce, .reduce.key
+ * ((a, r) => a + r.kwh, which gives 166.5 at 10, as Node does), .pipeline,
  * .toSorted, .toSorted.desc ((a, b) => b - a), .toSorted.rows,
  * .toSorted.rows.desc ((a, b) => b.kwh - a.kwh), .map.pluck (r => r.kwh),
  * .every (x => x >= 0), .some (r => r.kwh < 0) and .findIndex (r => r.id
@@ -223,6 +224,7 @@ typedef enum {
     CHECK_ARRAY_N,
     CHECK_FILTER_QUARTER,
     CHECK_SUM_XS,
+    CHECK_SUM_KWH,
     CHECK_PIPELINE,
     CHECK_SORTED,
     CHECK_SORTED_DESC,
@@ -365,6 +367,9 @@ static const bench_case cases[] = {
     { .name = "eval.array.reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "xs.reduce((a, x) => a + x, 0)", .globals = { { "xs", FIX_XS, NULL } }, .expect = "22.5",
       .check = CHECK_SUM_XS },
+    { .name = "eval.array.reduce.key", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.reduce((a, r) => a + r.kwh, 0)", .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "166.5",
+      .check = CHECK_SUM_KWH },
     { .name = "eval.array.pipeline", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.filter(r => r.priority > 1).map(r => r.kwh).reduce((a, k) => a + k, 0)",
       .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "66.6", .check = CHECK_PIPELINE },
@@ -942,6 +947,12 @@ static bool check_value(bench_run *run, sjs_value value) {
     case CHECK_ARRAY_N: return expect_shape(run, value, (bench_shape){ SJS_ARRAY, n });
     case CHECK_FILTER_QUARTER: return expect_shape(run, value, (bench_shape){ SJS_ARRAY, (n + 1u) / 4u });
     case CHECK_SUM_XS: return expect_number(run, value, (double)n * (double)(n - 1u) / 4.0);
+    case CHECK_SUM_KWH: {
+        /* In the order reduce adds them, so rounded the same way. */
+        double sum = 0;
+        for (uint32_t i = 0; i < n; i++) sum += row_kwh(i);
+        return expect_number(run, value, sum);
+    }
     case CHECK_PIPELINE: {
         double sum = 0;
         for (uint32_t i = 0; i < n; i++) {

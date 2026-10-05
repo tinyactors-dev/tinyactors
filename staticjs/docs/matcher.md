@@ -7,8 +7,8 @@ switch and the differential test ([matcher]); and the first consumers,
 7). Section 9 lists the commits, each with its tests; where the
 implementation proved the first draft wrong in a detail, the sections say
 what changed and why. Section 10 is what may come next. Section 11 adds
-numeric sorts and predicates against a literal (implemented), sums
-(designed), and designs set membership through a captured name.
+numeric sorts, predicates against a literal and sums (implemented), and
+designs set membership through a captured name.
 
 The compiler keeps reinventing small pattern matchers over the events it
 receives: OBJECT_LITERAL gathers static keys until a property breaks the
@@ -1513,8 +1513,8 @@ them.
 
 ## 11. The second rule set: numeric sorts, predicates and sums
 
-Status: item 1, the numeric sort, is implemented (11.6), and item 2, the
-predicates (11.7.3); item 3 is designed, not implemented. Items 1 to 3 are
+Status: item 1, the numeric sort, is implemented (11.6), item 2, the
+predicates (11.7.3), and item 3, the sums (11.8.1). Items 1 to 3 are
 one commit each (11.11);
 item 4, set membership through a captured name, is a design only (11.9),
 for the reasons given there.
@@ -2102,6 +2102,55 @@ LOOP_AGAIN. Otherwise the bytecode runs, for this element only.
 - **The accumulator's reference.** The bytecode path moves `acc` out of
   LOOP_OUTPUT into the call. The C path leaves it there, as a number,
   which nothing can observe.
+
+#### 11.8.1 Implemented
+
+As designed above, with these details:
+
+- **Rules and tables.** The eight rules of 11.3, as drafted. The tables
+  are 11.4's item 3 row: 27 nonterminals, 67 rules, 59 slots, 27 costs. A
+  record is 560 bytes on x86_64, so the first 1 KiB holds one, and
+  `matcher.c` asserts that it holds at least one.
+- **Consumer.** `sum_step` in `src/builtins.c`, called from REDUCE's
+  branch of `sjs_loop_step` after it enters the callback (on the first
+  step that would call it) and before it moves the accumulator out.
+  `shape_start` reads SUM_KEY's key and flag as it reads COMPARE_BY_KEY's,
+  and SUM's flag as COMPARE_NUMERIC's. The frame's fields are unchanged.
+- **Faults at the right element.** Every fault of these bodies comes from
+  the bytecode for the element that raises it, so a bad key before a null
+  faults with "staticjs adds two numbers, or a string and a primitive",
+  and a null first with "cannot read a property of null" (`shapes.spec`).
+  A number element for SUM_KEY falls back too, and the bytecode faults
+  with "staticjs reads properties of objects, arrays, strings and sets".
+- **Spec numbers.** `1e308` is refused as unsupported, like `1e999`, so
+  the overflow case adds `Number.MAX_VALUE` to itself.
+- **Fuel** (`api_test`): `[1, 2, 3, 4].reduce((a, x) => a + x, 0.5)` costs
+  36 without shapes and 20 with them (4 × 4 apart; 35 and 19 pauses on one
+  unit per run), and a SUM_KEY over four objects 44 and 28 (43 and 23
+  pauses). `max_stack` from 5 to 9 and `max_frames` 2 and 3 give the same
+  faults at the same places both ways, with and without an initial value.
+- **Existing cases on the path:** `eval.array.reduce` and the reduce of
+  `eval.array.pipeline` (SUM); new, `eval.array.reduce.key` (SUM_KEY).
+  `[0, -0, 0].toSorted((a, b) => a + b)`, a near-miss of COMPARE_NUMERIC,
+  is now tagged SUM, and toSorted runs its bytecode.
+
+`bench-compare 6deba94 --quick`, machine 172a3dd3bd74 (Xeon 2.10GHz, 4
+cores, a noisy VM), medians of 4 alternating runs. The one unflagged
+eval row:
+
+| case | n | before | after | change | fuel per op |
+|---|---|---|---|---|---|
+| eval.array.pipeline | 10,000 | 22.80 M elem/s | 31.79 M elem/s | +39.4% | 55,018 -> 35,018 |
+
+Flagged noisy but consistent with the fuel: eval.array.reduce +306% to
++316% (50,008 -> 10,008 at 10,000), .reduce.key +185% to +270% (60,008 ->
+20,008), .pipeline at 1,000 +45%. eval.guard.* are within the noise. No
+compile row is flagged slower at 8 runs, but every compile.module row
+reads 2 to 4% slower, and power.js, campaign.js and the synthetic module
+take one more allocation and 1,024 to 2,048 more bytes at the peak (the
+matcher's records, one per 1 KiB now); the guards' compiles are unchanged.
+That is the drift 11.6 and 11.7.3 saw, now larger: [slots] (11.4) comes
+next, before item 4.
 
 ### 11.9 Item 4, design only: captured names, set membership and conjunctions
 
