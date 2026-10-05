@@ -65,6 +65,17 @@ static bool tel_stage_send_id(const ta_system *system, ta_send_id send, tel_stag
     return result != TA_ERR_NOMEM;
 }
 
+/* tel_stage_value_params are the arguments of tel_stage_value; they only live for the call. */
+typedef struct {
+    const ta_tel_values *values; /* the data model to ask; may be NULL */
+    const ta_value *value;       /* the value to render */
+    tel_stage *stage;            /* where the text is copied */
+    uint32_t share;              /* how many value texts, this one included, still need staging */
+    ta_bytes *out;               /* receives the staged text */
+    uint16_t *flags;             /* receives `cut_flag` when the text was cut */
+    uint16_t cut_flag;
+} tel_stage_value_params;
+
 /*
  * tel_stage_value asks the data model for `value`'s text and copies it into
  * the staging area at once, since the data model's memory is only good until
@@ -77,8 +88,14 @@ static bool tel_stage_send_id(const ta_system *system, ta_send_id send, tel_stag
  * model without the op, a null value, a zero limit, or the op failing. A
  * failing op's fault is released and forgotten: telemetry never fails a step.
  */
-static bool tel_stage_value(const ta_system *system, const ta_tel_values *values, const ta_value *value,
-                            tel_stage *stage, uint32_t share, ta_bytes *out, uint16_t *flags, uint16_t cut_flag) {
+static bool tel_stage_value(const ta_system *system, const tel_stage_value_params *params) {
+    const ta_tel_values *values = params->values;
+    const ta_value *value = params->value;
+    tel_stage *stage = params->stage;
+    uint32_t share = params->share;
+    ta_bytes *out = params->out;
+    uint16_t *flags = params->flags;
+    uint16_t cut_flag = params->cut_flag;
     *out = (ta_bytes){ 0 };
     if (values == NULL || values->datamodel == NULL || values->datamodel->v == NULL ||
         values->datamodel->v->value_trace_text == NULL || value->v == NULL) {
@@ -156,6 +173,13 @@ static ta_bytes tel_ta_bytes(ta_str text) { return (ta_bytes){ (const uint8_t *)
  * Building a record
  */
 
+/* tel_fit_params are the arguments of tel_fit; they only live for the call. */
+typedef struct {
+    uint32_t max;    /* maxRecordBytes */
+    uint32_t *size;  /* receives the final size */
+    uint16_t *flags; /* receives the truncated bits */
+} tel_fit_params;
+
 /*
  * tel_fit makes the record fit maxRecordBytes by shortening the texts that
  * are values, in the order value, event data, fault data, each cut on a
@@ -165,7 +189,10 @@ static ta_bytes tel_ta_bytes(ta_str text) { return (ta_bytes){ (const uint8_t *)
  * record is still over `max` after every value is gone, or cannot be
  * measured.
  */
-static bool tel_fit(ta_msg_tel_trace *data, uint32_t max, uint32_t *size, uint16_t *flags) {
+static bool tel_fit(ta_msg_tel_trace *data, const tel_fit_params *params) {
+    uint32_t max = params->max;
+    uint32_t *size = params->size;
+    uint16_t *flags = params->flags;
     ta_bytes *values[] = { &data->value, &data->event_data, &data->fault_data };
     static const uint16_t cut_flags[] = { TA_MSG_TEL_TRACE_TRUNCATED, TA_MSG_TEL_TRACE_EVENT_DATA_TRUNCATED,
                                           TA_MSG_TEL_TRACE_FAULT_DATA_TRUNCATED };
@@ -194,6 +221,15 @@ static bool tel_fit(ta_msg_tel_trace *data, uint32_t max, uint32_t *size, uint16
     return *size <= max;
 }
 
+/* tel_build_params are the arguments of tel_build; they only live for the call. */
+typedef struct {
+    const ta_trace_record *record;
+    const ta_tel_values *values; /* may be NULL */
+    tel_stage *stage;
+    ta_msg_tel_trace *data; /* receives the built record */
+    uint32_t *size;         /* receives its size */
+} tel_build_params;
+
 /*
  * tel_build fills `data` for `record`: the scalars, the borrowed texts and
  * lists, and the texts it renders into `stage`, and measures it. False when
@@ -201,8 +237,12 @@ static bool tel_fit(ta_msg_tel_trace *data, uint32_t max, uint32_t *size, uint16
  * long to count, or a record that stays over maxRecordBytes with its values
  * cut away. `data` borrows from `record` and `stage` for the call.
  */
-static bool tel_build(const ta_system *system, const ta_trace_record *record, const ta_tel_values *values,
-                      tel_stage *stage, ta_msg_tel_trace *data, uint32_t *size) {
+static bool tel_build(const ta_system *system, const tel_build_params *params) {
+    const ta_trace_record *record = params->record;
+    const ta_tel_values *values = params->values;
+    tel_stage *stage = params->stage;
+    ta_msg_tel_trace *data = params->data;
+    uint32_t *size = params->size;
     uint16_t flags = 0;
     ta_msg_tel_trace built = { 0 };
     const ta_event *event = record->event;
@@ -239,13 +279,23 @@ static bool tel_build(const ta_system *system, const ta_trace_record *record, co
     uint32_t share = (event_data ? 1u : 0u) + (record_value ? 1u : 0u) + (record->has_fault ? 1u : 0u);
     /* An event's data is rendered when values are asked for, and always for an error: the reason is what an operator needs. */
     if (event_data) {
-        (void)tel_stage_value(system, values, &event->data, stage, share, &built.event_data, &flags,
-                              TA_MSG_TEL_TRACE_EVENT_DATA_TRUNCATED);
+        (void)tel_stage_value(system, &(tel_stage_value_params){ .values = values,
+                                                                 .value = &event->data,
+                                                                 .stage = stage,
+                                                                 .share = share,
+                                                                 .out = &built.event_data,
+                                                                 .flags = &flags,
+                                                                 .cut_flag = TA_MSG_TEL_TRACE_EVENT_DATA_TRUNCATED });
         share -= 1u;
     }
     if (record_value) {
-        if (tel_stage_value(system, values, &record->value, stage, share, &built.value, &flags,
-                            TA_MSG_TEL_TRACE_TRUNCATED)) {
+        if (tel_stage_value(system, &(tel_stage_value_params){ .values = values,
+                                                               .value = &record->value,
+                                                               .stage = stage,
+                                                               .share = share,
+                                                               .out = &built.value,
+                                                               .flags = &flags,
+                                                               .cut_flag = TA_MSG_TEL_TRACE_TRUNCATED })) {
             flags |= TA_MSG_TEL_TRACE_HAS_VALUE;
         }
         share -= 1u;
@@ -254,8 +304,13 @@ static bool tel_build(const ta_system *system, const ta_trace_record *record, co
         flags |= TA_MSG_TEL_TRACE_HAS_FAULT;
         built.fault_code = (uint32_t)record->fault.code;
         built.fault_message = tel_ta_bytes(record->fault.message);
-        (void)tel_stage_value(system, values, &record->fault.data, stage, share, &built.fault_data, &flags,
-                              TA_MSG_TEL_TRACE_FAULT_DATA_TRUNCATED);
+        (void)tel_stage_value(system, &(tel_stage_value_params){ .values = values,
+                                                                 .value = &record->fault.data,
+                                                                 .stage = stage,
+                                                                 .share = share,
+                                                                 .out = &built.fault_data,
+                                                                 .flags = &flags,
+                                                                 .cut_flag = TA_MSG_TEL_TRACE_FAULT_DATA_TRUNCATED });
     }
     ta_str invoke = { 0 };
     if (record->invoke != TA_INVOKE_ID_NONE && ta_system_invoke_id_text(system, record->invoke, &invoke) == TA_OK) {
@@ -298,7 +353,9 @@ static bool tel_build(const ta_system *system, const ta_trace_record *record, co
     built.context_flags = record->context.flags;
     built.context_detail = record->context.detail;
 
-    if (!tel_fit(&built, system->rings.ring[TA_RING_TEL].max_record_bytes, size, &flags)) {
+    if (!tel_fit(&built, &(tel_fit_params){ .max = system->rings.ring[TA_RING_TEL].max_record_bytes,
+                                            .size = size,
+                                            .flags = &flags })) {
         return false;
     }
     built.head = (ta_msg_head){ .flags = flags, .session = record->key.session, .at = record->now };
@@ -361,7 +418,11 @@ void ta_tel_write_trace(ta_system *system, const ta_trace_record *record, const 
     tel_stage stage = { .base = system->tel_staging, .capacity = system->tel_staging_bytes };
     ta_msg_tel_trace data;
     uint32_t size = 0;
-    if (!tel_build(system, record, values, &stage, &data, &size)) {
+    if (!tel_build(system, &(tel_build_params){ .record = record,
+                                                .values = values,
+                                                .stage = &stage,
+                                                .data = &data,
+                                                .size = &size })) {
         tel_lose(system, tel);
         return;
     }
