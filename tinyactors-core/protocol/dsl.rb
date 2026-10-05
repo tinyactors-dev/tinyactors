@@ -204,6 +204,6 @@ module RingProto
   end
 
   def self.load(path = File.join(__dir__, 'catalog.rb'))
-    Builder.build { instance_eval(File.read(path), path) }
+    Builder.build { instance_eval(File.read(path, encoding: 'UTF-8'), path) }
   end
 end

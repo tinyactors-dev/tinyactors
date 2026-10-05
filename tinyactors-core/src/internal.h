@@ -9,6 +9,7 @@
 #include "claim_set.h"
 #include "fifo.h"
 #include "ring.h"
+#include "record.h"
 #include "vec.h"
 #include "pool.h"
 #include "ilist.h"
