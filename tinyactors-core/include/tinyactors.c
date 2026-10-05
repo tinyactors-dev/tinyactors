@@ -1024,13 +1024,25 @@ TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo);
  * and record together; whoever sizes a reserve (the c2h mandatory reserve)
  * must count one pad per record or use the position-aware bound.
  *
- * Reading: peek, use, release. ta_ring_peek gives the oldest record in
+ * Reading: read, use, advance. ta_ring_read gives the oldest record in
  * place, after silently skipping (and releasing) any pad in front of it.
- * Peeking again without a release gives the same record. ta_ring_release
- * releases it. A consumer that keeps anything past release copies it, and
+ * Reading again without an advance gives the same record. ta_ring_advance
+ * releases it. A consumer that keeps anything past the advance copies it, and
  * the bytes its spans point to. Advancing the tail releases ring bytes only:
  * vrefs and blobs named in a record are the user's to release (ring.md,
  * "Values and buffers across a ring").
+ *
+ * Names. These are the handle-level calls, on a ta_ring. The system's
+ * public pair, ta_ring_peek and ta_ring_release (include/tinyactors.h), take
+ * a ta_system and a ta_ring_id and call these two; the names differ because
+ * the amalgamation is one translation unit and C has no overloading.
+ *
+ * An absent ring. A ring whose capacity (and max_record_bytes) is 0 does not
+ * exist: the control block has its entry, so a reader finds all three, but it
+ * holds no bytes and layout adds none for it. Reserving on it answers
+ * TA_RING_TOO_BIG, reading answers TA_RING_EMPTY, and ta_ring_would_fit says
+ * false. The system creates h2c and c2h this way until the ring-proto phase
+ * that introduces them (5.1).
  *
  * Modes. Lossless (h2c, c2h): when the record does not fit, reserve answers
  * TA_RING_FULL and nothing changes. Lossy (tel): reserve answers
@@ -1059,6 +1071,11 @@ TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo);
  * (ring.md, "Corrupt framing is a protocol failure"). The caller stops using
  * that ring; the ring does not try to guess.
  *
+ * Types. ta_ring_id, ta_ring_shared, ta_ring_control and ta_ring_record are
+ * public (include/tinyactors.h): a host reads the control block and the
+ * records through them. This file keeps what only core's unit needs: the
+ * specs, the plan and the handles.
+ *
  * Lifetimes.
  *   - system: the region (control block and the three data areas), allocated
  *     by the system's creation as one entry of its own layout, with the
@@ -1071,7 +1088,7 @@ TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo);
  *   - record, producer half: a ta_ring_reservation, from a successful
  *     reserve to commit or abandon. Its bytes pointer is not used after.
  *   - record: a committed record, from commit to release. The pointer in a
- *     ta_ring_record is valid until ta_ring_release.
+ *     ta_ring_record is valid until ta_ring_advance.
  *   - call: a ta_rings_plan.
  *
  * When it allocates: never. ta_rings_layout is arithmetic and
@@ -1121,57 +1138,35 @@ TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo);
  *		ta_ring_commit(&rings.ring[TA_RING_TEL]);
  *	}
  *	ta_ring_record rec;
- *	while (ta_ring_peek(&rings.ring[TA_RING_TEL], &rec) == TA_RING_OK) {
+ *	while (ta_ring_read(&rings.ring[TA_RING_TEL], &rec) == TA_RING_OK) {
  *		use(rec.bytes, rec.size, rec.seq, rec.gap);
- *		ta_ring_release(&rings.ring[TA_RING_TEL]);
+ *		ta_ring_advance(&rings.ring[TA_RING_TEL]);
  *	}
  *	ta_mem_free(allocator, memory, &(ta_allocator_free_params){ memory, plan.bytes, plan.alignment });
  */
-
-typedef enum ta_ring_id {
-    TA_RING_H2C = 0, /* host to core: lossless */
-    TA_RING_C2H = 1, /* core to host: lossless */
-    TA_RING_TEL = 2, /* core to host: lossy */
-    TA_RING_COUNT = 3
-} ta_ring_id;
 
 typedef enum ta_ring_mode {
     TA_RING_LOSSLESS = 0, /* full: refuse, nothing changes (h2c, c2h) */
     TA_RING_LOSSY = 1     /* full: drop the record, count it, consume its seq (tel) */
 } ta_ring_mode;
 
-#define TA_RING_MAGIC 0x31474E4952415454ull /* the bytes "TTARING1" on a little-endian host: a fixed tag the host checks */
-#define TA_RING_VERSION 1u
 #define TA_RING_ALIGN 8u       /* every record starts, and every size is, a multiple of this */
 #define TA_RING_MIN_RECORD 16u /* kind, flags, size, seq */
 
-/*
- * One ring's cells in the control block. The side named writes each; both
- * read. The u64 counters only grow.
- */
-typedef struct ta_ring_shared {
-    uint64_t capacity;         /* core, at init: bytes in the data area, a multiple of 8 */
-    uint64_t offset;           /* core, at init: byte offset of the data area from the control block's origin */
-    uint64_t head;             /* producer: bytes ever committed, pads included */
-    uint64_t tail;             /* consumer: bytes ever released, pads included */
-    uint64_t next_seq;         /* producer: the seq the next record will carry, from 1 */
-    uint64_t dropped;          /* producer: records dropped; stays 0 on a lossless ring */
-    uint32_t max_record_bytes; /* core, at init: the largest record a producer writes */
-    uint32_t mode;             /* core, at init: a ta_ring_mode */
-} ta_ring_shared;
-
-/* The control block: the head of the one region. Later units add the pool, names and admitting cells here, in place. */
-typedef struct ta_ring_control {
-    uint64_t magic;      /* core, at init */
-    uint32_t version;    /* core, at init */
-    uint32_t ring_count; /* core, at init: TA_RING_COUNT */
-    ta_ring_shared ring[TA_RING_COUNT];
-} ta_ring_control;
+/* The cells of ring `id` in the control block (the public struct names its three, one per ring); NULL for an unknown id. */
+TA_PRIVATE inline ta_ring_shared *ta_ring_cell(ta_ring_control *control, ta_ring_id id) {
+    switch (id) {
+    case TA_RING_H2C: return &control->h2c;
+    case TA_RING_C2H: return &control->c2h;
+    case TA_RING_TEL: return &control->tel;
+    default: return NULL;
+    }
+}
 
 /* What one ring is to be. A value read during the call. */
 typedef struct ta_ring_spec {
-    uint32_t capacity;         /* bytes; a multiple of 8; at least max_record_bytes */
-    uint32_t max_record_bytes; /* TA_RING_MIN_RECORD..capacity, a multiple of 8 */
+    uint32_t capacity;         /* bytes; a multiple of 8; at least max_record_bytes; 0: the ring does not exist */
+    uint32_t max_record_bytes; /* TA_RING_MIN_RECORD..capacity, a multiple of 8; 0 exactly when capacity is 0 */
     ta_ring_mode mode;         /* TA_RING_LOSSLESS or TA_RING_LOSSY */
 } ta_ring_spec;
 
@@ -1241,14 +1236,6 @@ typedef struct ta_ring_reservation {
     uint64_t seq;         /* the seq this record carries (OK), would carry on retry (FULL) or consumed (DROPPED) */
 } ta_ring_reservation;
 
-/* A committed record seen in place. */
-typedef struct ta_ring_record {
-    const unsigned char *bytes; /* in place, 8-aligned; valid until ta_ring_release */
-    uint32_t size;
-    uint64_t seq;
-    uint64_t gap; /* lossy: records dropped between the previous record and this one; 0 on lossless */
-} ta_ring_record;
-
 /*
  * ta_rings_layout computes where the control block and the three data areas
  * go in one region, with ta_layout. It validates the specs (capacity and
@@ -1287,6 +1274,22 @@ TA_PRIVATE ta_result ta_rings_init(ta_rings *rings, const ta_rings_init_params *
 TA_PRIVATE ta_ring_status ta_ring_reserve(ta_ring *ring, uint32_t size, ta_ring_reservation *out);
 
 /*
+ * ta_ring_would_fit (producer) says whether ta_ring_reserve(ring, size, ...)
+ * would answer TA_RING_OK right now, and changes nothing a reader or a later
+ * reserve can see (it reads the consumer's tail like reserve does, and
+ * keeps the validated value). It is exact, the wrap pad included: it is
+ * the same test reserve makes, and it is false in the cases where reserve
+ * answers anything but OK, the lone-pad case (see the package comment)
+ * among them, since no record would be written. It is how a lossy producer
+ * checks that a second record fits before it writes a first, so that a
+ * record it must not lose to a drop (tel.dropped) is never reserved by
+ * guesswork: a failed reserve on a lossy ring burns a seq and counts a drop.
+ * It answers false while a reservation is open, for a corrupt tail, for a
+ * size over max_record_bytes and for an absent ring.
+ */
+TA_PRIVATE bool ta_ring_would_fit(ta_ring *ring, uint32_t size);
+
+/*
  * ta_ring_commit (producer) publishes the open reservation: it writes size
  * and seq into bytes 4..16 of the record, the pad if the record wrapped, and
  * only then stores head and next_seq, so a reader sees whole records. The
@@ -1303,7 +1306,7 @@ TA_PRIVATE void ta_ring_commit(ta_ring *ring);
 TA_PRIVATE void ta_ring_abandon(ta_ring *ring);
 
 /*
- * ta_ring_peek (consumer) shows the oldest committed record in place. It
+ * ta_ring_read (consumer) shows the oldest committed record in place. It
  * reads head from the control block as untrusted input, validates it and the
  * record's framing (size at least TA_RING_MIN_RECORD, a multiple of 8,
  * within what is committed and before the end of the buffer; a pad that ends
@@ -1314,15 +1317,15 @@ TA_PRIVATE void ta_ring_abandon(ta_ring *ring);
  * A record larger than max_record_bytes that is otherwise well framed is
  * shown, not refused: bouncing it is the user's policy (ring.md).
  */
-TA_PRIVATE ta_ring_status ta_ring_peek(ta_ring *ring, ta_ring_record *out);
+TA_PRIVATE ta_ring_status ta_ring_read(ta_ring *ring, ta_ring_record *out);
 
 /*
- * ta_ring_release (consumer) releases the record last peeked: it advances
+ * ta_ring_advance (consumer) releases the record last peeked: it advances
  * the tail, stores it where the producer reads it and expects the next seq.
  * The record's bytes may be overwritten from then on. With nothing peeked it
  * does nothing, so it can never move the tail past the head.
  */
-TA_PRIVATE void ta_ring_release(ta_ring *ring);
+TA_PRIVATE void ta_ring_advance(ta_ring *ring);
 
 
 
@@ -1360,7 +1363,7 @@ TA_PRIVATE void ta_ring_release(ta_ring *ring);
  * caller, next to the ta_ring handle it reads; it owns nothing and may be
  * moved or copied only while no record taken from it is still being used (a
  * copy has its own next_seq). A ta_record lives on the caller's stack from a
- * successful check until ta_ring_release of the bytes it came from: its
+ * successful check until ta_ring_advance of the bytes it came from: its
  * `bytes` pointer, and every ta_bytes a getter derives from it, die at the
  * release. The fixed part is a private snapshot inside the token, so the
  * scalars a getter returns are copies and may outlive the record. Nothing in
@@ -1425,7 +1428,7 @@ TA_PRIVATE void ta_ring_release(ta_ring *ring);
  *         .table = ta_msg_table(), .ring = TA_RING_H2C,
  *         .mode = TA_RING_LOSSLESS, .max_record_bytes = 65536 });
  *     ta_ring_record raw;
- *     while (ta_ring_peek(&rings.ring[TA_RING_H2C], &raw) == TA_RING_OK) {
+ *     while (ta_ring_read(&rings.ring[TA_RING_H2C], &raw) == TA_RING_OK) {
  *         ta_record record;
  *         ta_record_fault fault = ta_record_check(&reader,
  *             &(ta_record_input){ .bytes = raw.bytes, .length = raw.size }, &record);
@@ -1435,7 +1438,7 @@ TA_PRIVATE void ta_ring_release(ta_ring *ring);
  *             ta_msg_h2c_event_get(&record, &event);   // spans point into raw.bytes
  *             use(&event);
  *         }
- *         ta_ring_release(&rings.ring[TA_RING_H2C]);   // record and its spans die here
+ *         ta_ring_advance(&rings.ring[TA_RING_H2C]);   // record and its spans die here
  *     }
  */
 
@@ -1519,12 +1522,12 @@ typedef struct ta_record_reader {
 /*
  * ta_record is a validated record: the token every getter reads. Record
  * lifetime (consumer half): it is valid from a successful ta_record_check
- * until ta_ring_release of the bytes it came from. `fixed` is a copy, so the
+ * until ta_ring_advance of the bytes it came from. `fixed` is a copy, so the
  * scalars decoded from it may be kept; `bytes` and the spans derived from it
  * may not.
  */
 typedef struct ta_record {
-    const unsigned char *bytes; /* the record in place; valid until ta_ring_release */
+    const unsigned char *bytes; /* the record in place; valid until ta_ring_advance */
     uint32_t size;
     uint16_t kind;
     uint64_t seq;
@@ -1582,7 +1585,7 @@ TA_PRIVATE uint64_t ta_record_u64(const ta_record *record, uint32_t at);
 
 /*
  * ta_record_span returns the bytes the span field at fixed-part offset `at`
- * names, as a view into record->bytes: valid until ta_ring_release. An empty
+ * names, as a view into record->bytes: valid until ta_ring_advance. An empty
  * span, or one that does not lie inside the record, answers {NULL, 0}; after
  * a successful check the second cannot happen, and the test is repeated so a
  * hand-built token cannot make this read outside the record. Never allocates.
@@ -10337,8 +10340,16 @@ TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo) { return fifo->capacit
  * per wrap. Failure paths change no counter and no byte a peer can see.
  */
 
-/* A spec is valid when progress is possible: the largest record fits an empty ring, and every size is a multiple of 8. */
+/*
+ * A spec is valid when progress is possible: the largest record fits an empty
+ * ring, and every size is a multiple of 8. A spec with both sizes 0 is an
+ * absent ring (ring.h): valid, and it takes no bytes.
+ */
 static bool spec_valid(const ta_ring_spec *spec) {
+    if (spec->capacity == 0 || spec->max_record_bytes == 0) {
+        return spec->capacity == 0 && spec->max_record_bytes == 0 &&
+               (spec->mode == TA_RING_LOSSLESS || spec->mode == TA_RING_LOSSY);
+    }
     return spec->capacity % TA_RING_ALIGN == 0 && spec->max_record_bytes % TA_RING_ALIGN == 0 &&
            spec->max_record_bytes >= TA_RING_MIN_RECORD && spec->max_record_bytes <= spec->capacity &&
            (spec->mode == TA_RING_LOSSLESS || spec->mode == TA_RING_LOSSY);
@@ -10388,7 +10399,7 @@ TA_PRIVATE ta_result ta_rings_init(ta_rings *rings, const ta_rings_init_params *
     rings->control = control;
     for (uint32_t i = 0; i < TA_RING_COUNT; i += 1) {
         const ta_ring_spec *spec = &params->specs.ring[i];
-        ta_ring_shared *shared = &control->ring[i];
+        ta_ring_shared *shared = ta_ring_cell(control, (ta_ring_id)i);
         shared->capacity = spec->capacity;
         shared->offset = plan.data_offset[i];
         shared->next_seq = 1;
@@ -10497,6 +10508,20 @@ TA_PRIVATE ta_ring_status ta_ring_reserve(ta_ring *ring, uint32_t size, ta_ring_
     return TA_RING_OK;
 }
 
+/* ta_ring_would_fit: see ring.h. The same arithmetic as ta_ring_reserve's, and none of its effects. */
+TA_PRIVATE bool ta_ring_would_fit(ta_ring *ring, uint32_t size) {
+    if (ring->pending_size != 0 || size > UINT32_MAX - (TA_RING_ALIGN - 1)) {
+        return false;
+    }
+    uint32_t rounded = (size + (TA_RING_ALIGN - 1)) & ~(TA_RING_ALIGN - 1);
+    if (rounded < TA_RING_MIN_RECORD || rounded > ring->max_record_bytes || !refresh_peer_tail(ring)) {
+        return false; /* an absent ring has max_record_bytes 0, so it ends here, before any division by capacity */
+    }
+    uint64_t to_end = ring->capacity - ring->head % ring->capacity;
+    uint64_t pad = rounded > to_end ? to_end : 0;
+    return pad + rounded <= ring->capacity - (ring->head - ring->peer_tail);
+}
+
 /* ta_ring_commit: see ring.h. Bytes first, counters last, so a reader never sees a half-written record. */
 TA_PRIVATE void ta_ring_commit(ta_ring *ring) {
     if (ring->pending_size == 0) {
@@ -10554,7 +10579,7 @@ static bool refresh_peer_head(ta_ring *ring) {
 }
 
 /*
- * ta_ring_peek: see ring.h. Every length read from the ring is checked
+ * ta_ring_read: see ring.h. Every length read from the ring is checked
  * against what is committed and the end of the buffer before it is used, so
  * a hostile h2c record can make peek answer CORRUPT but never read outside
  * the data area. While a record is peeked, a second peek rebuilds the answer
@@ -10562,7 +10587,7 @@ static bool refresh_peer_head(ta_ring *ring) {
  * and does not read the header again: a producer that rewrites the header in
  * place cannot change what release will skip.
  */
-TA_PRIVATE ta_ring_status ta_ring_peek(ta_ring *ring, ta_ring_record *out) {
+TA_PRIVATE ta_ring_status ta_ring_read(ta_ring *ring, ta_ring_record *out) {
     if (ring->peeked_size != 0) {
         *out = (ta_ring_record){ .bytes = ring->data + ring->tail % ring->capacity,
                                  .size = ring->peeked_size,
@@ -10608,8 +10633,8 @@ TA_PRIVATE ta_ring_status ta_ring_peek(ta_ring *ring, ta_ring_record *out) {
     }
 }
 
-/* ta_ring_release: see ring.h. */
-TA_PRIVATE void ta_ring_release(ta_ring *ring) {
+/* ta_ring_advance: see ring.h. */
+TA_PRIVATE void ta_ring_advance(ta_ring *ring) {
     if (ring->peeked_size == 0) {
         return;
     }

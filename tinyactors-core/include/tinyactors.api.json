@@ -181,6 +181,20 @@
       "value": 4294967295
     },
     {
+      "name": "TA_RING_MAGIC",
+      "type": {
+        "builtin": "uint64_t"
+      },
+      "value": 3550892908024517716
+    },
+    {
+      "name": "TA_RING_VERSION",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 1
+    },
+    {
       "name": "TA_SPEC_INDEX_NONE",
       "type": {
         "builtin": "uint32_t"
@@ -13418,6 +13432,271 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
+        }
+      }
+    },
+    "ta_ring_control": {
+      "kind": "struct",
+      "doc": "The control block: one ta_ring_shared per ring, in ta_ring_id order, laid out one after the other (the extractor has no array members). Valid while the system is.",
+      "fields": [
+        {
+          "name": "magic",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "TA_RING_MAGIC"
+        },
+        {
+          "name": "version",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "TA_RING_VERSION"
+        },
+        {
+          "name": "ring_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "TA_RING_COUNT"
+        },
+        {
+          "name": "h2c",
+          "type": {
+            "type": "ta_ring_shared"
+          },
+          "doc": "TA_RING_H2C"
+        },
+        {
+          "name": "c2h",
+          "type": {
+            "type": "ta_ring_shared"
+          },
+          "doc": "TA_RING_C2H"
+        },
+        {
+          "name": "tel",
+          "type": {
+            "type": "ta_ring_shared"
+          },
+          "doc": "TA_RING_TEL"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 184,
+          "align": 8,
+          "offsets": {
+            "magic": 0,
+            "version": 8,
+            "ring_count": 12,
+            "h2c": 16,
+            "c2h": 72,
+            "tel": 128
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 184,
+          "align": 8,
+          "offsets": {
+            "magic": 0,
+            "version": 8,
+            "ring_count": 12,
+            "h2c": 16,
+            "c2h": 72,
+            "tel": 128
+          }
+        }
+      }
+    },
+    "ta_ring_id": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_RING_H2C",
+          "value": 0,
+          "symbol": "h2c",
+          "doc": "host to core, lossless; absent (capacity 0) until ring-proto 5.1"
+        },
+        {
+          "name": "TA_RING_C2H",
+          "value": 1,
+          "symbol": "c2h",
+          "doc": "core to host, lossless; absent until ring-proto 5.1"
+        },
+        {
+          "name": "TA_RING_TEL",
+          "value": 2,
+          "symbol": "tel",
+          "doc": "core to host, lossy: telemetry"
+        },
+        {
+          "name": "TA_RING_COUNT",
+          "value": 3,
+          "symbol": "count"
+        }
+      ],
+      "doc": "======================================================================== Rings (ADR 0098; docs/proposals/ring-proto/reference/ring.md)\n\nA system owns three byte rings in one region it allocates at creation: h2c (host to core), c2h (core to host, lossless) and tel (core to host, lossy: what telemetry writes, ADR 0098). The control block at the head of the region holds each ring's counters; a host reads it with ta_system_control_block() at any time, on the system's own thread.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_ring_record": {
+      "kind": "struct",
+      "doc": "A committed record seen in place by ta_ring_peek(). The bytes are the record as written (header, fixed part, tail); decode them with ta_tel_decode() for tel. They are valid until ta_ring_release() and the next call into core that writes the ring; a host that keeps anything copies it first.",
+      "fields": [
+        {
+          "name": "bytes",
+          "type": {
+            "pointer": {
+              "builtin": "uint8_t",
+              "const": true
+            }
+          },
+          "count": "size",
+          "shape": "counted",
+          "direction": "in"
+        },
+        {
+          "name": "size",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "bytes"
+        },
+        {
+          "name": "seq",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "gap",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "lossy ring: records dropped between the previous record and this one"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "bytes": 0,
+            "size": 8,
+            "seq": 16,
+            "gap": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "bytes": 0,
+            "size": 4,
+            "seq": 8,
+            "gap": 16
+          }
+        }
+      }
+    },
+    "ta_ring_shared": {
+      "kind": "struct",
+      "doc": "One ring's cells in the control block. The side named writes each; both read. The u64 counters only grow. Each side keeps a private copy of the counters it writes and treats the peer's cell as untrusted input, so a peer that stores nonsense can end a ring's use but not corrupt core.",
+      "fields": [
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "core, at creation: bytes in the data area, a multiple of 8; 0: the ring does not exist"
+        },
+        {
+          "name": "offset",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "core, at creation: byte offset of the data area from the control block"
+        },
+        {
+          "name": "head",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "producer: bytes ever committed, pads included"
+        },
+        {
+          "name": "tail",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "consumer: bytes ever released, pads included"
+        },
+        {
+          "name": "next_seq",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "producer: the seq the next record will carry, from 1"
+        },
+        {
+          "name": "dropped",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "producer: records dropped; stays 0 on a lossless ring. tel's is ADR 0098's tel_dropped"
+        },
+        {
+          "name": "max_record_bytes",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "core, at creation: the largest record the producer writes"
+        },
+        {
+          "name": "mode",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "core, at creation: 0 lossless, 1 lossy"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "capacity": 0,
+            "offset": 8,
+            "head": 16,
+            "tail": 24,
+            "next_seq": 32,
+            "dropped": 40,
+            "max_record_bytes": 48,
+            "mode": 52
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "capacity": 0,
+            "offset": 8,
+            "head": 16,
+            "tail": 24,
+            "next_seq": 32,
+            "dropped": 40,
+            "max_record_bytes": 48,
+            "mode": 52
+          }
         }
       }
     },

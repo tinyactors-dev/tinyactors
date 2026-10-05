@@ -3720,6 +3720,73 @@ TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
 
 
 /* ========================================================================
+ * Rings (ADR 0098; docs/proposals/ring-proto/reference/ring.md)
+ *
+ * A system owns three byte rings in one region it allocates at creation:
+ * h2c (host to core), c2h (core to host, lossless) and tel (core to host,
+ * lossy: what telemetry writes, ADR 0098). The control block at the head of
+ * the region holds each ring's counters; a host reads it with
+ * ta_system_control_block() at any time, on the system's own thread.
+ */
+
+typedef enum {
+    TA_RING_H2C = 0, /* host to core, lossless; absent (capacity 0) until ring-proto 5.1 */
+    TA_RING_C2H = 1, /* core to host, lossless; absent until ring-proto 5.1 */
+    TA_RING_TEL = 2, /* core to host, lossy: telemetry */
+    TA_RING_COUNT = 3
+} ta_ring_id TA_SYMBOLS("TA_RING_");
+
+/* The control block's tag and layout version: what a host checks before it reads a cell. */
+#define TA_RING_MAGIC ((uint64_t)0x31474E4952415454ull) /* the bytes "TTARING1" on a little-endian host */
+#define TA_RING_VERSION ((uint32_t)1u)
+
+/*
+ * One ring's cells in the control block. The side named writes each; both
+ * read. The u64 counters only grow. Each side keeps a private copy of the
+ * counters it writes and treats the peer's cell as untrusted input, so a
+ * peer that stores nonsense can end a ring's use but not corrupt core.
+ */
+typedef struct ta_ring_shared {
+    uint64_t capacity;         /* core, at creation: bytes in the data area, a multiple of 8; 0: the ring does not exist */
+    uint64_t offset;           /* core, at creation: byte offset of the data area from the control block */
+    uint64_t head;             /* producer: bytes ever committed, pads included */
+    uint64_t tail;             /* consumer: bytes ever released, pads included */
+    uint64_t next_seq;         /* producer: the seq the next record will carry, from 1 */
+    uint64_t dropped;          /* producer: records dropped; stays 0 on a lossless ring. tel's is ADR 0098's tel_dropped */
+    uint32_t max_record_bytes; /* core, at creation: the largest record the producer writes */
+    uint32_t mode;             /* core, at creation: 0 lossless, 1 lossy */
+} ta_ring_shared;
+
+/*
+ * The control block: one ta_ring_shared per ring, in ta_ring_id order, laid
+ * out one after the other (the extractor has no array members). Valid while
+ * the system is.
+ */
+typedef struct ta_ring_control {
+    uint64_t magic;      /* TA_RING_MAGIC */
+    uint32_t version;    /* TA_RING_VERSION */
+    uint32_t ring_count; /* TA_RING_COUNT */
+    ta_ring_shared h2c;  /* TA_RING_H2C */
+    ta_ring_shared c2h;  /* TA_RING_C2H */
+    ta_ring_shared tel;  /* TA_RING_TEL */
+} ta_ring_control;
+
+/*
+ * A committed record seen in place by ta_ring_peek(). The bytes are the
+ * record as written (header, fixed part, tail); decode them with
+ * ta_tel_decode() for tel. They are valid until ta_ring_release() and the
+ * next call into core that writes the ring; a host that keeps anything
+ * copies it first.
+ */
+typedef struct {
+    TA_COUNTED_BY(size) const uint8_t *bytes;
+    uint32_t size;
+    uint64_t seq;
+    uint64_t gap; /* lossy ring: records dropped between the previous record and this one */
+} ta_ring_record;
+
+
+/* ========================================================================
  * Systems
  */
 

@@ -8,8 +8,16 @@
  * per wrap. Failure paths change no counter and no byte a peer can see.
  */
 
-/* A spec is valid when progress is possible: the largest record fits an empty ring, and every size is a multiple of 8. */
+/*
+ * A spec is valid when progress is possible: the largest record fits an empty
+ * ring, and every size is a multiple of 8. A spec with both sizes 0 is an
+ * absent ring (ring.h): valid, and it takes no bytes.
+ */
 static bool spec_valid(const ta_ring_spec *spec) {
+    if (spec->capacity == 0 || spec->max_record_bytes == 0) {
+        return spec->capacity == 0 && spec->max_record_bytes == 0 &&
+               (spec->mode == TA_RING_LOSSLESS || spec->mode == TA_RING_LOSSY);
+    }
     return spec->capacity % TA_RING_ALIGN == 0 && spec->max_record_bytes % TA_RING_ALIGN == 0 &&
            spec->max_record_bytes >= TA_RING_MIN_RECORD && spec->max_record_bytes <= spec->capacity &&
            (spec->mode == TA_RING_LOSSLESS || spec->mode == TA_RING_LOSSY);
@@ -59,7 +67,7 @@ ta_result ta_rings_init(ta_rings *rings, const ta_rings_init_params *params) {
     rings->control = control;
     for (uint32_t i = 0; i < TA_RING_COUNT; i += 1) {
         const ta_ring_spec *spec = &params->specs.ring[i];
-        ta_ring_shared *shared = &control->ring[i];
+        ta_ring_shared *shared = ta_ring_cell(control, (ta_ring_id)i);
         shared->capacity = spec->capacity;
         shared->offset = plan.data_offset[i];
         shared->next_seq = 1;
@@ -168,6 +176,20 @@ ta_ring_status ta_ring_reserve(ta_ring *ring, uint32_t size, ta_ring_reservation
     return TA_RING_OK;
 }
 
+/* ta_ring_would_fit: see ring.h. The same arithmetic as ta_ring_reserve's, and none of its effects. */
+bool ta_ring_would_fit(ta_ring *ring, uint32_t size) {
+    if (ring->pending_size != 0 || size > UINT32_MAX - (TA_RING_ALIGN - 1)) {
+        return false;
+    }
+    uint32_t rounded = (size + (TA_RING_ALIGN - 1)) & ~(TA_RING_ALIGN - 1);
+    if (rounded < TA_RING_MIN_RECORD || rounded > ring->max_record_bytes || !refresh_peer_tail(ring)) {
+        return false; /* an absent ring has max_record_bytes 0, so it ends here, before any division by capacity */
+    }
+    uint64_t to_end = ring->capacity - ring->head % ring->capacity;
+    uint64_t pad = rounded > to_end ? to_end : 0;
+    return pad + rounded <= ring->capacity - (ring->head - ring->peer_tail);
+}
+
 /* ta_ring_commit: see ring.h. Bytes first, counters last, so a reader never sees a half-written record. */
 void ta_ring_commit(ta_ring *ring) {
     if (ring->pending_size == 0) {
@@ -225,7 +247,7 @@ static bool refresh_peer_head(ta_ring *ring) {
 }
 
 /*
- * ta_ring_peek: see ring.h. Every length read from the ring is checked
+ * ta_ring_read: see ring.h. Every length read from the ring is checked
  * against what is committed and the end of the buffer before it is used, so
  * a hostile h2c record can make peek answer CORRUPT but never read outside
  * the data area. While a record is peeked, a second peek rebuilds the answer
@@ -233,7 +255,7 @@ static bool refresh_peer_head(ta_ring *ring) {
  * and does not read the header again: a producer that rewrites the header in
  * place cannot change what release will skip.
  */
-ta_ring_status ta_ring_peek(ta_ring *ring, ta_ring_record *out) {
+ta_ring_status ta_ring_read(ta_ring *ring, ta_ring_record *out) {
     if (ring->peeked_size != 0) {
         *out = (ta_ring_record){ .bytes = ring->data + ring->tail % ring->capacity,
                                  .size = ring->peeked_size,
@@ -279,8 +301,8 @@ ta_ring_status ta_ring_peek(ta_ring *ring, ta_ring_record *out) {
     }
 }
 
-/* ta_ring_release: see ring.h. */
-void ta_ring_release(ta_ring *ring) {
+/* ta_ring_advance: see ring.h. */
+void ta_ring_advance(ta_ring *ring) {
     if (ring->peeked_size == 0) {
         return;
     }

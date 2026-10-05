@@ -426,7 +426,7 @@ static void test_round_trip_every_message(unsigned seeds) {
             CHECK(c->write(data, &to) == TA_OK);
             ta_ring_commit(ring);
             ta_ring_record raw;
-            CHECK(ta_ring_peek(ring, &raw) == TA_RING_OK);
+            CHECK(ta_ring_read(ring, &raw) == TA_RING_OK);
             if (raw.bytes == NULL) return;
             CHECK(raw.size == size && raw.seq == to.seq);
             ta_record record;
@@ -434,7 +434,7 @@ static void test_round_trip_every_message(unsigned seeds) {
             if (fault != TA_RECORD_OK) {
                 fprintf(stderr, "%s seed %u: %s\n", c->id, seed, ta_record_fault_name(fault));
                 CHECK(fault == TA_RECORD_OK);
-                ta_ring_release(ring);
+                ta_ring_advance(ring);
                 continue;
             }
             CHECK(record.kind == c->kind && record.seq == raw.seq && record.size == size);
@@ -456,7 +456,7 @@ static void test_round_trip_every_message(unsigned seeds) {
             ta_mem_zero(other, sizeof other);
             CHECK(wrong->get(&record, other) == TA_ERR_INVALID);
             CHECK(is_zero(other, sizeof other));
-            ta_ring_release(ring);
+            ta_ring_advance(ring);
             records += 1;
         }
     }

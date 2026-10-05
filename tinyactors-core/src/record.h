@@ -37,7 +37,7 @@
  * caller, next to the ta_ring handle it reads; it owns nothing and may be
  * moved or copied only while no record taken from it is still being used (a
  * copy has its own next_seq). A ta_record lives on the caller's stack from a
- * successful check until ta_ring_release of the bytes it came from: its
+ * successful check until ta_ring_advance of the bytes it came from: its
  * `bytes` pointer, and every ta_bytes a getter derives from it, die at the
  * release. The fixed part is a private snapshot inside the token, so the
  * scalars a getter returns are copies and may outlive the record. Nothing in
@@ -102,7 +102,7 @@
  *         .table = ta_msg_table(), .ring = TA_RING_H2C,
  *         .mode = TA_RING_LOSSLESS, .max_record_bytes = 65536 });
  *     ta_ring_record raw;
- *     while (ta_ring_peek(&rings.ring[TA_RING_H2C], &raw) == TA_RING_OK) {
+ *     while (ta_ring_read(&rings.ring[TA_RING_H2C], &raw) == TA_RING_OK) {
  *         ta_record record;
  *         ta_record_fault fault = ta_record_check(&reader,
  *             &(ta_record_input){ .bytes = raw.bytes, .length = raw.size }, &record);
@@ -112,7 +112,7 @@
  *             ta_msg_h2c_event_get(&record, &event);   // spans point into raw.bytes
  *             use(&event);
  *         }
- *         ta_ring_release(&rings.ring[TA_RING_H2C]);   // record and its spans die here
+ *         ta_ring_advance(&rings.ring[TA_RING_H2C]);   // record and its spans die here
  *     }
  */
 
@@ -196,12 +196,12 @@ typedef struct ta_record_reader {
 /*
  * ta_record is a validated record: the token every getter reads. Record
  * lifetime (consumer half): it is valid from a successful ta_record_check
- * until ta_ring_release of the bytes it came from. `fixed` is a copy, so the
+ * until ta_ring_advance of the bytes it came from. `fixed` is a copy, so the
  * scalars decoded from it may be kept; `bytes` and the spans derived from it
  * may not.
  */
 typedef struct ta_record {
-    const unsigned char *bytes; /* the record in place; valid until ta_ring_release */
+    const unsigned char *bytes; /* the record in place; valid until ta_ring_advance */
     uint32_t size;
     uint16_t kind;
     uint64_t seq;
@@ -259,7 +259,7 @@ uint64_t ta_record_u64(const ta_record *record, uint32_t at);
 
 /*
  * ta_record_span returns the bytes the span field at fixed-part offset `at`
- * names, as a view into record->bytes: valid until ta_ring_release. An empty
+ * names, as a view into record->bytes: valid until ta_ring_advance. An empty
  * span, or one that does not lie inside the record, answers {NULL, 0}; after
  * a successful check the second cannot happen, and the test is repeated so a
  * hand-built token cannot make this read outside the record. Never allocates.
