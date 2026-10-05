@@ -14,6 +14,8 @@ JavaScript does, or a fault. Never a different value.
   `tests/spec/`, and run `mise run diff-node`: it evaluates them in Node.
 - Where JavaScript coerces, compares identities or reaches a prototype,
   fault (`sjs_vm_fault`) instead of following it.
+- Adding a built-in function or method: follow `docs/builtins.md`, which
+  says how to keep it from slowing evaluation down.
 - A refusal at compile time is `syntax` only when JavaScript refuses it too;
   JavaScript that staticjs leaves out is `unsupported`. `diff-node` checks
   both.
