@@ -422,7 +422,8 @@ command per Bash call (compound commands get refused by the permission check):
    For each worktree, every commit in git log ${BASE}..HEAD whose subject also appears in
    git log --format=%s ${BASE} is landed. Remove (git worktree remove --force) a worktree whose commits
    are all landed; list any other with the subjects that are not, and keep it.
-2. Run mise run test:full on ${BASE} (it can exceed 30 minutes; run it in the foreground with a long
+2. Run mise run test:full on ${BASE}, redirecting its output to a log file and reading its exit status
+   (never pipe it through tail or grep: that hides the status) (it can exceed 30 minutes; run it in the foreground with a long
    timeout, or in pieces per project, but never in the background where it can be killed).
 3. If it fails only on a timing-ratio assertion in tinyactors-napi/test/scale.js, classify it: run
    TAT_SCALE_MAX_POPULATION=1000000 <node|bun> test/scale.js three times on ${BASE}, then three times on
