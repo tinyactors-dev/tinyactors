@@ -72,8 +72,17 @@ struct sjs_vm {
 sjs_result sjs_vm_fault(sjs_vm *vm, const char *message);
 /* A failed allocation or limit, as a fault. */
 sjs_result sjs_vm_fail(sjs_vm *vm, sjs_result r);
-bool sjs_vm_push(sjs_vm *vm, sjs_value v);
-sjs_value sjs_vm_pop(sjs_vm *vm);
+/* Push takes over `v`'s reference. On a full stack it releases `v`, faults
+ * (sjs_vm_stack_full) and gives false. */
+bool sjs_vm_stack_full(sjs_vm *vm, sjs_value v);
+static inline bool sjs_vm_push(sjs_vm *vm, sjs_value v) {
+    if (vm->sp >= vm->stack_capacity) return sjs_vm_stack_full(vm, v);
+    vm->stack[vm->sp++] = v;
+    return true;
+}
+static inline sjs_value sjs_vm_pop(sjs_vm *vm) {
+    return vm->stack[--vm->sp];
+}
 /* Release a stack value, whatever its internal tag. */
 void sjs_vm_release(sjs_vm *vm, sjs_value v);
 

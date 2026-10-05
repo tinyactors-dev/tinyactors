@@ -16,7 +16,14 @@ void *sjs_mem_alloc(const sjs_allocator *allocator, size_t size);
 void sjs_mem_free(const sjs_allocator *allocator, void *ptr, size_t size);
 void sjs_copy(void *to, const void *from, size_t length);
 void sjs_zero(void *to, size_t length);
-bool sjs_str_equal(sjs_str a, sjs_str b);
+
+static inline bool sjs_str_equal(sjs_str a, sjs_str b) {
+    if (a.length != b.length) return false;
+    for (uint32_t i = 0; i < a.length; i++) {
+        if (a.ptr[i] != b.ptr[i]) return false;
+    }
+    return true;
+}
 
 /*
  * A growable array of bytes. It moves when it grows, so nothing keeps a
@@ -192,6 +199,31 @@ static inline bool sjs_is_heap(sjs_value v) {
  */
 static inline bool sjs_value_unique(sjs_value v) {
     return sjs_is_heap(v) && v.as.heap->refs == 1;
+}
+
+/* sjs_number, sjs_retain and sjs_release for the evaluator's hot paths,
+ * inline. sjs_unref frees through sjs_release only when it drops the last
+ * reference. */
+static inline sjs_value sjs_num(double value) {
+    sjs_value v = { 0 };
+    v.kind = SJS_NUMBER;
+    v.as.number = value;
+    return v;
+}
+
+static inline void sjs_ref(sjs_value v) {
+    if (sjs_is_heap(v) && v.as.heap->refs != SJS_IMMORTAL) v.as.heap->refs++;
+}
+
+static inline void sjs_unref(sjs_context *context, sjs_value v) {
+    if (!sjs_is_heap(v)) return;
+    uint32_t refs = v.as.heap->refs;
+    if (refs == SJS_IMMORTAL) return;
+    if (refs > 1) {
+        v.as.heap->refs = refs - 1;
+        return;
+    }
+    sjs_release(context, v);
 }
 
 sjs_result sjs_string_make(sjs_context *context, sjs_str text, sjs_string **out);

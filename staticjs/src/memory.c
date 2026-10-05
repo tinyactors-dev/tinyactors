@@ -28,14 +28,6 @@ void sjs_zero(void *to, size_t length) {
     for (size_t i = 0; i < length; i++) t[i] = 0;
 }
 
-bool sjs_str_equal(sjs_str a, sjs_str b) {
-    if (a.length != b.length) return false;
-    for (uint32_t i = 0; i < a.length; i++) {
-        if (a.ptr[i] != b.ptr[i]) return false;
-    }
-    return true;
-}
-
 sjs_str sjs_cstr(const char *text) {
     uint32_t length = 0;
     while (text[length] != '\0') length++;

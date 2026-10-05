@@ -466,3 +466,29 @@ export const again = [o, xs, { ...ns, z: 1 }];
 [1, 2, 3].reduce((acc, x) => [...acc, () => acc], []).map((f, i) => f().length)
 --- value
 [0,1,2]
+
+# Reading a member: the value outlives an object only the stack held, and a
+# key made at run time finds the same property as the literal's.
+=== a member of an object nothing else holds
+({ a: [1, 2], b: { c: "x" } }).b.c
+--- value
+"x"
+
+=== an array member outlives its object
+({ a: [1, 2] }).a
+--- value
+[1,2]
+
+=== a key made at run time is the same key
+(k => ({ [k + "b"]: 1, ab2: 2 }).ab)("a")
+--- value
+1
+
+=== a member the object lacks is undefined
+(o => o.b)({ a: 1 })
+--- value
+undefined
+
+=== a missing member still faults on prototype names
+(o => o.constructor)({ a: 1 })
+--- fault no prototype
