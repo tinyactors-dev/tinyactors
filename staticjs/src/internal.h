@@ -106,7 +106,7 @@ struct sjs_heap {
     uint32_t refs;
     uint8_t type;     /* SJS_HEAP_* */
     uint8_t flags;
-    uint16_t reserved;
+    uint16_t name_id; /* a string with SJS_STRING_NAMED: its sjs_name_id */
     uint32_t size;    /* bytes allocated */
     sjs_heap *link;   /* the release worklist */
 };
@@ -114,6 +114,7 @@ struct sjs_heap {
 /* String flags. */
 #define SJS_STRING_ASCII 1u
 #define SJS_STRING_INDEX 2u   /* a canonical array index; `index` holds it */
+#define SJS_STRING_NAMED 4u   /* `h.name_id` holds sjs_name_id of its text */
 
 typedef struct {
     sjs_heap h;
@@ -280,8 +281,6 @@ sjs_str sjs_typeof(sjs_value v);
 sjs_result sjs_to_string(sjs_context *context, sjs_value v, sjs_string **out);
 /* ToPropertyKey for primitives. */
 sjs_result sjs_to_key(sjs_context *context, sjs_value v, sjs_string **out);
-/* Names JavaScript finds on Object.prototype, which staticjs objects lack. */
-bool sjs_is_prototype_name(sjs_str key);
 
 /* ========================================================================
  * Built-ins
@@ -353,8 +352,34 @@ typedef enum {
 
 /* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name);
-/* The method `name` of a receiver of kind `kind`; NONE if unknown. */
-sjs_builtin_id sjs_method_lookup(uint8_t kind, sjs_str name);
+
+/*
+ * A name JavaScript finds on a prototype, or that names a method that would
+ * change its receiver: what a property read or a method call must know about
+ * a key besides the receiver's own properties. A key constant has its entry
+ * found once, at compile time (SJS_STRING_NAMED); any other key is looked up
+ * when it is used.
+ */
+#define SJS_NAME_ON_ARRAY 1u   /* on Array.prototype (or Object.prototype) */
+#define SJS_NAME_ON_STRING 2u  /* on String.prototype (or Object.prototype) */
+#define SJS_NAME_ON_SET 4u     /* on Set.prototype (or Object.prototype) */
+#define SJS_NAME_OBJECT 8u     /* on Object.prototype, which staticjs objects lack */
+#define SJS_NAME_MUTATING 16u  /* a method that changes its receiver */
+
+typedef struct {
+    sjs_str name;
+    uint8_t flags;      /* SJS_NAME_* */
+    uint8_t methods[3]; /* the staticjs method on an array, a string, a set; 0 if none */
+} sjs_name;
+
+/* The entry of `text` plus one, or 0 when it has none. */
+uint16_t sjs_name_id(sjs_str text);
+/* Every entry, sorted by bytes, and how many (for names_test). */
+const sjs_name *sjs_names(uint32_t *count);
+/* The entry of a key, or NULL when it has none. */
+const sjs_name *sjs_name_of(const sjs_string *key);
+/* The method `name` of a receiver of kind `kind`; NONE if it has none. */
+sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind);
 /* The immortal function value of a built-in function. */
 sjs_value sjs_builtin_value(sjs_builtin_id id);
 bool sjs_builtin_loops(sjs_builtin_id id);

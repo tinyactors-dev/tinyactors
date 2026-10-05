@@ -39,47 +39,118 @@ static const function_entry FUNCTION_TABLE[] = {
     { "Math", "sign", SJS_BUILTIN_MATH_SIGN }
 };
 
-typedef struct {
-    uint8_t kind;
-    const char *name;
-    uint16_t id;
-} method_entry;
+/*
+ * Every name JavaScript finds on the prototype of an array, a string or a
+ * set (those of Node 22, not only the methods staticjs has, so that reading
+ * one faults instead of giving undefined), on Object.prototype, or that
+ * names a method changing its receiver; with the staticjs method each kind
+ * has by that name. Sorted by bytes, for sjs_name_id's binary search.
+ */
+#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set } }
 
-static const method_entry METHOD_TABLE[] = {
-    { SJS_ARRAY, "at", SJS_METHOD_ARRAY_AT },
-    { SJS_ARRAY, "concat", SJS_METHOD_ARRAY_CONCAT },
-    { SJS_ARRAY, "every", SJS_METHOD_ARRAY_EVERY },
-    { SJS_ARRAY, "filter", SJS_METHOD_ARRAY_FILTER },
-    { SJS_ARRAY, "find", SJS_METHOD_ARRAY_FIND },
-    { SJS_ARRAY, "findIndex", SJS_METHOD_ARRAY_FIND_INDEX },
-    { SJS_ARRAY, "findLast", SJS_METHOD_ARRAY_FIND_LAST },
-    { SJS_ARRAY, "flat", SJS_METHOD_ARRAY_FLAT },
-    { SJS_ARRAY, "flatMap", SJS_METHOD_ARRAY_FLAT_MAP },
-    { SJS_ARRAY, "includes", SJS_METHOD_ARRAY_INCLUDES },
-    { SJS_ARRAY, "indexOf", SJS_METHOD_ARRAY_INDEX_OF },
-    { SJS_ARRAY, "join", SJS_METHOD_ARRAY_JOIN },
-    { SJS_ARRAY, "map", SJS_METHOD_ARRAY_MAP },
-    { SJS_ARRAY, "reduce", SJS_METHOD_ARRAY_REDUCE },
-    { SJS_ARRAY, "slice", SJS_METHOD_ARRAY_SLICE },
-    { SJS_ARRAY, "some", SJS_METHOD_ARRAY_SOME },
-    { SJS_ARRAY, "toReversed", SJS_METHOD_ARRAY_TO_REVERSED },
-    { SJS_ARRAY, "toSorted", SJS_METHOD_ARRAY_TO_SORTED },
-    { SJS_ARRAY, "with", SJS_METHOD_ARRAY_WITH },
-    { SJS_STRING, "endsWith", SJS_METHOD_STRING_ENDS_WITH },
-    { SJS_STRING, "includes", SJS_METHOD_STRING_INCLUDES },
-    { SJS_STRING, "indexOf", SJS_METHOD_STRING_INDEX_OF },
-    { SJS_STRING, "slice", SJS_METHOD_STRING_SLICE },
-    { SJS_STRING, "split", SJS_METHOD_STRING_SPLIT },
-    { SJS_STRING, "startsWith", SJS_METHOD_STRING_STARTS_WITH },
-    { SJS_STRING, "toLowerCase", SJS_METHOD_STRING_TO_LOWER_CASE },
-    { SJS_STRING, "toUpperCase", SJS_METHOD_STRING_TO_UPPER_CASE },
-    { SJS_STRING, "trim", SJS_METHOD_STRING_TRIM },
-    { SJS_SET, "difference", SJS_METHOD_SET_DIFFERENCE },
-    { SJS_SET, "has", SJS_METHOD_SET_HAS },
-    { SJS_SET, "intersection", SJS_METHOD_SET_INTERSECTION },
-    { SJS_SET, "isSubsetOf", SJS_METHOD_SET_IS_SUBSET_OF },
-    { SJS_SET, "symmetricDifference", SJS_METHOD_SET_SYMMETRIC_DIFFERENCE },
-    { SJS_SET, "union", SJS_METHOD_SET_UNION }
+static const sjs_name NAMES[] = {
+    NAME("__defineGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("__defineSetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("__lookupGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("__lookupSetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("__proto__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("add", SJS_NAME_ON_SET | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("anchor", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("at", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_AT, 0, 0),
+    NAME("big", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("blink", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("bold", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("charAt", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("charCodeAt", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("clear", SJS_NAME_ON_SET | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("codePointAt", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("concat", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_CONCAT, 0, 0),
+    NAME("constructor", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("copyWithin", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("delete", SJS_NAME_ON_SET | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("difference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_DIFFERENCE),
+    NAME("endsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_ENDS_WITH, 0),
+    NAME("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("every", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_EVERY, 0, 0),
+    NAME("fill", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("filter", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FILTER, 0, 0),
+    NAME("find", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND, 0, 0),
+    NAME("findIndex", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND_INDEX, 0, 0),
+    NAME("findLast", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND_LAST, 0, 0),
+    NAME("findLastIndex", SJS_NAME_ON_ARRAY, 0, 0, 0),
+    NAME("fixed", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("flat", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FLAT, 0, 0),
+    NAME("flatMap", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FLAT_MAP, 0, 0),
+    NAME("fontcolor", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("fontsize", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("forEach", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("has", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_HAS),
+    NAME("hasOwnProperty", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("includes", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INCLUDES, SJS_METHOD_STRING_INCLUDES, 0),
+    NAME("indexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INDEX_OF, SJS_METHOD_STRING_INDEX_OF, 0),
+    NAME("intersection", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_INTERSECTION),
+    NAME("isDisjointFrom", SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("isPrototypeOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("isSubsetOf", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_IS_SUBSET_OF),
+    NAME("isSupersetOf", SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("isWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("italics", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("join", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_JOIN, 0, 0),
+    NAME("keys", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("lastIndexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("link", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("localeCompare", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("map", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_MAP, 0, 0),
+    NAME("match", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("matchAll", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("normalize", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("padEnd", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("padStart", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("pop", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("propertyIsEnumerable", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("push", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("reduce", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_REDUCE, 0, 0),
+    NAME("reduceRight", SJS_NAME_ON_ARRAY, 0, 0, 0),
+    NAME("repeat", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("replace", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("replaceAll", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("search", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("set", SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("shift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("slice", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_SLICE, SJS_METHOD_STRING_SLICE, 0),
+    NAME("small", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("some", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_SOME, 0, 0),
+    NAME("sort", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("splice", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("split", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SPLIT, 0),
+    NAME("startsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_STARTS_WITH, 0),
+    NAME("strike", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("sub", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("substr", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("substring", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("sup", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("symmetricDifference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_SYMMETRIC_DIFFERENCE),
+    NAME("toLocaleLowerCase", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("toLocaleString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("toLocaleUpperCase", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("toLowerCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_LOWER_CASE, 0),
+    NAME("toReversed", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_REVERSED, 0, 0),
+    NAME("toSorted", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SORTED, 0, 0),
+    NAME("toSpliced", SJS_NAME_ON_ARRAY, 0, 0, 0),
+    NAME("toString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("toUpperCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_UPPER_CASE, 0),
+    NAME("toWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("trim", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM, 0),
+    NAME("trimEnd", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("trimLeft", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("trimRight", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("trimStart", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("union", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_UNION),
+    NAME("unshift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("valueOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("values", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("with", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_WITH, 0, 0)
 };
 
 #define FUNCTION_VALUE(id) [id] = { { SJS_IMMORTAL, SJS_HEAP_BUILTIN, 0, 0, sizeof(sjs_builtin_function), NULL }, id }
@@ -117,13 +188,52 @@ sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name) {
     return SJS_BUILTIN_NONE;
 }
 
-sjs_builtin_id sjs_method_lookup(uint8_t kind, sjs_str name) {
-    for (uint32_t i = 0; i < sizeof METHOD_TABLE / sizeof METHOD_TABLE[0]; i++) {
-        if (METHOD_TABLE[i].kind == kind && sjs_str_equal(name, sjs_cstr(METHOD_TABLE[i].name))) {
-            return (sjs_builtin_id)METHOD_TABLE[i].id;
-        }
+/* Which of `a` and `b` sorts first by bytes: negative, 0 or positive. */
+static int32_t name_compare(sjs_str a, sjs_str b) {
+    uint32_t n = a.length < b.length ? a.length : b.length;
+    for (uint32_t i = 0; i < n; i++) {
+        uint8_t x = (uint8_t)a.ptr[i];
+        uint8_t y = (uint8_t)b.ptr[i];
+        if (x != y) return x < y ? -1 : 1;
     }
-    return SJS_BUILTIN_NONE;
+    return a.length == b.length ? 0 : a.length < b.length ? -1 : 1;
+}
+
+uint16_t sjs_name_id(sjs_str text) {
+    uint32_t low = 0;
+    uint32_t high = sizeof NAMES / sizeof NAMES[0];
+    while (low < high) {
+        uint32_t mid = low + (high - low) / 2u;
+        int32_t order = name_compare(text, NAMES[mid].name);
+        if (order == 0) return (uint16_t)(mid + 1u);
+        if (order < 0) high = mid;
+        else low = mid + 1u;
+    }
+    return 0;
+}
+
+const sjs_name *sjs_names(uint32_t *count) {
+    *count = sizeof NAMES / sizeof NAMES[0];
+    return NAMES;
+}
+
+const sjs_name *sjs_name_of(const sjs_string *key) {
+    uint16_t id = (key->h.flags & SJS_STRING_NAMED) != 0 ? key->h.name_id : sjs_name_id(sjs_string_view(key));
+    return id == 0 ? NULL : &NAMES[id - 1u];
+}
+
+sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind) {
+    if (name == NULL) return SJS_BUILTIN_NONE;
+    switch (kind) {
+    case SJS_ARRAY:
+        return (sjs_builtin_id)name->methods[0];
+    case SJS_STRING:
+        return (sjs_builtin_id)name->methods[1];
+    case SJS_SET:
+        return (sjs_builtin_id)name->methods[2];
+    default:
+        return SJS_BUILTIN_NONE;
+    }
 }
 
 sjs_value sjs_builtin_value(sjs_builtin_id id) {

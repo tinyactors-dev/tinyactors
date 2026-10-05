@@ -488,7 +488,12 @@ static sjs_result string_constant(sjs_compiler *c, const sjs_event *e, uint32_t 
     if (index_find(&c->string_index, text, index)) return SJS_OK;
     sjs_string *s;
     sjs_result r = sjs_string_make(c->context, text, &s);
-    if (r == SJS_OK) r = value_constant(c, sjs_heap_value(SJS_STRING, &s->h), index);
+    if (r == SJS_OK) {
+        /* A key constant knows its prototype names and methods from now. */
+        s->h.flags |= SJS_STRING_NAMED;
+        s->h.name_id = sjs_name_id(text);
+        r = value_constant(c, sjs_heap_value(SJS_STRING, &s->h), index);
+    }
     uint32_t offset = c->string_text.length;
     if (r == SJS_OK) r = buf_add(c, &c->string_text, bytes_of(text.ptr, text.length));
     if (r == SJS_OK) r = index_put(c, &c->string_index, at_offset(offset, text.length, *index));

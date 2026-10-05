@@ -72,45 +72,20 @@ static void cut(sjs_vm *vm, uint32_t height) {
  * Properties
  */
 
-static bool is_mutating_method(sjs_str name) {
-    static const char *const names[] = { "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill",
-                                         "copyWithin", "add", "delete", "clear", "set" };
-    for (uint32_t i = 0; i < sizeof names / sizeof names[0]; i++) {
-        if (sjs_str_equal(name, sjs_cstr(names[i]))) return true;
+/* Whether JavaScript finds `key` on the prototype of a value of `kind`. */
+static bool on_prototype(uint8_t kind, const sjs_string *key) {
+    const sjs_name *n = sjs_name_of(key);
+    if (n == NULL) return false;
+    switch (kind) {
+    case SJS_ARRAY:
+        return (n->flags & SJS_NAME_ON_ARRAY) != 0;
+    case SJS_STRING:
+        return (n->flags & SJS_NAME_ON_STRING) != 0;
+    case SJS_SET:
+        return (n->flags & SJS_NAME_ON_SET) != 0;
+    default:
+        return (n->flags & SJS_NAME_OBJECT) != 0;
     }
-    return false;
-}
-
-/* Whether JavaScript finds `name` on the prototype of an array, a string or
- * a set: every method there, not only the ones staticjs has, so that reading
- * one faults instead of giving undefined. The names are those of Node 22. */
-static bool on_prototype(uint8_t kind, sjs_str name) {
-    static const char *const arrays[] = { "at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find",
-                                          "findIndex", "findLast", "findLastIndex", "flat", "flatMap", "forEach",
-                                          "includes", "indexOf", "join", "keys", "lastIndexOf", "map", "pop", "push",
-                                          "reduce", "reduceRight", "reverse", "shift", "slice", "some", "sort",
-                                          "splice", "toReversed", "toSorted", "toSpliced", "unshift", "values",
-                                          "with" };
-    static const char *const strings[] = { "anchor", "at", "big", "blink", "bold", "charAt", "charCodeAt",
-                                           "codePointAt", "concat", "endsWith", "fixed", "fontcolor", "fontsize",
-                                           "includes", "indexOf", "isWellFormed", "italics", "lastIndexOf", "link",
-                                           "localeCompare", "match", "matchAll", "normalize", "padEnd", "padStart",
-                                           "repeat", "replace", "replaceAll", "search", "slice", "small", "split",
-                                           "startsWith", "strike", "sub", "substr", "substring", "sup",
-                                           "toLocaleLowerCase", "toLocaleUpperCase", "toLowerCase", "toUpperCase",
-                                           "toWellFormed", "trim", "trimEnd", "trimLeft", "trimRight", "trimStart" };
-    static const char *const sets[] = { "add", "clear", "delete", "difference", "entries", "forEach", "has",
-                                        "intersection", "isDisjointFrom", "isSubsetOf", "isSupersetOf", "keys",
-                                        "symmetricDifference", "union", "values" };
-    const char *const *names = kind == SJS_ARRAY ? arrays : kind == SJS_STRING ? strings : sets;
-    uint32_t count = kind == SJS_ARRAY    ? (uint32_t)(sizeof arrays / sizeof arrays[0])
-                     : kind == SJS_STRING ? (uint32_t)(sizeof strings / sizeof strings[0])
-                                          : (uint32_t)(sizeof sets / sizeof sets[0]);
-    if (sjs_is_prototype_name(name)) return true;
-    for (uint32_t i = 0; i < count; i++) {
-        if (sjs_str_equal(name, sjs_cstr(names[i]))) return true;
-    }
-    return false;
 }
 
 /* A character of a string, by UTF-16 index. */
@@ -167,7 +142,7 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out) {
             sjs_ref(*out);
             return SJS_OK;
         }
-        if (sjs_is_prototype_name(name)) return fault_named(vm, "staticjs objects have no prototype", name);
+        if (on_prototype(SJS_OBJECT, key)) return fault_named(vm, "staticjs objects have no prototype", name);
         return SJS_OK;
     }
     case SJS_ARRAY: {
@@ -203,7 +178,7 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out) {
     default:
         return fault_named(vm, "staticjs reads properties of objects, arrays, strings and sets", name);
     }
-    if (on_prototype(object.kind, name)) {
+    if (on_prototype(object.kind, key)) {
         return fault_named(vm, "staticjs calls methods; it does not read them as values", name);
     }
     return SJS_OK;
@@ -218,9 +193,10 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     case SJS_ARRAY:
     case SJS_STRING:
     case SJS_SET: {
-        sjs_builtin_id id = sjs_method_lookup(receiver.kind, name);
+        const sjs_name *n = sjs_name_of(key);
+        sjs_builtin_id id = sjs_method_of(n, receiver.kind);
         if (id == SJS_BUILTIN_NONE) {
-            if (is_mutating_method(name)) return fault_named(vm, "staticjs values do not change, so this method is not there", name);
+            if (n != NULL && (n->flags & SJS_NAME_MUTATING) != 0) return fault_named(vm, "staticjs values do not change, so this method is not there", name);
             return fault_named(vm, "staticjs does not have this method", name);
         }
         sjs_value m = { 0 };
@@ -303,7 +279,7 @@ static sjs_result in(sjs_vm *vm, const sjs_value *pair, sjs_value *out) {
         *out = sjs_boolean(k->index < SJS_AS_ARRAY(object)->length);
     } else if (object.kind == SJS_ARRAY && sjs_str_equal(name, SJS_STR("length"))) {
         *out = sjs_boolean(true);
-    } else if (sjs_is_prototype_name(name) || (object.kind == SJS_ARRAY && on_prototype(SJS_ARRAY, name))) {
+    } else if (on_prototype(object.kind, k)) {
         r = fault_named(vm, "staticjs objects have no prototype", name);
     } else {
         *out = sjs_boolean(false);
