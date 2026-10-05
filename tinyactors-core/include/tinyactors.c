@@ -10682,6 +10682,7 @@ static bool span_ok(uint32_t offset, uint32_t length, uint32_t fixed_size, uint3
     return offset >= fixed_size && offset <= size && length <= size - offset;
 }
 
+/* ta_record_in_domain: see record.h. */
 TA_PRIVATE bool ta_record_in_domain(uint64_t allowed, uint32_t value) {
     return value < TA_RECORD_DOMAIN_BITS && ((allowed >> value) & 1u) != 0;
 }
@@ -10774,6 +10775,7 @@ TA_PRIVATE ta_record_fault ta_record_check(ta_record_reader *reader, const ta_re
     return TA_RECORD_OK;
 }
 
+/* ta_record_fault_name: see record.h. */
 TA_PRIVATE const char *ta_record_fault_name(ta_record_fault fault) {
     switch (fault) {
     case TA_RECORD_OK:
@@ -10806,30 +10808,35 @@ static void fixed_scalar(const ta_record *record, uint32_t at, void *dst, uint32
     ta_mem_copy(dst, record->fixed + at, size);
 }
 
+/* ta_record_u8: see record.h. */
 TA_PRIVATE uint8_t ta_record_u8(const ta_record *record, uint32_t at) {
     uint8_t value;
     fixed_scalar(record, at, &value, sizeof value);
     return value;
 }
 
+/* ta_record_u16: see record.h. */
 TA_PRIVATE uint16_t ta_record_u16(const ta_record *record, uint32_t at) {
     uint16_t value;
     fixed_scalar(record, at, &value, sizeof value);
     return value;
 }
 
+/* ta_record_u32: see record.h. */
 TA_PRIVATE uint32_t ta_record_u32(const ta_record *record, uint32_t at) {
     uint32_t value;
     fixed_scalar(record, at, &value, sizeof value);
     return value;
 }
 
+/* ta_record_u64: see record.h. */
 TA_PRIVATE uint64_t ta_record_u64(const ta_record *record, uint32_t at) {
     uint64_t value;
     fixed_scalar(record, at, &value, sizeof value);
     return value;
 }
 
+/* ta_record_span: see record.h. */
 TA_PRIVATE ta_bytes ta_record_span(const ta_record *record, uint32_t at) {
     ta_bytes none = { .ptr = NULL, .len = 0 };
     uint32_t fixed = record->descriptor == NULL ? 0u : record->descriptor->fixed_size;
@@ -10844,10 +10851,12 @@ TA_PRIVATE ta_bytes ta_record_span(const ta_record *record, uint32_t at) {
     return (ta_bytes){ .ptr = record->bytes + offset, .len = length };
 }
 
+/* ta_record_bytes_ok: see record.h. */
 TA_PRIVATE bool ta_record_bytes_ok(ta_bytes bytes) {
     return bytes.len == 0 || bytes.ptr != NULL;
 }
 
+/* ta_record_put_span: see record.h. */
 TA_PRIVATE void ta_record_put_span(ta_record_tail *tail, ta_span32 *span, ta_bytes bytes) {
     if (bytes.len == 0) {
         *span = (ta_span32){ .offset = 0, .length = 0 };
