@@ -163,6 +163,12 @@ typedef struct {
     uint32_t held_mid;     /* F_CONST: its value's first; F_INITIALIZER: its default value's */
     uint32_t target_base;  /* F_PARAMS, F_PATTERN_*: the held target's first */
     sjs_position at;
+    /* The node its events belong to (sjs_event.node, .start); 0 for a frame
+     * that sends no events of its own (F_PAREN, F_LABEL, F_COMPUTED_KEY, ...).
+     * F_IMPORT and F_EXPORT keep only the statement's start. */
+    uint32_t node;
+    sjs_position start;
+    sjs_position chain_start; /* where the optional chain open in it starts */
 } frame;
 
 /* Operators waiting for their right operand. */
@@ -176,6 +182,8 @@ typedef struct {
     uint8_t precedence;
     uint8_t saved_segment;
     sjs_position at;
+    uint32_t node;         /* the node of its events (sjs_event.node, .start) */
+    sjs_position start;
 } pending_op;
 
 /* The lookahead after `(` (decide_paren), as far as it has read. */
@@ -203,7 +211,17 @@ typedef struct {
     uint32_t alias_offset;
     uint32_t alias_length;
     sjs_position at;
+    uint32_t node;
+    sjs_position start;
 } held_event;
+
+/* Where an event is: its own token, and the node it belongs to
+ * (sjs_event.at, .node and .start). */
+typedef struct {
+    sjs_position at;
+    uint32_t node;
+    sjs_position start;
+} event_place;
 
 struct sjs_parser {
     sjs_allocator allocator;
@@ -229,6 +247,11 @@ struct sjs_parser {
     bool arrow_body_next;  /* the next token begins an arrow function's body */
     bool params_nonsimple; /* ... whose parameters are not all plain names */
     uint8_t last_operand;  /* LO_*: what the operand just read can be assigned as */
+    uint32_t next_node;    /* the id the next node gets (sjs_event.node), from 1 */
+    sjs_position last_start; /* the start of the last event sent: of the operand just read */
+    uint32_t arrow_node;   /* the arrow function whose body begins next (arrow_body_next) */
+    sjs_position arrow_start;
+    sjs_position export_token; /* the `export` of the statement being read */
     bool default_exported; /* a module exported a name `default` */
     paren_scan scan;
     sjs_buf scan_levels;   /* a byte per pattern level the scan has open: 1 for an object */
@@ -341,6 +364,8 @@ static handled hold_event(sjs_parser *p, const sjs_event *e) {
     h.count = e->count;
     h.number = e->number;
     h.at = e->at;
+    h.node = e->node;
+    h.start = e->start;
     h.text_offset = p->held_text.length;
     h.text_length = e->text.length;
     if (sjs_buf_append(&p->allocator, &p->held_text, (sjs_bytes){ (const uint8_t *)e->text.ptr, e->text.length }) != SJS_OK) {
@@ -374,6 +399,7 @@ static handled send(sjs_parser *p, const sjs_event *e) {
         p->last_operand = LO_OTHER;
         break;
     }
+    p->last_start = e->start;
     if (p->refusing) return H_TAKEN;
     if (buffering(p)) return hold_event(p, e);
     sjs_result r = p->sink.v->event(p->sink.self, e);
@@ -386,27 +412,67 @@ static handled send(sjs_parser *p, const sjs_event *e) {
     return H_TAKEN;
 }
 
-static handled send_kind(sjs_parser *p, uint8_t kind, sjs_position at) {
-    sjs_event e = { 0 };
-    e.kind = kind;
-    e.at = at;
-    return send(p, &e);
+/* A node of its own, new, whose source starts at its token `at`. */
+static event_place own_place(sjs_parser *p, sjs_position at) {
+    event_place place = { at, p->next_node++, at };
+    return place;
 }
 
-static sjs_event counted(uint8_t kind, uint32_t count, sjs_position at) {
+/* A node, new, whose first operand is the one just read: an operator, a
+ * member, an index, a call, a conditional. */
+static event_place operand_place(sjs_parser *p, sjs_position at) {
+    event_place place = { at, p->next_node++, p->last_start };
+    return place;
+}
+
+/* An event at `at` of the node a frame or an operator reads. */
+static event_place frame_place(const frame *f, sjs_position at) {
+    event_place place = { at, f->node, f->start };
+    return place;
+}
+
+static event_place op_place(const pending_op *op) {
+    event_place place = { op->at, op->node, op->start };
+    return place;
+}
+
+/* A unary operator at `at`: a node of its own, from the operator. */
+static pending_op unary(sjs_parser *p, uint8_t op, sjs_position at) {
+    pending_op pending = { OP_UNARY, op, PRECEDENCE_UNARY, 0, at, p->next_node++, at };
+    return pending;
+}
+
+/* END: the program's, node 0, which starts where the source does. */
+static event_place program_end(sjs_position at) {
+    event_place place = { at, 0, { 0, 1, 1 } };
+    return place;
+}
+
+/* A frame that sends no events of its own. */
+static event_place no_node(sjs_position at) {
+    event_place place = { at, 0, at };
+    return place;
+}
+
+static sjs_event counted(uint8_t kind, uint32_t count, event_place place) {
     sjs_event e = { 0 };
     e.kind = kind;
     e.count = count;
-    e.at = at;
+    e.at = place.at;
+    e.node = place.node;
+    e.start = place.start;
     return e;
 }
 
-static sjs_event texted(uint8_t kind, sjs_str text, sjs_position at) {
-    sjs_event e = { 0 };
-    e.kind = kind;
+static sjs_event texted(uint8_t kind, sjs_str text, event_place place) {
+    sjs_event e = counted(kind, 0, place);
     e.text = text;
-    e.at = at;
     return e;
+}
+
+static handled send_kind(sjs_parser *p, uint8_t kind, event_place place) {
+    sjs_event e = counted(kind, 0, place);
+    return send(p, &e);
 }
 
 static handled send_event(sjs_parser *p, sjs_event e) {
@@ -446,6 +512,8 @@ static handled send_held(sjs_parser *p, uint32_t from) {
         e.count = h.count;
         e.number = h.number;
         e.at = h.at;
+        e.node = h.node;
+        e.start = h.start;
         e.text = (sjs_str){ (const char *)p->held_text.ptr + h.text_offset, h.text_length };
         e.alias = (sjs_str){ (const char *)p->held_text.ptr + h.alias_offset, h.alias_length };
         sjs_result r = p->sink.v->event(p->sink.self, &e);
@@ -497,15 +565,18 @@ static void hold_from_here(sjs_parser *p) {
  * Stacks
  */
 
-static handled push_frame(sjs_parser *p, uint8_t type, sjs_position at) {
+/* A frame at `place.at`, whose events are of `place`'s node. */
+static handled push_frame(sjs_parser *p, uint8_t type, event_place place) {
     if (frame_depth(p) >= p->limits.max_nesting) {
-        sjs_error_set(&p->error, at, (sjs_problem){ SJS_ERROR_LIMIT, "the program nests deeper than max_nesting" });
+        sjs_error_set(&p->error, place.at, (sjs_problem){ SJS_ERROR_LIMIT, "the program nests deeper than max_nesting" });
         p->failed = true;
         return H_STOP;
     }
     frame f = { 0 };
     f.type = type;
-    f.at = at;
+    f.at = place.at;
+    f.node = place.node;
+    f.start = place.start;
     f.ops_base = SJS_BUF_COUNT(p->ops, pending_op);
     frame *parent = top_frame(p);
     if (parent != NULL && parent->buffered) f.holds = f.buffered = 1;
@@ -544,21 +615,21 @@ static handled pop_op(sjs_parser *p) {
     p->ops.length -= (uint32_t)sizeof(pending_op);
     switch (op.kind) {
     case OP_UNARY:
-        return send_event(p, counted(SJS_EV_UNARY, op.op, op.at));
+        return send_event(p, counted(SJS_EV_UNARY, op.op, op_place(&op)));
     case OP_BINARY:
-        return send_event(p, counted(SJS_EV_BINARY, op.op, op.at));
+        return send_event(p, counted(SJS_EV_BINARY, op.op, op_place(&op)));
     case OP_LOGICAL:
-        return send_event(p, counted(SJS_EV_LOGICAL_END, op.op, op.at));
+        return send_event(p, counted(SJS_EV_LOGICAL_END, op.op, op_place(&op)));
     case OP_ARROW:
         top_frame(p)->segment = op.saved_segment;
-        return send_kind(p, SJS_EV_ARROW_END, op.at);
+        return send_kind(p, SJS_EV_ARROW_END, op_place(&op));
     case OP_ASSIGN:
         top_frame(p)->segment = op.saved_segment;
         p->last_operand = op.op ? LO_DEFAULTED : LO_OTHER;
         return H_TAKEN;
     default:
         top_frame(p)->segment = op.saved_segment;
-        return send_kind(p, SJS_EV_CONDITIONAL_END, op.at);
+        return send_kind(p, SJS_EV_CONDITIONAL_END, op_place(&op));
     }
 }
 
@@ -575,7 +646,8 @@ static handled end_chain(sjs_parser *p) {
     frame *f = top_frame(p);
     if (!f->chain) return H_TAKEN;
     f->chain = 0;
-    return send_event(p, counted(SJS_EV_CHAIN_END, frame_depth(p), f->at));
+    event_place place = { f->at, p->next_node++, f->chain_start };
+    return send_event(p, counted(SJS_EV_CHAIN_END, frame_depth(p), place));
 }
 
 /* The current expression is complete: close its chain and its operators. */
@@ -631,13 +703,14 @@ static bool arrow_allowed(sjs_parser *p) {
 
 /* After `=>`: a block, or an expression that runs as far as it can. */
 static handled arrow_body(sjs_parser *p, const queued_token *t) {
+    event_place place = { t->at, p->arrow_node, p->arrow_start };
     if (is_punctuator(t, SJS_P_LBRACE)) {
-        if (push_frame(p, F_BLOCK, t->at) == H_STOP) return H_STOP;
+        if (push_frame(p, F_BLOCK, place) == H_STOP) return H_STOP;
         top_frame(p)->nonsimple = p->params_nonsimple ? 1u : 0u;
-        return send_kind(p, SJS_EV_BLOCK_BEGIN, t->at);
+        return send_kind(p, SJS_EV_BLOCK_BEGIN, place);
     }
     frame *f = top_frame(p);
-    pending_op op = { OP_ARROW, 0, PRECEDENCE_ELSE, f->segment, t->at };
+    pending_op op = { OP_ARROW, 0, PRECEDENCE_ELSE, f->segment, t->at, place.node, place.start };
     f->segment = 0;
     if (push_op(p, op) == H_STOP) return H_STOP;
     p->expect = E_OPERAND;
@@ -1173,19 +1246,17 @@ static handled operand_name(sjs_parser *p, const queued_token *t) {
     switch (t->keyword) {
     case SJS_K_TRUE:
         p->expect = E_OPERATOR;
-        return send_kind(p, SJS_EV_TRUE, t->at) == H_STOP ? H_STOP : H_TAKEN;
+        return send_kind(p, SJS_EV_TRUE, own_place(p, t->at)) == H_STOP ? H_STOP : H_TAKEN;
     case SJS_K_FALSE:
         p->expect = E_OPERATOR;
-        return send_kind(p, SJS_EV_FALSE, t->at) == H_STOP ? H_STOP : H_TAKEN;
+        return send_kind(p, SJS_EV_FALSE, own_place(p, t->at)) == H_STOP ? H_STOP : H_TAKEN;
     case SJS_K_NULL:
         p->expect = E_OPERATOR;
-        return send_kind(p, SJS_EV_NULL, t->at) == H_STOP ? H_STOP : H_TAKEN;
-    case SJS_K_TYPEOF: {
-        pending_op op = { OP_UNARY, SJS_OP_TYPEOF, PRECEDENCE_UNARY, 0, t->at };
-        return push_op(p, op);
-    }
+        return send_kind(p, SJS_EV_NULL, own_place(p, t->at)) == H_STOP ? H_STOP : H_TAKEN;
+    case SJS_K_TYPEOF:
+        return push_op(p, unary(p, SJS_OP_TYPEOF, t->at));
     case SJS_K_NEW:
-        return push_frame(p, F_NEW, t->at);
+        return push_frame(p, F_NEW, own_place(p, t->at));
     case SJS_K_IMPORT:
         return import_word(p, t);
     case SJS_K_CONST:
@@ -1204,10 +1275,14 @@ static handled operand_name(sjs_parser *p, const queued_token *t) {
         if (next->newline_before) return parse_fail(p, next, (sjs_problem){ SJS_ERROR_SYNTAX, "=> must be on the line of its parameters" });
         if (!arrow_allowed(p)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "an arrow function cannot be an operand here" });
         sjs_str name = token_text(p, t);
-        if (send_event(p, counted(SJS_EV_ARROW_BEGIN, 1, t->at)) == H_STOP) return H_STOP;
-        if (send_event(p, counted(SJS_EV_PARAM, 0, t->at)) == H_STOP) return H_STOP;
-        if (send_event(p, texted(SJS_EV_BIND, name, t->at)) == H_STOP) return H_STOP;
-        if (send_kind(p, SJS_EV_PARAMS_END, next->at) == H_STOP) return H_STOP;
+        event_place arrow = own_place(p, t->at);
+        if (send_event(p, counted(SJS_EV_ARROW_BEGIN, 1, arrow)) == H_STOP) return H_STOP;
+        if (send_event(p, counted(SJS_EV_PARAM, 0, arrow)) == H_STOP) return H_STOP;
+        if (send_event(p, texted(SJS_EV_BIND, name, own_place(p, t->at))) == H_STOP) return H_STOP;
+        arrow.at = next->at;
+        if (send_kind(p, SJS_EV_PARAMS_END, arrow) == H_STOP) return H_STOP;
+        p->arrow_node = arrow.node;
+        p->arrow_start = arrow.start;
         /* Consume the name and the arrow; the body comes next. */
         p->head++;
         p->expect = E_OPERAND;
@@ -1216,31 +1291,31 @@ static handled operand_name(sjs_parser *p, const queued_token *t) {
         return H_TAKEN;
     }
     p->expect = E_OPERATOR;
-    return send_event(p, texted(SJS_EV_NAME, token_text(p, t), t->at)) == H_STOP ? H_STOP : H_TAKEN;
+    return send_event(p, texted(SJS_EV_NAME, token_text(p, t), own_place(p, t->at))) == H_STOP ? H_STOP : H_TAKEN;
 }
 
 static handled operand(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     switch (t->kind) {
     case SJS_TOKEN_NUMBER: {
-        sjs_event e = { 0 };
-        e.kind = SJS_EV_NUMBER;
+        sjs_event e = counted(SJS_EV_NUMBER, 0, own_place(p, t->at));
         e.number = t->number;
-        e.at = t->at;
         p->expect = E_OPERATOR;
         return send(p, &e);
     }
     case SJS_TOKEN_STRING:
     case SJS_TOKEN_TEMPLATE:
         p->expect = E_OPERATOR;
-        return send_event(p, texted(SJS_EV_STRING, token_text(p, t), t->at));
-    case SJS_TOKEN_TEMPLATE_HEAD:
-        if (send_kind(p, SJS_EV_TEMPLATE_BEGIN, t->at) == H_STOP) return H_STOP;
-        if (send_event(p, texted(SJS_EV_STRING, token_text(p, t), t->at)) == H_STOP) return H_STOP;
-        if (push_frame(p, F_TEMPLATE, t->at) == H_STOP) return H_STOP;
+        return send_event(p, texted(SJS_EV_STRING, token_text(p, t), own_place(p, t->at)));
+    case SJS_TOKEN_TEMPLATE_HEAD: {
+        event_place head = own_place(p, t->at);
+        if (send_kind(p, SJS_EV_TEMPLATE_BEGIN, head) == H_STOP) return H_STOP;
+        if (send_event(p, texted(SJS_EV_STRING, token_text(p, t), head)) == H_STOP) return H_STOP;
+        if (push_frame(p, F_TEMPLATE, head) == H_STOP) return H_STOP;
         top_frame(p)->count = 1;
         p->expect = E_OPERAND;
         return H_TAKEN;
+    }
     case SJS_TOKEN_NAME:
         return operand_name(p, t);
     case SJS_TOKEN_PUNCTUATOR:
@@ -1256,33 +1331,32 @@ static handled operand(sjs_parser *p, const queued_token *t) {
         if (d == D_FAILED) return H_STOP;
         if (d == D_ARROW) {
             if (!arrow_allowed(p)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "an arrow function cannot be an operand here" });
-            if (send_event(p, counted(SJS_EV_ARROW_BEGIN, params, t->at)) == H_STOP) return H_STOP;
-            return push_frame(p, F_PARAMS, t->at);
+            event_place arrow = own_place(p, t->at);
+            if (send_event(p, counted(SJS_EV_ARROW_BEGIN, params, arrow)) == H_STOP) return H_STOP;
+            return push_frame(p, F_PARAMS, arrow);
         }
-        if (push_frame(p, F_PAREN, t->at) == H_STOP) return H_STOP;
+        if (push_frame(p, F_PAREN, no_node(t->at)) == H_STOP) return H_STOP;
         p->expect = E_OPERAND;
         return H_TAKEN;
     }
-    case SJS_P_LBRACKET:
-        if (send_kind(p, SJS_EV_ARRAY_BEGIN, t->at) == H_STOP) return H_STOP;
-        if (push_frame(p, F_ARRAY, t->at) == H_STOP) return H_STOP;
+    case SJS_P_LBRACKET: {
+        event_place array = own_place(p, t->at);
+        if (send_kind(p, SJS_EV_ARRAY_BEGIN, array) == H_STOP) return H_STOP;
+        if (push_frame(p, F_ARRAY, array) == H_STOP) return H_STOP;
         p->expect = E_OPERAND;
         return H_TAKEN;
-    case SJS_P_LBRACE:
-        if (send_kind(p, SJS_EV_OBJECT_BEGIN, t->at) == H_STOP) return H_STOP;
-        return push_frame(p, F_OBJECT, t->at);
-    case SJS_P_BANG: {
-        pending_op op = { OP_UNARY, SJS_OP_NOT, PRECEDENCE_UNARY, 0, t->at };
-        return push_op(p, op);
     }
-    case SJS_P_MINUS: {
-        pending_op op = { OP_UNARY, SJS_OP_NEGATE, PRECEDENCE_UNARY, 0, t->at };
-        return push_op(p, op);
+    case SJS_P_LBRACE: {
+        event_place object = own_place(p, t->at);
+        if (send_kind(p, SJS_EV_OBJECT_BEGIN, object) == H_STOP) return H_STOP;
+        return push_frame(p, F_OBJECT, object);
     }
-    case SJS_P_PLUS: {
-        pending_op op = { OP_UNARY, SJS_OP_PLUS, PRECEDENCE_UNARY, 0, t->at };
-        return push_op(p, op);
-    }
+    case SJS_P_BANG:
+        return push_op(p, unary(p, SJS_OP_NOT, t->at));
+    case SJS_P_MINUS:
+        return push_op(p, unary(p, SJS_OP_NEGATE, t->at));
+    case SJS_P_PLUS:
+        return push_op(p, unary(p, SJS_OP_PLUS, t->at));
     case SJS_P_ELLIPSIS:
         if ((f->type == F_ARRAY || f->type == F_CALL) && !f->spread && top_op(p) == NULL) {
             f->spread = 1;
@@ -1301,8 +1375,7 @@ static handled operand(sjs_parser *p, const queued_token *t) {
     case SJS_P_TILDE: {
         /* Refused, and read on as a unary operator. */
         if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no bitwise operators" }) == H_STOP) return H_STOP;
-        pending_op op = { OP_UNARY, SJS_OP_NOT, PRECEDENCE_UNARY, 0, t->at };
-        return push_op(p, op);
+        return push_op(p, unary(p, SJS_OP_NOT, t->at));
     }
     default:
         /* `#name` and `@` too: outside a class, which staticjs has none of, and a decorator are not JavaScript. */
@@ -1332,14 +1405,17 @@ static bool is_terminator(const queued_token *t) {
 
 /* An infix operator and how tightly it binds. */
 static pending_op infix(uint8_t op, uint8_t precedence) {
-    pending_op pending = { OP_BINARY, op, precedence, 0, { 0, 0, 0 } };
+    pending_op pending = { OP_BINARY, op, precedence, 0, { 0, 0, 0 }, 0, { 0, 0, 0 } };
     return pending;
 }
 
 static handled parse_binary(sjs_parser *p, const queued_token *t, pending_op pending) {
     if (end_chain(p) == H_STOP) return H_STOP;
     if (pop_ops(p, pending.precedence) == H_STOP) return H_STOP;
-    pending.at = t->at;
+    event_place place = operand_place(p, t->at);
+    pending.at = place.at;
+    pending.node = place.node;
+    pending.start = place.start;
     p->expect = E_OPERAND;
     return push_op(p, pending);
 }
@@ -1354,9 +1430,12 @@ static handled parse_logical(sjs_parser *p, const queued_token *t, pending_op pe
     if (f->segment == (SEG_LOGICAL | SEG_COALESCE)) {
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "?? cannot be mixed with && or || without parentheses" });
     }
-    if (send_event(p, counted(SJS_EV_LOGICAL, op, t->at)) == H_STOP) return H_STOP;
+    event_place place = operand_place(p, t->at);
+    if (send_event(p, counted(SJS_EV_LOGICAL, op, place)) == H_STOP) return H_STOP;
     pending.kind = OP_LOGICAL;
-    pending.at = t->at;
+    pending.at = place.at;
+    pending.node = place.node;
+    pending.start = place.start;
     p->expect = E_OPERAND;
     return push_op(p, pending);
 }
@@ -1369,20 +1448,21 @@ static handled member(sjs_parser *p, const queued_token *dot) {
         return parse_fail(p, name, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a property name after ." });
     }
     SJS_UNUSED(dot);
-    if (send_event(p, texted(SJS_EV_MEMBER, token_text(p, name), name->at)) == H_STOP) return H_STOP;
+    if (send_event(p, texted(SJS_EV_MEMBER, token_text(p, name), operand_place(p, name->at))) == H_STOP) return H_STOP;
     p->head++;
     return H_TAKEN;
 }
 
 static handled open_call(sjs_parser *p, const queued_token *t) {
-    if (send_kind(p, SJS_EV_CALL_BEGIN, t->at) == H_STOP) return H_STOP;
-    if (push_frame(p, F_CALL, t->at) == H_STOP) return H_STOP;
+    event_place call = operand_place(p, t->at);
+    if (send_kind(p, SJS_EV_CALL_BEGIN, call) == H_STOP) return H_STOP;
+    if (push_frame(p, F_CALL, call) == H_STOP) return H_STOP;
     p->expect = E_OPERAND;
     return H_TAKEN;
 }
 
 static handled open_index(sjs_parser *p, const queued_token *t) {
-    if (push_frame(p, F_INDEX, t->at) == H_STOP) return H_STOP;
+    if (push_frame(p, F_INDEX, operand_place(p, t->at)) == H_STOP) return H_STOP;
     p->expect = E_OPERAND;
     return H_TAKEN;
 }
@@ -1391,10 +1471,11 @@ static handled parse_optional(sjs_parser *p, const queued_token *t) {
     const queued_token *next = peek(p, 1);
     if (next == NULL) return H_WAIT;
     frame *f = top_frame(p);
+    if (!f->chain) f->chain_start = p->last_start;
     f->chain = 1;
-    if (send_event(p, counted(SJS_EV_OPTIONAL, frame_depth(p), t->at)) == H_STOP) return H_STOP;
+    if (send_event(p, counted(SJS_EV_OPTIONAL, frame_depth(p), operand_place(p, t->at))) == H_STOP) return H_STOP;
     if (next->kind == SJS_TOKEN_NAME) {
-        if (send_event(p, texted(SJS_EV_MEMBER, token_text(p, next), next->at)) == H_STOP) return H_STOP;
+        if (send_event(p, texted(SJS_EV_MEMBER, token_text(p, next), operand_place(p, next->at))) == H_STOP) return H_STOP;
         p->head++;
         return H_TAKEN;
     }
@@ -1417,9 +1498,10 @@ static bool assignable_item(const sjs_parser *p) {
 
 static handled close_object(sjs_parser *p, const queued_token *t) {
     bool pattern = !top_frame(p)->not_pattern;
+    event_place place = frame_place(top_frame(p), t->at);
     pop_frame(p);
     p->expect = E_OPERATOR;
-    if (send_kind(p, SJS_EV_OBJECT_END, t->at) == H_STOP) return H_STOP;
+    if (send_kind(p, SJS_EV_OBJECT_END, place) == H_STOP) return H_STOP;
     if (pattern) p->last_operand = LO_PATTERN;
     return H_TAKEN;
 }
@@ -1439,7 +1521,7 @@ static handled assignment(sjs_parser *p, const queued_token *t) {
     if (!position || !target) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "the left side of this assignment cannot be assigned to" });
     if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no assignment: values do not change" }) == H_STOP) return H_STOP;
     uint8_t defaulted = plain && (left == LO_SIMPLE || left == LO_PATTERN) ? 1u : 0u;
-    pending_op op = { OP_ASSIGN, defaulted, PRECEDENCE_ELSE, f->segment, t->at };
+    pending_op op = { OP_ASSIGN, defaulted, PRECEDENCE_ELSE, f->segment, t->at, 0, t->at };
     f->segment = 0;
     p->expect = E_OPERAND;
     return push_op(p, op);
@@ -1533,13 +1615,15 @@ static handled operator_token(sjs_parser *p, const queued_token *t) {
         return parse_logical(p, t, infix(SJS_OP_OR, PRECEDENCE_OR));
     case SJS_P_COALESCE:
         return parse_logical(p, t, infix(SJS_OP_COALESCE, PRECEDENCE_COALESCE));
-    case SJS_P_QUESTION:
+    case SJS_P_QUESTION: {
         if (end_chain(p) == H_STOP) return H_STOP;
         if (pop_ops(p, PRECEDENCE_ELSE + 1u) == H_STOP) return H_STOP;
-        if (send_kind(p, SJS_EV_CONDITIONAL, t->at) == H_STOP) return H_STOP;
-        if (push_frame(p, F_CONDITIONAL, t->at) == H_STOP) return H_STOP;
+        event_place place = operand_place(p, t->at);
+        if (send_kind(p, SJS_EV_CONDITIONAL, place) == H_STOP) return H_STOP;
+        if (push_frame(p, F_CONDITIONAL, place) == H_STOP) return H_STOP;
         p->expect = E_OPERAND;
         return H_TAKEN;
+    }
     case SJS_P_EQUAL:
     case SJS_P_NOT_EQUAL:
         return refused_binary(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs compares with === and !== only" });
@@ -1575,7 +1659,7 @@ static handled end_item(sjs_parser *p, uint8_t plain, uint8_t spread) {
     uint8_t kind = f->spread ? spread : plain;
     f->spread = 0;
     f->count++;
-    return send_kind(p, kind, f->at);
+    return send_kind(p, kind, frame_place(f, f->at));
 }
 
 static handled list_terminator(sjs_parser *p, const queued_token *t, uint8_t closer) {
@@ -1619,11 +1703,11 @@ static handled list_terminator(sjs_parser *p, const queued_token *t, uint8_t clo
     f = top_frame(p);
     uint8_t kind = is_array ? SJS_EV_ARRAY_END : (f->is_new ? SJS_EV_NEW_END : SJS_EV_CALL_END);
     uint32_t count = f->count;
-    sjs_position at = f->at;
+    event_place place = frame_place(f, f->at);
     bool pattern = !f->not_pattern;
     pop_frame(p);
     p->expect = E_OPERATOR;
-    if (send_event(p, counted(kind, count, at)) == H_STOP) return H_STOP;
+    if (send_event(p, counted(kind, count, place)) == H_STOP) return H_STOP;
     if (is_array && pattern) p->last_operand = LO_PATTERN;
     return H_TAKEN;
 }
@@ -1634,7 +1718,7 @@ static handled statement_done(sjs_parser *p);
 static handled finish_const(sjs_parser *p) {
     frame *f = top_frame(p);
     if (settle_held(p, f->held_base, f->held_mid) == H_STOP) return H_STOP;
-    return send_kind(p, SJS_EV_CONST_END, top_frame(p)->at);
+    return send_kind(p, SJS_EV_CONST_END, frame_place(top_frame(p), top_frame(p)->at));
 }
 
 /* `a, b` where an expression may be: a refusal, read on. */
@@ -1661,8 +1745,9 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
     if (empty) {
         if (f->type == F_RETURN && top_op(p) == NULL && (is_punctuator(t, SJS_P_SEMICOLON) || is_punctuator(t, SJS_P_RBRACE))) {
             /* `return;` returns undefined. */
+            event_place place = frame_place(f, t->at);
             pop_frame(p);
-            if (send_event(p, counted(SJS_EV_RETURN, 0, t->at)) == H_STOP) return H_STOP;
+            if (send_event(p, counted(SJS_EV_RETURN, 0, place)) == H_STOP) return H_STOP;
             if (statement_done(p) == H_STOP) return H_STOP;
             return is_punctuator(t, SJS_P_SEMICOLON) ? H_TAKEN : H_AGAIN;
         }
@@ -1683,7 +1768,7 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         if (t->kind != SJS_TOKEN_END) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected the end of the expression" });
         if (p->refusing) return report_refusal(p);
         p->done = true;
-        return send_kind(p, SJS_EV_END, t->at) == H_STOP ? H_STOP : H_TAKEN;
+        return send_kind(p, SJS_EV_END, program_end(t->at)) == H_STOP ? H_STOP : H_TAKEN;
     case F_PAREN: {
         if (!is_punctuator(t, SJS_P_RPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected )" });
         bool comma = f->after_comma != 0;
@@ -1694,32 +1779,36 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         if (comma || p->last_operand == LO_PATTERN || p->last_operand == LO_DEFAULTED) p->last_operand = LO_OTHER;
         return H_TAKEN;
     }
-    case F_INDEX:
+    case F_INDEX: {
         if (!is_punctuator(t, SJS_P_RBRACKET)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ]" });
+        event_place place = frame_place(f, t->at);
         pop_frame(p);
         p->expect = E_OPERATOR;
-        return send_kind(p, SJS_EV_INDEX, t->at);
+        return send_kind(p, SJS_EV_INDEX, place);
+    }
     case F_TEMPLATE:
         if (t->kind == SJS_TOKEN_TEMPLATE_MIDDLE) {
             f->count += 2;
             p->expect = E_OPERAND;
-            return send_event(p, texted(SJS_EV_STRING, token_text(p, t), t->at));
+            return send_event(p, texted(SJS_EV_STRING, token_text(p, t), frame_place(f, t->at)));
         }
         if (t->kind == SJS_TOKEN_TEMPLATE_TAIL) {
             uint32_t count = f->count + 2;
+            event_place place = frame_place(f, t->at);
             pop_frame(p);
             p->expect = E_OPERATOR;
-            if (send_event(p, texted(SJS_EV_STRING, token_text(p, t), t->at)) == H_STOP) return H_STOP;
-            return send_event(p, counted(SJS_EV_TEMPLATE_END, count, t->at));
+            if (send_event(p, texted(SJS_EV_STRING, token_text(p, t), place)) == H_STOP) return H_STOP;
+            return send_event(p, counted(SJS_EV_TEMPLATE_END, count, place));
         }
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected } to close ${" });
     case F_CONDITIONAL: {
         if (!is_punctuator(t, SJS_P_COLON)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected : of ?:" });
         sjs_position at = f->at;
+        event_place place = frame_place(f, t->at);
         pop_frame(p);
-        if (send_kind(p, SJS_EV_CONDITIONAL_ELSE, t->at) == H_STOP) return H_STOP;
+        if (send_kind(p, SJS_EV_CONDITIONAL_ELSE, place) == H_STOP) return H_STOP;
         frame *parent = top_frame(p);
-        pending_op op = { OP_ELSE, 0, PRECEDENCE_ELSE, parent->segment, at };
+        pending_op op = { OP_ELSE, 0, PRECEDENCE_ELSE, parent->segment, at, place.node, place.start };
         parent->segment = 0;
         p->expect = E_OPERAND;
         return push_op(p, op);
@@ -1734,7 +1823,7 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         uint8_t kind = f->spread ? SJS_EV_SPREAD_PROPERTY : SJS_EV_PROPERTY;
         f->spread = 0;
         f->count++;
-        if (send_kind(p, kind, t->at) == H_STOP) return H_STOP;
+        if (send_kind(p, kind, frame_place(f, t->at)) == H_STOP) return H_STOP;
         if (is_punctuator(t, SJS_P_COMMA)) {
             f->state = O_KEY;
             f->after_comma = 1;
@@ -1747,19 +1836,24 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         pop_frame(p);
         if (top_frame(p)->type == F_PATTERN_OBJECT) {
             top_frame(p)->state = PO_COLON;
-            return send_kind(p, SJS_EV_PATTERN_COMPUTED_KEY, t->at);
+            return send_kind(p, SJS_EV_PATTERN_COMPUTED_KEY, frame_place(top_frame(p), t->at));
         }
         top_frame(p)->state = O_COLON;
-        return send_kind(p, SJS_EV_COMPUTED_KEY, t->at);
+        return send_kind(p, SJS_EV_COMPUTED_KEY, frame_place(top_frame(p), t->at));
     case F_INITIALIZER:
         return end_initializer(p, t);
     case F_CONST:
         if (is_punctuator(t, SJS_P_SEMICOLON) || is_punctuator(t, SJS_P_COMMA)) {
             if (finish_const(p) == H_STOP) return H_STOP;
             if (is_punctuator(t, SJS_P_COMMA)) {
-                /* `export const a = 1, b = 2` exports both. */
-                if (f->exported && send_kind(p, SJS_EV_EXPORT, t->at) == H_STOP) return H_STOP;
-                if (send_kind(p, SJS_EV_CONST_BEGIN, t->at) == H_STOP) return H_STOP;
+                /* `export const a = 1, b = 2` exports both; each is a node,
+                 * from the statement's `const`. */
+                if (f->exported) {
+                    event_place exported = { t->at, p->next_node++, p->export_token };
+                    if (send_kind(p, SJS_EV_EXPORT, exported) == H_STOP) return H_STOP;
+                }
+                f->node = p->next_node++;
+                if (send_kind(p, SJS_EV_CONST_BEGIN, frame_place(f, t->at)) == H_STOP) return H_STOP;
                 top_frame(p)->state = C_PATTERN;
                 hold_from_here(p);
                 return H_TAKEN;
@@ -1774,14 +1868,16 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
             return statement_done(p) == H_STOP ? H_STOP : H_AGAIN;
         }
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after a const declaration" });
-    case F_RETURN:
+    case F_RETURN: {
         if (!is_punctuator(t, SJS_P_SEMICOLON) && !is_punctuator(t, SJS_P_RBRACE)) {
             return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after return" });
         }
+        event_place place = frame_place(f, t->at);
         pop_frame(p);
-        if (send_event(p, counted(SJS_EV_RETURN, 1, t->at)) == H_STOP) return H_STOP;
+        if (send_event(p, counted(SJS_EV_RETURN, 1, place)) == H_STOP) return H_STOP;
         if (statement_done(p) == H_STOP) return H_STOP;
         return is_punctuator(t, SJS_P_SEMICOLON) ? H_TAKEN : H_AGAIN;
+    }
     case F_EXPRESSION_STATEMENT:
         /* Refused already; it ends as a statement does. */
         if (!is_punctuator(t, SJS_P_SEMICOLON) && !is_punctuator(t, SJS_P_RBRACE) && t->kind != SJS_TOKEN_END) {
@@ -1794,15 +1890,15 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         /* The condition ends. */
         if (!is_punctuator(t, SJS_P_RPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ) after the condition" });
         f->state = IF_CONSEQUENT;
-        return send_kind(p, SJS_EV_IF, t->at);
+        return send_kind(p, SJS_EV_IF, frame_place(f, t->at));
     case F_DEFAULT: {
         if (is_punctuator(t, SJS_P_COMMA)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "export default takes one expression" });
         if (!is_punctuator(t, SJS_P_SEMICOLON) && t->kind != SJS_TOKEN_END) {
             return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after export default" });
         }
-        sjs_position at = f->at;
+        event_place place = frame_place(f, f->at);
         pop_frame(p);
-        if (send_kind(p, SJS_EV_EXPORT_DEFAULT, at) == H_STOP) return H_STOP;
+        if (send_kind(p, SJS_EV_EXPORT_DEFAULT, place) == H_STOP) return H_STOP;
         return is_punctuator(t, SJS_P_SEMICOLON) ? H_TAKEN : H_AGAIN;
     }
     default:
@@ -1931,12 +2027,12 @@ static handled begin_initializer(sjs_parser *p, const queued_token *t) {
     }
     if (f->type == F_PARAMS) f->nonsimple = 1;
     uint8_t holds = f->holds;
-    if (push_frame(p, F_INITIALIZER, t->at) == H_STOP) return H_STOP;
+    if (push_frame(p, F_INITIALIZER, own_place(p, t->at)) == H_STOP) return H_STOP;
     frame *init = top_frame(p);
     init->holds = init->buffered = holds;
     init->held_mid = held_count(p);
     p->expect = E_OPERAND;
-    return send_kind(p, SJS_EV_DEFAULT, t->at);
+    return send_kind(p, SJS_EV_DEFAULT, frame_place(init, t->at));
 }
 
 /* The default value ends at `,` or at the pattern's closing bracket, which
@@ -1946,7 +2042,7 @@ static handled end_initializer(sjs_parser *p, const queued_token *t) {
         !is_punctuator(t, SJS_P_RPAREN)) {
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "a default value ends with , or the pattern's end" });
     }
-    if (send_kind(p, SJS_EV_DEFAULT_END, t->at) == H_STOP) return H_STOP;
+    if (send_kind(p, SJS_EV_DEFAULT_END, frame_place(top_frame(p), t->at)) == H_STOP) return H_STOP;
     uint32_t n = frame_depth(p);
     frame *target = &SJS_BUF_AT(p->frames, frame, n - 2);
     if (settle_held(p, target->target_base, top_frame(p)->held_mid) == H_STOP) return H_STOP;
@@ -1960,18 +2056,18 @@ static handled end_initializer(sjs_parser *p, const queued_token *t) {
 static handled pattern_start(sjs_parser *p, const queued_token *t) {
     if (t->kind == SJS_TOKEN_NAME) {
         if (t->keyword != SJS_K_NONE) return refuse_binding(p, t, token_text(p, t));
-        if (send_event(p, texted(SJS_EV_BIND, token_text(p, t), t->at)) == H_STOP) return H_STOP;
+        if (send_event(p, texted(SJS_EV_BIND, token_text(p, t), own_place(p, t->at))) == H_STOP) return H_STOP;
         pattern_done(p);
         return H_TAKEN;
     }
     if (top_frame(p)->type == F_PARAMS) top_frame(p)->nonsimple = 1;
     if (is_punctuator(t, SJS_P_LBRACKET)) {
-        if (push_frame(p, F_PATTERN_ARRAY, t->at) == H_STOP) return H_STOP;
-        return send_kind(p, SJS_EV_ARRAY_PATTERN_BEGIN, t->at);
+        if (push_frame(p, F_PATTERN_ARRAY, own_place(p, t->at)) == H_STOP) return H_STOP;
+        return send_kind(p, SJS_EV_ARRAY_PATTERN_BEGIN, frame_place(top_frame(p), t->at));
     }
     if (is_punctuator(t, SJS_P_LBRACE)) {
-        if (push_frame(p, F_PATTERN_OBJECT, t->at) == H_STOP) return H_STOP;
-        return send_kind(p, SJS_EV_OBJECT_PATTERN_BEGIN, t->at);
+        if (push_frame(p, F_PATTERN_OBJECT, own_place(p, t->at)) == H_STOP) return H_STOP;
+        return send_kind(p, SJS_EV_OBJECT_PATTERN_BEGIN, frame_place(top_frame(p), t->at));
     }
     return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a name, [ or {" });
 }
@@ -1983,7 +2079,7 @@ static handled target_start(sjs_parser *p, const queued_token *t) {
 }
 
 static handled close_pattern(sjs_parser *p, uint8_t kind, const queued_token *t) {
-    if (send_kind(p, kind, t->at) == H_STOP) return H_STOP;
+    if (send_kind(p, kind, frame_place(top_frame(p), t->at)) == H_STOP) return H_STOP;
     pop_frame(p);
     pattern_done(p);
     return H_TAKEN;
@@ -2028,9 +2124,9 @@ static handled pattern_array_token(sjs_parser *p, const queued_token *t) {
         if (is_punctuator(t, SJS_P_ELLIPSIS)) {
             f->rest = 1;
             f->state = PA_REST;
-            return send_event(p, counted(SJS_EV_PATTERN_REST, f->count, t->at));
+            return send_event(p, counted(SJS_EV_PATTERN_REST, f->count, frame_place(f, t->at)));
         }
-        if (send_event(p, counted(SJS_EV_PATTERN_INDEX, f->count, t->at)) == H_STOP) return H_STOP;
+        if (send_event(p, counted(SJS_EV_PATTERN_INDEX, f->count, frame_place(f, t->at))) == H_STOP) return H_STOP;
         return target_start(p, t);
     }
 }
@@ -2039,9 +2135,9 @@ static handled pattern_array_token(sjs_parser *p, const queued_token *t) {
 static handled shorthand_property(sjs_parser *p, const queued_token *t) {
     if (p->name_keyword == NAME_STRING) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "this word cannot be bound" });
     if (p->name_keyword != SJS_K_NONE) return refuse_binding(p, t, held_name(p));
-    if (send_event(p, texted(SJS_EV_PATTERN_KEY, held_name(p), p->name_at)) == H_STOP) return H_STOP;
+    if (send_event(p, texted(SJS_EV_PATTERN_KEY, held_name(p), frame_place(top_frame(p), p->name_at))) == H_STOP) return H_STOP;
     begin_target(p);
-    if (send_event(p, texted(SJS_EV_BIND, held_name(p), p->name_at)) == H_STOP) return H_STOP;
+    if (send_event(p, texted(SJS_EV_BIND, held_name(p), own_place(p, p->name_at))) == H_STOP) return H_STOP;
     pattern_done(p);
     return H_AGAIN;
 }
@@ -2060,10 +2156,10 @@ static handled pattern_key_token(sjs_parser *p, const queued_token *t) {
         char text[32];
         uint32_t length = sjs_number_format(t->number, text);
         f->state = PO_COLON;
-        return send_event(p, texted(SJS_EV_PATTERN_KEY, (sjs_str){ text, length }, t->at));
+        return send_event(p, texted(SJS_EV_PATTERN_KEY, (sjs_str){ text, length }, frame_place(f, t->at)));
     }
     if (is_punctuator(t, SJS_P_LBRACKET)) {
-        if (push_frame(p, F_COMPUTED_KEY, t->at) == H_STOP) return H_STOP;
+        if (push_frame(p, F_COMPUTED_KEY, no_node(t->at)) == H_STOP) return H_STOP;
         p->expect = E_OPERAND;
         return H_TAKEN;
     }
@@ -2081,7 +2177,7 @@ static handled pattern_object_token(sjs_parser *p, const queued_token *t) {
         return pattern_key_token(p, t);
     case PO_KEY_NAME:
         if (is_punctuator(t, SJS_P_COLON)) {
-            if (send_event(p, texted(SJS_EV_PATTERN_KEY, held_name(p), p->name_at)) == H_STOP) return H_STOP;
+            if (send_event(p, texted(SJS_EV_PATTERN_KEY, held_name(p), frame_place(f, p->name_at))) == H_STOP) return H_STOP;
             /* The next token starts the property's own pattern. */
             f->state = PO_VALUE;
             return H_TAKEN;
@@ -2100,7 +2196,7 @@ static handled pattern_object_token(sjs_parser *p, const queued_token *t) {
         if (t->kind != SJS_TOKEN_NAME) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "... in an object pattern takes a name" });
         if (t->keyword != SJS_K_NONE) return refuse_binding(p, t, token_text(p, t));
         f->rest = 1;
-        if (send_event(p, counted(SJS_EV_PATTERN_REST, 0, t->at)) == H_STOP) return H_STOP;
+        if (send_event(p, counted(SJS_EV_PATTERN_REST, 0, frame_place(f, t->at))) == H_STOP) return H_STOP;
         return target_start(p, t);
     default: { /* PO_AFTER */
         handled h = after_target(p, t);
@@ -2124,8 +2220,11 @@ static handled end_params(sjs_parser *p) {
     if (arrow == NULL) return H_WAIT;
     if (arrow->newline_before) return parse_fail(p, arrow, (sjs_problem){ SJS_ERROR_SYNTAX, "=> must be on the line of its parameters" });
     p->params_nonsimple = f->nonsimple != 0;
+    p->arrow_node = f->node;
+    p->arrow_start = f->start;
+    event_place place = frame_place(f, arrow->at);
     pop_frame(p);
-    if (send_kind(p, SJS_EV_PARAMS_END, arrow->at) == H_STOP) return H_STOP;
+    if (send_kind(p, SJS_EV_PARAMS_END, place) == H_STOP) return H_STOP;
     p->head++;
     p->expect = E_OPERAND;
     p->arrow_body_next = true;
@@ -2162,9 +2261,9 @@ static handled params_token(sjs_parser *p, const queued_token *t) {
             f->rest = 1;
             f->nonsimple = 1;
             f->state = P_REST;
-            return send_event(p, counted(SJS_EV_REST_PARAM, f->count, t->at));
+            return send_event(p, counted(SJS_EV_REST_PARAM, f->count, frame_place(f, t->at)));
         }
-        if (send_event(p, counted(SJS_EV_PARAM, f->count, t->at)) == H_STOP) return H_STOP;
+        if (send_event(p, counted(SJS_EV_PARAM, f->count, frame_place(f, t->at))) == H_STOP) return H_STOP;
         return target_start(p, t);
     }
 }
@@ -2299,8 +2398,8 @@ static handled shorthand_word(sjs_parser *p, const queued_token *t) {
 static handled cover_assigned(sjs_parser *p, const queued_token *t) {
     if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no assignment: values do not change" }) == H_STOP) return H_STOP;
     if (shorthand_word(p, t) == H_STOP) return H_STOP;
-    if (send_event(p, texted(SJS_EV_KEY, held_name(p), p->name_at)) == H_STOP) return H_STOP;
-    if (send_event(p, texted(SJS_EV_NAME, held_name(p), p->name_at)) == H_STOP) return H_STOP;
+    if (send_event(p, texted(SJS_EV_KEY, held_name(p), frame_place(top_frame(p), p->name_at))) == H_STOP) return H_STOP;
+    if (send_event(p, texted(SJS_EV_NAME, held_name(p), own_place(p, p->name_at))) == H_STOP) return H_STOP;
     top_frame(p)->state = O_VALUE;
     p->expect = E_OPERATOR;
     return H_AGAIN;
@@ -2325,19 +2424,17 @@ static handled object_key_token(sjs_parser *p, const queued_token *t) {
                 return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs objects have no prototype" });
             }
             f->state = O_COLON;
-            return send_event(p, texted(SJS_EV_KEY, token_text(p, t), t->at));
+            return send_event(p, texted(SJS_EV_KEY, token_text(p, t), frame_place(f, t->at)));
         }
         if (t->kind == SJS_TOKEN_NUMBER) {
-            sjs_event e = { 0 };
-            e.kind = SJS_EV_NUMBER;
+            sjs_event e = counted(SJS_EV_NUMBER, 0, own_place(p, t->at));
             e.number = t->number;
-            e.at = t->at;
             if (send(p, &e) == H_STOP) return H_STOP;
             f->state = O_COLON;
-            return send_kind(p, SJS_EV_COMPUTED_KEY, t->at);
+            return send_kind(p, SJS_EV_COMPUTED_KEY, frame_place(f, t->at));
         }
         if (is_punctuator(t, SJS_P_LBRACKET)) {
-            if (push_frame(p, F_COMPUTED_KEY, t->at) == H_STOP) return H_STOP;
+            if (push_frame(p, F_COMPUTED_KEY, no_node(t->at)) == H_STOP) return H_STOP;
             p->expect = E_OPERAND;
             return H_TAKEN;
         }
@@ -2354,7 +2451,7 @@ static handled object_key_token(sjs_parser *p, const queued_token *t) {
             if (sjs_str_equal(held_name(p), SJS_STR("__proto__"))) {
                 return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs objects have no prototype" });
             }
-            if (send_event(p, texted(SJS_EV_KEY, held_name(p), p->name_at)) == H_STOP) return H_STOP;
+            if (send_event(p, texted(SJS_EV_KEY, held_name(p), frame_place(f, p->name_at))) == H_STOP) return H_STOP;
             f->state = O_VALUE;
             p->expect = E_OPERAND;
             return H_TAKEN;
@@ -2364,8 +2461,8 @@ static handled object_key_token(sjs_parser *p, const queued_token *t) {
             if (sjs_str_equal(held_name(p), SJS_STR("__proto__"))) {
                 return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs objects have no prototype" });
             }
-            if (send_event(p, texted(SJS_EV_KEY, held_name(p), p->name_at)) == H_STOP) return H_STOP;
-            if (send_event(p, texted(SJS_EV_NAME, held_name(p), p->name_at)) == H_STOP) return H_STOP;
+            if (send_event(p, texted(SJS_EV_KEY, held_name(p), frame_place(f, p->name_at))) == H_STOP) return H_STOP;
+            if (send_event(p, texted(SJS_EV_NAME, held_name(p), own_place(p, p->name_at))) == H_STOP) return H_STOP;
             f->state = O_VALUE;
             p->expect = E_OPERATOR;
             return H_AGAIN;
@@ -2393,8 +2490,8 @@ static handled object_key_token(sjs_parser *p, const queued_token *t) {
 /* The pattern comes before the value in the source and after it in the
  * events, so its events are held until the value has been sent. */
 static handled begin_const(sjs_parser *p, const queued_token *t) {
-    if (push_frame(p, F_CONST, t->at) == H_STOP) return H_STOP;
-    if (send_kind(p, SJS_EV_CONST_BEGIN, t->at) == H_STOP) return H_STOP;
+    if (push_frame(p, F_CONST, own_place(p, t->at)) == H_STOP) return H_STOP;
+    if (send_kind(p, SJS_EV_CONST_BEGIN, frame_place(top_frame(p), t->at)) == H_STOP) return H_STOP;
     hold_from_here(p);
     return H_TAKEN;
 }
@@ -2439,8 +2536,7 @@ static handled strict_directive(sjs_parser *p) {
 
 /* The if on top ends, with its chain: one IF_END. */
 static handled end_if_chain(sjs_parser *p) {
-    sjs_position at = top_frame(p)->at;
-    if (send_kind(p, SJS_EV_IF_END, at) == H_STOP) return H_STOP;
+    if (send_kind(p, SJS_EV_IF_END, frame_place(top_frame(p), top_frame(p)->at)) == H_STOP) return H_STOP;
     pop_frame(p);
     return H_TAKEN;
 }
@@ -2475,14 +2571,14 @@ static handled return_token(sjs_parser *p, const queued_token *t) {
     const queued_token *next = peek(p, 1);
     if (next == NULL) return H_WAIT;
     if (!next->newline_before || is_punctuator(next, SJS_P_SEMICOLON) || is_punctuator(next, SJS_P_RBRACE)) {
-        if (push_frame(p, F_RETURN, t->at) == H_STOP) return H_STOP;
+        if (push_frame(p, F_RETURN, own_place(p, t->at)) == H_STOP) return H_STOP;
         p->expect = E_OPERAND;
         return H_TAKEN;
     }
     if (starts_operand(p, next) && !is_punctuator(next, SJS_P_LBRACE)) {
         if (refuse(p, next, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "put the value on the line of its return" }) == H_STOP) return H_STOP;
     }
-    if (send_event(p, counted(SJS_EV_RETURN, 0, t->at)) == H_STOP) return H_STOP;
+    if (send_event(p, counted(SJS_EV_RETURN, 0, own_place(p, t->at))) == H_STOP) return H_STOP;
     return statement_done(p);
 }
 
@@ -2549,7 +2645,7 @@ static handled open_label(sjs_parser *p, const queued_token *t) {
     if (sjs_buf_append(&p->allocator, &p->labels, (sjs_bytes){ (const uint8_t *)p->queue_text.ptr + t->text_offset, t->text_length }) != SJS_OK) {
         return fail_memory(p);
     }
-    if (push_frame(p, F_LABEL, t->at) == H_STOP) return H_STOP;
+    if (push_frame(p, F_LABEL, no_node(t->at)) == H_STOP) return H_STOP;
     frame *f = top_frame(p);
     f->held_base = start;
     f->count = t->text_length;
@@ -2636,8 +2732,8 @@ static const char *statement_problem(const sjs_parser *p, const queued_token *t)
 static handled statement_token(sjs_parser *p, const queued_token *t, bool single) {
     if (is_punctuator(t, SJS_P_SEMICOLON)) return statement_done(p);
     if (is_punctuator(t, SJS_P_LBRACE)) {
-        if (push_frame(p, F_INNER_BLOCK, t->at) == H_STOP) return H_STOP;
-        return send_kind(p, SJS_EV_BLOCK_STATEMENT_BEGIN, t->at);
+        if (push_frame(p, F_INNER_BLOCK, own_place(p, t->at)) == H_STOP) return H_STOP;
+        return send_kind(p, SJS_EV_BLOCK_STATEMENT_BEGIN, frame_place(top_frame(p), t->at));
     }
     if (t->kind == SJS_TOKEN_NAME) {
         switch (t->keyword) {
@@ -2651,7 +2747,7 @@ static handled statement_token(sjs_parser *p, const queued_token *t, bool single
         case SJS_K_EXPORT:
             return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "export declares only at the top level of a module" });
         case SJS_K_RESERVED:
-            if (is_word(p, t, SJS_STR("if"))) return push_frame(p, F_IF, t->at);
+            if (is_word(p, t, SJS_STR("if"))) return push_frame(p, F_IF, own_place(p, t->at));
             break;
         default:
             break;
@@ -2680,7 +2776,7 @@ static handled statement_token(sjs_parser *p, const queued_token *t, bool single
         if (!statement_goes_on(p, t, next)) return parse_fail(p, next, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a statement" });
     }
     if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "an expression statement has no effect in staticjs" }) == H_STOP) return H_STOP;
-    if (push_frame(p, F_EXPRESSION_STATEMENT, t->at) == H_STOP) return H_STOP;
+    if (push_frame(p, F_EXPRESSION_STATEMENT, no_node(t->at)) == H_STOP) return H_STOP;
     p->expect = E_OPERAND;
     return H_AGAIN;
 }
@@ -2716,12 +2812,12 @@ static handled if_token(sjs_parser *p, const queued_token *t) {
             const queued_token *next = peek(p, 1);
             if (next == NULL) return H_WAIT;
             if (next->keyword == SJS_K_RESERVED && is_word(p, next, SJS_STR("if"))) {
-                if (send_event(p, counted(SJS_EV_ELSE, 1, t->at)) == H_STOP) return H_STOP;
+                if (send_event(p, counted(SJS_EV_ELSE, 1, frame_place(f, t->at))) == H_STOP) return H_STOP;
                 top_frame(p)->state = IF_OPEN;
                 p->head++;
                 return H_TAKEN;
             }
-            if (send_event(p, counted(SJS_EV_ELSE, 0, t->at)) == H_STOP) return H_STOP;
+            if (send_event(p, counted(SJS_EV_ELSE, 0, frame_place(f, t->at))) == H_STOP) return H_STOP;
             top_frame(p)->state = IF_ALTERNATIVE;
             return H_TAKEN;
         }
@@ -2743,23 +2839,25 @@ static handled block_token(sjs_parser *p, const queued_token *t) {
     f->count = 1;
     if (t->kind == SJS_TOKEN_END) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "the source ends early, inside a block" });
     if (!is_punctuator(t, SJS_P_RBRACE)) return statement_token(p, t, false);
+    event_place place = frame_place(f, t->at);
     sjs_position at = f->at;
     bool body = f->type == F_BLOCK;
     pop_frame(p);
     if (!body) {
-        if (send_kind(p, SJS_EV_BLOCK_STATEMENT_END, t->at) == H_STOP) return H_STOP;
+        if (send_kind(p, SJS_EV_BLOCK_STATEMENT_END, place) == H_STOP) return H_STOP;
         return statement_done(p);
     }
-    if (send_kind(p, SJS_EV_BLOCK_END, t->at) == H_STOP) return H_STOP;
-    if (send_kind(p, SJS_EV_ARROW_END, at) == H_STOP) return H_STOP;
+    if (send_kind(p, SJS_EV_BLOCK_END, place) == H_STOP) return H_STOP;
+    place.at = at;
+    if (send_kind(p, SJS_EV_ARROW_END, place) == H_STOP) return H_STOP;
     p->expect = E_AFTER_BLOCK_ARROW;
     return H_TAKEN;
 }
 
 /* An import or export statement. Its specifiers are held until the
  * statement's end says what they are. */
-static handled push_statement(sjs_parser *p, uint8_t type, sjs_position at) {
-    if (push_frame(p, type, at) == H_STOP) return H_STOP;
+static handled push_statement(sjs_parser *p, uint8_t type, event_place place) {
+    if (push_frame(p, type, place) == H_STOP) return H_STOP;
     frame *f = top_frame(p);
     f->held_base = held_count(p);
     return H_TAKEN;
@@ -2773,7 +2871,7 @@ static handled hold_specifier(sjs_parser *p, const sjs_event *spec, sjs_str name
 }
 
 static sjs_event specifier(uint32_t count, sjs_str alias, sjs_position at) {
-    sjs_event e = counted(0, count, at);
+    sjs_event e = counted(0, count, no_node(at));
     e.alias = alias;
     return e;
 }
@@ -2785,13 +2883,15 @@ static handled send_specifiers(sjs_parser *p, uint8_t kind, sjs_str module) {
     frame *f = top_frame(p);
     uint32_t n = SJS_BUF_COUNT(p->held, held_event);
     if (n == f->held_base && kind != SJS_EV_EXPORT_NAME) {
-        sjs_event e = counted(kind, SJS_IMPORT_MODULE, f->at);
+        event_place place = { f->at, p->next_node++, f->start };
+        sjs_event e = counted(kind, SJS_IMPORT_MODULE, place);
         e.text = module;
         return send(p, &e);
     }
     for (uint32_t i = f->held_base; i < n; i++) {
         held_event h = SJS_BUF_AT(p->held, held_event, i);
-        sjs_event e = counted(kind, h.count, h.at);
+        event_place place = { h.at, p->next_node++, f->start };
+        sjs_event e = counted(kind, h.count, place);
         e.text = module;
         e.alias = (sjs_str){ (const char *)p->held_text.ptr + h.alias_offset, h.alias_length };
         e.name = (sjs_str){ (const char *)p->held_text.ptr + h.text_offset, h.text_length };
@@ -3123,7 +3223,8 @@ static handled export_token(sjs_parser *p, const queued_token *t) {
 static handled export_start(sjs_parser *p, const queued_token *t) {
     top_frame(p)->state = M_ITEMS;
     if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_CONST) {
-        if (send_kind(p, SJS_EV_EXPORT, t->at) == H_STOP) return H_STOP;
+        event_place exported = { t->at, p->next_node++, p->export_token };
+        if (send_kind(p, SJS_EV_EXPORT, exported) == H_STOP) return H_STOP;
         if (begin_const(p, t) == H_STOP) return H_STOP;
         top_frame(p)->exported = 1;
         return H_TAKEN;
@@ -3133,12 +3234,14 @@ static handled export_start(sjs_parser *p, const queued_token *t) {
          * the compiler finds every other name exported twice. */
         if (p->default_exported) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "this name is exported twice" });
         p->default_exported = true;
-        if (push_frame(p, F_DEFAULT, t->at) == H_STOP) return H_STOP;
+        event_place place = { t->at, p->next_node++, p->export_token };
+        if (push_frame(p, F_DEFAULT, place) == H_STOP) return H_STOP;
         p->expect = E_OPERAND;
         return H_TAKEN;
     }
     if (is_punctuator(t, SJS_P_LBRACE) || is_punctuator(t, SJS_P_STAR)) {
-        if (push_statement(p, F_EXPORT, t->at) == H_STOP) return H_STOP;
+        event_place place = { t->at, 0, p->export_token };
+        if (push_statement(p, F_EXPORT, place) == H_STOP) return H_STOP;
         top_frame(p)->state = is_punctuator(t, SJS_P_STAR) ? X_STAR : X_NAME;
         return H_TAKEN;
     }
@@ -3169,17 +3272,18 @@ static handled module_token(sjs_parser *p, const queued_token *t) {
     if (t->kind == SJS_TOKEN_END) {
         if (p->refusing) return report_refusal(p);
         p->done = true;
-        return send_kind(p, SJS_EV_END, t->at) == H_STOP ? H_STOP : H_TAKEN;
+        return send_kind(p, SJS_EV_END, program_end(t->at)) == H_STOP ? H_STOP : H_TAKEN;
     }
     if (is_punctuator(t, SJS_P_SEMICOLON)) return H_TAKEN;
     if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_IMPORT) {
         const queued_token *next = peek(p, 1);
         if (next == NULL) return H_WAIT;
         if (is_punctuator(next, SJS_P_LPAREN) || is_punctuator(next, SJS_P_DOT)) return import_word(p, t);
-        return push_statement(p, F_IMPORT, t->at);
+        return push_statement(p, F_IMPORT, no_node(t->at));
     }
     if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_EXPORT) {
         f->state = M_EXPORT;
+        p->export_token = t->at;
         return H_TAKEN;
     }
     if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_CONST) return begin_const(p, t);
@@ -3238,7 +3342,7 @@ static handled new_token(sjs_parser *p, const queued_token *t) {
     f->is_new = 1;
     f->state = 0;
     p->expect = E_OPERAND;
-    return send_event(p, texted(SJS_EV_NEW_BEGIN, SJS_STR("Set"), f->at));
+    return send_event(p, texted(SJS_EV_NEW_BEGIN, SJS_STR("Set"), frame_place(f, f->at)));
 }
 
 /* ------------------------------------------------------------------------
@@ -3411,7 +3515,9 @@ sjs_result sjs_parser_init(sjs_parser **out, const sjs_parser_config *config) {
     p->lexer.error = &p->error;
     sjs_lexer_init(&p->lexer);
     sjs_position start = { 0, 1, 1 };
-    if (push_frame(p, p->goal == SJS_GOAL_MODULE ? F_MODULE : F_EXPRESSION_GOAL, start) == H_STOP) {
+    p->next_node = 1;
+    p->last_start = start;
+    if (push_frame(p, p->goal == SJS_GOAL_MODULE ? F_MODULE : F_EXPRESSION_GOAL, no_node(start)) == H_STOP) {
         sjs_parser_destroy(p);
         return SJS_ERR_NOMEM;
     }

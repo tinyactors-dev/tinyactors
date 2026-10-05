@@ -451,14 +451,54 @@ static void test_compile_costs(void) {
 /* A sink sees every import and export form as its events say. */
 typedef struct {
     char text[2048];
+    int nodes;   /* LOG_*: what log_event writes of each event */
 } event_log;
+
+/* Each event's kind, count and texts; or its kind, node and start, as
+ * `KIND#node@offset` (LOG_NODES) or `KIND#node@line.column` (LOG_LINES). */
+enum { LOG_TEXT = 0, LOG_NODES, LOG_LINES };
+
+static const char *const event_names[SJS_EV_END + 1] = {
+    [SJS_EV_NUMBER] = "NUMBER", [SJS_EV_STRING] = "STRING", [SJS_EV_TRUE] = "TRUE", [SJS_EV_FALSE] = "FALSE",
+    [SJS_EV_NULL] = "NULL", [SJS_EV_NAME] = "NAME", [SJS_EV_TEMPLATE_BEGIN] = "TEMPLATE_BEGIN",
+    [SJS_EV_TEMPLATE_END] = "TEMPLATE_END", [SJS_EV_ARRAY_BEGIN] = "ARRAY_BEGIN", [SJS_EV_ELEMENT] = "ELEMENT",
+    [SJS_EV_SPREAD_ELEMENT] = "SPREAD_ELEMENT", [SJS_EV_ARRAY_END] = "ARRAY_END", [SJS_EV_OBJECT_BEGIN] = "OBJECT_BEGIN",
+    [SJS_EV_KEY] = "KEY", [SJS_EV_COMPUTED_KEY] = "COMPUTED_KEY", [SJS_EV_PROPERTY] = "PROPERTY",
+    [SJS_EV_SPREAD_PROPERTY] = "SPREAD_PROPERTY", [SJS_EV_OBJECT_END] = "OBJECT_END", [SJS_EV_MEMBER] = "MEMBER",
+    [SJS_EV_INDEX] = "INDEX", [SJS_EV_OPTIONAL] = "OPTIONAL", [SJS_EV_CHAIN_END] = "CHAIN_END",
+    [SJS_EV_CALL_BEGIN] = "CALL_BEGIN", [SJS_EV_ARGUMENT] = "ARGUMENT", [SJS_EV_SPREAD_ARGUMENT] = "SPREAD_ARGUMENT",
+    [SJS_EV_CALL_END] = "CALL_END", [SJS_EV_NEW_BEGIN] = "NEW_BEGIN", [SJS_EV_NEW_END] = "NEW_END",
+    [SJS_EV_UNARY] = "UNARY", [SJS_EV_BINARY] = "BINARY", [SJS_EV_LOGICAL] = "LOGICAL",
+    [SJS_EV_LOGICAL_END] = "LOGICAL_END", [SJS_EV_CONDITIONAL] = "CONDITIONAL",
+    [SJS_EV_CONDITIONAL_ELSE] = "CONDITIONAL_ELSE", [SJS_EV_CONDITIONAL_END] = "CONDITIONAL_END",
+    [SJS_EV_ARROW_BEGIN] = "ARROW_BEGIN", [SJS_EV_PARAM] = "PARAM", [SJS_EV_REST_PARAM] = "REST_PARAM",
+    [SJS_EV_PARAMS_END] = "PARAMS_END", [SJS_EV_ARROW_END] = "ARROW_END", [SJS_EV_BLOCK_BEGIN] = "BLOCK_BEGIN",
+    [SJS_EV_RETURN] = "RETURN", [SJS_EV_BLOCK_END] = "BLOCK_END", [SJS_EV_BLOCK_STATEMENT_BEGIN] = "BLOCK_STATEMENT_BEGIN",
+    [SJS_EV_BLOCK_STATEMENT_END] = "BLOCK_STATEMENT_END", [SJS_EV_IF] = "IF", [SJS_EV_ELSE] = "ELSE",
+    [SJS_EV_IF_END] = "IF_END", [SJS_EV_BIND] = "BIND", [SJS_EV_ARRAY_PATTERN_BEGIN] = "ARRAY_PATTERN_BEGIN",
+    [SJS_EV_PATTERN_INDEX] = "PATTERN_INDEX", [SJS_EV_ARRAY_PATTERN_END] = "ARRAY_PATTERN_END",
+    [SJS_EV_OBJECT_PATTERN_BEGIN] = "OBJECT_PATTERN_BEGIN", [SJS_EV_PATTERN_KEY] = "PATTERN_KEY",
+    [SJS_EV_PATTERN_COMPUTED_KEY] = "PATTERN_COMPUTED_KEY", [SJS_EV_PATTERN_REST] = "PATTERN_REST",
+    [SJS_EV_OBJECT_PATTERN_END] = "OBJECT_PATTERN_END", [SJS_EV_DEFAULT] = "DEFAULT", [SJS_EV_DEFAULT_END] = "DEFAULT_END",
+    [SJS_EV_CONST_BEGIN] = "CONST_BEGIN", [SJS_EV_CONST_END] = "CONST_END", [SJS_EV_EXPORT] = "EXPORT",
+    [SJS_EV_IMPORT] = "IMPORT", [SJS_EV_EXPORT_DEFAULT] = "EXPORT_DEFAULT", [SJS_EV_EXPORT_NAME] = "EXPORT_NAME",
+    [SJS_EV_EXPORT_FROM] = "EXPORT_FROM", [SJS_EV_END] = "END",
+};
 
 static sjs_result log_event(void *self, const sjs_event *event) {
     event_log *log = self;
     size_t used = strlen(log->text);
-    snprintf(log->text + used, sizeof log->text - used, "%d:%u:%.*s:%.*s:%.*s\n", (int)event->kind, event->count,
-             (int)event->text.length, event->text.ptr, (int)event->alias.length, event->alias.ptr,
-             (int)event->name.length, event->name.ptr);
+    if (log->nodes == LOG_NODES) {
+        snprintf(log->text + used, sizeof log->text - used, "%s%s#%u@%u", used > 0 ? " " : "", event_names[event->kind],
+                 event->node, event->start.offset);
+    } else if (log->nodes == LOG_LINES) {
+        snprintf(log->text + used, sizeof log->text - used, "%s%s#%u@%u.%u", used > 0 ? " " : "",
+                 event_names[event->kind], event->node, event->start.line, event->start.column);
+    } else {
+        snprintf(log->text + used, sizeof log->text - used, "%d:%u:%.*s:%.*s:%.*s\n", (int)event->kind, event->count,
+                 (int)event->text.length, event->text.ptr, (int)event->alias.length, event->alias.ptr,
+                 (int)event->name.length, event->name.ptr);
+    }
     return SJS_OK;
 }
 
@@ -604,6 +644,83 @@ static void compile_events(const sjs_event *events, int count, const char *want)
     sjs_compiler_destroy(compiler);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
+}
+
+/* `source`'s events as `KIND#node@start` (LOG_NODES or LOG_LINES) are `want`. */
+static void expect_nodes(const char *source, sjs_goal goal, int nodes, const char *want) {
+    static event_log log;
+    log.nodes = nodes;
+    parse_events(source, goal, &log);
+    log.nodes = LOG_TEXT;
+    if (strcmp(log.text, want) != 0) fprintf(stderr, "%s\n  events: %s\n  wanted: %s\n", source, log.text, want);
+    CHECK(strcmp(log.text, want) == 0);
+}
+
+/* Each event carries its node's id and start (docs/matcher.md, section 1):
+ * one id for every event of a bracket, an operator's markers and its last
+ * event; a fresh one for every other node; the start of an operator, a
+ * member, an index or a call at its first operand's. */
+static void test_event_nodes(void) {
+    /* Postfix nodes start at their first operand. */
+    expect_nodes("a.b + c(d)[e]", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "NAME#1@0 MEMBER#2@0 NAME#4@6 CALL_BEGIN#5@6 NAME#6@8 ARGUMENT#5@6 CALL_END#5@6 NAME#8@11 INDEX#7@6 "
+                 "BINARY#3@0 END#0@0");
+    /* Parentheses are not part of an operand. */
+    expect_nodes("(a + b) * c", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "NAME#1@1 NAME#3@5 BINARY#2@1 NAME#5@10 BINARY#4@1 END#0@0");
+    expect_nodes("1 +\n  f(x)", SJS_GOAL_EXPRESSION, LOG_LINES,
+                 "NUMBER#1@1.1 NAME#3@2.3 CALL_BEGIN#4@2.3 NAME#5@2.5 ARGUMENT#4@2.3 CALL_END#4@2.3 BINARY#2@1.1 END#0@1.1");
+    /* An arrow's id across its parameters and body. */
+    expect_nodes("x => x.k", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 PARAM#1@0 BIND#2@0 PARAMS_END#1@0 NAME#3@5 MEMBER#4@5 ARROW_END#1@0 END#0@0");
+    /* ... and an arrow in a parameter's default keeps its own. A target is
+     * read before its default value and sent after it. */
+    expect_nodes("(a, b = c => 1) => { return a; }", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 PARAM#1@0 BIND#2@1 PARAM#1@0 DEFAULT#4@6 ARROW_BEGIN#5@8 PARAM#5@8 BIND#6@8 "
+                 "PARAMS_END#5@8 NUMBER#7@13 ARROW_END#5@8 DEFAULT_END#4@6 BIND#3@4 PARAMS_END#1@0 BLOCK_BEGIN#1@0 "
+                 "NAME#9@28 RETURN#8@21 BLOCK_END#1@0 ARROW_END#1@0 END#0@0");
+    expect_nodes("(...r) => r", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 REST_PARAM#1@0 BIND#2@4 PARAMS_END#1@0 NAME#3@10 ARROW_END#1@0 END#0@0");
+    /* A template's pieces are its own events; a string in it is a node. */
+    expect_nodes("`s${\"x\"}t`", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "TEMPLATE_BEGIN#1@0 STRING#1@0 STRING#2@4 STRING#1@0 TEMPLATE_END#1@0 END#0@0");
+    /* Logical and conditional markers, an optional chain, a unary operator. */
+    expect_nodes("a && b ? c?.d.e : -f", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "NAME#1@0 LOGICAL#2@0 NAME#3@5 LOGICAL_END#2@0 CONDITIONAL#4@0 NAME#5@9 OPTIONAL#6@9 MEMBER#7@9 "
+                 "MEMBER#8@9 CHAIN_END#9@9 CONDITIONAL_ELSE#4@0 NAME#11@19 UNARY#10@18 CONDITIONAL_END#4@0 END#0@0");
+    /* An array, an object and new. */
+    expect_nodes("{k: [1, ...a], [b]: c, 2: d, e, ...f}", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "OBJECT_BEGIN#1@0 KEY#1@0 ARRAY_BEGIN#2@4 NUMBER#3@5 ELEMENT#2@4 NAME#4@11 SPREAD_ELEMENT#2@4 "
+                 "ARRAY_END#2@4 PROPERTY#1@0 NAME#5@16 COMPUTED_KEY#1@0 NAME#6@20 PROPERTY#1@0 NUMBER#7@23 "
+                 "COMPUTED_KEY#1@0 NAME#8@26 PROPERTY#1@0 KEY#1@0 NAME#9@29 PROPERTY#1@0 NAME#10@35 "
+                 "SPREAD_PROPERTY#1@0 OBJECT_END#1@0 END#0@0");
+    expect_nodes("new Set([x])", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "NEW_BEGIN#1@0 ARRAY_BEGIN#2@8 NAME#3@9 ELEMENT#2@8 ARRAY_END#2@8 ARGUMENT#1@0 NEW_END#1@0 END#0@0");
+    /* One id for every IF, ELSE and IF_END of an else-if chain. */
+    expect_nodes("x => { if (x) return 1; else if (!x) return 2; else return 3; }", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 PARAM#1@0 BIND#2@0 PARAMS_END#1@0 BLOCK_BEGIN#1@0 NAME#4@11 IF#3@7 NUMBER#6@21 "
+                 "RETURN#5@14 ELSE#3@7 NAME#8@34 UNARY#7@33 IF#3@7 NUMBER#10@44 RETURN#9@37 ELSE#3@7 NUMBER#12@59 "
+                 "RETURN#11@52 IF_END#3@7 BLOCK_END#1@0 ARROW_END#1@0 END#0@0");
+    expect_nodes("x => { { const y = x; } return; }", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 PARAM#1@0 BIND#2@0 PARAMS_END#1@0 BLOCK_BEGIN#1@0 BLOCK_STATEMENT_BEGIN#3@7 "
+                 "CONST_BEGIN#4@9 NAME#6@19 BIND#5@15 CONST_END#4@9 BLOCK_STATEMENT_END#3@7 RETURN#7@24 BLOCK_END#1@0 "
+                 "ARROW_END#1@0 END#0@0");
+    /* Patterns; held and rotated events keep the ids they were made with. */
+    expect_nodes("({k: a, [b]: c, ...d}) => 0", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 PARAM#1@0 OBJECT_PATTERN_BEGIN#2@1 PATTERN_KEY#2@1 BIND#3@5 NAME#4@9 "
+                 "PATTERN_COMPUTED_KEY#2@1 BIND#5@13 PATTERN_REST#2@1 BIND#6@19 OBJECT_PATTERN_END#2@1 PARAMS_END#1@0 "
+                 "NUMBER#7@26 ARROW_END#1@0 END#0@0");
+    expect_nodes("const [a = b] = c", SJS_GOAL_MODULE, LOG_NODES,
+                 "CONST_BEGIN#1@0 NAME#6@16 ARRAY_PATTERN_BEGIN#2@6 PATTERN_INDEX#2@6 DEFAULT#4@9 NAME#5@11 "
+                 "DEFAULT_END#4@9 BIND#3@7 ARRAY_PATTERN_END#2@6 CONST_END#1@0 END#0@0");
+    /* Imports and exports: one node per specifier, from the statement's start. */
+    expect_nodes("import a, {b as c, d} from \"m\";", SJS_GOAL_MODULE, LOG_NODES,
+                 "IMPORT#1@0 IMPORT#2@0 IMPORT#3@0 END#0@0");
+    expect_nodes("export * from \"m\"; export const f = 1, g = 2; export default 3;", SJS_GOAL_MODULE, LOG_NODES,
+                 "EXPORT_FROM#1@0 EXPORT#2@19 CONST_BEGIN#3@26 NUMBER#5@36 BIND#4@32 CONST_END#3@26 EXPORT#6@19 "
+                 "CONST_BEGIN#7@26 NUMBER#9@43 BIND#8@39 CONST_END#7@26 NUMBER#11@61 EXPORT_DEFAULT#10@46 END#0@0");
+    expect_nodes("export { e as f }; const e = 1;", SJS_GOAL_MODULE, LOG_NODES,
+                 "EXPORT_NAME#1@0 CONST_BEGIN#2@19 NUMBER#4@29 BIND#3@25 CONST_END#2@19 END#0@0");
 }
 
 static void test_statement_order(void) {
@@ -1278,6 +1395,7 @@ int main(int argc, char **argv) {
     test_module_events();
     test_pattern_events();
     test_statement_events();
+    test_event_nodes();
     test_statement_order();
     test_sink();
     test_writer_resumes();

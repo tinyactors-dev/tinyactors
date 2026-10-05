@@ -422,7 +422,30 @@ typedef struct {
     /* SJS_EV_IMPORT, SJS_EV_EXPORT_FROM, SJS_EV_EXPORT_NAME: */
     sjs_str alias;  /* the name before `as` */
     sjs_str name;   /* the name after `as`, or the same name */
-    sjs_position at;
+    sjs_position at;       /* this event's own token */
+    /*
+     * The syntax node the event belongs to, so that a sink can tell which
+     * subtree an event closes without counting events. Every event of one
+     * node carries the same `node`: a bracketed node's BEGIN, its separators
+     * (ELEMENT, ARGUMENT, KEY, PARAM, PARAMS_END, ...) and its END; an
+     * operator's markers (LOGICAL, CONDITIONAL, CONDITIONAL_ELSE) and its last
+     * event; an arrow function's parameter list and body (BLOCK_BEGIN,
+     * BLOCK_END); every IF, ELSE and the IF_END of an else-if chain; a
+     * template's STRING pieces. Every other event is a node of its own.
+     * The ids are unique within one parse, made as the parser reads, so they
+     * need not increase in the events' order (a const's pattern is read
+     * before its value and sent after it). 0 is the program, whose only event
+     * is END. A sink that does not need them ignores both fields.
+     *
+     * `start` is where the node's source begins: its first token, which for
+     * an operator, a member, an index, a call or an optional chain is its
+     * first operand's. Parentheses around an operand are not part of it.
+     * `start` is at or before `at` for every event but CHAIN_END, whose `at`
+     * is the bracket the chain ends at and may come first: in `(a?.b).c`
+     * CHAIN_END's `at` is the `(` and its `start` is the `a`.
+     */
+    uint32_t node;
+    sjs_position start;
 } sjs_event;
 
 typedef struct sjs_sink_vtable {

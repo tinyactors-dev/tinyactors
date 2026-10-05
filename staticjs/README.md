@@ -81,6 +81,16 @@ while (sjs_writer_write(writer, &buffer) == SJS_NEED_SPACE) drain(&buffer);
 `sjs_compile()` does the first half for a source held in memory. A sink
 other than the compiler (a formatter, a linter) can take the same events.
 
+Each event names the syntax node it belongs to (`sjs_event.node`) and where
+that node's source starts (`sjs_event.start`). Every event of a bracketed
+node, from its BEGIN through its separators to its END, and an operator's
+markers and its last event, share one id; every other event is a node of
+its own. So a sink can tell which subtree an event closes, and where that
+subtree began, without counting events. The compiler ignores both; they
+are there for the shape matcher `docs/matcher.md` plans, and for any other
+sink that wants them. The start of an operator, a member, an index or a
+call is its first operand's.
+
 ## The language
 
 Expressions: numbers, strings, template literals, `true`, `false`, `null`,

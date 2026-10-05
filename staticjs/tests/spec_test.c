@@ -8,6 +8,9 @@
  * All three must give the same answer, and the whole run the expected one.
  * After each case, every byte the case allocated must have been freed.
  *
+ * Every compile passes the parser's events through a check of their nodes
+ * (node_check, below), and the three runs must send the same nodes.
+ *
  * With --full, each case is also run once for every allocation it makes,
  * with that allocation failing: each such run must end with an out-of-memory
  * error and free everything it took. The modules registered before the case
@@ -157,6 +160,7 @@ static const sjs_modules_vtable modules_vtable = { find_module };
  * "error <code> <line>:<column> <message>". */
 typedef struct {
     char text[MAX_TEXT];
+    uint64_t events;        /* the hash of the compile's events */
 } outcome;
 
 typedef struct {
@@ -197,7 +201,175 @@ static sjs_result write_value(sjs_context *context, sjs_value value, char *out, 
     return r;
 }
 
-/* Parse and compile `source`, pushing it `chunk` bytes at a time. */
+/* ------------------------------------------------------------------------
+ * Node identity: a tee between the parser and the compiler that checks each
+ * event's node and start (docs/matcher.md, section 1), with a table of its
+ * own of which events open, separate and close a node:
+ *
+ *   - an event starts no later than its own token (but CHAIN_END, whose
+ *     `at` is the bracket around its chain);
+ *   - a bracket's BEGIN, separators and END, and an operator's markers and
+ *     its last event, share one id and one start, which no other node uses;
+ *   - every other event is a node of its own, with an id never seen before;
+ *   - ids are never 0 but on END, which closes every bracket.
+ */
+
+enum { NODE_OWN = 0, NODE_OPEN, NODE_INNER, NODE_CLOSE };
+
+/* What an event is to its node; for NODE_INNER and NODE_CLOSE, the kinds
+ * that open the node it belongs to (two at most). */
+typedef struct {
+    uint8_t role;
+    uint8_t owner;
+    uint8_t other_owner;
+} node_role;
+
+static node_role role_of(sjs_event_kind kind) {
+    switch (kind) {
+    case SJS_EV_TEMPLATE_BEGIN:
+    case SJS_EV_ARRAY_BEGIN:
+    case SJS_EV_OBJECT_BEGIN:
+    case SJS_EV_CALL_BEGIN:
+    case SJS_EV_NEW_BEGIN:
+    case SJS_EV_LOGICAL:
+    case SJS_EV_CONDITIONAL:
+    case SJS_EV_ARROW_BEGIN:
+    case SJS_EV_BLOCK_STATEMENT_BEGIN:
+    case SJS_EV_IF:
+    case SJS_EV_ARRAY_PATTERN_BEGIN:
+    case SJS_EV_OBJECT_PATTERN_BEGIN:
+    case SJS_EV_DEFAULT:
+    case SJS_EV_CONST_BEGIN:
+        return (node_role){ NODE_OPEN, 0, 0 };
+    case SJS_EV_TEMPLATE_END: return (node_role){ NODE_CLOSE, SJS_EV_TEMPLATE_BEGIN, 0 };
+    case SJS_EV_ELEMENT:
+    case SJS_EV_SPREAD_ELEMENT: return (node_role){ NODE_INNER, SJS_EV_ARRAY_BEGIN, 0 };
+    case SJS_EV_ARRAY_END: return (node_role){ NODE_CLOSE, SJS_EV_ARRAY_BEGIN, 0 };
+    case SJS_EV_KEY:
+    case SJS_EV_COMPUTED_KEY:
+    case SJS_EV_PROPERTY:
+    case SJS_EV_SPREAD_PROPERTY: return (node_role){ NODE_INNER, SJS_EV_OBJECT_BEGIN, 0 };
+    case SJS_EV_OBJECT_END: return (node_role){ NODE_CLOSE, SJS_EV_OBJECT_BEGIN, 0 };
+    case SJS_EV_ARGUMENT:
+    case SJS_EV_SPREAD_ARGUMENT: return (node_role){ NODE_INNER, SJS_EV_CALL_BEGIN, SJS_EV_NEW_BEGIN };
+    case SJS_EV_CALL_END: return (node_role){ NODE_CLOSE, SJS_EV_CALL_BEGIN, 0 };
+    case SJS_EV_NEW_END: return (node_role){ NODE_CLOSE, SJS_EV_NEW_BEGIN, 0 };
+    case SJS_EV_LOGICAL_END: return (node_role){ NODE_CLOSE, SJS_EV_LOGICAL, 0 };
+    case SJS_EV_CONDITIONAL_ELSE: return (node_role){ NODE_INNER, SJS_EV_CONDITIONAL, 0 };
+    case SJS_EV_CONDITIONAL_END: return (node_role){ NODE_CLOSE, SJS_EV_CONDITIONAL, 0 };
+    case SJS_EV_PARAM:
+    case SJS_EV_REST_PARAM:
+    case SJS_EV_PARAMS_END:
+    case SJS_EV_BLOCK_BEGIN:
+    case SJS_EV_BLOCK_END: return (node_role){ NODE_INNER, SJS_EV_ARROW_BEGIN, 0 };
+    case SJS_EV_ARROW_END: return (node_role){ NODE_CLOSE, SJS_EV_ARROW_BEGIN, 0 };
+    case SJS_EV_BLOCK_STATEMENT_END: return (node_role){ NODE_CLOSE, SJS_EV_BLOCK_STATEMENT_BEGIN, 0 };
+    case SJS_EV_ELSE: return (node_role){ NODE_INNER, SJS_EV_IF, 0 };
+    case SJS_EV_IF_END: return (node_role){ NODE_CLOSE, SJS_EV_IF, 0 };
+    case SJS_EV_PATTERN_INDEX: return (node_role){ NODE_INNER, SJS_EV_ARRAY_PATTERN_BEGIN, 0 };
+    case SJS_EV_ARRAY_PATTERN_END: return (node_role){ NODE_CLOSE, SJS_EV_ARRAY_PATTERN_BEGIN, 0 };
+    case SJS_EV_PATTERN_KEY:
+    case SJS_EV_PATTERN_COMPUTED_KEY: return (node_role){ NODE_INNER, SJS_EV_OBJECT_PATTERN_BEGIN, 0 };
+    case SJS_EV_PATTERN_REST: return (node_role){ NODE_INNER, SJS_EV_ARRAY_PATTERN_BEGIN, SJS_EV_OBJECT_PATTERN_BEGIN };
+    case SJS_EV_OBJECT_PATTERN_END: return (node_role){ NODE_CLOSE, SJS_EV_OBJECT_PATTERN_BEGIN, 0 };
+    case SJS_EV_DEFAULT_END: return (node_role){ NODE_CLOSE, SJS_EV_DEFAULT, 0 };
+    case SJS_EV_CONST_END: return (node_role){ NODE_CLOSE, SJS_EV_CONST_BEGIN, 0 };
+    default: return (node_role){ NODE_OWN, 0, 0 };
+    }
+}
+
+#define MAX_OPEN_NODES 4096
+
+typedef struct {
+    sjs_sink downstream;
+    struct { uint32_t node; uint8_t kind; uint32_t start; } open[MAX_OPEN_NODES];
+    uint32_t depth;
+    uint8_t *seen;          /* by id: 1 when a node has used it */
+    uint32_t seen_capacity;
+    uint64_t hash;          /* of every event's kind, node and start, to compare push modes */
+    char problem[256];      /* the first one, or empty */
+} node_check;
+
+static void node_problem(node_check *check, const sjs_event *e, const char *what) {
+    if (check->problem[0] != '\0') return;
+    snprintf(check->problem, sizeof check->problem, "event %d (node %u, start %u, at %u:%u): %s", (int)e->kind, e->node,
+             e->start.offset, e->at.line, e->at.column, what);
+}
+
+/* Note that a node uses `id`; false when one already did. */
+static int claim_node(node_check *check, uint32_t id) {
+    if (id >= check->seen_capacity) {
+        uint32_t capacity = check->seen_capacity == 0 ? 1024u : check->seen_capacity;
+        while (capacity <= id) capacity *= 2u;
+        uint8_t *seen = realloc(check->seen, capacity);
+        if (seen == NULL) abort();
+        memset(seen + check->seen_capacity, 0, capacity - check->seen_capacity);
+        check->seen = seen;
+        check->seen_capacity = capacity;
+    }
+    if (check->seen[id]) return 0;
+    check->seen[id] = 1;
+    return 1;
+}
+
+static void check_node(node_check *check, const sjs_event *e) {
+    uint32_t values[5] = { (uint32_t)e->kind, e->node, e->start.offset, e->start.line, e->start.column };
+    for (int i = 0; i < 5; i++) check->hash = (check->hash ^ values[i]) * 1099511628211ull;
+    if (e->kind != SJS_EV_CHAIN_END && e->start.offset > e->at.offset) node_problem(check, e, "starts after its own token");
+    if (e->kind == SJS_EV_END) {
+        if (e->node != 0 || e->start.offset != 0 || e->start.line != 1 || e->start.column != 1) {
+            node_problem(check, e, "END is node 0, from the start");
+        }
+        if (check->depth != 0) node_problem(check, e, "END while a node is open");
+        return;
+    }
+    if (e->node == 0) {
+        node_problem(check, e, "node 0 is the program's, whose only event is END");
+        return;
+    }
+    node_role role = role_of(e->kind);
+    uint32_t top = check->depth;
+    bool of_top = top > 0 && check->open[top - 1].node == e->node;
+    if (of_top) {
+        uint8_t owner = check->open[top - 1].kind;
+        /* A template's pieces and an else-if's IF are their node's own events. */
+        bool inner = (role.role == NODE_INNER || role.role == NODE_CLOSE) && (owner == role.owner || owner == role.other_owner);
+        if ((e->kind == SJS_EV_STRING && owner == SJS_EV_TEMPLATE_BEGIN) || (e->kind == SJS_EV_IF && owner == SJS_EV_IF)) inner = true;
+        if (!inner) node_problem(check, e, "has the id of the open node, of another kind");
+        if (e->start.offset != check->open[top - 1].start) node_problem(check, e, "starts elsewhere than its node");
+        if (role.role == NODE_CLOSE) check->depth--;
+        return;
+    }
+    if (role.role == NODE_INNER || role.role == NODE_CLOSE) {
+        node_problem(check, e, "does not have the id of the node open around it");
+        return;
+    }
+    if (!claim_node(check, e->node)) node_problem(check, e, "a new node with an id already used");
+    if (role.role == NODE_OPEN) {
+        if (check->depth == MAX_OPEN_NODES) {
+            node_problem(check, e, "too many nodes open for the check");
+            return;
+        }
+        check->open[check->depth].node = e->node;
+        check->open[check->depth].kind = (uint8_t)e->kind;
+        check->open[check->depth].start = e->start.offset;
+        check->depth++;
+    }
+}
+
+static sjs_result node_check_event(void *self, const sjs_event *e) {
+    node_check *check = self;
+    check_node(check, e);
+    return check->downstream.v->event(check->downstream.self, e);
+}
+
+static const sjs_sink_vtable node_check_vtable = { node_check_event };
+
+/* The hash of the events of the last compile, for comparing push modes. */
+static uint64_t last_events_hash = 0;
+
+/* Parse and compile `source`, pushing it `chunk` bytes at a time. A stream
+ * whose nodes break the rules above is SJS_ERR_INVALID, after a message. */
 static sjs_result compile(const environment *env, const char *source, sjs_goal goal, uint32_t chunk, sjs_program **program,
                           sjs_error *error) {
     sjs_compiler *compiler;
@@ -205,8 +377,14 @@ static sjs_result compile(const environment *env, const char *source, sjs_goal g
                                    { env->modules, &modules_vtable } };
     sjs_result r = sjs_compiler_init(&compiler, &config);
     if (r != SJS_OK) return r;
+    static node_check check;
+    check.downstream = sjs_compiler_sink(compiler);
+    check.depth = 0;
+    check.hash = 14695981039346656037ull;
+    check.problem[0] = '\0';
+    if (check.seen != NULL) memset(check.seen, 0, check.seen_capacity);
     sjs_parser *parser;
-    sjs_parser_config parser_config = { env->allocator, SJS_LIMITS_DEFAULT, goal, sjs_compiler_sink(compiler) };
+    sjs_parser_config parser_config = { env->allocator, SJS_LIMITS_DEFAULT, goal, { &check, &node_check_vtable } };
     r = sjs_parser_init(&parser, &parser_config);
     if (r != SJS_OK) {
         sjs_compiler_destroy(compiler);
@@ -222,6 +400,12 @@ static sjs_result compile(const environment *env, const char *source, sjs_goal g
     if (r == SJS_ERR_PROGRAM && sjs_parser_error(parser, error) != SJS_OK) sjs_compiler_error(compiler, error);
     sjs_parser_destroy(parser);
     sjs_compiler_destroy(compiler);
+    last_events_hash = check.hash;
+    if (check.problem[0] != '\0') {
+        fprintf(stderr, "the events' nodes: %s\n", check.problem);
+        if (r == SJS_OK) sjs_program_release(*program);
+        return SJS_ERR_INVALID;
+    }
     return r;
 }
 
@@ -253,6 +437,7 @@ static void run_case(const environment *env, const spec_case *c, mode m, outcome
     sjs_program *program = NULL;
     sjs_error error = { 0 };
     sjs_result r = compile(env, c->source, c->is_module ? SJS_GOAL_MODULE : SJS_GOAL_EXPRESSION, m.chunk, &program, &error);
+    out->events = last_events_hash;
     if (r != SJS_OK) {
         if (r == SJS_ERR_PROGRAM) {
             snprintf(out->text, sizeof out->text, "error %s %u:%u %.*s", code_name(error.code), error.at.line,
@@ -455,6 +640,10 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
     }
     if (ok && strcmp(whole.text, chunks.text) != 0) {
         fprintf(stderr, "%s:%d: %s: pushed in chunks\n  whole:  %s\n  chunks: %s\n", file, c->line, c->name, whole.text, chunks.text);
+        ok = 0;
+    }
+    if (ok && (whole.events != bytes.events || whole.events != chunks.events)) {
+        fprintf(stderr, "%s:%d: %s: the events' nodes or starts differ between push modes\n", file, c->line, c->name);
         ok = 0;
     }
     for (int i = 0; i < c->global_count; i++) sjs_release(env->context, values[i]);
