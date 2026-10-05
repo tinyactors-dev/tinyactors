@@ -566,10 +566,8 @@ module TinyactorsTest
     end
 
     # The kernel's mailboxes of `actors` and its counters: { mailboxes:
-    # [{ actor:, state:, depth:, events: }], queued:, overflow:, delivered:,
-    # dead_letters: { total:, by_reason: { 'done' => n, ... } } }. `queued`
-    # includes the `overflow`, mail between actors accepted past the
-    # limits (kernel ADR 0003).
+    # [{ actor:, state:, depth:, events: }], queued:, delivered:,
+    # dead_letters: { total:, by_reason: { 'done' => n, ... } } }.
     def hosted_mailboxes(hosted, *actors)
       rpc('hosted.mailboxes', system: hosted[:hosted], actors: actors)
     end

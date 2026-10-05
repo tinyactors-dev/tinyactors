@@ -373,8 +373,7 @@ static const char *tat_hosted_state_name(tah_sched_state state) {
 /*
  * The mailboxes of `actors` (kernel ADR 0001 section 5), each
  * {"actor", "state", "depth", "events"}, with the queued events' names in
- * delivery order, and the scheduler's counters: messages queued (the
- * overflow included), those of them in the overflow (kernel ADR 0003),
+ * delivery order, and the scheduler's counters: messages queued,
  * delivered, and the dead letters reported so far, by reason.
  */
 jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
@@ -415,7 +414,6 @@ jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
     jv dead = jv_object_set(jv_object(), jv_string("total"), jv_number((double)stats.dead_letters));
     jv out = jv_object_set(jv_object(), jv_string("mailboxes"), boxes);
     out = jv_object_set(out, jv_string("queued"), jv_number((double)stats.queued));
-    out = jv_object_set(out, jv_string("overflow"), jv_number((double)stats.overflow));
     out = jv_object_set(out, jv_string("delivered"), jv_number((double)stats.delivered));
     return jv_object_set(out, jv_string("dead_letters"), jv_object_set(dead, jv_string("by_reason"), reasons));
 }

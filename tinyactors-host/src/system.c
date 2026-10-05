@@ -719,7 +719,7 @@ bool tah_system_cancel(tah_system *system, uint32_t index) {
         cancelled = tah_sched_cancel(&system->sched, index);
     }
     if (cancelled) {
-        tah_system_want_turn(system); /* a withdrawn message makes room the overflow may wait for (kernel ADR 0003) */
+        tah_system_want_turn(system); /* a withdrawn message leaves its actor's mailbox: it may be idle now */
     }
     return cancelled;
 }

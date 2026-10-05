@@ -123,13 +123,12 @@ module HostedRelay
   end
 end
 
-module HostedOverflow
+module HostedFullQueue
   # hosted_ping/a sends `ping` to hosted_pong/p while p's kernel queue is
   # full (maxQueuedMessages 1, taken by the application's `noise` for p). Mail
   # between actors waits in core (ADR 0099 section 4), outside the kernel's
-  # mailboxes and their limits, so the full queue does not stand in its way:
-  # nothing overflows (kernel ADR 0003 no longer applies to it). Both families
-  # are recorded. Answers [hosted, ping, pong].
+  # mailboxes and their limits, so the full queue does not stand in its way.
+  # Both families are recorded. Answers [hosted, ping, pong].
   def self.start(context, incarnation: 1)
     hosted = context.hosted_system(incarnation: incarnation, max_queued_messages: 1)
     context.hosted_record(hosted, 'hosted_ping', 'hosted_pong')
@@ -141,8 +140,6 @@ module HostedOverflow
     context.assert_equal 'ok', context.hosted_post(hosted, pong, 'noise')
     context.assert_equal 'err_busy', context.hosted_post(hosted, pong, 'noise'), "the application's mail is refused"
     context.hosted_run(hosted, limit: 1) # a sends `ping`; p takes `noise`
-    boxes = context.hosted_mailboxes(hosted, pong)
-    context.assert_equal 0, boxes[:overflow], 'mail between actors never overflows a kernel queue'
     [hosted, ping, pong]
   end
 end
@@ -209,15 +206,15 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: mail between actors held back by a full kernel queue. Kernel ADR
-  # 0003 held it as overflow until there was room; since core ADR 0099 it waits
-  # in core, outside the kernel's mailboxes and their limits, and runs at once.
+  # Catches: mail between actors held back by a full kernel queue. Since core
+  # ADR 0099 it waits in core, outside the kernel's mailboxes and their
+  # limits, and runs at once.
   scenario 'a full kernel queue does not hold back mail between actors' do
-    hosted, _ping, pong = HostedOverflow.start(self)
+    hosted, _ping, pong = HostedFullQueue.start(self)
     assert_equal [:pinged], hosted_states(hosted, pong)
     assert hosted_run(hosted)[:quiet]
     boxes = hosted_mailboxes(hosted, pong)
-    assert_equal [0, 0], [boxes[:queued], boxes[:overflow]]
+    assert_equal 0, boxes[:queued]
     assert_equal 0, close_hosted(hosted)
   end
 
@@ -225,7 +222,7 @@ TinyactorsTest.scenarios 'hosted' do
   # retries, delivery is at most once. Catches: a rebuild that resends what a
   # replayed macrostep sent, which would journal a second `ping` for p.
   scenario 'a rebuild does not send again the mail its replayed macrostep sent' do
-    hosted, = HostedOverflow.start(self)
+    hosted, = HostedFullQueue.start(self)
     store = hosted_store(hosted)
     close_hosted(hosted) # a crash: nothing more is recorded
     assert_equal %w[go], store.journals['hosted_ping/a'].map { |entry| entry[:event][:name] }

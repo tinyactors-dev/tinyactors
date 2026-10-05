@@ -243,8 +243,7 @@ void tah_system_free(tah_system *system);
 /*
  * Accepts a message and asks for a turn (ADR 0005). On TA_OK the system owns
  * the event's references and the message's waiter. TA_ERR_BUSY: the queue is
- * full (max_queued or max_retained) and the message may not overflow;
- * TA_ERR_NOMEM: nothing accepted.
+ * full (max_queued or max_retained); TA_ERR_NOMEM: nothing accepted.
  */
 ta_result tah_system_post(tah_system *system, const tah_message *message);
 
@@ -274,10 +273,10 @@ void tah_system_record_lateness(tah_system *system, ta_time due, const ta_trace_
  * actor's mailbox, or a dead letter when the name has none (not found, or
  * unloaded). `message->target` is ignored. On TA_OK the system owns the
  * event's references and the waiter; `address` stays the caller's.
- * TA_ERR_BUSY: the queue is full and the message may not overflow
- * (tah_message.may_overflow); TA_ERR_NOMEM: nothing accepted. The host's
- * messages wait in the kernel's mailboxes (kernel ADR 0003) until the kernel
- * hands the host's input to core; mail between sessions never does.
+ * TA_ERR_BUSY: the queue is full (max_queued or max_retained);
+ * TA_ERR_NOMEM: nothing accepted. The host's messages wait in the kernel's
+ * mailboxes until the kernel hands the host's input to core; mail between
+ * sessions never does.
  */
 ta_result tah_system_post_named(tah_system *system, ta_address *address, const tah_message *message);
 /* Installs core's log sink when JavaScript or the trace encoder wants

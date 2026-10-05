@@ -45,7 +45,7 @@ async function fifoAcrossTheBudget() {
   for (const actor of actors) {
     assert.equal(stateOf(actor), 'c');
   }
-  assert.deepEqual(system.stats().messages, { queued: 0, overflow: 0, delivered: 40, deadLetters: 0 });
+  assert.deepEqual(system.stats().messages, { queued: 0, delivered: 40, deadLetters: 0 });
   system.close();
 }
 

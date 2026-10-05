@@ -319,9 +319,9 @@ export interface SystemParameters {
   messageBudget?: number;
   /**
    * Accepted messages not yet delivered or reported; post() and send()
-   * are refused with `queue-full` beyond it. Mail between actors is never
-   * refused: past the limit it waits in its receiver's overflow, and is
-   * delivered as room appears (kernel ADR 0003). 0 (default): no limit.
+   * are refused with `queue-full` beyond it. It counts the application's
+   * mail only: mail between actors is core's, and waits in core's pool
+   * (core ADR 0099). 0 (default): no limit.
    */
   maxQueuedMessages?: number;
   /**
@@ -828,14 +828,8 @@ export interface SystemStats {
   /** Allocations plus frees: zero growth in steady state is the test signal. */
   readonly allocatorCalls: number;
   readonly messages: {
-    /** Accepted messages not yet delivered or reported as dead letters, the overflow included. */
+    /** Accepted messages not yet delivered or reported as dead letters. */
     readonly queued: number;
-    /**
-     * Of them, mail between actors accepted past maxQueuedMessages or
-     * maxRetainedBytes (kernel ADR 0003): it waits in its receiver's
-     * mailbox and is delivered as room appears.
-     */
-    readonly overflow: number;
     readonly delivered: number;
     readonly deadLetters: number;
   };

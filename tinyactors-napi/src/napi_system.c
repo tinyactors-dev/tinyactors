@@ -2033,7 +2033,6 @@ static napi_value tna_stats_method(napi_env env, napi_callback_info info) {
     napi_value messages = NULL;
     if (status == napi_ok) status = napi_create_object(env, &messages);
     if (status == napi_ok) status = tna_set_number(env, messages, "queued", (double)sched.queued);
-    if (status == napi_ok) status = tna_set_number(env, messages, "overflow", (double)sched.overflow);
     if (status == napi_ok) status = tna_set_number(env, messages, "delivered", (double)sched.delivered);
     if (status == napi_ok) status = tna_set_number(env, messages, "deadLetters", (double)sched.dead_letters);
     if (status == napi_ok) status = napi_set_named_property(env, stats, "messages", messages);
