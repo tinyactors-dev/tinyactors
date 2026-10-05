@@ -10,6 +10,7 @@ Important cross-cutting references:
 - `durability.md` — optional portable checkpoint/replay/effect protocols above core.
 - `interpreter-semantics.md` — macrostep/microstep execution.
 - `routing.md` — normalized external-event scheduling boundary.
+- `names.md` — which names are interned and when, and how an event's name is matched by its atoms.
 - `invariants.md` — rules implementations must never violate.
 - `memory-model.md` — density strategy for millions of actors.
 - `verification.md` — simulator/fuzzer integration.

@@ -233,7 +233,9 @@ bool ta_system_quota_actor(ta_system *system) {
 }
 
 /* Makes the event-name trie, `depth` segments deep, and adds the built-in
- * names in the order of the TA_EVENT_NAME_* constants. */
+ * names in the order of the TA_EVENT_NAME_* constants, then the `invoke`
+ * segment of the invocation error names: every segment of a name core
+ * generates is an atom from here on, whatever charts register. */
 static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allocator, uint32_t depth) {
     static const char *const builtins[] = {
         "error", "error.execution", "error.communication", "error.platform",
@@ -245,6 +247,9 @@ static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allo
     for (uint32_t index = 0; result == TA_OK && index < TA_ARRAY_COUNT(builtins); index += 1) {
         ta_event_name_id name = 0;
         result = ta_trie_intern_dotted(&system->event_names, ta_str_from_cstr(builtins[index]), &name);
+    }
+    if (result == TA_OK) {
+        result = ta_atom_intern(&system->atoms, ta_str_from_cstr("invoke"), &system->invoke_segment);
     }
     return result;
 }

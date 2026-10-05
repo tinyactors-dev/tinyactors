@@ -1,3 +1,134 @@
+/**
+ * @file definition.h
+ *
+ * # Compiled definitions
+ *
+ * `ta_definition` is one compiled, immutable statechart revision: the
+ * program actors of that revision run. The compiler (`builder.h`) makes
+ * it from a spec; the system registers it; the interpreter, invocations,
+ * session images and the inspection and export calls read it. This
+ * header holds its layout and the functions over it that the compiler
+ * and the interpreter share.
+ *
+ * A definition holds:
+ *
+ * - the state hierarchy and kinds, in document order, with each state's
+ *   children, transitions, `<onentry>` / `<onexit>` handlers (one action
+ *   block per handler, SCXML 3.8, 3.9), completion event and done data;
+ * - transitions with their sources, targets, type (`internal` or
+ *   `external`), conditions, event descriptors and actions, and the
+ *   initial transitions with their executable content;
+ * - executable content as one stream of actions in blocks, and where each
+ *   action sits (ADR 0071); invocation declarations; late or early data
+ *   binding; the history and configuration layouts;
+ * - the data model and the state it prepared for the definition, and the
+ *   expressions and their roles (ADR 0076);
+ * - the authored text the compiler normalizes, so that
+ *   `ta_definition_export` rebuilds a spec with the same fingerprint
+ *   (ADR 0042), and, when the spec knew them, where its elements were
+ *   written (ADR 0085), in a side table that nothing at run time reads and
+ *   that is not part of the revision.
+ *
+ * ## Contract and invariants
+ *
+ * - **Immutable program data.** A definition is compiled and validated
+ *   before registration and never changed while actors or session images
+ *   use it. The fields that change after registration are bookkeeping, not
+ *   program: the counters and state occupancy (ADR 0072), the microstep
+ *   limit (ADR 0075), `actor_count`, the holds and holders (ADR 0077),
+ *   `retired` (ADR 0043), the nested definitions of its `<invoke>`s, and
+ *   the spans a registration by identity hands over.
+ * - **Identity.** Each definition owns its `ta_definition_identity`: its
+ *   UTF-8 family and an opaque revision, the compiler's fingerprint unless
+ *   the spec gave one (`identity` of `ta_scxml_spec`); the definition
+ *   keeps its own copy of the revision bytes. A change that could alter how definition-local
+ *   session state is read makes a new revision. Several revisions of one
+ *   family may be registered at once; a session image reconstructs against
+ *   its exact revision, and an application upgrades a named actor by
+ *   starting it under the new revision and replacing its directory entry.
+ * - **IDs.** The system keeps registered definitions in a slot table: an
+ *   ID is a generation handle of its slot (`handle.h`), and freeing a
+ *   definition moves the slot's generation on, so `ta_definition_lookup`
+ *   answers NULL for a stale ID. Slots are reused, so each definition also
+ *   keeps a registration serial, and `ta_system_find_definition` answers
+ *   the newest match.
+ * - **Inspection** (ADR 0042): a registered definition reports its ID,
+ *   identity, `<scxml name>`, data-model adapter, binding mode, state
+ *   count, and lifecycle and memory facts (`ta_definition_inspect`), and
+ *   `ta_system_find_definition` resolves an exact identity to it.
+ * - **Retirement.** A retired definition takes no new actors and matches
+ *   no identity; the system frees it once its holds, holders and
+ *   `actor_count` are all zero, when its last actor is freed, after that
+ *   actor's data-model instance, session storage and invocations.
+ *
+ * ## Event descriptors and matching
+ *
+ * A transition's `event` attribute compiles to one `ta_event_pattern` per
+ * descriptor: a run of `ta_event_pattern_segment`s, each an atom the
+ * compiler interned when the definition was compiled, or the wildcard
+ * `*`. Descriptors are authored names; nothing at run time adds to them.
+ *
+ * `ta_event_pattern_matches` matches one descriptor against an event's
+ * name given as its segments, a list of atoms (ADR 0060 section 5): a
+ * descriptor that runs out before the event matches by prefix, and a `*`
+ * segment takes zero or more event segments anywhere in the descriptor.
+ * It compares the event's atoms with equality against the descriptor's,
+ * and needs nothing else about the event: not its trie node, not its
+ * text. So an event segment that is no atom at all (the name resolver's
+ * UNKNOWN, `TA_ATOM_NONE`) equals no descriptor segment, since every
+ * descriptor segment that is not a wildcard is a real atom, and is taken
+ * only by `*`. Matching segments looked up by text therefore gives the
+ * same answers as matching interned ones.
+ *
+ * The interpreter turns a taken event's name into its segments once per
+ * selection, before it matches any transition, and matches every
+ * descriptor of every candidate transition against that one list. An
+ * event carries its name as a node of the system's event-name trie, so its
+ * segments are the node's path (`ta_trie_path`); the name resolver
+ * (`names.h`) gives the same list from a name's bytes, by lookup, except
+ * where a trie segment holds a dot, which bytes split in two (the
+ * generated invocation ID of an invocation's error name;
+ * `docs/internal/names.md`).
+ *
+ * ## Memory
+ *
+ * A definition owns everything in it through its arena, from the
+ * allocator given to the compiler, except the span side table, one
+ * allocation from `span_allocator` that a registration by identity may
+ * hand to the live definition (`ta_definition_take_spans`), and the data
+ * model's prepared state, which the data model frees. The atoms and event
+ * names it uses belong to its system, which outlives it. It lives until
+ * the system frees it (see retirement above) or, unregistered, until
+ * `ta_definition_destroy`.
+ *
+ * Compiling allocates; `ta_definition_place_actions` allocates in the
+ * arena while the compiler seals the definition. Every other function
+ * here only reads, never allocates, and may run inside a macrostep.
+ *
+ * ## Complexity
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | `ta_definition_lookup`, `ta_definition_is_atomic`, `ta_definition_session_bytes`, `ta_definition_element_count`, `ta_definition_span_base` | O(1) |
+ * | `ta_definition_is_descendant` | O(depth of the state) |
+ * | `ta_event_pattern_matches` | O(event segments × descriptor segments) time, O(1) space, no recursion (ADR 0060) |
+ * | `ta_definition_place_actions` | O(actions) |
+ * | `ta_definition_take_spans` | O(1) |
+ *
+ * ## Failure
+ *
+ * `ta_definition_place_actions` answers `TA_ERR_NOMEM` when the arena
+ * cannot grow. The rest cannot fail: a lookup answers NULL for an unknown
+ * or stale ID, and a match answers false for an event with no segments.
+ *
+ * ## Users
+ *
+ * The compiler, the interpreter (transition selection, executable
+ * content, invocations), session images, inspection
+ * (`ta_definition_inspect`, `ta_definition_state`, ...) and export. ADRs
+ * 0042, 0043, 0053, 0060, 0063, 0071, 0072, 0075, 0076, 0077, 0085, 0087,
+ * 0088.
+ */
 #pragma once
 
 #include "configuration.h"
@@ -6,8 +137,6 @@
 #include "span.h"
 #include "text_writer.h"
 #include "../include/tinyactors.h"
-
-/* Functions over compiled definitions, shared by the compiler and interpreter. */
 
 typedef enum {
     TA_TRANSITION_EXTERNAL,
@@ -466,26 +595,33 @@ struct ta_definition {
     ta_definition *free_next;
 };
 
-/* A registered definition, retired or not; NULL for an unknown or stale ID. */
+/**
+ * The registered definition `id` names, retired or not, borrowed from the
+ * system; NULL for an unknown or stale ID. Never allocates; may run inside
+ * a macrostep.
+ */
 const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
-/* Bytes of one actor's session storage: two configurations and history. */
+/** Bytes of one actor's session storage: two configurations and history. Never allocates. */
 size_t ta_definition_session_bytes(const ta_definition *definition);
-/*
+/**
  * Fills `action_places` from the sealed blocks, in the definition's arena.
  * Every action belongs to exactly one block, so one pass over the top-level
  * blocks and one over the actions (for the blocks nested in <if> and
- * <foreach>) place them all, with no recursion (ADR 0060).
+ * <foreach>) place them all, with no recursion (ADR 0060). Runs while the
+ * compiler seals the definition, never in a macrostep; allocates, and
+ * answers `TA_ERR_NOMEM` when the arena cannot grow.
  */
 ta_result ta_definition_place_actions(ta_definition *definition);
-/*
+/**
  * The layout of `spans` (ADR 0085): elements of `kind` are numbered from
  * ta_definition_span_base(), and there are ta_definition_element_count() of
  * them. ta_definition_export() numbers the exported spec's spans the same
- * way.
+ * way. Never allocates.
  */
 uint32_t ta_definition_element_count(const ta_definition *definition, ta_element_kind kind);
+/** The number of the first span of an element of `kind`; see ta_definition_element_count(). */
 uint32_t ta_definition_span_base(const ta_definition *definition, ta_element_kind kind);
-/*
+/**
  * Registration by identity answered `definition` with `live` (ADR 0077):
  * when `definition` knows where its elements are written, and not exactly
  * where `live` says, `live` takes its spans, and `definition`, about to be
@@ -493,8 +629,23 @@ uint32_t ta_definition_span_base(const ta_definition *definition, ta_element_kin
  * so it cannot fail.
  */
 void ta_definition_take_spans(ta_definition *live, ta_definition *definition);
+/** Whether `state` is atomic or final. Never allocates; may run inside a macrostep. */
 bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
+/**
+ * Whether `state` is a proper descendant of `ancestor`; with
+ * `TA_STATE_NONE` as the ancestor, whether `state` is a state at all.
+ * Walks the parents. Never allocates; may run inside a macrostep.
+ */
 bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
+/**
+ * Whether `pattern`, one of `definition`'s event descriptors, matches the
+ * event whose name has the segments `event`, first segment first (see
+ * "Event descriptors and matching" above): by prefix, with `*` taking zero
+ * or more segments, and a segment that is no atom (`TA_ATOM_NONE`) taken
+ * only by `*`. False for an event of no segments. Borrows `event` for the
+ * call. Never allocates and never fails; may run inside a macrostep.
+ * O(event segments × descriptor segments), O(1) space.
+ */
 bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
-                              ta_event_name_id event);
+                              const ta_atom_list *event);

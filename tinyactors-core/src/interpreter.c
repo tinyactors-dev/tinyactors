@@ -1822,7 +1822,12 @@ static bool ta_send_replayed_invoke(ta_interpreter *it, const ta_scxml_target *t
     return true;
 }
 
-/* Resolves `type` / `typeexpr`; an unknown processor is an execution error. */
+/*
+ * Resolves `type` / `typeexpr`; an unknown processor is an execution error.
+ * A typeexpr's text is looked up, never interned: every processor this
+ * system has is an atom from its registration or from system creation, so
+ * text that is no atom names none, and `type` stays TA_ATOM_NONE.
+ */
 static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                  ta_fault *fault) {
     ta_system *system = it->system;
@@ -1836,11 +1841,13 @@ static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send,
                                                              .expr = send->type.as.expr, .holder = &holder,
                                                              .text = &text, .fault = fault,
                                                          }));
-        if (result == TA_OK) {
-            result = text.len == 0 ? ta_core_fault(fault, &(ta_core_fault_params){
-                                                              .result = TA_EXEC_FAILED, .code = TA_ERR_INVALID,
-                                                              .message = "the <send> typeexpr gave empty text" })
-                                   : ta_core_result(ta_atom_intern(&system->atoms, text, &type));
+        if (result == TA_OK && text.len == 0) {
+            result = ta_core_fault(fault, &(ta_core_fault_params){
+                                              .result = TA_EXEC_FAILED, .code = TA_ERR_INVALID,
+                                              .message = "the <send> typeexpr gave empty text" });
+        }
+        if (result == TA_OK && ta_atom_find(&system->atoms, text, &type) != TA_OK) {
+            type = TA_ATOM_NONE;
         }
         ta_value_release(&holder);
         if (result != TA_OK) {
@@ -2760,25 +2767,37 @@ static void ta_remove_conflicts(ta_interpreter *it) {
     it->enabled_count = kept;
 }
 
-static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, const ta_event *event) {
-    if (event == NULL) {
+/* Whether `transition` is enabled by the event whose name has the segments
+ * `name`, or, for a NULL `name`, whether it is eventless. */
+static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, const ta_atom_list *name) {
+    if (name == NULL) {
         return transition->event_patterns.length == 0;
     }
     for (uint32_t index = 0; index < transition->event_patterns.length; index += 1) {
         if (ta_event_pattern_matches(it->definition,
                                      &it->definition->event_patterns[transition->event_patterns.offset + index],
-                                     event->name)) {
+                                     name)) {
             return true;
         }
     }
     return false;
 }
 
-/* Selects the optimal enabled transition set; event is null for eventless selection. */
+/*
+ * Selects the optimal enabled transition set; event is null for eventless
+ * selection. The event's name is turned into its segments once, and every
+ * descriptor is matched against those atoms (definition.h).
+ */
 static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event) {
     const ta_definition *definition = it->definition;
     it->enabled_count = 0;
     it->condition_count = 0;
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    ta_atom_list name = { .atoms = segments, .count = 0 };
+    if (event != NULL) {
+        name.count = ta_trie_path(&it->system->event_names, event->name, segments);
+    }
+    const ta_atom_list *matched = event != NULL ? &name : NULL;
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {
         if (!ta_bits_get(it->active, atomic) || !ta_definition_is_atomic(definition, atomic)) {
             continue;
@@ -2789,7 +2808,7 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
             for (uint32_t index = 0; index < transitions.length && !found; index += 1) {
                 ta_transition_id id = transitions.offset + index;
                 const ta_transition_def *transition = &definition->transitions[id];
-                if (!ta_transition_matches(it, transition, event)) {
+                if (!ta_transition_matches(it, transition, matched)) {
                     continue;
                 }
                 bool enabled = true;

@@ -507,6 +507,25 @@ area, so it lands in 4.2.
 **Exit:** matching gives the same answers through lookup. The IRP tests in
 the test host and napi still pass.
 
+**Done (Phase 3).** The matcher runs over a name's atoms, built once per
+selection; `<send typeexpr>` and `<invoke typeexpr>` look types up
+without interning; the `invoke` segment is an atom from system creation.
+Events still carry a trie ID until 4.2, so at take the atoms come from
+the event's trie path, which gives the same list `ta_names_resolve`
+gives over the name's bytes (proved in `tests/name_matching_test.c`).
+Step 4.2 replaces that path with `ta_names_resolve` over the envelope's
+bytes, and stops interning at the sites that still do: the `<send
+eventexpr>` value, the generated invocation ID (`<stateid>.<platformid>`,
+to become a state ID and a counter), `done.invoke.<id>`,
+`error.communication.invoke.<id>.<reason>`, `#_<invokeid>` and
+session-URI families in `targetexpr`, and the host calls
+`ta_send_id_intern`, `ta_system_intern_invoke_id`,
+`ta_event_name_intern` and `ta_system_intern_atom`.
+**Open for 4.2:** `error.communication.invoke.<id>.<reason>` keeps a
+dotted invocation ID as one segment today, where `done.invoke.<id>`
+splits it; as bytes, it splits. A descriptor naming the ID's first part
+would then match where it does not today.
+
 ## Phase 4: core gains its queue
 
 The kernel stays and keeps napi and the test host working. It is changed

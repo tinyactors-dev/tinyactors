@@ -31,7 +31,7 @@ are private and hold layouts and internal functions.
 | `datamodel.h` | the data model's view of its actor (see its file comment) |
 | `io.h` | the I/O processor registry entry and origin rendering (see its file comment) |
 | `invoke.h` | invocation bookkeeping, retirement and restore (see its file comment) |
-| `definition.h` | immutable compiled statechart revision |
+| `definition.h` | immutable compiled statechart revision, and the event-descriptor matcher (see its file comment) |
 | `builder.h` | mutable construction/compilation front end |
 | `export.h` | rebuilds a compiled definition's authoring spec (`ta_definition_export`) |
 | `actor.h` | named actor protocol, resident session state, operational inspection |

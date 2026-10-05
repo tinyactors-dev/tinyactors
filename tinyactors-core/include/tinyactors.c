@@ -7980,9 +7980,138 @@ TA_PRIVATE ta_origin ta_invoke_origin_of(const ta_system *system, const ta_activ
 /* The origin of an event from the actor's active invocation `invoke`; false when there is none. */
 TA_PRIVATE bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out);
 
+/**
+ * @file definition.h
+ *
+ * # Compiled definitions
+ *
+ * `ta_definition` is one compiled, immutable statechart revision: the
+ * program actors of that revision run. The compiler (`builder.h`) makes
+ * it from a spec; the system registers it; the interpreter, invocations,
+ * session images and the inspection and export calls read it. This
+ * header holds its layout and the functions over it that the compiler
+ * and the interpreter share.
+ *
+ * A definition holds:
+ *
+ * - the state hierarchy and kinds, in document order, with each state's
+ *   children, transitions, `<onentry>` / `<onexit>` handlers (one action
+ *   block per handler, SCXML 3.8, 3.9), completion event and done data;
+ * - transitions with their sources, targets, type (`internal` or
+ *   `external`), conditions, event descriptors and actions, and the
+ *   initial transitions with their executable content;
+ * - executable content as one stream of actions in blocks, and where each
+ *   action sits (ADR 0071); invocation declarations; late or early data
+ *   binding; the history and configuration layouts;
+ * - the data model and the state it prepared for the definition, and the
+ *   expressions and their roles (ADR 0076);
+ * - the authored text the compiler normalizes, so that
+ *   `ta_definition_export` rebuilds a spec with the same fingerprint
+ *   (ADR 0042), and, when the spec knew them, where its elements were
+ *   written (ADR 0085), in a side table that nothing at run time reads and
+ *   that is not part of the revision.
+ *
+ * ## Contract and invariants
+ *
+ * - **Immutable program data.** A definition is compiled and validated
+ *   before registration and never changed while actors or session images
+ *   use it. The fields that change after registration are bookkeeping, not
+ *   program: the counters and state occupancy (ADR 0072), the microstep
+ *   limit (ADR 0075), `actor_count`, the holds and holders (ADR 0077),
+ *   `retired` (ADR 0043), the nested definitions of its `<invoke>`s, and
+ *   the spans a registration by identity hands over.
+ * - **Identity.** Each definition owns its `ta_definition_identity`: its
+ *   UTF-8 family and an opaque revision, the compiler's fingerprint unless
+ *   the spec gave one (`identity` of `ta_scxml_spec`); the definition
+ *   keeps its own copy of the revision bytes. A change that could alter how definition-local
+ *   session state is read makes a new revision. Several revisions of one
+ *   family may be registered at once; a session image reconstructs against
+ *   its exact revision, and an application upgrades a named actor by
+ *   starting it under the new revision and replacing its directory entry.
+ * - **IDs.** The system keeps registered definitions in a slot table: an
+ *   ID is a generation handle of its slot (`handle.h`), and freeing a
+ *   definition moves the slot's generation on, so `ta_definition_lookup`
+ *   answers NULL for a stale ID. Slots are reused, so each definition also
+ *   keeps a registration serial, and `ta_system_find_definition` answers
+ *   the newest match.
+ * - **Inspection** (ADR 0042): a registered definition reports its ID,
+ *   identity, `<scxml name>`, data-model adapter, binding mode, state
+ *   count, and lifecycle and memory facts (`ta_definition_inspect`), and
+ *   `ta_system_find_definition` resolves an exact identity to it.
+ * - **Retirement.** A retired definition takes no new actors and matches
+ *   no identity; the system frees it once its holds, holders and
+ *   `actor_count` are all zero, when its last actor is freed, after that
+ *   actor's data-model instance, session storage and invocations.
+ *
+ * ## Event descriptors and matching
+ *
+ * A transition's `event` attribute compiles to one `ta_event_pattern` per
+ * descriptor: a run of `ta_event_pattern_segment`s, each an atom the
+ * compiler interned when the definition was compiled, or the wildcard
+ * `*`. Descriptors are authored names; nothing at run time adds to them.
+ *
+ * `ta_event_pattern_matches` matches one descriptor against an event's
+ * name given as its segments, a list of atoms (ADR 0060 section 5): a
+ * descriptor that runs out before the event matches by prefix, and a `*`
+ * segment takes zero or more event segments anywhere in the descriptor.
+ * It compares the event's atoms with equality against the descriptor's,
+ * and needs nothing else about the event: not its trie node, not its
+ * text. So an event segment that is no atom at all (the name resolver's
+ * UNKNOWN, `TA_ATOM_NONE`) equals no descriptor segment, since every
+ * descriptor segment that is not a wildcard is a real atom, and is taken
+ * only by `*`. Matching segments looked up by text therefore gives the
+ * same answers as matching interned ones.
+ *
+ * The interpreter turns a taken event's name into its segments once per
+ * selection, before it matches any transition, and matches every
+ * descriptor of every candidate transition against that one list. An
+ * event carries its name as a node of the system's event-name trie, so its
+ * segments are the node's path (`ta_trie_path`); the name resolver
+ * (`names.h`) gives the same list from a name's bytes, by lookup, except
+ * where a trie segment holds a dot, which bytes split in two (the
+ * generated invocation ID of an invocation's error name;
+ * `docs/internal/names.md`).
+ *
+ * ## Memory
+ *
+ * A definition owns everything in it through its arena, from the
+ * allocator given to the compiler, except the span side table, one
+ * allocation from `span_allocator` that a registration by identity may
+ * hand to the live definition (`ta_definition_take_spans`), and the data
+ * model's prepared state, which the data model frees. The atoms and event
+ * names it uses belong to its system, which outlives it. It lives until
+ * the system frees it (see retirement above) or, unregistered, until
+ * `ta_definition_destroy`.
+ *
+ * Compiling allocates; `ta_definition_place_actions` allocates in the
+ * arena while the compiler seals the definition. Every other function
+ * here only reads, never allocates, and may run inside a macrostep.
+ *
+ * ## Complexity
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | `ta_definition_lookup`, `ta_definition_is_atomic`, `ta_definition_session_bytes`, `ta_definition_element_count`, `ta_definition_span_base` | O(1) |
+ * | `ta_definition_is_descendant` | O(depth of the state) |
+ * | `ta_event_pattern_matches` | O(event segments × descriptor segments) time, O(1) space, no recursion (ADR 0060) |
+ * | `ta_definition_place_actions` | O(actions) |
+ * | `ta_definition_take_spans` | O(1) |
+ *
+ * ## Failure
+ *
+ * `ta_definition_place_actions` answers `TA_ERR_NOMEM` when the arena
+ * cannot grow. The rest cannot fail: a lookup answers NULL for an unknown
+ * or stale ID, and a match answers false for an event with no segments.
+ *
+ * ## Users
+ *
+ * The compiler, the interpreter (transition selection, executable
+ * content, invocations), session images, inspection
+ * (`ta_definition_inspect`, `ta_definition_state`, ...) and export. ADRs
+ * 0042, 0043, 0053, 0060, 0063, 0071, 0072, 0075, 0076, 0077, 0085, 0087,
+ * 0088.
+ */
 
-
-/* Functions over compiled definitions, shared by the compiler and interpreter. */
 
 typedef enum {
     TA_TRANSITION_EXTERNAL,
@@ -8441,26 +8570,33 @@ struct ta_definition {
     ta_definition *free_next;
 };
 
-/* A registered definition, retired or not; NULL for an unknown or stale ID. */
+/**
+ * The registered definition `id` names, retired or not, borrowed from the
+ * system; NULL for an unknown or stale ID. Never allocates; may run inside
+ * a macrostep.
+ */
 TA_PRIVATE const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
-/* Bytes of one actor's session storage: two configurations and history. */
+/** Bytes of one actor's session storage: two configurations and history. Never allocates. */
 TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition);
-/*
+/**
  * Fills `action_places` from the sealed blocks, in the definition's arena.
  * Every action belongs to exactly one block, so one pass over the top-level
  * blocks and one over the actions (for the blocks nested in <if> and
- * <foreach>) place them all, with no recursion (ADR 0060).
+ * <foreach>) place them all, with no recursion (ADR 0060). Runs while the
+ * compiler seals the definition, never in a macrostep; allocates, and
+ * answers `TA_ERR_NOMEM` when the arena cannot grow.
  */
 TA_PRIVATE ta_result ta_definition_place_actions(ta_definition *definition);
-/*
+/**
  * The layout of `spans` (ADR 0085): elements of `kind` are numbered from
  * ta_definition_span_base(), and there are ta_definition_element_count() of
  * them. ta_definition_export() numbers the exported spec's spans the same
- * way.
+ * way. Never allocates.
  */
 TA_PRIVATE uint32_t ta_definition_element_count(const ta_definition *definition, ta_element_kind kind);
+/** The number of the first span of an element of `kind`; see ta_definition_element_count(). */
 TA_PRIVATE uint32_t ta_definition_span_base(const ta_definition *definition, ta_element_kind kind);
-/*
+/**
  * Registration by identity answered `definition` with `live` (ADR 0077):
  * when `definition` knows where its elements are written, and not exactly
  * where `live` says, `live` takes its spans, and `definition`, about to be
@@ -8468,11 +8604,26 @@ TA_PRIVATE uint32_t ta_definition_span_base(const ta_definition *definition, ta_
  * so it cannot fail.
  */
 TA_PRIVATE void ta_definition_take_spans(ta_definition *live, ta_definition *definition);
+/** Whether `state` is atomic or final. Never allocates; may run inside a macrostep. */
 TA_PRIVATE bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
+/**
+ * Whether `state` is a proper descendant of `ancestor`; with
+ * `TA_STATE_NONE` as the ancestor, whether `state` is a state at all.
+ * Walks the parents. Never allocates; may run inside a macrostep.
+ */
 TA_PRIVATE bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
+/**
+ * Whether `pattern`, one of `definition`'s event descriptors, matches the
+ * event whose name has the segments `event`, first segment first (see
+ * "Event descriptors and matching" above): by prefix, with `*` taking zero
+ * or more segments, and a segment that is no atom (`TA_ATOM_NONE`) taken
+ * only by `*`. False for an event of no segments. Borrows `event` for the
+ * call. Never allocates and never fails; may run inside a macrostep.
+ * O(event segments × descriptor segments), O(1) space.
+ */
 TA_PRIVATE bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
-                              ta_event_name_id event);
+                              const ta_atom_list *event);
 
 
 
@@ -8972,6 +9123,12 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
  *   invoked child's completion submit through it. The SCXML I/O type
  *   atom is interned at creation, and registering an I/O processor cannot
  *   replace it.
+ * - **Generated names:** every prefix of a name core generates is an
+ *   atom from creation on: the segments of the built-in event names below
+ *   and `invoke`. Matching an event compares its segments as atoms
+ *   against a definition's descriptors (`definition.h`); a `<send>` or
+ *   `<invoke>` `typeexpr` is looked up among the atoms, never interned,
+ *   since every processor and invoker type is an atom already.
  * - The parameters (ADR 0092) are fixed at creation and bound every
  *   buffer; `maxActors` and `maxDefinitions` are counted against
  *   `live_actors` and `live_definitions`.
@@ -9011,7 +9168,9 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
  * The event names system creation adds to `event_names`, in this order, so
  * their IDs are fixed: `error`, `error.execution`, `error.communication`,
  * `error.platform`, `done`, `done.state`, `done.invoke`. Core names the
- * events it raises below them.
+ * events it raises below them. Creation also interns `invoke`, the third
+ * segment of `error.communication.invoke.<id>.<reason>`, as
+ * `invoke_segment`.
  */
 enum {
     TA_EVENT_NAME_ERROR = 1u,
@@ -9120,6 +9279,9 @@ struct ta_system {
     ta_atom scxml_io_alias;
     /* Invoke: the canonical SCXML invoker type. */
     ta_atom scxml_invoke_type;
+    /* The `invoke` segment of error.communication.invoke.<id>.<reason>,
+     * interned at creation with the built-in event names. */
+    ta_atom invoke_segment;
     ta_arena scratch;
     /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
      * newest first, linked through `next_cached`; at most `block_cache_limit`
@@ -15933,15 +16095,19 @@ static const ta_invoker *ta_invoke_find_invoker(const ta_system *system, ta_atom
     return NULL;
 }
 
-static ta_atom ta_invoke_normalize_type(const ta_system *system, ta_atom type) {
+/* Whether `text` is one of the names of the SCXML invoker type. */
+static bool ta_invoke_is_scxml_alias(ta_str text) {
     static const char *const aliases[] = { "scxml", "http://www.w3.org/TR/scxml", "http://www.w3.org/TR/scxml/" };
-    ta_str text = ta_atom_text(&system->atoms, type);
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(aliases); index += 1) {
         if (ta_str_equal(text, ta_str_from_cstr(aliases[index]))) {
-            return system->scxml_invoke_type;
+            return true;
         }
     }
-    return type;
+    return false;
+}
+
+static ta_atom ta_invoke_normalize_type(const ta_system *system, ta_atom type) {
+    return ta_invoke_is_scxml_alias(ta_atom_text(&system->atoms, type)) ? system->scxml_invoke_type : type;
 }
 
 /* ------------------------------------------------------------------------
@@ -16145,10 +16311,18 @@ static ta_result ta_invoke_resolve_type(ta_interpreter *it, const ta_invoke_decl
                                               .value = &value, .out = &text, .fault = &values->fault });
     }
     ta_result result = ta_invoke_op(status);
+    if (result == TA_OK && text.ptr == NULL && text.len != 0) {
+        result = TA_INVOKE_FAILED;
+    }
     if (result == TA_OK) {
-        ta_atom atom = 0;
-        result = ta_invoke_core(ta_atom_intern(&system->atoms, text, &atom));
-        *out = ta_invoke_normalize_type(system, atom);
+        /* Looked up, never interned: every invoker type is an atom from its
+         * registration, so text that is no atom names no invoker, and
+         * TA_ATOM_NONE finds none. */
+        if (ta_invoke_is_scxml_alias(text)) {
+            *out = system->scxml_invoke_type;
+        } else if (ta_atom_find(&system->atoms, text, out) != TA_OK) {
+            *out = TA_ATOM_NONE;
+        }
     }
     ta_value_release(&value);
     return result;
@@ -16696,18 +16870,17 @@ TA_PRIVATE void ta_invoke_release(ta_system *system, ta_actor *actor) {
  * Host reports
  */
 
-/* error.communication.invoke.<id>.<reason> (ADR 0081) */
+/* error.communication.invoke.<id>.<reason> (ADR 0081). The `invoke`
+ * segment is the atom system creation interned; the ID and the reason are
+ * interned here. */
 static ta_result ta_invoke_error_name(ta_system *system, ta_invoke_id invoke, ta_str reason, ta_event_name_id *out) {
     ta_event_name_id name = 0;
-    ta_atom invoke_atom = 0;
     ta_atom reason_atom = 0;
-    ta_result result = ta_atom_intern(&system->atoms, (ta_str){ .ptr = "invoke", .len = 6 }, &invoke_atom);
-    if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, reason, &reason_atom);
-    }
+    ta_result result = ta_atom_intern(&system->atoms, reason, &reason_atom);
     if (result == TA_OK) {
         result = ta_trie_child(&system->event_names,
-                               (ta_trie_edge){ .parent = TA_EVENT_NAME_ERROR_COMMUNICATION, .segment = invoke_atom },
+                               (ta_trie_edge){ .parent = TA_EVENT_NAME_ERROR_COMMUNICATION,
+                                               .segment = system->invoke_segment },
                                &name);
     }
     ta_str text = ta_invoke_id_text(system, invoke);
@@ -17087,15 +17260,13 @@ static bool ta_pattern_match_run(const ta_pattern_match *match) {
 
 TA_PRIVATE bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
-                              ta_event_name_id event) {
-    ta_atom segments[TA_TRIE_MAX_DEPTH];
-    uint32_t count = ta_trie_path(&definition->system->event_names, event, segments);
-    if (count == 0) {
+                              const ta_atom_list *event) {
+    if (event->count == 0) {
         return false;
     }
     ta_pattern_match match = {
-        .event = segments,
-        .event_count = count,
+        .event = event->atoms,
+        .event_count = event->count,
         .pattern = definition->event_pattern_segments + pattern->segments.offset,
         .pattern_count = pattern->segments.length,
     };
@@ -24767,7 +24938,9 @@ TA_PRIVATE bool ta_system_quota_actor(ta_system *system) {
 }
 
 /* Makes the event-name trie, `depth` segments deep, and adds the built-in
- * names in the order of the TA_EVENT_NAME_* constants. */
+ * names in the order of the TA_EVENT_NAME_* constants, then the `invoke`
+ * segment of the invocation error names: every segment of a name core
+ * generates is an atom from here on, whatever charts register. */
 static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allocator, uint32_t depth) {
     static const char *const builtins[] = {
         "error", "error.execution", "error.communication", "error.platform",
@@ -24779,6 +24952,9 @@ static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allo
     for (uint32_t index = 0; result == TA_OK && index < TA_ARRAY_COUNT(builtins); index += 1) {
         ta_event_name_id name = 0;
         result = ta_trie_intern_dotted(&system->event_names, ta_str_from_cstr(builtins[index]), &name);
+    }
+    if (result == TA_OK) {
+        result = ta_atom_intern(&system->atoms, ta_str_from_cstr("invoke"), &system->invoke_segment);
     }
     return result;
 }
@@ -27378,7 +27554,12 @@ static bool ta_send_replayed_invoke(ta_interpreter *it, const ta_scxml_target *t
     return true;
 }
 
-/* Resolves `type` / `typeexpr`; an unknown processor is an execution error. */
+/*
+ * Resolves `type` / `typeexpr`; an unknown processor is an execution error.
+ * A typeexpr's text is looked up, never interned: every processor this
+ * system has is an atom from its registration or from system creation, so
+ * text that is no atom names none, and `type` stays TA_ATOM_NONE.
+ */
 static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                  ta_fault *fault) {
     ta_system *system = it->system;
@@ -27392,11 +27573,13 @@ static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send,
                                                              .expr = send->type.as.expr, .holder = &holder,
                                                              .text = &text, .fault = fault,
                                                          }));
-        if (result == TA_OK) {
-            result = text.len == 0 ? ta_core_fault(fault, &(ta_core_fault_params){
-                                                              .result = TA_EXEC_FAILED, .code = TA_ERR_INVALID,
-                                                              .message = "the <send> typeexpr gave empty text" })
-                                   : ta_core_result(ta_atom_intern(&system->atoms, text, &type));
+        if (result == TA_OK && text.len == 0) {
+            result = ta_core_fault(fault, &(ta_core_fault_params){
+                                              .result = TA_EXEC_FAILED, .code = TA_ERR_INVALID,
+                                              .message = "the <send> typeexpr gave empty text" });
+        }
+        if (result == TA_OK && ta_atom_find(&system->atoms, text, &type) != TA_OK) {
+            type = TA_ATOM_NONE;
         }
         ta_value_release(&holder);
         if (result != TA_OK) {
@@ -28316,25 +28499,37 @@ static void ta_remove_conflicts(ta_interpreter *it) {
     it->enabled_count = kept;
 }
 
-static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, const ta_event *event) {
-    if (event == NULL) {
+/* Whether `transition` is enabled by the event whose name has the segments
+ * `name`, or, for a NULL `name`, whether it is eventless. */
+static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, const ta_atom_list *name) {
+    if (name == NULL) {
         return transition->event_patterns.length == 0;
     }
     for (uint32_t index = 0; index < transition->event_patterns.length; index += 1) {
         if (ta_event_pattern_matches(it->definition,
                                      &it->definition->event_patterns[transition->event_patterns.offset + index],
-                                     event->name)) {
+                                     name)) {
             return true;
         }
     }
     return false;
 }
 
-/* Selects the optimal enabled transition set; event is null for eventless selection. */
+/*
+ * Selects the optimal enabled transition set; event is null for eventless
+ * selection. The event's name is turned into its segments once, and every
+ * descriptor is matched against those atoms (definition.h).
+ */
 static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event) {
     const ta_definition *definition = it->definition;
     it->enabled_count = 0;
     it->condition_count = 0;
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    ta_atom_list name = { .atoms = segments, .count = 0 };
+    if (event != NULL) {
+        name.count = ta_trie_path(&it->system->event_names, event->name, segments);
+    }
+    const ta_atom_list *matched = event != NULL ? &name : NULL;
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {
         if (!ta_bits_get(it->active, atomic) || !ta_definition_is_atomic(definition, atomic)) {
             continue;
@@ -28345,7 +28540,7 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
             for (uint32_t index = 0; index < transitions.length && !found; index += 1) {
                 ta_transition_id id = transitions.offset + index;
                 const ta_transition_def *transition = &definition->transitions[id];
-                if (!ta_transition_matches(it, transition, event)) {
+                if (!ta_transition_matches(it, transition, matched)) {
                     continue;
                 }
                 bool enabled = true;

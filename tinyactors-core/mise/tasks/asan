@@ -43,7 +43,8 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
 # when reserved larger (fifo_test), and quota counters checked at
 # their bounds (quota_test), and byte sinks whose run moves as it
 # grows (bytes_test), and names resolved into scratch at its exact
-# depth (names_test), and type registries whose entries and hash table
+# depth (names_test), and names matched by lookup against a running
+# system's atom table (name_matching_test), and type registries whose entries and hash table
 # move as they grow (type_registry_test), and byte rings read at every
 # offset and wrap (ring_test), and ring records read and written at the
 # exact ends of their buffers (ring_codec_test), and hashes and formatters
@@ -54,7 +55,7 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
 # error and event pattern tests exercise pure functions. The test
 # allocator's own test (test_allocator_test) is self-contained and runs
 # too: every other test's verdict on leaks and frees rests on it.
-STANDALONE = %w[actor_id_test session_id_test offload_test span_test layout_test list_test index_pool_test chunks_test paged_array_test heap_test table_test trie_test fifo_test quota_test bytes_test names_test type_registry_test ring_test ring_codec_test hash_test handle_test text_writer_test compile_sizes_test test_allocator_test].freeze
+STANDALONE = %w[actor_id_test session_id_test offload_test span_test layout_test list_test index_pool_test chunks_test paged_array_test heap_test table_test trie_test fifo_test quota_test bytes_test names_test name_matching_test type_registry_test ring_test ring_codec_test hash_test handle_test text_writer_test compile_sizes_test test_allocator_test].freeze
 
 # A binary is rebuilt only when one of its inputs is newer: its test, the
 # amalgamation or a header. Tests build and run in parallel, one per CPU.

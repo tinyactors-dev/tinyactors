@@ -42,6 +42,12 @@
  *   invoked child's completion submit through it. The SCXML I/O type
  *   atom is interned at creation, and registering an I/O processor cannot
  *   replace it.
+ * - **Generated names:** every prefix of a name core generates is an
+ *   atom from creation on: the segments of the built-in event names below
+ *   and `invoke`. Matching an event compares its segments as atoms
+ *   against a definition's descriptors (`definition.h`); a `<send>` or
+ *   `<invoke>` `typeexpr` is looked up among the atoms, never interned,
+ *   since every processor and invoker type is an atom already.
  * - The parameters (ADR 0092) are fixed at creation and bound every
  *   buffer; `maxActors` and `maxDefinitions` are counted against
  *   `live_actors` and `live_definitions`.
@@ -99,7 +105,9 @@
  * The event names system creation adds to `event_names`, in this order, so
  * their IDs are fixed: `error`, `error.execution`, `error.communication`,
  * `error.platform`, `done`, `done.state`, `done.invoke`. Core names the
- * events it raises below them.
+ * events it raises below them. Creation also interns `invoke`, the third
+ * segment of `error.communication.invoke.<id>.<reason>`, as
+ * `invoke_segment`.
  */
 enum {
     TA_EVENT_NAME_ERROR = 1u,
@@ -208,6 +216,9 @@ struct ta_system {
     ta_atom scxml_io_alias;
     /* Invoke: the canonical SCXML invoker type. */
     ta_atom scxml_invoke_type;
+    /* The `invoke` segment of error.communication.invoke.<id>.<reason>,
+     * interned at creation with the built-in event names. */
+    ta_atom invoke_segment;
     ta_arena scratch;
     /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
      * newest first, linked through `next_cached`; at most `block_cache_limit`

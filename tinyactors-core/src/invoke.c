@@ -192,15 +192,19 @@ static const ta_invoker *ta_invoke_find_invoker(const ta_system *system, ta_atom
     return NULL;
 }
 
-static ta_atom ta_invoke_normalize_type(const ta_system *system, ta_atom type) {
+/* Whether `text` is one of the names of the SCXML invoker type. */
+static bool ta_invoke_is_scxml_alias(ta_str text) {
     static const char *const aliases[] = { "scxml", "http://www.w3.org/TR/scxml", "http://www.w3.org/TR/scxml/" };
-    ta_str text = ta_atom_text(&system->atoms, type);
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(aliases); index += 1) {
         if (ta_str_equal(text, ta_str_from_cstr(aliases[index]))) {
-            return system->scxml_invoke_type;
+            return true;
         }
     }
-    return type;
+    return false;
+}
+
+static ta_atom ta_invoke_normalize_type(const ta_system *system, ta_atom type) {
+    return ta_invoke_is_scxml_alias(ta_atom_text(&system->atoms, type)) ? system->scxml_invoke_type : type;
 }
 
 /* ------------------------------------------------------------------------
@@ -404,10 +408,18 @@ static ta_result ta_invoke_resolve_type(ta_interpreter *it, const ta_invoke_decl
                                               .value = &value, .out = &text, .fault = &values->fault });
     }
     ta_result result = ta_invoke_op(status);
+    if (result == TA_OK && text.ptr == NULL && text.len != 0) {
+        result = TA_INVOKE_FAILED;
+    }
     if (result == TA_OK) {
-        ta_atom atom = 0;
-        result = ta_invoke_core(ta_atom_intern(&system->atoms, text, &atom));
-        *out = ta_invoke_normalize_type(system, atom);
+        /* Looked up, never interned: every invoker type is an atom from its
+         * registration, so text that is no atom names no invoker, and
+         * TA_ATOM_NONE finds none. */
+        if (ta_invoke_is_scxml_alias(text)) {
+            *out = system->scxml_invoke_type;
+        } else if (ta_atom_find(&system->atoms, text, out) != TA_OK) {
+            *out = TA_ATOM_NONE;
+        }
     }
     ta_value_release(&value);
     return result;
@@ -955,18 +967,17 @@ void ta_invoke_release(ta_system *system, ta_actor *actor) {
  * Host reports
  */
 
-/* error.communication.invoke.<id>.<reason> (ADR 0081) */
+/* error.communication.invoke.<id>.<reason> (ADR 0081). The `invoke`
+ * segment is the atom system creation interned; the ID and the reason are
+ * interned here. */
 static ta_result ta_invoke_error_name(ta_system *system, ta_invoke_id invoke, ta_str reason, ta_event_name_id *out) {
     ta_event_name_id name = 0;
-    ta_atom invoke_atom = 0;
     ta_atom reason_atom = 0;
-    ta_result result = ta_atom_intern(&system->atoms, (ta_str){ .ptr = "invoke", .len = 6 }, &invoke_atom);
-    if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, reason, &reason_atom);
-    }
+    ta_result result = ta_atom_intern(&system->atoms, reason, &reason_atom);
     if (result == TA_OK) {
         result = ta_trie_child(&system->event_names,
-                               (ta_trie_edge){ .parent = TA_EVENT_NAME_ERROR_COMMUNICATION, .segment = invoke_atom },
+                               (ta_trie_edge){ .parent = TA_EVENT_NAME_ERROR_COMMUNICATION,
+                                               .segment = system->invoke_segment },
                                &name);
     }
     ta_str text = ta_invoke_id_text(system, invoke);

@@ -58,10 +58,13 @@ static bool matches(const char *descriptor, const char *event) {
     }
     ta_event_name_id name = 0;
     CHECK(ta_trie_intern_dotted(&system_under_test->event_names, text(event), &name) == TA_OK);
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    ta_atom_list path = { .atoms = segments,
+                          .count = ta_trie_path(&system_under_test->event_names, name, segments) };
     const ta_transition_def *transition = &definition->transitions[0];
     CHECK(transition->event_patterns.length == 1);
     bool result = ta_event_pattern_matches(definition, &definition->event_patterns[transition->event_patterns.offset],
-                                           name);
+                                           &path);
     ta_definition_destroy(definition);
     return result;
 }
