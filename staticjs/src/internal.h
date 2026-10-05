@@ -43,11 +43,22 @@ void sjs_buf_free(const sjs_allocator *allocator, sjs_buf *buf);
 #define SJS_BUF_AT(buf, type, index) (((type *)(void *)(buf).ptr)[index])
 #define SJS_BUF_COUNT(buf, type) ((buf).length / (uint32_t)sizeof(type))
 
+/* A slot of the context's table of interned strings (sjs_string_intern). */
+typedef struct {
+    struct sjs_string_ *string;   /* NULL: empty */
+    uint32_t hash;
+} sjs_intern_slot;
+
 struct sjs_context {
     sjs_allocator backing;
     sjs_allocator counting;   /* what everything in the context allocates with */
     sjs_limits limits;
     size_t live;
+    /* Interned strings, weakly: a string leaves when it is freed, and the
+     * table goes when the last one does. Open-addressed, probed linearly. */
+    sjs_intern_slot *interned;
+    uint32_t intern_mask;     /* slots - 1 */
+    uint32_t intern_count;
 };
 
 /* ========================================================================
@@ -115,8 +126,9 @@ struct sjs_heap {
 #define SJS_STRING_ASCII 1u
 #define SJS_STRING_INDEX 2u   /* a canonical array index; `index` holds it */
 #define SJS_STRING_NAMED 4u   /* `h.name_id` holds sjs_name_id of its text */
+#define SJS_STRING_INTERNED 8u /* in its context's table: one string per text */
 
-typedef struct {
+typedef struct sjs_string_ {
     sjs_heap h;
     uint32_t length;
     uint32_t utf16_length;
@@ -248,6 +260,11 @@ static inline void sjs_unref(sjs_context *context, sjs_value v) {
 }
 
 sjs_result sjs_string_make(sjs_context *context, sjs_str text, sjs_string **out);
+/* The context's one string with `text`, made and interned if there is none
+ * yet; for property keys, so that two keys with the same text are most often
+ * the same string. When the table cannot grow, the string is made but not
+ * interned: interning only makes compares faster. */
+sjs_result sjs_string_intern(sjs_context *context, sjs_str text, sjs_string **out);
 /* The string for an array index, a number's text or a boolean's. */
 sjs_result sjs_string_from_number(sjs_context *context, double value, sjs_string **out);
 sjs_result sjs_array_make(sjs_context *context, uint32_t capacity, sjs_array **out);

@@ -66,6 +66,8 @@ static void lookup_free(sjs_context *context, sjs_index *index) {
     if (index != NULL) sjs_mem_free(&context->counting, index, lookup_size(index->mask));
 }
 
+static void intern_remove(sjs_context *context, const sjs_string *string);
+
 /* Free everything on the worklist, and what it alone held. */
 static void drain(sjs_context *context, sjs_heap *work) {
     while (work != NULL) {
@@ -94,6 +96,9 @@ static void drain(sjs_context *context, sjs_heap *work) {
             drop_program(&work, c->program);
             break;
         }
+        case SJS_HEAP_STRING:
+            if ((h->flags & SJS_STRING_INTERNED) != 0) intern_remove(context, (const sjs_string *)(const void *)h);
+            break;
         default:
             break;
         }
@@ -195,6 +200,86 @@ static uint32_t hash_bytes(sjs_str text) {
     uint32_t h = 2166136261u;   /* FNV-1a */
     for (uint32_t i = 0; i < text.length; i++) h = (h ^ (uint8_t)text.ptr[i]) * 16777619u;
     return h;
+}
+
+/* ------------------------------------------------------------------------
+ * Interned strings
+ */
+
+#define INTERN_FIRST_SLOTS 64u
+
+static size_t intern_size(uint32_t mask) {
+    return ((size_t)mask + 1u) * sizeof(sjs_intern_slot);
+}
+
+static void intern_place(sjs_intern_slot *slots, uint32_t mask, sjs_intern_slot slot) {
+    uint32_t i = slot.hash & mask;
+    while (slots[i].string != NULL) i = (i + 1u) & mask;
+    slots[i] = slot;
+}
+
+/* Room for one more string, at most half the slots full; false when the
+ * table cannot grow. */
+static bool intern_reserve(sjs_context *context) {
+    uint32_t slots = context->interned == NULL ? 0 : context->intern_mask + 1u;
+    if ((context->intern_count + 1u) * 2u <= slots) return true;
+    /* Twice the slots; 32-bit size_t (wasm32) needs the guard. */
+    uint32_t grown = slots == 0 ? INTERN_FIRST_SLOTS : slots * 2u;
+    if (grown == 0 || (size_t)grown > SIZE_MAX / sizeof(sjs_intern_slot)) return false;
+    sjs_intern_slot *table = sjs_mem_alloc(&context->counting, (size_t)grown * sizeof(sjs_intern_slot));
+    if (table == NULL) return false;
+    sjs_zero(table, (size_t)grown * sizeof(sjs_intern_slot));
+    for (uint32_t i = 0; i < slots; i++) {
+        if (context->interned[i].string != NULL) intern_place(table, grown - 1u, context->interned[i]);
+    }
+    if (context->interned != NULL) sjs_mem_free(&context->counting, context->interned, intern_size(context->intern_mask));
+    context->interned = table;
+    context->intern_mask = grown - 1u;
+    return true;
+}
+
+sjs_result sjs_string_intern(sjs_context *context, sjs_str text, sjs_string **out) {
+    uint32_t hash = hash_bytes(text);
+    if (context->interned != NULL) {
+        uint32_t mask = context->intern_mask;
+        for (uint32_t i = hash & mask; context->interned[i].string != NULL; i = (i + 1u) & mask) {
+            sjs_string *s = context->interned[i].string;
+            if (context->interned[i].hash == hash && sjs_str_equal(sjs_string_view(s), text)) {
+                if (s->h.refs != SJS_IMMORTAL) s->h.refs++;
+                *out = s;
+                return SJS_OK;
+            }
+        }
+    }
+    sjs_result r = sjs_string_make(context, text, out);
+    if (r != SJS_OK || !intern_reserve(context)) return r;
+    intern_place(context->interned, context->intern_mask, (sjs_intern_slot){ *out, hash });
+    context->intern_count++;
+    (*out)->h.flags |= SJS_STRING_INTERNED;
+    return SJS_OK;
+}
+
+/* Take a string being freed out of the table, shifting back the strings
+ * after it that probed past its slot, so that no probe meets a gap early. */
+static void intern_remove(sjs_context *context, const sjs_string *string) {
+    sjs_intern_slot *slots = context->interned;
+    uint32_t mask = context->intern_mask;
+    uint32_t i = hash_bytes(sjs_string_view(string)) & mask;
+    while (slots[i].string != string) i = (i + 1u) & mask;
+    for (uint32_t j = (i + 1u) & mask; slots[j].string != NULL; j = (j + 1u) & mask) {
+        uint32_t home = slots[j].hash & mask;
+        /* Slot j's string may move to i when its home is not in (i, j]. */
+        bool stays = i <= j ? (home > i && home <= j) : (home > i || home <= j);
+        if (stays) continue;
+        slots[i] = slots[j];
+        i = j;
+    }
+    slots[i].string = NULL;
+    if (--context->intern_count == 0) {
+        sjs_mem_free(&context->counting, slots, intern_size(mask));
+        context->interned = NULL;
+        context->intern_mask = 0;
+    }
 }
 
 /* Equal under SameValueZero, equal hashes: every NaN hashes alike, and -0
@@ -516,7 +601,7 @@ sjs_result sjs_object_put(sjs_context *context, sjs_value *object, const sjs_pro
     if (o->h.refs != 1 || property->value.internal != 0 || !sjs_utf8_valid(property->key)) return SJS_ERR_INVALID;
     if (sjs_str_equal(property->key, SJS_STR("__proto__"))) return SJS_ERR_INVALID;
     sjs_string *key;
-    sjs_result r = sjs_string_make(context, property->key, &key);
+    sjs_result r = sjs_string_intern(context, property->key, &key);
     if (r != SJS_OK) return r;
     r = sjs_object_put_key(context, &o, (sjs_put){ key, property->value });
     if (r != SJS_OK) {

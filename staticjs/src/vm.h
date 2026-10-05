@@ -41,6 +41,8 @@ typedef struct {
     uint32_t scratch_count;
 } vm_frame;
 
+#define VM_MEMBER_GUESSES 256u
+
 enum { VM_IDLE = 0, VM_RUNNING, VM_DONE, VM_FAULT };
 
 struct sjs_vm {
@@ -59,6 +61,12 @@ struct sjs_vm {
     uint32_t op_pc;       /* where the instruction running started */
     sjs_error_slot error;
     sjs_value result;
+    /* GET_MEMBER's guesses: where the last object read at an instruction had
+     * its key, by the instruction's offset. Programs are shared, so the
+     * guesses live here; a guess is only a place to look first, checked
+     * against the key, so instructions of other programs that share a slot
+     * cost a scan and nothing else. */
+    uint32_t member_guess[VM_MEMBER_GUESSES];
 };
 
 /* Loop frame slots, from base. reduce moves LOOP_OUTPUT, its accumulator,

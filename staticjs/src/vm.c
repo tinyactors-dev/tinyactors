@@ -1041,16 +1041,27 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
             const sjs_object *o = SJS_AS_OBJECT(*top);
             sjs_str name = sjs_string_view(key);
             const sjs_entry *e = NULL;
-            if (o->index != NULL) {
-                e = sjs_object_find(o, name);
-            } else {
-                for (uint32_t i = 0; i < o->count; i++) {
-                    const sjs_string *k = o->entries[i].key;
-                    if (k == key || sjs_str_equal(sjs_string_view(k), name)) {
-                        e = &o->entries[i];
-                        break;
+            /* First where this instruction last found its key: an object
+             * holds a key once, so the entry there with the key is the one.
+             * Keys are mostly interned, so the pointers mostly match. */
+            uint32_t *guess = &vm->member_guess[pc & (VM_MEMBER_GUESSES - 1u)];
+            if (*guess < o->count) {
+                const sjs_string *k = o->entries[*guess].key;
+                if (k == key || sjs_str_equal(sjs_string_view(k), name)) e = &o->entries[*guess];
+            }
+            if (e == NULL) {
+                if (o->index != NULL) {
+                    e = sjs_object_find(o, name);
+                } else {
+                    for (uint32_t i = 0; i < o->count; i++) {
+                        const sjs_string *k = o->entries[i].key;
+                        if (k == key || sjs_str_equal(sjs_string_view(k), name)) {
+                            e = &o->entries[i];
+                            break;
+                        }
                     }
                 }
+                if (e != NULL) *guess = (uint32_t)(e - o->entries);
             }
             if (e != NULL) {
                 sjs_value v = e->value;

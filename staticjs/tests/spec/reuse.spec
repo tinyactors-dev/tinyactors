@@ -489,6 +489,21 @@ export const again = [o, xs, { ...ns, z: 1 }];
 --- value
 undefined
 
+=== one member read finds its key at a different place in each object
+[{ a: 1, b: 2 }, { b: 3 }, { c: 1, d: 0, b: 4 }, {}, { a: 5 }, { b: 6, a: 7 }, { ba: 8, b: 9 }].map(o => o.b)
+--- value
+[2,3,4,undefined,undefined,6,9]
+
+=== a key made at run time is found where a literal's key was
+[{ x: 1, ab: 2 }, { ["a" + "b"]: 3, x: 4 }, { x: 5, [`a${"b"}`]: 6 }].map(o => o.ab)
+--- value
+[2,3,6]
+
+=== a large object read where a small one had its key
+[{ k: 1 }, Object.fromEntries([..."abcdefghijklmnop"].map((c, i) => [c, i]).concat([["k", 99]]))].map(o => o.k)
+--- value
+[1,99]
+
 === a missing member still faults on prototype names
 (o => o.constructor)({ a: 1 })
 --- fault no prototype
