@@ -2737,14 +2737,15 @@ static void ta_remove_conflicts(ta_interpreter *it) {
     it->enabled_count = kept;
 }
 
-static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, const ta_event *event) {
-    if (event == NULL) {
+static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, bool eventful,
+                                  ta_event_atoms event) {
+    if (!eventful) {
         return transition->event_patterns.length == 0;
     }
     for (uint32_t index = 0; index < transition->event_patterns.length; index += 1) {
         if (ta_event_pattern_matches(it->definition,
                                      &it->definition->event_patterns[transition->event_patterns.offset + index],
-                                     event->name)) {
+                                     event)) {
             return true;
         }
     }
@@ -2756,6 +2757,11 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
     const ta_definition *definition = it->definition;
     it->enabled_count = 0;
     it->condition_count = 0;
+    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
+    ta_event_atoms atoms = { .atoms = segments };
+    if (event != NULL) {
+        atoms.count = ta_trie_segments(&definition->system->event_names.trie, event->name, segments);
+    }
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {
         if (!ta_bits_get(it->active, atomic) || !ta_definition_is_atomic(definition, atomic)) {
             continue;
@@ -2766,7 +2772,7 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
             for (uint32_t index = 0; index < transitions.length && !found; index += 1) {
                 ta_transition_id id = transitions.offset + index;
                 const ta_transition_def *transition = &definition->transitions[id];
-                if (!ta_transition_matches(it, transition, event)) {
+                if (!ta_transition_matches(it, transition, event != NULL, atoms)) {
                     continue;
                 }
                 bool enabled = true;

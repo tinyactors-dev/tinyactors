@@ -499,6 +499,27 @@ uint32_t ta_definition_span_base(const ta_definition *definition, ta_element_kin
 void ta_definition_take_spans(ta_definition *live, ta_definition *definition);
 bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
 bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
+/*
+ * ta_event_atoms is a taken event's name as the matcher sees it: one atom per
+ * dot-separated segment, TA_NAME_UNKNOWN (never a valid atom) for a segment
+ * that is not an atom. The array is borrowed for one call: it lives in the
+ * interpreter's scratch (macrostep/unit lifetime) and the matcher neither
+ * keeps nor writes it. `count` 0 is the empty name, which matches no pattern.
+ */
+typedef struct {
+    const ta_atom *atoms;
+    uint32_t count;
+} ta_event_atoms;
+
+/*
+ * ta_event_pattern_matches reports whether `pattern`, a descriptor of
+ * `definition`, matches the event name `event` (ADR 0007: `*` as a segment
+ * matches any run of segments, and a descriptor that ends first matches the
+ * names below it). It compares atoms only, so a name segment that is not an
+ * atom equals no literal descriptor segment. Needs `pattern` to belong to
+ * `definition`; guarantees nothing is read after the call returns. It never
+ * allocates and never fails.
+ */
 bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
-                              ta_event_name_id event);
+                              ta_event_atoms event);

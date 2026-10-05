@@ -61,8 +61,11 @@ static bool matches(const char *descriptor, const char *event) {
     CHECK(ta_event_name_intern_dotted(&system_under_test->event_names, text(event), &name) == TA_OK);
     const ta_transition_def *transition = &definition->transitions[0];
     CHECK(transition->event_patterns.length == 1);
+    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
+    ta_event_atoms atoms = { .atoms = segments,
+                             .count = ta_trie_segments(&system_under_test->event_names.trie, name, segments) };
     bool result = ta_event_pattern_matches(definition, &definition->event_patterns[transition->event_patterns.offset],
-                                           name);
+                                           atoms);
     ta_definition_destroy(definition);
     return result;
 }

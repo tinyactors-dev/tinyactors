@@ -8931,9 +8931,30 @@ TA_PRIVATE uint32_t ta_definition_span_base(const ta_definition *definition, ta_
 TA_PRIVATE void ta_definition_take_spans(ta_definition *live, ta_definition *definition);
 TA_PRIVATE bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
 TA_PRIVATE bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
+/*
+ * ta_event_atoms is a taken event's name as the matcher sees it: one atom per
+ * dot-separated segment, TA_NAME_UNKNOWN (never a valid atom) for a segment
+ * that is not an atom. The array is borrowed for one call: it lives in the
+ * interpreter's scratch (macrostep/unit lifetime) and the matcher neither
+ * keeps nor writes it. `count` 0 is the empty name, which matches no pattern.
+ */
+typedef struct {
+    const ta_atom *atoms;
+    uint32_t count;
+} ta_event_atoms;
+
+/*
+ * ta_event_pattern_matches reports whether `pattern`, a descriptor of
+ * `definition`, matches the event name `event` (ADR 0007: `*` as a segment
+ * matches any run of segments, and a descriptor that ends first matches the
+ * names below it). It compares atoms only, so a name segment that is not an
+ * atom equals no literal descriptor segment. Needs `pattern` to belong to
+ * `definition`; guarantees nothing is read after the call returns. It never
+ * allocates and never fails.
+ */
 TA_PRIVATE bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
-                              ta_event_name_id event);
+                              ta_event_atoms event);
 
 
 
@@ -20180,15 +20201,13 @@ static bool ta_pattern_match_run(const ta_pattern_match *match) {
 
 TA_PRIVATE bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
-                              ta_event_name_id event) {
-    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_trie_segments(&definition->system->event_names.trie, event, segments);
-    if (count == 0) {
+                              ta_event_atoms event) {
+    if (event.count == 0) {
         return false;
     }
     ta_pattern_match match = {
-        .event = segments,
-        .event_count = count,
+        .event = event.atoms,
+        .event_count = event.count,
         .pattern = definition->event_pattern_segments + pattern->segments.offset,
         .pattern_count = pattern->segments.length,
     };
@@ -31400,14 +31419,15 @@ static void ta_remove_conflicts(ta_interpreter *it) {
     it->enabled_count = kept;
 }
 
-static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, const ta_event *event) {
-    if (event == NULL) {
+static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *transition, bool eventful,
+                                  ta_event_atoms event) {
+    if (!eventful) {
         return transition->event_patterns.length == 0;
     }
     for (uint32_t index = 0; index < transition->event_patterns.length; index += 1) {
         if (ta_event_pattern_matches(it->definition,
                                      &it->definition->event_patterns[transition->event_patterns.offset + index],
-                                     event->name)) {
+                                     event)) {
             return true;
         }
     }
@@ -31419,6 +31439,11 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
     const ta_definition *definition = it->definition;
     it->enabled_count = 0;
     it->condition_count = 0;
+    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
+    ta_event_atoms atoms = { .atoms = segments };
+    if (event != NULL) {
+        atoms.count = ta_trie_segments(&definition->system->event_names.trie, event->name, segments);
+    }
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {
         if (!ta_bits_get(it->active, atomic) || !ta_definition_is_atomic(definition, atomic)) {
             continue;
@@ -31429,7 +31454,7 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
             for (uint32_t index = 0; index < transitions.length && !found; index += 1) {
                 ta_transition_id id = transitions.offset + index;
                 const ta_transition_def *transition = &definition->transitions[id];
-                if (!ta_transition_matches(it, transition, event)) {
+                if (!ta_transition_matches(it, transition, event != NULL, atoms)) {
                     continue;
                 }
                 bool enabled = true;

@@ -108,15 +108,13 @@ static bool ta_pattern_match_run(const ta_pattern_match *match) {
 
 bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
-                              ta_event_name_id event) {
-    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_trie_segments(&definition->system->event_names.trie, event, segments);
-    if (count == 0) {
+                              ta_event_atoms event) {
+    if (event.count == 0) {
         return false;
     }
     ta_pattern_match match = {
-        .event = segments,
-        .event_count = count,
+        .event = event.atoms,
+        .event_count = event.count,
         .pattern = definition->event_pattern_segments + pattern->segments.offset,
         .pattern_count = pattern->segments.length,
     };
