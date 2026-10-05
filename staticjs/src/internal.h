@@ -123,10 +123,29 @@ typedef struct {
     char bytes[];
 } sjs_string;
 
+/*
+ * A hash index over a set's elements or an object's keys: an open-addressed
+ * table of positions (plus one; 0 is empty), probed linearly. A container
+ * gets one when an item goes in and it holds SJS_INDEX_FROM items or more,
+ * so small ones keep the plain scan. Items only ever go in, into a container
+ * one holder updates, so the index never goes stale; a container without one
+ * (one copied whole, or one whose index could not be allocated) is scanned.
+ */
+typedef struct {
+    uint32_t mask;      /* slots - 1; slots is a power of two */
+    uint32_t slots[];
+} sjs_index;
+
+#define SJS_INDEX_FROM 8u
+
+/* Container flags. */
+#define SJS_CONTAINER_UNINDEXED 1u   /* its index failed to allocate: scan it */
+
 typedef struct {
     sjs_heap h;
     uint32_t length;
     uint32_t capacity;
+    sjs_index *index;   /* a set's, or NULL; an array has none */
     sjs_value items[];
 } sjs_array;   /* also a set: elements in insertion order */
 
@@ -139,6 +158,7 @@ typedef struct {
     sjs_heap h;
     uint32_t count;
     uint32_t capacity;
+    sjs_index *index;   /* or NULL */
     sjs_entry entries[];
 } sjs_object;
 

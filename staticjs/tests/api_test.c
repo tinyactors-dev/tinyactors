@@ -170,6 +170,30 @@ static void test_values(void) {
     CHECK(strcmp(text, "new Set([1,0])") == 0);
     sjs_release(context, set);
 
+    /* Past SJS_INDEX_FROM items, lookups go through a hash index. */
+    sjs_value large;
+    CHECK(sjs_object_new(context, 0, &large) == SJS_OK);
+    char name[2] = { 0, 0 };
+    for (int i = 0; i < 20; i++) {
+        name[0] = (char)('a' + i);
+        sjs_property p = { (sjs_str){ name, 1 }, sjs_number(i) };
+        CHECK(sjs_object_put(context, &large, &p) == SJS_OK);
+    }
+    sjs_property again = { SJS_STR("c"), sjs_number(-1) };
+    CHECK(sjs_object_put(context, &large, &again) == SJS_OK);
+    CHECK(sjs_length(large) == 20);
+    CHECK(sjs_object_get(large, SJS_STR("t"), &got) == SJS_OK && got.as.number == 19);
+    CHECK(sjs_object_get(large, SJS_STR("c"), &got) == SJS_OK && got.as.number == -1);
+    CHECK(sjs_object_get(large, SJS_STR("z"), &got) == SJS_ERR_NOT_FOUND);
+    sjs_release(context, large);
+    CHECK(sjs_set_new(context, 0, &set) == SJS_OK);
+    for (int i = 0; i < 40; i++) CHECK(sjs_set_add(context, &set, sjs_number(i % 20)) == SJS_OK);
+    CHECK(sjs_set_add(context, &set, sjs_number(0.0 / 0.0)) == SJS_OK);
+    CHECK(sjs_set_add(context, &set, sjs_number(0.0 / 0.0)) == SJS_OK);
+    CHECK(sjs_set_add(context, &set, sjs_number(-0.0)) == SJS_OK);
+    CHECK(sjs_length(set) == 21);
+    sjs_release(context, set);
+
     CHECK(sjs_string_new(context, (sjs_str){ "\xff", 1 }, &s) == SJS_ERR_INVALID);
     sjs_release(context, array);
     CHECK(sjs_context_live_bytes(context) == 0);
