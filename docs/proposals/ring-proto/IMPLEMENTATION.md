@@ -459,6 +459,15 @@ blocks carry what Phase 4 needs (refill, ceilings, trim, checked growth),
 and the large deletions (`timer.c`, `io.c`, `io_origin.c`, the event
 blocks, the out-of-memory stop) come in Phases 4 and 5.
 
+**Recorded (Phase 1, 2026-10-05):** `bench-compare 02e431c` (the commit
+before Phase 1) on Node and Bun, 2 alternating runs each. Core and native
+bytes per actor are unchanged in every scenario (within 0.1%; 332.8
+native B/actor in `scale.js`). Throughput moved within ±2.7% except one
+figure at +5.0% (Bun tracing, sampled out). Eight figures crossed 5% in
+the worse direction: seven are process RSS, which moved as much the other
+way elsewhere in the same run (−8.9%), and one is the JavaScript heap in
+the decoded-tracing scenario (+8.4%), which Phase 1 does not touch.
+
 ## Phase 2: add the new blocks, unused
 
 Each block comes with its own tests and no caller yet. None of them needs
