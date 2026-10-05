@@ -117,6 +117,11 @@ struct tah_sched {
     /* Count of entries the most recent turn's first phase popped from the runnable queue. It is bounded by the resume
      * limit, so tests can check that a turn's work does not grow with the queue's length. */
     uint32_t turn_visited;
+    /* Calls of ta_run() the most recent turn made, in all its phases, and all of them since the system was created.
+     * Each call serves up to a full notice array of inputs, so a turn's calls are bounded by the inputs it completes
+     * plus the refills; tests compare them with the work asked for, in counts and not clocks. */
+    uint32_t turn_run_calls;
+    uint64_t run_calls_total;
     uint32_t known;         /* entries not in state NONE */
     uint32_t stranded;      /* entries marked TAH_SCHED_STRANDED, at most (a turn recounts) */
     /* Accepted messages not yet delivered or reported: mailboxes plus the dead list. */

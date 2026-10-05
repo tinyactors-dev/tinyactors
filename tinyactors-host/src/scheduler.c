@@ -1107,6 +1107,8 @@ ta_result tah_sched_run(tah_sched *sched, const tah_turn_params *params, tah_run
         uint32_t capacity = params->stop != NULL ? 3u : TAH_RUN_NOTICES;
         uint32_t count = 0;
         *params->inside_core = true;
+        sched->turn_run_calls += 1u;
+        sched->run_calls_total += 1u;
         result = ta_run(params->core, &(ta_run_params){ .budget = budget,
                                                         .action_budget = params->budgets.actions,
                                                         .status = status,
@@ -1536,6 +1538,7 @@ void tah_sched_turn(tah_sched *sched, const tah_turn_params *params) {
     sched->turn_left = params->budgets.resumes;
     sched->turn_bounded = true;
     sched->turn_visited = 0;
+    sched->turn_run_calls = 0;
     for (uint32_t index = 0; index < pending; index += 1) {
         if (sched->turn_left == 0) {
             /* The turn's inputs are used. Entries of actors a call already settled are dropped, which leaves the
