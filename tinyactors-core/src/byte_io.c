@@ -1,5 +1,26 @@
 #include "byte_io.h"
 
+/*
+ * Implementation of package byte_io. The package comment in byte_io.h is the
+ * reference: what each adapter is for, who owns the storage it works on, its
+ * lifetime (call: a stack struct for one write or read of one unit), when it
+ * allocates (only ta_arena_sink_write, through the arena it was given; the
+ * memory source and both chain adapters never do), failure behaviour (a
+ * failed write changes nothing for that piece, and end(keep=false) discards
+ * the unit) and complexity. It is not repeated here so the two cannot drift.
+ *
+ * Notes for the code below that the header does not need:
+ *   - The arena sink's size sum goes through ta_checked_add, and an
+ *     overflow answers TA_OP_NOMEM, never a short or wrapped write (the
+ *     chain's own limit is checked in ta_chain_write).
+ *   - Nothing here frees with a size it did not allocate with: the arena
+ *     sink never frees (the arena owns every run it handed out), and the
+ *     chain sink returns chunks only through ta_chain_free, which knows the
+ *     pool's chunk size.
+ *   - The vtables are static const, so an adapter's "as" is two pointers and
+ *     no allocation.
+ */
+
 static ta_op_status ta_arena_sink_begin(void *self) {
     ((ta_arena_sink *)self)->len = 0;
     return TA_OP_OK;
