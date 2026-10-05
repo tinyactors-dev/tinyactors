@@ -271,6 +271,67 @@ vtable and the event blocks).
   over 5% went both ways (+39% and -5.6% on neighbouring `summary` rows) with
   identical bytes, which two runs cannot separate from the noise.
 
+**Done in 4.2d (branch `wip/ring-proto/4.2d`).** The part of 4.2c that was
+left after 4.2a and the core's waiting machinery:
+
+- Mail between sessions is core's. `src/mail.{h,c}` places what a macrostep
+  sends (resident receivers on the `outgoing` list, spliced onto the run queue
+  when the macrostep ends; names nobody holds and gone sessions on
+  `outgoing_waiting`, then on the address's waiting list); due and activation
+  sends post at a safe point after `ta_mail_prepare`. The first mail or host
+  input for an address no session holds reports one LOAD_NEEDED notice;
+  `ta_address_load_failed` recycles the list (data-free `error.communication`
+  for mail, the refused list for host input), `ta_address_loaded` names the
+  instance for a gone session's key, `ta_address_waiting` counts a list. A
+  session of another incarnation (session 0 with a family) has the key
+  `<incarnation>.0.<family>`. An abandoned or runaway macrostep drops its
+  sends. `mail_test` and the exhaustive `mail_sweep_test` (every allocation of
+  a send, a placement and a recycle) cover it.
+- Deleted with every caller: the external event router
+  (`ta_external_event_router`, `ta_external_delivery`,
+  `ta_system_set_external_event_router`), the RETRY status and the delayed
+  send's `submitted` flag, the kernel's `router.{h,c}`, the test host's
+  `router.direct` and `router.recording`, and napi's unreachable-data hook.
+  `ta_system_dispatch_due` fills `ta_due_dispatch_params.fired`.
+- The kernel starts loads from the LOAD_NEEDED notice (`tah_loads_wanted`) and
+  answers core when they end (`tah_loads_finish` takes `.core`). Its overflow,
+  room queue, `tah_message.may_overflow` and the overflow counter are deleted:
+  nothing produced overflow once chart mail left the kernel. What the
+  kernel's mailboxes hold is the application's own posts.
+- The event-block cache and `eventBlockCache` are replaced by one spare block,
+  `system->workspace` (a run has one slot).
+- napi-visible: no `{ reason, target }` data on `error.communication`; a
+  loader's "not-found" for a chart's mail is the sender's error, not a dead
+  letter; `system.stats().messages.overflow`, the metric
+  `tinyactors.messages.overflow`, `eventBlockCache` and the delayed send's
+  `submitted` are gone.
+- Measured on this machine (4 CPUs, Linux x86_64): `sizeof(ta_envelope)` is
+  168, unchanged. `scale_test` bytes per actor 333.2 at 50,000 and 329.9 at
+  200,000 (329 before; the 3 bytes at 50,000 are the fixed pool and reserve
+  divided by fewer actors), 0.00 allocator calls per event, per batch of 256
+  and per local mail envelope after warm-up. napi `scale.js` native 322.2
+  bytes per actor at 200,000 (321 to 323 in 4.2a). Lines of
+  `tinyactors-core/src`: 37,025 at the start of the unit, 37,437 now (+412: the
+  mail package and the waiting machinery outweigh the router, the cache and
+  the dead paths they replace).
+- Not done, and why: (1) the event block itself stays. The pre-run state of
+  sessions outside the slot (a traced spawn's parent, the internal events of
+  a restored image, a publish's retirement, an invoke error report to an idle
+  session), the kept event of an invoked session and the copy of the taken
+  external event still live in it; moving them into a start record in the
+  sparse state and into the envelope changes the session-image format.
+  (2) The kernel still holds the application's posts in per-actor mailboxes
+  with their send() waiters, retained-bytes accounting and dead letters, and
+  hands them to core at the pace of `messageBudget`. Calling
+  `ta_actor_deliver` straight from `post()` and `send()`, with TA_ERR_FULL as
+  back-pressure to the caller, changes what every napi user sees (queue-full
+  versus pool full, dead-letter reasons, `mailbox()`, `maxQueuedMessages`)
+  and needs a decision before it is built. (3) The name area and run-time
+  names as bytes are 4.2b's. (4) `mise run test:full` was not run; the
+  fast passes of core (with asan), the kernel (with asan), the test host and
+  napi on Node were. Bun does not load the addon in this environment, and the
+  `otel-metrics` and `otel-sdk` suites need packages that are not installed.
+
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
   input.
