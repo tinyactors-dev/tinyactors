@@ -13,6 +13,7 @@ are private and hold layouts and internal functions.
 | `text_writer.h` | the bounded text writer and `ta_text_render`; decimal and hex formatters |
 | `hash.h` | FNV-1a (32- and 64-bit) and the fixed 64-bit mixer |
 | `handle.h` | generation handles: a slot and a generation packed in 64 bits, for actor and definition IDs |
+| `layout.h` | the layout builder: several regions in one block, with checked offsets and total |
 | `store.h` | empty compatibility boundary; durability is not a core store API |
 | `arena.h` | transient allocation |
 | `atom.h` | ordinary string interning |

@@ -27,7 +27,8 @@ Each semantic mutation advances the actor's session epoch. A captured image
 records that epoch. `ta_actor_unload()` accepts only a matching image, so a host
 cannot publish an older image after the actor processes another event.
 
-For memory density, uncommon state lives in sparse side storage, while
-configuration and history use definition-sized storage. An unloaded actor has
-no resident `ta_actor`; only the host's directory entry and the image it keeps
-in this process remain. Unloading bounds memory; it is not persistence.
+How an actor is laid out in memory (one block per actor, its session storage,
+the sparse state for uncommon facilities) is in the file comment of
+`src/actor.h`. An unloaded actor has no resident `ta_actor`; only the host's
+directory entry and the image it keeps in this process remain. Unloading bounds
+memory; it is not persistence.

@@ -1,4 +1,5 @@
 #include "system.h"
+#include "layout.h"
 #include "trace.h"
 #include "interpreter.h"
 #include "memory.h"
@@ -106,37 +107,63 @@ static ta_result ta_params_resolve(const ta_system_config *config, uint32_t valu
     return TA_OK;
 }
 
-/* Bytes of one interpreter: its structural region and its render area,
- * each a fixed arena, the render area starting aligned. */
-static size_t ta_interpreter_region_bytes(const uint32_t params[TA_PARAM_COUNT]) {
-    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(params[TA_PARAM_INTERPRETER_BYTES]),
-                                    (size_t)_Alignof(ta_arena_block));
-    return structural + ta_arena_fixed_bytes(params[TA_PARAM_RENDER_BYTES]);
+/*
+ * One interpreter's memory: its structural arena, then its render area,
+ * each a fixed arena starting aligned for ta_arena_block. The structural
+ * arena runs up to where the render area starts.
+ */
+typedef struct {
+    unsigned char *memory;
+    size_t render; /* where the render area starts */
+    size_t bytes;  /* the whole region */
+} ta_interpreter_region;
+
+/* Lays out a region for `params`; `memory` is left to the caller. */
+static ta_result ta_interpreter_region_lay_out(const uint32_t params[TA_PARAM_COUNT], ta_interpreter_region *out) {
+    ta_layout layout;
+    ta_layout_init(&layout);
+    size_t render = 0;
+    ta_result result = ta_layout_add(&layout,
+                                     &(ta_layout_entry){ .size = ta_arena_fixed_bytes(params[TA_PARAM_INTERPRETER_BYTES]),
+                                                         .alignment = _Alignof(ta_arena_block), .count = 1 },
+                                     NULL);
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout,
+                               &(ta_layout_entry){ .size = ta_arena_fixed_bytes(params[TA_PARAM_RENDER_BYTES]),
+                                                   .alignment = _Alignof(ta_arena_block), .count = 1 },
+                               &render);
+    }
+    if (result == TA_OK) {
+        *out = (ta_interpreter_region){ .memory = NULL, .render = render, .bytes = layout.bytes };
+    }
+    return result;
 }
 
 /* Lays a region's two fixed arenas over its memory. */
-static void ta_interpreter_region_open(const ta_system *system, void *memory, ta_arena *scratch, ta_arena *render) {
-    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(system->params[TA_PARAM_INTERPRETER_BYTES]),
-                                    (size_t)_Alignof(ta_arena_block));
-    ta_arena_init_fixed(scratch, memory, structural);
-    ta_arena_init_fixed(render, (unsigned char *)memory + structural,
-                        ta_arena_fixed_bytes(system->params[TA_PARAM_RENDER_BYTES]));
+static void ta_interpreter_region_open(const ta_interpreter_region *region, ta_arena *scratch, ta_arena *render) {
+    ta_arena_init_fixed(scratch, region->memory, region->render);
+    ta_arena_init_fixed(render, region->memory + region->render, region->bytes - region->render);
 }
 
 ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *scratch, ta_arena *render) {
     if (depth == 0 || depth >= system->params[TA_PARAM_INTERPRETER_NESTING]) {
         return TA_ERR_UNSUPPORTED;
     }
+    ta_interpreter_region laid = { 0 };
+    ta_result result = ta_interpreter_region_lay_out(system->params, &laid);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_nested_region *region = &system->nested[depth - 1u];
     if (region->memory == NULL) {
-        size_t bytes = ta_interpreter_region_bytes(system->params);
-        region->memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+        region->memory = ta_mem_alloc(system->allocator, laid.bytes, _Alignof(ta_arena_block));
         if (region->memory == NULL) {
             return TA_ERR_NOMEM;
         }
-        region->bytes = bytes;
+        region->bytes = laid.bytes;
     }
-    ta_interpreter_region_open(system, region->memory, scratch, render);
+    laid.memory = region->memory;
+    ta_interpreter_region_open(&laid, scratch, render);
     return TA_OK;
 }
 
@@ -146,17 +173,33 @@ ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *s
  * regions; and the event-block cache, filled to its parameter.
  */
 static ta_result ta_system_arena_open(ta_system *system) {
-    size_t region = ta_interpreter_region_bytes(system->params);
-    size_t nested = (size_t)(system->params[TA_PARAM_INTERPRETER_NESTING] - 1u) * sizeof(ta_nested_region);
-    size_t bytes = TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)) + nested;
-    system->arena_memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+    ta_interpreter_region first = { 0 };
+    ta_result result = ta_interpreter_region_lay_out(system->params, &first);
+    ta_layout layout;
+    ta_layout_init(&layout);
+    size_t nested = 0;
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout,
+                               &(ta_layout_entry){ .size = first.bytes, .alignment = _Alignof(ta_arena_block),
+                                                   .count = 1 },
+                               NULL);
+    }
+    if (result == TA_OK) {
+        result = ta_layout_add(
+            &layout, TA_LAYOUT_ENTRY(ta_nested_region, (size_t)system->params[TA_PARAM_INTERPRETER_NESTING] - 1u),
+            &nested);
+    }
+    if (result != TA_OK) {
+        return result;
+    }
+    system->arena_memory = ta_mem_alloc(system->allocator, layout.bytes, _Alignof(ta_arena_block));
     if (system->arena_memory == NULL) {
         return TA_ERR_NOMEM;
     }
-    system->arena_bytes = bytes;
-    ta_interpreter_region_open(system, system->arena_memory, &system->scratch, &system->render);
-    system->nested = (ta_nested_region *)((unsigned char *)system->arena_memory +
-                                          TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)));
+    system->arena_bytes = layout.bytes;
+    first.memory = system->arena_memory;
+    ta_interpreter_region_open(&first, &system->scratch, &system->render);
+    system->nested = (ta_nested_region *)((unsigned char *)system->arena_memory + nested);
     for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
         system->nested[index] = (ta_nested_region){ 0 };
     }

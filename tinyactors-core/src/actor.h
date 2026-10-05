@@ -1,3 +1,77 @@
+/**
+ * @file actor.h
+ *
+ * # Resident actors
+ *
+ * A `ta_actor` is one resident session of a compiled definition: its
+ * record (runtime ID, definition, self reference, residency), its session
+ * storage (configuration, late-binding bits, history), its data-model
+ * instance, and the state it needs only sometimes. The unit also holds the
+ * system's actor table, which maps a runtime ID to its actor, the event
+ * slots and event block an actor holds its events in, and the operator
+ * transition a delivered event may carry (ADR 0082).
+ *
+ * ## Contract and invariants
+ *
+ * - **One allocation per actor** (ADR 0063). An actor's block holds, in
+ *   order, the `ta_actor` record, its session storage and its data-model
+ *   instance, each at its alignment. `ta_actor_layout` lays the block out
+ *   once per definition, when it is compiled, with the layout builder
+ *   (`layout.h`), and the definition keeps the result in
+ *   `actor_block_bytes`, `actor_block_alignment`, `actor_session_offset`
+ *   and `actor_instance_offset`. The block ends with the instance; an
+ *   instance of size 0 (the null data model) points at the block's end.
+ * - **Session storage** is sized from the definition
+ *   (`ta_definition_session_bytes`): the configuration's words, then the
+ *   late-binding bits (sized like the configuration), then the history
+ *   slots. It starts aligned for `uint64_t` and is zeroed when the actor
+ *   is made. Uncommon state (invocations, a parent, completion data,
+ *   delayed sends, a paused continuation) lives in a sparse state
+ *   allocated only for an actor that uses it, so an ordinary actor costs
+ *   its block and its slot.
+ * - **The actor table** issues slots in fixed pages of
+ *   `TA_ACTOR_PAGE_SLOTS`; pages never move, so a pointer to a slot stays
+ *   valid for the life of the system. A runtime ID is a slot and a
+ *   generation; a freed slot's generation moves on, so an old ID finds
+ *   nothing.
+ * - **An operator transition** is one allocation: its header, then its
+ *   targets (`ta_operator_jump_bytes`). The event block owns it from
+ *   delivery until the macrostep that takes the event frees it.
+ * - Each semantic mutation advances the session epoch
+ *   (`ta_actor_touch`); a session image records the epoch it was taken
+ *   at, and unloading refuses an older one (ADR 0014).
+ *
+ * ## Memory
+ *
+ * The system owns its actors and the table's pages, from its allocator.
+ * `ta_actor_new` allocates the block (and may allocate a table page);
+ * `ta_actor_free` releases what the actor holds (its sparse state, its
+ * event block, its session entry) and frees the block.
+ * The definition outlives each of its actors: it counts them in
+ * `actor_count`. The event block is lent to an actor from delivery or its
+ * first internal event until its macrostep ends (ADR 0064, ADR 0069).
+ * `ta_actor_layout` and `ta_operator_jump_bytes` never allocate. Making an
+ * actor, delivering to it and storing its delayed sends allocate, outside
+ * a macrostep or into room reserved before it (ADR 0070).
+ *
+ * ## Complexity
+ *
+ * `ta_actor_lookup` and `ta_actor_slot_at` are O(1). `ta_actor_layout` and
+ * `ta_operator_jump_bytes` are O(1). Issuing a slot is O(1), and
+ * allocates a page once per `TA_ACTOR_PAGE_SLOTS` slots.
+ *
+ * ## Failure
+ *
+ * Allocation failure and the `maxActors` quota answer `TA_ERR_NOMEM`, and
+ * change nothing. A layout or an operator transition whose size would
+ * exceed `SIZE_MAX` answers `TA_ERR_NOMEM` too, before anything is
+ * allocated.
+ *
+ * ## Users
+ *
+ * The system (spawn, delivery, unload and load), the interpreter, session
+ * images and invocations. ADRs 0014, 0063, 0064, 0066, 0069, 0070, 0082.
+ */
 #pragma once
 
 #include "continuation.h"
@@ -74,10 +148,14 @@ typedef struct ta_operator_jump {
     ta_state_id targets[];
 } ta_operator_jump;
 
-/* The bytes an operator transition with `count` targets takes. */
-static inline size_t ta_operator_jump_bytes(uint32_t count) {
-    return offsetof(ta_operator_jump, targets) + (size_t)count * sizeof(ta_state_id);
-}
+/**
+ * The bytes an operator transition with `count` targets takes, its header
+ * then its targets, in `*out`. Never allocates; may run anywhere. Answers
+ * TA_ERR_NOMEM, leaving `*out` alone, when they would exceed SIZE_MAX.
+ * The count of a transition that was allocated was sized before, so for
+ * one that exists it cannot fail.
+ */
+ta_result ta_operator_jump_bytes(uint32_t count, size_t *out);
 
 /*
  * An actor's events other than its queued internal ones (ADR 0069). Taking
@@ -230,12 +308,16 @@ typedef struct {
 /* The entry for `slot`, or NULL when that slot was never issued. */
 ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
 void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
-/*
+/**
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the
  * ta_actor record, then the session storage, then the data-model instance,
- * each at its alignment. Called once, when the definition is compiled.
+ * each at its alignment, into the definition's `actor_*` fields. Called
+ * once, when the definition is compiled, after its configuration, history
+ * and data-model instance are sized; never allocates. Answers
+ * TA_ERR_NOMEM when the block would exceed SIZE_MAX and TA_ERR_INVALID for
+ * an instance alignment of 0, and then leaves the fields alone.
  */
-void ta_actor_layout(ta_definition *definition);
+ta_result ta_actor_layout(ta_definition *definition);
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
 /* The family atom of the resident actor `id`, or 0 when there is none (ADR 0088). */

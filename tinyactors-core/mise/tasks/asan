@@ -31,7 +31,8 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
                   retirement_test replay_test params_test copy_test scxml_uri_test send_id_test tree_test].freeze
 # Of the tests that include the amalgamation themselves, and so compile it
 # again, the ones about lifetimes run: actor lifetimes, and a compile that
-# runs out of memory at every allocation (span_test), and lists whose items
+# runs out of memory at every allocation (span_test), and blocks laid out
+# region by region and written to their ends (layout_test), and lists whose items
 # move between calls (list_test), and paged arrays whose directory moves
 # and whose pages are freed (paged_array_test), and heaps over items
 # that move between calls (heap_test), and queues whose array moves
@@ -47,7 +48,7 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
 # error and event pattern tests exercise pure functions. The test
 # allocator's own test (test_allocator_test) is self-contained and runs
 # too: every other test's verdict on leaks and frees rests on it.
-STANDALONE = %w[actor_id_test session_id_test offload_test span_test list_test paged_array_test heap_test fifo_test quota_test bytes_test names_test ring_test ring_codec_test hash_test handle_test text_writer_test test_allocator_test].freeze
+STANDALONE = %w[actor_id_test session_id_test offload_test span_test layout_test list_test paged_array_test heap_test fifo_test quota_test bytes_test names_test ring_test ring_codec_test hash_test handle_test text_writer_test test_allocator_test].freeze
 
 # A binary is rebuilt only when one of its inputs is newer: its test, the
 # amalgamation or a header. Tests build and run in parallel, one per CPU.

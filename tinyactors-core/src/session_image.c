@@ -215,8 +215,9 @@ static size_t ta_image_measure(const ta_actor *actor) {
     if (actor->event_block != NULL) {
         total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
         if (actor->event_block->slots.jump != NULL) {
-            total += ta_operator_jump_bytes(actor->event_block->slots.jump->target_count) +
-                     _Alignof(ta_operator_jump);
+            size_t bytes = 0;
+            (void)ta_operator_jump_bytes(actor->event_block->slots.jump->target_count, &bytes); /* it exists */
+            total += bytes + _Alignof(ta_operator_jump);
         }
     }
     if (sparse != NULL) {
@@ -259,7 +260,11 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
 
     /* An operator transition waiting with the external event (ADR 0082). */
     if (actor->event_block != NULL && actor->event_block->slots.jump != NULL) {
-        size_t bytes = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count);
+        size_t bytes = 0;
+        ta_result sized = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count, &bytes);
+        if (sized != TA_OK) {
+            return sized;
+        }
         image->slots.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
         if (image->slots.jump == NULL) {
             return TA_ERR_NOMEM;
@@ -720,11 +725,13 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         result = ta_image_localize_origin(system, &slots->kept_event);
     }
     if (result == TA_OK && slots != NULL && image->slots.jump != NULL) {
-        size_t bytes = ta_operator_jump_bytes(image->slots.jump->target_count);
-        slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
-        if (slots->jump == NULL) {
-            result = TA_ERR_NOMEM;
-        } else {
+        size_t bytes = 0;
+        result = ta_operator_jump_bytes(image->slots.jump->target_count, &bytes);
+        if (result == TA_OK) {
+            slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
+            result = slots->jump == NULL ? TA_ERR_NOMEM : TA_OK;
+        }
+        if (result == TA_OK) {
             ta_mem_copy(slots->jump, image->slots.jump, bytes);
         }
     }

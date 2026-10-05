@@ -19,26 +19,13 @@ that failed, in any phase: the microstep's (`EXIT`, `TRANSITIONS`,
 after an external event was taken, `INVOKES` at the end of a macrostep,
 and `FINISH` at a top-level final state. What the interpreter held in its
 scratch then moves into one `ta_continuation`, reached from the actor's
-sparse state:
-
-- `ta_micro_position`: the phase, the state, transition or cursor it is
-  at, the stage, the handler (or data declaration) being run, and whether
-  the frames hold an open block;
-- the live active set, the exit set, the entry set and the default-entry
-  set, computed once as the microstep began;
-- the data declarations the binding supplies, while bootstrapping;
-- the default-history map and the enabled transitions, by compiled ID;
-  the bootstrap's initial transition and an operator transition
-  (ADR 0082) are marks, since nothing reads them after the microstep has
-  begun but their executable content, which an operator transition does
-  not have;
-- the executor's `ta_exec_frame`s: open blocks with their cursors, and each
-  running `<foreach>` with its snapshot, position and count (ADR 0033).
+sparse state. What it holds and how its block is laid out is in the file
+comment of `src/continuation.h`.
 
 The continuation holds no pointers, so a copy is a copy of its bytes plus
 a retain of each `<foreach>` snapshot. A session image carries one; loading
 or reconstructing the image gives the new actor its own copy (ADR 0061
-section 4). Resuming moves it back into scratch and frees the allocation.
+section 4). Resuming moves it back into scratch and gives the allocation back to the system as its spare continuation.
 
 Saving cannot fail. Every `ta_actor_resume()` first reserves a
 continuation large enough for the definition (the one it resumes from, or

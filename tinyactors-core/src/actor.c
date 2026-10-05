@@ -1,4 +1,5 @@
 #include "actor.h"
+#include "layout.h"
 #include "interpreter.h"
 #include "memory.h"
 #include "str.h"
@@ -50,20 +51,49 @@ void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator) {
     table->count = 0;
 }
 
-void ta_actor_layout(ta_definition *definition) {
-    size_t instance_alignment = definition->datamodel_instance_alignment;
-    size_t alignment = _Alignof(ta_actor);
-    if (alignment < _Alignof(uint64_t)) {
-        alignment = _Alignof(uint64_t);
+ta_result ta_actor_layout(ta_definition *definition) {
+    ta_layout layout;
+    ta_layout_init(&layout);
+    size_t session = 0;
+    size_t instance = 0;
+    ta_result result = ta_layout_add(&layout, TA_LAYOUT_ENTRY(ta_actor, 1), NULL);
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout,
+                               &(ta_layout_entry){ .size = ta_definition_session_bytes(definition),
+                                                   .alignment = _Alignof(uint64_t), .count = 1 },
+                               &session);
     }
-    if (alignment < instance_alignment) {
-        alignment = instance_alignment;
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout,
+                               &(ta_layout_entry){ .size = definition->datamodel_instance_size,
+                                                   .alignment = definition->datamodel_instance_alignment,
+                                                   .count = 1 },
+                               &instance);
     }
-    definition->actor_session_offset = ta_align_up(sizeof(ta_actor), _Alignof(uint64_t));
-    definition->actor_instance_offset =
-        ta_align_up(definition->actor_session_offset + ta_definition_session_bytes(definition), instance_alignment);
-    definition->actor_block_bytes = definition->actor_instance_offset + definition->datamodel_instance_size;
-    definition->actor_block_alignment = alignment;
+    if (result != TA_OK) {
+        return result;
+    }
+    definition->actor_session_offset = session;
+    definition->actor_instance_offset = instance;
+    definition->actor_block_bytes = layout.bytes;
+    definition->actor_block_alignment = layout.alignment;
+    return TA_OK;
+}
+
+ta_result ta_operator_jump_bytes(uint32_t count, size_t *out) {
+    ta_layout layout;
+    ta_layout_init(&layout);
+    ta_result result = ta_layout_add(&layout,
+                                     &(ta_layout_entry){ .size = offsetof(ta_operator_jump, targets),
+                                                         .alignment = _Alignof(ta_operator_jump), .count = 1 },
+                                     NULL);
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout, TA_LAYOUT_ENTRY(ta_state_id, count), NULL);
+    }
+    if (result == TA_OK) {
+        *out = layout.bytes;
+    }
+    return result;
 }
 
 /*
@@ -1316,9 +1346,13 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
      * its macrostep ends (ADR 0069), are the steps here that can fail, and
      * they change nothing when they do. */
     ta_operator_jump *jump = NULL;
+    size_t jump_bytes = 0;
     if (transition != NULL) {
-        jump = ta_mem_alloc(system->allocator, ta_operator_jump_bytes(transition->target_count),
-                            _Alignof(ta_operator_jump));
+        result = ta_operator_jump_bytes(transition->target_count, &jump_bytes);
+        if (result != TA_OK) {
+            return result;
+        }
+        jump = ta_mem_alloc(system->allocator, jump_bytes, _Alignof(ta_operator_jump));
         if (jump == NULL) {
             return TA_ERR_NOMEM;
         }
@@ -1330,8 +1364,7 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     if (result != TA_OK) {
         if (jump != NULL) {
             ta_mem_free(system->allocator, jump,
-                        &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(jump->target_count),
-                                                     .alignment = _Alignof(ta_operator_jump) });
+                        &(ta_allocator_free_params){ .size = jump_bytes, .alignment = _Alignof(ta_operator_jump) });
         }
         return result;
     }

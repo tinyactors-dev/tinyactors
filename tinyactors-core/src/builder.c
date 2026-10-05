@@ -2351,7 +2351,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         if (definition->datamodel_instance_alignment == 0) {
             definition->datamodel_instance_alignment = 1;
         }
-        ta_actor_layout(definition);
+        result = ta_actor_layout(definition);
     }
     if (result != TA_OK) {
         ta_definition_destroy(definition);
@@ -2423,13 +2423,17 @@ static void ta_compile_rejected(ta_system *system, const ta_definition_compile_p
  */
 static ta_result ta_compile_check_scratch(ta_system *system, const ta_definition_compile_params *params) {
     ta_definition *definition = *params->out;
-    size_t need = ta_interpreter_scratch_need(definition);
+    size_t need = 0;
+    ta_result sized = ta_interpreter_scratch_need(definition, &need);
     uint32_t have = system->params[TA_PARAM_INTERPRETER_BYTES];
-    if (need <= have) {
+    if (sized == TA_OK && need <= have) {
         return TA_OK;
     }
     ta_definition_destroy(definition);
     *params->out = NULL;
+    if (sized != TA_OK) {
+        return sized;
+    }
     if (params->error == NULL) {
         return TA_ERR_UNSUPPORTED;
     }

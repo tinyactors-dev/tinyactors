@@ -700,6 +700,135 @@ TA_PRIVATE inline bool ta_handle_valid(ta_handle handle) {
     return ta_handle_generation(handle) != 0u;
 }
 
+/**
+ * @file layout.h
+ *
+ * # Layout builder
+ *
+ * A `ta_layout` lays several regions out in one block of memory, so that
+ * an object made of a header and arrays whose lengths are known only at
+ * run time takes one allocation instead of one per region. The caller
+ * adds the regions in order, each as an entry of `count` items of `size`
+ * bytes aligned to `alignment`, and reads back each entry's offset from
+ * the start of the block, then the block's total size and alignment. The
+ * arithmetic is checked: a region or a total that would not fit in a
+ * `size_t` is refused, where a hand-written sum would wrap and hand the
+ * allocator a size too small for what is then written into it.
+ *
+ * ```c
+ * ta_layout layout;
+ * ta_layout_init(&layout);
+ * size_t header = 0, items = 0;
+ * ta_result result = ta_layout_add(&layout, TA_LAYOUT_ENTRY(my_header, 1), &header);
+ * if (result == TA_OK) {
+ *     result = ta_layout_add(&layout, TA_LAYOUT_ENTRY(uint64_t, count), &items);
+ * }
+ * if (result != TA_OK) {
+ *     return result;
+ * }
+ * void *block = ta_mem_alloc(allocator, layout.bytes, layout.alignment);
+ * ```
+ *
+ * ## Contract
+ *
+ * - `ta_layout_init` starts an empty layout: `bytes` 0, `alignment` 1.
+ * - `ta_layout_add` places an entry at the first offset at or after the
+ *   current end that is a multiple of the entry's alignment. The entry
+ *   then ends `size * count` bytes later, and that end is the layout's new
+ *   `bytes`. `alignment` becomes the larger of itself and the entry's.
+ * - An entry of no bytes (a `count` or a `size` of 0) still gets an
+ *   aligned offset, and still moves `bytes` up to it and raises
+ *   `alignment`: its array is empty, but where it starts is defined, and
+ *   an accessor that points at it points inside or at the end of the
+ *   block.
+ * - An alignment is any non-zero number of bytes; offsets are rounded up
+ *   to a multiple of it, as `ta_align_up` does. Every alignment core
+ *   passes is a power of two except, possibly, the one a data model
+ *   reports for its instance. With powers of two, every entry's offset is
+ *   a multiple of its alignment in a block aligned to `alignment`.
+ * - `bytes` is the end of the last entry. It is not rounded up to
+ *   `alignment`: a caller that places blocks one after another rounds the
+ *   total itself, as another entry would.
+ * - The same entries added in the same order give the same offsets and
+ *   total every time, so a unit may lay its block out again from the
+ *   counts it stored, to find a region, instead of storing the offsets.
+ *   A layout that succeeded once succeeds again with the same entries.
+ *
+ * ## Memory
+ *
+ * The unit allocates nothing and owns nothing: a `ta_layout` is two
+ * numbers the caller keeps, usually on the stack, and the block it
+ * describes is allocated and owned by the caller. No function here
+ * allocates, so each may run anywhere, inside a macrostep included.
+ *
+ * ## Complexity
+ *
+ * `ta_layout_init` and `ta_layout_add` are O(1); `ta_layout_add` costs one
+ * division (the rounding to a non-power-of-two alignment) and three
+ * comparisons. Laying out a block is O(entries).
+ *
+ * ## Failure
+ *
+ * `ta_layout_add` answers `TA_ERR_NOMEM` when the entry's bytes
+ * (`size * count`), its aligned offset or its end would exceed `SIZE_MAX`:
+ * no allocator can serve a block that size, and `TA_ERR_NOMEM` is what the
+ * allocation it sizes would answer. It answers `TA_ERR_INVALID` for an
+ * alignment of 0. A failed call changes nothing: the layout keeps its
+ * `bytes` and `alignment`, and `*offset` is not written. A NULL layout or
+ * entry is a programmer error and is not checked.
+ *
+ * ## Users
+ *
+ * The actor block (the `ta_actor` record, its session storage and its
+ * data-model instance, in one allocation; ADR 0063); the continuation a
+ * stopped run is saved into (its header, the four state sets, the data
+ * declarations, the default-history map, the enabled transitions and the
+ * executor's frames; ADR 0061, ADR 0070); an operator transition and its
+ * targets (ADR 0082); the system's interpreter regions and the table of
+ * nested regions (ADR 0092); and the interpreter scratch a definition
+ * needs, which the compiler checks against `interpreterBytes` (ADR 0092).
+ */
+
+
+/**
+ * One region of a layout: `count` items of `size` bytes each, the region
+ * aligned to `alignment` bytes (never 0).
+ */
+typedef struct {
+    size_t size;
+    size_t alignment;
+    size_t count;
+} ta_layout_entry;
+
+/**
+ * A block being laid out: `bytes` is the end of the last entry added (the
+ * block's size so far) and `alignment` the largest alignment of any entry
+ * (1 with none). Read them; change them only through the functions below.
+ */
+typedef struct {
+    size_t bytes;
+    size_t alignment;
+} ta_layout;
+
+/** A pointer to an entry of `n` items of type `T`, for `ta_layout_add`. */
+#define TA_LAYOUT_ENTRY(T, n) (&(ta_layout_entry){ .size = sizeof(T), .alignment = _Alignof(T), .count = (n) })
+
+/** Makes `*layout` empty: no bytes, an alignment of 1. Never allocates; runs anywhere. */
+TA_PRIVATE void ta_layout_init(ta_layout *layout);
+
+/**
+ * Adds `*entry` at the end of `*layout`, at the first offset that is a
+ * multiple of its alignment, and writes that offset to `*offset` unless
+ * `offset` is NULL. Grows `bytes` to the entry's end and raises
+ * `alignment` to the entry's. Borrows `entry` for the call. Never
+ * allocates; may run inside a macrostep.
+ *
+ * Answers `TA_ERR_NOMEM` when the entry's bytes, its offset or its end
+ * would exceed `SIZE_MAX`, and `TA_ERR_INVALID` for an alignment of 0;
+ * either way the layout and `*offset` are unchanged.
+ */
+TA_PRIVATE ta_result ta_layout_add(ta_layout *layout, const ta_layout_entry *entry, size_t *offset);
+
 
 
 struct ta_arena_block {
@@ -5986,6 +6115,82 @@ struct ta_history_state {
 
 TA_PRIVATE uint64_t *ta_history_slot_words(const ta_history_state *history, uint32_t slot);
 
+/**
+ * @file continuation.h
+ *
+ * # Continuations
+ *
+ * A `ta_continuation` is a run stopped inside a phase, moved out of the
+ * interpreter's scratch into one allocation the actor owns, so that the
+ * run resumes there later (ADR 0061, ADR 0070). A run stops inside a
+ * phase when it pauses (between two units of executable content, or at a
+ * microstep's start) or runs out of memory. The unit also defines the
+ * executor's frames (`ta_exec_frame`), the phases a run can stand in
+ * (`ta_run_phase`), and the position inside one (`ta_micro_position`).
+ *
+ * ## Layout
+ *
+ * One block, laid out with the layout builder (`layout.h`), in this order:
+ *
+ * - the `ta_continuation` header: the block's size, the
+ *   `ta_micro_position` (the phase, the state, transition or cursor it is
+ *   at, the stage, the handler or data declaration being run, and whether
+ *   the frames hold an open block) and the counts below;
+ * - the four state sets, `words` 64-bit words each, side by side: the
+ *   live active set, the exit set, the entry set and the default-entry
+ *   set, computed once as the microstep began;
+ * - the data declarations the binding supplies, while bootstrapping
+ *   (`decl_words` words);
+ * - the default-history map (`state_count` state IDs);
+ * - the enabled transitions (`enabled_count`), by compiled ID; the
+ *   bootstrap's initial transition and an operator transition are marks,
+ *   since nothing reads them after the microstep has begun but their
+ *   executable content, which an operator transition does not have;
+ * - the executor's frames (`frame_count`): open blocks with their
+ *   cursors, and each running `<foreach>` with its snapshot, position and
+ *   count (ADR 0033).
+ *
+ * `ta_continuation_bytes` sizes a block from a shape's counts, and the
+ * accessors find each region by laying the block out again from the
+ * counts it holds. `bytes` is the allocation, which may be larger than the
+ * counts need: the system keeps one spare, sized for the largest
+ * definition it ran. Every block is allocated aligned to
+ * `TA_CONTINUATION_ALIGN`, the largest alignment of its regions.
+ *
+ * ## Invariants
+ *
+ * The counts a continuation holds are never larger than those its
+ * allocation was sized for, so laying it out again cannot fail. It holds
+ * no pointers: a copy is a copy of its `bytes` plus a retain of each
+ * `<foreach>` snapshot (`ta_continuation_retain`).
+ *
+ * ## Memory
+ *
+ * The actor owns its continuation, through its sparse state, from the
+ * stop until the run resumes; the system owns its spare. Both come from
+ * the system's allocator. The interpreter reserves a continuation large
+ * enough for the definition before a run starts, so stopping never
+ * allocates (ADR 0070). `ta_continuation_free` releases the frames'
+ * snapshots and frees the block. Nothing here allocates, so each function
+ * may run inside a macrostep.
+ *
+ * ## Complexity
+ *
+ * `ta_continuation_bytes` and each accessor are O(1): a layout of six
+ * regions. Retaining, releasing and freeing are O(frames).
+ *
+ * ## Failure
+ *
+ * `ta_continuation_bytes` answers `TA_ERR_NOMEM` for counts whose block
+ * would exceed `SIZE_MAX`; the reservation passes that on before the run
+ * does anything. Nothing else fails.
+ *
+ * ## Users
+ *
+ * The interpreter (stopping, resuming, inspection of where a run stands),
+ * session images (which carry a copy) and the actor's sparse state.
+ * ADRs 0033, 0060, 0061, 0070, 0082, 0083, 0086.
+ */
 
 
 typedef enum {
@@ -6089,17 +6294,9 @@ typedef struct {
 } ta_micro_position;
 
 /*
- * A run stopped inside a phase, by a pause (ADR 0061) or by running out of
- * memory (ADR 0070), moved out of the interpreter's scratch into one
- * allocation the actor owns. The header is followed, at the offsets the
- * accessors compute, by the four state sets (active, to exit, to enter,
- * default entry; `words` each), the data declarations the binding supplies
- * (`decl_words`, while bootstrapping), the default-history map
- * (`state_count`), the enabled transitions, and the executor's frames. `bytes` is the
- * allocation, which may be larger than this shape needs: the system keeps
- * one spare, sized for the largest definition it ran. It holds no
- * pointers, so copying `bytes` copies it; the frames' snapshots are values
- * a copy must retain.
+ * The header of a stopped run's block; the regions after it are listed in
+ * the file comment, at the offsets the accessors compute. `bytes` is the
+ * allocation, which may be larger than these counts need.
  */
 typedef struct ta_continuation {
     size_t bytes;
@@ -6111,8 +6308,12 @@ typedef struct ta_continuation {
     uint32_t frame_count;
 } ta_continuation;
 
-/* The bytes a continuation of this shape takes; `shape` has the counts set. */
-TA_PRIVATE size_t ta_continuation_bytes(const ta_continuation *shape);
+/**
+ * The bytes a continuation of this shape takes, in `*out`; `shape` has the
+ * counts set and is only read. Never allocates; may run anywhere. Answers
+ * TA_ERR_NOMEM, leaving `*out` alone, when they would exceed SIZE_MAX.
+ */
+TA_PRIVATE ta_result ta_continuation_bytes(const ta_continuation *shape, size_t *out);
 /* Whether the phase is one of a microstep's (START, EXIT, TRANSITIONS, ENTER). */
 TA_PRIVATE bool ta_run_phase_in_microstep(ta_run_phase phase);
 TA_PRIVATE uint64_t *ta_continuation_sets(ta_continuation *continuation);
@@ -6910,6 +7111,80 @@ TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_req
  * the codec is the embedder's.
  */
 
+/**
+ * @file actor.h
+ *
+ * # Resident actors
+ *
+ * A `ta_actor` is one resident session of a compiled definition: its
+ * record (runtime ID, definition, self reference, residency), its session
+ * storage (configuration, late-binding bits, history), its data-model
+ * instance, and the state it needs only sometimes. The unit also holds the
+ * system's actor table, which maps a runtime ID to its actor, the event
+ * slots and event block an actor holds its events in, and the operator
+ * transition a delivered event may carry (ADR 0082).
+ *
+ * ## Contract and invariants
+ *
+ * - **One allocation per actor** (ADR 0063). An actor's block holds, in
+ *   order, the `ta_actor` record, its session storage and its data-model
+ *   instance, each at its alignment. `ta_actor_layout` lays the block out
+ *   once per definition, when it is compiled, with the layout builder
+ *   (`layout.h`), and the definition keeps the result in
+ *   `actor_block_bytes`, `actor_block_alignment`, `actor_session_offset`
+ *   and `actor_instance_offset`. The block ends with the instance; an
+ *   instance of size 0 (the null data model) points at the block's end.
+ * - **Session storage** is sized from the definition
+ *   (`ta_definition_session_bytes`): the configuration's words, then the
+ *   late-binding bits (sized like the configuration), then the history
+ *   slots. It starts aligned for `uint64_t` and is zeroed when the actor
+ *   is made. Uncommon state (invocations, a parent, completion data,
+ *   delayed sends, a paused continuation) lives in a sparse state
+ *   allocated only for an actor that uses it, so an ordinary actor costs
+ *   its block and its slot.
+ * - **The actor table** issues slots in fixed pages of
+ *   `TA_ACTOR_PAGE_SLOTS`; pages never move, so a pointer to a slot stays
+ *   valid for the life of the system. A runtime ID is a slot and a
+ *   generation; a freed slot's generation moves on, so an old ID finds
+ *   nothing.
+ * - **An operator transition** is one allocation: its header, then its
+ *   targets (`ta_operator_jump_bytes`). The event block owns it from
+ *   delivery until the macrostep that takes the event frees it.
+ * - Each semantic mutation advances the session epoch
+ *   (`ta_actor_touch`); a session image records the epoch it was taken
+ *   at, and unloading refuses an older one (ADR 0014).
+ *
+ * ## Memory
+ *
+ * The system owns its actors and the table's pages, from its allocator.
+ * `ta_actor_new` allocates the block (and may allocate a table page);
+ * `ta_actor_free` releases what the actor holds (its sparse state, its
+ * event block, its session entry) and frees the block.
+ * The definition outlives each of its actors: it counts them in
+ * `actor_count`. The event block is lent to an actor from delivery or its
+ * first internal event until its macrostep ends (ADR 0064, ADR 0069).
+ * `ta_actor_layout` and `ta_operator_jump_bytes` never allocate. Making an
+ * actor, delivering to it and storing its delayed sends allocate, outside
+ * a macrostep or into room reserved before it (ADR 0070).
+ *
+ * ## Complexity
+ *
+ * `ta_actor_lookup` and `ta_actor_slot_at` are O(1). `ta_actor_layout` and
+ * `ta_operator_jump_bytes` are O(1). Issuing a slot is O(1), and
+ * allocates a page once per `TA_ACTOR_PAGE_SLOTS` slots.
+ *
+ * ## Failure
+ *
+ * Allocation failure and the `maxActors` quota answer `TA_ERR_NOMEM`, and
+ * change nothing. A layout or an operator transition whose size would
+ * exceed `SIZE_MAX` answers `TA_ERR_NOMEM` too, before anything is
+ * allocated.
+ *
+ * ## Users
+ *
+ * The system (spawn, delivery, unload and load), the interpreter, session
+ * images and invocations. ADRs 0014, 0063, 0064, 0066, 0069, 0070, 0082.
+ */
 
 
 typedef struct {
@@ -6975,10 +7250,14 @@ typedef struct ta_operator_jump {
     ta_state_id targets[];
 } ta_operator_jump;
 
-/* The bytes an operator transition with `count` targets takes. */
-TA_PRIVATE inline size_t ta_operator_jump_bytes(uint32_t count) {
-    return offsetof(ta_operator_jump, targets) + (size_t)count * sizeof(ta_state_id);
-}
+/**
+ * The bytes an operator transition with `count` targets takes, its header
+ * then its targets, in `*out`. Never allocates; may run anywhere. Answers
+ * TA_ERR_NOMEM, leaving `*out` alone, when they would exceed SIZE_MAX.
+ * The count of a transition that was allocated was sized before, so for
+ * one that exists it cannot fail.
+ */
+TA_PRIVATE ta_result ta_operator_jump_bytes(uint32_t count, size_t *out);
 
 /*
  * An actor's events other than its queued internal ones (ADR 0069). Taking
@@ -7131,12 +7410,16 @@ typedef struct {
 /* The entry for `slot`, or NULL when that slot was never issued. */
 TA_PRIVATE ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
 TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
-/*
+/**
  * Lays out one actor of `definition` as a single allocation (ADR 0063): the
  * ta_actor record, then the session storage, then the data-model instance,
- * each at its alignment. Called once, when the definition is compiled.
+ * each at its alignment, into the definition's `actor_*` fields. Called
+ * once, when the definition is compiled, after its configuration, history
+ * and data-model instance are sized; never allocates. Answers
+ * TA_ERR_NOMEM when the block would exceed SIZE_MAX and TA_ERR_INVALID for
+ * an instance alignment of 0, and then leaves the fields alone.
  */
-TA_PRIVATE void ta_actor_layout(ta_definition *definition);
+TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition);
 
 TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
 /* The family atom of the resident actor `id`, or 0 when there is none (ADR 0088). */
@@ -7373,6 +7656,65 @@ TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
         (system)->counters.field += 1u;                                                                       \
     } while (0)
 
+/**
+ * @file interpreter.h
+ *
+ * # Interpreter
+ *
+ * The SCXML execution engine. A `ta_interpreter` is the state of one call
+ * that advances one resident actor: it takes the actor's events, selects
+ * and runs microsteps, runs executable content through the data model,
+ * starts and cancels invocations, and stops when the actor is stable, its
+ * budget is spent, it pauses, or it runs out of memory. Between calls the
+ * actor holds everything (its configuration, history, internal queue and
+ * events); a run that stops inside a phase leaves the rest in a
+ * continuation (`continuation.h`). The unit also keeps the actor's event
+ * block and internal queue, send IDs as text, and the system's spare
+ * continuation and sparse state.
+ *
+ * ## Scratch
+ *
+ * A call's working sets, its selection and entry stacks, the executor's
+ * frames and its trace buffers come from the system's structural arena
+ * (`interpreterBytes`, ADR 0092), taken in a fixed order when the
+ * interpreter starts and sized from the definition: eleven state sets,
+ * the default-history map, the enabled, filtered and removed transitions,
+ * the entry frames, the history stack, the executor's frames, the bound
+ * data declarations, and the trace buffers. `ta_interpreter_scratch_need`
+ * lays the same takes out with the layout builder (`layout.h`), counted
+ * from the start of the arena's data, so the compiler can refuse a
+ * definition whose run would not fit before it registers. A definition
+ * that registers never runs out of structural scratch, and nothing in a
+ * run grows it (ADR 0060).
+ *
+ * ## Memory
+ *
+ * The interpreter owns nothing between calls: scratch is reset when a call
+ * starts. What a run allocates (event blocks, a sparse state, a
+ * continuation, room for delayed sends and internal events) it reserves
+ * before the step that needs it, so a step that runs out of memory has
+ * had no effect that doing it again would repeat (ADR 0047, ADR 0070).
+ * `ta_interpreter_scratch_need` never allocates.
+ *
+ * ## Complexity
+ *
+ * `ta_interpreter_scratch_need` walks each atomic state's ancestors and
+ * counts the guarded transitions it can select there: O(atomic states x
+ * (depth + transitions on that path)). A microstep costs
+ * what the SCXML algorithm costs over the definition's compiled tables.
+ *
+ * ## Failure
+ *
+ * Calls answer `ta_result`. `TA_ERR_NOMEM` stops a run before the step
+ * that failed, which a later call repeats. `ta_interpreter_scratch_need`
+ * answers `TA_ERR_NOMEM` for a need that would exceed `SIZE_MAX`.
+ *
+ * ## Users
+ *
+ * The actor and system units (spawn, delivery, resume, abandon), the
+ * compiler (the scratch check), invocations and session images.
+ * ADRs 0047, 0060, 0061, 0067, 0069, 0070, 0082, 0086, 0092.
+ */
 
 
 /* A generated send ID (`#_send.<n>`, ADR 0048) is this bit and the session's counter n. */
@@ -7508,8 +7850,14 @@ TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, 
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 /* Frees cached event blocks until the cache holds no more than its limit
  * (ADR 0069); a limit of 0 frees them all, at teardown. */
-/* The interpreter scratch a definition needs (ADR 0092 section 3). */
-TA_PRIVATE size_t ta_interpreter_scratch_need(const ta_definition *definition);
+/**
+ * The bytes of interpreter scratch a run of `definition` takes (ADR 0092
+ * section 3), in `*out`: what the interpreter takes from its structural
+ * arena when it starts, in the same order and alignment, with both trace
+ * buffers. Borrows `definition`; never allocates. Answers TA_ERR_NOMEM,
+ * leaving `*out` alone, when the need would exceed SIZE_MAX.
+ */
+TA_PRIVATE ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 TA_PRIVATE void ta_interpreter_render_fault(ta_fault *fault);
 /* Fills the event-block cache to its limit, at creation (ADR 0092 section 3). */
@@ -7828,6 +8176,38 @@ TA_PRIVATE ta_result ta_text_render(ta_allocator allocator, const ta_text_render
     (void)params->write(params->context, &writer);
     buffer[measure.length] = '\0';
     *params->out = (ta_str){ .ptr = buffer, .len = measure.length };
+    return TA_OK;
+}
+
+
+TA_PRIVATE void ta_layout_init(ta_layout *layout) {
+    *layout = (ta_layout){ .bytes = 0, .alignment = 1 };
+}
+
+TA_PRIVATE ta_result ta_layout_add(ta_layout *layout, const ta_layout_entry *entry, size_t *offset) {
+    if (entry->alignment == 0) {
+        return TA_ERR_INVALID;
+    }
+    if (entry->size != 0 && entry->count > SIZE_MAX / entry->size) {
+        return TA_ERR_NOMEM;
+    }
+    size_t span = entry->size * entry->count;
+    size_t remainder = layout->bytes % entry->alignment;
+    size_t padding = remainder == 0 ? 0 : entry->alignment - remainder;
+    if (padding > SIZE_MAX - layout->bytes) {
+        return TA_ERR_NOMEM;
+    }
+    size_t start = layout->bytes + padding;
+    if (span > SIZE_MAX - start) {
+        return TA_ERR_NOMEM;
+    }
+    layout->bytes = start + span;
+    if (entry->alignment > layout->alignment) {
+        layout->alignment = entry->alignment;
+    }
+    if (offset != NULL) {
+        *offset = start;
+    }
     return TA_OK;
 }
 
@@ -11783,51 +12163,84 @@ TA_PRIVATE uint64_t *ta_history_slot_words(const ta_history_state *history, uint
 }
 
 
-/* Offsets of the arrays that follow a continuation's header, in order. */
-typedef struct {
-    size_t sets;
-    size_t decls;
-    size_t history;
-    size_t enabled;
-    size_t frames;
-    size_t end;
-} ta_continuation_layout;
+/* The regions of a continuation's block, in the order they are laid out. */
+enum {
+    TA_CONTINUATION_HEADER = 0,
+    TA_CONTINUATION_SETS,
+    TA_CONTINUATION_DECLS,
+    TA_CONTINUATION_HISTORY,
+    TA_CONTINUATION_ENABLED,
+    TA_CONTINUATION_FRAMES,
+    TA_CONTINUATION_REGIONS
+};
 
-static ta_continuation_layout ta_continuation_offsets(const ta_continuation *shape) {
-    ta_continuation_layout layout;
-    layout.sets = ta_align_up(sizeof(ta_continuation), _Alignof(uint64_t));
-    layout.decls = layout.sets + (size_t)shape->words * 4u * sizeof(uint64_t);
-    layout.history = ta_align_up(layout.decls + (size_t)shape->decl_words * sizeof(uint64_t), _Alignof(ta_state_id));
-    layout.enabled = ta_align_up(layout.history + (size_t)shape->state_count * sizeof(ta_state_id),
-                                 _Alignof(ta_transition_id));
-    layout.frames = ta_align_up(layout.enabled + (size_t)shape->enabled_count * sizeof(ta_transition_id),
-                                _Alignof(ta_exec_frame));
-    layout.end = layout.frames + (size_t)shape->frame_count * sizeof(ta_exec_frame);
-    return layout;
+/* Lays out a continuation of `shape`'s counts: each region's offset into
+ * `offsets`, and the block's size and alignment into `*layout`. */
+static ta_result ta_continuation_lay_out(const ta_continuation *shape, size_t offsets[TA_CONTINUATION_REGIONS],
+                                         ta_layout *layout) {
+    const ta_layout_entry entries[TA_CONTINUATION_REGIONS] = {
+        [TA_CONTINUATION_HEADER] = { .size = sizeof(ta_continuation), .alignment = _Alignof(ta_continuation),
+                                     .count = 1 },
+        /* active, to exit, to enter and default entry, `words` each, side by side */
+        [TA_CONTINUATION_SETS] = { .size = 4u * sizeof(uint64_t), .alignment = _Alignof(uint64_t),
+                                   .count = shape->words },
+        [TA_CONTINUATION_DECLS] = { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t),
+                                    .count = shape->decl_words },
+        [TA_CONTINUATION_HISTORY] = { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
+                                      .count = shape->state_count },
+        [TA_CONTINUATION_ENABLED] = { .size = sizeof(ta_transition_id), .alignment = _Alignof(ta_transition_id),
+                                      .count = shape->enabled_count },
+        [TA_CONTINUATION_FRAMES] = { .size = sizeof(ta_exec_frame), .alignment = _Alignof(ta_exec_frame),
+                                     .count = shape->frame_count },
+    };
+    ta_layout_init(layout);
+    for (uint32_t region = 0; region < TA_CONTINUATION_REGIONS; region += 1u) {
+        ta_result result = ta_layout_add(layout, &entries[region], &offsets[region]);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    return TA_OK;
 }
 
-TA_PRIVATE size_t ta_continuation_bytes(const ta_continuation *shape) {
-    return ta_continuation_offsets(shape).end;
+/* Where `region` of an allocated continuation starts. Its counts are no
+ * larger than those its allocation was sized for, so laying it out again
+ * cannot fail. */
+static unsigned char *ta_continuation_region(ta_continuation *continuation, uint32_t region) {
+    size_t offsets[TA_CONTINUATION_REGIONS] = { 0 };
+    ta_layout layout;
+    (void)ta_continuation_lay_out(continuation, offsets, &layout);
+    return (unsigned char *)continuation + offsets[region];
+}
+
+TA_PRIVATE ta_result ta_continuation_bytes(const ta_continuation *shape, size_t *out) {
+    size_t offsets[TA_CONTINUATION_REGIONS];
+    ta_layout layout;
+    ta_result result = ta_continuation_lay_out(shape, offsets, &layout);
+    if (result == TA_OK) {
+        *out = layout.bytes;
+    }
+    return result;
 }
 
 TA_PRIVATE uint64_t *ta_continuation_sets(ta_continuation *continuation) {
-    return (uint64_t *)((unsigned char *)continuation + ta_continuation_offsets(continuation).sets);
+    return (uint64_t *)ta_continuation_region(continuation, TA_CONTINUATION_SETS);
 }
 
 TA_PRIVATE uint64_t *ta_continuation_decls(ta_continuation *continuation) {
-    return (uint64_t *)((unsigned char *)continuation + ta_continuation_offsets(continuation).decls);
+    return (uint64_t *)ta_continuation_region(continuation, TA_CONTINUATION_DECLS);
 }
 
 TA_PRIVATE ta_state_id *ta_continuation_history(ta_continuation *continuation) {
-    return (ta_state_id *)((unsigned char *)continuation + ta_continuation_offsets(continuation).history);
+    return (ta_state_id *)ta_continuation_region(continuation, TA_CONTINUATION_HISTORY);
 }
 
 TA_PRIVATE ta_transition_id *ta_continuation_enabled(ta_continuation *continuation) {
-    return (ta_transition_id *)((unsigned char *)continuation + ta_continuation_offsets(continuation).enabled);
+    return (ta_transition_id *)ta_continuation_region(continuation, TA_CONTINUATION_ENABLED);
 }
 
 TA_PRIVATE ta_exec_frame *ta_continuation_frames(ta_continuation *continuation) {
-    return (ta_exec_frame *)((unsigned char *)continuation + ta_continuation_offsets(continuation).frames);
+    return (ta_exec_frame *)ta_continuation_region(continuation, TA_CONTINUATION_FRAMES);
 }
 
 TA_PRIVATE void ta_continuation_retain(ta_continuation *continuation) {
@@ -17092,7 +17505,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         if (definition->datamodel_instance_alignment == 0) {
             definition->datamodel_instance_alignment = 1;
         }
-        ta_actor_layout(definition);
+        result = ta_actor_layout(definition);
     }
     if (result != TA_OK) {
         ta_definition_destroy(definition);
@@ -17164,13 +17577,17 @@ static void ta_compile_rejected(ta_system *system, const ta_definition_compile_p
  */
 static ta_result ta_compile_check_scratch(ta_system *system, const ta_definition_compile_params *params) {
     ta_definition *definition = *params->out;
-    size_t need = ta_interpreter_scratch_need(definition);
+    size_t need = 0;
+    ta_result sized = ta_interpreter_scratch_need(definition, &need);
     uint32_t have = system->params[TA_PARAM_INTERPRETER_BYTES];
-    if (need <= have) {
+    if (sized == TA_OK && need <= have) {
         return TA_OK;
     }
     ta_definition_destroy(definition);
     *params->out = NULL;
+    if (sized != TA_OK) {
+        return sized;
+    }
     if (params->error == NULL) {
         return TA_ERR_UNSUPPORTED;
     }
@@ -18638,20 +19055,49 @@ TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator alloc
     table->count = 0;
 }
 
-TA_PRIVATE void ta_actor_layout(ta_definition *definition) {
-    size_t instance_alignment = definition->datamodel_instance_alignment;
-    size_t alignment = _Alignof(ta_actor);
-    if (alignment < _Alignof(uint64_t)) {
-        alignment = _Alignof(uint64_t);
+TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition) {
+    ta_layout layout;
+    ta_layout_init(&layout);
+    size_t session = 0;
+    size_t instance = 0;
+    ta_result result = ta_layout_add(&layout, TA_LAYOUT_ENTRY(ta_actor, 1), NULL);
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout,
+                               &(ta_layout_entry){ .size = ta_definition_session_bytes(definition),
+                                                   .alignment = _Alignof(uint64_t), .count = 1 },
+                               &session);
     }
-    if (alignment < instance_alignment) {
-        alignment = instance_alignment;
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout,
+                               &(ta_layout_entry){ .size = definition->datamodel_instance_size,
+                                                   .alignment = definition->datamodel_instance_alignment,
+                                                   .count = 1 },
+                               &instance);
     }
-    definition->actor_session_offset = ta_align_up(sizeof(ta_actor), _Alignof(uint64_t));
-    definition->actor_instance_offset =
-        ta_align_up(definition->actor_session_offset + ta_definition_session_bytes(definition), instance_alignment);
-    definition->actor_block_bytes = definition->actor_instance_offset + definition->datamodel_instance_size;
-    definition->actor_block_alignment = alignment;
+    if (result != TA_OK) {
+        return result;
+    }
+    definition->actor_session_offset = session;
+    definition->actor_instance_offset = instance;
+    definition->actor_block_bytes = layout.bytes;
+    definition->actor_block_alignment = layout.alignment;
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_operator_jump_bytes(uint32_t count, size_t *out) {
+    ta_layout layout;
+    ta_layout_init(&layout);
+    ta_result result = ta_layout_add(&layout,
+                                     &(ta_layout_entry){ .size = offsetof(ta_operator_jump, targets),
+                                                         .alignment = _Alignof(ta_operator_jump), .count = 1 },
+                                     NULL);
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout, TA_LAYOUT_ENTRY(ta_state_id, count), NULL);
+    }
+    if (result == TA_OK) {
+        *out = layout.bytes;
+    }
+    return result;
 }
 
 /*
@@ -19904,9 +20350,13 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
      * its macrostep ends (ADR 0069), are the steps here that can fail, and
      * they change nothing when they do. */
     ta_operator_jump *jump = NULL;
+    size_t jump_bytes = 0;
     if (transition != NULL) {
-        jump = ta_mem_alloc(system->allocator, ta_operator_jump_bytes(transition->target_count),
-                            _Alignof(ta_operator_jump));
+        result = ta_operator_jump_bytes(transition->target_count, &jump_bytes);
+        if (result != TA_OK) {
+            return result;
+        }
+        jump = ta_mem_alloc(system->allocator, jump_bytes, _Alignof(ta_operator_jump));
         if (jump == NULL) {
             return TA_ERR_NOMEM;
         }
@@ -19918,8 +20368,7 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     if (result != TA_OK) {
         if (jump != NULL) {
             ta_mem_free(system->allocator, jump,
-                        &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(jump->target_count),
-                                                     .alignment = _Alignof(ta_operator_jump) });
+                        &(ta_allocator_free_params){ .size = jump_bytes, .alignment = _Alignof(ta_operator_jump) });
         }
         return result;
     }
@@ -20502,8 +20951,9 @@ static size_t ta_image_measure(const ta_actor *actor) {
     if (actor->event_block != NULL) {
         total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
         if (actor->event_block->slots.jump != NULL) {
-            total += ta_operator_jump_bytes(actor->event_block->slots.jump->target_count) +
-                     _Alignof(ta_operator_jump);
+            size_t bytes = 0;
+            (void)ta_operator_jump_bytes(actor->event_block->slots.jump->target_count, &bytes); /* it exists */
+            total += bytes + _Alignof(ta_operator_jump);
         }
     }
     if (sparse != NULL) {
@@ -20546,7 +20996,11 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
 
     /* An operator transition waiting with the external event (ADR 0082). */
     if (actor->event_block != NULL && actor->event_block->slots.jump != NULL) {
-        size_t bytes = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count);
+        size_t bytes = 0;
+        ta_result sized = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count, &bytes);
+        if (sized != TA_OK) {
+            return sized;
+        }
         image->slots.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
         if (image->slots.jump == NULL) {
             return TA_ERR_NOMEM;
@@ -21007,11 +21461,13 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         result = ta_image_localize_origin(system, &slots->kept_event);
     }
     if (result == TA_OK && slots != NULL && image->slots.jump != NULL) {
-        size_t bytes = ta_operator_jump_bytes(image->slots.jump->target_count);
-        slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
-        if (slots->jump == NULL) {
-            result = TA_ERR_NOMEM;
-        } else {
+        size_t bytes = 0;
+        result = ta_operator_jump_bytes(image->slots.jump->target_count, &bytes);
+        if (result == TA_OK) {
+            slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
+            result = slots->jump == NULL ? TA_ERR_NOMEM : TA_OK;
+        }
+        if (result == TA_OK) {
             ta_mem_copy(slots->jump, image->slots.jump, bytes);
         }
     }
@@ -21912,37 +22368,63 @@ static ta_result ta_params_resolve(const ta_system_config *config, uint32_t valu
     return TA_OK;
 }
 
-/* Bytes of one interpreter: its structural region and its render area,
- * each a fixed arena, the render area starting aligned. */
-static size_t ta_interpreter_region_bytes(const uint32_t params[TA_PARAM_COUNT]) {
-    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(params[TA_PARAM_INTERPRETER_BYTES]),
-                                    (size_t)_Alignof(ta_arena_block));
-    return structural + ta_arena_fixed_bytes(params[TA_PARAM_RENDER_BYTES]);
+/*
+ * One interpreter's memory: its structural arena, then its render area,
+ * each a fixed arena starting aligned for ta_arena_block. The structural
+ * arena runs up to where the render area starts.
+ */
+typedef struct {
+    unsigned char *memory;
+    size_t render; /* where the render area starts */
+    size_t bytes;  /* the whole region */
+} ta_interpreter_region;
+
+/* Lays out a region for `params`; `memory` is left to the caller. */
+static ta_result ta_interpreter_region_lay_out(const uint32_t params[TA_PARAM_COUNT], ta_interpreter_region *out) {
+    ta_layout layout;
+    ta_layout_init(&layout);
+    size_t render = 0;
+    ta_result result = ta_layout_add(&layout,
+                                     &(ta_layout_entry){ .size = ta_arena_fixed_bytes(params[TA_PARAM_INTERPRETER_BYTES]),
+                                                         .alignment = _Alignof(ta_arena_block), .count = 1 },
+                                     NULL);
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout,
+                               &(ta_layout_entry){ .size = ta_arena_fixed_bytes(params[TA_PARAM_RENDER_BYTES]),
+                                                   .alignment = _Alignof(ta_arena_block), .count = 1 },
+                               &render);
+    }
+    if (result == TA_OK) {
+        *out = (ta_interpreter_region){ .memory = NULL, .render = render, .bytes = layout.bytes };
+    }
+    return result;
 }
 
 /* Lays a region's two fixed arenas over its memory. */
-static void ta_interpreter_region_open(const ta_system *system, void *memory, ta_arena *scratch, ta_arena *render) {
-    size_t structural = TA_ALIGN_UP(ta_arena_fixed_bytes(system->params[TA_PARAM_INTERPRETER_BYTES]),
-                                    (size_t)_Alignof(ta_arena_block));
-    ta_arena_init_fixed(scratch, memory, structural);
-    ta_arena_init_fixed(render, (unsigned char *)memory + structural,
-                        ta_arena_fixed_bytes(system->params[TA_PARAM_RENDER_BYTES]));
+static void ta_interpreter_region_open(const ta_interpreter_region *region, ta_arena *scratch, ta_arena *render) {
+    ta_arena_init_fixed(scratch, region->memory, region->render);
+    ta_arena_init_fixed(render, region->memory + region->render, region->bytes - region->render);
 }
 
 TA_PRIVATE ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *scratch, ta_arena *render) {
     if (depth == 0 || depth >= system->params[TA_PARAM_INTERPRETER_NESTING]) {
         return TA_ERR_UNSUPPORTED;
     }
+    ta_interpreter_region laid = { 0 };
+    ta_result result = ta_interpreter_region_lay_out(system->params, &laid);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_nested_region *region = &system->nested[depth - 1u];
     if (region->memory == NULL) {
-        size_t bytes = ta_interpreter_region_bytes(system->params);
-        region->memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+        region->memory = ta_mem_alloc(system->allocator, laid.bytes, _Alignof(ta_arena_block));
         if (region->memory == NULL) {
             return TA_ERR_NOMEM;
         }
-        region->bytes = bytes;
+        region->bytes = laid.bytes;
     }
-    ta_interpreter_region_open(system, region->memory, scratch, render);
+    laid.memory = region->memory;
+    ta_interpreter_region_open(&laid, scratch, render);
     return TA_OK;
 }
 
@@ -21952,17 +22434,33 @@ TA_PRIVATE ta_result ta_system_nested_region(ta_system *system, uint32_t depth, 
  * regions; and the event-block cache, filled to its parameter.
  */
 static ta_result ta_system_arena_open(ta_system *system) {
-    size_t region = ta_interpreter_region_bytes(system->params);
-    size_t nested = (size_t)(system->params[TA_PARAM_INTERPRETER_NESTING] - 1u) * sizeof(ta_nested_region);
-    size_t bytes = TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)) + nested;
-    system->arena_memory = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_arena_block));
+    ta_interpreter_region first = { 0 };
+    ta_result result = ta_interpreter_region_lay_out(system->params, &first);
+    ta_layout layout;
+    ta_layout_init(&layout);
+    size_t nested = 0;
+    if (result == TA_OK) {
+        result = ta_layout_add(&layout,
+                               &(ta_layout_entry){ .size = first.bytes, .alignment = _Alignof(ta_arena_block),
+                                                   .count = 1 },
+                               NULL);
+    }
+    if (result == TA_OK) {
+        result = ta_layout_add(
+            &layout, TA_LAYOUT_ENTRY(ta_nested_region, (size_t)system->params[TA_PARAM_INTERPRETER_NESTING] - 1u),
+            &nested);
+    }
+    if (result != TA_OK) {
+        return result;
+    }
+    system->arena_memory = ta_mem_alloc(system->allocator, layout.bytes, _Alignof(ta_arena_block));
     if (system->arena_memory == NULL) {
         return TA_ERR_NOMEM;
     }
-    system->arena_bytes = bytes;
-    ta_interpreter_region_open(system, system->arena_memory, &system->scratch, &system->render);
-    system->nested = (ta_nested_region *)((unsigned char *)system->arena_memory +
-                                          TA_ALIGN_UP(region, (size_t)_Alignof(ta_nested_region)));
+    system->arena_bytes = layout.bytes;
+    first.memory = system->arena_memory;
+    ta_interpreter_region_open(&first, &system->scratch, &system->render);
+    system->nested = (ta_nested_region *)((unsigned char *)system->arena_memory + nested);
     for (uint32_t index = 0; index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING]; index += 1u) {
         system->nested[index] = (ta_nested_region){ 0 };
     }
@@ -23691,9 +24189,10 @@ static void ta_unbind_event(ta_actor *actor) {
 /* Frees the operator transition a waiting external event came with. */
 static void ta_jump_free(ta_system *system, ta_event_slots *slots) {
     if (slots->jump != NULL) {
+        size_t bytes = 0;
+        (void)ta_operator_jump_bytes(slots->jump->target_count, &bytes); /* sized when it was allocated */
         ta_mem_free(system->allocator, slots->jump,
-                    &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(slots->jump->target_count),
-                                                 .alignment = _Alignof(ta_operator_jump) });
+                    &(ta_allocator_free_params){ .size = bytes, .alignment = _Alignof(ta_operator_jump) });
         slots->jump = NULL;
     }
 }
@@ -26647,8 +27146,9 @@ static uint32_t ta_decl_words(const ta_definition *definition) {
 }
 
 /* The largest continuation a run of this definition can save: every set,
- * every enabled transition, and every frame the executor can open. */
-static size_t ta_continuation_capacity(const ta_definition *definition) {
+ * every enabled transition, and every frame the executor can open.
+ * TA_ERR_NOMEM when it would exceed SIZE_MAX. */
+static ta_result ta_continuation_capacity(const ta_definition *definition, size_t *out) {
     ta_continuation shape = {
         .words = ta_bits_words(definition->state_count),
         .decl_words = ta_decl_words(definition),
@@ -26656,7 +27156,7 @@ static size_t ta_continuation_capacity(const ta_definition *definition) {
         .enabled_count = definition->state_count + 1u,
         .frame_count = ta_exec_capacity(definition),
     };
-    return ta_continuation_bytes(&shape);
+    return ta_continuation_bytes(&shape, out);
 }
 
 static void ta_continuation_forget(ta_system *system, ta_continuation *continuation) {
@@ -26703,7 +27203,11 @@ static ta_result ta_reserve_stop(ta_system *system, ta_actor *actor) {
     if (actor->sparse != NULL && actor->sparse->paused != NULL) {
         return TA_OK;
     }
-    size_t bytes = ta_continuation_capacity(actor->definition);
+    size_t bytes = 0;
+    ta_result result = ta_continuation_capacity(actor->definition, &bytes);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_continuation *spare = system->spare_continuation;
     if (spare == NULL || spare->bytes < bytes) {
         ta_continuation *grown = ta_mem_alloc(system->allocator, bytes, TA_CONTINUATION_ALIGN);
@@ -26800,12 +27304,6 @@ static void ta_stop_drop(ta_interpreter *it) {
     }
 }
 
-/* One allocation of ta_interpreter_init, added to a running size the way
- * an arena lays it out. */
-static void ta_need_take(size_t *at, size_t size, size_t alignment) {
-    *at = TA_ALIGN_UP(*at, alignment) + size;
-}
-
 /*
  * The bytes of interpreter scratch a definition needs (ADR 0092 section 3):
  * everything ta_interpreter_init takes, in its order and alignment, with
@@ -26813,29 +27311,51 @@ static void ta_need_take(size_t *at, size_t size, size_t alignment) {
  * it against interpreterBytes, so a definition that registers never runs
  * out of structural scratch.
  */
-TA_PRIVATE size_t ta_interpreter_scratch_need(const ta_definition *definition) {
+TA_PRIVATE ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out) {
     /* Positions are counted from the block's data, which starts aligned to
      * the block's own alignment, as ta_arena_init_fixed lays it out. */
     size_t start = offsetof(ta_arena_block, data);
-    size_t at = start;
-    uint32_t words = ta_bits_words(definition->state_count);
-    for (uint32_t index = 0; index < 11u; index += 1u) {
-        ta_need_take(&at, (size_t)words * sizeof(uint64_t), _Alignof(uint64_t));
-    }
+    size_t words = ta_bits_words(definition->state_count);
     size_t capacity = (size_t)definition->state_count + 1u;
-    ta_need_take(&at, capacity * sizeof(ta_state_id), _Alignof(ta_state_id));
-    ta_need_take(&at, capacity * sizeof(ta_transition_id), _Alignof(ta_transition_id));
-    ta_need_take(&at, capacity * sizeof(ta_transition_id), _Alignof(ta_transition_id));
-    ta_need_take(&at, capacity * sizeof(bool), _Alignof(bool));
-    ta_need_take(&at, (size_t)ta_entry_capacity(definition) * sizeof(struct ta_entry_frame),
-                 _Alignof(struct ta_entry_frame));
-    ta_need_take(&at, ((size_t)definition->history.slot_count + 1u) * sizeof(ta_state_id), _Alignof(ta_state_id));
-    ta_need_take(&at, (size_t)ta_exec_capacity(definition) * sizeof(ta_exec_frame), _Alignof(ta_exec_frame));
-    ta_need_take(&at, (size_t)ta_decl_words(definition) * sizeof(uint64_t), _Alignof(uint64_t));
-    ta_need_take(&at, (3u * (size_t)definition->state_count + 1u) * sizeof(ta_state_id), _Alignof(ta_state_id));
-    ta_need_take(&at, ((size_t)ta_trace_guard_capacity(definition) + 1u) * sizeof(struct ta_trace_condition),
-                 _Alignof(struct ta_trace_condition));
-    return at - start;
+    const ta_layout_entry takes[] = {
+        { .size = start, .alignment = _Alignof(ta_arena_block), .count = 1 },
+        /* the eleven state sets, one allocation each */
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id), .count = capacity },
+        { .size = sizeof(ta_transition_id), .alignment = _Alignof(ta_transition_id), .count = capacity },
+        { .size = sizeof(ta_transition_id), .alignment = _Alignof(ta_transition_id), .count = capacity },
+        { .size = sizeof(bool), .alignment = _Alignof(bool), .count = capacity },
+        { .size = sizeof(struct ta_entry_frame), .alignment = _Alignof(struct ta_entry_frame),
+          .count = ta_entry_capacity(definition) },
+        { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
+          .count = (size_t)definition->history.slot_count + 1u },
+        { .size = sizeof(ta_exec_frame), .alignment = _Alignof(ta_exec_frame), .count = ta_exec_capacity(definition) },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = ta_decl_words(definition) },
+        { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
+          .count = 3u * (size_t)definition->state_count + 1u },
+        { .size = sizeof(struct ta_trace_condition), .alignment = _Alignof(struct ta_trace_condition),
+          .count = (size_t)ta_trace_guard_capacity(definition) + 1u },
+    };
+    ta_layout layout;
+    ta_layout_init(&layout);
+    for (uint32_t index = 0; index < TA_ARRAY_COUNT(takes); index += 1u) {
+        ta_result result = ta_layout_add(&layout, &takes[index], NULL);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    *out = layout.bytes - start;
+    return TA_OK;
 }
 
 static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_actor *actor) {

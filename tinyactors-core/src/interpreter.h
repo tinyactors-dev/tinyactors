@@ -1,3 +1,62 @@
+/**
+ * @file interpreter.h
+ *
+ * # Interpreter
+ *
+ * The SCXML execution engine. A `ta_interpreter` is the state of one call
+ * that advances one resident actor: it takes the actor's events, selects
+ * and runs microsteps, runs executable content through the data model,
+ * starts and cancels invocations, and stops when the actor is stable, its
+ * budget is spent, it pauses, or it runs out of memory. Between calls the
+ * actor holds everything (its configuration, history, internal queue and
+ * events); a run that stops inside a phase leaves the rest in a
+ * continuation (`continuation.h`). The unit also keeps the actor's event
+ * block and internal queue, send IDs as text, and the system's spare
+ * continuation and sparse state.
+ *
+ * ## Scratch
+ *
+ * A call's working sets, its selection and entry stacks, the executor's
+ * frames and its trace buffers come from the system's structural arena
+ * (`interpreterBytes`, ADR 0092), taken in a fixed order when the
+ * interpreter starts and sized from the definition: eleven state sets,
+ * the default-history map, the enabled, filtered and removed transitions,
+ * the entry frames, the history stack, the executor's frames, the bound
+ * data declarations, and the trace buffers. `ta_interpreter_scratch_need`
+ * lays the same takes out with the layout builder (`layout.h`), counted
+ * from the start of the arena's data, so the compiler can refuse a
+ * definition whose run would not fit before it registers. A definition
+ * that registers never runs out of structural scratch, and nothing in a
+ * run grows it (ADR 0060).
+ *
+ * ## Memory
+ *
+ * The interpreter owns nothing between calls: scratch is reset when a call
+ * starts. What a run allocates (event blocks, a sparse state, a
+ * continuation, room for delayed sends and internal events) it reserves
+ * before the step that needs it, so a step that runs out of memory has
+ * had no effect that doing it again would repeat (ADR 0047, ADR 0070).
+ * `ta_interpreter_scratch_need` never allocates.
+ *
+ * ## Complexity
+ *
+ * `ta_interpreter_scratch_need` walks each atomic state's ancestors and
+ * counts the guarded transitions it can select there: O(atomic states x
+ * (depth + transitions on that path)). A microstep costs
+ * what the SCXML algorithm costs over the definition's compiled tables.
+ *
+ * ## Failure
+ *
+ * Calls answer `ta_result`. `TA_ERR_NOMEM` stops a run before the step
+ * that failed, which a later call repeats. `ta_interpreter_scratch_need`
+ * answers `TA_ERR_NOMEM` for a need that would exceed `SIZE_MAX`.
+ *
+ * ## Users
+ *
+ * The actor and system units (spawn, delivery, resume, abandon), the
+ * compiler (the scratch check), invocations and session images.
+ * ADRs 0047, 0060, 0061, 0067, 0069, 0070, 0082, 0086, 0092.
+ */
 #pragma once
 
 #include "system.h"
@@ -144,8 +203,14 @@ void ta_interpreter_literal_content(const ta_definition *definition, ta_content_
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 /* Frees cached event blocks until the cache holds no more than its limit
  * (ADR 0069); a limit of 0 frees them all, at teardown. */
-/* The interpreter scratch a definition needs (ADR 0092 section 3). */
-size_t ta_interpreter_scratch_need(const ta_definition *definition);
+/**
+ * The bytes of interpreter scratch a run of `definition` takes (ADR 0092
+ * section 3), in `*out`: what the interpreter takes from its structural
+ * arena when it starts, in the same order and alignment, with both trace
+ * buffers. Borrows `definition`; never allocates. Answers TA_ERR_NOMEM,
+ * leaving `*out` alone, when the need would exceed SIZE_MAX.
+ */
+ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 void ta_interpreter_render_fault(ta_fault *fault);
 /* Fills the event-block cache to its limit, at creation (ADR 0092 section 3). */

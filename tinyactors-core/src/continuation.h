@@ -1,3 +1,79 @@
+/**
+ * @file continuation.h
+ *
+ * # Continuations
+ *
+ * A `ta_continuation` is a run stopped inside a phase, moved out of the
+ * interpreter's scratch into one allocation the actor owns, so that the
+ * run resumes there later (ADR 0061, ADR 0070). A run stops inside a
+ * phase when it pauses (between two units of executable content, or at a
+ * microstep's start) or runs out of memory. The unit also defines the
+ * executor's frames (`ta_exec_frame`), the phases a run can stand in
+ * (`ta_run_phase`), and the position inside one (`ta_micro_position`).
+ *
+ * ## Layout
+ *
+ * One block, laid out with the layout builder (`layout.h`), in this order:
+ *
+ * - the `ta_continuation` header: the block's size, the
+ *   `ta_micro_position` (the phase, the state, transition or cursor it is
+ *   at, the stage, the handler or data declaration being run, and whether
+ *   the frames hold an open block) and the counts below;
+ * - the four state sets, `words` 64-bit words each, side by side: the
+ *   live active set, the exit set, the entry set and the default-entry
+ *   set, computed once as the microstep began;
+ * - the data declarations the binding supplies, while bootstrapping
+ *   (`decl_words` words);
+ * - the default-history map (`state_count` state IDs);
+ * - the enabled transitions (`enabled_count`), by compiled ID; the
+ *   bootstrap's initial transition and an operator transition are marks,
+ *   since nothing reads them after the microstep has begun but their
+ *   executable content, which an operator transition does not have;
+ * - the executor's frames (`frame_count`): open blocks with their
+ *   cursors, and each running `<foreach>` with its snapshot, position and
+ *   count (ADR 0033).
+ *
+ * `ta_continuation_bytes` sizes a block from a shape's counts, and the
+ * accessors find each region by laying the block out again from the
+ * counts it holds. `bytes` is the allocation, which may be larger than the
+ * counts need: the system keeps one spare, sized for the largest
+ * definition it ran. Every block is allocated aligned to
+ * `TA_CONTINUATION_ALIGN`, the largest alignment of its regions.
+ *
+ * ## Invariants
+ *
+ * The counts a continuation holds are never larger than those its
+ * allocation was sized for, so laying it out again cannot fail. It holds
+ * no pointers: a copy is a copy of its `bytes` plus a retain of each
+ * `<foreach>` snapshot (`ta_continuation_retain`).
+ *
+ * ## Memory
+ *
+ * The actor owns its continuation, through its sparse state, from the
+ * stop until the run resumes; the system owns its spare. Both come from
+ * the system's allocator. The interpreter reserves a continuation large
+ * enough for the definition before a run starts, so stopping never
+ * allocates (ADR 0070). `ta_continuation_free` releases the frames'
+ * snapshots and frees the block. Nothing here allocates, so each function
+ * may run inside a macrostep.
+ *
+ * ## Complexity
+ *
+ * `ta_continuation_bytes` and each accessor are O(1): a layout of six
+ * regions. Retaining, releasing and freeing are O(frames).
+ *
+ * ## Failure
+ *
+ * `ta_continuation_bytes` answers `TA_ERR_NOMEM` for counts whose block
+ * would exceed `SIZE_MAX`; the reservation passes that on before the run
+ * does anything. Nothing else fails.
+ *
+ * ## Users
+ *
+ * The interpreter (stopping, resuming, inspection of where a run stands),
+ * session images (which carry a copy) and the actor's sparse state.
+ * ADRs 0033, 0060, 0061, 0070, 0082, 0083, 0086.
+ */
 #pragma once
 
 #include "event.h"
@@ -106,17 +182,9 @@ typedef struct {
 } ta_micro_position;
 
 /*
- * A run stopped inside a phase, by a pause (ADR 0061) or by running out of
- * memory (ADR 0070), moved out of the interpreter's scratch into one
- * allocation the actor owns. The header is followed, at the offsets the
- * accessors compute, by the four state sets (active, to exit, to enter,
- * default entry; `words` each), the data declarations the binding supplies
- * (`decl_words`, while bootstrapping), the default-history map
- * (`state_count`), the enabled transitions, and the executor's frames. `bytes` is the
- * allocation, which may be larger than this shape needs: the system keeps
- * one spare, sized for the largest definition it ran. It holds no
- * pointers, so copying `bytes` copies it; the frames' snapshots are values
- * a copy must retain.
+ * The header of a stopped run's block; the regions after it are listed in
+ * the file comment, at the offsets the accessors compute. `bytes` is the
+ * allocation, which may be larger than these counts need.
  */
 typedef struct ta_continuation {
     size_t bytes;
@@ -128,8 +196,12 @@ typedef struct ta_continuation {
     uint32_t frame_count;
 } ta_continuation;
 
-/* The bytes a continuation of this shape takes; `shape` has the counts set. */
-size_t ta_continuation_bytes(const ta_continuation *shape);
+/**
+ * The bytes a continuation of this shape takes, in `*out`; `shape` has the
+ * counts set and is only read. Never allocates; may run anywhere. Answers
+ * TA_ERR_NOMEM, leaving `*out` alone, when they would exceed SIZE_MAX.
+ */
+ta_result ta_continuation_bytes(const ta_continuation *shape, size_t *out);
 /* Whether the phase is one of a microstep's (START, EXIT, TRANSITIONS, ENTER). */
 bool ta_run_phase_in_microstep(ta_run_phase phase);
 uint64_t *ta_continuation_sets(ta_continuation *continuation);

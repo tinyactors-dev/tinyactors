@@ -1,4 +1,5 @@
 #include "interpreter.h"
+#include "layout.h"
 #include "memory.h"
 #include "str.h"
 #include "vec.h"
@@ -923,9 +924,10 @@ static void ta_unbind_event(ta_actor *actor) {
 /* Frees the operator transition a waiting external event came with. */
 static void ta_jump_free(ta_system *system, ta_event_slots *slots) {
     if (slots->jump != NULL) {
+        size_t bytes = 0;
+        (void)ta_operator_jump_bytes(slots->jump->target_count, &bytes); /* sized when it was allocated */
         ta_mem_free(system->allocator, slots->jump,
-                    &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(slots->jump->target_count),
-                                                 .alignment = _Alignof(ta_operator_jump) });
+                    &(ta_allocator_free_params){ .size = bytes, .alignment = _Alignof(ta_operator_jump) });
         slots->jump = NULL;
     }
 }
@@ -3879,8 +3881,9 @@ static uint32_t ta_decl_words(const ta_definition *definition) {
 }
 
 /* The largest continuation a run of this definition can save: every set,
- * every enabled transition, and every frame the executor can open. */
-static size_t ta_continuation_capacity(const ta_definition *definition) {
+ * every enabled transition, and every frame the executor can open.
+ * TA_ERR_NOMEM when it would exceed SIZE_MAX. */
+static ta_result ta_continuation_capacity(const ta_definition *definition, size_t *out) {
     ta_continuation shape = {
         .words = ta_bits_words(definition->state_count),
         .decl_words = ta_decl_words(definition),
@@ -3888,7 +3891,7 @@ static size_t ta_continuation_capacity(const ta_definition *definition) {
         .enabled_count = definition->state_count + 1u,
         .frame_count = ta_exec_capacity(definition),
     };
-    return ta_continuation_bytes(&shape);
+    return ta_continuation_bytes(&shape, out);
 }
 
 static void ta_continuation_forget(ta_system *system, ta_continuation *continuation) {
@@ -3935,7 +3938,11 @@ static ta_result ta_reserve_stop(ta_system *system, ta_actor *actor) {
     if (actor->sparse != NULL && actor->sparse->paused != NULL) {
         return TA_OK;
     }
-    size_t bytes = ta_continuation_capacity(actor->definition);
+    size_t bytes = 0;
+    ta_result result = ta_continuation_capacity(actor->definition, &bytes);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_continuation *spare = system->spare_continuation;
     if (spare == NULL || spare->bytes < bytes) {
         ta_continuation *grown = ta_mem_alloc(system->allocator, bytes, TA_CONTINUATION_ALIGN);
@@ -4032,12 +4039,6 @@ static void ta_stop_drop(ta_interpreter *it) {
     }
 }
 
-/* One allocation of ta_interpreter_init, added to a running size the way
- * an arena lays it out. */
-static void ta_need_take(size_t *at, size_t size, size_t alignment) {
-    *at = TA_ALIGN_UP(*at, alignment) + size;
-}
-
 /*
  * The bytes of interpreter scratch a definition needs (ADR 0092 section 3):
  * everything ta_interpreter_init takes, in its order and alignment, with
@@ -4045,29 +4046,51 @@ static void ta_need_take(size_t *at, size_t size, size_t alignment) {
  * it against interpreterBytes, so a definition that registers never runs
  * out of structural scratch.
  */
-size_t ta_interpreter_scratch_need(const ta_definition *definition) {
+ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out) {
     /* Positions are counted from the block's data, which starts aligned to
      * the block's own alignment, as ta_arena_init_fixed lays it out. */
     size_t start = offsetof(ta_arena_block, data);
-    size_t at = start;
-    uint32_t words = ta_bits_words(definition->state_count);
-    for (uint32_t index = 0; index < 11u; index += 1u) {
-        ta_need_take(&at, (size_t)words * sizeof(uint64_t), _Alignof(uint64_t));
-    }
+    size_t words = ta_bits_words(definition->state_count);
     size_t capacity = (size_t)definition->state_count + 1u;
-    ta_need_take(&at, capacity * sizeof(ta_state_id), _Alignof(ta_state_id));
-    ta_need_take(&at, capacity * sizeof(ta_transition_id), _Alignof(ta_transition_id));
-    ta_need_take(&at, capacity * sizeof(ta_transition_id), _Alignof(ta_transition_id));
-    ta_need_take(&at, capacity * sizeof(bool), _Alignof(bool));
-    ta_need_take(&at, (size_t)ta_entry_capacity(definition) * sizeof(struct ta_entry_frame),
-                 _Alignof(struct ta_entry_frame));
-    ta_need_take(&at, ((size_t)definition->history.slot_count + 1u) * sizeof(ta_state_id), _Alignof(ta_state_id));
-    ta_need_take(&at, (size_t)ta_exec_capacity(definition) * sizeof(ta_exec_frame), _Alignof(ta_exec_frame));
-    ta_need_take(&at, (size_t)ta_decl_words(definition) * sizeof(uint64_t), _Alignof(uint64_t));
-    ta_need_take(&at, (3u * (size_t)definition->state_count + 1u) * sizeof(ta_state_id), _Alignof(ta_state_id));
-    ta_need_take(&at, ((size_t)ta_trace_guard_capacity(definition) + 1u) * sizeof(struct ta_trace_condition),
-                 _Alignof(struct ta_trace_condition));
-    return at - start;
+    const ta_layout_entry takes[] = {
+        { .size = start, .alignment = _Alignof(ta_arena_block), .count = 1 },
+        /* the eleven state sets, one allocation each */
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = words },
+        { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id), .count = capacity },
+        { .size = sizeof(ta_transition_id), .alignment = _Alignof(ta_transition_id), .count = capacity },
+        { .size = sizeof(ta_transition_id), .alignment = _Alignof(ta_transition_id), .count = capacity },
+        { .size = sizeof(bool), .alignment = _Alignof(bool), .count = capacity },
+        { .size = sizeof(struct ta_entry_frame), .alignment = _Alignof(struct ta_entry_frame),
+          .count = ta_entry_capacity(definition) },
+        { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
+          .count = (size_t)definition->history.slot_count + 1u },
+        { .size = sizeof(ta_exec_frame), .alignment = _Alignof(ta_exec_frame), .count = ta_exec_capacity(definition) },
+        { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = ta_decl_words(definition) },
+        { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
+          .count = 3u * (size_t)definition->state_count + 1u },
+        { .size = sizeof(struct ta_trace_condition), .alignment = _Alignof(struct ta_trace_condition),
+          .count = (size_t)ta_trace_guard_capacity(definition) + 1u },
+    };
+    ta_layout layout;
+    ta_layout_init(&layout);
+    for (uint32_t index = 0; index < TA_ARRAY_COUNT(takes); index += 1u) {
+        ta_result result = ta_layout_add(&layout, &takes[index], NULL);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    *out = layout.bytes - start;
+    return TA_OK;
 }
 
 static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_actor *actor) {

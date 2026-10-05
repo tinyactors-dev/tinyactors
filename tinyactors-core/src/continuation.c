@@ -1,52 +1,86 @@
 #include "continuation.h"
+#include "layout.h"
 #include "memory.h"
 #include "../include/tinyactors.h"
 
-/* Offsets of the arrays that follow a continuation's header, in order. */
-typedef struct {
-    size_t sets;
-    size_t decls;
-    size_t history;
-    size_t enabled;
-    size_t frames;
-    size_t end;
-} ta_continuation_layout;
+/* The regions of a continuation's block, in the order they are laid out. */
+enum {
+    TA_CONTINUATION_HEADER = 0,
+    TA_CONTINUATION_SETS,
+    TA_CONTINUATION_DECLS,
+    TA_CONTINUATION_HISTORY,
+    TA_CONTINUATION_ENABLED,
+    TA_CONTINUATION_FRAMES,
+    TA_CONTINUATION_REGIONS
+};
 
-static ta_continuation_layout ta_continuation_offsets(const ta_continuation *shape) {
-    ta_continuation_layout layout;
-    layout.sets = ta_align_up(sizeof(ta_continuation), _Alignof(uint64_t));
-    layout.decls = layout.sets + (size_t)shape->words * 4u * sizeof(uint64_t);
-    layout.history = ta_align_up(layout.decls + (size_t)shape->decl_words * sizeof(uint64_t), _Alignof(ta_state_id));
-    layout.enabled = ta_align_up(layout.history + (size_t)shape->state_count * sizeof(ta_state_id),
-                                 _Alignof(ta_transition_id));
-    layout.frames = ta_align_up(layout.enabled + (size_t)shape->enabled_count * sizeof(ta_transition_id),
-                                _Alignof(ta_exec_frame));
-    layout.end = layout.frames + (size_t)shape->frame_count * sizeof(ta_exec_frame);
-    return layout;
+/* Lays out a continuation of `shape`'s counts: each region's offset into
+ * `offsets`, and the block's size and alignment into `*layout`. */
+static ta_result ta_continuation_lay_out(const ta_continuation *shape, size_t offsets[TA_CONTINUATION_REGIONS],
+                                         ta_layout *layout) {
+    const ta_layout_entry entries[TA_CONTINUATION_REGIONS] = {
+        [TA_CONTINUATION_HEADER] = { .size = sizeof(ta_continuation), .alignment = _Alignof(ta_continuation),
+                                     .count = 1 },
+        /* active, to exit, to enter and default entry, `words` each, side by side */
+        [TA_CONTINUATION_SETS] = { .size = 4u * sizeof(uint64_t), .alignment = _Alignof(uint64_t),
+                                   .count = shape->words },
+        [TA_CONTINUATION_DECLS] = { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t),
+                                    .count = shape->decl_words },
+        [TA_CONTINUATION_HISTORY] = { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
+                                      .count = shape->state_count },
+        [TA_CONTINUATION_ENABLED] = { .size = sizeof(ta_transition_id), .alignment = _Alignof(ta_transition_id),
+                                      .count = shape->enabled_count },
+        [TA_CONTINUATION_FRAMES] = { .size = sizeof(ta_exec_frame), .alignment = _Alignof(ta_exec_frame),
+                                     .count = shape->frame_count },
+    };
+    ta_layout_init(layout);
+    for (uint32_t region = 0; region < TA_CONTINUATION_REGIONS; region += 1u) {
+        ta_result result = ta_layout_add(layout, &entries[region], &offsets[region]);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    return TA_OK;
 }
 
-size_t ta_continuation_bytes(const ta_continuation *shape) {
-    return ta_continuation_offsets(shape).end;
+/* Where `region` of an allocated continuation starts. Its counts are no
+ * larger than those its allocation was sized for, so laying it out again
+ * cannot fail. */
+static unsigned char *ta_continuation_region(ta_continuation *continuation, uint32_t region) {
+    size_t offsets[TA_CONTINUATION_REGIONS] = { 0 };
+    ta_layout layout;
+    (void)ta_continuation_lay_out(continuation, offsets, &layout);
+    return (unsigned char *)continuation + offsets[region];
+}
+
+ta_result ta_continuation_bytes(const ta_continuation *shape, size_t *out) {
+    size_t offsets[TA_CONTINUATION_REGIONS];
+    ta_layout layout;
+    ta_result result = ta_continuation_lay_out(shape, offsets, &layout);
+    if (result == TA_OK) {
+        *out = layout.bytes;
+    }
+    return result;
 }
 
 uint64_t *ta_continuation_sets(ta_continuation *continuation) {
-    return (uint64_t *)((unsigned char *)continuation + ta_continuation_offsets(continuation).sets);
+    return (uint64_t *)ta_continuation_region(continuation, TA_CONTINUATION_SETS);
 }
 
 uint64_t *ta_continuation_decls(ta_continuation *continuation) {
-    return (uint64_t *)((unsigned char *)continuation + ta_continuation_offsets(continuation).decls);
+    return (uint64_t *)ta_continuation_region(continuation, TA_CONTINUATION_DECLS);
 }
 
 ta_state_id *ta_continuation_history(ta_continuation *continuation) {
-    return (ta_state_id *)((unsigned char *)continuation + ta_continuation_offsets(continuation).history);
+    return (ta_state_id *)ta_continuation_region(continuation, TA_CONTINUATION_HISTORY);
 }
 
 ta_transition_id *ta_continuation_enabled(ta_continuation *continuation) {
-    return (ta_transition_id *)((unsigned char *)continuation + ta_continuation_offsets(continuation).enabled);
+    return (ta_transition_id *)ta_continuation_region(continuation, TA_CONTINUATION_ENABLED);
 }
 
 ta_exec_frame *ta_continuation_frames(ta_continuation *continuation) {
-    return (ta_exec_frame *)((unsigned char *)continuation + ta_continuation_offsets(continuation).frames);
+    return (ta_exec_frame *)ta_continuation_region(continuation, TA_CONTINUATION_FRAMES);
 }
 
 void ta_continuation_retain(ta_continuation *continuation) {
