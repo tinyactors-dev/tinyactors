@@ -69,16 +69,15 @@ Named actors may exist while not resident: unloading lets one process hold far m
 
 ## Handles and run-time IDs
 
-A handle names a run-time object by a slot and a generation, so a stale
-handle to a slot that was freed and reused is told apart from the object that
-now lives there.
+Actor and definition IDs are generation handles: a slot and the slot's
+generation in 64 bits, so a stale ID is told apart from the object that now
+holds its slot. How they are packed, what generation 0 means and how a stale
+one is rejected is the contract of [`src/handle.h`](../../src/handle.h); the
+public halves of an actor ID are `ta_actor_id_slot`, `ta_actor_id_generation`
+and `ta_actor_id_make` (ADR 0059).
 
-- Handles are fixed-width integers, never pointers.
-- The public `ta_actor_id` is an opaque 64-bit identity; core decomposes it
-  into a slot and a generation (`ta_actor_id_make`, `ta_actor_id_slot`,
-  `ta_actor_id_generation`) to reject a stale reference (ADR 0059).
-- Run-time handles and IDs (atoms, event names, definitions, actors) are
-  process-local accelerators. Exact definition identity, logical actor
-  addresses, and anything a durable or portable encoding records use stable
-  logical forms, never a numeric run-time handle, which does not survive a
-  restart (ADR 0028).
+Run-time handles and IDs (atoms, event names, definitions, actors) are
+process-local accelerators. Exact definition identity, logical actor
+addresses, and anything a durable or portable encoding records use stable
+logical forms, never a numeric run-time handle, which does not survive a
+restart (ADR 0028).

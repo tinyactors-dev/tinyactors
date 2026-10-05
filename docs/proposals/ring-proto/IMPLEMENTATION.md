@@ -81,7 +81,7 @@ tinyactors-core/
     │                                    targets for a chunk chain and a record tail
     ├── version.c               +        ta_version
     ├── hash.h                  +        D5 FNV-1a and the 64-bit mixer, once (1.1)
-    ├── handle.h                +        E1 generation handles, with ta_actor_key (1.2)
+    ├── handle.h                +        E1 generation handles: make, slot, generation, valid (1.2)
     ├── layout.c / layout.h     +        A2 layout builder with checked arithmetic (1.4)
     ├── arena.c / arena.h       =   199  A3; optional A4 mark/rewind
     ├── index_pool.c / .h       +        A5 fixed items in pages, safe-point refill, ceiling, trim (1.5)
@@ -434,7 +434,7 @@ gets its own test program in `tinyactors-core/tests/`.
 
 | Step | Block | Replaces | Notes |
 |---|---|---|---|
-| 1.0 | – | `types.c` / `types.h` | Split into `memory`, `str`, `vec`, `bitset.h`, `span.h`, `text_writer` and `version.c`. Move `ta_actor_key` to `handle.h` with 1.2. Every module includes what it uses instead of `types.h`. Add the ast-grep rule that a header opens with a file comment, with today's headers on its allow-list; each new unit from the split gets its comment. |
+| 1.0 | – | `types.c` / `types.h` | Split into `memory`, `str`, `vec`, `bitset.h`, `span.h`, `text_writer` and `version.c`. Delete `ta_actor_key`, which nothing uses. Every module includes what it uses instead of `types.h`. Add the ast-grep rule that a header opens with a file comment, with today's headers on its allow-list; each new unit from the split gets its comment. |
 | 1.1 | D5 hash functions, D6 formatters | The Murmur finalizer duplicated in `session.c:4` and `trace.c:34`; FNV-1a in 32-bit and 64-bit forms; three decimal formatters, four hex helpers, two `cstr` helpers | One header. Trace and span IDs must stay identical: `span_test` covers them. |
 | 1.2 | E1 generation handles | The hand-packed definition IDs (`system.c:456`), and `ta_actor_id_make` as the only shared helper | |
 | 1.3 | E2 failing, counting test allocator | Nine hand-rolled copies in core's tests | It lives with the tests and is never amalgamated into the library. |
