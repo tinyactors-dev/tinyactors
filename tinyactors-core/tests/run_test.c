@@ -364,6 +364,42 @@ static void test_malformed(void) {
     world_close(&w);
 }
 
+/* test_steady_state_makes_no_allocator_call: once a few rounds have grown the envelope pool, the started-cell pool
+ * and the waiting tables to what the load needs, deliver-and-run rounds against 20 of 2000 actors make no allocator
+ * call at all. This is the property napi's scale.js reports as "steady-state allocator calls", pinned here in counts
+ * without a clock: a refill that rebuilt a table sized by the population, a trim and refill of a pool, or a scratch
+ * buffer per call would show as attempts. The population (2000 sessions) is far larger than the 20 that receive
+ * mail, so work that scaled with it would be seen. */
+static void test_steady_state_makes_no_allocator_call(void) {
+    enum { ACTORS = 2000, ACTIVE = 20, WARMUP = 50, ROUNDS = 1000 };
+    world w;
+    world_init(&w, NULL, 0);
+    static ta_actor_id actors[ACTORS];
+    for (uint32_t index = 0; index < ACTORS; index += 1u) {
+        actors[index] = spawn(&w, w.toggle);
+    }
+    static uint64_t tokens[ACTORS + 8];
+    uint32_t seen = 0;
+    (void)drain(&w, 64, 32, tokens, &seen); /* bootstraps everyone */
+    CHECK(seen == ACTORS);
+    uint64_t before = 0;
+    for (uint32_t round = 0; round < WARMUP + ROUNDS; round += 1u) {
+        if (round == WARMUP) {
+            before = heap.stats.attempts;
+        }
+        for (uint32_t index = 0; index < ACTIVE; index += 1u) {
+            uint64_t input = 0;
+            CHECK(post(&w, actors[index * (ACTORS / ACTIVE)], w.go, &input) == TA_OK);
+        }
+        seen = 0;
+        uint32_t calls = drain(&w, 64, 32, tokens, &seen);
+        CHECK(seen == ACTIVE);
+        CHECK(calls <= 2u); /* ACTIVE inputs fit one call's budget and notices: one call to run, one to see IDLE */
+    }
+    CHECK(heap.stats.attempts == before);
+    world_close(&w);
+}
+
 int main(void) {
     test_idle_and_arguments();
     test_order_and_tokens();
@@ -373,6 +409,7 @@ int main(void) {
     test_finished_session();
     test_destroyed_session();
     test_malformed();
+    test_steady_state_makes_no_allocator_call();
     CHECK(heap.stats.live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "run test: %d check(s) failed\n", failures);
