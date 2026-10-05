@@ -108,7 +108,7 @@ tinyactors-core/
     ├── atom.c / atom.h         ~   157  on B3; interning only at registration and creation
     ├── event_name.c / .h       →        trie.c / trie.h
     ├── trie.c / trie.h         ~   263  D7 trie of atoms, on B3; event names are one user (1.6)
-    ├── names.c / names.h       +        D4 resolver (bytes → atoms, UNKNOWN); envelope text layout (2.6, 4.2)
+    ├── names.c / names.h       +        D4 resolver (bytes → atoms, UNKNOWN) (2.6, 4.2)
     ├── type_registry.c / .h    +        B7, created twice: I/O processor and invoker types (2.7, 5.2)
     ├── address.c / address.h   ~   296  keeps its linear hash table (ADR 0065 decision 6); no run-time
     │                                    interning from targetexpr
@@ -120,7 +120,7 @@ tinyactors-core/
     ├── envelope.c / .h         +        the pool (A5), its lists (B1), recycling, withdrawal; the trace parent
     │                                    in the envelope's text when traced (4.2); waiting entries (A5), one per
     │                                    address with the address once, found through a fixed B3 table (5.3)
-    ├── name_area.c / .h        +        an A5 + A6 instance with 64-byte chunks, plus its quota (4.2)
+    ├── name_area.c / .h        +        an A5 + A6 instance with 64-byte chunks, plus its quota; the text layout (4.2)
     ├── admission.c / .h        +        reads h2c: admit, bounce, apply controls, fairness (4.2, 5.1)
     ├── deadline.c / .h         +        delayed sends: B2 over envelopes, owner lists, exact <cancel> (4.3)
     ├── timer.c / timer.h       -   634  replaced by deadline.c (4.3)

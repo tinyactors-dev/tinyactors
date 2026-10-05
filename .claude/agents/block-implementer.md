@@ -39,8 +39,14 @@ follow the catalog and list the question under `open_questions`.
   Every unit includes `../include/tinyactors.h` directly when it uses a
   public type, and directly includes every unit whose symbols it uses;
   never reach a unit through another header.
-- **Now:** Phase 1, in the plan's order. Read `git log --oneline -20` to
-  see what has landed.
+- **Also landed:** Phase 1, the rest of Phase 2, Phase 3 and step 4.1
+  (the `tel` ring). The design is adopted: ADRs 0098 to 0105 in
+  `tinyactors-core/docs/adr/` are the decisions; the reference documents
+  give the detail.
+- **Now:** Phase 4. Step 4.2 lands as the eight commits listed under
+  "Step 4.2 in commits" in `IMPLEMENTATION.md`; your task names which
+  one. Do only that commit. Read `git log --oneline -20` to see what has
+  landed.
 - **A header the step creates or changes** opens with a `/** @file`
   comment. `mise run check-header-comments` enforces it: a header on its
   allow-list (in `tinyactors-core/mise/tasks/check-header-comments`) that

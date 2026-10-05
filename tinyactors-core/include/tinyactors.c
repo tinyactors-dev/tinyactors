@@ -7658,6 +7658,713 @@ TA_PRIVATE ta_result ta_actor_ref_detach(ta_arena *arena, ta_actor_ref *ref);
 /* The origin of an event, when it is an actor. */
 TA_PRIVATE ta_actor_ref *ta_event_origin_ref(ta_event *event);
 
+/**
+ * @file envelope.h
+ *
+ * # The envelope pool
+ *
+ * An **envelope** is one input a session has not finished with yet: an
+ * external event admitted from the host, mail from another local session,
+ * a delayed send that is not yet due, a local invocation's completion or
+ * stop token, and the event whose execution has not completed. Internal
+ * events (`<raise>`, `done.state.*`, `error.*`) are not envelopes; they
+ * keep interpreter storage of their own (ADR 0099 decision 1).
+ *
+ * `ta_envelope_pool` holds every envelope of one system: fixed-size
+ * `ta_envelope` records in an index pool (`index_pool.h`), addressed by
+ * `uint32_t` index, 0 meaning none. It also holds the system's **run
+ * queue**, and counts its envelopes against its bound with a quota
+ * (`quota.h`) that gives the **admission watermark**.
+ *
+ * ## The envelope
+ *
+ * An envelope has a fixed size, so the pool is an array of items in
+ * pages. Its variable parts (the event name, an origin, a delayed send's
+ * target, a trace parent) are length-prefixed text fields in the name
+ * area (`name_area.h`), and `text` is the chain that holds them. See
+ * `ta_envelope` for each field.
+ *
+ * - `next` links the envelope on the one list that holds it: the run
+ *   queue, a macrostep's outgoing list, a session's deferred list, an
+ *   address's waiting list, or, while it is free, the pool's free list.
+ * - `owner_next` links a pending delayed send on its sender's owner list,
+ *   so `<cancel>` and unloading find a session's timers.
+ * - `heap_index` is the envelope's place in the deadline index while it
+ *   is a timer, and its **arrival number** while it is runnable. The two
+ *   never overlap: a runnable envelope is not in the deadline index.
+ * - `state` says which list or role holds it (`ta_envelope_state`);
+ *   the lists themselves do not record membership.
+ *
+ * ## The lists
+ *
+ * Every list is an intrusive `ta_list` (`list.h`) over the pool's items,
+ * so no list owns memory. `ta_envelope_pool_links` reaches `next`, and
+ * `ta_envelope_pool_owner_links` reaches `owner_next`.
+ *
+ * - **The run queue** is one list per system, in arrival order: the order
+ *   in which envelopes became runnable, not one queue per target. Arrival
+ *   order keeps every sender-to-receiver pair in order, which is what
+ *   SCXML asks of one sender's events, and needs no scheduler choosing
+ *   between targets. `ta_envelope_pool_enqueue` appends one envelope;
+ *   `ta_envelope_pool_dequeue` takes the head.
+ * - **An outgoing list** belongs to a running macrostep. It holds, in send
+ *   order, the mail the macrostep sent, on no queue yet, so nothing can
+ *   take it before the macrostep ends; `ta_envelope_pool_post` appends to
+ *   it. At the macrostep's end `ta_envelope_pool_deliver` moves the whole
+ *   list, in order, to the end of the run queue. A macrostep that is
+ *   abandoned frees its outgoing list instead, envelope by envelope.
+ *
+ * **Arrival numbers.** The pool numbers each envelope as it joins the run
+ * queue, from a `uint32_t` counter that wraps. Numbers are compared modulo
+ * 2^32 (`ta_envelope_arrived_before`), which is exact while fewer than
+ * 2^31 envelopes are runnable; the pool's bound is far below that. A
+ * session's deferred mail goes back into the run queue at the position
+ * its number gives it.
+ *
+ * ## Admission and the macrostep reserve
+ *
+ * The pool's quota has the pool's bound as its capacity and counts the
+ * envelopes taken. Two takes use it:
+ *
+ * - **`ta_envelope_pool_take`** is the ordinary take of a `<send>`, a
+ *   delayed send or an invocation token: it uses any free envelope that
+ *   exists.
+ * - **`ta_envelope_pool_admit`** is admission of external input: it takes
+ *   an envelope only while the pool stays at or below the **admission
+ *   watermark**, `max(1, bound × watermark_percent / 100)` envelopes in
+ *   use, by asking the quota for one envelope with `bound - watermark`
+ *   kept free. The rest is headroom for what sessions send each other, so
+ *   external load alone cannot make the charts' sends fail.
+ *   `ta_envelope_pool_admitting` says whether one more admission fits.
+ *
+ * The **macrostep reserve** is the number of free envelopes the pool
+ * keeps allocated at each safe point: `ta_envelope_pool_refill` makes
+ * `min(reserve, bound - used)` envelopes free, the quota's available room
+ * capping it. A macrostep takes only envelopes that already exist, so the
+ * reserve is the most one macrostep may take before its take answers
+ * `TA_ERR_FULL`, unless an earlier safe point left more free. A host that
+ * wants no allocation after start-up sets the reserve to the bound.
+ *
+ * ## Contract and invariants
+ *
+ * - `quota.used` and `items.used` are both the number of envelopes taken
+ *   and not given back; `quota.capacity` and `items.ceiling` are both the
+ *   bound.
+ * - A taken envelope reads as all zero, its state `TA_ENVELOPE_FREE`,
+ *   until its taker fills it and places it: on a list through
+ *   `enqueue` or `post`, which set its state, or in a role (a timer, an
+ *   invocation token) whose state the taker sets.
+ * - An envelope is on at most one list through `next` and one through
+ *   `owner_next`. The free list links through `next`, so a free envelope
+ *   is on no other `next` list.
+ * - Items never move: an index is stable from take to give. Users keep
+ *   indices, never addresses, and look an address up again with
+ *   `ta_envelope_pool_at` in each call, so a refill between calls cannot
+ *   leave a pointer behind.
+ *
+ * ## Memory
+ *
+ * The pool owns its pages, allocated through the `ta_allocator` given to
+ * `ta_envelope_pool_init`, which it borrows and which must outlive it.
+ * It owns the envelopes, not what they hold: an envelope's `data` and
+ * `content` are references its taker retained, and its `text` is a chain
+ * of the name area. Whoever gives an envelope back releases those first;
+ * the pool releases nothing, and neither does destroy.
+ *
+ * - **Never allocate, and may run inside a macrostep:** `take`, `admit`,
+ *   `give`, `at`, `admitting`, the links, `enqueue`, `dequeue`, `post`,
+ *   `deliver` and `ta_envelope_arrived_before`.
+ * - **`ta_envelope_pool_refill` allocates** pages, up to the bound. It
+ *   runs only at a safe point (during admission, after a macrostep ends,
+ *   at system creation), never inside a macrostep.
+ * - **`ta_envelope_pool_trim` and `ta_envelope_pool_destroy` only free.**
+ *   Trim gives back whole free pages above the reserve, only when the host
+ *   asks core to give memory back; core never trims on its own.
+ *
+ * On a 64-bit host an envelope is 104 bytes: 72 of links, state and
+ * identities, plus two 16-byte value references.
+ *
+ * ## Complexity
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | `take`, `admit`, `give`, `at`, `admitting` | O(1) |
+ * | `enqueue`, `dequeue`, `post` | O(1) |
+ * | `deliver` | O(envelopes on the outgoing list): each gets its arrival number; the splice itself is O(1) |
+ * | `refill` | O(1) when enough envelopes are free; otherwise one allocation per page added (`index_pool.h`) |
+ * | `trim` | walks the pages and the free list once |
+ *
+ * ## Failure
+ *
+ * - `ta_envelope_pool_init` answers `TA_ERR_INVALID` for parameters that
+ *   break a rule of `ta_envelope_pool_params`, and leaves `*pool`
+ *   untouched.
+ * - `ta_envelope_pool_take` answers `TA_ERR_FULL` when no envelope is
+ *   free: the pool is at its bound, or the free envelopes the last refill
+ *   left are used up. A `<send>` then fails as
+ *   `error.execution.capacity.pool`.
+ * - `ta_envelope_pool_admit` answers `TA_ERR_FULL` at the watermark as
+ *   well, and the input is bounced.
+ * - `ta_envelope_pool_refill` answers `TA_ERR_NOMEM` when an allocation
+ *   fails, and changes nothing.
+ * - A failed call changes nothing. Giving an envelope that is not taken,
+ *   or one still on a list, and placing an envelope that is already on a
+ *   list, are programmer errors, not checked.
+ *
+ * ## Users
+ *
+ * The system creates one pool (ADR 0099 decision 2), bounded by
+ * `poolEnvelopes`. Sending to a local session, delaying a send, starting
+ * a local invocation and admitting external input take an envelope from
+ * it; raising an internal event does not. The run queue feeds the
+ * macrostep; the outgoing list holds a macrostep's mail until it ends.
+ * The deadline index, the owner lists, the deferred lists and the waiting
+ * lists are built over the same envelopes and links.
+ */
+
+
+/** The smallest bound a pool accepts (`poolEnvelopes`). */
+#define TA_ENVELOPE_POOL_MIN 8u
+/** The largest bound a pool accepts (`poolEnvelopes`): 2^24. */
+#define TA_ENVELOPE_POOL_MAX 16777216u
+/** Each page of the pool holds `1 << TA_ENVELOPE_PAGE_SHIFT` envelopes. */
+#define TA_ENVELOPE_PAGE_SHIFT 6u
+
+/** Which list or role holds an envelope. */
+typedef enum {
+    /** On the free list, or taken and not yet placed. */
+    TA_ENVELOPE_FREE = 0,
+    /** On a running macrostep's outgoing list, until the macrostep ends. */
+    TA_ENVELOPE_OUTGOING = 1,
+    /** On the run queue, or on its target's deferred list. */
+    TA_ENVELOPE_RUNNABLE = 2,
+    /** On the waiting list of an address that is not resident. */
+    TA_ENVELOPE_WAITING = 3,
+    /** Taken by a macrostep: `_event` names it until its input completes. */
+    TA_ENVELOPE_TAKEN = 4,
+    /** A delayed send, in the deadline index and its sender's owner list. */
+    TA_ENVELOPE_TIMER = 5,
+    /** Held by a live local invocation, on no list. */
+    TA_ENVELOPE_INVOCATION_TOKEN = 6,
+    /** An invocation token turned into the stop of a child session. */
+    TA_ENVELOPE_CHILD_STOP = 7
+} ta_envelope_state;
+
+/** `target` is the index of a waiting entry, not a session. */
+#define TA_ENVELOPE_FLAG_WAITING_TARGET ((uint8_t)0x01u)
+/** `text` ends with a trace parent field (`name_area.h`). */
+#define TA_ENVELOPE_FLAG_TRACED ((uint8_t)0x02u)
+
+/** One pending input; see the file comment. */
+typedef struct {
+    /** The next envelope on the one list that holds it, 0 at the tail. */
+    uint32_t next;
+    /** The next pending delayed send of the same sender, 0 at the tail. */
+    uint32_t owner_next;
+    /** While a timer, its place in the deadline index; while runnable,
+     * its arrival number. */
+    uint32_t heap_index;
+    /** A `ta_envelope_state`. */
+    uint8_t state;
+    /** `_event.type`: a `ta_event_type`. */
+    uint8_t type;
+    /** Where it came from: a `ta_record_input_source`. */
+    uint8_t source;
+    /** `TA_ENVELOPE_FLAG_*`. */
+    uint8_t flags;
+    /** The target session's ID (ADR 0066), or, with
+     * `TA_ENVELOPE_FLAG_WAITING_TARGET`, the index of its address's
+     * waiting entry; 0 for a timer whose target is an I/O processor's,
+     * kept as text. */
+    uint64_t target;
+    /** The sending session's ID, or 0 for external input. */
+    uint64_t from;
+    /** A timer's deadline. */
+    ta_time due;
+    /** The invocation-instance token of a child event, completion or
+     * stop, or 0. */
+    uint64_t invoke_instance;
+    /** A local send's ID, for `<cancel>` on the owner list; an external
+     * send ID is text. */
+    ta_send_id send_id;
+    /** The host's sequence number of the input it was admitted from, or
+     * 0. */
+    uint64_t source_seq;
+    /** Its text fields in the name area. */
+    ta_chunk_chain text;
+    /** `_event.data`, a reference the envelope holds. */
+    ta_value data;
+    /** A delayed send's evaluated content, held apart from its data, or
+     * none. */
+    ta_value content;
+} ta_envelope;
+
+/** What `ta_envelope_pool_init` needs. */
+typedef struct {
+    /** Where pages come from; borrowed, and must outlive the pool. */
+    ta_allocator allocator;
+    /** The most envelopes the pool holds: from `TA_ENVELOPE_POOL_MIN` to
+     * `TA_ENVELOPE_POOL_MAX`. */
+    uint32_t bound;
+    /** The admission watermark, percent of `bound`: from 1 to 99. */
+    uint32_t watermark_percent;
+    /** Free envelopes refill keeps at a safe point: from 1 to `bound`. */
+    uint32_t reserve;
+} ta_envelope_pool_params;
+
+/** The envelopes of one system; see the file comment. Fields are for
+ * reading only. */
+typedef struct {
+    /** The envelopes, linked through `next` while free. */
+    ta_index_pool items;
+    /** The bound, and the envelopes in use. */
+    ta_quota quota;
+    /** Runnable envelopes in arrival order, linked through `next`. */
+    ta_list run_queue;
+    /** The arrival number the next runnable envelope gets. */
+    uint32_t arrivals;
+    /** The most envelopes in use that admission may leave:
+     * `max(1, bound × watermark_percent / 100)`. */
+    uint32_t watermark;
+    /** Free envelopes refill keeps. */
+    uint32_t reserve;
+} ta_envelope_pool;
+
+/**
+ * Sets up an empty pool, with no page yet. Allocates nothing; may run
+ * anywhere. Answers `TA_ERR_INVALID`, leaving `*pool` untouched, when a
+ * parameter breaks its rule.
+ */
+TA_PRIVATE ta_result ta_envelope_pool_init(ta_envelope_pool *pool, const ta_envelope_pool_params *params);
+
+/**
+ * Frees every page and leaves an empty pool. Every envelope is gone; the
+ * references and text chains of envelopes still taken are not released,
+ * so their owners release them first. Only frees; never fails; never
+ * runs inside a macrostep.
+ */
+TA_PRIVATE void ta_envelope_pool_destroy(ta_envelope_pool *pool);
+
+/**
+ * Makes `min(reserve, bound - used)` envelopes free, allocating pages
+ * when fewer are. Runs only at a safe point, never inside a macrostep.
+ * Answers `TA_OK`, or `TA_ERR_NOMEM` when an allocation fails, changing
+ * nothing.
+ */
+TA_PRIVATE ta_result ta_envelope_pool_refill(ta_envelope_pool *pool);
+
+/**
+ * Gives whole free pages back to the allocator while at least `reserve`
+ * envelopes stay free. Only frees; never fails. Runs at a safe point,
+ * only when the host asks core to give memory back.
+ */
+TA_PRIVATE void ta_envelope_pool_trim(ta_envelope_pool *pool);
+
+/**
+ * Takes a free envelope for a `<send>`, a delayed send or an invocation
+ * token, zeroes it, and answers its index in `*out`. O(1). Never
+ * allocates; may run inside a macrostep. Answers `TA_ERR_FULL`, changing
+ * nothing and leaving `*out` alone, when no envelope is free.
+ */
+TA_PRIVATE ta_result ta_envelope_pool_take(ta_envelope_pool *pool, uint32_t *out);
+
+/**
+ * Takes a free envelope for admitted external input, as
+ * `ta_envelope_pool_take` does, but only while the envelopes in use stay
+ * at or below the watermark. O(1). Never allocates. Answers
+ * `TA_ERR_FULL`, changing nothing, at the watermark or when no envelope
+ * is free.
+ */
+TA_PRIVATE ta_result ta_envelope_pool_admit(ta_envelope_pool *pool, uint32_t *out);
+
+/**
+ * Whether one more envelope may be admitted below the watermark: what
+ * the control block's `admitting` reports. It does not say whether an
+ * envelope is free. O(1). Never allocates.
+ */
+TA_PRIVATE bool ta_envelope_pool_admitting(const ta_envelope_pool *pool);
+
+/**
+ * Gives back `index`, which is taken and on no list, to the free list,
+ * and marks it free. Its references and text must be released already.
+ * O(1). Never allocates; may run inside a macrostep. Cannot fail.
+ */
+TA_PRIVATE void ta_envelope_pool_give(ta_envelope_pool *pool, uint32_t index);
+
+/**
+ * The envelope at `index`, or NULL for 0, an index past the bound, or
+ * one whose page is not allocated. Valid within the calling function
+ * only. O(1). Never allocates.
+ */
+TA_PRIVATE inline ta_envelope *ta_envelope_pool_at(const ta_envelope_pool *pool, uint32_t index) {
+    return ta_index_pool_at(&pool->items, index);
+}
+
+/** The links of a list of envelopes through `next`. Never allocates. */
+TA_PRIVATE inline ta_list_links ta_envelope_pool_links(ta_envelope_pool *pool) {
+    return ta_index_pool_links(&pool->items, offsetof(ta_envelope, next));
+}
+
+/** The links of an owner list through `owner_next`. Never allocates. */
+TA_PRIVATE inline ta_list_links ta_envelope_pool_owner_links(ta_envelope_pool *pool) {
+    return ta_index_pool_links(&pool->items, offsetof(ta_envelope, owner_next));
+}
+
+/**
+ * Appends `index`, which is on no list through `next`, to the run queue,
+ * gives it the next arrival number and marks it runnable. O(1). Never
+ * allocates; may run inside a macrostep. Cannot fail.
+ */
+TA_PRIVATE void ta_envelope_pool_enqueue(ta_envelope_pool *pool, uint32_t index);
+
+/**
+ * Removes the head of the run queue, marks it taken, and answers its
+ * index, or answers 0 and changes nothing when the run queue is empty.
+ * O(1). Never allocates.
+ */
+TA_PRIVATE uint32_t ta_envelope_pool_dequeue(ta_envelope_pool *pool);
+
+/** Where `ta_envelope_pool_post` puts an envelope. */
+typedef struct {
+    /** The running macrostep's outgoing list. */
+    ta_list *outgoing;
+    /** The envelope, on no list through `next`. */
+    uint32_t index;
+} ta_envelope_post;
+
+/**
+ * Appends `post.index` to the outgoing list `post.outgoing`, in send
+ * order, and marks it outgoing. O(1). Never allocates; may run inside a
+ * macrostep. Cannot fail.
+ */
+TA_PRIVATE void ta_envelope_pool_post(ta_envelope_pool *pool, ta_envelope_post post);
+
+/**
+ * At a macrostep's end: gives every envelope of `outgoing`, in order, the
+ * next arrival number and marks it runnable, then appends the whole list
+ * to the run queue and leaves `outgoing` empty. O(its length). Never
+ * allocates. Cannot fail.
+ */
+TA_PRIVATE void ta_envelope_pool_deliver(ta_envelope_pool *pool, ta_list *outgoing);
+
+/**
+ * Whether arrival number `a` came before `b`, modulo 2^32: exact while
+ * fewer than 2^31 envelopes are runnable. O(1).
+ */
+TA_PRIVATE inline bool ta_envelope_arrived_before(uint32_t a, uint32_t b) {
+    return (uint32_t)(a - b) >= 0x80000000u;
+}
+
+/**
+ * @file name_area.h
+ *
+ * # The name area
+ *
+ * `ta_name_area` holds the text of a system's envelopes: every name that
+ * is not interned because it was made at run time (ADR 0100), and the
+ * other variable parts of a pending input. It is a chunk area
+ * (`chunks.h`) of 64-byte chunks, 60 bytes of text and a `uint32_t` link
+ * each, bounded by `nameAreaBytes`, with a quota (`quota.h`) counting its
+ * chunks against that bound (ADR 0099 decision 3).
+ *
+ * Envelopes are freed out of order (a timer outlives the mail around it),
+ * so a bump arena would fragment; fixed chunks from a free list take and
+ * free in O(1) with no fragmentation. Most envelopes need one chunk; the
+ * overhead is 4 bytes in 64 plus the unused end of the last chunk.
+ *
+ * ## Fields
+ *
+ * An envelope's `text` is one chain of **fields**, each a `uint16_t`
+ * length, little-endian, followed by that many bytes. A field holds at
+ * most 65,535 bytes. The text a field may hold: the event name, the
+ * origin, origintype and invokeid of external input, a delayed send's
+ * target, the I/O processor type, a send ID that came from outside, and
+ * an invocation error's reason. The order is the envelope's to choose;
+ * the area only writes and reads fields in the order they were written.
+ * A field's prefix and bytes may straddle a chunk boundary; the reader
+ * hides that.
+ *
+ * ## The trace parent
+ *
+ * A traced envelope (its trace ID is not zero) carries the trace parent
+ * its receiver's macrostep runs under (ADRs 0067, 0073) as its **last**
+ * field, 40 bytes in all, so traces stay linked across sessions while
+ * mail and timers wait in core. An untraced envelope adds nothing.
+ *
+ * | Part | Bytes | Meaning |
+ * |---|---|---|
+ * | length | 2 | 38, as for every field |
+ * | context | 18 | trace ID high and low (8 each), W3C trace-flags (1), local detail (1) |
+ * | cause | 20 | the causing step's key: session (8), macrostep (8), microstep (4) |
+ *
+ * Every number is little-endian. The step key's `family` is not kept: a
+ * trace parent read back has family 0. A short name plus the trace
+ * parent passes 60 bytes, so a traced envelope usually takes a second
+ * chunk. The envelope's flag `TA_ENVELOPE_FLAG_TRACED` says whether its
+ * text ends with one; the field's length alone cannot, since another
+ * field may also be 38 bytes long.
+ *
+ * ## Admission and the reserve
+ *
+ * The quota's capacity is the area's chunks, and it counts the chunks
+ * that chains hold. A write made for admitted external input
+ * (`admission` in its params) succeeds only while the chunks in use stay
+ * at or below the **admission watermark**, `max(1, chunks ×
+ * watermark_percent / 100)`, after the write; the rest is headroom for
+ * what sessions send each other. `ta_name_area_admitting` says whether
+ * one more chunk fits below it, for the control block's `admitting`.
+ *
+ * The **reserve** is the number of free chunks the area keeps allocated
+ * at each safe point: `ta_name_area_refill` makes `min(reserve, chunks -
+ * used)` chunks free. A macrostep writes only into chunks that already
+ * exist.
+ *
+ * ## Contract and invariants
+ *
+ * - `quota.used` is the number of chunks every chain written through the
+ *   area holds, and equals `chunks.pool.used` as long as every chain is
+ *   written and freed through these functions, not through `chunks.h`
+ *   directly.
+ * - A write is all or nothing: it checks that its whole field (prefix
+ *   and bytes) fits, against both the free chunks and the quota, before
+ *   it writes anything. The needs of several fields onto one chain add
+ *   up (`ta_name_area_field_need`), so a caller that checks the total
+ *   first, and takes no chunk in between, writes them all.
+ * - A chain has one owner: an envelope, or the waiting entry of an
+ *   address that is not resident. The owner frees it once, with
+ *   `ta_name_area_free`.
+ *
+ * ## Memory
+ *
+ * The area owns its chunk pages, allocated through the `ta_allocator`
+ * given to `ta_name_area_init`, borrowed and outliving the area. Each
+ * chain's chunks belong to the chain's owner until it frees them.
+ *
+ * - **Never allocate, and may run inside a macrostep:** `field_need`,
+ *   `admitting`, `write`, `write_trace_parent`, `free`, `reader_of`,
+ *   `next`, `read` and `trace_parent`. A write that finds no room answers
+ *   `TA_ERR_FULL`; it never grows the area.
+ * - **`ta_name_area_refill` allocates** pages, up to the bound. It runs
+ *   only at a safe point (during admission, after a macrostep ends, at
+ *   system creation), never inside a macrostep.
+ * - **`ta_name_area_trim` and `ta_name_area_destroy` only free.** Trim
+ *   gives back whole free pages above the reserve, only when the host
+ *   asks core to give memory back; core never trims on its own.
+ * - A span `ta_name_area_read` answers points into a chunk, and is valid
+ *   until the chain is freed.
+ *
+ * ## Complexity
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | `field_need`, `admitting`, `reader_of` | O(1) |
+ * | `write`, `write_trace_parent` of `n` bytes | O(n), one take per new chunk; appending never walks the chain |
+ * | `next`, `read` | O(1) per chunk they cross |
+ * | `trace_parent` | walks the chain to its last 40 bytes: O(chunks) |
+ * | `free` | O(chunks of the chain) |
+ * | `refill`, `trim` | as `index_pool.h`: one allocation or free per page |
+ *
+ * ## Failure
+ *
+ * - `ta_name_area_init` answers `TA_ERR_INVALID` for parameters that
+ *   break a rule of `ta_name_area_params`, leaving `*area` untouched.
+ * - A write answers `TA_ERR_INVALID` for a field longer than 65,535
+ *   bytes, or a trace parent with no trace ID, and `TA_ERR_FULL` when the
+ *   field does not fit: too few chunks free, the bound reached, or, for
+ *   admission, the watermark. It changes nothing. A `<send>` then fails as
+ *   `error.execution.capacity.names`, and an admitted input is bounced.
+ * - `ta_name_area_next` answers `TA_ERR_NOT_FOUND` past the last field;
+ *   `ta_name_area_trace_parent` answers `TA_ERR_NOT_FOUND` when the chain
+ *   cannot end with a trace parent (shorter than 40 bytes, or its last 40
+ *   bytes do not start with the length 38). `ta_name_area_next` answers
+ *   `TA_ERR_CORRUPT` for a chain that ends inside a field, which a chain
+ *   written through the area never does. A failed read changes neither
+ *   the reader nor what it would have written.
+ * - `ta_name_area_refill` answers `TA_ERR_NOMEM` when an allocation
+ *   fails, and changes nothing.
+ *
+ * ## Users
+ *
+ * The system creates one name area beside its envelope pool. Admission
+ * copies an input's text into it; a `<send>` writes the evaluated event
+ * name and the sender's trace parent; a waiting entry keeps the address of
+ * a target that is not resident once, however many envelopes wait for it.
+ * When an envelope is taken, its name is resolved to atoms from these
+ * bytes (`names.h`), never interned.
+ */
+
+
+/** Bytes of one chunk of the name area, link included. */
+#define TA_NAME_AREA_CHUNK_BYTES 64u
+/** Bytes of text one chunk holds. */
+#define TA_NAME_AREA_TEXT_BYTES (TA_NAME_AREA_CHUNK_BYTES - TA_CHUNKS_LINK_BYTES)
+/** Bytes of a field's length prefix. */
+#define TA_NAME_AREA_PREFIX_BYTES 2u
+/** The longest field, bytes. */
+#define TA_NAME_AREA_FIELD_MAX 65535u
+/** Bytes of a trace parent field's text. */
+#define TA_NAME_AREA_TRACE_PARENT_BYTES 38u
+/** Bytes a trace parent adds to a chain, its prefix included. */
+#define TA_NAME_AREA_TRACE_FIELD_BYTES (TA_NAME_AREA_PREFIX_BYTES + TA_NAME_AREA_TRACE_PARENT_BYTES)
+/** The smallest area, bytes: one chunk. */
+#define TA_NAME_AREA_MIN_BYTES TA_NAME_AREA_CHUNK_BYTES
+/** The largest area, bytes: 1 GiB. */
+#define TA_NAME_AREA_MAX_BYTES 1073741824u
+/** Each page of the area holds `1 << TA_NAME_AREA_PAGE_SHIFT` chunks. */
+#define TA_NAME_AREA_PAGE_SHIFT 6u
+
+/** What `ta_name_area_init` needs. */
+typedef struct {
+    /** Where pages come from; borrowed, and must outlive the area. */
+    ta_allocator allocator;
+    /** `nameAreaBytes`: from `TA_NAME_AREA_MIN_BYTES` to
+     * `TA_NAME_AREA_MAX_BYTES`. The area holds `bytes / 64` chunks; a
+     * remainder is not used. */
+    uint32_t bytes;
+    /** The admission watermark, percent of the chunks: from 1 to 99. */
+    uint32_t watermark_percent;
+    /** Free chunks refill keeps at a safe point: from 1 to the chunks. */
+    uint32_t reserve;
+} ta_name_area_params;
+
+/** The text of one system's envelopes; see the file comment. Fields are
+ * for reading only. */
+typedef struct {
+    /** The chunks; refill and trim through this unit. */
+    ta_chunks chunks;
+    /** The area's chunks, and the chunks chains hold. */
+    ta_quota quota;
+    /** The most chunks in use admission may leave:
+     * `max(1, chunks × watermark_percent / 100)`. */
+    uint32_t watermark;
+    /** Free chunks refill keeps. */
+    uint32_t reserve;
+} ta_name_area;
+
+/** What `ta_name_area_write` appends. */
+typedef struct {
+    /** The chain's writer (`chunks.h`), borrowed for the call. */
+    ta_chunk_writer *writer;
+    /** The field's bytes, borrowed for the call and copied. */
+    ta_bytes text;
+    /** A write for admitted external input, held to the watermark. */
+    bool admission;
+} ta_name_area_write_params;
+
+/** What `ta_name_area_write_trace_parent` appends. */
+typedef struct {
+    /** The chain's writer, borrowed for the call. */
+    ta_chunk_writer *writer;
+    /** The trace parent, borrowed for the call; its trace ID is not zero. */
+    const ta_trace_parent *parent;
+    /** A write for admitted external input, held to the watermark. */
+    bool admission;
+} ta_name_area_trace_params;
+
+/** Reads a chain field by field; see `ta_name_area_reader_of`. */
+typedef struct {
+    /** Where the next byte is. */
+    ta_chunk_reader chunks;
+    /** Bytes of the current field not read yet. */
+    uint32_t field;
+} ta_name_area_reader;
+
+/**
+ * Sets up an empty area, with no page yet. Allocates nothing; may run
+ * anywhere. Answers `TA_ERR_INVALID`, leaving `*area` untouched, when a
+ * parameter breaks its rule.
+ */
+TA_PRIVATE ta_result ta_name_area_init(ta_name_area *area, const ta_name_area_params *params);
+
+/**
+ * Frees every page and leaves the area empty; every chain in it is gone,
+ * freed or not. Only frees; never fails; never runs inside a macrostep.
+ */
+TA_PRIVATE void ta_name_area_destroy(ta_name_area *area);
+
+/**
+ * Makes `min(reserve, chunks - used)` chunks free, allocating pages when
+ * fewer are. Runs only at a safe point, never inside a macrostep. Answers
+ * `TA_OK`, or `TA_ERR_NOMEM` when an allocation fails, changing nothing.
+ */
+TA_PRIVATE ta_result ta_name_area_refill(ta_name_area *area);
+
+/**
+ * Gives whole free pages back to the allocator while at least `reserve`
+ * chunks stay free. Only frees; never fails. Runs at a safe point, only
+ * when the host asks core to give memory back.
+ */
+TA_PRIVATE void ta_name_area_trim(ta_name_area *area);
+
+/**
+ * Whether one more chunk fits at or below the watermark: what the
+ * control block's `admitting` reports for the area. It does not say
+ * whether a chunk is free. O(1). Never allocates.
+ */
+TA_PRIVATE bool ta_name_area_admitting(const ta_name_area *area);
+
+/**
+ * The chunks a field of `text_length` bytes, its prefix included, takes
+ * when appended to a chain of `chain_length` bytes, or `UINT32_MAX` for a
+ * field longer than `TA_NAME_AREA_FIELD_MAX` or a chain that would pass
+ * `UINT32_MAX` bytes. Only counts. O(1). Never allocates; never fails.
+ */
+TA_PRIVATE uint32_t ta_name_area_field_need(const ta_name_area *area, uint32_t chain_length, uint32_t text_length);
+
+/**
+ * Appends one field, `params->text` behind its length, to the writer's
+ * chain. Never allocates; may run inside a macrostep. Answers `TA_OK`;
+ * `TA_ERR_INVALID` for text longer than `TA_NAME_AREA_FIELD_MAX`; or
+ * `TA_ERR_FULL` when the field does not fit (see the file comment). A
+ * failed write changes nothing.
+ */
+TA_PRIVATE ta_result ta_name_area_write(ta_name_area *area, const ta_name_area_write_params *params);
+
+/**
+ * Appends `params->parent` as a trace parent field, 40 bytes, to the
+ * writer's chain; it is the chain's last field. Never allocates; may run
+ * inside a macrostep. Answers `TA_OK`; `TA_ERR_INVALID` when the trace ID
+ * is zero (an untraced envelope carries none); or `TA_ERR_FULL` as
+ * `ta_name_area_write`. A failed write changes nothing.
+ */
+TA_PRIVATE ta_result ta_name_area_write_trace_parent(ta_name_area *area, const ta_name_area_trace_params *params);
+
+/**
+ * Returns every chunk of `*chain` to the area and its quota, and sets
+ * `*chain` empty; an empty chain changes nothing. O(its chunks). Never
+ * allocates; may run inside a macrostep. Cannot fail.
+ */
+TA_PRIVATE void ta_name_area_free(ta_name_area *area, ta_chunk_chain *chain);
+
+/** A reader before the first field of `chain`. O(1); borrows nothing. */
+TA_PRIVATE inline ta_name_area_reader ta_name_area_reader_of(ta_chunk_chain chain) {
+    return (ta_name_area_reader){ .chunks = ta_chunk_reader_of(chain), .field = 0u };
+}
+
+/**
+ * Skips what is left of the current field, reads the next field's length
+ * into `*length`, and stands at its first byte. O(chunks crossed). Never
+ * allocates. Answers `TA_OK`; `TA_ERR_NOT_FOUND` after the last field; or
+ * `TA_ERR_CORRUPT` when the chain ends inside a field. A failure changes
+ * neither the reader nor `*length`.
+ */
+TA_PRIVATE ta_result ta_name_area_next(const ta_name_area *area, ta_name_area_reader *reader, uint32_t *length);
+
+/**
+ * The next span of the current field, at most `max` bytes and within one
+ * chunk, and moves past it; length 0 once the field is read. The span is
+ * valid until the chain is freed. O(1). Never allocates; never fails.
+ */
+TA_PRIVATE ta_bytes ta_name_area_read(const ta_name_area *area, ta_name_area_reader *reader, uint32_t max);
+
+/**
+ * Reads the trace parent at the end of `chain` into `*out`, its cause's
+ * family 0. O(chunks of the chain). Never allocates; may run inside a
+ * macrostep. Answers `TA_OK`, or `TA_ERR_NOT_FOUND` (see the file
+ * comment), leaving `*out` alone.
+ */
+TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chunk_chain chain, ta_trace_parent *out);
+
 
 
 typedef struct {
@@ -16157,6 +16864,344 @@ TA_API void ta_external_delivery_release(ta_external_delivery *delivery) {
     }
     ta_actor_ref_release(&delivery->destination);
     ta_event_release(&delivery->event);
+}
+
+
+TA_PRIVATE ta_result ta_envelope_pool_init(ta_envelope_pool *pool, const ta_envelope_pool_params *params) {
+    if (params->bound < TA_ENVELOPE_POOL_MIN || params->bound > TA_ENVELOPE_POOL_MAX ||
+        params->watermark_percent < 1u || params->watermark_percent > 99u || params->reserve < 1u ||
+        params->reserve > params->bound) {
+        return TA_ERR_INVALID;
+    }
+    ta_index_pool items;
+    ta_result result = ta_index_pool_init(&items, &(ta_index_pool_params){
+                                                      .allocator = params->allocator,
+                                                      .item_size = sizeof(ta_envelope),
+                                                      .item_alignment = _Alignof(ta_envelope),
+                                                      .link_offset = offsetof(ta_envelope, next),
+                                                      .page_shift = TA_ENVELOPE_PAGE_SHIFT,
+                                                      .ceiling = params->bound,
+                                                  });
+    if (result != TA_OK) {
+        return result;
+    }
+    uint32_t watermark = (uint32_t)((uint64_t)params->bound * params->watermark_percent / 100u);
+    *pool = (ta_envelope_pool){
+        .items = items,
+        .quota = ta_quota_make(params->bound),
+        .run_queue = TA_LIST_EMPTY,
+        .arrivals = 0u,
+        .watermark = watermark == 0u ? 1u : watermark,
+        .reserve = params->reserve,
+    };
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_envelope_pool_destroy(ta_envelope_pool *pool) {
+    ta_index_pool_destroy(&pool->items);
+    pool->quota = ta_quota_make(pool->quota.capacity);
+    pool->run_queue = TA_LIST_EMPTY;
+}
+
+TA_PRIVATE ta_result ta_envelope_pool_refill(ta_envelope_pool *pool) {
+    uint32_t available = ta_quota_available(&pool->quota);
+    uint32_t min_free = pool->reserve < available ? pool->reserve : available;
+    /* The ceiling is the quota's capacity, so `used + min_free` never passes it: only NOMEM remains. */
+    return ta_index_pool_refill(&pool->items, min_free);
+}
+
+TA_PRIVATE void ta_envelope_pool_trim(ta_envelope_pool *pool) {
+    ta_index_pool_trim(&pool->items, pool->reserve);
+}
+
+/* Takes an envelope when the quota grants `request`; see take and admit. */
+static ta_result ta_envelope_pool_take_within(ta_envelope_pool *pool, ta_quota_request request, uint32_t *out) {
+    if (pool->items.free == 0u || !ta_quota_fits(&pool->quota, request)) {
+        return TA_ERR_FULL;
+    }
+    uint32_t index = 0u;
+    (void)ta_index_pool_take(&pool->items, &index); /* cannot fail: an envelope is free */
+    (void)ta_quota_take(&pool->quota, request);     /* cannot fail: it fits */
+    ta_mem_zero(ta_envelope_pool_at(pool, index), sizeof(ta_envelope));
+    *out = index;
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_envelope_pool_take(ta_envelope_pool *pool, uint32_t *out) {
+    return ta_envelope_pool_take_within(pool, (ta_quota_request){ .amount = 1u, .keep = 0u }, out);
+}
+
+/* The quota request of one admission: one envelope, keeping all room above the watermark. */
+static ta_quota_request ta_envelope_pool_admission(const ta_envelope_pool *pool) {
+    return (ta_quota_request){ .amount = 1u, .keep = pool->quota.capacity - pool->watermark };
+}
+
+TA_PRIVATE ta_result ta_envelope_pool_admit(ta_envelope_pool *pool, uint32_t *out) {
+    return ta_envelope_pool_take_within(pool, ta_envelope_pool_admission(pool), out);
+}
+
+TA_PRIVATE bool ta_envelope_pool_admitting(const ta_envelope_pool *pool) {
+    return ta_quota_fits(&pool->quota, ta_envelope_pool_admission(pool));
+}
+
+TA_PRIVATE void ta_envelope_pool_give(ta_envelope_pool *pool, uint32_t index) {
+    ta_envelope_pool_at(pool, index)->state = TA_ENVELOPE_FREE;
+    ta_index_pool_give(&pool->items, index);
+    (void)ta_quota_release(&pool->quota, 1u); /* cannot fail: the envelope was in use */
+}
+
+/* Gives `envelope` the next arrival number and marks it runnable. */
+static void ta_envelope_pool_arrive(ta_envelope_pool *pool, ta_envelope *envelope) {
+    envelope->heap_index = pool->arrivals;
+    envelope->state = TA_ENVELOPE_RUNNABLE;
+    pool->arrivals += 1u;
+}
+
+TA_PRIVATE void ta_envelope_pool_enqueue(ta_envelope_pool *pool, uint32_t index) {
+    ta_envelope_pool_arrive(pool, ta_envelope_pool_at(pool, index));
+    ta_list_links links = ta_envelope_pool_links(pool);
+    ta_list_push_back(&pool->run_queue, &links, index);
+}
+
+TA_PRIVATE uint32_t ta_envelope_pool_dequeue(ta_envelope_pool *pool) {
+    ta_list_links links = ta_envelope_pool_links(pool);
+    uint32_t index = ta_list_pop_front(&pool->run_queue, &links);
+    if (index != 0u) {
+        ta_envelope_pool_at(pool, index)->state = TA_ENVELOPE_TAKEN;
+    }
+    return index;
+}
+
+TA_PRIVATE void ta_envelope_pool_post(ta_envelope_pool *pool, ta_envelope_post post) {
+    ta_envelope_pool_at(pool, post.index)->state = TA_ENVELOPE_OUTGOING;
+    ta_list_links links = ta_envelope_pool_links(pool);
+    ta_list_push_back(post.outgoing, &links, post.index);
+}
+
+TA_PRIVATE void ta_envelope_pool_deliver(ta_envelope_pool *pool, ta_list *outgoing) {
+    ta_list_links links = ta_envelope_pool_links(pool);
+    for (uint32_t index = ta_list_head(outgoing); index != 0u; index = ta_list_next(&links, index)) {
+        ta_envelope_pool_arrive(pool, ta_envelope_pool_at(pool, index));
+    }
+    ta_list_splice(&pool->run_queue, &links, outgoing);
+}
+
+
+TA_PRIVATE ta_result ta_name_area_init(ta_name_area *area, const ta_name_area_params *params) {
+    if (params->bytes < TA_NAME_AREA_MIN_BYTES || params->bytes > TA_NAME_AREA_MAX_BYTES ||
+        params->watermark_percent < 1u || params->watermark_percent > 99u) {
+        return TA_ERR_INVALID;
+    }
+    uint32_t count = params->bytes / TA_NAME_AREA_CHUNK_BYTES;
+    if (params->reserve < 1u || params->reserve > count) {
+        return TA_ERR_INVALID;
+    }
+    ta_chunks chunks;
+    ta_result result = ta_chunks_init(&chunks, &(ta_chunks_params){ .allocator = params->allocator,
+                                                                    .chunk_size = TA_NAME_AREA_CHUNK_BYTES,
+                                                                    .page_shift = TA_NAME_AREA_PAGE_SHIFT,
+                                                                    .ceiling = count });
+    if (result != TA_OK) {
+        return result;
+    }
+    uint32_t watermark = (uint32_t)((uint64_t)count * params->watermark_percent / 100u);
+    *area = (ta_name_area){
+        .chunks = chunks,
+        .quota = ta_quota_make(count),
+        .watermark = watermark == 0u ? 1u : watermark,
+        .reserve = params->reserve,
+    };
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_name_area_destroy(ta_name_area *area) {
+    ta_chunks_destroy(&area->chunks);
+    area->quota = ta_quota_make(area->quota.capacity);
+}
+
+TA_PRIVATE ta_result ta_name_area_refill(ta_name_area *area) {
+    uint32_t available = ta_quota_available(&area->quota);
+    uint32_t min_free = area->reserve < available ? area->reserve : available;
+    /* The ceiling is the quota's capacity, so `used + min_free` never passes it: only NOMEM remains. */
+    return ta_index_pool_refill(&area->chunks.pool, min_free);
+}
+
+TA_PRIVATE void ta_name_area_trim(ta_name_area *area) {
+    ta_index_pool_trim(&area->chunks.pool, area->reserve);
+}
+
+/* The quota request of `need` chunks, kept to the watermark for admission. */
+static ta_quota_request ta_name_area_request(const ta_name_area *area, uint32_t need, bool admission) {
+    return (ta_quota_request){ .amount = need, .keep = admission ? area->quota.capacity - area->watermark : 0u };
+}
+
+TA_PRIVATE bool ta_name_area_admitting(const ta_name_area *area) {
+    return ta_quota_fits(&area->quota, ta_name_area_request(area, 1u, true));
+}
+
+TA_PRIVATE uint32_t ta_name_area_field_need(const ta_name_area *area, uint32_t chain_length, uint32_t text_length) {
+    if (text_length > TA_NAME_AREA_FIELD_MAX) {
+        return UINT32_MAX;
+    }
+    return ta_chunks_need(&area->chunks, chain_length, TA_NAME_AREA_PREFIX_BYTES + text_length);
+}
+
+/* Bytes of the field being appended: its prefix, and its text. */
+typedef struct {
+    uint8_t prefix[TA_NAME_AREA_PREFIX_BYTES];
+    ta_bytes text;
+} ta_name_area_field;
+
+/* Appends `field` to the writer's chain, all or nothing; see ta_name_area_write. */
+static ta_result ta_name_area_append(ta_name_area *area, const ta_name_area_write_params *params,
+                                     const ta_name_area_field *field) {
+    uint32_t need = ta_name_area_field_need(area, params->writer->chain.length, field->text.len);
+    ta_quota_request request = ta_name_area_request(area, need, params->admission);
+    if (need > area->chunks.pool.free || !ta_quota_fits(&area->quota, request)) {
+        return TA_ERR_FULL;
+    }
+    /* Neither write can fail: the whole field's chunks are free, and the needs of its two parts add up. */
+    (void)ta_chunks_write(&area->chunks, params->writer,
+                          (ta_bytes){ .ptr = field->prefix, .len = TA_NAME_AREA_PREFIX_BYTES });
+    (void)ta_chunks_write(&area->chunks, params->writer, field->text);
+    (void)ta_quota_take(&area->quota, request);
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_name_area_write(ta_name_area *area, const ta_name_area_write_params *params) {
+    if (params->text.len > TA_NAME_AREA_FIELD_MAX) {
+        return TA_ERR_INVALID;
+    }
+    ta_name_area_field field = { .prefix = { (uint8_t)(params->text.len & 0xFFu), (uint8_t)(params->text.len >> 8) },
+                                 .text = params->text };
+    return ta_name_area_append(area, params, &field);
+}
+
+/* Writes `value` as `count` bytes, little-endian, at `out`; answers the byte after them. */
+static uint8_t *ta_name_area_put(uint8_t *out, uint64_t value, uint32_t count) {
+    for (uint32_t byte = 0; byte < count; byte += 1u) {
+        out[byte] = (uint8_t)(value >> (8u * byte));
+    }
+    return out + count;
+}
+
+/* Reads `count` bytes, little-endian, at `*in`, and moves `*in` past them. */
+static uint64_t ta_name_area_get(const uint8_t **in, uint32_t count) {
+    uint64_t value = 0u;
+    for (uint32_t byte = 0; byte < count; byte += 1u) {
+        value |= (uint64_t)(*in)[byte] << (8u * byte);
+    }
+    *in += count;
+    return value;
+}
+
+TA_PRIVATE ta_result ta_name_area_write_trace_parent(ta_name_area *area, const ta_name_area_trace_params *params) {
+    const ta_trace_parent *parent = params->parent;
+    if (parent->context.trace_id_high == 0u && parent->context.trace_id_low == 0u) {
+        return TA_ERR_INVALID;
+    }
+    uint8_t bytes[TA_NAME_AREA_TRACE_PARENT_BYTES];
+    uint8_t *at = bytes;
+    at = ta_name_area_put(at, parent->context.trace_id_high, 8u);
+    at = ta_name_area_put(at, parent->context.trace_id_low, 8u);
+    at = ta_name_area_put(at, parent->context.flags, 1u);
+    at = ta_name_area_put(at, parent->context.detail, 1u);
+    at = ta_name_area_put(at, parent->cause.session, 8u);
+    at = ta_name_area_put(at, parent->cause.macrostep, 8u);
+    (void)ta_name_area_put(at, parent->cause.microstep, 4u);
+    ta_name_area_field field = { .prefix = { TA_NAME_AREA_TRACE_PARENT_BYTES, 0u },
+                                 .text = { .ptr = bytes, .len = TA_NAME_AREA_TRACE_PARENT_BYTES } };
+    ta_name_area_write_params write = { .writer = params->writer, .text = field.text, .admission = params->admission };
+    return ta_name_area_append(area, &write, &field);
+}
+
+TA_PRIVATE void ta_name_area_free(ta_name_area *area, ta_chunk_chain *chain) {
+    uint32_t held = ta_chunks_need(&area->chunks, 0u, chain->length);
+    ta_chunks_free(&area->chunks, chain);
+    (void)ta_quota_release(&area->quota, held); /* cannot fail: the chain's chunks are in use */
+}
+
+/* Moves `reader` past `count` bytes; answers how many of them the chain did not have. */
+static uint32_t ta_name_area_skip(const ta_name_area *area, ta_chunk_reader *reader, uint32_t count) {
+    while (count != 0u) {
+        ta_bytes span = ta_chunks_read(&area->chunks, reader, count);
+        if (span.len == 0u) {
+            break;
+        }
+        count -= span.len;
+    }
+    return count;
+}
+
+/* Where ta_name_area_copy puts bytes, and how many. */
+typedef struct {
+    uint8_t *ptr;
+    uint32_t len;
+} ta_name_area_buffer;
+
+/* Copies the next `out.len` bytes into `out.ptr`; answers false when the chain ends first. */
+static bool ta_name_area_copy(const ta_name_area *area, ta_chunk_reader *reader, ta_name_area_buffer out) {
+    uint32_t copied = 0u;
+    while (copied < out.len) {
+        ta_bytes span = ta_chunks_read(&area->chunks, reader, out.len - copied);
+        if (span.len == 0u) {
+            return false;
+        }
+        ta_mem_copy(out.ptr + copied, span.ptr, span.len);
+        copied += span.len;
+    }
+    return true;
+}
+
+TA_PRIVATE ta_result ta_name_area_next(const ta_name_area *area, ta_name_area_reader *reader, uint32_t *length) {
+    ta_chunk_reader at = reader->chunks;
+    if (ta_name_area_skip(area, &at, reader->field) != 0u) {
+        return TA_ERR_CORRUPT;
+    }
+    if (at.remaining == 0u) {
+        return TA_ERR_NOT_FOUND;
+    }
+    uint8_t prefix[TA_NAME_AREA_PREFIX_BYTES];
+    if (!ta_name_area_copy(area, &at, (ta_name_area_buffer){ .ptr = prefix, .len = TA_NAME_AREA_PREFIX_BYTES })) {
+        return TA_ERR_CORRUPT;
+    }
+    uint32_t field = (uint32_t)prefix[0] | (uint32_t)prefix[1] << 8;
+    if (field > at.remaining) {
+        return TA_ERR_CORRUPT;
+    }
+    *reader = (ta_name_area_reader){ .chunks = at, .field = field };
+    *length = field;
+    return TA_OK;
+}
+
+TA_PRIVATE ta_bytes ta_name_area_read(const ta_name_area *area, ta_name_area_reader *reader, uint32_t max) {
+    ta_bytes span = ta_chunks_read(&area->chunks, &reader->chunks, max < reader->field ? max : reader->field);
+    reader->field -= span.len;
+    return span;
+}
+
+TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chunk_chain chain, ta_trace_parent *out) {
+    if (chain.length < TA_NAME_AREA_TRACE_FIELD_BYTES) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_chunk_reader reader = ta_chunk_reader_of(chain);
+    (void)ta_name_area_skip(area, &reader, chain.length - TA_NAME_AREA_TRACE_FIELD_BYTES);
+    uint8_t bytes[TA_NAME_AREA_TRACE_FIELD_BYTES];
+    (void)ta_name_area_copy(area, &reader, (ta_name_area_buffer){ .ptr = bytes, .len = TA_NAME_AREA_TRACE_FIELD_BYTES });
+    const uint8_t *at = bytes;
+    if (ta_name_area_get(&at, TA_NAME_AREA_PREFIX_BYTES) != TA_NAME_AREA_TRACE_PARENT_BYTES) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_trace_parent parent = { 0 };
+    parent.context.trace_id_high = ta_name_area_get(&at, 8u);
+    parent.context.trace_id_low = ta_name_area_get(&at, 8u);
+    parent.context.flags = (uint8_t)ta_name_area_get(&at, 1u);
+    parent.context.detail = (uint8_t)ta_name_area_get(&at, 1u);
+    parent.cause.session = ta_name_area_get(&at, 8u);
+    parent.cause.macrostep = ta_name_area_get(&at, 8u);
+    parent.cause.microstep = (uint32_t)ta_name_area_get(&at, 4u);
+    *out = parent;
+    return TA_OK;
 }
 
 
