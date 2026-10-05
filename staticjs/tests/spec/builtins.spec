@@ -253,3 +253,35 @@ Math.max(...[3, 9, 4])
 === a namespace on its own is refused
 Math
 --- error unsupported Math.name
+
+# A key built at run time finds the same methods and prototype names as a
+# key written in the source.
+=== a method named by a key built at run time
+((h, s) => [new Set([1, 2])[h](2), [1, 2, 3][s](1), "abc"[s](1)])("h" + "as", "sl" + "ice")
+--- value
+[true,[2,3],"bc"]
+
+=== a changing method named by a key built at run time
+(p => [1][p](2))("pu" + "sh")
+--- fault do not change
+
+=== a method of another kind named by a key built at run time
+(h => [1][h](1))("h" + "as")
+--- fault does not have
+
+=== a prototype name built at run time, read from an object
+(t => ({})[t])("to" + "String")
+--- fault no prototype
+
+=== a prototype name built at run time, tested with in on an array
+(m => m in [1])("ma" + "p")
+--- fault no prototype
+
+=== a string method built at run time, read as a value
+(t => "x"[t])("tr" + "im")
+--- fault calls methods
+
+=== a name that only sorts near prototype names is an own property
+(o => [o.toStrin, o["valueOf" + "f"], o.__proto, "concat" in {}, "a" in [1]])({ toStrin: 1, valueOff: 2, __proto: 3 })
+--- value
+[1,2,3,false,false]

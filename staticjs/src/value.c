@@ -678,15 +678,3 @@ sjs_result sjs_to_string(sjs_context *context, sjs_value v, sjs_string **out) {
 sjs_result sjs_to_key(sjs_context *context, sjs_value v, sjs_string **out) {
     return sjs_to_string(context, v, out);
 }
-
-bool sjs_is_prototype_name(sjs_str key) {
-    static const char *const names[] = {
-        "constructor", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString",
-        "toString", "valueOf", "__proto__", "__defineGetter__", "__defineSetter__", "__lookupGetter__",
-        "__lookupSetter__"
-    };
-    for (uint32_t i = 0; i < sizeof names / sizeof names[0]; i++) {
-        if (sjs_str_equal(key, sjs_cstr(names[i]))) return true;
-    }
-    return false;
-}

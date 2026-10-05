@@ -26,6 +26,7 @@ module StaticJS
   # are `mise run bench`'s, never the tests'.
   TESTS = {
     'number_test' => { source: 'tests/number_test.c', fast: [], full: [] },
+    'names_test' => { source: 'tests/names_test.c', fast: [], full: [] },
     'api_test' => { source: 'tests/api_test.c', fast: [], full: ['--full'] },
     'spec_test' => { source: 'tests/spec_test.c', fast: ['tests/spec'], full: ['--full', 'tests/spec'] },
     'bench' => { source: 'bench/bench.c', fast: ['--smoke'], full: ['--smoke'] }
